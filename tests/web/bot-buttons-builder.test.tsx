@@ -385,6 +385,26 @@ describe('the button builder — saving', () => {
     expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
+  it('never lets a read older than the draft it just saved replace that draft', async () => {
+    // The read answers the PRE-save draft (no version) even after the save: a stale answer.
+    const withoutHelp: ExplicitMainMenu = {
+      ...DEFAULT_EXPLICIT_MAIN_MENU,
+      rows: [['catalog', 'services'], ['wallet'], ['trial', 'referral'], ['apps'], ['tickets']],
+    };
+    const api = builderApi(builderView(), [saved({ version: 1, layout: withoutHelp })]);
+    renderPage(page());
+    await ready();
+    select('help');
+    move('web.bb_remove');
+    await saveAndRead(api);
+    const reads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/bot-menu/builder'))
+        .length;
+    await waitFor(() => expect(reads()).toBeGreaterThan(1));
+    await waitFor(() => expect(state()).toBe('differs'));
+    expect(pooled()).toContain('help');
+  });
+
   it('a 409 keeps the edit, says so, never retries, and reloads only when asked', async () => {
     const api = builderApi(builderView(), [
       { url: '/bot-menu/builder/draft', status: 409, body: refusal('control.version_conflict') },
