@@ -19,7 +19,9 @@ import {
   isNexaError,
   legacyProjectionOf,
   mainMenuBuilderMutationResponseSchema,
+  systemContext,
   type ActorContext,
+  type BotInstanceId,
   type ExplicitMainMenu,
   type MainMenuBuilderMutationResponse,
   type MainMenuButtonId,
@@ -34,7 +36,10 @@ import { BotMenuBuilderService } from '../../apps/api/src/modules/control/bot-me
 import { PublishedMainMenuSource } from '../../apps/api/src/modules/control/bot-menu-builder/application/main-menu-source';
 import type { MainMenuBuilderRepository } from '../../apps/api/src/modules/control/bot-menu-builder/application/ports';
 import { DrizzleMainMenuBuilderRepository } from '../../apps/api/src/modules/control/bot-menu-builder/infrastructure/drizzle-main-menu-builder.repository';
-import { DrizzleAppearanceRepository } from '../../apps/api/src/modules/control/appearance/infrastructure/drizzle-appearance.repository';
+import {
+  CachedAppearanceReader,
+  DrizzleAppearanceRepository,
+} from '../../apps/api/src/modules/control/appearance/infrastructure/drizzle-appearance.repository';
 import { DrizzleSettingRepository } from '../../apps/api/src/modules/control/settings/infrastructure/drizzle-settings.repository';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import type { Container } from '../../apps/api/src/container';
@@ -471,6 +476,31 @@ describe('the button builder (round T, T1)', () => {
       expect(await builder().saveDraft(tenantA, owner, draftCommand)).toEqual(saved);
     });
 
+    it('P-3b refuses a draft key replayed with ANOTHER layout, and never reports the first save for it', async () => {
+      // A save whose response was lost is retried under its key after the operator edited:
+      // replaying the first answer would report the newer layout saved when it was not.
+      const command = {
+        idempotencyKey: 'menu-builder-replayed-draft-edited',
+        expectedDraftVersion: null,
+        layout: threeAcross(),
+        legacyBaselineVersion: null,
+      };
+      const first = await builder().saveDraft(tenantA, owner, command);
+      expect(first.head.draft.version).toBe(1);
+      // Same key, same body: the first answer, nothing written twice.
+      expect(await builder().saveDraft(tenantA, owner, command)).toEqual(first);
+      // Same key, the operator's later layout: refused, whatever the versions say.
+      expect(
+        await codeOf(
+          builder().saveDraft(tenantA, owner, { ...command, layout: DEFAULT_EXPLICIT_MAIN_MENU }),
+        ),
+      ).toBe(PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH);
+      const view = await builder().view(tenantA, owner);
+      expect(view.draft.version).toBe(1);
+      expect(view.draft.layout).toEqual(first.head.draft.layout);
+      expect(await auditActions()).toEqual([BOT_MENU_BUILDER_AUDIT_ACTIONS.DRAFT_SAVED]);
+    });
+
     it('P-5 a setting written behind the publish by an older release wins, is reported superseded, and is never overwritten unseen', async () => {
       await saveDraft(threeAcross(), null);
       await publish(1, null);
@@ -863,6 +893,67 @@ describe('the button builder (round T, T1)', () => {
       expect(
         Object.fromEntries(view.iconEligibility.map((bot) => [bot.botInstanceId, bot.eligible])),
       ).toEqual({ [SEED_IDS.botA1]: true, [SEED_IDS.botA2]: false });
+    });
+
+    it('F-4 calls a bot eligible exactly when the runtime decorates it: a tested, refused bot is not', async () => {
+      // botA1 proved custom emoji; botA2 was TESTED and refused — a recorded outcome that is
+      // not SENT, which a builder answering "has a test" would call eligible.
+      for (const [botId, outcome, errorCode] of [
+        [SEED_IDS.botA1, 'SENT', null],
+        [SEED_IDS.botA2, 'REJECTED', 'appearance.custom_emoji_refused'],
+      ] as const) {
+        await db().execute(
+          sql`UPDATE bot_instances SET custom_emoji_tested_at = now(),
+                     custom_emoji_test_outcome = ${outcome},
+                     custom_emoji_test_error_code = ${errorCode}
+               WHERE id = ${botId}`,
+        );
+      }
+      await db().execute(
+        sql`INSERT INTO bot_appearance_slots (id, tenant_id, slot, custom_emoji_id)
+            VALUES (gen_random_uuid(), ${tenantA.tenantId}, 'wallet', '5368324170671202286')
+            ON CONFLICT (tenant_id, slot) DO UPDATE SET custom_emoji_id = EXCLUDED.custom_emoji_id,
+                                                        enabled = true`,
+      );
+      const view = await builder().view(tenantA, owner);
+      const reader = new CachedAppearanceReader(
+        new DrizzleAppearanceRepository(db()),
+        container.clock,
+      );
+      for (const bot of view.iconEligibility) {
+        const decorated =
+          (await reader.decorationFor(tenantA, bot.botInstanceId as BotInstanceId)).customEmoji
+            .size > 0;
+        expect({ bot: bot.botInstanceId, eligible: bot.eligible }).toEqual({
+          bot: bot.botInstanceId,
+          eligible: decorated,
+        });
+      }
+      expect(
+        Object.fromEntries(view.iconEligibility.map((bot) => [bot.botInstanceId, bot.eligible])),
+      ).toEqual({ [SEED_IDS.botA1]: true, [SEED_IDS.botA2]: false });
+    });
+
+    it('F-6 refuses a system scope as the pre-round-T read did, never answering the default keyboard', async () => {
+      const system = systemContext('round-t-f6');
+      // 25e717a read bot.main_menu through settings.find → requireTenantId: fail closed.
+      for (const read of [
+        () => container.mainMenu.keyboardFor(system),
+        () => container.mainMenu.rowsFor(system),
+        () => container.mainMenu.describeFor(system),
+      ]) {
+        expect(await codeOf(read())).toBe(PLATFORM_ERROR_CODES.TENANT_CONTEXT_MISSING);
+      }
+      // The source itself refuses, rather than handing the evaluator the registry default
+      // and leaving the refusal to whichever later read happens to need a tenant.
+      const source = new PublishedMainMenuSource(
+        new DrizzleMainMenuBuilderRepository(db()),
+        container.settingsResolver,
+        container.opsLog,
+      );
+      expect(await codeOf(source.snapshotFor(system))).toBe(
+        PLATFORM_ERROR_CODES.TENANT_CONTEXT_MISSING,
+      );
     });
 
     it('reports each button’s gate as the server decides it, never the page', async () => {

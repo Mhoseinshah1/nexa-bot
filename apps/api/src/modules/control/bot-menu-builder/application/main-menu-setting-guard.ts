@@ -17,10 +17,16 @@ import type { MainMenuBuilderRepository } from './ports.js';
  * it to disagree with, and refusing it would break the page that ships until round T's web
  * package replaces it). A no-op write and a replay are never asked (`SettingsService`).
  *
- * The builder row is read `FOR UPDATE`, in the settings write's own transaction, so a
- * publish committing between this answer and the write cannot slip through: the publish
- * locks the same row first, and its projection write moves the setting's version, which
- * the settings write's own predicate then refuses.
+ * What serialises a settings write against a racing publish is the SETTING's own version
+ * predicate, not this read: both write `setting_values` under `version = expected` (a
+ * first write, under the row's unique key), the publish's projection write moves that
+ * version, and at READ COMMITTED the loser's predicate is re-evaluated after the winner
+ * commits and matches nothing — so a settings write that this guard answered before a
+ * publish committed is refused as a version conflict, never applied over the projection.
+ * The builder row is ALSO read `FOR UPDATE` in the settings write's transaction; that lock
+ * is defence in depth (it orders this read behind a publish holding the row), and nothing
+ * above depends on it — the T4 review's M07 (the read without the lock) changes no outcome
+ * (`docs/round-t-final-review.md`, F-5).
  */
 export class MainMenuSettingGuard implements SettingChangeGuard {
   readonly key = 'bot.main_menu';

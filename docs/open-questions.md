@@ -2838,3 +2838,57 @@ Resolved by real-bot acceptance R-ACC-2 (`docs/round-t-button-builder-audit.md` 
 carry an icon (or from a bot known to be ineligible), record the HTTP status and the exact
 `description`, and widen the classifier ONLY if that sentence is specific to custom emoji —
 in its own commit, with the observed sentence as a test fixture.
+
+Recorded by the T4 final review (`docs/round-t-final-review.md`, F-10): the same rule has a
+second cost. A message carrying BOTH decorated text and an iconed keyboard, refused with a
+description that does not name custom emoji, used to switch the bot's text decoration off
+(before round T a decorated-text refusal did). Under B5 nothing is switched off, so every
+such message costs a refused request plus the icon-less retry for as long as the condition
+lasts; the operator sees the deduplicated condition once. That is B5 as written, not a
+defect. R-ACC-2 records which of the two answers Telegram gives, and the classifier is
+widened only from the observed sentence.
+
+## OQ-T-1 — a button's label is live, not drafted
+
+Round T, button builder (`docs/round-t-button-builder-audit.md` §14). DECISION. Editing a
+label edits the `bot.menu.*` template through the existing template mechanism and applies
+at once, outside Draft/Publish; the builder never stores a label. The Inspector says so
+(`web.bb_label_note`).
+
+Default in force, accepted by the owner for round T. Copied here by the T4 review (F-9).
+
+## OQ-T-2 — a button a later release adds, on a tenant with a published layout
+
+Round T. DECISION. The new button lands UNPLACED, in the pool, and is never drawn on an
+explicit layout until an operator places it and publishes (`normalizeExplicitMainMenu`; the
+T4 review's M05 shows that path is tested). It still routes: `routesFor` covers every
+declared button.
+
+Default in force, accepted by the owner for round T. Copied here by the T4 review (F-9).
+
+**Obligation carried, not built (T4 review F-8, Codex #134 finding 7):** the default also
+promises a "new" badge on that button in the pool, and round T ships none — no release has
+added a button, so nothing could show it. **The release that adds a main-menu button must
+ship, in the same change, a marker in the builder read** (an `unconfigured`/new flag on the
+item, set when the tenant's stored layout has no configuration for the button) **and the
+pool badge that draws it**, with a web test. Without it the operator is never told a new
+button exists; customers lose nothing (unplaced, not drawn, still routed).
+
+## OQ-T-3 — revision retention
+
+Round T. DECISION. Every publish writes one append-only `main_menu_revisions` row (a few
+hundred bytes), kept for the tenant's life, like `template_revisions`; the history read is
+paginated. No cap and no pruning job. Revisit only if a cap is wanted.
+
+Default in force, accepted by the owner for round T. Copied here by the T4 review (F-9).
+
+## OQ-T-4 — icon eligibility is shared with message decoration
+
+Round T. DECISION. One custom-emoji eligibility per bot: the appearance test's recorded
+outcome, `SENT` only (`isCustomEmojiEligible`, used by the runtime's decoration and by the
+builder's Inspector alike since the T4 review's F-4). Refined by owner rule B5
+(`OQ-T-API-02`, `OQ-T-API-05`): only a reliably classified custom-emoji denial switches the
+shared state off; a generic refusal of an iconed message does not. Revisit only if real
+acceptance (R-ACC-2) shows Telegram grants text decoration and keyboard icons differently.
+
+Default in force, accepted by the owner for round T. Copied here by the T4 review (F-9).

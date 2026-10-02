@@ -1794,9 +1794,16 @@ release before round T runs:
 - **A save on the old release's «دکمه‌های ربات» page wins.** It writes `bot.main_menu`
   directly, moving its version past the one the last publish recorded. After the
   roll-forward the runtime follows that setting (the operator's latest act) and the
-  builder reports the published layout **superseded**; the operator reviews the draft and
-  publishes again. Nothing is silently overwritten in either direction. Unlike round P's
-  workaround, there is no need to save the arrangement on the old release to keep it.
+  builder reports the published layout **superseded**. The existing draft does **not**
+  publish over it — its legacy baseline is behind the setting, so Publish is refused
+  (`control.version_conflict`) until the operator reseeds the draft from the live keyboard
+  («ساختن دوباره از منوی زنده»); to bring the published layout back, they then restore its
+  revision from History into the draft, and publish. Nothing is silently overwritten in
+  either direction. Unlike round P's workaround, there is no need to save the arrangement
+  on the old release to keep it. (Migration `0156`'s header comment says the keyboard
+  follows the setting "until somebody publishes again" — true of the keyboard, but the
+  publish needs the reseed above first. The migration is merged and immutable, so the
+  correction lives here; T4 review, F-3.)
 - **On the new release, `bot.main_menu` has one writer once a tenant has published**: the
   settings endpoint refuses a change to it (`MainMenuSettingGuard`) and the builder's
   publish rewrites it. A tenant that never published keeps the legacy path, unchanged.

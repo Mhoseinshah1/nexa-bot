@@ -275,9 +275,11 @@ export class MainMenuLayout {
   }
 
   /**
-   * The keyboard's rows as rendered labels — the TEXT-ONLY view of `keyboardFor`, which is
-   * what the transport draws until it carries styles and icons (round T, T2). Byte for byte
-   * the rows it drew before round T on the legacy path.
+   * The keyboard's rows as rendered labels — the TEXT-ONLY view of `keyboardFor`. The
+   * messenger draws `keyboardFor` itself (styles and icons, round T, T2); this serves the
+   * views that show text only: the operator's `/bot-menu` read (`BotMenuService`) and the
+   * builder's `live` rows. Byte for byte the rows the transport drew before round T on the
+   * legacy path.
    */
   async rowsFor(scope: ScopeContext, options: MainMenuReadOptions = {}): Promise<string[][]> {
     return (await this.keyboardFor(scope, options)).map((row) => row.map((button) => button.text));
