@@ -931,6 +931,108 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'ops.financial.outcome_unknown',
+    description:
+      'Financial log (TonPays Telegram, §9.6.4): a gateway payment whose provider review window ended with no trustworthy answer is now UNKNOWN. Nothing was settled or failed; an operator must reconcile it from the recorded inquiries.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'route',
+        type: 'STRING',
+        description: 'The gateway provider.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: 'The customer’s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The customer’s Telegram @username, or a dash when they have none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: 'The customer’s Telegram display name, or a dash.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment’s own reference code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'paymentId',
+        type: 'STRING',
+        description: 'The internal payment id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'orderId',
+        type: 'STRING',
+        description: 'The order id, or a dash for a top-up.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'principal',
+        type: 'MONEY',
+        description:
+          'The principal: what the order cost or the wallet receives. The fee is never part of it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'fee',
+        type: 'MONEY',
+        description:
+          'The customer’s gateway fee snapshotted on the payment; zero for every non-gateway method.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description: 'What the customer was asked to pay: principal plus fee.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'providerInvoiceId',
+        type: 'STRING',
+        description: 'The provider’s invoice id, or a dash.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'providerFinalAmount',
+        type: 'STRING',
+        description:
+          'The final amount the provider reported, in its own unit, or a dash. Diagnostic only: it never decides anything.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the fact was recorded.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'ops.financial.refund_completed',
     description:
       'Financial log (WP18): a refund reached COMPLETED — an operator’s, or the automatic refund of an undeliverable order.',
