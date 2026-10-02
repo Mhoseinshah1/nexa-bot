@@ -4391,6 +4391,172 @@ export const TEMPLATES = [
    * authors — a name, an emoji — travels as a COMMAND carrying its argument, never as
    * a prompt that captures the next message (INCIDENT-FIN-001).
    */
+  // --- Spec §7: the client apps section and the tutorial video wizard ---------------
+  {
+    key: 'bot.admin.apps_button',
+    description:
+      'Spec §7: opens the client apps section of the management panel, where a tutorial video is set. Drawn for an administrator who holds `client_apps.view`; setting or deleting a video charges `client_apps.edit`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_section',
+    description:
+      'Spec §7: the client apps section — a heading over one button per app, each named by the app.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_empty',
+    description:
+      'Spec §7: the client apps section when the installation has no app entry yet (they are created in the Web Admin).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_detail_video',
+    description:
+      'Spec §7: one app in the management panel, when a tutorial video is stored for this bot. Carries «تنظیم ویدیو» (replace), delete and back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_detail_no_video',
+    description:
+      'Spec §7: one app in the management panel, when no tutorial video is stored for this bot. Carries «تنظیم ویدیو» and back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_set_button',
+    description:
+      'Spec §7: «تنظیم ویدیو» — opens the bounded prompt that reads the next video the administrator sends as this app’s tutorial.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_delete_button',
+    description: 'Spec §7: asks to delete this app’s tutorial video. Deletes nothing by itself.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_delete_ask',
+    description: 'Spec §7: the confirmation before a tutorial video is deleted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_delete_confirm_button',
+    description: 'Spec §7: confirms deleting the tutorial video.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_prompt',
+    description:
+      'Spec §7: asks the administrator to send the tutorial video now, as a video message; says the request expires. Carries the cancel button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_cancel_button',
+    description: 'Spec §7: cancels the open «send the video» prompt. Stores nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_saved',
+    description:
+      'Spec §7: the video was stored as this app’s tutorial (a first one or a replacement).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_deleted',
+    description: 'Spec §7: the tutorial video was deleted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_cancelled',
+    description: 'Spec §7: the «send the video» prompt was cancelled; nothing was stored.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_stale',
+    description:
+      'Spec §7: a video arrived, or a prompt button was tapped, with no open prompt — expired, cancelled, superseded or never opened. Nothing was stored.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_back_button',
+    description: 'Spec §7: back to the client apps section.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_back_button',
+    description: 'Spec §7: back to the app’s own screen.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_not_found',
+    description: 'Spec §7: the app a management-panel button named no longer exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.categories_button',
     description:

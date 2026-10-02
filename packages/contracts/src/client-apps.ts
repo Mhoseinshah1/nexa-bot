@@ -114,6 +114,23 @@ export const CLIENT_APP_IMAGE_MAX_SIDE = 2048;
 /** Telegram refuses a photo whose sides differ by more than a factor of 20. */
 export const CLIENT_APP_IMAGE_MAX_ASPECT = 20;
 
+// --- Tutorial video (spec §7) --------------------------------------------------------
+
+/**
+ * Spec §7: a client app's tutorial VIDEO is set from Telegram by an administrator
+ * («تنظیم ویدیو»), and what is stored is Telegram's own reference to it — `file_id`, which
+ * sends it again with no byte downloaded, and `file_unique_id`, stable across bots — never
+ * the video's bytes. A `file_id` is valid only for the bot that received it, so a video is
+ * stored PER BOT: the bot an administrator sent it to is the bot that can show it.
+ *
+ * How long the «send the video now» prompt stays open. Longer than an amount capture's five
+ * minutes: a video is picked from a phone's gallery and uploaded, which takes a while.
+ */
+export const CLIENT_APP_VIDEO_CAPTURE_TTL_MS = 15 * 60 * 1000;
+/** Bounds on the identifiers Telegram gives; a longer one is not a Telegram identifier. */
+export const CLIENT_APP_VIDEO_FILE_ID_MAX_LENGTH = 256;
+export const CLIENT_APP_VIDEO_FILE_UNIQUE_ID_MAX_LENGTH = 128;
+
 /** Why a file is refused as an entry's image. */
 export type ClientAppImageProblem =
   | 'EMPTY'
