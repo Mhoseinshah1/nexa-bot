@@ -103,12 +103,9 @@ M = [
                    "          isNull(gatewayReceiptCaptures.closedAt),\n          sql`false`,\n        ),\n      );\n\n    const rows")],
      T_GW, 'TPTG-10', 'KILL'),
     # --- money ----------------------------------------------------------------------------
-    ('TPTG-11', [(PS, "        const confirmation = {\n          evidenceKind:",
-                  "        if (payment.gatewayProvider === 'TONPAYS_TELEGRAM') {\n"
-                  "          const inv = await this.deps.gatewayInvoices.findByPayment(scope, paymentId, tx);\n"
-                  "          if (inv?.finalAmount != null) (payment as { amount: unknown }).amount = { ...payment.amount, amountMinor: inv.finalAmount };\n"
-                  "        }\n"
-                  "        const confirmation = {\n          evidenceKind:")],
+    # The credit reads the provider's figure instead of the payment's frozen amount.
+    ('TPTG-11', [(PS, "        amount: confirmed.amount,",
+                  "        amount: { ...confirmed.amount, amountMinor: (await this.deps.gatewayInvoices.findByPayment(scope, confirmed.id, tx))?.finalAmount ?? confirmed.amount.amountMinor },")],
      T_GW, 'TPTG-11: a top-up credits', 'KILL'),
     ('TPTG-12', [(IR, "                eq(gatewayInvoices.creationState, 'CREATING'),\n                isNull(gatewayInvoices.creationErrorCode),",
                   "                eq(gatewayInvoices.creationState, 'CREATING'),\n                sql`true`,")],
@@ -265,10 +262,12 @@ M = [
     ('TPTG-37s', [(PS, "        if (payment.state !== 'UNKNOWN') {\n          throw errors.conflict(\n            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,\n            'Only a payment whose outcome is unknown can be reconciled.',",
                    "        if (false) {\n          throw errors.conflict(\n            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,\n            'Only a payment whose outcome is unknown can be reconciled.',")],
      T_RV, 'TPTG-37: needs payments.reconcile', 'KILL'),
+    # A permission the support role HOLDS, so the denial the test expects can only come
+    # from `payments.reconcile`.
     ('TPTG-37p', [(PS, "    const denial = { action, entityType: 'Payment', entityId: paymentId };\n    await this.authorize(scope, actor, PAYMENT_RECONCILE_PERMISSION, denial);",
-                   "    const denial = { action, entityType: 'Payment', entityId: paymentId };\n    await this.authorize(scope, actor, 'payments.view', denial);"),
+                   "    const denial = { action, entityType: 'Payment', entityId: paymentId };\n    await this.authorize(scope, actor, 'orders.view', denial);"),
                   (PS, "    return runAuthorizedMutation(\n      this.mutationDeps(),\n      scope,\n      actor,\n      PAYMENT_RECONCILE_PERMISSION,\n      denial,\n      async (tx) => {\n        await this.assertScopeActive(scope, tx);\n        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);\n        if (payment === null || payment.method !== 'GATEWAY') {\n          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');\n        }\n        if (payment.state !== 'UNKNOWN') {\n          throw errors.conflict(\n            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,\n            'Only a payment whose outcome is unknown can be reconciled.',",
-                   "    return runAuthorizedMutation(\n      this.mutationDeps(),\n      scope,\n      actor,\n      'payments.view',\n      denial,\n      async (tx) => {\n        await this.assertScopeActive(scope, tx);\n        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);\n        if (payment === null || payment.method !== 'GATEWAY') {\n          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');\n        }\n        if (payment.state !== 'UNKNOWN') {\n          throw errors.conflict(\n            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,\n            'Only a payment whose outcome is unknown can be reconciled.',")],
+                   "    return runAuthorizedMutation(\n      this.mutationDeps(),\n      scope,\n      actor,\n      'orders.view',\n      denial,\n      async (tx) => {\n        await this.assertScopeActive(scope, tx);\n        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);\n        if (payment === null || payment.method !== 'GATEWAY') {\n          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');\n        }\n        if (payment.state !== 'UNKNOWN') {\n          throw errors.conflict(\n            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,\n            'Only a payment whose outcome is unknown can be reconciled.',")],
      T_RV, 'TPTG-37 (HTTP)', 'KILL'),
     ('TPTG-37r', [(PR, "          eq(payments.id, id),\n          eq(payments.state, 'UNKNOWN'),\n          eq(payments.method, 'GATEWAY'),\n        ),\n      )\n      .returning({ id: payments.id });\n    return rows.length > 0;\n  }\n\n  async reconcileFail(",
                    "          eq(payments.id, id),\n          eq(payments.method, 'GATEWAY'),\n        ),\n      )\n      .returning({ id: payments.id });\n    return rows.length > 0;\n  }\n\n  async reconcileFail(")],
