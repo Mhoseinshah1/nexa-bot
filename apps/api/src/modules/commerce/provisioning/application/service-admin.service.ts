@@ -7,6 +7,7 @@ import {
   type PermissionKey,
   type ServiceActionAvailability,
   type TenantContext,
+  type UserId,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { SERVICE_PAGE_DEFAULT } from './provisioning.service.js';
@@ -23,6 +24,7 @@ import type {
   PanelOperability,
   PanelOperabilityReader,
   ServiceCursor,
+  ServiceCustomerIdentity,
   ServicePage,
   ServiceRecord,
   ServiceRepository,
@@ -123,6 +125,23 @@ export class ServiceAdminService {
     await this.deps.guard.check(scope, actor, SERVICE_VIEW_PERMISSION);
     const limit = Math.min(Math.max(query.limit ?? SERVICE_PAGE_DEFAULT, 1), SERVICE_PAGE_MAX);
     return this.deps.services.list(scope, query.search, limit, query.cursor ?? null);
+  }
+
+  /**
+   * Who a page of services' customers are on Telegram (spec §10): the operator-facing
+   * identity, so the list shows a Telegram id rather than an internal uuid. Charged like
+   * every other read of a service, and one query for the page.
+   */
+  async customerIdentities(
+    scope: TenantContext,
+    actor: ActorContext,
+    services: readonly ServiceRecord[],
+  ): Promise<ReadonlyMap<UserId, ServiceCustomerIdentity>> {
+    await this.deps.guard.check(scope, actor, SERVICE_VIEW_PERMISSION);
+    return this.deps.services.customerIdentities(
+      scope,
+      services.map((service) => service.customerId),
+    );
   }
 
   async get(scope: TenantContext, actor: ActorContext, id: string) {
