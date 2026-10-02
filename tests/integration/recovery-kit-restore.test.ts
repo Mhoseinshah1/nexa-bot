@@ -88,7 +88,7 @@ describe('restoring another installation’s backup with its Recovery Kit', () =
     material: Buffer,
     extraKeys = '',
   ): Promise<{ container: Container; database: string; workRoot: string; owner: ActorContext }> {
-    const database = `nexa_drlive_${randomBytes(6).toString('hex')}`;
+    const database = `nexa_kitlive_${randomBytes(6).toString('hex')}`;
     created.push(database);
     await maintenance(`CREATE DATABASE "${database}"`);
     const url = new URL(testConfig().DATABASE_URL);
@@ -164,7 +164,7 @@ describe('restoring another installation’s backup with its Recovery Kit', () =
   afterEach(async () => {
     for (const container of containers.splice(0)) await container.shutdown().catch(() => undefined);
     // Only what THIS file created. Not a cluster-wide LIKE sweep: other suites
-    // (and other agents' databases) may hold `nexa_drlive_*` names right now.
+    // (and other agents' databases) may hold `nexa_drlive_*` (which is why these are `nexa_kitlive_*`) names right now.
     for (const name of new Set(created.filter((name) => name !== ''))) {
       await maintenance(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`).catch(() => undefined);
     }

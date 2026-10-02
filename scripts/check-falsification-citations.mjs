@@ -113,6 +113,7 @@ const RECORDS = [
   'docs/round-t-t2-falsification.md',
   'docs/round-t-t3-falsification.md',
   'docs/tonpays-telegram-falsification.md',
+  'docs/recovery-kit-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -153,8 +154,9 @@ const RECORDS = [
  * to the record's layer table (a review fix now holds their rows a second way).
  * 2635 → 2638: the Codex review of #136 — four CDX rows added, and REV-F6 moved to the layer
  * table (the stamp's own transaction now re-decides the window).
+ * 2638 → 2648: the Recovery Kit (ADR-0032), `docs/recovery-kit-falsification.md` — ten rows.
  */
-const EXPECTED = 2638;
+const EXPECTED = 2648;
 /**
  * A table whose last column is one of these is making citations.
  *
