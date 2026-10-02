@@ -318,8 +318,10 @@ M = [
      T_RV, 'review F5: in review, a customer', 'KILL'),
     ('REV-F5s', [(IR, "          or(isNull(gatewayInvoices.lastInquiryAt), lte(gatewayInvoices.lastInquiryAt, spaced)),\n", "")],
      T_RV, 'review F5: the operator', 'KILL'),
+    # Since Codex #136-2 the stamp's own transaction re-decides the window under the lock, so
+    # this unlocked read is one line of two; CDX-2 removes the other and is killed.
     ('REV-F6', [(GPS, "      !windowOpen({\n        state: payment.state,\n        expiresAt: payment.expiresAt,\n        reviewUntil: payment.providerReviewUntil,\n      })\n", "      false\n")],
-     T_GW, 'review F6', 'KILL'),
+     T_GW, 'review F6', 'LAYER'),
     ('REV-F7', [(IR, "          sql`COALESCE(${payments.providerReviewUntil}, ${payments.expiresAt}) > ${input.now}::timestamptz`,",
                  "          sql`${payments.expiresAt} > ${input.now}::timestamptz`,")],
      T_RV, 'review F7', 'KILL'),

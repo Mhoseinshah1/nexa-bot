@@ -150,8 +150,10 @@ const RECORDS = [
  * 2523 → 2611: TonPays Telegram, `docs/tonpays-telegram-falsification.md` — 88 citations.
  * 2611 → 2628: its independent review — nineteen REV rows added, and TPTG-36p and -36d moved
  * to the record's layer table (a review fix now holds their rows a second way).
+ * 2628 → 2631: the Codex review of #136 — four CDX rows added, and REV-F6 moved to the layer
+ * table (the stamp's own transaction now re-decides the window).
  */
-const EXPECTED = 2628;
+const EXPECTED = 2631;
 /**
  * A table whose last column is one of these is making citations.
  *
