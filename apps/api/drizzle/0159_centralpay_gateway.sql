@@ -8,9 +8,11 @@
 -- stable random integer per provider. The hand-written tail adds two write-once guards
 -- drizzle-kit does not model. No money data, no Persian text, no balance, no row written.
 --
--- ROLLBACK NOTE. The previous release reads a CENTRALPAY row as a provider it has no adapter
--- for and offers nothing; an open CentralPay attempt is expired by its deadline sweep like
--- any other PENDING gateway payment. `botctl rollback` never restores the database.
+-- ROLLBACK NOTE. The previous release lists and claims only providers it knows, so a
+-- CENTRALPAY row neither breaks its gateway page nor stalls its worker — but it never
+-- verifies an open CentralPay attempt, which then expires even if paid. Disable the route and
+-- drain first: docs/deployment.md, "Before rolling back past CentralPay (0159)". `botctl
+-- rollback` never restores the database.
 CREATE TABLE "gateway_customer_numbers" (
 	"tenant_id" uuid NOT NULL,
 	"provider" text NOT NULL,
