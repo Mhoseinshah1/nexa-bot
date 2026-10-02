@@ -933,7 +933,7 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
       title={t('web.user_orders_title')}
       hint={t('web.user_orders_hint')}
       actions={
-        <a href={`/orders?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+        <a href={`/orders?q=${encodeURIComponent(customerId)}`} onClick={onLink}>
           {t('web.user_orders_all')}
         </a>
       }
@@ -1059,7 +1059,7 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
       title={t('web.user_services_title')}
       hint={t('web.user_services_hint')}
       actions={
-        <a href={`/services?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+        <a href={`/services?q=${encodeURIComponent(customerId)}`} onClick={onLink}>
           {t('web.user_services_all')}
         </a>
       }

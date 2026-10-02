@@ -858,6 +858,30 @@ describe('the route table', () => {
     expect(screen.queryByText(/orders\.view/u)).toBeNull();
   });
 
+  it('links "all orders" and "all services" through the one search box, scoped to this customer', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      { url: '/orders', body: { orders: [order()], nextCursor: null } },
+      { url: '/services', body: { services: [], nextCursor: null } },
+    ]);
+    const resolved = resolve({ path: `/users/${ROW_ID}`, query: new URLSearchParams() }, [
+      'users.view',
+      'orders.view',
+      'services.view',
+    ]);
+    renderPage(resolved.element as ReactElement);
+
+    const orders = await screen.findByText('همهٔ سفارش‌های این مشتری');
+    const services = await screen.findByText('همهٔ سرویس‌های این مشتری');
+    // The list pages read only `q`; a retired `customerId` would show every tenant row.
+    expect(orders.closest('a')?.getAttribute('href')).toBe(
+      `/orders?q=${encodeURIComponent(ROW_ID)}`,
+    );
+    expect(services.closest('a')?.getAttribute('href')).toBe(
+      `/services?q=${encodeURIComponent(ROW_ID)}`,
+    );
+  });
+
   /*
    * The other half of the same wiring, and the half that catches the likelier slip.
    *
