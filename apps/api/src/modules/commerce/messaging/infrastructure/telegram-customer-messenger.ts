@@ -15,7 +15,9 @@ import {
   templateDefinition,
   APPEARANCE_SLOTS,
   appearanceMarker,
+  inlineButtonStyleOf,
   type AppearanceTestErrorCode,
+  type InlineButtonStyles,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
@@ -55,6 +57,7 @@ import {
   type CustomEmojiEntity,
 } from '../application/appearance-render.js';
 import type { MainMenuKeyboardButton } from '../application/main-menu.js';
+import type { InlineButtonStyleReader } from '../application/inline-buttons.js';
 import {
   APPEARANCE_DECORATION_FAILED_CODE,
   APPEARANCE_DECORATION_OK_CODE,
@@ -342,6 +345,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * eligibility gets.
      */
     private readonly appearance?: AppearanceReader,
+    /**
+     * Owner spec §6: the tenant's inline-button styles (`bot.inline_buttons`). Absent in a
+     * stand-in, which draws every registry button with its default — no style on the wire.
+     */
+    private readonly inlineStyles?: InlineButtonStyleReader,
   ) {}
 
   async send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult> {
@@ -1035,8 +1043,20 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     buttons: readonly CustomerButton[],
   ): Promise<TelegramButton[]> {
     const labelled: TelegramButton[] = [];
+    // Read once per keyboard, and only for a keyboard that names a registry button.
+    const styles: InlineButtonStyles =
+      this.inlineStyles !== undefined && buttons.some((button) => button.inline !== undefined)
+        ? await this.inlineStyles.stylesFor(scope)
+        : {};
     for (const button of buttons) {
       const text = await this.labelText(scope, button.label);
+      /*
+       * Owner spec §6: the registry button's style, `default` omitted. The route below is
+       * the caller's and the style never touches it.
+       */
+      const style =
+        button.inline === undefined ? 'default' : inlineButtonStyleOf(button.inline, styles);
+      const styled = style === 'default' ? {} : { style };
       /*
        * The union is discriminated by the field that IS the difference, not by a `kind`
        * tag beside it. A URL button carries a link the client opens; a copy button
@@ -1045,11 +1065,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
        * with the three that decide it.
        */
       if ('url' in button) {
-        labelled.push({ text, url: validatedButtonUrl(button.url), ...rowOf(button) });
+        labelled.push({ text, url: validatedButtonUrl(button.url), ...rowOf(button), ...styled });
       } else if ('copyText' in button) {
-        labelled.push({ text, copyText: button.copyText, ...rowOf(button) });
+        labelled.push({ text, copyText: button.copyText, ...rowOf(button), ...styled });
       } else {
-        labelled.push({ text, data: button.data, ...rowOf(button) });
+        labelled.push({ text, data: button.data, ...rowOf(button), ...styled });
       }
     }
     return labelled;

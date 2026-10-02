@@ -291,7 +291,16 @@ async function telegramCall(request: TelegramRequest): Promise<TelegramCallOutco
  * installation. The scheme is validated by the messenger, which is where the URL is
  * chosen; the transport carries what it is given.
  */
-export type TelegramButton = { readonly text: string; readonly row?: number } & (
+export type TelegramButton = {
+  readonly text: string;
+  readonly row?: number;
+  /**
+   * Owner spec §6: `InlineKeyboardButton.style` — the same closed set as the reply keyboard
+   * (`TELEGRAM_KEYBOARD_BUTTON_STYLES`, Bot API 9.4). Absent is the client default; a value
+   * outside the set is never put on the wire. Presentation only: it changes no route.
+   */
+  readonly style?: TelegramKeyboardButtonStyle;
+} & (
   | { readonly data: string; readonly copyText?: undefined; readonly url?: undefined }
   | { readonly copyText: string; readonly data?: undefined; readonly url?: undefined }
   | { readonly url: string; readonly data?: undefined; readonly copyText?: undefined }
@@ -322,12 +331,18 @@ export function telegramButtonMarkup(
       );
     }
     const key = button.row === undefined ? `self:${index}` : `row:${button.row}`;
-    const cell =
+    const cell: Record<string, unknown> =
       button.url !== undefined
         ? { text: button.text, url: button.url }
         : button.copyText !== undefined
           ? { text: button.text, copy_text: { text: button.copyText } }
           : { text: button.text, callback_data: button.data };
+    if (
+      button.style !== undefined &&
+      (TELEGRAM_KEYBOARD_BUTTON_STYLES as readonly string[]).includes(button.style)
+    ) {
+      cell.style = button.style;
+    }
     const existing = rows.get(key);
     if (existing === undefined) rows.set(key, [cell]);
     else existing.push(cell);

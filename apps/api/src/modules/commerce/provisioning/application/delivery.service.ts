@@ -23,6 +23,7 @@ import type {
 } from '../../messaging/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import { serviceIdOrNotFound } from './service-id.js';
+import { inlineLabel } from '../../messaging/application/inline-buttons.js';
 import {
   cardRetryDelayMs,
   type CardMessageRef,
@@ -1031,17 +1032,17 @@ const EMPTY_SWEEP: DeliverySweepReport = {
 export function deliveryCardButtons(serviceId: string): readonly CustomerButton[] {
   return [
     {
-      label: { kind: 'TEMPLATE', key: 'bot.service.tutorial_button' },
+      ...inlineLabel('service.tutorial'),
       data: `${TUTORIAL_CALLBACK_DATA}`,
       row: 0,
     },
     {
-      label: { kind: 'TEMPLATE', key: 'bot.service.connected_button' },
+      ...inlineLabel('service.connected'),
       data: `${CONNECTED_CALLBACK_PREFIX}${serviceId}`,
       row: 1,
     },
     {
-      label: { kind: 'TEMPLATE', key: 'bot.service.problem_button' },
+      ...inlineLabel('service.problem'),
       data: `${SUPPORT_CALLBACK_DATA}`,
       row: 1,
     },
@@ -1054,7 +1055,7 @@ export function deliveryCardButtons(serviceId: string): readonly CustomerButton[
  */
 export function backToCardButton(serviceId: string): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_card_button' },
+    ...inlineLabel('service.back_to_card'),
     data: `${SERVICE_CARD_CALLBACK_PREFIX}${serviceId}`,
   };
 }
