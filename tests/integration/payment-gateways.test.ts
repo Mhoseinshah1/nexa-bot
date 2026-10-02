@@ -142,11 +142,16 @@ describe('payment routes', () => {
       'MANUAL_TRANSFER',
       'TELEGRAM_STARS',
       'TONPAYS',
+      'TONPAYS_TELEGRAM',
     ]);
     const route = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
     expect(route?.status).toBe('ACTIVE');
     // WP11A: a route that needs a credential is seeded DISABLED, with no key.
     expect(gateways.find((gateway) => gateway.provider === 'TONPAYS')?.status).toBe('DISABLED');
+    // TonPays Telegram: its own route, seeded DISABLED like the website one.
+    expect(gateways.find((gateway) => gateway.provider === 'TONPAYS_TELEGRAM')?.status).toBe(
+      'DISABLED',
+    );
     // Package A: a route priced by an operator's rate is seeded DISABLED, with no rate.
     const stars = gateways.find((gateway) => gateway.provider === 'TELEGRAM_STARS');
     expect(stars?.status).toBe('DISABLED');
@@ -172,8 +177,8 @@ describe('payment routes', () => {
 
   it('lets a view-only role read and refuses its writes at the guard', async () => {
     const { gateways } = await ctx.container.paymentGateways.list(tenantA, viewerA);
-    // The whole roster, TonPays (WP11A) and Telegram Stars (Package A) included.
-    expect(gateways).toHaveLength(3);
+    // The whole roster: TonPays (WP11A), Telegram Stars (Package A) and TonPays Telegram.
+    expect(gateways).toHaveLength(4);
 
     const refused = await ctx.container.paymentGateways
       .setStatus(tenantA, viewerA, {
