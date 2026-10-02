@@ -2,6 +2,10 @@ import { z } from 'zod';
 import { CURRENCY_CODES, salesCurrencyCodeSchema } from './money.js';
 import { TELEGRAM_STARS_CURRENCY } from './telegram-stars.js';
 import {
+  GATEWAY_CARD_CHANGE_STATES,
+  GATEWAY_RECEIPT_SUBMISSION_STATES,
+} from './tonpays-telegram.js';
+import {
   FX_USABLE_QUOTE_STATES,
   fxBaseAssetSchema,
   fxSourceSchema,
@@ -167,6 +171,42 @@ const gatewayInvoiceViewShape = z.object({
   outcome: z.enum(GATEWAY_INVOICE_OUTCOMES).nullable(),
   lateCompletionObservedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
+  /*
+   * A card-transfer route (`TONPAYS_TELEGRAM`, `docs/tonpays-telegram-gateway-audit.md` §10).
+   * The current card's sequence and when it was received — NOT the number: this is an
+   * operator's diagnosis view, and a payee card is the provider's. What the provider last
+   * said about changing it, the latest card-change request, and every receipt the customer
+   * sent to the provider, by state and code only (never a file, a caption or bytes).
+   * Defaulted on parse so a response from the previous release reads "none".
+   */
+  cardSeq: z.number().int().nullable().default(null),
+  cardReceivedAt: z.iso.datetime().nullable().default(null),
+  cardChangeShown: z.boolean().nullable().default(null),
+  cardChangeCooldownUntil: z.iso.datetime().nullable().default(null),
+  cardChangeExhausted: z.boolean().nullable().default(null),
+  latestCardChange: z
+    .object({
+      state: z.enum(GATEWAY_CARD_CHANGE_STATES),
+      errorCode: z.string().nullable(),
+      requestedAt: z.iso.datetime(),
+      decidedAt: z.iso.datetime().nullable(),
+    })
+    .nullable()
+    .default(null),
+  receiptSubmissions: z
+    .array(
+      z.object({
+        id: z.string(),
+        state: z.enum(GATEWAY_RECEIPT_SUBMISSION_STATES),
+        errorCode: z.string().nullable(),
+        providerStatus: z.string().nullable(),
+        receiptReceived: z.boolean().nullable(),
+        openedReview: z.boolean(),
+        createdAt: z.iso.datetime(),
+        decidedAt: z.iso.datetime().nullable(),
+      }),
+    )
+    .default([]),
 });
 /**
  * The view with its policy always present: what the previous release sent without one is

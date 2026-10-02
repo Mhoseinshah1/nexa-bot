@@ -250,6 +250,9 @@ function GatewayName({ provider }: { provider: string | null }) {
   if (provider === 'MANUAL_TRANSFER')
     return <>{t('web.payment_gateway_provider_manual_transfer')}</>;
   if (provider === 'TONPAYS') return <>{t('web.payment_gateway_provider_tonpays')}</>;
+  if (provider === 'TONPAYS_TELEGRAM') {
+    return <>{t('web.payment_gateway_provider_tonpays_telegram')}</>;
+  }
   if (provider === 'TELEGRAM_STARS') {
     return <>{t('web.payment_gateway_provider_telegram_stars')}</>;
   }

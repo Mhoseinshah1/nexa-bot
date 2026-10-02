@@ -80,6 +80,11 @@ describe('the conversion (A1)', () => {
         modeSetting: 'stars.pricing_mode',
         unitRatioSetting: 'stars.per_usdt',
       },
+      // TonPays Telegram (audit §5.3): the invoice form that replaced the BOT_TOKEN inference.
+      invoiceForm: 'BOT_INVOICE',
+      boundToBot: true,
+      requiresBuyerChatId: false,
+      providerReview: false,
     });
     expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS.approval).toBe('INQUIRY');
   });

@@ -1749,7 +1749,8 @@ export const WEB_FA = {
     'فهرست روش‌ها ثابت است و تنها روش‌هایی را نشان می‌دهد که این نسخه می‌تواند انجام دهد. روش جدید با نسخهٔ جدید اضافه می‌شود، نه از این صفحه.',
   'web.payment_gateway_provider': 'روش',
   'web.payment_gateway_provider_manual_transfer': 'کارت به کارت',
-  'web.payment_gateway_provider_tonpays': 'تون‌پیز (TonPays)',
+  'web.payment_gateway_provider_tonpays': 'درگاه پرداخت تون پی وبسایت',
+  'web.payment_gateway_provider_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
   'web.payment_gateway_provider_telegram_stars': 'تلگرام استارز (⭐)',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',

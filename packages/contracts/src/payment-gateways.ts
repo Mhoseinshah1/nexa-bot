@@ -76,8 +76,19 @@ const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
  *   token, and only Telegram's `successful_payment`, received on the bot's authenticated
  *   webhook and recorded, approves it. Priced by an operator-set rate; a row starts
  *   DISABLED and cannot be enabled without one.
+ * - `TONPAYS_TELEGRAM` — TonPays' Custom Telegram gateway (`docs/tonpays-telegram-gateway-audit.md`).
+ *   A card-to-card transfer to a payee card TonPays names, shown in the bot; the customer
+ *   sends the receipt to TONPAYS (never to Nexa's manual review queue), and the provider's
+ *   INQUIRY alone approves. Its own key, never the website route's; a row starts DISABLED
+ *   and cannot be enabled without one. Not accepted against the real provider yet
+ *   (`OQ-WP10-01`).
  */
-export const PAYMENT_GATEWAY_PROVIDERS = ['MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS'] as const;
+export const PAYMENT_GATEWAY_PROVIDERS = [
+  'MANUAL_TRANSFER',
+  'TONPAYS',
+  'TELEGRAM_STARS',
+  'TONPAYS_TELEGRAM',
+] as const;
 export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
 
@@ -119,6 +130,33 @@ export interface PaymentGatewayDescriptor {
    * policy and hold the unit ratio. The core reads the spec and never the name.
    */
   readonly conversion: GatewayConversionSpec;
+  /**
+   * What the customer pays THROUGH (`docs/tonpays-telegram-gateway-audit.md` §5.3): no
+   * invoice (`NONE`), a link to the provider's page (`LINK`), an invoice message this bot
+   * sends (`BOT_INVOICE`), or a payee card shown in the bot (`CARD_TRANSFER`). Replaces
+   * every "a link unless the credential is a bot token" inference: a third invoice form
+   * would otherwise be recorded as having no link and never be handed back as open.
+   */
+  readonly invoiceForm: 'NONE' | 'LINK' | 'BOT_INVOICE' | 'CARD_TRANSFER';
+  /**
+   * Whether an attempt is offered only inside a bot and records the bot it was opened
+   * through. A request from no bot has no chat to show the invoice in.
+   */
+  readonly boundToBot: boolean;
+  /**
+   * Whether the provider REQUIRES the buyer's chat id. Such an attempt is refused before
+   * any row is written when the customer's Telegram id is not a safe JSON integer —
+   * dropping a required field would be a guaranteed refusal after the payment exists.
+   */
+  readonly requiresBuyerChatId: boolean;
+  /**
+   * Whether a provider acknowledgement of the customer's receipt, recorded under the
+   * payment's lock before its deadline, opens the bounded provider review window
+   * (`payments.provider_review_until`, owner decision of 2026-10-01). The list of routes
+   * with this flag generates `payments_provider_review_check`; no other route can carry
+   * the columns.
+   */
+  readonly providerReview: boolean;
 }
 
 export const PAYMENT_GATEWAY_DESCRIPTORS: {
@@ -131,6 +169,10 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     invoiceCredential: 'NONE',
     approval: 'NONE',
     conversion: SAME_UNIT_CONVERSION,
+    invoiceForm: 'NONE',
+    boundToBot: false,
+    requiresBuyerChatId: false,
+    providerReview: false,
   },
   TONPAYS: {
     provider: 'TONPAYS',
@@ -139,6 +181,10 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     invoiceCredential: 'GATEWAY_KEY',
     approval: 'INQUIRY',
     conversion: SAME_UNIT_CONVERSION,
+    invoiceForm: 'LINK',
+    boundToBot: false,
+    requiresBuyerChatId: false,
+    providerReview: false,
   },
   TELEGRAM_STARS: {
     provider: 'TELEGRAM_STARS',
@@ -159,8 +205,34 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
       modeSetting: 'stars.pricing_mode',
       unitRatioSetting: 'stars.per_usdt',
     },
+    invoiceForm: 'BOT_INVOICE',
+    boundToBot: true,
+    requiresBuyerChatId: false,
+    providerReview: false,
+  },
+  TONPAYS_TELEGRAM: {
+    provider: 'TONPAYS_TELEGRAM',
+    settlesVia: 'GATEWAY',
+    // Its OWN key (the store panel's "Custom Telegram Gateway" key), never the website one.
+    requiresCredentials: true,
+    invoiceCredential: 'GATEWAY_KEY',
+    approval: 'INQUIRY',
+    conversion: SAME_UNIT_CONVERSION,
+    invoiceForm: 'CARD_TRANSFER',
+    boundToBot: true,
+    requiresBuyerChatId: true,
+    providerReview: true,
   },
 };
+
+/**
+ * The routes whose descriptor says `providerReview` — the list that generates
+ * `payments_provider_review_check`, so the review columns can exist on no other route.
+ */
+export const PROVIDER_REVIEW_GATEWAY_PROVIDERS: readonly PaymentGatewayProvider[] =
+  PAYMENT_GATEWAY_PROVIDERS.filter(
+    (provider) => PAYMENT_GATEWAY_DESCRIPTORS[provider].providerReview,
+  );
 
 /**
  * The bound on a `FIXED_RATE` route's rate: sales-currency minor units per ONE provider

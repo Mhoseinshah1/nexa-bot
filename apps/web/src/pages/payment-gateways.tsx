@@ -142,6 +142,8 @@ function nameOf(gateway: PaymentGatewayView): string {
       return t('web.payment_gateway_provider_tonpays');
     case 'TELEGRAM_STARS':
       return t('web.payment_gateway_provider_telegram_stars');
+    case 'TONPAYS_TELEGRAM':
+      return t('web.payment_gateway_provider_tonpays_telegram');
   }
 }
 

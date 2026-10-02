@@ -7866,7 +7866,14 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.route_name_tonpays',
     description:
-      'The product’s own name for the TonPays route, used when the operator set no display name.',
+      'The product’s own name for the TonPays WEBSITE route (`TONPAYS`), used when the operator set no display name.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.route_name_tonpays_telegram',
+    description:
+      'The product’s own name for the TonPays TELEGRAM route (`TONPAYS_TELEGRAM`, a card-to-card transfer shown in the bot), used when the operator set no display name.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -8254,6 +8261,278 @@ export const TEMPLATES = [
     description:
       'This attempt can no longer be paid: its deadline passed or it was closed. The order, ' +
       'when there is one, is not cancelled by this; the customer may start a new payment.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * TonPays Telegram (`TONPAYS_TELEGRAM`, `docs/tonpays-telegram-gateway-audit.md` §8, §9.6).
+   * A payee card shown in the bot, a receipt sent to TONPAYS, and the provider review window.
+   * None of these says the customer has paid until the payment is CONFIRMED by TonPays'
+   * own inquiry, and none of them renders TonPays' figure as what Nexa settles.
+   */
+  {
+    key: 'bot.payment.gateway_card_invoice',
+    description:
+      'The TonPays Telegram card-to-card invoice (`docs/tonpays-telegram-gateway-audit.md` §8.1): the payable from Nexa’s snapshot, the provider’s transfer figure when it differs, the payee card and the deadline, with the receipt, change-card and check buttons beneath. It must say a payment counts only once TonPays has confirmed it, and never that anything was paid.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'principal',
+        type: 'MONEY',
+        description: 'The principal from Nexa’s snapshot, shown only when a gateway fee applies.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'fee',
+        type: 'MONEY',
+        description:
+          'The customer’s gateway fee snapshotted on this attempt, shown only when above zero.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'transferAmount',
+        type: 'MONEY',
+        description:
+          'The amount TonPays itself asked to be transferred (its `final_amount`), shown only when present and different from the payable. Provider metadata: it is never what Nexa settles or credits.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'cardNumber',
+        type: 'STRING',
+        description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardName',
+        type: 'STRING',
+        description: 'The card holder’s name TonPays sent, when it sent one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_receipt_sent',
+    description:
+      'TonPays Telegram: the customer’s receipt is on its way to TonPays, or TonPays received it without opening a review. Nothing is confirmed; the check button reads the stored state. Never says paid.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_receipt_refused',
+    description:
+      'TonPays Telegram: TonPays did not accept the last image as a receipt (or it could not be sent), so the customer is asked to send a clear photo again before the deadline. The card is shown again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardNumber',
+        type: 'STRING',
+        description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardName',
+        type: 'STRING',
+        description: 'The card holder’s name TonPays sent, when it sent one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_changing',
+    description:
+      'TonPays Telegram: the customer asked for another card and the request is with TonPays; the new card replaces this message when it arrives. Says nothing was paid.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_unconfirmed',
+    description:
+      'TonPays Telegram: TonPays’ answer to a card change was lost, so no card is shown (the previous one may have been retired). The customer may send the receipt of a transfer already made, check the status, or ask for a card again after a minute. Never says paid or failed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_missing',
+    description:
+      'TonPays Telegram: TonPays reported the invoice created but sent no card to transfer to, so it cannot be paid from here. Nothing is recorded as paid; starting again opens a new attempt.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_in_review',
+    description:
+      'TonPays Telegram, owner decision of 2026-10-01: TonPays acknowledged the customer’s receipt before the deadline and is reviewing it. Shows the payable and the end of the review window. It invites no new payment, no new receipt and no card change, and never says paid, failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reviewUntil',
+        type: 'DATETIME',
+        description:
+          'The end of TonPays’ review window: twenty-four hours from the acknowledgement, frozen.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_review_unresolved',
+    description:
+      'TonPays Telegram: the review window ended without a trustworthy answer from TonPays. The outcome is not confirmed yet and nothing has failed; the payment is being checked by the operator. It must tell the customer not to pay again, and never says failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_receipt_button',
+    description:
+      'TonPays Telegram: the button that opens the receipt prompt for this payment. The receipt goes to TonPays, never to this installation’s manual review.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_change_card_button',
+    description:
+      'TonPays Telegram: the button that asks TonPays for another payee card. Drawn only while TonPays allows a change.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_card_check_button',
+    description:
+      'TonPays Telegram: reads the stored state of the attempt and brings the next TonPays inquiry forward; it never calls TonPays while Telegram waits.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_receipt_prompt',
+    description:
+      'TonPays Telegram: asks for ONE photo of the transfer receipt (a photo only — no file, PDF or video — at most five megabytes), until the stated time. The next photo the customer sends in this bot goes to TonPays for this payment.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'closesAt',
+        type: 'DATETIME',
+        description: 'When this receipt request stops accepting a photo.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_receipt_queued',
+    description:
+      'TonPays Telegram: the photo was taken and is being sent to TonPays; the payment message shows the result. Never says paid.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_receipt_photo_only',
+    description:
+      'TonPays Telegram: the customer sent something other than a photo while a receipt was requested. Asks for the receipt as a photo; nothing was stored or sent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_receipt_too_large',
+    description:
+      'TonPays Telegram: the photo is larger than five megabytes. Asks for a smaller photo; nothing was stored or sent.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

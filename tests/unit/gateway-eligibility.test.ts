@@ -4,6 +4,7 @@ import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PARITY_DEFERRALS,
   PAYMENT_GATEWAY_PROVIDERS,
+  PROVIDER_REVIEW_GATEWAY_PROVIDERS,
   paymentGatewayConfigSchema,
   type PaymentGatewayEligibility,
 } from '@nexa/contracts';
@@ -172,11 +173,13 @@ describe('the provider catalogue', () => {
      * that silently cannot take money.
      */
     // WP11A added TonPays WITH its adapter (`TonPaysAdapter`), and Package A added Telegram
-    // Stars with its own (`TelegramStarsAdapter`); that is what this pins.
+    // Stars with its own (`TelegramStarsAdapter`), and TonPays Telegram its own
+    // (`TonPaysTelegramAdapter`, `docs/tonpays-telegram-gateway-audit.md`); that is what this pins.
     expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual([
       'MANUAL_TRANSFER',
       'TONPAYS',
       'TELEGRAM_STARS',
+      'TONPAYS_TELEGRAM',
     ]);
   });
 
@@ -197,6 +200,40 @@ describe('the provider catalogue', () => {
     expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS).toMatchObject({
       settlesVia: 'GATEWAY',
       requiresCredentials: true,
+    });
+  });
+});
+
+describe('the invoice-form descriptor fields (TonPays Telegram, audit §5.3)', () => {
+  it('pins how each route is paid, bound and reviewed, so the existing routes keep their behaviour exactly', () => {
+    const table = Object.fromEntries(
+      PAYMENT_GATEWAY_PROVIDERS.map((provider) => {
+        const d = PAYMENT_GATEWAY_DESCRIPTORS[provider];
+        return [
+          provider,
+          [
+            d.invoiceForm,
+            d.boundToBot,
+            d.requiresBuyerChatId,
+            d.providerReview,
+            d.invoiceCredential,
+          ],
+        ];
+      }),
+    );
+    expect(table).toEqual({
+      MANUAL_TRANSFER: ['NONE', false, false, false, 'NONE'],
+      TONPAYS: ['LINK', false, false, false, 'GATEWAY_KEY'],
+      TELEGRAM_STARS: ['BOT_INVOICE', true, false, false, 'BOT_TOKEN'],
+      TONPAYS_TELEGRAM: ['CARD_TRANSFER', true, true, true, 'GATEWAY_KEY'],
+    });
+    // Only the Telegram route may carry the review columns: the list generates the CHECK.
+    expect([...PROVIDER_REVIEW_GATEWAY_PROVIDERS]).toEqual(['TONPAYS_TELEGRAM']);
+    // Its own key, through the same credential store, never the website route's.
+    expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS_TELEGRAM).toMatchObject({
+      settlesVia: 'GATEWAY',
+      requiresCredentials: true,
+      approval: 'INQUIRY',
     });
   });
 });

@@ -340,6 +340,9 @@ function toSummary(
     customerTelegramUserId: identity?.telegramUserId ?? null,
     customerUsername: identity?.username ?? null,
     receiptDisposition,
+    // The provider review window arrives with its columns (TonPays Telegram, P1).
+    providerReviewStartedAt: null,
+    providerReviewUntil: null,
   };
 }
 
@@ -403,6 +406,14 @@ function toGatewayInvoiceView(invoice: GatewayInvoiceRecord): GatewayInvoiceView
     outcome: invoice.outcome,
     lateCompletionObservedAt: iso(invoice.lateCompletionObservedAt),
     createdAt: invoice.createdAt.toISOString(),
+    // The card-transfer facts arrive with their columns (TonPays Telegram, P1).
+    cardSeq: null,
+    cardReceivedAt: null,
+    cardChangeShown: null,
+    cardChangeCooldownUntil: null,
+    cardChangeExhausted: null,
+    latestCardChange: null,
+    receiptSubmissions: [],
   };
 }
 
