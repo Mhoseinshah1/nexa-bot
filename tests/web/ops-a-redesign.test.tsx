@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import { PanelDetailPage, PanelsPage } from '../../apps/web/src/pages/panels';
 import { BotsPage } from '../../apps/web/src/pages/bots';
 import { BotButtonsPage } from '../../apps/web/src/pages/bot-buttons';
@@ -316,8 +317,10 @@ describe('the bots page, redesigned', () => {
 describe('dirty-state protection on the OPS-A forms', () => {
   it('guards a moved main-menu arrangement until it is saved or restored', async () => {
     stubApi([
+      { url: '/bot-menu/builder', body: body('/bot-menu/builder') },
       { url: '/bot-menu', body: body('/bot-menu') },
       { url: '/templates', body: body('/templates') },
+      { url: '/appearance', body: body('/appearance') },
     ]);
     renderPage(
       <>
@@ -325,18 +328,22 @@ describe('dirty-state protection on the OPS-A forms', () => {
         <LeaveGuardHost />
       </>,
     );
-    const down = await screen.findAllByRole('button', {
-      name: new RegExp(`^${t('web.bot_buttons_move_down')}`, 'u'),
+    const help = await screen.findByRole('button', {
+      name: new RegExp(`^${CATALOGUE_FA['bot.menu.help']}`, 'u'),
     });
     expect(leave()).toBeNull();
     go('/bot-buttons');
 
-    fireEvent.click(down[0] as HTMLElement);
+    // Row 2 holds «help» alone: taking it to the pool is an unsaved arrangement.
+    fireEvent.click(help);
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_remove') }));
     expect(leave()).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_stay') }));
 
-    // Back to the stored arrangement: nothing is unsaved, nothing is asked.
-    fireEvent.click(screen.getByRole('button', { name: t('web.bot_buttons_restore_default') }));
+    // Back where it was (its own row, second): nothing is unsaved, nothing is asked.
+    fireEvent.change(screen.getByLabelText(t('web.bb_place_into')), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_place_add') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_move_own_row') }));
     expect(leave()).toBeNull();
   });
 
