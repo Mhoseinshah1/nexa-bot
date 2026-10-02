@@ -146,9 +146,7 @@ describe('payment routes', () => {
       'TONPAYS_TELEGRAM',
     ]);
     // NOWPayments needs a key and an IPN secret: seeded DISABLED like TonPays.
-    expect(gateways.find((gateway) => gateway.provider === 'NOWPAYMENTS')?.status).toBe(
-      'DISABLED',
-    );
+    expect(gateways.find((gateway) => gateway.provider === 'NOWPAYMENTS')?.status).toBe('DISABLED');
     const route = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
     expect(route?.status).toBe('ACTIVE');
     // WP11A: a route that needs a credential is seeded DISABLED, with no key.
