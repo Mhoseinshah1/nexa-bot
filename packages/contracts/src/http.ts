@@ -5037,8 +5037,7 @@ export const PAYMENT_GATEWAY_ROUTES = {
   webhookSecret: (provider: string) =>
     `/payment-gateways/${encodeURIComponent(provider)}/webhook-secret`,
   check: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/check`,
-  verifyKey: (provider: string) =>
-    `/payment-gateways/${encodeURIComponent(provider)}/verify-key`,
+  verifyKey: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/verify-key`,
 } as const;
 
 // --- Central exchange rates (package FX) ----------------------------------------------
