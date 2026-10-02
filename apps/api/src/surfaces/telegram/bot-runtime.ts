@@ -72,7 +72,10 @@ import {
   validateUsernamePolicy,
 } from '@nexa/contracts';
 import type { PanelUsernamePolicy } from '../../modules/platform/panels/application/ports.js';
-import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
+import {
+  MARKETING_OPT_OUT_DISABLED_REASON,
+  type CustomerService,
+} from '../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
@@ -12692,13 +12695,31 @@ export class BotRuntime {
     optedOut: boolean,
     idempotencyKey: string,
   ): Promise<PendingReply> {
+    /*
+     * Spec §9: while the installation does not let customers stop promotions, /stop and an
+     * old opt-out / opt-in button are answered and change nothing. The service decides
+     * again inside its transaction; its refusal (the switch moved between the two reads) is
+     * answered the same way.
+     */
+    const unavailable: PendingReply = {
+      key: 'bot.marketing.unavailable',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+    if (!(await this.deps.customers.marketingOptOutAllowed(scope))) return unavailable;
     // The update's key is already spent by `resolveFromUpdate` under this surface: the
     // preference is a second command of the same turn, so it takes the turn's sub-key.
-    await this.deps.customers.setMarketingOptOut(scope, actor, {
-      idempotencyKey: `${idempotencyKey}:marketing`,
-      customerId: customer.id,
-      optedOut,
-    });
+    try {
+      await this.deps.customers.setMarketingOptOut(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:marketing`,
+        customerId: customer.id,
+        optedOut,
+      });
+    } catch (error) {
+      if (isMarketingOptOutDisabled(error)) return unavailable;
+      throw error;
+    }
     return {
       key: optedOut ? 'bot.marketing.opted_out' : 'bot.marketing.opted_in',
       values: {},
@@ -12724,8 +12745,11 @@ export class BotRuntime {
             },
           ]),
       // Round N close (§D): the promotional opt-out lives on the support screen, as the
-      // reverse of whatever the customer holds now — the same path /stop takes.
-      marketingPreferenceButton(customer.marketingOptOutAt !== null),
+      // reverse of whatever the customer holds now — the same path /stop takes. Spec §9:
+      // not drawn while the installation does not let customers change it.
+      ...((await this.deps.customers.marketingOptOutAllowed(scope))
+        ? [marketingPreferenceButton(customer.marketingOptOutAt !== null)]
+        : []),
       mainMenuButton(),
     ];
     if (screen.parts.length === 0) {
@@ -15930,6 +15954,11 @@ function mainMenuButton(): CustomerButton {
  * opt-out button otherwise. One button, the reverse of the state, so the screen never shows
  * a choice that is already the case.
  */
+/** Spec §9: the service's refusal while customers may not change their preference. */
+function isMarketingOptOutDisabled(error: unknown): boolean {
+  return isNexaError(error) && error.details['reason'] === MARKETING_OPT_OUT_DISABLED_REASON;
+}
+
 export function marketingPreferenceButton(optedOut: boolean): CustomerButton {
   return optedOut
     ? {

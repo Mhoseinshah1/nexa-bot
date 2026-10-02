@@ -1569,6 +1569,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+    // Spec §9: whether a customer may stop promotional messages at all.
+    features: featureFlagResolver,
   });
 
   /**
@@ -4086,7 +4088,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const broadcastFacts = new DrizzleRecipientFactsReader(database.db, (scope) =>
     settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
   );
+  /*
+   * Spec §9: a customer's stored promotional opt-out is honoured exactly while the
+   * `customer_marketing_opt_out` switch is on. One policy for the preview, the launch and
+   * the dispatcher's stamp; each reads it in its own transaction.
+   */
+  const marketingOptOutPolicy = {
+    honoured: (scope: TenantContext, tx?: unknown) =>
+      featureFlagResolver.isEnabled(scope, 'customer_marketing_opt_out', tx),
+  };
   const broadcastService = new BroadcastService({
+    marketingOptOut: marketingOptOutPolicy,
     repository: broadcastRepository,
     audience: audienceService,
     transport: broadcastTransport,
@@ -4112,6 +4124,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
     logger,
+    marketingOptOut: marketingOptOutPolicy,
   });
   const broadcastLoop = new BroadcastLoop(broadcastDispatcher, {
     scope: () =>

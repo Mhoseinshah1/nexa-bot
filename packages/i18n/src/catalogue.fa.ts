@@ -1269,6 +1269,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.marketing.opted_in': '🔔 پیام‌های تبلیغاتی دوباره برای شما فعال شد.',
   'bot.marketing.opt_out_button': '🔕 قطع پیام‌های تبلیغاتی',
   'bot.marketing.opt_in_button': '🔔 دریافت پیام‌های تبلیغاتی',
+  'bot.marketing.unavailable':
+    'ℹ️ در حال حاضر امکان قطع یا وصل پیام‌های تبلیغاتی در این ربات فعال نیست.\nاطلاع‌رسانی‌های مربوط به پرداخت، سرویس و پشتیبانی شما مثل همیشه ارسال می‌شود.',
   'bot.menu.tickets': '🎫 پشتیبانی / تیکت‌ها',
   'bot.support.tickets_button': '🎫 تیکت‌های پشتیبانی',
   'bot.ticket.list':

@@ -200,8 +200,10 @@ describe('round N close', () => {
       ids: c.ids,
       scopeIsActive: async () => true,
       logger: { info: () => undefined, error: () => undefined },
+      marketingOptOut: optOutPolicy(),
     });
     broadcasts = new BroadcastService({
+      marketingOptOut: optOutPolicy(),
       repository: new DrizzleBroadcastRepository(c.database.db),
       audience: c.audience,
       transport,
@@ -219,6 +221,12 @@ describe('round N close', () => {
     });
     calendar = new IntlCampaignCalendar(new CachedTenantPresentationReader(c.tenants, clock));
     campaigns = new CampaignService(campaignDeps());
+  });
+
+  /** Spec §9: the container's own switch, as production wires it. */
+  const optOutPolicy = () => ({
+    honoured: (scope: typeof tenantA, tx?: unknown) =>
+      ctx.container.featureFlagResolver.isEnabled(scope, 'customer_marketing_opt_out', tx),
   });
 
   function processor(): BulkOperationProcessor {
@@ -1035,6 +1043,79 @@ describe('round N close', () => {
         '771000': 'SKIPPED:broadcast.marketing_opted_out',
       });
       expect(transport.delivered).toEqual([]);
+      expect(a).toBeTruthy();
+    });
+
+    async function setOptOutPolicy(enabled: boolean) {
+      const current = await ctx.container.featureFlagResolver.resolve(
+        tenantA,
+        'customer_marketing_opt_out',
+      );
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'customer_marketing_opt_out',
+        enabled,
+        expectedVersion: current.version,
+        idempotencyKey: key(),
+        reason: 'Spec §9 integration test.',
+      });
+    }
+
+    const storedOptOut = async (customerId: string) =>
+      (
+        await rows<{ at: Date | null }>(
+          sql`SELECT marketing_opt_out_at AS at FROM customers WHERE id = ${customerId}`,
+        )
+      )[0]?.at ?? null;
+
+    it('spec §9: with the policy OFF a MARKETING send ignores a stored opt-out — at the count, the materialisation and the send — without erasing it; ON again honours it', async () => {
+      const [a, b] = await customers(2);
+      await optOut(b as string, true);
+      const stored = await storedOptOut(b as string);
+      expect(stored).not.toBeNull();
+
+      await setOptOutPolicy(false);
+      const marketing = await draft('MARKETING');
+      expect((await broadcasts.preview(tenantA, owner, marketing.id)).customers).toBe(2);
+      await launch(marketing.id);
+      expect(await states(marketing.id)).toEqual({ '771000': 'PENDING', '771001': 'PENDING' });
+      await dispatcher.pass(tenantA);
+      expect(await states(marketing.id)).toEqual({ '771000': 'SENT', '771001': 'SENT' });
+      expect(transport.delivered.sort()).toEqual(['771000', '771001']);
+      // The stored preference is untouched.
+      expect(await storedOptOut(b as string)).toEqual(stored);
+
+      // ON again: the earlier choice is effective at once.
+      await setOptOutPolicy(true);
+      const again = await draft('MARKETING');
+      expect((await broadcasts.preview(tenantA, owner, again.id)).customers).toBe(1);
+      expect(a).toBeTruthy();
+    });
+
+    it('spec §9: the send re-reads the policy at its stamp — rows materialised while OFF are SKIPPED if it is ON again before they go', async () => {
+      const [a, b] = await customers(2);
+      await optOut(b as string, true);
+      await setOptOutPolicy(false);
+      const marketing = await draft('MARKETING');
+      await launch(marketing.id);
+      expect(await states(marketing.id)).toEqual({ '771000': 'PENDING', '771001': 'PENDING' });
+      await setOptOutPolicy(true);
+      await dispatcher.pass(tenantA);
+      expect(await states(marketing.id)).toEqual({
+        '771000': 'SENT',
+        '771001': 'SKIPPED:broadcast.marketing_opted_out',
+      });
+      expect(transport.delivered).toEqual(['771000']);
+      expect(a).toBeTruthy();
+    });
+
+    it('spec §9: a service announcement is unaffected by the policy either way', async () => {
+      const [a, b] = await customers(2);
+      await optOut(b as string, true);
+      for (const enabled of [false, true]) {
+        await setOptOutPolicy(enabled);
+        const notice = await draft('SERVICE_ANNOUNCEMENT');
+        expect((await broadcasts.preview(tenantA, owner, notice.id)).customers).toBe(2);
+      }
       expect(a).toBeTruthy();
     });
 

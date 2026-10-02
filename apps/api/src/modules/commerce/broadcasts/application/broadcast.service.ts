@@ -44,6 +44,10 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
+  excludesMarketingOptOuts,
+  type MarketingOptOutPolicy,
+} from './marketing-opt-out-policy.js';
+import {
   freezeAudience,
   toPreview,
   type AudienceService,
@@ -81,6 +85,12 @@ export interface BroadcastServiceDeps {
   readonly outbox: OutboxWriter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * Spec §9: whether a customer's stored promotional opt-out is HONOURED right now
+   * (`customer_marketing_opt_out`). Off, a MARKETING send ignores `marketing_opt_out_at`
+   * without erasing it. Absent reads as honoured — the behaviour before the switch.
+   */
+  readonly marketingOptOut?: MarketingOptOutPolicy;
 }
 
 /** The composer's fields. */
@@ -505,7 +515,14 @@ export class BroadcastService {
     }
     // Round N close (§D): a MARKETING send counts without the customers who opted out, and
     // the launch materialises with the same flag, so the count confirmed is the count frozen.
-    const options = { excludeMarketingOptOuts: record.purpose === 'MARKETING' };
+    // Spec §9: only while the installation honours the opt-out.
+    const options = {
+      excludeMarketingOptOuts: await excludesMarketingOptOuts(
+        record.purpose,
+        this.deps.marketingOptOut,
+        scope,
+      ),
+    };
     const result = await this.deps.audience.evaluate(
       scope,
       record.audienceDefinition,
@@ -753,7 +770,13 @@ export class BroadcastService {
             );
           }
         }
-        const excludeMarketingOptOuts = current.purpose === 'MARKETING';
+        // Spec §9: read in the launch's own transaction.
+        const excludeMarketingOptOuts = await excludesMarketingOptOuts(
+          current.purpose,
+          this.deps.marketingOptOut,
+          scope,
+          tx,
+        );
         /*
          * Round N close (§A): a draft bound to a frozen audience COPIES its members, and the
          * rows written must be the rows frozen (the header's count and fingerprint) as well as
