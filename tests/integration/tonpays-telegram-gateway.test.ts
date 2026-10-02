@@ -16,6 +16,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { DrizzleGatewayCardTransferRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository';
 import { DrizzleReceiptCaptureRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt.repository';
 import type { GatewayPaymentService } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
 import type { InboundReceiptFile } from '../../apps/api/src/modules/commerce/payments/application/receipt-ports';
@@ -910,6 +911,85 @@ describe('TonPays Telegram, through the one settlement path', () => {
         state: 'ACCEPTED',
         opened_review: false,
       });
+      // Review F12: the late acknowledgement is still on the record, saying it opened nothing.
+      const audited = await rows<{ after: { openedReview: boolean; state: string } }>(
+        sql`SELECT after FROM audit_logs WHERE entity_id = ${other.paymentId}
+             AND action = 'gateway_receipt.accepted'`,
+      );
+      expect(audited.map((row) => row.after)).toEqual([
+        expect.objectContaining({ state: 'ACCEPTED', openedReview: false }),
+      ]);
+    });
+
+    it('review F6: a window that closes while the photo downloads uploads nothing', async () => {
+      const { paymentId } = await createdAttempt();
+      await openWindow(paymentId);
+      await sendPhoto(photo('receipt-f6'));
+      const deadline = new Date((await paymentOf(paymentId)).expires_at);
+      clock.at(new Date(deadline.getTime() - 5_000));
+      // Nothing else due, so the budget's first question is the receipt lane's, asked after
+      // the download and before the payment is read again.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = NULL WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      let armed = true;
+      const closing = telegramLaneWith(ctx, fake, {
+        budget: {
+          take: () => {
+            if (armed) {
+              armed = false;
+              clock.at(new Date(deadline.getTime() + 1));
+            }
+            return Promise.resolve(true);
+          },
+        },
+      });
+      await closing.runOnce(tenantA);
+      expect(telegram.downloads).toEqual(['receipt-f6']);
+      expect(fake.receipts).toHaveLength(0);
+      expect((await submissions(paymentId))[0]).toMatchObject({
+        state: 'ABANDONED',
+        error_code: 'nexa.deadline_passed',
+      });
+    });
+
+    it('review F10: a receipt window past its own ten minutes takes no photo, though the payment is open', async () => {
+      const { paymentId } = await createdAttempt();
+      expect(await openWindow(paymentId)).not.toBeNull();
+      clock.shift(11 * 60_000);
+      expect(await sendPhoto(photo('receipt-f10'))).toBe('CLOSED');
+      expect(await submissions(paymentId)).toEqual([]);
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+    });
+
+    it('review F11: a lost upload is resolved only by an inquiry SENT after it was given up on', async () => {
+      const { paymentId } = await createdAttempt();
+      await openWindow(paymentId);
+      fake.receiptMode = 'TIMEOUT';
+      await sendPhoto(photo('receipt-f11'));
+      await pass();
+      const [lost] = await rows<{ decided_at: string }>(
+        sql`SELECT decided_at FROM gateway_receipt_submissions WHERE payment_id = ${paymentId}`,
+      );
+      const decidedAt = new Date(lost!.decided_at);
+      const repo = new DrizzleGatewayCardTransferRepository(ctx.container.database.db);
+      // On the wire before the upload was given up on, answered after: says nothing.
+      expect(
+        await repo.resolveUnknownSubmissions(
+          tenantA,
+          paymentId,
+          new Date(decidedAt.getTime() - 1_000),
+          new Date(decidedAt.getTime() + 5_000),
+        ),
+      ).toBe(0);
+      expect(
+        await repo.resolveUnknownSubmissions(
+          tenantA,
+          paymentId,
+          new Date(decidedAt.getTime() + 1_000),
+          new Date(decidedAt.getTime() + 5_000),
+        ),
+      ).toBe(1);
     });
   });
 

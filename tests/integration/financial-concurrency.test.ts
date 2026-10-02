@@ -679,7 +679,9 @@ describe('financial concurrency', () => {
     await held.inside;
     const paying = settle(order.id, 'race-sig-first-settle');
     paying.catch(() => undefined);
-    await awaitWaitingOn('update "payments"');
+    // `cancelPendingForOrder` locks the order's PENDING rows in a statement of its own
+    // first (TonPays Telegram review F3), so that SELECT is the one that waits.
+    await awaitWaitingOn('"payments"."order_id" = $2 and "payments"."state" = $3) for update');
 
     held.release();
     const [signalled, paid] = await Promise.allSettled([signalling, paying]);

@@ -449,6 +449,25 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     tx: unknown,
   ): Promise<readonly PaymentId[]> {
     const tenantId = requireTenantId(scope);
+    /*
+     * The order's PENDING rows are LOCKED first, in a statement of their own, so the UPDATE
+     * below runs on a snapshot taken AFTER every lock is held (READ COMMITTED takes one per
+     * statement). The receipt-in-flight predicate reads ANOTHER table, and PostgreSQL's
+     * re-check of a row it waited for does not re-read other tables: a receipt queued under
+     * the payment's lock while this statement waited would be invisible to it, and the
+     * payment the customer had just sent a receipt for would be cancelled (review F3).
+     */
+    await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          eq(payments.state, 'PENDING'),
+        ),
+      )
+      .for('update');
     const rows = await this.exec(tx)
       .update(payments)
       .set({ state: 'CANCELLED', resolvedAt: now, updatedAt: now })
@@ -457,6 +476,12 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           eq(payments.tenantId, tenantId),
           eq(payments.orderId, orderId),
           eq(payments.state, 'PENDING'),
+          /*
+           * Nor one whose receipt has been sent to a provider and not yet answered (review
+           * F3): the customer's transfer is very probably made. Read on the snapshot taken
+           * after the lock above.
+           */
+          sql`NOT ${receiptInFlight()}`,
           /*
            * A SIGNALLED transfer is never withdrawn here, and the predicate belongs in
            * this statement rather than in the caller's guard.
@@ -801,9 +826,68 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           or(
             and(eq(payments.state, 'PENDING'), isNotNull(payments.providerReviewUntil)),
             eq(payments.state, 'UNKNOWN'),
+            // A receipt already sent to the provider and not yet answered (review F3).
+            and(eq(payments.state, 'PENDING'), receiptInFlight()),
           ),
         ),
       )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async lockPendingForOrder(scope: TenantContext, orderId: OrderId, tx: unknown): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          eq(payments.state, 'PENDING'),
+        ),
+      )
+      .orderBy(asc(payments.id))
+      .for('update');
+  }
+
+  async hasOtherLivePaymentForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    except: PaymentId,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          sql`${payments.id} <> ${except}`,
+          /*
+           * Any PENDING one, whatever its clock says — a manual transfer with a receipt never
+           * expires and can still be confirmed — an UNKNOWN one, and a CONFIRMED one: the
+           * order is then paid, and a receipt for it would be a second payment.
+           */
+          inArray(payments.state, ['PENDING', 'UNKNOWN', 'CONFIRMED']),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async hasGatewayReceiptInFlight(
+    scope: TenantContext,
+    id: PaymentId,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.tenantId, tenantId), eq(payments.id, id), receiptInFlight()))
       .limit(1);
     return rows.length > 0;
   }
@@ -987,4 +1071,21 @@ function toRecord(row: Row): PaymentRecord {
 /** No approved Stars checkout holds the row at `now` (Codex review of #85, C2). */
 function notHeldAt(now: Date) {
   return or(isNull(payments.checkoutHeldUntil), lte(payments.checkoutHeldUntil, now));
+}
+
+/**
+ * A provider receipt the customer has SENT for this payment that the provider has not yet
+ * answered, or whose answer is still being decided (`docs/tonpays-telegram-gateway-audit.md`
+ * §9.6.3 f; independent review F3): queued, on the wire, accepted, or lost and not yet
+ * resolved by an inquiry. Money the customer has very probably moved — the manual-transfer
+ * precedent is `customer_signalled_at`. Raw SQL over the submissions table, correlated on
+ * the payment row, so the predicate composes into any payments query.
+ */
+function receiptInFlight(): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM gateway_receipt_submissions s
+     WHERE s.tenant_id = ${payments.tenantId}
+       AND s.payment_id = ${payments.id}
+       AND (s.state IN ('QUEUED', 'SENDING', 'ACCEPTED')
+            OR (s.state = 'UNKNOWN' AND s.inquiry_resolved_at IS NULL)))`;
 }

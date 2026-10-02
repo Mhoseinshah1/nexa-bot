@@ -900,10 +900,15 @@ export interface GatewayCardTransferRepository {
   ): Promise<boolean>;
   /** The ACCEPTED submission whose acknowledgement opened the review. Once per payment. */
   markOpenedReview(scope: TenantContext, id: string, tx: unknown): Promise<boolean>;
-  /** An inquiry answered after these UNKNOWN uploads: resolved FOR DISPLAY, never a review. */
+  /**
+   * An inquiry SENT after these UNKNOWN uploads were given up on: resolved FOR DISPLAY, never
+   * a review. Compared with the inquiry's send time, not its answer time — an inquiry already
+   * on the wire when the upload was lost says nothing about the upload (review F11).
+   */
   resolveUnknownSubmissions(
     scope: TenantContext,
     paymentId: PaymentId,
+    inquirySentAt: Date,
     now: Date,
     tx?: unknown,
   ): Promise<number>;

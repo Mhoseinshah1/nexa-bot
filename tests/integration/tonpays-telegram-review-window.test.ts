@@ -24,6 +24,7 @@ import {
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
+import { DrizzleGatewayCardTransferRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository';
 import type { GatewayPaymentService } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
@@ -787,6 +788,453 @@ describe('the TonPays Telegram provider review window', () => {
    * permission from the SESSION, and refuses with the service's own code — the Web Admin
    * not drawing the button for a support operator is not what stops them.
    */
+  /*
+   * The independent review of this route (F1–F12) and the lead's decision on OQ-TPTG-17:
+   * while an order has money in flight through a provider, nothing invites a second payment;
+   * an UNKNOWN always has a terminal exit; and the rules the first falsification record did
+   * not isolate each have a test of their own.
+   */
+  describe('money in flight across the order (OQ-TPTG-17, decided)', () => {
+    const BOT_A2 = SEED_IDS.botA2 as BotInstanceId;
+    const refusal = async (promise: Promise<unknown>) => {
+      try {
+        await promise;
+      } catch (error: unknown) {
+        return isNexaError(error) ? error.code : String(error);
+      }
+      return 'accepted';
+    };
+    const paymentsOf = async (orderId: string) =>
+      (
+        await rows<{ state: string }>(
+          sql`SELECT state FROM payments WHERE order_id = ${orderId} ORDER BY created_at`,
+        )
+      ).map((row) => row.state);
+    const inBot = (bot: BotInstanceId) => ({ tenantId: tenantA.tenantId, botInstanceId: bot });
+
+    async function fourteenDayOrders() {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO setting_values (id, tenant_id, setting_key, value, version)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'sales.order_expiry_minutes',
+                ${JSON.stringify(20_160)}::jsonb, 1)`);
+    }
+
+    async function enableWebsite() {
+      await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS',
+        config: OPEN_ROUTE,
+      });
+      await ctx.container.paymentGateways.setCredential(tenantA, owner, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS',
+        apiKey: 'tp_live_WEBSITE_review_key_0001',
+      });
+      await ctx.container.paymentGateways.setStatus(tenantA, owner, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS',
+        status: 'ACTIVE',
+      });
+    }
+
+    async function activateBotB() {
+      await ctx.container.database.db.execute(
+        sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${BOT_A2}`,
+      );
+    }
+
+    it('review F7: in review, the same route in the same bot hands the attempt back at minute 71 — no second invoice', async () => {
+      // An order that outlives the customer window, so only the attempt's own rule decides.
+      await fourteenDayOrders();
+      const review = await reviewed(30);
+      clock.at(new Date(review.expiresAt.getTime() + 60_000));
+      const again = await ctx.container.payments.requestGatewayPayment(
+        inBot(BOT_A),
+        systemActor(key()),
+        maryam,
+        { idempotencyKey: key(), orderId: review.orderId, provider: 'TONPAYS_TELEGRAM' },
+      );
+      expect(again.payment.id).toBe(review.paymentId);
+      expect(fake.creates).toHaveLength(1);
+    });
+
+    it('review F1: in review and when UNKNOWN, no new attempt — another bot, a manual transfer, a new tap — even with a 14-day order', async () => {
+      await fourteenDayOrders();
+      await activateBotB();
+      const review = await reviewed(30);
+      const tryAll = async () => {
+        expect(
+          await refusal(
+            ctx.container.payments.requestGatewayPayment(
+              inBot(BOT_A2),
+              systemActor(key()),
+              maryam,
+              {
+                idempotencyKey: key(),
+                orderId: review.orderId,
+                provider: 'TONPAYS_TELEGRAM',
+              },
+            ),
+          ),
+        ).toBe('commerce.order_transfer_under_review');
+        expect(
+          await refusal(
+            ctx.container.payments.requestManualTransfer(inBot(BOT_A), systemActor(key()), maryam, {
+              idempotencyKey: key(),
+              orderId: review.orderId,
+            }),
+          ),
+        ).toBe('commerce.order_transfer_under_review');
+      };
+      await tryAll();
+      await lapse(review);
+      await tryAll();
+      // EXP-2: the customer taps the route again in the same bot. Nothing new is created.
+      await tap(`gp:${review.orderId}.TONPAYS_TELEGRAM`);
+      expect(await paymentsOf(review.orderId)).toEqual(['UNKNOWN']);
+      expect(fake.creates).toHaveLength(1);
+    });
+
+    it('review F3: a receipt sent and not yet answered is money in flight — no cancellation, no withdrawal, no wallet purchase, no new attempt', async () => {
+      await activateBotB();
+      const created = await attempt();
+      const opened = await ctx.container.gatewayReceiptCaptures.openReceiptCapture(
+        inBot(BOT_A),
+        systemActor(key()),
+        { customerId: maryam, paymentId: created.paymentId, botInstanceId: BOT_A },
+      );
+      expect(opened).not.toBeNull();
+      telegram.files.set('receipt-f3', JPEG_BYTES);
+      expect(
+        await ctx.container.gatewayReceiptCaptures.receivePhoto(inBot(BOT_A), systemActor(key()), {
+          customerId: maryam,
+          botInstanceId: BOT_A,
+          file: {
+            kind: 'PHOTO',
+            fileId: 'receipt-f3',
+            fileUniqueId: 'receipt-f3',
+            mimeType: null,
+            fileName: null,
+            fileSize: BigInt(JPEG_BYTES.byteLength),
+            telegramMessageId: 1n,
+            caption: null,
+          },
+        }),
+      ).toBe('QUEUED');
+      expect(
+        await refusal(
+          ctx.container.orders.cancelByCustomer(tenantA, systemActor(key()), {
+            idempotencyKey: key(),
+            customerId: maryam,
+            orderId: created.orderId,
+          }),
+        ),
+      ).toBe('commerce.order_transfer_under_review');
+      expect(
+        await refusal(
+          ctx.container.payments.withdrawPending(tenantA, systemActor(key()), maryam, {
+            idempotencyKey: key(),
+            paymentId: created.paymentId,
+          }),
+        ),
+      ).toBe('commerce.order_transfer_under_review');
+      expect(
+        await refusal(
+          ctx.container.payments.settleFromWallet(tenantA, systemActor(key()), maryam, {
+            idempotencyKey: key(),
+            orderId: created.orderId,
+          }),
+        ),
+      ).toBe('commerce.order_transfer_under_review');
+      expect(
+        await refusal(
+          ctx.container.payments.requestGatewayPayment(inBot(BOT_A2), systemActor(key()), maryam, {
+            idempotencyKey: key(),
+            orderId: created.orderId,
+            provider: 'TONPAYS_TELEGRAM',
+          }),
+        ),
+      ).toBe('commerce.order_transfer_under_review');
+      expect(await paymentsOf(created.orderId)).toEqual(['PENDING']);
+      expect(await orderState(created.orderId)).toBe('AWAITING_PAYMENT');
+    });
+
+    it('review F1 (race): a new attempt waiting on the payment a receipt is being queued under sees the receipt and is refused', async () => {
+      await activateBotB();
+      const created = await attempt();
+      const window = await ctx.container.gatewayReceiptCaptures.openReceiptCapture(
+        inBot(BOT_A),
+        systemActor(key()),
+        { customerId: maryam, paymentId: created.paymentId, botInstanceId: BOT_A },
+      );
+      if (window === null) throw new Error('no window');
+      const repo = new DrizzlePaymentRepository(ctx.container.database.db);
+      const cards = new DrizzleGatewayCardTransferRepository(ctx.container.database.db);
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let locked: () => void = () => undefined;
+      const holding = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      // The receipt lane's own shape: the payment's lock, then the submission, then commit.
+      const queuing = ctx.container.uow.run(tenantA, async (tx) => {
+        await repo.findByIdForUpdate(tenantA, created.paymentId, tx);
+        locked();
+        await held;
+        return cards.queueSubmission(
+          tenantA,
+          {
+            id: ctx.container.ids.uuid(),
+            paymentId: created.paymentId,
+            providerInvoiceId: created.invoiceId,
+            botInstanceId: BOT_A,
+            customerId: maryam,
+            captureId: window.id,
+            telegramFileId: 'race-file',
+            telegramFileUniqueId: 'race-file',
+            declaredSize: 10n,
+            now: clock.now(),
+          },
+          tx,
+        );
+      });
+      await holding;
+      const requesting = refusal(
+        ctx.container.payments.requestGatewayPayment(inBot(BOT_A2), systemActor(key()), maryam, {
+          idempotencyKey: key(),
+          orderId: created.orderId,
+          provider: 'TONPAYS_TELEGRAM',
+        }),
+      );
+      await awaitBlocked();
+      release();
+      expect(await queuing).not.toBeNull();
+      expect(await requesting).toBe('commerce.order_transfer_under_review');
+      expect(await paymentsOf(created.orderId)).toEqual(['PENDING']);
+    });
+
+    it('review F1: a receipt is refused while the order has another live payment', async () => {
+      await enableWebsite();
+      const created = await attempt();
+      await ctx.container.payments.requestGatewayPayment(inBot(BOT_A), systemActor(key()), maryam, {
+        idempotencyKey: key(),
+        orderId: created.orderId,
+        provider: 'TONPAYS',
+      });
+      expect(
+        await ctx.container.gatewayReceiptCaptures.openReceiptCapture(
+          inBot(BOT_A),
+          systemActor(key()),
+          { customerId: maryam, paymentId: created.paymentId, botInstanceId: BOT_A },
+        ),
+      ).not.toBeNull();
+      telegram.files.set('receipt-f1', JPEG_BYTES);
+      expect(
+        await ctx.container.gatewayReceiptCaptures.receivePhoto(inBot(BOT_A), systemActor(key()), {
+          customerId: maryam,
+          botInstanceId: BOT_A,
+          file: {
+            kind: 'PHOTO',
+            fileId: 'receipt-f1',
+            fileUniqueId: 'receipt-f1',
+            mimeType: null,
+            fileName: null,
+            fileSize: BigInt(JPEG_BYTES.byteLength),
+            telegramMessageId: 1n,
+            caption: null,
+          },
+        }),
+      ).toBe('CLOSED');
+      const [submitted] = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM gateway_receipt_submissions WHERE payment_id = ${created.paymentId}`,
+      );
+      expect(submitted?.n).toBe(0);
+    });
+
+    it('review F1 (backstop): an UNKNOWN whose order another payment settled is returned to the wallet, exactly, through the one credit path', async () => {
+      // The website route, opened BEFORE any receipt — the coexistence the guard still allows.
+      await enableWebsite();
+      const created = await attempt();
+      const website = await ctx.container.payments.requestGatewayPayment(
+        inBot(BOT_A),
+        systemActor(key()),
+        maryam,
+        { idempotencyKey: key(), orderId: created.orderId, provider: 'TONPAYS' },
+      );
+      expect((await confirmNow(website.payment.id)).outcome).toBe('SETTLED');
+      expect(await orderState(created.orderId)).toBe('PAID');
+      /*
+       * The Telegram attempt's review, written as a release before the guard would have
+       * written it (the receipt is now refused while another payment settled the order):
+       * the CHECK and the guard trigger accept exactly this shape.
+       */
+      const ackAt = new Date(created.expiresAt.getTime() - 40 * 60_000);
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET provider_review_started_at = ${ackAt.toISOString()}::timestamptz,
+                   provider_review_until = ${ackAt.toISOString()}::timestamptz + interval '24 hours'
+             WHERE id = ${created.paymentId}`,
+      );
+      const reviewUntil = new Date(ackAt.getTime() + TONPAYS_TELEGRAM_REVIEW_WINDOW_MS);
+      await lapse({ paymentId: created.paymentId, reviewUntil });
+      fake.set(created.invoiceId, 'completed', true);
+      clock.at(new Date(reviewUntil.getTime() + 120_000));
+      await ctx.container.payments.reinquireGatewayPayment(tenantA, owner, created.paymentId, {
+        idempotencyKey: key(),
+      });
+      await lane.runOnce(tenantA);
+      const reconciled = await ctx.container.payments.reconcileGatewayPayment(
+        tenantA,
+        owner,
+        created.paymentId,
+        { to: 'CONFIRMED', note: 'paid twice', idempotencyKey: key() },
+      );
+      // The order's one confirmed slot is the website payment's: this one is resolved FAILED
+      // by the operator, and its money returned — the customer is told of the refund only.
+      expect(reconciled.state).toBe('FAILED');
+      expect(await orderState(created.orderId)).toBe('PAID');
+      expect(await notified(created.paymentId)).not.toContain('GATEWAY_PAYMENT_FAILED');
+      const refunds = await rows<{ state: string; amount: string; channel: string }>(
+        sql`SELECT state, amount::text AS amount, channel FROM refunds WHERE payment_id = ${created.paymentId}`,
+      );
+      expect(refunds).toEqual([expect.objectContaining({ state: 'COMPLETED', amount: '250000' })]);
+      const credits = await rows<{ amount: string }>(
+        sql`SELECT amount::text AS amount FROM wallet_entries WHERE customer_id = ${maryam} AND amount > 0`,
+      );
+      expect(credits.map((row) => row.amount)).toEqual(['250000']);
+      const [audit] = await rows<{ after: { returnedToWallet: string | null } }>(
+        sql`SELECT after FROM audit_logs WHERE entity_id = ${created.paymentId}
+             AND action = 'payment.reconcile_confirmed'`,
+      );
+      expect(audit?.after.returnedToWallet).toBe('250000');
+    });
+
+    it('review F2: reconciling CONFIRMED needs paid === true, not completed alone or with paid absent', async () => {
+      const review = await reviewed(30);
+      await lapse(review);
+      const confirm = () =>
+        ctx.container.payments.reconcileGatewayPayment(tenantA, owner, review.paymentId, {
+          to: 'CONFIRMED',
+          note: null,
+          idempotencyKey: key(),
+        });
+      const reasonOf = async () => {
+        try {
+          await confirm();
+        } catch (error: unknown) {
+          return isNexaError(error) ? String(error.details['reason']) : String(error);
+        }
+        return 'accepted';
+      };
+      let at = review.reviewUntil.getTime() + 120_000;
+      for (const paid of [false, undefined]) {
+        fake.set(review.invoiceId, 'completed', paid);
+        clock.at(new Date(at));
+        await ctx.container.payments.reinquireGatewayPayment(tenantA, owner, review.paymentId, {
+          idempotencyKey: key(),
+        });
+        await lane.runOnce(tenantA);
+        expect((await invoiceOf(review.paymentId)).provider_status).toBe('completed');
+        expect(await reasonOf()).toBe('RECONCILIATION_EVIDENCE_MISSING');
+        at += 120_000;
+      }
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+    });
+
+    it('review F5: the operator’s question passes the post-deadline bound, and is spaced a minute apart', async () => {
+      const review = await reviewed(30);
+      await lapse(review);
+      // The bound reached by hints already: only the operator's question may pass it.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET post_deadline_inquiries = 3 WHERE payment_id = ${review.paymentId}`,
+      );
+      fake.set(review.invoiceId, 'completed', true);
+      clock.at(new Date(review.reviewUntil.getTime() + 120_000));
+      const ask = () =>
+        ctx.container.payments.reinquireGatewayPayment(tenantA, owner, review.paymentId, {
+          idempotencyKey: key(),
+        });
+      expect(await ask()).toBe(true);
+      // Back to back: the request just recorded spaces the next one.
+      expect(await ask()).toBe(false);
+      await lane.runOnce(tenantA);
+      expect((await invoiceOf(review.paymentId)).provider_status).toBe('completed');
+      // The inquiry just made spaces it too, though the request it answered is cleared.
+      clock.at(new Date(review.reviewUntil.getTime() + 130_000));
+      expect(await ask()).toBe(false);
+    });
+
+    it('review F5: in review, a customer’s check is spaced a minute after the last inquiry', async () => {
+      const review = await reviewed(30);
+      await lane.runOnce(tenantA);
+      const [asked] = await rows<{ last_inquiry_at: string | null }>(
+        sql`SELECT last_inquiry_at FROM gateway_invoices WHERE payment_id = ${review.paymentId}`,
+      );
+      if (asked?.last_inquiry_at == null) throw new Error('no inquiry was made');
+      const last = new Date(asked.last_inquiry_at);
+      clock.at(new Date(last.getTime() + 10_000));
+      const view = await lane.attemptFor(tenantA, maryam, review.paymentId);
+      if (view === null) throw new Error('no attempt');
+      await lane.requestCheck(tenantA, view);
+      expect(new Date((await invoiceOf(review.paymentId)).next_inquiry_at!).getTime()).toBe(
+        last.getTime() + 60_000,
+      );
+    });
+
+    it('review F8: reconciling resolves the open "review unresolved" condition', async () => {
+      const review = await reviewed(30);
+      await lapse(review);
+      const open = () =>
+        rows<{ resolved_at: string | null }>(
+          sql`SELECT resolved_at FROM operational_events
+               WHERE code = 'payments.gateway_review_unresolved' AND resolved_at IS NULL`,
+        );
+      expect(await open()).toHaveLength(1);
+      fake.set(review.invoiceId, 'canceled', false);
+      clock.at(new Date(review.reviewUntil.getTime() + 120_000));
+      await ctx.container.payments.reinquireGatewayPayment(tenantA, owner, review.paymentId, {
+        idempotencyKey: key(),
+      });
+      await lane.runOnce(tenantA);
+      await ctx.container.payments.reconcileGatewayPayment(tenantA, owner, review.paymentId, {
+        to: 'FAILED',
+        note: null,
+        idempotencyKey: key(),
+      });
+      expect(await open()).toEqual([]);
+    });
+
+    it('review F9: a lapsed review reaches the financial log as ops.financial.outcome_unknown', async () => {
+      let flag = 0;
+      const k = () => `f9-log-${String((flag += 1))}`;
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: k(),
+        confirmKey: 'ops_notifications',
+        reason: 'Review F9 financial log.',
+      });
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '-1001234567890',
+        expectedVersion: null,
+        idempotencyKey: k(),
+      });
+      const review = await reviewed(30);
+      await lapse(review);
+      for (let round = 0; round < 20; round += 1) {
+        if ((await ctx.container.relay.processBatch()).claimed === 0) break;
+      }
+      const logs = await rows<{ template_key: string }>(
+        sql`SELECT template_key FROM notifications WHERE tenant_id = ${tenantA.tenantId}
+             AND template_key = 'ops.financial.outcome_unknown'`,
+      );
+      expect(logs).toHaveLength(1);
+    });
+  });
+
   describe('reconciliation over HTTP', () => {
     let api: ApiApp;
     const ORIGIN = 'https://admin.example.test';

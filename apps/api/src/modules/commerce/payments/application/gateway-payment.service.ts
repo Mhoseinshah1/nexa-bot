@@ -749,6 +749,8 @@ export class GatewayPaymentService {
       return 'BUDGET';
     }
 
+    // The clock BEFORE the call: what an answer can say anything about (F11).
+    const sentAt = this.deps.clock.now();
     const outcome = await adapter.inquire(apiKey, invoiceId);
     const at = this.deps.clock.now();
     const next = postDeadline
@@ -826,7 +828,14 @@ export class GatewayPaymentService {
        * opens a review: only the upload answer's own acknowledgement does.
        */
       if (this.deps.cardTransfer !== undefined) {
-        await this.deps.cardTransfer.resolveUnknownSubmissions(scope, invoice.paymentId, at, tx);
+        // `sentAt`: taken before the call, so earlier than the request ever left (F11).
+        await this.deps.cardTransfer.resolveUnknownSubmissions(
+          scope,
+          invoice.paymentId,
+          sentAt,
+          at,
+          tx,
+        );
       }
       await this.deps.invoices.recordInquiry(
         scope,

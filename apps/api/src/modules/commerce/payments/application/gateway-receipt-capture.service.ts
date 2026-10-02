@@ -74,7 +74,10 @@ export class GatewayReceiptCaptureService {
       readonly scopeActivity: ScopeActivityReader;
       readonly clock: Clock;
       readonly ids: IdGenerator;
-      readonly payments: Pick<PaymentRepository, 'findByIdForUpdate'>;
+      readonly payments: Pick<
+        PaymentRepository,
+        'findByIdForUpdate' | 'hasOtherLivePaymentForOrder'
+      >;
       readonly invoices: Pick<GatewayInvoiceRepository, 'findByPayment'>;
       readonly cardTransfer: GatewayCardTransferRepository;
     },
@@ -245,8 +248,36 @@ export class GatewayReceiptCaptureService {
     };
     return this.mutate(scope, actor, denial, async (tx, now) => {
       const payment = await this.deps.payments.findByIdForUpdate(scope, capture.paymentId, tx);
+      /*
+       * The window read again, in this transaction and after the payment's lock (review
+       * F10): the read above was outside any transaction, and a manual window opened since
+       * has closed this one. The photo is then the manual flow's, never this provider's.
+       */
+      const current = await this.deps.cardTransfer.findOpenCapture(
+        scope,
+        input.botInstanceId,
+        input.customerId,
+        tx,
+      );
+      if (current === null || current.id !== capture.id) return 'NO_WINDOW';
+      /*
+       * One payment in flight per order (OQ-TPTG-17, decided): a receipt is not taken while
+       * the order has another live payment. Read after this payment's lock, which every path
+       * issuing a new payment for the order takes first (`lockPendingForOrder`): either that
+       * path sees this receipt and refuses, or this read sees its payment and refuses.
+       */
+      const otherLive =
+        payment !== null &&
+        payment.orderId !== null &&
+        (await this.deps.payments.hasOtherLivePaymentForOrder(
+          scope,
+          payment.orderId,
+          payment.id,
+          tx,
+        ));
       const invoice = await this.deps.invoices.findByPayment(scope, capture.paymentId, tx);
       const usable =
+        !otherLive &&
         payment !== null &&
         payment.customerId === input.customerId &&
         payment.state === 'PENDING' &&

@@ -2530,6 +2530,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const paymentService = new PaymentService({
     resellers: resellerService,
     undeliverable: undeliverableOrders,
+    // The one credit path, for a reconciliation whose order another payment settled.
+    refunds: refundService,
     repository: paymentRepository,
     /*
      * The two READ methods only. This module consults a route and cannot configure one

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type {
   GatewayCardChangeState,
   GatewayReceiptCaptureCloseReason,
@@ -656,6 +656,7 @@ export class DrizzleGatewayCardTransferRepository implements GatewayCardTransfer
   async resolveUnknownSubmissions(
     scope: TenantContext,
     paymentId: PaymentId,
+    inquirySentAt: Date,
     now: Date,
     tx?: unknown,
   ): Promise<number> {
@@ -669,8 +670,8 @@ export class DrizzleGatewayCardTransferRepository implements GatewayCardTransfer
           eq(gatewayReceiptSubmissions.paymentId, paymentId),
           eq(gatewayReceiptSubmissions.state, 'UNKNOWN'),
           isNull(gatewayReceiptSubmissions.inquiryResolvedAt),
-          // Only an inquiry that ANSWERED after the upload's answer was lost resolves it.
-          lte(gatewayReceiptSubmissions.decidedAt, now),
+          // Only an inquiry SENT after the upload's answer was given up on resolves it.
+          lt(gatewayReceiptSubmissions.decidedAt, inquirySentAt),
         ),
       )
       .returning({ id: gatewayReceiptSubmissions.id });

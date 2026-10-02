@@ -88,6 +88,7 @@ import type { OutboxWriter } from '../../../platform/eventing/infrastructure/out
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { OrderRecord, OrderRepository } from '../../orders/application/ports.js';
 import type { UndeliverableOrderRefunder } from '../../orders/application/undeliverable-order-refunder.js';
+import type { RefundService } from './refund.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
@@ -253,6 +254,12 @@ export interface PaymentServiceDeps {
    * `UndeliverableOrderRefunder`.
    */
   readonly undeliverable: UndeliverableOrderRefunder;
+  /**
+   * The ONE credit path (`RefundService.refundUndeliverable`), for the reconciliation of an
+   * UNKNOWN gateway payment whose order another payment has already settled: the money
+   * moved, so it is returned to the wallet (OQ-TPTG-17, decided).
+   */
+  readonly refunds: Pick<RefundService, 'refundUndeliverable'>;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
@@ -1097,7 +1104,11 @@ export class PaymentService {
          * insert would issue a live transfer reference to an account that is BLOCKED.
          * Taken before the order, in the same order `settleFromWallet` takes them, so the
          * two issuing paths cannot deadlock against each other.
+         *
+         * The order's PENDING payments are locked before it, as the wallet purchase does,
+         * for the money-in-flight read below (OQ-TPTG-17, decided).
          */
+        await this.deps.repository.lockPendingForOrder(scope, orderId, tx);
         if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
         }
@@ -1227,6 +1238,22 @@ export class PaymentService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_WINDOW_TOO_SHORT,
             'There is not enough time left on this order to pay for it out of band.',
+          );
+        }
+        /*
+         * No NEW transfer while the order has money in flight through a provider — a
+         * payment in review, UNKNOWN, or with a receipt sent and unanswered (OQ-TPTG-17,
+         * decided). The customer has very probably paid already; inviting a second
+         * transfer is how one order is paid twice. A transfer already issued is handed
+         * back above; only a new reference is refused.
+         */
+        if (
+          already === undefined &&
+          (await this.deps.repository.hasProviderReviewOrUnknownForOrder(scope, orderId, tx))
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A payment for this order is being reviewed by the gateway.',
           );
         }
 
@@ -2929,6 +2956,13 @@ export class PaymentService {
             'The gateway is reviewing a receipt for this payment.',
           );
         }
+        // Nor one whose receipt is on its way to the provider, or not yet answered (F3).
+        if (await this.deps.repository.hasGatewayReceiptInFlight(scope, paymentId, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A receipt for this payment has been sent to the gateway.',
+          );
+        }
 
         /*
          * A transfer the customer sent a RECEIPT for is not theirs to withdraw (Payment
@@ -3309,6 +3343,12 @@ export class PaymentService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        /*
+         * The order's PENDING payments are locked BEFORE the customer — the order the wallet
+         * purchase takes them in — so the money-in-flight read when a new attempt is opened
+         * sees a provider receipt queued under one of those locks (OQ-TPTG-17, decided).
+         */
+        await this.deps.repository.lockPendingForOrder(scope, orderId, tx);
         // The customer row first, in the order every issuing path takes it.
         if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
@@ -3694,7 +3734,7 @@ export class PaymentService {
         await this.assertScopeActive(scope, tx);
         const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
         // The upload is answered either way; the submission records it in this transaction.
-        await this.deps.cardTransfer.decideSubmission(
+        const decided = await this.deps.cardTransfer.decideSubmission(
           scope,
           input.submissionId,
           'ACCEPTED',
@@ -3706,59 +3746,99 @@ export class PaymentService {
           now,
           tx,
         );
-        if (
-          payment === null ||
-          payment.method !== 'GATEWAY' ||
-          payment.gatewayProvider === null ||
-          !PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].providerReview ||
-          payment.state !== 'PENDING' ||
-          payment.expiresAt === null ||
-          input.acknowledgedAt.getTime() >= payment.expiresAt.getTime()
-        ) {
-          return false;
-        }
-        const reviewUntil = new Date(
-          input.acknowledgedAt.getTime() + TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
-        );
-        const opened = await this.deps.repository.recordProviderReview(
-          scope,
-          paymentId,
-          { acknowledgedAt: input.acknowledgedAt, reviewUntil },
-          now,
-          tx,
-        );
-        if (!opened) return false;
-        await this.deps.cardTransfer.markOpenedReview(scope, input.submissionId, tx);
-        await this.deps.cardTransfer.closeCapturesForPayment(
-          scope,
-          paymentId,
-          'PAYMENT_CLOSED',
-          now,
-          tx,
-        );
-        await this.deps.audit.record(
-          scope,
-          actor,
-          {
-            action: PROVIDER_REVIEW_ACTION,
-            entityType: 'Payment',
-            entityId: paymentId,
-            before: { state: 'PENDING', providerReviewUntil: null },
-            after: {
-              state: 'PENDING',
-              gatewayProvider: payment.gatewayProvider,
-              submissionId: input.submissionId,
-              providerReviewStartedAt: input.acknowledgedAt.toISOString(),
-              providerReviewUntil: reviewUntil.toISOString(),
-              expiresAt: payment.expiresAt.toISOString(),
+        const opened = await this.openProviderReview(scope, actor, payment, input, now, tx);
+        /*
+         * The acknowledgement is audited whether or not it opened anything (review F12): the
+         * lane's own `decide('ACCEPTED')` finds the submission already decided here and moves
+         * nothing, so without this row an acknowledgement at or after the deadline would
+         * leave no record at all.
+         */
+        if (decided) {
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'gateway_receipt.accepted',
+              entityType: 'Payment',
+              entityId: paymentId,
+              before: { submissionId: input.submissionId, state: 'SENDING' },
+              after: {
+                submissionId: input.submissionId,
+                state: 'ACCEPTED',
+                providerStatus: input.providerStatus,
+                receiptReceived: input.receiptReceived,
+                openedReview: opened,
+              },
+              result: 'SUCCESS',
             },
-            result: 'SUCCESS',
-          },
-          tx,
-        );
-        return true;
+            tx,
+          );
+        }
+        return opened;
       },
     );
+  }
+
+  /** The review window itself, under the payment's lock (§9.6.3 c). True when it opened. */
+  private async openProviderReview(
+    scope: TenantContext,
+    actor: ActorContext,
+    payment: PaymentRecord | null,
+    input: { readonly submissionId: string; readonly acknowledgedAt: Date },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    if (
+      payment === null ||
+      payment.method !== 'GATEWAY' ||
+      payment.gatewayProvider === null ||
+      !PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].providerReview ||
+      payment.state !== 'PENDING' ||
+      payment.expiresAt === null ||
+      input.acknowledgedAt.getTime() >= payment.expiresAt.getTime()
+    ) {
+      return false;
+    }
+    const reviewUntil = new Date(
+      input.acknowledgedAt.getTime() + TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
+    );
+    const opened = await this.deps.repository.recordProviderReview(
+      scope,
+      payment.id,
+      { acknowledgedAt: input.acknowledgedAt, reviewUntil },
+      now,
+      tx,
+    );
+    if (!opened) return false;
+    await this.deps.cardTransfer.markOpenedReview(scope, input.submissionId, tx);
+    await this.deps.cardTransfer.closeCapturesForPayment(
+      scope,
+      payment.id,
+      'PAYMENT_CLOSED',
+      now,
+      tx,
+    );
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: PROVIDER_REVIEW_ACTION,
+        entityType: 'Payment',
+        entityId: payment.id,
+        before: { state: 'PENDING', providerReviewUntil: null },
+        after: {
+          state: 'PENDING',
+          gatewayProvider: payment.gatewayProvider,
+          submissionId: input.submissionId,
+          providerReviewStartedAt: input.acknowledgedAt.toISOString(),
+          providerReviewUntil: reviewUntil.toISOString(),
+          expiresAt: payment.expiresAt.toISOString(),
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return true;
   }
 
   /**
@@ -3771,8 +3851,11 @@ export class PaymentService {
    * Anything else is refused and the payment stays UNKNOWN.
    *
    * `CONFIRMED` goes through the SAME settlement body every rail uses, from `UNKNOWN`,
-   * with evidence `RECONCILIATION` and the operator as the confirming administrator; an
-   * order no longer awaiting payment is refused (it stays UNKNOWN). `FAILED` is the
+   * with evidence `RECONCILIATION` and the operator as the confirming administrator. When the
+   * order is no longer awaiting payment (another payment settled it), the payment's exact
+   * amount is returned to the wallet through the one credit path and the payment resolved
+   * FAILED (the order's one confirmed slot is taken), so an UNKNOWN always has a terminal
+   * exit (OQ-TPTG-17, decided). `FAILED` is the
    * conditional `UNKNOWN -> FAILED` with the operator as the resolver, the customer told
    * `GATEWAY_PAYMENT_FAILED`, and `PaymentFailed` in the outbox. Both conditional, so a
    * double click moves once, and both close the payment's open operational condition.
@@ -3839,6 +3922,8 @@ export class PaymentService {
         }
         const provider = (payment.gatewayProvider ?? invoice.provider).toLowerCase();
         let result: PaymentRecord;
+        // Set only when the order was already settled elsewhere and the money went back.
+        let returnedToWallet: string | null = null;
         if (input.to === 'CONFIRMED') {
           const confirmation = {
             evidenceKind: 'RECONCILIATION' as const,
@@ -3859,32 +3944,69 @@ export class PaymentService {
             );
           } else {
             const order = await this.deps.orders.findById(scope, payment.orderId, tx);
-            if (
-              order === null ||
-              order.customerId !== payment.customerId ||
-              order.state !== 'AWAITING_PAYMENT'
-            ) {
-              // Money for an order already paid or closed: never a second settlement.
-              throw errors.conflict(
-                COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
-                'This payment’s order is no longer awaiting payment.',
-                { reason: 'ORDER_NOT_AWAITING_PAYMENT' },
-              );
+            if (order === null || order.customerId !== payment.customerId) {
+              throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
             }
-            result = (
-              await this.confirmAndSettle(
+            if (order.state !== 'AWAITING_PAYMENT') {
+              /*
+               * Money for an order already paid or closed (OQ-TPTG-17, decided): never a
+               * second settlement, and never an UNKNOWN left for ever. The provider's
+               * recorded answer says the money moved, so its exact amount goes back to the
+               * customer's wallet through the ONE credit path, in this transaction.
+               *
+               * The payment cannot be CONFIRMED: `payments_order_confirmed_key` allows one
+               * confirmed payment per order, and the other payment holds it. It is resolved
+               * FAILED by this operator — it did not pay the order — with a resolution note
+               * that says the money was returned, and the customer is told about the refund,
+               * not a failure. Unreachable through the guards above (a receipt is refused
+               * while the order has another live or confirmed payment, and no new payment is
+               * issued while one is in flight); this is the exit for what they did not stop.
+               */
+              const moved = await this.deps.repository.reconcileFail(
+                scope,
+                paymentId,
+                {
+                  resolvedByAdminId: adminIdOf(actor),
+                  resolutionNote: `${provider}:${status}:paid:returned_to_wallet`.slice(0, 120),
+                  resolvedAt: now,
+                },
+                now,
+                tx,
+              );
+              if (!moved) {
+                throw errors.conflict(
+                  COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+                  'This payment was already resolved.',
+                );
+              }
+              const resolved = await this.deps.repository.findById(scope, paymentId, tx);
+              if (resolved === null) {
+                throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+              }
+              const refund = await this.deps.refunds.refundUndeliverable(
                 scope,
                 actor,
+                { payment: resolved, now },
                 tx,
-                payment,
-                order,
-                confirmation,
-                now,
-                action,
-                undefined,
-                'UNKNOWN',
-              )
-            ).payment;
+              );
+              returnedToWallet = refund === null ? null : refund.amount.amountMinor.toString();
+              result = resolved;
+            } else {
+              result = (
+                await this.confirmAndSettle(
+                  scope,
+                  actor,
+                  tx,
+                  payment,
+                  order,
+                  confirmation,
+                  now,
+                  action,
+                  undefined,
+                  'UNKNOWN',
+                )
+              ).payment;
+            }
           }
         } else {
           const moved = await this.deps.repository.reconcileFail(
@@ -3945,6 +4067,7 @@ export class PaymentService {
               providerPaid: invoice.providerPaid,
               lastInquiryAt: invoice.lastInquiryAt?.toISOString() ?? null,
               note,
+              returnedToWallet,
             },
             result: 'SUCCESS',
           },
@@ -4277,6 +4400,22 @@ export class PaymentService {
       payment = existing;
       invoice = open;
     } else {
+      /*
+       * OQ-TPTG-17 (decided): no NEW attempt — any route, any bot — for an order with money
+       * in flight through a provider (in review, UNKNOWN, or a receipt sent and not yet
+       * answered). Decided here, after the hand-back above, so the customer's own in-review
+       * attempt is still shown to them. Read after `requestGatewayPayment` locked the order's
+       * PENDING payments, so a receipt queued under one of those locks is seen here.
+       */
+      if (
+        input.orderId !== null &&
+        (await this.deps.repository.hasProviderReviewOrUnknownForOrder(scope, input.orderId, tx))
+      ) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+          'A payment for this order is being reviewed by the gateway.',
+        );
+      }
       /*
        * The customer's gateway fee (WP18, owner decision): the principal stays
        * `input.amount` — what the order cost or the wallet receives, the figure every

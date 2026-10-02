@@ -1219,11 +1219,41 @@ This is where the build differs from the sections above, and why:
   `gateway_receipt_photo_only`.
 - **The website route gains no `WRONG_API_KEY_KIND` mapping.** It is the owner's call, so
   nothing was added there.
-- **Other routes still coexist with a Telegram payment in review (OQ-TPTG-17).** A customer may
-  open a website TonPays or manual attempt for the same order. If both are paid, the second
-  approval is `LATE_COMPLETION` and nothing moves. A Telegram payment that goes `UNKNOWN` for an
-  order that another route has since paid cannot be reconciled `CONFIRMED`, because the order is
-  no longer awaiting payment. An operator then refunds it outside Nexa.
+- **OQ-TPTG-17 is decided by the lead (2026-10-02), owner to confirm.** This follows the
+  independent review's F1 and F3. The rules:
+  - While an order has money in flight through a provider, every NEW way to pay it is refused
+    with `ORDER_TRANSFER_UNDER_REVIEW`. That covers a gateway attempt on any route and in any
+    bot, a manual transfer, and the wallet. Money in flight means a payment in review, one
+    that is `UNKNOWN`, or one with a receipt sent and not yet answered. The same in-review
+    attempt is still handed back.
+  - A receipt is refused while the order has another `PENDING`, `UNKNOWN` or `CONFIRMED`
+    payment.
+  - Each issuing path locks the order's `PENDING` payments before the customer, and the
+    receipt path holds its payment's lock. So either the issuing path sees the receipt, or
+    the receipt path sees the new payment.
+  - A receipt sent and not yet answered also refuses the customer's cancellation, the
+    withdrawal and the wallet purchase. `cancelPendingForOrder` locks first and decides on a
+    later snapshot.
+  - **The backstop.** An `UNKNOWN` whose order another payment has settled can no longer be
+    left for ever. Reconciling it `CONFIRMED` returns the exact amount to the wallet through
+    `refundUndeliverable`, the one credit path. The payment cannot become `CONFIRMED`, because
+    `payments_order_confirmed_key` allows one confirmed payment per order. It is therefore
+    resolved `FAILED` by the operator, with the note `…:paid:returned_to_wallet`. The customer
+    is told of the refund, not of a failure. This departs from "confirmed, then returned",
+    because the unique index forbids it. Through the guards above the state is unreachable;
+    the test builds it directly.
+  - An automatic approval arriving inside a review on an order already settled is decided by
+    `confirmGatewayPayment` as `ORDER_NOT_AWAITING_PAYMENT`. It is recorded as
+    `LATE_COMPLETION` with nothing moved, as every route already handles it. The payment then
+    lapses to `UNKNOWN` and takes the backstop above.
+- **The scope-activity check in the card and receipt lanes (review F13) is unchanged.**
+  Activity is checked once at pass start and not re-read in each row's transaction. That
+  matches the existing create and inquiry lanes. Changing it for these two lanes alone would
+  make one lane disagree with the others; the right place to fix it is all four at once.
+- **The re-read of the receipt window under the lock (review F10) has no test of its own.** It
+  closes a window that only a concurrent manual window can open, and Telegram serialises one
+  chat's updates. The capture's own ten-minute expiry, which the review found untested, now
+  has a test.
 - **The minute-70 race (c) of TPTG-31 is held by construction, not by a test.** That is the case
   where the sweep's snapshot is taken before the acknowledgement commits and its lock after.
   The predicate is row-local, so PostgreSQL's re-check of the locked row sees it. `SKIP LOCKED`

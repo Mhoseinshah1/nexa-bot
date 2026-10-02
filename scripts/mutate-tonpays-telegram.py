@@ -44,6 +44,7 @@ CS = 'apps/api/src/modules/commerce/messaging/application/customer-screens.ts'
 BR = 'apps/api/src/surfaces/telegram/bot-runtime.ts'
 FF = 'apps/api/src/infrastructure/telegram/fetch-file.ts'
 CAT = 'packages/i18n/src/catalogue.fa.ts'
+FIN = P + 'application/financial-log.consumer.ts'
 
 T_AD = ('unit', 'tests/unit/tonpays-telegram-adapter.test.ts')
 T_FF = ('unit', 'tests/unit/telegram-fetch-file.test.ts')
@@ -177,12 +178,12 @@ M = [
                    "  TONPAYS_TELEGRAM: 'bot.payment.route_name_tonpays',")],
      T_RN, 'defaults the website route', 'KILL'),
     # --- the review window ------------------------------------------------------------------
-    ('TPTG-24', [(PS, "          payment.expiresAt === null ||\n          input.acknowledgedAt.getTime() >= payment.expiresAt.getTime()\n",
-                  "          payment.expiresAt === null\n"),
+    ('TPTG-24', [(PS, "      payment.expiresAt === null ||\n      input.acknowledgedAt.getTime() >= payment.expiresAt.getTime()\n",
+                  "      payment.expiresAt === null\n"),
                  (PR, "          // Half-open: an acknowledgement AT the deadline opens nothing.\n          gt(payments.expiresAt, window.acknowledgedAt),\n", "")],
      T_REPO, 'TPTG-24: an acknowledgement opens a review only strictly before', 'KILL'),
-    ('TPTG-24s', [(PS, "          payment.expiresAt === null ||\n          input.acknowledgedAt.getTime() >= payment.expiresAt.getTime()\n",
-                   "          payment.expiresAt === null\n"),
+    ('TPTG-24s', [(PS, "      payment.expiresAt === null ||\n      input.acknowledgedAt.getTime() >= payment.expiresAt.getTime()\n",
+                   "      payment.expiresAt === null\n"),
                   (PR, "          // Half-open: an acknowledgement AT the deadline opens nothing.\n          gt(payments.expiresAt, window.acknowledgedAt),\n", "")],
      # The same two lines removed, seen end to end: the CHECK's `started < expires_at` is the
      # third line, refuses the write, and the worker opens nothing. Expected to survive.
@@ -286,6 +287,50 @@ M = [
      T_AD, 'TPTG-40', 'KILL'),
     ('TPTG-40l', [(GPS, "      : reviewUntil !== null\n        ? // In review", "      : false\n        ? // In review")],
      T_RV, 'TPTG-40', 'KILL'),
+
+    # --- the independent review (F1–F12) and the lead's decision on OQ-TPTG-17 -----------
+    ('REV-F1g', [(PS, "        input.orderId !== null &&\n        (await this.deps.repository.hasProviderReviewOrUnknownForOrder(scope, input.orderId, tx))",
+                  "        false")],
+     T_RV, 'review F1: in review and when UNKNOWN', 'KILL'),
+    ('REV-F1m', [(PS, "          already === undefined &&\n          (await this.deps.repository.hasProviderReviewOrUnknownForOrder(scope, orderId, tx))",
+                  "          false")],
+     T_RV, 'review F1: in review and when UNKNOWN', 'KILL'),
+    ('REV-F1l', [(PS, "        await this.deps.repository.lockPendingForOrder(scope, orderId, tx);\n        // The customer row first", "        // The customer row first")],
+     T_RV, 'review F1 (race)', 'KILL'),
+    ('REV-F1r', [(RC, "        !otherLive &&\n", "")],
+     T_RV, 'review F1: a receipt is refused while the order has another live payment', 'KILL'),
+    ('REV-F1b', [(PS, "            if (order.state !== 'AWAITING_PAYMENT') {\n              /*\n               * Money for an order already paid",
+                  "            if (order.state !== 'AWAITING_PAYMENT') {\n              throw errors.conflict(COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID, 'x', { reason: 'ORDER_NOT_AWAITING_PAYMENT' });\n              /*\n               * Money for an order already paid")],
+     T_RV, 'review F1 (backstop)', 'KILL'),
+    ('REV-F2', [(PS, "            ? status === 'completed' && invoice?.providerPaid === true\n", "            ? status === 'completed'\n")],
+     T_RV, 'review F2', 'KILL'),
+    ('REV-F3a', [(PR, "            and(eq(payments.state, 'PENDING'), receiptInFlight()),\n", "")],
+     T_RV, 'review F3', 'KILL'),
+    ('REV-F3c', [(PR, "          sql`NOT ${receiptInFlight()}`,", "          sql`true`,")],
+     T_RV, 'review F3', 'KILL'),
+    ('REV-F3w', [(PS, "        if (await this.deps.repository.hasGatewayReceiptInFlight(scope, paymentId, tx)) {", "        if (false) {")],
+     T_RV, 'review F3', 'KILL'),
+    ('REV-F5a', [(GPS, " && !operatorAsked)", ")")],
+     T_RV, 'review F5: the operator', 'KILL'),
+    ('REV-F5c', [(GPS, "        : TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS;", "        : 5_000;")],
+     T_RV, 'review F5: in review, a customer', 'KILL'),
+    ('REV-F5s', [(IR, "          or(isNull(gatewayInvoices.lastInquiryAt), lte(gatewayInvoices.lastInquiryAt, spaced)),\n", "")],
+     T_RV, 'review F5: the operator', 'KILL'),
+    ('REV-F6', [(GPS, "      !windowOpen({\n        state: payment.state,\n        expiresAt: payment.expiresAt,\n        reviewUntil: payment.providerReviewUntil,\n      })\n", "      false\n")],
+     T_GW, 'review F6', 'KILL'),
+    ('REV-F7', [(IR, "          sql`COALESCE(${payments.providerReviewUntil}, ${payments.expiresAt}) > ${input.now}::timestamptz`,",
+                 "          sql`${payments.expiresAt} > ${input.now}::timestamptz`,")],
+     T_RV, 'review F7', 'KILL'),
+    ('REV-F8', [(PS, "            recoversCode: GATEWAY_REVIEW_UNRESOLVED_CODE,\n            recoversDedupeKey: dedupeKey,\n", "")],
+     T_RV, 'review F8', 'KILL'),
+    ('REV-F9', [(FIN, "    'PaymentOutcomeUnknown',\n", "")],
+     T_RV, 'review F9', 'KILL'),
+    ('REV-F10', [(RC, "        now.getTime() < capture.expiresAt.getTime() &&\n", "")],
+     T_GW, 'review F10', 'KILL'),
+    ('REV-F11', [(CT, "          lt(gatewayReceiptSubmissions.decidedAt, inquirySentAt),", "          lte(gatewayReceiptSubmissions.decidedAt, now),")],
+     T_GW, 'review F11', 'KILL'),
+    ('REV-F12', [(PS, "        if (decided) {\n          await this.deps.audit.record(", "        if (false) {\n          await this.deps.audit.record(")],
+     T_GW, 'TPTG-33', 'KILL'),
 
     # --- the website route's rules, re-run over the refactored code (docs/tonpays-falsification.md)
     ('TP-01', [(DTP, "      return paid === true ? 'APPROVED' : 'OPEN';", "      return paid ? 'APPROVED' : 'OPEN';")],

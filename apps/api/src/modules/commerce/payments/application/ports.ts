@@ -548,15 +548,37 @@ export interface PaymentRepository {
   ): Promise<boolean>;
 
   /**
-   * Whether this order has money in flight through a provider review: a PENDING payment in
-   * review, or an UNKNOWN one (§9.6.3 f). The wallet purchase and the customer's own
-   * cancellation refuse on it.
+   * Whether this order has money in flight through a provider: a PENDING payment in review,
+   * an UNKNOWN one (§9.6.3 f), or a PENDING one with a receipt sent to the provider and not
+   * yet answered (independent review F3). Every NEW way to pay the order, the wallet
+   * purchase and the customer's own cancellation refuse on it (OQ-TPTG-17, decided).
    */
   hasProviderReviewOrUnknownForOrder(
     scope: TenantContext,
     orderId: OrderId,
     tx: unknown,
   ): Promise<boolean>;
+
+  /**
+   * Lock the order's PENDING payments, in id order. Taken by every path that issues a NEW way
+   * to pay an order BEFORE the customer's row — the order the wallet purchase takes them in —
+   * so the money-in-flight read after it sees a receipt queued under one of those locks.
+   */
+  lockPendingForOrder(scope: TenantContext, orderId: OrderId, tx: unknown): Promise<void>;
+
+  /**
+   * Whether the order has another payment that is PENDING, UNKNOWN or CONFIRMED beside
+   * `except`. A provider receipt is refused while one exists (OQ-TPTG-17, decided).
+   */
+  hasOtherLivePaymentForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    except: PaymentId,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /** Whether a receipt sent to the provider for this payment is still unanswered (F3). */
+  hasGatewayReceiptInFlight(scope: TenantContext, id: PaymentId, tx: unknown): Promise<boolean>;
 
   /**
    * Records the external gateway's own id for a GATEWAY payment (WP11A): the provider's
