@@ -155,10 +155,11 @@ function olderThan(read: MainMenuDraftView, held: MainMenuDraftView): boolean {
 
 /**
  * Round T: the button builder — the customer main menu as explicit rows and a style per
- * button (the button icon was retired on 2026-10-02), around a DRAFT that changes nothing a customer sees until it is
- * published. Reads `GET /bot-menu/builder`; writes through the four builder endpoints, each
- * with an idempotency key and the versions it read. Gates are the server's answers
- * (`items[].gateOpen`), passed to the contract's `customerRowsOf` — never decided here.
+ * button (the button icon was retired on 2026-10-02), around a DRAFT that changes nothing a
+ * customer sees until it is published. Reads `GET /bot-menu/builder`; writes through the
+ * four builder endpoints, each with an idempotency key and the versions it read. Gates are
+ * the server's answers (`items[].gateOpen`), passed to the contract's `customerRowsOf` —
+ * never decided here.
  */
 export function MenuBuilder({
   view,

@@ -338,6 +338,7 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
     };
   }
 
+  /** A revision with its origin's number and its publisher's name now (round-T QA-4), same tenant only. */
   private revisionQuery(executor: Executor) {
     return executor
       .select({
@@ -358,7 +359,6 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
           eq(revisionOrigin.id, mainMenuRevisions.restoredFromRevisionId),
         ),
       )
-      // The publisher's name as the directory has it now (round-T QA-4), same tenant only.
       .leftJoin(
         admins,
         and(
