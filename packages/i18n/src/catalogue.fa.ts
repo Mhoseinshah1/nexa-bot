@@ -1165,6 +1165,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '⏳ فیش شما دریافت شد و در حال ارسال برای تون پی است. نتیجه در پیام پرداخت نمایش داده می‌شود.',
   'bot.payment.gateway_receipt_photo_only':
     'فقط عکس فیش پذیرفته می‌شود. لطفاً فیش را به‌صورت عکس (نه فایل، PDF یا ویدیو) بفرستید.',
+  'bot.payment.gateway_receipt_already_sent':
+    'این عکس پیش‌تر برای همین پرداخت فرستاده شده است و دوباره ارسال نمی‌شود. اگر فیش دیگری دارید، عکس آن را بفرستید.',
   'bot.payment.gateway_receipt_too_large':
     'حجم این عکس بیش از ۵ مگابایت است. لطفاً عکس کوچک‌تری از فیش واریزی بفرستید.',
   'bot.wallet.summary':

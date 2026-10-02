@@ -8639,6 +8639,13 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.gateway_receipt_already_sent',
+    description:
+      'TonPays Telegram: the customer sent the very photo already sent for this payment, and that earlier submission has ended (refused, given up, or answered). Nothing new was queued; asks for a different photo if they have one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.wallet.summary',
     description:
       'The wallet screen: the customer’s account summary. Every figure is read on render ' +
