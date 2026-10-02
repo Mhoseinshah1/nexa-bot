@@ -135,6 +135,28 @@ const CUSTOMER_NAMESPACE = 'TELEGRAM' as const;
 /** The surface an operator's confirmation arrives through. */
 const OPERATOR_NAMESPACE = 'WEB' as const;
 
+/**
+ * Who a wallet settlement is made under (Customer 360, §11.6). A customer paying their own
+ * order is the default, unchanged. An operator's manual order passes
+ * `MANUAL_ORDER_WALLET_SETTLEMENT` — `orders.manual.create` in the `WEB` namespace — and
+ * otherwise runs exactly this path: the same customer lock, the same sufficiency check,
+ * the same `PURCHASE` debit and the same refusal (never a refund) when it cannot be funded.
+ */
+export interface WalletSettlementAuthority {
+  readonly permission: PermissionKey;
+  readonly namespace: 'WEB' | 'TELEGRAM';
+}
+
+export const CUSTOMER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
+  permission: PAYMENT_PLACE_PERMISSION,
+  namespace: CUSTOMER_NAMESPACE,
+};
+
+export const MANUAL_ORDER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
+  permission: 'orders.manual.create',
+  namespace: OPERATOR_NAMESPACE,
+};
+
 export interface PaymentServiceDeps {
   readonly repository: PaymentRepository;
   readonly orders: OrderRepository;
@@ -721,15 +743,16 @@ export class PaymentService {
     actor: ActorContext,
     customerId: UserId,
     intent: PaymentIntent,
+    authority: WalletSettlementAuthority = CUSTOMER_WALLET_SETTLEMENT,
   ): Promise<{ readonly payment: PaymentRecord; readonly order: OrderRecord }> {
     const orderId = this.orderId(intent.orderId);
     const denial = { action: 'payment.wallet_settle', entityType: 'Order', entityId: orderId };
-    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+    await this.authorize(scope, actor, authority.permission, denial);
 
     const requestHash = hashRequest({ customerId, orderId });
     const replay = await this.replayed(
       scope,
-      CUSTOMER_NAMESPACE,
+      authority.namespace,
       intent.idempotencyKey,
       requestHash,
     );
@@ -743,7 +766,7 @@ export class PaymentService {
       this.mutationDeps(),
       scope,
       actor,
-      PAYMENT_PLACE_PERMISSION,
+      authority.permission,
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
@@ -999,7 +1022,7 @@ export class PaymentService {
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          CUSTOMER_NAMESPACE,
+          authority.namespace,
           intent.idempotencyKey,
           requestHash,
           { paymentId: confirmed.payment.id },

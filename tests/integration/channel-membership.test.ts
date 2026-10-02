@@ -374,6 +374,39 @@ describe('mandatory channel membership (Package B)', () => {
     expect(textOf(await say(adminUser, '/start'))).not.toContain(JOIN);
   });
 
+  it("lets an exempted customer through the gate itself, and stops them again once it's lifted (Customer 360)", async () => {
+    await channels([{ handle: '@nexa_exempt', mandatory: true }]);
+    const customer = user();
+    expect(textOf(await say(customer, '/start'))).toEqual([JOIN]);
+    const [row] = await rows<{ id: string }>(
+      sql`SELECT id FROM customers WHERE tenant_id = ${tenantA.tenantId}
+            AND telegram_user_id = ${String(customer)}`,
+    );
+    const customerId = row!.id;
+
+    await api.container.customerControls.setChannelExemption(tenantA, owner, {
+      idempotencyKey: 'exempt-grant',
+      customerId,
+      exempt: true,
+      reason: 'VIP, approved by the owner',
+    });
+    calls = [];
+    const replies = await say(customer, '/start');
+    expect(textOf(replies)).not.toContain(JOIN);
+    // Enforced by not asking at all: the exemption is read before Telegram is.
+    expect(calls.some((call) => call.method === 'getChatMember')).toBe(false);
+    // Another customer is not exempted by it.
+    expect(textOf(await say(user(), '/start'))).toEqual([JOIN]);
+
+    await api.container.customerControls.setChannelExemption(tenantA, owner, {
+      idempotencyKey: 'exempt-revoke',
+      customerId,
+      exempt: false,
+      reason: 'lifted',
+    });
+    expect(textOf(await say(customer, '/start'))).toEqual([JOIN]);
+  });
+
   it('fails open when the bot cannot check a channel, raises one condition, and recovers it', async () => {
     const customer = user();
     await channels([{ handle: '@nexa_fail_open', mandatory: true }]);

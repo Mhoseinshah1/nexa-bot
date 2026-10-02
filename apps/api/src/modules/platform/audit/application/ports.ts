@@ -43,4 +43,16 @@ export interface AuditHistoryReader {
     },
     limit: number,
   ): Promise<readonly AuditHistoryRecord[]>;
+
+  /**
+   * Customer 360's timeline (§11.10): the rows recorded against ONE customer — as the
+   * `Customer` entity (status, controls, trial override, reseller, transfer, manual order)
+   * or as their `Wallet` (every adjustment) — newest first, with the reason the operator
+   * gave. Through `audit_logs_entity_idx`, one probe per entity type.
+   */
+  customerTimeline(
+    scope: TenantContext,
+    customerId: string,
+    limit: number,
+  ): Promise<readonly (AuditHistoryRecord & { readonly reason: string | null })[]>;
 }

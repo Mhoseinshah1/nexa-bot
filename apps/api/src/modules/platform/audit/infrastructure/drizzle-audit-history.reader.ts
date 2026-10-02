@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { ActorType, AuditResult, SourceSurface, TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { auditLogs } from '../../../../infrastructure/persistence/schema.js';
@@ -60,7 +60,53 @@ export class DrizzleAuditHistoryReader implements AuditHistoryReader {
       after: asRecord(row.after),
     }));
   }
+
+  async customerTimeline(
+    scope: TenantContext,
+    customerId: string,
+    limit: number,
+  ): Promise<readonly (AuditHistoryRecord & { readonly reason: string | null })[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select({
+        id: auditLogs.id,
+        action: auditLogs.action,
+        actorType: auditLogs.actorType,
+        actorLabel: auditLogs.actorLabel,
+        surface: auditLogs.sourceSurface,
+        result: auditLogs.result,
+        occurredAt: auditLogs.occurredAt,
+        reason: auditLogs.reason,
+        before: auditLogs.before,
+        after: auditLogs.after,
+      })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.tenantId, tenantId),
+          inArray(auditLogs.entityType, CUSTOMER_TIMELINE_ENTITY_TYPES),
+          eq(auditLogs.entityId, customerId),
+        ),
+      )
+      .orderBy(desc(auditLogs.occurredAt), desc(auditLogs.id))
+      .limit(limit);
+    return rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      actorType: row.actorType as ActorType,
+      actorLabel: row.actorLabel,
+      surface: row.surface as SourceSurface,
+      result: row.result as AuditResult,
+      occurredAt: row.occurredAt,
+      reason: row.reason,
+      before: asRecord(row.before),
+      after: asRecord(row.after),
+    }));
+  }
 }
+
+/** The entity types a customer's own audit rows are recorded under. */
+const CUSTOMER_TIMELINE_ENTITY_TYPES = ['Customer', 'Wallet'];
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

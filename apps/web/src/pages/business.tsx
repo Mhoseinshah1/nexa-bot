@@ -117,6 +117,7 @@ const WALLET_GROUP_LABELS: Readonly<Record<WalletReportGroup, WebKey>> = {
   SPENDING: 'web.report_wallet_spending',
   REFUND: 'web.report_wallet_refund',
   ADMINISTRATIVE: 'web.report_wallet_admin',
+  TRANSFER: 'web.report_wallet_transfer',
   OTHER: 'web.report_wallet_other',
 };
 

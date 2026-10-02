@@ -13,6 +13,7 @@ import {
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { ServiceRecord } from '../../provisioning/application/ports.js';
 import type {
+  CustomerLocationOverrideRepository,
   LocationChangeRepository,
   ServiceLocationRecord,
   ServiceLocationRepository,
@@ -37,6 +38,13 @@ export interface LocationOffer {
 export interface LocationChangePolicyDeps {
   readonly locations: Pick<ServiceLocationRepository, 'forPanel'>;
   readonly changes: Pick<LocationChangeRepository, 'countedRequestTimes'>;
+  /**
+   * Customer 360 (§11.4): the owner's limit override, which REPLACES each target's cooldown
+   * and rolling limit for their services. Read here, at the one evaluator, so the button,
+   * the quote, its confirmation and the free request all apply it — and a quote freezes
+   * the limits it was actually decided under (`target.limits`).
+   */
+  readonly overrides: Pick<CustomerLocationOverrideRepository, 'find'>;
   readonly settings: SettingsResolver;
   readonly clock: Clock;
 }
@@ -91,12 +99,15 @@ export class LocationChangePolicy {
      */
     const history = await this.history(scope, service, null, tx);
     const now = this.deps.clock.now();
-    const targets = resolvedTargets(rows, service.productId).filter(
-      (row): row is LocationTarget =>
-        row.locationKey !== current.key &&
-        isOffered(row, currency) &&
-        locationChangeWindow(row.limits, history, now).ok,
-    );
+    const override = await this.overrideFor(scope, service, tx);
+    const targets = resolvedTargets(rows, service.productId)
+      .map((row) => withLimits(row, override))
+      .filter(
+        (row): row is LocationTarget =>
+          row.locationKey !== current.key &&
+          isOffered(row, currency) &&
+          locationChangeWindow(row.limits, history, now).ok,
+      );
     return targets.length === 0 ? null : { current, targets };
   }
 
@@ -132,7 +143,9 @@ export class LocationChangePolicy {
     if (current === null) throw unavailable();
     const currency = await this.salesCurrency(scope, tx);
 
-    const chosen = resolvedTargets(rows, service.productId).find((row) => row.id === locationId);
+    const override = await this.overrideFor(scope, service, tx);
+    const found = resolvedTargets(rows, service.productId).find((row) => row.id === locationId);
+    const chosen = found === undefined ? undefined : withLimits(found, override);
     // Not this panel's, another product's, superseded by a more specific row, or switched
     // off or unpriced since the button was drawn: the same sentence for all of them.
     if (chosen === undefined || !isOffered(chosen, currency)) throw unavailable();
@@ -169,6 +182,15 @@ export class LocationChangePolicy {
     return this.deps.changes.countedRequestTimes(scope, service.id, excludeOrderId, tx);
   }
 
+  /** The owner's override, or null. Keyed by the service's CURRENT owner. */
+  private async overrideFor(
+    scope: TenantContext,
+    service: ServiceRecord,
+    tx?: unknown,
+  ): Promise<LocationChangeLimits | null> {
+    return (await this.deps.overrides.find(scope, service.customerId, tx))?.limits ?? null;
+  }
+
   private async salesCurrency(scope: TenantContext, tx?: unknown): Promise<SalesCurrencyCode> {
     return this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx);
   }
@@ -203,6 +225,14 @@ export function resolvedTargets(
     }
   }
   return rows.filter((row) => byKey.get(row.locationKey) === row);
+}
+
+/** The row with the customer's override in place of its own window, when there is one. */
+function withLimits(
+  row: ServiceLocationRecord,
+  override: LocationChangeLimits | null,
+): ServiceLocationRecord {
+  return override === null ? row : { ...row, limits: override };
 }
 
 /** Enabled, priced, and priced in what this installation sells in. Zero is free. */

@@ -18,6 +18,7 @@ import {
   type ServiceUsernameMode,
   type Clock,
   type IdGenerator,
+  type IdempotencyNamespace,
   type IdempotencyStore,
   type OperationalEventRecorder,
   type OrderId,
@@ -102,6 +103,33 @@ export const ORDER_PLACE_PERMISSION: PermissionKey = 'maintenance.run';
  * collide with the replay it is supposed to find.
  */
 const ORDER_NAMESPACE = 'TELEGRAM' as const;
+
+/**
+ * Who a draft, a username choice or a confirmation is placed under (Customer 360, §11.6).
+ *
+ * A customer's own purchase is `CUSTOMER_ORDER_AUTHORITY` — `maintenance.run` in the
+ * `TELEGRAM` namespace, as it always was, and the default everywhere, so no customer path
+ * changed. An operator placing an order for a customer passes `MANUAL_ORDER_AUTHORITY`:
+ * `orders.manual.create`, in the operator's own `WEB` namespace, so the audit row says an
+ * operator placed it and neither surface can consume the other's keys. Everything ELSE —
+ * the pricing, the reseller entitlement, the capacity slot, the username policy, the quote
+ * honoured at confirmation — is the same code either way, which is the point: a second
+ * order path would be a second answer to "what does this cost".
+ */
+export interface OrderAuthority {
+  readonly permission: PermissionKey;
+  readonly namespace: IdempotencyNamespace;
+}
+
+export const CUSTOMER_ORDER_AUTHORITY: OrderAuthority = {
+  permission: ORDER_PLACE_PERMISSION,
+  namespace: ORDER_NAMESPACE,
+};
+
+export const MANUAL_ORDER_AUTHORITY: OrderAuthority = {
+  permission: 'orders.manual.create',
+  namespace: 'WEB',
+};
 
 /**
  * What an order cancellation needs to know and do about the payments against it.
@@ -307,6 +335,7 @@ export class OrderService {
       readonly customerId: string;
       readonly productId: string;
     },
+    authority: OrderAuthority = CUSTOMER_ORDER_AUTHORITY,
   ): Promise<OrderRecord> {
     const customerId = this.customerId(input.customerId);
     const productId = this.productId(input.productId);
@@ -325,18 +354,23 @@ export class OrderService {
      * throws leaves NO audit row, so closing the read hole would open a silent-refusal
      * one. See `authorize`.
      */
-    await this.authorize(scope, actor, {
-      // `order.draft_create`, the SAME action the success row and the transaction-time
-      // denial below use. An early refusal recorded under a second name splits one
-      // command across two audit actions, so a query for the established one silently
-      // omits exactly the denials this early check exists to record. Found by the Codex
-      // review of the stabilization round — introduced by the fix for C2.
-      action: 'order.draft_create',
-      entityType: 'Order',
-      entityId: null,
-    });
+    await this.authorize(
+      scope,
+      actor,
+      {
+        // `order.draft_create`, the SAME action the success row and the transaction-time
+        // denial below use. An early refusal recorded under a second name splits one
+        // command across two audit actions, so a query for the established one silently
+        // omits exactly the denials this early check exists to record. Found by the Codex
+        // review of the stabilization round — introduced by the fix for C2.
+        action: 'order.draft_create',
+        entityType: 'Order',
+        entityId: null,
+      },
+      authority.permission,
+    );
 
-    const replay = await this.replay(scope, input.idempotencyKey, requestHash);
+    const replay = await this.replay(scope, input.idempotencyKey, requestHash, authority.namespace);
     if (replay !== null) return replay;
 
     const now = this.deps.clock.now();
@@ -346,7 +380,7 @@ export class OrderService {
       this.mutationDeps(),
       scope,
       actor,
-      ORDER_PLACE_PERMISSION,
+      authority.permission,
       { action: 'order.draft_create', entityType: 'Order', entityId: null },
       async (tx) => {
         await this.assertScopeActive(scope, tx);
@@ -472,7 +506,7 @@ export class OrderService {
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          ORDER_NAMESPACE,
+          authority.namespace,
           input.idempotencyKey,
           requestHash,
           { orderId: created.id },
@@ -754,6 +788,7 @@ export class OrderService {
       readonly orderId: string;
       readonly choice: UsernameChoice;
     },
+    authority: OrderAuthority = CUSTOMER_ORDER_AUTHORITY,
   ): Promise<UsernameReservation> {
     const customerId = this.customerId(input.customerId);
     const orderId = this.orderId(input.orderId);
@@ -777,20 +812,31 @@ export class OrderService {
     });
 
     /** Before the replay, for the reason `createDraft` states: a replay returns a row. */
-    await this.authorize(scope, actor, {
-      action: 'order.username.choose',
-      entityType: 'Order',
-      entityId: orderId,
-    });
+    await this.authorize(
+      scope,
+      actor,
+      {
+        action: 'order.username.choose',
+        entityType: 'Order',
+        entityId: orderId,
+      },
+      authority.permission,
+    );
 
-    const replayed = await this.replayUsername(scope, input.idempotencyKey, requestHash, orderId);
+    const replayed = await this.replayUsername(
+      scope,
+      input.idempotencyKey,
+      requestHash,
+      orderId,
+      authority.namespace,
+    );
     if (replayed !== null) return replayed;
 
     return runAuthorizedMutation(
       this.mutationDeps(),
       scope,
       actor,
-      ORDER_PLACE_PERMISSION,
+      authority.permission,
       { action: 'order.username.choose', entityType: 'Order', entityId: orderId },
       async (tx) => {
         await this.assertScopeActive(scope, tx);
@@ -812,7 +858,7 @@ export class OrderService {
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          ORDER_NAMESPACE,
+          authority.namespace,
           input.idempotencyKey,
           requestHash,
           { orderId },
@@ -1540,19 +1586,25 @@ export class OrderService {
       readonly customerId: string;
       readonly orderId: string;
     },
+    authority: OrderAuthority = CUSTOMER_ORDER_AUTHORITY,
   ): Promise<OrderRecord> {
     const customerId = this.customerId(input.customerId);
     const orderId = this.orderId(input.orderId);
     const requestHash = hashRequest({ customerId, orderId });
 
     /** Before the replay, for the reason `createDraft` states: a replay returns a row. */
-    await this.authorize(scope, actor, {
-      action: 'order.confirm',
-      entityType: 'Order',
-      entityId: orderId,
-    });
+    await this.authorize(
+      scope,
+      actor,
+      {
+        action: 'order.confirm',
+        entityType: 'Order',
+        entityId: orderId,
+      },
+      authority.permission,
+    );
 
-    const replay = await this.replay(scope, input.idempotencyKey, requestHash);
+    const replay = await this.replay(scope, input.idempotencyKey, requestHash, authority.namespace);
     if (replay !== null) return replay;
 
     const now = this.deps.clock.now();
@@ -1561,7 +1613,7 @@ export class OrderService {
       this.mutationDeps(),
       scope,
       actor,
-      ORDER_PLACE_PERMISSION,
+      authority.permission,
       { action: 'order.confirm', entityType: 'Order', entityId: orderId },
       async (tx) => {
         await this.assertScopeActive(scope, tx);
@@ -1600,7 +1652,7 @@ export class OrderService {
           await rememberOnce(
             this.deps.idempotency,
             scope,
-            ORDER_NAMESPACE,
+            authority.namespace,
             input.idempotencyKey,
             requestHash,
             { orderId: order.id },
@@ -1870,7 +1922,7 @@ export class OrderService {
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          ORDER_NAMESPACE,
+          authority.namespace,
           input.idempotencyKey,
           requestHash,
           { orderId: after.id },
@@ -1962,19 +2014,25 @@ export class OrderService {
       readonly customerId: string;
       readonly orderId: string;
     },
+    authority: OrderAuthority = CUSTOMER_ORDER_AUTHORITY,
   ): Promise<OrderRecord> {
     const customerId = this.customerId(input.customerId);
     const orderId = this.orderId(input.orderId);
     const requestHash = hashRequest({ customerId, orderId, action: 'cancel' });
 
     /** Before the replay, for the reason `createDraft` states: a replay returns a row. */
-    await this.authorize(scope, actor, {
-      action: 'order.cancel',
-      entityType: 'Order',
-      entityId: orderId,
-    });
+    await this.authorize(
+      scope,
+      actor,
+      {
+        action: 'order.cancel',
+        entityType: 'Order',
+        entityId: orderId,
+      },
+      authority.permission,
+    );
 
-    const replay = await this.replay(scope, input.idempotencyKey, requestHash);
+    const replay = await this.replay(scope, input.idempotencyKey, requestHash, authority.namespace);
     if (replay !== null) return replay;
 
     const now = this.deps.clock.now();
@@ -1983,7 +2041,7 @@ export class OrderService {
       this.mutationDeps(),
       scope,
       actor,
-      ORDER_PLACE_PERMISSION,
+      authority.permission,
       { action: 'order.cancel', entityType: 'Order', entityId: orderId },
       async (tx) => {
         await this.assertScopeActive(scope, tx);
@@ -2003,7 +2061,7 @@ export class OrderService {
           await rememberOnce(
             this.deps.idempotency,
             scope,
-            ORDER_NAMESPACE,
+            authority.namespace,
             input.idempotencyKey,
             requestHash,
             { orderId: before.id },
@@ -2213,7 +2271,7 @@ export class OrderService {
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          ORDER_NAMESPACE,
+          authority.namespace,
           input.idempotencyKey,
           requestHash,
           { orderId: after.id },
@@ -2259,10 +2317,11 @@ export class OrderService {
     scope: TenantContext,
     key: string,
     requestHash: string,
+    namespace: IdempotencyNamespace = ORDER_NAMESPACE,
   ): Promise<OrderRecord | null> {
     const found = await this.deps.idempotency.find<{ orderId: string }>(
       scope,
-      ORDER_NAMESPACE,
+      namespace,
       key,
       requestHash,
     );
@@ -2296,10 +2355,11 @@ export class OrderService {
     key: string,
     requestHash: string,
     orderId: OrderId,
+    namespace: IdempotencyNamespace = ORDER_NAMESPACE,
   ): Promise<UsernameReservation | null> {
     const found = await this.deps.idempotency.find<{ orderId: string }>(
       scope,
-      ORDER_NAMESPACE,
+      namespace,
       key,
       requestHash,
     );
@@ -2415,18 +2475,12 @@ export class OrderService {
     scope: TenantContext,
     actor: ActorContext,
     denial: { action: string; entityType: string; entityId: string | null },
+    permission: PermissionKey = ORDER_PLACE_PERMISSION,
   ): Promise<void> {
     try {
-      await this.deps.guard.check(scope, actor, ORDER_PLACE_PERMISSION);
+      await this.deps.guard.check(scope, actor, permission);
     } catch (error) {
-      await recordMutationDenial(
-        this.mutationDeps(),
-        scope,
-        actor,
-        ORDER_PLACE_PERMISSION,
-        denial,
-        error,
-      );
+      await recordMutationDenial(this.mutationDeps(), scope, actor, permission, denial, error);
       throw error;
     }
   }

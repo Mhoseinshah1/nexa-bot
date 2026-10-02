@@ -60,7 +60,7 @@ export class DrizzleWalletThresholdAlertRepository implements WalletThresholdAle
     const tenantId = requireTenantId(scope);
     const result = await this.exec(tx).execute(sql`
       WITH running AS (
-        SELECT e.customer_id, e.id, e.created_at,
+        SELECT e.customer_id, e.id, e.created_at, e.reason,
                SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount ELSE -e.amount END)
                  OVER w AS after_entry,
                ROW_NUMBER() OVER w AS pos
@@ -85,6 +85,9 @@ export class DrizzleWalletThresholdAlertRepository implements WalletThresholdAle
         ON crossing.customer_id = s.customer_id AND crossing.pos = s.last_high + 1
       WHERE s.last_high IS NOT NULL
         AND latest.after_entry < ${wallet.threshold}
+        -- Customer 360: a balance moved out by an account transfer is not a customer
+        -- running low; the account it moved to is the one they use now.
+        AND crossing.reason <> 'ACCOUNT_TRANSFER_OUT'
         AND NOT EXISTS (
           SELECT 1 FROM wallet_threshold_alerts a
           WHERE a.tenant_id = ${tenantId}

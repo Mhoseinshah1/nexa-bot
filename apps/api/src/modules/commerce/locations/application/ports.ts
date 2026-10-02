@@ -207,3 +207,32 @@ export interface LocationChangeRepository {
     tx?: unknown,
   ): Promise<readonly LocationChangeRecord[]>;
 }
+
+/**
+ * Customer 360 (§11.4): one customer's location-change limit override, as stored. It
+ * REPLACES the configured location's window for every service the customer owns while it
+ * exists; which targets are offered and at what price is still the configuration's.
+ */
+export interface CustomerLocationOverrideRecord {
+  readonly customerId: UserId;
+  readonly limits: LocationChangeLimits;
+  readonly setAt: Date;
+}
+
+export interface CustomerLocationOverrideRepository {
+  find(
+    scope: TenantContext,
+    customerId: UserId,
+    tx?: unknown,
+  ): Promise<CustomerLocationOverrideRecord | null>;
+  /** Insert or replace. Returns whether the stored limits changed. */
+  upsert(
+    scope: TenantContext,
+    customerId: UserId,
+    limits: LocationChangeLimits,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+  /** Returns whether a row was removed. */
+  remove(scope: TenantContext, customerId: UserId, tx: TransactionScope): Promise<boolean>;
+}
