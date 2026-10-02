@@ -110,8 +110,9 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = ['bot.main_menu
  * nothing, which is the one thing this screen must never offer.
  *
  * `trial.product_id` (R1): a trial is configured on each panel's «سرویس تست» tab.
+ * `stars.pricing_mode` (spec §8): Stars are always priced by the central rate.
  */
-export const SETTINGS_RETIRED: readonly SettingKey[] = ['trial.product_id'];
+export const SETTINGS_RETIRED: readonly SettingKey[] = ['trial.product_id', 'stars.pricing_mode'];
 
 export interface SettingPresentation {
   readonly title: WebKey;

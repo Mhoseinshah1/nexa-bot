@@ -256,27 +256,41 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
     });
   }
 
+  const configureStars = (
+    config: Partial<PaymentGatewayConfig> & {
+      customerFeeBasisPoints?: number;
+      providerUnitRateMinor?: bigint | null;
+    } = {},
+  ) =>
+    api.container.paymentGateways.configure(tenantA, owner, {
+      idempotencyKey: key(),
+      provider: 'TELEGRAM_STARS',
+      config: { ...OPEN_ROUTE, ...config },
+    });
+
+  const switchStars = (status: 'ACTIVE' | 'DISABLED') =>
+    api.container.paymentGateways.setStatus(tenantA, owner, {
+      idempotencyKey: key(),
+      provider: 'TELEGRAM_STARS',
+      status,
+    });
+
+  /**
+   * Spec §8: the Stars route is priced by the central rate only, so switching it on needs
+   * the feature on and the ratio set — 100 Stars per USDT here. No fixed rate exists.
+   */
   async function enableStars(
     config: Partial<PaymentGatewayConfig> & { customerFeeBasisPoints?: number } = {},
   ) {
-    await api.container.paymentGateways.configure(tenantA, owner, {
-      idempotencyKey: key(),
-      provider: 'TELEGRAM_STARS',
-      config: { ...OPEN_ROUTE, providerUnitRateMinor: RATE, ...config },
-    });
-    await api.container.paymentGateways.setStatus(tenantA, owner, {
-      idempotencyKey: key(),
-      provider: 'TELEGRAM_STARS',
-      status: 'ACTIVE',
-    });
-  }
-
-  /** The whole central setup: flag on, ratio 100 Stars per USDT, mode central, one refresh. */
-  async function centralStars() {
-    await enableStars({ customerFeeBasisPoints: 500 });
+    await configureStars(config);
     await setFlag(true);
     await setSetting('stars.per_usdt', '100');
-    await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO');
+    await switchStars('ACTIVE');
+  }
+
+  /** The whole central setup: the route on (flag, ratio) and one refresh. */
+  async function centralStars() {
+    await enableStars({ customerFeeBasisPoints: 500 });
     expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
       outcome: 'REFRESHED',
     });
@@ -369,31 +383,108 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
     });
   });
 
-  describe('backward compatibility (FX-STARS)', () => {
-    it('an upgraded installation prices Stars by the fixed rate: policy FIXED_RATE, no FX snapshot, nothing dialled', async () => {
-      await enableStars({ customerFeeBasisPoints: 500 });
+  describe('central FX only (spec §8): no manual Stars rate', () => {
+    it('a legacy fixed rate left on the route and the legacy FIXED_RATE mode are ignored: the attempt is priced centrally', async () => {
+      await centralStars();
+      // What an upgraded installation carries: Package A's Toman per Star on the row, and
+      // `stars.pricing_mode` at its FIXED_RATE default. Neither prices anything any more.
+      await api.container.database.db.execute(
+        sql`UPDATE payment_gateways SET provider_unit_rate_minor = ${RATE}
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS'`,
+      );
+      expect(await api.container.settingsResolver.valueOf(tenantA, 'stars.pricing_mode')).toBe(
+        'FIXED_RATE',
+      );
       const attempt = await topup(100_000n);
-      const invoice = await invoiceOf(attempt.payment.id);
-      // 100,000 + 5 % = 105,000; / 1,300 = 80.77 → 81 Stars, exactly as Package A.
-      expect(invoice).toMatchObject({
-        sent_amount: '81',
-        conversion_policy: 'FIXED_RATE',
-        conversion_rate_minor: '1300',
-        fx_quote_id: null,
-        fx_source: null,
+      // 105,000 / 1,035.5 → 102 Stars, never 105,000 / 1,300 → 81.
+      expect(await invoiceOf(attempt.payment.id)).toMatchObject({
+        sent_amount: '102',
+        conversion_policy: 'CENTRAL_FX',
+        conversion_rate_minor: null,
       });
-      expect(attempt.invoice.conversionPolicy).toBe('FIXED_RATE');
-      expect(attempt.invoice.fx).toBeNull();
-      expect(hits).toEqual([]);
-      // The worker's lane, with the feature off, dials nothing either.
-      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
-        outcome: 'DISABLED',
+      // An edit of the route that does not mention the rate still saves over the legacy value.
+      await configureStars({ customerFeeBasisPoints: 500 });
+    });
+
+    it('with no usable quote the attempt is REFUSED, never priced by the legacy rate (no Stars-only fallback)', async () => {
+      await enableStars({ customerFeeBasisPoints: 500 });
+      await api.container.database.db.execute(
+        sql`UPDATE payment_gateways SET provider_unit_rate_minor = ${RATE}
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS'`,
+      );
+      // Never fetched.
+      const never = await topup(100_000n).catch((error: unknown) => error);
+      expect(isNexaError(never) && never.details).toMatchObject({
+        reason: FX_UNAVAILABLE_REASON,
+        detail: 'NEVER_FETCHED',
       });
-      expect(hits).toEqual([]);
+      const [count] = await rows<{ n: string }>(
+        sql`SELECT count(*)::text AS n FROM payments WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(count?.n).toBe('0');
+    });
+
+    it('a manual rate cannot be set on the Stars route any more, and the retired mode cannot be changed', async () => {
+      const rate = await configureStars({ providerUnitRateMinor: RATE }).catch(
+        (error: unknown) => error,
+      );
+      expect(isNexaError(rate) && rate.code).toBe(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID);
+      expect(isNexaError(rate) && rate.details).toMatchObject({ field: 'providerUnitRateMinor' });
+      // Clearing is harmless and allowed.
+      await configureStars({ providerUnitRateMinor: null });
+      const mode = await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO').catch(
+        (error: unknown) => error,
+      );
+      expect(isNexaError(mode) && mode.code).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
+      expect(isNexaError(mode) && mode.message).toMatch(/retired/u);
+    });
+
+    it('the route cannot be switched on while the feature is off or the ratio is unset, and the ratio cannot be cleared while it is on', async () => {
+      await configureStars();
+      const off = await switchStars('ACTIVE').catch((error: unknown) => error);
+      expect(isNexaError(off) && off.code).toBe(COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE);
+      expect(isNexaError(off) && off.details).toMatchObject({
+        reason: FX_UNAVAILABLE_REASON,
+        detail: 'DISABLED',
+      });
+      await setFlag(true);
+      const noRatio = await switchStars('ACTIVE').catch((error: unknown) => error);
+      expect(isNexaError(noRatio) && noRatio.details).toMatchObject({
+        reason: FX_UNAVAILABLE_REASON,
+        detail: 'UNIT_RATIO_MISSING',
+      });
+      expect((await setSetting('stars.per_usdt', '100')).changed).toBe(true);
+      expect((await switchStars('ACTIVE')).status).toBe('ACTIVE');
+      const cleared = await setSetting('stars.per_usdt', '').catch((error: unknown) => error);
+      expect(isNexaError(cleared) && cleared.code).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
+      // A positive ratio is always accepted; switching the route off frees the ratio.
+      expect((await setSetting('stars.per_usdt', '77.5')).changed).toBe(true);
+      await switchStars('DISABLED');
+      expect((await setSetting('stars.per_usdt', '')).changed).toBe(true);
+    });
+
+    it('a route whose ratio is unset is not offered to a customer (a courtesy; the attempt decides again)', async () => {
+      await centralStars();
+      const offered = async () =>
+        (
+          await api.container.paymentGateways.routesFor(
+            tenantA,
+            maryam,
+            'WALLET_TOPUP',
+            money(100_000n, 'IRT'),
+          )
+        ).map((route) => route.provider);
+      expect(await offered()).toContain('TELEGRAM_STARS');
+      // Bypass the guard, as a value stored by a previous release could.
+      await api.container.database.db.execute(
+        sql`UPDATE setting_values SET value = '"0"'::jsonb
+            WHERE tenant_id = ${tenantA.tenantId} AND setting_key = 'stars.per_usdt'`,
+      );
+      expect(await offered()).not.toContain('TELEGRAM_STARS');
     });
 
     it('the previous release keeps writing a Stars invoice in its own shape: a rate and no policy reads back FIXED_RATE (Codex #122, P1)', async () => {
-      await enableStars({ customerFeeBasisPoints: 500 });
+      await centralStars();
       const attempt = await topup(100_000n);
       const db = api.container.database.db;
       // The columns the previous release wrote: everything but the policy and the FX snapshot.
@@ -409,11 +500,12 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       expect(columns).not.toContain('conversion_policy');
       const list = sql.raw(columns.map((column) => `"${column}"`).join(', '));
       // One connection: the copy is a TEMP table, and the re-insert is the old write shape
-      // (a rate, the column's default for the policy), exactly what a rolling deploy sees.
+      // (a rate, the column's default for the policy), exactly what a rollback window sees.
       await db.transaction(async (tx) => {
         await tx.execute(
           sql`CREATE TEMP TABLE pre_p_invoice ON COMMIT DROP AS SELECT * FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
         );
+        await tx.execute(sql`UPDATE pre_p_invoice SET conversion_rate_minor = ${RATE}`);
         await tx.execute(
           sql`DELETE FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
         );
@@ -422,7 +514,6 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
         );
       });
       expect(await invoiceOf(attempt.payment.id)).toMatchObject({
-        sent_amount: '81',
         conversion_policy: 'FIXED_RATE',
         conversion_rate_minor: '1300',
         fx_quote_id: null,
@@ -433,32 +524,6 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
         attempt.payment.id,
       );
       expect(record?.conversionPolicy).toBe('FIXED_RATE');
-    });
-
-    it('the central mode cannot be chosen while the feature is off or the ratio is unset, and the ratio cannot be cleared under it', async () => {
-      // A positive ratio is accepted at any time; it is the MODE that needs the feature.
-      expect((await setSetting('stars.per_usdt', '100')).changed).toBe(true);
-      const off = await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO').catch(
-        (error: unknown) => error,
-      );
-      expect(isNexaError(off) && off.code).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
-      expect(isNexaError(off) && off.message).toMatch(/central_fx feature is on/u);
-      await setFlag(true);
-      // Under the fixed rate the ratio may be cleared; the mode then needs it back.
-      expect((await setSetting('stars.per_usdt', '')).changed).toBe(true);
-      const noRatio = await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO').catch(
-        (error: unknown) => error,
-      );
-      expect(isNexaError(noRatio) && noRatio.code).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
-      expect(isNexaError(noRatio) && noRatio.message).toMatch(/positive ratio/u);
-      await setSetting('stars.per_usdt', '100');
-      expect((await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO')).changed).toBe(true);
-      const cleared = await setSetting('stars.per_usdt', '').catch((error: unknown) => error);
-      expect(isNexaError(cleared) && cleared.code).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
-      // A positive ratio is always accepted, and switching back to the fixed rate frees the ratio.
-      expect((await setSetting('stars.per_usdt', '77.5')).changed).toBe(true);
-      await setSetting('stars.pricing_mode', 'FIXED_RATE');
-      expect((await setSetting('stars.per_usdt', '')).changed).toBe(true);
     });
   });
 
@@ -729,9 +794,6 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
 
     it('primary down: the fallback prices the attempt from Toman as read, and the conditions are recorded', async () => {
       await enableStars({ customerFeeBasisPoints: 500 });
-      await setFlag(true);
-      await setSetting('stars.per_usdt', '100');
-      await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO');
       script.nobitex = { status: 502, body: 'bad gateway' };
       expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
         outcome: 'REFRESHED_BY_FALLBACK',
@@ -772,7 +834,8 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
         stars: {
           pricingMode: 'CENTRAL_FX_RATIO',
           starsPerUsdt: '100',
-          fixedRateMinor: '1300',
+          // Spec §8: no manual Stars rate exists to report.
+          fixedRateMinor: null,
           centralRatePerStar: '1035.5',
         },
         policyVersion: 1,

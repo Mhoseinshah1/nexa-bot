@@ -2305,6 +2305,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     credentials: gatewayCredentialStore,
     adapters: gatewayAdapters,
     callbackUrlFor: gatewayCallbackUrlFor,
+    // Spec §8: a route priced only by the central rate cannot be enabled while it is off.
+    features: featureFlagResolver,
   });
 
   /**
@@ -3140,10 +3142,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      */
     [
       new SalesCurrencyChangeGuard(refundRepository),
-      // Package FX-STARS: the central pricing mode needs the feature on and a ratio set,
-      // and the ratio cannot be cleared while the mode depends on it.
-      new StarsPricingModeGuard(featureFlagResolver, settingsResolver),
-      new StarsPerUsdtGuard(settingsResolver),
+      // Spec §8: the Stars pricing mode is retired (every change refused), and the ratio
+      // cannot be cleared while the Stars route is switched on.
+      new StarsPricingModeGuard(),
+      new StarsPerUsdtGuard(paymentGatewayRepository),
       // The trial product must be a product of this tenant (WP6-A).
       new TrialProductGuard(productRepository),
       // One per reminder threshold. The five have to agree with one another, and no
