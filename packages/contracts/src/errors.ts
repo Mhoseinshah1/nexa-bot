@@ -399,9 +399,14 @@ export const PLATFORM_ERROR_CODES = {
   /** The administrator's own password did not verify, so no kit was produced. */
   RECOVERY_KIT_REAUTHENTICATION_FAILED: 'recovery_kit.reauthentication_failed',
   /**
-   * A destructive recovery holds the installation, so its keys may not change.
-   * The executor carries the CURRENT keys into the restored database; a key
-   * imported or removed during that window would be lost or resurrected.
+   * Not now, and nothing was changed. Two causes, one answer:
+   *
+   *   - a destructive recovery holds the installation, so its keys may not
+   *     change: the executor carries the CURRENT keys into the restored
+   *     database, and a key imported or removed in that window would be lost or
+   *     resurrected;
+   *   - another Recovery Kit is being opened or sealed in this process. A kit's
+   *     key derivation is deliberately expensive, so at most one runs at a time.
    */
   RECOVERY_KIT_BUSY: 'recovery_kit.busy',
   /** No imported key by that id. Configured keys are not addressable here. */

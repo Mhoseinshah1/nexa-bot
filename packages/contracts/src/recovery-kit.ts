@@ -90,7 +90,13 @@ export const RECOVERY_KIT_KDF_BOUNDS = {
   minR: 8,
   maxR: 8,
   minP: 1,
-  maxP: 8,
+  /**
+   * 4, the writer's own value: the work a crafted header may demand per
+   * derivation is bounded too, not only the memory. (Was 8; lowered after the
+   * PR #144 security review. A kit at p = 8 was never written by this code.) The
+   * server also runs at most ONE kit derivation at a time per process.
+   */
+  maxP: 4,
 } as const;
 
 /**
@@ -210,7 +216,9 @@ export type InstallationKeySource = (typeof INSTALLATION_KEY_SOURCES)[number];
  *
  * `secrets`           stored credentials whose envelope names this key.
  * `wrappedKeys`       other imported keys stored wrapped under this one.
- * `retainedArchives`  encrypted archives on this server's disk sealed under it.
+ * `retainedArchives`  encrypted archives on this server's disk sealed under it, OR
+ *                     taken while it was held — such a backup may carry secrets
+ *                     sealed under it that its own header cannot reveal.
  * `openRecoveries`    recoveries not yet finished whose upload is sealed under it.
  *
  * A copy of an archive somewhere else — a Telegram chat, a laptop — is not
@@ -226,7 +234,12 @@ export type InstallationKeyDependencies = z.infer<typeof installationKeyDependen
 
 export const installationKeySummarySchema = z.object({
   keyId: installationKeyIdSchema,
-  fingerprint: installationKeyFingerprintSchema,
+  /**
+   * Null for a CONFIGURED key unless the reader may export the kit: the list is
+   * readable with LOW `backup.view`, and a fingerprint of the server's own keys
+   * is for the people who hold them.
+   */
+  fingerprint: installationKeyFingerprintSchema.nullable(),
   origin: z.enum(INSTALLATION_KEY_ORIGINS),
   /** `true` for exactly one key: the configured active one. Never for an imported key. */
   encrypts: z.boolean(),
@@ -238,6 +251,12 @@ export const installationKeySummarySchema = z.object({
    */
   available: z.boolean(),
   dependencies: installationKeyDependenciesSchema,
+  /**
+   * The key was not imported here: it came back inside a RESTORED backup. Flagged
+   * (and audited at the cutover) so a key nobody imported on this server is
+   * visible as such.
+   */
+  arrivedByRestore: z.boolean(),
   /** Only an imported key with no dependency. Configured keys are never removable here. */
   removable: z.boolean(),
 });
@@ -274,6 +293,12 @@ export const importRecoveryKitRequestSchema = z
       .max(Math.ceil((RECOVERY_KIT_MAX_BYTES * 4) / 3) + 4)
       .regex(/^[A-Za-z0-9+/_=-]+$/),
     passphrase: z.string().max(RECOVERY_KIT_PASSPHRASE_MAX_LENGTH),
+    /**
+     * Step-up, as on export. A stolen owner session must not be able to import a
+     * key of its own choosing: with one, a forged archive sealed under it would
+     * open here and could be restored.
+     */
+    accountPassword: z.string().min(1).max(1024),
     idempotencyKey: z.string().min(8).max(255),
   })
   .strict();
