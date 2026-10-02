@@ -107,7 +107,9 @@ export interface PaymentGatewayServiceDeps {
    * route priced ONLY by it is switched on. Optional so a narrow test wiring need not
    * supply it; absent is read as "off" for that one gate, never as "on".
    */
-  readonly features?: { isEnabled(scope: TenantContext, key: 'central_fx', tx?: unknown): Promise<boolean> };
+  readonly features?: {
+    isEnabled(scope: TenantContext, key: 'central_fx', tx?: unknown): Promise<boolean>;
+  };
 }
 
 /**

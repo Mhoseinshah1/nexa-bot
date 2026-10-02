@@ -57,9 +57,7 @@ const APP_CODES = {
 type AppCode = keyof typeof APP_CODES;
 
 /** The callback's command, `{ intent: 'UNSUPPORTED' }` when malformed, null when not ours. */
-export function adminTutorialCallback(
-  data: string,
-): {
+export function adminTutorialCallback(data: string): {
   readonly intent: AdminTutorialIntent | 'UNSUPPORTED';
   readonly targetId: string | null;
 } | null {

@@ -39,7 +39,8 @@ export class StarsPricingModeGuard implements SettingChangeGuard {
 
 /** The routes whose price depends on `stars.per_usdt`, read from their descriptors. */
 const RATIO_ROUTES: readonly PaymentGatewayProvider[] = PAYMENT_GATEWAY_PROVIDERS.filter(
-  (provider) => PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion.unitRatioSetting === STARS_PER_USDT_KEY,
+  (provider) =>
+    PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion.unitRatioSetting === STARS_PER_USDT_KEY,
 );
 
 /**
