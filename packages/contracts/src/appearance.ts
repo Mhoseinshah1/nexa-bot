@@ -62,6 +62,20 @@ export const APPEARANCE_SLOTS = [
   'location',
   'active',
   'inactive',
+  /*
+   * Owner spec §4: the account screen and the payment messages. Appended, never inserted:
+   * the order is the Web Admin's and a stored row names its slot, not its position. Each
+   * fallback is what the default bodies drew before the slot existed, except `phone`,
+   * whose old ⚫ was a bullet and is now the phone it names.
+   */
+  'account',
+  'identity',
+  'phone',
+  'invoice',
+  'amount',
+  'credit',
+  'group',
+  'clock',
 ] as const;
 export type AppearanceSlot = (typeof APPEARANCE_SLOTS)[number];
 
@@ -102,6 +116,14 @@ export const APPEARANCE_SLOT_FALLBACKS: Readonly<Record<AppearanceSlot, string>>
   location: '🌍',
   active: '🟢',
   inactive: '🔴',
+  account: '🎡',
+  identity: '🪪',
+  phone: '📱',
+  invoice: '🧾',
+  amount: '💵',
+  credit: '💎',
+  group: '🔖',
+  clock: '🕒',
 };
 
 // ---------------------------------------------------------------------------

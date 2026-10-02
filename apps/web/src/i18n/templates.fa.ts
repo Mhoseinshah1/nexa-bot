@@ -229,6 +229,8 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
   NUMBER: 'عدد',
   MONEY: 'مبلغ با واحد پول',
   DATETIME: 'تاریخ و زمان',
+  DATE: 'تاریخ',
+  TIME: 'ساعت',
   DURATION_DAYS: 'مدت به روز (صفر یعنی نامحدود)',
   BYTES: 'حجم',
   TRAFFIC_LIMIT: 'سقف حجم (صفر یعنی نامحدود)',
@@ -337,6 +339,8 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   noExpiry: 'خط بدون تاریخ انقضا',
   note: 'یادداشت',
   notice: 'اطلاعیهٔ کارت سرویس',
+  nowDate: 'تاریخ امروز (هنگام نمایش)',
+  nowTime: 'ساعت فعلی (هنگام نمایش)',
   number: 'شماره',
   occurrences: 'تعداد تکرار',
   olderLine: 'خط پیام‌های قدیمی‌تر',
@@ -980,7 +984,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.wallet.summary': [
     'اطلاعات حساب کاربری (کیف پول)',
-    'صفحهٔ کیف پول: شناسه و نام، موجودی، تعداد سرویس‌ها و پرداخت‌ها، زیرمجموعه‌ها و گروه کاربری.',
+    'صفحهٔ کیف پول: شناسه و نام، موجودی، تعداد سرویس‌ها و پرداخت‌ها، زیرمجموعه‌ها، گروه کاربری و تاریخ و ساعت لحظهٔ نمایش.',
   ],
   'bot.wallet.phone_missing': [
     'خط شمارهٔ تلفن ثبت‌نشده',
@@ -1001,6 +1005,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.wallet.topup_button': [
     'دکمهٔ افزایش موجودی',
     'دکمهٔ زیر موجودی که شارژ کیف پول را شروع می‌کند.',
+  ],
+  'bot.wallet.open_button': [
+    'دکمهٔ کیف پول',
+    'دکمهٔ شیشه‌ای زیر پیام شارژ کیف پول که صفحهٔ کیف پول را در پیامی تازه باز می‌کند.',
+  ],
+  'bot.catalog.open_button': [
+    'دکمهٔ خرید سرویس',
+    'دکمهٔ شیشه‌ای زیر پیام شارژ کیف پول که فهرست خرید سرویس را در پیامی تازه باز می‌کند.',
   ],
   'bot.wallet.topup_choose': [
     'انتخاب مبلغ شارژ',

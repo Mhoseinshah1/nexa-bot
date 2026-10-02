@@ -1,0 +1,4 @@
+ALTER TABLE "bot_appearance_slots" DROP CONSTRAINT "bot_appearance_slots_slot_check";--> statement-breakpoint
+ALTER TABLE "telegram_wizards" DROP CONSTRAINT "telegram_wizards_step_check";--> statement-breakpoint
+ALTER TABLE "bot_appearance_slots" ADD CONSTRAINT "bot_appearance_slots_slot_check" CHECK (slot IN ('success', 'error', 'warning', 'info', 'payment', 'wallet', 'purchase', 'service', 'trial', 'referral', 'support', 'ticket', 'renewal', 'traffic', 'time', 'date', 'link', 'user', 'location', 'active', 'inactive', 'account', 'identity', 'phone', 'invoice', 'amount', 'credit', 'group', 'clock'));--> statement-breakpoint
+ALTER TABLE "telegram_wizards" ADD CONSTRAINT "telegram_wizards_step_check" CHECK (step IN ('CATEGORIES', 'PRODUCTS', 'USERNAME', 'DISCOUNT', 'PREINVOICE', 'AWAITING_PAYMENT', 'METHODS', 'AMOUNT', 'INVOICE_LOADING', 'INVOICE_PENDING', 'INVOICE', 'NOTICE', 'CLOSED', 'RECEIPT_WAIT', 'RECEIPT_REVIEW'));

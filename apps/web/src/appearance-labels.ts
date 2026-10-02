@@ -28,4 +28,12 @@ export const APPEARANCE_SLOT_LABEL: Readonly<Record<AppearanceSlot, WebKey>> = {
   location: 'web.appearance_slot_location',
   active: 'web.appearance_slot_active',
   inactive: 'web.appearance_slot_inactive',
+  account: 'web.appearance_slot_account',
+  identity: 'web.appearance_slot_identity',
+  phone: 'web.appearance_slot_phone',
+  invoice: 'web.appearance_slot_invoice',
+  amount: 'web.appearance_slot_amount',
+  credit: 'web.appearance_slot_credit',
+  group: 'web.appearance_slot_group',
+  clock: 'web.appearance_slot_clock',
 };

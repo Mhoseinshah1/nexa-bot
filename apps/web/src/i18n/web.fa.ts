@@ -3070,6 +3070,9 @@ export const WEB_FA = {
     'برای دیدن و ویرایش متن دکمه‌ها به دسترسی templates.view نیاز است.',
   'web.bot_buttons_label_duplicate': 'متن این دکمه با دکمهٔ دیگری یکسان است.',
   'web.setting_bot_main_menu': 'دکمه‌های منوی اصلی ربات',
+  'web.setting_bot_inline_buttons': 'سبک دکمه‌های شیشه‌ای ربات',
+  'web.setting_bot_inline_buttons_desc':
+    'رنگ (سبک) هر دکمهٔ شیشه‌ای مشتری؛ در صفحهٔ «دکمه‌های ربات»، بخش «دکمه‌های شیشه‌ای ربات» ویرایش می‌شود.',
   'web.setting_bot_main_menu_desc':
     'ترتیب و نمایش دکمه‌های منوی اصلی ربات؛ در صفحهٔ «دکمه‌های ربات» ویرایش می‌شود.',
   // Round P: target, appearance slot, the Telegram command menu and its sync per bot.
@@ -4538,6 +4541,14 @@ export const WEB_FA = {
   'web.appearance_slot_location': 'لوکیشن',
   'web.appearance_slot_active': 'فعال',
   'web.appearance_slot_inactive': 'غیرفعال',
+  'web.appearance_slot_account': 'اطلاعات حساب',
+  'web.appearance_slot_identity': 'شناسهٔ کاربر',
+  'web.appearance_slot_phone': 'شمارهٔ تماس',
+  'web.appearance_slot_invoice': 'فاکتور',
+  'web.appearance_slot_amount': 'مبلغ قابل پرداخت',
+  'web.appearance_slot_credit': 'واریز به کیف پول',
+  'web.appearance_slot_group': 'گروه کاربری',
+  'web.appearance_slot_clock': 'ساعت',
   'web.appearance_test_title': 'ارسال پیام آزمایشی',
   'web.appearance_test_hint':
     'یک پیام واقعی با همهٔ ایموجی‌های سفارشی تنظیم‌شده به چت تلگرام خودتان فرستاده می‌شود و پاسخ واقعی تلگرام برای همان ربات ثبت می‌شود. تا وقتی این آزمایش برای رباتی موفق نشده، آن ربات فقط ایموجی پیش‌فرض می‌فرستد. تلگرام ایموجی سفارشی را فقط برای ربات‌هایی می‌پذیرد که نام کاربری اضافه در Fragment خریده‌اند.',

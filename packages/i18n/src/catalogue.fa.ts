@@ -659,6 +659,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
   'bot.wallet.insufficient': '{icon:warning} موجودی کیف پول کافی نیست. کمبود: {shortfall}',
   'bot.wallet.topup_button': '💰 افزایش موجودی',
+  'bot.wallet.open_button': '💰 کیف پول',
+  'bot.catalog.open_button': '🛒 خرید سرویس',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
   'bot.wallet.topup_refused': 'این مبلغ قابل شارژ نیست. لطفاً مبلغ دیگری را از فهرست انتخاب کنید.',
   'bot.wallet.topup_unavailable':

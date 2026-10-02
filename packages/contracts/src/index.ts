@@ -60,6 +60,8 @@ export * from './bot-commands.js';
 export * from './bot-menu.js';
 // Round T: the button builder — explicit rows, styles, icons, draft/publish/revisions.
 export * from './bot-menu-builder.js';
+// Owner spec §6: the customer's inline («شیشه‌ای») buttons — keys, labels, styles.
+export * from './inline-buttons.js';
 export * from './bot-management.js';
 // Premium UI: appearance slots and custom emoji.
 export * from './appearance.js';

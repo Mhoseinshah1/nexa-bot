@@ -39,6 +39,7 @@ import {
 } from './payment.js';
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
+import { inlineButtonStylesSchema } from './inline-buttons.js';
 import {
   FX_FRESH_TTL_SECONDS_DEFAULT,
   FX_FRESH_TTL_SECONDS_MAX,
@@ -886,6 +887,29 @@ export const SETTINGS = [
     defaultValue: [...DEFAULT_MAIN_MENU_LAYOUT],
     configures: null,
     // An empty list is not "no keyboard": every button is then drawn in its default place.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * Owner spec §6: the style of each customer INLINE button, edited on the Web Admin's
+   * «دکمه‌های ربات» page, section «دکمه‌های شیشه‌ای ربات», and nowhere else (it is not drawn
+   * on the settings page). The labels are templates, edited on the same section through the
+   * texts screen's own card. Separate from `bot.main_menu`: that is the reply keyboard.
+   */
+  {
+    key: 'bot.inline_buttons',
+    description:
+      'The style of each inline (glass) button a customer is shown, by the button\u2019s ' +
+      'registry key: default, primary (blue), success (green) or danger (red), the styles ' +
+      'Telegram supports on an inline button. A button this value does not name keeps its ' +
+      'registry default. The label is not here and nothing a customer taps depends on it: ' +
+      'every button routes by its own callback data, whatever it reads or looks like.',
+    schema: inlineButtonStylesSchema,
+    defaultValue: {},
+    configures: null,
+    // Empty is not "no buttons": every button is then drawn with its registry default.
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
