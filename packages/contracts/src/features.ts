@@ -331,6 +331,22 @@ export const FEATURE_FLAGS = [
     configuredBy: [],
   },
   {
+    key: 'customer_marketing_opt_out',
+    description:
+      'Let a customer stop promotional (MARKETING) broadcasts themselves — /stop and the ' +
+      'opt-out button — and honour what they chose. On by default: what every installation ' +
+      'did before this switch existed. Turning it off hides the button, makes /stop and any ' +
+      'old opt-out or opt-in button change nothing, and sends MARKETING broadcasts to ' +
+      'customers who opted out earlier. Their stored choice is NOT erased: turning it back ' +
+      'on makes it effective again. Messages about a customer\u2019s own payments, services ' +
+      'and tickets are never affected either way (spec §9).',
+    defaultEnabled: true,
+    // TENANT_WIDE: turning it off sends promotions to every customer who asked not to get
+    // them, at once. Worth saying out loud before it happens.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
     key: 'central_fx',
     description:
       'Read the USDT rate from a public exchange (Nobitex, with Wallex as the fallback) and ' +

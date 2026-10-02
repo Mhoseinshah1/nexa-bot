@@ -10300,6 +10300,15 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.marketing.unavailable',
+    description:
+      'Spec §9: answers /stop, or an old opt-out / opt-in button, while the installation does ' +
+      'not let customers stop promotional messages (the customer_marketing_opt_out flag is ' +
+      'off). Says the preference cannot be changed here; nothing is changed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.marketing.opt_in_button',
     description:
       'Round N close: the button, on the opted-out reply and on the support screen, that opts the ' +
