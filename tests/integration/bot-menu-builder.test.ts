@@ -19,6 +19,7 @@ import {
   isNexaError,
   legacyProjectionOf,
   mainMenuBuilderMutationResponseSchema,
+  systemContext,
   type ActorContext,
   type BotInstanceId,
   type ExplicitMainMenu,
@@ -931,6 +932,28 @@ describe('the button builder (round T, T1)', () => {
       expect(
         Object.fromEntries(view.iconEligibility.map((bot) => [bot.botInstanceId, bot.eligible])),
       ).toEqual({ [SEED_IDS.botA1]: true, [SEED_IDS.botA2]: false });
+    });
+
+    it('F-6 refuses a system scope as the pre-round-T read did, never answering the default keyboard', async () => {
+      const system = systemContext('round-t-f6');
+      // 25e717a read bot.main_menu through settings.find → requireTenantId: fail closed.
+      for (const read of [
+        () => container.mainMenu.keyboardFor(system),
+        () => container.mainMenu.rowsFor(system),
+        () => container.mainMenu.describeFor(system),
+      ]) {
+        expect(await codeOf(read())).toBe(PLATFORM_ERROR_CODES.TENANT_CONTEXT_MISSING);
+      }
+      // The source itself refuses, rather than handing the evaluator the registry default
+      // and leaving the refusal to whichever later read happens to need a tenant.
+      const source = new PublishedMainMenuSource(
+        new DrizzleMainMenuBuilderRepository(db()),
+        container.settingsResolver,
+        container.opsLog,
+      );
+      expect(await codeOf(source.snapshotFor(system))).toBe(
+        PLATFORM_ERROR_CODES.TENANT_CONTEXT_MISSING,
+      );
     });
 
     it('reports each button’s gate as the server decides it, never the page', async () => {
