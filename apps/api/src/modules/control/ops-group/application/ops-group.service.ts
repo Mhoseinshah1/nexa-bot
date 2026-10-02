@@ -973,6 +973,22 @@ export class OpsGroupService {
   // -------------------------------------------------------------------------
 
   /** Where the group is now, for snapshotting a new intent. Null when none is connected. */
+  /**
+   * The bound group's standing, from the database alone: whether one is CONNECTED, what
+   * its latest check found, and which bot it is bound to. For a caller — the backup
+   * delivery — that must not hand the group work it already KNOWS it cannot take: the
+   * dispatcher queues and retries, a backup gets one delivery.
+   */
+  async binding(scope: ScopeContext): Promise<{
+    readonly health: OpsLogGroupHealth;
+    readonly problems: readonly OpsLogGroupProblem[];
+    readonly botInstanceId: string;
+  } | null> {
+    const group = await this.deps.repository.findGroup(scope);
+    if (group === null || group.status !== 'CONNECTED') return null;
+    return { health: group.health, problems: group.problems, botInstanceId: group.botInstanceId };
+  }
+
   async currentDestination(
     scope: ScopeContext,
     category: OpsLogTopicCategory,

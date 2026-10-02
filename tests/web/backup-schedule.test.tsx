@@ -11,6 +11,7 @@ import {
 import { BackupScheduleCard } from '../../apps/web/src/pages/backup-schedule';
 import { intervalMinutes, presetOf, splitInterval } from '../../apps/web/src/backup-interval';
 import { SETTINGS_MANAGED_ELSEWHERE } from '../../apps/web/src/settings-presentation';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -173,6 +174,26 @@ describe('the backup schedule card', () => {
     );
     await screen.findByRole('switch', { name: 'بکاپ خودکار' });
     expect(container.textContent).toContain('فقط روی سرور نگه داشته می‌شود');
+  });
+
+  // Codex review of PR #142, finding 4: a failed settings read used to leave a switch
+  // that was merely disabled, with no error and no reason.
+  it('says the settings could not be read, with a retry, instead of a silently dead switch', async () => {
+    const api = stubApi([
+      {
+        url: `${API_PREFIX}${CONTROL_ROUTES.settings}`,
+        status: 500,
+        body: {
+          error: { kind: 'internal', code: 'test.down', message: 'down', correlationId: 'c' },
+        },
+      },
+    ]);
+    renderPage(<BackupScheduleCard status={STATUS} permissions={EDIT} />);
+    const retry = await screen.findByRole('button', { name: t('web.retry') });
+    expect(screen.getByRole('switch', { name: 'بکاپ خودکار' })).toBeDisabled();
+    const before = api.calls.length;
+    fireEvent.click(retry);
+    await waitFor(() => expect(api.calls.length).toBeGreaterThan(before));
   });
 
   it('is drawn on the backup page, not the generic settings page', () => {

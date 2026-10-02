@@ -25,9 +25,25 @@ export type OpsGroupBackupRoute =
       readonly token: string;
     };
 
+/**
+ * Whether the group can take a backup at all, from the DATABASE alone (Codex review of
+ * PR #142, findings 2 and 3). One answer for both `describe` and `resolve`, so the status
+ * card names the recipient `resolve` would actually pick.
+ *
+ * `UNUSABLE` is a group known not to work: its latest check found a PROBLEM (bot removed,
+ * cannot send, no topic right…) or its bot has no token. The notification dispatcher may
+ * still queue for such a group — it retries — but a backup gets ONE delivery, and handing
+ * it to a group already known to refuse it would spend that delivery on a refusal while a
+ * working fallback chat sat unused.
+ */
+export type OpsGroupBackupStanding =
+  | { readonly kind: 'NOT_CONNECTED' }
+  | { readonly kind: 'UNUSABLE'; readonly errorCode: string; readonly errorMessage: string }
+  | { readonly kind: 'USABLE' };
+
 export interface OpsGroupBackupTopic {
-  /** Whether a group is connected now. A database read; no Telegram call. */
-  connected(scope: ScopeContext): Promise<boolean>;
+  /** The group's standing. Database reads only; no Telegram call. */
+  standing(scope: ScopeContext): Promise<OpsGroupBackupStanding>;
   /**
    * The group's chat and the backups topic's thread, creating the topic if it is owed.
    * `staleThreadId` is the thread Telegram just said is gone: the topic is recreated
@@ -64,8 +80,9 @@ export interface RoutedBackupDeliveryDeps {
  *   1. A CONNECTED operations log group: its «💾 بکاپ‌ها» topic, posted by the group's
  *      own bot. The canonical destination — an operator who connected a group set up no
  *      second chat id.
- *   2. Otherwise — no group connected, or a connected group whose topic could not be made
- *      ready before ANY byte was sent — the environment's dedicated chat, when it is
+ *   2. Otherwise — no group connected, a group whose latest check found a PROBLEM (or
+ *      whose bot has no token), or a group whose topic could not be made ready (an
+ *      answer or a throw) before ANY byte was sent — the environment's dedicated chat, when it is
  *      configured. That is the explicit fallback, and the only reason the two
  *      `BACKUP_TELEGRAM_*` variables still exist.
  *   3. Otherwise nothing: `NOT_ATTEMPTED` when nothing is configured anywhere, or a
@@ -86,40 +103,78 @@ export class RoutedBackupDelivery implements BackupDeliveryRouter {
 
   async describe(): Promise<BackupDeliveryDestination> {
     const scope = this.deps.scope();
-    if (scope !== null && (await this.deps.opsGroup.connected(scope))) return 'OPS_GROUP_TOPIC';
+    const standing = scope === null ? null : await this.standingOf(scope);
+    if (standing?.kind === 'USABLE') return 'OPS_GROUP_TOPIC';
     return this.deps.dedicated.configured ? 'DEDICATED_CHAT' : 'NONE';
   }
 
   async resolve(): Promise<BackupDeliveryResolution> {
     const scope = this.deps.scope();
-    const route = scope === null ? null : await this.deps.opsGroup.route(scope, null);
+    if (scope === null) return this.fallback(null);
+    const standing = await this.standingOf(scope);
+    if (standing.kind === 'NOT_CONNECTED') return this.fallback(null);
+    if (standing.kind === 'UNUSABLE') return this.fallback(standing);
 
-    if (scope !== null && route !== null && route.kind === 'ROUTED') {
+    // Nothing has been sent yet, so a route that THROWS (a database hiccup, a provisioner
+    // failure) is as safe to fall back from as one that answers UNAVAILABLE: the fallback
+    // cannot be a second copy of anything (Codex review of PR #142, finding 1).
+    let route: OpsGroupBackupRoute;
+    try {
+      route = await this.deps.opsGroup.route(scope, null);
+    } catch (error) {
+      route = {
+        kind: 'UNAVAILABLE',
+        errorCode: 'ops_group.route_failed',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (route.kind === 'ROUTED') {
       return {
         kind: 'READY',
         destination: 'OPS_GROUP_TOPIC',
         channel: this.groupChannel(scope, route),
       };
     }
+    return this.fallback(route.kind === 'NOT_CONNECTED' ? null : route);
+  }
+
+  /**
+   * The dedicated chat when it is configured, else nothing — naming why when a group is
+   * connected and was not usable. Only ever reached before anything was sent to the group.
+   */
+  private fallback(groupProblem: { readonly errorCode: string } | null): BackupDeliveryResolution {
     if (this.deps.dedicated.configured) {
-      if (route !== null && route.kind === 'UNAVAILABLE') {
+      if (groupProblem !== null) {
         // Said out loud: the operator connected a group and the archive went elsewhere.
         this.deps.logger.warn(
-          { errorCode: route.errorCode },
+          { errorCode: groupProblem.errorCode },
           'the operations group backups topic is unavailable; delivering to the dedicated backup chat instead',
         );
       }
       return { kind: 'READY', destination: 'DEDICATED_CHAT', channel: this.deps.dedicated };
     }
-    if (route !== null && route.kind === 'UNAVAILABLE') {
+    if (groupProblem !== null) {
       return {
         kind: 'UNAVAILABLE',
         detail:
-          `The operations group's backups topic is unavailable (${route.errorCode}) and no ` +
-          'dedicated backup chat is configured. The archive is retained on the server.',
+          `The operations group's backups topic is unavailable (${groupProblem.errorCode}) and ` +
+          'no dedicated backup chat is configured. The archive is retained on the server.',
       };
     }
     return { kind: 'NONE' };
+  }
+
+  /** The standing, with a read that throws treated as a group not known to work. */
+  private async standingOf(scope: ScopeContext): Promise<OpsGroupBackupStanding> {
+    try {
+      return await this.deps.opsGroup.standing(scope);
+    } catch (error) {
+      return {
+        kind: 'UNUSABLE',
+        errorCode: 'ops_group.standing_unreadable',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   /** The group's topic, with the one safe resend: after a definitive "topic is gone". */

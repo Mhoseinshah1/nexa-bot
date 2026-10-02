@@ -1,6 +1,7 @@
 import { OPS_GROUP_ERROR_CODES, type ActorContext, type ScopeContext } from '@nexa/contracts';
 import type {
   OpsGroupBackupRoute,
+  OpsGroupBackupStanding,
   OpsGroupBackupTopic,
 } from '../../../platform/backup/application/routed-backup-delivery.js';
 import type { OpsGroupService } from './ops-group.service.js';
@@ -22,16 +23,36 @@ import type { OpsGroupBots } from './ports.js';
  */
 export class OpsGroupBackupTopicAdapter implements OpsGroupBackupTopic {
   constructor(
-    private readonly service: Pick<
-      OpsGroupService,
-      'route' | 'currentDestination' | 'noteDelivered'
-    >,
+    private readonly service: Pick<OpsGroupService, 'route' | 'binding' | 'noteDelivered'>,
     private readonly bots: Pick<OpsGroupBots, 'tokenFor'>,
     private readonly systemActor: () => ActorContext,
   ) {}
 
-  async connected(scope: ScopeContext): Promise<boolean> {
-    return (await this.service.currentDestination(scope, 'BACKUPS')) !== null;
+  /**
+   * Whether the group can take this backup, from what is already recorded (Codex review
+   * of PR #142): a group whose latest check found a PROBLEM — the bot removed, unable to
+   * send or to manage topics — is not handed the archive, and neither is one whose bot has
+   * no token. `UNVERIFIED` is not a known problem (a group just bound, or one Telegram said
+   * changed), so it is tried; a refusal is then the run's recorded answer.
+   */
+  async standing(scope: ScopeContext): Promise<OpsGroupBackupStanding> {
+    const binding = await this.service.binding(scope);
+    if (binding === null) return { kind: 'NOT_CONNECTED' };
+    if (binding.health === 'PROBLEM') {
+      return {
+        kind: 'UNUSABLE',
+        errorCode: 'ops_group.problem',
+        errorMessage: `The operations group's latest check found: ${binding.problems.join(', ')}.`,
+      };
+    }
+    if ((await this.bots.tokenFor(scope, binding.botInstanceId)) === null) {
+      return {
+        kind: 'UNUSABLE',
+        errorCode: 'telegram.no_bot_configured',
+        errorMessage: 'The bot bound to the operations group is not active.',
+      };
+    }
+    return { kind: 'USABLE' };
   }
 
   async route(scope: ScopeContext, staleThreadId: number | null): Promise<OpsGroupBackupRoute> {

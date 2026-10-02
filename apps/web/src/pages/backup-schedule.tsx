@@ -33,6 +33,7 @@ import {
   Ltr,
   Pills,
   Select,
+  StateSwitch,
   ToggleRow,
 } from '../ui/kit';
 
@@ -274,6 +275,12 @@ export function BackupScheduleCard({
           </div>
         </form>
       )}
+      {/*
+        The editor needs the two rows' versions. While they load, or when the read failed,
+        say so — with the retry every other settings consumer offers — rather than leave a
+        switch that is merely disabled with no reason (Codex review of PR #142).
+      */}
+      {mayView && !settings.isSuccess && <StateSwitch query={settings}>{null}</StateSwitch>}
       {!mayEdit && <p className="muted small">{t('web.backup_schedule_read_only')}</p>}
       {save.isSuccess && <Banner tone="ok">{t('web.backup_schedule_saved')}</Banner>}
       {save.error !== null && (

@@ -5084,13 +5084,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     schedule: () => backupSchedule.effective(),
     tickIntervalMs: config.BACKUP_TICK_MS,
-    // Every stage that can take long has its own ceiling, so a run in flight longer than
-    // their sum plus the delivery and a margin is not waiting on a tool; it is stuck.
-    maxRunMs:
-      config.BACKUP_DUMP_TIMEOUT_MS +
-      config.BACKUP_RESTORE_TIMEOUT_MS +
-      config.BACKUP_DELIVERY_TIMEOUT_MS * 2 +
-      BACKUP_LEASE_STALE_AFTER_MS,
+    // A run in flight is alive while its lease heartbeat is — the same rule that decides
+    // when another process may reclaim it as abandoned.
+    runHeartbeatAt: () => backup.leaseHeartbeatAt(),
+    runStaleAfterMs: BACKUP_LEASE_STALE_AFTER_MS,
     logger,
   });
 

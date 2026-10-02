@@ -122,7 +122,23 @@ export type BackupOutcome =
   | { readonly kind: 'COMPLETED'; readonly run: BackupRunRow };
 
 export class BackupService {
+  /**
+   * When the lease of the run THIS process is executing was last refreshed, or null when
+   * it is executing none. The scheduler's health reads it (Codex review of PR #142,
+   * finding 5): the lease heartbeat is the installation's own definition of "this run is
+   * alive" — a run whose heartbeat stops is reclaimed as abandoned after
+   * `BACKUP_LEASE_STALE_AFTER_MS` — so health and reclamation give one answer, through
+   * every stage, the unbounded checksum/encrypt/decrypt streaming included.
+   */
+  private leaseRefreshedAt: number | null = null;
+  /** Which run `leaseRefreshedAt` is about, so a late heartbeat of a finished run is ignored. */
+  private leaseRunId: string | null = null;
+
   constructor(private readonly deps: BackupServiceDeps) {}
+
+  leaseHeartbeatAt(): number | null {
+    return this.leaseRefreshedAt;
+  }
 
   /**
    * Runs one backup, end to end, or reports truthfully that one is running.
@@ -183,6 +199,8 @@ export class BackupService {
       return { kind: 'BUSY', holder: claim.holder };
     }
 
+    this.leaseRunId = id;
+    this.leaseRefreshedAt = startedAt.getTime();
     const heartbeat = this.startHeartbeat(id);
 
     let stage: BackupStage = 'DUMP';
@@ -444,6 +462,8 @@ export class BackupService {
       });
     } finally {
       heartbeat.stop();
+      this.leaseRunId = null;
+      this.leaseRefreshedAt = null;
     }
 
     const run = await this.deps.runs.byId(id);
@@ -684,6 +704,9 @@ export class BackupService {
     const timer = setInterval(() => {
       void this.deps.runs
         .heartbeat({ id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
+        .then(() => {
+          if (this.leaseRunId === id) this.leaseRefreshedAt = this.deps.clock.now().getTime();
+        })
         .catch((error: unknown) => {
           // Not fatal to the run: the work is still progressing, and a lost
           // heartbeat costs the lock, not the dump. Loud, because a run whose

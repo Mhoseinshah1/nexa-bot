@@ -229,6 +229,8 @@ interface Harness {
     /** Null models an installation with no tenant provisioned yet. */
     scoped: boolean;
     opsLogThrows: boolean;
+    /** Called inside the DUMP stage, so a test can look at the service mid-run. */
+    onDump?: () => void;
   };
 }
 
@@ -236,7 +238,8 @@ const CHECKSUM = 'a'.repeat(64);
 const DAY_MS = 24 * 3_600_000;
 /** The production default tick: five minutes, NOT the thirty-second workaround. */
 const TICK_MS = 5 * 60_000;
-const MAX_RUN_MS = 5 * 3_600_000;
+/** `BACKUP_LEASE_STALE_AFTER_MS`: how long a run's heartbeat may be silent. */
+const RUN_STALE_MS = 15 * 60_000;
 
 function harness(options: { delivery?: BackupDelivery } = {}): Harness {
   const clock = new FakeClock();
@@ -287,6 +290,7 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
         return '16.13';
       },
       async dump() {
+        state.onDump?.();
         if (state.dumpFails) throw new Error('pg_dump exploded');
         return { databaseName: 'nexa', pgDumpVersion: 'pg_dump 16.13' };
       },
@@ -792,6 +796,20 @@ describe('the backup pipeline', () => {
   });
 });
 
+describe('the run lease the scheduler reads', () => {
+  it('names the run in flight from its claim, and nothing once it is over', async () => {
+    const h = harness();
+    expect(h.service.leaseHeartbeatAt()).toBeNull();
+    let during: number | null = null;
+    h.state.onDump = () => {
+      during = h.service.leaseHeartbeatAt();
+    };
+    await completed(h);
+    expect(during).toBe(NOW.getTime());
+    expect(h.service.leaseHeartbeatAt()).toBeNull();
+  });
+});
+
 describe('the backup scheduler', () => {
   function scheduled(
     options: {
@@ -813,7 +831,8 @@ describe('the backup scheduler', () => {
       clock: h.clock,
       schedule: options.schedule ?? (async () => ({ enabled: true, intervalMs: DAY_MS })),
       tickIntervalMs: TICK_MS,
-      maxRunMs: MAX_RUN_MS,
+      runHeartbeatAt: () => null,
+      runStaleAfterMs: RUN_STALE_MS,
       logger: { info() {}, warn() {}, error() {} },
     });
     return { scheduler, h };
@@ -958,7 +977,8 @@ describe('the backup scheduler', () => {
       clock: h.clock,
       schedule: async () => ({ enabled: true, intervalMs: DAY_MS }),
       tickIntervalMs: TICK_MS,
-      maxRunMs: MAX_RUN_MS,
+      runHeartbeatAt: () => null,
+      runStaleAfterMs: RUN_STALE_MS,
       logger: { info() {}, warn() {}, error() {} },
     });
     scheduler.start();
@@ -976,10 +996,18 @@ describe('the backup scheduler', () => {
     }
   });
 
-  it('stays healthy while its own run is in flight, up to the run ceiling', async () => {
+  /*
+   * Codex review of PR #142, finding 5: a fixed run budget (dump + restore + delivery)
+   * left out the checksum, encrypt and decrypt stages, which stream the whole database
+   * with no timeout, so a large legitimate run was reported stalled. In flight, health is
+   * now the run's LEASE heartbeat — the same signal that decides whether the run is
+   * abandoned — with no budget at all.
+   */
+  it('stays healthy while the run lease heartbeat is alive, however long the run', async () => {
     const h = harness();
     let release: () => void = () => {};
     let started = false;
+    let heartbeatAt: number | null = null;
     const slow = {
       run: () =>
         new Promise((resolve) => {
@@ -994,16 +1022,52 @@ describe('the backup scheduler', () => {
       clock: h.clock,
       schedule: async () => ({ enabled: true, intervalMs: DAY_MS }),
       tickIntervalMs: TICK_MS,
-      maxRunMs: MAX_RUN_MS,
+      runHeartbeatAt: () => heartbeatAt,
+      runStaleAfterMs: RUN_STALE_MS,
       logger: { info() {}, warn() {}, error() {} },
     });
     const ticking = scheduler.tick();
     await vi.waitFor(() => expect(started).toBe(true));
-    // A two-hour dump is the scheduler working, not the scheduler stalled.
-    h.clock.advance(2 * 3_600_000);
+    // Ten hours of streaming a huge database, heartbeating every minute: working.
+    for (let minute = 0; minute < 600; minute += 1) {
+      h.clock.advance(60_000);
+      heartbeatAt = h.clock.now().getTime();
+    }
     expect(scheduler.isFresh(h.clock.now().getTime())).toBe(true);
-    // Past every stage's ceiling, it is stuck, and health says so.
-    h.clock.advance(MAX_RUN_MS);
+    // The heartbeat stops: past the lease window the run is abandoned, and health says so.
+    h.clock.advance(RUN_STALE_MS - 1_000);
+    expect(scheduler.isFresh(h.clock.now().getTime())).toBe(true);
+    h.clock.advance(2_000);
+    expect(scheduler.isFresh(h.clock.now().getTime())).toBe(false);
+    release();
+    await ticking;
+  });
+
+  it('reports a run with no heartbeat at all as stalled once its lease window passes', async () => {
+    const h = harness();
+    let started = false;
+    let release: () => void = () => {};
+    const slow = {
+      run: () =>
+        new Promise((resolve) => {
+          started = true;
+          release = () => resolve({ kind: 'BUSY', holder: null });
+        }),
+    } as unknown as BackupService;
+    const scheduler = new BackupScheduler({
+      service: slow,
+      runs: h.runs,
+      quiesced: async () => false,
+      clock: h.clock,
+      schedule: async () => ({ enabled: true, intervalMs: DAY_MS }),
+      tickIntervalMs: TICK_MS,
+      runHeartbeatAt: () => null,
+      runStaleAfterMs: RUN_STALE_MS,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const ticking = scheduler.tick();
+    await vi.waitFor(() => expect(started).toBe(true));
+    h.clock.advance(RUN_STALE_MS + 1_000);
     expect(scheduler.isFresh(h.clock.now().getTime())).toBe(false);
     release();
     await ticking;

@@ -414,7 +414,9 @@ reads none of this; only the worker's scheduler does, on every tick, with the da
 up by definition. The bounds are unchanged (15 minutes to 30 days).
 
 **Health.** The scheduler's freshness is `LoopProgress`: healthy from `start()` for
-three ticks, with an immediate first check, and a run in flight counts as progress up
-to the sum of the stage ceilings. The `BACKUP_TICK_MS=30000` production workaround for
+three ticks, with an immediate first check, and a run in flight counts as progress for
+as long as its lease heartbeat is alive — the reclamation rule, with no run-length
+budget. A group whose latest check found a PROBLEM is not offered the archive, and a
+route that throws before anything was sent falls back like one that answers. The `BACKUP_TICK_MS=30000` production workaround for
 a worker reported unhealthy until its first five-minute tick is no longer needed.
 Operational detail: `docs/backup.md`.

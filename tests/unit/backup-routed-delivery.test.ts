@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   RoutedBackupDelivery,
   type OpsGroupBackupRoute,
+  type OpsGroupBackupStanding,
   type OpsGroupBackupTopic,
 } from '../../apps/api/src/modules/platform/backup/application/routed-backup-delivery';
 import type {
@@ -33,6 +34,10 @@ function world(
     /** What a send into the group answers, per thread. */
     groupAnswer?: (threadId: number) => DeliveryAttempt;
     scoped?: boolean;
+    /** The recorded standing; derived from `group` when absent. A function may throw. */
+    standing?: OpsGroupBackupStanding | (() => OpsGroupBackupStanding);
+    /** `route` throws instead of answering. */
+    routeThrows?: boolean;
   } = {},
 ) {
   const sent: Sent[] = [];
@@ -40,12 +45,17 @@ function world(
   const delivered: string[] = [];
   let routeCount = 0;
   const group: OpsGroupBackupTopic = {
-    async connected() {
-      const route = typeof options.group === 'function' ? options.group() : options.group;
-      return route !== undefined && route.kind !== 'NOT_CONNECTED';
+    async standing() {
+      if (typeof options.standing === 'function') return options.standing();
+      if (options.standing !== undefined) return options.standing;
+      if (typeof options.group === 'function') return { kind: 'USABLE' };
+      return options.group === undefined || options.group.kind === 'NOT_CONNECTED'
+        ? { kind: 'NOT_CONNECTED' }
+        : { kind: 'USABLE' };
     },
     async route(_scope, stale) {
       routes.push(stale);
+      if (options.routeThrows === true) throw new Error('connection terminated');
       routeCount += 1;
       const route =
         typeof options.group === 'function'
@@ -223,5 +233,66 @@ describe('a deleted backups topic', () => {
     const { attempt } = await sendDocument(w);
     expect(attempt.state).toBe('FAILED_DEFINITIVE');
     expect(w.sent).toHaveLength(1);
+  });
+});
+
+/*
+ * Codex review of PR #142, findings 1-3: a group known not to work is not handed the one
+ * delivery a backup gets, a route that THROWS falls back like one that answers (nothing
+ * was sent yet), and the status card names the recipient `resolve` would pick.
+ */
+describe('a group that cannot take the archive', () => {
+  const PROBLEM: OpsGroupBackupStanding = {
+    kind: 'UNUSABLE',
+    errorCode: 'ops_group.problem',
+    errorMessage: 'BOT_REMOVED',
+  };
+
+  it('is skipped for the dedicated chat when its latest check found a problem', async () => {
+    const w = world({ group: ROUTED, standing: PROBLEM, dedicatedConfigured: true });
+    const { resolution } = await sendDocument(w);
+    expect(resolution.kind === 'READY' && resolution.destination).toBe('DEDICATED_CHAT');
+    // Not even routed: nothing is created in, or sent to, a group known to refuse it.
+    expect(w.routes).toEqual([]);
+    expect(w.sent).toEqual([{ to: 'dedicated', kind: 'document' }]);
+    await expect(w.delivery.describe()).resolves.toBe('DEDICATED_CHAT');
+  });
+
+  it('is a recorded refusal, sending nothing, when there is no fallback', async () => {
+    const w = world({ group: ROUTED, standing: PROBLEM });
+    const resolution = await w.delivery.resolve();
+    expect(resolution.kind).toBe('UNAVAILABLE');
+    expect(w.routes).toEqual([]);
+    // The card says where the archive actually goes: nowhere but the server.
+    await expect(w.delivery.describe()).resolves.toBe('NONE');
+  });
+
+  it('falls back when routing THROWS before anything was sent', async () => {
+    const w = world({ group: ROUTED, routeThrows: true, dedicatedConfigured: true });
+    const { resolution, attempt } = await sendDocument(w);
+    expect(resolution.kind === 'READY' && resolution.destination).toBe('DEDICATED_CHAT');
+    expect(attempt.state).toBe('SUCCEEDED');
+    expect(w.sent).toEqual([{ to: 'dedicated', kind: 'document' }]);
+  });
+
+  it('records a throwing route as a refusal when there is no fallback, never a crash', async () => {
+    const w = world({ group: ROUTED, routeThrows: true });
+    const resolution = await w.delivery.resolve();
+    expect(resolution.kind === 'UNAVAILABLE' && resolution.detail).toContain(
+      'ops_group.route_failed',
+    );
+  });
+
+  it('falls back when the standing itself cannot be read', async () => {
+    const w = world({
+      group: ROUTED,
+      dedicatedConfigured: true,
+      standing: () => {
+        throw new Error('database blip');
+      },
+    });
+    const { resolution } = await sendDocument(w);
+    expect(resolution.kind === 'READY' && resolution.destination).toBe('DEDICATED_CHAT');
+    await expect(w.delivery.describe()).resolves.toBe('DEDICATED_CHAT');
   });
 });

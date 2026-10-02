@@ -59,12 +59,16 @@ Decided per run, at `DELIVER`, in this order (`RoutedBackupDelivery`):
    sent once more, which is safe only because Telegram's "thread not found" is a
    definitive refusal: nothing was posted.
 2. **The dedicated chat** (`BACKUP_TELEGRAM_CHAT_ID` + `BACKUP_TELEGRAM_BOT_TOKEN`),
-   only when no group is connected, or when a connected group's topic could not be
-   made ready before anything was sent. It is the explicit fallback, kept so an
+   only when no group is connected, when the group's latest check found a PROBLEM (bot
+   removed, cannot send, no topic right) or its bot has no token, or when its topic
+   could not be made ready — an answer or a thrown error — before anything was sent. It is the explicit fallback, kept so an
    installation configured that way keeps working unchanged.
 3. **Nowhere**: the run is `NOT_ATTEMPTED` with nothing configured, or
    `FAILED_DEFINITIVE` naming why when a group is connected and unusable with no
    fallback. The archive is verified and on disk either way.
+
+The status card's «مقصد ارسال فایل بکاپ» is computed by the same decision from the
+database, so it names the recipient the next run would actually pick.
 
 **Why the group's own bot, and not `BACKUP_TELEGRAM_BOT_TOKEN`.** Only a member of a
 chat can post in it, and the group's bot is the one Nexa has verified is an
@@ -121,9 +125,12 @@ was used in production to hide it. Now:
 - the scheduler is healthy from `start()` for three tick intervals before any tick
   has completed, after which health is purely progress-based (`LoopProgress`, the
   same rule every other worker loop uses);
-- a backup this process is running counts as progress for as long as a run can
-  legitimately take (the dump, restore and delivery ceilings plus the lease), so a
-  two-hour dump does not make the worker unhealthy at minute sixteen.
+- a backup this process is running counts as progress for as long as its LEASE
+  heartbeat is alive (refreshed every minute; silent for `BACKUP_LEASE_STALE_AFTER_MS`,
+  15 minutes, means abandoned) — the same rule another process uses to reclaim it. There
+  is no run-length budget, because the checksum, encrypt and decrypt stages stream the
+  whole database with no timeout of their own, so a large legitimate run is never
+  reported stalled and a run whose heartbeat stops always is.
 
 **`BACKUP_TICK_MS=30000` is no longer needed.** It is harmless if left set; remove it
 at your convenience.

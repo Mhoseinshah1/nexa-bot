@@ -984,8 +984,27 @@ describe('the operations log group (WP-A4)', () => {
       );
 
     it('is not connected until a group is', async () => {
-      await expect(backupTopic().connected(tenantA)).resolves.toBe(false);
+      await expect(backupTopic().standing(tenantA)).resolves.toEqual({ kind: 'NOT_CONNECTED' });
       await expect(backupTopic().route(tenantA, null)).resolves.toEqual({ kind: 'NOT_CONNECTED' });
+    });
+
+    // Codex review of PR #142, finding 2: route() answers ROUTED for any connected group
+    // with a ready topic, so the recorded health has to be read BEFORE a backup is handed
+    // to it — a backup gets one delivery, and the fallback chat should get it instead.
+    it('is unusable while the group’s latest check found a problem, usable otherwise', async () => {
+      await connectHealthy();
+      await expect(backupTopic().standing(tenantA)).resolves.toEqual({ kind: 'USABLE' });
+      await ctx.container.database.db.execute(
+        `UPDATE ops_log_groups SET health = 'PROBLEM', problems = '{BOT_REMOVED}'` as never,
+      );
+      const standing = await backupTopic().standing(tenantA);
+      expect(standing).toMatchObject({ kind: 'UNUSABLE', errorCode: 'ops_group.problem' });
+      expect(standing.kind === 'UNUSABLE' && standing.errorMessage).toContain('BOT_REMOVED');
+      // A group nobody has checked since a change is not a KNOWN problem: it is tried.
+      await ctx.container.database.db.execute(
+        `UPDATE ops_log_groups SET health = 'UNVERIFIED', problems = '{}'` as never,
+      );
+      await expect(backupTopic().standing(tenantA)).resolves.toEqual({ kind: 'USABLE' });
     });
 
     it('is created once for concurrent deliveries, and posted to by the group’s own bot', async () => {
@@ -1007,7 +1026,7 @@ describe('the operations log group (WP-A4)', () => {
       for (const route of routes.filter((candidate) => candidate.kind !== 'ROUTED')) {
         expect(route).toMatchObject({ kind: 'UNAVAILABLE', errorCode: 'ops_group.topic_pending' });
       }
-      await expect(backupTopic().connected(tenantA)).resolves.toBe(true);
+      await expect(backupTopic().standing(tenantA)).resolves.toEqual({ kind: 'USABLE' });
     });
 
     it('is recreated once when deleted, however many senders met the stale thread', async () => {

@@ -47,13 +47,20 @@ export interface BackupSchedulerDeps {
   /** How often to ask. Much shorter than the interval; asking is cheap. */
   readonly tickIntervalMs: number;
   /**
-   * The longest one backup run can legitimately take: the dump, restore and delivery
-   * ceilings together, plus slack. While a run this process started is younger than
-   * this, the scheduler is working — it is waiting on `pg_dump`, not stalled. Each of
-   * those stages has its own timeout, so a run cannot be in flight for longer than this
-   * unless something below them has hung, which is exactly when health should say so.
+   * When the lease of the run this process is executing was last refreshed
+   * (`BackupService.leaseHeartbeatAt`), or null. While a run is in flight the scheduler
+   * is working exactly as long as that heartbeat is: no fixed budget, because the
+   * checksum, encrypt and decrypt stages stream the whole database with no timeout of
+   * their own, and a budget sized for an average installation reports a large one
+   * stalled (Codex review of PR #142, finding 5).
    */
-  readonly maxRunMs: number;
+  readonly runHeartbeatAt: () => number | null;
+  /**
+   * How long a run's heartbeat may be silent before it is not alive:
+   * `BACKUP_LEASE_STALE_AFTER_MS`, the same window after which another process would
+   * reclaim the run as abandoned. Health and reclamation cannot then disagree.
+   */
+  readonly runStaleAfterMs: number;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -118,12 +125,15 @@ export class BackupScheduler {
    *
    * Progress-based, not existence-based: a scheduler whose ticks are all throwing has a
    * live timer and is not working. Three tick intervals of slack, so one slow tick is not
-   * an outage — and a run in flight is working for as long as a run can take, so a
-   * two-hour dump does not make the worker unhealthy at minute sixteen.
+   * an outage — and a run in flight is working for as long as its lease heartbeat is,
+   * so a two-hour dump does not make the worker unhealthy at minute sixteen, and a run
+   * whose heartbeat has stopped does.
    */
   isFresh(nowMs: number): boolean {
-    if (this.runStartedAt !== null && nowMs - this.runStartedAt <= this.deps.maxRunMs) {
-      return true;
+    if (this.runStartedAt !== null) {
+      // Alive while its lease is: the later of the run's start and its last heartbeat.
+      const beat = Math.max(this.runStartedAt, this.deps.runHeartbeatAt() ?? 0);
+      return nowMs - beat <= this.deps.runStaleAfterMs;
     }
     return this.progress.isFresh(nowMs);
   }
