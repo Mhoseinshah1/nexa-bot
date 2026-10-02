@@ -1,5 +1,5 @@
 {
-  "id": "c266f7c4-4dfc-4034-8f1a-5072c462dbfe",
+  "id": "8aae6848-0576-4c70-a73f-33c71790df95",
   "prevId": "7523dd21-3308-40c6-be83-0348c094b8bc",
   "version": "7",
   "dialect": "postgresql",
@@ -21108,7 +21108,7 @@
         },
         "service_ownership_transfers_bot_check": {
           "name": "service_ownership_transfers_bot_check",
-          "value": "bot_instance_id IS NOT NULL OR actor_type <> 'CUSTOMER'"
+          "value": "bot_instance_id IS NOT NULL OR actor_type = 'WEB_ADMIN'"
         }
       },
       "isRLSEnabled": false

@@ -9625,9 +9625,9 @@ export const serviceOwnershipTransfers = pgTable(
     fromCustomerId: uuid('from_customer_id').notNull(),
     toCustomerId: uuid('to_customer_id').notNull(),
     /**
-     * The bot the sender confirmed through. NULL only for a move no customer confirmed — an
-     * operator's account transfer (Customer 360), which happens on no bot. A CUSTOMER's
-     * transfer always names one (`service_ownership_transfers_bot_check`).
+     * The bot the sender confirmed through. NULL only for a move no customer confirmed — a
+     * Web Admin operator's account transfer (Customer 360), which happens on no bot. Every
+     * other actor's transfer names one (`service_ownership_transfers_bot_check`).
      */
     botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
     /**
@@ -9667,7 +9667,7 @@ export const serviceOwnershipTransfers = pgTable(
     check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
     check(
       'service_ownership_transfers_bot_check',
-      sql`bot_instance_id IS NOT NULL OR actor_type <> 'CUSTOMER'`,
+      sql`bot_instance_id IS NOT NULL OR actor_type = 'WEB_ADMIN'`,
     ),
   ],
 );

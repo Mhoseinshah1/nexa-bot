@@ -2,6 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { CurrencyCode, TenantContext, UserId } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { customerAccountTransfers } from '../../../../infrastructure/persistence/schema.js';
+import { SERVICE_LIFECYCLE_LOCK_CLASS } from '../../provisioning/infrastructure/drizzle-service.repository.js';
 import {
   requireTenantId,
   type TransactionScope,
@@ -58,6 +59,9 @@ export class DrizzleCustomerAccountTransferRepository implements CustomerAccount
         (SELECT count(*)::int FROM payments p
           WHERE p.tenant_id = ${tenantId} AND p.customer_id = ${sourceId}
             AND p.state IN ('PENDING', 'UNKNOWN')) AS pending_payments,
+        (SELECT count(*)::int FROM payments p
+          WHERE p.tenant_id = ${tenantId} AND p.customer_id = ${sourceId}
+            AND p.state = 'CONFIRMED') AS confirmed_payments,
         (SELECT count(*)::int FROM resellers r
           WHERE r.tenant_id = ${tenantId} AND r.customer_id = ${sourceId}) AS reseller_rows,
         (SELECT count(*)::int FROM order_cashback c
@@ -94,6 +98,7 @@ export class DrizzleCustomerAccountTransferRepository implements CustomerAccount
       orders: n('orders'),
       ordersInProgress: n('awaiting_orders') + n('undelivered_orders'),
       payments: n('payments'),
+      confirmedPayments: n('confirmed_payments'),
       pendingPayments: n('pending_payments'),
       isReseller: n('reseller_rows') > 0,
       pendingRewards: n('pending_cashback') + n('pending_commissions'),
@@ -104,6 +109,29 @@ export class DrizzleCustomerAccountTransferRepository implements CustomerAccount
       trialOverride: n('trial_override') > 0,
       locationOverride: n('location_override') > 0,
     };
+  }
+
+  /**
+   * `SKIP LOCKED` and `pg_try_advisory_xact_lock`: neither waits, and neither raises — a
+   * raised error would abort the transaction. A row another transaction holds is skipped
+   * and comes back absent, which is the answer "held".
+   */
+  async tryLockService(
+    scope: TenantContext,
+    serviceId: string,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const row = await this.exec(tx).execute(sql`
+      SELECT id FROM services
+      WHERE tenant_id = ${tenantId} AND id = ${serviceId}
+      FOR NO KEY UPDATE SKIP LOCKED
+    `);
+    if (row.rows.length === 0) return false;
+    const lifecycle = await this.exec(tx).execute(
+      sql`SELECT pg_try_advisory_xact_lock(${SERVICE_LIFECYCLE_LOCK_CLASS}, hashtext(${`${tenantId}:${serviceId}`})) AS held`,
+    );
+    return (lifecycle.rows[0] as { held?: boolean } | undefined)?.held === true;
   }
 
   async isReseller(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean> {

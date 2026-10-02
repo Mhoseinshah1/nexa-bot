@@ -65,10 +65,18 @@ a blocker in `CUSTOMER_TRANSFER_BLOCKERS`: `SAME_CUSTOMER`, `DESTINATION_UNKNOWN
    (`CUSTOMER_TRANSFER_CONFIRMATION_MISMATCH` otherwise).
 2. Replay: `customer_account_transfers (tenant, idempotency_key)` is unique; the same key
    answers the row it wrote. A key reused for another source or fingerprint is refused.
-3. One `uow.run`: scope activity; the key again (a concurrent duplicate); both customers'
-   wallet locks in id order (the canonical `customer -> service` order); each live service's
-   row lock then lifecycle lock (the locks terminate, refund requests and commercial
-   settlement serialise on); the plan re-derived under them.
+3. One `uow.run`, in this order (corrected after review round 1 — see §4.1):
+   1. scope activity;
+   2. both customers' wallet locks, **newest first** (UUIDv7 ids sort by creation);
+   3. the key **again**, so a concurrent duplicate that committed while this one waited is
+      answered as its replay rather than as a stale preview;
+   4. the destination **re-read** under its lock, so a block committed meanwhile refuses;
+   5. the facts under the customer locks: any live non-trial service in `PENDING_PROVISION`
+      or `UNRECONCILED` refuses `SERVICE_UNSETTLED` **before any service lock is taken**;
+   6. each movable (ACTIVE/SUSPENDED) service's row lock and lifecycle lock, **tried, never
+      waited for** (`FOR NO KEY UPDATE SKIP LOCKED`, `pg_try_advisory_xact_lock`): a service
+      another transaction holds refuses `SERVICE_UNSETTLED`;
+   7. the plan re-derived under all of them.
 4. Any blocker → `CUSTOMER_TRANSFER_REFUSED` with the list; a plan whose fingerprint
    (destination, moved service ids, amount, currency) differs from the confirmed preview →
    `CUSTOMER_TRANSFER_PREVIEW_STALE`. Nothing written.
@@ -77,12 +85,57 @@ a blocker in `CUSTOMER_TRANSFER_BLOCKERS`: `SAME_CUSTOMER`, `DESTINATION_UNKNOWN
    `WalletEntryRecorded`; the record; `customer.account_transfer` (source) and
    `customer.account_transfer.received` (destination) audits; `CustomerAccountTransferred`.
 
-A deadlock with a concurrent settlement can only abort the transaction (PostgreSQL 40P01),
-which writes nothing; the operator previews again.
+### 4.1 Lock order, and why it cannot close a cycle
 
-## 5. What is deliberately not done
+The first version locked the two customers oldest-first and then WAITED for service locks,
+and this section claimed a deadlock "can only abort the transaction". That was wrong on two
+counts: PostgreSQL picks the victim, so the aborted transaction could be the OTHER one — a
+provisioning refund or a customer's own service transfer — and three existing writers take
+the reverse order:
+
+| writer                                                                                            | its order                                                           | how the transfer now avoids the cycle                                                                                                            |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| provisioning refund (`refundPurchase` → `refundUndeliverable` → `lockCustomer`)                   | service row, then customer                                          | a `PENDING_PROVISION`/`UNRECONCILED` service refuses from the facts before any service lock; every other service lock is TRIED, never waited for |
+| a customer's own service transfer (Package F)                                                     | service row, then `FOR KEY SHARE` on both customers (its FK checks) | the transfer never waits on a service lock while holding a customer, so it cannot be the other half of that wait                                 |
+| refund reversal of a referral commission (`refund.service.ts` → `referral-commission.service.ts`) | referee (newer), then referrer (older)                              | the transfer takes the pair newest-first, the same order                                                                                         |
+
+The only locks the transfer waits for are the two customers' rows, in the order every other
+two-customer writer takes. Tests: `customer-360.test.ts` — "refuses a service still being
+provisioned before taking any service lock", "refuses, never waits for, a movable service
+another transaction holds", "locks the newer customer first", "answers a concurrent duplicate
+of one key as its replay", "reads the destination again under its lock".
+
+## 5. What is deliberately not done, and what keeps landing on the source
+
+Credits tied to the source's HISTORY keep going to the source, by design — history is never
+rewritten — and the preview says so (`REFUNDS_CREDIT_SOURCE` when the source has confirmed
+payments, `REFERRAL_CREDITS_STAY` when it referred anybody):
+
+- a refund of one of the source's payments — an operator's manual refund, or
+  `refundUndeliverable` for a later order the source placed (e.g. a RENEW of an EXPIRED
+  service that stayed) — credits the source's wallet, now drained;
+- commissions earned from customers the source referred are earned into the source;
+- a moved service's WP19 refund request is impossible for the new owner:
+  `service-refund-request.service.ts` requires the payer to own the service (the same rule
+  Package F's own transfers already have). Its original payer may no longer request one
+  either, since they no longer own it.
+
+An operator who needs such a credit on the new account moves it with a second transfer
+(nothing else blocks) or a wallet adjustment.
+
+Other deliberate limits:
 
 - No customer notification: the destination is the same person, told by the operator.
 - The source is not blocked automatically; that is the existing block action.
 - Only the selling currency's balance moves; an entry in another currency (from before a
   `sales.currency` change) stays.
+
+## 6. Manual orders spend the wallet: they need `users.wallet.debit`
+
+A manual order (§11.6) debits the customer's wallet through the customer's own settlement.
+`orders.manual.create` alone is held by the seeded `sales` role, which may not debit a wallet,
+so the lead decided (review round 1, no migration): a manual order ALSO requires
+`users.wallet.debit`, checked through the guard before any order exists (denial audited as
+`customer.manual_order` DENIED) and again inside the settling transaction. The manual order's
+own `customer.manual_order` audit row is written inside that same transaction, so a replay
+adds none.

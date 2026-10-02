@@ -145,6 +145,16 @@ const OPERATOR_NAMESPACE = 'WEB' as const;
 export interface WalletSettlementAuthority {
   readonly permission: PermissionKey;
   readonly namespace: 'WEB' | 'TELEGRAM';
+  /**
+   * Run inside the settling transaction, after the money moved and before the key is
+   * remembered — so whatever it writes (the manual order's own audit row, its extra
+   * permission re-check) commits with the settlement or not at all, and a replay, which
+   * never reaches the transaction, writes it no second time.
+   */
+  readonly inTransaction?: (
+    tx: TransactionScope,
+    settled: { readonly payment: PaymentRecord; readonly order: OrderRecord },
+  ) => Promise<void>;
 }
 
 export const CUSTOMER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
@@ -1018,6 +1028,8 @@ export class PaymentService {
             },
           });
         }
+
+        if (authority.inTransaction !== undefined) await authority.inTransaction(tx, confirmed);
 
         await rememberOnce(
           this.deps.idempotency,

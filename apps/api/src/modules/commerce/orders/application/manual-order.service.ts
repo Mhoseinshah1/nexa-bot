@@ -5,17 +5,13 @@ import {
   userIdSchema,
   type ActorContext,
   type AuditWriter,
-  type IdempotencyStore,
   type OperationalEventRecorder,
   type PermissionKey,
   type TenantContext,
-  type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { recordMutationDenial } from '../../../platform/access/application/authorized-mutation.js';
-import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
-import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   MANUAL_ORDER_WALLET_SETTLEMENT,
   type PaymentService,
@@ -25,6 +21,8 @@ import { MANUAL_ORDER_AUTHORITY, type OrderService } from './order.service.js';
 import type { OrderRecord } from './ports.js';
 
 export const MANUAL_ORDER_PERMISSION: PermissionKey = 'orders.manual.create';
+/** A manual order spends the customer's wallet, so it needs the key a direct debit needs. */
+export const WALLET_DEBIT_PERMISSION: PermissionKey = 'users.wallet.debit';
 const CUSTOMER_VIEW: PermissionKey = 'users.view';
 
 export interface ManualOrderDeps {
@@ -36,8 +34,6 @@ export interface ManualOrderDeps {
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
-  readonly uow: UnitOfWork<TransactionScope>;
-  readonly idempotency: IdempotencyStore;
 }
 
 /**
@@ -84,7 +80,13 @@ export class ManualOrderService {
       entityType: 'Customer',
       entityId: customerId,
     };
-    for (const permission of [CUSTOMER_VIEW, MANUAL_ORDER_PERMISSION]) {
+    /*
+     * `users.wallet.debit` as well (review of the Customer 360 branch): a manual order spends
+     * the customer's wallet, and `orders.manual.create` alone — held by the seeded `sales`
+     * role — must not be a way to debit a wallet that role could not debit directly. Checked
+     * here, before any order exists, and again inside the settling transaction.
+     */
+    for (const permission of [CUSTOMER_VIEW, MANUAL_ORDER_PERMISSION, WALLET_DEBIT_PERMISSION]) {
       try {
         await this.deps.guard.check(scope, actor, permission);
       } catch (error) {
@@ -143,7 +145,37 @@ export class ManualOrderService {
         actor,
         customerId,
         { idempotencyKey: `${stem}:settle`, orderId: confirmed.id },
-        MANUAL_ORDER_WALLET_SETTLEMENT,
+        {
+          ...MANUAL_ORDER_WALLET_SETTLEMENT,
+          /*
+           * In the settling transaction: the debit permission decided again where the money
+           * moves, and the customer's own audit row committed with the settlement — so a
+           * replay, which never reaches this transaction, adds no second row.
+           */
+          inTransaction: async (tx, done) => {
+            await this.deps.guard.check(scope, actor, WALLET_DEBIT_PERMISSION, tx);
+            await this.deps.audit.record(
+              scope,
+              actor,
+              {
+                action: 'customer.manual_order',
+                entityType: 'Customer',
+                entityId: customerId,
+                before: null,
+                after: {
+                  orderId: done.order.id,
+                  paymentId: done.payment.id,
+                  productId: input.productId,
+                  totalMinor: done.order.totals.total.amountMinor.toString(),
+                  currency: done.order.totals.currency,
+                },
+                result: 'SUCCESS',
+                reason,
+              },
+              tx,
+            );
+          },
+        },
       );
     } catch (error) {
       // A refusal (a 4xx) rolled back with nothing debited: withdraw the order it was for.
@@ -158,34 +190,6 @@ export class ManualOrderService {
       }
       throw error;
     }
-
-    // The customer's own audit row, once per command: a replay finds its key and adds none.
-    const auditKey = `${stem}:audit`;
-    const auditHash = hashRequest({ orderId: settled.order.id });
-    await this.deps.uow.run(scope, async (tx) => {
-      if ((await this.deps.idempotency.find(scope, 'WEB', auditKey, auditHash)) !== null) return;
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action: 'customer.manual_order',
-          entityType: 'Customer',
-          entityId: customerId,
-          before: null,
-          after: {
-            orderId: settled.order.id,
-            paymentId: settled.payment.id,
-            productId: input.productId,
-            totalMinor: settled.order.totals.total.amountMinor.toString(),
-            currency: settled.order.totals.currency,
-          },
-          result: 'SUCCESS',
-          reason,
-        },
-        tx,
-      );
-      await rememberOnce(this.deps.idempotency, scope, 'WEB', auditKey, auditHash, {}, tx);
-    });
     return settled;
   }
 }

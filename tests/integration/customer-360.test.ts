@@ -561,6 +561,305 @@ describe('Customer 360 — backend controls', () => {
       expect((await preview()).blockers).toContain('SERVICE_UNSETTLED');
     });
 
+    // --- every blocker and warning, each from the rows that cause it (review round 1) ---
+
+    const run = (query: ReturnType<typeof sql>) =>
+      ctx.container.database.db.execute(query as never);
+    const blockersNow = async () => (await preview()).blockers;
+
+    it('refuses a reseller source, and warns for a reseller destination', async () => {
+      await fund(source, 10_000n);
+      const tier = ctx.container.ids.uuid();
+      await run(sql`INSERT INTO reseller_tiers (id, tenant_id, name, pricing_mode, credit_limit_currency)
+                    VALUES (${tier}, ${tenantA.tenantId}, 'tier', 'LIST_PRICE', 'IRT')`);
+      await run(sql`INSERT INTO resellers (id, tenant_id, customer_id, tier_id, status, credit_limit_amount)
+                    VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${destination}, ${tier}, 'ACTIVE', NULL)`);
+      const plan = await preview();
+      expect(plan.blockers).toEqual([]);
+      expect(plan.warnings).toContain('DESTINATION_IS_RESELLER');
+      await run(sql`INSERT INTO resellers (id, tenant_id, customer_id, tier_id, status, credit_limit_amount)
+                    VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${source}, ${tier}, 'ACTIVE', NULL)`);
+      expect(await blockersNow()).toContain('SOURCE_IS_RESELLER');
+    });
+
+    it('refuses a negative (legacy-debt) balance', async () => {
+      await deliveredService('debt');
+      await run(sql`INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency, reference)
+                    VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${source}, 'DEBIT',
+                            'ADMIN_DEBIT', 5000, 'IRT', ${key('debt-ref')})`);
+      expect(await blockersNow()).toContain('SOURCE_BALANCE_NEGATIVE');
+    });
+
+    it('refuses a pending payment', async () => {
+      await fund(source, 10_000n);
+      await run(sql`INSERT INTO payments (id, tenant_id, customer_id, state, method, amount, currency, reference, expires_at)
+                    VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${source}, 'PENDING',
+                            'MANUAL_TRANSFER', 50000, 'IRT', ${key('pay-ref')}, now() + interval '1 hour')`);
+      expect(await blockersNow()).toContain('PAYMENT_PENDING');
+    });
+
+    it('refuses promised cashback, and a promised referral commission to the source', async () => {
+      const service = await deliveredService('reward');
+      const rule = ctx.container.ids.uuid();
+      await run(sql`INSERT INTO cashback_rules (id, tenant_id, label, percent, applies_to)
+                    VALUES (${rule}, ${tenantA.tenantId}, 'rule', 5, ARRAY['NEW_SERVICE'])`);
+      const cashback = ctx.container.ids.uuid();
+      await run(sql`INSERT INTO order_cashback (id, tenant_id, order_id, customer_id, rule_id, rule_label, percent, amount, currency)
+                    VALUES (${cashback}, ${tenantA.tenantId}, ${service.orderId}, ${source}, ${rule}, 'rule', 5, 100, 'IRT')`);
+      expect(await blockersNow()).toContain('REWARD_PENDING');
+      expect((await preview()).warnings).toContain('REFUNDS_CREDIT_SOURCE');
+    });
+
+    it('refuses a referral commission promised to the source, and warns that referral credits stay', async () => {
+      await fund(source, 10_000n);
+      const referee = await resolve('951009', 'معرفی‌شده');
+      const referral = ctx.container.ids.uuid();
+      await run(sql`INSERT INTO referrals (id, tenant_id, referrer_id, referee_id, trigger)
+                    VALUES (${referral}, ${tenantA.tenantId}, ${source}, ${referee}, 'ON_EVERY_PAID_ORDER')`);
+      expect((await preview()).warnings).toContain('REFERRAL_CREDITS_STAY');
+      const bought = await deliveredService('referee-buy', referee);
+      await run(sql`INSERT INTO order_referral_commissions
+                      (id, tenant_id, order_id, referral_id, referrer_id, referee_id, scope, percent, basis_amount, amount, currency)
+                    VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${bought.orderId}, ${referral},
+                            ${source}, ${referee}, 'EVERY_PAID_ORDER', 10, 250000, 25000, 'IRT')`);
+      expect(await blockersNow()).toContain('REWARD_PENDING');
+    });
+
+    it('refuses a pending bulk operation item', async () => {
+      await fund(source, 10_000n);
+      const operation = ctx.container.ids.uuid();
+      await run(sql`INSERT INTO bulk_operations
+                      (id, tenant_id, kind, amount_minor, currency, notify, note, audience_definition,
+                       audience_hash, audience_as_of, item_count, audience_fingerprint, created_by_admin_id)
+                    VALUES (${operation}, ${tenantA.tenantId}, 'WALLET_CREDIT', 1000, 'IRT', false, 'x', '{}'::jsonb,
+                            ${'a'.repeat(64)}, now(), 1, 'x', ${owner.id})`);
+      await run(sql`INSERT INTO bulk_operation_items (id, tenant_id, bulk_operation_id, customer_id)
+                    VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${operation}, ${source})`);
+      expect(await blockersNow()).toContain('BULK_OPERATION_PENDING');
+    });
+
+    it('refuses a PAID order whose service does not exist yet', async () => {
+      await fund(source, 10_000n);
+      const panel = (
+        await rows<{ panel_id: string }>(sql`SELECT panel_id FROM products WHERE id = ${productId}`)
+      )[0]!.panel_id;
+      await run(sql`INSERT INTO orders
+                      (id, tenant_id, customer_id, state, product_id, panel_id, line_title, line_duration_days,
+                       line_traffic_bytes, line_unit_price_amount, subtotal_amount, discount_amount,
+                       total_amount, currency, quote, confirmed_at, settled_at, purpose)
+                    VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${source}, 'PAID', ${productId}, ${panel},
+                            'x', 30, 1, 1000, 1000, 0, 1000, 'IRT', '{}'::jsonb, now(), now(), 'NEW_SERVICE')`);
+      expect(await blockersNow()).toContain('ORDER_IN_PROGRESS');
+    });
+
+    it('refuses a service still being provisioned before taking any service lock', async () => {
+      // Settled and not yet provisioned: PENDING_PROVISION.
+      const draft = await ctx.container.orders.createDraft(tenantA, systemActor('pp'), {
+        idempotencyKey: key('pp-draft'),
+        customerId: source,
+        productId,
+      });
+      const confirmed = await ctx.container.orders.confirm(tenantA, systemActor('pp'), {
+        idempotencyKey: key('pp-confirm'),
+        customerId: source,
+        orderId: draft.id,
+      });
+      await fund(source, PRICE + 1_000n);
+      await ctx.container.payments.settleFromWallet(tenantA, systemActor('pp'), source, {
+        idempotencyKey: key('pp-pay'),
+        orderId: confirmed.id as OrderId,
+      });
+      const pending = await services.findByOrderId(tenantA, confirmed.id);
+      expect(pending?.state).toBe('PENDING_PROVISION');
+      // Hold that service's row from outside, the way a provisioning refund would. A transfer
+      // that waited for it while holding the customer would close a cycle; it must refuse.
+      let release!: () => void;
+      const gate = new Promise<void>((done) => (release = done));
+      let held!: () => void;
+      const holding = new Promise<void>((done) => (held = done));
+      const holder = ctx.container.database.db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM services WHERE id = ${pending!.id} FOR UPDATE`);
+        held();
+        await gate;
+      });
+      await holding;
+      try {
+        const refused = await refusalOf(transfer('0'.repeat(64)));
+        expect(refused.code).toBe(COMMERCE_ERROR_CODES.CUSTOMER_TRANSFER_REFUSED);
+        expect(refused.details.blockers).toEqual(['SERVICE_UNSETTLED']);
+      } finally {
+        release();
+        await holder;
+      }
+    });
+
+    it('refuses, never waits for, a movable service another transaction holds', async () => {
+      const service = await deliveredService('held');
+      const plan = await preview();
+      let release!: () => void;
+      const gate = new Promise<void>((done) => (release = done));
+      let held!: () => void;
+      const holding = new Promise<void>((done) => (held = done));
+      const holder = ctx.container.database.db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM services WHERE id = ${service.id} FOR NO KEY UPDATE`);
+        held();
+        await gate;
+      });
+      await holding;
+      try {
+        const refused = await refusalOf(transfer(plan.fingerprint));
+        expect(refused.details.blockers).toEqual(['SERVICE_UNSETTLED']);
+      } finally {
+        release();
+        await holder;
+      }
+      expect((await services.findById(tenantA, service.id))?.customerId).toBe(source);
+      // Released, the same confirmation goes through.
+      expect((await transfer(plan.fingerprint)).transfer.serviceIds).toEqual([service.id]);
+    });
+
+    it('locks the newer customer first, the referral order, so it never holds the older while waiting', async () => {
+      await fund(source, 10_000n);
+      const plan = await preview();
+      // `destination` registered after `source`: the newer UUIDv7.
+      expect(destination > source).toBe(true);
+      let release!: () => void;
+      const gate = new Promise<void>((done) => (release = done));
+      let held!: () => void;
+      const holding = new Promise<void>((done) => (held = done));
+      const holder = ctx.container.database.db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM customers WHERE id = ${destination} FOR UPDATE`);
+        held();
+        await gate;
+      });
+      await holding;
+      const racing = transfer(plan.fingerprint);
+      // Wait until the transfer blocks on the newer customer.
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const waiting = await count(
+          sql`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+               WHERE NOT l.granted AND a.datname = current_database()`,
+        );
+        if (waiting > 0) break;
+        if (Date.now() > deadline) throw new Error('the transfer never waited');
+        await new Promise((done) => setTimeout(done, 25));
+      }
+      // The older customer is free: the transfer did not take it before the newer one.
+      const older = await ctx.container.database.db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM customers WHERE id = ${source} FOR UPDATE NOWAIT`);
+        return 'free';
+      });
+      expect(older).toBe('free');
+      release();
+      await holder;
+      expect((await racing).replayed).toBe(false);
+    });
+
+    /** Holds `customerId`'s row in another transaction; `then` runs inside it before release. */
+    async function holdCustomer(customerId: string) {
+      let release!: (
+        then?: (tx: { execute: (q: ReturnType<typeof sql>) => Promise<unknown> }) => Promise<void>,
+      ) => void;
+      const gate = new Promise<
+        | ((tx: { execute: (q: ReturnType<typeof sql>) => Promise<unknown> }) => Promise<void>)
+        | undefined
+      >((done) => (release = done));
+      let held!: () => void;
+      const holding = new Promise<void>((done) => (held = done));
+      const holder = ctx.container.database.db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM customers WHERE id = ${customerId} FOR UPDATE`);
+        held();
+        const then = await gate;
+        if (then !== undefined) await then(tx as never);
+      });
+      await holding;
+      return { release, holder };
+    }
+
+    async function waitersAtLeast(expected: number) {
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const waiting = await count(
+          sql`SELECT count(DISTINCT l.pid)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+               WHERE NOT l.granted AND a.datname = current_database()`,
+        );
+        if (waiting >= expected) return;
+        if (Date.now() > deadline) throw new Error('nothing waited');
+        await new Promise((done) => setTimeout(done, 25));
+      }
+    }
+
+    it('answers a concurrent duplicate of one key as its replay, not as a stale preview', async () => {
+      await fund(source, 10_000n);
+      const plan = await preview();
+      const hold = await holdCustomer(destination);
+      const first = transfer(plan.fingerprint, { idempotencyKey: 'twice' });
+      const second = transfer(plan.fingerprint, { idempotencyKey: 'twice' });
+      await waitersAtLeast(2);
+      hold.release();
+      await hold.holder;
+      const results = await Promise.all([first, second]);
+      expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
+      expect(results[0].transfer.id).toBe(results[1].transfer.id);
+    });
+
+    it('reads the destination again under its lock: a block committed meanwhile refuses', async () => {
+      await fund(source, 10_000n);
+      const plan = await preview();
+      const hold = await holdCustomer(destination);
+      const racing = refusalOf(transfer(plan.fingerprint));
+      await waitersAtLeast(1);
+      hold.release(async (tx) => {
+        await tx.execute(
+          sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now() WHERE id = ${destination}`,
+        );
+      });
+      await hold.holder;
+      const refused = await racing;
+      expect(refused.details.blockers).toContain('DESTINATION_BLOCKED');
+      expect(await balanceOf(source)).toBe(10_000n);
+    });
+
+    it('lets only a Web Admin ownership row omit the bot', async () => {
+      const service = await deliveredService('botless');
+      const insert = (actorType: string) =>
+        ctx.container.database.db.execute(sql`
+          INSERT INTO service_ownership_transfers
+            (id, tenant_id, service_id, from_customer_id, to_customer_id, bot_instance_id,
+             idempotency_key, actor_type, correlation_id)
+          VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${service.id}, ${source},
+                  ${destination}, NULL, ${key('botless')}, ${actorType}, 'c')`);
+      await expect(insert('SYSTEM_JOB')).rejects.toThrow();
+      await expect(insert('CUSTOMER')).rejects.toThrow();
+      await expect(insert('WEB_ADMIN')).resolves.toBeDefined();
+    });
+
+    it('refuses a key reused for another account or another preview', async () => {
+      await fund(source, 10_000n);
+      const plan = await preview();
+      await transfer(plan.fingerprint, { idempotencyKey: 'reused-key' });
+      // Same key, a different fingerprint.
+      expect(
+        (await refusalOf(transfer('c'.repeat(64), { idempotencyKey: 'reused-key' }))).code,
+      ).toBe(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID);
+      // Same key, another source.
+      expect(
+        (
+          await refusalOf(
+            ctx.container.customerAccountTransfers.transfer(tenantA, owner, {
+              idempotencyKey: 'reused-key',
+              sourceId: destination,
+              destinationTelegramUserId: SOURCE_TG,
+              fingerprint: plan.fingerprint,
+              confirmTelegramUserId: SOURCE_TG,
+              reason: 'x',
+            }),
+          )
+        ).code,
+      ).toBe(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID);
+    });
+
     it('is the owner’s alone: an operator is refused the preview and the transfer, audited', async () => {
       await fund(source, 10_000n);
       const plan = await preview();
@@ -591,9 +890,7 @@ describe('Customer 360 — backend controls', () => {
 
     it('places, prices and settles through the customer path, under the operator’s key', async () => {
       await fund(source, PRICE + 1_000n);
-      const sales = adminActorFor(
-        await createAdmin(ctx.container, tenantA, { username: 'sales-360', roleKeys: ['sales'] }),
-      );
+      const sales = owner;
       const { order, payment } = await place(sales, 'manual-1');
       expect(order.state).toBe('PAID');
       expect(order.totals.total.amountMinor).toBe(PRICE);
@@ -630,6 +927,20 @@ describe('Customer 360 — backend controls', () => {
       expect(await count(sql`SELECT count(*)::int AS n FROM panel_capacity_reservations`)).toBe(0);
     });
 
+    it('refuses sales, which holds orders.manual.create but may not debit a wallet', async () => {
+      await fund(source, PRICE);
+      const sales = adminActorFor(
+        await createAdmin(ctx.container, tenantA, { username: 'sales-360', roleKeys: ['sales'] }),
+      );
+      await expect(place(sales)).rejects.toMatchObject({ code: 'platform.permission_denied' });
+      expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
+      expect(await balanceOf(source)).toBe(PRICE);
+      const denied = await rows<{ result: string }>(
+        sql`SELECT result FROM audit_logs WHERE action = 'customer.manual_order'`,
+      );
+      expect(denied).toEqual([{ result: 'DENIED' }]);
+    });
+
     it('refuses a role without orders.manual.create, before any order exists', async () => {
       await fund(source, PRICE);
       await expect(place(support)).rejects.toMatchObject({ code: 'platform.permission_denied' });
@@ -651,6 +962,14 @@ describe('Customer 360 — backend controls', () => {
         action: 'SUSPEND',
       });
       expect(suspended.map((row) => row.outcome)).toEqual(['PLANNED', 'PLANNED']);
+      // A replay of the same key plans nothing new and writes no second summary row.
+      const again = await ctx.container.customerServicesToggle.toggle(tenantA, operator, {
+        idempotencyKey: 'suspend-all',
+        customerId: source,
+        action: 'SUSPEND',
+      });
+      expect(again.map((row) => row.outcome)).toEqual(['PLANNED', 'PLANNED']);
+      expect(await auditOf('customer.services.suspend_all')).toHaveLength(1);
       await ctx.container.provisionerLoop.tick();
       expect((await services.findById(tenantA, a.id))?.state).toBe('SUSPENDED');
       expect((await services.findById(tenantA, b.id))?.state).toBe('SUSPENDED');

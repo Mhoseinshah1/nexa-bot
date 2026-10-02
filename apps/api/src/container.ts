@@ -3648,8 +3648,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     audit,
     opsLog,
-    uow,
-    idempotency,
   });
   const customerServicesToggleService = new CustomerServicesToggleService({
     services: serviceRepository,
@@ -3657,6 +3655,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     audit,
     uow,
+    idempotency,
   });
   /*
    * WP-A7 — support tickets. ONE service for the bot and the Web Admin. An administrator's

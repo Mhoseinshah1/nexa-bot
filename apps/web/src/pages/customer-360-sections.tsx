@@ -869,6 +869,8 @@ const WARNING_LABELS: Readonly<Record<CustomerTransferWarning, WebKey>> = {
   TRIAL_SERVICES_STAY: 'web.c360_warning_trials',
   SOURCE_OVERRIDES_STAY: 'web.c360_warning_overrides',
   OPEN_TICKETS_STAY: 'web.c360_warning_tickets',
+  REFERRAL_CREDITS_STAY: 'web.c360_warning_referral_credits',
+  REFUNDS_CREDIT_SOURCE: 'web.c360_warning_refunds',
 };
 
 export function DangerZoneCard({

@@ -7,11 +7,13 @@ import {
   type ActorContext,
   type AuditWriter,
   type CustomerServicesToggleAction,
+  type IdempotencyStore,
   type PermissionKey,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { OPERATOR_OPERATION_PERMISSION, type ProvisioningService } from './provisioning.service.js';
@@ -26,6 +28,7 @@ export interface CustomerServicesToggleDeps {
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
   readonly uow: UnitOfWork<TransactionScope>;
+  readonly idempotency: IdempotencyStore;
 }
 
 export interface CustomerServicesToggleResult {
@@ -101,8 +104,12 @@ export class CustomerServicesToggleService {
           code: null,
         });
       } catch (error) {
-        // A decided refusal for THIS service. Anything else is not ours to swallow.
-        if (!isNexaError(error) || error.httpStatus >= 500) throw error;
+        // A decided refusal for THIS service. Anything else is not ours to swallow — but the
+        // customer's timeline still says the command ran, and how far, before it stopped.
+        if (!isNexaError(error) || error.httpStatus >= 500) {
+          await this.summarise(scope, actor, customerId, input.action, results, stem, 'FAILED');
+          throw error;
+        }
         results.push({
           serviceId: service.id,
           providerUsername: service.providerUsername,
@@ -113,27 +120,61 @@ export class CustomerServicesToggleService {
     }
 
     // One row on the customer's own timeline; each service's own row is the operation's.
-    await this.deps.uow.run(scope, async (tx) => {
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action:
-            input.action === 'SUSPEND'
-              ? 'customer.services.suspend_all'
-              : 'customer.services.resume_all',
-          entityType: 'Customer',
-          entityId: customerId,
-          before: null,
-          after: {
-            planned: results.filter((result) => result.outcome === 'PLANNED').length,
-            refused: results.filter((result) => result.outcome === 'REFUSED').length,
-          },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-    });
+    await this.summarise(scope, actor, customerId, input.action, results, stem, 'SUCCESS');
     return results;
+  }
+
+  /**
+   * The summary row, once per command: a SUCCESS remembers the command's key in the same
+   * transaction, so a replay — which re-plans nothing, every service's own key answering
+   * for it — finds the key and writes no second row. A FAILED one is not remembered: the
+   * retry that completes the command is entitled to its own SUCCESS row.
+   */
+  private async summarise(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+    action: CustomerServicesToggleAction,
+    results: readonly CustomerServicesToggleResult[],
+    stem: string,
+    result: 'SUCCESS' | 'FAILED',
+  ): Promise<void> {
+    const key = `${stem}:summary`;
+    const hash = hashRequest({ customerId, action });
+    try {
+      await this.deps.uow.run(scope, async (tx) => {
+        if (
+          result === 'SUCCESS' &&
+          (await this.deps.idempotency.find(scope, actor.surface, key, hash)) !== null
+        ) {
+          return;
+        }
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action:
+              action === 'SUSPEND'
+                ? 'customer.services.suspend_all'
+                : 'customer.services.resume_all',
+            entityType: 'Customer',
+            entityId: customerId,
+            before: null,
+            after: {
+              planned: results.filter((entry) => entry.outcome === 'PLANNED').length,
+              refused: results.filter((entry) => entry.outcome === 'REFUSED').length,
+            },
+            result,
+          },
+          tx,
+        );
+        if (result === 'SUCCESS') {
+          await rememberOnce(this.deps.idempotency, scope, actor.surface, key, hash, {}, tx);
+        }
+      });
+    } catch (error) {
+      // The FAILED row is a courtesy beside the error being rethrown; never a second error.
+      if (result === 'SUCCESS') throw error;
+    }
   }
 }

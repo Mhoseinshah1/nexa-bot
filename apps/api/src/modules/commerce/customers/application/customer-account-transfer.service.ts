@@ -56,6 +56,8 @@ export interface AccountTransferFacts {
   /** `AWAITING_PAYMENT`, or `PAID` with no service yet: money in flight either way. */
   readonly ordersInProgress: number;
   readonly payments: number;
+  /** `CONFIRMED` payments: money a later refund would credit back to the SOURCE. */
+  readonly confirmedPayments: number;
   /** `PENDING` or `UNKNOWN`: a payment that may still settle against the source. */
   readonly pendingPayments: number;
   readonly isReseller: boolean;
@@ -101,6 +103,11 @@ export interface AccountTransferDraft {
 export interface CustomerAccountTransferRepository {
   facts(scope: TenantContext, sourceId: UserId, tx?: unknown): Promise<AccountTransferFacts>;
   isReseller(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean>;
+  /**
+   * The service's row lock (`FOR NO KEY UPDATE`) and its lifecycle lock, each TRIED: false,
+   * holding nothing new that matters, when another transaction holds either.
+   */
+  tryLockService(scope: TenantContext, serviceId: string, tx: TransactionScope): Promise<boolean>;
   findByKey(
     scope: TenantContext,
     idempotencyKey: string,
@@ -116,7 +123,7 @@ export interface CustomerAccountTransferRepository {
 export interface CustomerAccountTransferDeps {
   readonly repository: CustomerAccountTransferRepository;
   readonly customers: Pick<CustomerRepository, 'findById' | 'list'>;
-  readonly services: Pick<ServiceRepository, 'findForCustomer' | 'lockForUpdate' | 'lockLifecycle'>;
+  readonly services: Pick<ServiceRepository, 'findForCustomer'>;
   readonly serviceTransfers: Pick<ServiceTransferRepository, 'create' | 'reassign'>;
   /** The ONE evaluator of whether a service may change hands (Package F). */
   readonly transferability: Pick<ServiceTransferService, 'ineligibilityOf'>;
@@ -286,28 +293,57 @@ export class CustomerAccountTransferService {
             'This installation has stopped accepting work.',
           );
         }
-        // Under the transaction, so two concurrent submissions of one key cannot both pass.
-        const raced = await this.deps.repository.findByKey(scope, input.idempotencyKey, tx);
-        if (raced !== null) return this.replayOf(raced, sourceId, input);
-
-        const destination = await this.findByTelegramId(scope, input.destinationTelegramUserId, tx);
-        // Both wallet locks, in id order: the order every two-customer writer must take.
+        const found = await this.findByTelegramId(scope, input.destinationTelegramUserId, tx);
+        /*
+         * Both customers' wallet locks, NEWEST FIRST (UUIDv7 ids sort by creation). That is
+         * the referral order — a refund takes the referee (newer) and then the referrer
+         * (older), and nothing takes older-then-newer — and a source and destination in a
+         * referral relationship is the likely pair (`docs/customer-account-transfer-audit.md` §4).
+         */
         const ids =
-          destination === null
+          found === null || found.id === sourceId
             ? [sourceId]
-            : [sourceId, destination.id].sort((a, b) => a.localeCompare(b));
+            : [sourceId, found.id].sort((a, b) => b.localeCompare(a));
         for (const id of ids) {
           if (!(await this.deps.wallet.lockCustomer(scope, id, tx))) {
             throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
           }
         }
-        // Each movable service's row lock and then its lifecycle lock, in id order — the
-        // locks a terminate, a refund request and a commercial settlement serialise on.
+        /*
+         * The key AGAIN, now that the locks are held: a concurrent submission of this very
+         * key that committed while this one waited is answered as its replay, never as a
+         * stale preview of an account it already emptied.
+         */
+        const raced = await this.deps.repository.findByKey(scope, input.idempotencyKey, tx);
+        if (raced !== null) return this.replayOf(raced, sourceId, input);
+        // The destination as it is under its lock — a block that committed meanwhile counts.
+        const destination =
+          found === null ? null : await this.deps.customers.findById(scope, found.id, tx);
+
+        /*
+         * Refuse an undecided provider state from the facts, BEFORE any service lock.
+         *
+         * A provisioning refund holds such a service's row and then takes its customer's
+         * wallet lock (`refundPurchase` → `refundUndeliverable`); taking that row here, while
+         * holding the customer, would be the reverse order and a deadlock either side can lose.
+         */
         const preliminary = await this.deps.repository.facts(scope, sourceId, tx);
-        for (const service of preliminary.services) {
-          if (!service.isTrial && !service.refundedAway && LIVE_STATES.has(service.state)) {
-            await this.deps.services.lockForUpdate(scope, service.id, tx);
-            await this.deps.services.lockLifecycle(scope, service.id, tx);
+        const live = preliminary.services.filter(
+          (service) => !service.isTrial && !service.refundedAway && LIVE_STATES.has(service.state),
+        );
+        if (live.some((service) => !SETTLED_STATES.has(service.state))) {
+          throw refused(['SERVICE_UNSETTLED']);
+        }
+        /*
+         * Each movable service's row lock, then its lifecycle lock — TRIED, never waited for.
+         * Anything holding a service lock may next want a customer lock this transaction
+         * already holds (a customer's own service transfer takes the row and then the
+         * customers' key-share locks), so waiting here could close a cycle. A service some
+         * other command holds is in flight, and the transfer is refused as unsettled.
+         */
+        for (const service of live) {
+          if (!(await this.deps.repository.tryLockService(scope, service.id, tx))) {
+            throw refused(['SERVICE_UNSETTLED']);
           }
         }
 
@@ -317,11 +353,7 @@ export class CustomerAccountTransferService {
         }
         const plan = await this.plan(scope, source, destination, tx);
         if (plan.blockers.length > 0 || plan.destination === null) {
-          throw errors.conflict(
-            COMMERCE_ERROR_CODES.CUSTOMER_TRANSFER_REFUSED,
-            'This account cannot be transferred now.',
-            { blockers: [...plan.blockers] },
-          );
+          throw refused(plan.blockers);
         }
         if (plan.fingerprint !== input.fingerprint) {
           throw errors.conflict(
@@ -604,6 +636,9 @@ export class CustomerAccountTransferService {
       source.phoneNumber !== null;
     if (overrides) warnings.push('SOURCE_OVERRIDES_STAY');
     if (facts.openTickets > 0) warnings.push('OPEN_TICKETS_STAY');
+    // Credits tied to the source's history keep landing on the source (audit §5).
+    if (facts.referredCustomers > 0) warnings.push('REFERRAL_CREDITS_STAY');
+    if (facts.confirmedPayments > 0) warnings.push('REFUNDS_CREDIT_SOURCE');
 
     return {
       source,
@@ -679,6 +714,17 @@ export class CustomerAccountTransferService {
     return parsed.data;
   }
 }
+
+function refused(blockers: readonly CustomerTransferBlocker[]) {
+  return errors.conflict(
+    COMMERCE_ERROR_CODES.CUSTOMER_TRANSFER_REFUSED,
+    'This account cannot be transferred now.',
+    { blockers: [...blockers] },
+  );
+}
+
+/** The live states a service may be moved from: decided on its panel, nothing undecided. */
+const SETTLED_STATES: ReadonlySet<string> = new Set(['ACTIVE', 'SUSPENDED']);
 
 /** States in which a service still exists on a panel for somebody. */
 const LIVE_STATES: ReadonlySet<string> = new Set([
