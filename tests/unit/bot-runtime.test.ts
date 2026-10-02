@@ -850,6 +850,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.gateway_no_link',
       'bot.payment.gateway_pay_button',
       'bot.payment.gateway_preparing',
+      'bot.payment.gateway_receipt_already_sent',
       'bot.payment.gateway_receipt_button',
       'bot.payment.gateway_receipt_photo_only',
       'bot.payment.gateway_receipt_prompt',
