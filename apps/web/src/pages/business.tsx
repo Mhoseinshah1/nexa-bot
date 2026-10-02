@@ -106,7 +106,7 @@ const METHOD_LABELS: Readonly<Record<PaymentMethod, WebKey>> = {
   GATEWAY: 'web.payment_method_gateway',
 };
 
-const WALLET_GROUP_LABELS: Readonly<Record<WalletReportGroup, WebKey>> = {
+export const WALLET_GROUP_LABELS: Readonly<Record<WalletReportGroup, WebKey>> = {
   TOPUP: 'web.report_wallet_topup',
   RECEIPT_CREDIT: 'web.report_wallet_receipt_credit',
   CASHBACK: 'web.report_wallet_cashback',

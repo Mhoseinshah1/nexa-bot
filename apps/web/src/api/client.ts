@@ -459,6 +459,31 @@ import {
   type CampaignScheduleRequest,
   type CampaignState,
   type CampaignUpdateRequest,
+  CUSTOMER_360_ROUTES,
+  customerControlResponseSchema,
+  customerFinancialSummaryResponseSchema,
+  customerManualOrderResponseSchema,
+  customerOverviewResponseSchema,
+  customerServicesToggleResponseSchema,
+  customerTimelineResponseSchema,
+  customerTransferPreviewResponseSchema,
+  customerTransferResponseSchema,
+  type CustomerChannelExemptionRequest,
+  type CustomerControlResponse,
+  type CustomerFinancialSummaryResponse,
+  type CustomerLocationOverrideRequest,
+  type CustomerManualOrderRequest,
+  type CustomerManualOrderResponse,
+  type CustomerNotificationsRequest,
+  type CustomerOverviewResponse,
+  type CustomerPhoneVerificationRequest,
+  type CustomerServicesToggleRequest,
+  type CustomerServicesToggleResponse,
+  type CustomerTimelineResponse,
+  type CustomerTransferPreviewRequest,
+  type CustomerTransferPreviewResponse,
+  type CustomerTransferRequest,
+  type CustomerTransferResultResponse,
 } from '@nexa/contracts';
 
 /**
@@ -3595,4 +3620,86 @@ export function steerBulkOperation(
   action: 'pause' | 'resume',
 ): Promise<BulkOperationResponse> {
   return post(BULK_OPERATION_ROUTES[action](id), {}, bulkOperationResponseSchema);
+}
+
+// --- Customer 360 (spec §11) -----------------------------------------------------------
+//
+// Every write carries its idempotency key in the body, as every other command here does;
+// every read and write is charged on the server, so a control this page does not draw is a
+// courtesy and never the enforcement.
+
+const customer360ControlResponseSchema = customerControlResponseSchema;
+export type Customer360ControlResponse = CustomerControlResponse;
+
+export function fetchCustomerOverview(id: string): Promise<{ overview: CustomerOverviewResponse }> {
+  return authedGet(CUSTOMER_360_ROUTES.overview(id), customerOverviewResponseSchema);
+}
+
+export function setCustomerChannelExemption(
+  id: string,
+  body: CustomerChannelExemptionRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.channelExemption(id), body, customer360ControlResponseSchema);
+}
+
+export function setCustomerPhone(
+  id: string,
+  body: CustomerPhoneVerificationRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.phone(id), body, customer360ControlResponseSchema);
+}
+
+export function setCustomerLocationOverride(
+  id: string,
+  body: CustomerLocationOverrideRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.locationOverride(id), body, customer360ControlResponseSchema);
+}
+
+export function setCustomerNotifications(
+  id: string,
+  body: CustomerNotificationsRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.notifications(id), body, customer360ControlResponseSchema);
+}
+
+export function toggleCustomerServices(
+  id: string,
+  body: CustomerServicesToggleRequest,
+): Promise<CustomerServicesToggleResponse> {
+  return post(CUSTOMER_360_ROUTES.servicesToggle(id), body, customerServicesToggleResponseSchema);
+}
+
+export function previewCustomerTransfer(
+  id: string,
+  body: CustomerTransferPreviewRequest,
+): Promise<{ preview: CustomerTransferPreviewResponse }> {
+  return post(CUSTOMER_360_ROUTES.transferPreview(id), body, customerTransferPreviewResponseSchema);
+}
+
+export function transferCustomer(
+  id: string,
+  body: CustomerTransferRequest,
+): Promise<{ transfer: CustomerTransferResultResponse }> {
+  return post(CUSTOMER_360_ROUTES.transfer(id), body, customerTransferResponseSchema);
+}
+
+export function placeManualOrder(
+  id: string,
+  body: CustomerManualOrderRequest,
+): Promise<CustomerManualOrderResponse> {
+  return post(CUSTOMER_360_ROUTES.manualOrder(id), body, customerManualOrderResponseSchema);
+}
+
+export function fetchCustomerFinancialSummary(
+  id: string,
+): Promise<{ summary: CustomerFinancialSummaryResponse }> {
+  return authedGet(
+    CUSTOMER_360_ROUTES.financialSummary(id),
+    customerFinancialSummaryResponseSchema,
+  );
+}
+
+export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
+  return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
 }
