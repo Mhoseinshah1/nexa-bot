@@ -8,6 +8,7 @@ import {
 } from '@nexa/contracts';
 import { CATALOGUE_FA, renderTemplateBody, DEFAULT_TEMPLATE_PRESENTATION } from '@nexa/i18n';
 import { CustomerScreenComposer } from '../../apps/api/src/modules/commerce/messaging/application/customer-screens';
+import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 
 /**
  * The approved customer screens, pinned as TEXT (customer UX completion §Q).
@@ -19,13 +20,19 @@ import { CustomerScreenComposer } from '../../apps/api/src/modules/commerce/mess
  */
 const scope = { tenantId: 'tenant-1', botInstanceId: null } as unknown as ScopeContext;
 
+/*
+ * As a customer with no custom emoji configured reads it: the messenger turns every
+ * appearance marker (`{icon:wallet}`, owner spec §4) into its fallback emoji.
+ */
 const render = (key: TemplateKey, values: TemplateValues): string =>
-  renderTemplateBody(
-    templateDefinition(key),
-    CATALOGUE_FA[key],
-    values,
-    'fa',
-    DEFAULT_TEMPLATE_PRESENTATION,
+  appearanceFallbackText(
+    renderTemplateBody(
+      templateDefinition(key),
+      CATALOGUE_FA[key],
+      values,
+      'fa',
+      DEFAULT_TEMPLATE_PRESENTATION,
+    ),
   );
 
 const composer = new CustomerScreenComposer({
@@ -146,21 +153,30 @@ describe('the wallet summary', () => {
       paidInvoiceCount: 4,
       referralCount: 2,
       group: 'CUSTOMER',
+      now: new Date('2026-10-02T19:52:00Z'),
     });
     expect(screen.key).toBe('bot.wallet.summary');
+    /*
+     * Owner spec §3/§4: every icon is an appearance slot (the phone is 📱, the balance the
+     * `wallet` slot, the referral count the `referral` slot), and after the user group a
+     * blank line, then the date and the time the screen was drawn, in Tehran, Jalali.
+     */
     expect(render(screen.key, screen.values)).toBe(
       [
         '🎡 اطلاعات حساب کاربری شما:',
         '',
         '🪪 آی دی عددی: 910910',
         '👤 نام: مریم احمدی',
-        '⚫ شماره تماس: 🔴 ارسال نشده است',
+        '📱 شماره تماس: 🔴 ارسال نشده است',
         '⏳ زمان ثبت نام: 1405/06/10 11:30',
-        '⭐ موجودی: 1,250,000 تومان',
+        '💰 موجودی: 1,250,000 تومان',
         '🛒 تعداد سرویس های خریداری شده: 3 عدد',
         '🧾 تعداد فاکتورهای پرداخت شده: 4 عدد',
-        '👥 تعداد زیرمجموعه های شما: 2 نفر',
+        '🎁 تعداد زیرمجموعه های شما: 2 نفر',
         '🔖 گروه کاربری: کاربر عادی',
+        '',
+        '📅 تاریخ: 1405/07/10',
+        '🕒 ساعت: 23:22',
       ].join('\n'),
     );
   });
@@ -175,6 +191,7 @@ describe('the wallet summary', () => {
       paidInvoiceCount: 0,
       referralCount: 0,
       group: 'RESELLER',
+      now: new Date('2026-10-02T19:52:00Z'),
     });
     expect(render(screen.key, screen.values)).toContain('🔖 گروه کاربری: نماینده');
   });

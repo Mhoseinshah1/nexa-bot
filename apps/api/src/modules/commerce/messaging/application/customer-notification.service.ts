@@ -499,8 +499,8 @@ export class CustomerNotificationService {
 
   /**
    * The message's values and its inline buttons, or `null` when its subject cannot state the
-   * fact. Only a transfer's notification carries a button (Package F); every other kind's
-   * values are `reminderValues`'.
+   * fact. The buttons are `buttonsFor`'s, derived from the kind and what its subject names —
+   * never stored (ADR 0030 §1); every other kind's values are `reminderValues`'.
    */
   private async contentOf(
     scope: TenantContext,
@@ -553,7 +553,9 @@ export class CustomerNotificationService {
       };
     }
     const values = await this.reminderValues(scope, row);
-    return values === null ? null : { values, buttons: [] };
+    // Owner spec §2.1/§2.2: a kind's buttons, derived from the KIND alone (no subject): the
+    // low-balance alert's top-up, a wallet credit's wallet and catalogue. Still no payload.
+    return values === null ? null : { values, buttons: this.deps.buttonsFor?.(row.kind, {}) ?? [] };
   }
 
   /**

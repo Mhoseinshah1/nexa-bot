@@ -264,6 +264,21 @@ describe('a customer looks after the services they bought', () => {
   const last = () => messages()[messages().length - 1];
   const lastText = () => String(last()?.body['text'] ?? '');
   const lastMarkup = () => JSON.stringify(last()?.body['reply_markup'] ?? {});
+  // Owner spec §2.3: a page, a card from the list and the way back EDIT the tapped message.
+  const drawn = () =>
+    sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
+  const lastDrawn = () => drawn()[drawn().length - 1];
+  const lastDrawnText = () => String(lastDrawn()?.body['text'] ?? '');
+  const lastDrawnMarkup = () => JSON.stringify(lastDrawn()?.body['reply_markup'] ?? {});
+  /** A tap on one particular message — the list the bot sent, say. */
+  const tapOn = (data: string, messageId: number) => {
+    const update = tap(data);
+    const query = (
+      update.update as unknown as { callback_query: { message: { message_id: number } } }
+    ).callback_query;
+    query.message.message_id = messageId;
+    return update;
+  };
   const buttonsOf = (markup: string): string[] =>
     [...markup.matchAll(/"callback_data":"([^"]+)"/g)].map((m) => m[1] as string);
 
@@ -288,7 +303,7 @@ describe('a customer looks after the services they bought', () => {
       );
       const markup = lastMarkup();
       expect(markup).toContain(`✨ ${service.username} ✨`);
-      expect(buttonsOf(markup)).toEqual([`s:${service.id}`, 'ss:', 'ss:', 'sl:1', 'mm:']);
+      expect(buttonsOf(markup)).toEqual([`sv:${service.id}`, 'ss:', 'ss:', 'sl:1', 'mm:']);
       expect(markup).toContain('جستجو نام کاربری');
       expect(markup).toContain('🔎 جستجو');
       expect(markup).toContain('1/1');
@@ -300,8 +315,8 @@ describe('a customer looks after the services they bought', () => {
       const theirs = await activeService('list-theirs', reza);
       await handle(text('/services'));
       const markup = lastMarkup();
-      expect(markup).toContain(`s:${mine.id}`);
-      expect(markup).not.toContain(`s:${theirs.id}`);
+      expect(markup).toContain(`sv:${mine.id}`);
+      expect(markup).not.toContain(theirs.id);
       expect(markup).not.toContain(theirs.username);
     });
 
@@ -314,25 +329,63 @@ describe('a customer looks after the services they bought', () => {
       await handle(text('/services'));
       expect(lastText()).toContain('📄 صفحه 1 از 2 | 📊 کل: 11 سرویس');
       const first = buttonsOf(lastMarkup());
-      expect(first.filter((b) => b.startsWith('s:'))).toHaveLength(10);
+      expect(first.filter((b) => b.startsWith('sv:'))).toHaveLength(10);
       expect(first).toContain('sl:2');
       expect(first).not.toContain('sl:0');
 
       await handle(tap('sl:2'));
-      expect(lastText()).toContain('📄 صفحه 2 از 2 | 📊 کل: 11 سرویس');
-      const second = buttonsOf(lastMarkup());
-      expect(second.filter((b) => b.startsWith('s:'))).toHaveLength(1);
+      expect(lastDrawnText()).toContain('📄 صفحه 2 از 2 | 📊 کل: 11 سرویس');
+      const second = buttonsOf(lastDrawnMarkup());
+      expect(second.filter((b) => b.startsWith('sv:'))).toHaveLength(1);
       expect(second).toContain('sl:1');
       expect(second).not.toContain('sl:3');
       // Newest first: the last created service leads page 1, the first created ends page 2.
-      expect(first[0]).toBe(`s:${ids[10] ?? ''}`);
-      expect(second[0]).toBe(`s:${ids[0] ?? ''}`);
+      expect(first[0]).toBe(`sv:${ids[10] ?? ''}`);
+      expect(second[0]).toBe(`sv:${ids[0] ?? ''}`);
 
       // A stale button from an older message lands on the last real page.
       await handle(tap('sl:9'));
-      expect(lastText()).toContain('📄 صفحه 2 از 2');
+      expect(lastDrawnText()).toContain('📄 صفحه 2 از 2');
       const crafted = await handle(tap('sl:abc'));
       expect(crafted.intent).toBe('UNSUPPORTED');
+    });
+
+    /*
+     * Owner spec §2.3: «سرویس‌های من» is ONE message. Selecting a service edits the list
+     * into its card; the card's back edits it into the list again; nothing new is sent. A
+     * stale card tap (a service no longer the customer's) still edits that message, and
+     * keeps the way back to the list on it.
+     */
+    it('opens a card and goes back to the list in the SAME message', async () => {
+      const service = await activeService('same-message');
+      await handle(text('/services'));
+      const listMessage = 7001;
+      sent = [];
+      await handle(tapOn(`sv:${service.id}`, listMessage));
+      expect(messages()).toHaveLength(0);
+      const opened = lastDrawn();
+      expect(opened?.url).toContain('/editMessageText');
+      expect(opened?.body['message_id']).toBe(listMessage);
+      expect(buttonsOf(lastDrawnMarkup())).toContain('sl:1');
+
+      sent = [];
+      await handle(tapOn('sl:1', listMessage));
+      expect(messages()).toHaveLength(0);
+      expect(lastDrawn()?.url).toContain('/editMessageText');
+      expect(lastDrawn()?.body['message_id']).toBe(listMessage);
+      expect(lastDrawnText()).toContain('✨ اشتراک های خریداری شده توسط شما');
+      expect(buttonsOf(lastDrawnMarkup())).toContain(`sv:${service.id}`);
+    });
+
+    it('answers a stale card tap in place, with the way back to the list', async () => {
+      const theirs = await activeService('stale-theirs', reza);
+      sent = [];
+      const result = await handle(tap(`sv:${theirs.id}`));
+      expect(result.replyKey).toBe('bot.service.not_found');
+      expect(messages()).toHaveLength(0);
+      expect(lastDrawn()?.url).toContain('/editMessageText');
+      expect(buttonsOf(lastDrawnMarkup())).toEqual(['sl:1']);
+      expect(lastDrawnText()).not.toContain(theirs.username);
     });
 
     it('answers a customer with no services with the empty key and a way back', async () => {
@@ -354,8 +407,8 @@ describe('a customer looks after the services they bought', () => {
 
       await handle(text(mine.username.slice(0, 4)));
       expect(last()?.body['text']).toContain('🔎 نتایج جستجو برای');
-      expect(lastMarkup()).toContain(`s:${mine.id}`);
-      expect(lastMarkup()).not.toContain(`s:${theirs.id}`);
+      expect(lastMarkup()).toContain(`sv:${mine.id}`);
+      expect(lastMarkup()).not.toContain(theirs.id);
 
       // The EXACT username of another customer's service: nothing, and no oracle.
       await handle(tap('ss:'));

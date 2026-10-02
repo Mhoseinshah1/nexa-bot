@@ -1120,6 +1120,14 @@ export { SERVICE_CARD_CALLBACK_PREFIX };
 export const SERVICE_NOTE_CALLBACK_PREFIX = 'nt:';
 export const SERVICE_RENEW_QUOTE_CALLBACK_PREFIX = 'nr:';
 export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
+/**
+ * Owner spec §2.2: open the wallet screen, or the catalogue, as a NEW message — the two
+ * buttons under a wallet-credit message, which must stay in the chat as the record of the
+ * credit. No id and no state: a tap on one a year later opens today's wallet or catalogue,
+ * which is exactly what it says. Neither is a wizard button, so neither edits the message.
+ */
+export const WALLET_OPEN_CALLBACK_DATA = 'wo:';
+export const CATALOG_OPEN_CALLBACK_DATA = 'co:';
 
 /**
  * The management panel's prefixes (Phase 5T), deliberately UPPERCASE.
@@ -2545,6 +2553,13 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === MAIN_MENU_CALLBACK_DATA) {
       return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };
+    }
+    // Owner spec §2.2: the wallet-credit message's two next actions.
+    if (data === WALLET_OPEN_CALLBACK_DATA) {
+      return { intent: 'WALLET', targetId: null, callbackQueryId: id };
+    }
+    if (data === CATALOG_OPEN_CALLBACK_DATA) {
+      return { intent: 'CATALOG', targetId: null, callbackQueryId: id };
     }
     if (data === MEMBERSHIP_CHECK_CALLBACK_DATA) {
       return { intent: 'MEMBERSHIP_CHECK', targetId: null, callbackQueryId: id };
@@ -9864,10 +9879,15 @@ export class BotRuntime {
       return this.serviceRefresh(scope, actor, customer, command.targetId, input.idempotencyKey);
     }
     if (command.intent === 'SERVICE_CARD' && command.targetId !== null) {
-      return {
-        ...(await this.serviceDetail(scope, actor, customer, command.targetId)),
-        edit: true,
-      };
+      const card = await this.serviceDetail(scope, actor, customer, command.targetId);
+      /*
+       * Owner spec §2.3: a stale tap — a service transferred, refunded or never theirs —
+       * still edits the list's message, and keeps the way back to the list on it, so the
+       * customer is never left on a dead end where their list was.
+       */
+      return card.key === 'bot.service.not_found'
+        ? { ...card, buttons: [backToListButton()], edit: true }
+        : { ...card, edit: true };
     }
     /*
      * Round N (F4): every screen a service card's button opens is edited INTO the card's
@@ -10128,7 +10148,9 @@ export class BotRuntime {
     if (command.intent === 'SERVICES_PAGE') {
       // A keyset token from a message older than the paged list lands on page 1: the
       // token names a position in an ordering this list no longer uses.
-      return this.services(scope, customer, command.page ?? 1);
+      // Owner spec §2.3: a page, and «back to the list» from a card, EDIT the tapped
+      // message — the list, the card and the list again are one message.
+      return { ...(await this.services(scope, customer, command.page ?? 1)), edit: true };
     }
     if (command.intent === 'SERVICE' && command.targetId !== null) {
       return this.serviceDetail(scope, actor, customer, command.targetId);
@@ -10307,7 +10329,8 @@ export class BotRuntime {
     const buttons: CustomerButton[] = page.items.map((service) => ({
       // The REAL username on the panel, as the approved list shows it; never the title.
       ...inlineLabel('services.item', { username: service.providerUsername }),
-      data: `${SERVICE_CALLBACK_PREFIX}${service.id}`,
+      // Owner spec §2.3: the card IN PLACE of the list (`sv:`); its back (`sl:`) the list again.
+      data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
     }));
     buttons.push(...servicesListControls(page.page, page.pages));
     return {
@@ -11408,7 +11431,8 @@ export class BotRuntime {
         buttons: [
           ...found.map((service) => ({
             ...inlineLabel('services.item', { username: service.providerUsername }),
-            data: `${SERVICE_CALLBACK_PREFIX}${service.id}`,
+            // Owner spec §2.3: the card IN PLACE of the list (`sv:`); its back (`sl:`) the list again.
+            data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
           })),
           backToListButton(),
         ],
@@ -13712,6 +13736,8 @@ export class BotRuntime {
       paidInvoiceCount: counters.paidInvoices,
       referralCount,
       group: reseller === null ? 'CUSTOMER' : 'RESELLER',
+      // Owner spec §3: when the screen was drawn, not when anything happened.
+      now: this.deps.clock.now(),
     });
     return {
       key: summary.key,
@@ -14711,19 +14737,32 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      const { receiptWindow } = await this.deps.payments.signalTransferSent(
+      const { payment, receiptWindow } = await this.deps.payments.signalTransferSent(
         scope,
         actor,
         customer.id,
         { idempotencyKey: `${idempotencyKey}:pay-sent`, paymentId, botInstanceId },
       );
+      /*
+       * Owner spec §2.4: the tap EDITS the invoice it was on (its claim, `PAY_SENT`'s gate).
+       * The card details and the copy buttons go with the old screen; the wizard keeps its
+       * kind and its order, and names the payment so the receipt can find this message.
+       */
+      const screen = (step: 'RECEIPT_WAIT' | 'RECEIPT_REVIEW'): WizardDirective => ({
+        kind: payment.orderId === null ? 'TOPUP' : 'ORDER',
+        step,
+        paymentId: payment.id,
+        ...(payment.orderId === null ? {} : { subjectId: payment.orderId }),
+      });
       if (receiptWindow === null) {
         return {
           key: 'bot.payment.received_for_review',
           values: {},
+          // Nothing more to do on this message: no button, as the receipt's final state.
           buttons: [],
           orderId: null,
           fallback: { kind: 'PAYMENT_TRANSFER_RECORDED', subjectId: paymentId },
+          wizard: screen('RECEIPT_REVIEW'),
         };
       }
       return {
@@ -14735,8 +14774,19 @@ export class BotRuntime {
          * customer was told nothing at all after tapping the button.
          */
         values: { minutes: receiptWindow.minutes },
-        buttons: [],
+        /*
+         * Owner spec §2.4, state 2: the receipt is asked for, with no card details and no
+         * copy buttons. The withdrawal stays — the invoice it replaced offered it, and a
+         * customer who did not pay after all must still be able to close the payment.
+         */
+        buttons: [
+          {
+            ...inlineLabel('payment.cancel'),
+            data: `${CANCEL_PAY_ASK_CALLBACK_PREFIX}${payment.id}`,
+          },
+        ],
         orderId: null,
+        wizard: screen('RECEIPT_WAIT'),
         /*
          * The fallback is the CLAIM, not the prompt.
          *
@@ -14781,7 +14831,7 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      await this.deps.receipts.submit(scope, actor, customer.id, {
+      const submitted = await this.deps.receipts.submit(scope, actor, customer.id, {
         idempotencyKey: `${idempotencyKey}:receipt`,
         botInstanceId,
         file,
@@ -14792,7 +14842,30 @@ export class BotRuntime {
        * push is that event's consumer and its own lane — durable with the receipt, never
        * able to cost the customer this answer, and not lost by a crash after the commit.
        */
-      return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.payment.receipt_received',
+        values: {},
+        /*
+         * Owner spec §2.4, state 3: the ORIGINAL payment message is edited once more into
+         * the final sentence, with NO button — no status check, no resend, no cancel, no
+         * copy, no card details. Anchored on the chat's invoice of THIS payment waiting at
+         * the receipt prompt (or already final, for a further receipt of the same payment),
+         * either kind. With no such message — an invoice from before this release, or one
+         * Telegram will not edit — the same sentence goes out as its own message, as before.
+         */
+        buttons: [],
+        orderId: null,
+        wizard: {
+          kind: 'ORDER',
+          step: 'RECEIPT_REVIEW',
+          paymentId: submitted.paymentId,
+          anchor: {
+            steps: ['RECEIPT_WAIT', 'RECEIPT_REVIEW'],
+            paymentId: submitted.paymentId,
+            anyKind: true,
+          },
+        },
+      };
     } catch (error) {
       return refusal(error);
     }
@@ -14934,9 +15007,10 @@ export class BotRuntime {
       target = await state.claimLatest(scope, actor, {
         botInstanceId: input.botInstanceId,
         chatId,
-        kind: directive.kind,
+        kind: directive.anchor.anyKind === true ? null : directive.kind,
         steps: directive.anchor.steps,
         subjectId: directive.anchor.subjectId ?? null,
+        paymentId: directive.anchor.paymentId ?? null,
         updateKey: input.idempotencyKey,
       });
       if (target === null) return null;
@@ -14960,7 +15034,10 @@ export class BotRuntime {
     }
     const loading = directive?.invoicePending === true && directive.paymentId != null;
     const landed = await state.land(scope, actor, target, {
-      kind: directive?.kind ?? target.kind,
+      kind:
+        directive === undefined || directive.anchor?.anyKind === true
+          ? target.kind
+          : directive.kind,
       step: directive?.step ?? 'NOTICE',
       subjectId: directive?.subjectId !== undefined ? directive.subjectId : target.subjectId,
       paymentId: directive?.paymentId !== undefined ? directive.paymentId : target.paymentId,
@@ -16000,8 +16077,10 @@ export function decodeTransferConfirm(data: string): {
  * (Package F). Handed to the notification lane by the composition root, because the
  * callback vocabulary is this surface's: the lane stores no button and carries no payload.
  *
- * Only `SERVICE_TRANSFER_RECEIVED` has one — «مشخصات سرویس», opening the service through
- * `getForCustomer` for whoever taps it.
+ * A transfer's and a renewal's open the service; support's reply opens the ticket; the
+ * low-balance alert offers the top-up and a wallet credit the wallet and the catalogue
+ * (owner spec §2) — those last are derived from the KIND alone. Every label and style is
+ * the registry's (`inlineLabel`); a button key is not a payload.
  */
 export function notificationButtons(
   kind: CustomerNotificationKind,
@@ -16018,6 +16097,25 @@ export function notificationButtons(
         ...inlineLabel('tickets.view'),
         data: `${TICKET_VIEW_CALLBACK_PREFIX}${subject.ticketId}`,
       },
+    ];
+  }
+  /*
+   * Owner spec §2.1: the low-balance alert's one action, the top-up — the wallet screen's
+   * own «افزایش موجودی», so the flow it opens is the existing one, not a copy. No id: the
+   * tap's customer is the subject, and the top-up re-decides what it may offer.
+   */
+  if (kind === 'WALLET_LOW_BALANCE') {
+    return [{ ...inlineLabel('wallet.topup'), data: TOPUP_MENU_CALLBACK_PREFIX }];
+  }
+  /*
+   * Owner spec §2.2: a credit to the wallet — a confirmed top-up, or a receipt a reviewer
+   * credited — answers with the two useful next actions, side by side. Both open a NEW
+   * message, so the credit stays in the chat as its record.
+   */
+  if (kind === 'WALLET_TOPUP_CREDITED' || kind === 'RECEIPT_CREDITED_TO_WALLET') {
+    return [
+      { ...inlineLabel('wallet.open'), data: WALLET_OPEN_CALLBACK_DATA, row: 0 },
+      { ...inlineLabel('catalog.open'), data: CATALOG_OPEN_CALLBACK_DATA, row: 0 },
     ];
   }
   // R2 (item 11): the renewal result's one button opens the renewed service's card.

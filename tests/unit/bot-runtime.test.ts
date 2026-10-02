@@ -760,6 +760,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.catalog.empty',
       'bot.catalog.heading',
       'bot.catalog.next_page_button',
+      // Owner spec §2.2: a button label under a wallet credit, opening the catalogue.
+      'bot.catalog.open_button',
       'bot.catalog.previous_page_button',
       // Package B: the join screen and its check button.
       'bot.channels.check_button',
@@ -1092,6 +1094,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.taken',
       'bot.username.unavailable',
       'bot.wallet.insufficient',
+      // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.
+      'bot.wallet.open_button',
       'bot.wallet.topup_above_maximum',
       'bot.wallet.topup_amount_invalid',
       'bot.wallet.topup_amount_prompt',

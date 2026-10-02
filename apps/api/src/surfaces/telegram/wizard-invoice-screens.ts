@@ -167,4 +167,7 @@ const OPEN_ORDER_STEPS: readonly TelegramWizardStep[] = [
   'INVOICE_PENDING',
   'INVOICE',
   'NOTICE',
+  // Owner spec §2.4: the receipt prompt still carries the withdrawal. The final receipt
+  // screen (`RECEIPT_REVIEW`) carries nothing and is never edited again.
+  'RECEIPT_WAIT',
 ];

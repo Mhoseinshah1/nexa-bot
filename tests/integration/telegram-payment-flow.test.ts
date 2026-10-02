@@ -8,7 +8,7 @@ import {
   money,
   type ProductId,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
+import { CATALOGUE_FA, formatDateOnly, formatMoney } from '@nexa/i18n';
 import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
@@ -160,7 +160,10 @@ describe('the customer payment flow over Telegram', () => {
     });
   };
 
-  const tap = (data: string, options: { from?: number; update?: number } = {}) => {
+  const tap = (
+    data: string,
+    options: { from?: number; update?: number; message?: number } = {},
+  ) => {
     const id = options.update ?? (updateId += 1);
     return inject({
       method: 'POST',
@@ -173,11 +176,39 @@ describe('the customer payment flow over Telegram', () => {
           from: { id: options.from ?? CUSTOMER_TELEGRAM_ID, is_bot: false, first_name: 'Ali' },
           data,
           message: {
-            message_id: id,
+            message_id: options.message ?? id,
             date: 0,
             chat: { id: CHAT_ID, type: 'private' },
             from: { id: 999999, is_bot: true, first_name: 'Nexa' },
           },
+        },
+      },
+    });
+  };
+
+  /** The customer sending a photo — a receipt — into the chat. */
+  const photo = (fileId: string) => {
+    const id = (updateId += 1);
+    return inject({
+      method: 'POST',
+      url: `/telegram/webhook/${BOT_A}`,
+      headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+      payload: {
+        update_id: id,
+        message: {
+          message_id: id,
+          date: 0,
+          chat: { id: CHAT_ID, type: 'private' },
+          from: { id: CUSTOMER_TELEGRAM_ID, is_bot: false, first_name: 'Ali' },
+          photo: [
+            {
+              file_id: fileId,
+              file_unique_id: `u-${fileId}`,
+              file_size: 2048,
+              width: 90,
+              height: 90,
+            },
+          ],
         },
       },
     });
@@ -330,7 +361,23 @@ describe('the customer payment flow over Telegram', () => {
     // The account summary; its balance line is the ledger's sum, not a column.
     const text = String(lastMessage()?.body['text']);
     expect(text.startsWith('🎡 اطلاعات حساب کاربری شما:')).toBe(true);
-    expect(text).toContain(`⭐ موجودی: ${formatMoney(money(750_000n, 'IRT'))}`);
+    // Owner spec §4: the balance line is the `wallet` appearance slot (its fallback 💰).
+    expect(text).toContain(`💰 موجودی: ${formatMoney(money(750_000n, 'IRT'))}`);
+    /*
+     * Owner spec §3: after the user group, a blank line, then TODAY and the TIME, in the
+     * tenant's zone and calendar (Asia/Tehran, Jalali by default) — the moment of drawing.
+     */
+    expect(text).toMatch(
+      /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
+    );
+    const now = api.container.clock.now();
+    const tehran = { timezone: 'Asia/Tehran', calendar: 'jalali' } as const;
+    const shown = /📅 تاریخ: (\S+)/u.exec(text)?.[1];
+    // The day the clock says now (or a moment ago, across midnight), never the registration.
+    expect([
+      formatDateOnly(now, tehran),
+      formatDateOnly(new Date(now.getTime() - 60_000), tehran),
+    ]).toContain(shown);
   });
 
   // -------------------------------------------------------------------------
@@ -624,6 +671,52 @@ describe('the customer payment flow over Telegram', () => {
     // The wallet is untouched and the order is unsettled. Money arrived nowhere yet.
     expect(await entries()).toHaveLength(0);
     expect((await orders())[0]?.['state']).toBe('AWAITING_PAYMENT');
+  });
+
+  /*
+   * Owner spec §2.4: the manual transfer is ONE message from the invoice to the end. The
+   * claim edits the invoice into the receipt prompt (no card, no copy buttons); the receipt
+   * edits it once more into the final sentence with NO button; nothing else is sent; and a
+   * tap on the old keyboard afterwards does nothing at all.
+   */
+  it('edits the invoice in place through the receipt, ending with no button and no extra message', async () => {
+    const orderId = await awaitingPayment();
+    const invoiceTap = (updateId += 1);
+    await tap(`m:${orderId}`, { update: invoiceTap });
+    const payment = String((await payments())[0]?.['id']);
+    // The invoice is the tapped message, edited (R2): its id is the tap's message id.
+    const invoice = invoiceTap;
+
+    sent = [];
+    await tap(`i:${payment}`, { message: invoice });
+    expect(sent.filter((one) => one.url.includes('/sendMessage'))).toHaveLength(0);
+    const prompt = messages().at(-1);
+    expect(prompt?.url).toContain('/editMessageText');
+    expect(prompt?.body['message_id']).toBe(invoice);
+    const promptText = String(prompt?.body['text']);
+    expect(promptText).toContain('رسید');
+    expect(promptText).not.toContain('6037991234567893');
+    const promptButtons = buttonsOf(prompt);
+    expect(promptButtons.map((b) => b.callback_data)).toEqual([`x:${payment}`]);
+    expect(JSON.stringify(prompt?.body['reply_markup'])).not.toContain('copy_text');
+
+    sent = [];
+    await photo('receipt-file-1');
+    expect(sent.filter((one) => one.url.includes('/sendMessage'))).toHaveLength(0);
+    const final = messages().at(-1);
+    expect(final?.url).toContain('/editMessageText');
+    expect(final?.body['message_id']).toBe(invoice);
+    expect(String(final?.body['text'])).toBe(
+      '✅ رسید شما دریافت شد و در حال بررسی می‌باشد.\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+    );
+    // ZERO buttons: the keyboard is sent EMPTY, which is what removes the old one.
+    expect(final?.body['reply_markup']).toEqual({ inline_keyboard: [] });
+    expect((await payments())[0]?.['state']).toBe('PENDING');
+
+    // A stale tap on the old «پرداخت را انجام دادم» changes nothing and sends nothing.
+    sent = [];
+    await tap(`i:${payment}`, { message: invoice });
+    expect(messages()).toHaveLength(0);
   });
 
   it('treats a REDELIVERED transfer tap as a replay: one pending payment', async () => {

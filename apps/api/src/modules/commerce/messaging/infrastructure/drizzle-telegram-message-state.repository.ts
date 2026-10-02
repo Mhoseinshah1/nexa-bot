@@ -354,9 +354,10 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
     where: {
       readonly botInstanceId: BotInstanceId;
       readonly chatId: string;
-      readonly kind: TelegramWizardKind;
+      readonly kind: TelegramWizardKind | null;
       readonly steps: readonly TelegramWizardStep[];
       readonly subjectId: string | null;
+      readonly paymentId?: string | null;
     },
     now: Date,
     tx?: TransactionScope,
@@ -370,9 +371,12 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
           eq(telegramWizards.tenantId, requireTenantId(scope)),
           eq(telegramWizards.botInstanceId, where.botInstanceId),
           eq(telegramWizards.chatId, where.chatId),
-          eq(telegramWizards.kind, where.kind),
+          where.kind === null ? undefined : eq(telegramWizards.kind, where.kind),
           inArray(telegramWizards.step, [...where.steps]),
           where.subjectId === null ? undefined : eq(telegramWizards.subjectId, where.subjectId),
+          where.paymentId === undefined || where.paymentId === null
+            ? undefined
+            : eq(telegramWizards.paymentId, where.paymentId),
           or(isNull(telegramWizards.busyUntil), lte(telegramWizards.busyUntil, now)),
         ),
       )
