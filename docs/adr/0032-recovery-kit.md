@@ -58,7 +58,10 @@ algorithm is NAMED in the authenticated header, so adding `argon2id` later is a
 new branch in the reader, not a new format.
 
 A reader bounds what an unauthenticated header may ask for (`log2N ≤ 18`,
-`r = 8`, `p ≤ 8` — at most 256 MiB) before deriving anything. The passphrase
+`r = 8`, `p ≤ 4` — at most 256 MiB, and no more work per derivation than the
+writer's own) before deriving anything, and runs at most ONE kit derivation at a
+time per process, refusing a second as `recovery_kit.busy` rather than queueing
+it on libuv's shared thread pool. The passphrase
 floor is 12 code points after NFC normalisation, without leading or trailing
 spaces; NFC so the same passphrase typed on two keyboards opens the same kit.
 
@@ -131,12 +134,12 @@ satisfies it.
 
 Three new CRITICAL permissions, owner-only (backfilled in 0158):
 
-| Operation | Permission            | Also requires                                                                         |
-| --------- | --------------------- | ------------------------------------------------------------------------------------- |
-| List      | `backup.view`         | — (ids, fingerprints, origin, dependency counts; never bytes)                         |
-| Export    | `recovery.kit.export` | the admin's own account password (throttled like login), passphrase typed twice       |
-| Import    | `recovery.kit.import` | idempotency key; refused while a destructive recovery holds the installation          |
-| Remove    | `recovery.key.remove` | the key's label typed; only an imported key; refused while anything retained needs it |
+| Operation | Permission            | Also requires                                                                                                   |
+| --------- | --------------------- | --------------------------------------------------------------------------------------------------------------- |
+| List      | `backup.view`         | — (ids, origin, dependency counts; never bytes; a configured key's fingerprint only with `recovery.kit.export`) |
+| Export    | `recovery.kit.export` | the admin's own account password (throttled like login), passphrase typed twice                                 |
+| Import    | `recovery.kit.import` | the admin's own account password (same throttle); idempotency key; refused during a destructive recovery        |
+| Remove    | `recovery.key.remove` | the key's label typed; only an imported key; refused while anything retained needs it                           |
 
 Export needs the account password because, with `backup.download` beside it, a
 kit is the whole database in plaintext: a stolen session alone must not be
@@ -145,23 +148,61 @@ as login and `changeOwnPassword`, so it is not a second guessing door. A failed
 step-up is a 400 (`recovery_kit.reauthentication_failed`), not a 401, so the
 operator is not signed out of the page.
 
+Import needs the account password too (PR #144 security review). Without it a
+stolen owner session could import a key of its own choosing, seal a forged
+`.nxb` under it and restore that. The step-up runs before the idempotent replay,
+and a replay is answered only after the passphrase has opened the kit again and
+only for the same actor — a replay is not a way around either proof.
+
 Import is all or nothing: the kit is opened (the expensive KDF) outside any
 transaction, classified against what is held, then — under a table advisory lock,
-in one unit-of-work transaction — classified again and written with its audit row
-and its idempotency record. A failure on any key writes none. Same id and same
-bytes is "already held"; same bytes under another id is also already held; same
-id and different bytes is a collision that refuses the whole kit.
+in one unit-of-work transaction, with the destructive-recovery check repeated
+under that lock — classified again and written with its audit row and its
+idempotency record. A failure on any key writes none. Same id and same bytes is
+"already held"; same id and different bytes is a collision that refuses the
+whole kit. The same bytes under a NEW id are imported as that id: an archive
+names its key by id, so a kit's name for a key must resolve here (reporting it
+"already held" left the name unresolvable). An import that would take the
+installation past `RECOVERY_KIT_MAX_KEYS` (64) is refused
+(`recovery_kit.too_many_keys`): an installation whose keys no longer fit in a
+kit could not export one.
 
 Removal counts four dependencies — stored secrets naming the key (via
-`SECRET_COLUMNS`), imported keys wrapped under it, archives on this server's disk
-whose cleartext header names it (`BACKUP_WORK_DIR/*/archive.nxb`), and
-unfinished recoveries whose upload names it — and removes only at zero. Copies
-elsewhere (Telegram, a laptop) are not countable, and the confirmation says so.
+`SECRET_COLUMNS`, counted with a `GROUP BY`), imported keys wrapped under it,
+archives on this server's disk (`BACKUP_WORK_DIR/*/archive.nxb`), and unfinished
+recoveries whose upload names it — and removes only at zero. An archive counts
+if its cleartext header names the key OR if it was taken while the key was held
+(its UUIDv7 id at or after the import): such a backup may carry restored secrets
+still sealed under the key, which no header can show. That is conservative on
+purpose and errs towards keeping a key. The scan FAILS CLOSED: only a confirmed
+absent archive is no dependency; an archive or upload that exists and cannot be
+read counts against every key, and a backup directory that cannot be listed is
+one such archive. Copies elsewhere (Telegram, a laptop) are not countable, and
+the confirmation says so — including that this server's own older backups may
+need the key.
+
+Removal leaves a **tombstone**: the row stays with its wrapped bytes erased
+(`removed_at` set; a CHECK keeps the two halves consistent). The executor carries
+tombstones into the candidate, so restoring a backup taken before the removal
+does not quietly revive the key; only a later explicit import does. A key the
+candidate holds and this installation never had is stamped `restored_at`, shown
+as such in the list, and audited after the cutover
+(`installation_key.arrived_by_restore`).
+
+A reload never zeroes a key buffer that may be in use: an unchanged key keeps its
+buffer, and a dropped one is left to the collector. A reader such as
+`openArchive` takes the KEK, awaits file I/O, then unwraps; zeroing on reload —
+which the 60-second timer and every key list used to trigger — handed it 32 zero
+bytes and failed a recovery for good. Reloads are serialised, so an older read
+never lands last. The list no longer reloads at all. The recovery's own refresh
+is NOT quiet: a recovery that cannot reload the keys fails instead of running on
+a stale keyring.
 Configured keys are not removable from the Web Admin at all: that is a host
 configuration change, gated by `botctl secrets retire-check`, which now counts
 imported keys wrapped under the key too.
 
-Every export, import and removal — and every refusal — writes an audit row with
+Every export, import and removal — and every refusal, including malformed
+requests, passphrase refusals, busy, not-found and in-use — writes an audit row with
 key ids and fingerprints only. No key byte, passphrase or account password is
 logged, audited, returned in an error, or put in a URL; `passphrase` joins the
 redaction fragments.

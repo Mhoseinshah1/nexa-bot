@@ -273,8 +273,13 @@ existed when it was made.
 
 Imported keys are listed with what still depends on each. An imported key can be
 removed only when no stored secret, other imported key, archive on this server's
-disk or unfinished recovery needs it — copies elsewhere (Telegram, a laptop)
-cannot be counted, so remove one only when you are sure. Configured keys are never
+disk (sealed under it, or taken while it was held) or unfinished recovery needs
+it. Copies elsewhere (Telegram, a laptop) cannot be counted — and that includes
+this server's own older backups taken before a `secrets rewrap`, which may hold
+credentials still sealed under the key — so remove one only when you are sure.
+A removed key leaves a tombstone, so restoring an older backup does not bring it
+back; importing its kit again does. Import, like export, asks for your account
+password. Configured keys are never
 removed from the Web Admin; `botctl secrets retire-check --key ID` is the gate for
 those, and it counts imported keys wrapped under the key as dependencies.
 `botctl secrets rewrap` re-wraps imported keys under the active key along with

@@ -32,7 +32,7 @@ Total size ≤ 256 KiB.
 ```
 
 Strict: an unknown field anywhere is malformed. Accepted bounds: `log2N` 10–18,
-`r` = 8, `p` 1–8. The writer uses `log2N = 17, r = 8, p = 4` (a test profile
+`r` = 8, `p` 1–4. The writer uses `log2N = 17, r = 8, p = 4` (a test profile
 `log2N = 10, p = 1` exists and is refused in production by the same switch that
 selects the password hasher's cost).
 
