@@ -301,6 +301,13 @@ export interface ExternalGatewayAdapter {
    * so nothing in an unverified body is ever read. Absent for every other adapter.
    */
   verifyWebhook?(secret: string, body: unknown, signature: string | undefined): boolean;
+  /**
+   * For a provider whose invoice can carry several payments (NOWPayments): how strongly a
+   * webhook status says the money is with the provider. A verified webhook moves the hint to
+   * its payment only when it is at least as strong as what the hinted payment last showed,
+   * so a later weaker notification never displaces a stronger one. Absent: always moves.
+   */
+  hintRank?(status: string | null): number;
   /** The operator's read-only credential check, for a provider that offers a safe read. */
   checkCredential?(apiKey: string): Promise<GatewayCredentialCheck>;
 }

@@ -414,6 +414,68 @@ describe('the authoritative read', () => {
     });
   });
 
+  it('reads ONLY the hinted payment when it is decisive (finished for the price)', async () => {
+    const { adapter, calls } = adapterWith(() => json(200, PAYMENT));
+    await adapter.inquire(API_KEY, INVOICE_ID, context({ hintedPaymentId: '5077125051' }));
+    expect(calls).toHaveLength(1);
+  });
+
+  it('Codex #141: a hinted payment that is not decisive never hides another one under the invoice', async () => {
+    // The hinted payment expired; the customer paid with another coin and that IPN was lost.
+    const { adapter, calls } = adapterWith((call) =>
+      call.url.includes('/v1/payment/?')
+        ? json(200, {
+            data: [
+              { ...PAYMENT, payment_id: 2, payment_status: 'finished' },
+              { ...PAYMENT, payment_id: 1, payment_status: 'expired' },
+            ],
+          })
+        : json(200, { ...PAYMENT, payment_id: 1, payment_status: 'expired' }),
+    );
+    const outcome = await adapter.inquire(API_KEY, INVOICE_ID, context({ hintedPaymentId: '1' }));
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      '/v1/payment/1',
+      '/v1/payment/',
+    ]);
+    expect(outcome).toMatchObject({ verdict: 'APPROVED', providerPaymentId: '2', paid: true });
+  });
+
+  it('keeps the hinted read as the answer when the list is refused, and ignores a hinted record of another invoice', async () => {
+    const refused = adapterWith((call) =>
+      call.url.includes('/v1/payment/?')
+        ? json(401, { code: 'AUTH_REQUIRED' })
+        : json(200, { ...PAYMENT, payment_status: 'confirming' }),
+    );
+    expect(
+      await refused.adapter.inquire(
+        API_KEY,
+        INVOICE_ID,
+        context({ hintedPaymentId: '5077125051' }),
+      ),
+    ).toMatchObject({ kind: 'OBSERVED', status: 'confirming', fundsDetected: true });
+
+    const foreign = adapterWith((call) =>
+      call.url.includes('/v1/payment/?')
+        ? json(200, { data: [{ ...PAYMENT, payment_id: 3, payment_status: 'waiting' }] })
+        : json(200, { ...PAYMENT, invoice_id: 999, payment_status: 'finished' }),
+    );
+    expect(
+      await foreign.adapter.inquire(
+        API_KEY,
+        INVOICE_ID,
+        context({ hintedPaymentId: '5077125051' }),
+      ),
+    ).toMatchObject({ kind: 'OBSERVED', status: 'waiting', providerPaymentId: '3' });
+  });
+
+  it('ranks statuses so a weaker webhook never displaces a stronger hint', () => {
+    const adapter = new NowPaymentsAdapter();
+    const ranks = ['finished', 'partially_paid', 'confirming', 'waiting', 'expired', null].map(
+      (status) => adapter.hintRank(status),
+    );
+    expect(ranks).toEqual([4, 3, 2, 1, 0, 0]);
+  });
+
   it('never puts a non-numeric hint in a path: it lists the invoice instead', async () => {
     const { adapter, calls } = adapterWith(() => json(200, { data: [] }));
     const outcome = await adapter.inquire(

@@ -7,10 +7,13 @@
 -- NOWPayments snapshot CHECK (US cents, central FX, no bot). No money data, no Persian text,
 -- no balance, no row written.
 --
--- ROLLBACK NOTE. The previous release reads a NOWPAYMENTS row as a provider it has no
--- adapter for and offers nothing. A NOWPayments payment already in its review window is not
--- expired by that release (it knows `provider_review_until`, 0157) and is moved to UNKNOWN by
--- its review sweep at the window's end, for an operator. `botctl rollback` never restores
+-- ROLLBACK NOTE. The release boots and seeds a DISABLED NOWPAYMENTS route row per tenant. The
+-- previous (0157) binary has no NOWPAYMENTS descriptor and indexes the descriptor map by every
+-- row's provider: its Web Admin gateway list throws, an ACTIVE row breaks its customer route
+-- evaluator, and an open NOWPayments attempt stalls its gateway worker. Before rolling back,
+-- follow `docs/deployment.md`, "Before rolling back past NOWPayments (0158)": disable the
+-- route, wait until no NOWPayments payment is PENDING/UNKNOWN and nothing is scheduled, then
+-- delete the NOWPAYMENTS budget, credential and route rows. `botctl rollback` never restores
 -- the database (CLAUDE.md).
 ALTER TABLE "gateway_invoices" DROP CONSTRAINT "gateway_invoices_provider_check";--> statement-breakpoint
 ALTER TABLE "payment_gateway_call_budgets" DROP CONSTRAINT "payment_gateway_call_budgets_provider_check";--> statement-breakpoint
