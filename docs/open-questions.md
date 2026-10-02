@@ -2926,3 +2926,38 @@ other (CLAUDE.md's provider rule).
   after the customer chooses one; Nexa does not know which coin will be chosen. The route's
   own min/max (sales currency) is the operator's control; a too-small invoice is refused by
   the provider on its page, and the Nexa attempt expires at its deadline.
+
+## OQ-CP — CentralPay (`CENTRALPAY`): what the guide does not settle
+
+Spec §17 (`docs/centralpay-gateway-audit.md`). Built from the owner-supplied "CentralPay
+Deposit Method" guide alone. Every test runs against a fake written from that guide's shapes,
+so the adapter and the fake can only be shown to agree with each other (CLAUDE.md's provider
+rule).
+
+- **OQ-CP-01 — live acceptance with real credentials.** UNRESOLVED. Owed on staging with a
+  real CentralPay merchant: the API key and the verify key set, one top-up and one order paid,
+  the browser returning to the bot and the Telegram message turning confirmed, the payment
+  card showing the order id, the provider user id, `verified`, `provider_paid` and the
+  reference. Record every real shape that differs from the audit's §2 (the failure body, HTTP
+  statuses, whether amounts and ids arrive as numbers or strings, whether verify echoes
+  `orderId`) and correct the fake in the same commit. Until then the route ships `DISABLED`
+  and is not claimed as accepted.
+- **OQ-CP-02 — integer width of `orderId` and `userId`.** The guide says "integer" only. Nexa
+  sends random ten-digit integers inside a signed 32-bit range and never the Telegram id
+  (whose width may exceed it). If CentralPay accepts 64-bit integers nothing changes; if it
+  requires smaller ones, the range in `centralpay.ts` must shrink before acceptance.
+- **OQ-CP-03 — what `success: false` means, and whether an early verify has side effects.**
+  Undocumented for both calls. Nexa treats a getLink `success: false` as the merchant's
+  configuration (operator told, customer told "unavailable"), and a verify `success: false`
+  as "not paid yet" (open, asked again until the 70-minute deadline). If verifying an unpaid
+  order cancels or consumes it at CentralPay, the worker's schedule must change to verify only
+  after a browser return or a customer check tap.
+- **OQ-CP-04 — how long a payment link stays payable.** Undocumented. Nexa's attempt is 70
+  minutes (the rule every inquiry route shares); money verified after it is a recorded
+  `LATE_COMPLETION` that moves nothing.
+- **OQ-CP-05 — rate limits.** Unpublished. Nexa stays under 50 calls a minute per tenant (40
+  for verify) across every replica.
+- **OQ-CP-06 — is `referenceId` unique at CentralPay?** Nexa refuses a reference already
+  bound to another payment of the tenant (write-once charge id, unique per tenant and
+  provider) and holds that payment for an operator. Whether CentralPay can legitimately reuse
+  a reference (for example across merchants) is unknown.

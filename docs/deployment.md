@@ -1923,6 +1923,57 @@ The same descriptor indexing applies to every earlier provider added the same wa
 holds for the customer path only while the route is `DISABLED`. `botctl rollback` never
 restores the database.
 
+### Before rolling back past CentralPay (`0159`)
+
+Migration `0159_centralpay_gateway` adds the `CENTRALPAY` route
+(`docs/centralpay-gateway-audit.md`), the verify-key columns on
+`payment_gateway_credentials`, `gateway_invoices.provider_user_id` and the
+`gateway_customer_numbers` table. It is additive, and the release seeds a `CENTRALPAY` route
+row for every tenant (`DISABLED`).
+
+The release before it (the `0158` binary) already lists routes and claims gateway rows only
+for providers it knows, and resolves no adapter for an unknown one, so a `CENTRALPAY` row does
+not break its gateway page or its worker. What it cannot do is **verify** a CentralPay
+payment: an attempt still open when it takes over is never asked, and expires at its deadline
+even if the customer paid — a payment an operator then has to find by hand. A payment's
+detail page for a CentralPay payment also fails on that binary (it reads the descriptor).
+**Before rolling back past 0159:**
+
+1. Switch the `CENTRALPAY` route to DISABLED on the Payment Gateways page.
+2. Wait until nothing is in flight — attempts end at their 70-minute deadline, and each
+   `UNKNOWN` payment (a verify that did not match) is reconciled from its page — and read:
+
+   ```bash
+   docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+     exec -T postgres psql -U nexa -d nexa -c \
+     "SELECT 'payments' AS what, count(*) FROM payments
+       WHERE gateway_provider = 'CENTRALPAY' AND state IN ('PENDING', 'UNKNOWN')
+      UNION ALL
+      SELECT 'scheduled', count(*) FROM gateway_invoices
+       WHERE provider = 'CENTRALPAY' AND (next_inquiry_at IS NOT NULL OR creation_state = 'CREATING')"
+   ```
+
+   Both must be zero (a leftover `scheduled` row for a closed payment is only a diagnostic
+   read; clear it as for NOWPayments above).
+
+3. Optionally remove the route rows (credential row first). The `0158` binary ignores them,
+   but its secret-key rotation does not know the verify-key column: a rotation run on it that
+   retires the old key would leave the verify key undecryptable after the roll-forward. If
+   you rotate keys while rolled back, delete them and re-enter both keys after the
+   roll-forward, which re-seeds the route `DISABLED`:
+
+   ```sql
+   BEGIN;
+   DELETE FROM payment_gateway_call_budgets WHERE provider = 'CENTRALPAY';
+   DELETE FROM payment_gateway_credentials WHERE provider = 'CENTRALPAY';
+   DELETE FROM payment_gateways WHERE provider = 'CENTRALPAY';
+   COMMIT;
+   ```
+
+4. Roll back. Closed CentralPay payments, their invoice rows and `gateway_customer_numbers`
+   stay as history (keep the numbers: a customer's CentralPay `userId` must not change across
+   a roll-forward). `botctl rollback` never restores the database.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
