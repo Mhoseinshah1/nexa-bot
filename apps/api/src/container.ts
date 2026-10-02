@@ -252,6 +252,8 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { ClientAppVideoService } from './modules/control/client-apps/application/client-app-video.service.js';
+import { DrizzleClientAppVideoRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app-video.repository.js';
 import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
 import { ClientAppCatalog } from './modules/control/client-apps/application/client-app-catalog.js';
 import { ProvisionedServiceFacts } from './modules/control/client-apps/application/customer-service-facts.js';
@@ -932,6 +934,8 @@ export interface Container {
   readonly supportScreen: SupportScreenReader;
   /** WP-A10: the tenant's client apps as the operator maintains them. */
   readonly clientApps: ClientAppService;
+  /** Spec §7: the tutorial videos set from Telegram. */
+  readonly clientAppVideos: ClientAppVideoService;
   /** WP-A10: the customer's read of them, filtered by what their services are. */
   readonly clientAppCatalog: ClientAppCatalog;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
@@ -4486,6 +4490,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     clock,
   });
+  // Spec §7: the tutorial video set from Telegram («تنظیم ویدیو»), one per app and bot.
+  const clientAppVideoService = new ClientAppVideoService({
+    videos: new DrizzleClientAppVideoRepository(database.db),
+    apps: clientAppRepository,
+    captures: new DrizzleAdminAmountCaptureRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
   const clientAppCatalog = new ClientAppCatalog({
     repository: clientAppRepository,
     facts: new ProvisionedServiceFacts({
@@ -5420,6 +5439,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       }),
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
       clientApps: clientAppCatalog,
+      // Spec §7: the tutorial video — the admin wizard and the customer's app screen.
+      clientAppVideos: clientAppVideoService,
       serviceTransfers: serviceTransferService,
       /*
        * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
@@ -5532,6 +5553,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportFaqs: supportFaqService,
     supportScreen: supportScreenReader,
     clientApps: clientAppService,
+    clientAppVideos: clientAppVideoService,
     clientAppCatalog,
     templateRepository,
     notifications,

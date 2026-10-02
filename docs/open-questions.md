@@ -2721,6 +2721,9 @@ every attempt beside the USDT quote; the Web Admin shows the figure per Star it 
 UNRESOLVED as a source. Not a defect: the ratio is the operator's own terms, exactly as the
 fixed rate was, and nothing here pretends Telegram supplies one.
 
+Spec §8 (2026-10-02) made the central rate the ONLY Stars pricing; this ratio is now the one
+figure an operator enters for Stars (`docs/package-h-tutorials-marketing-stars.md` §8).
+
 ## OQ-FX-02 — Wallex's live response shape, and both sources' live behaviour
 
 Round P, package FX. `apidocs.nobitex.ir`, `api.nobitex.ir`, `api-docs.wallex.ir`,

@@ -202,6 +202,19 @@ import type {
 import type { TicketCategoryService } from '../../modules/commerce/tickets/application/ticket-category.service.js';
 import type { TicketScreenComposer } from '../../modules/commerce/tickets/application/ticket-screens.js';
 import type { ClientAppCatalog } from '../../modules/control/client-apps/application/client-app-catalog.js';
+import { CLIENT_APP_VIEW_PERMISSION } from '../../modules/control/client-apps/application/client-app.service.js';
+import type {
+  ClientAppVideoService,
+  InboundTutorialVideo,
+} from '../../modules/control/client-apps/application/client-app-video.service.js';
+import {
+  ADMIN_TUTORIAL_INTENTS,
+  adminTutorialCallback,
+  adminTutorialTurn,
+  maySeeTutorials,
+  tutorialVideoOf,
+  tutorialsPanelButton,
+} from './admin-tutorial-video.js';
 
 import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
 
@@ -627,6 +640,8 @@ export const BOT_INTENTS = [
   'ADMIN_CATEGORY_ASSIGN',
   'ADMIN_LINK',
   'ADMIN_ROLE',
+  // Spec §7: the client apps section and its «تنظیم ویدیو» wizard (`admin-tutorial-video.ts`).
+  ...ADMIN_TUTORIAL_INTENTS,
   'UNSUPPORTED',
 ] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -733,6 +748,8 @@ export interface BotCommand {
    * `entities-states.md`'s worst finding, and nothing in this flow needs the text.
    */
   readonly file?: InboundReceiptFile | null;
+  /** Spec §7: the video an `ADMIN_APP_VIDEO_UPLOAD` carries, and nothing else ever does. */
+  readonly video?: InboundTutorialVideo | null;
 }
 
 /**
@@ -1279,6 +1296,8 @@ const PANEL_SECTION_PERMISSIONS: readonly PermissionKey[] = [
   SETTINGS_VIEW_PERMISSION,
   CUSTOMERS_VIEW_PERMISSION,
   CATALOG_VIEW_PERMISSION,
+  // Spec §7: the client apps section («تنظیم ویدیو»).
+  CLIENT_APP_VIEW_PERMISSION,
 ];
 
 /** Whether these permissions open any section of the panel. */
@@ -3205,9 +3224,21 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     const categories = adminCategoryCommand(data, id);
     if (categories !== null) return categories;
+    // Spec §7: the client apps section's callbacks, validated in their own module.
+    const tutorials = adminTutorialCallback(data);
+    if (tutorials !== null) return { ...tutorials, callbackQueryId: id };
     return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
   }
 
+  /*
+   * Spec §7: a VIDEO message. Offered only to an administrator's open «تنظیم ویدیو» prompt;
+   * from anybody else it reaches `adminTurn`, resolves to no prompt or no administrator, and
+   * is answered like any message this bot does not understand — which is what a video was.
+   */
+  const video = tutorialVideoOf((update as { message?: unknown } | null)?.message);
+  if (video !== null) {
+    return { intent: 'ADMIN_APP_VIDEO_UPLOAD', targetId: null, callbackQueryId: null, video };
+  }
   /*
    * A FILE before the text, because a photo message has no `text` at all — Telegram
    * puts any accompanying words in `caption`, which this deliberately ignores.
@@ -3767,6 +3798,20 @@ export interface BotRuntimeDeps {
    * `bot.tutorial.<platform>` texts it was before, and a stale `ca:` answers not-found.
    */
   readonly clientApps?: Pick<ClientAppCatalog, 'platformsFor' | 'appsFor' | 'appFor'>;
+  /**
+   * Spec §7: the tutorial video — the management panel's «تنظیم ویدیو» wizard, and the
+   * video an app's screen sends first. Absent: no section, and app screens as before.
+   */
+  readonly clientAppVideos?: Pick<
+    ClientAppVideoService,
+    | 'listForAdmin'
+    | 'detailForAdmin'
+    | 'beginCapture'
+    | 'cancelCapture'
+    | 'receiveVideo'
+    | 'remove'
+    | 'videoFor'
+  >;
   /** The referral program (WP9): its terms and the invite, for the referral screen. */
   readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
@@ -4428,7 +4473,12 @@ export type LeadMessage =
        * turn stops there, as a text lead's does.
        */
       readonly caption?: { readonly key: TemplateKey; readonly values: TemplateValues };
-    };
+    }
+  /**
+   * Spec §7: a client app's tutorial video, by the `file_id` THIS bot received. Decorative,
+   * like a bare photo: a refusal drops it and the reply goes on.
+   */
+  | { readonly kind: 'VIDEO_FILE'; readonly fileId: string };
 
 /** One file this installation already holds, and the bot that holds it. */
 interface ReplyMedia {
@@ -5500,24 +5550,31 @@ export class BotRuntime {
               values: lead.values,
               botInstanceId: input.botInstanceId,
             })
-          : await this.deps.messenger.sendFile(scope, {
-              chatId,
-              botInstanceId: input.botInstanceId,
-              kind: 'PHOTO',
-              source: {
-                kind: 'BYTES',
-                bytes: lead.bytes,
-                fileName: lead.fileName,
-                mimeType: lead.mimeType,
-              },
-              ...(lead.kind === 'PHOTO_BYTES' && lead.caption !== undefined
-                ? {
-                    caption: { templateKey: lead.caption.key, values: lead.caption.values },
-                    // Whole or not at all: a cut invite loses the link at its end.
-                    captionWhole: true as const,
-                  }
-                : {}),
-            });
+          : lead.kind === 'VIDEO_FILE'
+            ? await this.deps.messenger.sendFile(scope, {
+                chatId,
+                botInstanceId: input.botInstanceId,
+                kind: 'VIDEO',
+                source: { kind: 'FILE_ID', fileId: lead.fileId },
+              })
+            : await this.deps.messenger.sendFile(scope, {
+                chatId,
+                botInstanceId: input.botInstanceId,
+                kind: 'PHOTO',
+                source: {
+                  kind: 'BYTES',
+                  bytes: lead.bytes,
+                  fileName: lead.fileName,
+                  mimeType: lead.mimeType,
+                },
+                ...(lead.kind === 'PHOTO_BYTES' && lead.caption !== undefined
+                  ? {
+                      caption: { templateKey: lead.caption.key, values: lead.caption.values },
+                      // Whole or not at all: a cut invite loses the link at its end.
+                      captionWhole: true as const,
+                    }
+                  : {}),
+              });
       /*
        * R1: a CAPTIONED photo is a message, not a decoration (`LeadMessage.caption`).
        * Refused — a broken image, a caption over Telegram's bound — its words go out as
@@ -5573,7 +5630,7 @@ export class BotRuntime {
          * customer asked for, so a picture that fails is dropped and the reply goes on. A TEXT lead is an earlier part of the one message, and a
          * keyboard without the text it belongs to is worse than no reply.
          */
-        if (lead.kind === 'PHOTO_BYTES') continue;
+        if (lead.kind === 'PHOTO_BYTES' || lead.kind === 'VIDEO_FILE') continue;
         await this.stopSpinner(scope, command, input.botInstanceId);
         return {
           intent,
@@ -5862,6 +5919,10 @@ export class BotRuntime {
                       data: ADMIN_SECTION_CALLBACK_PREFIX,
                     },
                   ]
+                : []),
+              // Spec §7: the client apps section, where a tutorial video is set.
+              ...(this.deps.clientAppVideos !== undefined && maySeeTutorials(permissions)
+                ? [tutorialsPanelButton()]
                 : []),
             ],
             orderId: null,
@@ -6217,6 +6278,31 @@ export class BotRuntime {
             permissions,
             input.idempotencyKey,
           );
+        case 'ADMIN_APPS':
+        case 'ADMIN_APP':
+        case 'ADMIN_APP_VIDEO_SET':
+        case 'ADMIN_APP_VIDEO_DELETE_ASK':
+        case 'ADMIN_APP_VIDEO_DELETE':
+        case 'ADMIN_APP_VIDEO_CANCEL':
+        case 'ADMIN_APP_VIDEO_UPLOAD': {
+          // Spec §7: the client apps section; the service charges every permission.
+          const videos = this.deps.clientAppVideos;
+          if (videos === undefined) return null;
+          const numericUpdate = updateIdOf(input.update);
+          return await adminTutorialTurn(
+            videos,
+            scope,
+            adminActor,
+            { intent: command.intent, targetId: command.targetId, video: command.video ?? null },
+            {
+              idempotencyKey: input.idempotencyKey,
+              botInstanceId: input.botInstanceId,
+              adminId: identity.admin.id,
+              updateId: numericUpdate === undefined ? null : BigInt(numericUpdate),
+              permissions,
+            },
+          );
+        }
         case 'ADMIN_SECTION':
           return await this.adminSection(scope, adminActor);
         case 'ADMIN_ADMIN':
@@ -9822,7 +9908,7 @@ export class BotRuntime {
       return this.tutorialPlatform(scope, customer, command.targetId as ClientAppPlatform);
     }
     if (command.intent === 'CLIENT_APP' && command.targetId !== null) {
-      return this.clientApp(scope, customer, command.targetId);
+      return this.clientApp(scope, customer, command.targetId, input.botInstanceId);
     }
     if (command.intent === 'SERVICE_CONNECTED' && command.targetId !== null) {
       // Acknowledged, and NOTHING is written: the customer told us a fact about their
@@ -12817,12 +12903,28 @@ export class BotRuntime {
     scope: TenantContext,
     customer: CustomerRecord,
     appId: string,
+    botInstanceId: BotInstanceId,
   ): Promise<PendingReply> {
     const detail =
       this.deps.clientApps === undefined
         ? null
         : await this.deps.clientApps.appFor(scope, customer.id, appId);
-    return clientAppScreen(detail);
+    const screen = clientAppScreen(detail);
+    /*
+     * Spec §7: the app's tutorial video, when an administrator set one through THIS bot — a
+     * `file_id` is valid only for the bot that received it. Sent by reference, nothing
+     * downloaded, as a decorative lead: a video Telegram refuses is dropped and the screen
+     * still goes out.
+     */
+    const video =
+      detail === null || this.deps.clientAppVideos === undefined
+        ? null
+        : await this.deps.clientAppVideos.videoFor(scope, appId, botInstanceId);
+    if (video === null) return screen;
+    return {
+      ...screen,
+      lead: [...(screen.lead ?? []), { kind: 'VIDEO_FILE', fileId: video.fileId }],
+    };
   }
 
   /** One of the customer's own services, or null. Never anybody else's, never a throw. */

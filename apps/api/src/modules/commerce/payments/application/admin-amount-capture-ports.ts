@@ -8,8 +8,11 @@ import type {
   UserId,
 } from '@nexa/contracts';
 
-/** The purposes that read an AMOUNT. */
-export type AdminAmountCapturePurpose = Exclude<AdminCapturePurpose, AdminReasonCapturePurpose>;
+/** The purposes that read an AMOUNT (spec §7's video prompt reads neither). */
+export type AdminAmountCapturePurpose = Exclude<
+  AdminCapturePurpose,
+  AdminReasonCapturePurpose | 'CLIENT_APP_VIDEO'
+>;
 
 /**
  * One administrator's amount capture for one receipt (`admin_amount_captures`, 0115).
@@ -31,6 +34,8 @@ export interface AdminAmountCaptureRecord {
   readonly customerId: UserId | null;
   /** The customer's service refund request, for the two WP19 purposes. */
   readonly serviceRefundRequestId: string | null;
+  /** Spec §7: the client app a `CLIENT_APP_VIDEO` prompt reads the tutorial video for. */
+  readonly clientAppId: string | null;
   /** What the capture reads: the credit's amount, or a block's or rejection's reason. */
   readonly purpose: AdminCapturePurpose;
   readonly amountMinor: bigint | null;
@@ -70,6 +75,8 @@ export interface AdminAmountCaptureRepository {
       readonly paymentId?: PaymentId;
       readonly customerId?: UserId;
       readonly serviceRefundRequestId?: string;
+      /** Spec §7: the app, for `CLIENT_APP_VIDEO`. */
+      readonly clientAppId?: string;
       /** Defaults to the credit's amount, the purpose every existing caller opens. */
       readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
@@ -89,6 +96,17 @@ export interface AdminAmountCaptureRepository {
     botInstanceId: BotInstanceId,
     adminId: string,
     purpose: AdminReasonCapturePurpose,
+    tx?: unknown,
+  ): Promise<AdminAmountCaptureRecord | null>;
+
+  /**
+   * Spec §7: this administrator's open `CLIENT_APP_VIDEO` prompt on this bot, whatever its
+   * deadline — the caller decides expiry against its own clock and closes it EXPIRED.
+   */
+  findOpenVideo(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    adminId: string,
     tx?: unknown,
   ): Promise<AdminAmountCaptureRecord | null>;
 

@@ -527,7 +527,7 @@ export function boundCaption(caption: string): string {
  */
 export function fileMessageBody(input: {
   readonly chatId: string;
-  readonly kind: 'PHOTO' | 'DOCUMENT';
+  readonly kind: 'PHOTO' | 'DOCUMENT' | 'VIDEO';
   readonly fileId: string;
   readonly caption?: string;
   readonly html?: boolean;
@@ -535,7 +535,11 @@ export function fileMessageBody(input: {
 }): Record<string, unknown> {
   return {
     chat_id: input.chatId,
-    ...(input.kind === 'PHOTO' ? { photo: input.fileId } : { document: input.fileId }),
+    ...(input.kind === 'PHOTO'
+      ? { photo: input.fileId }
+      : input.kind === 'VIDEO'
+        ? { video: input.fileId }
+        : { document: input.fileId }),
     ...captionAndKeyboardFields(input),
   };
 }
@@ -630,7 +634,7 @@ export function deleteMessageBody(input: {
  */
 export function fileUploadBody(input: {
   readonly chatId: string;
-  readonly kind: 'PHOTO' | 'DOCUMENT';
+  readonly kind: 'PHOTO' | 'DOCUMENT' | 'VIDEO';
   readonly bytes: Uint8Array;
   readonly fileName: string;
   readonly mimeType: string;
@@ -646,7 +650,7 @@ export function fileUploadBody(input: {
   return {
     fields,
     file: {
-      field: input.kind === 'PHOTO' ? 'photo' : 'document',
+      field: input.kind === 'PHOTO' ? 'photo' : input.kind === 'VIDEO' ? 'video' : 'document',
       fileName: input.fileName,
       mimeType: input.mimeType,
       bytes: input.bytes,
