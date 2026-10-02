@@ -145,8 +145,10 @@ const RECORDS = [
  * 2468 → 2493: round T (T2), `docs/round-t-t2-falsification.md` — fourteen rows, 25
  * citations. 2493 → 2494: T2-15, from the PR #135 review. Combined with round T (T3),
  * `docs/round-t-t3-falsification.md` (29 citations, merged first in #134): 2523.
+ *
+ * 2523 → 2530: the round T T4 review's fixes — T1-20..T1-24 (six citations) and T3-28 (one).
  */
-const EXPECTED = 2523;
+const EXPECTED = 2530;
 /**
  * A table whose last column is one of these is making citations.
  *
