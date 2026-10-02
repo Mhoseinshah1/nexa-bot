@@ -6,6 +6,7 @@ import {
   uuidV7Schema,
   type ActorContext,
   type AuditWriter,
+  type BackupDeliveryDestination,
   type Clock,
   type PermissionKey,
   type TenantContext,
@@ -14,6 +15,7 @@ import type { PermissionGuard } from '../../access/application/permission-guard.
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
 import type { BackupRunRepository, BackupRunRow } from '../../backup/application/ports.js';
 import type { BackupService } from '../../backup/application/backup.service.js';
+import type { EffectiveBackupSchedule } from '../../backup/application/backup-schedule.js';
 import type { RecoveryRequestRepository } from './ports.js';
 
 /**
@@ -45,8 +47,12 @@ export interface BackupAdminServiceDeps {
   readonly clock: Clock;
   /** `BACKUP_WORK_DIR`. Used to DERIVE a path, never to accept one. */
   readonly workRoot: string;
-  readonly scheduleEnabled: boolean;
-  readonly intervalMs: number;
+  /**
+   * The EFFECTIVE schedule — the Web Admin's stored value, else the environment's — from
+   * the same `BackupSchedulePolicy` the scheduler obeys, so the card cannot show a
+   * schedule the worker is not running (spec §13.2).
+   */
+  readonly schedule: () => Promise<EffectiveBackupSchedule>;
 }
 
 /** A run, plus whether its encrypted archive is still downloadable. */
@@ -58,6 +64,8 @@ export interface BackupRunView {
 export interface BackupStatusView {
   readonly scheduleEnabled: boolean;
   readonly intervalMs: number;
+  readonly scheduleSource: EffectiveBackupSchedule['source'];
+  readonly deliveryDestination: BackupDeliveryDestination;
   readonly lastSucceededAt: Date | null;
   readonly running: BackupRunView | null;
   readonly unknownDeliveries: number;
@@ -73,15 +81,20 @@ export class BackupAdminService {
       entityType: 'Backup',
       entityId: null,
     });
-    const [lastSucceededAt, running, unknownDeliveries, lock] = await Promise.all([
-      this.deps.runs.lastSucceededAt(),
-      this.deps.runs.active(),
-      this.deps.runs.countUnknownDeliveries(),
-      this.deps.recoveries.installationLock(),
-    ]);
+    const [lastSucceededAt, running, unknownDeliveries, lock, schedule, deliveryDestination] =
+      await Promise.all([
+        this.deps.runs.lastSucceededAt(),
+        this.deps.runs.active(),
+        this.deps.runs.countUnknownDeliveries(),
+        this.deps.recoveries.installationLock(),
+        this.deps.schedule(),
+        this.deps.backup.deliveryDestination(),
+      ]);
     return {
-      scheduleEnabled: this.deps.scheduleEnabled,
-      intervalMs: this.deps.intervalMs,
+      scheduleEnabled: schedule.enabled,
+      intervalMs: schedule.intervalMs,
+      scheduleSource: schedule.source,
+      deliveryDestination,
       lastSucceededAt,
       running: running === null ? null : await this.withAvailability(running),
       unknownDeliveries,

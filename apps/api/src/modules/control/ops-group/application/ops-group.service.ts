@@ -868,7 +868,13 @@ export class OpsGroupService {
     // batch per pass, until none is left (Codex review #1 of PR #99). Bounded by
     // `checkedAt`, so a message that fails again after its requeue is not cycled.
     if (group.health === 'HEALTHY' && group.checkedAt !== null) {
-      return (await this.drain(scope, actor, group)) > 0 ? 'REQUEUED' : 'IDLE';
+      // Spec §12: a topic this release owes and the group does not have — a category added
+      // by an upgrade, or one deleted and never sent to since — is created now, rather
+      // than on the first event that happens to need it.
+      const owed = await this.provisionOwed(scope, actor, group);
+      if (owed === 'FAILED') return 'CHECKED';
+      const requeued = await this.drain(scope, actor, group);
+      return requeued > 0 ? 'REQUEUED' : owed === 'CREATED' ? 'CHECKED' : 'IDLE';
     }
     const due =
       group.health === 'UNVERIFIED' ||
@@ -881,6 +887,52 @@ export class OpsGroupService {
     const findings = await this.check(scope, actor, group, OPS_GROUP_SYSTEM_PERMISSION);
     await this.commitFindings(scope, actor, group, findings, OPS_GROUP_SYSTEM_PERMISSION, null);
     return 'CHECKED';
+  }
+
+  /**
+   * Creates the topics a HEALTHY group is owed and lacks (spec §12).
+   *
+   * A pass that finds every topic READY makes no Telegram call at all — one registry read.
+   * Creation goes through the ONE provisioner, so two worker replicas meeting the same
+   * owed topic create it once: the conditional claim decides, not timing. A topic another
+   * caller is creating is BUSY and left for the next pass.
+   *
+   * A creation Telegram REFUSES is not retried on the next pass — that would be one
+   * `createForumTopic` every fifteen seconds for as long as the bot lacks a right. The
+   * group is marked for a full re-check instead, which records `TOPIC_CREATE_FAILED` (or
+   * the right that is missing) and rechecks on the problem schedule.
+   */
+  private async provisionOwed(
+    scope: ScopeContext,
+    actor: ActorContext,
+    group: OpsGroupRecord,
+  ): Promise<'NONE' | 'CREATED' | 'FAILED'> {
+    const topics = await this.deps.repository.listTopics(scope, group.chatId);
+    const owed = OPS_LOG_TOPIC_CATEGORIES.filter((category) => {
+      const topic = topics.find((candidate) => candidate.category === category);
+      return !(topic?.state === 'READY' && topic.messageThreadId !== null);
+    });
+    if (owed.length === 0) return 'NONE';
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return 'NONE';
+    const token = await this.deps.bots.tokenFor(scope, group.botInstanceId);
+    if (token === null) {
+      await this.deps.repository.markHealthyForRecheck(scope, { now: this.deps.clock.now() });
+      return 'FAILED';
+    }
+    let created = false;
+    for (const category of owed) {
+      const ensured = await this.deps.provisioner.ensure(scope, actor, group, category, token);
+      if (ensured.kind === 'FAILED') {
+        this.deps.logger.warn(
+          { category, errorCode: ensured.errorCode },
+          'an owed operations topic could not be created; the group will be checked again',
+        );
+        await this.deps.repository.markHealthyForRecheck(scope, { now: this.deps.clock.now() });
+        return 'FAILED';
+      }
+      if (ensured.kind === 'READY' && ensured.created) created = true;
+    }
+    return created ? 'CREATED' : 'NONE';
   }
 
   /**

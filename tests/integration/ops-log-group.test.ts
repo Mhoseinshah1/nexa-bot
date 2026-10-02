@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   isNexaError,
   normaliseOpsConnectCode,
+  OPS_LOG_TOPIC_CATEGORIES,
   systemJobActor,
   type ActorContext,
   type Clock,
@@ -20,6 +21,7 @@ import {
   OpsGroupService,
 } from '../../apps/api/src/modules/control/ops-group/application/ops-group.service';
 import { OpsTopicProvisioner } from '../../apps/api/src/modules/control/ops-group/application/topic-provisioner';
+import { OpsGroupBackupTopicAdapter } from '../../apps/api/src/modules/control/ops-group/application/backup-topic';
 import type { OpsGroupTelegram } from '../../apps/api/src/modules/control/ops-group/application/ports';
 import { DrizzleOpsGroupRepository } from '../../apps/api/src/modules/control/ops-group/infrastructure/drizzle-ops-group.repository';
 import { OpsGroupBotSource } from '../../apps/api/src/modules/control/ops-group/infrastructure/telegram-ops-group';
@@ -99,7 +101,10 @@ class FakeOpsTelegram implements OpsGroupTelegram {
   }
   /** Refuses `createForumTopic`, as Telegram does for a bot without the right. */
   createRefused = false;
+  /** Every createForumTopic asked of Telegram, refused or not. */
+  createAttempts = 0;
   async createTopic(_token: string, chatId: string, name: string) {
+    this.createAttempts += 1;
     if (this.createDelayMs > 0)
       await new Promise((resolve) => setTimeout(resolve, this.createDelayMs));
     if (this.createRefused) {
@@ -315,9 +320,10 @@ describe('the operations log group (WP-A4)', () => {
 
   const raise = (dedupeKey: string, extra: Record<string, unknown> = {}) =>
     ctx.container.opsLog.record(tenantA, {
-      code: 'panel.health.unreachable',
+      // A code that routes to SYSTEM (spec 12 moved panel.* to a topic of its own).
+      code: 'outbox.message_exhausted',
       severity: 'ERROR',
-      message: 'The panel did not answer.',
+      message: 'An outbox message exhausted its attempts.',
       dedupeKey,
       context: extra,
     });
@@ -455,14 +461,23 @@ describe('the operations log group (WP-A4)', () => {
 
     it('declares a group healthy only after getChat and getChatMember agree, and then creates the topics', async () => {
       await connectHealthy();
+      // Spec 12: every concern's topic, named in Persian, the backups one exactly so.
       expect(telegram.created.map((topic) => topic.name).sort()).toEqual(
-        ['⚙️ سیستم و خطاها', '💳 پرداخت‌ها'].sort(),
+        [
+          '⚙️ سیستم',
+          '🚨 خطاها',
+          '💳 پرداخت‌ها',
+          '🧩 سفارش‌ها و سرویس‌ها',
+          '🖥 پنل‌ها',
+          '🤖 ربات و پیام‌رسانی',
+          '🛡 امنیت و دسترسی',
+          '💾 بکاپ‌ها',
+        ].sort(),
       );
       const view = await service.view(tenantA, owner);
-      expect(view.topics.map((topic) => [topic.category, topic.state])).toEqual([
-        ['SYSTEM', 'READY'],
-        ['PAYMENTS', 'READY'],
-      ]);
+      expect(view.topics.map((topic) => [topic.category, topic.state])).toEqual(
+        OPS_LOG_TOPIC_CATEGORIES.map((category) => [category, 'READY']),
+      );
     });
 
     it('names a bot that is only a member', async () => {
@@ -556,14 +571,17 @@ describe('the operations log group (WP-A4)', () => {
   describe('topic creation is idempotent', () => {
     it('creates each topic once however often setup runs', async () => {
       await connectHealthy();
-      expect(telegram.created).toHaveLength(2);
+      const owed = OPS_LOG_TOPIC_CATEGORIES.length;
+      expect(telegram.created).toHaveLength(owed);
       await service.verify(tenantA, owner, { idempotencyKey: key('verify') });
       await service.reconnect(tenantA, owner, { idempotencyKey: key('reconnect') });
-      expect(telegram.created).toHaveLength(2);
+      // And the healthy group's maintenance pass owes nothing more.
+      await service.maintain(tenantA, system());
+      expect(telegram.created).toHaveLength(owed);
       const rows = (await ctx.container.database.db.execute(
         `SELECT category FROM ops_log_topics` as never,
       )) as unknown as { rows: unknown[] };
-      expect(rows.rows).toHaveLength(2);
+      expect(rows.rows).toHaveLength(owed);
     });
 
     it('creates ONE topic when five callers race for it', async () => {
@@ -614,7 +632,7 @@ describe('the operations log group (WP-A4)', () => {
       );
       expect(after).toMatchObject({ state: 'READY', messageThreadId: resentTo, recreatedCount: 1 });
       // Only the SYSTEM topic was recreated.
-      expect(telegram.created).toHaveLength(3);
+      expect(telegram.created).toHaveLength(OPS_LOG_TOPIC_CATEGORIES.length + 1);
 
       const [intent] = await ctx.container.notifications.list(tenantA, owner);
       const detail = await ctx.container.notifications.get(tenantA, owner, intent!.id);
@@ -880,6 +898,137 @@ describe('the operations log group (WP-A4)', () => {
         expect(text).not.toContain(secret);
       }
     });
+
+    it('routes each concern to its own topic (spec 12)', async () => {
+      await connectHealthy();
+      const topics = await repository.listTopics(tenantA, GROUP_CHAT);
+      const thread = (category: string) =>
+        topics.find((topic) => topic.category === category)?.messageThreadId;
+      for (const [n, code] of [
+        'panel.health.unreachable',
+        'backup.run_failed',
+        'auth.login_locked_out',
+        'internal.unhandled',
+      ].entries()) {
+        await ctx.container.opsLog.record(tenantA, {
+          code,
+          severity: 'ERROR',
+          message: 'A routed event.',
+          dedupeKey: `concern-${String(n)}`,
+        });
+      }
+      await dispatcher.tick();
+      const threads = transport.messages.map((message) =>
+        message.destination.transport === 'TELEGRAM' ? message.destination.topicId : null,
+      );
+      expect(threads.sort()).toEqual(
+        [thread('PANELS'), thread('BACKUPS'), thread('SECURITY'), thread('ERRORS')].sort(),
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Spec 12 — topics a release adds, and the backups topic the pipeline posts to
+  // -------------------------------------------------------------------------
+
+  describe('topics an upgrade adds', () => {
+    /** The group as an installation upgraded from SYSTEM + PAYMENTS has it. */
+    async function forgetNewTopics(): Promise<void> {
+      await ctx.container.database.db.execute(
+        `DELETE FROM ops_log_topics WHERE category NOT IN ('SYSTEM', 'PAYMENTS')` as never,
+      );
+    }
+
+    it('are created by the healthy group’s maintenance pass, once, with two replicas', async () => {
+      await connectHealthy();
+      await forgetNewTopics();
+      const before = telegram.created.length;
+      telegram.createDelayMs = 50;
+      // Two worker replicas, as on every rolling update. The claim decides, not timing.
+      await Promise.all([service.maintain(tenantA, system()), service.maintain(tenantA, system())]);
+      await service.maintain(tenantA, system());
+      const owed = OPS_LOG_TOPIC_CATEGORIES.length - 2;
+      expect(telegram.created.length - before).toBe(owed);
+      const topics = await repository.listTopics(tenantA, GROUP_CHAT);
+      expect(topics).toHaveLength(OPS_LOG_TOPIC_CATEGORIES.length);
+      expect(topics.every((topic) => topic.state === 'READY')).toBe(true);
+      // And a pass that finds nothing owed makes no Telegram call.
+      await service.maintain(tenantA, system());
+      expect(telegram.created.length - before).toBe(owed);
+    });
+
+    it('a refused one sends the group for a check, not a retry every pass', async () => {
+      await connectHealthy();
+      await forgetNewTopics();
+      telegram.createRefused = true;
+      await service.maintain(tenantA, system());
+      expect((await service.view(tenantA, owner)).health).toBe('UNVERIFIED');
+      // The check finds and names the problem, and then it waits the problem schedule.
+      await service.maintain(tenantA, system());
+      const view = await service.view(tenantA, owner);
+      expect(view.health).toBe('PROBLEM');
+      expect(view.problems).toContain('TOPIC_CREATE_FAILED');
+      const attempts = telegram.createAttempts;
+      await service.maintain(tenantA, system());
+      await service.maintain(tenantA, system());
+      expect(telegram.createAttempts).toBe(attempts);
+    });
+  });
+
+  describe('the backups topic (spec 13.1)', () => {
+    const backupTopic = () =>
+      new OpsGroupBackupTopicAdapter(
+        service,
+        new OpsGroupBotSource(ctx.container.botInstances),
+        system,
+      );
+
+    it('is not connected until a group is', async () => {
+      await expect(backupTopic().connected(tenantA)).resolves.toBe(false);
+      await expect(backupTopic().route(tenantA, null)).resolves.toEqual({ kind: 'NOT_CONNECTED' });
+    });
+
+    it('is created once for concurrent deliveries, and posted to by the group’s own bot', async () => {
+      expect(await bind(await issueCode())).toBe('CONNECTED');
+      telegram.createDelayMs = 50;
+      const routes = await Promise.all([
+        backupTopic().route(tenantA, null),
+        backupTopic().route(tenantA, null),
+        backupTopic().route(tenantA, null),
+      ]);
+      const backups = telegram.created.filter((topic) => topic.name === '💾 بکاپ‌ها');
+      expect(backups).toHaveLength(1);
+      const routed = routes.filter((route) => route.kind === 'ROUTED');
+      expect(routed.length).toBeGreaterThanOrEqual(1);
+      for (const route of routed) {
+        expect(route).toMatchObject({ chatId: GROUP_CHAT, threadId: backups[0]?.threadId });
+      }
+      // A caller that lost the claim is told so, never handed a second topic.
+      for (const route of routes.filter((candidate) => candidate.kind !== 'ROUTED')) {
+        expect(route).toMatchObject({ kind: 'UNAVAILABLE', errorCode: 'ops_group.topic_pending' });
+      }
+      await expect(backupTopic().connected(tenantA)).resolves.toBe(true);
+    });
+
+    it('is recreated once when deleted, however many senders met the stale thread', async () => {
+      expect(await bind(await issueCode())).toBe('CONNECTED');
+      const first = await backupTopic().route(tenantA, null);
+      if (first.kind !== 'ROUTED') throw new Error('expected the topic');
+      const stale = first.threadId;
+      const again = await Promise.all([
+        backupTopic().route(tenantA, stale),
+        backupTopic().route(tenantA, stale),
+      ]);
+      const backups = telegram.created.filter((topic) => topic.name === '💾 بکاپ‌ها');
+      expect(backups).toHaveLength(2);
+      for (const route of again.filter((candidate) => candidate.kind === 'ROUTED')) {
+        expect(route).toMatchObject({ threadId: backups[1]?.threadId });
+      }
+      const topic = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (candidate) => candidate.category === 'BACKUPS',
+      );
+      expect(topic).toMatchObject({ state: 'READY', recreatedCount: 1 });
+    });
   });
 
   describe('the status panel', () => {
@@ -896,10 +1045,9 @@ describe('the operations log group (WP-A4)', () => {
     it('sends a test into every topic and records the last delivery', async () => {
       await connectHealthy();
       const tested = await service.sendTest(tenantA, owner, { idempotencyKey: key('test') });
-      expect(tested.results.map((result) => [result.category, result.outcome])).toEqual([
-        ['SYSTEM', 'SENT'],
-        ['PAYMENTS', 'SENT'],
-      ]);
+      expect(tested.results.map((result) => [result.category, result.outcome])).toEqual(
+        OPS_LOG_TOPIC_CATEGORIES.map((category) => [category, 'SENT']),
+      );
       expect(tested.opsGroup.lastDeliveredAt).not.toBeNull();
       expect(tested.opsGroup.topics.every((topic) => topic.lastDeliveredAt !== null)).toBe(true);
     });
@@ -1031,7 +1179,7 @@ describe('the operations log group (WP-A4)', () => {
         service.sendTest(tenantA, owner, { idempotencyKey }),
       ]);
       // One set: one message per topic.
-      expect(telegram.sent.length - before).toBe(2);
+      expect(telegram.sent.length - before).toBe(OPS_LOG_TOPIC_CATEGORIES.length);
       expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
       const refused = outcomes.find((outcome) => outcome.status === 'rejected');
       expect(
@@ -1042,7 +1190,7 @@ describe('the operations log group (WP-A4)', () => {
       // Afterwards the key replays the first answer and still sends nothing.
       const replay = await service.sendTest(tenantA, owner, { idempotencyKey });
       expect(replay.results.every((result) => result.outcome === 'SENT')).toBe(true);
-      expect(telegram.sent.length - before).toBe(2);
+      expect(telegram.sent.length - before).toBe(OPS_LOG_TOPIC_CATEGORIES.length);
     });
 
     it('C5: the automatic requeue drains every preserved row across passes, and does not cycle one that fails again', async () => {
@@ -1208,7 +1356,7 @@ describe('the operations log group (WP-A4)', () => {
 
     const raiseNamed = (n: number) =>
       ctx.container.opsLog.record(tenantA, {
-        code: 'panel.health.unreachable',
+        code: 'outbox.message_exhausted',
         severity: 'ERROR',
         message: `event ${n}`,
         dedupeKey: `named-${n}`,
