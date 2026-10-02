@@ -698,16 +698,22 @@ describe('the TonPays Telegram provider review window', () => {
           note: 'checked against the TonPays panel',
           idempotencyKey,
         });
+      // The code, and WHICH refusal: the state check names the state, the evidence check
+      // its reason — both are PAYMENT_STATE_INVALID, so the code alone cannot tell them apart.
       const code = async (promise: Promise<unknown>) => {
         try {
           await promise;
         } catch (error: unknown) {
-          return isNexaError(error) ? error.code : String(error);
+          if (!isNexaError(error)) return String(error);
+          const which = error.details['reason'] ?? error.details['state'];
+          return which === undefined ? error.code : `${error.code}:${String(which)}`;
         }
         return 'accepted';
       };
       // Only from UNKNOWN.
-      expect(await code(reconcile(owner, 'CONFIRMED'))).toBe('commerce.payment_state_invalid');
+      expect(await code(reconcile(owner, 'CONFIRMED'))).toBe(
+        'commerce.payment_state_invalid:PENDING',
+      );
       await lapse(review);
       // Without the permission.
       const support = adminActorFor(
@@ -718,8 +724,12 @@ describe('the TonPays Telegram provider review window', () => {
       );
       expect(await code(reconcile(support, 'CONFIRMED'))).toBe('platform.permission_denied');
       // Without recorded evidence: the last inquiry said `processing`.
-      expect(await code(reconcile(owner, 'CONFIRMED'))).toBe('commerce.payment_state_invalid');
-      expect(await code(reconcile(owner, 'FAILED'))).toBe('commerce.payment_state_invalid');
+      expect(await code(reconcile(owner, 'CONFIRMED'))).toBe(
+        'commerce.payment_state_invalid:RECONCILIATION_EVIDENCE_MISSING',
+      );
+      expect(await code(reconcile(owner, 'FAILED'))).toBe(
+        'commerce.payment_state_invalid:RECONCILIATION_EVIDENCE_MISSING',
+      );
       expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
 
       // The operator asks the provider again; the answer is recorded, nothing moves.
@@ -734,12 +744,16 @@ describe('the TonPays Telegram provider review window', () => {
       expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
 
       // Evidence says completed + paid: FAILED is refused, CONFIRMED settles, once.
-      expect(await code(reconcile(owner, 'FAILED'))).toBe('commerce.payment_state_invalid');
+      expect(await code(reconcile(owner, 'FAILED'))).toBe(
+        'commerce.payment_state_invalid:RECONCILIATION_EVIDENCE_MISSING',
+      );
       const confirmKey = key();
       await reconcile(owner, 'CONFIRMED', confirmKey);
       const replay = await reconcile(owner, 'CONFIRMED', confirmKey);
       expect(replay.state).toBe('CONFIRMED');
-      expect(await code(reconcile(owner, 'CONFIRMED'))).toBe('commerce.payment_state_invalid');
+      expect(await code(reconcile(owner, 'CONFIRMED'))).toBe(
+        'commerce.payment_state_invalid:CONFIRMED',
+      );
       const payment = await paymentOf(review.paymentId);
       expect(payment.state).toBe('CONFIRMED');
       expect(payment.evidence_kind).toBe('RECONCILIATION');

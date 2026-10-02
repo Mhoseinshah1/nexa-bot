@@ -17,7 +17,7 @@ import type {
  * The TonPays Telegram rules that decide anything, as pure functions
  * (`docs/tonpays-telegram-gateway-audit.md`). Pure for the reason `domain/tonpays.ts` gives:
  * a rule exercised only through a network and a database is a rule whose corners nobody
- * tests. `tests/unit/tonpays-telegram-rules.test.ts` pins each.
+ * tests. `tests/unit/tonpays-telegram-adapter.test.ts` pins each.
  */
 
 /**
