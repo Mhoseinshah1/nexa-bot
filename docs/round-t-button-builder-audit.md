@@ -719,3 +719,77 @@ now historical; `rowsFor` still serves the builder's read and the bot-menu page.
   the command reached is the button's.
 - Confirm on the real client that an icon from an eligible bot is not ALSO drawn as the
   label's leading emoji twice (operator-facing warning in the builder, audit §5).
+
+## 16. Owner order 2026-10-02 — the button icon retired, the drag refined
+
+The owner removed «آیکون دکمه» (`iconSlot`) and «آیکون معنایی» (`appearanceSlot`) from
+«دکمه‌های ربات», and asked for a quality pass on the drag (it already worked on a real phone).
+Appearance (`/appearance`, «ظاهر ربات») is NOT touched: it stays the one mechanism for message
+icons and custom emoji.
+
+### 16.1 Compatibility decision — and why
+
+| Question                                                                                                 | Decision                                                                                                                                                                                                                                                                                          | Why                                                                                                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Does the runtime still draw an icon a published layout stored?                                           | **No.** Rows and styles are drawn exactly as published; the icon is ignored on every bot.                                                                                                                                                                                                         | Keeping it would leave customers with an icon the operator can no longer see or remove from the page that made it — the surprising option. Ignoring it makes the operator's preview, the live keyboard and the Telegram keyboard agree again. |
+| Do stored snapshots break?                                                                               | **No.** `iconSlot` stays in `explicitMainMenuSchema`, required and nullable; every stored layout still parses.                                                                                                                                                                                    | The previous release's `.strict()` parser requires the key in every snapshot this release writes; dropping it would make each new layout "unreadable" after a rollback (§10).                                                                 |
+| What happens to a stored icon?                                                                           | `normalizeExplicitMainMenu` canonicalises it to `null` — and every builder read, write and the runtime source go through it. `customerRowsOf` no longer has an icon field, so neither the runtime nor the preview can draw one. A draft or revision written from now on carries `iconSlot: null`. | One place decides; an icon alone is never a "pending change" (`explicitMainMenusEqual`).                                                                                                                                                      |
+| Are rows rewritten or columns dropped?                                                                   | **No** (expand/contract). The JSONB snapshots keep what they hold; no migration.                                                                                                                                                                                                                  | A rollback to `v0.4.x` without a new publish draws the stored icons again — the previous release's behaviour, untouched. After a publish from this release, the snapshot carries `null` and the old release draws no icon either.             |
+| Does the API still accept an icon?                                                                       | **Yes** — accepted, canonicalised to `null`, never stored. `iconEligibility` stays in the read.                                                                                                                                                                                                   | A page loaded from the previous release mid-rollout still sends `iconSlot` and parses `iconEligibility`; refusing either would break that page. The new page uses `iconEligibility` only to name the bot in the preview phone.                |
+| `appearanceSlot` («آیکون معنایی»)?                                                                       | Control removed; value **round-tripped unchanged** and still projected into `bot.main_menu`.                                                                                                                                                                                                      | It never had a runtime consumer (§7): removing the control changes nothing a customer sees, and keeping the value keeps the projection the previous release reads byte-identical.                                                             |
+| The transport's icon handling (`replyKeyboardFor`, the one-shot icon-less retry, `isCustomEmojiDenial`)? | **Kept**, still driven by `tests/unit/telegram-reply-keyboard-wire.test.ts`; the main menu no longer feeds it (`MainMenuLayout.keyboardFor` passes `iconSlot: null`).                                                                                                                             | It lives in the messenger, which other work changes concurrently; it is a tested capability, not dead code reachable by mistake.                                                                                                              |
+
+**Contract phase (a later release, not this one):** once no supported rollback target requires
+the key, `iconSlot` can become optional in the schema, `iconEligibility` can leave the read,
+and the transport's icon path can go — together, as one contract change.
+
+Tests: `tests/unit/bot-menu-builder-contracts.test.ts` › "the retired button icon";
+`tests/unit/main-menu-layout.test.ts` (a layout naming an icon draws none);
+`tests/integration/bot-menu-builder.test.ts` › "keeps drawing a layout an earlier release
+published WITH icons"; `tests/integration/telegram-reply-keyboard.test.ts` (no icon on any bot;
+a snapshot stored with icons drawn without them; a bot that refuses custom emoji is no longer
+refused, retried or switched off because of the keyboard). The end-to-end cases of the old
+icon path were replaced by these: they described behaviour that no longer exists.
+
+### 16.2 Drag quality
+
+What a drop DOES is decided by one pure function, `applyDrop` (`model.ts`), over the same
+primitives the Inspector and the keyboard call; it answers `null` for a drop that changes
+nothing. The pointer code (`dnd.ts`) only feeds it.
+
+- **No accidental reorder.** A press moves nothing until the pointer travels 6 px
+  (`DRAG_THRESHOLD_PX`); a no-op drop draws no placeholder and announces nothing; Escape,
+  `pointercancel` and a lost pointer capture abandon the drag.
+- **No jumpiness.** The gaps between rows are always laid out; every placeholder (the caret
+  before a key, the caret at a row's end, the new-row line and its note) is a CSS
+  pseudo-element over the layout, so nothing resizes under a still pointer. Before/after is
+  the half of the key under the pointer in READING order (`chipSide`), with a 6 px dead band so
+  the caret does not flicker.
+- **Smooth tracking.** An SVG ghost of the key follows the pointer, moved once per animation
+  frame through its `transform` attribute — the production CSP (`style-src 'self'`) forbids
+  every inline style, and `csp.test.tsx` refuses every spelling of one. The target is
+  hit-tested on that frame; near the top or bottom edge the page scrolls.
+- **Obvious target row.** The row a drop lands in is outlined.
+- **Touch.** The grip is a real `<button>` (34 × 44 px hit area, out of the tab order,
+  `aria-hidden`) — QA-2's fix direction. `scripts/web-shots/bot-buttons-drag.mjs` drives
+  Chromium over CDP (a finger at 390 px, a mouse at 1440 px) and passes; it does not
+  reproduce QA-2's retargeting with the OLD grip either, so R-ACC-9 on a real phone remains
+  the evidence for that defect.
+- **Keyboard fallback** unchanged: Alt+arrows by reading direction (tested in RTL and LTR),
+  Delete, Alt+Enter, the Inspector's move buttons.
+- **RTL / 390.** Logical CSS properties throughout (`inset-inline-*`); no horizontal overflow at
+  390 (`pnpm web:shots /bot-buttons --width 390`).
+
+Tests: `tests/web/bot-buttons-dnd.test.tsx` (pure) and "the button builder — drag quality" in
+`tests/web/bot-buttons-builder.test.tsx`.
+
+### 16.3 Round-T follow-ups, audited against `main` at `6d00f094`
+
+| Item                                                        | Status at `6d00f094`                                                                           | Outcome                                                                                                                   |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| QA-3 doubled emoji (icon marker beside a label's own emoji) | present                                                                                        | **Obsolete** — the icon is retired; the warning and the marker are removed with it.                                       |
+| QA-4 history names the publisher by an id prefix            | present (`history.tsx:93`)                                                                     | **Fixed** — revisions carry `createdByAdminName` (tenant-scoped join on `admins`); the drawer shows the name, or no line. |
+| QA-5 "live menu changed" banner squeezed at 390             | present                                                                                        | **Fixed** — a builder banner's action stacks under its text below 560 px.                                                 |
+| QA-6 «published» read for a moment after a restore          | present: a pending restore or reset was not a state, so the page kept the state from before it | **Fixed** — a pending reset or restore reads «saving».                                                                    |
+| F-8 / OQ-T-2 "new button" badge                             | not reachable: no release has added a main-menu button                                         | **Unchanged** — the obligation in `docs/open-questions.md` OQ-T-2 stands for the release that adds one.                   |
+| QA-2 touch on a key's grip                                  | not reproducible through CDP touch emulation (§16.2)                                           | Grip rebuilt as a button; real-phone check stays in R-ACC-9.                                                              |
