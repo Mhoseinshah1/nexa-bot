@@ -16,6 +16,7 @@ import {
   type PaymentReceiptView,
   type PaymentState,
   type PaymentSummaryResponse,
+  type PaymentDetailResponse,
   type ReceiptDisposition,
 } from '@nexa/contracts';
 import {
@@ -28,6 +29,8 @@ import {
   fetchPaymentReceiptBytes,
   fetchPayments,
   fetchRefunds,
+  reconcilePayment,
+  reinquirePayment,
   requestRefund,
 } from '../api/client';
 import { formatMoneyText, formatTimestamp, splitBytes } from '../format';
@@ -212,6 +215,15 @@ function DispositionBadge({ value }: { value: ReceiptDisposition | null }) {
   );
 }
 
+/**
+ * A TonPays Telegram payment whose receipt the provider acknowledged in time
+ * (`docs/tonpays-telegram-gateway-audit.md` §9.6): still PENDING, its deadline moved to the
+ * end of the 24-hour review. Neither paid nor failed — the badge says only that.
+ */
+function inProviderReview(row: Pick<PaymentSummaryResponse, 'state' | 'providerReviewUntil'>) {
+  return row.state === 'PENDING' && row.providerReviewUntil !== null;
+}
+
 function Dash() {
   return <span className="faint">—</span>;
 }
@@ -366,7 +378,17 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
     {
       key: 'state',
       header: t('web.payment_state'),
-      render: (row) => <StateBadge value={row.state} />,
+      render: (row) => (
+        <>
+          <StateBadge value={row.state} />
+          {inProviderReview(row) && (
+            <>
+              {' '}
+              <Badge tone="info">{t('web.payment_provider_review_badge')}</Badge>
+            </>
+          )}
+        </>
+      ),
     },
     {
       /*
@@ -1257,6 +1279,7 @@ export function PaymentDetailPage({
   mayIssueRefunds,
   mayViewOrders = false,
   mayViewWallet = false,
+  mayReconcile = false,
   denied,
 }: {
   id: string;
@@ -1278,6 +1301,12 @@ export function PaymentDetailPage({
    * a new question for the history card.
    */
   mayViewWallet?: boolean;
+  /**
+   * `payments.reconcile`: resolving an `UNKNOWN` gateway payment from the provider's
+   * recorded answer. The server charges it itself; this only decides whether the controls
+   * are drawn, and without it the card names the permission instead.
+   */
+  mayReconcile?: boolean;
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
@@ -1315,6 +1344,12 @@ export function PaymentDetailPage({
           <>
             {row.state === 'UNKNOWN' && (
               <Banner tone="warn">{t('web.payment_unknown_banner')}</Banner>
+            )}
+            {inProviderReview(row) && row.providerReviewUntil !== null && (
+              <Banner tone="info">
+                {t('web.payment_provider_review_banner')}{' '}
+                <strong>{formatTimestamp(row.providerReviewUntil)}</strong>
+              </Banner>
             )}
             <TwoColumn
               main={
@@ -1680,6 +1715,8 @@ export function PaymentDetailPage({
                                 </Badge>
                               ),
                             ],
+                            ...reviewFacts(row),
+                            ...cardTransferFacts(row.gatewayInvoice),
                           ]}
                         />
                       </Disclosure>
@@ -1689,6 +1726,13 @@ export function PaymentDetailPage({
               }
               side={
                 <>
+                  {/*
+              An UNKNOWN gateway payment (TonPays Telegram §9.6.4): resolved from the
+              provider's RECORDED answer, never from the operator's choice.
+            */}
+                  {row.state === 'UNKNOWN' && row.method === 'GATEWAY' && (
+                    <ReconcileCard payment={row} mayReconcile={mayReconcile} />
+                  )}
                   {/*
               Card-to-card review is Telegram's alone (Payment File 02 §10, D3): approve,
               reject and credit-to-wallet are decided there, and this page shows what was
@@ -1800,6 +1844,221 @@ export function PaymentDetailPage({
         )}
       </StateSwitch>
     </>
+  );
+}
+
+type PaymentDetail = PaymentDetailResponse;
+type GatewayInvoiceDetail = NonNullable<PaymentDetail['gatewayInvoice']>;
+
+/** When the provider's review opened and when it ends (§9.6). Absent for any other payment. */
+function reviewFacts(row: PaymentDetail): [string, ReactNode][] {
+  if (row.providerReviewStartedAt === null || row.providerReviewUntil === null) return [];
+  return [
+    [
+      t('web.payment_provider_review_window'),
+      <span key="rw">
+        {formatTimestamp(row.providerReviewStartedAt)}
+        {' → '}
+        {formatTimestamp(row.providerReviewUntil)}
+      </span>,
+    ],
+  ];
+}
+
+/**
+ * A card-transfer attempt's two lanes (TonPays Telegram §10): which card is current — its
+ * sequence and when it arrived, never its number — the last card change, and what happened
+ * to each receipt. States and codes only: the receipt itself never reaches this page.
+ */
+function cardTransferFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][] {
+  if (invoice.cardSeq === null && invoice.receiptSubmissions.length === 0) return [];
+  const change = invoice.latestCardChange;
+  return [
+    [
+      t('web.payment_gateway_card'),
+      invoice.cardSeq === null ? (
+        <Dash key="cs" />
+      ) : (
+        <span key="cs">
+          <Ltr>{`#${String(invoice.cardSeq)}`}</Ltr>
+          {invoice.cardReceivedAt === null ? null : ` · ${formatTimestamp(invoice.cardReceivedAt)}`}
+          {invoice.cardChangeExhausted === true ? (
+            <>
+              {' '}
+              <Badge tone="neutral">{t('web.payment_gateway_card_change_exhausted')}</Badge>
+            </>
+          ) : null}
+        </span>
+      ),
+    ],
+    [
+      t('web.payment_gateway_card_change'),
+      change === null ? (
+        <Dash key="cc" />
+      ) : (
+        <Ltr key="cc">
+          {`${change.state}${change.errorCode === null ? '' : ` · ${change.errorCode}`} · ${formatTimestamp(change.requestedAt)}`}
+        </Ltr>
+      ),
+    ],
+    [
+      t('web.payment_gateway_receipts'),
+      invoice.receiptSubmissions.length === 0 ? (
+        <Dash key="rs" />
+      ) : (
+        <span key="rs">
+          {invoice.receiptSubmissions.map((one) => (
+            <div key={one.id}>
+              <Ltr>
+                {`${one.state}${one.errorCode === null ? '' : ` · ${one.errorCode}`}${one.providerStatus === null ? '' : ` · ${one.providerStatus}`} · ${formatTimestamp(one.createdAt)}`}
+              </Ltr>
+              {one.openedReview ? (
+                <>
+                  {' '}
+                  <Badge tone="info">{t('web.payment_gateway_receipt_opened_review')}</Badge>
+                </>
+              ) : null}
+            </div>
+          ))}
+        </span>
+      ),
+    ],
+  ];
+}
+
+/**
+ * Resolving an `UNKNOWN` gateway payment (TonPays Telegram audit §9.6.4).
+ *
+ * The provider's RECORDED answer is shown first because it is the only thing that can
+ * decide: the server refuses CONFIRMED without a recorded `completed` + `paid`, and FAILED
+ * without a recorded `rejected`/`expired`/`canceled`. "Ask again" writes a request for the
+ * worker's next inquiry and decides nothing. Both commands carry an idempotency key bound
+ * to what was submitted, kept across a 5xx so a retry is a replay and never a second move.
+ */
+function ReconcileCard({
+  payment,
+  mayReconcile,
+}: {
+  payment: PaymentDetail;
+  mayReconcile: boolean;
+}) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const decision = useSubmissionKey();
+  const asking = useSubmissionKey();
+  const [note, setNote] = useState('');
+  const invoice = payment.gatewayInvoice;
+
+  const refresh = () => {
+    void queries.invalidateQueries({ queryKey: ['payment', payment.id] });
+    void queries.invalidateQueries({ queryKey: ['payments'] });
+    void queries.invalidateQueries({ queryKey: ['payment-timeline', payment.id] });
+    void queries.invalidateQueries({ queryKey: ['order'] });
+    void queries.invalidateQueries({ queryKey: ['wallet'] });
+  };
+
+  const reconcile = useMutation({
+    mutationFn: (to: 'CONFIRMED' | 'FAILED') =>
+      reconcilePayment({
+        paymentId: payment.id,
+        idempotencyKey: decision.current({ id: payment.id, to, note }),
+        to,
+        ...(note.trim() === '' ? {} : { note: note.trim() }),
+      }),
+    onSuccess: () => {
+      decision.settle();
+      notify({ tone: 'ok', message: t('web.payment_reconcile_done') });
+      setNote('');
+      refresh();
+    },
+    onError: (error) => {
+      decision.settleOn(error);
+      refresh();
+    },
+  });
+
+  const reinquire = useMutation({
+    mutationFn: () =>
+      reinquirePayment({
+        paymentId: payment.id,
+        idempotencyKey: asking.current({ id: payment.id }),
+      }),
+    onSuccess: (response) => {
+      asking.settle();
+      notify({
+        tone: 'ok',
+        message: t(
+          response.requested ? 'web.payment_reinquire_done' : 'web.payment_reinquire_recent',
+        ),
+      });
+      refresh();
+    },
+    onError: (error) => {
+      asking.settleOn(error);
+    },
+  });
+
+  useUnsavedChanges(mayReconcile && note.trim() !== '');
+  const busy = reconcile.isPending || reinquire.isPending;
+
+  return (
+    <Card title={t('web.payment_reconcile_title')} hint={t('web.payment_reconcile_hint')}>
+      <KV
+        items={[
+          [
+            t('web.payment_reconcile_evidence'),
+            invoice === null ? (
+              <Dash key="ev" />
+            ) : (
+              <Ltr key="ev">
+                {`${invoice.providerStatus ?? '—'} · paid=${invoice.providerPaid === null ? '—' : String(invoice.providerPaid)}`}
+              </Ltr>
+            ),
+          ],
+          [
+            t('web.payment_gateway_invoice_last_inquiry'),
+            invoice?.lastInquiryAt == null ? (
+              <Dash key="li" />
+            ) : (
+              <span key="li">{formatTimestamp(invoice.lastInquiryAt)}</span>
+            ),
+          ],
+        ]}
+      />
+      {mayReconcile ? (
+        <>
+          <Field label={t('web.payment_reconcile_note')} htmlFor="reconcile-note">
+            <Input
+              id="reconcile-note"
+              size="sm"
+              value={note}
+              maxLength={500}
+              onChange={(event) => setNote(event.target.value)}
+            />
+          </Field>
+          <div className="form-actions">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={busy}
+              onClick={() => reconcile.mutate('CONFIRMED')}
+            >
+              {t('web.payment_reconcile_confirm')}
+            </Button>
+            <Button size="sm" disabled={busy} onClick={() => reconcile.mutate('FAILED')}>
+              {t('web.payment_reconcile_fail')}
+            </Button>
+            <Button size="sm" disabled={busy} onClick={() => reinquire.mutate()}>
+              {t('web.payment_reinquire')}
+            </Button>
+          </div>
+          {reconcile.error !== null && <Banner tone="danger">{messageFor(reconcile.error)}</Banner>}
+          {reinquire.error !== null && <Banner tone="danger">{messageFor(reinquire.error)}</Banner>}
+        </>
+      ) : (
+        <Banner tone="info">{t('web.payment_reconcile_denied')}</Banner>
+      )}
+    </Card>
   );
 }
 

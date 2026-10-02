@@ -212,6 +212,9 @@ describe('dynamic route registration', () => {
       ['GET', `payments/${id}/receipts`],
       ['GET', `payments/${id}/timeline`],
       ['GET', `payments/${id}/receipts/${REFUND_ID}/content`],
+      // TonPays Telegram §9.6.4: resolving an UNKNOWN gateway payment from recorded evidence.
+      ['POST', `payments/${id}/reconcile`],
+      ['POST', `payments/${id}/reinquire`],
       ['POST', `admins/${id}/status`],
       ['POST', `admins/${id}/roles`],
       ['POST', `admins/${id}/telegram`],

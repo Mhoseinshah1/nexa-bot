@@ -1,8 +1,14 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  API_PREFIX,
+  AUTH_ROUTES,
   EMPTY_PRODUCT_DISPLAY,
+  PAYMENT_ROUTES,
+  SESSION_COOKIE_NAME,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
+  paymentReinquireResponseSchema,
+  paymentResponseSchema,
   isNexaError,
   money,
   type ActorContext,
@@ -15,6 +21,7 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
+import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import type { GatewayPaymentService } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
@@ -26,6 +33,7 @@ import {
   validatePanelConnection,
   SEED_IDS,
   tenantA,
+  testConfig,
   type TestContext,
 } from './harness';
 import {
@@ -757,6 +765,157 @@ describe('the TonPays Telegram provider review window', () => {
       expect(failed.state).toBe('FAILED');
       expect(await notified(review.paymentId)).toContain('GATEWAY_PAYMENT_FAILED');
       expect(await orderState(review.orderId)).toBe('AWAITING_PAYMENT');
+    });
+  });
+
+  /*
+   * The same rule over real HTTP (§10): the route takes the payment from the PATH, the
+   * permission from the SESSION, and refuses with the service's own code — the Web Admin
+   * not drawing the button for a support operator is not what stops them.
+   */
+  describe('reconciliation over HTTP', () => {
+    let api: ApiApp;
+    const ORIGIN = 'https://admin.example.test';
+
+    beforeAll(async () => {
+      api = await createApiApp(
+        testConfig({ PANEL_HTTP_ALLOW_LOOPBACK: 'true', TELEGRAM_API_BASE_URL: telegram.base }),
+      );
+    }, 120_000);
+
+    afterAll(async () => {
+      await api?.close();
+    });
+
+    afterEach(() => {
+      delete (api.container.clock as { now?: () => Date }).now;
+    });
+
+    const inject = (options: Record<string, unknown>) =>
+      api.app
+        .getHttpAdapter()
+        .getInstance()
+        .inject(options as never);
+
+    async function cookieFor(username: string, roleKeys?: readonly string[]): Promise<string> {
+      const password = `the-${username}-password`;
+      if (roleKeys !== undefined) {
+        await createAdmin(ctx.container, tenantA, { username, password, roleKeys });
+      }
+      const response = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+        headers: { origin: ORIGIN },
+        payload: { username, password },
+      });
+      const match = new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(
+        String(response.headers['set-cookie'] ?? ''),
+      );
+      if (match === null) throw new Error(`no session for ${username}`);
+      return `${SESSION_COOKIE_NAME}=${match[1] as string}`;
+    }
+
+    it('TPTG-37 (HTTP): support is refused, the evidence decides, a replay moves once, and the detail shows the review and the receipt lane', async () => {
+      api.container.setInstallationTenant(tenantA.tenantId);
+      // One clock for both containers: the review's deadlines are in the test's time.
+      (api.container.clock as { now: () => Date }).now = () => ctx.container.clock.now();
+
+      const review = await reviewed(30);
+      let finance = await cookieFor('finance-rv', ['finance']);
+      await createAdmin(ctx.container, tenantA, {
+        username: 'support-rv-http',
+        password: 'the-support-rv-http-password',
+        roleKeys: ['support'],
+      });
+      const post = (cookie: string, route: string, payload: unknown) =>
+        inject({
+          method: 'POST',
+          url: `${API_PREFIX}${route}`,
+          headers: { cookie, origin: ORIGIN },
+          payload,
+        });
+      const codeOf = (body: string) => (JSON.parse(body) as { error: { code: string } }).error.code;
+
+      // In review, the detail shows it — and reconcile refuses: only UNKNOWN is reconciled.
+      const inReview = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${PAYMENT_ROUTES.detail(review.paymentId)}`,
+        headers: { cookie: finance },
+      });
+      expect(inReview.statusCode).toBe(200);
+      const detail = paymentResponseSchema.parse(inReview.json()).payment;
+      expect(detail.providerReviewUntil).toBe(review.reviewUntil.toISOString());
+      expect(detail.gatewayInvoice?.receiptSubmissions.map((one) => one.state)).toEqual([
+        'ACCEPTED',
+      ]);
+      expect(detail.gatewayInvoice?.receiptSubmissions[0]?.openedReview).toBe(true);
+      // Never a Telegram file id, nor the card number, on the operator's wire.
+      expect(inReview.body).not.toContain('photo-');
+      expect(inReview.body).not.toContain('6037');
+      const early = await post(finance, PAYMENT_ROUTES.reconcile(review.paymentId), {
+        idempotencyKey: 'http-early-1',
+        to: 'CONFIRMED',
+      });
+      expect(early.statusCode).toBe(409);
+      expect(codeOf(early.body)).toBe('commerce.payment_state_invalid');
+
+      await lapse(review);
+      // A day has passed on the shared clock: the sessions are taken afresh.
+      finance = await cookieFor('finance-rv');
+      const support = await cookieFor('support-rv-http');
+
+      const denied = await post(support, PAYMENT_ROUTES.reconcile(review.paymentId), {
+        idempotencyKey: 'http-denied-1',
+        to: 'CONFIRMED',
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(codeOf(denied.body)).toBe('platform.permission_denied');
+      const deniedAsk = await post(support, PAYMENT_ROUTES.reinquire(review.paymentId), {
+        idempotencyKey: 'http-denied-2',
+      });
+      expect(deniedAsk.statusCode).toBe(403);
+      // A malformed body is refused before anything is read.
+      const malformed = await post(finance, PAYMENT_ROUTES.reconcile(review.paymentId), {
+        idempotencyKey: 'http-bad-1',
+        to: 'PAID',
+      });
+      expect(malformed.statusCode).toBe(400);
+      // No recorded `completed`+`paid` yet: the operator's word is not evidence.
+      const unsupported = await post(finance, PAYMENT_ROUTES.reconcile(review.paymentId), {
+        idempotencyKey: 'http-unsupported-1',
+        to: 'CONFIRMED',
+      });
+      expect(codeOf(unsupported.body)).toBe('commerce.payment_state_invalid');
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+
+      fake.set(review.invoiceId, 'completed', true);
+      clock.at(new Date(review.reviewUntil.getTime() + 120_000));
+      const asked = await post(finance, PAYMENT_ROUTES.reinquire(review.paymentId), {
+        idempotencyKey: 'http-ask-1',
+      });
+      expect(asked.statusCode).toBe(201);
+      expect(paymentReinquireResponseSchema.parse(asked.json()).requested).toBe(true);
+      await lane.runOnce(tenantA);
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+
+      const body = { idempotencyKey: 'http-confirm-1', to: 'CONFIRMED', note: 'checked' };
+      const confirmed = await post(finance, PAYMENT_ROUTES.reconcile(review.paymentId), body);
+      expect(confirmed.statusCode).toBe(201);
+      expect(paymentResponseSchema.parse(confirmed.json()).payment.state).toBe('CONFIRMED');
+      const replay = await post(finance, PAYMENT_ROUTES.reconcile(review.paymentId), body);
+      expect(paymentResponseSchema.parse(replay.json()).payment.state).toBe('CONFIRMED');
+      const again = await post(finance, PAYMENT_ROUTES.reconcile(review.paymentId), {
+        ...body,
+        idempotencyKey: 'http-confirm-2',
+      });
+      expect(codeOf(again.body)).toBe('commerce.payment_state_invalid');
+      const payment = await paymentOf(review.paymentId);
+      expect(payment.evidence_kind).toBe('RECONCILIATION');
+      expect(await orderState(review.orderId)).toBe('PAID');
+      const [credits] = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM payments WHERE id = ${review.paymentId} AND state = 'CONFIRMED'`,
+      );
+      expect(credits?.n).toBe(1);
     });
   });
 

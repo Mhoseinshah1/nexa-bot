@@ -1838,6 +1838,8 @@ export const WEB_FA = {
   'web.payment_gateway_credential_title': 'کلید API درگاه',
   'web.payment_gateway_credential_hint':
     'کلید ذخیره‌شده هرگز دوباره نمایش داده نمی‌شود. برای تغییر، کلید جدید را وارد کنید تا جایگزین کلید قبلی شود. بدون کلید، این درگاه قابل فعال‌سازی نیست.',
+  'web.payment_gateway_credential_telegram_hint':
+    'این درگاه کلید «Custom Telegram» جداگانه‌ای از تون پی می‌خواهد. کلید درگاه وبسایت اینجا کار نمی‌کند و نباید وارد شود.',
   'web.payment_gateway_credential_input': 'کلید API جدید',
   'web.payment_gateway_credential_save': 'ذخیرهٔ کلید',
   'web.payment_gateway_credential_saved': 'کلید API ذخیره شد.',
@@ -2101,6 +2103,33 @@ export const WEB_FA = {
    */
   'web.payment_unknown_banner':
     'نتیجهٔ این پرداخت مشخص نیست. تا زمانی که با سوابق طرف مقابل تطبیق داده نشود، نه موفق است و نه ناموفق.',
+  /*
+   * TonPays Telegram (audit §9.6, §10). A payment in the provider's review is neither paid
+   * nor failed, and the copy says only that it is waiting for TonPays. Reconciliation is
+   * decided by the provider's RECORDED answer; the buttons say so rather than inviting an
+   * operator to choose.
+   */
+  'web.payment_provider_review_badge': 'در بررسی درگاه',
+  'web.payment_provider_review_banner':
+    'تون پی دریافت فیش این پرداخت را تأیید کرده و آن را در حال بررسی است. تا پایان بررسی نه موفق است و نه ناموفق. پایان مهلت بررسی:',
+  'web.payment_provider_review_window': 'بازهٔ بررسی درگاه',
+  'web.payment_gateway_card': 'کارت فعلی',
+  'web.payment_gateway_card_change_exhausted': 'تعویض کارت دیگر ممکن نیست',
+  'web.payment_gateway_card_change': 'آخرین تعویض کارت',
+  'web.payment_gateway_receipts': 'فیش‌های ارسال‌شده به درگاه',
+  'web.payment_gateway_receipt_opened_review': 'آغازگر بررسی',
+  'web.payment_reconcile_title': 'تطبیق با درگاه',
+  'web.payment_reconcile_hint':
+    'نتیجه فقط از روی آخرین پاسخ ثبت‌شدهٔ استعلام تون پی تعیین می‌شود. تأیید بدون پاسخ «completed» و پرداخت‌شده، و ناموفق بدون پاسخ رد، منقضی یا لغو، پذیرفته نمی‌شود.',
+  'web.payment_reconcile_evidence': 'آخرین پاسخ ثبت‌شده',
+  'web.payment_reconcile_note': 'یادداشت (اختیاری)',
+  'web.payment_reconcile_confirm': 'تأیید بر اساس پاسخ ثبت‌شده',
+  'web.payment_reconcile_fail': 'ناموفق بر اساس پاسخ ثبت‌شده',
+  'web.payment_reinquire': 'استعلام دوباره',
+  'web.payment_reconcile_done': 'نتیجهٔ پرداخت ثبت شد.',
+  'web.payment_reinquire_done': 'استعلام دوباره در نوبت قرار گرفت.',
+  'web.payment_reinquire_recent': 'یک استعلام در دقیقهٔ گذشته درخواست شده است.',
+  'web.payment_reconcile_denied': 'تطبیق این پرداخت به دسترسی payments.reconcile نیاز دارد.',
   // --- Refunds (Phase 5E) --------------------------------------------------
   /*
    * A refund is money going BACK, and the copy never says it has gone back until an

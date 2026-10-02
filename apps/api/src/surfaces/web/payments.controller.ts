@@ -1,4 +1,4 @@
-import { Controller, Get, Inject, Param, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
@@ -12,6 +12,9 @@ import {
   paymentIdSchema,
   paymentReceiptIdSchema,
   paymentListQuerySchema,
+  paymentReconcileRequestSchema,
+  paymentReinquireRequestSchema,
+  routePattern,
   type CompensationListResponse,
   type CompensationView,
   type OrderId,
@@ -21,6 +24,7 @@ import {
   type PaymentListResponse,
   type PaymentReceiptListResponse,
   type PaymentReceiptView,
+  type PaymentReinquireResponse,
   type PaymentResponse,
   type PaymentSummaryResponse,
   type PaymentTimelineResponse,
@@ -49,6 +53,7 @@ import type {
 import type { PaymentDestinationRecord } from '../../modules/commerce/payments/application/account-ports.js';
 import type { PaymentReceiptRecord } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
+import type { GatewayCardFacts } from '../../modules/commerce/payments/application/gateway-payment.service.js';
 
 /**
  * Payments over HTTP, at `/payments`, and the compensation list at `/compensations`.
@@ -138,6 +143,9 @@ export class PaymentsController {
       payment.method === 'GATEWAY'
         ? await this.container.gatewayPayments.invoiceForPayment(scope, payment.id)
         : null;
+    // A card-transfer attempt's card-change and receipt lanes (§10): states only, no bytes.
+    const cardFacts =
+      invoice === null ? null : await this.container.gatewayPayments.cardFactsFor(scope, invoice);
     return {
       payment: toDetail(
         payment,
@@ -146,8 +154,45 @@ export class PaymentsController {
         credit,
         identities.get(payment.customerId),
         dispositions.get(payment.id) ?? null,
+        cardFacts,
       ),
     };
+  }
+
+  /**
+   * Resolve an `UNKNOWN` gateway payment (`docs/tonpays-telegram-gateway-audit.md` §9.6.4).
+   * The path names the payment; the body's `to` is re-decided by the service against the
+   * RECORDED inquiry evidence, under the payment's lock and `payments.reconcile`.
+   */
+  @Post(routePattern(PAYMENT_ROUTES.reconcile, 'id'))
+  async reconcile(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = paymentReconcileRequestSchema.parse(body);
+    await this.container.payments.reconcileGatewayPayment(scope, actor, id, {
+      to: input.to,
+      note: input.note === undefined || input.note === '' ? null : input.note,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return this.detail(request, id);
+  }
+
+  /** Bring the next provider inquiry forward. A row write; nothing is decided here. */
+  @Post(routePattern(PAYMENT_ROUTES.reinquire, 'id'))
+  async reinquire(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentReinquireResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = paymentReinquireRequestSchema.parse(body);
+    const requested = await this.container.payments.reinquireGatewayPayment(scope, actor, id, {
+      idempotencyKey: input.idempotencyKey,
+    });
+    return { requested };
   }
 
   /**
@@ -352,7 +397,10 @@ function toSummary(
  * The gateway side of a payment, for an operator (WP11A). Ids, states and the provider's
  * amounts as provider metadata; never a payment link — a link is a way to pay.
  */
-function toGatewayInvoiceView(invoice: GatewayInvoiceRecord): GatewayInvoiceView {
+function toGatewayInvoiceView(
+  invoice: GatewayInvoiceRecord,
+  cardFacts: GatewayCardFacts | null,
+): GatewayInvoiceView {
   const iso = (value: Date | null) => (value === null ? null : value.toISOString());
   const amount = (value: bigint | null) => (value === null ? null : value.toString());
   return {
@@ -414,8 +462,26 @@ function toGatewayInvoiceView(invoice: GatewayInvoiceRecord): GatewayInvoiceView
     cardChangeShown: invoice.cardChangeShown,
     cardChangeCooldownUntil: iso(invoice.cardChangeCooldownUntil),
     cardChangeExhausted: invoice.cardChangeExhausted,
-    latestCardChange: null,
-    receiptSubmissions: [],
+    latestCardChange:
+      cardFacts?.latestChange == null
+        ? null
+        : {
+            state: cardFacts.latestChange.state,
+            errorCode: cardFacts.latestChange.errorCode,
+            requestedAt: cardFacts.latestChange.requestedAt.toISOString(),
+            decidedAt: iso(cardFacts.latestChange.decidedAt),
+          },
+    // Never a Telegram file id: the operator sees what happened to a receipt, not the receipt.
+    receiptSubmissions: (cardFacts?.submissions ?? []).map((one) => ({
+      id: one.id,
+      state: one.state,
+      errorCode: one.errorCode,
+      providerStatus: one.providerStatus,
+      receiptReceived: one.receiptReceived,
+      openedReview: one.openedReview,
+      createdAt: one.createdAt.toISOString(),
+      decidedAt: iso(one.decidedAt),
+    })),
   };
 }
 
@@ -444,6 +510,7 @@ function toDetail(
   credit: ReceiptCreditRecord | null,
   identity: PaymentCustomerIdentity | undefined,
   receiptDisposition: ReceiptDisposition | null,
+  cardFacts: GatewayCardFacts | null = null,
 ): PaymentDetailResponse {
   return {
     ...toSummary(record, identity, receiptDisposition),
@@ -452,7 +519,7 @@ function toDetail(
     destination: destination === null ? null : toDestinationView(destination),
     receiptCredit: credit === null ? null : toReceiptCreditView(credit),
     topupCashbackPercent: record.topupCashbackPercent,
-    gatewayInvoice: invoice === null ? null : toGatewayInvoiceView(invoice),
+    gatewayInvoice: invoice === null ? null : toGatewayInvoiceView(invoice, cardFacts),
     // Beside the principal, never added to it (WP18).
     customerFee:
       record.customerFee === null

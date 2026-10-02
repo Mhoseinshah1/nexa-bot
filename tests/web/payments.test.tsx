@@ -1568,3 +1568,133 @@ describe('no card-to-card mutation in the Web Admin (§10)', () => {
     expect(deciding).toEqual([]);
   });
 });
+
+/*
+ * TonPays Telegram (`docs/tonpays-telegram-gateway-audit.md` §9.6, §10). A payment in the
+ * provider's review is PENDING with a moved deadline: the page says "in review", never
+ * paid and never failed. An UNKNOWN one is resolved from the RECORDED inquiry answer, and
+ * the controls are drawn only for `payments.reconcile` — the server charges it either way.
+ */
+describe('a TonPays Telegram payment on the detail', () => {
+  const INVOICE = {
+    provider: 'TONPAYS_TELEGRAM',
+    providerOrderId: 'NTAAAAAAAAAAAAAAAAAA',
+    providerInvoiceId: 'TPT-1',
+    creationState: 'CREATED',
+    creationErrorCode: null,
+    providerStatus: 'completed',
+    providerPaid: true,
+    lastInquiryAt: '2026-09-11T12:32:00.000Z',
+    lastInquiryErrorCode: null,
+    webhookStatusHint: null,
+    lastWebhookAt: null,
+    webhookCount: 0,
+    providerUnit: 'IRT',
+    sentAmount: '250000',
+    conversionRateMinor: null,
+    providerChargeId: null,
+    requestAmount: '250000',
+    finalAmount: '250037',
+    creditAmount: null,
+    outcome: null,
+    lateCompletionObservedAt: null,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    cardSeq: 2,
+    cardReceivedAt: '2026-09-10T12:40:00.000Z',
+    cardChangeShown: true,
+    cardChangeCooldownUntil: null,
+    cardChangeExhausted: true,
+    latestCardChange: {
+      state: 'APPLIED',
+      errorCode: null,
+      requestedAt: '2026-09-10T12:39:00.000Z',
+      decidedAt: '2026-09-10T12:40:00.000Z',
+    },
+    receiptSubmissions: [
+      {
+        id: 'sub-1',
+        state: 'ACCEPTED',
+        errorCode: null,
+        providerStatus: 'processing',
+        receiptReceived: true,
+        openedReview: true,
+        createdAt: '2026-09-10T13:00:00.000Z',
+        decidedAt: '2026-09-10T13:00:05.000Z',
+      },
+    ],
+  };
+  const REVIEW = {
+    providerReviewStartedAt: '2026-09-10T13:00:05.000Z',
+    providerReviewUntil: '2026-09-11T13:00:05.000Z',
+  };
+  const render = (
+    overrides: Record<string, unknown>,
+    mayReconcile: boolean,
+    extra: { url: string; body: unknown; status?: number }[] = [],
+  ) => {
+    const api = stubApi([
+      ...detail({ method: 'GATEWAY', gatewayInvoice: INVOICE, ...REVIEW, ...overrides }),
+      ...extra,
+    ]);
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        mayReconcile={mayReconcile}
+        denied={false}
+      />,
+    );
+    return api;
+  };
+
+  it('in review it says so and offers no decision, and shows the receipt lane by state', async () => {
+    render({ state: 'PENDING' }, true);
+    expect(await screen.findByText(t('web.payment_provider_review_banner'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.payment_reconcile_title'))).not.toBeInTheDocument();
+    expect(screen.getByText(t('web.payment_gateway_receipt_opened_review'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.payment_gateway_card_change_exhausted'))).toBeInTheDocument();
+  });
+
+  it('UNKNOWN with payments.reconcile: the recorded answer, then confirm sends the evidence-bound command', async () => {
+    const api = render({ state: 'UNKNOWN', ...REVIEW }, true, [
+      {
+        url: `/payments/${ROW_ID}/reconcile`,
+        body: {
+          payment: {
+            ...payment({ state: 'CONFIRMED', method: 'GATEWAY' }),
+            evidenceNote: null,
+            resolutionNote: null,
+            destination: null,
+          },
+        },
+      },
+    ]);
+    expect(await screen.findByText(t('web.payment_reconcile_title'))).toBeInTheDocument();
+    expect(screen.getAllByText('completed · paid=true').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText(t('web.payment_reconcile_confirm')));
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.endsWith(PAYMENT_ROUTES.reconcile(ROW_ID)))).toBe(
+        true,
+      ),
+    );
+    const sent = api.calls.find((call) => call.url.endsWith(PAYMENT_ROUTES.reconcile(ROW_ID)));
+    expect(sent?.method).toBe('POST');
+    expect(sent?.body).toMatchObject({ to: 'CONFIRMED' });
+    expect(typeof (sent?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
+  });
+
+  it('UNKNOWN without payments.reconcile: names the permission and draws no control', async () => {
+    render({ state: 'UNKNOWN' }, false);
+    expect(await screen.findByText(t('web.payment_reconcile_denied'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.payment_reconcile_confirm'))).not.toBeInTheDocument();
+    expect(screen.queryByText(t('web.payment_reinquire'))).not.toBeInTheDocument();
+  });
+
+  it('the list marks a payment in the provider review', async () => {
+    stubApi(list([payment({ method: 'GATEWAY', ...REVIEW })]));
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    expect(await screen.findByText(t('web.payment_provider_review_badge'))).toBeInTheDocument();
+  });
+});

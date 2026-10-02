@@ -175,6 +175,8 @@ import {
   paymentReceiptListResponseSchema,
   paymentTimelineResponseSchema,
   paymentResponseSchema,
+  paymentReinquireResponseSchema,
+  type PaymentReinquireResponse,
   walletEntryListResponseSchema,
   walletEntryResponseSchema,
   walletResponseSchema,
@@ -1483,6 +1485,33 @@ export function fetchPayment(id: string): Promise<PaymentResponse> {
  */
 export function fetchPaymentTimeline(id: string): Promise<PaymentTimelineResponse> {
   return authedGet(PAYMENT_ROUTES.timeline(id), paymentTimelineResponseSchema);
+}
+
+/**
+ * Resolve an `UNKNOWN` gateway payment (TonPays Telegram audit §9.6.4), under
+ * `payments.reconcile`. The server re-decides `to` against the provider's RECORDED answer
+ * and refuses what that answer does not show — this is not a card-to-card confirm.
+ */
+export function reconcilePayment(input: {
+  paymentId: string;
+  idempotencyKey: string;
+  to: 'CONFIRMED' | 'FAILED';
+  note?: string;
+}): Promise<PaymentResponse> {
+  const { paymentId, ...body } = input;
+  return post(PAYMENT_ROUTES.reconcile(paymentId), body, paymentResponseSchema);
+}
+
+/** Bring the next provider inquiry of an `UNKNOWN` gateway payment forward. */
+export function reinquirePayment(input: {
+  paymentId: string;
+  idempotencyKey: string;
+}): Promise<PaymentReinquireResponse> {
+  return post(
+    PAYMENT_ROUTES.reinquire(input.paymentId),
+    { idempotencyKey: input.idempotencyKey },
+    paymentReinquireResponseSchema,
+  );
 }
 
 /** What the customer sent against one payment. Behind `receipts.view` on the server. */
