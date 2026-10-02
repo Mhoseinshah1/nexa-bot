@@ -292,6 +292,18 @@ enabled. A stale render between the mutation and the refetch; no wrong write is 
 ## 8. What QA did not do
 
 - Real Telegram: impossible from here. `docs/round-t-telegram-acceptance.md` is the checklist.
+  It was corrected after the Codex review of PR #138 (nine findings, all confirmed against the
+  code): a baseline revision is now published first (R-ACC-0), because a never-published
+  tenant has no revision to roll back to (and, found while fixing it, the page cannot save an
+  unchanged seeded draft — `builder.tsx:206`, `:507-523` — so that save is a console request); every evidence query is scoped to the tenant; the
+  forced-eligibility step changes and restores all three custom-emoji test columns together
+  (`bot_instances_custom_emoji_test_shape_check`, reproduced on `nexa_qa_t`); `botctl` is used
+  by version name (`update VERSION`, argument-less `rollback`); tap and refusal evidence comes
+  from the Telegram client and the operator's own token-safe Bot API probe, since the
+  application logs neither a customer's text nor Telegram's refusal sentence; R-ACC-8 is
+  tests-only, because no real reply carries both markups; the prerequisites list every
+  permission used; and the superseded 409 is checked by an authenticated request from the
+  browser console, since the page disables Publish.
 - A second administrator with `settings.view` only, in the browser: covered by integration
   H-2, not re-driven.
 - Mutation testing: not re-run; T4's table and the committed falsification rows stand.
