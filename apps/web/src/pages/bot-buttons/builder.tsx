@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   customerRowsOf,
   explicitMainMenuSchema,
@@ -15,7 +15,6 @@ import {
 } from '@nexa/contracts';
 import {
   ApiError,
-  fetchAppearance,
   publishBotMenu,
   resetBotMenuDraft,
   restoreBotMenuRevision,
@@ -53,16 +52,14 @@ import { usePointerDrag, type DragSource, type DropTarget } from './dnd';
 import { HistoryDrawer, REVISIONS_QUERY_KEY } from './history';
 import { Inspector } from './inspector';
 import {
+  applyDrop,
   diffLayouts,
   gateAnswersOf,
   lookOf,
   moveEarlier,
   moveLater,
-  moveRow,
   moveToNextRow,
   moveToPreviousRow,
-  placeAtRowEnd,
-  placeBefore,
   placeInNewRow,
   positionOf,
   removeToPool,
@@ -122,8 +119,6 @@ const CHANGE_LABEL: Readonly<Record<ButtonChange, WebKey>> = {
   enabled: 'web.bb_change_enabled',
   disabled: 'web.bb_change_disabled',
   look: 'web.bb_change_style',
-  icon: 'web.bb_change_icon',
-  screen: 'web.bb_change_screen',
 };
 
 type Mode = 'edit' | 'customer' | 'live';
@@ -159,11 +154,12 @@ function olderThan(read: MainMenuDraftView, held: MainMenuDraftView): boolean {
 }
 
 /**
- * Round T: the button builder — the customer main menu as explicit rows, a style and an
- * icon per button, around a DRAFT that changes nothing a customer sees until it is
- * published. Reads `GET /bot-menu/builder`; writes through the four builder endpoints, each
- * with an idempotency key and the versions it read. Gates are the server's answers
- * (`items[].gateOpen`), passed to the contract's `customerRowsOf` — never decided here.
+ * Round T: the button builder — the customer main menu as explicit rows and a style per
+ * button (the button icon was retired on 2026-10-02), around a DRAFT that changes nothing a
+ * customer sees until it is published. Reads `GET /bot-menu/builder`; writes through the
+ * four builder endpoints, each with an idempotency key and the versions it read. Gates are
+ * the server's answers (`items[].gateOpen`), passed to the contract's `customerRowsOf` —
+ * never decided here.
  */
 export function MenuBuilder({
   view,
@@ -200,7 +196,6 @@ export function MenuBuilder({
     () => new Map<MainMenuButtonId, MainMenuBuilderItem>(view.items.map((item) => [item.id, item])),
     [view.items],
   );
-  const appearance = useQuery({ queryKey: ['appearance'], queryFn: fetchAppearance });
 
   const layout = seed.layout;
   const dirty = !explicitMainMenusEqual(layout, seed.basis.layout);
@@ -293,30 +288,21 @@ export function MenuBuilder({
     }
   });
 
+  /**
+   * A drop: the model's `applyDrop` decides what it does — the same primitives as every
+   * other move — and a drop that would change nothing (the same place, a row onto a key)
+   * changes nothing and says nothing.
+   */
   const onDrop = (source: DragSource, target: DropTarget) => {
+    if (!editable) return;
+    const next = applyDrop(layout, source, target);
+    if (next === null) return;
     if (source.kind === 'row') {
-      if (target.kind !== 'gap') return;
-      const from = source.row;
-      const next = moveRow(layout, from, target.at);
       setSeed({ basis: seed.basis, layout: next });
-      say(fill(t('web.bb_announce_row'), { from: from + 1 }));
+      say(fill(t('web.bb_announce_row'), { from: source.row + 1 }));
       return;
     }
-    const id = source.id;
-    switch (target.kind) {
-      case 'chip':
-        onMove(id, (l) => placeBefore(l, id, target.id));
-        return;
-      case 'row':
-        onMove(id, (l) => placeAtRowEnd(l, id, target.row));
-        return;
-      case 'gap':
-        onMove(id, (l) => placeInNewRow(l, id, target.at));
-        return;
-      case 'pool':
-        onMove(id, (l) => removeToPool(l, id));
-        return;
-    }
+    onMove(source.id, () => next);
   };
   const drag = usePointerDrag(editable, onDrop);
 
@@ -488,21 +474,25 @@ export function MenuBuilder({
   const serverInvalid =
     lastAction === 'save' && lastError instanceof ApiError && lastError.status === 400;
 
-  const state: BuilderState = save.isPending
-    ? 'saving'
-    : publish.isPending
-      ? 'publishing'
-      : conflict !== null
-        ? 'conflict'
-        : !valid || serverInvalid
-          ? 'invalid'
-          : dirty
-            ? 'unsaved'
-            : seed.basis.version === null
-              ? 'not_saved'
-              : seed.basis.differsFromPublished || view.superseded || view.publishedUnreadable
-                ? 'differs'
-                : 'published';
+  // A reset or a restore REPLACES the draft: until its answer is adopted the page must not
+  // keep reporting the state from before it (round-T QA-6 read «published» right after a
+  // restore was confirmed).
+  const state: BuilderState =
+    save.isPending || reset.isPending || restore.isPending
+      ? 'saving'
+      : publish.isPending
+        ? 'publishing'
+        : conflict !== null
+          ? 'conflict'
+          : !valid || serverInvalid
+            ? 'invalid'
+            : dirty
+              ? 'unsaved'
+              : seed.basis.version === null
+                ? 'not_saved'
+                : seed.basis.differsFromPublished || view.superseded || view.publishedUnreadable
+                  ? 'differs'
+                  : 'published';
 
   const publishable =
     editable &&
@@ -531,12 +521,11 @@ export function MenuBuilder({
         key: one.button,
         label: labelOf(one.button, items.get(one.button)),
         look: lookOf(one),
-        iconSlot: one.iconSlot,
       })),
     );
   const customerRows = toPreview(customerRowsOf(layout, gates));
   // The live keyboard: the server's rendered labels, row by row. While an explicit layout
-  // is what customers get, each key's style and icon are that PUBLISHED layout's, drawn by
+  // is what customers get, each key's style is that PUBLISHED layout's, drawn by
   // the same rule with the server's gate answers — used only when it lines up key for key
   // with the server's rows, so nothing is drawn that the server did not say (Codex #134-5).
   const publishedRows =
@@ -554,7 +543,6 @@ export function MenuBuilder({
         key: `${String(at)}-${String(index)}`,
         label,
         look: drawn === undefined ? 'default' : lookOf(drawn),
-        iconSlot: drawn?.iconSlot ?? null,
       };
     }),
   );
@@ -562,9 +550,6 @@ export function MenuBuilder({
   const crampedRows = layout.rows
     .map((row, at) => (rowLooksCramped(row, wide) ? at + 1 : null))
     .filter((n): n is number => n !== null);
-  const usesIcons = layout.buttons.some(
-    (config) => config.iconSlot !== null && positionOf(layout, config.button) !== null,
-  );
   const bot =
     view.iconEligibility.find((one) => one.status === 'ACTIVE') ?? view.iconEligibility[0];
   const phoneTitle =
@@ -773,7 +758,6 @@ export function MenuBuilder({
               {fill(t('web.bb_rows_cramped'), { rows: crampedRows.join(t('web.bb_sep')) })}
             </Banner>
           )}
-          {usesIcons && <p className="muted small">{t('web.bb_icon_legend')}</p>}
           <p className="muted small">{t('web.bb_style_legend')}</p>
           {publishBlocker !== null && (
             <p className="muted small" data-testid="bb-publish-blocker">
@@ -787,8 +771,6 @@ export function MenuBuilder({
           id={selected}
           item={selected === null ? undefined : items.get(selected)}
           editable={editable}
-          iconEligibility={view.iconEligibility}
-          appearanceSlots={appearance.data?.slots ?? null}
           mayViewTemplates={mayViewTemplates}
           onMove={onMove}
           onChange={onChange}

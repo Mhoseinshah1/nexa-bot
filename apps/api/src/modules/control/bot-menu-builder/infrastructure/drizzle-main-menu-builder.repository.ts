@@ -3,6 +3,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { ScopeContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  admins,
   mainMenuLayouts,
   mainMenuRevisions,
   settingValues,
@@ -337,6 +338,7 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
     };
   }
 
+  /** A revision with its origin's number and its publisher's name now (round-T QA-4), same tenant only. */
   private revisionQuery(executor: Executor) {
     return executor
       .select({
@@ -345,6 +347,7 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
         snapshot: mainMenuRevisions.snapshot,
         createdAt: mainMenuRevisions.createdAt,
         createdByAdminId: mainMenuRevisions.createdByAdminId,
+        createdByAdminName: admins.displayName,
         originId: revisionOrigin.id,
         originRevision: revisionOrigin.revision,
       })
@@ -354,6 +357,13 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
         and(
           eq(revisionOrigin.tenantId, mainMenuRevisions.tenantId),
           eq(revisionOrigin.id, mainMenuRevisions.restoredFromRevisionId),
+        ),
+      )
+      .leftJoin(
+        admins,
+        and(
+          eq(admins.tenantId, mainMenuRevisions.tenantId),
+          eq(admins.id, mainMenuRevisions.createdByAdminId),
         ),
       )
       .$dynamic();
@@ -366,6 +376,7 @@ function toRevision(row: {
   snapshot: unknown;
   createdAt: Date;
   createdByAdminId: string | null;
+  createdByAdminName: string | null;
   originId: string | null;
   originRevision: number | null;
 }): StoredMainMenuRevision {
@@ -375,6 +386,7 @@ function toRevision(row: {
     snapshot: row.snapshot,
     createdAt: row.createdAt,
     createdByAdminId: row.createdByAdminId,
+    createdByAdminName: row.createdByAdminName,
     restoredFrom:
       row.originId === null || row.originRevision === null
         ? null
