@@ -215,12 +215,332 @@
 
 /* --- Bot buttons ----------------------------------------------------------------- */
 
-.bot-buttons-rules {
+/*
+ * Round T: the builder. Pool, phone canvas and Inspector side by side at desk width; the
+ * pool above the other two at tablet width; one column on a phone. Every class is `bb-`.
+ */
+.bb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.bb-workspace {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr) minmax(260px, 330px);
+  gap: var(--gap);
+  align-items: start;
+}
+.bb-workspace > * {
+  min-width: 0;
+}
+@media (max-width: 1180px) {
+  .bb-workspace {
+    grid-template-columns: minmax(0, 1fr) minmax(250px, 320px);
+  }
+  .bb-workspace > .bb-pool {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 760px) {
+  .bb-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.bb-pane-title {
+  margin: 0 0 6px;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.bb-pool,
+.bb-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+.bb-pool.is-target {
+  border-style: dashed;
+  border-color: var(--line-2);
+}
+.bb-pool.is-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.bb-pool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bb-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bb-canvas-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.bb-canvas .tg-phone {
+  max-width: 420px;
+  min-height: 300px;
+}
+
+/* The editable keyboard: rows of chips, gaps that appear while dragging. */
+.bb-keyboard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bb-row-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bb-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  min-width: 0;
+  padding: 2px;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-ctl);
+}
+.bb-row.is-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.bb-row.is-dragging {
+  opacity: 0.55;
+}
+.bb-row-grip,
+.bb-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  color: var(--fg-3);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.bb-row-warn {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--warn);
+}
+.bb-gap {
+  padding: 6px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-ctl);
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+.bb-gap.is-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+.bb-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-3);
+}
+.bb-pool-list .bb-chip {
+  flex: 0 1 auto;
+}
+.bb-chip-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 7px 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-ui);
+  cursor: pointer;
+  text-align: center;
+}
+.bb-chip-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bb-chip.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.bb-chip.is-over {
+  border-inline-start-width: 3px;
+  border-inline-start-color: var(--accent);
+}
+.bb-chip.is-dragging {
+  opacity: 0.5;
+}
+.bb-chip.is-off .bb-chip-label {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+.bb-chip.is-gated {
+  border-style: dashed;
+}
+
+/* The four styles Telegram accepts — approximations in theme tokens, nothing custom. */
+.bb-chip.bb-style-primary,
+.menu-preview-key.bb-style-primary {
+  border-color: var(--info);
+  background: var(--info-soft);
+}
+.bb-chip.bb-style-success,
+.menu-preview-key.bb-style-success {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+.bb-chip.bb-style-danger,
+.menu-preview-key.bb-style-danger {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+.bb-style-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-3);
+}
+.bb-style-primary .bb-style-swatch {
+  border-color: var(--info);
+  background: var(--info-soft);
+}
+.bb-style-success .bb-style-swatch {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+.bb-style-danger .bb-style-swatch {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+.bb-styles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+.bb-style-option {
+  align-items: center;
+  gap: 6px;
+}
+
+/* The icon marker: the slot's ordinary emoji in a dashed frame, never a custom emoji. */
+.bb-icon-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 0 2px;
+  border: 1px dashed var(--fg-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* The Inspector. */
+.bb-fieldset {
+  margin: 0;
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.bb-fieldset > legend {
+  padding: 0;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+.bb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.bb-switch-row,
+.bb-to-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.bb-move-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bb-eligibility ul {
   margin: 0;
   padding-inline-start: 1.1rem;
   display: flex;
   flex-direction: column;
+  gap: 4px;
+}
+
+/* Publish: the change list and the two keyboards. History: one revision per item. */
+.bb-diff {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bb-diff-keyboards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.bb-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.bb-history-item {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+}
+.bb-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.bb-history-item > .btn {
+  align-self: flex-start;
 }
 
 /* --- Appearance ------------------------------------------------------------------ */
