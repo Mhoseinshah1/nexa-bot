@@ -471,6 +471,31 @@ describe('the button builder (round T, T1)', () => {
       expect(await builder().saveDraft(tenantA, owner, draftCommand)).toEqual(saved);
     });
 
+    it('P-3b refuses a draft key replayed with ANOTHER layout, and never reports the first save for it', async () => {
+      // A save whose response was lost is retried under its key after the operator edited:
+      // replaying the first answer would report the newer layout saved when it was not.
+      const command = {
+        idempotencyKey: 'menu-builder-replayed-draft-edited',
+        expectedDraftVersion: null,
+        layout: threeAcross(),
+        legacyBaselineVersion: null,
+      };
+      const first = await builder().saveDraft(tenantA, owner, command);
+      expect(first.head.draft.version).toBe(1);
+      // Same key, same body: the first answer, nothing written twice.
+      expect(await builder().saveDraft(tenantA, owner, command)).toEqual(first);
+      // Same key, the operator's later layout: refused, whatever the versions say.
+      expect(
+        await codeOf(
+          builder().saveDraft(tenantA, owner, { ...command, layout: DEFAULT_EXPLICIT_MAIN_MENU }),
+        ),
+      ).toBe(PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH);
+      const view = await builder().view(tenantA, owner);
+      expect(view.draft.version).toBe(1);
+      expect(view.draft.layout).toEqual(first.head.draft.layout);
+      expect(await auditActions()).toEqual([BOT_MENU_BUILDER_AUDIT_ACTIONS.DRAFT_SAVED]);
+    });
+
     it('P-5 a setting written behind the publish by an older release wins, is reported superseded, and is never overwritten unseen', async () => {
       await saveDraft(threeAcross(), null);
       await publish(1, null);
