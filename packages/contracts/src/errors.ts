@@ -409,6 +409,13 @@ export const PLATFORM_ERROR_CODES = {
    *     key derivation is deliberately expensive, so at most one runs at a time.
    */
   RECOVERY_KIT_BUSY: 'recovery_kit.busy',
+  /**
+   * The import would leave this installation holding more keys than one kit can
+   * carry (`RECOVERY_KIT_MAX_KEYS`). Refused, because an installation whose keys
+   * no longer fit in a kit can no longer export one — the export the import was
+   * meant to make possible.
+   */
+  RECOVERY_KIT_TOO_MANY_KEYS: 'recovery_kit.too_many_keys',
   /** No imported key by that id. Configured keys are not addressable here. */
   INSTALLATION_KEY_NOT_FOUND: 'installation_key.not_found',
   /**
