@@ -175,13 +175,15 @@ describe('the provider catalogue', () => {
     // WP11A added TonPays WITH its adapter (`TonPaysAdapter`), and Package A added Telegram
     // Stars with its own (`TelegramStarsAdapter`), and TonPays Telegram its own
     // (`TonPaysTelegramAdapter`, `docs/tonpays-telegram-gateway-audit.md`), and NOWPayments its
-    // own (`NowPaymentsAdapter`, `docs/nowpayments-gateway-audit.md`); that is what this pins.
+    // own (`NowPaymentsAdapter`, `docs/nowpayments-gateway-audit.md`), and CentralPay its own
+    // (`CentralPayAdapter`, `docs/centralpay-gateway-audit.md`); that is what this pins.
     expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual([
       'MANUAL_TRANSFER',
       'TONPAYS',
       'TELEGRAM_STARS',
       'TONPAYS_TELEGRAM',
       'NOWPAYMENTS',
+      'CENTRALPAY',
     ]);
   });
 
@@ -220,17 +222,32 @@ describe('the invoice-form descriptor fields (TonPays Telegram, audit §5.3)', (
             d.providerReview,
             d.invoiceCredential,
             d.webhookSecret,
+            d.verifyKey,
+            d.browserReturn,
+            d.numericIdentity,
           ],
         ];
       }),
     );
     expect(table).toEqual({
-      MANUAL_TRANSFER: ['NONE', false, false, false, 'NONE', false],
-      TONPAYS: ['LINK', false, false, false, 'GATEWAY_KEY', false],
-      TELEGRAM_STARS: ['BOT_INVOICE', true, false, false, 'BOT_TOKEN', false],
-      TONPAYS_TELEGRAM: ['CARD_TRANSFER', true, true, true, 'GATEWAY_KEY', false],
+      MANUAL_TRANSFER: ['NONE', false, false, false, 'NONE', false, false, false, false],
+      TONPAYS: ['LINK', false, false, false, 'GATEWAY_KEY', false, false, false, false],
+      TELEGRAM_STARS: ['BOT_INVOICE', true, false, false, 'BOT_TOKEN', false, false, false, false],
+      TONPAYS_TELEGRAM: [
+        'CARD_TRANSFER',
+        true,
+        true,
+        true,
+        'GATEWAY_KEY',
+        false,
+        false,
+        false,
+        false,
+      ],
       // NOWPayments: a link, its coins-on-chain review, and the only signed webhook.
-      NOWPAYMENTS: ['LINK', false, false, true, 'GATEWAY_KEY', true],
+      NOWPAYMENTS: ['LINK', false, false, true, 'GATEWAY_KEY', true, false, false, false],
+      // CentralPay: a link, a separate verify key, a browser return and integer identities.
+      CENTRALPAY: ['LINK', false, false, false, 'GATEWAY_KEY', false, true, true, true],
     });
     // Only the routes that review may carry the review columns: the list generates the CHECK.
     expect([...PROVIDER_REVIEW_GATEWAY_PROVIDERS]).toEqual(['TONPAYS_TELEGRAM', 'NOWPAYMENTS']);

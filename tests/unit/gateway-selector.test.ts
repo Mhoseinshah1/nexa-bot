@@ -47,7 +47,7 @@ describe('externalRoutes', () => {
     expect(externalRoutes([])).toEqual([]);
   });
 
-  it('answers TonPays, Telegram Stars, TonPays Telegram and NOWPayments, and only those, among the providers this release has', () => {
+  it('answers TonPays, Telegram Stars, TonPays Telegram, NOWPayments and CentralPay, and only those, among the providers this release has', () => {
     const real = PAYMENT_GATEWAY_PROVIDERS.map((provider) =>
       route(provider, PAYMENT_GATEWAY_DESCRIPTORS[provider]),
     );
@@ -57,6 +57,7 @@ describe('externalRoutes', () => {
       'TELEGRAM_STARS',
       'TONPAYS_TELEGRAM',
       'NOWPAYMENTS',
+      'CENTRALPAY',
     ]);
   });
 

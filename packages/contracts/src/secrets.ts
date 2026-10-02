@@ -40,6 +40,10 @@
  * same `payment_gateway_credentials` row as the key. Its own purpose for the reason the
  * panel credentials have three: the key's ciphertext moved into this column must not
  * decrypt as the secret.
+ *
+ * `payment_gateway.verify_key` is the second key of a route whose provider authorises its
+ * INQUIRY with a separate credential (CentralPay's verify key, `docs/centralpay-gateway-
+ * audit.md`), on the same row, under its own purpose for the same reason.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -48,6 +52,7 @@ export const SECRET_PURPOSES = [
   'panel.api_token',
   'payment_gateway.api_key',
   'payment_gateway.webhook_secret',
+  'payment_gateway.verify_key',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 
