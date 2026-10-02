@@ -149,6 +149,25 @@ materialisation, and the dispatcher's stamp. ADR-0030's lane never reads it.
 The `/stop` entry stays in the Telegram command menu while the policy is OFF (the menu is
 per bot and synced separately); it answers `bot.marketing.unavailable`.
 
+## Falsification
+
+`scripts/mutate-package-h.py` reverts each rule once, runs its named tests and restores the
+file. Recorded on the branch head before the §7 commit (counts from real output):
+
+| #   | Rule reverted                                            | Result                    |
+| --- | -------------------------------------------------------- | ------------------------- |
+| M1  | §7 a video older than the tap is offered to the prompt   | 1 failed / 7 integration  |
+| M2  | §7 an expired prompt still stores                        | 1 failed / 7 integration  |
+| M3  | §9 the service write does not re-check the policy        | 1 failed / 3 integration  |
+| M4  | §9 MARKETING always excludes stored opt-outs             | 2 failed / 20 integration |
+| M5  | §9 the support screen draws the button while OFF         | 1 failed / 3 integration  |
+| M6  | §8 a central-only route with no ratio is offered         | 1 failed / 20 integration |
+| M7  | §8 the Stars route enables with central_fx off           | 1 failed / 20 integration |
+| M8  | §8 the ratio can be cleared while the route is on        | 1 failed / 20 integration |
+| M9  | §8 a legacy stored rate blocks every route edit          | 1 failed / 20 integration |
+| M10 | §8 the Stars spec back to FIXED_RATE-first, two policies | 3 failed / 43 unit        |
+| M11 | §8 the retired mode guard accepts a change               | 1 failed / 20 integration |
+
 ## Rollback
 
 Migration 0158 is additive: a new table, a nullable column, widened CHECKs. The previous
