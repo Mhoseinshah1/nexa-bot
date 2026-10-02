@@ -148,8 +148,10 @@ const RECORDS = [
  * `docs/round-t-t3-falsification.md` (29 citations, merged first in #134): 2523.
  *
  * 2523 → 2611: TonPays Telegram, `docs/tonpays-telegram-falsification.md` — 88 citations.
+ * 2611 → 2628: its independent review — nineteen REV rows added, and TPTG-36p and -36d moved
+ * to the record's layer table (a review fix now holds their rows a second way).
  */
-const EXPECTED = 2611;
+const EXPECTED = 2628;
 /**
  * A table whose last column is one of these is making citations.
  *

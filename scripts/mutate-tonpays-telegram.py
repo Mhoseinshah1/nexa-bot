@@ -246,14 +246,16 @@ M = [
      T_RV, 'TPTG-36', 'KILL'),
     ('TPTG-36c', [(OS, "        if (await this.deps.payments.providerReviewFor(scope, orderId, tx)) {", "        if (false) {")],
      T_RV, 'TPTG-36', 'KILL'),
+    # 36p and 36d: a payment in review always carries the ACCEPTED submission that opened it, so
+    # the receipt-in-flight predicate (review F3) holds the same rows. One line of two.
     ('TPTG-36p', [(PR, "           * acknowledgement's row lock re-reads this column on the committed row.\n           */\n          isNull(payments.providerReviewUntil),\n",
                    "           * acknowledgement's row lock re-reads this column on the committed row.\n           */\n")],
-     T_RV, 'TPTG-36', 'KILL'),
+     T_RV, 'TPTG-36', 'LAYER'),
     ('TPTG-36o', [(OR, "AND live.state IN ('PENDING', 'UNKNOWN')", "AND live.state IN ('PENDING')")],
      T_RV, 'TPTG-36', 'KILL'),
     ('TPTG-36d', [(PS, "        if (payment.providerReviewUntil !== null) {\n          throw errors.conflict(\n            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,",
                    "        if (false) {\n          throw errors.conflict(\n            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,")],
-     T_RV, 'TPTG-36', 'KILL'),
+     T_RV, 'TPTG-36', 'LAYER'),
     ('TPTG-37c', [(PS, "            ? status === 'completed' && invoice?.providerPaid === true\n",
                    "            ? true\n")],
      T_RV, 'TPTG-37: needs payments.reconcile', 'KILL'),
