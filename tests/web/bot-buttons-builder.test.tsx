@@ -18,6 +18,8 @@ import {
   builderApi,
   builderView,
   draftView,
+  failBuilderReadsAfterFirst,
+  holdRequests,
   liveBuilderApi,
   mutationAnswer,
   refusal,
@@ -755,5 +757,192 @@ describe('the button builder — banners and permissions', () => {
     expect(
       (document.querySelector('#bot-buttons-label-wallet details') as HTMLDetailsElement).open,
     ).toBe(true);
+  });
+});
+
+/**
+ * The eight findings of PR #134's review, each pinned by the case that failed before its fix.
+ */
+describe('the button builder — review of PR #134', () => {
+  const withoutHelp: ExplicitMainMenu = {
+    ...DEFAULT_EXPLICIT_MAIN_MENU,
+    rows: [['catalog', 'services'], ['wallet'], ['trial', 'referral'], ['apps'], ['tickets']],
+  };
+  const explicitView = (overrides: Parameters<typeof builderView>[0] = {}) =>
+    builderView({
+      source: 'EXPLICIT',
+      draft: draftView({ version: 3, differsFromPublished: true, layout: withoutHelp }),
+      published: {
+        layout: {
+          ...DEFAULT_EXPLICIT_MAIN_MENU,
+          buttons: DEFAULT_EXPLICIT_MAIN_MENU.buttons.map((config) =>
+            config.button === 'catalog'
+              ? { ...config, style: 'primary' as const, iconSlot: 'purchase' as const }
+              : config,
+          ),
+        },
+        revision: 2,
+        publishedAt: '2026-09-30T10:00:00.000Z',
+        publishedByAdminId: null,
+      },
+      ...overrides,
+    });
+
+  it('#1 allows no edit while a write is in flight, so its answer drops nothing', async () => {
+    const api = builderApi(builderView(), [saved({ version: 1, layout: withoutHelp })]);
+    const held = holdRequests('PUT', '/bot-menu/builder/draft');
+    renderPage(page());
+    await ready();
+    select('help');
+    move('web.bb_remove');
+    fireEvent.click(toolbarButton(t('web.bb_save_draft')));
+    await waitFor(() => expect(state()).toBe('saving'));
+    // In flight: the controls are off and the keyboard moves nothing.
+    select('catalog');
+    const remove = screen
+      .getByTestId('bb-inspector')
+      .querySelector('[data-move="web.bb_remove"]') as HTMLButtonElement;
+    expect(remove.disabled).toBe(true);
+    fireEvent.keyDown(chipButton('catalog'), { key: 'Delete' });
+    expect(drawnRows().flat()).toContain('catalog');
+    held.release();
+    await waitFor(() => expect(state()).toBe('differs'));
+    expect(draftPuts(api)).toHaveLength(1);
+    expect(pooled()).toEqual(['help']);
+  });
+
+  it('#2 keeps a publish’s answer over the snapshot that was on screen before it', async () => {
+    const api = builderApi(explicitView(), [
+      {
+        url: '/bot-menu/builder/publish',
+        body: mutationAnswer({ version: 3, differsFromPublished: false, layout: withoutHelp }),
+      },
+    ]);
+    renderPage(page());
+    await ready();
+    const reads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/bot-menu/builder'))
+        .length;
+    const before = reads();
+    fireEvent.click(toolbarButton(t('web.bb_publish')));
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_publish_confirm') }));
+    await waitFor(() => expect(posts(api, '/publish')).toHaveLength(1));
+    await waitFor(() => expect(state()).toBe('published'));
+    // The re-read answers the pre-publish snapshot again (a lagging or unchanged read).
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    expect(state()).toBe('published');
+  });
+
+  it('#3 forgets an earlier write’s refusal once a later write succeeds', async () => {
+    builderApi(builderView(), [
+      {
+        url: '/bot-menu/builder/draft',
+        status: 400,
+        body: {
+          error: {
+            kind: 'validation',
+            code: 'control.invalid_value',
+            message: 'The layout does not match its declaration.',
+            details: { issues: [{ path: 'rows', message: 'A button may be placed once.' }] },
+            correlationId: 'test',
+          },
+        },
+      },
+      { url: '/bot-menu/builder/reset', body: mutationAnswer({ version: 1 }) },
+    ]);
+    renderPage(page());
+    await ready();
+    select('help');
+    move('web.bb_remove');
+    fireEvent.click(toolbarButton(t('web.bb_save_draft')));
+    await screen.findByText('rows: A button may be placed once.');
+    fireEvent.click(toolbarButton(t('web.bb_reset')));
+    const dialog = within(screen.getByRole('dialog', { name: t('web.bb_reset_title') }));
+    fireEvent.click(dialog.getByRole('button', { name: t('web.bb_reset_confirm') }));
+    await waitFor(() => expect(state()).toBe('differs'));
+    expect(screen.queryByText('rows: A button may be placed once.')).toBeNull();
+  });
+
+  it('#4 keeps the edit and the conflict when the re-read after a 409 fails', async () => {
+    builderApi(builderView(), [
+      { url: '/bot-menu/builder/draft', status: 409, body: refusal('control.version_conflict') },
+    ]);
+    failBuilderReadsAfterFirst();
+    renderPage(page());
+    await ready();
+    select('help');
+    move('web.bb_remove');
+    fireEvent.click(toolbarButton(t('web.bb_save_draft')));
+    await screen.findByTestId('bb-conflict');
+    fireEvent.click(screen.getAllByRole('button', { name: t('web.bb_reload') })[0] as HTMLElement);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: t('web.discard') }),
+    );
+    await screen.findByText('platform.unavailable');
+    expect(pooled()).toContain('help');
+    expect(screen.getByTestId('bb-conflict')).toBeTruthy();
+    expect(screen.getByTestId('bb-live').textContent).not.toBe(t('web.bb_reloaded'));
+  });
+
+  it('#5 draws the live keyboard with the published layout’s styles and icons', async () => {
+    builderApi(explicitView());
+    renderPage(page());
+    await ready();
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_live') }));
+    const live = screen.getByTestId('bb-live-preview');
+    const first = live.querySelector('[data-key="0-0"]') as HTMLElement;
+    expect(first.textContent).toContain(LABEL('catalog'));
+    expect(first.getAttribute('data-look')).toBe('primary');
+    expect(first.querySelector('.bb-icon-mark')).not.toBeNull();
+    expect(live.querySelector('[data-key="0-1"]')?.getAttribute('data-look')).toBe('default');
+    cleanup();
+    // The legacy keyboard has no styles to show.
+    builderApi(builderView());
+    renderPage(page());
+    await ready();
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_live') }));
+    expect(
+      screen
+        .getByTestId('bb-live-preview')
+        .querySelector('[data-key="0-0"]')
+        ?.getAttribute('data-look'),
+    ).toBe('default');
+  });
+
+  it('#6 never calls a publish over an unreadable layout the first publication', async () => {
+    builderApi(
+      explicitView({
+        publishedUnreadable: true,
+        published: {
+          layout: null,
+          revision: 2,
+          publishedAt: '2026-09-30T10:00:00.000Z',
+          publishedByAdminId: null,
+        },
+      }),
+    );
+    renderPage(page());
+    await ready();
+    fireEvent.click(toolbarButton(t('web.bb_publish')));
+    const dialog = within(screen.getByRole('dialog', { name: t('web.bb_publish_title') }));
+    expect(dialog.getByText(t('web.bb_publish_over_unreadable'))).toBeTruthy();
+    expect(dialog.queryByText(t('web.bb_publish_first'))).toBeNull();
+  });
+
+  it('#8 warns, without refusing, when an icon would sit beside a label’s own emoji', async () => {
+    builderApi(builderView({ itemOverrides: { services: { label: 'سرویس‌ها' } } }));
+    renderPage(page());
+    await ready();
+    select('catalog');
+    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
+      target: { value: 'purchase' },
+    });
+    expect(screen.getByTestId('bb-icon-doubled')).toBeTruthy();
+    select('services');
+    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
+      target: { value: 'service' },
+    });
+    expect(screen.queryByTestId('bb-icon-doubled')).toBeNull();
+    expect(toolbarButton(t('web.bb_save_draft')).disabled).toBe(false);
   });
 });

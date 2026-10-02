@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   customerRowsOf,
   explicitMainMenuSchema,
@@ -71,6 +71,17 @@ import {
 } from './model';
 
 export const BUILDER_QUERY_KEY = ['bot-menu-builder'] as const;
+/** Every builder write carries this key, so the page knows one is in flight (Codex #134-1). */
+const WRITE_KEY = ['bot-menu-builder', 'write'] as const;
+
+/** What a re-read returned: fresh data, or an error beside the data cached before it. */
+export interface BuilderRead {
+  readonly data: BotMenuBuilderResponse | undefined;
+  readonly isError: boolean;
+  readonly error: unknown;
+}
+
+type Action = 'save' | 'publish' | 'reset' | 'restore';
 
 /** What the draft on this page is, against what the server has. */
 type BuilderState =
@@ -165,7 +176,7 @@ export function MenuBuilder({
   mayEdit: boolean;
   mayViewTemplates: boolean;
   onEditLabel: (id: MainMenuButtonId) => void;
-  refetch: () => Promise<BotMenuBuilderResponse | undefined>;
+  refetch: () => Promise<BuilderRead>;
 }) {
   const client = useQueryClient();
   const toast = useToast();
@@ -198,8 +209,18 @@ export function MenuBuilder({
   // lost, and otherwise SAY so — a save would then be refused (409), never overwrite. A read
   // OLDER than the draft this page already holds (one that started before this page's own
   // write and answered after it) is not a move: every draft write raises the version.
+  //
+  // A write's ANSWER outranks the query snapshot that was on screen when it was adopted,
+  // whatever the versions say: a publish does not raise the draft version, so that older
+  // snapshot carries the same version and would otherwise be adopted back over the answer
+  // (Codex #134-2). Only a NEW read (a different snapshot object) can move the page again.
+  const latestRead = useRef(view.draft);
+  latestRead.current = view.draft;
+  const [answered, setAnswered] = useState<MainMenuDraftView | null>(null);
   const serverMoved =
-    !sameServerDraft(view.draft, seed.basis) && !olderThan(view.draft, seed.basis);
+    view.draft !== answered &&
+    !sameServerDraft(view.draft, seed.basis) &&
+    !olderThan(view.draft, seed.basis);
   useEffect(() => {
     if (serverMoved && !dirty) {
       setSeed(seedOf(view.draft));
@@ -210,12 +231,19 @@ export function MenuBuilder({
 
   useUnsavedChanges(mayEdit && dirty, t('web.bb_unsaved_leave'));
 
-  const editable = mayEdit;
+  // While a write is in flight nothing is editable: its answer replaces the draft, and an
+  // edit made meanwhile would be silently thrown away by it (Codex #134-1).
+  const writing = useIsMutating({ mutationKey: WRITE_KEY }) > 0;
+  const editable = mayEdit && !writing;
+  const [lastAction, setLastAction] = useState<Action | null>(null);
+  const [reloadError, setReloadError] = useState<unknown>(null);
   const say = (text: string) => setAnnouncement(text);
 
   const adopt = (response: MainMenuBuilderMutationResponse) => {
+    setAnswered(latestRead.current);
     setSeed(seedOf(response.head.draft));
     setConflict(null);
+    setReloadError(null);
   };
   const refreshAll = async () => {
     await Promise.all([
@@ -332,6 +360,8 @@ export function MenuBuilder({
 
   const saveKey = useSubmissionKey();
   const save = useMutation({
+    mutationKey: WRITE_KEY,
+    onMutate: () => setLastAction('save'),
     mutationFn: (command: {
       expectedDraftVersion: number | null;
       legacyBaselineVersion: number | null;
@@ -364,6 +394,8 @@ export function MenuBuilder({
 
   const publishKey = useSubmissionKey();
   const publish = useMutation({
+    mutationKey: WRITE_KEY,
+    onMutate: () => setLastAction('publish'),
     mutationFn: (command: {
       expectedDraftVersion: number;
       expectedPublishedRevision: number | null;
@@ -394,6 +426,8 @@ export function MenuBuilder({
 
   const resetKey = useSubmissionKey();
   const reset = useMutation({
+    mutationKey: WRITE_KEY,
+    onMutate: () => setLastAction('reset'),
     mutationFn: (command: { expectedDraftVersion: number | null; seed: MainMenuResetSeed }) =>
       resetBotMenuDraft({
         ...command,
@@ -414,6 +448,8 @@ export function MenuBuilder({
 
   const restoreKey = useSubmissionKey();
   const restore = useMutation({
+    mutationKey: WRITE_KEY,
+    onMutate: () => setLastAction('restore'),
     mutationFn: (command: { revisionId: string; expectedDraftVersion: number | null }) =>
       restoreBotMenuRevision({ ...command, idempotencyKey: restoreKey.current(command) }),
     onSuccess: async (response) => {
@@ -429,16 +465,28 @@ export function MenuBuilder({
   });
 
   const reload = async () => {
-    const fresh = await refetch();
-    if (fresh !== undefined) setSeed(seedOf(fresh.draft));
+    const read = await refetch();
+    // A failed re-read resolves with the data cached BEFORE the conflict: adopting it would
+    // drop the edit for a stale draft and call the conflict solved (Codex #134-4).
+    if (read.isError || read.data === undefined) {
+      setReloadError(read.error ?? new Error('reload'));
+      return;
+    }
+    setReloadError(null);
+    setAnswered(null);
+    setSeed(seedOf(read.data.draft));
     setConflict(null);
     save.reset();
     say(t('web.bb_reloaded'));
   };
 
   const pending = save.isPending || publish.isPending || reset.isPending || restore.isPending;
-  const lastError = [save, publish, reset, restore].find((one) => one.isError)?.error;
-  const serverInvalid = lastError instanceof ApiError && lastError.status === 400 && save.isError;
+  // Only the LATEST write's refusal is the page's state: an earlier one a later write has
+  // since answered is history (Codex #134-3).
+  const latest = { save, publish, reset, restore }[lastAction ?? 'save'];
+  const lastError = lastAction !== null && latest.isError ? latest.error : undefined;
+  const serverInvalid =
+    lastAction === 'save' && lastError instanceof ApiError && lastError.status === 400;
 
   const state: BuilderState = save.isPending
     ? 'saving'
@@ -487,13 +535,28 @@ export function MenuBuilder({
       })),
     );
   const customerRows = toPreview(customerRowsOf(layout, gates));
+  // The live keyboard: the server's rendered labels, row by row. While an explicit layout
+  // is what customers get, each key's style and icon are that PUBLISHED layout's, drawn by
+  // the same rule with the server's gate answers — used only when it lines up key for key
+  // with the server's rows, so nothing is drawn that the server did not say (Codex #134-5).
+  const publishedRows =
+    view.source === 'EXPLICIT' && view.published?.layout !== null && view.published !== null
+      ? customerRowsOf(view.published.layout, gates)
+      : null;
+  const aligned =
+    publishedRows !== null &&
+    publishedRows.length === view.live.rows.length &&
+    publishedRows.every((row, at) => row.length === view.live.rows[at]?.length);
   const liveRows: PreviewKey[][] = view.live.rows.map((row, at) =>
-    row.map((label, index) => ({
-      key: `${String(at)}-${String(index)}`,
-      label,
-      look: 'default',
-      iconSlot: null,
-    })),
+    row.map((label, index) => {
+      const drawn = aligned ? publishedRows[at]?.[index] : undefined;
+      return {
+        key: `${String(at)}-${String(index)}`,
+        label,
+        look: drawn === undefined ? 'default' : lookOf(drawn),
+        iconSlot: drawn?.iconSlot ?? null,
+      };
+    }),
   );
   const wide = (id: MainMenuButtonId) => items.get(id)?.wide ?? false;
   const crampedRows = layout.rows
@@ -640,6 +703,7 @@ export function MenuBuilder({
         </Banner>
       )}
       {!valid && <Banner tone="danger">{t('web.bot_buttons_one_required')}</Banner>}
+      {reloadError !== null && <ErrorReport error={reloadError} />}
       {lastError !== undefined && lastError !== null && !isConflict(lastError) && (
         <ErrorReport error={lastError} />
       )}
@@ -825,6 +889,7 @@ function PublishDialog({
   onConfirm: () => void;
 }) {
   const before = view.published?.layout ?? null;
+  const unreadable = view.published !== null && before === null;
   const changes = before === null ? null : diffLayouts(before, layout);
   return (
     <Modal
@@ -844,7 +909,9 @@ function PublishDialog({
       }
     >
       <p>{t('web.bb_publish_question')}</p>
-      {before === null ? (
+      {unreadable ? (
+        <Banner tone="warn">{t('web.bb_publish_over_unreadable')}</Banner>
+      ) : before === null ? (
         <Banner tone="info">{t('web.bb_publish_first')}</Banner>
       ) : changes !== null && changes.length === 0 ? (
         <p className="muted small">{t('web.bb_publish_no_layout_change')}</p>

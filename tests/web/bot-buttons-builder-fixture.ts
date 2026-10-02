@@ -232,3 +232,40 @@ export function liveBuilderApi(view: BotMenuBuilderResponse = builderView()): Ap
   });
   return api;
 }
+
+/**
+ * Holds every request whose method and URL end match until `release()` — a write the
+ * server has not answered yet. Wraps whatever `fetch` the stub installed, so calls are
+ * still recorded.
+ */
+export function holdRequests(method: string, suffix: string): { release: () => void } {
+  const inner = globalThis.fetch;
+  let open: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
+    if ((init?.method ?? 'GET') === method && String(input).endsWith(suffix)) await gate;
+    return inner(input as RequestInfo, init);
+  });
+  return { release: () => open() };
+}
+
+/** Every builder READ after the first fails with a 500: a re-read that does not arrive. */
+export function failBuilderReadsAfterFirst(): void {
+  const inner = globalThis.fetch;
+  let reads = 0;
+  vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
+    const answer = await inner(input as RequestInfo, init);
+    if ((init?.method ?? 'GET') === 'GET' && String(input).endsWith('/bot-menu/builder')) {
+      reads += 1;
+      if (reads > 1) {
+        return new Response(JSON.stringify(refusal('platform.unavailable', 'internal')), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+    }
+    return answer;
+  });
+}

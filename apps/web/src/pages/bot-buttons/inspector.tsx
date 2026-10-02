@@ -37,6 +37,7 @@ import {
   setEnabled,
   setIconSlot,
   setStyle,
+  startsWithEmoji,
 } from './model';
 
 /** The Persian name of each style. Exactly the contract's four; no custom colour exists. */
@@ -194,6 +195,7 @@ export function Inspector({
           <button
             type="button"
             className="btn sm"
+            disabled={!editable}
             data-move="web.bb_place_go"
             onClick={() =>
               onMove(id, (l) =>
@@ -210,6 +212,7 @@ export function Inspector({
           <button
             type="button"
             className="btn sm danger"
+            disabled={!editable}
             data-move="web.bb_remove"
             onClick={() => onMove(id, (l) => removeToPool(l, id))}
           >
@@ -290,6 +293,11 @@ export function Inspector({
           ))}
         </select>
         <p className="muted small">{t('web.bb_icon_hint')}</p>
+        {config.iconSlot !== null && startsWithEmoji(label) && (
+          <Banner tone="warn">
+            <span data-testid="bb-icon-doubled">{t('web.bb_icon_label_has_emoji')}</span>
+          </Banner>
+        )}
         {config.iconSlot !== null && slotView !== undefined && (
           <p className="muted small" data-testid="bb-icon-slot-state">
             {t(

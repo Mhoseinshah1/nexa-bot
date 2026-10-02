@@ -329,3 +329,8 @@ export function diffLayouts(
   }
   return out;
 }
+
+/** A label that already starts with an emoji: an icon beside it draws two symbols. */
+export function startsWithEmoji(label: string): boolean {
+  return /^\p{Extended_Pictographic}/u.test(label.trimStart());
+}

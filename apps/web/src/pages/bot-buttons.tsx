@@ -135,7 +135,7 @@ export function BotButtonsPage({
             mayEdit={mayEdit}
             mayViewTemplates={mayViewTemplates}
             onEditLabel={editLabel}
-            refetch={async () => (await builder.refetch()).data}
+            refetch={() => builder.refetch()}
           />
         )}
       </StateSwitch>
