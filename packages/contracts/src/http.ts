@@ -171,6 +171,8 @@ import {
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
   BACKUP_TRIGGERS,
+  BACKUP_DELIVERY_DESTINATIONS,
+  BACKUP_SCHEDULE_SOURCES,
 } from './backup.js';
 import {
   RECOVERY_CONFIRMATION_PHRASE,
@@ -5670,8 +5672,16 @@ export type BackupRunDetailResponse = z.infer<typeof backupRunDetailResponseSche
  * the schedule switched off is the shape that reads as healthy and is not.
  */
 export const backupStatusResponseSchema = z.object({
+  /** The EFFECTIVE schedule: the Web Admin's stored value, else the environment's. */
   scheduleEnabled: z.boolean(),
   intervalMs: z.number().int().positive(),
+  /** Where each effective schedule value came from (spec §13.2). */
+  scheduleSource: z.object({
+    enabled: z.enum(BACKUP_SCHEDULE_SOURCES),
+    interval: z.enum(BACKUP_SCHEDULE_SOURCES),
+  }),
+  /** Where the next run's archive would be delivered, as configured now (spec §13.1). */
+  deliveryDestination: z.enum(BACKUP_DELIVERY_DESTINATIONS),
   lastSucceededAt: z.iso.datetime().nullable(),
   /** The run currently holding the installation's backup lock, if any. */
   running: backupRunSummarySchema.nullable(),
