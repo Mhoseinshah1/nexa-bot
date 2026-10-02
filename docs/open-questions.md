@@ -2784,3 +2784,27 @@ and the style adds nothing. The builder never alters `text`, so routing by the r
 
 RESOLVED (owner). Real-bot acceptance R-ACC-3 still taps each styled and iconed button and
 confirms the command it reaches.
+
+## OQ-T-API-05 — the exact refusal an ineligible bot gets for `icon_custom_emoji_id`
+
+Round T (T2). UNKNOWN, and deliberately not guessed. Owner rule B5 lets only a RELIABLY
+classified eligibility denial switch a bot's shared custom-emoji state off. T2 reuses the
+appearance probe's classifier unchanged (`classifyProbeRefusal`, read by
+`isCustomEmojiDenial` in `telegram-customer-messenger.ts`): the description must name custom
+emoji (`custom emoji`, `CUSTOM_EMOJI_…`) or the entities they ride on. Every other permanent
+400 on an iconed keyboard is GENERIC: the one icon-less retry is still made (a 4xx means
+nothing landed), the bot's eligibility is left as it was, and the per-bot condition
+`telegram.appearance_decoration_failed` is recorded with `eligibilityChanged: false`.
+
+What is not known: whether Telegram's refusal of an ineligible bot's icon names custom emoji
+at all. If it does not, every iconed message from such a bot costs one refused request and
+one retry, indefinitely, and the operator sees the condition but the bot is never switched
+off automatically — the cost B5 accepts in exchange for never switching an eligible bot off
+on a 400 that had another cause. Also unknown: whether Telegram ignores an icon from an
+ineligible bot silently (a 200 with no icon drawn), which no response could reveal.
+
+Resolved by real-bot acceptance R-ACC-2 (`docs/round-t-button-builder-audit.md` §13 and
+§15): send an iconed keyboard from a bot whose appearance test is NOT `SENT` forced to
+carry an icon (or from a bot known to be ineligible), record the HTTP status and the exact
+`description`, and widen the classifier ONLY if that sentence is specific to custom emoji —
+in its own commit, with the observed sentence as a test fixture.

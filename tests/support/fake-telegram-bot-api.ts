@@ -25,6 +25,17 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  *    only a test can read it (`registration`);
  *  - `deleteWebhook` answers `result: true` whether or not one was set.
  *
+ * Round T (T2) adds `sendMessage`, for the customer reply keyboard. Documented and modelled:
+ * a `ReplyKeyboardMarkup` of `KeyboardButton`s whose `style`, when present, is one of
+ * `primary`, `success`, `danger` (Bot API 9.4, `OQ-T-API-01`), and whose
+ * `icon_custom_emoji_id` is honoured only for a bot able to use custom emoji
+ * (`OQ-T-API-02`; a new fake bot accepts them until `setCustomEmoji` says otherwise). NOT
+ * documented, so never decided here: the exact description Telegram gives an ineligible bot's
+ * icon — a PARAMETER of `setCustomEmoji` every refusing test states — and the description of
+ * a malformed keyboard, which is the fake's OWN wording (`FAKE_KEYBOARD_INVALID`, marked as
+ * such). Every message accepted is kept (`delivered`), so a test can count what LANDED —
+ * which is the only honest way to assert "never sent twice".
+ *
  * What the Bot API does NOT document is not decided here. Whether a BotFather revocation
  * keeps the bot's webhook (`OQ-WP13-02`) is a parameter every caller of `revoke` must
  * state, never a default.
@@ -49,7 +60,38 @@ interface BotState {
    * bot, not per token.
    */
   commands: { readonly command: string; readonly description: string }[];
+  /**
+   * Round T (T2): whether this bot may use custom emoji — an `icon_custom_emoji_id` on a
+   * keyboard button, or a `custom_emoji` entity. `ACCEPT`, or `REFUSE` with the description
+   * the test states (Telegram's exact sentence for an ineligible bot is undocumented).
+   */
+  customEmoji: FakeCustomEmojiAnswer;
+  /** Every `sendMessage` this bot accepted, in order. */
+  delivered: FakeDeliveredMessage[];
 }
+
+/** Round T (T2): how the fake answers a custom emoji from one bot. */
+export type FakeCustomEmojiAnswer =
+  { readonly kind: 'ACCEPT' } | { readonly kind: 'REFUSE'; readonly description: string };
+
+/** One message the fake accepted: what the chat would now show. */
+export interface FakeDeliveredMessage {
+  readonly messageId: number;
+  readonly chatId: string;
+  readonly text: string;
+  readonly replyMarkup: unknown;
+  readonly entities: unknown;
+}
+
+/** `KeyboardButton.style` — exactly these (Bot API 9.4). */
+const KEYBOARD_BUTTON_STYLES: readonly string[] = ['primary', 'success', 'danger'];
+/** The `KeyboardButton` fields this installation may send; anything else is refused. */
+const KEYBOARD_BUTTON_FIELDS: readonly string[] = ['text', 'style', 'icon_custom_emoji_id'];
+/**
+ * The fake's OWN wording for a malformed keyboard — a generic 400 that names no custom emoji.
+ * Not Telegram's sentence; real acceptance (audit §13, R-ACC-1/2) records the real one.
+ */
+export const FAKE_KEYBOARD_INVALID = 'Bad Request: keyboard button is invalid (fake)';
 
 /** The Bot API's documented bounds on a `BotCommand` (Bot API §BotCommand). */
 const COMMAND_PATTERN = /^[a-z0-9_]{1,32}$/u;
@@ -81,7 +123,12 @@ export type FakeTelegramFault =
   | { readonly kind: 'refuse'; readonly description: string }
   /** HTTP 429 with `parameters.retry_after` (seconds), nothing applied. */
   | { readonly kind: 'rate_limit'; readonly retryAfter: number }
-  | { readonly kind: 'ok_without_applying' };
+  | { readonly kind: 'ok_without_applying' }
+  /**
+   * Round T (T2): the change IS applied and the answer is HTTP 200 with a body that is not
+   * JSON — the unreadable 2xx, which may well mean the message landed.
+   */
+  | { readonly kind: 'apply_then_garble' };
 
 export interface FakeTelegramBotApi {
   readonly url: string;
@@ -103,6 +150,10 @@ export interface FakeTelegramBotApi {
   /** Round P: the command list Telegram holds for this bot. For assertions only. */
   registeredCommands(botId: number): readonly { command: string; description: string }[];
   setPending(botId: number, pending: number, lastError?: string): void;
+  /** Round T (T2): how this bot's custom emoji are answered from now on. */
+  setCustomEmoji(botId: number, answer: FakeCustomEmojiAnswer): void;
+  /** Round T (T2): every message this bot accepted, in order. For assertions only. */
+  delivered(botId: number): readonly FakeDeliveredMessage[];
   /** The next call of `method` misbehaves once. */
   failNext(method: string, fault: FakeTelegramFault): void;
   /** Every call of `method` waits until the returned function is called. */
@@ -121,6 +172,7 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
   const holds = new Map<string, { readonly gate: Promise<void>; readonly arrived: () => void }>();
   const hooks = new Map<string, Array<() => Promise<void> | void>>();
   let serial = 0;
+  let messageSerial = 0;
 
   const mint = (id: number): string => {
     serial += 1;
@@ -304,6 +356,82 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
         bot.commands = parsed;
         return { status: 200, payload: { ok: true, result: true } };
       }
+      case 'sendMessage': {
+        const badRequest = (description: string) => ({
+          status: 400,
+          payload: { ok: false, error_code: 400, description },
+        });
+        const chatId = body.chat_id;
+        if (typeof chatId !== 'string' && typeof chatId !== 'number') {
+          return badRequest('Bad Request: chat not found');
+        }
+        if (typeof body.text !== 'string' || body.text.length === 0) {
+          return badRequest('Bad Request: message text is empty');
+        }
+        let customEmoji = false;
+        const markup = body.reply_markup as Record<string, unknown> | undefined;
+        if (markup !== undefined && Array.isArray(markup.keyboard)) {
+          for (const row of markup.keyboard as unknown[]) {
+            if (!Array.isArray(row)) return badRequest(FAKE_KEYBOARD_INVALID);
+            for (const cell of row as unknown[]) {
+              if (typeof cell !== 'object' || cell === null) {
+                return badRequest(FAKE_KEYBOARD_INVALID);
+              }
+              const button = cell as Record<string, unknown>;
+              if (Object.keys(button).some((key) => !KEYBOARD_BUTTON_FIELDS.includes(key))) {
+                return badRequest(FAKE_KEYBOARD_INVALID);
+              }
+              if (typeof button.text !== 'string' || button.text.length === 0) {
+                return badRequest(FAKE_KEYBOARD_INVALID);
+              }
+              if (
+                'style' in button &&
+                (typeof button.style !== 'string' || !KEYBOARD_BUTTON_STYLES.includes(button.style))
+              ) {
+                return badRequest(FAKE_KEYBOARD_INVALID);
+              }
+              if ('icon_custom_emoji_id' in button) {
+                if (
+                  typeof button.icon_custom_emoji_id !== 'string' ||
+                  !/^[0-9]{1,32}$/u.test(button.icon_custom_emoji_id)
+                ) {
+                  return badRequest(FAKE_KEYBOARD_INVALID);
+                }
+                customEmoji = true;
+              }
+            }
+          }
+        }
+        if (
+          Array.isArray(body.entities) &&
+          (body.entities as { type?: unknown }[]).some((entity) => entity?.type === 'custom_emoji')
+        ) {
+          customEmoji = true;
+        }
+        if (customEmoji && bot.customEmoji.kind === 'REFUSE') {
+          return badRequest(bot.customEmoji.description);
+        }
+        messageSerial += 1;
+        bot.delivered.push({
+          messageId: messageSerial,
+          chatId: String(chatId),
+          text: body.text,
+          replyMarkup: body.reply_markup ?? null,
+          entities: body.entities ?? null,
+        });
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            result: {
+              message_id: messageSerial,
+              date: 1_790_000_000,
+              chat: { id: Number(chatId), type: 'private' },
+              text: body.text,
+            },
+          },
+        };
+      }
       case 'getMyCommands':
         return {
           status: 200,
@@ -372,6 +500,11 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
             case 'ok_without_applying':
               ok(response, true, 'Webhook was set');
               return;
+            case 'apply_then_garble':
+              apply(bot, method, body);
+              response.writeHead(200, { 'content-type': 'application/json' });
+              response.end('{"ok":tr');
+              return;
           }
         }
         const answer = apply(bot, method, body);
@@ -396,6 +529,8 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
         pendingUpdateCount: 0,
         lastError: null,
         commands: [],
+        customEmoji: { kind: 'ACCEPT' },
+        delivered: [],
       });
       return token;
     },
@@ -428,6 +563,12 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
       const bot = require(botId);
       bot.pendingUpdateCount = pending;
       bot.lastError = lastError === undefined ? null : { date: 1_790_000_000, message: lastError };
+    },
+    setCustomEmoji(botId, answer) {
+      require(botId).customEmoji = answer;
+    },
+    delivered(botId) {
+      return [...require(botId).delivered];
     },
     failNext(method, fault) {
       const list = faults.get(method) ?? [];

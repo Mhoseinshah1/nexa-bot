@@ -371,6 +371,57 @@ function entitiesInside(
   );
 }
 
+/**
+ * Round T (T2): the closed set of `KeyboardButton.style` values Telegram accepts — exactly
+ * these three (Bot API 9.4, confirmed by the owner, `OQ-T-API-01`). An absent style is the
+ * client's default; the builder's `default` is therefore never sent, and no other string is.
+ */
+export const TELEGRAM_KEYBOARD_BUTTON_STYLES = ['primary', 'success', 'danger'] as const;
+export type TelegramKeyboardButtonStyle = (typeof TELEGRAM_KEYBOARD_BUTTON_STYLES)[number];
+
+/**
+ * Round T (T2): ONE reply-keyboard button on its way to the wire — the one structured
+ * descriptor every reply keyboard is built from (`docs/round-t-button-builder-audit.md` §12).
+ *
+ * - `text` is sent EXACTLY as given. A tap on a button with no special field other than
+ *   `text`, `style` and `icon_custom_emoji_id` sends `text` back (`OQ-T-API-04`), and the
+ *   runtime routes by it, so nothing here may prefix, trim or decorate it — an icon is a
+ *   separate field, never an emoji glued onto the label.
+ * - `style` is omitted for the client default; a value outside
+ *   `TELEGRAM_KEYBOARD_BUTTON_STYLES` is never put on the wire.
+ * - `iconCustomEmojiId` is `icon_custom_emoji_id`, set only by a caller that resolved it
+ *   for the SENDING bot's proven eligibility. An empty string is never sent.
+ */
+export interface TelegramReplyKeyboardButton {
+  readonly text: string;
+  readonly style?: TelegramKeyboardButtonStyle;
+  readonly iconCustomEmojiId?: string;
+}
+
+/**
+ * One reply-keyboard cell as Telegram reads it. A bare string — the admin row, every caller
+ * before round T — is `{ text }` and nothing else, so a keyboard of strings, or of
+ * descriptors carrying neither a style nor an icon, is byte for byte what was sent before.
+ *
+ * Exported for the unit tests: the omission of `default` and of an unproven icon is a rule.
+ */
+export function replyKeyboardButtonMarkup(
+  button: string | TelegramReplyKeyboardButton,
+): Record<string, unknown> {
+  if (typeof button === 'string') return { text: button };
+  const cell: Record<string, unknown> = { text: button.text };
+  if (
+    button.style !== undefined &&
+    (TELEGRAM_KEYBOARD_BUTTON_STYLES as readonly string[]).includes(button.style)
+  ) {
+    cell.style = button.style;
+  }
+  if (button.iconCustomEmojiId !== undefined && button.iconCustomEmojiId !== '') {
+    cell.icon_custom_emoji_id = button.iconCustomEmojiId;
+  }
+  return cell;
+}
+
 export function textMessageBody(input: {
   readonly chatId: string;
   readonly text: string;
@@ -398,7 +449,8 @@ export function textMessageBody(input: {
    */
   readonly buttons?: readonly TelegramButton[];
   /**
-   * A persistent keyboard under the chat, as rows of plain labels.
+   * A persistent keyboard under the chat, as rows of labels — a bare string, or (round T)
+   * a `TelegramReplyKeyboardButton` carrying a style and an icon beside the label.
    *
    * `ReplyKeyboardMarkup`, not an inline keyboard: no `callback_data`, so a tap arrives
    * as an ordinary text message whose body is the label. `is_persistent` keeps it shown
@@ -408,7 +460,7 @@ export function textMessageBody(input: {
    *
    * Supplied instead of `buttons`, never beside it — `reply_markup` holds one markup.
    */
-  readonly keyboard?: readonly (readonly string[])[];
+  readonly keyboard?: readonly (readonly (string | TelegramReplyKeyboardButton)[])[];
   /**
    * Round N (F1): a reply to this message of the same chat. `allow_sending_without_reply`,
    * so a message deleted in the meantime costs the reply's link, never the message.
@@ -435,7 +487,7 @@ export function textMessageBody(input: {
     body.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
   } else if (input.keyboard !== undefined && input.keyboard.length > 0) {
     body.reply_markup = {
-      keyboard: input.keyboard.map((row) => row.map((text) => ({ text }))),
+      keyboard: input.keyboard.map((row) => row.map(replyKeyboardButtonMarkup)),
       resize_keyboard: true,
       is_persistent: true,
       one_time_keyboard: false,
