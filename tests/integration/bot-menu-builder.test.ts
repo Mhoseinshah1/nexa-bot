@@ -80,7 +80,10 @@ const codeOf = async (work: Promise<unknown>): Promise<string> => {
 let keyCounter = 0;
 const key = () => `menu-builder-${String((keyCounter += 1)).padStart(8, '0')}`;
 
-/** Three rows the legacy packing could never draw, with a style and an icon. */
+/**
+ * Three rows the legacy packing could never draw, with a style — and the RETIRED icon a
+ * page of the previous release still sends mid-rollout: accepted, never stored or drawn.
+ */
 function threeAcross(): ExplicitMainMenu {
   return {
     v: 1,
@@ -301,12 +304,17 @@ describe('the button builder (round T, T1)', () => {
       const rows = await keyboard();
       expect(rows).toEqual([
         [
-          { text: label('bot.menu.wallet'), style: 'success', iconSlot: 'wallet' },
+          // The request named an icon (an older page): retired, so neither drawn nor kept.
+          { text: label('bot.menu.wallet'), style: 'success', iconSlot: null },
           { text: label('bot.menu.catalog'), style: 'primary', iconSlot: null },
           { text: label('bot.menu.services'), style: 'default', iconSlot: null },
         ],
         [{ text: label('bot.menu.help'), style: 'default', iconSlot: null }],
       ]);
+      const snapshots = await db().execute<{ snapshot: ExplicitMainMenu }>(
+        sql`SELECT snapshot FROM main_menu_revisions WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(snapshots.rows[0]?.snapshot.buttons.every((one) => one.iconSlot === null)).toBe(true);
       // The text-only view the transport draws until T2 is the same rows' labels.
       expect(await container.mainMenu.rowsFor(tenantA)).toEqual(
         rowsOfLabels([['wallet', 'catalog', 'services'], ['help']]),
@@ -664,6 +672,41 @@ describe('the button builder (round T, T1)', () => {
       expect(unchanged.changed).toBe(false);
     });
 
+    it('keeps drawing a layout an earlier release published WITH icons — rows and styles, no icon', async () => {
+      await saveDraft(threeAcross(), null);
+      await publish(1, null);
+      // What v0.4.x stored: the same layout, its wallet and help carrying icon slots.
+      const withIcons = {
+        ...threeAcross(),
+        buttons: threeAcross().buttons.map((one) =>
+          one.button === 'help' ? { ...one, iconSlot: 'support' } : one,
+        ),
+      };
+      await db().execute(
+        sql`UPDATE main_menu_layouts
+               SET published = ${JSON.stringify(withIcons)}::jsonb,
+                   draft = ${JSON.stringify(withIcons)}::jsonb
+             WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(await keyboard()).toEqual([
+        [
+          { text: label('bot.menu.wallet'), style: 'success', iconSlot: null },
+          { text: label('bot.menu.catalog'), style: 'primary', iconSlot: null },
+          { text: label('bot.menu.services'), style: 'default', iconSlot: null },
+        ],
+        [{ text: label('bot.menu.help'), style: 'default', iconSlot: null }],
+      ]);
+      const view = await builder().view(tenantA, owner);
+      // Readable — never «unreadable» because of an icon — and an icon alone is no change.
+      expect(view.source).toBe('EXPLICIT');
+      expect(view.publishedUnreadable).toBe(false);
+      expect(view.published?.layout?.buttons.every((one) => one.iconSlot === null)).toBe(true);
+      expect(view.draft.layout.buttons.every((one) => one.iconSlot === null)).toBe(true);
+      expect(view.draft.differsFromPublished).toBe(false);
+      const [revision] = (await builder().revisions(tenantA, owner, {})).revisions;
+      expect(revision?.layout?.buttons.every((one) => one.iconSlot === null)).toBe(true);
+    });
+
     it('falls back to the setting when the published snapshot is unreadable, says so, and a publish closes it', async () => {
       await saveDraft(threeAcross(), null);
       await publish(1, null);
@@ -741,6 +784,19 @@ describe('the button builder (round T, T1)', () => {
       expect(latest?.restoredFrom).toEqual({ id: revisionOne?.id, revision: 1 });
       expect(await keyboard()).not.toEqual(live);
       expect(await auditActions()).toContain(BOT_MENU_BUILDER_AUDIT_ACTIONS.RESTORED);
+    });
+
+    it('names a revision’s publisher by the administrator’s display name (round-T QA-4)', async () => {
+      await saveDraft(threeAcross(), null);
+      await publish(1, null);
+      await db().execute(
+        sql`UPDATE admins SET display_name = 'Sara Ahmadi' WHERE id = ${owner.id}`,
+      );
+      const [revision] = (await builder().revisions(tenantA, owner, {})).revisions;
+      expect(revision?.createdByAdminId).toBe(owner.id);
+      expect(revision?.createdByAdminName).toBe('Sara Ahmadi');
+      // (Another tenant's administrator cannot be a publisher at all: the tenant-scoped
+      // foreign key `main_menu_revisions_tenant_admin_fk` refuses the row.)
     });
 
     it('pages revisions newest first', async () => {
