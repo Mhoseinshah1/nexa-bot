@@ -1,0 +1,53 @@
+# Round T (T3) — Web builder falsification record
+
+Each rule below was reverted alone in the T3 worktree with `scripts/falsify.sh` (project
+`web`): the harness applied the one mutation to the committed file, ran the one test file,
+restored the file with `git checkout` and checked it byte-identical before the next row.
+No database is involved — the web suite stubs `fetch` only. Every cited test passes on the
+unmutated tree. `docs/round-t-button-builder-audit.md` §13 (T3) names the targets.
+
+T3-01b re-runs F5-12's citation (`docs/f5-falsification.md`), whose test was rewritten
+onto the builder's customer preview when the legacy order table was replaced: the rule it
+holds — the trial is left out while the server says no panel offers one — is unchanged.
+
+| #      | rule                                                                   | mutation                                                           | tests that die                                                                                                            | result |
+| ------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ------ |
+| T3-01  | the preview's gate answers are the server's `gateOpen`, passed through | `gateAnswersOf` computes a gate in React (open unless TRIAL_OFFER) | `bot-buttons-builder.test.tsx` › draws a gated button exactly when the server says its gate is open                       | KILLED |
+| T3-01b | the same, on the page's listing (F5-12)                                | as T3-01                                                           | `bot-buttons.test.tsx` › lists every main-menu button, the trial and the referral included, with its label and its gate   | KILLED |
+| T3-02  | an unknown gate answer is not open                                     | `hiddenNowByGate` hides only on `gateOpen === false`               | `bot-buttons-builder.test.tsx` › draws a gated button exactly when the server says its gate is open                       | KILLED |
+| T3-03  | a drop on a button places before it, as the Inspector's moves do       | the chip drop appends to that button's row instead                 | `bot-buttons-builder.test.tsx` › drag and drop and the non-drag controls produce the identical draft                      | KILLED |
+| T3-04  | the one placement primitive puts a button BEFORE its target            | `placeBefore` splices one place later                              | `bot-buttons-builder.test.tsx` › drag and drop and the non-drag controls produce the identical draft                      | KILLED |
+| T3-05  | switching off keeps the button's place                                 | `setEnabled(false)` removes the button to the pool                 | `bot-buttons-builder.test.tsx` › switching a button off keeps its place — unlike removing it                              | KILLED |
+| T3-06  | the pool keeps a removed button's configuration                        | `removeToPool` resets the button's configuration to the default    | `bot-buttons-builder.test.tsx` › removes a button to the pool and restores it with its configuration kept                 | KILLED |
+| T3-07  | the icon slot is independent of the appearance slot                    | setting the screen's appearance slot also sets `iconSlot`          | `bot-buttons-builder.test.tsx` › chooses an icon slot without touching the appearance slot, and shows per-bot eligibility | KILLED |
+| T3-08  | the first save states the baseline the page was seeded from            | the save sends `legacyBaselineVersion: null`                       | `bot-buttons-builder.test.tsx` › first save states no draft version and the baseline the page was seeded from, with a key | KILLED |
+| T3-09  | a save names the draft version it read                                 | the save always sends `expectedDraftVersion: null`                 | `bot-buttons-builder.test.tsx` › first save states no draft version and the baseline the page was seeded from, with a key | KILLED |
+| T3-10  | a 409 never silently replaces the operator's edit                      | a save conflict reloads the server's draft at once                 | `bot-buttons-builder.test.tsx` › a 409 keeps the edit, says so, never retries, and reloads only when asked                | KILLED |
+| T3-11  | publish is asked first                                                 | the Publish button publishes directly                              | `bot-buttons-builder.test.tsx` › publishes only after confirmation, with the diff and both versions it read               | KILLED |
+| T3-12  | an unsaved edit cannot be published                                    | `publishable` drops `!dirty`                                       | `bot-buttons-builder.test.tsx` › cannot publish an unsaved edit or an unsaved draft                                       | KILLED |
+| T3-13  | restore is asked first                                                 | choosing a revision restores it at once                            | `bot-buttons-builder.test.tsx` › restores a revision INTO THE DRAFT after confirmation, and publishes nothing             | KILLED |
+| T3-14  | reset is asked first                                                   | the Reset button resets to DEFAULT at once                         | `bot-buttons-builder.test.tsx` › resets only after confirmation, from the seed chosen                                     | KILLED |
+| T3-15  | a draft the live menu moved under cannot be published from the page    | `publishable` ignores `legacyChangedSinceDraft`                    | `bot-buttons-builder.test.tsx` › blocks publishing a draft the live menu moved under, and offers the reseed from live     | KILLED |
+| T3-16  | a read older than the draft held never replaces it                     | `olderThan` always answers false                                   | `bot-buttons-builder.test.tsx` › never lets a read older than the draft it just saved replace that draft                  | KILLED |
+| T3-17  | no write control is drawn without settings.edit                        | the toolbar's write buttons are drawn for everyone                 | `bot-buttons-builder.test.tsx` › a viewer without settings.edit sees the menu and its history, and no control that writes | KILLED |
+| T3-18  | an unsaved draft holds the leave guard                                 | `useUnsavedChanges` is never armed                                 | `bot-buttons-builder.test.tsx` › guards leaving while the draft is unsaved                                                | KILLED |
+| T3-18b | the same, on the OPS-A guard suite                                     | as T3-18                                                           | `ops-a-redesign.test.tsx` › guards a moved main-menu arrangement until it is saved or restored                            | KILLED |
+| T3-19  | the style picker offers exactly the contract's four                    | the picker drops `danger`                                          | `bot-buttons-builder.test.tsx` › offers exactly the four styles and saves the one chosen                                  | KILLED |
+| T3-20  | a row emptied by a move is dropped, never saved empty                  | `withRows` keeps empty rows                                        | `bot-buttons-builder.test.tsx` › drag and drop and the non-drag controls produce the identical draft                      | KILLED |
+
+## The review of PR #134
+
+Rows T3-21 to T3-27 answer the one Codex review of PR #134 (findings 1–6 and 8; finding 7
+was rejected because the read cannot express it — every stored layout is returned
+normalised, so a button a later release added is indistinguishable from one the operator
+configured). Same procedure as above; each cited test was written to fail before its fix.
+
+| #     | rule                                                                     | mutation                                                           | tests that die                                                                                                 | result |
+| ----- | ------------------------------------------------------------------------ | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------ |
+| T3-21 | nothing is editable while a builder write is in flight                   | `editable` ignores the pending write                               | `bot-buttons-builder.test.tsx` › #1 allows no edit while a write is in flight, so its answer drops nothing     | KILLED |
+| T3-22 | a write's answer outranks the snapshot that was on screen when it landed | the sync ignores which snapshot the answer superseded              | `bot-buttons-builder.test.tsx` › #2 keeps a publish’s answer over the snapshot that was on screen before it    | KILLED |
+| T3-23 | only the latest write's refusal is shown                                 | the error shown is the first errored mutation's                    | `bot-buttons-builder.test.tsx` › #3 forgets an earlier write’s refusal once a later write succeeds             | KILLED |
+| T3-24 | a failed re-read never replaces the edit with cached data                | the reload adopts the result's data whether or not the read failed | `bot-buttons-builder.test.tsx` › #4 keeps the edit and the conflict when the re-read after a 409 fails         | KILLED |
+| T3-25 | the live keyboard shows the published layout's styles                    | every live key is drawn `default`                                  | `bot-buttons-builder.test.tsx` › #5 draws the live keyboard with the published layout’s styles and icons       | KILLED |
+| T3-26 | a publish over an unreadable layout is not the first publication         | the unreadable case falls through to the first-publication message | `bot-buttons-builder.test.tsx` › #6 never calls a publish over an unreadable layout the first publication      | KILLED |
+| T3-27 | an icon beside a label's own emoji is warned about                       | the warning is never drawn                                         | `bot-buttons-builder.test.tsx` › #8 warns, without refusing, when an icon would sit beside a label’s own emoji | KILLED |
