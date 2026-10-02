@@ -573,6 +573,39 @@ describe('TonPays Telegram, through the one settlement path', () => {
     });
   });
 
+  describe('the money, on a top-up', () => {
+    /*
+     * An order settles against its own total, so a provider figure that reached the payment
+     * would move nothing visible there. A top-up CREDITS the payment's amount, which makes
+     * TonPays' `final_amount` — the payable plus its own adjustment — observable.
+     */
+    it('TPTG-11: a top-up credits the payment’s own amount, never final_amount', async () => {
+      await enable();
+      const attempt = await ctx.container.payments.requestGatewayTopup(
+        { tenantId: tenantA.tenantId, botInstanceId: BOT_A },
+        systemActor(key()),
+        maryam,
+        { idempotencyKey: key(), amount: money(300_000n, 'IRT'), provider: 'TONPAYS_TELEGRAM' },
+      );
+      await pass();
+      const invoice = await invoiceOf(attempt.payment.id);
+      if (invoice.provider_invoice_id === null) throw new Error('not created');
+      fake.set(invoice.provider_invoice_id, 'completed', true);
+      clock.shift(6 * 60_000);
+      await pass();
+      expect((await paymentOf(attempt.payment.id)).state).toBe('CONFIRMED');
+      const [recorded] = await rows<{ final_amount: string | null }>(
+        sql`SELECT final_amount::text AS final_amount FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
+      );
+      expect(recorded?.final_amount).not.toBe('300000');
+      const credited = await rows<{ amount: string }>(
+        sql`SELECT amount::text AS amount FROM wallet_entries
+             WHERE customer_id = ${maryam} AND amount > 0 ORDER BY created_at`,
+      );
+      expect(credited.map((row) => row.amount)).toEqual(['300000']);
+    });
+  });
+
   describe('the card', () => {
     it('applies a new card: appended to the history, made current, the provider’s cooldown copied', async () => {
       const { paymentId } = await createdAttempt();
@@ -754,6 +787,39 @@ describe('TonPays Telegram, through the one settlement path', () => {
       expect(await openWindow(paymentId, BOT_A2)).toBeNull();
     });
 
+    it('TPTG-19 (service): another customer can neither open a receipt window nor ask for a card on this attempt', async () => {
+      const { paymentId } = await createdAttempt();
+      clock.shift(61_000);
+      const other = (
+        await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-o'), {
+          idempotencyKey: 'resolve-o',
+          telegramUserId: '910999',
+          from: { id: 910999, first_name: 'دیگری' },
+          botInstanceId: BOT_A,
+        })
+      ).customer.id;
+      expect(
+        await ctx.container.gatewayReceiptCaptures.openReceiptCapture(tenantA, systemActor(key()), {
+          customerId: other,
+          paymentId,
+          botInstanceId: BOT_A,
+        }),
+      ).toBeNull();
+      expect(
+        await ctx.container.gatewayReceiptCaptures.requestCardChange(tenantA, systemActor(key()), {
+          customerId: other,
+          paymentId,
+          botInstanceId: BOT_A,
+          idempotencyKey: key(),
+        }),
+      ).toBe(false);
+      expect(await cardChanges(paymentId)).toEqual([]);
+      const [windows] = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM gateway_receipt_captures WHERE payment_id = ${paymentId}`,
+      );
+      expect(windows?.n).toBe(0);
+    });
+
     it('TPTG-09: a document (even image/*), or a photo declared over 5 MB, is refused before any row', async () => {
       const { paymentId } = await createdAttempt();
       await openWindow(paymentId);
@@ -857,7 +923,17 @@ describe('TonPays Telegram, through the one settlement path', () => {
       const empty = telegramLaneWith(ctx, fake, {
         budget: { take: () => Promise.resolve(false) },
       });
-      await empty.runOnce(tenantA);
+      /*
+       * Nothing else due: an inquiry that met the empty budget first would end the pass
+       * before the card lane claimed anything, and the assertions below would hold vacuously.
+       */
+      const quiet = () =>
+        ctx.container.database.db.execute(
+          sql`UPDATE gateway_invoices SET next_inquiry_at = NULL WHERE tenant_id = ${tenantA.tenantId}`,
+        );
+      await quiet();
+      const report = await empty.runOnce(tenantA);
+      expect(report).toMatchObject({ budgetExhausted: true, inquired: 0, cardChanges: 0 });
       const leases = await rows<{ claimed_until: string | null }>(
         sql`SELECT claimed_until FROM gateway_card_changes WHERE tenant_id = ${tenantA.tenantId}`,
       );
@@ -865,7 +941,17 @@ describe('TonPays Telegram, through the one settlement path', () => {
 
       await openWindow(first.paymentId);
       await sendPhoto(photo('receipt-22'));
-      await empty.runOnce(tenantA);
+      // The card lane must not stop the pass first: its two requests are decided.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_card_changes SET state = 'REFUSED', decided_at = now(), error_code = 'test.closed'
+             WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      await quiet();
+      expect(await empty.runOnce(tenantA)).toMatchObject({
+        budgetExhausted: true,
+        cardChanges: 0,
+        receipts: 0,
+      });
       const receiptLeases = await rows<{ claimed_until: string | null; state: string }>(
         sql`SELECT claimed_until, state FROM gateway_receipt_submissions WHERE tenant_id = ${tenantA.tenantId}`,
       );

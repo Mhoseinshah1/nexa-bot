@@ -1181,3 +1181,50 @@ pushed nothing, and printed no secret. It did not see the screenshot. §9.6 and 
 it touches record the owner's decision of 2026-10-01 on OQ-TPTG-11. They were written the same
 way, against the same `main`, and every race claim in them is a test the implementation
 owes (TPTG-31, TPTG-32), not one this audit ran.
+
+## 17. What was built
+
+Implemented on `tonpays-telegram/impl` in the phases of §14, with each contract change committed
+on its own. The falsification record is `docs/tonpays-telegram-falsification.md`, and its driver
+is `scripts/mutate-tonpays-telegram.py`. **A real-provider acceptance is still owed**
+(`OQ-WP10-01`, OQ-TPTG-16). Every provider behaviour here is pinned only against a fake written
+from the owner's transcription, and no capability is claimed as accepted.
+
+This is where the build differs from the sections above, and why:
+
+- **Migration 0157 writes data once.** It backfills `payments.reconcile` onto the `owner` and
+  `finance` system roles, in the shape migration 0148 used. Without that backfill, an
+  installation that existed before the permission would have no operator able to resolve an
+  `UNKNOWN` payment. §7 said the migration writes no data; this is the one exception.
+- **A second contract commit adds `ops.financial.outcome_unknown`.** The review sweep's
+  `PaymentOutcomeUnknown` reaches the financial log through its own template key, with the
+  same fields as `late_completion`. §9.6 named the event but not a template for it.
+- **The routes were split into one more contract commit.** `PAYMENT_ROUTES.reconcile`, `reinquire`
+  and the reinquire response were added there. The "three commands" of §9.6.7 are two routes:
+  `reconcile` (`to: CONFIRMED | FAILED`) and `reinquire`.
+- **The in-review and `UNKNOWN` screens keep wizard step `INVOICE`.** The worker's later edit,
+  confirmed or failed, then replaces them in place.
+- **The gateway receipt window and the manual one close each other in their repositories' `open`.**
+  This happens under the same advisory lock, rather than in a service.
+- **Card and receipt dependencies of `GatewayPaymentService` are optional.** A container
+  without the card lane still builds, and those lanes are then no-ops.
+- **A card change answered `INVOICE_NOT_FOUND` is recorded `REFUSED`, with the code kept.** It
+  also raises the identity-mismatch condition. It is never a reason to hide the card.
+- **A lost receipt upload (`UNKNOWN`) is resolved for display by any answered inquiry about the
+  attempt.** A later `pending` lets the customer send another photo. That resolution never opens
+  a review.
+- **"5 MB" is read as 5,000,000 bytes.** That is the stricter of the two readings.
+- **A video sent while a provider window is open is not intercepted.** It gets the bot's generic
+  "unsupported" reply, and nothing is stored. A document is refused with
+  `gateway_receipt_photo_only`.
+- **The website route gains no `WRONG_API_KEY_KIND` mapping.** It is the owner's call, so
+  nothing was added there.
+- **Other routes still coexist with a Telegram payment in review (OQ-TPTG-17).** A customer may
+  open a website TonPays or manual attempt for the same order. If both are paid, the second
+  approval is `LATE_COMPLETION` and nothing moves. A Telegram payment that goes `UNKNOWN` for an
+  order that another route has since paid cannot be reconciled `CONFIRMED`, because the order is
+  no longer awaiting payment. An operator then refunds it outside Nexa.
+- **The minute-70 race (c) of TPTG-31 is held by construction, not by a test.** That is the case
+  where the sweep's snapshot is taken before the acknowledgement commits and its lock after.
+  The predicate is row-local, so PostgreSQL's re-check of the locked row sees it. `SKIP LOCKED`
+  never waits, so no barrier can force that interleaving. Cases (a) and (b) are tested.

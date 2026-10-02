@@ -395,6 +395,9 @@ describe('the TonPays Telegram rules', () => {
     const late = new Date(until.getTime() - 60_000);
     expect(reviewInquiryNextAt(start, until, late)!.getTime()).toBe(until.getTime() - 15_000);
     expect(reviewInquiryNextAt(start, until, new Date(until.getTime() - 10_000))).toBeNull();
+    // A step that would land INSIDE the last fifteen seconds is pulled back to them.
+    const nearEnd = new Date(until.getTime() - 1_800_000 - 10_000);
+    expect(reviewInquiryNextAt(start, until, nearEnd)!.getTime()).toBe(until.getTime() - 15_000);
     let calls = 1;
     let at = start;
     for (;;) {
