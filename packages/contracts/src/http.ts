@@ -4268,6 +4268,10 @@ export const paymentReinquireRequestSchema = z.object({
 });
 export type PaymentReinquireRequest = z.infer<typeof paymentReinquireRequestSchema>;
 
+/** `requested` is false when a request was already recorded within the last minute. */
+export const paymentReinquireResponseSchema = z.object({ requested: z.boolean() });
+export type PaymentReinquireResponse = z.infer<typeof paymentReinquireResponseSchema>;
+
 // --- Payment timeline (WP17) --------------------------------------------------
 
 /**
@@ -4438,6 +4442,15 @@ export const PAYMENT_ROUTES = {
    * behind their own permission — `paymentTimelineResponseSchema`.
    */
   timeline: (id: string) => `/payments/${encodeURIComponent(id)}/timeline`,
+  /**
+   * Resolving an `UNKNOWN` gateway payment from the provider's RECORDED answer
+   * (`docs/tonpays-telegram-gateway-audit.md` §9.6.4), under `payments.reconcile`. This is
+   * not the card-to-card confirm the comment above excludes: the operator chooses nothing
+   * the inquiry evidence does not already show, and the server re-decides it under the lock.
+   */
+  reconcile: (id: string) => `/payments/${encodeURIComponent(id)}/reconcile`,
+  /** Bring the next provider inquiry of an `UNKNOWN` gateway payment forward: a row write only. */
+  reinquire: (id: string) => `/payments/${encodeURIComponent(id)}/reinquire`,
 } as const;
 
 /**
