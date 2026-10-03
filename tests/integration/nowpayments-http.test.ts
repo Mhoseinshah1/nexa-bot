@@ -11,7 +11,14 @@ import {
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { sortDeep } from '../../apps/api/src/modules/commerce/payments/infrastructure/nowpayments-signature';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  adminActorFor,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * NOWPayments over HTTP (`docs/nowpayments-gateway-audit.md` §5.6–§5.7):
@@ -55,10 +62,20 @@ describe('NOWPayments over HTTP', () => {
     await resetDatabase(api.container.database.db);
     await seed(api.container.database.db, api.container.cipher);
     api.container.setInstallationTenant(tenantA.tenantId);
-    await createAdmin(api.container, tenantA, {
+    const admin = await createAdmin(api.container, tenantA, {
       username: 'owner',
       password: 'the-owners-real-password',
       roleKeys: ['owner'],
+    });
+    // A route priced only by the central rate is switched on only while that rate is on
+    // (spec §8, #143); this file is about NOWPayments' own preconditions, so the rate is on.
+    const centralFx = await api.container.featureFlagResolver.resolve(tenantA, 'central_fx');
+    await api.container.featureFlags.set(tenantA, adminActorFor(admin), {
+      key: 'central_fx',
+      enabled: true,
+      expectedVersion: centralFx.version,
+      idempotencyKey: idempotencyKey(),
+      reason: 'NOWPayments HTTP integration test.',
     });
     const login = await inject({
       method: 'POST',
