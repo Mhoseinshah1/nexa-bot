@@ -165,11 +165,17 @@ describe('the payment list', () => {
     }
   });
 
-  it('says why a gateway never appears, rather than leaving it unexplained', async () => {
+  /*
+   * The Payment Operations Center (program §10) replaced the old "no gateway is defined"
+   * note — gateways ship now — with the rule the page holds: nothing here marks a payment
+   * paid, and where reconciling and refunding live instead.
+   */
+  it('says that nothing on the page marks a payment paid, and where the real actions are', async () => {
     stubApi(list([payment()]));
     const { container } = renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718:manual');
-    expect(container.textContent).toContain('هیچ درگاه پرداختی ثبت یا تعریف نشده است');
+    expect(container.textContent).toContain('تأیید یک پرداخت فقط از راه تسویه و با مدرک');
+    expect(container.textContent).not.toContain('هیچ درگاه پرداختی ثبت یا تعریف نشده است');
   });
 
   /*
@@ -212,7 +218,8 @@ describe('the payment list', () => {
     };
     renderPage(<PaymentsPage route={route} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718:manual');
-    const url = api.calls[api.calls.length - 1]?.url ?? '';
+    // The list request, not the queue counts read beside it.
+    const url = [...api.calls].reverse().find((call) => call.url.includes('/payments?'))?.url ?? '';
     expect(url).toContain('q=abc%3Amanual');
     expect(url).toContain('method=MANUAL_TRANSFER');
   });

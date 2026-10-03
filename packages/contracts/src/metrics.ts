@@ -359,6 +359,124 @@ export const METRIC_DEFINITIONS: readonly MetricDefinition[] = [
     supportedPeriods: [],
     description: 'Work waiting for a panel, and work whose outcome a READ must decide.',
   },
+  /*
+   * Phase E2 — Financial Reports V2 (`docs/financial-reports.md`). A STATEMENT: each fact
+   * is counted once, on the timestamp it happened, and a later event is its own line — so a
+   * closed period's figures never change. Three sections that are never added together:
+   * sales (revenue recognised at settlement), cash from customers (money that arrived from
+   * outside) and the wallet (stored value the tenant owes). A top-up is cash and a wallet
+   * liability, never a sale; the wallet purchase that spends it is a sale, never cash.
+   */
+  {
+    name: 'finance.sales',
+    kind: 'SUM_MONEY',
+    formula:
+      "count, sum(subtotal_amount), sum(discount_amount), sum(total_amount) of orders with state in ('PAID','REFUNDED'), a sale purpose and settled_at in the period, grouped by currency",
+    timestampBasis: 'PAID_AT',
+    filters: [
+      'state PAID or REFUNDED: a later refund is its own line (finance.refunds), never a rewrite of the period the sale was in',
+      'purpose is a sale purpose (never TRIAL)',
+      'one row per ORDER, never per payment attempt',
+      'tenant-scoped',
+    ],
+    supportedPeriods: REPORT_PERIODS,
+    description:
+      'Sales recognised when the money for them was taken. Top-ups, cashback, gifts and commissions never enter it; a wallet purchase does, once.',
+  },
+  {
+    name: 'finance.refunds',
+    kind: 'SUM_MONEY',
+    formula:
+      "count, sum(amount) of refunds with state = 'COMPLETED' and completed_at in the period, grouped by currency and channel (WALLET_CREDIT, EXTERNAL_MANUAL, PROVIDER)",
+    timestampBasis: 'COMPLETED_AT',
+    filters: [
+      'COMPLETED only: a requested or failed refund gave nothing back',
+      'every refund names an order payment; a top-up is not refundable',
+      'partial refunds are separate rows and sum to at most the payment',
+      'tenant-scoped',
+    ],
+    supportedPeriods: REPORT_PERIODS,
+    description: 'Sales money given back, on the day it was given back.',
+  },
+  {
+    name: 'finance.net_sales',
+    kind: 'SUM_MONEY',
+    formula: 'finance.sales total − finance.refunds amount, per currency, same period',
+    timestampBasis: 'PAID_AT',
+    filters: ['never across currencies', 'tenant-scoped'],
+    supportedPeriods: REPORT_PERIODS,
+    description: 'Sales net of the refunds completed in the same period.',
+  },
+  {
+    name: 'finance.customer_paid',
+    kind: 'SUM_MONEY',
+    formula:
+      "count, sum(amount) (principal), sum(customer_fee_amount) and sum(coalesce(payable_amount, amount)) of payments with state = 'CONFIRMED', method <> 'WALLET' and confirmed_at in the period, grouped by currency, method, route and kind (ORDER or TOPUP)",
+    timestampBasis: 'PAID_AT',
+    filters: [
+      'external money only: a WALLET payment spends stored value and is never cash',
+      'the customer gateway fee is beside the principal, never inside revenue',
+      'a fee the provider deducted is not recorded and is not reported',
+      'tenant-scoped',
+    ],
+    supportedPeriods: REPORT_PERIODS,
+    description:
+      'What customers paid from outside, before any provider deduction: the principal, the gateway fee they bore, and the two together.',
+  },
+  {
+    name: 'finance.receipt_credits',
+    kind: 'SUM_MONEY',
+    formula:
+      "count, sum(amount) of wallet_entries with reason = 'RECEIPT_CREDIT' and created_at in the period, grouped by currency",
+    timestampBasis: 'OCCURRED_AT',
+    filters: [
+      'the receipt payment itself is FAILED and is not in finance.customer_paid',
+      'tenant-scoped',
+    ],
+    supportedPeriods: REPORT_PERIODS,
+    description: 'Card-to-card money a reviewer credited to a wallet instead of confirming.',
+  },
+  {
+    name: 'finance.wallet_liability',
+    kind: 'SUM_MONEY',
+    formula:
+      'per currency: opening = Σ signed wallet_entries before the period; movement per WALLET_REPORT_GROUPS group = Σ signed in the period; closing = Σ signed before the period end. opening + Σ movements = closing',
+    timestampBasis: 'OCCURRED_AT',
+    filters: ['signed by the ledger rule: CREDIT +, DEBIT −', 'tenant-scoped'],
+    supportedPeriods: REPORT_PERIODS,
+    description:
+      'The stored value customers hold, and why it moved: top-ups, receipt credits, spending, refunds, cashback, commissions, gifts, administration and transfers.',
+  },
+  {
+    name: 'finance.sales_by_channel',
+    kind: 'SUM_MONEY',
+    formula:
+      "finance.sales split by the method and route of the order's one CONFIRMED payment (payments_order_confirmed_key); NONE when no payment was needed",
+    timestampBasis: 'PAID_AT',
+    filters: ['the parts add up to finance.sales', 'tenant-scoped'],
+    supportedPeriods: REPORT_PERIODS,
+    description: 'Which sales were paid from the wallet and which by each external route.',
+  },
+  {
+    name: 'finance.sales_by_product',
+    kind: 'SUM_MONEY',
+    formula:
+      'finance.sales grouped by (product_id, snapshot line_title, currency), with finance.refunds of those products’ orders in the same period beside them',
+    timestampBasis: 'PAID_AT',
+    filters: ['the title is the snapshot the product was sold under', 'tenant-scoped'],
+    supportedPeriods: REPORT_PERIODS,
+    description: 'Sales and refunds per product, by the name it was sold under.',
+  },
+  {
+    name: 'finance.reseller_sales',
+    kind: 'SUM_MONEY',
+    formula:
+      'count, sum(total_amount) of finance.sales rows that have an order_reseller_terms row, grouped by currency',
+    timestampBasis: 'PAID_AT',
+    filters: ['what the reseller was charged; margin and cost are never read', 'tenant-scoped'],
+    supportedPeriods: REPORT_PERIODS,
+    description: 'The part of sales bought by resellers.',
+  },
   {
     name: 'nav.counters',
     kind: 'GAUGE',

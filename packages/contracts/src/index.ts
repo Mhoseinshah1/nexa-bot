@@ -119,6 +119,8 @@ export * from './http.js';
 /** Phase D2: the admin's second factor, own sessions and security history. */
 export * from './admin-security.js';
 export * from './reporting.js';
+// Program §10: the Payment Operations Center's queues and the shared attention read model.
+export * from './payment-operations.js';
 /** Round W: the Web Admin dashboard and sidebar counters, over the reports above. */
 export * from './dashboard.js';
 /** Round N: the shared audience, broadcast, and safe mass actions. */

@@ -33,9 +33,15 @@ export class DrizzleAudienceReader implements AudienceReader {
     options: AudienceEvaluationOptions = {},
   ): Promise<AudienceSummary> {
     const tenantId = requireTenantId(scope);
-    const [row] = await this.rows<{ customers: number; reachable: number; fingerprint: string }>(
+    const [row] = await this.rows<{
+      customers: number;
+      reachable: number;
+      opted_out: number;
+      fingerprint: string;
+    }>(
       sql`SELECT count(*)::int AS customers,
                  count(*) FILTER (WHERE a.bot_instance_id IS NOT NULL)::int AS reachable,
+                 count(*) FILTER (WHERE a.opted_out)::int AS opted_out,
                  ${fingerprintOf(sql`a.customer_id`)} AS fingerprint
             FROM (${audienceCustomersQuery({ tenantId, definition, asOf, ...options })}) a`,
       tx,
@@ -43,6 +49,7 @@ export class DrizzleAudienceReader implements AudienceReader {
     return {
       customers: row?.customers ?? 0,
       reachable: row?.reachable ?? 0,
+      optedOut: row?.opted_out ?? 0,
       fingerprint: row?.fingerprint ?? '',
     };
   }
@@ -79,7 +86,7 @@ export class DrizzleAudienceReader implements AudienceReader {
 
   async options(scope: TenantContext): Promise<AudienceOptions> {
     const tenantId = requireTenantId(scope);
-    const [tiers, products, panels] = await Promise.all([
+    const [tiers, products, panels, tags] = await Promise.all([
       this.rows<{ id: string; name: string }>(
         sql`SELECT id, name FROM reseller_tiers WHERE tenant_id = ${tenantId}::uuid
              ORDER BY lower(name), id`,
@@ -92,7 +99,13 @@ export class DrizzleAudienceReader implements AudienceReader {
         sql`SELECT id, name FROM panels WHERE tenant_id = ${tenantId}::uuid AND archived_at IS NULL
              ORDER BY lower(name), id`,
       ),
+      // Broadcast V2: the customer tags (program §8), active first. Labels only, by id.
+      this.rows<{ id: string; label: string; archived: boolean }>(
+        sql`SELECT id, label, archived_at IS NOT NULL AS archived
+              FROM customer_tags WHERE tenant_id = ${tenantId}::uuid
+             ORDER BY archived_at IS NOT NULL, lower(label), id`,
+      ),
     ]);
-    return { resellerTiers: tiers, products, panels };
+    return { resellerTiers: tiers, products, panels, tags };
   }
 }
