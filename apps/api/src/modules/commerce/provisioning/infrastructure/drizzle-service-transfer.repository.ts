@@ -32,7 +32,7 @@ function toRecord(row: Row): ServiceTransferRecord {
     serviceId: row.serviceId,
     fromCustomerId: row.fromCustomerId as UserId,
     toCustomerId: row.toCustomerId as UserId,
-    botInstanceId: row.botInstanceId as BotInstanceId,
+    botInstanceId: row.botInstanceId as BotInstanceId | null,
     idempotencyKey: row.idempotencyKey,
     // Cast rather than re-validated: the CHECK is built from the contract's own enum.
     actorType: row.actorType as ActorType,

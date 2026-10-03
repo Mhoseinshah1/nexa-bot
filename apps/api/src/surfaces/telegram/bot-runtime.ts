@@ -9735,6 +9735,12 @@ export class BotRuntime {
     const membership = this.deps.membership;
     if (
       membership === undefined ||
+      /*
+       * Customer 360 (§11.4): an operator's per-customer exemption, read from the row this
+       * update resolved — so it is enforced HERE, at the one gate, and an exemption lifted
+       * a moment ago applies to the very next update. Telegram is not asked at all.
+       */
+      customer.channelMembershipExemptAt !== null ||
       (!checking &&
         (MEMBERSHIP_EXEMPT_INTENTS.has(command.intent) || ADMIN_INTENTS.has(command.intent)))
     ) {

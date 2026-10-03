@@ -290,3 +290,87 @@
   flex: 1;
   min-width: 0;
 }
+
+/* ------------------------------------------------------------ Customer 360 (§11) --- */
+
+/* The primary actions in the head: they wrap rather than overflow on a phone. */
+.c360-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/*
+ * The section list. Sticky under the topbar on a wide screen so an operator can jump
+ * between parts of a long page; a horizontally scrolling strip on a narrow one.
+ */
+.c360-nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 6px;
+  margin-block: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+  scrollbar-width: thin;
+}
+.c360-nav a {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  color: var(--fg-2);
+  text-decoration: none;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.c360-nav a:hover,
+.c360-nav a:focus-visible {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+
+/* A section an anchor lands on clears the sticky list above it. */
+.c360 [id^='c360-'] {
+  scroll-margin-top: 64px;
+}
+
+/* One control: its state, then its action, on one line that wraps on a phone. */
+.c360-control {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  inline-size: 100%;
+}
+
+.c360-per-currency {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.c360-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.c360-list {
+  margin: 4px 0 0;
+  padding-inline-start: 18px;
+}
+
+@media (max-width: 520px) {
+  .c360-actions {
+    justify-content: flex-start;
+  }
+  .c360-actions > * {
+    flex: 1 1 auto;
+  }
+}

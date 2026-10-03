@@ -38,6 +38,15 @@ export interface CustomerRecord {
    * they receive them. Governs MARKETING broadcasts only.
    */
   readonly marketingOptOutAt: Date | null;
+  /**
+   * Customer 360 (§11.4): when an operator exempted this customer from mandatory channel
+   * membership; null while the gate applies. The Telegram gate reads it from the row it
+   * resolved for the update, so the exemption is enforced where membership is.
+   */
+  readonly channelMembershipExemptAt: Date | null;
+  /** A number an operator verified out of band, and when; both or neither. */
+  readonly phoneNumber: string | null;
+  readonly phoneVerifiedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -197,6 +206,31 @@ export interface CustomerRepository {
     scope: TenantContext,
     id: UserId,
     optedOut: boolean,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Customer 360: the channel-membership exemption, as a conditional UPDATE naming the
+   * state it expects (not exempt when exempting, exempt when lifting). `false`: already so.
+   */
+  setChannelMembershipExemption(
+    scope: TenantContext,
+    id: UserId,
+    exempt: boolean,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Customer 360: record a verified number (`phoneNumber` set) or forget it (null). `false`
+   * when the row already holds exactly that — the same number stays verified from the
+   * first time, rather than being re-stamped by a replay.
+   */
+  setVerifiedPhone(
+    scope: TenantContext,
+    id: UserId,
+    phoneNumber: string | null,
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;

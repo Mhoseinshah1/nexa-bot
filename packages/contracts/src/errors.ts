@@ -1476,6 +1476,22 @@ export const COMMERCE_ERROR_CODES = {
    * names it and it cannot be deleted. The `reason` detail says which.
    */
   SERVICE_LOCATION_INVALID: 'commerce.service_location_invalid',
+
+  // --- Customer 360 (docs/customer-account-transfer-audit.md) --------------------------
+  /**
+   * The account transfer cannot run now. The `blockers` detail lists
+   * `CUSTOMER_TRANSFER_BLOCKERS` members. Nothing was written.
+   */
+  CUSTOMER_TRANSFER_REFUSED: 'commerce.customer_transfer_refused',
+  /**
+   * What would move is no longer what the confirmed preview showed: a service, an order or
+   * the balance changed in between. Nothing was written; preview again.
+   */
+  CUSTOMER_TRANSFER_PREVIEW_STALE: 'commerce.customer_transfer_preview_stale',
+  /** The typed confirmation does not name the destination's Telegram numeric id. */
+  CUSTOMER_TRANSFER_CONFIRMATION_MISMATCH: 'commerce.customer_transfer_confirmation_mismatch',
+  /** Not a phone number this installation can store. */
+  CUSTOMER_PHONE_INVALID: 'commerce.customer_phone_invalid',
 } as const;
 
 /*

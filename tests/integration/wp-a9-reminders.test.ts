@@ -691,6 +691,22 @@ describe('WP-A9 reminders', () => {
     });
   });
 
+  it('never tells a wallet emptied by an account transfer (Customer 360)', async () => {
+    await setFlag('wallet_low_balance_reminders', true);
+    expect(
+      await setSetting('wallet.low_balance.threshold', { amountMinor: '50000', currency: 'IRT' }),
+    ).toBeNull();
+    await ledger(customerA, 'CREDIT', 100_000n);
+    // The whole balance moved to the account that replaces this one.
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
+                                  currency, reference)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, 'DEBIT',
+              'ACCOUNT_TRANSFER_OUT', 100000, 'IRT', ${`ref-${key()}`})`);
+    expect(await walletPass()).toEqual({ alerts: 0 });
+    expect(await count('wallet_threshold_alerts')).toBe(0);
+  });
+
   it('never tells a wallet that never held the threshold', async () => {
     await setFlag('wallet_low_balance_reminders', true);
     expect(

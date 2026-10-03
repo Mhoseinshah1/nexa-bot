@@ -1091,6 +1091,58 @@ describe('service location change (WP-A6)', () => {
       expect(await count('service_location_changes')).toBe(1);
     });
 
+    it("replaces the window with the customer's override, and restores it when removed (Customer 360)", async () => {
+      const service = await activeService('override');
+      const { nl, fi } = await standardLocations({
+        cooldownHours: 24,
+        maxChanges: null,
+        periodDays: null,
+      });
+      await requestFree(service.id, fi, 'override-1');
+      await ctx.container.provisionerLoop.tick();
+      await expect(draftMove(service.id, nl, 'override-2')).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.LOCATION_CHANGE_COOLDOWN,
+      });
+
+      // No cooldown and no limit for THIS customer: the next move is quoted, and the
+      // quote freezes the override's window, not the location's.
+      await ctx.container.customerControls.setLocationOverride(tenantA, owner, {
+        idempotencyKey: 'override-set',
+        customerId: customerA,
+        limits: { cooldownHours: null, maxChanges: null, periodDays: null },
+        reason: 'support ticket 42',
+      });
+      const quoted = await draftMove(service.id, nl, 'override-3');
+      const frozen = await ctx.container.database.db.execute<{ cooldown_hours: number | null }>(
+        sql`SELECT cooldown_hours FROM service_location_changes WHERE order_id = ${quoted.order.id}`,
+      );
+      expect(frozen.rows).toHaveLength(1);
+      expect(frozen.rows[0]?.cooldown_hours).toBeNull();
+
+      // A tighter override refuses where the location alone would not: a rolling limit of
+      // one change in thirty days, which the free move already used.
+      await ctx.container.customerControls.setLocationOverride(tenantA, owner, {
+        idempotencyKey: 'override-tight',
+        customerId: customerA,
+        limits: { cooldownHours: null, maxChanges: 1, periodDays: 30 },
+        reason: 'tighter',
+      });
+      await expect(draftMove(service.id, nl, 'override-4')).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.LOCATION_CHANGE_LIMIT_REACHED,
+      });
+
+      // Removed: the configured cooldown applies again.
+      await ctx.container.customerControls.setLocationOverride(tenantA, owner, {
+        idempotencyKey: 'override-remove',
+        customerId: customerA,
+        limits: null,
+        reason: 'back to normal',
+      });
+      await expect(draftMove(service.id, nl, 'override-5')).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.LOCATION_CHANGE_COOLDOWN,
+      });
+    });
+
     it('refuses a service that is not live', async () => {
       const service = await activeService('blocked');
       const { nl, fi } = await standardLocations();

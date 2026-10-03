@@ -197,7 +197,15 @@ import {
   TemplateResolver,
 } from './modules/control/templates/application/template-resolver.js';
 import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
+import { CustomerControlService } from './modules/commerce/customers/application/customer-control.service.js';
+import { CustomerInsightService } from './modules/commerce/customers/application/customer-insight.service.js';
+import { CustomerAccountTransferService } from './modules/commerce/customers/application/customer-account-transfer.service.js';
+import { DrizzleCustomerInsightReader } from './modules/commerce/customers/infrastructure/drizzle-customer-insight.reader.js';
+import { DrizzleCustomerAccountTransferRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-account-transfer.repository.js';
+import { ManualOrderService } from './modules/commerce/orders/application/manual-order.service.js';
+import { CustomerServicesToggleService } from './modules/commerce/provisioning/application/customer-services-toggle.service.js';
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
+import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/locations/infrastructure/drizzle-customer-location-override.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { ProductCategoryService } from './modules/commerce/catalog/application/product-category.service.js';
@@ -744,6 +752,16 @@ export interface Container {
    * controller cannot get it wrong.
    */
   readonly customers: CustomerService;
+  /** Customer 360 (§11.4): the per-customer controls an operator sets. */
+  readonly customerControls: CustomerControlService;
+  /** Customer 360 (§11.7, §11.10): exact aggregates and the management timeline. */
+  readonly customerInsights: CustomerInsightService;
+  /** Customer 360 (§11.5): moving a customer's holdings to another Telegram identity. */
+  readonly customerAccountTransfers: CustomerAccountTransferService;
+  /** Customer 360 (§11.6): an operator's order for a customer, through the customer's path. */
+  readonly manualOrders: ManualOrderService;
+  /** Customer 360 (§11.4): suspend or resume all of one customer's configurations. */
+  readonly customerServicesToggle: CustomerServicesToggleService;
   readonly products: ProductService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
@@ -1766,9 +1784,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const serviceLocationRepository = new DrizzleServiceLocationRepository(database.db);
   const locationChangeRepository = new DrizzleLocationChangeRepository(database.db);
+  const customerLocationOverrides = new DrizzleCustomerLocationOverrideRepository(database.db);
   const locationChangePolicy = new LocationChangePolicy({
     locations: serviceLocationRepository,
     changes: locationChangeRepository,
+    overrides: customerLocationOverrides,
     settings: settingsResolver,
     clock,
   });
@@ -3628,6 +3648,68 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
   /*
+   * Customer 360 (spec §11, `docs/customer-account-transfer-audit.md`). Each is a thin
+   * composition of the services above: the controls write the customer row and the
+   * location override, the transfer reuses Package F's ownership rows and evaluator and the
+   * wallet ledger, the manual order runs the customer's own four commands under the
+   * operator's authority, and the toggle plans each service through the operator's
+   * per-service request.
+   */
+  const customerControlService = new CustomerControlService({
+    customers: customerRepository,
+    locationOverrides: customerLocationOverrides,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+  });
+  const customerInsightService = new CustomerInsightService({
+    reader: new DrizzleCustomerInsightReader(database.db),
+    customers: customerRepository,
+    auditHistory: new DrizzleAuditHistoryReader(database.db),
+    guard,
+  });
+  const customerAccountTransferService = new CustomerAccountTransferService({
+    repository: new DrizzleCustomerAccountTransferRepository(database.db),
+    customers: customerRepository,
+    services: serviceRepository,
+    serviceTransfers: new DrizzleServiceTransferRepository(database.db),
+    transferability: serviceTransferService,
+    wallet: walletRepository,
+    sellingCurrency: (scope, tx) =>
+      settingsResolver.valueOf<CurrencyCode>(scope, 'sales.currency', tx),
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
+  const manualOrderService = new ManualOrderService({
+    orders: orderService,
+    payments: paymentService,
+    guard,
+    audit,
+    opsLog,
+  });
+  const customerServicesToggleService = new CustomerServicesToggleService({
+    services: serviceRepository,
+    provisioning: provisioningService,
+    guard,
+    audit,
+    uow,
+    idempotency,
+  });
+  /*
    * WP-A7 — support tickets. ONE service for the bot and the Web Admin. An administrator's
    * reply enqueues `TICKET_REPLY` on the customer lane in the transaction that writes it,
    * through the same notifier every other producer uses.
@@ -5379,6 +5461,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     recordPing,
     customers: customerService,
+    customerControls: customerControlService,
+    customerInsights: customerInsightService,
+    customerAccountTransfers: customerAccountTransferService,
+    manualOrders: manualOrderService,
+    customerServicesToggle: customerServicesToggleService,
     products: productService,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,

@@ -475,7 +475,8 @@ describe('the customer detail', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ali_tehran', { exact: false });
+    // The head and the general card both name the username (Customer 360).
+    await screen.findAllByText('ali_tehran', { exact: false });
     const text = container.textContent ?? '';
     expect(text).not.toContain('فعالیت اخیر');
     expect(text).not.toContain('برچسب');
@@ -538,7 +539,8 @@ describe('the customer detail', () => {
     it('once loaded, where the head card carries it and names the customer', async () => {
       stubApi(detail());
       renderPage(page(false));
-      await screen.findByText('ali_tehran', { exact: false });
+      // The head and the general card both name the username (Customer 360).
+      await screen.findAllByText('ali_tehran', { exact: false });
       const headings = screen.getAllByRole('heading', { level: 1 });
       expect(headings).toHaveLength(1);
       expect(headings[0]?.closest('.detail-head')).not.toBeNull();
@@ -818,7 +820,8 @@ describe('the route table', () => {
       'users.block',
     ]);
     renderPage(resolved.element as ReactElement);
-    await screen.findByText('ali_tehran', { exact: false });
+    // The head and the general card both name the username (Customer 360).
+    await screen.findAllByText('ali_tehran', { exact: false });
   });
 
   /*
@@ -898,7 +901,8 @@ describe('the route table', () => {
       'users.view',
     ]);
     renderPage(resolved.element as ReactElement);
-    await screen.findByText('ali_tehran', { exact: false });
+    // The head and the general card both name the username (Customer 360).
+    await screen.findAllByText('ali_tehran', { exact: false });
 
     expect(screen.getByText(/orders\.view/u)).toBeTruthy();
     expect(screen.getByText(/services\.view/u)).toBeTruthy();

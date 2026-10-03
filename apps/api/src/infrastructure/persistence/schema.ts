@@ -3145,6 +3145,20 @@ export const customers = pgTable(
      * Set and cleared by the customer's own Telegram turn through a conditional UPDATE.
      */
     marketingOptOutAt: timestamptz('marketing_opt_out_at'),
+    /**
+     * Customer 360 (§11.4): when an operator exempted this customer from MANDATORY channel
+     * membership; NULL while the gate applies to them. Read by the Telegram gate itself
+     * (`BotRuntime.guardedAct`) from the row it resolves on every update — not a Web Admin
+     * decoration. Set and cleared only by `CustomerControlService`, conditionally.
+     */
+    channelMembershipExemptAt: timestamptz('channel_membership_exempt_at'),
+    /**
+     * Customer 360 (§11.4): a phone number an OPERATOR verified out of band, and when. The
+     * bot never asks for one. Both or neither (`customers_phone_check`), so a number is
+     * never stored without the verification that justified storing it.
+     */
+    phoneNumber: text('phone_number'),
+    phoneVerifiedAt: timestamptz('phone_verified_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3181,6 +3195,11 @@ export const customers = pgTable(
     check('customers_status_check', enumCheck('status', CUSTOMER_STATUSES)),
     /** A blocked customer has a time; an active one does not. Neither state can lie. */
     check('customers_blocked_at_check', sql`(status = 'BLOCKED') = (blocked_at IS NOT NULL)`),
+    check('customers_phone_check', sql`(phone_number IS NULL) = (phone_verified_at IS NULL)`),
+    check(
+      'customers_phone_format_check',
+      sql`phone_number IS NULL OR phone_number ~ '^[+][1-9][0-9]{7,14}$'`,
+    ),
     /** The target of the composite references the child tables use. */
     unique('customers_tenant_id_key').on(table.tenantId, table.id),
   ],
@@ -9742,10 +9761,12 @@ export const serviceOwnershipTransfers = pgTable(
     serviceId: uuid('service_id').notNull(),
     fromCustomerId: uuid('from_customer_id').notNull(),
     toCustomerId: uuid('to_customer_id').notNull(),
-    /** The bot the sender confirmed through. */
-    botInstanceId: uuid('bot_instance_id')
-      .notNull()
-      .references(() => botInstances.id),
+    /**
+     * The bot the sender confirmed through. NULL only for a move no customer confirmed — a
+     * Web Admin operator's account transfer (Customer 360), which happens on no bot. Every
+     * other actor's transfer names one (`service_ownership_transfers_bot_check`).
+     */
+    botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
     /**
      * The confirmation's idempotency key — the Telegram update that carried the tap. Unique
      * for ever, so a redelivered update answers with this row and never transfers again.
@@ -9781,6 +9802,130 @@ export const serviceOwnershipTransfers = pgTable(
     check('service_ownership_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
     check('service_ownership_transfers_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
     check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
+    check(
+      'service_ownership_transfers_bot_check',
+      sql`bot_instance_id IS NOT NULL OR actor_type = 'WEB_ADMIN'`,
+    ),
+  ],
+);
+
+// --- Customer 360 ------------------------------------------------------------------------
+
+/**
+ * A customer's location-change limit override (Customer 360, §11.4): the cooldown and the
+ * rolling limit that REPLACE the configured location's for every service this customer
+ * owns, while the row exists. The shape of `trial_limit_overrides`: one row per customer,
+ * deleted to remove. Null fields mean "no limit of that kind" — exactly what they mean on
+ * `service_locations`, so `locationChangeWindow` reads either without translation.
+ *
+ * Only the WINDOW is replaced. Which targets exist, their prices and whether the panel can
+ * move the service are still decided by `LocationChangePolicy` from the configuration.
+ */
+export const customerLocationChangeOverrides = pgTable(
+  'customer_location_change_overrides',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    cooldownHours: integer('cooldown_hours'),
+    maxChanges: integer('max_changes'),
+    periodDays: integer('period_days'),
+    setAt: timestamptz('set_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'customer_location_change_overrides_pkey',
+      columns: [table.tenantId, table.customerId],
+    }),
+    foreignKey({
+      name: 'customer_location_change_overrides_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    check(
+      'customer_location_change_overrides_limits_check',
+      sql`(cooldown_hours IS NULL OR cooldown_hours BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_COOLDOWN_HOURS_MAX))})
+        AND (max_changes IS NULL OR max_changes BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_MAX_CHANGES_MAX))})
+        AND (period_days IS NULL OR period_days BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_PERIOD_DAYS_MAX))})
+        AND ((max_changes IS NULL) = (period_days IS NULL))`,
+    ),
+  ],
+);
+
+/**
+ * One operator account transfer (Customer 360, §11.5, `docs/customer-account-transfer-audit.md`).
+ *
+ * Append-only (`nexa_reject_mutation`), written in the transaction that moves the services
+ * and the balance. It is the record a replay answers from — `(tenant_id, idempotency_key)`
+ * is unique for ever — and the evidence of what moved: the service ids, the amount, and the
+ * two wallet entries. Each moved service ALSO has its own `service_ownership_transfers` row,
+ * because that row is what `nexa_services_ownership_guard` admits a change of owner on.
+ */
+export const customerAccountTransfers = pgTable(
+  'customer_account_transfers',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    fromCustomerId: uuid('from_customer_id').notNull(),
+    toCustomerId: uuid('to_customer_id').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    /** The ids of the services that changed hands, in the order they were moved. */
+    serviceIds: jsonb('service_ids').notNull(),
+    walletAmount: bigint('wallet_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The DEBIT of the source and the CREDIT of the destination; NULL when nothing moved. */
+    debitEntryId: uuid('debit_entry_id'),
+    creditEntryId: uuid('credit_entry_id'),
+    fingerprint: text('fingerprint').notNull(),
+    reason: text('reason').notNull(),
+    actorAdminId: uuid('actor_admin_id').references(() => admins.id),
+    correlationId: text('correlation_id').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('customer_account_transfers_key').on(table.tenantId, table.idempotencyKey),
+    index('customer_account_transfers_from_idx').on(
+      table.tenantId,
+      table.fromCustomerId,
+      table.createdAt,
+    ),
+    index('customer_account_transfers_to_idx').on(
+      table.tenantId,
+      table.toCustomerId,
+      table.createdAt,
+    ),
+    foreignKey({
+      name: 'customer_account_transfers_from_fk',
+      columns: [table.tenantId, table.fromCustomerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'customer_account_transfers_to_fk',
+      columns: [table.tenantId, table.toCustomerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'customer_account_transfers_debit_fk',
+      columns: [table.tenantId, table.debitEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+    }),
+    foreignKey({
+      name: 'customer_account_transfers_credit_fk',
+      columns: [table.tenantId, table.creditEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+    }),
+    check('customer_account_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
+    check('customer_account_transfers_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('customer_account_transfers_amount_check', sql`wallet_amount >= 0`),
+    check(
+      'customer_account_transfers_entries_check',
+      sql`(wallet_amount = 0) = (debit_entry_id IS NULL) AND (debit_entry_id IS NULL) = (credit_entry_id IS NULL)`,
+    ),
+    check('customer_account_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 255`),
+    check('customer_account_transfers_reason_check', sql`length(reason) BETWEEN 1 AND 500`),
   ],
 );
 

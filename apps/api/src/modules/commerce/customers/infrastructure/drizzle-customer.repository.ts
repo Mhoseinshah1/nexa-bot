@@ -320,6 +320,59 @@ export class DrizzleCustomerRepository implements CustomerRepository {
       .returning({ id: customers.id });
     return rows.length > 0;
   }
+
+  async setChannelMembershipExemption(
+    scope: TenantContext,
+    id: UserId,
+    exempt: boolean,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customers)
+      .set({ channelMembershipExemptAt: exempt ? now : null, updatedAt: now })
+      .where(
+        and(
+          eq(customers.tenantId, tenantId),
+          eq(customers.id, id),
+          exempt
+            ? sql`${customers.channelMembershipExemptAt} IS NULL`
+            : sql`${customers.channelMembershipExemptAt} IS NOT NULL`,
+        ),
+      )
+      .returning({ id: customers.id });
+    return rows.length > 0;
+  }
+
+  async setVerifiedPhone(
+    scope: TenantContext,
+    id: UserId,
+    phoneNumber: string | null,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customers)
+      .set({
+        phoneNumber,
+        phoneVerifiedAt: phoneNumber === null ? null : now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(customers.tenantId, tenantId),
+          eq(customers.id, id),
+          // Conditional on a CHANGE: the same number again keeps its first verification.
+          phoneNumber === null
+            ? sql`${customers.phoneNumber} IS NOT NULL`
+            : sql`${customers.phoneNumber} IS DISTINCT FROM ${phoneNumber}`,
+        ),
+      )
+      .returning({ id: customers.id });
+    return rows.length > 0;
+  }
 }
 
 function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
@@ -338,6 +391,9 @@ function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
     blockedReason: row.blockedReason,
     blockedReasonShown: row.blockedReasonShown,
     marketingOptOutAt: row.marketingOptOutAt,
+    channelMembershipExemptAt: row.channelMembershipExemptAt,
+    phoneNumber: row.phoneNumber,
+    phoneVerifiedAt: row.phoneVerifiedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
