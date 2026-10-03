@@ -87,8 +87,22 @@ jobs:
           BUILD_VERSION: ${{ github.sha }}
           BUILD_COMMIT: ${{ github.sha }}
 
+      # Every ordering resets the database, and a reset TRUNCATEs ~150 tables:
+      # with fsync on, that is hundreds of synced file creations per ordering.
+      # The container is discarded with the job; see the script for numbers.
+      - name: Make the throwaway database non-durable
+        run: bash scripts/ci-test-postgres.sh "$POSTGRES_CONTAINER"
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+
       - name: Apply migrations
         run: pnpm db:migrate
 
+      # Progress per file and test as each starts, and a heartbeat, so a long
+      # quiet stretch reads as slow, stuck or held open — see ci.yml.
       - name: Exhaustive notification orderings
-        run: pnpm test:exhaustive
+        run: >-
+          pnpm test:exhaustive
+          --reporter=default
+          --reporter=./tests/support/ci-progress-reporter.ts
+          --reporter=hanging-process

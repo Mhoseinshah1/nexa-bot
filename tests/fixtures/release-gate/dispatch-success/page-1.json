@@ -1,0 +1,17 @@
+{
+  "total_count": 1,
+  "workflow_runs": [
+    {
+      "id": 107,
+      "name": "CI",
+      "path": ".github/workflows/ci.yml",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "head_branch": "hotfix/x",
+      "event": "workflow_dispatch",
+      "status": "completed",
+      "conclusion": "success",
+      "run_attempt": 1,
+      "html_url": "https://github.com/example/nexa-bot/actions/runs/107"
+    }
+  ]
+}
