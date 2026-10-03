@@ -1005,9 +1005,17 @@ export const roles = pgTable(
     name: text('name').notNull(),
     isSystem: boolean('is_system').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /**
+     * Phase D3: optimistic concurrency for the role editor. An edit names the version it
+     * was made from and the UPDATE matches on it; a zero row count is a conflict, never
+     * a merge (ADR-0021's rule for every versioned edit).
+     */
+    version: integer('version').notNull().default(1),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     unique('roles_tenant_id_key').on(table.tenantId, table.id),
+    check('roles_version_check', sql`version >= 1`),
     uniqueIndex('roles_tenant_key_key').on(table.tenantId, table.key),
     check('roles_key_shape_check', sql`key ~ '^[a-z][a-z0-9_]{1,63}$'`),
   ],

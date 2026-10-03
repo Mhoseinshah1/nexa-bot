@@ -1,3 +1,4 @@
+import { RolesSection } from './roles';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import {
@@ -72,7 +73,7 @@ import { DiagnosticsSection } from './system-diagnostics';
  * and what the background monitor is configured to do.
  */
 
-const SECTIONS = ['status', 'diagnostics', 'monitor', 'admins'] as const;
+const SECTIONS = ['status', 'diagnostics', 'monitor', 'admins', 'roles'] as const;
 type Section = (typeof SECTIONS)[number];
 
 function isSection(value: string | null): value is Section {
@@ -130,6 +131,8 @@ export function SystemPage({
           { id: 'diagnostics', label: t('web.system_tab_diagnostics') },
           { id: 'monitor', label: t('web.system_tab_monitor') },
           { id: 'admins', label: t('web.system_tab_admins') },
+          // Phase D3: roles, the permission matrix and the effective-permission preview.
+          { id: 'roles', label: t('web.system_tab_roles') },
         ]}
       />
 
@@ -143,6 +146,12 @@ export function SystemPage({
           <AdminsSection
             denied={!permissions.includes('admins.view')}
             mayEdit={permissions.includes('admins.edit')}
+          />
+        )}
+        {section === 'roles' && (
+          <RolesSection
+            denied={!permissions.includes('admins.view')}
+            mayEdit={permissions.includes('admins.permissions.edit')}
           />
         )}
       </TabPanel>
