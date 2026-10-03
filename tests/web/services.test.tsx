@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   SERVICE_OPERATOR_ACTIONS,
@@ -318,6 +318,74 @@ describe('the service list', () => {
 });
 
 describe('the service detail', () => {
+  /**
+   * Program §13 (Codex review of #157): an operation reaching its end re-reads what it
+   * changed. The history is polled while an operation is PLANNED; when the poll answers
+   * with that operation SUCCEEDED, the page must fetch the service and its move targets
+   * again — otherwise a grant that landed leaves the old limit and the old blockers on
+   * screen. Exercised on the PAGE, so deleting the hook's call from it fails here.
+   */
+  it('reads the service and its move targets again when a polled operation ends', async () => {
+    let opState = 'PLANNED';
+    const routes = [
+      {
+        url: `/services/${SERVICE_ID}/operations`,
+        get body() {
+          return {
+            operations: [operation({ type: 'ADD_TRAFFIC', state: opState, completedAt: null })],
+            limit: 50,
+            hasMore: false,
+          };
+        },
+      },
+      {
+        url: `/services/${SERVICE_ID}/location-targets`,
+        body: { current: null, targets: [] },
+      },
+      {
+        url: `/services/${SERVICE_ID}`,
+        body: {
+          service: {
+            deliveryAttempts: 1,
+            deliveryNextAttemptAt: null,
+            actions: actionsWith({ CHANGE_LOCATION: 'AVAILABLE' }),
+            ...service(),
+          },
+        },
+      },
+    ];
+    const api = stubApi(routes);
+    const count = (suffix: string) =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(suffix)).length;
+    const detailReads = () => count(`/services/${SERVICE_ID}`);
+    const targetReads = () => count(`/services/${SERVICE_ID}/location-targets`);
+    const historyReads = () => count(`/services/${SERVICE_ID}/operations`);
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(
+        <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate mayGrant />,
+      );
+      await waitFor(() => expect(targetReads()).toBe(1));
+      expect(detailReads()).toBe(1);
+
+      // A poll that finds the same history changes nothing.
+      await vi.advanceTimersByTimeAsync(5_500);
+      await waitFor(() => expect(historyReads()).toBe(2));
+      expect(detailReads()).toBe(1);
+      expect(targetReads()).toBe(1);
+
+      // The next poll finds the operation at its end.
+      opState = 'SUCCEEDED';
+      await vi.advanceTimersByTimeAsync(5_500);
+      await waitFor(() => expect(historyReads()).toBe(3));
+      await waitFor(() => expect(detailReads()).toBe(2));
+      await waitFor(() => expect(targetReads()).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders the identity, the traffic and the delivery of one service', async () => {
     stubApi(detail());
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
