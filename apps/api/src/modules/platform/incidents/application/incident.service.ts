@@ -2,6 +2,8 @@ import {
   COMMERCE_ERROR_CODES,
   INCIDENT_EFFECT_CLAIM_STALE_MS,
   INCIDENT_ERROR_CODES,
+  INCIDENT_LIST_PAGE_SIZE,
+  isIncidentId,
   PLATFORM_ERROR_CODES,
   errors,
   incidentConditionKey,
@@ -44,6 +46,7 @@ import type {
   IncidentFields,
   IncidentRecord,
   IncidentRepository,
+  EffectClaim,
 } from './ports.js';
 
 export const INCIDENTS_VIEW: PermissionKey = 'incidents.view';
@@ -129,10 +132,27 @@ export class IncidentService {
 
   // --- reads ----------------------------------------------------------------------------
 
-  async list(scope: TenantContext, actor: ActorContext): Promise<readonly IncidentView[]> {
+  /**
+   * One page, newest first, and the cursor of the page after it (Codex, #162: a list that
+   * stopped at 100 hid every older incident). `cursor` is the previous page's `nextCursor`.
+   */
+  async list(
+    scope: TenantContext,
+    actor: ActorContext,
+    cursor: string | null = null,
+  ): Promise<{ readonly incidents: readonly IncidentView[]; readonly nextCursor: string | null }> {
     await this.deps.guard.check(scope, actor, INCIDENTS_VIEW);
-    const rows = await this.deps.repository.list(scope, 100);
-    return Promise.all(rows.map(async (incident) => this.viewOf(scope, incident)));
+    const after = cursor === null ? null : parseListCursor(cursor);
+    const rows = await this.deps.repository.list(scope, INCIDENT_LIST_PAGE_SIZE + 1, after);
+    const page = rows.slice(0, INCIDENT_LIST_PAGE_SIZE);
+    const last = page[page.length - 1];
+    return {
+      incidents: await Promise.all(page.map(async (incident) => this.viewOf(scope, incident))),
+      nextCursor:
+        rows.length > INCIDENT_LIST_PAGE_SIZE && last !== undefined
+          ? `${last.createdAt.toISOString()}_${last.id}`
+          : null,
+    };
   }
 
   async get(
@@ -422,13 +442,22 @@ export class IncidentService {
   async applyEffects(scope: TenantContext, actor: ActorContext, id: string): Promise<IncidentView> {
     const denial = { action: 'incident.effects', entityType: 'Incident', entityId: id };
     await this.authorize(scope, actor, INCIDENTS_MANAGE, denial);
-    const incident = await this.require(scope, id);
+    await this.require(scope, id);
     await this.reconcile(scope, actor, id);
-    await this.deps.uow.run(scope, async (tx) => {
-      await this.assertScopeActive(scope, tx);
-      await this.clearEffectsPending(scope, incident, tx);
-    });
-    return this.viewOf(scope, await this.require(scope, id));
+    const after = await this.require(scope, id);
+    /*
+     * The "effects pending" condition closes only when every effect the incident wants is
+     * in force — APPLIED, or ALREADY withdrawn. A FAILED one (an operator without the
+     * module's key) leaves it open: the stop-sale the window asked for has not happened,
+     * and the inbox must keep saying so (Codex, #162).
+     */
+    if (await this.effectsInForce(scope, after)) {
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.clearEffectsPending(scope, after, tx);
+      });
+    }
+    return this.viewOf(scope, after);
   }
 
   /** How many customers a notice would reach now — the count the confirmation repeats. */
@@ -684,44 +713,67 @@ export class IncidentService {
    * never stops the other effects.
    */
   private async reconcile(scope: TenantContext, actor: ActorContext, id: string): Promise<void> {
-    const incident = await this.require(scope, id);
-    const desired = new Map<
-      string,
-      { kind: IncidentEffectKind; target: IncidentTarget; subjectRef: string }
-    >();
-    if (incident.status === 'ACTIVE' && incident.stopSales) {
-      for (const target of incident.targets) {
-        const resolved = await this.deps.effects.resolve(scope, target);
-        if (resolved !== null) {
-          desired.set(`${resolved.kind}:${resolved.subjectRef}`, {
-            kind: resolved.kind,
-            target,
-            subjectRef: resolved.subjectRef,
-          });
-        }
-      }
-    }
+    let incident = await this.require(scope, id);
+    let desired = await this.desiredOf(scope, incident);
     const marker = markerOf(incident);
-    const staleBefore = new Date(this.deps.clock.now().getTime() - INCIDENT_EFFECT_CLAIM_STALE_MS);
 
     for (const [, effect] of desired) {
-      const claimed = await this.deps.uow.run(scope, async (tx) => {
-        await this.assertScopeActive(scope, tx);
-        return this.deps.repository.claimApply(
-          scope,
-          {
-            incidentId: id,
-            kind: effect.kind,
-            targetKind: effect.target.kind,
-            targetRef: effect.target.ref,
-            subjectRef: effect.subjectRef,
-            staleBefore,
-            now: this.deps.clock.now(),
-          },
-          tx,
-        );
-      });
-      if (!claimed) continue;
+      const claim = await this.claimWaiting(
+        scope,
+        effect.kind,
+        effect.subjectRef,
+        (tx, staleBefore) =>
+          this.deps.repository.claimApply(
+            scope,
+            {
+              incidentId: id,
+              kind: effect.kind,
+              targetKind: effect.target.kind,
+              targetRef: effect.target.ref,
+              subjectRef: effect.subjectRef,
+              staleBefore,
+              now: this.deps.clock.now(),
+            },
+            tx,
+          ),
+      );
+      if (claim === 'BUSY') {
+        await this.deps.uow.run(scope, async (tx) => {
+          await this.assertScopeActive(scope, tx);
+          const now = this.deps.clock.now();
+          const marked = await this.deps.repository.markContended(
+            scope,
+            {
+              incidentId: id,
+              kind: effect.kind,
+              targetKind: effect.target.kind,
+              targetRef: effect.target.ref,
+              subjectRef: effect.subjectRef,
+              now,
+            },
+            tx,
+          );
+          if (marked) {
+            await this.event(
+              scope,
+              actor,
+              id,
+              'EFFECT',
+              {
+                step: 'apply',
+                kind: effect.kind,
+                subjectRef: effect.subjectRef,
+                state: 'FAILED',
+                errorCode: 'incident.effect_contended',
+              },
+              now,
+              tx,
+            );
+          }
+        });
+        continue;
+      }
+      if (claim !== 'CLAIMED') continue;
       let state: 'APPLIED' | 'ALREADY' | 'FAILED' = 'FAILED';
       let errorCode: string | null = null;
       try {
@@ -745,45 +797,56 @@ export class IncidentService {
       } catch (error) {
         errorCode = this.failureCode(error);
       }
-      await this.settle(
-        scope,
-        actor,
-        id,
-        effect.kind,
-        effect.subjectRef,
-        'PENDING',
-        state,
-        errorCode,
-        'apply',
-      );
+      await this.settleApply(scope, actor, id, effect.kind, effect.subjectRef, state, errorCode);
     }
 
-    // Everything applied that is no longer desired is restored — and only if it is still
-    // as this incident left it (for a drain, still carrying this incident's marker).
+    /*
+     * Asked AGAIN after the apply pass (Codex, #162). A resolution that committed while an
+     * effect was being applied found that effect PENDING and could not restore it; it is
+     * settled APPLIED only now, so this pass — which re-reads the incident after its own
+     * settles — is the one that sees RESOLVED and restores it. Without this a stop-sale
+     * outlived the incident that made it.
+     */
+    incident = await this.require(scope, id);
+    desired = await this.desiredOf(scope, incident);
+
+    // Everything applied that is no longer desired is restored — or handed to another
+    // incident that still wants it — and only if it is still as this incident left it.
     for (const effect of await this.deps.repository.effects(scope, id)) {
       if (desired.has(`${effect.kind}:${effect.subjectRef}`)) continue;
       if (effect.state !== 'APPLIED' && effect.state !== 'REVERTING') continue;
-      const claimed = await this.deps.uow.run(scope, async (tx) => {
-        await this.assertScopeActive(scope, tx);
-        return this.deps.repository.claimRevert(
-          scope,
-          {
-            incidentId: id,
-            kind: effect.kind,
-            subjectRef: effect.subjectRef,
-            staleBefore,
-            now: this.deps.clock.now(),
-          },
-          tx,
-        );
-      });
-      if (!claimed) continue;
+      let handed = false;
+      const claim = await this.claimWaiting(
+        scope,
+        effect.kind,
+        effect.subjectRef,
+        async (tx, staleBefore) => {
+          const claimed = await this.deps.repository.claimRevert(
+            scope,
+            {
+              incidentId: id,
+              kind: effect.kind,
+              subjectRef: effect.subjectRef,
+              staleBefore,
+              now: this.deps.clock.now(),
+            },
+            tx,
+          );
+          if (claimed !== 'CLAIMED') return claimed;
+          handed = await this.handOver(scope, actor, id, effect.kind, effect.subjectRef, tx);
+          return claimed;
+        },
+      );
+      if (claim !== 'CLAIMED' || handed) continue;
       let state: 'REVERTED' | 'KEPT' | 'APPLIED' = 'APPLIED';
       let errorCode: string | null = null;
       try {
         const now = await this.deps.effects.status(scope, effect.kind, effect.subjectRef);
         const ours =
-          now !== null && now.inForce && (effect.kind !== 'PANEL_DRAIN' || now.marker === marker);
+          now !== null &&
+          now.inForce &&
+          (effect.kind !== 'PANEL_DRAIN' ||
+            (await this.markerIsOurs(scope, now.marker, marker, effect.kind, effect.subjectRef)));
         if (!ours) {
           state = 'KEPT';
         } else {
@@ -814,6 +877,249 @@ export class IncidentService {
     }
   }
 
+  /** What the incident wants withdrawn now: every target's subject while ACTIVE with stop-sales. */
+  private async desiredOf(
+    scope: TenantContext,
+    incident: IncidentRecord,
+  ): Promise<
+    Map<string, { kind: IncidentEffectKind; target: IncidentTarget; subjectRef: string }>
+  > {
+    const desired = new Map<
+      string,
+      { kind: IncidentEffectKind; target: IncidentTarget; subjectRef: string }
+    >();
+    if (incident.status === 'ACTIVE' && incident.stopSales) {
+      for (const target of incident.targets) {
+        const resolved = await this.deps.effects.resolve(scope, target);
+        if (resolved !== null) {
+          desired.set(`${resolved.kind}:${resolved.subjectRef}`, {
+            kind: resolved.kind,
+            target,
+            subjectRef: resolved.subjectRef,
+          });
+        }
+      }
+    }
+    return desired;
+  }
+
+  /** Whether every effect the incident wants is in force: APPLIED or ALREADY, each one. */
+  private async effectsInForce(scope: TenantContext, incident: IncidentRecord): Promise<boolean> {
+    const desired = await this.desiredOf(scope, incident);
+    if (desired.size === 0) return true;
+    const effects = await this.deps.repository.effects(scope, incident.id);
+    return [...desired.values()].every((wanted) =>
+      effects.some(
+        (effect) =>
+          effect.kind === wanted.kind &&
+          effect.subjectRef === wanted.subjectRef &&
+          (effect.state === 'APPLIED' || effect.state === 'ALREADY'),
+      ),
+    );
+  }
+
+  /**
+   * A claim on one subject, under the subject's lock, waiting while ANOTHER incident holds a
+   * live claim on it: at most one change per subject is in flight across every incident, so
+   * a hand-over or an adoption is decided with nothing moving underneath it. `BUSY` after
+   * the wait is recorded by the caller as a contended FAILED effect, retried by "apply".
+   */
+  private async claimWaiting(
+    scope: TenantContext,
+    kind: IncidentEffectKind,
+    subjectRef: string,
+    claim: (tx: TransactionScope, staleBefore: Date) => Promise<EffectClaim>,
+  ): Promise<EffectClaim> {
+    for (let attempt = 0; ; attempt += 1) {
+      const answer = await this.deps.uow.run(scope, async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.deps.repository.lockSubject(scope, kind, subjectRef, tx);
+        const staleBefore = new Date(
+          this.deps.clock.now().getTime() - INCIDENT_EFFECT_CLAIM_STALE_MS,
+        );
+        return claim(tx, staleBefore);
+      });
+      if (answer !== 'BUSY' || attempt >= CLAIM_WAIT_ATTEMPTS) return answer;
+      await new Promise((resolve) => setTimeout(resolve, CLAIM_WAIT_MS));
+    }
+  }
+
+  /**
+   * At this incident's end (or a scope change), under the subject's lock and holding its
+   * REVERTING claim: when another incident still wants the subject withdrawn, nothing is
+   * restored — that incident takes ownership (its ALREADY or FAILED row becomes APPLIED, it
+   * restores the subject when IT ends) and this one is HANDED_OVER. An incident that already
+   * owns it (APPLIED) needs no hand-over. True when the subject was handed over.
+   */
+  private async handOver(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    kind: IncidentEffectKind,
+    subjectRef: string,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const peers = (
+      await this.deps.repository.subjectPeers(scope, { incidentId: id, kind, subjectRef }, tx)
+    ).filter((peer) => peer.wants);
+    if (peers.length === 0) return false;
+    const now = this.deps.clock.now();
+    const owner = peers.find((peer) => peer.state === 'APPLIED');
+    if (owner === undefined) {
+      const heir = peers.find((peer) => peer.state === 'ALREADY' || peer.state === 'FAILED');
+      if (heir === undefined) return false;
+      const adopted = await this.deps.repository.settleEffect(
+        scope,
+        {
+          incidentId: heir.incidentId,
+          kind,
+          subjectRef,
+          from: heir.state,
+          state: 'APPLIED',
+          errorCode: null,
+          now,
+        },
+        tx,
+      );
+      if (!adopted) return false;
+      await this.event(
+        scope,
+        actor,
+        heir.incidentId,
+        'EFFECT',
+        { step: 'adopt', kind, subjectRef, state: 'APPLIED', from: id },
+        now,
+        tx,
+      );
+    }
+    await this.deps.repository.settleEffect(
+      scope,
+      {
+        incidentId: id,
+        kind,
+        subjectRef,
+        from: 'REVERTING',
+        state: 'HANDED_OVER',
+        errorCode: null,
+        now,
+      },
+      tx,
+    );
+    await this.event(
+      scope,
+      actor,
+      id,
+      'EFFECT',
+      {
+        step: 'revert',
+        kind,
+        subjectRef,
+        state: 'HANDED_OVER',
+        to: (owner ?? peers[0])?.incidentId ?? null,
+      },
+      now,
+      tx,
+    );
+    return true;
+  }
+
+  /**
+   * Settles an apply under the subject's lock. An ALREADY outcome first looks for an ORPHANED
+   * owner — another incident's APPLIED row whose incident no longer wants the subject (it
+   * ended while this claim was in flight, and so could not hand over) — and adopts it: this
+   * incident becomes the owner and restores the subject when it ends.
+   */
+  private async settleApply(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    kind: IncidentEffectKind,
+    subjectRef: string,
+    outcome: 'APPLIED' | 'ALREADY' | 'FAILED',
+    errorCode: string | null,
+  ): Promise<void> {
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.repository.lockSubject(scope, kind, subjectRef, tx);
+      const now = this.deps.clock.now();
+      let state = outcome;
+      let adoptedFrom: string | null = null;
+      if (outcome === 'ALREADY') {
+        const orphan = (
+          await this.deps.repository.subjectPeers(scope, { incidentId: id, kind, subjectRef }, tx)
+        ).find((peer) => peer.state === 'APPLIED' && !peer.wants);
+        if (
+          orphan !== undefined &&
+          (await this.deps.repository.settleEffect(
+            scope,
+            {
+              incidentId: orphan.incidentId,
+              kind,
+              subjectRef,
+              from: 'APPLIED',
+              state: 'HANDED_OVER',
+              errorCode: null,
+              now,
+            },
+            tx,
+          ))
+        ) {
+          state = 'APPLIED';
+          adoptedFrom = orphan.incidentId;
+          await this.event(
+            scope,
+            actor,
+            orphan.incidentId,
+            'EFFECT',
+            { step: 'revert', kind, subjectRef, state: 'HANDED_OVER', to: id },
+            now,
+            tx,
+          );
+        }
+      }
+      const settled = await this.deps.repository.settleEffect(
+        scope,
+        { incidentId: id, kind, subjectRef, from: 'PENDING', state, errorCode, now },
+        tx,
+      );
+      if (!settled) return;
+      await this.event(
+        scope,
+        actor,
+        id,
+        'EFFECT',
+        {
+          step: adoptedFrom === null ? 'apply' : 'adopt',
+          kind,
+          subjectRef,
+          state,
+          errorCode,
+          ...(adoptedFrom === null ? {} : { from: adoptedFrom }),
+        },
+        now,
+        tx,
+      );
+    });
+  }
+
+  /**
+   * Whether a drain's reason is this incident's — or the marker of an incident that handed
+   * its withdrawal of this subject over, which is how an adopted drain is recognised: a
+   * drain cannot be re-marked while it holds, so ownership is read from the hand-over.
+   */
+  private async markerIsOurs(
+    scope: TenantContext,
+    found: string | null,
+    mine: string,
+    kind: IncidentEffectKind,
+    subjectRef: string,
+  ): Promise<boolean> {
+    if (found === mine) return true;
+    if (found === null || !found.startsWith('incident:')) return false;
+    const from = found.slice('incident:'.length);
+    if (!isIncidentId(from)) return false;
+    return this.deps.repository.handedOver(scope, { incidentId: from, kind, subjectRef });
+  }
+
   private async settle(
     scope: TenantContext,
     actor: ActorContext,
@@ -826,6 +1132,7 @@ export class IncidentService {
     step: 'apply' | 'revert',
   ): Promise<void> {
     await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.repository.lockSubject(scope, kind, subjectRef, tx);
       const now = this.deps.clock.now();
       const settled = await this.deps.repository.settleEffect(
         scope,
@@ -1119,7 +1426,9 @@ export class IncidentService {
   }
 
   private async require(scope: TenantContext, id: string): Promise<IncidentRecord> {
-    if (!/^[0-9a-f-]{36}$/u.test(id)) throw this.notFound();
+    // A strict UUID: anything else would reach the database's uuid cast and fail there as a
+    // 500 rather than the NOT_FOUND it is (Codex, #162).
+    if (!isIncidentId(id)) throw this.notFound();
     const incident = await this.deps.repository.find(scope, id);
     if (incident === null) throw this.notFound();
     return incident;
@@ -1204,6 +1513,21 @@ function effectKey(
   step: 'on' | 'off',
 ): string {
   return `incident:${incident.id}:v${incident.version}:${kind}:${subjectRef}:${step}`;
+}
+
+/** How long a claim waits for another incident's claim on the same subject: 50 × 100 ms. */
+const CLAIM_WAIT_ATTEMPTS = 50;
+const CLAIM_WAIT_MS = 100;
+
+/** The list cursor `createdAt_id`, shape-checked by the contract's query schema. */
+function parseListCursor(cursor: string): { createdAt: Date; id: string } {
+  const at = cursor.lastIndexOf('_');
+  const createdAt = new Date(cursor.slice(0, at));
+  const id = cursor.slice(at + 1);
+  if (at < 0 || Number.isNaN(createdAt.getTime()) || !isIncidentId(id)) {
+    throw errors.validation(INCIDENT_ERROR_CODES.NOT_FOUND, 'Not a list cursor.');
+  }
+  return { createdAt, id };
 }
 
 export function markerOf(incident: Pick<IncidentRecord, 'id'>): string {

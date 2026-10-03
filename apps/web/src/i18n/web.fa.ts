@@ -6337,6 +6337,7 @@ export const WEB_FA = {
   'web.inc_effect_state_reverting': 'در حال بازگرداندن',
   'web.inc_effect_state_reverted': 'بازگردانده شد',
   'web.inc_effect_state_kept': 'دست‌نخورده ماند',
+  'web.inc_effect_state_handed_over': 'به رخداد فعال دیگری سپرده شد',
   'web.inc_event_created': 'ثبت شد',
   'web.inc_event_scheduled': 'زمان‌بندی شد',
   'web.inc_event_started': 'آغاز شد',

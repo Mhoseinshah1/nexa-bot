@@ -24,7 +24,7 @@ CREATE TABLE "incident_effects" (
 	CONSTRAINT "incident_effects_pk" PRIMARY KEY("tenant_id","incident_id","kind","subject_ref"),
 	CONSTRAINT "incident_effects_kind_check" CHECK (kind IN ('PANEL_DRAIN', 'LOCATION_DISABLE', 'PRODUCT_DEACTIVATE', 'GATEWAY_DISABLE')),
 	CONSTRAINT "incident_effects_target_kind_check" CHECK (target_kind IN ('PANEL', 'LOCATION', 'PRODUCT', 'GATEWAY')),
-	CONSTRAINT "incident_effects_state_check" CHECK (state IN ('PENDING', 'APPLIED', 'ALREADY', 'FAILED', 'REVERTING', 'REVERTED', 'KEPT'))
+	CONSTRAINT "incident_effects_state_check" CHECK (state IN ('PENDING', 'APPLIED', 'ALREADY', 'FAILED', 'REVERTING', 'REVERTED', 'KEPT', 'HANDED_OVER'))
 );
 --> statement-breakpoint
 CREATE TABLE "incident_events" (

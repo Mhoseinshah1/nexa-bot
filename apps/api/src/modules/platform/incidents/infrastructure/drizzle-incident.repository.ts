@@ -25,11 +25,13 @@ import {
   incidents,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  EffectClaim,
   IncidentEffectRecord,
   IncidentEventRecord,
   IncidentFields,
   IncidentRecord,
   IncidentRepository,
+  SubjectPeer,
 } from '../application/ports.js';
 
 type Row = typeof incidents.$inferSelect;
@@ -141,12 +143,24 @@ export class DrizzleIncidentRepository implements IncidentRepository {
     return record ?? null;
   }
 
-  async list(scope: TenantContext, limit: number): Promise<readonly IncidentRecord[]> {
+  async list(
+    scope: TenantContext,
+    limit: number,
+    after: { readonly createdAt: Date; readonly id: string } | null = null,
+  ): Promise<readonly IncidentRecord[]> {
     const tenantId = requireTenantId(scope);
     const rows = await this.db
       .select()
       .from(incidents)
-      .where(eq(incidents.tenantId, tenantId))
+      .where(
+        and(
+          eq(incidents.tenantId, tenantId),
+          // Keyset, newest first: strictly older than the last row of the previous page.
+          after === null
+            ? undefined
+            : sql`(${incidents.createdAt}, ${incidents.id}) < (${after.createdAt}, ${after.id}::uuid)`,
+        ),
+      )
       .orderBy(desc(incidents.createdAt), desc(incidents.id))
       .limit(limit);
     return this.withTargets(tenantId, rows);
@@ -346,13 +360,14 @@ export class DrizzleIncidentRepository implements IncidentRepository {
       readonly now: Date;
     },
     tx: TransactionScope,
-  ): Promise<boolean> {
+  ): Promise<EffectClaim> {
     const tenantId = requireTenantId(scope);
+    if (await this.subjectBusy(tenantId, input, tx)) return 'BUSY';
     /*
      * One statement: a new effect is inserted PENDING; an existing one is re-claimed only
-     * when it is a FAILED attempt, a REVERTED/KEPT one being wanted again (the scope came
-     * back), or a claim gone stale. APPLIED and ALREADY are settled and stay as they are, so
-     * a racing second caller claims nothing.
+     * when it is a FAILED attempt, a REVERTED/KEPT/HANDED_OVER one being wanted again (the
+     * scope came back), or a claim gone stale. APPLIED and ALREADY are settled and stay as
+     * they are, so a racing second caller claims nothing.
      */
     const result = await this.exec(tx).execute(sql`
       INSERT INTO incident_effects (tenant_id, incident_id, kind, target_kind, target_ref,
@@ -362,8 +377,120 @@ export class DrizzleIncidentRepository implements IncidentRepository {
       ON CONFLICT (tenant_id, incident_id, kind, subject_ref) DO UPDATE
          SET state = 'PENDING', error_code = NULL, updated_at = EXCLUDED.updated_at,
              target_kind = EXCLUDED.target_kind, target_ref = EXCLUDED.target_ref
-       WHERE incident_effects.state IN ('FAILED', 'REVERTED', 'KEPT')
+       WHERE incident_effects.state IN ('FAILED', 'REVERTED', 'KEPT', 'HANDED_OVER')
           OR (incident_effects.state = 'PENDING' AND incident_effects.updated_at < ${input.staleBefore})
+      RETURNING subject_ref`);
+    return result.rows.length > 0 ? 'CLAIMED' : 'SETTLED';
+  }
+
+  /**
+   * Whether ANOTHER incident holds a live claim on this subject. Asked under
+   * `lockSubject`, so the answer cannot change before this transaction's claim commits.
+   */
+  private async subjectBusy(
+    tenantId: string,
+    input: {
+      readonly incidentId: string;
+      readonly kind: IncidentEffectKind;
+      readonly subjectRef: string;
+      readonly staleBefore: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const result = await this.exec(tx).execute(sql`
+      SELECT 1 FROM incident_effects
+       WHERE tenant_id = ${tenantId} AND kind = ${input.kind} AND subject_ref = ${input.subjectRef}
+         AND incident_id <> ${input.incidentId}
+         AND state IN ('PENDING', 'REVERTING')
+         AND updated_at >= ${input.staleBefore}
+       LIMIT 1`);
+    return result.rows.length > 0;
+  }
+
+  async lockSubject(
+    scope: TenantContext,
+    kind: IncidentEffectKind,
+    subjectRef: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`incident-subject:${tenantId}:${kind}:${subjectRef}`}, 0))`,
+    );
+  }
+
+  async subjectPeers(
+    scope: TenantContext,
+    input: {
+      readonly incidentId: string;
+      readonly kind: IncidentEffectKind;
+      readonly subjectRef: string;
+    },
+    tx: TransactionScope,
+  ): Promise<readonly SubjectPeer[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute(sql`
+      SELECT e.incident_id, e.state, (i.status = 'ACTIVE' AND i.stop_sales) AS wants
+        FROM incident_effects e
+        JOIN incidents i ON i.tenant_id = e.tenant_id AND i.id = e.incident_id
+       WHERE e.tenant_id = ${tenantId} AND e.kind = ${input.kind}
+         AND e.subject_ref = ${input.subjectRef} AND e.incident_id <> ${input.incidentId}
+       ORDER BY e.created_at, e.incident_id`);
+    return (result.rows as { incident_id: string; state: string; wants: boolean }[]).map((row) => ({
+      incidentId: row.incident_id,
+      state: row.state as IncidentEffectState,
+      wants: row.wants,
+    }));
+  }
+
+  async handedOver(
+    scope: TenantContext,
+    input: {
+      readonly incidentId: string;
+      readonly kind: IncidentEffectKind;
+      readonly subjectRef: string;
+    },
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select({ subjectRef: incidentEffects.subjectRef })
+      .from(incidentEffects)
+      .where(
+        and(
+          eq(incidentEffects.tenantId, tenantId),
+          eq(incidentEffects.incidentId, input.incidentId),
+          eq(incidentEffects.kind, input.kind),
+          eq(incidentEffects.subjectRef, input.subjectRef),
+          eq(incidentEffects.state, 'HANDED_OVER'),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async markContended(
+    scope: TenantContext,
+    input: {
+      readonly incidentId: string;
+      readonly kind: IncidentEffectKind;
+      readonly targetKind: IncidentTargetKind;
+      readonly targetRef: string;
+      readonly subjectRef: string;
+      readonly now: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute(sql`
+      INSERT INTO incident_effects (tenant_id, incident_id, kind, target_kind, target_ref,
+                                    subject_ref, state, error_code, created_at, updated_at)
+      VALUES (${tenantId}, ${input.incidentId}, ${input.kind}, ${input.targetKind},
+              ${input.targetRef}, ${input.subjectRef}, 'FAILED', 'incident.effect_contended',
+              ${input.now}, ${input.now})
+      ON CONFLICT (tenant_id, incident_id, kind, subject_ref) DO UPDATE
+         SET state = 'FAILED', error_code = 'incident.effect_contended',
+             updated_at = EXCLUDED.updated_at
+       WHERE incident_effects.state IN ('FAILED', 'REVERTED', 'KEPT', 'HANDED_OVER')
       RETURNING subject_ref`);
     return result.rows.length > 0;
   }
@@ -378,8 +505,9 @@ export class DrizzleIncidentRepository implements IncidentRepository {
       readonly now: Date;
     },
     tx: TransactionScope,
-  ): Promise<boolean> {
+  ): Promise<EffectClaim> {
     const tenantId = requireTenantId(scope);
+    if (await this.subjectBusy(tenantId, input, tx)) return 'BUSY';
     const result = await this.exec(tx).execute(sql`
       UPDATE incident_effects SET state = 'REVERTING', updated_at = ${input.now}
        WHERE tenant_id = ${tenantId} AND incident_id = ${input.incidentId}
@@ -387,7 +515,7 @@ export class DrizzleIncidentRepository implements IncidentRepository {
          AND (state = 'APPLIED'
               OR (state = 'REVERTING' AND updated_at < ${input.staleBefore}))
       RETURNING subject_ref`);
-    return result.rows.length > 0;
+    return result.rows.length > 0 ? 'CLAIMED' : 'SETTLED';
   }
 
   async settleEffect(
@@ -438,6 +566,10 @@ export class DrizzleIncidentRepository implements IncidentRepository {
     const result = await this.exec(tx).execute(sql`
       SELECT c.id AS customer_id, c.first_bot_instance_id AS bot_instance_id
         FROM customers c
+        -- Reachable: the customer's bot is ACTIVE, as a direct message requires. A notice
+        -- queued on a disabled bot is a count the operator confirmed that nobody receives.
+        JOIN bot_instances b
+          ON b.tenant_id = c.tenant_id AND b.id = c.first_bot_instance_id AND b.status = 'ACTIVE'
        WHERE c.tenant_id = ${tenantId}
          AND c.status = 'ACTIVE'
          AND c.first_bot_instance_id IS NOT NULL

@@ -261,6 +261,94 @@ export class ServiceLocationAdminService {
   }
 
   /**
+   * Switches a location on or off and changes NOTHING else (Phase E3, Codex review of #162).
+   * The row is read under the tenant's location lock, in the same transaction that writes
+   * it, so a concurrent edit of the label, price or limits is never overwritten by a stale
+   * copy of the row — which is what rebuilding a full `update` from a read taken before the
+   * lock did. Switching on still needs a price, exactly as `update` requires.
+   */
+  async setEnabled(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly locationId: string;
+      readonly enabled: boolean;
+    },
+  ): Promise<{ readonly location: ServiceLocationRecord; readonly changed: boolean }> {
+    const locationId = this.locationId(input.locationId);
+    const requestHash = hashRequest({ locationId, enabled: input.enabled });
+    const denial: Denial = {
+      action: 'service_location.update',
+      entityType: 'ServiceLocation',
+      entityId: locationId,
+    };
+    await this.authorize(scope, actor, denial);
+    const replay = await this.replayed(scope, input.idempotencyKey, requestHash);
+    if (replay !== null) return { location: replay, changed: false };
+
+    const now = this.deps.clock.now();
+    return this.mutate(scope, actor, denial, async (tx) => {
+      await this.deps.repository.lockForWrite(scope, tx);
+      const before = await this.deps.repository.findById(scope, locationId, tx);
+      if (before === null) throw notFound();
+      if (before.enabled !== input.enabled) {
+        if (input.enabled && before.price === null) {
+          throw invalid('UNPRICED', 'An enabled location needs a price. Zero is free.');
+        }
+        const updated = await this.deps.repository.update(
+          scope,
+          locationId,
+          {
+            panelId: before.panelId,
+            productId: before.productId,
+            locationKey: before.locationKey,
+            label: before.label,
+            initial: before.initial,
+            enabled: input.enabled,
+            price: before.price,
+            limits: before.limits,
+            sortOrder: before.sortOrder,
+          },
+          now,
+          tx,
+        );
+        if (!updated.ok) throw conflictError(updated.conflict);
+        if (updated.record === null) throw notFound();
+        await this.audit(
+          scope,
+          actor,
+          tx,
+          denial.action,
+          locationId,
+          view(before),
+          view(updated.record),
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          'WEB',
+          input.idempotencyKey,
+          requestHash,
+          { locationId },
+          tx,
+        );
+        return { location: updated.record, changed: true };
+      }
+      await rememberOnce(
+        this.deps.idempotency,
+        scope,
+        'WEB',
+        input.idempotencyKey,
+        requestHash,
+        { locationId },
+        tx,
+      );
+      return { location: before, changed: false };
+    });
+  }
+
+  /**
    * Deletes a location nothing has been quoted from. One a change request or a commercial
    * action names is refused — that row's history points at it — and the operator switches
    * it off instead, which withdraws it from sale exactly as deleting would.

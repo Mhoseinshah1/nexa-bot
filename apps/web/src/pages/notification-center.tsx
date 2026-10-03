@@ -141,6 +141,8 @@ export function pathOf(link: InboxLink): string {
       return id === '' ? '/incidents' : `/incidents/${id}`;
     case 'INCIDENTS':
       return '/incidents';
+    case 'COMPENSATIONS':
+      return '/compensations';
   }
 }
 

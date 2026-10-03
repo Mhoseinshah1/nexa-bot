@@ -15,8 +15,6 @@ import {
   OPERATION_LEASE_SECONDS_MIN,
   TICKET_REPLY_FILE_RETENTION_DAYS,
   DIRECT_MESSAGE_FILE_RETENTION_DAYS,
-  INCIDENT_ERROR_CODES,
-  errors,
   INCIDENT_SCHEDULER_INTERVAL_MS,
   NOTIFICATION_RULES,
   canAdjustDeviceLimit,
@@ -4282,30 +4280,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           const row = await serviceLocationRepository.findById(scope, id);
           return row === null ? null : { enabled: row.enabled, panelId: row.panelId };
         },
-        setEnabled: async (scope, actor, input) => {
-          const row = await serviceLocationRepository.findById(scope, input.locationId as never);
-          if (row === null) {
-            throw errors.notFound(INCIDENT_ERROR_CODES.TARGET_INVALID, 'No such location.');
-          }
-          return serviceLocationAdminService.update(scope, actor, {
-            idempotencyKey: input.idempotencyKey,
-            locationId: input.locationId,
-            location: {
-              panelId: row.panelId,
-              productId: row.productId,
-              locationKey: row.locationKey,
-              label: row.label,
-              initial: row.initial,
-              enabled: input.enabled,
-              price:
-                row.price === null
-                  ? null
-                  : { amountMinor: row.price.amountMinor, currency: row.price.currency },
-              limits: row.limits,
-              sortOrder: row.sortOrder,
-            },
-          });
-        },
+        // The location module's own narrow switch, under its lock (Codex, #162): never a
+        // full update rebuilt from a row read before the lock.
+        setEnabled: (scope, actor, input) =>
+          serviceLocationAdminService.setEnabled(scope, actor, input),
       },
       products: {
         statusOf: async (scope, id) =>

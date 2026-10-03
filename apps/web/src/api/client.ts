@@ -4174,8 +4174,13 @@ export function markAllInbox(input: {
 // Phase E3: incidents and maintenance
 // ---------------------------------------------------------------------------
 
-export function fetchIncidents(): Promise<IncidentListResponse> {
-  return authedGet(INCIDENT_ROUTES.list, incidentListResponseSchema);
+/** One page, newest first; `cursor` is the previous page's `nextCursor`. */
+export function fetchIncidents(query: { cursor?: string } = {}): Promise<IncidentListResponse> {
+  const path =
+    query.cursor === undefined || query.cursor === ''
+      ? INCIDENT_ROUTES.list
+      : `${INCIDENT_ROUTES.list}?cursor=${encodeURIComponent(query.cursor)}`;
+  return authedGet(path, incidentListResponseSchema);
 }
 
 export function fetchIncident(id: string): Promise<IncidentDetailResponse> {

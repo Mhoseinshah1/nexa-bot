@@ -1,5 +1,5 @@
 {
-  "id": "6cf074ee-ad99-484c-bfd5-907b632b2016",
+  "id": "1e2d841e-8e39-4be6-8f48-58bdba82e7cf",
   "prevId": "7785a957-05c7-4539-b5d2-66c494af0caf",
   "version": "7",
   "dialect": "postgresql",
@@ -10948,7 +10948,7 @@
         },
         "incident_effects_state_check": {
           "name": "incident_effects_state_check",
-          "value": "state IN ('PENDING', 'APPLIED', 'ALREADY', 'FAILED', 'REVERTING', 'REVERTED', 'KEPT')"
+          "value": "state IN ('PENDING', 'APPLIED', 'ALREADY', 'FAILED', 'REVERTING', 'REVERTED', 'KEPT', 'HANDED_OVER')"
         }
       },
       "isRLSEnabled": false

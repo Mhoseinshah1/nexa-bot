@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CUSTOMER_NOTIFICATION_KINDS,
   INCIDENT_KINDS,
+  NOTIFICATION_CATEGORY_PERMISSIONS,
+  NOTIFICATION_RULES,
   PERMISSION_REQUIRES,
   ROLE_SEEDS,
   createIncidentRequestSchema,
@@ -81,5 +83,34 @@ describe('the incident permissions and notice kind', () => {
 
   it('declares the notice as a closed lane kind', () => {
     expect(CUSTOMER_NOTIFICATION_KINDS).toContain('INCIDENT_NOTICE');
+  });
+});
+
+describe('the notification links (review of #162)', () => {
+  /** The key each entity page — and the compensation list — charges for reading it. */
+  const PAGE_PERMISSION: Readonly<Record<string, string>> = {
+    PAYMENT: 'payments.view',
+    PANEL: 'panels.view',
+    SERVICE: 'services.view',
+    ORDER: 'orders.view',
+    INCIDENT: 'incidents.view',
+    COMPENSATIONS: 'payments.view',
+  };
+
+  it('links each rule only where its category key reaches', () => {
+    for (const rule of NOTIFICATION_RULES) {
+      const needed = PAGE_PERMISSION[rule.link];
+      if (needed === undefined) continue;
+      expect(NOTIFICATION_CATEGORY_PERMISSIONS[rule.category], rule.code ?? rule.prefix).toBe(
+        needed,
+      );
+    }
+  });
+
+  it('files an undeliverable refund under payments, linked to the compensation list', () => {
+    expect(notificationRuleFor('order.refunded_undeliverable')).toMatchObject({
+      category: 'PAYMENTS',
+      link: 'COMPENSATIONS',
+    });
   });
 });

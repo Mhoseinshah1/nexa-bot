@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   createIncidentRequestSchema,
   incidentActionRequestSchema,
+  incidentListQuerySchema,
   incidentNoticeRequestSchema,
   updateIncidentRequestSchema,
   type IncidentBannerResponse,
@@ -30,10 +31,16 @@ import type { IncidentView } from '../../modules/platform/incidents/application/
 export class IncidentsController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
+  /** One page, newest first; `?cursor=` is the previous page's `nextCursor`. */
   @Get('incidents')
-  async list(@Req() request: FastifyRequest): Promise<IncidentListResponse> {
+  async list(
+    @Req() request: FastifyRequest,
+    @Query() query: unknown,
+  ): Promise<IncidentListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    return { incidents: (await this.container.incidents.list(scope, actor)).map(toItem) };
+    const { cursor } = incidentListQuerySchema.parse(query ?? {});
+    const page = await this.container.incidents.list(scope, actor, cursor ?? null);
+    return { incidents: page.incidents.map(toItem), nextCursor: page.nextCursor };
   }
 
   @Get('incidents/banner')

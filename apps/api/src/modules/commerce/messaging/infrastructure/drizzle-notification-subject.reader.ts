@@ -309,8 +309,8 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
   }
 
   /**
-   * See the port. The direct-message kinds only — their precondition is the one that lapses
-   * by the clock — read against the SAME instant `directMessageFresh` compares with, so
+   * See the port. The direct-message kinds and the incident notice — the preconditions that
+   * lapse by the clock or by another record's end — read against the SAME instant `directMessageFresh` compares with, so
    * the two can only agree: a row named here is one `stillHolds` would answer `false`.
    * Whatever the customer's status; that is the point.
    */
@@ -341,10 +341,35 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
       )
       .orderBy(asc(customerDirectMessages.createdAt), asc(customerDirectMessages.id))
       .limit(limit);
-    return rows.map((row) => ({
-      kind: row.kind as CustomerNotificationKind,
-      subjectId: row.subjectId,
-    }));
+    /*
+     * Phase E3: an incident notice lapses the same way — when its incident is no longer
+     * SCHEDULED or ACTIVE, or it is older than `INCIDENT_NOTICE_STALE_AFTER_MS` — and a
+     * customer who stays blocked would otherwise hold it QUEUED for ever (Codex, #162).
+     * The exact negation of the `INCIDENT_NOTICE` branch of `stillHolds`, same instant.
+     */
+    const notices = await this.db.execute(sql`
+      SELECT cn.kind, cn.subject_id
+        FROM customer_notifications cn
+        JOIN incident_notices n ON n.tenant_id = cn.tenant_id AND n.id = cn.subject_id
+        JOIN incidents i ON i.tenant_id = n.tenant_id AND i.id = n.incident_id
+       WHERE cn.tenant_id = ${tenantId}
+         AND cn.kind = 'INCIDENT_NOTICE'
+         AND cn.state = 'PENDING'
+         AND cn.send_started_at IS NULL
+         AND (i.status NOT IN ('SCHEDULED', 'ACTIVE')
+              OR n.created_at <= ${new Date(now.getTime() - INCIDENT_NOTICE_STALE_AFTER_MS)})
+       ORDER BY n.created_at, n.id
+       LIMIT ${Math.max(0, limit - rows.length)}`);
+    return [
+      ...rows.map((row) => ({
+        kind: row.kind as CustomerNotificationKind,
+        subjectId: row.subjectId,
+      })),
+      ...(notices.rows as { kind: string; subject_id: string }[]).map((row) => ({
+        kind: row.kind as CustomerNotificationKind,
+        subjectId: row.subject_id,
+      })),
+    ];
   }
 
   /**

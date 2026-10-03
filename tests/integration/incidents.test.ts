@@ -17,6 +17,11 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import {
+  IncidentService,
+  type IncidentServiceDeps,
+} from '../../apps/api/src/modules/platform/incidents/application/incident.service';
+import { DrizzleServiceLocationRepository } from '../../apps/api/src/modules/commerce/locations/infrastructure/drizzle-service-location.repository';
 import { createIncidentRequestSchema, updateIncidentRequestSchema } from '@nexa/contracts';
 import {
   adminActorFor,
@@ -357,6 +362,294 @@ describe('Phase E3 — incidents and maintenance', () => {
     expect((await drainOf(affected))?.reason).toBe(`incident:${started.incident.id}`);
   });
 
+  // --- review of #162 ------------------------------------------------------------------------
+
+  /** The container's service with its effects port wrapped: a test can hold a module call. */
+  function heldService(): {
+    service: IncidentService;
+    reached: Promise<void>;
+    release: () => void;
+  } {
+    const deps = (ctx.container.incidents as unknown as { deps: IncidentServiceDeps }).deps;
+    const real = deps.effects;
+    let onReached: () => void = () => undefined;
+    const reached = new Promise<void>((resolve) => (onReached = resolve));
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const service = new IncidentService({
+      ...deps,
+      effects: {
+        resolve: (scope, target) => real.resolve(scope, target),
+        panelOfLocation: (scope, id) => real.panelOfLocation(scope, id),
+        status: (scope, kind, subject) => real.status(scope, kind, subject),
+        set: async (scope, actor, input) => {
+          onReached();
+          await gate;
+          return real.set(scope, actor, input);
+        },
+      },
+    });
+    return { service, reached, release };
+  }
+  const versionOf = async (id: string) =>
+    (await ctx.container.incidents.get(tenantA, owner, id)).incident.version;
+  const resolveNow = async (id: string) =>
+    ctx.container.incidents.resolve(tenantA, owner, id, {
+      idempotencyKey: key(),
+      expectedVersion: await versionOf(id),
+    });
+
+  it('overlapping incidents on one panel: the first to end hands the drain over, the last restores it', async () => {
+    const p = await panel('Frankfurt');
+    const first = await create({ stopSales: true, targets: [{ kind: 'PANEL', ref: p }] });
+    const second = await create({ stopSales: true, targets: [{ kind: 'PANEL', ref: p }] });
+    expect(first.effects[0]?.state).toBe('APPLIED');
+    expect(second.effects[0]?.state).toBe('ALREADY');
+
+    const ended = await resolveNow(first.incident.id);
+    expect(ended.effects[0]?.state).toBe('HANDED_OVER');
+    // The second incident still wants it: the panel stays withdrawn, and it owns it now.
+    expect(await sellable(p)).toMatchObject({ sellable: false, reason: 'DRAINING' });
+    expect(
+      (await ctx.container.incidents.get(tenantA, owner, second.incident.id)).effects[0]?.state,
+    ).toBe('APPLIED');
+
+    // Its drain still carries the first incident's marker, which the hand-over vouches for.
+    const last = await resolveNow(second.incident.id);
+    expect(last.effects[0]?.state).toBe('REVERTED');
+    expect(await sellable(p)).toMatchObject({ sellable: true });
+  });
+
+  it('overlapping incidents on one product: the withdrawal holds until the last one ends', async () => {
+    const productId = await product(await panel('Frankfurt'));
+    const first = await create({ stopSales: true, targets: [{ kind: 'PRODUCT', ref: productId }] });
+    const second = await create({
+      stopSales: true,
+      targets: [{ kind: 'PRODUCT', ref: productId }],
+    });
+    await resolveNow(first.incident.id);
+    expect(await productStatus(productId)).toBe('INACTIVE');
+    await resolveNow(second.incident.id);
+    expect(await productStatus(productId)).toBe('ACTIVE');
+  });
+
+  it('two incidents claiming one subject at once: one applies, the other waits and finds it applied', async () => {
+    const p = await panel('Frankfurt');
+    const [a, b] = await Promise.all([
+      create({ stopSales: true, targets: [{ kind: 'PANEL', ref: p }] }),
+      create({ stopSales: true, targets: [{ kind: 'PANEL', ref: p }] }),
+    ]);
+    expect([a.effects[0]?.state, b.effects[0]?.state].sort()).toEqual(['ALREADY', 'APPLIED']);
+    // Whichever order they end in, the panel sells again only after both.
+    await resolveNow(b.incident.id);
+    expect(await sellable(p)).toMatchObject({ sellable: false, reason: 'DRAINING' });
+    await resolveNow(a.incident.id);
+    expect(await sellable(p)).toMatchObject({ sellable: true });
+  });
+
+  it('a second incident waits while the first holds the subject, then finds it withdrawn', async () => {
+    const p = await panel('Frankfurt');
+    const held = heldService();
+    const first = held.service.create(
+      tenantA,
+      owner,
+      createIncidentRequestSchema.parse({
+        idempotencyKey: key(),
+        kind: 'INCIDENT',
+        severity: 'MAJOR',
+        title: 'اول',
+        stopSales: true,
+        targets: [{ kind: 'PANEL', ref: p }],
+      }),
+    );
+    await held.reached;
+    // The first incident's drain is claimed and in flight; the second asks for the same panel.
+    const second = create({ stopSales: true, targets: [{ kind: 'PANEL', ref: p }] });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    held.release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.effects[0]?.state).toBe('APPLIED');
+    // Not a second APPLIED: two owners would each restore the panel at their own end.
+    expect(b.effects[0]?.state).toBe('ALREADY');
+  });
+
+  it('adopts a withdrawal whose incident ended without restoring it, and restores it at its own end', async () => {
+    const p = await panel('Frankfurt');
+    const orphaned = await create({ stopSales: true, targets: [{ kind: 'PANEL', ref: p }] });
+    // A process that resolved the incident and died before its restore pass.
+    await ctx.container.database.db.execute(
+      sql`UPDATE incidents SET status = 'RESOLVED', resolved_at = now() WHERE id = ${orphaned.incident.id}`,
+    );
+    const next = await create({ stopSales: true, targets: [{ kind: 'PANEL', ref: p }] });
+    expect(next.effects[0]?.state).toBe('APPLIED');
+    expect(
+      (await ctx.container.incidents.get(tenantA, owner, orphaned.incident.id)).effects[0]?.state,
+    ).toBe('HANDED_OVER');
+    await resolveNow(next.incident.id);
+    expect(await sellable(p)).toMatchObject({ sellable: true });
+  });
+
+  it('a resolution that lands while an effect is being applied still restores it', async () => {
+    const p = await panel('Frankfurt');
+    const held = heldService();
+    const creating = held.service.create(
+      tenantA,
+      owner,
+      createIncidentRequestSchema.parse({
+        idempotencyKey: key(),
+        kind: 'INCIDENT',
+        severity: 'MAJOR',
+        title: 'قطعی',
+        stopSales: true,
+        targets: [{ kind: 'PANEL', ref: p }],
+      }),
+    );
+    await held.reached;
+    // The effect is claimed PENDING and its module call is held: resolve now.
+    const [row] = await rows<{ id: string }>(sql`SELECT id FROM incidents`);
+    const resolved = await resolveNow(row!.id);
+    expect(resolved.incident.status).toBe('RESOLVED');
+    held.release();
+    const view = await creating;
+    expect(view.effects[0]?.state).toBe('REVERTED');
+    expect(await sellable(p)).toMatchObject({ sellable: true });
+  });
+
+  it('keeps "effects pending" open while an effect FAILED, and closes it once all are in force', async () => {
+    const p = await panel('Frankfurt');
+    const startAt = new Date(Date.now() + 1_000);
+    const scheduled = await create({
+      stopSales: true,
+      targets: [{ kind: 'PANEL', ref: p }],
+      scheduledStartAt: startAt.toISOString(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await ctx.container.incidentSchedulerLoop.tick();
+    const pending = async () =>
+      (
+        await ctx.container.notificationCenter.list(tenantA, owner, {
+          limit: 50,
+          unreadOnly: false,
+          before: null,
+        })
+      ).find((x) => x.code === 'maintenance.effects_pending');
+    expect((await pending())?.resolvedAt).toBeNull();
+
+    // The operator holds no `panels.drain`: the drain FAILED, so nothing is in force yet.
+    const tried = await ctx.container.incidents.applyEffects(
+      tenantA,
+      operator,
+      scheduled.incident.id,
+    );
+    expect(tried.effects[0]?.state).toBe('FAILED');
+    expect((await pending())?.resolvedAt).toBeNull();
+
+    await ctx.container.incidents.applyEffects(tenantA, owner, scheduled.incident.id);
+    expect((await pending())?.resolvedAt).not.toBeNull();
+  });
+
+  it('expires a queued notice for a customer who stays blocked once the incident ends', async () => {
+    const affected = await panel('Frankfurt');
+    const customerId = await customerWithService('974101', affected);
+    const started = await create({ targets: [{ kind: 'PANEL', ref: affected }] });
+    const preview = await ctx.container.incidents.noticePreview(
+      tenantA,
+      owner,
+      started.incident.id,
+    );
+    await ctx.container.incidents.notify(tenantA, owner, started.incident.id, {
+      idempotencyKey: key(),
+      expectedVersion: preview.version,
+      expectedRecipients: 1,
+    });
+    await ctx.container.customers.block(tenantA, owner, {
+      idempotencyKey: key(),
+      customerId,
+      reason: 'spam',
+    });
+    await ctx.container.customerNotificationLoop.tick();
+    const state = async () =>
+      (
+        await rows<{ state: string }>(
+          sql`SELECT state FROM customer_notifications WHERE kind = 'INCIDENT_NOTICE'`,
+        )
+      )[0]?.state;
+    expect(await state()).toBe('PENDING');
+    await resolveNow(started.incident.id);
+    await ctx.container.customerNotificationLoop.tick();
+    expect(await state()).toBe('SUPERSEDED');
+    expect(sent.filter((x) => x.url.endsWith('/sendMessage'))).toHaveLength(0);
+  });
+
+  it('counts no customer whose bot is not ACTIVE', async () => {
+    const affected = await panel('Frankfurt');
+    await customerWithService('974201', affected);
+    const started = await create({ targets: [{ kind: 'PANEL', ref: affected }] });
+    expect(
+      (await ctx.container.incidents.noticePreview(tenantA, owner, started.incident.id)).recipients,
+    ).toBe(1);
+    await ctx.container.database.db.execute(
+      sql`UPDATE bot_instances SET status = 'STOPPED' WHERE id = ${BOT_A}`,
+    );
+    try {
+      expect(
+        (await ctx.container.incidents.noticePreview(tenantA, owner, started.incident.id))
+          .recipients,
+      ).toBe(0);
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${BOT_A}`,
+      );
+    }
+  });
+
+  it('pages the list by a keyset cursor: every incident once, newest first', async () => {
+    for (let i = 0; i < 52; i += 1) await create({ title: `رخداد ${String(i)}` });
+    const first = await ctx.container.incidents.list(tenantA, owner);
+    expect(first.incidents).toHaveLength(50);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await ctx.container.incidents.list(tenantA, owner, first.nextCursor);
+    expect(second.incidents).toHaveLength(2);
+    expect(second.nextCursor).toBeNull();
+    const ids = [...first.incidents, ...second.incidents].map((v) => v.incident.id);
+    expect(new Set(ids).size).toBe(52);
+  });
+
+  it('answers a malformed incident id NOT_FOUND, never a database error', async () => {
+    for (const id of ['-'.repeat(36), '0'.repeat(36)]) {
+      expect((await refusal(ctx.container.incidents.get(tenantA, owner, id))).code).toBe(
+        'incident.not_found',
+      );
+    }
+  });
+
+  it('switches a location off without overwriting an edit that committed meanwhile', async () => {
+    const p = await panel('Frankfurt');
+    const loc = await location(p, 'fra-2');
+    const locations = new DrizzleServiceLocationRepository(ctx.container.database.db);
+    let releaseEdit: () => void = () => undefined;
+    const editHeld = new Promise<void>((resolve) => (releaseEdit = resolve));
+    let onLocked: () => void = () => undefined;
+    const locked = new Promise<void>((resolve) => (onLocked = resolve));
+    // An operator's edit holds the location lock, renames the row, and commits a moment later.
+    const editing = ctx.container.uow.run(tenantA, async (tx) => {
+      await locations.lockForWrite(tenantA, tx);
+      await tx.tx.execute(sql`UPDATE service_locations SET label = 'renamed' WHERE id = ${loc}`);
+      onLocked();
+      await editHeld;
+    });
+    await locked;
+    const starting = create({ stopSales: true, targets: [{ kind: 'LOCATION', ref: loc }] });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    releaseEdit();
+    await editing;
+    await starting;
+    const [row] = await rows<{ label: string; enabled: boolean }>(
+      sql`SELECT label, enabled FROM service_locations WHERE id = ${loc}`,
+    );
+    expect(row).toEqual({ label: 'renamed', enabled: false });
+  });
+
   it('refuses a confirmation on the affected panel before any money moves, and confirms elsewhere', async () => {
     const affected = await panel('Frankfurt');
     const untouched = await panel('Amsterdam');
@@ -501,7 +794,7 @@ describe('Phase E3 — incidents and maintenance', () => {
     const applied = await ctx.container.incidents.applyEffects(tenantA, owner, started.incident.id);
     expect(applied.effects[0]?.state).toBe('APPLIED');
     // Support may read, and nothing more.
-    expect((await ctx.container.incidents.list(tenantA, support)).length).toBe(1);
+    expect((await ctx.container.incidents.list(tenantA, support)).incidents.length).toBe(1);
     expect(
       (await refusal(ctx.container.incidents.noticePreview(tenantA, support, started.incident.id)))
         .kind,
@@ -528,7 +821,7 @@ describe('Phase E3 — incidents and maintenance', () => {
         )
       ).kind,
     ).toBe('NOT_FOUND');
-    expect(await ctx.container.incidents.list(tenantB, ownerB)).toEqual([]);
+    expect((await ctx.container.incidents.list(tenantB, ownerB)).incidents).toEqual([]);
   });
 
   // --- lifecycle, idempotency and concurrency --------------------------------------------------

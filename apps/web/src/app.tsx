@@ -1564,7 +1564,7 @@ function SignedIn({
         <main className="content" id="main">
           <div className="content-inner">
             {/* Phase E3: every administrator sees an ACTIVE incident that asked to be seen. */}
-            <IncidentBanner />
+            <IncidentBanner mayView={permissions.includes('incidents.view')} />
             {resolved.element}
           </div>
         </main>

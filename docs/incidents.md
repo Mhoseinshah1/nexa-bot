@@ -50,13 +50,34 @@ Each effect is CLAIMED before it is applied (`PENDING`, a conditional upsert tha
 is recorded per subject: `APPLIED`, `ALREADY` (it was withdrawn before the incident — and
 will be left withdrawn), or `FAILED` with the error code (typically
 `platform.permission_denied` when the operator lacks that module's key — shown on the
-page, never hidden). Each call to a module carries a deterministic idempotency key
-`incident:<id>:<kind>:<subject>:on|off`.
+page, never hidden). Each call to a module carries an idempotency key derived from the
+incident, its version and the subject, `incident:<id>:v<version>:<kind>:<subject>:on|off`.
+
+At most one claim is live per SUBJECT across every incident: a claim is taken under a
+per-subject advisory lock, and a claim that finds another incident's live `PENDING` /
+`REVERTING` on the same subject waits (up to 5 s) and asks again — after that it is
+recorded `FAILED` with `incident.effect_contended`, for **Apply effects** to retry. So a
+restore, a hand-over or an adoption is decided with nothing moving underneath it.
+
+The apply pass re-reads the incident after settling its claims, and the restore pass works
+from that second reading: a resolution that committed while an effect was in flight (it
+found the row `PENDING` and could not restore it) is restored by the pass that applied it.
 
 On resolve, only what this incident applied is restored: an `APPLIED` row is claimed
 `REVERTING`, and reverted only if the subject is still withdrawn AND, for a panel, its
 drain reason is still this incident's marker `incident:<id>`. A drain someone else has
 since set, or a product an operator has since re-activated, is `KEPT` as it is.
+
+**Overlapping incidents.** Two ACTIVE stop-sales incidents on one subject: the first
+applies it (`APPLIED`), the second finds it withdrawn (`ALREADY`). When the first ends
+while the second still wants the subject, it restores nothing: the second's row becomes
+`APPLIED` (its `ALREADY` or `FAILED` row is promoted) and the first's `HANDED_OVER`. The
+withdrawal lifts only when the last incident that wants it ends. A drain cannot be
+re-marked while it holds, so the new owner recognises it by the hand-over: a drain whose
+reason is the marker of an incident that `HANDED_OVER` this subject is its own to restore.
+An `APPLIED` row whose incident no longer wants the subject (it ended and its restore pass
+never ran) is an orphan: the next incident to find the subject withdrawn adopts it, and
+restores it at its own end.
 
 ## The money rules
 
@@ -84,17 +105,25 @@ Every transition records through `OperationalEventRecorder`: `incident.started` 
 from the incident's), `.resolved` recovers it, `.scheduled` / `.cancelled` are one-shot
 INFO events. `NOTIFICATION_RULES` already routes the `incident.` and `maintenance.`
 prefixes to the INCIDENTS category (`incidents.view`) and links to `/incidents/<id>`.
+The "effects pending" condition closes only when every effect the incident wants is in
+force (`APPLIED` or `ALREADY`): an apply that FAILED leaves it open.
+
+The list pages by a keyset cursor (`?cursor=`, 50 a page, newest first). The admin
+banner is every administrator's; its link to the incident is drawn only for
+`incidents.view`, which the detail page charges.
 
 ## The customer notice
 
 A new closed lane kind, `INCIDENT_NOTICE` (ADR-0030, template `bot.incident.notice`, one
-`message` value). The operator previews the count — ACTIVE customers with a bot and an
+`message` value). The operator previews the count — ACTIVE customers whose bot is ACTIVE and with an
 ACTIVE or SUSPENDED service on a targeted panel (directly or through a location), or of a
 targeted product; every such customer when there are no targets — and confirms by sending
 that count back; a different count is refused (`incident.notice_refused`). The words are
 read at send time from the communication row, never stored as a rendered string. A notice
 holds only while its incident is SCHEDULED or ACTIVE and is younger than 12 hours: a
-cancelled or resolved window's queued notices are superseded unsent.
+cancelled or resolved window's queued notices are superseded unsent — including those
+of a customer who stays blocked, whom the dispatcher never claims: the lane's lapsed-subject
+sweep names them too.
 
 ## Permissions, audit, idempotency
 

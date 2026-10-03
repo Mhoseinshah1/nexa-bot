@@ -50,6 +50,7 @@ import {
   Button,
   Card,
   Checkbox,
+  CursorPager,
   DataTable,
   Empty,
   Field,
@@ -133,6 +134,7 @@ export const INCIDENT_EFFECT_STATE_LABELS: Readonly<Record<IncidentEffectState, 
   REVERTING: 'web.inc_effect_state_reverting',
   REVERTED: 'web.inc_effect_state_reverted',
   KEPT: 'web.inc_effect_state_kept',
+  HANDED_OVER: 'web.inc_effect_state_handed_over',
 };
 
 const EFFECT_STATE_TONES: Readonly<Record<IncidentEffectState, Tone>> = {
@@ -143,6 +145,7 @@ const EFFECT_STATE_TONES: Readonly<Record<IncidentEffectState, Tone>> = {
   REVERTING: 'info',
   REVERTED: 'ok',
   KEPT: 'neutral',
+  HANDED_OVER: 'neutral',
 };
 
 export const INCIDENT_EVENT_LABELS: Readonly<Record<IncidentEventKind, WebKey>> = {
@@ -203,7 +206,7 @@ export function fromLocalInput(value: string): string | null {
  * Drawn above every page while an ACTIVE incident asked for one. Any administrator may
  * read it; a failure to ask draws nothing, because a missing banner is not an incident.
  */
-export function IncidentBanner() {
+export function IncidentBanner({ mayView }: { mayView: boolean }) {
   const onLink = useLinkHandler();
   const banner = useQuery({
     queryKey: ['incident-banner'],
@@ -220,15 +223,21 @@ export function IncidentBanner() {
           tone={row.severity === 'MINOR' ? 'warn' : 'danger'}
           role="status"
           title={t(INCIDENT_KIND_LABELS[row.kind])}
-          action={
-            <a
-              className="btn sm"
-              href={`/incidents/${encodeURIComponent(row.id)}`}
-              onClick={onLink}
-            >
-              {t('web.inc_banner_open')}
-            </a>
-          }
+          // The detail page charges `incidents.view`: without it there is nothing to open,
+          // so no link is drawn — the banner itself is every administrator's (Codex, #162).
+          {...(mayView
+            ? {
+                action: (
+                  <a
+                    className="btn sm"
+                    href={`/incidents/${encodeURIComponent(row.id)}`}
+                    onClick={onLink}
+                  >
+                    {t('web.inc_banner_open')}
+                  </a>
+                ),
+              }
+            : {})}
         >
           {' '}
           {row.title}
@@ -250,13 +259,17 @@ export function IncidentBanner() {
 
 export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManage: boolean }) {
   const onLink = useLinkHandler();
+  // A stack of cursors: the last is the page shown, popping it goes back one.
+  const [cursors, setCursors] = useState<readonly string[]>([]);
+  const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
   const list = useQuery({
-    queryKey: ['incidents'],
-    queryFn: fetchIncidents,
+    queryKey: ['incidents', cursor ?? null],
+    queryFn: () => fetchIncidents(cursor === undefined ? {} : { cursor }),
     enabled: !denied,
   });
   const [creating, setCreating] = useState(false);
   const rows = list.data?.incidents ?? [];
+  const nextCursor = list.data?.nextCursor ?? null;
   return (
     <>
       <PageHead
@@ -275,7 +288,7 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
       <StateSwitch
         query={list}
         denied={denied}
-        isEmpty={rows.length === 0}
+        isEmpty={rows.length === 0 && cursors.length === 0}
         empty={<Empty title={t('web.inc_empty')} />}
       >
         <Card>
@@ -335,6 +348,14 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
                 ),
               },
             ]}
+          />
+          <CursorPager
+            hasPrevious={cursors.length > 0}
+            hasNext={nextCursor !== null}
+            onPrevious={() => setCursors((stack) => stack.slice(0, -1))}
+            onNext={() => {
+              if (nextCursor !== null) setCursors((stack) => [...stack, nextCursor]);
+            }}
           />
         </Card>
       </StateSwitch>
@@ -1003,6 +1024,25 @@ interface TargetOption {
   readonly label: string;
 }
 
+/** A picker's whole list, by the server's keyset: bounded, so a loop can never run away. */
+export const TARGET_PICKER_MAX_PAGES = 50;
+
+export async function walkPages(
+  fetchPage: (
+    cursor: string | null,
+  ) => Promise<{ readonly items: readonly TargetOption[]; readonly nextCursor: string | null }>,
+): Promise<readonly TargetOption[]> {
+  const all: TargetOption[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < TARGET_PICKER_MAX_PAGES; page += 1) {
+    const next = await fetchPage(cursor);
+    all.push(...next.items);
+    if (next.nextCursor === null) break;
+    cursor = next.nextCursor;
+  }
+  return all;
+}
+
 /**
  * The options for one target kind, from the module that owns them. When the operator may
  * not list that module, the picker falls back to a typed reference, which the server
@@ -1014,20 +1054,31 @@ function useTargetOptions(kind: IncidentTargetKind) {
     queryFn: async (): Promise<readonly TargetOption[]> => {
       switch (kind) {
         case 'PANEL':
-          return (await fetchPanels({ limit: 100 })).panels.map((panel) => ({
-            ref: panel.id,
-            label: panel.name,
-          }));
+          return walkPages(async (cursor) => {
+            const page = await fetchPanels({ limit: 100, ...(cursor === null ? {} : { cursor }) });
+            return {
+              items: page.panels.map((panel) => ({ ref: panel.id, label: panel.name })),
+              nextCursor: page.nextCursor,
+            };
+          });
         case 'LOCATION':
           return (await fetchServiceLocations()).locations.map((location) => ({
             ref: location.id,
             label: `${location.label} (${location.locationKey})`,
           }));
         case 'PRODUCT':
-          return (await fetchProducts({ limit: 100 })).products.map((product) => ({
-            ref: product.id,
-            label: product.title,
-          }));
+          // Every page, not the first (Codex, #162): a product past the hundredth was not
+          // offered, and could only be typed by its id.
+          return walkPages(async (cursor) => {
+            const page = await fetchProducts({
+              limit: 100,
+              ...(cursor === null ? {} : { cursor }),
+            });
+            return {
+              items: page.products.map((product) => ({ ref: product.id, label: product.title })),
+              nextCursor: page.nextCursor,
+            };
+          });
         case 'GATEWAY':
           return (await fetchPaymentGateways()).gateways.map((gateway) => ({
             ref: gateway.provider,

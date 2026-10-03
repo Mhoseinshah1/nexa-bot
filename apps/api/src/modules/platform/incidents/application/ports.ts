@@ -64,6 +64,21 @@ export interface IncidentFields {
   readonly targets: readonly IncidentTarget[];
 }
 
+/**
+ * A claim's answer. `BUSY`: another incident holds a live claim on the same subject — the
+ * caller waits and asks again. `SETTLED`: this incident's row is in a state the claim does
+ * not take (already applied, already restored).
+ */
+export type EffectClaim = 'CLAIMED' | 'BUSY' | 'SETTLED';
+
+/** Another incident's row on a subject, and whether that incident still wants it withdrawn. */
+export interface SubjectPeer {
+  readonly incidentId: string;
+  readonly state: IncidentEffectState;
+  /** The peer incident is ACTIVE with stop-sales on: it wants the subject withdrawn. */
+  readonly wants: boolean;
+}
+
 export interface IncidentRepository {
   insert(
     scope: TenantContext,
@@ -79,7 +94,12 @@ export interface IncidentRepository {
   find(scope: TenantContext, id: string, tx?: unknown): Promise<IncidentRecord | null>;
   /** `FOR UPDATE`. */
   lock(scope: TenantContext, id: string, tx: TransactionScope): Promise<IncidentRecord | null>;
-  list(scope: TenantContext, limit: number): Promise<readonly IncidentRecord[]>;
+  /** Newest first; `after` is the last row of the previous page (a keyset cursor). */
+  list(
+    scope: TenantContext,
+    limit: number,
+    after?: { readonly createdAt: Date; readonly id: string } | null,
+  ): Promise<readonly IncidentRecord[]>;
   /** ACTIVE incidents that asked for a banner. */
   banner(scope: TenantContext): Promise<readonly IncidentRecord[]>;
   /** Edits the fields and replaces the targets, conditional on the version. */
@@ -143,7 +163,7 @@ export interface IncidentRepository {
       readonly now: Date;
     },
     tx: TransactionScope,
-  ): Promise<boolean>;
+  ): Promise<EffectClaim>;
   /** APPLIED → REVERTING (or a stale REVERTING taken over). True when claimed. */
   claimRevert(
     scope: TenantContext,
@@ -152,6 +172,52 @@ export interface IncidentRepository {
       readonly kind: IncidentEffectKind;
       readonly subjectRef: string;
       readonly staleBefore: Date;
+      readonly now: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<EffectClaim>;
+  /**
+   * Serialises every decision about one SUBJECT across incidents, for the transaction: a
+   * claim, a hand-over and an adoption are each taken under it. Taken before the claim, so
+   * the claim's "is another live on this subject" check sees a settled answer.
+   */
+  lockSubject(
+    scope: TenantContext,
+    kind: IncidentEffectKind,
+    subjectRef: string,
+    tx: TransactionScope,
+  ): Promise<void>;
+  /** The OTHER incidents' rows on one subject, with whether each incident still wants it. */
+  subjectPeers(
+    scope: TenantContext,
+    input: {
+      readonly incidentId: string;
+      readonly kind: IncidentEffectKind;
+      readonly subjectRef: string;
+    },
+    tx: TransactionScope,
+  ): Promise<readonly SubjectPeer[]>;
+  /** Whether `incidentId` handed its withdrawal of this subject over to another incident. */
+  handedOver(
+    scope: TenantContext,
+    input: {
+      readonly incidentId: string;
+      readonly kind: IncidentEffectKind;
+      readonly subjectRef: string;
+    },
+  ): Promise<boolean>;
+  /**
+   * Records an effect that could not be claimed because another incident held the subject
+   * for longer than the wait: FAILED, `incident.effect_contended`, unless it is settled.
+   */
+  markContended(
+    scope: TenantContext,
+    input: {
+      readonly incidentId: string;
+      readonly kind: IncidentEffectKind;
+      readonly targetKind: IncidentTargetKind;
+      readonly targetRef: string;
+      readonly subjectRef: string;
       readonly now: Date;
     },
     tx: TransactionScope,
