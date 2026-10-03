@@ -1281,6 +1281,8 @@ describe('TonPays, through the one settlement path', () => {
         payments: {
           confirmGatewayPayment: (...args) => ctx.container.payments.confirmGatewayPayment(...args),
           recordProviderReview: (...args) => ctx.container.payments.recordProviderReview(...args),
+          recordProviderFundsDetected: (...args) =>
+            ctx.container.payments.recordProviderFundsDetected(...args),
           failGatewayPayment: (...args) => {
             if (refusals > 0) {
               refusals -= 1;

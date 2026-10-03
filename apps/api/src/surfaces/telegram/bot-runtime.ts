@@ -15734,6 +15734,32 @@ function cardTransferScreen(
  * to pay (the order's method selector, or the top-up's amount), never a retry of THIS
  * attempt: an attempt whose create is unknown is never created again (TonPays rule three).
  */
+/**
+ * The review-window and needs-review sentences per provider, for a route whose own words
+ * differ from TonPays Telegram's receipt wording (NOWPayments: coins confirming on chain,
+ * `docs/nowpayments-gateway-audit.md` §5.8). A provider absent here keeps the original keys.
+ */
+const PROVIDER_REVIEW_SCREEN_KEYS: Partial<
+  Record<
+    PaymentGatewayProvider,
+    { readonly inReview: TemplateKey; readonly unresolved: TemplateKey }
+  >
+> = {
+  NOWPAYMENTS: {
+    inReview: 'bot.payment.nowpayments_in_review',
+    unresolved: 'bot.payment.nowpayments_review_unresolved',
+  },
+};
+
+/**
+ * The label of the URL button that opens a provider's invoice page. NOWPayments carries the
+ * owner's «💳 پرداخت با ارز دیجیتال» under its OWN key, isolated so the central inline-button
+ * registry can take it over as `payment.nowpayments.open` without touching any other route.
+ */
+const PROVIDER_PAY_BUTTON_KEYS: Partial<Record<PaymentGatewayProvider, TemplateKey>> = {
+  NOWPAYMENTS: 'bot.payment.nowpayments_pay_button',
+};
+
 export function gatewayAttemptScreen(
   attempt: GatewayAttempt | GatewayAttemptView,
   orderId: string | null,
@@ -15778,14 +15804,18 @@ export function gatewayAttemptScreen(
    * payment, a new receipt or a card change. Both stay `INVOICE` so the worker's edit of the
    * outcome (confirmed, failed) replaces them in place.
    */
+  const reviewKeys = PROVIDER_REVIEW_SCREEN_KEYS[invoice.provider] ?? {
+    inReview: 'bot.payment.gateway_in_review',
+    unresolved: 'bot.payment.gateway_review_unresolved',
+  };
   if (payment.state === 'UNKNOWN') {
-    return screen('bot.payment.gateway_review_unresolved', [], 'INVOICE');
+    return screen(reviewKeys.unresolved, [], 'INVOICE');
   }
   const reviewUntil = payment.providerReviewUntil ?? null;
   if (payment.state === 'PENDING' && reviewUntil !== null) {
     if (reviewUntil.getTime() > at.getTime()) {
       return {
-        key: 'bot.payment.gateway_in_review',
+        key: reviewKeys.inReview,
         values: {
           payable: payment.customerFee?.payable ?? payment.amount,
           reviewUntil,
@@ -15796,7 +15826,7 @@ export function gatewayAttemptScreen(
       };
     }
     // Lapsed and not yet swept: the same truth the sweep is about to record.
-    return screen('bot.payment.gateway_review_unresolved', [], 'INVOICE');
+    return screen(reviewKeys.unresolved, [], 'INVOICE');
   }
   if (payment.state === 'FAILED') {
     // A create the gateway refused is "unavailable"; an invoice it did not approve failed.
@@ -15897,7 +15927,13 @@ export function gatewayAttemptScreen(
   return {
     ...invoiceBody,
     buttons: [
-      { label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_pay_button' }, url: link },
+      {
+        label: {
+          kind: 'TEMPLATE',
+          key: PROVIDER_PAY_BUTTON_KEYS[invoice.provider] ?? 'bot.payment.gateway_pay_button',
+        },
+        url: link,
+      },
       check,
       mainMenuButton(),
     ],

@@ -12,8 +12,10 @@ import {
   type SalesCurrencyCode,
 } from '@nexa/contracts';
 import {
+  checkPaymentGatewayCredential,
   fetchPaymentGateways,
   setPaymentGatewayCredential,
+  setPaymentGatewayWebhookSecret,
   setPaymentGatewayStatus,
   updatePaymentGateway,
 } from '../api/client';
@@ -144,8 +146,17 @@ function nameOf(gateway: PaymentGatewayView): string {
       return t('web.payment_gateway_provider_telegram_stars');
     case 'TONPAYS_TELEGRAM':
       return t('web.payment_gateway_provider_tonpays_telegram');
+    case 'NOWPAYMENTS':
+      return t('web.payment_gateway_provider_nowpayments');
   }
 }
+
+/**
+ * The routes whose adapter offers a safe, read-only credential check
+ * (`docs/nowpayments-gateway-audit.md` §5.7). The server refuses any other; the button is
+ * simply not drawn for them.
+ */
+const CHECKABLE_PROVIDERS: ReadonlySet<string> = new Set(['NOWPAYMENTS']);
 
 /** A form's title, naming the route it is open on when that route is on screen. */
 function titled(title: string, row: PaymentGatewayView | undefined): string {
@@ -293,6 +304,10 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
    */
   const [apiKey, setApiKey] = useState('');
   const keyed = useSubmissionKey();
+  /** A signed route's webhook secret, typed and sent once, exactly like the key. */
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const secretKeyed = useSubmissionKey();
+  const checkKeyed = useSubmissionKey();
 
   const reset = () => {
     setEditing(null);
@@ -417,7 +432,49 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
     onError: (error) => keyed.settleOn(error),
   });
 
-  const busy = save.isPending || toggle.isPending || credential.isPending;
+  const secret = useMutation({
+    mutationFn: () => {
+      if (keying === null) throw new Error('no route is being keyed');
+      return setPaymentGatewayWebhookSecret({
+        provider: keying,
+        secret: webhookSecret,
+        idempotencyKey: secretKeyed.current({ provider: keying, webhookSecret }),
+      });
+    },
+    onSuccess: () => {
+      secretKeyed.settle();
+      setWebhookSecret('');
+      notify({ tone: 'ok', message: t('web.payment_gateway_webhook_secret_saved') });
+      refresh();
+    },
+    onError: (error) => secretKeyed.settleOn(error),
+  });
+
+  const check = useMutation({
+    mutationFn: (provider: string) =>
+      checkPaymentGatewayCredential({
+        provider,
+        /*
+         * Stable intent only (Codex review of #141): an automatic retry of the same tap reuses
+         * the key, so it is the same command — never a second provider call. The key is
+         * retired once an answer is seen, so the operator's next check is a new command.
+         */
+        idempotencyKey: checkKeyed.current({ provider }),
+      }),
+    onSuccess: () => {
+      checkKeyed.settle();
+      notify({ tone: 'ok', message: t('web.payment_gateway_check_done') });
+      refresh();
+    },
+    onError: (error) => checkKeyed.settleOn(error),
+  });
+
+  const busy =
+    save.isPending ||
+    toggle.isPending ||
+    credential.isPending ||
+    secret.isPending ||
+    check.isPending;
   const failure = save.error ?? toggle.error;
 
   /*
@@ -428,7 +485,9 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
   const editedRow = editing === null ? undefined : rows.find((row) => row.provider === editing);
   const formDirty =
     editedRow !== undefined && JSON.stringify(form) !== JSON.stringify(formOf(editedRow));
-  useUnsavedChanges(mayEdit && (formDirty || (keying !== null && apiKey !== '')));
+  useUnsavedChanges(
+    mayEdit && (formDirty || (keying !== null && (apiKey !== '' || webhookSecret !== ''))),
+  );
 
   const columns: readonly Column<PaymentGatewayView>[] = [
     {
@@ -582,10 +641,47 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
         ) : row.credential.setAt === null ? (
           <Badge tone="warn">{t('web.payment_gateway_credential_missing')}</Badge>
         ) : (
-          <>
-            <Badge tone="ok">{t('web.payment_gateway_credential_configured')}</Badge>{' '}
-            <span className="muted small">{formatTimestamp(row.credential.setAt)}</span>
-          </>
+          <span className="gateways-lines">
+            <span>
+              <Badge tone="ok">{t('web.payment_gateway_credential_configured')}</Badge>{' '}
+              <span className="muted small">{formatTimestamp(row.credential.setAt)}</span>
+            </span>
+            {/* A signed route's IPN secret: its state alone, never a value. */}
+            {row.credential.webhookSecretRequired && (
+              <span>
+                {row.credential.webhookSecretSetAt === null ? (
+                  <Badge tone="warn">{t('web.payment_gateway_webhook_secret_missing')}</Badge>
+                ) : (
+                  <>
+                    <Badge tone="ok">{t('web.payment_gateway_webhook_secret_configured')}</Badge>{' '}
+                    <span className="muted small">
+                      {formatTimestamp(row.credential.webhookSecretSetAt)}
+                    </span>
+                  </>
+                )}
+              </span>
+            )}
+            {/* The last credential check: when, and its machine result for diagnosis. */}
+            {row.credential.lastCheckAt !== null && row.credential.lastCheckResult !== null && (
+              <span>
+                <span className="muted">{t('web.payment_gateway_last_check')}:</span>{' '}
+                <Badge tone={row.credential.lastCheckResult === 'ok' ? 'ok' : 'danger'}>
+                  {t(
+                    row.credential.lastCheckResult === 'ok'
+                      ? 'web.payment_gateway_check_ok'
+                      : 'web.payment_gateway_check_failed',
+                  )}
+                </Badge>{' '}
+                <span className="muted small">{formatTimestamp(row.credential.lastCheckAt)}</span>
+                {row.credential.lastCheckResult !== 'ok' && (
+                  <>
+                    {' '}
+                    <Ltr>{row.credential.lastCheckResult}</Ltr>
+                  </>
+                )}
+              </span>
+            )}
+          </span>
         ),
     },
     {
@@ -617,9 +713,20 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 onClick={() => {
                   setKeying(row.provider);
                   setApiKey('');
+                  setWebhookSecret('');
                 }}
               >
                 {t('web.payment_gateway_credential_edit')}
+              </button>
+            )}
+            {CHECKABLE_PROVIDERS.has(row.provider) && row.credential.setAt !== null && (
+              <button
+                type="button"
+                className="btn sm"
+                disabled={busy}
+                onClick={() => check.mutate(row.provider)}
+              >
+                {t('web.payment_gateway_check')}
               </button>
             )}
             <button
@@ -694,6 +801,9 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           {keying === 'TONPAYS_TELEGRAM' && (
             <Banner tone="info">{t('web.payment_gateway_credential_telegram_hint')}</Banner>
           )}
+          {keying === 'NOWPAYMENTS' && (
+            <Banner tone="info">{t('web.payment_gateway_nowpayments_hint')}</Banner>
+          )}
           <Field label={t('web.payment_gateway_credential_input')} htmlFor="pg-api-key">
             <input
               id="pg-api-key"
@@ -722,6 +832,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               onClick={() => {
                 setKeying(null);
                 setApiKey('');
+                setWebhookSecret('');
               }}
             >
               {t('web.payment_gateway_cancel_edit')}
@@ -730,8 +841,47 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           {credential.error != null && (
             <Banner tone="danger">{messageFor(credential.error)}</Banner>
           )}
+          {/*
+            A signed route's IPN secret (NOWPayments): its own write-only field and its own
+            command, starting EMPTY every time — the stored secret is never sent here.
+          */}
+          {PAYMENT_GATEWAY_DESCRIPTORS[keying as keyof typeof PAYMENT_GATEWAY_DESCRIPTORS]
+            ?.webhookSecret === true && (
+            <>
+              <Field
+                label={t('web.payment_gateway_webhook_secret_input')}
+                htmlFor="pg-webhook-secret"
+                hint={t('web.payment_gateway_webhook_secret_hint')}
+              >
+                <input
+                  id="pg-webhook-secret"
+                  className="input ltr mono"
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  value={webhookSecret}
+                  maxLength={256}
+                  onChange={(event) => setWebhookSecret(event.target.value)}
+                />
+              </Field>
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={busy || webhookSecret.trim() === ''}
+                  onClick={() => secret.mutate()}
+                >
+                  {t('web.payment_gateway_webhook_secret_save')}
+                </button>
+              </div>
+              {secret.error != null && <Banner tone="danger">{messageFor(secret.error)}</Banner>}
+            </>
+          )}
         </Card>
       )}
+
+      {/* The credential check's own failure (Codex review of #141), like every other command's. */}
+      {check.error != null && <Banner tone="danger">{messageFor(check.error)}</Banner>}
 
       {/*
         A refusal to switch a route on — TonPays without its key — lands here, since the

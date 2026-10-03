@@ -1815,6 +1815,25 @@ export function setPaymentGatewayCredential(input: {
   return post(PAYMENT_GATEWAY_ROUTES.credential(provider), body, paymentGatewayResponseSchema);
 }
 
+/** Replaces a signed route's webhook secret (NOWPayments' IPN secret). Write-only. */
+export function setPaymentGatewayWebhookSecret(input: {
+  provider: string;
+  idempotencyKey: string;
+  secret: string;
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.webhookSecret(provider), body, paymentGatewayResponseSchema);
+}
+
+/** The operator's read-only credential check; the answer carries the route's last check. */
+export function checkPaymentGatewayCredential(input: {
+  provider: string;
+  idempotencyKey: string;
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.check(provider), body, paymentGatewayResponseSchema);
+}
+
 /**
  * The central exchange rate's status (package FX): the feature's state, the sources,
  * the quote in force and its freshness, and the Stars route's mode and figures. Every

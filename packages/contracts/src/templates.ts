@@ -7980,6 +7980,56 @@ export const TEMPLATES = [
     placeholders: [],
   },
   /*
+   * NOWPayments (`docs/nowpayments-gateway-audit.md` §5.8). The customer chooses the coin on
+   * NOWPayments' own page; none of these names an asset, a crypto amount or the provider's
+   * figures, and none says paid until the payment is CONFIRMED by the provider's own read.
+   */
+  {
+    key: 'bot.payment.route_name_nowpayments',
+    description:
+      'The product’s own name for the NOWPayments crypto route (`NOWPAYMENTS`), used when the operator set no display name. The owner’s label: «💳 پرداخت با ارز دیجیتال».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.nowpayments_pay_button',
+    description:
+      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments.open`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.nowpayments_in_review',
+    description:
+      'NOWPayments: the provider reported the customer’s coins on their way (seen on chain, confirming or being forwarded) before the deadline, and the bounded review window is open while the chain confirms them. Shows the payable and the end of the window. It invites no new payment and never says paid, failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'The payment’s own payable (principal plus any fee), from Nexa’s snapshot — never a crypto figure.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reviewUntil',
+        type: 'DATETIME',
+        description:
+          'The end of the review window: twenty-four hours from when the coins were first seen, frozen.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.nowpayments_review_unresolved',
+    description:
+      'NOWPayments: the payment needs a person — the provider reported an amount that does not match the invoice (a partial payment), or the confirmation window ended without a final answer. Nothing has failed and nothing was settled; the operator is reconciling it. It must tell the customer not to pay again, and never says failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
    * Package A — Telegram Stars (`docs/package-a-telegram-stars-audit.md`). A Star is never
    * shown as the sales currency: the Toman figures are Nexa's snapshot, and the Star
    * figure is the conversion the invoice asks for.

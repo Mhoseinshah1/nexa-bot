@@ -2,6 +2,7 @@ import { Body, Controller, Headers, HttpCode, Inject, Param, Post } from '@nestj
 import { z } from 'zod';
 import {
   COMMERCE_ERROR_CODES,
+  NOWPAYMENTS_SIGNATURE_HEADER,
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
   TONPAYS_DELIVERY_ID_HEADER,
@@ -45,6 +46,13 @@ const tenantIdSchema = z.uuid();
  * encouraged to retry for ever. A body that is not the documented shape is a 400, like
  * every other malformed command here; the provider is not the sender of such a body.
  *
+ * ## A signed route (NOWPayments)
+ *
+ * A route whose descriptor says `webhookSecret` hands the signature header on; the body is
+ * verified (HMAC-SHA512 over the key-sorted JSON, constant-time) against the tenant's stored
+ * IPN secret before any field is read, and an unverified one is answered `{ ok: true }`
+ * like any other ignored webhook — and dropped. A verified one is STILL only a hint.
+ *
  * No external call is made here, and no money moves here.
  */
 @Controller()
@@ -57,6 +65,12 @@ export class GatewayWebhookController {
     @Param('provider') providerParam: string,
     @Param('tenantId') tenantIdParam: string,
     @Headers(TONPAYS_DELIVERY_ID_HEADER) deliveryId: string | undefined,
+    /*
+     * NOWPayments' IPN signature (`docs/nowpayments-gateway-audit.md` §5.6). Read ONLY for a
+     * route whose descriptor says its provider signs; the service verifies it against the
+     * tenant's stored secret before any field of the body is read. Never logged.
+     */
+    @Headers(NOWPAYMENTS_SIGNATURE_HEADER) signature: string | undefined,
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
     const provider = externalProviderOf(providerParam);
@@ -71,6 +85,7 @@ export class GatewayWebhookController {
       provider,
       body,
       deliveryId,
+      PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret ? signature : undefined,
     );
     if (result === 'MALFORMED') {
       throw errors.validation(
