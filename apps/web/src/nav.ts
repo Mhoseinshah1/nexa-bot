@@ -486,6 +486,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
+    // Phase B3: the notification center. Every administrator has an inbox; the server
+    // filters it by the categories their permissions admit.
+    id: 'inbox',
+    path: '/notification-center',
+    label: 'web.nav_inbox',
+    icon: 'bell',
+    permission: null,
+    group: 'web.navgroup_system',
+  },
+  {
     id: 'alerts',
     path: '/alerts',
     label: 'web.nav_alerts',

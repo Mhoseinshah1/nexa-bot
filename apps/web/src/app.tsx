@@ -19,6 +19,8 @@ import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
+// Phase B3: the notification center and its top-bar bell.
+import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
@@ -201,6 +203,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/content',
   '/alerts',
   '/notifications',
+  '/notification-center',
   '/appearance',
   '/ops-group',
   '/recovery',
@@ -995,6 +998,15 @@ export function resolve(
     };
   }
 
+  if (route.path === '/notification-center') {
+    return {
+      // Every administrator has an inbox; the server shows only the categories they may see.
+      element: <NotificationCenterPage permissions={permissions} />,
+      crumbs: [{ label: t('web.nav_inbox') }],
+      title: t('web.nc_title'),
+    };
+  }
+
   if (route.path === '/notifications') {
     return {
       element: <NotificationsPage mayTest={may('settings.edit')} denied={!may('opslog.view')} />,
@@ -1461,6 +1473,7 @@ function SignedIn({
           onSearch={() => setSearching(true)}
           admin={admin}
           onSignOut={() => leave.mutate()}
+          bell={<NotificationBell />}
         />
 
         <main className="content" id="main">

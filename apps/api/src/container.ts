@@ -12,6 +12,7 @@ import {
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
   TICKET_REPLY_FILE_RETENTION_DAYS,
+  NOTIFICATION_RULES,
   canAdjustDeviceLimit,
   canChangeLocation,
   // Round N: the mass credit's notification renders the amount the ledger holds.
@@ -173,6 +174,8 @@ import { BackupSchedulePolicy } from './modules/platform/backup/application/back
 import { OpsGroupBackupTopicAdapter } from './modules/control/ops-group/application/backup-topic.js';
 import { FilesystemBackupWorkspaces } from './modules/platform/backup/infrastructure/workspace.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
+import { NotificationCenterService } from './modules/platform/opslog/application/notification-center.service.js';
+import { DrizzleNotificationInboxRepository } from './modules/platform/opslog/infrastructure/drizzle-notification-inbox.repository.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
@@ -993,6 +996,8 @@ export interface Container {
   readonly opsGroups: OpsGroupService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
+  /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
+  readonly notificationCenter: NotificationCenterService;
   /**
    * What the background monitor is configured to do, and what that
    * configuration can carry. A read of installation configuration plus two
@@ -4897,6 +4902,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
+  /**
+   * Phase B3 (`docs/notification-center.md`): the Notification Center reads the same
+   * `operational_events` through `NOTIFICATION_RULES`; its one table is per-admin read marks.
+   */
+  const notificationCenter = new NotificationCenterService({
+    repository: new DrizzleNotificationInboxRepository(database.db, NOTIFICATION_RULES),
+    guard,
+    scopeActivity: tenants,
+    uow,
+    clock,
+  });
   const diagnostics = new DiagnosticsService({
     guard,
     reader: new DrizzleDiagnosticsReader(database.db),
@@ -5810,6 +5826,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsGroups,
     opsGroupMaintainer,
     opsLogService,
+    notificationCenter,
     monitorProfileService,
     diagnostics,
     panelMonitor,
