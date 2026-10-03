@@ -698,6 +698,23 @@ export class DrizzleOperationRepository implements OperationRepository {
        * delayed every new order by a tick per ten of them.
        */
       .orderBy(
+        /*
+         * Background usage refresh is housekeeping, not customer-paid work.
+         *
+         * P1 can introduce ~27k adopted services whose usage is initially stale. Without
+         * this first key, their old SYNC_USAGE rows win the existing oldest-first order
+         * and a newly settled PROVISION waits one tick per sync ahead of it. Only the
+         * scheduled lane is demoted: a customer-requested SYNC_USAGE carries
+         * requested_by_customer_id and stays at normal priority.
+         *
+         * Priority is decided in the claim statement, so every worker replica sees the
+         * same order. There is no process-local queue to disagree across containers.
+         */
+        sql`CASE
+          WHEN ${provisioningOperations.type} = 'SYNC_USAGE'
+           AND ${provisioningOperations.requestedByCustomerId} IS NULL
+          THEN 1 ELSE 0
+        END ASC`,
         sql`${provisioningOperations.nextAttemptAt} ASC NULLS FIRST`,
         asc(provisioningOperations.createdAt),
       )
