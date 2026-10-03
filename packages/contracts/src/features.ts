@@ -382,6 +382,21 @@ export const FEATURE_FLAGS = [
       'stars.per_usdt',
     ],
   },
+  {
+    key: 'terms_enforcement',
+    description:
+      'Require every customer to accept the current terms and rules before using the bot ' +
+      '(program §6). While it is on, a customer who has not accepted the newest PUBLISHED ' +
+      'version is shown it, with an accept button, instead of what they asked for — at one ' +
+      'gate in front of every customer action; support, help and the promotional opt-out ' +
+      'stay reachable. With no published version nobody is stopped. Publishing a new version ' +
+      'never marks anybody as having accepted it, so every customer is asked again. Turning ' +
+      'it off lets everyone through and erases no acceptance.',
+    defaultEnabled: false,
+    // Turning it on stops every customer who has not accepted, at once.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   PLACEHOLDER_TOKEN_PATTERN,
   TEMPLATE_BODY_MAX_LENGTH,
+  TERMS_BODY_MAX_LENGTH,
+  TERMS_TEMPLATE_MAX_LENGTH,
+  TERMS_TITLE_MAX_LENGTH,
   money,
   placeholderTokensIn,
   templateDefinition,
@@ -9,7 +12,7 @@ import {
   validateTemplateValues,
   type TemplateDefinition,
 } from '@nexa/contracts';
-import { escapeTelegramHtml, renderTemplateBody } from '@nexa/i18n';
+import { CATALOGUE_FA, escapeTelegramHtml, renderTemplateBody } from '@nexa/i18n';
 
 const kinds = (body: string, key: 'bot.ping.reply' | 'bot.unknown_command' = 'bot.ping.reply') =>
   validateTemplateBody(templateDefinition(key), body).map((issue) => issue.kind);
@@ -117,6 +120,33 @@ describe('validateTemplateBody', () => {
   it('rejects a body longer than a Telegram message can carry', () => {
     const body = `{correlationId}${'ا'.repeat(TEMPLATE_BODY_MAX_LENGTH)}`;
     expect(kinds(body)).toContain('TOO_LONG');
+  });
+
+  it('bounds the terms frames so the longest title and body still fit one message', () => {
+    // Codex 4172817732. Every byte of the frame plus the longest substituted values must
+    // fit Telegram's 4,096, the two tokens themselves not credited.
+    expect(TERMS_TEMPLATE_MAX_LENGTH + TERMS_TITLE_MAX_LENGTH + TERMS_BODY_MAX_LENGTH).toBe(
+      TEMPLATE_BODY_MAX_LENGTH,
+    );
+    for (const key of ['bot.terms.required', 'bot.terms.updated'] as const) {
+      const definition = templateDefinition(key);
+      expect(definition.maxLength).toBe(TERMS_TEMPLATE_MAX_LENGTH);
+      const frame = (length: number) => {
+        const head = '{title}\n{body}\n';
+        return head + 'ا'.repeat(length - head.length);
+      };
+      expect(validateTemplateBody(definition, frame(TERMS_TEMPLATE_MAX_LENGTH))).toEqual([]);
+      expect(
+        validateTemplateBody(definition, frame(TERMS_TEMPLATE_MAX_LENGTH + 1)).map((i) => i.kind),
+      ).toEqual(['TOO_LONG']);
+      // The shipped default is within its own ceiling.
+      const rendered = renderTemplateBody(definition, CATALOGUE_FA[key], {
+        title: 'ع'.repeat(TERMS_TITLE_MAX_LENGTH),
+        body: 'ب'.repeat(TERMS_BODY_MAX_LENGTH),
+      });
+      expect(CATALOGUE_FA[key].length).toBeLessThanOrEqual(TERMS_TEMPLATE_MAX_LENGTH);
+      expect(rendered.length).toBeLessThanOrEqual(TEMPLATE_BODY_MAX_LENGTH);
+    }
   });
 
   it('validates per key, never against a global vocabulary', () => {

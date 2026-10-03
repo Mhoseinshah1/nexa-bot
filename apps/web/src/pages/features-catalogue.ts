@@ -6,8 +6,8 @@ import type { WebKey } from '../i18n/web.fa';
  *
  * The frozen registry in `@nexa/contracts` says what a flag IS: its key, its default, the
  * settings it governs. This says how it reads on the screen: a Persian name, one practical
- * sentence, and whether switching it OFF deserves a plain confirmation first. It is kept
- * out of the contract because none of it changes what the server does. The server
+ * sentence, and whether switching it OFF (or, rarely, ON) deserves a plain confirmation
+ * first. It is kept out of the contract because none of it changes what the server does. The server
  * refuses no toggle for want of a confirmation; the modal is a courtesy to the operator,
  * not a safeguard.
  *
@@ -33,6 +33,22 @@ export interface FeaturePresentation {
    * back on restores it exactly.
    */
   readonly disableEffect: WebKey | null;
+  /**
+   * What switching this feature ON asks first, or `null` for one click.
+   *
+   * Most features only offer something when on, so turning one on needs no question. A
+   * feature whose switch-ON stops customers at once (`terms_enforcement`: everyone who has
+   * not accepted the current terms is held at the gate) asks here with the SAME words as
+   * its own page, so the two paths to one switch cannot be one guarded and one not.
+   */
+  readonly confirmEnable: EnableConfirmation | null;
+}
+
+/** The enable-confirmation's wording: the question, the consequence and the yes button. */
+export interface EnableConfirmation {
+  readonly question: WebKey;
+  readonly detail: WebKey;
+  readonly confirmLabel: WebKey;
 }
 
 export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresentation>> = {
@@ -42,6 +58,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     title: 'web.feature_ops_notifications_title',
     summary: 'web.feature_ops_notifications_summary',
     disableEffect: 'web.feature_ops_notifications_off_effect',
+    confirmEnable: null,
   },
   // Off: every customer-facing message changes at once, including any the tenant
   // rewrote to carry its own instructions.
@@ -49,6 +66,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     title: 'web.feature_template_overrides_title',
     summary: 'web.feature_template_overrides_summary',
     disableEffect: 'web.feature_template_overrides_off_effect',
+    confirmEnable: null,
   },
   // The three reminder families: off, every customer with a dated or metered service
   // silently stops being warned, and a threshold crossed while off is not sent later.
@@ -56,16 +74,19 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     title: 'web.feature_service_expiry_reminders_title',
     summary: 'web.feature_service_expiry_reminders_summary',
     disableEffect: 'web.feature_service_expiry_reminders_off_effect',
+    confirmEnable: null,
   },
   service_expired_notice: {
     title: 'web.feature_service_expired_notice_title',
     summary: 'web.feature_service_expired_notice_summary',
     disableEffect: 'web.feature_service_expired_notice_off_effect',
+    confirmEnable: null,
   },
   service_usage_reminders: {
     title: 'web.feature_service_usage_reminders_title',
     summary: 'web.feature_service_usage_reminders_summary',
     disableEffect: 'web.feature_service_usage_reminders_off_effect',
+    confirmEnable: null,
   },
   // WP-A9: the three reminder switches it added. Off, like the families above, customers
   // silently stop being told something they did not ask for and rely on.
@@ -73,45 +94,53 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     title: 'web.feature_service_expiry_day_reminder_title',
     summary: 'web.feature_service_expiry_day_reminder_summary',
     disableEffect: 'web.feature_service_expiry_day_reminder_off_effect',
+    confirmEnable: null,
   },
   wallet_low_balance_reminders: {
     title: 'web.feature_wallet_low_balance_reminders_title',
     summary: 'web.feature_wallet_low_balance_reminders_summary',
     disableEffect: 'web.feature_wallet_low_balance_reminders_off_effect',
+    confirmEnable: null,
   },
   payment_pending_reminders: {
     title: 'web.feature_payment_pending_reminders_title',
     summary: 'web.feature_payment_pending_reminders_summary',
     disableEffect: 'web.feature_payment_pending_reminders_off_effect',
+    confirmEnable: null,
   },
   // Round N, package D. Off, resellers are simply not told; nothing else depends on it.
   reseller_minimum_reminders: {
     title: 'web.feature_reseller_minimum_reminders_title',
     summary: 'web.feature_reseller_minimum_reminders_summary',
     disableEffect: null,
+    confirmEnable: null,
   },
   reseller_minimum_achieved_notices: {
     title: 'web.feature_reseller_minimum_achieved_notices_title',
     summary: 'web.feature_reseller_minimum_achieved_notices_summary',
     disableEffect: null,
+    confirmEnable: null,
   },
   // HF-A9. Off loses nothing: a held reminder is simply sent at its next claim.
   reminder_quiet_hours: {
     title: 'web.feature_reminder_quiet_hours_title',
     summary: 'web.feature_reminder_quiet_hours_summary',
     disableEffect: null,
+    confirmEnable: null,
   },
   // Off withdraws the button; a rotation already planned still runs.
   customer_link_rotation: {
     title: 'web.feature_customer_link_rotation_title',
     summary: 'web.feature_customer_link_rotation_summary',
     disableEffect: null,
+    confirmEnable: null,
   },
   // Off withdraws the button; requests already filed can still be decided.
   customer_refund_requests: {
     title: 'web.feature_customer_refund_requests_title',
     summary: 'web.feature_customer_refund_requests_summary',
     disableEffect: null,
+    confirmEnable: null,
   },
   // Spec §9. Off hides the button and makes /stop change nothing; stored choices are kept
   // and become effective again when it is turned back on.
@@ -119,6 +148,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     title: 'web.feature_customer_marketing_opt_out_title',
     summary: 'web.feature_customer_marketing_opt_out_summary',
     disableEffect: 'web.feature_customer_marketing_opt_out_off_effect',
+    confirmEnable: null,
   },
   // Off: an attribution is made only at registration and never afterwards, so a
   // customer who joins through a referral link while this is off is never attributed.
@@ -126,6 +156,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     title: 'web.feature_referrals_title',
     summary: 'web.feature_referrals_summary',
     disableEffect: 'web.feature_referrals_off_effect',
+    confirmEnable: null,
   },
   // Off refuses new claims; shares already credited stay, and unclaimed ones can be
   // claimed once it is back on.
@@ -133,18 +164,23 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     title: 'web.feature_referral_signup_gift_title',
     summary: 'web.feature_referral_signup_gift_summary',
     disableEffect: null,
+    confirmEnable: null,
   },
   // Off: new drafts go to their product's own panel again; nothing already placed moves.
   panel_auto_balancing: {
     title: 'web.feature_panel_auto_balancing_title',
     summary: 'web.feature_panel_auto_balancing_summary',
     disableEffect: null,
+    // On only changes where NEW drafts land, among panels an operator grouped; it stops
+    // nobody, so one click.
+    confirmEnable: null,
   },
   // Off withdraws the button; orders already confirmed are still paid for and delivered.
   custom_service: {
     title: 'web.feature_custom_service_title',
     summary: 'web.feature_custom_service_summary',
     disableEffect: null,
+    confirmEnable: null,
   },
   // Off: every route priced by the central rate refuses NEW invoices at once (an issued
   // invoice keeps its own snapshot), and the Stars route in its central mode stops selling
@@ -153,6 +189,21 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     title: 'web.feature_central_fx_title',
     summary: 'web.feature_central_fx_summary',
     disableEffect: 'web.feature_central_fx_off_effect',
+    confirmEnable: null,
+  },
+  // Program §6. Off lets every customer through at once; no acceptance is erased, and
+  // turning it back on asks only those who have not accepted the current version. ON stops
+  // every customer who has not accepted at once, so it asks first — in the terms page's
+  // own words (Codex 4172817735).
+  terms_enforcement: {
+    title: 'web.feature_terms_enforcement_title',
+    summary: 'web.feature_terms_enforcement_summary',
+    disableEffect: null,
+    confirmEnable: {
+      question: 'web.terms_enforce_confirm_question',
+      detail: 'web.terms_enforce_confirm_detail',
+      confirmLabel: 'web.terms_enforce_confirm',
+    },
   },
 };
 

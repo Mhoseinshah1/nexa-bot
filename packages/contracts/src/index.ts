@@ -100,6 +100,11 @@ export * from './custom-service.js';
 // WP-A6: moving an existing service between locations of its own panel.
 export * from './service-location.js';
 export * from './customer-360.js';
+/** Phase D1: the Web Admin's audit log browser and its export. */
+export * from './audit-log.js';
+// Program §6: the terms / rules domain.
+export * from './terms.js';
+export * from './customer-crm.js';
 export * from './templates.js';
 export * from './settings.js';
 export * from './features.js';
@@ -118,3 +123,4 @@ export * from './dashboard.js';
 export * from './audience.js';
 export * from './broadcasts.js';
 export * from './bulk-operations.js';
+export * from './direct-messages.js';

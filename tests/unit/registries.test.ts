@@ -334,6 +334,9 @@ describe('the feature flag registry', () => {
       'service_expiry_reminders',
       'service_usage_reminders',
       'template_overrides',
+      // Program §6. Off by default; the one Telegram gate it switches on is reachable, and
+      // with no published version it stops nobody.
+      'terms_enforcement',
       // `trials` (WP6-A) left in F5: each panel's own trial is the switch.
       // WP-A9. Off by default; the low-balance lane it switches on is reachable, and it
       // does nothing until wallet.low_balance.threshold is a positive amount.

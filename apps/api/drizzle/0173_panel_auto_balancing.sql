@@ -6,8 +6,8 @@
 -- order_panel_placements     why a new-service order landed where it did, written once in
 --                            the draft's transaction and never changed (trigger below).
 --
--- Numbered 0166 on its branch, above C2's 0165; the lead renumbers at merge. The
--- hand-written immutability trigger is the separated tail after the generated DDL.
+-- Numbered 0173, above C2's 0172_panel_drain; renumber at merge if another lands first.
+-- The hand-written immutability trigger is the separated tail after the generated DDL.
 CREATE TABLE "order_panel_placements" (
 	"tenant_id" uuid NOT NULL,
 	"order_id" uuid NOT NULL,
