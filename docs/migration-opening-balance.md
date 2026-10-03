@@ -49,11 +49,17 @@ PAYMENT_AMOUNT_MAX_MINOR`.
    exists in this tenant **and** its `telegram_user_id` equals the command's legacy id (the
    reference is derived from it); the currency is the selling currency; the customer row is
    locked (`lockCustomer`, the wallet's serialisation point); the reference is looked up;
-   the entry is appended; audit `wallet.migration_opening_balance` with the balance before
-   and after; outbox `WalletEntryRecorded`.
+   the entry is appended; audit `wallet.migration_opening_balance` with the entry and its
+   signed amount (no balance); outbox `WalletEntryRecorded`.
 
-Outcomes: `POSTED` (with `balanceAfterMinor`), `ALREADY_POSTED` (identical opening
+Outcomes: `POSTED` (with the entry's `signedAmountMinor`), `ALREADY_POSTED` (identical opening
 present — nothing written, no audit, no event), `ZERO_NO_ENTRY`.
+
+**No after-balance is reported or audited.** Ordinary credits do not take the customer
+lock (only debits do), so a credit committing while the opening's transaction runs is
+missing from any balance read inside it yet present in the wallet afterwards; an
+"after" figure would be a snapshot presented as authoritative (Codex review of PR #170).
+The outcome and the audit carry only facts of the entry itself; the balance is the ledger.
 
 ## Idempotency
 
@@ -86,7 +92,9 @@ movement, and opening + Σ movements = closing still holds. The Web Admin labels
   the DB constraints directly, and report classification (financial, wallet, dashboard)
   with the wallet identity against an independent balance read. Mutation-checked: filing
   the reason as `TOPUP`, accepting a changed figure, and dropping the telegram-id match
-  each fail it.
+  each fail it. The outcome and the audit row are pinned by SHAPE to carry the entry's
+  signed amount and no balance; re-adding a balance to either (audit `balanceMinor`, outcome
+  `balanceAfterMinor`) fails it.
 - `tests/unit/financial-statement.test.ts`, `tests/unit/reporting-contracts.test.ts` — the
   filing rule and the reference format, pure.
 
