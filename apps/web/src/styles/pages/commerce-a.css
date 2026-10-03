@@ -375,6 +375,31 @@
   }
 }
 
+/* --- Program §13: the Service Operations Center --------------------------------- */
+
+/* The workspace's further filters: wrap at 390px, never scroll sideways. */
+.soc-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin-block: 8px;
+}
+.soc-filters .field {
+  min-width: 0;
+  flex: 1 1 160px;
+}
+/* Grant traffic, grant time and move: side by side on a wide screen, stacked on a phone. */
+.soc-grant-move {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.soc-grant-move h4 {
+  margin: 0;
+  font-size: var(--fs-body);
+}
+
 /* Phase A2: «ارسال پیام» — the preview and the history's message text. */
 .dm-text {
   white-space: pre-wrap;

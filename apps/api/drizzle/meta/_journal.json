@@ -1219,6 +1219,20 @@
       "when": 1791036374074,
       "tag": "0173_admin_security_2fa",
       "breakpoints": true
+    },
+    {
+      "idx": 174,
+      "version": "7",
+      "when": 1791038222588,
+      "tag": "0174_service_operations_center",
+      "breakpoints": true
+    },
+    {
+      "idx": 175,
+      "version": "7",
+      "when": 1791038228605,
+      "tag": "0175_service_operations_permissions",
+      "breakpoints": true
     }
   ]
 }

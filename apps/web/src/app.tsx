@@ -422,6 +422,11 @@ export function resolve(
           route={route}
           denied={!may('services.view')}
           mayViewRefundRequests={may('refunds.view')}
+          /* Program §13: the workspace's filters and its one mass action. */
+          mayViewPanels={may('panels.view')}
+          mayViewCatalog={may('catalog.view')}
+          mayMassStatus={may('services.mass.status') && may('services.edit')}
+          mayMassGrant={may('services.mass.grant')}
         />
       ),
       crumbs: [{ label: t('web.services_title') }],
@@ -447,6 +452,8 @@ export function resolve(
           /* WP19: a customer's refund request deletes the service AND moves money. */
           mayViewRefundRequests={may('refunds.view')}
           mayDecideRefundRequests={may('refunds.issue') && may('services.terminate')}
+          /* Program §13: an operator's free traffic or time. */
+          mayGrant={may('services.grant')}
         />
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],
@@ -496,7 +503,11 @@ export function resolve(
         <BulkOperationsPage
           route={route}
           denied={!may('bulk_operations.view')}
-          mayRun={may('users.wallet.mass') || may('services.mass.grant')}
+          mayRun={
+            may('users.wallet.mass') ||
+            may('services.mass.grant') ||
+            (may('services.mass.status') && may('services.edit'))
+          }
         />
       ),
       crumbs: [{ label: t('web.bulk_page_title') }],
@@ -509,6 +520,7 @@ export function resolve(
         <BulkOperationNewPage
           mayWallet={may('users.wallet.mass')}
           mayGrant={may('services.mass.grant')}
+          mayStatus={may('services.mass.status') && may('services.edit')}
         />
       ),
       crumbs: [nav('bulk-operations'), { label: t('web.bulk_new') }],
@@ -525,6 +537,7 @@ export function resolve(
           denied={!may('bulk_operations.view')}
           mayWallet={may('users.wallet.mass')}
           mayGrant={may('services.mass.grant')}
+          mayStatus={may('services.mass.status') && may('services.edit')}
         />
       ),
       crumbs: [nav('bulk-operations'), { label: t('web.bulk_detail') }],
