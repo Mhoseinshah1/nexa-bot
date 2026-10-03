@@ -231,6 +231,12 @@ export function formatDateOnly(date: Date, presentation: TemplatePresentation): 
   return `${p.year}/${p.month}/${p.day}`;
 }
 
+/** The time of day alone, `23:22`, in the tenant's zone (owner spec §3: the account screen). */
+export function formatTimeOnly(date: Date, presentation: TemplatePresentation): string {
+  const p = dateParts(date, presentation, true);
+  return `${p.hour}:${p.minute}`;
+}
+
 function isWholeNumber(value: TemplateValue): value is number | bigint {
   return typeof value === 'bigint' || (typeof value === 'number' && Number.isSafeInteger(value));
 }
@@ -245,7 +251,10 @@ function renderValue(
   // ISO when no presentation was resolved: the caller has no tenant to ask, and an
   // unambiguous instant beats a guessed calendar.
   if (value instanceof Date) {
-    return presentation === undefined ? value.toISOString() : formatDateTime(value, presentation);
+    if (presentation === undefined) return value.toISOString();
+    if (type === 'DATE') return formatDateOnly(value, presentation);
+    if (type === 'TIME') return formatTimeOnly(value, presentation);
+    return formatDateTime(value, presentation);
   }
   /*
    * A figure's unit is the renderer's, as the placeholder declarations have always said:

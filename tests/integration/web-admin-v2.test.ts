@@ -752,10 +752,14 @@ describe('the Web Admin V2 surface', () => {
        * The second is `trial.product_id`, retired by R1: a trial is configured per panel
        * and issued from no product, the R1 migration carried a configured product across
        * once, and nothing reads the key since. It stays declared for the same reason.
+       *
+       * The third is `stars.pricing_mode`, retired by Package H (spec §8): Stars are priced
+       * from the central FX quote only, so the manual/central switch is no longer read, and
+       * a change to it is refused. It stays declared so a stored value keeps parsing.
        */
       expect(
         body.settings.filter((setting) => setting.consumer === 'PLANNED').map((s) => s.key),
-      ).toEqual(['ops.notifications.min_severity', 'trial.product_id']);
+      ).toEqual(['ops.notifications.min_severity', 'trial.product_id', 'stars.pricing_mode']);
       /*
        * `support.accounts` left that list with the customer UX completion: the support
        * screen's contact button is its first handle, so it is read.

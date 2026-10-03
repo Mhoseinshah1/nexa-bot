@@ -1,4 +1,5 @@
 import type {
+  ListSearchTerm,
   Money,
   OrderId,
   PaymentEvidenceKind,
@@ -192,6 +193,14 @@ export interface PaymentSearch {
    * exact match a unique lookup within the tenant.
    */
   readonly reference?: string;
+  /**
+   * The list's ONE free-text search (spec §10), already classified. A Telegram id matches
+   * the customer exactly — or a reference or bank reference spelled in the same digits; a
+   * uuid matches the payment, its customer or its order; `@name` a customer username
+   * prefix; other text the reference or the external reference EXACTLY, for the reason
+   * `reference` above gives.
+   */
+  readonly text?: ListSearchTerm;
   /**
    * How the receipt left review (WP10 follow-up §5), by the SAME derivation the list and
    * detail report — one SQL expression, so the filter and the column cannot disagree.
@@ -524,6 +533,20 @@ export interface PaymentRepository {
     limit: number,
     tx: unknown,
   ): Promise<readonly PaymentRecord[]>;
+
+  /**
+   * `LOSE_TRACK` for ONE payment (NOWPayments' MISMATCH, `docs/nowpayments-gateway-audit.md`
+   * §5.5): `PENDING -> UNKNOWN`, conditional on a PENDING GATEWAY payment whose effective
+   * deadline (`COALESCE(provider_review_until, expires_at)`) is still ahead of `now`. The
+   * provider holds money that is not what was invoiced: never settled, never failed, and
+   * never left to expire — an operator reconciles it. Null when nothing moved.
+   */
+  loseTrack(
+    scope: TenantContext,
+    id: PaymentId,
+    now: Date,
+    tx: unknown,
+  ): Promise<PaymentRecord | null>;
 
   /**
    * `RECONCILE_CONFIRMED` (§9.6.4): the confirm edge from `UNKNOWN`, conditional on it, every

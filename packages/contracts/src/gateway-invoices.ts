@@ -91,8 +91,12 @@ export type GatewayInvoiceCreationState = (typeof GATEWAY_INVOICE_CREATION_STATE
  *   `paid === true`, and only when read from the inquiry endpoint.
  * - `OPEN` — nothing decided yet; keep asking until the attempt's deadline.
  * - `UNSUCCESSFUL` — the provider definitively did not approve it.
+ * - `MISMATCH` — the provider holds money for this attempt that is NOT what Nexa asked for
+ *   (NOWPayments: `partially_paid`, or `finished` for another price or currency). Never
+ *   fulfils and never fails on its own: the payment goes to `UNKNOWN` for an operator to
+ *   reconcile against the provider's records (`docs/nowpayments-gateway-audit.md` §5.5).
  */
-export const GATEWAY_APPROVAL_VERDICTS = ['APPROVED', 'OPEN', 'UNSUCCESSFUL'] as const;
+export const GATEWAY_APPROVAL_VERDICTS = ['APPROVED', 'OPEN', 'UNSUCCESSFUL', 'MISMATCH'] as const;
 export type GatewayApprovalVerdict = (typeof GATEWAY_APPROVAL_VERDICTS)[number];
 
 /**
@@ -165,6 +169,12 @@ const gatewayInvoiceViewShape = z.object({
   fx: fxSnapshotViewSchema.nullable().default(null),
   /** The provider's charge id, recorded from a pushed payment (Stars). Null until then. */
   providerChargeId: z.string().nullable(),
+  /**
+   * The provider's own id for the payment a VERIFIED webhook last named under this invoice
+   * (NOWPayments' `payment_id`): what the next inquiry reads. A hint, never evidence.
+   * Defaulted so a response from the previous release reads "none".
+   */
+  hintedPaymentId: z.string().nullable().default(null),
   requestAmount: z.string().nullable(),
   finalAmount: z.string().nullable(),
   creditAmount: z.string().nullable(),

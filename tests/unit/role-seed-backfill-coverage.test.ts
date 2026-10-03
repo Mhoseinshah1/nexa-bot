@@ -177,7 +177,10 @@ describe('role seed backfill coverage', () => {
     // Named rather than derived: the eight pairs this hotfix exists for. A
     // derived expectation here would be the same computation as the code under
     // test, and would agree with it however wrong both were.
-    const dr = [...backfilled].filter((p) => /:(backup\.|recovery\.)/.test(p)).sort();
+    // `recovery.kit.*` and `recovery.key.*` are the Recovery Kit's (0160), named below.
+    const dr = [...backfilled]
+      .filter((p) => /:(backup\.|recovery\.)/.test(p) && !/:recovery\.(kit|key)\./.test(p))
+      .sort();
     expect(dr).toEqual([
       'observer:backup.view',
       'operator:backup.view',
@@ -187,6 +190,16 @@ describe('role seed backfill coverage', () => {
       'owner:recovery.restore',
       'technical:backup.run',
       'technical:backup.view',
+    ]);
+  });
+
+  it('accounts for the Recovery Kit release exactly: three CRITICAL keys, owner only', () => {
+    // ADR-0032, migration 0160. Named, for the reason the case above gives.
+    const kit = [...backfilled].filter((p) => /:recovery\.(kit|key)\./.test(p)).sort();
+    expect(kit).toEqual([
+      'owner:recovery.key.remove',
+      'owner:recovery.kit.export',
+      'owner:recovery.kit.import',
     ]);
   });
 });

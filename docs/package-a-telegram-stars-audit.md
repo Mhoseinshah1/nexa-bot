@@ -4,6 +4,10 @@ The owner's post-WP20 brief, Package A. Telegram Stars (`XTR`) becomes a real Ne
 route for the bot's digital services, inside the existing payment architecture. It adds no
 second accounting system.
 
+> **Superseded in part (spec §8, 2026-10-02):** the operator-set rate of §2.1–§2.2 no
+> longer prices Stars; the central USDT rate and `stars.per_usdt` do. See
+> `docs/package-h-tutorials-marketing-stars.md` §8.
+
 ## 1. What already exists, and what does not fit
 
 The gateway layer (WP11A, `docs/tonpays-gateway-audit.md`; WP18) is provider-neutral in

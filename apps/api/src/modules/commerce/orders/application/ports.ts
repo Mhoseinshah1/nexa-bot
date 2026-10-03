@@ -1,4 +1,5 @@
 import type {
+  ListSearchTerm,
   CurrencyCode,
   Money,
   OrderId,
@@ -132,6 +133,19 @@ export interface OrderSearch {
   readonly state?: OrderState;
   readonly customerId?: UserId;
   readonly productId?: ProductId;
+  /**
+   * The list's ONE free-text search (spec §10), already classified: a Telegram id or an
+   * `@username` prefix names the customer; a uuid the order, its customer or its product;
+   * other text the order's snapshot title by PREFIX, or a product whose current title
+   * CONTAINS it. See `orderTextCondition` for the index behind each arm.
+   */
+  readonly text?: ListSearchTerm;
+}
+
+/** A customer as Telegram knows them, for the order list (spec §10). */
+export interface OrderCustomerIdentity {
+  readonly telegramUserId: string;
+  readonly username: string | null;
 }
 
 /** Everything the DRAFT row carries at creation. Every field is a snapshot. */
@@ -188,6 +202,13 @@ export interface OrderRepository {
     cursor: OrderCursor | null,
     tx?: unknown,
   ): Promise<OrderPage>;
+
+  /** The Telegram identity of each of these customers, inside the tenant, in one read. */
+  customerIdentities(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<UserId, OrderCustomerIdentity>>;
 
   /**
    * Moves an order between two states, and reports whether the row actually moved.

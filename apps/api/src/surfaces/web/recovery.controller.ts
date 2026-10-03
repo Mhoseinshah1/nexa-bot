@@ -90,6 +90,8 @@ export class RecoveryController {
     return {
       scheduleEnabled: status.scheduleEnabled,
       intervalMs: status.intervalMs,
+      scheduleSource: { ...status.scheduleSource },
+      deliveryDestination: status.deliveryDestination,
       lastSucceededAt: status.lastSucceededAt?.toISOString() ?? null,
       running: status.running === null ? null : toRunSummary(status.running),
       unknownDeliveries: status.unknownDeliveries,
@@ -181,10 +183,10 @@ export class RecoveryController {
     return {
       uploadEnabled: this.container.config.RECOVERY_UPLOAD_ENABLED,
       maxUploadBytes: this.container.config.RECOVERY_UPLOAD_MAX_BYTES,
-      // Reported as false rather than omitted, so the Web Admin says
-      // «پشتیبانی نمی‌شود» where an operator looks for it instead of leaving the
-      // absence to read as an oversight. ADR-0028 § 10.
-      foreignInstallationSupported: false,
+      // True since ADR-0032: an archive from another installation restores once
+      // that installation's Recovery Kit has been imported. ADR-0028 § 10 is
+      // superseded by it.
+      foreignInstallationSupported: true,
       confirmationPhrase: RECOVERY_CONFIRMATION_PHRASE,
       confirmationTtlMs: RECOVERY_CONFIRMATION_TTL_MS,
     };

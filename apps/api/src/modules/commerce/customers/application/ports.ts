@@ -1,5 +1,6 @@
 import type {
   CustomerProfileFacts,
+  ListSearchTerm,
   CustomerStatus,
   ScopeContext,
   TenantContext,
@@ -120,6 +121,14 @@ export interface CustomerSearch {
    */
   readonly username?: string;
   readonly status?: CustomerStatus;
+  /**
+   * The list's ONE free-text search (spec §10), already classified. A Telegram id and a
+   * uuid match EXACTLY; `@name` is a username prefix; other text is a prefix of the
+   * username, of the display name (first name then last) or of the last name alone. All
+   * prefixes, each served by a `text_pattern_ops` index — see `customerTextCondition`.
+   * Charged `users.search`, like every other way of finding one customer.
+   */
+  readonly text?: ListSearchTerm;
 }
 
 export interface CustomerRepository {

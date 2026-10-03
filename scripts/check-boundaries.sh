@@ -652,6 +652,7 @@ apps/api/src/modules/platform/backup/infrastructure/telegram-backup-delivery.ts
 apps/api/src/modules/platform/backup/infrastructure/pg-tools.ts
 apps/api/src/modules/commerce/payments/infrastructure/tonpays-adapter.ts
 apps/api/src/modules/commerce/payments/infrastructure/tonpays-telegram-adapter.ts
+apps/api/src/modules/commerce/payments/infrastructure/nowpayments-adapter.ts
 "
 UNGUARDED=""
 for sink in $SINK_FILES; do

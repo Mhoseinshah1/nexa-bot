@@ -216,6 +216,11 @@ part of item 24 and R-ACC-9 on real devices.
 
 ## 7. Defects and findings
 
+**Follow-up status (2026-10-02, owner order — `docs/round-t-button-builder-audit.md` §16.3):**
+QA-3 obsolete (the button icon is retired); QA-4, QA-5 and QA-6 fixed with tests; QA-2's grip
+rebuilt as a 34 × 44 px button (the fix direction below), its real-phone check still R-ACC-9;
+F-8 (the "new" badge) still unreachable, its obligation unchanged under OQ-T-2.
+
 ### QA-1 — MEDIUM (process; owner decision) — a release contains Round T before the T4 fixes
 
 - **Evidence.** `git ls-remote --tags origin`: `v0.4.0` → `f9be46f1` (merge of PR #135),

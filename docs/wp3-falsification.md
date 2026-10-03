@@ -90,10 +90,10 @@ the negative case can tell those apart.
 
 `tests/web/services.test.tsx`, two mutations.
 
-| #    | Rule                                                       | Mutation                                          | Named test                                                                 | Result |
-| ---- | ---------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------- | ------ |
-| F-01 | the box refuses what the schema refuses, before requesting | `usernameProblem` replaced with `() => undefined` | _refuses a name the server would refuse, without spending a request on it_ | KILLED |
-| F-02 | the client sends the name UNFOLDED                         | `.toLowerCase()` added in `fetchServices`         | _asks the server for the exact name, and sends it unfolded_                | KILLED |
+| #    | Rule                                                                                                        | Mutation                                         | Named test                                                               | Result |
+| ---- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------ | ------ |
+| F-01 | superseded by spec §10's one box: `@name` is read as a customer's Telegram username, said before requesting | `classifyListSearch`: the `@` branch disabled    | _reads a leading @ as the customer’s Telegram username, and says so_     | KILLED |
+| F-02 | the client sends the name UNFOLDED                                                                          | `.toLowerCase()` added to `q` in `fetchServices` | _asks the server for the name through the one search box, sent unfolded_ | KILLED |
 
 F-02 is the rule that keeps the fold in one place. It is not about correctness
 of the result today — the server folds, so a pre-folded value finds the same row

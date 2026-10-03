@@ -73,11 +73,11 @@ describe('the conversion (A1)', () => {
       requiresCredentials: false,
       invoiceCredential: 'BOT_TOKEN',
       approval: 'RECORDED_PAYMENT',
-      // Package FX: the fixed rate stays first and default; the central rate is opt-in.
+      // Spec §8: the central rate only. No manual Toman-per-Star rate, no mode to pick one.
       conversion: {
-        policies: ['FIXED_RATE', 'CENTRAL_FX'],
+        policies: ['CENTRAL_FX'],
         fxBaseAsset: 'USDT',
-        modeSetting: 'stars.pricing_mode',
+        modeSetting: null,
         unitRatioSetting: 'stars.per_usdt',
       },
       // TonPays Telegram (audit §5.3): the invoice form that replaced the BOT_TOKEN inference.
@@ -85,6 +85,8 @@ describe('the conversion (A1)', () => {
       boundToBot: true,
       requiresBuyerChatId: false,
       providerReview: false,
+      // NOWPayments: only a provider that signs its webhooks takes a second secret.
+      webhookSecret: false,
     });
     expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS.approval).toBe('INQUIRY');
   });

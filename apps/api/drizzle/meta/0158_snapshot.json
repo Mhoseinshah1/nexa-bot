@@ -1,5 +1,5 @@
 {
-  "id": "8aae6848-0576-4c70-a73f-33c71790df95",
+  "id": "b71e59fc-6fd1-46fd-98fa-5c9bbc58ccf5",
   "prevId": "7523dd21-3308-40c6-be83-0348c094b8bc",
   "version": "7",
   "dialect": "postgresql",
@@ -5478,378 +5478,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.customer_account_transfers": {
-      "name": "customer_account_transfers",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "from_customer_id": {
-          "name": "from_customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "to_customer_id": {
-          "name": "to_customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "idempotency_key": {
-          "name": "idempotency_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "service_ids": {
-          "name": "service_ids",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "wallet_amount": {
-          "name": "wallet_amount",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "currency": {
-          "name": "currency",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "debit_entry_id": {
-          "name": "debit_entry_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "credit_entry_id": {
-          "name": "credit_entry_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "fingerprint": {
-          "name": "fingerprint",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "actor_admin_id": {
-          "name": "actor_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "correlation_id": {
-          "name": "correlation_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "customer_account_transfers_from_idx": {
-          "name": "customer_account_transfers_from_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "from_customer_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "customer_account_transfers_to_idx": {
-          "name": "customer_account_transfers_to_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "to_customer_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "customer_account_transfers_tenant_id_tenants_id_fk": {
-          "name": "customer_account_transfers_tenant_id_tenants_id_fk",
-          "tableFrom": "customer_account_transfers",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_account_transfers_actor_admin_id_admins_id_fk": {
-          "name": "customer_account_transfers_actor_admin_id_admins_id_fk",
-          "tableFrom": "customer_account_transfers",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "actor_admin_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_account_transfers_from_fk": {
-          "name": "customer_account_transfers_from_fk",
-          "tableFrom": "customer_account_transfers",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "from_customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_account_transfers_to_fk": {
-          "name": "customer_account_transfers_to_fk",
-          "tableFrom": "customer_account_transfers",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "to_customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_account_transfers_debit_fk": {
-          "name": "customer_account_transfers_debit_fk",
-          "tableFrom": "customer_account_transfers",
-          "tableTo": "wallet_entries",
-          "columnsFrom": [
-            "tenant_id",
-            "debit_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_account_transfers_credit_fk": {
-          "name": "customer_account_transfers_credit_fk",
-          "tableFrom": "customer_account_transfers",
-          "tableTo": "wallet_entries",
-          "columnsFrom": [
-            "tenant_id",
-            "credit_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "customer_account_transfers_key": {
-          "name": "customer_account_transfers_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "idempotency_key"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "customer_account_transfers_parties_check": {
-          "name": "customer_account_transfers_parties_check",
-          "value": "from_customer_id <> to_customer_id"
-        },
-        "customer_account_transfers_currency_check": {
-          "name": "customer_account_transfers_currency_check",
-          "value": "currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
-        },
-        "customer_account_transfers_amount_check": {
-          "name": "customer_account_transfers_amount_check",
-          "value": "wallet_amount >= 0"
-        },
-        "customer_account_transfers_entries_check": {
-          "name": "customer_account_transfers_entries_check",
-          "value": "(wallet_amount = 0) = (debit_entry_id IS NULL) AND (debit_entry_id IS NULL) = (credit_entry_id IS NULL)"
-        },
-        "customer_account_transfers_key_check": {
-          "name": "customer_account_transfers_key_check",
-          "value": "length(idempotency_key) BETWEEN 1 AND 255"
-        },
-        "customer_account_transfers_reason_check": {
-          "name": "customer_account_transfers_reason_check",
-          "value": "length(reason) BETWEEN 1 AND 500"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.customer_location_change_overrides": {
-      "name": "customer_location_change_overrides",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "cooldown_hours": {
-          "name": "cooldown_hours",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "max_changes": {
-          "name": "max_changes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "period_days": {
-          "name": "period_days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "set_at": {
-          "name": "set_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "customer_location_change_overrides_tenant_id_tenants_id_fk": {
-          "name": "customer_location_change_overrides_tenant_id_tenants_id_fk",
-          "tableFrom": "customer_location_change_overrides",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_location_change_overrides_customer_fk": {
-          "name": "customer_location_change_overrides_customer_fk",
-          "tableFrom": "customer_location_change_overrides",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "customer_location_change_overrides_pkey": {
-          "name": "customer_location_change_overrides_pkey",
-          "columns": [
-            "tenant_id",
-            "customer_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "customer_location_change_overrides_limits_check": {
-          "name": "customer_location_change_overrides_limits_check",
-          "value": "(cooldown_hours IS NULL OR cooldown_hours BETWEEN 1 AND 8760)\n        AND (max_changes IS NULL OR max_changes BETWEEN 1 AND 100)\n        AND (period_days IS NULL OR period_days BETWEEN 1 AND 365)\n        AND ((max_changes IS NULL) = (period_days IS NULL))"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.customer_notifications": {
       "name": "customer_notifications",
       "schema": "",
@@ -6351,24 +5979,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "channel_membership_exempt_at": {
-          "name": "channel_membership_exempt_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "phone_number": {
-          "name": "phone_number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "phone_verified_at": {
-          "name": "phone_verified_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -6503,14 +6113,6 @@
         "customers_blocked_at_check": {
           "name": "customers_blocked_at_check",
           "value": "(status = 'BLOCKED') = (blocked_at IS NOT NULL)"
-        },
-        "customers_phone_check": {
-          "name": "customers_phone_check",
-          "value": "(phone_number IS NULL) = (phone_verified_at IS NULL)"
-        },
-        "customers_phone_format_check": {
-          "name": "customers_phone_format_check",
-          "value": "phone_number IS NULL OR phone_number ~ '^[+][1-9][0-9]{7,14}$'"
         }
       },
       "isRLSEnabled": false
@@ -8708,6 +8310,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "hinted_payment_id": {
+          "name": "hinted_payment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -8925,7 +8533,7 @@
         },
         "gateway_invoices_provider_check": {
           "name": "gateway_invoices_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "gateway_invoices_creation_state_check": {
           "name": "gateway_invoices_creation_state_check",
@@ -8970,6 +8578,14 @@
         "gateway_invoices_tonpays_telegram_check": {
           "name": "gateway_invoices_tonpays_telegram_check",
           "value": "provider <> 'TONPAYS_TELEGRAM' OR (bot_instance_id IS NOT NULL AND provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT')"
+        },
+        "gateway_invoices_hinted_payment_id_check": {
+          "name": "gateway_invoices_hinted_payment_id_check",
+          "value": "hinted_payment_id IS NULL OR hinted_payment_id ~ '^[0-9]{1,20}$'"
+        },
+        "gateway_invoices_nowpayments_check": {
+          "name": "gateway_invoices_nowpayments_check",
+          "value": "provider <> 'NOWPAYMENTS' OR (provider_unit = 'USD' AND conversion_policy = 'CENTRAL_FX' AND bot_instance_id IS NULL)"
         },
         "gateway_invoices_card_check": {
           "name": "gateway_invoices_card_check",
@@ -14470,7 +14086,7 @@
       "checkConstraints": {
         "payment_gateway_call_budgets_provider_check": {
           "name": "payment_gateway_call_budgets_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payment_gateway_call_budgets_used_check": {
           "name": "payment_gateway_call_budgets_used_check",
@@ -14518,6 +14134,36 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "webhook_secret_ciphertext": {
+          "name": "webhook_secret_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_secret_key_id": {
+          "name": "webhook_secret_key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_secret_set_at": {
+          "name": "webhook_secret_set_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_check_at": {
+          "name": "last_check_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_check_result": {
+          "name": "last_check_result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -14591,9 +14237,17 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "payment_gateway_credentials_webhook_secret_check": {
+          "name": "payment_gateway_credentials_webhook_secret_check",
+          "value": "(webhook_secret_ciphertext IS NULL) = (webhook_secret_key_id IS NULL) AND (webhook_secret_ciphertext IS NULL) = (webhook_secret_set_at IS NULL)"
+        },
+        "payment_gateway_credentials_last_check_check": {
+          "name": "payment_gateway_credentials_last_check_check",
+          "value": "(last_check_at IS NULL) = (last_check_result IS NULL) AND (last_check_result IS NULL OR length(last_check_result) BETWEEN 1 AND 64)"
+        },
         "payment_gateway_credentials_provider_check": {
           "name": "payment_gateway_credentials_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         }
       },
       "isRLSEnabled": false
@@ -14787,7 +14441,7 @@
       "checkConstraints": {
         "payment_gateways_provider_check": {
           "name": "payment_gateways_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payment_gateways_status_check": {
           "name": "payment_gateways_status_check",
@@ -15592,7 +15246,7 @@
         },
         "payments_gateway_provider_check": {
           "name": "payments_gateway_provider_check",
-          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payments_topup_cashback_percent_check": {
           "name": "payments_topup_cashback_percent_check",
@@ -15604,7 +15258,7 @@
         },
         "payments_provider_review_check": {
           "name": "payments_provider_review_check",
-          "value": "(provider_review_started_at IS NULL) = (provider_review_until IS NULL) AND (provider_review_until IS NULL OR (method = 'GATEWAY' AND gateway_provider IN ('TONPAYS_TELEGRAM') AND expires_at IS NOT NULL AND provider_review_started_at < expires_at AND provider_review_until = provider_review_started_at + interval '24 hours'))"
+          "value": "(provider_review_started_at IS NULL) = (provider_review_until IS NULL) AND (provider_review_until IS NULL OR (method = 'GATEWAY' AND gateway_provider IN ('TONPAYS_TELEGRAM', 'NOWPAYMENTS') AND expires_at IS NOT NULL AND provider_review_started_at < expires_at AND provider_review_until = provider_review_started_at + interval '24 hours'))"
         }
       },
       "isRLSEnabled": false
@@ -20937,7 +20591,7 @@
           "name": "bot_instance_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "idempotency_key": {
           "name": "idempotency_key",
@@ -21105,10 +20759,6 @@
         "service_ownership_transfers_key_check": {
           "name": "service_ownership_transfers_key_check",
           "value": "length(idempotency_key) BETWEEN 1 AND 200"
-        },
-        "service_ownership_transfers_bot_check": {
-          "name": "service_ownership_transfers_bot_check",
-          "value": "bot_instance_id IS NOT NULL OR actor_type = 'WEB_ADMIN'"
         }
       },
       "isRLSEnabled": false
@@ -26103,7 +25753,7 @@
         },
         "wallet_entries_reason_check": {
           "name": "wallet_entries_reason_check",
-          "value": "reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'RECEIPT_CREDIT', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'ACCOUNT_TRANSFER_OUT', 'ACCOUNT_TRANSFER_IN', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'CHARGEBACK', 'CORRECTION', 'OTHER')"
+          "value": "reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'RECEIPT_CREDIT', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'CHARGEBACK', 'CORRECTION', 'OTHER')"
         },
         "wallet_entries_currency_check": {
           "name": "wallet_entries_currency_check",

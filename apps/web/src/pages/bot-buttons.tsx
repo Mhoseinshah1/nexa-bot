@@ -25,6 +25,7 @@ import { TemplateCard } from './content';
 import { ErrorReport } from './settings';
 import { BUILDER_QUERY_KEY, MenuBuilder } from './bot-buttons/builder';
 import { labelOf } from './bot-buttons/canvas';
+import { InlineButtonsSection } from './bot-buttons/inline-buttons';
 
 const SYNC_STATE_LABEL: Readonly<Record<BotCommandSyncState, WebKey>> = {
   CURRENT: 'web.bot_menu_state_current',
@@ -147,6 +148,17 @@ export function BotButtonsPage({
           </div>
         )}
       </StateSwitch>
+      {/* Owner spec §6: the inline (glass) buttons, between the command menu and the texts. */}
+      <InlineButtonsSection
+        mayEdit={mayEdit}
+        denied={denied}
+        mayViewTemplates={mayViewTemplates}
+        mayEditTemplates={mayEditTemplates}
+        templates={templates.data?.templates}
+        // Codex 4170910525: a glass label can be a main-menu template (`bot.menu.services`),
+        // so a label save re-reads both menu read models, as the texts cards do.
+        onLabelChanged={refreshMenu}
+      />
       <Card title={t('web.bot_buttons_labels_title')} hint={t('web.bot_buttons_labels_hint')}>
         {!mayViewTemplates ? (
           <Banner tone="info">{t('web.bot_buttons_labels_denied')}</Banner>

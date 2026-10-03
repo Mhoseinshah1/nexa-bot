@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { MAX_MONEY_AMOUNT_MINOR } from './money.js';
 import type { PaymentMethod } from './payment.js';
 import type { GatewayConversionSpec } from './fx.js';
+import { NOWPAYMENTS_CENTS_PER_USDT } from './nowpayments.js';
 
 /** A route billed in the sales currency: nothing is converted. */
 const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
@@ -82,12 +83,20 @@ const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
  *   INQUIRY alone approves. Its own key, never the website route's; a row starts DISABLED
  *   and cannot be enabled without one. Not accepted against the real provider yet
  *   (`OQ-WP10-01`).
+ * - `NOWPAYMENTS` — NOWPayments' hosted crypto invoice (`docs/nowpayments-gateway-audit.md`).
+ *   The customer chooses the asset on NOWPayments' own page; Nexa never names one. Priced
+ *   in US dollars from the CENTRAL USDT quote (package FX), never an operator's rate. A
+ *   verified IPN is a hint; only the provider's own payment read, asked server to server,
+ *   approves — `finished`, for exactly the invoice's price. Needs an API key AND an IPN
+ *   secret; a row starts DISABLED and cannot be enabled without both. Not accepted
+ *   against the real provider yet (`OQ-NP-01`).
  */
 export const PAYMENT_GATEWAY_PROVIDERS = [
   'MANUAL_TRANSFER',
   'TONPAYS',
   'TELEGRAM_STARS',
   'TONPAYS_TELEGRAM',
+  'NOWPAYMENTS',
 ] as const;
 export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
@@ -150,13 +159,21 @@ export interface PaymentGatewayDescriptor {
    */
   readonly requiresBuyerChatId: boolean;
   /**
-   * Whether a provider acknowledgement of the customer's receipt, recorded under the
-   * payment's lock before its deadline, opens the bounded provider review window
-   * (`payments.provider_review_until`, owner decision of 2026-10-01). The list of routes
-   * with this flag generates `payments_provider_review_check`; no other route can carry
-   * the columns.
+   * Whether a provider's acknowledgement that the customer's money is WITH it, recorded
+   * under the payment's lock before its deadline, opens the bounded provider review window
+   * (`payments.provider_review_until`, owner decision of 2026-10-01). TonPays Telegram: the
+   * receipt upload's acknowledgement. NOWPayments: an inquiry reporting the coins detected
+   * on chain (`docs/nowpayments-gateway-audit.md` §5.4). The list of routes with this flag
+   * generates `payments_provider_review_check`; no other route can carry the columns.
    */
   readonly providerReview: boolean;
+  /**
+   * Whether the provider SIGNS its webhooks with a second, operator-set secret
+   * (`NOWPAYMENTS`' IPN secret). Such a route stores that secret write-only beside its API
+   * key, cannot be enabled without it, and a webhook whose signature does not verify is
+   * dropped before a single field of it is read. A verified webhook is still only a hint.
+   */
+  readonly webhookSecret: boolean;
 }
 
 export const PAYMENT_GATEWAY_DESCRIPTORS: {
@@ -173,6 +190,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     boundToBot: false,
     requiresBuyerChatId: false,
     providerReview: false,
+    webhookSecret: false,
   },
   TONPAYS: {
     provider: 'TONPAYS',
@@ -185,6 +203,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     boundToBot: false,
     requiresBuyerChatId: false,
     providerReview: false,
+    webhookSecret: false,
   },
   TELEGRAM_STARS: {
     provider: 'TELEGRAM_STARS',
@@ -194,21 +213,25 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     invoiceCredential: 'BOT_TOKEN',
     approval: 'RECORDED_PAYMENT',
     /*
-     * Priced by the operator's fixed rate (Package A) OR, when `stars.pricing_mode` is
-     * switched to `CENTRAL_FX_RATIO`, by the central USDT quote and `stars.per_usdt`
-     * (package FX-STARS). The default mode is the fixed rate, so an installation that
-     * upgrades keeps pricing exactly as before until an operator switches it.
+     * Priced ONLY by the central USDT quote and `stars.per_usdt` (spec §8, "Stars price
+     * from central FX only"). The operator-set Toman-per-Star rate of Package A and the
+     * `stars.pricing_mode` switch that chose between the two are retired: there is no
+     * manual Stars FX rate and no Stars-only fallback. `stars.per_usdt` stays — it is not
+     * an exchange rate but the provider-side ratio (how many Stars one USDT buys), which no
+     * fiat feed can supply. A single policy, so `conversionPolicyFor` ignores any mode.
+     * Invoices issued under the old fixed rate keep their own frozen snapshot.
      */
     conversion: {
-      policies: ['FIXED_RATE', 'CENTRAL_FX'],
+      policies: ['CENTRAL_FX'],
       fxBaseAsset: 'USDT',
-      modeSetting: 'stars.pricing_mode',
+      modeSetting: null,
       unitRatioSetting: 'stars.per_usdt',
     },
     invoiceForm: 'BOT_INVOICE',
     boundToBot: true,
     requiresBuyerChatId: false,
     providerReview: false,
+    webhookSecret: false,
   },
   TONPAYS_TELEGRAM: {
     provider: 'TONPAYS_TELEGRAM',
@@ -222,6 +245,38 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     boundToBot: true,
     requiresBuyerChatId: true,
     providerReview: true,
+    webhookSecret: false,
+  },
+  NOWPAYMENTS: {
+    provider: 'NOWPAYMENTS',
+    settlesVia: 'GATEWAY',
+    requiresCredentials: true,
+    invoiceCredential: 'GATEWAY_KEY',
+    approval: 'INQUIRY',
+    /*
+     * The central USDT quote (package FX), with the provider unit — a US cent — pegged at a
+     * FIXED 100 per USDT (`docs/nowpayments-gateway-audit.md` §3). No mode, no ratio
+     * setting and no operator rate: the owner's rule is that this route is priced from the
+     * central FX infrastructure and nothing else.
+     */
+    conversion: {
+      policies: ['CENTRAL_FX'],
+      fxBaseAsset: 'USDT',
+      modeSetting: null,
+      unitRatioSetting: null,
+      fixedUnitRatio: { mantissa: NOWPAYMENTS_CENTS_PER_USDT, scale: 0 },
+    },
+    invoiceForm: 'LINK',
+    boundToBot: false,
+    requiresBuyerChatId: false,
+    /*
+     * Crypto is confirmed by a chain, not by a person: once NOWPayments reports the
+     * customer's coins on their way (`confirming`, `confirmed`, `sending`) before the
+     * attempt's deadline, the bounded provider review window opens so the confirmations
+     * can finish. It never settles anything by itself.
+     */
+    providerReview: true,
+    webhookSecret: true,
   },
 };
 

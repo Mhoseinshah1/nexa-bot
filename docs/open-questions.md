@@ -708,7 +708,12 @@ customer-supplied text — Phase 4A, when a Telegram update can fail.
 
 ## Restoring a backup taken by a DIFFERENT installation
 
-**Status: OPEN — recorded by the Web Admin Disaster Recovery pass (ADR-0028 § 10).**
+**Status: RESOLVED by [ADR-0032](adr/0032-recovery-kit.md) — the Recovery Kit.** Shape 2
+below was built: a passphrase-sealed kit, imported as decrypt-only keys with their own
+storage (`installation_keys`), audit, dependency-checked removal and a carry across the
+cutover. Shape 1 (a pasted KEK) stays refused. Kept as written for the record.
+
+**Original status: OPEN — recorded by the Web Admin Disaster Recovery pass (ADR-0028 § 10).**
 
 An archive's data key is wrapped under the KEK of the installation that wrote it.
 This installation holds its own keyring, so a foreign archive fails at the key —
@@ -2721,6 +2726,9 @@ every attempt beside the USDT quote; the Web Admin shows the figure per Star it 
 UNRESOLVED as a source. Not a defect: the ratio is the operator's own terms, exactly as the
 fixed rate was, and nothing here pretends Telegram supplies one.
 
+Spec §8 (2026-10-02) made the central rate the ONLY Stars pricing; this ratio is now the one
+figure an operator enters for Stars (`docs/package-h-tutorials-marketing-stars.md` §8).
+
 ## OQ-FX-02 — Wallex's live response shape, and both sources' live behaviour
 
 Round P, package FX. `apidocs.nobitex.ir`, `api.nobitex.ir`, `api-docs.wallex.ir`,
@@ -2747,7 +2755,16 @@ and OMITS `style` for `default`. No custom colours exist and none are offered.
 
 RESOLVED (owner, Bot API 9.4). Real-bot acceptance R-ACC-1 still checks the rendering.
 
+Owner spec §6 (2026-10-02): `InlineKeyboardButton.style` takes the SAME closed set in the
+same release (cross-checked against the published Bot API type docs of two client
+libraries, aiogram and gramio, since `core.telegram.org` is not reachable from the build
+session). The inline button registry (`inline-buttons.ts`) reuses `MAIN_MENU_BUTTON_STYLES`
+and omits `default` on the wire. Real-bot acceptance still owes one look at a styled inline
+button.
+
 ## OQ-T-API-02 — who may use `KeyboardButton.icon_custom_emoji_id`
+
+**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
 
 Round T. Confirmed by the owner: `icon_custom_emoji_id` is official Bot API, usable by bots
 able to use custom emoji (bots with purchased Fragment usernames, or in the applicable
@@ -2817,6 +2834,8 @@ route is claimed as accepted before it.
 
 ## OQ-T-API-05 — the exact refusal an ineligible bot gets for `icon_custom_emoji_id`
 
+**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
+
 Round T (T2). UNKNOWN, and deliberately not guessed. Owner rule B5 lets only a RELIABLY
 classified eligibility denial switch a bot's shared custom-emoji state off. T2 reuses the
 appearance probe's classifier unchanged (`classifyProbeRefusal`, read by
@@ -2884,6 +2903,8 @@ Default in force, accepted by the owner for round T. Copied here by the T4 revie
 
 ## OQ-T-4 — icon eligibility is shared with message decoration
 
+**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
+
 Round T. DECISION. One custom-emoji eligibility per bot: the appearance test's recorded
 outcome, `SENT` only (`isCustomEmojiEligible`, used by the runtime's decoration and by the
 builder's Inspector alike since the T4 review's F-4). Refined by owner rule B5
@@ -2892,3 +2913,37 @@ shared state off; a generic refusal of an iconed message does not. Revisit only 
 acceptance (R-ACC-2) shows Telegram grants text decoration and keyboard icons differently.
 
 Default in force, accepted by the owner for round T. Copied here by the T4 review (F-9).
+
+## OQ-NP — NOWPayments (`NOWPAYMENTS`): what the documentation does not settle
+
+Spec §16 (`docs/nowpayments-gateway-audit.md`). Built from NOWPayments' published API
+reference (the Postman collection, read through its OpenAPI mirror — the documenter host is
+refused by the build session's egress) and its own JS client. Every test runs against a fake
+written from those shapes, so the adapter and the fake can only be shown to agree with each
+other (CLAUDE.md's provider rule).
+
+- **OQ-NP-01 — live acceptance with real credentials.** UNRESOLVED. Owed on staging with a
+  real NOWPayments account: key and IPN secret set, the credential check answering `ok`, one
+  top-up and one order paid in two different coins, the IPN verifying (no
+  `payments.gateway_webhook_unverified`), the payment card showing invoice id, provider
+  payment id, `finished` and `provider_paid`, and one deliberately short payment reconciled
+  from `UNKNOWN`. Record every real shape that differs from the audit's §2 — the error body,
+  whether a payment record always carries `order_id`, whether nested IPN objects are signed
+  recursively sorted — and correct the fake in the same commit. Until then the route ships
+  `DISABLED` and is not claimed as accepted.
+- **OQ-NP-02 — does `GET /v1/payment/?invoiceId=` answer the API key alone?** The reference
+  shows a JWT `Authorization` header (minted from the account's e-mail and password) beside
+  the key. Nexa sends the key only and stores no account password. If the list is refused,
+  reconciliation of a LOST IPN cannot find the payment; a verified IPN still names it, and the
+  refusal is recorded as `nowpayments.list_refused.<status>`, never as a misconfigured key.
+  Decide after OQ-NP-01 whether a JWT credential is worth storing.
+- **OQ-NP-03 — how long a hosted invoice stays payable.** Undocumented. Nexa's attempt is 70
+  minutes (the TonPays rule); coins seen inside it extend to the 24-hour review window. A
+  payment started after the attempt closed is a recorded `LATE_COMPLETION` that moves nothing
+  — the known limit TonPays has (`OQ-WP11A-03`).
+- **OQ-NP-04 — rate limits.** Unpublished per key. Nexa stays under 50 calls a minute per
+  tenant (40 for inquiries) across every replica.
+- **OQ-NP-05 — per-coin minimums.** NOWPayments enforces a minimum per coin on its own page,
+  after the customer chooses one; Nexa does not know which coin will be chosen. The route's
+  own min/max (sales currency) is the operator's control; a too-small invoice is refused by
+  the provider on its page, and the Nexa attempt expires at its deadline.

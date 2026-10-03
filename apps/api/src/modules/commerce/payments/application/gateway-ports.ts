@@ -89,6 +89,18 @@ export interface PaymentGatewayRepository {
   ): Promise<PaymentGatewayRecord | null>;
 
   /**
+   * The route's row, FOR UPDATE, in the caller's transaction. Spec §8 (Codex review of
+   * #143): switching a central-rate route ON and clearing its unit ratio are writes to two
+   * different rows that each judge the other; both take THIS lock first, so they serialise
+   * and the second sees what the first committed.
+   */
+  lockForUpdate(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx: unknown,
+  ): Promise<PaymentGatewayRecord | null>;
+
+  /**
    * Creates the routes this release can operate, for a tenant that has none.
    *
    * `ON CONFLICT DO NOTHING`, so it is idempotent and so a route an operator has since

@@ -2002,7 +2002,9 @@ describe('a provisioned service announces itself', () => {
      */
     const listed = JSON.stringify(messages()[messages().length - 1]);
     expect(listed).toContain(service?.providerUsername ?? 'MISSING');
-    expect(listed).toContain(`s:${service?.id ?? ''}`);
+    // Owner spec §2.3: the list opens the card IN PLACE (`sv:`); a `s:` from an older
+    // message still opens it as a message of its own.
+    expect(listed).toContain(`sv:${service?.id ?? ''}`);
     await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${service?.id ?? ''}`));
     expect(JSON.stringify(messages()[messages().length - 1])).toContain('پلن پایه');
   });
@@ -2039,7 +2041,7 @@ describe('a provisioned service announces itself', () => {
     const first = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
     expect(first.replyKey).toBe('bot.service.list');
     const firstBody = JSON.stringify(messages()[messages().length - 1]);
-    const firstPage = created.filter((id) => firstBody.includes(`s:${id}`));
+    const firstPage = created.filter((id) => firstBody.includes(`sv:${id}`));
     expect(firstPage, 'the page is the bound, not the whole list').toHaveLength(
       SERVICES_LIST_PAGE_SIZE,
     );
@@ -2048,8 +2050,10 @@ describe('a provisioned service announces itself', () => {
     const second = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(next));
     expect(second.intent).toBe('SERVICES_PAGE');
     expect(second.replyKey).toBe('bot.service.list');
-    const secondBody = JSON.stringify(messages()[messages().length - 1]);
-    const secondPage = created.filter((id) => secondBody.includes(`s:${id}`));
+    // Owner spec §2.3: a page EDITS the tapped list message.
+    const edits = sent.filter((one) => one.url.includes('/editMessageText'));
+    const secondBody = JSON.stringify(edits[edits.length - 1]);
+    const secondPage = created.filter((id) => secondBody.includes(`sv:${id}`));
 
     /* The one past the page, and NOT one the first page already showed. */
     expect(secondPage).toHaveLength(1);
@@ -2115,7 +2119,12 @@ describe('a provisioned service announces itself', () => {
       tapUpdateAs(`l:${token}`, '910911', 'سارا'),
     );
     expect(result.replyKey).toBe('bot.service.list_empty');
-    expect(JSON.stringify(messages()[messages().length - 1])).not.toContain(`s:${mine?.id ?? ''}`);
+    // Owner spec §2.3: a page tap EDITS the list's message; nothing of theirs is in it.
+    const drawn = sent.filter(
+      (one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'),
+    );
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(JSON.stringify(drawn[drawn.length - 1])).not.toContain(mine?.id ?? 'MISSING');
   });
 
   it('shows one service, with the moment its usage was read', async () => {

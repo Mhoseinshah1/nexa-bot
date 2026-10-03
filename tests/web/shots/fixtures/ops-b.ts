@@ -641,6 +641,8 @@ export const OPS_B: readonly ShotFixture[] = [
   fixture('/backups/status', backupStatusResponseSchema, {
     scheduleEnabled: true,
     intervalMs: 6 * 60 * 60 * 1000,
+    scheduleSource: { enabled: 'SETTING', interval: 'SETTING' },
+    deliveryDestination: 'OPS_GROUP_TOPIC',
     lastSucceededAt: ago(87),
     running: null,
     unknownDeliveries: 1,

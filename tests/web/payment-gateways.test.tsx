@@ -327,6 +327,124 @@ describe('the TonPays API key', () => {
 });
 
 /**
+ * NOWPayments (`docs/nowpayments-gateway-audit.md` §5.7): the IPN secret is a second
+ * write-only field beside the key, shown as a state and never a value; the credential check
+ * posts to its own route and the last result is shown for diagnosis.
+ */
+describe('the NOWPayments key, IPN secret and credential check', () => {
+  const NOWPAYMENTS = {
+    provider: 'NOWPAYMENTS',
+    status: 'DISABLED',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    credential: {
+      required: true,
+      setAt: '2026-09-20T08:00:00.000Z',
+      webhookSecretRequired: true,
+      webhookSecretSetAt: null,
+      lastCheckAt: '2026-09-21T08:00:00.000Z',
+      lastCheckResult: 'refused:INVALID_API_KEY',
+    },
+    callbackUrl: 'https://bot.example.com/payments/webhook/nowpayments/t-1',
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  };
+
+  it('shows the missing IPN secret and the failed last check as states', async () => {
+    stubApi([{ url: '/payment-gateways', body: { gateways: [NOWPAYMENTS] } }]);
+    const view = renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    expect(await screen.findByText('کلید IPN تنظیم نشده')).toBeInTheDocument();
+    expect(screen.getByText('اتصال ناموفق')).toBeInTheDocument();
+    expect(view.container.textContent).toContain('refused:INVALID_API_KEY');
+    expect(view.container.querySelectorAll('input[type="password"]')).toHaveLength(0);
+  });
+
+  it('replaces the IPN secret through its own empty write-only field and route', async () => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [NOWPAYMENTS] } },
+      { url: '/payment-gateways/NOWPAYMENTS/webhook-secret', body: { gateway: NOWPAYMENTS } },
+    ]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
+    const input = (await screen.findByLabelText('کلید IPN جدید (IPN Secret)')) as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(input.type).toBe('password');
+    fireEvent.change(input, { target: { value: 'ipn_secret_123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ کلید IPN' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const posted = api.calls.filter((call) => call.method === 'POST');
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.url).toContain('/payment-gateways/NOWPAYMENTS/webhook-secret');
+    expect((posted[0]!.body as Record<string, unknown>)['secret']).toBe('ipn_secret_123');
+  });
+
+  it('Codex #141: shows a failed check, and a retry of the same check reuses its idempotency key', async () => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [NOWPAYMENTS] } },
+      {
+        url: '/payment-gateways/NOWPAYMENTS/check',
+        status: 502,
+        body: {
+          error: {
+            kind: 'unavailable',
+            code: 'test.upstream',
+            message: 'the check could not be completed',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'بررسی اتصال' }));
+    expect(await screen.findByText('the check could not be completed')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'بررسی اتصال' })).not.toBeDisabled();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    fireEvent.click(screen.getByRole('button', { name: 'بررسی اتصال' }));
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'POST').length).toBeGreaterThanOrEqual(2);
+    });
+    const keys = api.calls
+      .filter((call) => call.method === 'POST')
+      .map((call) => (call.body as Record<string, unknown>)['idempotencyKey']);
+    expect(new Set(keys).size).toBe(1);
+  });
+
+  it('runs the credential check through its own route, and offers it to no other route', async () => {
+    const tonpays = { ...NOWPAYMENTS, provider: 'TONPAYS' };
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [NOWPAYMENTS, tonpays] } },
+      { url: '/payment-gateways/NOWPAYMENTS/check', body: { gateway: NOWPAYMENTS } },
+    ]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    const checks = await screen.findAllByRole('button', { name: 'بررسی اتصال' });
+    expect(checks).toHaveLength(1);
+    fireEvent.click(checks[0]!);
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    expect(api.calls.filter((call) => call.method === 'POST')[0]!.url).toContain(
+      '/payment-gateways/NOWPAYMENTS/check',
+    );
+  });
+});
+
+/**
  * WP18 — the customer gateway fee field. Only a route that settles through `GATEWAY` draws
  * it; a typed `5.25` travels as 525 basis points, and 525 reopens as `5.25`.
  */
@@ -408,8 +526,8 @@ describe('the customer gateway fee', () => {
 
 /** Package A: the Telegram Stars rate — sales-currency minor units per Star. */
 describe('the Web Admin rate field', () => {
-  it('is shown for a fixed-rate route only', () => {
-    expect(takesConversionRate('TELEGRAM_STARS')).toBe(true);
+  it('is shown for a fixed-rate route only — none since spec §8 priced Stars by the central rate', () => {
+    expect(takesConversionRate('TELEGRAM_STARS')).toBe(false);
     expect(takesConversionRate('TONPAYS')).toBe(false);
     expect(takesConversionRate('MANUAL_TRANSFER')).toBe(false);
   });

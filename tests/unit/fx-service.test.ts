@@ -613,8 +613,9 @@ describe('the central rate: refreshing', () => {
     });
   });
 
-  it('the status names the Stars route generically from the descriptor: mode, ratio, fixed rate and the central figure per Star', async () => {
-    const w = world({ settings: { 'stars.pricing_mode': 'CENTRAL_FX_RATIO' } });
+  it('the status names the Stars route generically from the descriptor: always central, the ratio and the central figure per Star — a retired fixed rate on the row is not reported (spec §8)', async () => {
+    // A stored legacy mode cannot bring the manual rate back.
+    const w = world({ settings: { 'stars.pricing_mode': 'FIXED_RATE' } });
     await w.service.refreshIfDue(scope, 'USDT');
     const status = await w.service.status(scope, actor, 'USDT');
     expect(status.state).toBe('FRESH');
@@ -623,7 +624,7 @@ describe('the central rate: refreshing', () => {
         provider: 'TELEGRAM_STARS',
         mode: 'CENTRAL_FX',
         unitRatioText: '100',
-        fixedRateMinor: 1_300n,
+        fixedRateMinor: null,
         // 103,550 Toman per USDT over 100 Stars: 1,035.5 Toman per Star, as 2,071 / 2.
         centralRatePerUnit: { numerator: 2_071n, denominator: 2n },
       },

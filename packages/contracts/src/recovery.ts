@@ -307,7 +307,11 @@ export const RECOVERY_FAILURE_CODES = [
   'recovery.archive_malformed',
   /** Authenticated decryption failed. One code for all four causes. */
   'recovery.archive_auth_failed',
-  /** The archive names a KEK this installation does not hold. See D-10. */
+  /**
+   * The archive names a KEK this installation does not hold. Since ADR-0032 this
+   * is answered by importing the writing installation's Recovery Kit, then
+   * uploading the archive again.
+   */
   'recovery.archive_foreign_key',
   /** The decrypted bytes are not the bytes the manifest describes. */
   'recovery.checksum_mismatch',
@@ -341,6 +345,13 @@ export const RECOVERY_FAILURE_CODES = [
   'recovery.readiness_failed',
   /** The executor stopped reporting and its lease was taken over. */
   'recovery.lease_expired',
+  /**
+   * The restored database holds secrets sealed under a key this installation
+   * does not hold — not configured, not imported. Cutting over to it would
+   * produce an installation that cannot read its own bot tokens and panel
+   * credentials. Import the Recovery Kit of the installation that wrote it.
+   */
+  'recovery.candidate_keys_missing',
   /** Anything this vocabulary does not name. Logged in full, reported as this. */
   'recovery.internal',
 ] as const;

@@ -1,5 +1,5 @@
 -- Customer 360 (spec §11.4–11.5, `docs/customer-account-transfer-audit.md`): what
--- `drizzle-kit` does not model for 0158 — the append-only guard on the account-transfer
+-- `drizzle-kit` does not model for 0162 — the append-only guard on the account-transfer
 -- record, and the backfill of the five new `users.*` keys to the seeded roles that already
 -- exist. Hand-written, so no snapshot accompanies it and the drift check has nothing to
 -- compare.

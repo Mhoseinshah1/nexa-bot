@@ -20,6 +20,11 @@ import {
   quietHoursTimeSchema,
 } from './customer-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
+import {
+  BACKUP_INTERVAL_MINUTES_MAX,
+  BACKUP_INTERVAL_MINUTES_MIN,
+  BACKUP_SCHEDULE_SETTING_KEYS,
+} from './backup.js';
 import { uuidV7Schema } from './ids.js';
 import {
   REFERRAL_COMMISSION_PERCENT_MAX,
@@ -39,6 +44,7 @@ import {
 } from './payment.js';
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
+import { inlineButtonStylesSchema } from './inline-buttons.js';
 import {
   FX_FRESH_TTL_SECONDS_DEFAULT,
   FX_FRESH_TTL_SECONDS_MAX,
@@ -365,6 +371,49 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * The automatic backup schedule (spec §13.2). Read on the INSTALLATION tenant by the
+   * worker's backup scheduler on every tick, so a change applies within one tick and
+   * needs no restart. Null — the default — means the installation's environment value
+   * (`BACKUP_SCHEDULE_ENABLED`, `BACKUP_INTERVAL_MS`), so an installation whose operator
+   * never opens the backup page behaves exactly as it did before these keys existed.
+   * Edited on the backup page («بکاپ و بازیابی»), not the generic settings page.
+   */
+  {
+    key: BACKUP_SCHEDULE_SETTING_KEYS.enabled,
+    description:
+      'Whether the worker takes automatic backups. Null uses the installation environment ' +
+      'value BACKUP_SCHEDULE_ENABLED. Read on the installation tenant on every scheduler tick.',
+    schema: z.boolean().nullable(),
+    defaultValue: null,
+    // Null carries a behaviour — "use the environment default" — so it is LITERAL, exactly
+    // like the ops topic ids above; `false` is an ordinary value meaning off.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
+    description:
+      'Minutes after the last VERIFIED backup until the next automatic one is due, between ' +
+      `${String(BACKUP_INTERVAL_MINUTES_MIN)} minutes and 30 days. Null uses the installation ` +
+      'environment value BACKUP_INTERVAL_MS. Measured from the last successful run, never from ' +
+      'process start, so restarts do not multiply backups.',
+    schema: z
+      .number()
+      .int()
+      .min(BACKUP_INTERVAL_MINUTES_MIN)
+      .max(BACKUP_INTERVAL_MINUTES_MAX)
+      .nullable(),
+    defaultValue: null,
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
     consumer: 'ACTIVE',
   },
   {
@@ -892,6 +941,29 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   /*
+   * Owner spec §6: the style of each customer INLINE button, edited on the Web Admin's
+   * «دکمه‌های ربات» page, section «دکمه‌های شیشه‌ای ربات», and nowhere else (it is not drawn
+   * on the settings page). The labels are templates, edited on the same section through the
+   * texts screen's own card. Separate from `bot.main_menu`: that is the reply keyboard.
+   */
+  {
+    key: 'bot.inline_buttons',
+    description:
+      'The style of each inline (glass) button a customer is shown, by the button\u2019s ' +
+      'registry key: default, primary (blue), success (green) or danger (red), the styles ' +
+      'Telegram supports on an inline button. A button this value does not name keeps its ' +
+      'registry default. The label is not here and nothing a customer taps depends on it: ' +
+      'every button routes by its own callback data, whatever it reads or looks like.',
+    schema: inlineButtonStylesSchema,
+    defaultValue: {},
+    configures: null,
+    // Empty is not "no buttons": every button is then drawn with its registry default.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
    * The trial's configuration. What a trial IS — whether it is offered, its traffic and its
    * hours — is each panel's own (`panel_trial_configs`, R1), and since F5 nothing else
    * switches it: the `trials` flag is retired, and a tenant is offered a trial exactly when
@@ -1165,27 +1237,32 @@ export const SETTINGS = [
   {
     key: 'stars.pricing_mode',
     description:
-      'How the Telegram Stars route prices a Star. FIXED_RATE (the default, and what every ' +
-      'existing installation keeps) uses the rate set on the route. CENTRAL_FX_RATIO derives ' +
-      'the Toman per Star from the central USDT quote and stars.per_usdt, exactly: ' +
-      'stars = ceil(payable / (rate / ratio)). Switching is refused while the central_fx ' +
-      'flag is off or the ratio is zero; switching back never touches an issued invoice.',
+      'RETIRED (spec §8, Stars price from central FX only). This used to choose between the ' +
+      'operator-set Toman per Star (FIXED_RATE) and the central USDT quote (CENTRAL_FX_RATIO). ' +
+      'The Telegram Stars route is now priced by the central quote and stars.per_usdt only, ' +
+      'so nothing reads this value. It stays declared so a stored value keeps parsing, it is ' +
+      'not shown on the settings page, and a change to it is refused.',
     schema: starsPricingModeSchema,
     defaultValue: 'FIXED_RATE',
-    configures: 'central_fx',
+    // It configures nothing now; saying otherwise would draw it beside the feature.
+    configures: null,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
-    consumer: 'ACTIVE',
+    // Nothing reads it. `PLANNED` is the registry's only word for "stored and unread".
+    consumer: 'PLANNED',
   },
   {
     key: 'stars.per_usdt',
     description:
       'How many Telegram Stars one USDT buys, as a decimal with up to four fractional ' +
-      'digits. Telegram publishes no canonical Star↔USDT merchant feed (OQ-FX-01), so ' +
-      'this is the operator’s figure. Zero means not set: the CENTRAL_FX_RATIO mode cannot ' +
-      'be chosen and a new central-rate Stars invoice is refused. Snapshotted on every ' +
-      'attempt; a change affects only attempts opened afterwards.',
+      'digits: the provider-side Star↔USD ratio, NOT an exchange rate. The Toman per Star ' +
+      'is always derived from the central USDT quote divided by this ratio (spec §8); ' +
+      'there is no manual Stars rate. Telegram publishes no canonical Star↔USDT merchant ' +
+      'feed (OQ-FX-01), so this figure is entered once. Zero means not set: the Stars ' +
+      'route cannot be switched on, and a new Stars invoice is refused. Cannot be cleared ' +
+      'while the route is on. Snapshotted on every attempt; a change affects only attempts ' +
+      'opened afterwards.',
     schema: starsPerUsdtSchema,
     defaultValue: '0',
     configures: 'central_fx',

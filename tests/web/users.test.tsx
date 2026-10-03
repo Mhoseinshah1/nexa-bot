@@ -21,6 +21,8 @@ import { customer, order, renderPage, stubApi } from './harness';
  */
 
 const LIST_ROUTE = { path: '/users', query: new URLSearchParams() };
+/** The one search box's label (spec §10). */
+const SEARCH = 'جست‌وجو';
 const ROW_ID = '019210ab-cdef-7012-8345-6789abcdef01';
 /** The block's reason field, labelled mandatory (WP10G). */
 const LABEL = 'دلیل مسدودسازی (اجباری)';
@@ -89,59 +91,47 @@ const list = (customers: unknown[], nextCursor: string | null = null) => [
 
 describe('the customer list', () => {
   /**
-   * Navigating away from a search must not leave its criteria in the boxes.
+   * Navigating away from a search must not leave its criteria in the box.
    *
    * The sidebar's «کاربران» link re-renders THIS component with an empty query
-   * instead of remounting it, and `useState(appliedTelegramId)` runs its
-   * initialiser once per mount. So after a search that link left the inputs
-   * showing the old criteria above an unfiltered list, with Clear disabled
-   * because nothing was applied any more — the screen telling the operator three
-   * different things about what they had asked for.
+   * instead of remounting it, and a `useState` initialiser runs once per mount. So
+   * after a search that link left the input showing the old criteria above an
+   * unfiltered list, with Clear disabled because nothing was applied any more — the
+   * screen telling the operator three different things about what they had asked for.
+   * `ListSearchBox` derives its draft from the URL for that reason.
    *
    * `rerender` is exactly that navigation: same component instance, new props.
    */
-  it('clears the search boxes when navigation drops the query', async () => {
-    stubApi([
-      { url: '/users?', body: { customers: [customer()], nextCursor: null } },
-      { url: '/users', body: { customers: [customer()], nextCursor: null } },
-    ]);
-    const searched = {
-      path: '/users',
-      query: new URLSearchParams({ telegramUserId: '5551234567', username: 'ali_tehran' }),
-    };
+  it('clears the search box when navigation drops the query', async () => {
+    stubApi([{ url: '/users', body: { customers: [customer()], nextCursor: null } }]);
+    const searched = { path: '/users', query: new URLSearchParams({ q: '5551234567' }) };
     const { rerender } = renderPage(<UsersPage route={searched} maySearch denied={false} />);
-    await screen.findByText('5551234567');
-    expect((screen.getByLabelText('شناسهٔ تلگرام') as HTMLInputElement).value).toBe('5551234567');
-    expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('ali_tehran');
+    await screen.findByText('5551234567', { selector: '.ltr' });
+    expect((screen.getByLabelText(SEARCH) as HTMLInputElement).value).toBe('5551234567');
 
     // The sidebar link: same component, empty query.
     rerender(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
 
     expect(
-      (screen.getByLabelText('شناسهٔ تلگرام') as HTMLInputElement).value,
-      'the Telegram id box still shows a search that is no longer applied',
-    ).toBe('');
-    expect(
-      (screen.getByLabelText('نام کاربری') as HTMLInputElement).value,
-      'the username box still shows a search that is no longer applied',
+      (screen.getByLabelText(SEARCH) as HTMLInputElement).value,
+      'the search box still shows a search that is no longer applied',
     ).toBe('');
   });
 
   /**
    * And the draft must SURVIVE a render that does not change the applied search.
    *
-   * The fix derives the draft from the URL, so the mistake it could introduce is
-   * the opposite one: resetting on every render would erase what the operator is
-   * typing. The status filter is the case that proves the signature is the two
-   * values the form owns and not all three.
+   * Deriving the draft from the URL invites the opposite mistake: resetting on every
+   * render would erase what the operator is typing. The status filter is the case that
+   * proves the box follows `q` and nothing else.
    */
   it('keeps what the operator is typing when the status filter changes', async () => {
     stubApi([{ url: '/users', body: { customers: [customer()], nextCursor: null } }]);
     const { rerender } = renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5551234567');
 
-    fireEvent.change(screen.getByLabelText('نام کاربری'), { target: { value: 'half' } });
-    expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('half');
+    fireEvent.change(screen.getByLabelText(SEARCH), { target: { value: 'half' } });
+    expect((screen.getByLabelText(SEARCH) as HTMLInputElement).value).toBe('half');
 
     rerender(
       <UsersPage
@@ -151,8 +141,8 @@ describe('the customer list', () => {
       />,
     );
     expect(
-      (screen.getByLabelText('نام کاربری') as HTMLInputElement).value,
-      'changing the status filter discarded a half-typed username',
+      (screen.getByLabelText(SEARCH) as HTMLInputElement).value,
+      'changing the status filter discarded a half-typed search',
     ).toBe('half');
   });
 
@@ -241,12 +231,22 @@ describe('the customer list', () => {
     renderPage(<UsersPage route={LIST_ROUTE} maySearch={false} denied={false} />);
     await screen.findByText('5551234567');
 
-    // No input at all for the two searches — not a disabled one. A disabled box
-    // makes the same claim without naming the permission, which is the half an
-    // operator needs in order to ask for it.
-    expect(screen.queryByLabelText('شناسهٔ تلگرام')).toBeNull();
-    expect(screen.queryByLabelText('نام کاربری')).toBeNull();
+    // No search box at all — not a disabled one. A disabled box makes the same claim
+    // without naming the permission, which is the half an operator needs in order to
+    // ask for it.
+    expect(screen.queryByLabelText(SEARCH)).toBeNull();
     expect(screen.getByText(/users\.search/)).toBeInTheDocument();
+  });
+
+  it('never sends a search an actor without users.search left in the URL', async () => {
+    // A link from a colleague who holds the permission must not turn the list into a 403.
+    const api = stubApi(list([customer()]));
+    const route = { path: '/users', query: new URLSearchParams({ q: '5551234567' }) };
+    renderPage(<UsersPage route={route} maySearch={false} denied={false} />);
+    await screen.findByText('5551234567');
+    expect(api.calls[api.calls.length - 1]?.url ?? '').not.toContain('q=');
+    // And the empty state, were there one, would not claim a search found nothing.
+    expect(screen.queryByText('هیچ مشتری‌ای با این جست‌وجو پیدا نشد.')).toBeNull();
   });
 
   it('keeps the status filter for an actor without users.search', async () => {
@@ -264,63 +264,67 @@ describe('the customer list', () => {
     expect(screen.getByRole('button', { name: 'فعال' })).toBeInTheDocument();
   });
 
-  it('refuses a malformed Telegram id before asking the server', async () => {
+  /**
+   * Spec §10: ONE box, and the server decides what the text is. The line under the box
+   * says how it will be read, from the contract's own `classifyListSearch` — so an
+   * operator who typed `12ab` is told it is searched as text rather than finding out
+   * from an empty page that it was never a Telegram id.
+   */
+  it('says how the box will read what was typed, before anything is sent', async () => {
     const api = stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5551234567');
     const before = api.calls.length;
+    const box = screen.getByLabelText(SEARCH);
 
-    fireEvent.change(screen.getByLabelText('شناسهٔ تلگرام'), { target: { value: '12ab' } });
-    // The error is stated and the submit is disabled, so the request is never
-    // made. The server's 400 for a malformed id reads as "no such customer",
-    // which is a different and false answer.
-    expect(screen.getByRole('alert').textContent ?? '').toContain('رقم');
-    const submit = screen.getByRole('button', { name: 'جست‌وجو' });
-    expect(submit).toBeDisabled();
-    fireEvent.click(submit);
-    await waitFor(() => expect(api.calls.length).toBe(before));
+    const readsAs = (value: string) => {
+      fireEvent.change(box, { target: { value } });
+      return screen.getByTestId('list-search-kind').textContent ?? '';
+    };
+    expect(readsAs('5551234567')).toContain('شناسهٔ عددی تلگرام');
+    expect(readsAs('@ali')).toContain('نام کاربری');
+    expect(readsAs(ROW_ID)).toContain('شناسهٔ داخلی');
+    expect(readsAs('12ab')).toContain('متن');
+    // Typing asks nothing: the draft lives in state, the search in the URL.
+    expect(api.calls.length).toBe(before);
   });
 
-  it('sends the two searches as separate parameters, only when non-empty', async () => {
-    const route = {
-      path: '/users',
-      query: new URLSearchParams({ telegramUserId: '5551234567', username: 'ali' }),
-    };
+  it('sends the one search as q, and none of the retired parameters', async () => {
+    const route = { path: '/users', query: new URLSearchParams({ q: 'ali' }) };
     const api = stubApi(list([customer()]));
     renderPage(<UsersPage route={route} maySearch denied={false} />);
     await screen.findByText('5551234567');
 
     const url = api.calls[api.calls.length - 1]?.url ?? '';
-    expect(url).toContain('telegramUserId=5551234567');
-    expect(url).toContain('username=ali');
+    expect(url).toContain('q=ali');
+    expect(url).not.toContain('telegramUserId=');
+    expect(url).not.toContain('username=');
   });
 
-  it('applies BOTH search boxes, in one navigation, and clears both', async () => {
+  it('applies the search in one navigation that keeps the status filter, and clears it', async () => {
     /*
-     * The page's own use of `setQueries`, not the helper's behaviour.
-     *
-     * Two `setQuery` calls in one handler apply ONE change: each builds from the
-     * `route.query` PROP this render captured, which the first call's navigation does
-     * not update. So the second overwrote the first and `telegramUserId` was silently
-     * dropped — the operator saw the id in the box and a list filtered only by name.
-     * The clear button had it in the other direction.
-     *
-     * `router.test.tsx` proves the helper; only this proves the CALL SITE, and a
-     * falsification that reverted the handler survived the whole suite without it.
+     * The box navigates with `setQueries`, which builds from the route it was handed;
+     * the status filter in the same URL must survive a search being applied.
      */
     stubApi(list([customer()]));
-    window.history.replaceState(null, '', '/users');
-    renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    window.history.replaceState(null, '', '/users?status=ACTIVE');
+    renderPage(
+      <UsersPage
+        route={{ path: '/users', query: new URLSearchParams({ status: 'ACTIVE' }) }}
+        maySearch
+        denied={false}
+      />,
+    );
     await screen.findByText('5551234567');
 
-    fireEvent.change(screen.getByLabelText('شناسهٔ تلگرام'), { target: { value: '5551234567' } });
-    fireEvent.change(screen.getByLabelText('نام کاربری'), { target: { value: 'ali' } });
-    fireEvent.click(screen.getByText('جست‌وجو'));
+    fireEvent.change(screen.getByLabelText(SEARCH), { target: { value: '  5551234567 ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'جست‌وجو' }));
 
     await waitFor(() => {
       const applied = new URLSearchParams(window.location.search);
-      expect(applied.get('telegramUserId'), 'the id filter was dropped').toBe('5551234567');
-      expect(applied.get('username')).toBe('ali');
+      // Trimmed: the URL carries what the server will read.
+      expect(applied.get('q')).toBe('5551234567');
+      expect(applied.get('status'), 'applying a search dropped the status filter').toBe('ACTIVE');
     });
 
     stubApi(list([customer()]));
@@ -333,55 +337,45 @@ describe('the customer list', () => {
     );
     fireEvent.click((await screen.findAllByText('پاک کردن'))[0] as HTMLButtonElement);
     await waitFor(() => {
-      expect(window.location.search).toBe('');
+      expect(window.location.search).toBe('?status=ACTIVE');
     });
   });
 
-  it('sends no search parameters at all when the boxes are empty', async () => {
+  it('sends no search parameter at all when the box is empty', async () => {
     const api = stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5551234567');
 
     const url = api.calls[api.calls.length - 1]?.url ?? '';
-    // Not `username=`: the server would answer an empty prefix with every row
-    // while charging `users.search` for it, which is a search an operator did
-    // not ask for.
-    expect(url).not.toContain('telegramUserId=');
-    expect(url).not.toContain('username=');
+    // An empty `q` would be refused by the server as a 400; absent is "no search".
+    expect(url).not.toContain('q=');
   });
 
-  it('answers a username search separately from a Telegram-id search of the same text', async () => {
+  it('answers a search separately from a status filter spelled the same way', async () => {
     /*
      * The cursor trail and the query key are keyed on a SIGNATURE of the applied
-     * search, and the separator is what keeps two searches apart. With an empty one,
-     * `?username=1` and `?telegramUserId=1` are the same string — one key, one trail —
-     * so the page serves one search's cached rows under the other's heading and pages
-     * it with the other's cursor.
-     *
-     * Asserted over the REQUESTS rather than over the string, because the string is an
-     * implementation detail and the thing that matters is that the server is asked two
-     * different questions.
+     * filters, and the separator is what keeps two of them apart. `?q=BLOCKED` and
+     * `?status=BLOCKED` must be two questions to the server, never one cached answer
+     * served under the other's heading and paged with the other's cursor.
      */
-    const byName = { path: '/users', query: new URLSearchParams({ username: '1' }) };
-    const byId = { path: '/users', query: new URLSearchParams({ telegramUserId: '1' }) };
+    const bySearch = { path: '/users', query: new URLSearchParams({ q: 'BLOCKED' }) };
+    const byStatus = { path: '/users', query: new URLSearchParams({ status: 'BLOCKED' }) };
 
     const api = stubApi(list([customer()], 'Y3Vyc29yLXNoYXJlZA'));
-    const view = renderPage(<UsersPage route={byName} maySearch denied={false} />);
+    const view = renderPage(<UsersPage route={bySearch} maySearch denied={false} />);
     await screen.findByText('5551234567');
-    const nameUrl = api.calls[api.calls.length - 1]?.url ?? '';
+    const searchUrl = api.calls[api.calls.length - 1]?.url ?? '';
 
-    view.rerender(<UsersPage route={byId} maySearch denied={false} />);
+    view.rerender(<UsersPage route={byStatus} maySearch denied={false} />);
     await waitFor(() =>
-      expect(api.calls[api.calls.length - 1]?.url ?? '').toContain('telegramUserId=1'),
+      expect(api.calls[api.calls.length - 1]?.url ?? '').toContain('status=BLOCKED'),
     );
-    const idUrl = api.calls[api.calls.length - 1]?.url ?? '';
+    const statusUrl = api.calls[api.calls.length - 1]?.url ?? '';
 
-    expect(nameUrl).toContain('username=1');
-    expect(nameUrl).not.toContain('telegramUserId=');
-    expect(idUrl).not.toContain('username=');
-    // Two distinct requests, which is only true if the two searches did not collapse
-    // into one query key.
-    expect(nameUrl).not.toBe(idUrl);
+    expect(searchUrl).toContain('q=BLOCKED');
+    expect(searchUrl).not.toContain('status=');
+    expect(statusUrl).not.toContain('q=');
+    expect(searchUrl).not.toBe(statusUrl);
   });
 
   it('pages forward with the cursor the server minted, and back without one', async () => {
@@ -428,7 +422,7 @@ describe('the customer list', () => {
   });
 
   it('says a SEARCH found nothing when a search is applied', async () => {
-    const route = { path: '/users', query: new URLSearchParams({ username: 'nobody' }) };
+    const route = { path: '/users', query: new URLSearchParams({ q: 'nobody' }) };
     stubApi(list([]));
     renderPage(<UsersPage route={route} maySearch denied={false} />);
     await screen.findByText('هیچ مشتری‌ای با این جست‌وجو پیدا نشد.');
@@ -452,7 +446,7 @@ describe('the customer list', () => {
      * have been a test that could only pass by changing the mechanism; asserting
      * it cannot be seen or reached is the actual rule.
      */
-    expect(screen.getByLabelText('شناسهٔ تلگرام')).not.toBeVisible();
+    expect(screen.getByLabelText(SEARCH)).not.toBeVisible();
   });
 });
 
@@ -865,6 +859,30 @@ describe('the route table', () => {
     await screen.findByText('پلن یک‌ماهه');
     expect(screen.getByText(/services\.view/u)).toBeTruthy();
     expect(screen.queryByText(/orders\.view/u)).toBeNull();
+  });
+
+  it('links "all orders" and "all services" through the one search box, scoped to this customer', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      { url: '/orders', body: { orders: [order()], nextCursor: null } },
+      { url: '/services', body: { services: [], nextCursor: null } },
+    ]);
+    const resolved = resolve({ path: `/users/${ROW_ID}`, query: new URLSearchParams() }, [
+      'users.view',
+      'orders.view',
+      'services.view',
+    ]);
+    renderPage(resolved.element as ReactElement);
+
+    const orders = await screen.findByText('همهٔ سفارش‌های این مشتری');
+    const services = await screen.findByText('همهٔ سرویس‌های این مشتری');
+    // The list pages read only `q`; a retired `customerId` would show every tenant row.
+    expect(orders.closest('a')?.getAttribute('href')).toBe(
+      `/orders?q=${encodeURIComponent(ROW_ID)}`,
+    );
+    expect(services.closest('a')?.getAttribute('href')).toBe(
+      `/services?q=${encodeURIComponent(ROW_ID)}`,
+    );
   });
 
   /*

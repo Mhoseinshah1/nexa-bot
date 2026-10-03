@@ -4,6 +4,8 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   OPS_GROUP_ROUTES,
+  OPS_LOG_TOPIC_CATEGORIES,
+  OPS_LOG_TOPIC_NAME_TEMPLATES,
   SESSION_COOKIE_NAME,
   TELEGRAM_SECRET_TOKEN_HEADER,
   opsConnectCodeResponseSchema,
@@ -205,12 +207,13 @@ describe('the operations log group over HTTP and the webhook (WP-A4)', () => {
       problems: [],
       group: { title: 'Nexa Ops', bot: { username: 'acme_store_bot' } },
     });
-    expect(status.opsGroup.topics.map((topic) => topic.state)).toEqual(['READY', 'READY']);
+    expect(status.opsGroup.topics.map((topic) => topic.state)).toEqual(
+      OPS_LOG_TOPIC_CATEGORIES.map(() => 'READY'),
+    );
     const created = calls.filter((call) => call.method === 'createForumTopic');
-    expect(created.map((call) => call.body.name)).toEqual([
-      CATALOGUE_FA['ops.group.topic_name.system'],
-      CATALOGUE_FA['ops.group.topic_name.payments'],
-    ]);
+    expect(created.map((call) => call.body.name)).toEqual(
+      Object.values(OPS_LOG_TOPIC_NAME_TEMPLATES).map((key) => CATALOGUE_FA[key]),
+    );
     // The chat id never came from a request body, and is not echoed to the panel.
     expect(JSON.stringify(status)).not.toContain(String(GROUP_CHAT));
   });

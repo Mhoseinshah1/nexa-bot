@@ -4,6 +4,7 @@ import type {
   BotInstanceId,
   CustomerNotificationKind,
   CustomerNotificationState,
+  InlineButtonKey,
   Money,
   TemplateKey,
   TemplateValues,
@@ -75,7 +76,13 @@ export type CustomerButtonRow = number;
 export interface CustomerCallbackButton {
   readonly label: CustomerButtonLabel;
   readonly data: string;
-  readonly row?: CustomerButtonRow;
+  readonly row?: CustomerButtonRow; /**
+   * Owner spec §6: which registry button this is (`INLINE_BUTTONS`). The messenger draws its
+   * STYLE from the tenant's `bot.inline_buttons`; the label is already the registry's
+   * template (`inlineLabel`). Never part of the route: `data`, the URL or the copied text
+   * are what a tap acts on, whatever this names. Absent on administrator buttons.
+   */
+  readonly inline?: InlineButtonKey;
 }
 
 /**
@@ -94,7 +101,13 @@ export interface CustomerCopyButton {
   readonly label: CustomerButtonLabel;
   /** What lands on the clipboard. Telegram caps it at 256 characters. */
   readonly copyText: string;
-  readonly row?: CustomerButtonRow;
+  readonly row?: CustomerButtonRow; /**
+   * Owner spec §6: which registry button this is (`INLINE_BUTTONS`). The messenger draws its
+   * STYLE from the tenant's `bot.inline_buttons`; the label is already the registry's
+   * template (`inlineLabel`). Never part of the route: `data`, the URL or the copied text
+   * are what a tap acts on, whatever this names. Absent on administrator buttons.
+   */
+  readonly inline?: InlineButtonKey;
 }
 
 /**
@@ -109,7 +122,13 @@ export interface CustomerCopyButton {
 export interface CustomerUrlButton {
   readonly label: CustomerButtonLabel;
   readonly url: string;
-  readonly row?: CustomerButtonRow;
+  readonly row?: CustomerButtonRow; /**
+   * Owner spec §6: which registry button this is (`INLINE_BUTTONS`). The messenger draws its
+   * STYLE from the tenant's `bot.inline_buttons`; the label is already the registry's
+   * template (`inlineLabel`). Never part of the route: `data`, the URL or the copied text
+   * are what a tap acts on, whatever this names. Absent on administrator buttons.
+   */
+  readonly inline?: InlineButtonKey;
 }
 
 export type CustomerButton = CustomerCallbackButton | CustomerCopyButton | CustomerUrlButton;
@@ -197,7 +216,8 @@ export type MainMenuVariant = 'MAIN_MENU' | 'MAIN_MENU_ADMIN';
 export interface CustomerFileMessage {
   readonly chatId: string;
   readonly botInstanceId: BotInstanceId;
-  readonly kind: 'PHOTO' | 'DOCUMENT';
+  /** Spec §7: `VIDEO` — a client app's tutorial, by the `file_id` the bot itself received. */
+  readonly kind: 'PHOTO' | 'DOCUMENT' | 'VIDEO';
   /**
    * Where the bytes come from.
    *
