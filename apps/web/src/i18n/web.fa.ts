@@ -6200,6 +6200,13 @@ export const WEB_FA = {
   'web.rbac_why_denied': 'با استثنای «منع» گرفته شده',
   'web.rbac_why_requires': 'بدون «{requires}» کار نمی‌کند',
   'web.rbac_why_other': 'مؤثر نیست',
+  'web.rbac_overrides_title': 'استثناهای اختصاصی این مدیر',
+  'web.rbac_override_deny': 'منع',
+  'web.rbac_override_grant': 'اعطا',
+  'web.rbac_override_expired': 'منقضی',
+  'web.rbac_override_reason': 'دلیل',
+  'web.rbac_override_no_expiry': 'بدون انقضا',
+  'web.rbac_override_expires': 'انقضا',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

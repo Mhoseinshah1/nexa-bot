@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useQuery } from '@tanstack/react-query';
+import { fetchSession } from '../../apps/web/src/api/client';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { PERMISSION_LABELS } from '../../apps/web/src/rbac-labels';
@@ -228,5 +230,160 @@ describe('the label table', () => {
         permission.key,
       ).toBeDefined();
     }
+  });
+});
+
+describe('Codex review of #161 (web)', () => {
+  const ADMIN = {
+    id: '019a0000-0000-7000-8000-000000000009',
+    username: 'helper',
+    displayName: 'Helper',
+    status: 'ACTIVE',
+    telegramUserId: null,
+    roleKeys: ['support'],
+    createdAt: '2026-09-01T00:00:00.000Z',
+    lastLoginAt: null,
+  };
+  const PREVIEW = {
+    adminId: ADMIN.id,
+    active: true,
+    roles: [{ key: 'support', name: 'Support' }],
+    rolePermissions: ['tickets.reply', 'tickets.view', 'users.view'],
+    overrides: [
+      {
+        permissionKey: 'refunds.issue',
+        effect: 'DENY',
+        reason: 'never refunds',
+        expiresAt: null,
+        active: true,
+      },
+      {
+        permissionKey: 'users.block',
+        effect: 'GRANT',
+        reason: 'temporary cover',
+        expiresAt: '2026-09-01T00:00:00.000Z',
+        active: false,
+      },
+    ],
+    effective: ['tickets.reply', 'tickets.view', 'users.view'],
+  };
+  const SESSION = {
+    admin: { ...ADMIN, username: 'owner', roleKeys: ['owner'] },
+    permissions: ['admins.view', 'admins.permissions.edit'],
+    expiresAt: '2026-10-08T00:00:00.000Z',
+  };
+
+  /** Mounts the shell's own session query beside the page, as the app does. */
+  function SessionProbe() {
+    useQuery({ queryKey: ['session'], queryFn: fetchSession });
+    return null;
+  }
+
+  const count = (api: { calls: { url: string }[] }, fragment: string) =>
+    api.calls.filter((call) => call.url.includes(fragment)).length;
+
+  async function openSupportEditor() {
+    const supportRow = (await screen.findByText('Support')).closest('li')!;
+    fireEvent.click(
+      within(supportRow).getByRole('button', { name: new RegExp(t('web.rbac_edit')) }),
+    );
+    fireEvent.change(screen.getByLabelText(t('web.rbac_name')), {
+      target: { value: 'Support desk' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.admin_reason_label')), {
+      target: { value: 'rename' },
+    });
+  }
+
+  it('4173474771: a role update re-reads the effective preview and the session', async () => {
+    const api = stubApi([
+      { url: '/rbac/roles', body: { roles: [SUPPORT] } },
+      {
+        url: '/rbac/roles/support',
+        body: { role: { ...SUPPORT, version: 4, name: 'Support desk' } },
+      },
+      { url: '/admins', body: { admins: [ADMIN] } },
+      { url: `/admins/${ADMIN.id}/effective-permissions`, body: PREVIEW },
+      { url: '/auth/session', body: SESSION },
+    ]);
+    renderPage(
+      <>
+        <SessionProbe />
+        <SystemPage route={route} permissions={['admins.view', 'admins.permissions.edit']} />
+      </>,
+    );
+    await screen.findByRole('option', { name: /Helper/ });
+    fireEvent.change(screen.getByLabelText(t('web.rbac_preview_admin')), {
+      target: { value: ADMIN.id },
+    });
+    await screen.findByText(t('web.rbac_overrides_title'));
+    const previewsBefore = count(api, '/effective-permissions');
+    const sessionsBefore = count(api, '/auth/session');
+
+    await openSupportEditor();
+    fireEvent.click(screen.getByRole('button', { name: t('web.rbac_save') }));
+    await waitFor(() => {
+      expect(count(api, '/effective-permissions')).toBeGreaterThan(previewsBefore);
+      expect(count(api, '/auth/session')).toBeGreaterThan(sessionsBefore);
+    });
+  });
+
+  it('4173474772: a version conflict re-reads the role list', async () => {
+    const api = stubApi([
+      { url: '/rbac/roles', body: { roles: [SUPPORT] } },
+      {
+        url: '/rbac/roles/support',
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'role.version_conflict',
+            message: 'stale',
+            details: { currentVersion: 4 },
+            correlationId: 'c',
+          },
+        },
+      },
+      { url: '/admins', body: { admins: [] } },
+    ]);
+    renderPage(
+      <SystemPage route={route} permissions={['admins.view', 'admins.permissions.edit']} />,
+    );
+    await openSupportEditor();
+    const listsBefore = api.calls.filter((call) => call.url.endsWith('/rbac/roles')).length;
+    fireEvent.click(screen.getByRole('button', { name: t('web.rbac_save') }));
+    expect(await screen.findByText(t('web.rbac_error_version'))).toBeInTheDocument();
+    await waitFor(() =>
+      expect(api.calls.filter((call) => call.url.endsWith('/rbac/roles')).length).toBeGreaterThan(
+        listsBefore,
+      ),
+    );
+  });
+
+  it('4173474768: every override is shown — expired ones and DENYs outside the roles, with reason and expiry', async () => {
+    stubApi([
+      { url: '/rbac/roles', body: { roles: [SUPPORT] } },
+      { url: '/admins', body: { admins: [ADMIN] } },
+      { url: `/admins/${ADMIN.id}/effective-permissions`, body: PREVIEW },
+    ]);
+    renderPage(<SystemPage route={route} permissions={['admins.view']} />);
+    await screen.findByRole('option', { name: /Helper/ });
+    fireEvent.change(screen.getByLabelText(t('web.rbac_preview_admin')), {
+      target: { value: ADMIN.id },
+    });
+    const list = (await screen.findByText(t('web.rbac_overrides_title'))).parentElement!;
+    // The DENY on a permission no role grants.
+    expect(within(list).getByText('refunds.issue')).toBeInTheDocument();
+    expect(within(list).getByText(/never refunds/)).toBeInTheDocument();
+    // The EXPIRED grant, marked as such, with its expiry.
+    expect(within(list).getByText('users.block')).toBeInTheDocument();
+    expect(within(list).getByText(/temporary cover/)).toBeInTheDocument();
+    expect(within(list).getByText(t('web.rbac_override_expired'))).toBeInTheDocument();
+    expect(
+      within(list).getByText(new RegExp(`${t('web.rbac_override_expires')}:`)),
+    ).toBeInTheDocument();
+    expect(
+      within(list).getByText(new RegExp(t('web.rbac_override_no_expiry'))),
+    ).toBeInTheDocument();
   });
 });

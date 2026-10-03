@@ -24,6 +24,7 @@ import {
   fetchManagedRoles,
   updateRole,
 } from '../api/client';
+import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { PERMISSION_DOMAIN_LABELS, PERMISSION_LABELS } from '../rbac-labels';
 import { useSubmissionKey } from '../submission-key';
@@ -75,6 +76,19 @@ function domainLabel(domain: string): string {
 }
 
 /** The server's refusal, in this page's words. */
+/**
+ * After any role write: the role list, the assignment picker's catalogue, every cached
+ * effective-permission preview, and the shell's own session — whose permissions decide
+ * what chrome this operator is drawn if the edit touched a role they hold
+ * (Codex 4173474771).
+ */
+function afterRoleWrite(queries: ReturnType<typeof useQueryClient>): void {
+  void queries.invalidateQueries({ queryKey: ['managed-roles'] });
+  void queries.invalidateQueries({ queryKey: ['roles'] });
+  void queries.invalidateQueries({ queryKey: ['effective-permissions'] });
+  void queries.invalidateQueries({ queryKey: ['session'] });
+}
+
 function roleMessage(error: unknown): string {
   if (error instanceof ApiError) {
     const known: Record<string, WebKey> = {
@@ -407,11 +421,17 @@ function RoleEditor({
     onSuccess: () => {
       submission.settle();
       notify({ tone: 'ok', message: t('web.rbac_saved') });
-      void queries.invalidateQueries({ queryKey: ['managed-roles'] });
-      void queries.invalidateQueries({ queryKey: ['roles'] });
+      afterRoleWrite(queries);
       onClose();
     },
-    onError: (error: unknown) => submission.settleOn(error),
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      // A stale version (Codex 4173474772): the open copy is out of date, so the list is
+      // re-read — the operator re-opens the CURRENT role instead of retrying the old one.
+      if (error instanceof ApiError && error.code === IDENTITY_ERROR_CODES.ROLE_VERSION_CONFLICT) {
+        void queries.invalidateQueries({ queryKey: ['managed-roles'] });
+      }
+    },
   });
 
   const { requestClose, dialog } = useConfirmedClose(dirty && !save.isSuccess, onClose);
@@ -551,11 +571,17 @@ function DeleteRoleDialog({ role, onClose }: { role: RoleView; onClose: () => vo
     onSuccess: () => {
       submission.settle();
       notify({ tone: 'ok', message: t('web.rbac_deleted') });
-      void queries.invalidateQueries({ queryKey: ['managed-roles'] });
-      void queries.invalidateQueries({ queryKey: ['roles'] });
+      afterRoleWrite(queries);
       onClose();
     },
-    onError: (error: unknown) => submission.settleOn(error),
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      // A stale version (Codex 4173474772): the open copy is out of date, so the list is
+      // re-read — the operator re-opens the CURRENT role instead of retrying the old one.
+      if (error instanceof ApiError && error.code === IDENTITY_ERROR_CODES.ROLE_VERSION_CONFLICT) {
+        void queries.invalidateQueries({ queryKey: ['managed-roles'] });
+      }
+    },
   });
   return (
     <Modal
@@ -701,6 +727,33 @@ function EffectiveList({ data }: { data: EffectivePermissionsResponse }) {
           </div>
         );
       })}
+      {data.overrides.length > 0 && (
+        <div className="inset stack">
+          {/* Every override the server returned, as returned (Codex 4173474768): an
+              expired one, and a DENY on a permission no role grants, are still facts. */}
+          <strong>{t('web.rbac_overrides_title')}</strong>
+          <ul className="small rbac-overrides">
+            {data.overrides.map((one) => (
+              <li key={`${one.effect}:${one.permissionKey}`}>
+                <Badge tone={one.effect === 'DENY' ? 'danger' : 'teal'}>
+                  {one.effect === 'DENY'
+                    ? t('web.rbac_override_deny')
+                    : t('web.rbac_override_grant')}
+                </Badge>{' '}
+                {labelOf(one.permissionKey)} <Ltr>{one.permissionKey}</Ltr>
+                {!one.active && <Badge tone="neutral">{t('web.rbac_override_expired')}</Badge>}
+                <div className="muted">
+                  {t('web.rbac_override_reason')}: {one.reason}
+                  {' · '}
+                  {one.expiresAt === null
+                    ? t('web.rbac_override_no_expiry')
+                    : `${t('web.rbac_override_expires')}: ${formatTimestamp(one.expiresAt)}`}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {missing.length > 0 && (
         <div className="inset stack">
           <strong>{t('web.rbac_preview_missing')}</strong>
