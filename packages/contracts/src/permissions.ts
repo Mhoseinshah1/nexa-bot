@@ -299,6 +299,15 @@ export const PERMISSIONS = [
    * Both are exercised from the bulk-operation history, which `bulk_operations.view` reads.
    */
   p('services.mass.grant', 'Run a mass traffic or time grant on existing services', 'CRITICAL'),
+  /*
+   * Program §13 (the Service Operations Center). `services.grant` gives ONE service free
+   * traffic or time — free service, so HIGH and the owner's, beside `services.terminate`.
+   * `services.mass.status` suspends or resumes many services through the mass-operation
+   * lane; it is charged TOGETHER with `services.edit`, so it never lets anybody do in
+   * bulk what they could not do to one service.
+   */
+  p('services.grant', 'Give one service free traffic or time', 'HIGH'),
+  p('services.mass.status', 'Suspend or resume many services at once', 'HIGH'),
   p('bulk_operations.view', 'View mass operations and their per-item results', 'LOW'),
 
   /*
@@ -717,6 +726,10 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
   'broadcasts.send': 'broadcasts.view' as PermissionKey,
   'users.wallet.mass': 'bulk_operations.view' as PermissionKey,
   'services.mass.grant': 'bulk_operations.view' as PermissionKey,
+  // Program §13: a mass status change is confirmed and followed from the history.
+  'services.mass.status': 'bulk_operations.view' as PermissionKey,
+  // Program §13: a grant is given FROM a service's page, which `services.view` reads.
+  'services.grant': 'services.view' as PermissionKey,
   /*
    * Round N, C1. Every campaign command is taken FROM a campaign page, which
    * `campaigns.view` reads, and each answers with the campaign's preview and results.

@@ -5335,6 +5335,12 @@ export const serviceSummarySchema = z.object({
    */
   customerTelegramUserId: z.string().nullable().default(null),
   customerUsername: z.string().nullable().default(null),
+  /**
+   * Program §13: where the service is, as the panel's location configuration names it.
+   * Null when it was never moved and its panel has no initial location recorded.
+   * Defaulted on parse, like the identity pair above.
+   */
+  locationLabel: z.string().nullable().default(null),
 });
 export type ServiceSummaryResponse = z.infer<typeof serviceSummarySchema>;
 
@@ -5376,6 +5382,17 @@ export const SERVICE_OPERATOR_ACTIONS = [
   'SUSPEND',
   'RESUME',
   'TERMINATE',
+  /*
+   * Program §13 (the Service Operations Center): an operator's FREE grant of traffic or
+   * time to one service, and an operator's move of one service to another configured
+   * location of its panel. Each takes input (an amount, a target) and a reason, so each
+   * has its own request rather than the bare idempotency key the eight above take. All
+   * three plan the same provisioning operation a purchase plans (`ADD_TRAFFIC`,
+   * `ADD_TIME`, `CHANGE_LOCATION`); no provider write path is added.
+   */
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'CHANGE_LOCATION',
 ] as const;
 export type ServiceOperatorAction = (typeof SERVICE_OPERATOR_ACTIONS)[number];
 
@@ -5396,6 +5413,13 @@ export const SERVICE_ACTION_BLOCKERS = [
   'IN_PROGRESS',
   'NO_CONFIGURATION',
   'NO_CONTACT',
+  /*
+   * Program §13. `UNLIMITED`: a grant in a dimension the service has no limit in (no
+   * expiry, or unlimited traffic) — there is nothing to add to. `NO_TARGET`: no other
+   * configured location of this panel is offered for this service's product.
+   */
+  'UNLIMITED',
+  'NO_TARGET',
 ] as const;
 export type ServiceActionBlocker = (typeof SERVICE_ACTION_BLOCKERS)[number];
 
@@ -5455,6 +5479,20 @@ export const serviceListQuerySchema = z.object({
    * matches on this list is documented in `docs/web-admin-search.md`.
    */
   q: listSearchQuerySchema.optional(),
+  /*
+   * Program §13, the workspace's three further filters. The product the service was
+   * bought as; the location it is in (a panel location KEY, as stored on the service);
+   * and services that EXPIRE within the next N hours (not already expired), decided
+   * against the server's clock.
+   */
+  productId: uuidV7Schema.optional(),
+  locationKey: z.string().trim().min(1).max(120).optional(),
+  expiringWithinHours: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 366)
+    .optional(),
 });
 export type ServiceListQuery = z.infer<typeof serviceListQuerySchema>;
 
@@ -5538,6 +5576,57 @@ export const serviceActionRequestSchema = z.object({
 });
 export type ServiceActionRequest = z.infer<typeof serviceActionRequestSchema>;
 
+/**
+ * Program §13: an operator's free grant to ONE service. `trafficGb` (typed in GB, at most
+ * two decimals) for `ADD_TRAFFIC`, `durationDays` for `ADD_TIME`; a reason is mandatory —
+ * it is free service, and the audit row is where "why" is answered later.
+ */
+export const SERVICE_GRANT_DURATION_MAX_DAYS = 365;
+export const SERVICE_OPERATOR_REASON_MAX_LENGTH = 300;
+export const serviceGrantRequestSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      idempotencyKey: z.string().min(8).max(255),
+      kind: z.literal('ADD_TRAFFIC'),
+      trafficGb: z.string().regex(TRAFFIC_GB_PATTERN),
+      reason: z.string().trim().min(1).max(SERVICE_OPERATOR_REASON_MAX_LENGTH),
+    })
+    .strict(),
+  z
+    .object({
+      idempotencyKey: z.string().min(8).max(255),
+      kind: z.literal('ADD_TIME'),
+      durationDays: z.number().int().min(1).max(SERVICE_GRANT_DURATION_MAX_DAYS),
+      reason: z.string().trim().min(1).max(SERVICE_OPERATOR_REASON_MAX_LENGTH),
+    })
+    .strict(),
+]);
+export type ServiceGrantRequest = z.infer<typeof serviceGrantRequestSchema>;
+
+/** Program §13: an operator's move of one service to a configured location of its panel. */
+export const serviceChangeLocationRequestSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    locationId: uuidV7Schema,
+    reason: z.string().trim().min(1).max(SERVICE_OPERATOR_REASON_MAX_LENGTH),
+  })
+  .strict();
+export type ServiceChangeLocationRequest = z.infer<typeof serviceChangeLocationRequestSchema>;
+
+/**
+ * The locations an operator may move this service to: its panel's enabled targets for its
+ * product, other than where it is. The customer's cooldown and rolling limit are NOT
+ * applied to an operator's move — they ration what a customer may ask for, not what the
+ * installation may do — and no price is charged.
+ */
+export const serviceLocationTargetsResponseSchema = z.object({
+  current: z.object({ key: z.string(), label: z.string() }).nullable(),
+  targets: z.array(
+    z.object({ id: z.string(), locationKey: z.string(), label: z.string() }),
+  ),
+});
+export type ServiceLocationTargetsResponse = z.infer<typeof serviceLocationTargetsResponseSchema>;
+
 export const serviceTerminateRequestSchema = serviceActionRequestSchema.extend({
   /** The phrase, exactly. See `SERVICE_TERMINATE_CONFIRMATION`. */
   confirm: z.string().max(64),
@@ -5592,6 +5681,11 @@ export const SERVICE_ROUTES = {
   terminate: (id: string) => `/services/${encodeURIComponent(id)}/terminate`,
   /** `ROTATE_LINK`: a new subscription link, minted by the panel. `services.edit`. */
   rotateLink: (id: string) => `/services/${encodeURIComponent(id)}/rotate-link`,
+  /** Program §13: a free traffic or time grant to one service. `services.grant`. */
+  grant: (id: string) => `/services/${encodeURIComponent(id)}/grant`,
+  /** Program §13: an operator's location move. `services.edit`. */
+  changeLocation: (id: string) => `/services/${encodeURIComponent(id)}/change-location`,
+  locationTargets: (id: string) => `/services/${encodeURIComponent(id)}/location-targets`,
 } as const;
 
 // --- Service refund requests (WP19) --------------------------------------------
