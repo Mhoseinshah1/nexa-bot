@@ -9,7 +9,10 @@ import {
   SESSION_COOKIE_NAME,
   TELEGRAM_SECRET_TOKEN_HEADER,
   TERMS_ERROR_CODES,
+  TERMS_BODY_MAX_LENGTH,
   TERMS_ROUTES,
+  TERMS_TEMPLATE_MAX_LENGTH,
+  TERMS_TITLE_MAX_LENGTH,
   customerOverviewResponseSchema,
   isNexaError,
   money,
@@ -20,6 +23,7 @@ import {
   type PanelId,
   type ProductCategoryId,
   type ProductId,
+  type CorrelationId,
   type TenantContext,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
@@ -457,6 +461,57 @@ describe('terms and rules (program §6)', () => {
     expect(await auditOf('customer.terms_accept')).toEqual([]);
   });
 
+  it('fits the longest version into one message under any accepted override, and answers a stored over-long one in parts', async () => {
+    // Codex 4172817732: `{title}` and `{body}` add up to 3,620 characters, so an override
+    // under the generic 4,096 ceiling could render to ~7,700 — past Telegram's bound.
+    const title = 'ع'.repeat(TERMS_TITLE_MAX_LENGTH);
+    const body = Array.from({ length: 2 }, () => 'ب'.repeat(1749)).join('\n\n');
+    expect(body.length).toBe(TERMS_BODY_MAX_LENGTH);
+    const v1 = await publish(title, body);
+    await enforce(true);
+
+    // The frame is bounded so that frame + the longest title + the longest body fit.
+    const frame = (length: number) => {
+      const head = '{icon:info} {title}\n\n{body}\n\n';
+      return head + 'ق'.repeat(length - head.length);
+    };
+    const setFrame = (text: string) =>
+      api.container.templatesService.set(tenantA, owner, {
+        key: 'bot.terms.required',
+        body: text,
+        expectedVersion: null,
+        expectedRevision: null,
+        idempotencyKey: key(),
+      });
+    expect(await codeOf(setFrame(frame(TERMS_TEMPLATE_MAX_LENGTH + 1)))).toBe(
+      'control.template_invalid',
+    );
+    await setFrame(frame(TERMS_TEMPLATE_MAX_LENGTH));
+    const customer = user();
+    const fits = await say(customer, '/start');
+    expect(fits).toHaveLength(1);
+    expect(textOf(fits)[0]?.length).toBeLessThanOrEqual(4096);
+    expect(isTermsScreen(fits, v1)).toBe(true);
+
+    // An override stored before the ceiling existed (or by a hand-written row) is still
+    // ANSWERED: the messenger cuts it into parts within the bound, and the accept button
+    // rides on the last one, so the customer is never left with nothing.
+    await rows(
+      sql`UPDATE template_overrides SET body = ${frame(4096)}
+          WHERE tenant_id = ${tenantA.tenantId} AND template_key = 'bot.terms.required'`,
+    );
+    const parts = await say(customer, '/start');
+    expect(parts.length).toBeGreaterThan(1);
+    for (const text of textOf(parts)) expect(text.length).toBeLessThanOrEqual(4096);
+    expect(dataOf(parts.slice(-1))).toEqual([`ac:${v1.id}`]);
+    expect(dataOf(parts.slice(0, -1))).toEqual([]);
+    const whole = textOf(parts).join('');
+    expect(whole).toContain(title);
+    for (const paragraph of body.split('\n\n')) expect(whole).toContain(paragraph);
+    // And the button works from there.
+    expect(textOf(await tap(customer, `ac:${v1.id}`))).toEqual([ACCEPTED]);
+  });
+
   it('records a duplicate accept once, sequentially and concurrently', async () => {
     const v1 = await publish('قوانین', 'نسخهٔ یک');
     await enforce(true);
@@ -661,6 +716,44 @@ describe('terms and rules (program §6)', () => {
     ]);
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(await auditOf('terms.publish')).toHaveLength(1);
+  });
+
+  it('answers a replayed acceptance of a since-superseded version as STALE with the current terms', async () => {
+    // Codex 4172817728: the replay branch fell through into a new write that stored a
+    // second result under the occupied key, and `rememberOnce` refused it as in-flight.
+    const v1 = await publish('قوانین یک', 'متن یک');
+    await enforce(true);
+    const telegramUser = user();
+    await say(telegramUser, '/start');
+    const customerId = await customerIdOf(telegramUser);
+    if (customerId === undefined) throw new Error('no customer');
+    // The actor the Telegram surface accepts as (`BotRuntime.acceptTerms`).
+    const system: ActorContext = {
+      type: 'SYSTEM_JOB',
+      id: null,
+      label: 'telegram-update:test',
+      surface: 'TELEGRAM',
+      correlationId: 'terms-replay' as CorrelationId,
+    };
+    const input = {
+      idempotencyKey: 'terms-replay-accept',
+      customerId,
+      termsVersionId: v1.id,
+      botInstanceId: BOT_A,
+    };
+    const first = await api.container.termsAcceptance.accept(tenantA, system, input);
+    expect(first).toMatchObject({ outcome: 'ACCEPTED', changed: true });
+
+    const v2 = await publish('قوانین دو', 'متن دو');
+    const replayed = await api.container.termsAcceptance.accept(tenantA, system, input);
+    expect(replayed).toEqual({
+      outcome: 'STALE',
+      current: expect.objectContaining({ id: v2.id }) as unknown,
+    });
+    // Nothing new was written: the one acceptance is still of v1.
+    expect(await acceptances()).toEqual([
+      expect.objectContaining({ customer_id: customerId, terms_version_id: v1.id }),
+    ]);
   });
 
   it('makes a published version and every acceptance immutable in the database', async () => {

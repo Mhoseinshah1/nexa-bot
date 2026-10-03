@@ -152,8 +152,14 @@ export class TermsAcceptanceService {
       if (replay.result.outcome === 'ACCEPTED' && current?.id === input.termsVersionId) {
         return { outcome: 'ACCEPTED', changed: replay.result.changed, version: current };
       }
-      if (replay.result.outcome === 'STALE') return { outcome: 'STALE', current };
-      // Accepted then, superseded since: answered as what it is now.
+      /*
+       * STALE then, or accepted then and superseded since: either way the answer is STALE
+       * with what to show now, and it is answered HERE. Falling through to the write would
+       * store a second result under the key the first one already holds — `rememberOnce`
+       * refuses that as `platform.idempotency_in_flight`, and the customer would be told
+       * an error instead of being shown the current terms.
+       */
+      return { outcome: 'STALE', current };
     }
 
     const now = this.deps.clock.now();

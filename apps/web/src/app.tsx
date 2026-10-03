@@ -940,7 +940,7 @@ export function resolve(
           denied={!may('terms.view')}
           mayEdit={may('terms.edit')}
           mayPublish={may('terms.publish')}
-          mayToggle={may('features.edit')}
+          mayToggle={may('settings.edit')}
         />
       ),
       crumbs: [{ label: t('web.nav_terms') }],

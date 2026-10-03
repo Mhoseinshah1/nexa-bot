@@ -22,8 +22,12 @@ Telegram gate. This note records the decisions and where each rule is tested.
 
 `terms_enforcement` is a feature flag (default off, `TENANT_WIDE`): enforcement is on or
 off and has no parameters, so it is a flag and not a setting. It is toggled through the
-existing features write (`features.edit`); the terms page draws the switch only for an
-actor who holds that key, and asks before turning it on.
+existing features write, which `FeatureFlagsService` charges as `settings.edit` (there is
+no `features.edit` key); the terms page draws the switch only for an actor who holds
+`settings.edit`, and asks before turning it on. The features page is a second path to
+the same switch, so it asks too, in the same words: `FEATURE_PRESENTATION` carries a
+per-flag `confirmEnable`, set only for `terms_enforcement` (pinned in
+`tests/web/control-plane-pages.test.tsx`).
 
 With enforcement on and something published, `TermsAcceptanceService.requirement` asks
 one question: has this customer accepted the CURRENT version? An older acceptance never
@@ -43,7 +47,20 @@ message, a crafted id, or another tenant's id writes nothing and answers
 concurrent tap inserts nothing the second time (`ON CONFLICT DO NOTHING` on the once
 key), and only the row actually written is audited (`customer.terms_accept`) and
 announced (`CustomerTermsAccepted`). After acceptance the customer gets the main menu;
-what they first asked for is never replayed.
+what they first asked for is never replayed. A replayed acceptance (the same key) is
+answered from the replay alone: ACCEPTED while its version is still current, otherwise
+STALE with the current version — it never falls through to a second write under the
+occupied key, which `rememberOnce` would refuse as in-flight.
+
+## Message length
+
+`{title}` (≤ 120) and `{body}` (≤ 3,500) are substituted into `bot.terms.required` and
+`bot.terms.updated`, so those two keys carry their own ceiling,
+`TERMS_TEMPLATE_MAX_LENGTH` = 4,096 − 120 − 3,500 = 476: an accepted override renders the
+longest version in one message with its button. An override stored before the ceiling
+(or written by hand) can still render past 4,096; the customer messenger then cuts it
+into parts within the bound with the accept button on the last part, so the gate always
+answers (`terms.test.ts`, "fits the longest version…").
 
 ## Permissions
 

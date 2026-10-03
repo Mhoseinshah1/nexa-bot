@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { NAV, navPermitted } from '../../apps/web/src/app';
+import type { ReactElement } from 'react';
+import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { TermsPage, termsPreviewText } from '../../apps/web/src/pages/terms';
 import { GeneralInfoCard } from '../../apps/web/src/pages/customer-360-sections';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -74,6 +75,18 @@ describe('the terms navigation entry', () => {
     expect(entry.path).toBe('/terms');
     expect(navPermitted(entry, ['terms.view'])).toBe(true);
     expect(navPermitted(entry, ['terms.edit', 'terms.publish'])).toBe(false);
+  });
+
+  it('draws the enforcement switch on settings.edit, the permission the flag write is charged', () => {
+    // There is no `features.edit` key: `FeatureFlagsService` authorises every flag write
+    // with `settings.edit`, so gating on anything else hides the switch from the very
+    // role that may use it (or offers it to one the server refuses).
+    const route = { path: '/terms', query: new URLSearchParams() };
+    const props = (permissions: string[]) =>
+      (resolve(route, permissions).element as ReactElement<{ mayToggle: boolean }>).props;
+    expect(props(['terms.view', 'settings.edit']).mayToggle).toBe(true);
+    expect(props(['terms.view', 'features.edit']).mayToggle).toBe(false);
+    expect(props(['terms.view']).mayToggle).toBe(false);
   });
 });
 

@@ -57,7 +57,8 @@ import { Icon } from '../ui/icons';
  * customer is asked to accept the new version, including those who accepted the old one.
  *
  * **Enforcement is the `terms_enforcement` feature flag**, toggled here through the same
- * `/features` write the features page uses (`features.edit`), and only drawn for an actor
+ * `/features` write the features page uses (`settings.edit`, which is what
+ * `FeatureFlagsService` charges for every flag write), and only drawn for an actor
  * who holds it. Turning it ON asks first, because it stops every customer who has not
  * accepted at once.
  *
@@ -117,7 +118,7 @@ export function TermsPage({
   denied: boolean;
   mayEdit: boolean;
   mayPublish: boolean;
-  /** `features.edit`: the enforcement switch. */
+  /** `settings.edit` (the feature-flag write's permission): the enforcement switch. */
   mayToggle: boolean;
 }) {
   const queries = useQueryClient();
