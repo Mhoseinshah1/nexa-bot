@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ServiceActionAvailability } from '@nexa/contracts';
 import { BulkOperationDetailPage } from '../../apps/web/src/pages/bulk-operations';
 import {
   ServiceGrantMoveCard,
   ServiceMassActionCard,
   massDefinitionOf,
+  useRefreshOnOperationChange,
   type ServiceFilters,
 } from '../../apps/web/src/pages/service-ops';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -92,6 +94,13 @@ describe('the mass action over the filtered set', () => {
     expect(massDefinitionOf({ ...FILTERS, q: 'nx-1' })).toBeNull();
     expect(massDefinitionOf({ ...FILTERS, deliveryState: 'FAILED' })).toBeNull();
     expect(massDefinitionOf({ ...FILTERS, locationKey: 'de' })).toBeNull();
+    // Codex review of #157: the audience's "expiring" means ACTIVE-and-expiring, so an
+    // expiry filter over any other state (or none) is a set the preview cannot describe.
+    expect(massDefinitionOf({ ...FILTERS, state: null })).toBeNull();
+    expect(massDefinitionOf({ ...FILTERS, state: 'SUSPENDED' })).toBeNull();
+    expect(
+      massDefinitionOf({ ...FILTERS, state: 'SUSPENDED', expiringWithinHours: null }),
+    ).not.toBeNull();
   });
 
   it('previews the eligible and the excluded, and suspends only after a reason and a confirmation', async () => {
@@ -134,6 +143,8 @@ describe('the mass action over the filtered set', () => {
     fireEvent.click(screen.getByRole('button', { name: t('web.bulk_preview_button') }));
     expect(await screen.findByText('nx_xui_1')).toBeInTheDocument();
     expect(screen.getAllByText(t('web.soc_ineligible_panel')).length).toBeGreaterThan(0);
+    // All three reasons are counted on screen, the third included (Codex review of #157).
+    expect(screen.getAllByText(t('web.soc_ineligible_other')).length).toBeGreaterThan(0);
 
     const execute = screen.getByRole('button', { name: t('web.bulk_execute') });
     expect(execute).toBeDisabled();
@@ -329,5 +340,31 @@ describe('retrying the FAILED items of a mass operation', () => {
     );
     expect(await screen.findAllByText(t('web.bulk_kind_suspend'))).not.toHaveLength(0);
     expect(screen.queryByRole('button', { name: t('web.bulk_retry_preview') })).toBeNull();
+  });
+});
+
+describe('a service page whose operation reaches its end', () => {
+  function Probe({ ops }: { ops: { id: string; state: string }[] | undefined }) {
+    useRefreshOnOperationChange(SERVICE, ops);
+    return null;
+  }
+
+  it('reads the service again when the history changes, and not before', () => {
+    const client = new QueryClient();
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    const wrap = (ops: { id: string; state: string }[] | undefined) => (
+      <QueryClientProvider client={client}>
+        <Probe ops={ops} />
+      </QueryClientProvider>
+    );
+    const view = render(wrap(undefined));
+    view.rerender(wrap([{ id: 'op', state: 'PLANNED' }]));
+    // The first history seen is the baseline, not a change.
+    expect(spy).not.toHaveBeenCalled();
+    view.rerender(wrap([{ id: 'op', state: 'PLANNED' }]));
+    expect(spy).not.toHaveBeenCalled();
+    view.rerender(wrap([{ id: 'op', state: 'SUCCEEDED' }]));
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['service', SERVICE] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['service-location-targets', SERVICE] });
   });
 });

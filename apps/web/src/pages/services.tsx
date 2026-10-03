@@ -68,6 +68,7 @@ import {
   ServiceGrantMoveCard,
   ServiceMassActionCard,
   serviceFiltersOf,
+  useRefreshOnOperationChange,
 } from './service-ops';
 
 /**
@@ -830,6 +831,9 @@ export function ServiceDetailPage({
         ? 5_000
         : false,
   });
+
+  // Program §13 (Codex review of #157): an operation's end re-reads the service it changed.
+  useRefreshOnOperationChange(id, operations.data?.operations);
 
   const [phrase, setPhrase] = useState('');
   const act = useServiceAction(id, refresh, () => setPhrase(''));

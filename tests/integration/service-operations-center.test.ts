@@ -557,6 +557,98 @@ describe('the Service Operations Center (program §13)', () => {
     ).toBe(BULK_ERROR_CODES.RETRY_NOTHING);
   });
 
+  // =====================================================================================
+  // Codex review of #157
+  // =====================================================================================
+
+  it('classifies an unlimited service on a healthy panel as OTHER, not as its panel', async () => {
+    const service = await activeService(930070);
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET traffic_limit_bytes = 0 WHERE id = ${service.id}::uuid`,
+    );
+    const preview = await ctx.container.bulkOperations.preview(tenantA, owner, {
+      grant: { kind: 'SERVICE_TRAFFIC', trafficGb: '5' },
+      definition: ALL_SERVICES,
+    });
+    expect(preview.count).toBe(0);
+    expect(preview.ineligible).toMatchObject({
+      selected: 1,
+      notInState: 0,
+      panelNotOperable: 0,
+      other: 1,
+      sample: [expect.objectContaining({ serviceId: service.id, reason: 'OTHER' })],
+    });
+  });
+
+  it('gives a status-only role the audience builder its form needs', async () => {
+    const statusOnly = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'status-only' }),
+    );
+    for (const permissionKey of ['bulk_operations.view', 'services.mass.status', 'services.edit']) {
+      await ctx.container.database.db.insert(adminPermissionOverrides).values({
+        tenantId: tenantA.tenantId,
+        adminId: statusOnly.id as string,
+        permissionKey,
+        effect: 'GRANT',
+        reason: 'test',
+        expiresAt: null,
+      });
+    }
+    const options = await ctx.container.audience.options(tenantA, statusOnly);
+    expect(options.currency).toBe('IRT');
+  });
+
+  it('answers a retry from a caller without access the same for a real and an unknown id', async () => {
+    await activeService(930080);
+    const { operation } = await massStatus('SERVICE_SUSPEND');
+    const nobody = adminActorFor(await createAdmin(ctx.container, tenantA, { username: 'nobody' }));
+    const unknown = ctx.container.ids.uuid();
+    const previewCodes = [
+      await codeOf(ctx.container.bulkOperations.retryPreview(tenantA, nobody, operation.id)),
+      await codeOf(ctx.container.bulkOperations.retryPreview(tenantA, nobody, unknown)),
+    ];
+    const retry = (id: string) =>
+      ctx.container.bulkOperations.retry(tenantA, nobody, id, {
+        idempotencyKey: key('retry'),
+        note: 'x',
+        expectedCount: 1,
+        expectedFingerprint: 'a'.repeat(32),
+        typedCount: null,
+      });
+    const retryCodes = [await codeOf(retry(operation.id)), await codeOf(retry(unknown))];
+    expect(previewCodes[0]).toMatch(/permission/u);
+    expect(previewCodes[1]).toBe(previewCodes[0]);
+    expect(retryCodes[0]).toMatch(/permission/u);
+    expect(retryCodes[1]).toBe(retryCodes[0]);
+    expect((await auditOf('bulk.retry')).map((row) => row.result)).toEqual(['DENIED', 'DENIED']);
+  });
+
+  it('does not offer a grant while another commercial action is open on the service', async () => {
+    const service = await activeService(930090);
+    await ctx.container.serviceGrants.grant(tenantA, owner, service.id, {
+      idempotencyKey: key('grant'),
+      kind: 'ADD_TIME',
+      durationDays: 3,
+      reason: 'first',
+    });
+    const detail = await ctx.container.serviceAdmin.detail(tenantA, owner, service.id);
+    // An open ADD_TIME also blocks ADD_TRAFFIC: `prepareCommercialAction` refuses it.
+    expect(detail.actions.find((entry) => entry.action === 'ADD_TRAFFIC')).toMatchObject({
+      available: false,
+      blocker: 'IN_PROGRESS',
+    });
+    expect(
+      await codeOf(
+        ctx.container.serviceGrants.grant(tenantA, owner, service.id, {
+          idempotencyKey: key('grant'),
+          kind: 'ADD_TRAFFIC',
+          trafficGb: '1',
+          reason: 'second',
+        }),
+      ),
+    ).toBe(COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS);
+  });
+
   it('charges services.mass.status AND services.edit, and keeps tenants apart', async () => {
     await activeService(930060);
     // The operator holds services.edit but not the mass key.

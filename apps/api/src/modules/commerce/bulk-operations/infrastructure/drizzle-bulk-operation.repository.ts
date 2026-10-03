@@ -390,12 +390,18 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
   ) {
     requireTenantId(scope);
     const operable = sql`s.panel_id = ANY(${sql.param([...rule.operablePanelIds])}::uuid[])`;
-    // One classification for the counts and the sample, so they cannot disagree.
+    /*
+     * One classification for the counts and the sample, so they cannot disagree. A missing
+     * limit is classified BEFORE the panel (Codex review of #157): `operablePanelIds` is
+     * built only from panels that hold a legal-state, FINITE service, so an unlimited
+     * service on a perfectly healthy panel would otherwise read as "panel not operable" —
+     * which sends the operator to the wrong screen.
+     */
     const classified = sql`
       SELECT a.service_id, a.customer_id, a.service_label,
              CASE WHEN NOT (${legalState(rule.kind)}) THEN 'NOT_IN_STATE'
-                  WHEN NOT (${operable}) THEN 'PANEL_NOT_OPERABLE'
                   WHEN NOT (${finite(rule.kind)}) THEN 'OTHER'
+                  WHEN NOT (${operable}) THEN 'PANEL_NOT_OPERABLE'
                   ELSE NULL END AS reason
         FROM (${audienceServicesQuery(evaluation)}) a
         JOIN services s ON s.tenant_id = ${evaluation.tenantId}::uuid AND s.id = a.service_id`;

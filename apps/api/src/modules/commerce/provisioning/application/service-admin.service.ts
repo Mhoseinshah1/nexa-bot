@@ -193,12 +193,14 @@ export class ServiceAdminService {
     id: string,
   ): Promise<{ service: ServiceRecord; actions: readonly ServiceActionAvailability[] }> {
     const service = await this.get(scope, actor, id);
-    const [openOperations, operability, contact, hasLocationTarget] = await Promise.all([
-      this.openOperationsFor(scope, service.id),
-      this.operabilityFor(scope, service),
-      this.contactPresenceFor(scope, service),
-      this.deps.locationTargets?.hasOperatorTarget(scope, service) ?? Promise.resolve(false),
-    ]);
+    const [openOperations, operability, contact, hasLocationTarget, openCommercial] =
+      await Promise.all([
+        this.openOperationsFor(scope, service.id),
+        this.operabilityFor(scope, service),
+        this.contactPresenceFor(scope, service),
+        this.deps.locationTargets?.hasOperatorTarget(scope, service) ?? Promise.resolve(false),
+        this.deps.operations.findOpenCommercial(scope, service.id),
+      ]);
     return {
       service,
       actions: evaluateServiceActions({
@@ -212,6 +214,7 @@ export class ServiceAdminService {
           noExpiry: service.expiresAt === null,
         },
         hasLocationTarget,
+        openCommercial: openCommercial !== null,
       }),
     };
   }

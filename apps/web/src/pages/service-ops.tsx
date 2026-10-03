@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BULK_LARGE_OPERATION,
@@ -226,6 +226,13 @@ export function massDefinitionOf(filters: ServiceFilters): unknown {
   if (filters.q !== '' || filters.deliveryState !== null || filters.locationKey !== null) {
     return null;
   }
+  /*
+   * Codex review of #157: the audience's "expiring within" selects ACTIVE services only,
+   * while the list's filter selects any state. The two agree only when the list is ALSO
+   * filtered to ACTIVE; otherwise the preview would describe a different set from the one
+   * on screen (a SUSPENDED-and-expiring list would preview an empty resume).
+   */
+  if (filters.expiringWithinHours !== null && filters.state !== 'ACTIVE') return null;
   return {
     version: 1,
     // Every customer: a status change or a grant is about the SERVICE, whatever its owner.
@@ -423,6 +430,11 @@ export function ServiceMassActionCard({
                         ? { tone: 'warn' as const }
                         : {})}
                     />
+                    {/* Codex review of #157: the third reason, so the three add up. */}
+                    <StatCard
+                      label={t('web.soc_ineligible_other')}
+                      value={formatNumber(preview.ineligible.other)}
+                    />
                   </>
                 )}
               </div>
@@ -512,6 +524,40 @@ export function ServiceMassActionCard({
 // ---------------------------------------------------------------------------------------
 // One service: the operator's grant and move
 // ---------------------------------------------------------------------------------------
+
+/** What changed in a service's operation history, as one comparable string. */
+export function operationsSignature(
+  operations: readonly { readonly id: string; readonly state: string }[] | undefined,
+): string | null {
+  return operations === undefined
+    ? null
+    : operations.map((operation) => `${operation.id}:${operation.state}`).join(',');
+}
+
+/**
+ * Codex review of #157: the history is polled while an operation is in flight, and when it
+ * CHANGES — an operation reaches its end, or a new one appears — the service itself (its
+ * allowance, expiry, location, state and action verdicts), the move targets and the list
+ * are read again. Without it the page kept showing the pre-grant figures and an
+ * IN_PROGRESS blocker for an action that had already finished.
+ */
+export function useRefreshOnOperationChange(
+  serviceId: string,
+  operations: readonly { readonly id: string; readonly state: string }[] | undefined,
+): void {
+  const client = useQueryClient();
+  const seen = useRef<string | null>(null);
+  const signature = operationsSignature(operations);
+  useEffect(() => {
+    if (signature === null) return;
+    if (seen.current !== null && seen.current !== signature) {
+      void client.invalidateQueries({ queryKey: ['service', serviceId] });
+      void client.invalidateQueries({ queryKey: ['service-location-targets', serviceId] });
+      void client.invalidateQueries({ queryKey: ['services'] });
+    }
+    seen.current = signature;
+  }, [signature, client, serviceId]);
+}
 
 /** The actions that take input of their own, drawn in this card rather than as buttons. */
 export const INPUT_ACTIONS: ReadonlySet<ServiceOperatorAction> = new Set<ServiceOperatorAction>([

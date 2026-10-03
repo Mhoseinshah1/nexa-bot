@@ -853,6 +853,9 @@ export class BulkOperationService {
     actor: ActorContext,
     id: string,
   ): Promise<BulkRetryPreview> {
+    // The view key BEFORE the row is read (Codex review of #157): otherwise "not found"
+    // and "denied" would tell a caller with no access which ids exist.
+    await this.deps.guard.check(scope, actor, BULK_VIEW);
     const existing = await this.require(scope, id);
     await this.deps.guard.check(scope, actor, permissionFor(existing.kind));
     const companion = companionPermissionFor(existing.kind);
@@ -891,9 +894,11 @@ export class BulkOperationService {
       readonly typedCount: number | null;
     },
   ): Promise<BulkOperationRecord> {
+    const denial = { action: 'bulk.retry', entityType: 'BulkOperation', entityId: id };
+    // The view key BEFORE the row is read, audited when refused, for the reason above.
+    await this.authorize(scope, actor, BULK_VIEW, denial);
     const original = await this.require(scope, id);
     const permission = permissionFor(original.kind);
-    const denial = { action: 'bulk.retry', entityType: 'BulkOperation', entityId: id };
     await this.authorize(scope, actor, permission, denial);
     const companion = companionPermissionFor(original.kind);
     if (companion !== null) await this.authorize(scope, actor, companion, denial);

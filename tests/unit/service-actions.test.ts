@@ -72,6 +72,7 @@ const factsFor = (
   // Program §13: a service with limits to add to and somewhere to move to.
   grantLimits: { trafficUnlimited: false, noExpiry: false },
   hasLocationTarget: true,
+  openCommercial: false,
   ...over,
 });
 
@@ -333,6 +334,21 @@ describe('service action availability', () => {
     ).toBe(true);
   });
 
+  it('refuses a grant or a move while ANY commercial action is open, as planGrant does', () => {
+    /*
+     * Codex review of #157: `prepareCommercialAction` refuses on `findOpenCommercial` — an
+     * open RENEW blocks an ADD_TIME — so the matrix must not offer what the write refuses.
+     */
+    for (const action of ['ADD_TRAFFIC', 'ADD_TIME', 'CHANGE_LOCATION'] as const) {
+      expect(verdict('ACTIVE', action, { openCommercial: true }), action).toEqual({
+        available: false,
+        blocker: 'IN_PROGRESS',
+      });
+    }
+    // A suspend is not a commercial action and is not held back by one.
+    expect(verdict('ACTIVE', 'SUSPEND', { openCommercial: true }).available).toBe(true);
+  });
+
   it('fails closed when the grant and move facts were not gathered', () => {
     const facts: ServiceActionFacts = {
       state: 'ACTIVE',
@@ -345,6 +361,15 @@ describe('service action availability', () => {
     expect(byAction.get('ADD_TRAFFIC')?.blocker).toBe('UNLIMITED');
     expect(byAction.get('ADD_TIME')?.blocker).toBe('UNLIMITED');
     expect(byAction.get('CHANGE_LOCATION')?.blocker).toBe('NO_TARGET');
+    // With limits and a target but no word on open commercial actions: still refused.
+    const unknownOpen = new Map(
+      evaluateServiceActions({
+        ...facts,
+        grantLimits: { trafficUnlimited: false, noExpiry: false },
+        hasLocationTarget: true,
+      }).map((entry) => [entry.action, entry]),
+    );
+    expect(unknownOpen.get('ADD_TIME')?.blocker).toBe('IN_PROGRESS');
   });
 
   it('says the panel cannot, before saying there is nothing to add — 3X-UI cannot ADD_TRAFFIC', () => {
