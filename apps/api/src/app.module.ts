@@ -8,6 +8,7 @@ import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { CustomersController } from './surfaces/web/customers.controller.js';
 import { Customer360Controller } from './surfaces/web/customer-360.controller.js';
+import { IncidentsController } from './surfaces/web/incidents.controller.js';
 import { NotificationCenterController } from './surfaces/web/notification-center.controller.js';
 import { CustomerCrmController } from './surfaces/web/customer-crm.controller.js';
 import { TrialsController } from './surfaces/web/trials.controller.js';
@@ -91,6 +92,8 @@ export class AppModule implements NestModule {
         ControlController as never,
         CustomersController as never,
         Customer360Controller as never,
+        // Phase E3: incidents and maintenance.
+        IncidentsController as never,
         // Phase B3: the administrator's notification inbox.
         NotificationCenterController as never,
         // Program §8: operator-only notes and tags.

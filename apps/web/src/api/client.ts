@@ -1,4 +1,24 @@
 import {
+  // Phase E3: incidents and maintenance windows.
+  INCIDENT_ROUTES,
+  incidentBannerResponseSchema,
+  incidentDetailResponseSchema,
+  incidentListResponseSchema,
+  incidentNoticePreviewResponseSchema,
+  incidentNoticeResponseSchema,
+  incidentResponseSchema,
+  type CreateIncidentRequest,
+  type IncidentActionRequest,
+  type IncidentBannerResponse,
+  type IncidentDetailResponse,
+  type IncidentListResponse,
+  type IncidentNoticePreviewResponse,
+  type IncidentNoticeRequest,
+  type IncidentNoticeResponse,
+  type IncidentResponse,
+  type UpdateIncidentRequest,
+} from '@nexa/contracts';
+import {
   // Program §8: operator-only customer notes and tags.
   CUSTOMER_CRM_ROUTES,
   customerNoteCreateResponseSchema,
@@ -4013,4 +4033,60 @@ export function markAllInbox(input: {
     input.category === undefined ? {} : { category: input.category },
     markAllInboxResponseSchema,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Phase E3: incidents and maintenance
+// ---------------------------------------------------------------------------
+
+export function fetchIncidents(): Promise<IncidentListResponse> {
+  return authedGet(INCIDENT_ROUTES.list, incidentListResponseSchema);
+}
+
+export function fetchIncident(id: string): Promise<IncidentDetailResponse> {
+  return authedGet(INCIDENT_ROUTES.one(encodeURIComponent(id)), incidentDetailResponseSchema);
+}
+
+/** The admin banner: any administrator may read it. */
+export function fetchIncidentBanner(): Promise<IncidentBannerResponse> {
+  return authedGet(INCIDENT_ROUTES.banner, incidentBannerResponseSchema);
+}
+
+export function createIncident(input: CreateIncidentRequest): Promise<IncidentResponse> {
+  return post(INCIDENT_ROUTES.create, input, incidentResponseSchema);
+}
+
+export function updateIncident(
+  input: UpdateIncidentRequest & { id: string },
+): Promise<IncidentResponse> {
+  const { id, ...body } = input;
+  return post(INCIDENT_ROUTES.update(encodeURIComponent(id)), body, incidentResponseSchema);
+}
+
+export type IncidentAction = 'start' | 'resolve' | 'cancel';
+
+export function actOnIncident(
+  input: IncidentActionRequest & { id: string; action: IncidentAction },
+): Promise<IncidentResponse> {
+  const { id, action, ...body } = input;
+  return post(INCIDENT_ROUTES[action](encodeURIComponent(id)), body, incidentResponseSchema);
+}
+
+/** Idempotent by construction on the server: each effect is claimed once per subject. */
+export function applyIncidentEffects(id: string): Promise<IncidentResponse> {
+  return post(INCIDENT_ROUTES.applyEffects(encodeURIComponent(id)), {}, incidentResponseSchema);
+}
+
+export function fetchIncidentNoticePreview(id: string): Promise<IncidentNoticePreviewResponse> {
+  return authedGet(
+    INCIDENT_ROUTES.noticePreview(encodeURIComponent(id)),
+    incidentNoticePreviewResponseSchema,
+  );
+}
+
+export function sendIncidentNotice(
+  input: IncidentNoticeRequest & { id: string },
+): Promise<IncidentNoticeResponse> {
+  const { id, ...body } = input;
+  return post(INCIDENT_ROUTES.notice(encodeURIComponent(id)), body, incidentNoticeResponseSchema);
 }

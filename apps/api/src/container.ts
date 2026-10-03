@@ -12,6 +12,9 @@ import {
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
   TICKET_REPLY_FILE_RETENTION_DAYS,
+  INCIDENT_ERROR_CODES,
+  errors,
+  INCIDENT_SCHEDULER_INTERVAL_MS,
   NOTIFICATION_RULES,
   canAdjustDeviceLimit,
   canChangeLocation,
@@ -176,6 +179,10 @@ import { BackupSchedulePolicy } from './modules/platform/backup/application/back
 import { OpsGroupBackupTopicAdapter } from './modules/control/ops-group/application/backup-topic.js';
 import { FilesystemBackupWorkspaces } from './modules/platform/backup/infrastructure/workspace.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
+import { IncidentService } from './modules/platform/incidents/application/incident.service.js';
+import { IncidentSchedulerLoop } from './modules/platform/incidents/application/incident-scheduler-loop.js';
+import { DrizzleIncidentRepository } from './modules/platform/incidents/infrastructure/drizzle-incident.repository.js';
+import { ModuleIncidentEffects } from './modules/platform/incidents/infrastructure/incident-effects.js';
 import { NotificationCenterService } from './modules/platform/opslog/application/notification-center.service.js';
 import { DrizzleNotificationInboxRepository } from './modules/platform/opslog/infrastructure/drizzle-notification-inbox.repository.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
@@ -1004,6 +1011,10 @@ export interface Container {
   readonly opsGroups: OpsGroupService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
+  /** Phase E3: incidents and maintenance windows. */
+  readonly incidents: IncidentService;
+  /** Phase E3: starts scheduled maintenance windows. Started by the WORKER only. */
+  readonly incidentSchedulerLoop: IncidentSchedulerLoop;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
   readonly notificationCenter: NotificationCenterService;
   /**
@@ -4163,6 +4174,89 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * rendering and the 429 classification cannot diverge between the reply path and the
    * background one.
    */
+  /**
+   * Phase E3 (`docs/incidents.md`): incidents and maintenance. The record is this module's;
+   * every effect goes through its owning module's existing write path, as the operator.
+   */
+  const incidentService = new IncidentService({
+    repository: new DrizzleIncidentRepository(database.db),
+    effects: new ModuleIncidentEffects({
+      panels: {
+        drainOf: async (scope, panelId) => {
+          const view = await panelRepository.find(scope as TenantContext, panelId);
+          if (view === null) return undefined;
+          return view.panel.drain === null ? null : { reason: view.panel.drain.reason };
+        },
+        setDrain: (scope, actor, panelId, input) =>
+          panelService.setDrain(scope, actor, panelId, input),
+      },
+      locations: {
+        find: async (scope, id) => {
+          const row = await serviceLocationRepository.findById(scope, id);
+          return row === null ? null : { enabled: row.enabled, panelId: row.panelId };
+        },
+        setEnabled: async (scope, actor, input) => {
+          const row = await serviceLocationRepository.findById(scope, input.locationId as never);
+          if (row === null) {
+            throw errors.notFound(INCIDENT_ERROR_CODES.TARGET_INVALID, 'No such location.');
+          }
+          return serviceLocationAdminService.update(scope, actor, {
+            idempotencyKey: input.idempotencyKey,
+            locationId: input.locationId,
+            location: {
+              panelId: row.panelId,
+              productId: row.productId,
+              locationKey: row.locationKey,
+              label: row.label,
+              initial: row.initial,
+              enabled: input.enabled,
+              price:
+                row.price === null
+                  ? null
+                  : { amountMinor: row.price.amountMinor, currency: row.price.currency },
+              limits: row.limits,
+              sortOrder: row.sortOrder,
+            },
+          });
+        },
+      },
+      products: {
+        statusOf: async (scope, id) =>
+          (await productRepository.findById(scope, id))?.status ?? null,
+        activate: (scope, actor, input) => productService.activate(scope, actor, input),
+        deactivate: (scope, actor, input) => productService.deactivate(scope, actor, input),
+      },
+      gateways: {
+        statusOf: async (scope, provider) =>
+          (await paymentGatewayRepository.find(scope, provider as PaymentGatewayProvider))
+            ?.status ?? null,
+        setStatus: (scope, actor, input) => paymentGatewayService.setStatus(scope, actor, input),
+      },
+    }),
+    notifier: customerNotifier,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+    ids,
+    logger,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+  });
+  const incidentSchedulerLoop = new IncidentSchedulerLoop(incidentService, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: INCIDENT_SCHEDULER_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
+
   const customerNotificationLoop = new CustomerNotificationLoop(
     new CustomerNotificationService({
       notifications: customerNotificationRepository,
@@ -4175,6 +4269,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       serviceTransfers: serviceTransferService,
       // WP-A7: support's reply, read from the ticket message the notification names.
       tickets: ticketService,
+      // Phase E3: an incident notice's words, read from its communication row.
+      incidents: incidentService,
       buttonsFor: notificationButtons,
       /*
        * The ledger reader the refund sentence renders from. The wallet repository
@@ -5860,6 +5956,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,
+    incidents: incidentService,
+    incidentSchedulerLoop,
     monitorProfileService,
     diagnostics,
     panelMonitor,
@@ -5900,6 +5998,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await customerNotificationLoop.stop();
       // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
       await broadcastLoop.stop();
+      await incidentSchedulerLoop.stop();
       await bulkOperationLoop.stop();
       await receiptReviewPushLoop.stop();
       await opsGroupMaintainer.stop();

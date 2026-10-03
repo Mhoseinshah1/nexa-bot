@@ -506,6 +506,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_system',
   },
   {
+    // Phase E3: incidents and maintenance windows. `incidents.view` is what the list
+    // charges; manage and notify are gated on the page.
+    id: 'incidents',
+    path: '/incidents',
+    label: 'web.nav_incidents',
+    icon: 'alert',
+    permission: 'incidents.view',
+    group: 'web.navgroup_system',
+  },
+  {
     id: 'alerts',
     path: '/alerts',
     label: 'web.nav_alerts',

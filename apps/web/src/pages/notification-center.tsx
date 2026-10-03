@@ -137,6 +137,10 @@ export function pathOf(link: InboxLink): string {
       return '/system?section=admins';
     case 'ALERTS':
       return '/alerts';
+    case 'INCIDENT':
+      return id === '' ? '/incidents' : `/incidents/${id}`;
+    case 'INCIDENTS':
+      return '/incidents';
   }
 }
 

@@ -2,6 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { CustomerNotificationKind, ServiceReminderKind, TenantContext } from '@nexa/contracts';
 import {
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
+  INCIDENT_NOTICE_STALE_AFTER_MS,
   EXPIRY_REMINDER_KINDS,
   EXPIRY_REMINDER_STATES,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
@@ -42,6 +43,8 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   'ORDER_PENDING_REMINDER',
   // Round N R2: answered from the notice row, the reseller and the month's sales.
   'RESELLER_MINIMUM_REMINDER',
+  // Phase E3: answered from the notice row and its incident.
+  'INCIDENT_NOTICE',
 ];
 
 /**
@@ -104,6 +107,23 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     if (kind === 'ORDER_PENDING_REMINDER') return this.orderStillPending(tenantId, subjectId, now);
     if (kind === 'RESELLER_MINIMUM_REMINDER') {
       return resellerMinimumReminderHolds(this.db, tenantId, subjectId, now);
+    }
+    /*
+     * Phase E3: a notice holds while its incident is still SCHEDULED or ACTIVE and the
+     * notice is younger than `INCIDENT_NOTICE_STALE_AFTER_MS` by the dispatcher's clock.
+     * A cancelled or resolved window, or a notice held back a day, is superseded unsent.
+     */
+    if (kind === 'INCIDENT_NOTICE') {
+      const result = await this.db.execute(sql`
+        SELECT 1
+          FROM incident_notices n
+          JOIN incidents i ON i.tenant_id = n.tenant_id AND i.id = n.incident_id
+         WHERE n.tenant_id = ${tenantId}
+           AND n.id = ${subjectId}
+           AND i.status IN ('SCHEDULED', 'ACTIVE')
+           AND n.created_at > ${new Date(now.getTime() - INCIDENT_NOTICE_STALE_AFTER_MS)}
+         LIMIT 1`);
+      return result.rows.length > 0;
     }
 
     /*

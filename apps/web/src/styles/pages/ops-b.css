@@ -924,3 +924,50 @@ form.set-row > * + * {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ------------------------------------------------------------------------------------- */
+/* Phase E3: incidents and maintenance                                                    */
+/* ------------------------------------------------------------------------------------- */
+
+/* Above every page while an ACTIVE incident asked for one; stacks, never overlaps. */
+.incident-banners {
+  display: grid;
+  gap: 8px;
+  margin-block-end: var(--gap);
+}
+.incident-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 12px;
+}
+/* One column at 390px; the scope and timeline beside the summary on a desk. */
+.incident-detail {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+}
+.incident-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.incident-targets {
+  margin: 0 0 12px;
+  padding-inline-start: 18px;
+}
+.incident-targets li {
+  margin-block: 4px;
+  overflow-wrap: anywhere;
+}
+.incident-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+}
+.incident-targets-editor {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  margin-block: 12px;
+  padding: 12px;
+  min-inline-size: 0;
+}

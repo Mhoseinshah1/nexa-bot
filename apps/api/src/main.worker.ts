@@ -136,6 +136,8 @@ async function main(): Promise<void> {
         // Round N: the broadcast lane. No flag: a confirmed broadcast nobody sends is a
         // report that says "sending" for ever, and silence is what a stalled lane looks like.
         ['broadcasts', true, () => container.broadcastLoop.isFresh(now)],
+        // Phase E3: scheduled maintenance windows start on time.
+        ['incident-scheduler', true, () => container.incidentSchedulerLoop.isFresh(now)],
         // Round N: and the mass-operation lane, for the same reason.
         ['bulk-operations', true, () => container.bulkOperationLoop.isFresh(now)],
         // The administrators' receipt push (ADR-0031). No flag, for the customer lane's
@@ -234,6 +236,7 @@ async function main(): Promise<void> {
   container.customerNotificationLoop.start();
   // Round N: and the broadcast lane — frozen recipients, paced per bot, at most once.
   container.broadcastLoop.start();
+  container.incidentSchedulerLoop.start();
   // And the mass-operation lane: one item, one transaction, exactly once.
   container.bulkOperationLoop.start();
   // And the administrators' receipt push: a new card-to-card receipt, to every Telegram
