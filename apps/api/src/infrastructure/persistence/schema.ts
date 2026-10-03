@@ -204,6 +204,8 @@ import {
   TICKET_ATTACHMENT_KINDS,
   TICKET_ATTACHMENT_MAX_BYTES,
   TICKET_REPLY_FILE_TYPES,
+  DIRECT_MESSAGE_CONTENT_KINDS,
+  DIRECT_MESSAGE_TEXT_MAX_LENGTH,
   TICKET_CATEGORY_SORT_MAX,
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
   TICKET_MESSAGE_MAX_LENGTH,
@@ -11635,6 +11637,143 @@ export const bulkOperationItems = pgTable(
     check(
       'bulk_operation_items_processed_check',
       sql`(state IN ('PENDING', 'CANCELLED')) = (processed_at IS NULL)`,
+    ),
+  ],
+);
+
+// --- Phase A2: a direct message from Customer 360 ---------------------------------------
+
+/**
+ * One message an operator wrote to ONE customer (`docs/direct-message-audit.md`).
+ *
+ * The row IS the message, the way `ticket_messages` is a ticket's: it is written once, in
+ * the transaction that queues its `DIRECT_MESSAGE` / `DIRECT_MESSAGE_MEDIA` row on the
+ * customer notification lane, and the lane reads the text, the caption and the file back
+ * from here at send time. Where it GOT TO is the lane row's state — read through
+ * `customer_notifications_subject_key`, never copied here, so the two cannot disagree.
+ *
+ * The file's bytes are staging, as on `ticket_reply_files`: kept only until Telegram has
+ * them (the delivery stamps Telegram's handle and clears them in the same transaction), or
+ * until `DIRECT_MESSAGE_FILE_RETENTION_DAYS` pass; the name, type, size and digest stay.
+ *
+ * Rate limits are COUNTED from this table (the customer and admin indexes) under the
+ * tenant's direct-message advisory lock, so it is also the limiter's ledger.
+ */
+export const customerDirectMessages = pgTable(
+  'customer_direct_messages',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** The bot it is sent through: the customer's own, resolved when it was written. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /** Who wrote it. Never null: only an administrator can send one. */
+    authorAdminId: uuid('author_admin_id').notNull(),
+    contentKind: text('content_kind').notNull(),
+    /** The text of a TEXT message, or a file's caption (null when it has none). */
+    body: text('body'),
+    fileMimeType: text('file_mime_type'),
+    /** The name it is sent under, cleaned and ending in the verified type's extension. */
+    fileName: text('file_name'),
+    fileByteLength: integer('file_byte_length'),
+    fileSha256: text('file_sha256'),
+    /** The bytes, until Telegram has them or retention clears them. */
+    fileContent: bytea('file_content'),
+    /** When `file_content` was cleared, by the delivery or by retention. */
+    filePurgedAt: timestamptz('file_purged_at'),
+    telegramFileId: text('telegram_file_id'),
+    telegramFileUniqueId: text('telegram_file_unique_id'),
+    /** The request's key, namespaced by surface and administrator: a replay is this row. */
+    idempotencyKey: text('idempotency_key').notNull(),
+    /** What the key was first used for, so the same key with different content is refused. */
+    requestHash: text('request_hash').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('customer_direct_messages_tenant_id_key').on(table.tenantId, table.id),
+    unique('customer_direct_messages_key').on(table.tenantId, table.idempotencyKey),
+    /** The customer's history, newest first, and the per-customer rate window. */
+    index('customer_direct_messages_customer_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.createdAt,
+      table.id,
+    ),
+    /** The per-operator rate window. */
+    index('customer_direct_messages_admin_idx').on(
+      table.tenantId,
+      table.authorAdminId,
+      table.createdAt,
+    ),
+    /** The staging bound's sum and the retention sweep's walk: the held bytes only. */
+    index('customer_direct_messages_staged_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`file_content IS NOT NULL`),
+    index('customer_direct_messages_retention_idx')
+      .on(table.createdAt)
+      .where(sql`file_content IS NOT NULL`),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'customer_direct_messages_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.authorAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'customer_direct_messages_author_fk',
+    }),
+    check(
+      'customer_direct_messages_kind_check',
+      enumCheck('content_kind', DIRECT_MESSAGE_CONTENT_KINDS),
+    ),
+    check(
+      'customer_direct_messages_body_check',
+      sql`body IS NULL OR length(body) BETWEEN 1 AND ${sql.raw(String(DIRECT_MESSAGE_TEXT_MAX_LENGTH))}`,
+    ),
+    /** A TEXT message has text and no file; a PHOTO or DOCUMENT has a file. */
+    check(
+      'customer_direct_messages_shape_check',
+      sql`CASE content_kind
+            WHEN 'TEXT' THEN body IS NOT NULL AND file_mime_type IS NULL AND file_name IS NULL
+              AND file_byte_length IS NULL AND file_sha256 IS NULL AND file_content IS NULL
+              AND file_purged_at IS NULL AND telegram_file_id IS NULL
+            ELSE file_mime_type IS NOT NULL AND file_name IS NOT NULL
+              AND file_byte_length IS NOT NULL AND file_sha256 IS NOT NULL
+          END`,
+    ),
+    /** The allow-list, from the contract: each type with its shape and its own bound. */
+    check(
+      'customer_direct_messages_file_type_check',
+      sql`file_mime_type IS NULL OR CASE file_mime_type ${sql.raw(
+        TICKET_REPLY_FILE_TYPES.map((type) => {
+          if (!/^[a-z]+\/[a-z0-9.+-]+$/.test(type.mimeType) || !/^[A-Z]+$/.test(type.kind)) {
+            throw new Error(`customer_direct_messages: "${type.mimeType}" is not a plain literal.`);
+          }
+          return `WHEN '${type.mimeType}' THEN content_kind = '${type.kind}' AND file_byte_length BETWEEN 1 AND ${String(type.maxBytes)}`;
+        }).join(' '),
+      )} ELSE false END`,
+    ),
+    check(
+      'customer_direct_messages_file_content_check',
+      sql`content_kind = 'TEXT'
+          OR ((file_content IS NULL) = (file_purged_at IS NOT NULL)
+              AND (file_content IS NULL OR octet_length(file_content) = file_byte_length))`,
+    ),
+    check(
+      'customer_direct_messages_telegram_check',
+      sql`(telegram_file_id IS NULL) = (telegram_file_unique_id IS NULL)`,
+    ),
+    check(
+      'customer_direct_messages_sha256_check',
+      sql`file_sha256 IS NULL OR file_sha256 ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'customer_direct_messages_name_check',
+      sql`file_name IS NULL OR length(file_name) BETWEEN 1 AND ${sql.raw(String(TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH))}`,
     ),
   ],
 );

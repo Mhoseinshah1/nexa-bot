@@ -60,6 +60,8 @@ import {
   useCustomerOverview,
   useFinancialSummary,
 } from './customer-360-sections';
+// Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
+import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
 import {
   Badge,
   Banner,
@@ -121,6 +123,8 @@ export function UserDetailPage({
   mayManualOrder = false,
   mayEditServices = false,
   mayViewAudit = false,
+  mayMessage = false,
+  mayViewMessages = false,
   denied,
 }: {
   id: string;
@@ -167,6 +171,10 @@ export function UserDetailPage({
   mayEditServices?: boolean;
   /** `audit.view` — the management timeline. */
   mayViewAudit?: boolean;
+  /** `users.message.send` — the direct message (Phase A2). */
+  mayMessage?: boolean;
+  /** `users.message.view` — the direct-message history (Phase A2). */
+  mayViewMessages?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -175,6 +183,7 @@ export function UserDetailPage({
   const submission = useSubmissionKey();
   const [reason, setReason] = useState('');
   const [manualOrderOpen, setManualOrderOpen] = useState(false);
+  const [messageOpen, setMessageOpen] = useState(false);
   /*
    * Two steps, never one click (WP10G, closing OQ-WP10F-03). Step one chooses the direction;
    * step two is the confirmation panel — with the MANDATORY reason for a block, a plain
@@ -292,6 +301,11 @@ export function UserDetailPage({
                       {t('web.c360_manual_order')}
                     </Button>
                   )}
+                  {mayMessage && (
+                    <Button size="sm" icon="send" onClick={() => setMessageOpen(true)}>
+                      {t('web.dm_send')}
+                    </Button>
+                  )}
                   {mayViewOrders && (
                     <a
                       className="btn sm ghost"
@@ -339,6 +353,7 @@ export function UserDetailPage({
               <a href="#c360-financial">{t('web.c360_nav_financial')}</a>
               <a href="#c360-controls">{t('web.c360_nav_controls')}</a>
               <a href="#c360-relations">{t('web.c360_nav_relations')}</a>
+              {(mayViewMessages || mayMessage) && <a href="#c360-messages">{t('web.dm_nav')}</a>}
               <a href="#c360-timeline">{t('web.c360_nav_timeline')}</a>
               {(mayTransfer || mayEditServices) && (
                 <a href="#c360-danger">{t('web.c360_nav_danger')}</a>
@@ -426,6 +441,13 @@ export function UserDetailPage({
               onClose={() => setManualOrderOpen(false)}
             />
 
+            <DirectMessageComposeModal
+              customerId={id}
+              open={mayMessage && messageOpen}
+              blocked={row.status === 'BLOCKED'}
+              onClose={() => setMessageOpen(false)}
+            />
+
             <TwoColumn
               main={
                 <>
@@ -443,6 +465,14 @@ export function UserDetailPage({
                       mayDebit={mayDebit}
                     />
                   </div>
+                  {(mayViewMessages || mayMessage) && (
+                    <DirectMessagesCard
+                      customerId={id}
+                      mayView={mayViewMessages}
+                      maySend={mayMessage}
+                      onCompose={() => setMessageOpen(true)}
+                    />
+                  )}
                   <TimelineCard customerId={id} mayView={mayViewAudit} />
                 </>
               }

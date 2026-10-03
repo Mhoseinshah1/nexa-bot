@@ -1,7 +1,8 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gt, ne, sql } from 'drizzle-orm';
 import type { CustomerNotificationKind, ServiceReminderKind, TenantContext } from '@nexa/contracts';
 import {
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
+  DIRECT_MESSAGE_STALE_AFTER_MS,
   EXPIRY_REMINDER_KINDS,
   EXPIRY_REMINDER_STATES,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
@@ -12,6 +13,7 @@ import {
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
+  customerDirectMessages,
   serviceOwnershipTransfers,
   services,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -42,6 +44,9 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   'ORDER_PENDING_REMINDER',
   // Round N R2: answered from the notice row, the reseller and the month's sales.
   'RESELLER_MINIMUM_REMINDER',
+  // Phase A2: answered from the direct message's own row.
+  'DIRECT_MESSAGE',
+  'DIRECT_MESSAGE_MEDIA',
 ];
 
 /**
@@ -104,6 +109,9 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     if (kind === 'ORDER_PENDING_REMINDER') return this.orderStillPending(tenantId, subjectId, now);
     if (kind === 'RESELLER_MINIMUM_REMINDER') {
       return resellerMinimumReminderHolds(this.db, tenantId, subjectId, now);
+    }
+    if (kind === 'DIRECT_MESSAGE' || kind === 'DIRECT_MESSAGE_MEDIA') {
+      return this.directMessageFresh(tenantId, kind, subjectId, now);
     }
 
     /*
@@ -269,6 +277,36 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
       LIMIT 1
     `);
     return result.rows.length > 0;
+  }
+
+  /**
+   * Phase A2: what an operator wrote holds while it is younger than
+   * `DIRECT_MESSAGE_STALE_AFTER_MS` — by the dispatcher's clock, half-open — and is the
+   * kind its row says it is. Read by the MESSAGE's id from its own table, never another
+   * table by the subject id. A row that is not there is `false`: nothing is sent about it.
+   */
+  private async directMessageFresh(
+    tenantId: string,
+    kind: 'DIRECT_MESSAGE' | 'DIRECT_MESSAGE_MEDIA',
+    subjectId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const since = new Date(now.getTime() - DIRECT_MESSAGE_STALE_AFTER_MS);
+    const [row] = await this.db
+      .select({ id: customerDirectMessages.id })
+      .from(customerDirectMessages)
+      .where(
+        and(
+          eq(customerDirectMessages.tenantId, tenantId),
+          eq(customerDirectMessages.id, subjectId),
+          kind === 'DIRECT_MESSAGE'
+            ? eq(customerDirectMessages.contentKind, 'TEXT')
+            : ne(customerDirectMessages.contentKind, 'TEXT'),
+          gt(customerDirectMessages.createdAt, since),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
   }
 
   /**

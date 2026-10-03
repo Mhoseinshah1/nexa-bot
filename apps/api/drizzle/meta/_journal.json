@@ -1156,6 +1156,20 @@
       "when": 1791012268199,
       "tag": "0164_centralpay_gateway",
       "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "7",
+      "when": 1791019392920,
+      "tag": "0165_customer_direct_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 166,
+      "version": "7",
+      "when": 1791019417093,
+      "tag": "0166_direct_message_grants",
+      "breakpoints": true
     }
   ]
 }

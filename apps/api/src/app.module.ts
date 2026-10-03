@@ -8,6 +8,7 @@ import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { CustomersController } from './surfaces/web/customers.controller.js';
 import { Customer360Controller } from './surfaces/web/customer-360.controller.js';
+import { CustomerDirectMessagesController } from './surfaces/web/customer-direct-messages.controller.js';
 import { TrialsController } from './surfaces/web/trials.controller.js';
 import { ProductsController } from './surfaces/web/products.controller.js';
 import { ProductCategoriesController } from './surfaces/web/product-categories.controller.js';
@@ -89,6 +90,8 @@ export class AppModule implements NestModule {
         ControlController as never,
         CustomersController as never,
         Customer360Controller as never,
+        // Phase A2: «ارسال پیام» from Customer 360.
+        CustomerDirectMessagesController as never,
         TrialsController as never,
         ProductsController as never,
         ProductCategoriesController as never,

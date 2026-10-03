@@ -379,6 +379,28 @@ export interface CustomerNotificationDeps {
       itemId: string,
     ): Promise<TemplateValues | null>;
   };
+  /**
+   * Phase A2: what `DIRECT_MESSAGE` and `DIRECT_MESSAGE_MEDIA` send — the operator's text,
+   * or the file and its caption — read at send time from the MESSAGE ROW the notification
+   * names, exactly as `tickets` reads a reply. A reader, not a payload (ADR 0030 §1). Null
+   * when the row is not the kind's (or a file's bytes are already cleared), which sends
+   * nothing. Absent, both kinds render nothing and are not sent.
+   */
+  readonly directMessages?: {
+    notificationFacts(
+      scope: TenantContext,
+      kind: 'DIRECT_MESSAGE' | 'DIRECT_MESSAGE_MEDIA',
+      messageId: string,
+    ): Promise<{ readonly values: TemplateValues; readonly file?: NotificationFile } | null>;
+    /** Telegram took the file: stamp its handle and clear the bytes, in the record's tx. */
+    fileDelivered(
+      scope: TenantContext,
+      messageId: string,
+      file: { readonly fileId: string; readonly fileUniqueId: string },
+      at: Date,
+      tx: TransactionScope,
+    ): Promise<boolean>;
+  };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -512,6 +534,15 @@ export class CustomerNotificationService {
     readonly file?: NotificationFile;
     /** R2: the order whose payment screens are closed right before this is sent. */
     readonly closesOrder?: string;
+    /**
+     * Where a delivered file's handle is stamped and its staged bytes cleared, in the
+     * transaction that records the delivery — the subject's own owner (HF-A7, Phase A2).
+     */
+    readonly fileDelivered?: (
+      file: { readonly fileId: string; readonly fileUniqueId: string },
+      at: Date,
+      tx: TransactionScope,
+    ) => Promise<boolean>;
   } | null> {
     if (row.kind === 'SERVICE_RENEWED') {
       if (this.deps.renewals === undefined) return null;
@@ -532,7 +563,36 @@ export class CustomerNotificationService {
       if (this.deps.tickets === undefined) return null;
       const facts = await this.deps.tickets.attachmentFacts(scope, row.subjectId);
       if (facts === null) return null;
-      return { values: facts.values, buttons: [], file: facts.file };
+      const tickets = this.deps.tickets;
+      return {
+        values: facts.values,
+        buttons: [],
+        file: facts.file,
+        fileDelivered: (file, at, tx) =>
+          tickets.attachmentDelivered(scope, row.subjectId, file, at, tx),
+      };
+    }
+    if (row.kind === 'DIRECT_MESSAGE' || row.kind === 'DIRECT_MESSAGE_MEDIA') {
+      if (this.deps.directMessages === undefined) return null;
+      const direct = this.deps.directMessages;
+      const facts = await direct.notificationFacts(scope, row.kind, row.subjectId);
+      if (facts === null) return null;
+      // Exactly one of the two shapes per kind: a text never carries a file, a file always.
+      if ((row.kind === 'DIRECT_MESSAGE_MEDIA') !== (facts.file !== undefined)) return null;
+      return {
+        values: facts.values,
+        buttons: [],
+        ...(facts.file === undefined
+          ? {}
+          : {
+              file: facts.file,
+              fileDelivered: (
+                file: { readonly fileId: string; readonly fileUniqueId: string },
+                at: Date,
+                tx: TransactionScope,
+              ) => direct.fileDelivered(scope, row.subjectId, file, at, tx),
+            }),
+      };
     }
     if (row.kind === 'SERVICE_TRANSFER_RECEIVED') {
       if (this.deps.serviceTransfers === undefined) return null;
@@ -975,9 +1035,9 @@ export class CustomerNotificationService {
           to === 'DELIVERED' &&
           content.file !== undefined &&
           result.file !== undefined &&
-          this.deps.tickets !== undefined
+          content.fileDelivered !== undefined
         ) {
-          await this.deps.tickets.attachmentDelivered(scope, row.subjectId, result.file, at, tx);
+          await content.fileDelivered(result.file, at, tx);
         }
         return moved;
       });

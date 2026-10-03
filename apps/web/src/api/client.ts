@@ -493,6 +493,15 @@ import {
   type CustomerTransferRequest,
   type CustomerTransferResultResponse,
 } from '@nexa/contracts';
+// Phase A2: a direct message from Customer 360.
+import {
+  DIRECT_MESSAGE_ROUTES,
+  directMessageListResponseSchema,
+  directMessageResponseSchema,
+  type DirectMessageFile,
+  type DirectMessageListResponse,
+  type DirectMessageResponse,
+} from '@nexa/contracts';
 
 /**
  * The typed API client.
@@ -3824,4 +3833,35 @@ export function fetchCustomerFinancialSummary(
 
 export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
+}
+
+// --- Phase A2: «ارسال پیام» -------------------------------------------------------------
+
+/** The customer's direct messages, newest first; `cursor` is the previous page's last row. */
+export function fetchDirectMessages(
+  customerId: string,
+  cursor?: { readonly at: string; readonly id: string },
+): Promise<DirectMessageListResponse> {
+  const params = new URLSearchParams();
+  if (cursor !== undefined) {
+    params.set('beforeAt', cursor.at);
+    params.set('beforeId', cursor.id);
+  }
+  const suffix = params.toString();
+  const path = DIRECT_MESSAGE_ROUTES.list(customerId);
+  return authedGet(suffix ? `${path}?${suffix}` : path, directMessageListResponseSchema);
+}
+
+/** Queues one message; the same key answers with the same message (`replayed`). */
+export function sendDirectMessage(input: {
+  customerId: string;
+  idempotencyKey: string;
+  text: string;
+  file: DirectMessageFile | null;
+}): Promise<DirectMessageResponse> {
+  return post(
+    DIRECT_MESSAGE_ROUTES.send(input.customerId),
+    { idempotencyKey: input.idempotencyKey, text: input.text, file: input.file },
+    directMessageResponseSchema,
+  );
 }
