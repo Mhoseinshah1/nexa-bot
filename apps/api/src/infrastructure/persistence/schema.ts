@@ -55,6 +55,7 @@ import {
   RECOVERY_ACTIVE_DESTRUCTIVE_STATES,
   RECOVERY_FAILURE_CODES,
   RECOVERY_SOURCES,
+  INSTALLATION_KEY_SOURCES,
   RECOVERY_STAGES,
   RECOVERY_STATES,
   TEMPLATE_REVISION_ACTIONS,
@@ -2931,6 +2932,79 @@ export const recoveryRequests = pgTable(
      * ordering and the `ROW(created_at, id) < ROW(...)` continuation.
      */
     index('recovery_requests_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+  ],
+);
+
+/**
+ * Decrypt-only key-encryption keys imported from a Recovery Kit (ADR-0032).
+ *
+ * INSTALLATION-WIDE, and the one table here with neither `tenant_id` nor a
+ * tenant-bound encryption context, for a reason that is the whole point of it:
+ * it must SURVIVE a restore. A restore replaces every tenant row with the
+ * backup's, so a key bound to the current primary tenant would be bound to a
+ * tenant that no longer exists the moment it was needed. The recovery executor
+ * carries these rows into the restored candidate before the cutover, exactly as
+ * it re-asserts its own request row afterwards.
+ *
+ * `wrapped_material` is the key, AES-256-GCM-wrapped under a CONFIGURED key
+ * (`wrapped_under_key_id`) with the key id and the wrapping id as associated
+ * data. Deliberately not named `*_ciphertext`: that suffix marks a
+ * `SecretCipher` column, which this is not (see `installation-keyring.ts`), and
+ * `secrets status|rewrap|retire-check` walk this table by name instead.
+ *
+ * Nothing here can make a key ENCRYPT. Which key encrypts is
+ * `SECRETS_ACTIVE_KEY_ID`, and this table has no column that could say
+ * otherwise.
+ */
+export const installationKeys = pgTable(
+  'installation_keys',
+  {
+    id: uuid('id').primaryKey(),
+    /** The key's label, unique across the installation. Never a configured key's id. */
+    keyId: text('key_id').notNull(),
+    /** `kekFingerprint` of the key. Safe to show; compared on every unwrap. */
+    fingerprint: text('fingerprint').notNull(),
+    /**
+     * The wrapped key. NULL exactly when the row is a TOMBSTONE: removal erases
+     * the bytes and keeps the row, so a restore of an older backup — which still
+     * holds this key — cannot quietly bring it back (the executor carries the
+     * tombstone into the candidate).
+     */
+    wrappedMaterial: text('wrapped_material'),
+    /** Which CONFIGURED key wraps it — what `secrets retire-check` counts. NULL on a tombstone. */
+    wrappedUnderKeyId: text('wrapped_under_key_id'),
+    source: text('source').notNull(),
+    /** The kit it arrived in. An identifier, never the kit. */
+    kitId: uuid('kit_id'),
+    importedAt: timestamptz('imported_at').notNull(),
+    /** Captured as a label too, so the row still names somebody after a restore. */
+    importedByAdminId: uuid('imported_by_admin_id'),
+    importedByLabel: text('imported_by_label'),
+    /** Set by removal; the row is then a tombstone. Cleared only by a later import. */
+    removedAt: timestamptz('removed_at'),
+    removedByLabel: text('removed_by_label'),
+    /**
+     * Set by the recovery executor on a row the CANDIDATE held and this
+     * installation did not: a key that came back inside a restored backup rather
+     * than through an import here. Shown in the list, and audited at the cutover.
+     */
+    restoredAt: timestamptz('restored_at'),
+  },
+  (table) => [
+    uniqueIndex('installation_keys_key_id_idx').on(table.keyId),
+    check('installation_keys_source_check', enumCheck('source', INSTALLATION_KEY_SOURCES)),
+    check('installation_keys_key_id_check', sql`key_id ~ '^[A-Za-z0-9._-]{1,64}$'`),
+    check('installation_keys_fingerprint_check', sql`fingerprint ~ '^[0-9a-f]{32}$'`),
+    check(
+      'installation_keys_wrapped_under_check',
+      sql`wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)`,
+    ),
+    /** A live row has its wrap; a tombstone has neither half of it. Both directions. */
+    check(
+      'installation_keys_tombstone_check',
+      sql`(removed_at IS NULL) = (wrapped_material IS NOT NULL) AND (wrapped_material IS NULL) = (wrapped_under_key_id IS NULL)`,
+    ),
+    index('installation_keys_wrapped_under_idx').on(table.wrappedUnderKeyId),
   ],
 );
 

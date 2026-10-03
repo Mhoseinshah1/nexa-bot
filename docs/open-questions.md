@@ -708,7 +708,12 @@ customer-supplied text — Phase 4A, when a Telegram update can fail.
 
 ## Restoring a backup taken by a DIFFERENT installation
 
-**Status: OPEN — recorded by the Web Admin Disaster Recovery pass (ADR-0028 § 10).**
+**Status: RESOLVED by [ADR-0032](adr/0032-recovery-kit.md) — the Recovery Kit.** Shape 2
+below was built: a passphrase-sealed kit, imported as decrypt-only keys with their own
+storage (`installation_keys`), audit, dependency-checked removal and a carry across the
+cutover. Shape 1 (a pasted KEK) stays refused. Kept as written for the record.
+
+**Original status: OPEN — recorded by the Web Admin Disaster Recovery pass (ADR-0028 § 10).**
 
 An archive's data key is wrapped under the KEK of the installation that wrote it.
 This installation holds its own keyring, so a foreign archive fails at the key —

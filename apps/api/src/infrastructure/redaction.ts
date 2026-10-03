@@ -23,6 +23,8 @@ const SENSITIVE_FRAGMENTS = [
   'secret',
   'password',
   'passwd',
+  // A Recovery Kit passphrase (ADR-0032) unlocks every key-encryption key.
+  'passphrase',
   'apikey',
   'authorization',
   'auth',
@@ -145,6 +147,8 @@ const TEXT_SENSITIVE_FRAGMENTS = [
   'secret',
   'password',
   'passwd',
+  // A Recovery Kit passphrase (ADR-0032) unlocks every key-encryption key.
+  'passphrase',
   'apikey',
   'api_key',
   'api-key',

@@ -146,6 +146,9 @@ pnpm backup run                                  # take one now, trigger MANUAL
 pnpm backup list [--limit N]                     # recent runs and their delivery state
 pnpm backup verify --archive PATH                # decrypt and checksum; touches no database
 pnpm backup restore --archive PATH --target DB   # restore into an explicit, empty database
+
+# Another installation's archive (ADR-0032): add --kit; the passphrase comes on stdin.
+read -rs P; printf %s "$P" | pnpm backup verify --archive PATH --kit old.nxkit
 ```
 
 In a deployed installation these run inside the api container; `backup:dev` is
@@ -316,14 +319,25 @@ psql -c "SELECT datname FROM pg_database WHERE datname LIKE 'nexa_pre_restore_%'
 dropdb nexa_pre_restore_<id>        # only when you are sure
 ```
 
-### Foreign archives are not supported
+### Another installation's archive: the Recovery Kit
 
-An archive from ANOTHER installation cannot be restored here, and the Web Admin
-says so — «پشتیبانی نمی‌شود» — rather than omitting the option. Its data key is
-wrapped under that installation's KEK, which this one does not hold, and the two
-ways to change that are a form that accepts a pasted key (refused: see ADR-0028)
-and a key-import feature that does not exist. Move the KEK into `SECRETS_KEYS`
-deliberately, out of band, and the archive becomes an ordinary one.
+An archive from ANOTHER installation — the usual case after a server is rebuilt
+from scratch — is sealed under that installation's key, which a fresh install
+does not have. Without its **Recovery Kit** the upload fails as
+`recovery.archive_foreign_key` and the Web Admin says what to do. With it:
+
+1. On the fresh install, sign in as the owner and open **بکاپ و بازیابی**.
+2. Under **کیت بازیابی**, import the old server's `.nxkit` with its passphrase.
+   Its keys are added **decrypt-only**: this server's own key stays the one every
+   new secret and backup is sealed with.
+3. Upload the old `.nxb`, verify, confirm — the ordinary restore above.
+
+The restore-test also checks the secrets INSIDE the backup (bot tokens, panel
+credentials): if any is sealed under a key neither this server nor the kit
+holds, it refuses with `recovery.candidate_keys_missing` before anything is
+confirmed. The executor carries the imported keys into the restored database
+before the cutover, so they survive it. Details: ADR-0032 and
+`docs/recovery-kit-format.md`.
 
 ### What the Web path does NOT do
 
@@ -337,6 +351,30 @@ pools, and their own pool error listeners are what let them survive it. A
 uploaded archive's workspace after success.** Debris is reported on the row and
 in the operational log rather than cleaned up silently; a recovery that removed
 its own evidence would be a recovery nobody could audit.
+
+## The Recovery Kit — keep one, apart from the backups
+
+**A `.nxb` alone is not enough to restore on a new server.** Export a Recovery
+Kit from the Web Admin (owner, account password, a passphrase of at least 12
+characters typed twice), and keep it somewhere that is neither this server nor
+the place the backups go; keep the passphrase somewhere else again. Kit +
+passphrase + any backup is the whole database, so treat the kit like the KEK it
+contains. Export a new kit after every key rotation: a kit holds the keys that
+existed when it was made.
+
+Imported keys are listed with what still depends on each. An imported key can be
+removed only when no stored secret, other imported key, archive on this server's
+disk (sealed under it, or taken while it was held) or unfinished recovery needs
+it. Copies elsewhere (Telegram, a laptop) cannot be counted — and that includes
+this server's own older backups taken before a `secrets rewrap`, which may hold
+credentials still sealed under the key — so remove one only when you are sure.
+A removed key leaves a tombstone, so restoring an older backup does not bring it
+back; importing its kit again does. Import, like export, asks for your account
+password. Configured keys are never
+removed from the Web Admin; `botctl secrets retire-check --key ID` is the gate for
+those, and it counts imported keys wrapped under the key as dependencies.
+`botctl secrets rewrap` re-wraps imported keys under the active key along with
+everything else.
 
 ## Relationship to `botctl backup`
 

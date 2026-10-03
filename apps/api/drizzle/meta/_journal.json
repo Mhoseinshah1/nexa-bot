@@ -1121,6 +1121,13 @@
       "when": 1791009597352,
       "tag": "0159_spec7_client_app_tutorial_video",
       "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1791009900767,
+      "tag": "0160_recovery_kit_installation_keys",
+      "breakpoints": true
     }
   ]
 }

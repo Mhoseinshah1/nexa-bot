@@ -82,6 +82,16 @@ import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
 import { hostname } from 'node:os';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
+import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
+import { FAST_KIT_KDF, PRODUCTION_KIT_KDF } from './infrastructure/crypto/recovery-kit.js';
+import { InstallationKeyService } from './modules/platform/recovery/application/installation-key.service.js';
+import { DrizzleInstallationKeyRepository } from './modules/platform/recovery/infrastructure/drizzle-installation-key.repository.js';
+import {
+  FilesystemRetainedArchiveScanner,
+  InstallationKeyLoader,
+  KeyringRecoveryKeyCoverage,
+  PgCandidateKeyStore,
+} from './modules/platform/recovery/infrastructure/installation-key-adapters.js';
 import { blocksReadiness } from './modules/platform/system/application/readiness.service.js';
 import { createLogger, newCorrelationId } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
@@ -999,6 +1009,15 @@ export interface Container {
    */
   readonly backupArchiver: KeyringBackupArchiver;
   readonly backupTools: PostgresDatabaseTools;
+  /**
+   * The Recovery Kit (ADR-0032): the keyring every cipher in this process reads
+   * — configured keys plus imported decrypt-only ones — its loader, and the
+   * lifecycle service the Web Admin calls.
+   */
+  readonly keyring: InstallationKeyring;
+  readonly installationKeyLoader: InstallationKeyLoader;
+  readonly installationKeyRepository: DrizzleInstallationKeyRepository;
+  readonly installationKeys: InstallationKeyService;
 
   shutdown(): Promise<void>;
 }
@@ -1057,8 +1076,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // One resolution of the keyring, used for both the cipher's keys and the
   // v1-acceptance default that depends on which spelling configured them.
   // Resolving it twice would let the two answers come from different parses.
-  const keyring = resolveKeyring(config);
-  const cipher = new AesGcmSecretCipher(keyring, acceptsV1(config, keyring));
+  //
+  // Wrapped in the INSTALLATION keyring (ADR-0032), which adds the decrypt-only
+  // keys imported from Recovery Kits and changes nothing about which key
+  // encrypts: `activeKeyId` is the configured one, read-only. The cipher and the
+  // archive read `keys` at the moment of use, so a kit imported later is usable
+  // by both without either knowing kits exist.
+  const configuredKeyring = resolveKeyring(config);
+  const keyring = new InstallationKeyring(configuredKeyring);
+  const cipher = new AesGcmSecretCipher(keyring, acceptsV1(config, configuredKeyring));
   const translator = createTranslator();
 
   const database = createDatabase(
@@ -5022,6 +5048,43 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const recoveryWorkspaces = new FilesystemRecoveryWorkspaces(config.RECOVERY_WORK_DIR);
   const recoveryJournal = new FileCutoverJournal(config.RECOVERY_WORK_DIR);
+  /*
+   * The Recovery Kit's key lifecycle (ADR-0032). The loader keeps this
+   * process's keyring in step with `installation_keys`; the coverage adapter is
+   * what both halves of a recovery ask about keys.
+   */
+  const installationKeyRepository = new DrizzleInstallationKeyRepository(database.db);
+  const installationKeyLoader = new InstallationKeyLoader(
+    keyring,
+    installationKeyRepository,
+    logger,
+  );
+  const recoveryKeyCoverage = new KeyringRecoveryKeyCoverage(
+    keyring,
+    installationKeyLoader,
+    installationKeyRepository,
+    new PgCandidateKeyStore(config.DATABASE_URL, backupTools.liveDatabase),
+  );
+  const installationKeys = new InstallationKeyService({
+    keyring,
+    loader: installationKeyLoader,
+    keys: installationKeyRepository,
+    archives: new FilesystemRetainedArchiveScanner(config.BACKUP_WORK_DIR),
+    recoveries: recoveryRequests,
+    workspaces: recoveryWorkspaces,
+    uow,
+    idempotency,
+    guard,
+    audit,
+    opsLog,
+    clock,
+    ids,
+    // The same switch that selects the password hasher's cost, refused in
+    // production by the config schema for the same reason.
+    kdf: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KIT_KDF : PRODUCTION_KIT_KDF,
+    verifyPassword: (scope, actor, password, context, action) =>
+      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+  });
   const recoveryService = new RecoveryService({
     requests: recoveryRequests,
     workspaces: recoveryWorkspaces,
@@ -5030,6 +5093,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // proving a path nobody restores through.
     archiver: backupArchiver,
     engine: backupTools,
+    keys: recoveryKeyCoverage,
     guard,
     audit,
     opsLog,
@@ -5073,6 +5137,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recovery: recoveryService,
     engine: backupTools,
     workspaces: recoveryWorkspaces,
+    keys: recoveryKeyCoverage,
+    audit,
     journal: recoveryJournal,
     // The unmodified pipeline. `PRE_RESTORE` is a trigger VALUE, not a second
     // code path: same lock, same six stages, same mandatory verification.
@@ -5649,7 +5715,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recoveryExecutor,
     recoveryRequests,
     recoveryWorkspaces,
+    keyring,
+    installationKeyLoader,
+    installationKeyRepository,
+    installationKeys,
     async shutdown() {
+      installationKeyLoader.stop();
       backupScheduler.stop();
       recoveryExecutor.stop();
       await relay.stop();
