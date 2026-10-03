@@ -425,6 +425,47 @@ describe('C-3 placement safety', () => {
   });
 });
 
+describe('the retired button icon (owner order 2026-10-02)', () => {
+  const stored = explicitMainMenuSchema.parse({
+    v: 1,
+    rows: [['wallet', 'catalog'], ['help']],
+    buttons: MAIN_MENU_BUTTON_IDS.map((id) => ({
+      ...defaultMainMenuButtonConfig(id),
+      iconSlot: id === 'wallet' ? 'wallet' : id === 'help' ? 'support' : null,
+      appearanceSlot: id === 'wallet' ? 'payment' : null,
+    })),
+  });
+
+  it('still PARSES a snapshot an earlier release wrote with icons (no layout becomes unreadable)', () => {
+    expect(stored.buttons.find((one) => one.button === 'wallet')?.iconSlot).toBe('wallet');
+  });
+
+  it('canonicalises every icon to null, and keeps the screen slot exactly as stored', () => {
+    const normalized = normalizeExplicitMainMenu(stored);
+    expect(normalized.buttons.every((one) => one.iconSlot === null)).toBe(true);
+    expect(normalized.buttons.find((one) => one.button === 'wallet')?.appearanceSlot).toBe(
+      'payment',
+    );
+    // The key is still WRITTEN: the previous release's strict parser requires it.
+    expect(normalized.buttons.every((one) => 'iconSlot' in one)).toBe(true);
+    expect(explicitMainMenuSchema.safeParse(normalized).success).toBe(true);
+  });
+
+  it('decides "nothing changed" without the icon, so an icon alone is never a pending change', () => {
+    const without = {
+      ...stored,
+      buttons: stored.buttons.map((one) => ({ ...one, iconSlot: null })),
+    };
+    expect(explicitMainMenusEqual(stored, without)).toBe(true);
+  });
+
+  it('never draws an icon: the rendering rule has nowhere to put one', () => {
+    for (const button of customerRowsOf(stored, allOpen).flat()) {
+      expect(Object.keys(button).sort()).toEqual(['button', 'style']);
+    }
+  });
+});
+
 describe('customerRowsOf — the one rendering rule (runtime and preview)', () => {
   const layout = explicitMainMenuSchema.parse({
     v: 1,
@@ -444,10 +485,10 @@ describe('customerRowsOf — the one rendering rule (runtime and preview)', () =
     // leaves its row shorter; nothing from row three moves up.
     expect(customerRowsOf(layout, { trial: false, referral: null })).toEqual([
       [
-        { button: 'catalog', style: 'default', iconSlot: null },
-        { button: 'wallet', style: 'success', iconSlot: 'wallet' },
+        { button: 'catalog', style: 'default' },
+        { button: 'wallet', style: 'success' },
       ],
-      [{ button: 'help', style: 'default', iconSlot: null }],
+      [{ button: 'help', style: 'default' }],
     ]);
     // One gate open: its button is drawn alone on its row.
     expect(idsOf(customerRowsOf(layout, { trial: true }))).toEqual([

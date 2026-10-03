@@ -1,5 +1,5 @@
-import { and, asc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
-import type { CustomerStatus, UserId } from '@nexa/contracts';
+import { and, asc, eq, getTableColumns, or, sql, type SQL } from 'drizzle-orm';
+import type { CustomerStatus, ListSearchTerm, UserId } from '@nexa/contracts';
 import type { BotInstanceId, ScopeContext, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -7,6 +7,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { customers } from '../../../../infrastructure/persistence/schema.js';
+import { lowerPrefix } from '../../../../infrastructure/persistence/list-search.js';
 import type {
   CustomerCursor,
   CustomerPage,
@@ -239,6 +240,7 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     if (search.status !== undefined) {
       conditions.push(eq(customers.status, search.status));
     }
+    if (search.text !== undefined) conditions.push(customerTextCondition(search.text));
     if (cursor !== null) {
       conditions.push(
         sql`(${customers.createdAt}, ${customers.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
@@ -339,4 +341,45 @@ function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * The display name, as ONE expression: first name, a space, last name.
+ *
+ * Spelled exactly as `customers_tenant_full_name_idx` is built (see `online-indexes.ts`),
+ * because an expression index serves only the expression it was built over. `concat_ws`
+ * would read better and cannot be indexed at all — it is STABLE, not IMMUTABLE — so the
+ * `coalesce(...) || ' ' || coalesce(...)` spelling is the load-bearing one. The literals
+ * are written into the SQL text rather than bound, for the same reason: a bound `' '` is a
+ * parameter, and a parameter is not the indexed expression.
+ */
+const fullName = sql`coalesce(${customers.firstName}, '') || ' ' || coalesce(${customers.lastName}, '')`;
+
+/**
+ * The customer list's one search box (spec §10).
+ *
+ * Every arm is an Index Cond: `customers_tenant_telegram_key` for a Telegram id, the
+ * primary key for a uuid, and three `text_pattern_ops` btrees for a prefix — the username
+ * (`customers_tenant_username_idx`), the display name (`customers_tenant_full_name_idx`)
+ * and the last name (`customers_tenant_last_name_idx`), so "Rezaei" finds "Ali Rezaei"
+ * as well as "Ali" does. A prefix and never an infix: `pg_trgm` is not installed, and an
+ * infix over the tenant's whole customer table is the scan this list must not make
+ * (`docs/web-admin-search.md`).
+ */
+function customerTextCondition(term: ListSearchTerm): SQL {
+  switch (term.kind) {
+    case 'TELEGRAM_ID':
+      // Exact. A prefix here would be a way to enumerate Telegram ids.
+      return eq(customers.telegramUserId, term.value);
+    case 'UUID':
+      return eq(customers.id, term.value);
+    case 'USERNAME':
+      return lowerPrefix(sql`${customers.username}`, term.value);
+    case 'TEXT':
+      return or(
+        lowerPrefix(sql`${customers.username}`, term.folded),
+        lowerPrefix(fullName, term.folded),
+        lowerPrefix(sql`${customers.lastName}`, term.folded),
+      ) as SQL;
+  }
 }

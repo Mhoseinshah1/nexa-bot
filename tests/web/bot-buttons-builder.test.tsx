@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-libra
 import {
   DEFAULT_EXPLICIT_MAIN_MENU,
   MAIN_MENU_BUTTON_STYLES,
+  type BotMenuBuilderResponse,
   type ExplicitMainMenu,
   type MainMenuButtonId,
 } from '@nexa/contracts';
@@ -78,16 +79,27 @@ function move(key: string): void {
   fireEvent.click(button);
 }
 
-/** A pointer drag from `id`'s grip onto whatever `target()` resolves to once the drag is on. */
-function drag(id: MainMenuButtonId, target: () => Element | null): void {
+/**
+ * A pointer drag from `id`'s grip onto whatever `target()` resolves to. The pointer travels
+ * past the drag threshold first: a press that does not travel is not a drag. jsdom lays
+ * nothing out, so every key's rectangle is empty and, in Persian, any point right of its
+ * zero-width middle is its START half: a plain `drag` onto a key drops BEFORE it.
+ */
+function drag(id: MainMenuButtonId, target: () => Element | null, x = 20): void {
   const from = grip(id);
   fireEvent.pointerDown(from, { pointerId: 1, clientX: 1, clientY: 1 });
-  // The gaps between rows exist only while dragging, so the target is found now.
   const element = target();
   expect(element).not.toBeNull();
   document.elementFromPoint = vi.fn(() => element);
-  fireEvent.pointerMove(from, { pointerId: 1, clientX: 2, clientY: 2 });
-  fireEvent.pointerUp(from, { pointerId: 1, clientX: 2, clientY: 2 });
+  fireEvent.pointerMove(from, { pointerId: 1, clientX: x, clientY: 20 });
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: x, clientY: 20 });
+}
+
+/** A drag onto the START half of a key (the right half in Persian): before it. */
+function dragOntoStart(id: MainMenuButtonId, onto: MainMenuButtonId): void {
+  const host = chip(onto) as HTMLElement;
+  host.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
+  drag(id, () => host, 90);
 }
 
 const draftPuts = (api: Api) =>
@@ -122,7 +134,7 @@ describe('the button builder — editing the draft', () => {
     let api = builderApi(builderView(), [saved()]);
     renderPage(page());
     await ready();
-    drag('help', () => chip('catalog'));
+    dragOntoStart('help', 'catalog');
     drag('wallet', () => {
       const gaps = document.querySelectorAll('[data-drop="gap"]');
       return gaps[gaps.length - 1] ?? null;
@@ -262,57 +274,41 @@ describe('the button builder — editing the draft', () => {
     expect(body.layout.buttons.find((one) => one.button === 'wallet')?.style).toBe('danger');
   });
 
-  it('chooses an icon slot without touching the appearance slot, and shows per-bot eligibility', async () => {
-    const api = liveBuilderApi();
+  it('offers no icon control — neither «آیکون دکمه» nor «آیکون معنایی» — and keeps what is stored', async () => {
+    // A draft as a replica of the previous release could still answer mid-rollout: an icon
+    // on catalog, and a screen slot an operator once chose for it.
+    const layout: ExplicitMainMenu = {
+      ...DEFAULT_EXPLICIT_MAIN_MENU,
+      buttons: DEFAULT_EXPLICIT_MAIN_MENU.buttons.map((one) =>
+        one.button === 'catalog' ? { ...one, iconSlot: 'wallet', appearanceSlot: 'payment' } : one,
+      ),
+    };
+    const api = builderApi(builderView({ draft: draftView({ version: 1, layout }) }), [
+      saved({ version: 2 }),
+    ]);
     renderPage(page());
     await ready();
     select('catalog');
-    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
-      target: { value: 'wallet' },
-    });
-    // The marker is the slot's ordinary emoji in a frame, never the label's text.
-    expect(chip('catalog')?.querySelector('.bb-icon-mark')?.textContent).toBe('💰');
-    expect(chip('catalog')?.querySelector('.bb-chip-label')?.textContent).toBe(LABEL('catalog'));
-    const eligibility = within(screen.getByTestId('bb-eligibility'));
-    expect(eligibility.getByText('@acme_store_bot')).toBeTruthy();
-    expect(eligibility.getByText(t('web.bb_icon_eligible'))).toBeTruthy();
-    expect(eligibility.getByText(t('web.bb_icon_not_eligible'))).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/آیکون دکمه|آیکون معنایی/);
+    expect(
+      inspector()
+        .queryAllByRole('combobox')
+        .map((one) => one.id),
+    ).toHaveLength(1);
+    expect(document.querySelector('.bb-icon-mark')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
+    expect(
+      screen.getByTestId('bb-customer-preview').querySelector('[data-key="catalog"]')?.textContent,
+    ).toBe(LABEL('catalog'));
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_edit') }));
 
-    let body = await saveAndRead(api);
-    let config = body.layout.buttons.find((one) => one.button === 'catalog');
-    expect(config?.iconSlot).toBe('wallet');
-    expect(config?.appearanceSlot).toBeNull();
-
-    // The other way round: the screen's slot moves, the icon stays.
-    fireEvent.change(inspector().getByLabelText(t('web.bot_buttons_slot')), {
-      target: { value: 'payment' },
-    });
-    body = await saveAndRead(api);
-    config = body.layout.buttons.find((one) => one.button === 'catalog');
+    // An edit saves the layout with both values as they were: the server decides (it
+    // canonicalises the retired icon to null and keeps the screen slot).
+    fireEvent.click(inspector().getByLabelText(t('web.bb_style_success')));
+    const body = await saveAndRead(api);
+    const config = body.layout.buttons.find((one) => one.button === 'catalog');
     expect(config?.appearanceSlot).toBe('payment');
-    expect(config?.iconSlot).toBe('wallet');
-  });
-
-  it('says when no bot can show an icon', async () => {
-    builderApi(
-      builderView({
-        iconEligibility: [
-          {
-            botInstanceId: '01900000-0000-7000-8000-00000000a003',
-            username: 'only_bot',
-            status: 'ACTIVE',
-            eligible: false,
-          },
-        ],
-      }),
-    );
-    renderPage(page());
-    await ready();
-    select('catalog');
-    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
-      target: { value: 'purchase' },
-    });
-    expect(inspector().getByText(t('web.bb_icon_no_eligible_bot'))).toBeTruthy();
+    expect(config?.style).toBe('success');
   });
 
   it('warns about a crowded row without refusing it', async () => {
@@ -725,9 +721,11 @@ describe('the button builder — banners and permissions', () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
-    expect((inspector().getByLabelText(t('web.bb_icon_title')) as HTMLSelectElement).disabled).toBe(
-      true,
-    );
+    expect(
+      [...screen.getByTestId('bb-inspector').querySelectorAll('select')].every(
+        (one) => (one as HTMLSelectElement).disabled || one.closest('fieldset')?.disabled,
+      ),
+    ).toBe(true);
     fireEvent.keyDown(chipButton('help'), { key: 'Delete' });
     expect(pooled()).not.toContain('help');
     fireEvent.click(toolbarButton(t('web.bb_history')));
@@ -884,7 +882,7 @@ describe('the button builder — review of PR #134', () => {
     expect(screen.getByTestId('bb-live').textContent).not.toBe(t('web.bb_reloaded'));
   });
 
-  it('#5 draws the live keyboard with the published layout’s styles and icons', async () => {
+  it('#5 draws the live keyboard with the published layout’s styles, and no icon', async () => {
     builderApi(explicitView());
     renderPage(page());
     await ready();
@@ -893,7 +891,7 @@ describe('the button builder — review of PR #134', () => {
     const first = live.querySelector('[data-key="0-0"]') as HTMLElement;
     expect(first.textContent).toContain(LABEL('catalog'));
     expect(first.getAttribute('data-look')).toBe('primary');
-    expect(first.querySelector('.bb-icon-mark')).not.toBeNull();
+    expect(first.textContent).toBe(LABEL('catalog'));
     expect(live.querySelector('[data-key="0-1"]')?.getAttribute('data-look')).toBe('default');
     cleanup();
     // The legacy keyboard has no styles to show.
@@ -954,20 +952,243 @@ describe('the button builder — review of PR #134', () => {
     expect(dialog.queryByTestId('bb-diff')).toBeNull();
   });
 
-  it('#8 warns, without refusing, when an icon would sit beside a label’s own emoji', async () => {
-    builderApi(builderView({ itemOverrides: { services: { label: 'سرویس‌ها' } } }));
+  it('#8 (round-T QA-3, obsolete) never draws a second symbol beside a label’s own emoji', async () => {
+    // The doubled «💰💰» came from an icon marker drawn beside a label that starts with an
+    // emoji. The icon is retired, so every surface draws the label alone.
+    const layout: ExplicitMainMenu = {
+      ...DEFAULT_EXPLICIT_MAIN_MENU,
+      buttons: DEFAULT_EXPLICIT_MAIN_MENU.buttons.map((one) =>
+        one.button === 'wallet' ? { ...one, iconSlot: 'wallet' } : one,
+      ),
+    };
+    builderApi(builderView({ draft: draftView({ version: 1, layout }) }));
     renderPage(page());
     await ready();
-    select('catalog');
-    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
-      target: { value: 'purchase' },
-    });
-    expect(screen.getByTestId('bb-icon-doubled')).toBeTruthy();
-    select('services');
-    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
-      target: { value: 'service' },
-    });
+    expect(chip('wallet')?.querySelector('.bb-chip-label')?.textContent).toBe(LABEL('wallet'));
+    expect(chip('wallet')?.querySelector('.bb-chip-main')?.textContent).toBe(LABEL('wallet'));
     expect(screen.queryByTestId('bb-icon-doubled')).toBeNull();
-    expect(toolbarButton(t('web.bb_save_draft')).disabled).toBe(false);
+  });
+});
+
+describe('the button builder — round-T follow-ups (owner, 2026-10-02)', () => {
+  const published = (): BotMenuBuilderResponse => {
+    const view = builderView({ source: 'EXPLICIT' });
+    return builderView({
+      source: 'EXPLICIT',
+      draft: draftView({ version: 3, differsFromPublished: false }),
+      published: {
+        layout: view.draft.layout,
+        revision: 2,
+        publishedAt: '2026-09-30T10:00:00.000Z',
+        publishedByAdminId: null,
+      },
+    });
+  };
+
+  it('QA-4 names a revision’s publisher by name, never by an id prefix', async () => {
+    builderApi(builderView(), [
+      {
+        url: '/bot-menu/builder/revisions',
+        body: {
+          revisions: [
+            revision(REVISION_2, 2, DEFAULT_EXPLICIT_MAIN_MENU),
+            { ...revision(REVISION_1, 1, DEFAULT_EXPLICIT_MAIN_MENU), createdByAdminName: null },
+          ],
+          nextBefore: null,
+        },
+      },
+    ]);
+    renderPage(page());
+    await ready();
+    fireEvent.click(toolbarButton(t('web.bb_history')));
+    const history = await screen.findByTestId('bb-history');
+    const by = await within(history).findAllByTestId('bb-revision-by');
+    // Revision 2 names its publisher; revision 1's administrator row is gone: no line at all.
+    expect(by).toHaveLength(1);
+    expect(by[0]?.textContent).toBe(`${t('web.bb_revision_by')} سارا احمدی`);
+    expect(history.textContent).not.toContain('01900000');
+  });
+
+  it('QA-6 never reads «published» while a restore is replacing the draft', async () => {
+    builderApi(published(), [
+      {
+        url: '/bot-menu/builder/revisions',
+        body: {
+          revisions: [revision(REVISION_1, 1, DEFAULT_EXPLICIT_MAIN_MENU)],
+          nextBefore: null,
+        },
+      },
+      {
+        url: `/bot-menu/builder/revisions/${REVISION_1}/restore`,
+        body: mutationAnswer({
+          version: 4,
+          differsFromPublished: true,
+          restoredFrom: { id: REVISION_1, revision: 1 },
+        }),
+      },
+    ]);
+    const held = holdRequests('POST', '/restore');
+    renderPage(page());
+    await ready();
+    expect(state()).toBe('published');
+    fireEvent.click(toolbarButton(t('web.bb_history')));
+    fireEvent.click(
+      within(await screen.findByTestId('bb-history')).getByRole('button', {
+        name: `${t('web.bb_restore')}: ${t('web.bb_revision_n').replace('{n}', '1')}`,
+      }),
+    );
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: t('web.bb_restore') }),
+    );
+    await waitFor(() => expect(state()).toBe('saving'));
+    held.release();
+    await waitFor(() => expect(state()).toBe('differs'));
+  });
+
+  it('QA-6 the same for a reset', async () => {
+    builderApi(published(), [
+      { url: '/bot-menu/builder/reset', body: mutationAnswer({ version: 5 }) },
+    ]);
+    const held = holdRequests('POST', '/reset');
+    renderPage(page());
+    await ready();
+    expect(state()).toBe('published');
+    fireEvent.click(toolbarButton(t('web.bb_reset')));
+    const dialog = within(screen.getByRole('dialog', { name: t('web.bb_reset_title') }));
+    fireEvent.click(dialog.getByRole('button', { name: t('web.bb_reset_confirm') }));
+    await waitFor(() => expect(state()).toBe('saving'));
+    held.release();
+    await waitFor(() => expect(state()).not.toBe('saving'));
+  });
+});
+
+describe('the button builder — drag quality (owner, 2026-10-02)', () => {
+  it('a press on a grip that does not travel moves nothing, whatever is under it', async () => {
+    const api = builderApi(builderView(), [saved()]);
+    renderPage(page());
+    await ready();
+    const before = drawnRows();
+    const from = grip('help');
+    fireEvent.pointerDown(from, { pointerId: 1, clientX: 10, clientY: 10 });
+    document.elementFromPoint = vi.fn(() => pool());
+    // Three pixels: a trembling finger or a click, not a drag.
+    fireEvent.pointerMove(from, { pointerId: 1, clientX: 12, clientY: 12 });
+    fireEvent.pointerUp(from, { pointerId: 1, clientX: 12, clientY: 12 });
+    expect(drawnRows()).toEqual(before);
+    expect(screen.getByTestId('bb-live').textContent).toBe('');
+    expect(state()).not.toBe('unsaved');
+    expect(draftPuts(api)).toHaveLength(0);
+  });
+
+  it('a drop where the key already is, or a cancelled drag, changes nothing and says nothing', async () => {
+    builderApi(builderView());
+    renderPage(page());
+    await ready();
+    const before = drawnRows();
+    // `services` is right after `catalog`: onto catalog's END half is where it already is.
+    const catalog = chip('catalog') as HTMLElement;
+    catalog.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
+    drag('services', () => catalog, 10);
+    // A row dropped on a key is not a move.
+    const rowGrip = screen.getByTestId('bb-row-1').querySelector('.bb-row-grip') as HTMLElement;
+    fireEvent.pointerDown(rowGrip, { pointerId: 2, clientX: 1, clientY: 1 });
+    document.elementFromPoint = vi.fn(() => chip('catalog'));
+    fireEvent.pointerMove(rowGrip, { pointerId: 2, clientX: 40, clientY: 40 });
+    fireEvent.pointerUp(rowGrip, { pointerId: 2, clientX: 40, clientY: 40 });
+    // Escape abandons a drag that would have moved something.
+    fireEvent.pointerDown(grip('help'), { pointerId: 3, clientX: 1, clientY: 1 });
+    document.elementFromPoint = vi.fn(() => pool());
+    fireEvent.pointerMove(grip('help'), { pointerId: 3, clientX: 40, clientY: 40 });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.pointerUp(grip('help'), { pointerId: 3, clientX: 40, clientY: 40 });
+    // A pointer the browser cancels (a scroll gesture, a call) moves nothing either.
+    fireEvent.pointerDown(grip('help'), { pointerId: 4, clientX: 1, clientY: 1 });
+    fireEvent.pointerMove(grip('help'), { pointerId: 4, clientX: 40, clientY: 40 });
+    fireEvent.pointerCancel(grip('help'), { pointerId: 4 });
+    fireEvent.pointerUp(grip('help'), { pointerId: 4, clientX: 40, clientY: 40 });
+    expect(drawnRows()).toEqual(before);
+    expect(screen.getByTestId('bb-live').textContent).toBe('');
+    expect(state()).not.toBe('unsaved');
+  });
+
+  it('decides before/after by the half of the key under the pointer, in reading order (RTL)', async () => {
+    const api = builderApi(builderView(), [saved()]);
+    renderPage(page());
+    await ready();
+    // Persian: the RIGHT half of catalog is its start — help goes before it.
+    dragOntoStart('help', 'catalog');
+    expect(drawnRows()[0]).toEqual(['help', 'catalog', 'services']);
+    // The LEFT half of catalog is its end — wallet goes after it, before services.
+    const host = chip('catalog') as HTMLElement;
+    host.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
+    drag('wallet', () => host, 10);
+    expect(drawnRows()[0]).toEqual(['help', 'catalog', 'wallet', 'services']);
+    // The left half of the LAST key: the end of its row.
+    const last = chip('services') as HTMLElement;
+    last.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
+    drag('apps', () => last, 10);
+    expect(drawnRows()[0]).toEqual(['help', 'catalog', 'wallet', 'services', 'apps']);
+    const body = await saveAndRead(api);
+    expect(body.layout.rows[0]).toEqual(['help', 'catalog', 'wallet', 'services', 'apps']);
+  });
+
+  it('keeps the layout still when a drag starts, and draws the placeholder and target row over it', async () => {
+    builderApi(builderView());
+    renderPage(page());
+    await ready();
+    // The gaps are laid out before any drag: starting one adds nothing to the page.
+    const gaps = document.querySelectorAll('[data-drop="gap"]').length;
+    expect(gaps).toBe(drawnRows().length + 1);
+    const from = grip('help');
+    fireEvent.pointerDown(from, { pointerId: 1, clientX: 1, clientY: 1 });
+    const host = chip('catalog') as HTMLElement;
+    host.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
+    document.elementFromPoint = vi.fn(() => host);
+    fireEvent.pointerMove(from, { pointerId: 1, clientX: 90, clientY: 20 });
+    expect(document.querySelectorAll('[data-drop="gap"]').length).toBe(gaps);
+    // The ghost follows the pointer; the caret sits before catalog; its row is the target.
+    expect(await screen.findByTestId('bb-drag-ghost')).toBeTruthy();
+    await waitFor(() => expect(chip('catalog')?.className).toContain('is-insert-before'));
+    expect(screen.getByTestId('bb-row-0').className).toContain('is-target');
+    expect(screen.getByTestId('bb-row-1').className).not.toContain('is-target');
+    expect(chip('help')?.className).toContain('is-dragging');
+    // Over the pool: the pool is the target, no row is.
+    document.elementFromPoint = vi.fn(() => pool());
+    fireEvent.pointerMove(from, { pointerId: 1, clientX: 95, clientY: 25 });
+    await waitFor(() => expect(pool().className).toContain('is-over'));
+    expect(document.querySelector('.bb-row.is-target')).toBeNull();
+    fireEvent.pointerUp(from, { pointerId: 1, clientX: 95, clientY: 25 });
+    expect(screen.queryByTestId('bb-drag-ghost')).toBeNull();
+    expect(pooled()).toContain('help');
+  });
+
+  it('the grip is a real button a finger lands on, out of the tab order (QA-2)', async () => {
+    builderApi(builderView());
+    renderPage(page());
+    await ready();
+    const grips = document.querySelectorAll('.bb-grip, .bb-row-grip');
+    expect(grips.length).toBeGreaterThan(0);
+    for (const one of grips) {
+      expect(one.tagName).toBe('BUTTON');
+      expect(one.getAttribute('tabindex')).toBe('-1');
+      expect(one.getAttribute('aria-hidden')).toBe('true');
+    }
+  });
+
+  it('keeps the keyboard fallback: Alt+arrows follow the reading direction in LTR too', async () => {
+    builderApi(builderView());
+    const before = document.documentElement.dir;
+    document.documentElement.dir = 'ltr';
+    try {
+      renderPage(page());
+      await ready();
+      // The default draft's first row is catalog, services.
+      fireEvent.keyDown(chipButton('services'), { key: 'ArrowLeft', altKey: true });
+      expect(drawnRows()[0]).toEqual(['services', 'catalog']);
+      fireEvent.keyDown(chipButton('services'), { key: 'ArrowRight', altKey: true });
+      expect(drawnRows()[0]).toEqual(['catalog', 'services']);
+    } finally {
+      document.documentElement.dir = before;
+    }
   });
 });

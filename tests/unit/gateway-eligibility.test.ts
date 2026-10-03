@@ -174,12 +174,14 @@ describe('the provider catalogue', () => {
      */
     // WP11A added TonPays WITH its adapter (`TonPaysAdapter`), and Package A added Telegram
     // Stars with its own (`TelegramStarsAdapter`), and TonPays Telegram its own
-    // (`TonPaysTelegramAdapter`, `docs/tonpays-telegram-gateway-audit.md`); that is what this pins.
+    // (`TonPaysTelegramAdapter`, `docs/tonpays-telegram-gateway-audit.md`), and NOWPayments its
+    // own (`NowPaymentsAdapter`, `docs/nowpayments-gateway-audit.md`); that is what this pins.
     expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual([
       'MANUAL_TRANSFER',
       'TONPAYS',
       'TELEGRAM_STARS',
       'TONPAYS_TELEGRAM',
+      'NOWPAYMENTS',
     ]);
   });
 
@@ -217,18 +219,21 @@ describe('the invoice-form descriptor fields (TonPays Telegram, audit §5.3)', (
             d.requiresBuyerChatId,
             d.providerReview,
             d.invoiceCredential,
+            d.webhookSecret,
           ],
         ];
       }),
     );
     expect(table).toEqual({
-      MANUAL_TRANSFER: ['NONE', false, false, false, 'NONE'],
-      TONPAYS: ['LINK', false, false, false, 'GATEWAY_KEY'],
-      TELEGRAM_STARS: ['BOT_INVOICE', true, false, false, 'BOT_TOKEN'],
-      TONPAYS_TELEGRAM: ['CARD_TRANSFER', true, true, true, 'GATEWAY_KEY'],
+      MANUAL_TRANSFER: ['NONE', false, false, false, 'NONE', false],
+      TONPAYS: ['LINK', false, false, false, 'GATEWAY_KEY', false],
+      TELEGRAM_STARS: ['BOT_INVOICE', true, false, false, 'BOT_TOKEN', false],
+      TONPAYS_TELEGRAM: ['CARD_TRANSFER', true, true, true, 'GATEWAY_KEY', false],
+      // NOWPayments: a link, its coins-on-chain review, and the only signed webhook.
+      NOWPAYMENTS: ['LINK', false, false, true, 'GATEWAY_KEY', true],
     });
-    // Only the Telegram route may carry the review columns: the list generates the CHECK.
-    expect([...PROVIDER_REVIEW_GATEWAY_PROVIDERS]).toEqual(['TONPAYS_TELEGRAM']);
+    // Only the routes that review may carry the review columns: the list generates the CHECK.
+    expect([...PROVIDER_REVIEW_GATEWAY_PROVIDERS]).toEqual(['TONPAYS_TELEGRAM', 'NOWPAYMENTS']);
     // Its own key, through the same credential store, never the website route's.
     expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS_TELEGRAM).toMatchObject({
       settlesVia: 'GATEWAY',

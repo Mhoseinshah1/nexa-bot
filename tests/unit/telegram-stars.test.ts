@@ -85,6 +85,8 @@ describe('the conversion (A1)', () => {
       boundToBot: true,
       requiresBuyerChatId: false,
       providerReview: false,
+      // NOWPayments: only a provider that signs its webhooks takes a second secret.
+      webhookSecret: false,
     });
     expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS.approval).toBe('INQUIRY');
   });

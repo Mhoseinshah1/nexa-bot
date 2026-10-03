@@ -90,6 +90,8 @@ export class RecoveryController {
     return {
       scheduleEnabled: status.scheduleEnabled,
       intervalMs: status.intervalMs,
+      scheduleSource: { ...status.scheduleSource },
+      deliveryDestination: status.deliveryDestination,
       lastSucceededAt: status.lastSucceededAt?.toISOString() ?? null,
       running: status.running === null ? null : toRunSummary(status.running),
       unknownDeliveries: status.unknownDeliveries,

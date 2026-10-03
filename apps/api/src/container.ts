@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url';
 import {
   ADMIN_MENU_BUTTON,
   ADMIN_MENU_COMMAND,
+  BACKUP_LEASE_STALE_AFTER_MS,
+  BACKUP_SCHEDULE_SETTING_KEYS,
   PAYMENT_GATEWAY_DESCRIPTORS,
   CAMPAIGN_SCHEDULE_INTERVAL_MS,
   CHANNEL_MEMBERSHIP_TIMEOUT_MS,
@@ -156,6 +158,9 @@ import type { InstallationWriteGate } from './infrastructure/persistence/write-g
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
+import { RoutedBackupDelivery } from './modules/platform/backup/application/routed-backup-delivery.js';
+import { BackupSchedulePolicy } from './modules/platform/backup/application/backup-schedule.js';
+import { OpsGroupBackupTopicAdapter } from './modules/control/ops-group/application/backup-topic.js';
 import { FilesystemBackupWorkspaces } from './modules/platform/backup/infrastructure/workspace.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
@@ -328,6 +333,7 @@ import type {
 import { GatewayReceiptCaptureService } from './modules/commerce/payments/application/gateway-receipt-capture.service.js';
 import { DrizzleGatewayCardTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository.js';
 import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
+import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/nowpayments-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -2250,6 +2256,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const tonpaysTelegramAdapter = new TonPaysTelegramAdapter();
   /*
+   * NOWPayments (`docs/nowpayments-gateway-audit.md`): the hosted crypto invoice. Its own
+   * adapter, the only code that speaks its HTTP; priced from the central USDT quote; its IPN
+   * verified against the tenant's stored secret and still only a hint. Not accepted against
+   * the real provider yet (`OQ-NP-01`).
+   */
+  const nowpaymentsAdapter = new NowPaymentsAdapter();
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -2266,7 +2279,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         return starsAdapter;
       case 'TONPAYS_TELEGRAM':
         return tonpaysTelegramAdapter;
+      case 'NOWPAYMENTS':
+        return nowpaymentsAdapter;
       case 'MANUAL_TRANSFER':
+        return null;
+      default:
+        // A provider a LATER release added (seen after a rollback): no adapter, never undefined.
         return null;
     }
   };
@@ -4629,10 +4647,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     config.TELEGRAM_API_BASE_URL,
     config.NOTIFICATION_SEND_TIMEOUT_MS,
   );
+  const opsGroupBots = new OpsGroupBotSource(botInstances);
   const opsGroups = new OpsGroupService({
     repository: opsGroupRepository,
     telegram: opsGroupTelegram,
-    bots: new OpsGroupBotSource(botInstances),
+    bots: opsGroupBots,
     provisioner: new OpsTopicProvisioner({
       repository: opsGroupRepository,
       telegram: opsGroupTelegram,
@@ -4907,6 +4926,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ),
   });
   const backupArchiver = new KeyringBackupArchiver(keyring);
+  /*
+   * The automatic schedule (spec §13.2): the Web Admin's registry values on the
+   * installation tenant, the environment as the compatible default. One policy, read by
+   * the scheduler on every tick and by the status card, so they cannot disagree.
+   */
+  const backupSchedule = new BackupSchedulePolicy({
+    settings: {
+      read: async (scope) => ({
+        enabled: await settingsResolver.valueOf<boolean | null>(
+          scope,
+          BACKUP_SCHEDULE_SETTING_KEYS.enabled,
+        ),
+        intervalMinutes: await settingsResolver.valueOf<number | null>(
+          scope,
+          BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
+        ),
+      }),
+    },
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    environment: {
+      enabled: config.BACKUP_SCHEDULE_ENABLED,
+      intervalMs: config.BACKUP_INTERVAL_MS,
+    },
+  });
   const backup = new BackupService({
     runs: backupRuns,
     tools: backupTools,
@@ -4916,11 +4962,35 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // in this installation does.
     archiver: backupArchiver,
     workspaces: new FilesystemBackupWorkspaces(config.BACKUP_WORK_DIR),
-    delivery: new TelegramBackupDelivery({
-      apiBaseUrl: config.TELEGRAM_API_BASE_URL,
-      token: config.BACKUP_TELEGRAM_BOT_TOKEN,
-      chatId: config.BACKUP_TELEGRAM_CHAT_ID,
-      timeoutMs: config.BACKUP_DELIVERY_TIMEOUT_MS,
+    /*
+     * Spec §13.1: the connected operations log group's «💾 بکاپ‌ها» topic first, posted
+     * by the group's own bot through the ONE topic provisioner; the environment's
+     * dedicated chat only as the explicit fallback. Precedence: `RoutedBackupDelivery`.
+     */
+    delivery: new RoutedBackupDelivery({
+      opsGroup: new OpsGroupBackupTopicAdapter(opsGroups, opsGroupBots, () =>
+        systemJobActor('backup-delivery', newCorrelationId(ids.uuid())),
+      ),
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      channelFor: (target) =>
+        new TelegramBackupDelivery({
+          apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+          token: target.token,
+          chatId: target.chatId,
+          messageThreadId: target.threadId,
+          timeoutMs: config.BACKUP_DELIVERY_TIMEOUT_MS,
+        }),
+      dedicated: new TelegramBackupDelivery({
+        apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+        token: config.BACKUP_TELEGRAM_BOT_TOKEN,
+        chatId: config.BACKUP_TELEGRAM_CHAT_ID,
+        timeoutMs: config.BACKUP_DELIVERY_TIMEOUT_MS,
+      }),
+      clock,
+      logger,
     }),
     clock,
     ids,
@@ -4995,8 +5065,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     clock,
     workRoot: config.BACKUP_WORK_DIR,
-    scheduleEnabled: config.BACKUP_SCHEDULE_ENABLED,
-    intervalMs: config.BACKUP_INTERVAL_MS,
+    schedule: () => backupSchedule.effective(),
   });
 
   const recoveryExecutor = new RecoveryExecutor({
@@ -5059,8 +5128,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       return lock !== null && lock.quiescing;
     },
     clock,
-    intervalMs: config.BACKUP_INTERVAL_MS,
+    schedule: () => backupSchedule.effective(),
     tickIntervalMs: config.BACKUP_TICK_MS,
+    // A run in flight is alive while its lease heartbeat is — the same rule that decides
+    // when another process may reclaim it as abandoned.
+    runHeartbeatAt: () => backup.leaseHeartbeatAt(),
+    runStaleAfterMs: BACKUP_LEASE_STALE_AFTER_MS,
     logger,
   });
 

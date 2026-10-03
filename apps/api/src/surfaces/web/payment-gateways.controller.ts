@@ -3,6 +3,8 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  checkPaymentGatewayCredentialRequestSchema,
+  setPaymentGatewayWebhookSecretRequestSchema,
   providerUnitRateMinorSchema,
   PAYMENT_GATEWAY_ROUTES,
   paymentGatewayConfigSchema,
@@ -159,6 +161,45 @@ export class PaymentGatewaysController {
     return this.respond(scope, gateway);
   }
 
+  /**
+   * Replaces a signed route's webhook secret (NOWPayments' IPN secret). Write-only, the key's
+   * rules: the answer is the route view with the secret's set-at time, never the secret.
+   */
+  @Post(routePattern(PAYMENT_GATEWAY_ROUTES.webhookSecret, 'provider'))
+  async setWebhookSecret(
+    @Req() request: FastifyRequest,
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ): Promise<PaymentGatewayResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = setPaymentGatewayWebhookSecretRequestSchema.parse(body);
+    const gateway = await this.container.paymentGateways.setWebhookSecret(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      provider,
+      secret: input.secret,
+    });
+    return this.respond(scope, gateway);
+  }
+
+  /**
+   * The operator's credential check: one read-only provider call with the stored key,
+   * recorded as the route's last check. The answer is the route view.
+   */
+  @Post(routePattern(PAYMENT_GATEWAY_ROUTES.check, 'provider'))
+  async checkCredential(
+    @Req() request: FastifyRequest,
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ): Promise<PaymentGatewayResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = checkPaymentGatewayCredentialRequestSchema.parse(body);
+    const gateway = await this.container.paymentGateways.checkCredential(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      provider,
+    });
+    return this.respond(scope, gateway);
+  }
+
   private async respond(
     scope: TenantContext,
     gateway: PaymentGatewayRecord,
@@ -200,7 +241,12 @@ export class PaymentGatewaysController {
  * The descriptor's `settlesVia` and `requiresCredentials` are deliberately absent — the
  * view schema says why.
  */
-const NO_FACTS: GatewayOperatorFacts = { credentialSetAt: null, callbackUrl: null };
+const NO_FACTS: GatewayOperatorFacts = {
+  credentialSetAt: null,
+  callbackUrl: null,
+  webhookSecretSetAt: null,
+  lastCheck: null,
+};
 
 function toView(
   gateway: PaymentGatewayRecord,
@@ -231,6 +277,10 @@ function toView(
     credential: {
       required: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].requiresCredentials,
       setAt: facts.credentialSetAt?.toISOString() ?? null,
+      webhookSecretRequired: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].webhookSecret,
+      webhookSecretSetAt: facts.webhookSecretSetAt?.toISOString() ?? null,
+      lastCheckAt: facts.lastCheck?.at.toISOString() ?? null,
+      lastCheckResult: facts.lastCheck?.result ?? null,
     },
     callbackUrl: facts.callbackUrl,
     conversion: {

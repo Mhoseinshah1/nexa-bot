@@ -671,6 +671,44 @@ export const WEB_FA = {
   'web.recovery_schedule_off_hint':
     'بکاپ خودکار خاموش است. تاریخچه‌ی سالم به‌تنهایی معنایش این نیست که بکاپی گرفته می‌شود.',
   'web.recovery_interval': 'فاصله‌ی بکاپ‌ها',
+  // Spec §13.2 — the automatic schedule, edited here instead of in the server's settings.
+  'web.backup_schedule_title': 'زمان‌بندی بکاپ خودکار',
+  'web.backup_schedule_hint':
+    'بکاپ خودکار و فاصله‌ی آن از همین صفحه تنظیم می‌شود و بدون راه‌اندازی دوباره اعمال می‌شود.',
+  'web.backup_schedule_auto': 'بکاپ خودکار',
+  'web.backup_schedule_auto_hint':
+    'وقتی روشن است، پس از گذشت فاصله‌ی تعیین‌شده از آخرین بکاپ موفق، بکاپ تازه‌ای گرفته می‌شود.',
+  'web.backup_schedule_on': 'روشن',
+  'web.backup_schedule_off': 'خاموش',
+  'web.backup_schedule_interval': 'فاصله‌ی بکاپ‌ها',
+  'web.backup_schedule_interval_edit': 'تغییر فاصله',
+  'web.backup_interval_1h': 'هر ۱ ساعت',
+  'web.backup_interval_3h': 'هر ۳ ساعت',
+  'web.backup_interval_6h': 'هر ۶ ساعت',
+  'web.backup_interval_12h': 'هر ۱۲ ساعت',
+  'web.backup_interval_24h': 'هر ۲۴ ساعت',
+  'web.backup_interval_custom': 'سفارشی',
+  'web.backup_interval_value': 'مقدار',
+  'web.backup_interval_unit': 'واحد',
+  'web.backup_interval_bounds': 'کمترین فاصله ۱۵ دقیقه و بیشترین ۳۰ روز است.',
+  'web.backup_interval_invalid': 'یک عدد صحیح وارد کنید.',
+  'web.backup_interval_too_short': 'فاصله نمی‌تواند کمتر از ۱۵ دقیقه باشد.',
+  'web.backup_interval_too_long': 'فاصله نمی‌تواند بیشتر از ۳۰ روز باشد.',
+  'web.backup_interval_save': 'ذخیره‌ی فاصله',
+  'web.backup_schedule_reset_enabled': 'بازگشت روشن/خاموش به پیش‌فرض نصب',
+  'web.backup_schedule_reset_interval': 'بازگشت فاصله به پیش‌فرض نصب',
+  'web.backup_schedule_saved': 'ذخیره شد. از نوبت بعدی بررسی زمان‌بندی اعمال می‌شود.',
+  'web.backup_schedule_read_only': 'برای تغییر زمان‌بندی، دسترسی ویرایش تنظیمات لازم است.',
+  'web.backup_source_setting': 'تنظیم‌شده در پنل',
+  'web.backup_source_environment': 'پیش‌فرض نصب',
+  'web.backup_schedule_technical':
+    'مقداری که در این صفحه ذخیره نشده باشد، از پیکربندی سرور (متغیرهای محیطی زیر) خوانده می‌شود. مقدار ذخیره‌شده در این صفحه همیشه بر آن مقدم است.',
+  'web.backup_destination': 'مقصد ارسال فایل بکاپ',
+  'web.backup_destination_ops_group': 'تاپیک «💾 بکاپ‌ها» در گروه گزارش‌های مدیریتی',
+  'web.backup_destination_dedicated': 'گفت‌وگوی اختصاصی بکاپ (پیکربندی سرور)',
+  'web.backup_destination_none': 'هیچ‌جا — فقط روی سرور نگه داشته می‌شود',
+  'web.backup_destination_none_hint':
+    'برای دریافت فایل بکاپ در تلگرام، «گروه گزارش‌های مدیریتی» را متصل کنید؛ Nexa تاپیک «💾 بکاپ‌ها» را خودش می‌سازد.',
   'web.recovery_last_success': 'آخرین موفقیت',
   'web.recovery_never': 'هرگز',
   'web.recovery_running': 'در حال اجرا',
@@ -1445,12 +1483,16 @@ export const WEB_FA = {
   'web.users_empty_hint': 'مشتری با نخستین پیام /start به ربات ساخته می‌شود.',
   'web.users_search_empty': 'هیچ مشتری‌ای با این جست‌وجو پیدا نشد.',
   'web.users_search_empty_hint':
-    'شناسهٔ عددی تلگرام باید کامل و دقیق باشد؛ نام کاربری با ابتدای آن جست‌وجو می‌شود.',
-  'web.users_search_telegram': 'شناسهٔ تلگرام',
-  'web.users_search_telegram_hint': 'تطبیق کامل و دقیق. بخشی از شناسه جست‌وجو نمی‌شود.',
-  'web.users_search_username': 'نام کاربری',
-  'web.users_search_username_hint': 'با ابتدای نام کاربری، بدون حساسیت به بزرگی و کوچکی حرف‌ها.',
-  'web.users_search_invalid_telegram': 'شناسهٔ تلگرام فقط رقم است و با صفر آغاز نمی‌شود.',
+    'شناسهٔ عددی تلگرام باید کامل و دقیق باشد؛ نام کاربری و نام با ابتدای آنها جست‌وجو می‌شوند.',
+  'web.users_search_hint':
+    'شناسهٔ عددی تلگرام (دقیق)، ‎@نام کاربری، یا ابتدای نام یا نام خانوادگی.',
+  // Spec §10: the one search box every list page draws (`ui/list-search.tsx`).
+  'web.list_search_label': 'جست‌وجو',
+  'web.list_search_reads_telegram': 'به‌عنوان شناسهٔ عددی تلگرام جست‌وجو می‌شود.',
+  'web.list_search_reads_id': 'به‌عنوان شناسهٔ داخلی جست‌وجو می‌شود.',
+  'web.list_search_reads_username': 'به‌عنوان ابتدای نام کاربری تلگرام جست‌وجو می‌شود.',
+  'web.list_search_reads_text': 'به‌عنوان متن جست‌وجو می‌شود.',
+  'web.customer_identity_unknown': 'مشتری نامشخص',
   'web.users_search_apply': 'جست‌وجو',
   'web.users_search_clear': 'پاک کردن',
   'web.users_search_denied':
@@ -1688,12 +1730,9 @@ export const WEB_FA = {
   'web.payment_customer_signalled_none': 'مشتری چیزی نگفته است.',
   'web.payment_customer_signalled_hint':
     'این فقط گفتهٔ مشتری است، نه رسید و نه تأیید. پرداخت همچنان در انتظار بررسی شماست.',
-  'web.payments_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
-  'web.payments_filter_order_hint': 'شناسهٔ سفارش را کامل وارد کنید.',
-  'web.payments_filter_reference_hint': 'کد پیگیری دقیقاً همان چیزی است که مشتری می‌خواند.',
+  'web.payments_search_hint':
+    'شناسهٔ عددی تلگرام، کد پیگیری یا شمارهٔ مرجع بانک (دقیق)، شناسهٔ پرداخت یا سفارش، یا ‎@نام کاربری.',
   'web.payments_filter_all': 'همه',
-  'web.payments_filter_invalid_id': 'شناسه معتبر نیست.',
-  'web.payments_search_apply': 'جست‌وجو',
   'web.payment_confirm_title': 'بررسی رسید',
   /*
    * Payment File 02 §10: card-to-card review is Telegram's alone. The Web Admin says
@@ -1754,6 +1793,7 @@ export const WEB_FA = {
   'web.payment_gateway_provider_tonpays': 'درگاه پرداخت تون پی وبسایت',
   'web.payment_gateway_provider_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
   'web.payment_gateway_provider_telegram_stars': 'تلگرام استارز (⭐)',
+  'web.payment_gateway_provider_nowpayments': 'درگاه ارز دیجیتال (NOWPayments)',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
   'web.payment_gateway_rate_hint':
@@ -1844,6 +1884,21 @@ export const WEB_FA = {
   'web.payment_gateway_credential_input': 'کلید API جدید',
   'web.payment_gateway_credential_save': 'ذخیرهٔ کلید',
   'web.payment_gateway_credential_saved': 'کلید API ذخیره شد.',
+  'web.payment_gateway_nowpayments_hint':
+    'مبلغ فاکتور به دلار و فقط از نرخ مرکزی ارز (USDT) محاسبه می‌شود؛ مشتری نوع ارز دیجیتال را در صفحهٔ NOWPayments انتخاب می‌کند. پرداخت فقط پس از وضعیت «finished» با استعلام مستقیم از NOWPayments تأیید می‌شود.',
+  'web.payment_gateway_webhook_secret_missing': 'کلید IPN تنظیم نشده',
+  'web.payment_gateway_webhook_secret_configured': 'کلید IPN تنظیم شده ••••••••',
+  'web.payment_gateway_webhook_secret_input': 'کلید IPN جدید (IPN Secret)',
+  'web.payment_gateway_webhook_secret_hint':
+    'اعلان‌های NOWPayments فقط با این کلید امضا و بررسی می‌شوند. کلید ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید. بدون کلید IPN، این درگاه قابل فعال‌سازی نیست.',
+  'web.payment_gateway_webhook_secret_save': 'ذخیرهٔ کلید IPN',
+  'web.payment_gateway_webhook_secret_saved': 'کلید IPN ذخیره شد.',
+  'web.payment_gateway_provider_payment_id': 'شناسهٔ پرداخت در درگاه',
+  'web.payment_gateway_check': 'بررسی اتصال',
+  'web.payment_gateway_check_done': 'بررسی اتصال انجام شد.',
+  'web.payment_gateway_last_check': 'آخرین بررسی',
+  'web.payment_gateway_check_ok': 'اتصال موفق',
+  'web.payment_gateway_check_failed': 'اتصال ناموفق',
   'web.payment_gateway_callback_url': 'آدرس وب‌هوک (تولیدشده)',
   'web.payment_gateway_callback_url_hint':
     'این آدرس به‌صورت خودکار ساخته می‌شود و همراه هر فاکتور برای درگاه ارسال می‌شود. وب‌هوک فقط یک اعلان است؛ تأیید پرداخت همیشه با استعلام مستقیم از درگاه انجام می‌شود.',
@@ -2528,11 +2583,9 @@ export const WEB_FA = {
   'web.orders_empty': 'هنوز سفارشی ثبت نشده است.',
   'web.orders_empty_hint': 'وقتی مشتری از فهرست ربات چیزی انتخاب کند، اینجا دیده می‌شود.',
   'web.orders_filter_empty': 'سفارشی با این مشخصات پیدا نشد.',
-  'web.orders_filter_empty_hint': 'شناسه را بررسی کنید یا صافی‌ها را پاک کنید.',
-  'web.orders_filter_customer_hint': 'شناسهٔ داخلی مشتری، نه شناسهٔ تلگرام.',
-  'web.orders_filter_product_hint': 'شناسهٔ محصول.',
-  'web.orders_filter_invalid_id':
-    'این یک شناسهٔ معتبر نیست. شناسهٔ داخلی را از صفحهٔ همان مشتری یا محصول بردارید.',
+  'web.orders_filter_empty_hint': 'متن جست‌وجو را بررسی کنید یا صافی‌ها را پاک کنید.',
+  'web.orders_search_hint':
+    'شناسهٔ عددی تلگرام، شناسهٔ سفارش یا محصول، نام محصول، یا ‎@نام کاربری.',
   'web.order_detail': 'جزئیات سفارش',
   'web.order_line': 'سرویس',
   'web.order_line_title': 'آنچه خریداری شده',
@@ -2698,21 +2751,8 @@ export const WEB_FA = {
   'web.service_delivery_next_attempt': 'تلاش بعدی',
 
   'web.services_filter_all': 'همه',
-  'web.services_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
-  'web.services_filter_panel_hint': 'شناسهٔ پنل را کامل وارد کنید.',
-  'web.services_filter_invalid_id': 'شناسه معتبر نیست.',
-  /*
-   * The lookup an operator actually arrives with.
-   *
-   * A customer quotes the name on their account, never the internal id, so until
-   * this existed the one handle a support conversation contains matched no search
-   * on either surface. EXACT, and the hint says so: a prefix over account names
-   * would enumerate a panel's accounts, and every row here leads to a
-   * subscription.
-   */
-  'web.services_filter_username_hint': 'نام کاربری روی پنل را کامل وارد کنید؛ جست‌وجو دقیق است.',
-  'web.services_filter_invalid_username': 'این نام کاربری از شکلی نیست که اینجا ذخیره می‌شود.',
-  'web.services_search_apply': 'جست‌وجو',
+  'web.services_search_hint':
+    'نام کاربری سرویس روی پنل (کامل و دقیق)، شناسهٔ عددی تلگرام، ‎@نام کاربری، یا شناسهٔ سرویس، سفارش یا پنل.',
 
   /*
    * Three banners, each naming what an operator should DO.
@@ -3057,7 +3097,7 @@ export const WEB_FA = {
   'web.nav_bot_buttons': 'دکمه‌های ربات',
   'web.bot_buttons_title': 'دکمه‌های ربات',
   'web.bot_buttons_intro':
-    'دکمه‌های منوی اصلی ربات، یعنی کیبوردی که زیر چت مشتری نمایش داده می‌شود: ردیف‌ها، نمایش، رنگ، آیکون و متن هر دکمه، و منوی دستورهای تلگرام.',
+    'دکمه‌های منوی اصلی ربات، یعنی کیبوردی که زیر چت مشتری نمایش داده می‌شود: ردیف‌ها، نمایش، رنگ و متن هر دکمه، و منوی دستورهای تلگرام.',
   'web.bot_buttons_needs_trial_offer':
     'فقط وقتی دیده می‌شود که دست‌کم روی یک پنل سرویس تست روشن باشد و همین حالا ارائه شود (صفحهٔ پنل، زبانهٔ «سرویس تست»).',
   'web.bot_buttons_trial_not_offered': 'فعلاً هیچ پنلی سرویس تست ارائه نمی‌کند',
@@ -3081,10 +3121,6 @@ export const WEB_FA = {
   'web.bot_buttons_target': 'مقصد',
   'web.bot_buttons_target_hint':
     'هر دکمه دقیقاً همان دستور واقعی ربات را باز می‌کند که برایش تعریف شده است. مقصد از این صفحه تغییر نمی‌کند و دو دکمه نمی‌توانند یک مقصد داشته باشند.',
-  'web.bot_buttons_slot': 'آیکون معنایی',
-  'web.bot_buttons_slot_default': 'پیش‌فرض',
-  'web.bot_buttons_slot_hint':
-    'آیکون معنایی ارجاعی به بخش «ظاهر ربات» است و صفحه‌ای را که دکمه باز می‌کند تزئین می‌کند؛ روی متن خود دکمه اثری ندارد، چون دکمه‌های کیبورد تلگرام فقط متن ساده می‌پذیرند.',
   'web.bot_buttons_commands_title': 'منوی دستورهای تلگرام',
   'web.bot_buttons_commands_hint':
     'فهرستی که با setMyCommands در تلگرام ثبت می‌شود و کنار دکمهٔ «منو» در چت دیده می‌شود: فقط دستورهای واقعی مشتری، با همان توضیحی که در متن‌ها نوشته‌اید. دستورهای پنل مدیریت هرگز ثبت نمی‌شوند.',
@@ -4628,8 +4664,14 @@ export const WEB_FA = {
   'web.opsgroup_topics': 'تاپیک‌ها',
   'web.opsgroup_topics_hint':
     'Nexa این تاپیک‌ها را خودش می‌سازد و نگه می‌دارد؛ اگر یکی حذف شود، دوباره ساخته می‌شود.',
-  'web.opsgroup_topic_system': '⚙️ سیستم و خطاها',
+  'web.opsgroup_topic_system': '⚙️ سیستم',
   'web.opsgroup_topic_payments': '💳 پرداخت‌ها',
+  'web.opsgroup_topic_errors': '🚨 خطاها',
+  'web.opsgroup_topic_services': '🧩 سفارش‌ها و سرویس‌ها',
+  'web.opsgroup_topic_panels': '🖥 پنل‌ها',
+  'web.opsgroup_topic_bot': '🤖 ربات و پیام‌رسانی',
+  'web.opsgroup_topic_security': '🛡 امنیت و دسترسی',
+  'web.opsgroup_topic_backups': '💾 بکاپ‌ها',
   'web.opsgroup_topic_pending': 'هنوز ساخته نشده',
   'web.opsgroup_topic_ready': 'آماده',
   'web.opsgroup_topic_missing': 'حذف شده — دوباره ساخته می‌شود',
@@ -5274,7 +5316,7 @@ export const WEB_FA = {
   // Round T — the button builder («دکمه‌های ربات»).
   'web.bb_title': 'چیدمان منوی اصلی',
   'web.bb_hint':
-    'دکمه‌ها را در ردیف‌ها بچینید، روشن یا خاموش کنید، رنگ و آیکون بدهید. همه‌چیز در پیش‌نویس می‌ماند تا منتشر کنید.',
+    'دکمه‌ها را در ردیف‌ها بچینید، روشن یا خاموش کنید و رنگ بدهید. همه‌چیز در پیش‌نویس می‌ماند تا منتشر کنید.',
   'web.bb_draft_note':
     'پیش‌نویس هیچ اثری روی ربات ندارد. مشتریان فقط آخرین نسخهٔ «منتشرشده» را می‌بینند؛ ذخیرهٔ پیش‌نویس چیزی را زنده نمی‌کند.',
   'web.bb_source_legacy': 'منوی مشتری اکنون از چیدمان قبلی (بدون ردیف‌بندی دستی) ساخته می‌شود.',
@@ -5323,7 +5365,7 @@ export const WEB_FA = {
   'web.bb_unsaved_leave': 'پیش‌نویس منو تغییرات ذخیره‌نشده دارد. بدون ذخیره خارج می‌شوید؟',
   'web.bb_pool_title': 'دکمه‌های آزاد',
   'web.bb_pool_hint':
-    'دکمه‌ای که در منو نیست اینجا می‌ماند و رنگ و آیکونش حفظ می‌شود. برای افزودن، بکشید یا از بازرس استفاده کنید.',
+    'دکمه‌ای که در منو نیست اینجا می‌ماند و رنگ و تنظیماتش حفظ می‌شود. برای افزودن، بکشید یا از بازرس استفاده کنید.',
   'web.bb_pool_empty': 'همهٔ دکمه‌ها در منو هستند.',
   'web.bb_in_pool': 'در دکمه‌های آزاد (خارج از منو)',
   'web.bb_canvas_title': 'منو',
@@ -5337,7 +5379,7 @@ export const WEB_FA = {
     'همهٔ دکمه‌های چیده‌شده دیده می‌شوند؛ خاموش‌ها کم‌رنگ و پنهان‌ها نشان‌دار.',
   'web.bb_mode_customer_note':
     'این پیش‌نویس، اگر منتشر شود، با وضعیت فعلی شرط‌ها همین‌طور دیده می‌شود.',
-  'web.bb_mode_live_note': 'آنچه مشتریان همین حالا می‌بینند (رنگ و آیکون اینجا نشان داده نمی‌شود).',
+  'web.bb_mode_live_note': 'آنچه مشتریان همین حالا می‌بینند.',
   'web.bb_row_n': 'ردیف {n}',
   'web.bb_position': 'ردیف {row}، جایگاه {index}',
   'web.bb_drag_hint': 'برای جابه‌جایی بکشید',
@@ -5347,10 +5389,6 @@ export const WEB_FA = {
   'web.bb_rows_cramped':
     'ردیف {rows} ممکن است روی گوشی‌های باریک فشرده دیده شود. این فقط یک هشدار است و ذخیره را رد نمی‌کند.',
   'web.bb_hidden_now': 'اکنون پنهان',
-  'web.bb_icon_mark_title':
-    'جای آیکون: شکلک سفارشی فقط در ربات‌های واجد شرایط نمایش داده می‌شود؛ اینجا شکلک معمولی جایگزین آن کشیده شده است.',
-  'web.bb_icon_legend':
-    'آیکون‌ها با کادر نقطه‌چین نشان داده شده‌اند: شکلک سفارشی واقعی اینجا کشیده نمی‌شود و فقط در ربات‌های واجد شرایط ارسال می‌شود؛ متن دکمه هرگز تغییر نمی‌کند.',
   'web.bb_style_legend': 'رنگ‌ها تقریبی‌اند؛ شکل نهایی را برنامهٔ تلگرام مشتری تعیین می‌کند.',
   'web.bb_publish_save_first': 'برای انتشار، ابتدا پیش‌نویس را ذخیره کنید.',
   'web.bb_publish_nothing_saved':
@@ -5359,7 +5397,7 @@ export const WEB_FA = {
     'منوی زنده تغییر کرده است؛ ابتدا پیش‌نویس را از منوی زنده دوباره بسازید.',
   'web.bb_inspector_title': 'بازرس',
   'web.bb_inspector_empty':
-    'یک دکمه را انتخاب کنید تا جایگاه، نمایش، رنگ، آیکون و متن آن را اینجا ببینید.',
+    'یک دکمه را انتخاب کنید تا جایگاه، نمایش، رنگ و متن آن را اینجا ببینید.',
   'web.bb_where': 'جایگاه',
   'web.bb_place_title': 'جایگاه در منو',
   'web.bb_move_in_row': 'جابه‌جایی دکمه',
@@ -5388,20 +5426,6 @@ export const WEB_FA = {
   'web.bb_style_success': 'موفق (سبز)',
   'web.bb_style_danger': 'هشدار (قرمز)',
   'web.bb_style_hint': 'فقط همین چهار حالت را تلگرام می‌پذیرد؛ رنگ دلخواه ممکن نیست.',
-  'web.bb_icon_title': 'آیکون دکمه',
-  'web.bb_icon_none': 'بدون آیکون',
-  'web.bb_icon_hint':
-    'آیکون از جایگاه‌های «ظاهر ربات» انتخاب می‌شود و از «آیکون معنایی صفحه» جداست. فقط در ربات‌هایی که آزمون شکلک سفارشی را گذرانده‌اند ارسال می‌شود.',
-  'web.bb_icon_label_has_emoji':
-    'متن این دکمه خودش با یک شکلک شروع می‌شود؛ با آیکون، دو نماد کنار هم دیده می‌شود. این فقط یک هشدار است.',
-  'web.bb_icon_slot_configured': 'این جایگاه شکلک سفارشی دارد.',
-  'web.bb_icon_slot_unconfigured':
-    'این جایگاه شکلک سفارشی فعالی ندارد؛ تا در «ظاهر ربات» تنظیم نشود، آیکونی ارسال نمی‌شود.',
-  'web.bb_icon_eligibility': 'ربات‌هایی که آیکون را نشان می‌دهند:',
-  'web.bb_icon_eligible': 'واجد شرایط',
-  'web.bb_icon_not_eligible': 'بدون آیکون (آزمون ظاهر موفق نبوده)',
-  'web.bb_icon_no_eligible_bot':
-    'فعلاً هیچ رباتی واجد شرایط نیست؛ این آیکون تا آزمون موفق در «ظاهر ربات» نمایش داده نمی‌شود.',
   'web.bb_gate_title': 'شرط نمایش',
   'web.bb_gate_open': 'شرط برقرار است؛ اکنون دیده می‌شود',
   'web.bb_hidden_now_because': 'اکنون پنهان است، چون:',
@@ -5419,8 +5443,6 @@ export const WEB_FA = {
   'web.bb_announce_on': '«{label}» روشن شد.',
   'web.bb_announce_off': '«{label}» خاموش شد؛ جایش حفظ می‌شود.',
   'web.bb_announce_style': 'رنگ «{label}»: {look}.',
-  'web.bb_announce_icon': 'آیکون «{label}»: {icon}.',
-  'web.bb_announce_screen': 'آیکون معنایی صفحهٔ «{label}» تغییر کرد.',
   'web.bb_publish_title': 'انتشار منو',
   'web.bb_publish_question':
     'این پیش‌نویس منوی اصلی همهٔ ربات‌ها می‌شود و از پیام بعدی به مشتریان نشان داده می‌شود.',
@@ -5443,8 +5465,6 @@ export const WEB_FA = {
   'web.bb_change_enabled': 'روشن می‌شود',
   'web.bb_change_disabled': 'خاموش می‌شود',
   'web.bb_change_style': 'رنگ تغییر می‌کند',
-  'web.bb_change_icon': 'آیکون تغییر می‌کند',
-  'web.bb_change_screen': 'آیکون معنایی صفحه تغییر می‌کند',
   'web.bb_reset_title': 'بازنشانی پیش‌نویس',
   'web.bb_reset_question':
     'پیش‌نویس جایگزین می‌شود. منوی زنده تا انتشار تغییری نمی‌کند. پیش‌نویس از کجا ساخته شود؟',

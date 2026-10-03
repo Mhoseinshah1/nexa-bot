@@ -403,6 +403,13 @@ export interface GatewayConversionSpec {
   readonly modeSetting: string | null;
   /** The setting holding provider units per base unit, for `CENTRAL_FX`. */
   readonly unitRatioSetting: string | null;
+  /**
+   * Provider units per base unit when the unit is a FIXED denomination rather than an
+   * operator's choice (NOWPayments: 100 US cents per USDT, `docs/nowpayments-gateway-
+   * audit.md` §3). Takes precedence over `unitRatioSetting`; absent for every route whose
+   * ratio is configured.
+   */
+  readonly fixedUnitRatio?: FxUnitRatio;
 }
 
 /** Whether a route may be priced by an operator-set rate (and so takes one). */

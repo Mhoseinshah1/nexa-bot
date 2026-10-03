@@ -37,8 +37,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'ops.notification.operational_event':
     '{severity} — <code>{code}</code>\n{message}\n\n{details}\n🏢 مستأجر: <code>{tenantId}</code>\n🤖 ربات: <code>{botInstanceId}</code>\n🔗 شناسه پیگیری: <code>{correlationId}</code>\n🔁 تعداد رخداد: {occurrences}\n🕒 نخستین بار: {firstSeenAt}\n🕒 این بار: {lastSeenAt}',
   // WP-A4 — the operations log group Nexa manages.
-  'ops.group.topic_name.system': '⚙️ سیستم و خطاها',
+  'ops.group.topic_name.system': '⚙️ سیستم',
   'ops.group.topic_name.payments': '💳 پرداخت‌ها',
+  'ops.group.topic_name.errors': '🚨 خطاها',
+  'ops.group.topic_name.services': '🧩 سفارش‌ها و سرویس‌ها',
+  'ops.group.topic_name.panels': '🖥 پنل‌ها',
+  'ops.group.topic_name.bot': '🤖 ربات و پیام‌رسانی',
+  'ops.group.topic_name.security': '🛡 امنیت و دسترسی',
+  'ops.group.topic_name.backups': '💾 بکاپ‌ها',
   'ops.group.connected':
     '✅ این گروه به‌عنوان «گروه گزارش‌های مدیریتی» Nexa متصل شد.\nNexa اکنون دسترسی‌های ربات را بررسی می‌کند و تاپیک‌های خود را می‌سازد. نتیجه را در پنل مدیریت، بخش «گروه گزارش‌های مدیریتی» ببینید.',
   'ops.group.connect_refused':
@@ -1125,6 +1131,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.route_name_manual_transfer': 'کارت به کارت',
   'bot.payment.route_name_tonpays': 'درگاه پرداخت تون پی وبسایت',
   'bot.payment.route_name_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
+  'bot.payment.route_name_nowpayments': '💳 پرداخت با ارز دیجیتال',
+  'bot.payment.nowpayments_pay_button': '💳 پرداخت با ارز دیجیتال',
+  'bot.payment.nowpayments_in_review':
+    '🕓 پرداخت ارز دیجیتال شما دریافت شده و در انتظار تأیید شبکه است.\n\n💵 مبلغ قابل پرداخت: {payable}\n⏳ پایان مهلت تأیید: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید نهایی درگاه در همین پیام نمایش داده می‌شود.',
+  'bot.payment.nowpayments_review_unresolved':
+    'پرداخت ارز دیجیتال شما نیاز به بررسی دارد؛ مبلغ دریافتی با فاکتور مطابقت ندارد یا تأیید نهایی آن هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.route_name_telegram_stars': '⭐ تلگرام استارز',
   'bot.payment.stars_invoice_order':
     '🧾 فاکتور پرداخت با تلگرام استارز\n\n💰 مبلغ سفارش: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n⏳ مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',

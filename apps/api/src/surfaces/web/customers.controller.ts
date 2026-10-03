@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   blockCustomerRequestSchema,
   unblockCustomerRequestSchema,
+  classifyListSearch,
   customerListQuerySchema,
   CUSTOMER_ROUTES,
   type CustomerListResponse,
@@ -68,7 +69,9 @@ export class CustomersController {
       ...(query.telegramUserId === undefined ? {} : { telegramUserId: query.telegramUserId }),
       ...(query.username === undefined ? {} : { username: query.username }),
       ...(query.status === undefined ? {} : { status: query.status }),
+      ...(query.q === undefined ? {} : { q: query.q }),
     });
+    const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.customers.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       // The shared cursor, the same one Panels uses. A cursor this server did not mint
@@ -78,6 +81,7 @@ export class CustomersController {
         ...(page.telegramUserId === undefined ? {} : { telegramUserId: page.telegramUserId }),
         ...(page.username === undefined ? {} : { usernamePrefix: page.username }),
         ...(page.status === undefined ? {} : { status: page.status }),
+        ...(text === null ? {} : { text }),
       },
     });
     return {

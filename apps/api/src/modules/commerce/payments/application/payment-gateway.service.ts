@@ -88,7 +88,16 @@ export interface PaymentGatewayServiceDeps {
    * the write for replacing it. Never a read of the key itself — this service has no
    * reason to hold one.
    */
-  readonly credentials: Pick<GatewayCredentialStore, 'setAt' | 'replace'>;
+  readonly credentials: Pick<
+    GatewayCredentialStore,
+    | 'setAt'
+    | 'replace'
+    | 'read'
+    | 'webhookSecretSetAt'
+    | 'replaceWebhookSecret'
+    | 'lastCheck'
+    | 'recordCheck'
+  >;
   /**
    * The adapter behind an external route, for the one question route selection asks of
    * it: whether an amount has an exact value in the provider's unit. Null for a route
@@ -96,7 +105,7 @@ export interface PaymentGatewayServiceDeps {
    */
   readonly adapters: (
     provider: PaymentGatewayProvider,
-  ) => Pick<ExternalGatewayAdapter, 'providerAmountOf'> | null;
+  ) => Pick<ExternalGatewayAdapter, 'providerAmountOf' | 'checkCredential'> | null;
   /** The GENERATED callback URL a route's provider is sent, for the operator to see. */
   readonly callbackUrlFor: (
     scope: TenantContext,
@@ -124,6 +133,10 @@ export function pricedOnlyByCentralFx(spec: GatewayConversionSpec): boolean {
 export interface GatewayOperatorFacts {
   readonly credentialSetAt: Date | null;
   readonly callbackUrl: string | null;
+  /** A signed route's webhook secret: when it was last replaced. Never the secret. */
+  readonly webhookSecretSetAt: Date | null;
+  /** The operator's last credential check, latest state only. */
+  readonly lastCheck: { readonly at: Date; readonly result: string } | null;
 }
 
 /**
@@ -223,14 +236,167 @@ export class PaymentGatewayService {
     scope: TenantContext,
     provider: PaymentGatewayProvider,
   ): Promise<GatewayOperatorFacts> {
-    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials) {
-      return { credentialSetAt: null, callbackUrl: null };
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[provider];
+    if (!descriptor.requiresCredentials) {
+      return {
+        credentialSetAt: null,
+        callbackUrl: null,
+        webhookSecretSetAt: null,
+        lastCheck: null,
+      };
     }
-    const [credentialSetAt, callbackUrl] = await Promise.all([
+    const [credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck] = await Promise.all([
       this.deps.credentials.setAt(scope, provider),
       this.deps.callbackUrlFor(scope, provider),
+      descriptor.webhookSecret
+        ? this.deps.credentials.webhookSecretSetAt(scope, provider)
+        : Promise.resolve(null),
+      this.deps.credentials.lastCheck(scope, provider),
     ]);
-    return { credentialSetAt, callbackUrl };
+    return { credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck };
+  }
+
+  /**
+   * Replaces a signed route's webhook secret (NOWPayments' IPN secret,
+   * `docs/nowpayments-gateway-audit.md` §5.6). Write-only, exactly like `setCredential`: the
+   * secret is encrypted at rest under its own purpose, on the key's row, and is in no
+   * request hash, response, audit row or log line. The key is set first — the secret is
+   * bound to that row's id — so a route with no key refuses this with `CREDENTIAL_MISSING`.
+   */
+  async setWebhookSecret(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly provider: string;
+      readonly secret: string;
+    },
+  ): Promise<PaymentGatewayRecord> {
+    const provider = this.provider(input.provider);
+    const denial = {
+      action: 'payment_gateway.set_webhook_secret',
+      entityType: 'PaymentGateway',
+      entityId: provider,
+    };
+    await this.authorize(scope, actor, denial);
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This payment route takes no webhook secret.',
+      );
+    }
+    const requestHash = hashRequest({ provider, credential: 'WEBHOOK_SECRET' });
+    const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_GATEWAY_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const gateway = await this.require(scope, provider, tx);
+        const before = await this.deps.credentials.webhookSecretSetAt(scope, provider, tx);
+        const setAt = await this.deps.credentials.replaceWebhookSecret(
+          scope,
+          provider,
+          input.secret,
+          now,
+          tx,
+        );
+        if (setAt === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'Set this payment route’s API key before its webhook secret.',
+            { reason: 'CREDENTIAL_MISSING' },
+          );
+        }
+        await this.record(scope, actor, tx, {
+          action: 'payment_gateway.set_webhook_secret',
+          entityId: provider,
+          // Whether one was stored and when — never the value or a fingerprint of it.
+          before: {
+            provider,
+            configured: before !== null,
+            replacedAt: before?.toISOString() ?? null,
+          },
+          after: { provider, configured: true, replacedAt: setAt.toISOString() },
+        });
+        await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
+        return gateway;
+      },
+    );
+  }
+
+  /**
+   * The operator's credential check (`docs/nowpayments-gateway-audit.md` §5.7): one read-only
+   * provider call with the stored key, made OUTSIDE any transaction, its machine result then
+   * recorded on the route (latest state only) with an audit row. It changes no route state
+   * and moves no money; the result is `ok` or the classified code — never a body or the key.
+   * Refused for a route whose adapter offers no safe read, or that has no key yet.
+   */
+  async checkCredential(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly idempotencyKey: string; readonly provider: string },
+  ): Promise<PaymentGatewayRecord> {
+    const provider = this.provider(input.provider);
+    const denial = {
+      action: 'payment_gateway.check_credential',
+      entityType: 'PaymentGateway',
+      entityId: provider,
+    };
+    await this.authorize(scope, actor, denial);
+    const adapter = this.deps.adapters(provider);
+    if (adapter === null || adapter.checkCredential === undefined) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This payment route offers no credential check.',
+      );
+    }
+    const requestHash = hashRequest({ provider, check: 'CREDENTIAL' });
+    const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This installation has stopped accepting work.',
+      );
+    }
+    const apiKey = await this.deps.credentials.read(scope, provider);
+    if (apiKey === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+        'This payment route needs its API key before it can be checked.',
+        { reason: 'CREDENTIAL_MISSING' },
+      );
+    }
+    const check = await adapter.checkCredential(apiKey);
+    const result = check.kind === 'OK' ? 'ok' : `${check.kind.toLowerCase()}:${check.code}`;
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_GATEWAY_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const gateway = await this.require(scope, provider, tx);
+        await this.deps.credentials.recordCheck(scope, provider, result, now, tx);
+        await this.record(scope, actor, tx, {
+          action: 'payment_gateway.check_credential',
+          entityId: provider,
+          before: null,
+          after: { provider, checkedAt: now.toISOString(), result: result.slice(0, 64) },
+        });
+        await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
+        return gateway;
+      },
+    );
   }
 
   /**
@@ -537,6 +703,23 @@ export class PaymentGatewayService {
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
             'This payment route needs its API key before it can be switched on.',
             { reason: 'CREDENTIAL_MISSING' },
+          );
+        }
+
+        /*
+         * And a route whose provider SIGNS its webhooks (NOWPayments) cannot be switched ON
+         * without the secret: every notification would be dropped unverified, leaving only
+         * the bounded reconciliation to find a payment.
+         */
+        if (
+          input.status === 'ACTIVE' &&
+          PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret &&
+          (await this.deps.credentials.webhookSecretSetAt(scope, provider, tx)) === null
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route needs its webhook secret before it can be switched on.',
+            { reason: 'WEBHOOK_SECRET_MISSING' },
           );
         }
 
@@ -945,7 +1128,8 @@ export class PaymentGatewayService {
      * central policy the answer is the same: a positive payable is at least one unit
      * either way, and "does this amount have an exact value in the unit" is a question
      * only a same-unit route can answer no to. A route priced ONLY by the central rate
-     * (Stars, spec §8) is therefore admitted for any positive amount.
+     * (Stars, spec §8; NOWPayments) is therefore admitted for any positive amount; the
+     * attempt decides the rest, including refusing when no usable quote exists.
      */
     if (pricedOnlyByCentralFx(descriptor.conversion)) return amount.amountMinor > 0n;
     const conversion: ResolvedConversion | null = takesFixedRate(descriptor.conversion)

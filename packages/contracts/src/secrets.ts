@@ -34,6 +34,12 @@
  * TonPays), one per `(tenant, provider)` in `payment_gateway_credentials`. Declared
  * in the commit that brings its producer, never before: a purpose with nothing
  * writing it is the empty-table mistake `tests/unit/secret-registry.test.ts` refuses.
+ *
+ * `payment_gateway.webhook_secret` is the second secret of a route whose provider SIGNS
+ * its webhooks (NOWPayments' IPN secret, `docs/nowpayments-gateway-audit.md`), on the
+ * same `payment_gateway_credentials` row as the key. Its own purpose for the reason the
+ * panel credentials have three: the key's ciphertext moved into this column must not
+ * decrypt as the secret.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -41,6 +47,7 @@ export const SECRET_PURPOSES = [
   'panel.password',
   'panel.api_token',
   'payment_gateway.api_key',
+  'payment_gateway.webhook_secret',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

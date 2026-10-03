@@ -33,6 +33,7 @@ const view = (overrides: Record<string, unknown> = {}) => ({
   topics: [
     { category: 'SYSTEM', state: 'READY', lastDeliveredAt: null, recreatedCount: 0 },
     { category: 'PAYMENTS', state: 'READY', lastDeliveredAt: null, recreatedCount: 0 },
+    { category: 'BACKUPS', state: 'MISSING', lastDeliveredAt: null, recreatedCount: 1 },
   ],
   queue: { pending: 0, preserved: 0 },
   laneEnabled: true,
@@ -57,7 +58,9 @@ describe('the operations log group page', () => {
     const text = container.textContent ?? '';
     expect(text).toContain('متصل');
     expect(text).toContain('@acme_store_bot');
-    expect(text).toContain('⚙️ سیستم و خطاها');
+    expect(text).toContain('⚙️ سیستم');
+    // Spec 12: the dedicated backups topic is shown by its Persian name.
+    expect(text).toContain('💾 بکاپ‌ها');
     expect(text).toContain('💳 پرداخت‌ها');
     expect(screen.queryByRole('button', { name: 'اتصال گروه تلگرام' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'قطع اتصال' })).toBeNull();

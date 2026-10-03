@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
-import { MAX_REQUESTS_PER_PROBE } from '@nexa/contracts';
+import {
+  BACKUP_INTERVAL_MINUTES_MAX,
+  BACKUP_INTERVAL_MINUTES_MIN,
+  MAX_REQUESTS_PER_PROBE,
+} from '@nexa/contracts';
 import {
   effectiveProbeCooldownMs,
   healthyCadenceFitsFreshness,
@@ -555,21 +559,39 @@ export const configSchema = z
      * CLI that runs before — and during — the failure a backup exists for, and
      * a settings table is exactly what is unavailable then.
      */
+    /**
+     * The DEFAULT for whether the worker takes automatic backups.
+     *
+     * Since spec §13.2 the Web Admin's backup page stores the schedule in the settings
+     * registry (`backup.schedule_enabled`, `backup.interval_minutes`, on the
+     * installation tenant), and a stored value wins. This and `BACKUP_INTERVAL_MS` apply
+     * whenever the Web Admin has set nothing — so an installation configured through the
+     * environment keeps exactly the schedule it had, and needs no edit to keep it.
+     */
     BACKUP_SCHEDULE_ENABLED: booleanish.default(false),
     /**
-     * How long after the last SUCCESSFUL backup the next one is due.
+     * How long after the last SUCCESSFUL backup the next one is due — the default the
+     * Web Admin's interval overrides.
      *
      * Twenty-four hours. Measured from the last verified artifact rather than
      * from process start, so restarts do not multiply backups and failures do
-     * not reset the clock as though they had worked.
+     * not reset the clock as though they had worked. The bounds are the registry's
+     * (`BACKUP_INTERVAL_MINUTES_MIN/MAX`), so the two places cannot disagree.
      */
     BACKUP_INTERVAL_MS: z.coerce
       .number()
       .int()
-      .min(15 * 60_000)
-      .max(30 * 24 * 3_600_000)
+      .min(BACKUP_INTERVAL_MINUTES_MIN * 60_000)
+      .max(BACKUP_INTERVAL_MINUTES_MAX * 60_000)
       .default(24 * 3_600_000),
-    /** How often the worker asks whether a backup is due. Asking is cheap. */
+    /**
+     * How often the worker asks whether a backup is due. Asking is cheap.
+     *
+     * NOT a readiness knob any more (spec §14). The scheduler is fresh from `start()`
+     * for three ticks and runs its first check immediately, so the worker's health no
+     * longer waits on a first tick a whole interval away; the production workaround
+     * `BACKUP_TICK_MS=30000` is unnecessary, and harmless if it is still set.
+     */
     BACKUP_TICK_MS: z.coerce
       .number()
       .int()
@@ -586,7 +608,14 @@ export const configSchema = z
      */
     BACKUP_WORK_DIR: z.string().trim().min(1).default('/var/lib/nexa/backups'),
     /**
-     * The Telegram chat the archive is delivered to.
+     * The Telegram chat the archive is delivered to WHEN NO OPERATIONS LOG GROUP IS
+     * CONNECTED.
+     *
+     * Since spec §13.1 the canonical destination is the connected operations group's
+     * «💾 بکاپ‌ها» topic, posted by the group's own bot (only a member of the group can
+     * post in it). This pair is the explicit fallback for an installation with no group,
+     * or whose group topic cannot be made ready before anything is sent — see
+     * `RoutedBackupDelivery` and `docs/backup.md` for the precedence.
      *
      * Empty means delivery is not configured, which is NOT a failure: a run
      * that dumps, verifies and retains is a backup. ADR-0011's fifth

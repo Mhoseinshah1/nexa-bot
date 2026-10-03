@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   ORDER_ROUTES,
+  classifyListSearch,
   orderListQuerySchema,
   type OrderId,
   type OrderListResponse,
@@ -17,7 +18,11 @@ import { adminActor, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import type { OrderCursor, OrderRecord } from '../../modules/commerce/orders/application/ports.js';
+import type {
+  OrderCursor,
+  OrderCustomerIdentity,
+  OrderRecord,
+} from '../../modules/commerce/orders/application/ports.js';
 
 /**
  * Orders over HTTP, at `/orders`. Two reads and NO writes.
@@ -62,7 +67,9 @@ export class OrdersController {
       ...(query.state === undefined ? {} : { state: query.state }),
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
       ...(query.productId === undefined ? {} : { productId: query.productId }),
+      ...(query.q === undefined ? {} : { q: query.q }),
     });
+    const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.orders.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: orderCursorFrom(page.cursor) }),
@@ -70,10 +77,13 @@ export class OrdersController {
         ...(page.state === undefined ? {} : { state: page.state }),
         ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
         ...(page.productId === undefined ? {} : { productId: page.productId as ProductId }),
+        ...(text === null ? {} : { text }),
       },
     });
+    // Who each order is for, as Telegram knows them — one read for the page (spec §10).
+    const identities = await this.container.orders.customerIdentities(scope, actor, result.items);
     return {
-      orders: result.items.map(toSummary),
+      orders: result.items.map((record) => toSummary(record, identities.get(record.customerId))),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -83,7 +93,9 @@ export class OrdersController {
     const { scope, actor } = await this.authenticate(request);
     // The id is NOT cast here: `OrderService.get` validates it, so a malformed path
     // segment is a 400 rather than a 500 at the `uuid` cast.
-    return { order: toSummary(await this.container.orders.get(scope, actor, id)) };
+    const order = await this.container.orders.get(scope, actor, id);
+    const identities = await this.container.orders.customerIdentities(scope, actor, [order]);
+    return { order: toSummary(order, identities.get(order.customerId)) };
   }
 
   private async authenticate(
@@ -119,10 +131,15 @@ function orderCursorFrom(raw: string): OrderCursor {
  * reading the purchase, which is the question the legacy system cannot answer for any
  * order it ever took.
  */
-function toSummary(record: OrderRecord): OrderSummaryResponse {
+function toSummary(
+  record: OrderRecord,
+  identity: OrderCustomerIdentity | undefined,
+): OrderSummaryResponse {
   return {
     id: record.id,
     customerId: record.customerId,
+    customerTelegramUserId: identity?.telegramUserId ?? null,
+    customerUsername: identity?.username ?? null,
     state: record.state,
     purpose: record.purpose,
     productId: record.line.productId,

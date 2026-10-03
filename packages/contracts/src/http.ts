@@ -31,7 +31,9 @@ import {
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS, RECEIPT_DISPOSITIONS } from './payment-receipts.js';
 import { gatewayInvoiceViewSchema } from './gateway-invoices.js';
+import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
+import { listSearchQuerySchema } from './list-search.js';
 import {
   CASHBACK_PERCENT_MAX,
   CASHBACK_PERCENT_MIN,
@@ -171,6 +173,8 @@ import {
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
   BACKUP_TRIGGERS,
+  BACKUP_DELIVERY_DESTINATIONS,
+  BACKUP_SCHEDULE_SOURCES,
 } from './backup.js';
 import {
   RECOVERY_CONFIRMATION_PHRASE,
@@ -1965,6 +1969,11 @@ export const customerListQuerySchema = z.object({
   telegramUserId: telegramUserIdSchema.optional(),
   username: z.string().max(64).optional(),
   status: z.enum(CUSTOMER_STATUSES).optional(),
+  /**
+   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+   * matches on this list is documented in `docs/web-admin-search.md`.
+   */
+  q: listSearchQuerySchema.optional(),
 });
 export type CustomerListQuery = z.infer<typeof customerListQuerySchema>;
 
@@ -3647,6 +3656,14 @@ export const orderSummarySchema = z.object({
   settledAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  /**
+   * Who the order is for, as Telegram knows them (spec §10): the numeric id is the
+   * operator-facing customer identity, the internal `customerId` stays for links. Defaulted
+   * on PARSE like the payment summary's pair, so a response from the previous release reads
+   * "not known" rather than failing. The server sends both on every list row.
+   */
+  customerTelegramUserId: z.string().nullable().default(null),
+  customerUsername: z.string().nullable().default(null),
 });
 export type OrderSummaryResponse = z.infer<typeof orderSummarySchema>;
 
@@ -3675,6 +3692,11 @@ export const orderListQuerySchema = z.object({
    */
   customerId: uuidV7Schema.optional(),
   productId: uuidV7Schema.optional(),
+  /**
+   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+   * matches on this list is documented in `docs/web-admin-search.md`.
+   */
+  q: listSearchQuerySchema.optional(),
 });
 export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
 
@@ -4237,6 +4259,11 @@ export const paymentListQuerySchema = z.object({
   orderId: uuidV7Schema.optional(),
   /** The quotable code, matched exactly. What an operator has in front of them. */
   reference: z.string().trim().min(1).max(64).optional(),
+  /**
+   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+   * matches on this list is documented in `docs/web-admin-search.md`.
+   */
+  q: listSearchQuerySchema.optional(),
 });
 export type PaymentListQuery = z.infer<typeof paymentListQuerySchema>;
 
@@ -4791,9 +4818,30 @@ export const paymentGatewaySchema = z.object({
     .object({
       required: z.boolean(),
       setAt: z.iso.datetime().nullable(),
+      /**
+       * A route whose provider SIGNS its webhooks (`webhookSecret` in the descriptor,
+       * NOWPayments' IPN secret): whether one is required and when it was last replaced.
+       * The same rule as the key — a set-at time, never a value, never a masked stand-in.
+       */
+      webhookSecretRequired: z.boolean().default(false),
+      webhookSecretSetAt: z.iso.datetime().nullable().default(null),
+      /**
+       * The operator's last credential check against the provider (a read-only call made
+       * with the stored key): when, and its machine result — `ok`, or the classified code.
+       * Never a body, a header or the key.
+       */
+      lastCheckAt: z.iso.datetime().nullable().default(null),
+      lastCheckResult: z.string().nullable().default(null),
     })
     // Defaulted, like the D7 fields: a response from the previous release has neither.
-    .default({ required: false, setAt: null }),
+    .default({
+      required: false,
+      setAt: null,
+      webhookSecretRequired: false,
+      webhookSecretSetAt: null,
+      lastCheckAt: null,
+      lastCheckResult: null,
+    }),
   /**
    * The URL this installation sends the gateway as its webhook, GENERATED and never
    * typed (WP11A §14). Null for a route that takes no callback, or while the installation
@@ -4939,11 +4987,49 @@ export type SetPaymentGatewayCredentialRequest = z.input<
   typeof setPaymentGatewayCredentialRequestSchema
 >;
 
+/**
+ * Replacing a route's webhook signing secret (NOWPayments' IPN secret,
+ * `docs/nowpayments-gateway-audit.md` §5.6). Write-only, exactly like the key: the response
+ * is the route view with the secret's set-at time, never the secret, and there is no clear.
+ * Refused for a route whose provider does not sign its webhooks.
+ */
+export const setPaymentGatewayWebhookSecretRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  secret: z
+    .string()
+    .transform((value) => value.trim())
+    .pipe(
+      z
+        .string()
+        .min(1)
+        .max(NOWPAYMENTS_IPN_SECRET_MAX_LENGTH)
+        .regex(/^[\x21-\x7E]+$/u, { message: 'must be printable ASCII with no spaces' }),
+    ),
+});
+export type SetPaymentGatewayWebhookSecretRequest = z.input<
+  typeof setPaymentGatewayWebhookSecretRequestSchema
+>;
+
+/**
+ * The operator's credential check: one read-only call to the provider with the stored key,
+ * made by the API outside any transaction and recorded on the route (`lastCheckAt`,
+ * `lastCheckResult`). It moves no money and changes no route state.
+ */
+export const checkPaymentGatewayCredentialRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type CheckPaymentGatewayCredentialRequest = z.infer<
+  typeof checkPaymentGatewayCredentialRequestSchema
+>;
+
 export const PAYMENT_GATEWAY_ROUTES = {
   list: '/payment-gateways',
   update: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}`,
   status: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/status`,
   credential: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/credential`,
+  webhookSecret: (provider: string) =>
+    `/payment-gateways/${encodeURIComponent(provider)}/webhook-secret`,
+  check: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/check`,
 } as const;
 
 // --- Central exchange rates (package FX) ----------------------------------------------
@@ -5207,6 +5293,14 @@ export const serviceSummarySchema = z.object({
   terminatedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  /**
+   * Who the service is for, as Telegram knows them (spec §10): the numeric id is the
+   * operator-facing customer identity, the internal `customerId` stays for links. Defaulted
+   * on PARSE like the payment summary's pair, so a response from the previous release reads
+   * "not known" rather than failing. The server sends both on every list row.
+   */
+  customerTelegramUserId: z.string().nullable().default(null),
+  customerUsername: z.string().nullable().default(null),
 });
 export type ServiceSummaryResponse = z.infer<typeof serviceSummarySchema>;
 
@@ -5322,6 +5416,11 @@ export const serviceListQuerySchema = z.object({
    * prefix, and why a prefix here would be an enumeration of a panel's accounts.
    */
   providerUsername: providerUsernameLookupSchema.optional(),
+  /**
+   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+   * matches on this list is documented in `docs/web-admin-search.md`.
+   */
+  q: listSearchQuerySchema.optional(),
 });
 export type ServiceListQuery = z.infer<typeof serviceListQuerySchema>;
 
@@ -5670,8 +5769,16 @@ export type BackupRunDetailResponse = z.infer<typeof backupRunDetailResponseSche
  * the schedule switched off is the shape that reads as healthy and is not.
  */
 export const backupStatusResponseSchema = z.object({
+  /** The EFFECTIVE schedule: the Web Admin's stored value, else the environment's. */
   scheduleEnabled: z.boolean(),
   intervalMs: z.number().int().positive(),
+  /** Where each effective schedule value came from (spec §13.2). */
+  scheduleSource: z.object({
+    enabled: z.enum(BACKUP_SCHEDULE_SOURCES),
+    interval: z.enum(BACKUP_SCHEDULE_SOURCES),
+  }),
+  /** Where the next run's archive would be delivered, as configured now (spec §13.1). */
+  deliveryDestination: z.enum(BACKUP_DELIVERY_DESTINATIONS),
   lastSucceededAt: z.iso.datetime().nullable(),
   /** The run currently holding the installation's backup lock, if any. */
   running: backupRunSummarySchema.nullable(),

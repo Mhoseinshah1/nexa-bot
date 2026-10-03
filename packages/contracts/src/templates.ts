@@ -403,8 +403,9 @@ export const TEMPLATES = [
   {
     key: 'ops.group.topic_name.system',
     description:
-      'The name Nexa gives the forum topic it creates for system events and errors in the ' +
-      'operations log group. Read when the topic is created or recreated.',
+      'The name Nexa gives the forum topic it creates for system events in the operations ' +
+      'log group — and for any event no other topic claims. Read when the topic is created ' +
+      'or recreated.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -413,6 +414,56 @@ export const TEMPLATES = [
     description:
       'The name Nexa gives the forum topic it creates for the payments log in the operations ' +
       'log group. Read when the topic is created or recreated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  // Spec §12 — the topics beyond the first two, each named when created or recreated.
+  {
+    key: 'ops.group.topic_name.errors',
+    description:
+      'The name Nexa gives the operations log group topic for unanticipated failures: ' +
+      'unhandled exceptions and errors the API answered.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.services',
+    description:
+      'The name Nexa gives the operations log group topic for orders and the services ' +
+      'provisioned for them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.panels',
+    description:
+      'The name Nexa gives the operations log group topic for panel health, probes and ' +
+      'capacity.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.bot',
+    description:
+      'The name Nexa gives the operations log group topic for the bots themselves: sending ' +
+      'to customers, menus and commands, channel checks and token replacement.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.security',
+    description:
+      'The name Nexa gives the operations log group topic for refusals, sign-in lock-outs, ' +
+      'administrator changes and spam protection.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.backups',
+    description:
+      'The name Nexa gives the operations log group topic that receives the encrypted backup ' +
+      'archives, the notice for an archive too large to send, and the backup and recovery ' +
+      'events.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -8142,6 +8193,56 @@ export const TEMPLATES = [
     key: 'bot.payment.route_name_tonpays_telegram',
     description:
       'The product’s own name for the TonPays TELEGRAM route (`TONPAYS_TELEGRAM`, a card-to-card transfer shown in the bot), used when the operator set no display name.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * NOWPayments (`docs/nowpayments-gateway-audit.md` §5.8). The customer chooses the coin on
+   * NOWPayments' own page; none of these names an asset, a crypto amount or the provider's
+   * figures, and none says paid until the payment is CONFIRMED by the provider's own read.
+   */
+  {
+    key: 'bot.payment.route_name_nowpayments',
+    description:
+      'The product’s own name for the NOWPayments crypto route (`NOWPAYMENTS`), used when the operator set no display name. The owner’s label: «💳 پرداخت با ارز دیجیتال».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.nowpayments_pay_button',
+    description:
+      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments.open`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.nowpayments_in_review',
+    description:
+      'NOWPayments: the provider reported the customer’s coins on their way (seen on chain, confirming or being forwarded) before the deadline, and the bounded review window is open while the chain confirms them. Shows the payable and the end of the window. It invites no new payment and never says paid, failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'The payment’s own payable (principal plus any fee), from Nexa’s snapshot — never a crypto figure.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reviewUntil',
+        type: 'DATETIME',
+        description:
+          'The end of the review window: twenty-four hours from when the coins were first seen, frozen.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.nowpayments_review_unresolved',
+    description:
+      'NOWPayments: the payment needs a person — the provider reported an amount that does not match the invoice (a partial payment), or the confirmation window ended without a final answer. Nothing has failed and nothing was settled; the operator is reconciling it. It must tell the customer not to pay again, and never says failed or closed.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

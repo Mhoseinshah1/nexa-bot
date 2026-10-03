@@ -4256,6 +4256,13 @@ export const gatewayInvoices = pgTable(
      * let through. A flag on the row rather than a raised constant.
      */
     reconcileInquiryRequestedAt: timestamptz('reconcile_inquiry_requested_at'),
+    /**
+     * The provider's own id for the payment a VERIFIED webhook last named under this
+     * invoice (NOWPayments' `payment_id`, `docs/nowpayments-gateway-audit.md` §5.6): what
+     * the next inquiry reads. A hint, replaced by each verified webhook whose ids match the
+     * attempt, and never evidence: only that inquiry's answer decides anything.
+     */
+    hintedPaymentId: text('hinted_payment_id'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -4374,6 +4381,18 @@ export const gatewayInvoices = pgTable(
     check(
       'gateway_invoices_tonpays_telegram_check',
       sql`provider <> 'TONPAYS_TELEGRAM' OR (bot_instance_id IS NOT NULL AND provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT')`,
+    ),
+    check(
+      'gateway_invoices_hinted_payment_id_check',
+      sql`hinted_payment_id IS NULL OR hinted_payment_id ~ '^[0-9]{1,20}$'`,
+    ),
+    /**
+     * A NOWPayments attempt is billed in US cents, priced from the central USDT quote
+     * (package FX) and never by a fixed rate or in the sales currency.
+     */
+    check(
+      'gateway_invoices_nowpayments_check',
+      sql`provider <> 'NOWPAYMENTS' OR (provider_unit = 'USD' AND conversion_policy = 'CENTRAL_FX' AND bot_instance_id IS NULL)`,
     ),
     /** A current card is a whole card, only on a card-transfer route, bounded by length only. */
     check(
@@ -4977,10 +4996,35 @@ export const paymentGatewayCredentials = pgTable(
     apiKeyCiphertext: text('api_key_ciphertext').notNull(),
     apiKeyKeyId: text('api_key_key_id').notNull(),
     apiKeySetAt: timestamptz('api_key_set_at').notNull(),
+    /*
+     * A route whose provider SIGNS its webhooks (NOWPayments' IPN secret,
+     * `docs/nowpayments-gateway-audit.md` §5.6): the second secret, its own AEAD purpose
+     * (`payment_gateway.webhook_secret`) bound to this row's id. All three or none
+     * (`payment_gateway_credentials_webhook_secret_check`); replaced, never cleared, and
+     * never selected by a projection — only its set-at time is.
+     */
+    webhookSecretCiphertext: text('webhook_secret_ciphertext'),
+    webhookSecretKeyId: text('webhook_secret_key_id'),
+    webhookSecretSetAt: timestamptz('webhook_secret_set_at'),
+    /*
+     * The operator's last credential check (a read-only provider call with the stored key):
+     * when, and its machine result — `ok` or the classified code. Latest state only, the
+     * panel-health rule; never a body, a header or the key.
+     */
+    lastCheckAt: timestamptz('last_check_at'),
+    lastCheckResult: text('last_check_result'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
+    check(
+      'payment_gateway_credentials_webhook_secret_check',
+      sql`(webhook_secret_ciphertext IS NULL) = (webhook_secret_key_id IS NULL) AND (webhook_secret_ciphertext IS NULL) = (webhook_secret_set_at IS NULL)`,
+    ),
+    check(
+      'payment_gateway_credentials_last_check_check',
+      sql`(last_check_at IS NULL) = (last_check_result IS NULL) AND (last_check_result IS NULL OR length(last_check_result) BETWEEN 1 AND 64)`,
+    ),
     uniqueIndex('payment_gateway_credentials_tenant_provider_key').on(
       table.tenantId,
       table.provider,
