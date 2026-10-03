@@ -76,7 +76,12 @@ export class AccountSecurityController {
   ): Promise<BackupCodesResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     void reply.header('cache-control', 'no-store');
-    const result = await this.container.accountSecurity.activateTotp(scope, actor, body);
+    const result = await this.container.accountSecurity.activateTotp(
+      scope,
+      actor,
+      body,
+      this.throttleContext(request),
+    );
     return { backupCodes: result.backupCodes };
   }
 

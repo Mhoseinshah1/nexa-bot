@@ -1,7 +1,5 @@
 import {
   accountSecurityResponseSchema,
-  adminChangeReasonSchema,
-  adminUsernameSchema,
   BACKUP_CODE_COUNT,
   errors,
   IDENTITY_ERROR_CODES,
@@ -11,7 +9,7 @@ import {
   reauthenticateWithSecondFactorSchema,
   SECOND_FACTOR_METHODS,
   SECURITY_EVENT_ACTIONS,
-  systemJobActor,
+  TOTP_ACTIVATION_MAX_ATTEMPTS,
   TOTP_ENROLMENT_TTL_SECONDS,
   TOTP_ISSUER,
   TOTP_PARAMETERS,
@@ -25,7 +23,6 @@ import {
   type AdminSessionSummary,
   type AuditWriter,
   type Clock,
-  type CorrelationId,
   type IdGenerator,
   type ManagementAdminEventCode,
   type OperationalEventRecorder,
@@ -125,7 +122,11 @@ export class AccountSecurityService {
 
   async overview(scope: ScopeContext, actor: ActorContext): Promise<AccountSecurityResponse> {
     const { tenantScope, adminId } = this.self(scope, actor);
-    const factor = await this.deps.factors.findFactor(tenantScope, adminId);
+    const stored = await this.deps.factors.findFactor(tenantScope, adminId);
+    // An expired PENDING enrolment is no enrolment: it cannot be activated, and showing
+    // it as waiting would invite a code that is then refused (D2 review).
+    const factor =
+      stored !== null && isExpiredPending(stored, this.deps.clock.now()) ? null : stored;
     const codes =
       factor?.state === 'ACTIVE'
         ? await this.deps.factors.backupCodeSummary(tenantScope, adminId)
@@ -175,7 +176,15 @@ export class AccountSecurityService {
       );
       await this.deps.factors.replaceWithPending(
         tenantScope,
-        { id: factorId, adminId, ciphertext: sealed.ciphertext, keyId: sealed.keyId, now },
+        {
+          id: factorId,
+          adminId,
+          ciphertext: sealed.ciphertext,
+          keyId: sealed.keyId,
+          // Activation must come from THIS session (D2 review): the secret was shown to it.
+          enrolledSessionId: actor.sessionId ?? null,
+          now,
+        },
         tx,
       );
       const expiresAt = new Date(now.getTime() + TOTP_ENROLMENT_TTL_SECONDS * 1000);
@@ -215,96 +224,207 @@ export class AccountSecurityService {
    * backup codes, once. Every OTHER session of the account ends: they were opened
    * without the second factor, and the point of turning it on is that that is no longer
    * enough.
+   *
+   * ## Guessing (D2 security review)
+   *
+   * This answers with the only display of ten backup codes and ends every other
+   * session, so it must not be a place to guess six digits. Three bounds, all needed:
+   *
+   *   - each guess is RESERVED on the credential throttle, like every other code and
+   *     password the account accepts; a wrong one keeps its reservation;
+   *   - one pending enrolment allows `TOTP_ACTIVATION_MAX_ATTEMPTS` wrong codes, counted
+   *     in a commit of its own; past that the pending row is DELETED and enrolment starts
+   *     again from the password;
+   *   - only the session that enrolled may activate: a different session presenting a
+   *     code never saw the secret, so it is guessing.
+   *
+   * An expired enrolment is deleted before the refusal is reported, so its secret does
+   * not linger as a stored ciphertext nobody can use.
    */
   async activateTotp(
     scope: ScopeContext,
     actor: ActorContext,
     input: unknown,
+    context: PasswordChangeContext = { ip: null },
   ): Promise<{ backupCodes: string[]; endedSignIns: number }> {
     const { tenantScope, adminId } = this.self(scope, actor);
     const command = totpActivateRequestSchema.parse(input);
-    const codes = generateBackupCodes();
+    const admin = await this.requireAdmin(tenantScope, adminId);
 
-    const outcome = await this.deps.uow.run(tenantScope, async (tx) => {
-      await this.lockSelf(tenantScope, actor, adminId, tx);
-      const now = this.deps.clock.now();
-      const factor = await this.deps.factors.lockFactor(tenantScope, adminId, tx);
-      if (factor?.state === 'ACTIVE') {
+    // Pre-checks that decide nothing and spend nothing: an expired enrolment is removed
+    // (in its own commit) and refused; another session's enrolment is refused.
+    const pending = await this.deps.factors.findFactor(tenantScope, adminId);
+    if (pending !== null && pending.state === 'PENDING') {
+      if (isExpiredPending(pending, this.deps.clock.now())) {
+        await this.deps.factors.discardPending(tenantScope, adminId);
+        throw notPending();
+      }
+    }
+
+    const reserved = await this.reserveGuess(
+      tenantScope,
+      actor,
+      admin,
+      context,
+      'admin.totp_enable',
+      'TOTP',
+    );
+    let judged = false;
+    try {
+      const attempts = await this.deps.factors.countActivationAttempt(tenantScope, adminId);
+      if (attempts === null) {
+        await this.deps.throttle.release(tenantScope, admin.username, context.ip, reserved);
+        judged = true;
+        throw notPending();
+      }
+      if (attempts > TOTP_ACTIVATION_MAX_ATTEMPTS) {
+        // Out of guesses: the displayed secret is spent. Not a judged guess, so the
+        // reservation goes back; the pending row goes away in its own commit.
+        await this.deps.factors.discardPending(tenantScope, adminId);
+        await this.deps.throttle.release(tenantScope, admin.username, context.ip, reserved);
+        judged = true;
+        await this.deps.audit.record(tenantScope, actor, {
+          action: 'admin.totp_enable',
+          entityType: 'Admin',
+          entityId: adminId,
+          before: { state: 'PENDING' },
+          after: { reason: 'ACTIVATION_ATTEMPTS_EXHAUSTED', state: 'DISABLED' },
+          result: 'DENIED',
+        });
+        throw notPending();
+      }
+
+      const codes = generateBackupCodes();
+      const outcome = await this.deps.uow.run(tenantScope, async (tx) => {
+        await this.lockSelf(tenantScope, actor, adminId, tx);
+        // After the waits, not before them (D2 review).
+        const now = this.deps.clock.now();
+        const factor = await this.deps.factors.lockFactor(tenantScope, adminId, tx);
+        if (factor?.state === 'ACTIVE') return { kind: 'ALREADY_ACTIVE' as const };
+        if (factor === null || isExpiredPending(factor, now))
+          return { kind: 'NOT_PENDING' as const };
+        if (
+          factor.enrolledSessionId !== null &&
+          factor.enrolledSessionId !== (actor.sessionId ?? null)
+        ) {
+          return { kind: 'OTHER_SESSION' as const };
+        }
+        const secret = this.deps.cipher.decrypt(
+          { ciphertext: factor.ciphertext, keyId: factor.keyId },
+          totpSecretContext(tenantScope.tenantId, factor.id),
+        );
+        const step = matchTotp(secret, command.code, now, null);
+        if (step === null) return { kind: 'WRONG' as const };
+
+        if (!(await this.deps.factors.activate(tenantScope, factor.id, step, now, tx))) {
+          return { kind: 'NOT_PENDING' as const };
+        }
+        await this.writeBackupCodes(tenantScope, adminId, codes, now, tx);
+        const endedSignIns = await this.endOtherSessions(
+          tenantScope,
+          actor,
+          adminId,
+          now,
+          tx,
+          'second_factor_enabled',
+        );
+        // The reservation goes back WITH the activation, never after it.
+        await this.deps.throttle.releaseIn(tenantScope, admin.username, context.ip, reserved, tx);
+        await this.deps.audit.record(
+          tenantScope,
+          actor,
+          {
+            action: 'admin.totp_enable',
+            entityType: 'Admin',
+            entityId: adminId,
+            before: { state: 'PENDING' },
+            after: { state: 'ACTIVE', backupCodesIssued: BACKUP_CODE_COUNT, endedSignIns },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.recordChange(
+          tenantScope,
+          tx,
+          'admin.second_factor_enabled',
+          'INFO',
+          'an administrator turned on two-step sign-in',
+          { adminId, endedSignIns },
+        );
+        return { kind: 'OK' as const, endedSignIns };
+      });
+
+      if (outcome.kind === 'OK') {
+        judged = true;
+        return { backupCodes: codes, endedSignIns: outcome.endedSignIns };
+      }
+      if (outcome.kind === 'WRONG' || outcome.kind === 'OTHER_SESSION') {
+        // A judged guess: the reservation stays.
+        judged = true;
+        await this.deps.audit.record(tenantScope, actor, {
+          action: 'admin.totp_enable',
+          entityType: 'Admin',
+          entityId: adminId,
+          before: null,
+          after: {
+            reason: outcome.kind === 'WRONG' ? 'BAD_SECOND_FACTOR' : 'OTHER_SESSION',
+            method: 'TOTP',
+          },
+          result: 'DENIED',
+        });
+        if (outcome.kind === 'OTHER_SESSION') throw notPending();
+        // The guess that USES UP the allowance also voids the enrolment, so a sixth guess
+        // has nothing to guess at — whatever the throttle's own limit is.
+        if (attempts >= TOTP_ACTIVATION_MAX_ATTEMPTS) {
+          await this.deps.factors.discardPending(tenantScope, adminId);
+        }
+        throw errors.unauthenticated(
+          IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_INVALID,
+          'The code is not valid.',
+        );
+      }
+      await this.deps.throttle.release(tenantScope, admin.username, context.ip, reserved);
+      judged = true;
+      if (outcome.kind === 'ALREADY_ACTIVE') {
         throw errors.conflict(
           IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_ACTIVE,
           'Two-step sign-in is already on.',
         );
       }
-      if (
-        factor === null ||
-        factor.createdAt.getTime() + TOTP_ENROLMENT_TTL_SECONDS * 1000 <= now.getTime()
-      ) {
-        throw errors.conflict(
-          IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_NOT_PENDING,
-          'There is no enrolment waiting, or it has expired. Start again.',
-        );
+      await this.deps.factors.discardPending(tenantScope, adminId);
+      throw notPending();
+    } catch (error) {
+      if (!judged) {
+        await this.deps.throttle.release(tenantScope, admin.username, context.ip, reserved);
       }
-      const secret = this.deps.cipher.decrypt(
-        { ciphertext: factor.ciphertext, keyId: factor.keyId },
-        totpSecretContext(tenantScope.tenantId, factor.id),
-      );
-      const step = matchTotp(secret, command.code, now, null);
-      if (step === null) return { kind: 'WRONG' as const };
-
-      if (!(await this.deps.factors.activate(tenantScope, factor.id, step, now, tx))) {
-        throw errors.conflict(
-          IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_NOT_PENDING,
-          'There is no enrolment waiting, or it has expired. Start again.',
-        );
-      }
-      await this.writeBackupCodes(tenantScope, adminId, codes, now, tx);
-      const endedSignIns = await this.endOtherSessions(
-        tenantScope,
-        actor,
-        adminId,
-        now,
-        tx,
-        'second_factor_enabled',
-      );
-      await this.deps.audit.record(
-        tenantScope,
-        actor,
-        {
-          action: 'admin.totp_enable',
-          entityType: 'Admin',
-          entityId: adminId,
-          before: { state: 'PENDING' },
-          after: { state: 'ACTIVE', backupCodesIssued: BACKUP_CODE_COUNT, endedSignIns },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-      await this.recordChange(
-        tenantScope,
-        tx,
-        'admin.second_factor_enabled',
-        'INFO',
-        'an administrator turned on two-step sign-in',
-        { adminId, endedSignIns },
-      );
-      return { kind: 'OK' as const, endedSignIns };
-    });
-
-    if (outcome.kind === 'WRONG') {
-      await this.deps.audit.record(tenantScope, actor, {
-        action: 'admin.totp_enable',
-        entityType: 'Admin',
-        entityId: adminId,
-        before: null,
-        after: { reason: 'BAD_SECOND_FACTOR', method: 'TOTP' },
-        result: 'DENIED',
-      });
-      throw errors.unauthenticated(
-        IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_INVALID,
-        'The code is not valid.',
-      );
+      throw error;
     }
-    return { backupCodes: codes, endedSignIns: outcome.endedSignIns };
+  }
+
+  /** One code guess, reserved on the shared credential throttle; a refusal is audited. */
+  private async reserveGuess(
+    scope: TenantContext,
+    actor: ActorContext,
+    admin: Admin,
+    context: PasswordChangeContext,
+    action: string,
+    method: SecondFactorMethod,
+  ): Promise<Reservation> {
+    try {
+      return await this.deps.throttle.reserve(scope, actor, admin.username, context.ip);
+    } catch (error) {
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) {
+        await this.deps.audit.record(scope, actor, {
+          action,
+          entityType: 'Admin',
+          entityId: admin.id,
+          before: null,
+          after: { reason: 'THROTTLED', method },
+          result: 'DENIED',
+        });
+      }
+      throw error;
+    }
   }
 
   /** Turns the factor off: password AND a current code or unused backup code. */
@@ -519,8 +639,10 @@ export class AccountSecurityService {
           // Named only when somebody ELSE acted on this account: an operator, or the
           // server recovery path. The holder's own acts need no name.
           actorLabel: row.actorId === adminId ? null : row.actorLabel,
-          ip: row.ip,
-          userAgent: row.userAgent,
+          // The address and agent only when the account holder acted (D2 review): on a row
+          // an OPERATOR wrote, they are the operator's, not this holder's to see.
+          ip: row.actorId === adminId ? row.ip : null,
+          userAgent: row.actorId === adminId ? row.userAgent : null,
           reason: typeof reason === 'string' ? reason : null,
           method:
             typeof method === 'string' &&
@@ -529,73 +651,6 @@ export class AccountSecurityService {
               : null,
         },
       ];
-    });
-  }
-
-  /**
-   * Owner recovery from the SERVER (`pnpm admin:2fa-reset`, `botctl admin reset-2fa`).
-   *
-   * The answer to the lockout a second factor creates: the only owner has lost their
-   * phone and their backup codes. It is a CLI and never an endpoint, for the reason
-   * `admin:bootstrap` is: there is no caller to authorize, so over HTTP it would be an
-   * unauthenticated route that strips a factor. Whoever can run it already holds the
-   * database credentials, which is more than this grants.
-   *
-   * What it does is deliberately small — removes the factor and its backup codes, and
-   * ends every session — so the person recovering still needs the PASSWORD to get in.
-   * It never sets a password and never creates a session. Audited as `SYSTEM_JOB`
-   * with the operator's stated reason, and raised as a WARN on the alerts page.
-   */
-  async resetFromServer(
-    scope: TenantContext,
-    input: { readonly username: string; readonly reason: string },
-  ): Promise<{ adminId: AdminId; hadSecondFactor: boolean; endedSignIns: number }> {
-    const username = adminUsernameSchema.parse(input.username.trim().toLowerCase());
-    const reason = adminChangeReasonSchema.parse(input.reason);
-    const actor = systemJobActor('install:reset-admin-2fa', this.deps.ids.uuid() as CorrelationId);
-
-    return this.deps.uow.run(scope, async (tx) => {
-      // The tenant lock every administrator change takes, so this serialises against
-      // the holder's own enrolment and against a login in flight. NOT refused for a
-      // stopped tenant: recovery only ever removes access, and a stopped installation
-      // is precisely one whose owner may need back in.
-      await this.deps.admins.lockTenantForAdminChange(scope, tx);
-      const admin = await this.deps.admins.findByUsername(scope, username, tx);
-      if (admin === null) {
-        throw errors.notFound(IDENTITY_ERROR_CODES.ADMIN_NOT_FOUND, 'No such administrator.');
-      }
-      const now = this.deps.clock.now();
-      const hadSecondFactor = await this.deps.factors.deleteFactor(scope, admin.id, tx);
-      const endedSignIns = await this.deps.sessions.revokeAllForAdmin(
-        scope,
-        admin.id,
-        now,
-        'second_factor_reset',
-        tx,
-      );
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action: 'admin.totp_reset',
-          entityType: 'Admin',
-          entityId: admin.id,
-          before: { hadSecondFactor },
-          after: { state: 'DISABLED', endedSignIns, via: 'SERVER_CLI' },
-          reason,
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-      await this.recordChange(
-        scope,
-        tx,
-        'admin.second_factor_reset',
-        'WARN',
-        `two-step sign-in of administrator ${admin.username} was reset from the server`,
-        { adminId: admin.id, hadSecondFactor, endedSignIns, via: 'SERVER_CLI' },
-      );
-      return { adminId: admin.id, hadSecondFactor, endedSignIns };
     });
   }
 
@@ -629,22 +684,7 @@ export class AccountSecurityService {
 
     const admin = await this.requireAdmin(tenantScope, adminId);
     const method: SecondFactorMethod = command.code !== undefined ? 'TOTP' : 'BACKUP_CODE';
-    let reserved: Reservation;
-    try {
-      reserved = await this.deps.throttle.reserve(tenantScope, actor, admin.username, context.ip);
-    } catch (error) {
-      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) {
-        await this.deps.audit.record(tenantScope, actor, {
-          action,
-          entityType: 'Admin',
-          entityId: adminId,
-          before: null,
-          after: { reason: 'THROTTLED', method },
-          result: 'DENIED',
-        });
-      }
-      throw error;
-    }
+    const reserved = await this.reserveGuess(tenantScope, actor, admin, context, action, method);
 
     let outcome: ProofOutcome;
     try {
@@ -668,6 +708,10 @@ export class AccountSecurityService {
         );
         if (!verdict.accepted) return { kind: 'REJECTED', verdict };
         await fn(tenantScope, adminId, verdict.method, now, tx);
+        // In the SAME transaction as the change (Codex review): released afterwards, a
+        // transient failure reported an error for a change already made — a regeneration
+        // whose old codes were gone and whose new ones were never delivered.
+        await this.deps.throttle.releaseIn(tenantScope, admin.username, context.ip, reserved, tx);
         return { kind: 'OK', method: verdict.method };
       });
     } catch (error) {
@@ -695,8 +739,9 @@ export class AccountSecurityService {
         'The code is not valid.',
       );
     }
-    await this.deps.throttle.release(tenantScope, admin.username, context.ip, reserved);
     if (outcome.kind === 'NOT_ACTIVE') {
+      // Never judged: the reservation goes back.
+      await this.deps.throttle.release(tenantScope, admin.username, context.ip, reserved);
       throw errors.conflict(
         IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_NOT_ACTIVE,
         'Two-step sign-in is not on for this account.',
@@ -836,6 +881,20 @@ export class AccountSecurityService {
       throw error;
     }
   }
+}
+
+function isExpiredPending(factor: StoredTotpFactor, now: Date): boolean {
+  return (
+    factor.state === 'PENDING' &&
+    factor.createdAt.getTime() + TOTP_ENROLMENT_TTL_SECONDS * 1000 <= now.getTime()
+  );
+}
+
+function notPending() {
+  return errors.conflict(
+    IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_NOT_PENDING,
+    'There is no enrolment waiting, or it has expired. Start again.',
+  );
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

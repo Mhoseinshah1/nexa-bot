@@ -1,5 +1,5 @@
 {
-  "id": "5920dc7b-99d4-44de-ba81-32bda536f5a6",
+  "id": "10dd130f-4db5-4062-be65-7e8c7d128b5d",
   "prevId": "0933052c-32d7-454c-ad41-85a6f1a06dad",
   "version": "7",
   "dialect": "postgresql",
@@ -1226,6 +1226,19 @@
           "primaryKey": false,
           "notNull": false
         },
+        "enrolled_session_id": {
+          "name": "enrolled_session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "activation_attempts": {
+          "name": "activation_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -1313,6 +1326,10 @@
         "admin_totp_factors_step_check": {
           "name": "admin_totp_factors_step_check",
           "value": "last_used_step IS NULL OR last_used_step >= 0"
+        },
+        "admin_totp_factors_attempts_check": {
+          "name": "admin_totp_factors_attempts_check",
+          "value": "activation_attempts >= 0"
         }
       },
       "isRLSEnabled": false

@@ -30,12 +30,15 @@ CREATE TABLE "admin_totp_factors" (
 	"totp_secret_ciphertext" text NOT NULL,
 	"totp_secret_key_id" text NOT NULL,
 	"last_used_step" integer,
+	"enrolled_session_id" uuid,
+	"activation_attempts" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone NOT NULL,
 	"activated_at" timestamp with time zone,
 	"updated_at" timestamp with time zone NOT NULL,
 	CONSTRAINT "admin_totp_factors_state_check" CHECK (state IN ('PENDING', 'ACTIVE')),
 	CONSTRAINT "admin_totp_factors_activated_check" CHECK ((state = 'ACTIVE') = (activated_at IS NOT NULL)),
-	CONSTRAINT "admin_totp_factors_step_check" CHECK (last_used_step IS NULL OR last_used_step >= 0)
+	CONSTRAINT "admin_totp_factors_step_check" CHECK (last_used_step IS NULL OR last_used_step >= 0),
+	CONSTRAINT "admin_totp_factors_attempts_check" CHECK (activation_attempts >= 0)
 );
 --> statement-breakpoint
 ALTER TABLE "admin_backup_codes" ADD CONSTRAINT "admin_backup_codes_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

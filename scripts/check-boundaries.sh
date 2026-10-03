@@ -185,11 +185,14 @@ else
 fi
 
 # --- The owner 2FA recovery is not reachable from a surface ----------------
-# Phase D2. `AccountSecurityService.resetFromServer` strips an administrator's
+# Phase D2. `ServerSecondFactorRecovery.resetFromServer` strips an administrator's
 # second factor without authorizing a caller, because the server operator HAS
 # no session — that is the lockout it exists to end. The same argument as the
 # bootstrap: safe only while no HTTP or Telegram route can reach it.
-RESET_2FA_LEAK=$(grep -rn "resetFromServer" apps/api/src/surfaces 2>/dev/null || true)
+# Structural first: the recovery is its own module, never a container property, and only
+# the CLI entrypoint constructs it. Then the old text check as a backstop.
+RESET_2FA_LEAK=$(grep -rn "server-second-factor-recovery\|ServerSecondFactorRecovery\|resetFromServer" \
+  apps/api/src/surfaces apps/api/src/container.ts apps/api/src/app.module.ts 2>/dev/null || true)
 if [ -n "$RESET_2FA_LEAK" ]; then
   fail "A surface reaches the server-side 2FA reset" "$RESET_2FA_LEAK" \
        "Owner 2FA recovery is a CLI (src/admin-2fa-reset.cli.ts), not an endpoint."

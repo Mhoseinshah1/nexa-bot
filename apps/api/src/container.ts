@@ -1271,6 +1271,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     credentialThrottle,
     idempotency,
     secondFactors,
+    cipher,
   );
 
   const accountSecurity = new AccountSecurityService({
@@ -5221,8 +5222,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // The same switch that selects the password hasher's cost, refused in
     // production by the config schema for the same reason.
     kdf: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KIT_KDF : PRODUCTION_KIT_KDF,
-    verifyPassword: (scope, actor, password, context, action) =>
-      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+    verifyStepUp: (scope, actor, stepUp, context, action) =>
+      adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
   });
   const recoveryService = new RecoveryService({
     requests: recoveryRequests,

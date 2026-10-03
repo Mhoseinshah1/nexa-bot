@@ -1247,6 +1247,15 @@ export const adminTotpFactors = pgTable(
     totpSecretCiphertext: text('totp_secret_ciphertext').notNull(),
     totpSecretKeyId: text('totp_secret_key_id').notNull(),
     lastUsedStep: integer('last_used_step'),
+    /**
+     * The session that started a PENDING enrolment. Activation is refused from any other
+     * session: the secret was shown to that one, and a different session presenting a
+     * code is somebody guessing rather than somebody scanning (security review, D2).
+     * Null once active, and for an enrolment made without a session.
+     */
+    enrolledSessionId: uuid('enrolled_session_id'),
+    /** Wrong activation codes against this PENDING row; past the cap it is discarded. */
+    activationAttempts: integer('activation_attempts').notNull().default(0),
     createdAt: timestamptz('created_at').notNull(),
     activatedAt: timestamptz('activated_at'),
     updatedAt: timestamptz('updated_at').notNull(),
@@ -1260,6 +1269,7 @@ export const adminTotpFactors = pgTable(
       sql`(state = 'ACTIVE') = (activated_at IS NOT NULL)`,
     ),
     check('admin_totp_factors_step_check', sql`last_used_step IS NULL OR last_used_step >= 0`),
+    check('admin_totp_factors_attempts_check', sql`activation_attempts >= 0`),
     foreignKey({
       name: 'admin_totp_factors_tenant_admin_fk',
       columns: [table.tenantId, table.adminId],

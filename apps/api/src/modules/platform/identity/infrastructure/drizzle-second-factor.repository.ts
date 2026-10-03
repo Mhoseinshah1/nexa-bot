@@ -34,6 +34,8 @@ function toFactor(row: FactorRow): StoredTotpFactor {
     ciphertext: row.totpSecretCiphertext,
     keyId: row.totpSecretKeyId,
     lastUsedStep: row.lastUsedStep,
+    enrolledSessionId: row.enrolledSessionId,
+    activationAttempts: row.activationAttempts,
     createdAt: row.createdAt,
     activatedAt: row.activatedAt,
   };
@@ -82,6 +84,7 @@ export class DrizzleSecondFactorRepository implements SecondFactorRepository {
       readonly adminId: AdminId;
       readonly ciphertext: string;
       readonly keyId: string;
+      readonly enrolledSessionId: string | null;
       readonly now: Date;
     },
     tx: unknown,
@@ -101,10 +104,41 @@ export class DrizzleSecondFactorRepository implements SecondFactorRepository {
       totpSecretCiphertext: input.ciphertext,
       totpSecretKeyId: input.keyId,
       lastUsedStep: null,
+      enrolledSessionId: input.enrolledSessionId,
+      activationAttempts: 0,
       createdAt: input.now,
       activatedAt: null,
       updatedAt: input.now,
     });
+  }
+
+  async countActivationAttempt(scope: ScopeContext, adminId: AdminId): Promise<number | null> {
+    const [row] = await this.db
+      .update(adminTotpFactors)
+      .set({ activationAttempts: sql`${adminTotpFactors.activationAttempts} + 1` })
+      .where(
+        and(
+          eq(adminTotpFactors.tenantId, requireTenantId(scope)),
+          eq(adminTotpFactors.adminId, adminId),
+          eq(adminTotpFactors.state, 'PENDING'),
+        ),
+      )
+      .returning({ attempts: adminTotpFactors.activationAttempts });
+    return row?.attempts ?? null;
+  }
+
+  async discardPending(scope: ScopeContext, adminId: AdminId): Promise<boolean> {
+    const rows = await this.db
+      .delete(adminTotpFactors)
+      .where(
+        and(
+          eq(adminTotpFactors.tenantId, requireTenantId(scope)),
+          eq(adminTotpFactors.adminId, adminId),
+          eq(adminTotpFactors.state, 'PENDING'),
+        ),
+      )
+      .returning({ id: adminTotpFactors.id });
+    return rows.length > 0;
   }
 
   async activate(
@@ -116,7 +150,13 @@ export class DrizzleSecondFactorRepository implements SecondFactorRepository {
   ): Promise<boolean> {
     const rows = await executorOf(this.db, tx)
       .update(adminTotpFactors)
-      .set({ state: 'ACTIVE', activatedAt: now, lastUsedStep: step, updatedAt: now })
+      .set({
+        state: 'ACTIVE',
+        activatedAt: now,
+        lastUsedStep: step,
+        enrolledSessionId: null,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(adminTotpFactors.tenantId, requireTenantId(scope)),

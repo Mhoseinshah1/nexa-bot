@@ -427,6 +427,9 @@ export interface StoredTotpFactor {
   readonly ciphertext: string;
   readonly keyId: string;
   readonly lastUsedStep: number | null;
+  /** The session a PENDING enrolment was started from; activation must come from it. */
+  readonly enrolledSessionId: string | null;
+  readonly activationAttempts: number;
   readonly createdAt: Date;
   readonly activatedAt: Date | null;
 }
@@ -444,10 +447,22 @@ export interface SecondFactorRepository {
       readonly adminId: AdminId;
       readonly ciphertext: string;
       readonly keyId: string;
+      readonly enrolledSessionId: string | null;
       readonly now: Date;
     },
     tx: unknown,
   ): Promise<void>;
+  /**
+   * Counts one activation guess against the PENDING row, in its OWN commit so a failed
+   * guess cannot roll its count back. Returns the count after it, or null when there is
+   * no pending row.
+   */
+  countActivationAttempt(scope: ScopeContext, adminId: AdminId): Promise<number | null>;
+  /**
+   * Deletes this administrator's PENDING row — an expired enrolment, or one out of
+   * guesses — in its own commit. Never touches an ACTIVE factor.
+   */
+  discardPending(scope: ScopeContext, adminId: AdminId): Promise<boolean>;
   /** PENDING → ACTIVE, consuming `step`. False when the row was not PENDING. */
   activate(
     scope: ScopeContext,

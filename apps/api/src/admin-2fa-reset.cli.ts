@@ -1,6 +1,12 @@
-import { isNexaError, type AdminId, type TenantContext } from '@nexa/contracts';
+import {
+  isNexaError,
+  TOTP_ENROLMENT_TTL_SECONDS,
+  type AdminId,
+  type TenantContext,
+} from '@nexa/contracts';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
+import { ServerSecondFactorRecovery } from './modules/platform/identity/application/server-second-factor-recovery.js';
 
 /**
  * `pnpm admin:2fa-reset` — owner recovery for two-step sign-in (Phase D2).
@@ -100,13 +106,30 @@ async function main(): Promise<void> {
       if (admin === null) throw new ResetArgsError('No such administrator.');
       const factor = await container.secondFactors.findFactor(scope, admin.id as AdminId);
       // The ONLY line on stdout, so a shell can read it.
+      // An expired PENDING enrolment cannot be activated, so it reads as off (D2 review).
+      const expired =
+        factor !== null &&
+        factor.state === 'PENDING' &&
+        factor.createdAt.getTime() + TOTP_ENROLMENT_TTL_SECONDS * 1000 <=
+          container.clock.now().getTime();
       process.stdout.write(
-        `${factor === null ? 'off' : factor.state === 'ACTIVE' ? 'on' : 'pending'}\n`,
+        `${factor === null || expired ? 'off' : factor.state === 'ACTIVE' ? 'on' : 'pending'}\n`,
       );
       return;
     }
 
-    const result = await container.accountSecurity.resetFromServer(scope, {
+    // Built HERE and nowhere else: the container does not carry it, so no surface can.
+    const recovery = new ServerSecondFactorRecovery({
+      uow: container.uow,
+      admins: container.admins,
+      sessions: container.sessions,
+      factors: container.secondFactors,
+      audit: container.audit,
+      opsLog: container.opsLog,
+      clock: container.clock,
+      ids: container.ids,
+    });
+    const result = await recovery.resetFromServer(scope, {
       username: args.username,
       reason: args.reason ?? '',
     });

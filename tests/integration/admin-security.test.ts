@@ -23,6 +23,7 @@ import {
   totpForStep,
   totpStepAt,
 } from '../../apps/api/src/modules/platform/identity/application/totp';
+import { ServerSecondFactorRecovery } from '../../apps/api/src/modules/platform/identity/application/server-second-factor-recovery';
 import {
   createAdmin,
   createTestContext,
@@ -149,6 +150,20 @@ async function enableFor(admin: SeededAdmin) {
     code: code(enrolment.secret, -1),
   });
   return { secret: enrolment.secret, backupCodes, actor, token, enrolment };
+}
+
+/** Built from the container's parts, exactly as the CLI builds it: the container has none. */
+function serverRecovery(): ServerSecondFactorRecovery {
+  return new ServerSecondFactorRecovery({
+    uow: ctx.container.uow,
+    admins: ctx.container.admins,
+    sessions: ctx.container.sessions,
+    factors: ctx.container.secondFactors,
+    audit: ctx.container.audit,
+    opsLog: ctx.container.opsLog,
+    clock: ctx.container.clock,
+    ids: ctx.container.ids,
+  });
 }
 
 async function challengeFor(admin: SeededAdmin): Promise<string> {
@@ -809,6 +824,7 @@ describe('operator reset and server recovery', () => {
       await codeOf(
         ctx.container.adminManagement.resetSecondFactor(tenantA, actor, manager.id, {
           reason: 'lost phone',
+          stepUp: { password: 'the-support-password' },
         }),
       ),
     ).toBe('platform.permission_denied');
@@ -828,6 +844,7 @@ describe('operator reset and server recovery', () => {
       manager.id,
       {
         reason: 'lost phone',
+        stepUp: { password: OWNER_PASSWORD },
       },
     );
     expect(result.hadSecondFactor).toBe(true);
@@ -849,6 +866,7 @@ describe('operator reset and server recovery', () => {
           managerSession.actor.id as never,
           {
             reason: 'x',
+            stepUp: { password: 'the-managers-password' },
           },
         ),
       ),
@@ -856,6 +874,7 @@ describe('operator reset and server recovery', () => {
     const ownerReset = await codeOf(
       ctx.container.adminManagement.resetSecondFactor(tenantA, managerSession.actor, owner.id, {
         reason: 'x',
+        stepUp: { password: 'the-managers-password' },
       }),
     );
     // An owner target needs `admins.permissions.edit`, which a delegated manager lacks.
@@ -870,6 +889,7 @@ describe('operator reset and server recovery', () => {
       await codeOf(
         ctx.container.adminManagement.resetSecondFactor(tenantB, b.actor, owner.id, {
           reason: 'x',
+          stepUp: { password: 'tenant-b-password' },
         }),
       ),
     ).toBe(IDENTITY_ERROR_CODES.ADMIN_NOT_FOUND);
@@ -879,7 +899,7 @@ describe('operator reset and server recovery', () => {
 
   it('server recovery removes the factor, ends sessions, audits as SYSTEM_JOB with the reason', async () => {
     const { token } = await enableFor(owner);
-    const result = await ctx.container.accountSecurity.resetFromServer(tenantA, {
+    const result = await serverRecovery().resetFromServer(tenantA, {
       username: 'OWNER',
       reason: 'owner lost phone and backup codes',
     });
@@ -1052,4 +1072,342 @@ describe('the recovery CLI', () => {
     const after = await run(['--check', '--username', 'owner', '--tenant', tenantSlug]);
     expect(after.stdout.trim()).toBe('off');
   }, 120_000);
+});
+
+describe('security review fixes (#151)', () => {
+  const wrongFor = (secret: string) => (code(secret) === '000000' ? '111111' : '000000');
+
+  async function enrolOnly(admin: SeededAdmin) {
+    const signedIn = await passwordLogin(admin);
+    const enrolment = await ctx.container.accountSecurity.enrolTotp(
+      tenantA,
+      signedIn.actor,
+      { password: admin.password },
+      from,
+    );
+    return { ...signedIn, secret: enrolment.secret };
+  }
+
+  it('activation: wrong codes are counted, the pending enrolment is voided, and 50 guesses get nowhere', async () => {
+    const { actor, secret } = await enrolOnly(owner);
+    const outcomes: string[] = [];
+    for (let guess = 0; guess < 50; guess += 1) {
+      outcomes.push(
+        await codeOf(
+          ctx.container.accountSecurity.activateTotp(
+            tenantA,
+            actor,
+            { code: wrongFor(secret) },
+            { ip: null },
+          ),
+        ),
+      );
+    }
+    // The first five are judged wrong; after that the throttle or the voided enrolment
+    // refuses, and the RIGHT code no longer activates anything.
+    expect(outcomes.slice(0, 5)).toEqual(
+      Array(5).fill(IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_INVALID),
+    );
+    expect(
+      outcomes
+        .slice(5)
+        .every(
+          (one) =>
+            one === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED ||
+            one === IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_NOT_PENDING,
+        ),
+    ).toBe(true);
+    expect(await ctx.container.secondFactors.findFactor(tenantA, owner.id)).toBeNull();
+    await expect(
+      ctx.container.accountSecurity.activateTotp(tenantA, actor, { code: code(secret) }),
+    ).rejects.toThrow();
+    expect((await ctx.container.accountSecurity.overview(tenantA, actor)).totp.state).toBe(
+      'DISABLED',
+    );
+  });
+
+  it('activation: the cap voids the enrolment even while the throttle still allows guesses', async () => {
+    const lenient = await createTestContext({ LOGIN_MAX_ATTEMPTS_PER_USERNAME: '100' });
+    try {
+      await lenient.reset();
+      const admin = await createAdmin(lenient.container, tenantA, {
+        username: 'lenient',
+        password: 'the-lenient-password',
+        roleKeys: ['owner'],
+      });
+      const login = await lenient.container.auth.login(
+        tenantA,
+        anonymous(),
+        { username: 'lenient', password: 'the-lenient-password' },
+        from,
+      );
+      const actor = actorWithSession(admin, login.session.id);
+      const enrolment = await lenient.container.accountSecurity.enrolTotp(
+        tenantA,
+        actor,
+        { password: 'the-lenient-password' },
+        from,
+      );
+      const now = totpForStep(enrolment.secret, totpStepAt(new Date()));
+      const wrong = now === '000000' ? '111111' : '000000';
+      for (let guess = 0; guess < 5; guess += 1) {
+        expect(
+          await codeOf(
+            lenient.container.accountSecurity.activateTotp(tenantA, actor, { code: wrong }),
+          ),
+        ).toBe(IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_INVALID);
+      }
+      expect(
+        await codeOf(
+          lenient.container.accountSecurity.activateTotp(tenantA, actor, { code: wrong }),
+        ),
+      ).toBe(IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_NOT_PENDING);
+      expect(await lenient.container.secondFactors.findFactor(tenantA, admin.id)).toBeNull();
+    } finally {
+      await lenient.close();
+    }
+  });
+
+  it('activation guesses are counted on the shared credential throttle', async () => {
+    const { actor, secret } = await enrolOnly(owner);
+    for (let guess = 0; guess < 3; guess += 1) {
+      await codeOf(
+        ctx.container.accountSecurity.activateTotp(
+          tenantA,
+          actor,
+          { code: wrongFor(secret) },
+          { ip: null },
+        ),
+      );
+    }
+    const [row] = await ctx.container.database.db
+      .select({ failedCount: adminLoginThrottle.failedCount })
+      .from(adminLoginThrottle)
+      .where(
+        and(
+          eq(adminLoginThrottle.subjectKind, 'USERNAME'),
+          eq(adminLoginThrottle.subject, 'owner'),
+        ),
+      );
+    expect(row?.failedCount).toBe(3);
+  });
+
+  it('activation is refused from a session other than the one that enrolled', async () => {
+    const { secret } = await enrolOnly(owner);
+    const other = await passwordLogin(owner);
+    expect(
+      await codeOf(
+        ctx.container.accountSecurity.activateTotp(tenantA, other.actor, { code: code(secret) }),
+      ),
+    ).toBe(IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_NOT_PENDING);
+    const factor = await ctx.container.secondFactors.findFactor(tenantA, owner.id);
+    expect(factor?.state).toBe('PENDING');
+  });
+
+  it('an expired pending enrolment is deleted, and reads as off', async () => {
+    const { actor, secret } = await enrolOnly(owner);
+    await ctx.container.database.db
+      .update(adminTotpFactors)
+      .set({ createdAt: new Date(Date.now() - 16 * 60_000) });
+    expect((await ctx.container.accountSecurity.overview(tenantA, actor)).totp.state).toBe(
+      'DISABLED',
+    );
+    expect(
+      await codeOf(
+        ctx.container.accountSecurity.activateTotp(tenantA, actor, { code: code(secret) }),
+      ),
+    ).toBe(IDENTITY_ERROR_CODES.ADMIN_SECOND_FACTOR_NOT_PENDING);
+    expect(await ctx.container.database.db.select().from(adminTotpFactors)).toHaveLength(0);
+  });
+
+  it('operator 2FA reset: the actor steps up, with their own code when their factor is on', async () => {
+    const { secret } = await enableFor(owner);
+    await enableFor(manager);
+    const signed = await ctx.container.auth.completeSecondFactor(
+      await challengeFor(owner),
+      anonymous(),
+      { code: code(secret) },
+      from,
+    );
+    const actor = actorWithSession(owner, signed.session.id);
+    const reset = (stepUp: Record<string, string>, idempotencyKey?: string) =>
+      ctx.container.adminManagement.resetSecondFactor(tenantA, actor, manager.id, {
+        reason: 'lost phone',
+        stepUp,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      });
+
+    expect(await codeOf(reset({ password: OWNER_PASSWORD }))).toBe(
+      IDENTITY_ERROR_CODES.AUTH_STEP_UP_FACTOR_REQUIRED,
+    );
+    expect(await codeOf(reset({ password: 'wrong-password', code: code(secret, 1) }))).toBe(
+      IDENTITY_ERROR_CODES.AUTH_STEP_UP_FAILED,
+    );
+    expect(await codeOf(reset({ password: OWNER_PASSWORD, code: wrongFor(secret) }))).toBe(
+      IDENTITY_ERROR_CODES.AUTH_STEP_UP_FAILED,
+    );
+    expect(await ctx.container.secondFactors.findFactor(tenantA, manager.id)).not.toBeNull();
+
+    const first = await reset(
+      { password: OWNER_PASSWORD, code: code(secret, 1) },
+      'reset-key-0001',
+    );
+    expect(first.hadSecondFactor).toBe(true);
+    // A replay (a lost response) returns the FIRST result and resets nothing again —
+    // although its code has been spent.
+    const replay = await reset(
+      { password: OWNER_PASSWORD, code: code(secret, 1) },
+      'reset-key-0001',
+    );
+    expect(replay.hadSecondFactor).toBe(true);
+    expect(replay.sessionsRevoked).toBe(first.sessionsRevoked);
+    const resets = await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.action, 'admin.totp_reset'), eq(auditLogs.result, 'SUCCESS')));
+    expect(resets).toHaveLength(1);
+  });
+
+  it('operator password reset: refused without the actor’s step-up', async () => {
+    const { actor } = await passwordLogin(owner);
+    expect(
+      await codeOf(
+        ctx.container.adminManagement.resetPassword(tenantA, actor, manager.id, {
+          newPassword: 'taking-the-account-now',
+          reason: 'takeover attempt',
+          stepUp: { password: 'not-the-owners-password' },
+        }),
+      ),
+    ).toBe(IDENTITY_ERROR_CODES.AUTH_STEP_UP_FAILED);
+    await expect(
+      ctx.container.adminManagement.resetPassword(tenantA, actor, manager.id, {
+        newPassword: 'taking-the-account-now',
+        reason: 'no step-up at all',
+      }),
+    ).rejects.toThrow();
+    await expect(passwordLogin(manager)).resolves.toBeDefined();
+    await ctx.container.adminManagement.resetPassword(tenantA, actor, manager.id, {
+      newPassword: 'a-legitimate-new-password',
+      reason: 'they forgot it',
+      stepUp: { password: OWNER_PASSWORD },
+    });
+    expect(await codeOf(passwordLogin(manager))).toBe(
+      IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS,
+    );
+  });
+
+  it('operator password reset: an actor with 2FA on must also give a code', async () => {
+    const { secret, actor } = await enableFor(owner);
+    expect(
+      await codeOf(
+        ctx.container.adminManagement.resetPassword(tenantA, actor, manager.id, {
+          newPassword: 'taking-the-account-now',
+          reason: 'password alone',
+          stepUp: { password: OWNER_PASSWORD },
+        }),
+      ),
+    ).toBe(IDENTITY_ERROR_CODES.AUTH_STEP_UP_FACTOR_REQUIRED);
+    await ctx.container.adminManagement.resetPassword(tenantA, actor, manager.id, {
+      newPassword: 'a-legitimate-new-password',
+      reason: 'they forgot it',
+      stepUp: { password: OWNER_PASSWORD, code: code(secret) },
+    });
+  });
+
+  it('Recovery Kit export needs a code when the exporter’s factor is on', async () => {
+    const { secret, actor } = await enableFor(owner);
+    const exportWith = (extra: Record<string, string>) =>
+      ctx.container.installationKeys.exportKit(
+        tenantA,
+        actor,
+        {
+          accountPassword: OWNER_PASSWORD,
+          passphrase: 'a passphrase of decent length',
+          passphraseConfirmation: 'a passphrase of decent length',
+          ...extra,
+        },
+        { ip: null },
+      );
+    expect(await codeOf(exportWith({}))).toBe(IDENTITY_ERROR_CODES.AUTH_STEP_UP_FACTOR_REQUIRED);
+    expect(await codeOf(exportWith({ code: wrongFor(secret) }))).toBe(
+      'recovery_kit.reauthentication_failed',
+    );
+    const kit = await exportWith({ code: code(secret) });
+    expect(kit.keyCount).toBeGreaterThan(0);
+  });
+
+  it('the password-only login writes nothing for a 2FA account', async () => {
+    await enableFor(owner);
+    const before = await ctx.container.database.db.select().from(adminLoginChallenges);
+    expect(await codeOf(passwordLogin(owner))).toBe(
+      IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_REQUIRED,
+    );
+    expect(await ctx.container.database.db.select().from(adminLoginChallenges)).toHaveLength(
+      before.length,
+    );
+    const challengeRows = await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'auth.login_challenge'));
+    expect(challengeRows).toHaveLength(0);
+  });
+
+  it('a regeneration rolls back whole when its throttle bookkeeping fails', async () => {
+    const { secret, backupCodes, actor } = await enableFor(owner);
+    const throttle = (
+      ctx.container.accountSecurity as unknown as {
+        deps: { throttle: { releaseIn: (...args: unknown[]) => Promise<void> } };
+      }
+    ).deps.throttle;
+    const original = throttle.releaseIn;
+    throttle.releaseIn = () => Promise.reject(new Error('transient'));
+    try {
+      await expect(
+        ctx.container.accountSecurity.regenerateBackupCodes(
+          tenantA,
+          actor,
+          { password: OWNER_PASSWORD, code: code(secret) },
+          from,
+        ),
+      ).rejects.toThrow('transient');
+    } finally {
+      throttle.releaseIn = original;
+    }
+    // The old codes still work: nothing committed without its bookkeeping.
+    await expect(
+      ctx.container.auth.completeSecondFactor(
+        await challengeFor(owner),
+        anonymous(),
+        { backupCode: backupCodes[0]! },
+        from,
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it("shows an operator's address only on the operator's rows, never in the target's history", async () => {
+    await enableFor(manager);
+    const ownerSession = await passwordLogin(owner);
+    await ctx.container.adminManagement.resetSecondFactor(
+      tenantA,
+      { ...ownerSession.actor, ip: '198.51.100.250', userAgent: 'operator-agent' },
+      manager.id,
+      { reason: 'lost phone', stepUp: { password: OWNER_PASSWORD } },
+    );
+    const target = await passwordLogin(manager);
+    const events = await ctx.container.accountSecurity.securityEvents(tenantA, target.actor);
+    const reset = events.find((event) => event.action === 'admin.totp_reset');
+    expect(reset?.actorLabel).toBe('owner');
+    expect(reset?.ip).toBeNull();
+    expect(reset?.userAgent).toBeNull();
+    expect(JSON.stringify(events)).not.toContain('198.51.100.250');
+    // The holder's OWN rows still carry their address.
+    expect(events.some((event) => event.ip === from.ip)).toBe(true);
+  });
+
+  it('the server recovery is not reachable from the container a surface holds', () => {
+    expect('resetFromServer' in ctx.container.accountSecurity).toBe(false);
+    expect(
+      Object.values(ctx.container).some((value) => value instanceof ServerSecondFactorRecovery),
+    ).toBe(false);
+  });
 });

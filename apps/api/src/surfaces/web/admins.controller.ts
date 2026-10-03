@@ -15,6 +15,7 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { ipThrottleSubject } from '../../infrastructure/trusted-proxy.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { toSummary } from './auth.controller.js';
 
@@ -136,7 +137,13 @@ export class AdminsController {
   ): Promise<ResetAdminPasswordResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const targetId = uuidV7Schema.parse(id) as AdminId;
-    const result = await this.container.adminManagement.resetPassword(scope, actor, targetId, body);
+    const result = await this.container.adminManagement.resetPassword(
+      scope,
+      actor,
+      targetId,
+      body,
+      { ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS) },
+    );
     return {
       admin: toSummary(result.admin, result.roleKeys),
       sessionsRevoked: result.sessionsRevoked,
@@ -160,6 +167,7 @@ export class AdminsController {
       actor,
       targetId,
       body,
+      { ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS) },
     );
     return {
       admin: toSummary(result.admin, result.roleKeys),

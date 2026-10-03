@@ -307,7 +307,7 @@ describe('admin security over HTTP', () => {
       method: 'POST',
       url: `${API_PREFIX}${ACCOUNT_SECURITY_ROUTES.adminSecondFactorReset(ownerId)}`,
       headers: as(helperCookie),
-      payload: { reason: 'try' },
+      payload: { reason: 'try', stepUp: { password: 'the-helpers-password' } },
     });
     expect(denied.statusCode).toBe(403);
 
@@ -315,7 +315,11 @@ describe('admin security over HTTP', () => {
       method: 'POST',
       url: `${API_PREFIX}${ACCOUNT_SECURITY_ROUTES.adminSecondFactorReset(helper.id)}`,
       headers: as(ownerCookie),
-      payload: { reason: 'lost phone' },
+      payload: {
+        reason: 'lost phone',
+        stepUp: { password: OWNER_PASSWORD },
+        idempotencyKey: 'http-reset-key-0001',
+      },
     });
     expect(done.statusCode).toBe(201);
     const body = resetAdminSecondFactorResponseSchema.parse(done.json());

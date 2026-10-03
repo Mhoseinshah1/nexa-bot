@@ -194,12 +194,12 @@ export class AuthenticationService {
     input: unknown,
     context: LoginContext,
   ): Promise<LoginResult> {
-    const outcome = await this.signIn(scope, actor, input, context);
+    // `issueChallenge: false` (D2 review): for a 2FA account this answers
+    // `auth.second_factor_required` having written NOTHING — no orphan challenge and no
+    // SUCCESS audit row for a sign-in that did not happen.
+    const outcome = await this.signIn(scope, actor, input, context, { issueChallenge: false });
     if (outcome.kind === 'SIGNED_IN') return outcome.result;
-    throw errors.unauthenticated(
-      IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_REQUIRED,
-      'This account needs a second factor to sign in.',
-    );
+    throw secondFactorRequired();
   }
 
   async signIn(
@@ -207,6 +207,7 @@ export class AuthenticationService {
     actor: ActorContext,
     input: unknown,
     context: LoginContext,
+    options: { readonly issueChallenge: boolean } = { issueChallenge: true },
   ): Promise<SignInOutcome> {
     const command = loginRequestSchema.parse(input);
     // Case-folded at the boundary, so `Owner` and `owner` are one account and
@@ -253,6 +254,7 @@ export class AuthenticationService {
         () => {
           verdictReached = true;
         },
+        options.issueChallenge,
       );
     } catch (error) {
       if (!verdictReached) {
@@ -272,6 +274,7 @@ export class AuthenticationService {
     reserved: Reservation,
     now: Date,
     verdict: () => void,
+    issueChallenge: boolean,
   ): Promise<SignInOutcome> {
     const shaped = adminUsernameSchema.safeParse(username);
     if (!shaped.success) {
@@ -434,22 +437,6 @@ export class AuthenticationService {
        */
       const factor = await this.secondFactor.factors.findFactor(scope, credentials.admin.id, tx);
       if (factor !== null && factor.state === 'ACTIVE') {
-        const challengeToken = generateSessionToken();
-        const challengeExpiresAt = new Date(now.getTime() + LOGIN_CHALLENGE_TTL_SECONDS * 1000);
-        await this.secondFactor.challenges.create(
-          scope,
-          {
-            id: this.ids.uuid(),
-            adminId: credentials.admin.id,
-            tokenHash: hashSessionToken(challengeToken),
-            credentialFingerprint: credentialFingerprint(rehashed ?? credentials.passwordHash),
-            issuedAt: now,
-            expiresAt: challengeExpiresAt,
-            ip: context.ip,
-            userAgent: context.userAgent,
-          },
-          tx,
-        );
         /*
          * The password reservation is GIVEN BACK, not cleared. Clearing would erase
          * earlier second-factor failures, and somebody holding the password could then
@@ -475,6 +462,23 @@ export class AuthenticationService {
             tx,
           );
         }
+        if (!issueChallenge) return { outcome: 'FACTOR_REQUIRED' as const };
+        const challengeToken = generateSessionToken();
+        const challengeExpiresAt = new Date(now.getTime() + LOGIN_CHALLENGE_TTL_SECONDS * 1000);
+        await this.secondFactor.challenges.create(
+          scope,
+          {
+            id: this.ids.uuid(),
+            adminId: credentials.admin.id,
+            tokenHash: hashSessionToken(challengeToken),
+            credentialFingerprint: credentialFingerprint(rehashed ?? credentials.passwordHash),
+            issuedAt: now,
+            expiresAt: challengeExpiresAt,
+            ip: context.ip,
+            userAgent: context.userAgent,
+          },
+          tx,
+        );
         await this.audit.record(
           scope,
           actorFor(actor, credentials.admin),
@@ -524,6 +528,12 @@ export class AuthenticationService {
       }
       verdict();
       return await this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
+    }
+
+    if (issued.outcome === 'FACTOR_REQUIRED') {
+      // Reservations given back in the transaction; nothing else was written.
+      verdict();
+      throw secondFactorRequired();
     }
 
     if (issued.outcome === 'CHALLENGE') {
@@ -737,7 +747,6 @@ export class AuthenticationService {
 
       const token = generateSessionToken();
       const sessionId = this.ids.uuid() as AdminSessionId;
-      const expiresAt = new Date(now.getTime() + this.sessionTtlSeconds * 1000);
 
       const outcome = await this.uow.run(scope, async (tx) => {
         if ((await this.admins.lockTenantForRead(scope, tx)) !== 'ACTIVE') {
@@ -754,10 +763,15 @@ export class AuthenticationService {
           return { kind: 'STALE' as const, reason: 'CHALLENGE_INVALID' as const };
         }
         const locked = await this.secondFactor.challenges.lock(scope, challenge.id, tx);
+        // The instant is read AFTER the throttle and the lock waits (D2 review): a
+        // challenge that expired while this request queued is expired, and the code is
+        // judged against the step it is checked in, not the one the request arrived in.
+        const lockedNow = this.clock.now();
+        const expiresAt = new Date(lockedNow.getTime() + this.sessionTtlSeconds * 1000);
         if (
           locked === null ||
           locked.consumedAt !== null ||
-          locked.expiresAt.getTime() <= now.getTime()
+          locked.expiresAt.getTime() <= lockedNow.getTime()
         ) {
           return { kind: 'STALE' as const, reason: 'CHALLENGE_INVALID' as const };
         }
@@ -775,12 +789,12 @@ export class AuthenticationService {
           admin.id,
           factor,
           proof,
-          now,
+          lockedNow,
           tx,
         );
         if (!verdict.accepted) return { kind: 'REJECTED' as const, verdict };
 
-        if (!(await this.secondFactor.challenges.consume(scope, challenge.id, now, tx))) {
+        if (!(await this.secondFactor.challenges.consume(scope, challenge.id, lockedNow, tx))) {
           // Unreachable under the row lock above; kept as the single-use guarantee.
           throw challengeInvalid();
         }
@@ -794,10 +808,10 @@ export class AuthenticationService {
             userAgent: context.userAgent,
           },
           reserved,
-          { sessionId, token, now, expiresAt, method: verdict.method },
+          { sessionId, token, now: lockedNow, expiresAt, method: verdict.method },
           tx,
         );
-        return { kind: 'ISSUED' as const, display };
+        return { kind: 'ISSUED' as const, display, issuedAt: lockedNow, expiresAt };
       });
 
       if (outcome.kind === 'STALE') {
@@ -825,7 +839,15 @@ export class AuthenticationService {
         );
       }
       judged = true;
-      return sessionResult(token, admin, scope, sessionId, now, expiresAt, outcome.display);
+      return sessionResult(
+        token,
+        admin,
+        scope,
+        sessionId,
+        outcome.issuedAt,
+        outcome.expiresAt,
+        outcome.display,
+      );
     } catch (error) {
       // Anything that failed before a verdict judged nothing, so it is not counted.
       if (!judged) await this.credentialThrottle.release(scope, username, context.ip, reserved);
@@ -1058,6 +1080,13 @@ export class AuthenticationService {
       'The username or password is incorrect.',
     );
   }
+}
+
+function secondFactorRequired() {
+  return errors.unauthenticated(
+    IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_REQUIRED,
+    'This account needs a second factor to sign in.',
+  );
 }
 
 function challengeInvalid() {
