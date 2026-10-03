@@ -580,6 +580,59 @@ describe('an order that cannot be delivered is refunded', () => {
     await assertRefunded(order.id, { services: 0 });
   });
 
+  // -------------------------------------------------------------------------
+  // Phase C2: drain refuses NEW allocations at settlement, and only those
+  // -------------------------------------------------------------------------
+
+  const setDrained = (panelId: string) =>
+    ctx.container.database.db.execute(
+      sql`UPDATE panels SET drained_at = now(), drain_reason = 'نگهداری' WHERE id = ${panelId}`,
+    );
+
+  it('settles an order confirmed before the drain while its hold stands', async () => {
+    // Its slot was taken at confirmation, before the operator drained the panel, so
+    // settling it allocates nothing new. Refunding it would punish the customer for a
+    // decision made after they bought.
+    const order = await awaitingPayment(panelA);
+    const paymentId = await pendingTransfer(order);
+    await setDrained(panelA);
+
+    const { order: settled } = await confirmTransfer(paymentId);
+
+    expect(settled?.state).toBe('PAID');
+    expect(await countOf('refunds')).toBe(0);
+    expect(await countOf('services')).toBe(1);
+  });
+
+  it('refunds when the panel was drained and the hold had lapsed', async () => {
+    // The hold is gone, so this settlement WOULD be a new allocation on a drained
+    // panel: refused, and the money goes back through the one credit path.
+    const order = await awaitingPayment(panelA);
+    const paymentId = await pendingTransfer(order);
+    await setDrained(panelA);
+    await expireHold(order.id);
+
+    const { payment } = await confirmTransfer(paymentId);
+
+    expect(payment.state).toBe('CONFIRMED');
+    await assertRefunded(order.id, { services: 0 });
+  });
+
+  it('applies a RENEW on a drained panel: existing services keep every operation', async () => {
+    const serviceId = await ownService(panelRenew);
+    await setDrained(panelRenew);
+    const { paymentId } = await renewalByTransfer(serviceId);
+
+    const { order: settled } = await confirmTransfer(paymentId);
+
+    expect(settled?.state).toBe('PAID');
+    expect(await countOf('refunds')).toBe(0);
+    const operations = (await ctx.container.database.db.execute(
+      sql`SELECT type FROM provisioning_operations` as never,
+    )) as unknown as { rows: { type: string }[] };
+    expect(operations.rows.map((row) => row.type)).toEqual(['RENEW']);
+  });
+
   it('refunds when the panel was ARCHIVED after the transfer', async () => {
     const order = await awaitingPayment(panelA);
     const paymentId = await pendingTransfer(order);

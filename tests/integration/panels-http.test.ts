@@ -6,6 +6,7 @@ import {
   CONTROL_ERROR_CODES,
   PANEL_ERROR_CODES,
   PANEL_ROUTES,
+  panelHealthDashboardResponseSchema,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -1921,6 +1922,101 @@ describe('panel HTTP surface', () => {
         (await get(PANEL_ADVANCED_ROUTES.advanced(id), ownerCookie)).json(),
       );
       expect(after.policy.revision).toBe(0);
+    });
+  });
+
+  describe('Phase C2: the health dashboard and drain over HTTP', () => {
+    it('serves the dashboard to panels.view, with every number and no credential', async () => {
+      const created = panelResponseSchema.parse(
+        (
+          await createPanel(ownerCookie, {
+            credentials: { username: USERNAME, password: PASSWORD },
+          })
+        ).json(),
+      );
+      const response = await get(PANEL_ROUTES.health, technicalCookie);
+      expect(response.statusCode).toBe(200);
+      const body = panelHealthDashboardResponseSchema.parse(response.json());
+      expect(body.rows.map((row) => row.panel.id)).toEqual([created.panel.id]);
+      const [row] = body.rows;
+      expect(row?.panel.drain).toEqual({ draining: false, since: null, reason: null });
+      expect(row?.services).toEqual({
+        active: 0,
+        suspended: 0,
+        expired: 0,
+        pending: 0,
+        unreconciled: 0,
+      });
+      expect(row?.provisioning).toEqual({
+        failedInWindow: 0,
+        unknownOpen: 0,
+        lastFailureAt: null,
+        lastFailureKind: null,
+      });
+      expect(body.failureWindowMs).toBe(24 * 60 * 60 * 1000);
+      // The response builder is the security boundary; nothing in it is a value.
+      expect(response.body).not.toContain(PASSWORD);
+      expect(response.body).not.toContain(USERNAME);
+    });
+
+    it('refuses the dashboard to a role without panels.view', async () => {
+      expect((await get(PANEL_ROUTES.health, supportCookie)).statusCode).toBe(403);
+    });
+
+    it('drains for panels.drain, refuses it without, and refuses a foreign origin', async () => {
+      const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
+      const id = created.panel.id;
+      const body = { draining: true, reason: 'مهاجرت سرور', idempotencyKey: idempotencyKey() };
+
+      expect((await post(PANEL_ROUTES.drain(id), supportCookie, body)).statusCode).toBe(403);
+      const foreign = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${PANEL_ROUTES.drain(id)}`,
+        headers: { cookie: technicalCookie, origin: 'https://attacker.example' },
+        payload: body,
+      });
+      expect(foreign.statusCode).toBe(403);
+
+      const drained = await post(PANEL_ROUTES.drain(id), technicalCookie, body);
+      expect(drained.statusCode).toBe(201);
+      const panel = panelResponseSchema.parse(drained.json()).panel;
+      expect(panel.drain.draining).toBe(true);
+      expect(panel.drain.reason).toBe('مهاجرت سرور');
+      // Drain is not a status: the panel stays ACTIVE and monitored.
+      expect(panel.status).toBe('ACTIVE');
+      expect(panel.sellability).toMatchObject({ sellable: false, reason: 'DRAINING' });
+    });
+
+    it('refuses a drain with no reason as a validation error', async () => {
+      const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
+      const response = await post(PANEL_ROUTES.drain(created.panel.id), ownerCookie, {
+        draining: true,
+        reason: '',
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: { code: PANEL_ERROR_CODES.PANEL_REQUEST_INVALID },
+      });
+    });
+
+    it("cannot drain another tenant's panel by naming its id", async () => {
+      const foreign = await api.container.panels.create(tenantB, adminActorFor(ownerB), {
+        name: 'Foreign',
+        providerType: 'marzban',
+        baseUrl: 'https://foreign.example.test',
+        idempotencyKey: 'foreign-panel-drain',
+      });
+      const response = await post(PANEL_ROUTES.drain(foreign.view.panel.id), ownerCookie, {
+        draining: true,
+        reason: 'not yours',
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(response.statusCode).toBe(404);
+      const rows = await api.container.database.db.execute(
+        sql`SELECT drained_at FROM panels WHERE id = ${foreign.view.panel.id}` as never,
+      );
+      expect((rows.rows as { drained_at: unknown }[])[0]?.drained_at).toBeNull();
     });
   });
 });
