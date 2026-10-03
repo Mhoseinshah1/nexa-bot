@@ -178,6 +178,10 @@ import {
   SERVICE_LAST_SEEN_STATES,
   SERVICE_NOTE_MAX_LENGTH,
   SUPPORT_FAQ_STATUSES,
+  TERMS_ACCEPTANCE_SOURCES,
+  TERMS_BODY_MAX_LENGTH,
+  TERMS_TITLE_MAX_LENGTH,
+  TERMS_VERSION_STATUSES,
   SUPPORT_FAQ_QUESTION_MAX_LENGTH,
   SUPPORT_FAQ_ANSWER_MAX_LENGTH,
   TENANT_MEDIA_PURPOSES,
@@ -11644,6 +11648,102 @@ export const bulkOperationItems = pgTable(
       'bulk_operation_items_processed_check',
       sql`(state IN ('PENDING', 'CANCELLED')) = (processed_at IS NULL)`,
     ),
+  ],
+);
+
+/**
+ * Program §6 — one version of a tenant's terms and rules (`docs/terms-audit.md`).
+ *
+ * At most one DRAFT per tenant (the partial unique index), edited in place with a revision
+ * counter every edit names. Publishing is a conditional UPDATE from DRAFT at that revision
+ * which gives the row the next `version_number`; from then on the row is IMMUTABLE — the
+ * hand-written guard migration refuses any UPDATE or DELETE of a PUBLISHED row — so an
+ * acceptance always points at the exact text the customer was shown.
+ *
+ * The CURRENT version is the PUBLISHED row with the greatest `version_number`. It is not
+ * stored: a stored "current" flag would be a second fact that could disagree with the
+ * numbers. `title` and `body` are the operator's raw text, never a rendered string.
+ */
+export const termsVersions = pgTable(
+  'terms_versions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    status: text('status').notNull(),
+    versionNumber: integer('version_number'),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    revision: integer('revision').notNull().default(1),
+    createdByAdminId: uuid('created_by_admin_id').references(() => admins.id),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    publishedByAdminId: uuid('published_by_admin_id').references(() => admins.id),
+    publishedAt: timestamptz('published_at'),
+  },
+  (table) => [
+    unique('terms_versions_tenant_id_key').on(table.tenantId, table.id),
+    unique('terms_versions_tenant_number_key').on(table.tenantId, table.versionNumber),
+    uniqueIndex('terms_versions_one_draft_key')
+      .on(table.tenantId)
+      .where(sql`status = 'DRAFT'`),
+    check('terms_versions_status_check', enumCheck('status', TERMS_VERSION_STATUSES)),
+    check(
+      'terms_versions_published_check',
+      sql`(status = 'PUBLISHED') = (version_number IS NOT NULL AND published_at IS NOT NULL)`,
+    ),
+    check('terms_versions_number_check', sql`version_number IS NULL OR version_number >= 1`),
+    check('terms_versions_revision_check', sql`revision >= 1`),
+    check(
+      'terms_versions_title_check',
+      sql`length(btrim(title)) BETWEEN 1 AND ${sql.raw(String(TERMS_TITLE_MAX_LENGTH))}`,
+    ),
+    check(
+      'terms_versions_body_check',
+      sql`length(btrim(body)) BETWEEN 1 AND ${sql.raw(String(TERMS_BODY_MAX_LENGTH))}`,
+    ),
+  ],
+);
+
+/**
+ * Program §6 — a customer's acceptance of one published version.
+ *
+ * Append-only (the hand-written guard migration): written once, by the customer's own tap,
+ * and never changed or removed. One row per (customer, version) by the unique key, so a
+ * repeated or concurrent tap inserts nothing the second time. Both references carry the
+ * tenant, so an acceptance cannot name another tenant's customer or version.
+ */
+export const termsAcceptances = pgTable(
+  'terms_acceptances',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    termsVersionId: uuid('terms_version_id').notNull(),
+    acceptedAt: timestamptz('accepted_at').notNull(),
+    source: text('source').notNull(),
+    /** The bot the tap arrived on, when there was one. */
+    botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
+    correlationId: text('correlation_id').notNull(),
+  },
+  (table) => [
+    unique('terms_acceptances_once_key').on(table.tenantId, table.customerId, table.termsVersionId),
+    index('terms_acceptances_version_idx').on(table.tenantId, table.termsVersionId),
+    index('terms_acceptances_customer_idx').on(table.tenantId, table.customerId, table.acceptedAt),
+    foreignKey({
+      name: 'terms_acceptances_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'terms_acceptances_version_fk',
+      columns: [table.tenantId, table.termsVersionId],
+      foreignColumns: [termsVersions.tenantId, termsVersions.id],
+    }),
+    check('terms_acceptances_source_check', enumCheck('source', TERMS_ACCEPTANCE_SOURCES)),
   ],
 );
 

@@ -54,6 +54,7 @@ export const INLINE_BUTTON_GROUPS = [
   'REFERRAL',
   'APPS',
   'CHANNELS',
+  'TERMS',
 ] as const;
 export type InlineButtonGroup = (typeof INLINE_BUTTON_GROUPS)[number];
 
@@ -216,6 +217,9 @@ export const INLINE_BUTTONS = [
   button('channels.join_public', 'CHANNELS', null, 'URL'),
   button('channels.join_private', 'CHANNELS', 'bot.channels.join_private_button', 'URL'),
   button('channels.check', 'CHANNELS', 'bot.channels.check_button'),
+
+  // Terms and rules (program §6)
+  button('terms.accept', 'TERMS', 'bot.terms.accept_button'),
 ] as const satisfies readonly InlineButtonDefinition[];
 
 export type InlineButtonKey = (typeof INLINE_BUTTONS)[number]['key'];

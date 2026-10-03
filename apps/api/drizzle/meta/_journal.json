@@ -1170,6 +1170,20 @@
       "when": 1791019240639,
       "tag": "0166_customer_notes_tags_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 167,
+      "version": "7",
+      "when": 1791030038784,
+      "tag": "0167_terms",
+      "breakpoints": true
+    },
+    {
+      "idx": 168,
+      "version": "7",
+      "when": 1791030050110,
+      "tag": "0168_terms_guards",
+      "breakpoints": true
     }
   ]
 }

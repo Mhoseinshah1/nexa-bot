@@ -35,6 +35,7 @@ import {
 } from '@nexa/contracts';
 import type { AntiSpamService } from '../../modules/commerce/customers/application/anti-spam.service.js';
 import type { ChannelMembershipService } from '../../modules/commerce/customers/application/channel-membership.service.js';
+import type { TermsAcceptanceService } from '../../modules/control/terms/application/terms-acceptance.service.js';
 import type {
   ClientAppPlatform,
   ConnectionGuidePlatform,
@@ -409,6 +410,13 @@ export const BOT_INTENTS = [
    * never replays what the customer first asked for: a pass answers the main menu.
    */
   'MEMBERSHIP_CHECK',
+  /*
+   * Program §6 — the accept button under the terms and rules. Carries the VERSION the
+   * customer was shown; only that version is recorded, and only while it is still the
+   * current one. Exempt from the terms gate (it is the way through it), never from the
+   * membership gate, and never replays what the customer first asked for.
+   */
+  'TERMS_ACCEPT',
   /*
    * WP-A7 — the customer's support tickets. `TICKETS` is the list (the menu entry, /tickets
    * and its callback), `TICKET_NEW` the category chooser, `TICKET_CATEGORY` opens the window
@@ -1120,6 +1128,11 @@ export const MARKETING_OPT_OUT_CALLBACK_DATA = 'mk:out';
 export const MARKETING_OPT_IN_CALLBACK_DATA = 'mk:in';
 /** Package B: the membership check button's callback data. */
 export const MEMBERSHIP_CHECK_CALLBACK_DATA = 'mc:';
+/**
+ * Program §6: `ac:<terms version uuid>` — accept THAT version of the terms and rules. Two
+ * letters: `a:` is taken, and `ac:` differs from it at the second character. 39 bytes.
+ */
+export const TERMS_ACCEPT_CALLBACK_PREFIX = 'ac:';
 export const TUTORIAL_PLATFORM_CALLBACK_PREFIX = 'to:';
 /** WP-A10: `ca:<entry uuid>` — one of the tenant's client apps. Begins with `c` like `c:`, `cg:`, `ck:`. */
 export const CLIENT_APP_CALLBACK_PREFIX = 'ca:';
@@ -1381,6 +1394,29 @@ function membershipRequired(
      * R2: a gate, not a step — its own message, so the screen the customer tapped stays
      * behind it and works again once they have joined.
      */
+    wizard: { kind: 'ORDER', step: 'NOTICE', placement: 'NEW' },
+  };
+}
+
+/**
+ * The terms screen (program §6): the current version's title and text, as the operator
+ * wrote them, and one accept button that names THAT version. A gate like the join screen —
+ * its own message, so the screen the customer tapped stays behind it.
+ */
+function termsRequired(
+  key: 'bot.terms.required' | 'bot.terms.updated',
+  version: { readonly id: string; readonly title: string; readonly body: string },
+): PendingReply {
+  return {
+    key,
+    values: { title: version.title, body: version.body },
+    buttons: [
+      {
+        ...inlineLabel('terms.accept'),
+        data: `${TERMS_ACCEPT_CALLBACK_PREFIX}${version.id}`,
+      },
+    ],
+    orderId: null,
     wizard: { kind: 'ORDER', step: 'NOTICE', placement: 'NEW' },
   };
 }
@@ -2585,6 +2621,11 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === MEMBERSHIP_CHECK_CALLBACK_DATA) {
       return { intent: 'MEMBERSHIP_CHECK', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(TERMS_ACCEPT_CALLBACK_PREFIX)) {
+      const version = uuidV7Schema.safeParse(data.slice(TERMS_ACCEPT_CALLBACK_PREFIX.length));
+      if (!version.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'TERMS_ACCEPT', targetId: version.data, callbackQueryId: id };
     }
     if (data === TUTORIAL_CALLBACK_DATA) {
       return { intent: 'TUTORIAL', targetId: null, callbackQueryId: id };
@@ -3897,6 +3938,12 @@ export interface BotRuntimeDeps {
    * tenant with no REQUIRED channel sees.
    */
   readonly membership?: Pick<ChannelMembershipService, 'missingRequired'>;
+  /**
+   * The terms and rules (program §6). Optional for the reason `membership` is; absent, no
+   * customer is asked to accept anything — which is also what a tenant with enforcement off,
+   * or with nothing published, sees.
+   */
+  readonly terms?: Pick<TermsAcceptanceService, 'requirement' | 'accept'>;
   /**
    * Block User from the receipt message (WP10 follow-up §4). Optional for the reason
    * `receiptCredits` is; without it the block button is not drawn. It blocks only through
@@ -9744,7 +9791,7 @@ export class BotRuntime {
       (!checking &&
         (MEMBERSHIP_EXEMPT_INTENTS.has(command.intent) || ADMIN_INTENTS.has(command.intent)))
     ) {
-      return this.act(scope, actor, safe, customer, arrival, input);
+      return this.termsGatedAct(scope, actor, safe, customer, arrival, input);
     }
     const missing = await membership.missingRequired(scope, {
       botInstanceId: input.botInstanceId,
@@ -9756,12 +9803,109 @@ export class BotRuntime {
       (await this.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) !=
         null
     ) {
-      return this.act(scope, actor, safe, customer, arrival, input);
+      return this.termsGatedAct(scope, actor, safe, customer, arrival, input);
     }
     return membershipRequired(
       checking ? 'bot.channels.still_missing' : 'bot.channels.join_required',
       missing,
     );
+  }
+
+  /**
+   * The terms and rules gate (program §6), the second half of the ONE central guard: it
+   * runs only behind the membership gate, and `act` is reached only through it. Not a check
+   * copied into handlers — a handler cannot forget it, and a crafted callback for any
+   * customer action meets it like a tapped one.
+   *
+   * While enforcement is on and the customer has not accepted the CURRENT published
+   * version, every customer intent is answered with that version and its accept button
+   * instead. Exempt, as from the membership gate: support, help, the promotional opt-out
+   * and the management panel; a bound administrator is never stopped. The requirement is
+   * asked only for an intent that would be gated, so the exempt ones pay for no lookup.
+   *
+   * The accept button is the only way through. It names the version it was drawn under:
+   * that version is recorded only while it is still the current one, and a button under an
+   * older message answers with the version that replaced it. After acceptance the customer
+   * gets the main menu — never a replay of what they first asked for.
+   */
+  private async termsGatedAct(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    customer: CustomerRecord,
+    arrival: CustomerArrival,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply> {
+    const terms = this.deps.terms;
+    if (command.intent === 'TERMS_ACCEPT') {
+      return this.acceptTerms(scope, actor, command, customer, arrival, input);
+    }
+    if (
+      terms === undefined ||
+      MEMBERSHIP_EXEMPT_INTENTS.has(command.intent) ||
+      ADMIN_INTENTS.has(command.intent)
+    ) {
+      return this.act(scope, actor, command, customer, arrival, input);
+    }
+    const required = await terms.requirement(scope, customer.id);
+    if (
+      required === null ||
+      (await this.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) !=
+        null
+    ) {
+      return this.act(scope, actor, command, customer, arrival, input);
+    }
+    return termsRequired('bot.terms.required', required);
+  }
+
+  private async acceptTerms(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    customer: CustomerRecord,
+    arrival: CustomerArrival,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply> {
+    const menu: BotCommand = {
+      intent: 'MAIN_MENU',
+      targetId: null,
+      callbackQueryId: command.callbackQueryId,
+    };
+    const terms = this.deps.terms;
+    if (terms === undefined || command.targetId === null) {
+      return this.act(scope, actor, menu, customer, arrival, input);
+    }
+    // The update's key is already spent by `resolveFromUpdate` under this surface: the
+    // acceptance is a second command of the same turn, so it takes the turn's sub-key.
+    const accepted = await terms.accept(scope, actor, {
+      idempotencyKey: `${input.idempotencyKey}:terms`,
+      customerId: customer.id,
+      termsVersionId: command.targetId,
+      botInstanceId: input.botInstanceId,
+    });
+    if (accepted.outcome === 'STALE') {
+      /*
+       * Nothing was recorded. When a newer version replaced the one shown, it is shown now
+       * with its own button — whatever enforcement says, because the customer asked to
+       * accept the rules and the rules they would be accepting are these. When nothing is
+       * published any more, there is nothing to accept: the main menu.
+       */
+      return accepted.current === null
+        ? this.act(scope, actor, menu, customer, arrival, input)
+        : termsRequired('bot.terms.updated', accepted.current);
+    }
+    const reply = await this.act(scope, actor, menu, customer, arrival, input);
+    return { ...reply, key: 'bot.terms.accepted' };
   }
 
   /**

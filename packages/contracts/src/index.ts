@@ -100,6 +100,8 @@ export * from './custom-service.js';
 // WP-A6: moving an existing service between locations of its own panel.
 export * from './service-location.js';
 export * from './customer-360.js';
+// Program §6: the terms / rules domain.
+export * from './terms.js';
 export * from './customer-crm.js';
 export * from './templates.js';
 export * from './settings.js';
