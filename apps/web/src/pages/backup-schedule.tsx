@@ -8,6 +8,7 @@ import {
   type BackupScheduleSource,
   type BackupStatusResponse,
   type ResolvedSettingResponse,
+  type PermissionKey,
 } from '@nexa/contracts';
 import { ApiError, fetchSettings, newIdempotencyKey, saveSetting } from '../api/client';
 import {
@@ -95,7 +96,7 @@ export function BackupScheduleCard({
   permissions,
 }: {
   status: ScheduleStatus;
-  permissions: readonly string[];
+  permissions: readonly PermissionKey[];
 }) {
   const client = useQueryClient();
   const mayView = permissions.includes('settings.view');

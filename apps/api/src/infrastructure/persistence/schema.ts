@@ -71,6 +71,11 @@ import {
   CUSTOMER_STATUSES,
   PRODUCT_STATUSES,
   PRODUCT_AUDIENCES,
+  // Legacy migration prerequisites (Items 14, 15).
+  LEGACY_SHAPE_RESOLUTIONS,
+  LEGACY_SHAPE_TARIFF_STATUSES,
+  LEGACY_SHAPE_UNRESOLVED_REASONS,
+  LEGACY_TRIAL_DECISIONS,
   SERVICE_ADDON_KINDS,
   SERVICE_ADDON_STATUSES,
   COMMERCIAL_ORDER_PURPOSES,
@@ -12550,5 +12555,173 @@ export const incidentNotices = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'incident_notices_customer_fk',
     }),
+  ],
+);
+
+/**
+ * A hidden legacy product shape (program Item 14,
+ * `docs/legacy-migration/hidden-legacy-products.md`).
+ *
+ * One row per tenant per canonical legacy tariff shape — `(code_panel, volume,
+ * service_time, time_unit, is_custom)` reduced by `legacyShapeKey` — and the ONE hidden
+ * product that stands for it. A legacy service whose invoice named no product will, in
+ * P6, reference that product, so it renews through the ordinary renewal path and the one
+ * pricing boundary. There is no second productless pricing system.
+ *
+ * `price_product` is deliberately absent. It is a historical purchase snapshot and the
+ * owner decided renewals are at the CURRENT NEXA tariff, so two invoices of one shape at
+ * two historical prices are one shape and one product, and no column here could become a
+ * permanent price lock.
+ *
+ * The product is created INACTIVE, HIDDEN, unpriced and uncategorised. `tariff_status`
+ * `UNRESOLVED` is the explicit manual-review state: nothing of this shape is adoptable
+ * until a current tariff is resolved. Uncategorised is structural, not cosmetic: an
+ * order for a NEW service refuses a product with no category (`NOT_CATEGORISED`), while a
+ * renewal reads the service's own product, so the row renews and is never sold new — and
+ * `nexa_legacy_shape_product_hidden` refuses an edit that would categorise or list it.
+ */
+export const legacyProductShapes = pgTable(
+  'legacy_product_shapes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** `legacyShapeKey`'s output: versioned, deterministic, price-free. */
+    shapeKey: text('shape_key').notNull(),
+    /** The legacy panel CODE (e.g. `bac6`), trimmed; NULL when the invoice named none. */
+    legacyCodePanel: text('legacy_code_panel'),
+    trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }).notNull(),
+    durationDays: integer('duration_days').notNull(),
+    isCustom: boolean('is_custom').notNull(),
+    /** The hidden product standing for this shape. One shape, one product, both ways. */
+    productId: uuid('product_id').notNull(),
+    tariffStatus: text('tariff_status').notNull().default('UNRESOLVED'),
+    unresolvedReason: text('unresolved_reason').default('NOT_YET_RESOLVED'),
+    resolution: text('resolution'),
+    /** For `MATCHED_PUBLIC_PRODUCT`: the public product whose current price was taken. */
+    tariffSourceProductId: uuid('tariff_source_product_id'),
+    resolvedAt: timestamptz('resolved_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The idempotent ensure: one shape per tenant, whatever the rerun. */
+    uniqueIndex('legacy_product_shapes_tenant_key').on(table.tenantId, table.shapeKey),
+    uniqueIndex('legacy_product_shapes_tenant_product_key').on(table.tenantId, table.productId),
+    index('legacy_product_shapes_tenant_status_idx').on(
+      table.tenantId,
+      table.tariffStatus,
+      table.id,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'legacy_product_shapes_product_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.tariffSourceProductId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'legacy_product_shapes_source_fk',
+    }),
+    check(
+      'legacy_product_shapes_tariff_status_check',
+      enumCheck('tariff_status', LEGACY_SHAPE_TARIFF_STATUSES),
+    ),
+    check(
+      'legacy_product_shapes_unresolved_reason_check',
+      nullableEnumCheck('unresolved_reason', LEGACY_SHAPE_UNRESOLVED_REASONS),
+    ),
+    check(
+      'legacy_product_shapes_resolution_check',
+      nullableEnumCheck('resolution', LEGACY_SHAPE_RESOLUTIONS),
+    ),
+    /** UNRESOLVED carries a reason and nothing else; RESOLVED carries how and when. */
+    check(
+      'legacy_product_shapes_state_check',
+      sql`(tariff_status = 'UNRESOLVED'
+            AND unresolved_reason IS NOT NULL AND resolution IS NULL
+            AND resolved_at IS NULL AND tariff_source_product_id IS NULL)
+       OR (tariff_status = 'RESOLVED'
+            AND unresolved_reason IS NULL AND resolution IS NOT NULL AND resolved_at IS NOT NULL
+            AND (resolution = 'MATCHED_PUBLIC_PRODUCT') = (tariff_source_product_id IS NOT NULL))`,
+    ),
+    check(
+      'legacy_product_shapes_amounts_check',
+      sql`traffic_bytes > 0 AND duration_days > 0 AND duration_days <= 3650`,
+    ),
+    check(
+      'legacy_product_shapes_key_check',
+      sql`length(shape_key) BETWEEN 1 AND 512 AND (legacy_code_panel IS NULL OR length(btrim(legacy_code_panel)) > 0)`,
+    ),
+  ],
+);
+
+/**
+ * What the migration decided about one legacy customer's trial entitlement (program
+ * Item 15, `docs/legacy-migration/trial-eligibility.md`).
+ *
+ * The provenance of a `trial_limit_overrides` row the migration wrote, or of its decision
+ * NOT to write one. There is no second trial subsystem: a claim still decides with
+ * `trialAllowanceFor` over the override and the grants; this table explains why the
+ * override is what it is, and makes the decision once.
+ *
+ * Written once per customer and never updated: a rerun with the same legacy facts is a
+ * replay, and a rerun with different ones is reported as a conflict and changes nothing —
+ * in particular an override an operator removed after the import is not re-imposed. The
+ * legacy facts are stored as values (`limit_usertest`, whether a test invoice existed),
+ * never the legacy row or the Telegram id.
+ */
+export const legacyTrialEligibility = pgTable(
+  'legacy_trial_eligibility',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** The legacy `user.limit_usertest`, or NULL when it was not a whole number. */
+    legacyLimitUsertest: integer('legacy_limit_usertest'),
+    /** Whether the legacy archive held a test invoice for this user, in any status. */
+    legacyHadTrial: boolean('legacy_had_trial').notNull(),
+    decision: text('decision').notNull(),
+    /** The customer's NEXA override before the decision, and after it. */
+    overrideBefore: integer('override_before'),
+    overrideAfter: integer('override_after'),
+    /** SHA-256 of the normalised legacy facts: a rerun with other facts is a conflict. */
+    inputHash: text('input_hash').notNull(),
+    recordedAt: timestamptz('recorded_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'legacy_trial_eligibility_pkey',
+      columns: [table.tenantId, table.customerId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'legacy_trial_eligibility_customer_fk',
+    }),
+    index('legacy_trial_eligibility_tenant_decision_idx').on(
+      table.tenantId,
+      table.decision,
+      table.customerId,
+    ),
+    check('legacy_trial_eligibility_decision_check', enumCheck('decision', LEGACY_TRIAL_DECISIONS)),
+    /** The decision and the override it left agree, so the row cannot misexplain it. */
+    check(
+      'legacy_trial_eligibility_effect_check',
+      sql`(decision IN ('LEGACY_NO_TRIALS', 'LEGACY_TRIAL_CONSUMED', 'LEGACY_LIMIT_UNREADABLE')
+            AND override_before IS NULL AND override_after = 0)
+       OR (decision = 'INHERIT_NEXA_POLICY' AND override_before IS NULL AND override_after IS NULL)
+       OR (decision = 'KEPT_EXISTING_OVERRIDE'
+            AND override_before IS NOT NULL AND override_after = override_before)`,
+    ),
+    /** An unreadable limit is NULL, and every decision drawn from the limit had one. */
+    check(
+      'legacy_trial_eligibility_limit_check',
+      sql`decision = 'KEPT_EXISTING_OVERRIDE'
+       OR (decision = 'LEGACY_LIMIT_UNREADABLE') = (legacy_limit_usertest IS NULL)`,
+    ),
+    check('legacy_trial_eligibility_hash_check', sql`input_hash ~ '^[0-9a-f]{64}$'`),
   ],
 );

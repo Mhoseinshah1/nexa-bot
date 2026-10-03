@@ -1,4 +1,4 @@
-import type { PermissionKey } from '@nexa/contracts';
+import type { PermissionDomain, PermissionKey } from '@nexa/contracts';
 import type { WebKey } from './i18n/web.fa';
 
 /**
@@ -7,8 +7,13 @@ import type { WebKey } from './i18n/web.fa';
  * A `Record<PermissionKey, …>`, so adding a permission to the contract without naming it
  * here is a type error rather than a row the matrix renders as a bare key. The KEY stays
  * the identity everywhere; this is what an operator reads.
+ *
+ * That sentence was false until `PermissionKey` became the catalogue's literal union: it
+ * was `string`, this was a `Record<string, …>`, and sixteen keys reached the contract
+ * unnamed with only `tests/web/roles.test.tsx` to notice. `tests/web/permission-catalogue.typecheck.ts`
+ * now pins both directions — a missing label and an unknown key fail to compile.
  */
-export const PERMISSION_LABELS: Record<PermissionKey, WebKey> = {
+export const PERMISSION_LABELS: Readonly<Record<PermissionKey, WebKey>> = {
   'users.view': 'web.perm_users_view',
   'users.search': 'web.perm_users_search',
   'users.edit': 'web.perm_users_edit',
@@ -107,8 +112,12 @@ export const PERMISSION_LABELS: Record<PermissionKey, WebKey> = {
   'incidents.notify': 'web.perm_incidents_notify',
 };
 
-/** Persian names for the catalogue's domains (a permission's `resource`). */
-export const PERMISSION_DOMAIN_LABELS: Readonly<Record<string, WebKey>> = {
+/**
+ * Persian names for the catalogue's domains (a permission's `resource`). Total over
+ * `PermissionDomain`, which is derived from the catalogue: a permission in a new domain
+ * without a name here is a compile error, and so is a name for a domain that does not exist.
+ */
+export const PERMISSION_DOMAIN_LABELS: Readonly<Record<PermissionDomain, WebKey>> = {
   users: 'web.perm_domain_users',
   orders: 'web.perm_domain_orders',
   payments: 'web.perm_domain_payments',

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, within } from '@testing-library/react';
-import { PERMISSION_KEYS } from '@nexa/contracts';
+import { PERMISSION_KEYS, type PermissionKey } from '@nexa/contracts';
 import {
   App,
   GROUP_ORDER,
@@ -28,7 +28,7 @@ const ALL = [...PERMISSION_KEYS];
 const OWNER = ['owner'];
 
 const concrete = (pattern: string) => pattern.replace(/:[a-zA-Z]+/g, SAMPLE_ID);
-const at = (path: string, permissions: readonly string[] = ALL, roles = OWNER) =>
+const at = (path: string, permissions: readonly PermissionKey[] = ALL, roles = OWNER) =>
   resolve({ path, query: new URLSearchParams() }, permissions, roles);
 const componentName = (element: ReactElement): string => {
   const type = element.type as { name?: string } | string;
@@ -95,13 +95,13 @@ describe('every route the shell serves', () => {
 
 describe('the navigation groups', () => {
   /** The least an actor needs for the entry to be drawn, per its own declaration. */
-  const minimal = (entry: NavEntry): { permissions: string[]; roles: string[] } => {
-    const first =
+  const minimal = (entry: NavEntry): { permissions: PermissionKey[]; roles: string[] } => {
+    const first: PermissionKey[] =
       entry.permission === null
         ? []
         : typeof entry.permission === 'string'
           ? [entry.permission]
-          : [entry.permission[0] as string];
+          : entry.permission.slice(0, 1);
     return { permissions: first, roles: entry.ownerOnly === true ? OWNER : [] };
   };
 

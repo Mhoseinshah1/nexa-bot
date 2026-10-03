@@ -2566,10 +2566,7 @@ export class AdminManagementService {
         // shared recorder learned the hard way that "the guard wrote nothing"
         // is exactly the sentence that goes false one call site over. Ask.
         if (!denialEventRecorded(error)) {
-          await this.opsLog.record(
-            scope,
-            this.guard.denialEvent(actor, (attempted[0] ?? 'unknown') as PermissionKey),
-          );
+          await this.opsLog.record(scope, this.guard.denialEvent(actor, attempted[0] ?? 'unknown'));
         }
       }
       throw error;
@@ -2677,7 +2674,7 @@ function coherentPermissionSet(submitted: readonly string[]): PermissionKey[] {
       { permissions: [...new Set(unknown)].sort() },
     );
   }
-  const permissions = [...new Set(submitted as PermissionKey[])].sort();
+  const permissions = [...new Set(submitted.filter(isPermissionKey))].sort();
   const incoherent = incoherentPermissionGrants(permissions);
   if (incoherent.length > 0) {
     throw errors.validation(

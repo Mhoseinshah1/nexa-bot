@@ -1,0 +1,29 @@
+{
+  "total_count": 3,
+  "workflow_runs": [
+    {
+      "id": 109,
+      "name": "CI",
+      "path": ".github/workflows/ci.yml",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "head_branch": "main",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "run_attempt": 1,
+      "html_url": "https://github.com/example/nexa-bot/actions/runs/109"
+    },
+    {
+      "id": 110,
+      "name": "CI",
+      "path": ".github/workflows/ci.yml",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "head_branch": "feature/y",
+      "event": "pull_request",
+      "status": "completed",
+      "conclusion": "success",
+      "run_attempt": 1,
+      "html_url": "https://github.com/example/nexa-bot/actions/runs/110"
+    }
+  ]
+}

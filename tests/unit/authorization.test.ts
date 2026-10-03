@@ -190,7 +190,7 @@ describe('one denial is one event and one audit row', () => {
     }
   }
 
-  const PERMISSION = 'panels.edit' as PermissionKey;
+  const PERMISSION: PermissionKey = 'panels.edit';
   const denial = { action: 'panel.update', entityType: 'Panel', entityId: 'panel-1' };
 
   async function refusedBy(theGuard: PermissionGuard, tx: unknown): Promise<unknown> {
@@ -380,7 +380,7 @@ describe('one denial is one event and one audit row', () => {
       { guard: g, opsLog, audit },
       scope,
       webAdmin,
-      'panels.credentials.rotate' as PermissionKey,
+      'panels.credentials.rotate',
       denial,
       error,
     );

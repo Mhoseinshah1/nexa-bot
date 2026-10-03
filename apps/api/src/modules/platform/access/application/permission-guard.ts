@@ -160,7 +160,13 @@ export class PermissionGuard {
    * Exposed so a transactional caller can record the same event once its
    * transaction has unwound, rather than the guard writing it under a lock.
    */
-  denialEvent(actor: ActorContext, permission: PermissionKey): OperationalEventInput {
+  /*
+   * `string`, not `PermissionKey`, deliberately. The guard's own denials name a catalogued
+   * key, but `AdminManagementService` also records an AMPLIFICATION refusal here, and the
+   * key that names is whatever the request asked to confer — possibly one the catalogue
+   * never had, which is exactly what an operator reading the log needs to see verbatim.
+   */
+  denialEvent(actor: ActorContext, permission: string): OperationalEventInput {
     return {
       code: 'access.permission_denied',
       severity: 'WARN',

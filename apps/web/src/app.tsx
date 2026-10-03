@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent, useRef } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SessionResponse } from '@nexa/contracts';
+import { isPermissionKey, type PermissionKey, type SessionResponse } from '@nexa/contracts';
 import { finalAnswer, pollSession } from './polling';
 import { ApiError, completeSecondFactor, fetchSession, signIn, signOut } from './api/client';
 import { t } from './i18n/web.fa';
@@ -226,7 +226,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
  * Round N, C1: each campaign action's editor is drawn on the key the server charges for it —
  * the discounts route's rule, per action.
  */
-function campaignActionPermissions(may: (permission: string) => boolean) {
+function campaignActionPermissions(may: (permission: PermissionKey) => boolean) {
   return {
     discount: may('catalog.discounts.edit'),
     cashback: may('catalog.pricing.edit'),
@@ -246,10 +246,10 @@ function campaignActionPermissions(may: (permission: string) => boolean) {
  */
 export function resolve(
   route: Route,
-  permissions: readonly string[],
+  permissions: readonly PermissionKey[],
   roleKeys: readonly string[] = [],
 ): Resolved {
-  const may = (permission: string | null): boolean =>
+  const may = (permission: PermissionKey | null): boolean =>
     permission === null || permissions.includes(permission);
   const superAdmin = isSuperAdmin(roleKeys, permissions);
 
@@ -1588,11 +1588,21 @@ function messageFor(error: unknown): string {
 
 function SignedIn({
   admin,
-  permissions,
+  permissions: sessionPermissions,
 }: {
   admin: { username: string; displayName: string; roleKeys: string[] };
   permissions: string[];
 }) {
+  /*
+   * The session carries strings; everything below decides on `PermissionKey`, so a key a
+   * page names is checked against the catalogue at compile time. A key the catalogue does
+   * not name — only possible across a version skew, since the server resolves through the
+   * same catalogue — grants this console nothing, exactly as it grants the server nothing.
+   */
+  const permissions = useMemo(
+    () => sessionPermissions.filter(isPermissionKey),
+    [sessionPermissions],
+  );
   const route = useRoute();
   const client = useQueryClient();
   const { choice, setChoice } = useTheme();

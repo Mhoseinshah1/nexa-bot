@@ -1223,30 +1223,30 @@ const MODE_OFF = UNCAPPED;
  * decide which BUTTONS exist, which is not authorization — `docs/conventions.md`:
  * never by not drawing a button.
  */
-const RECEIPTS_VIEW_PERMISSION = 'receipts.view' as PermissionKey;
-const ADMINS_VIEW_PERMISSION = 'admins.view' as PermissionKey;
+const RECEIPTS_VIEW_PERMISSION: PermissionKey = 'receipts.view';
+const ADMINS_VIEW_PERMISSION: PermissionKey = 'admins.view';
 /*
  * What the roster's status buttons are DRAWN for, and nothing more.
  * `AdminManagementService.setStatus` charges it through the same guard the Web Admin
  * uses, and re-checks it inside the writing transaction, so a crafted `7:` callback
  * from an administrator who lacks it is refused there and leaves the denial record.
  */
-const ADMINS_EDIT_PERMISSION = 'admins.edit' as PermissionKey;
-const RECEIPTS_REVIEW_PERMISSION = 'receipts.review' as PermissionKey;
+const ADMINS_EDIT_PERMISSION: PermissionKey = 'admins.edit';
+const RECEIPTS_REVIEW_PERMISSION: PermissionKey = 'receipts.review';
 /*
  * The second key the credit-to-wallet disposition charges (Payment File 02 §12). Decides
  * whether its button is DRAWN; `creditToWallet` charges it through the guard.
  */
-const WALLET_CREDIT_PERMISSION = 'users.wallet.credit' as PermissionKey;
+const WALLET_CREDIT_PERMISSION: PermissionKey = 'users.wallet.credit';
 /*
  * The three the services section reads, and the same rule applies: these decide which
  * BUTTONS exist, which is not authorization. `ServiceAdminService`, `ProvisioningService`
  * and `DeliveryService` each charge their own key through the same guard the Web Admin
  * uses, so a crafted callback from an administrator who lacks one is refused there.
  */
-const SERVICES_VIEW_PERMISSION = 'services.view' as PermissionKey;
-const SERVICES_EDIT_PERMISSION = 'services.edit' as PermissionKey;
-const SERVICES_TERMINATE_PERMISSION = 'services.terminate' as PermissionKey;
+const SERVICES_VIEW_PERMISSION: PermissionKey = 'services.view';
+const SERVICES_EDIT_PERMISSION: PermissionKey = 'services.edit';
+const SERVICES_TERMINATE_PERMISSION: PermissionKey = 'services.terminate';
 /*
  * The two the panels section reads, and the same rule again: these decide which BUTTONS
  * exist, never what is allowed. `PanelService.list` and `.get` charge `panels.view`;
@@ -1254,7 +1254,7 @@ const SERVICES_TERMINATE_PERMISSION = 'services.terminate' as PermissionKey;
  * Web Admin uses. There is deliberately no third key here, because this surface never
  * touches a credential: `panels.credentials.rotate` has no button in Telegram at all.
  */
-const PANELS_VIEW_PERMISSION = 'panels.view' as PermissionKey;
+const PANELS_VIEW_PERMISSION: PermissionKey = 'panels.view';
 /*
  * ONE key for both halves of the reminders section, because there is only one.
  *
@@ -1267,8 +1267,8 @@ const PANELS_VIEW_PERMISSION = 'panels.view' as PermissionKey;
  * `FeatureFlagsService` charges `settings.view` for a read and `settings.edit` for a
  * write, deliberately and in terms. So does this.
  */
-const SETTINGS_VIEW_PERMISSION = 'settings.view' as PermissionKey;
-const PANELS_EDIT_PERMISSION = 'panels.edit' as PermissionKey;
+const SETTINGS_VIEW_PERMISSION: PermissionKey = 'settings.view';
+const PANELS_EDIT_PERMISSION: PermissionKey = 'panels.edit';
 /*
  * The two the customers section reads, and the same rule a fourth time: these decide
  * which BUTTONS exist, never what is allowed. `CustomerService.list` and `.get` charge
@@ -1283,8 +1283,8 @@ const PANELS_EDIT_PERMISSION = 'panels.edit' as PermissionKey;
  * for why that is the product's answer rather than an unfinished feature. Drawing an
  * edit button here would be the first thing to make it a lie.
  */
-const CUSTOMERS_VIEW_PERMISSION = 'users.view' as PermissionKey;
-const CUSTOMERS_BLOCK_PERMISSION = 'users.block' as PermissionKey;
+const CUSTOMERS_VIEW_PERMISSION: PermissionKey = 'users.view';
+const CUSTOMERS_BLOCK_PERMISSION: PermissionKey = 'users.block';
 /*
  * The categories section's two, and the same rule a fifth time: they decide which
  * BUTTONS exist. `ProductCategoryService.list` charges `catalog.view`; every write charges
@@ -1292,8 +1292,8 @@ const CUSTOMERS_BLOCK_PERMISSION = 'users.block' as PermissionKey;
  * callback from an administrator who holds only the first is refused there and leaves the
  * denial record.
  */
-const CATALOG_VIEW_PERMISSION = 'catalog.view' as PermissionKey;
-const CATALOG_EDIT_PERMISSION = 'catalog.edit' as PermissionKey;
+const CATALOG_VIEW_PERMISSION: PermissionKey = 'catalog.view';
+const CATALOG_EDIT_PERMISSION: PermissionKey = 'catalog.edit';
 
 /**
  * The key each section of the management panel is ADVERTISED by, in one list.

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { PermissionKey } from '@nexa/contracts';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { resolve } from '../../apps/web/src/app';
@@ -165,7 +166,7 @@ describe('payment timeline card on the payment detail', () => {
     },
   };
 
-  const open = (permissions: readonly string[]) =>
+  const open = (permissions: readonly PermissionKey[]) =>
     renderPage(
       resolve({ path: `/payments/${PAYMENT_ID}`, query: new URLSearchParams() }, permissions)
         .element as ReactElement,
@@ -490,7 +491,7 @@ describe('payment timeline card on the payment detail', () => {
 
   it('asks for the history again when a section permission is revoked on an open page', async () => {
     const api = stubApi([detailRoute, ...timeline({ entries: [timelineCreated] })]);
-    const page = (permissions: readonly string[]) =>
+    const page = (permissions: readonly PermissionKey[]) =>
       resolve({ path: `/payments/${PAYMENT_ID}`, query: new URLSearchParams() }, permissions)
         .element as ReactElement;
     const { rerender } = renderPage(page(['payments.view', 'users.view']));
