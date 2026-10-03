@@ -11158,6 +11158,36 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.direct_message.text',
+    description:
+      'Phase A2: a direct message an operator wrote to this one customer from Customer 360 (DIRECT_MESSAGE). The text is read at send time from the message row the notification names.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "The operator's message, exactly as stored.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.direct_message.media',
+    description:
+      'Phase A2: the caption on a photo or document an operator sent this one customer from Customer 360 (DIRECT_MESSAGE_MEDIA). The caption is read at send time from the message row; a message without one drops its line.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'caption',
+        type: 'STRING',
+        description: "The operator's caption, exactly as stored, when there is one.",
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.ticket.view_button',
     description: "WP-A7: the notification's button that opens the ticket.",
     format: 'PLAIN_TEXT',

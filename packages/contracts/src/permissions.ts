@@ -103,6 +103,15 @@ export const PERMISSIONS = [
   p('users.notifications.edit', "Change a customer's promotional notification preference"),
   p('users.transfer', "Transfer a customer's account to another Telegram identity", 'CRITICAL'),
   /*
+   * Phase A2 (`docs/direct-message-audit.md`): one operator-written message to ONE customer,
+   * from Customer 360. Independent of `broadcasts.send` on purpose — a role that may answer a
+   * customer need not be a role that may write to thousands — and of `tickets.reply`, which
+   * answers inside a conversation the customer opened. The history is its own read: what
+   * support wrote to a customer is not implied by being able to read the customer.
+   */
+  p('users.message.send', 'Send a direct message to one customer'),
+  p('users.message.view', 'View the direct messages sent to a customer'),
+  /*
    * Phase 7, both of them, and neither is charged by anything here. There is no
    * tier column, no tier type and no tier surface; there is no mass tool at all.
    * `CLAUDE.md` forbids building either without an explicit instruction, and the
@@ -438,6 +447,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'users.phone.verify',
       'users.location.edit',
       'users.notifications.edit',
+      // Phase A2: writing to one customer is the support conversation an operator holds.
+      'users.message.send',
+      'users.message.view',
       'orders.view',
       'services.view',
       'services.edit',
@@ -534,6 +546,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'tickets.reply',
       'tickets.assign',
       'tickets.close',
+      // Phase A2: a direct message to one customer, from their page.
+      'users.message.send',
+      'users.message.view',
     ],
   },
   {
@@ -700,6 +715,12 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
   'users.location.edit': 'users.view' as PermissionKey,
   'users.notifications.edit': 'users.view' as PermissionKey,
   'users.transfer': 'users.view' as PermissionKey,
+  /*
+   * Phase A2. A direct message is composed on the customer's page and answers with that
+   * customer's history; both are customer data `users.view` reads.
+   */
+  'users.message.send': 'users.view' as PermissionKey,
+  'users.message.view': 'users.view' as PermissionKey,
   /*
    * WP-A7. Every ticket action is taken FROM a ticket (or, for categories, from the
    * inbox that lists them), which `tickets.view` reads. Holding the action alone would be

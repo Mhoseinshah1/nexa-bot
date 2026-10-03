@@ -1380,6 +1380,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '📩 پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}\n\n{text}',
   'bot.ticket.support_attachment': '📎 پیوست پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}',
   'bot.ticket.view_button': '🎫 مشاهده تیکت',
+  'bot.direct_message.text': '{icon:support} پیام پشتیبانی\n\n{text}',
+  'bot.direct_message.media': '{icon:support} پیام پشتیبانی\n\n{caption}',
   'bot.ticket.category_default_1': 'مشکل اتصال',
   'bot.ticket.category_default_2': 'خرید و پرداخت',
   'bot.ticket.category_default_3': 'سرویس',

@@ -118,3 +118,4 @@ export * from './dashboard.js';
 export * from './audience.js';
 export * from './broadcasts.js';
 export * from './bulk-operations.js';
+export * from './direct-messages.js';

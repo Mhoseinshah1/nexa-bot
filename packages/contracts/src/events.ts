@@ -171,6 +171,9 @@ export const EVENT_TYPES = [
   // the recipients are never in the payload: a state change is the fact.
   'BroadcastStateChanged',
   'BulkOperationStateChanged',
+  // Phase A2: an operator queued a direct message to one customer. Ids and the content's
+  // kind only — never its text, its caption or its file, which are on the message row.
+  'CustomerDirectMessageQueued',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -569,6 +572,11 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     from: z.string().nullable(),
     to: z.string(),
     items: z.number().int().nonnegative(),
+  }),
+  CustomerDirectMessageQueued: z.object({
+    messageId: z.string(),
+    customerId: z.string(),
+    contentKind: z.enum(['TEXT', 'PHOTO', 'DOCUMENT']),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 
