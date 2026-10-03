@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PAYMENT_GATEWAY_DESCRIPTORS,
@@ -283,7 +283,16 @@ export function minorOf(value: string): string | null {
  * refusal by pressing one. Drawing a control nobody may use is `UNK-ADM-001` from the
  * other end.
  */
-export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
+export function PaymentGatewaysPage({
+  denied,
+  mayEdit,
+  tabs,
+}: {
+  denied: boolean;
+  mayEdit: boolean;
+  /** The Configuration / Health tab strip (program §11), drawn under the page head. */
+  tabs?: ReactNode;
+}) {
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -801,6 +810,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
         title={t('web.payment_gateways_title')}
         subtitle={t('web.payment_gateways_subtitle')}
       />
+      {tabs}
 
       <StateSwitch
         query={gateways}

@@ -28,7 +28,7 @@ import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { CompensationsPage } from './pages/compensations';
 import { PaymentAccountsPage } from './pages/payment-accounts';
 import { BotsPage } from './pages/bots';
-import { PaymentGatewaysPage } from './pages/payment-gateways';
+import { PaymentGatewaysTabbedPage } from './pages/gateway-health';
 import { SupportPage } from './pages/support';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
@@ -586,7 +586,8 @@ export function resolve(
   if (route.path === '/payment-gateways') {
     return {
       element: (
-        <PaymentGatewaysPage
+        <PaymentGatewaysTabbedPage
+          route={route}
           denied={!may('payments.gateways.view')}
           mayEdit={may('payments.gateways.edit')}
         />

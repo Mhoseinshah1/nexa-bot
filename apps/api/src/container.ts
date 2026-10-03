@@ -423,6 +423,8 @@ import {
   type PaymentAttentionReader,
 } from './modules/commerce/payments/application/payment-operations.service.js';
 import { DrizzlePaymentAttentionReader } from './modules/commerce/payments/infrastructure/drizzle-payment-attention.reader.js';
+import { GatewayHealthService } from './modules/commerce/payments/application/gateway-health.service.js';
+import { DrizzleGatewayHealthReader } from './modules/commerce/payments/infrastructure/drizzle-gateway-health.reader.js';
 import {
   DrizzleReferralCommissionRepository,
   DrizzleReferralRepository,
@@ -906,6 +908,11 @@ export interface Container {
    * Notification Center read it under their own authority.
    */
   readonly paymentAttention: PaymentAttentionReader;
+  /**
+   * Gateway Health (program §11): every route's recorded health, and — through `signals` —
+   * the typed gateway health signals the Notification Center consumes.
+   */
+  readonly gatewayHealth: GatewayHealthService;
   /** The Telegram half of the credit-to-wallet disposition: the reviewer's amount capture (D3). */
   readonly receiptCreditCaptures: ReceiptCreditCaptureService;
   /** Block User from the receipt message (WP10 follow-up §4): confirm, reason, block. */
@@ -3537,6 +3544,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   });
 
+  // Gateway Health (program §11): read-only, over the route service's own readiness reads,
+  // the recorded facts, and the Payment Operations Center's queues and window.
+  const gatewayHealthService = new GatewayHealthService({
+    guard,
+    routes: {
+      routes: (scope) => paymentGatewayRepository.list(scope),
+      readinessFacts: (scope, gateway) => paymentGatewayService.readinessFacts(scope, gateway),
+      checkSupported: (provider) => paymentGatewayService.checkSupported(provider),
+      lastCheck: (scope, provider) => gatewayCredentialStore.lastCheck(scope, provider),
+    },
+    reader: new DrizzleGatewayHealthReader(database.db),
+    attention: paymentAttentionReader,
+    operations: paymentOperationsService,
+    clock,
+  });
+
   const reportingService = new ReportingService({
     access: new ReportAccess(guard, admins, opsLog),
     repository: new DrizzleReportingRepository(database.db),
@@ -5572,6 +5595,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentTimeline: paymentTimelineService,
     paymentOperations: paymentOperationsService,
     paymentAttention: paymentAttentionReader,
+    gatewayHealth: gatewayHealthService,
     receiptCreditCaptures: receiptCreditCaptureService,
     receiptBlockCaptures: receiptBlockCaptureService,
     receiptRejectCaptures: receiptRejectCaptureService,

@@ -156,6 +156,9 @@ import {
   IDENTITY_ERROR_CODES,
   PAYMENT_ROUTES,
   PAYMENT_OPS_ROUTES,
+  GATEWAY_HEALTH_ROUTES,
+  gatewayHealthResponseSchema,
+  type GatewayHealthResponse,
   paymentAttentionResponseSchema,
   type PaymentAttentionResponse,
   type PaymentGatewayProvider,
@@ -1816,6 +1819,19 @@ export function setDefaultPaymentAccount(input: {
  * The currency arrives WITH the list rather than from a second call, because a bound
  * rendered in the wrong denomination is a number an operator would act on.
  */
+/** Gateway Health (program §11): every route's recorded health over a created-at range. */
+export function fetchGatewayHealth(
+  query: { range?: ReportRange } = {},
+): Promise<GatewayHealthResponse> {
+  const params = new URLSearchParams();
+  if (query.range !== undefined) params.set('range', query.range);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${GATEWAY_HEALTH_ROUTES.list}?${suffix}` : GATEWAY_HEALTH_ROUTES.list,
+    gatewayHealthResponseSchema,
+  );
+}
+
 export function fetchPaymentGateways(): Promise<PaymentGatewayListResponse> {
   return authedGet(PAYMENT_GATEWAY_ROUTES.list, paymentGatewayListResponseSchema);
 }

@@ -405,9 +405,9 @@ const GATEWAY_CONFIRM_ACTION = 'payment.gateway_confirm';
 const GATEWAY_FAIL_ACTION = 'payment.gateway_fail';
 /** TonPays Telegram (§9.4): the review window and the reconciliation of an UNKNOWN payment. */
 const PROVIDER_REVIEW_ACTION = 'payment.provider_review_started';
-const RECONCILE_CONFIRM_ACTION = 'payment.reconcile_confirmed';
-const RECONCILE_FAIL_ACTION = 'payment.reconcile_failed';
-const RECONCILE_INQUIRY_ACTION = 'gateway_invoice.reconcile_inquiry_requested';
+export const RECONCILE_CONFIRM_ACTION = 'payment.reconcile_confirmed';
+export const RECONCILE_FAIL_ACTION = 'payment.reconcile_failed';
+export const RECONCILE_INQUIRY_ACTION = 'gateway_invoice.reconcile_inquiry_requested';
 
 /** What reconciling an UNKNOWN gateway payment acts under (OQ-TPTG-19). */
 export const PAYMENT_RECONCILE_PERMISSION: PermissionKey = 'payments.reconcile';
