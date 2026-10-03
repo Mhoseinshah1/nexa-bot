@@ -6,8 +6,10 @@ import {
   rateToDecimalText,
   COMMERCE_ERROR_CODES,
   COMPENSATION_ROUTES,
+  PAYMENT_OPS_ROUTES,
   PAYMENT_ROUTES,
   classifyListSearch,
+  paymentAttentionQuerySchema,
   compensationListQuerySchema,
   errors,
   paymentIdSchema,
@@ -20,7 +22,9 @@ import {
   type CompensationView,
   type OrderId,
   type PaymentDestinationView,
+  type PaymentAttentionResponse,
   type PaymentDetailResponse,
+  type PaymentGatewaySignal,
   type PaymentId,
   type PaymentListResponse,
   type PaymentReceiptListResponse,
@@ -44,6 +48,7 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 import type {
   PaymentCursor,
   PaymentCustomerIdentity,
+  PaymentGatewaySignalRecord,
   PaymentRecord,
 } from '../../modules/commerce/payments/application/ports.js';
 import type { ReceiptCreditRecord } from '../../modules/commerce/payments/application/receipt-credit-ports.js';
@@ -97,21 +102,34 @@ export class PaymentsController {
       ...(query.reference === undefined ? {} : { reference: query.reference }),
       ...(query.disposition === undefined ? {} : { disposition: query.disposition }),
       ...(query.q === undefined ? {} : { q: query.q }),
+      // The Payment Operations Center's facets (program §10).
+      ...(query.queue === undefined ? {} : { queue: query.queue }),
+      ...(query.gateway === undefined ? {} : { gateway: query.gateway }),
+      ...(query.range === undefined ? {} : { range: query.range }),
+      ...(query.from === undefined ? {} : { from: query.from }),
+      ...(query.to === undefined ? {} : { to: query.to }),
     });
     const text = page.q === undefined ? null : classifyListSearch(page.q);
-    const result = await this.container.payments.list(scope, actor, {
-      ...(page.limit === undefined ? {} : { limit: page.limit }),
-      ...(page.cursor === undefined ? {} : { cursor: paymentCursorFrom(page.cursor) }),
-      search: {
-        ...(page.state === undefined ? {} : { state: page.state }),
-        ...(page.method === undefined ? {} : { method: page.method }),
-        ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
-        ...(page.orderId === undefined ? {} : { orderId: page.orderId as OrderId }),
-        ...(page.reference === undefined ? {} : { reference: page.reference }),
-        ...(page.disposition === undefined ? {} : { disposition: page.disposition }),
-        ...(text === null ? {} : { text }),
+    const result = await this.container.paymentOperations.list(
+      scope,
+      actor,
+      {
+        ...(page.limit === undefined ? {} : { limit: page.limit }),
+        ...(page.cursor === undefined ? {} : { cursor: paymentCursorFrom(page.cursor) }),
+        search: {
+          ...(page.state === undefined ? {} : { state: page.state }),
+          ...(page.method === undefined ? {} : { method: page.method }),
+          ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
+          ...(page.orderId === undefined ? {} : { orderId: page.orderId as OrderId }),
+          ...(page.reference === undefined ? {} : { reference: page.reference }),
+          ...(page.disposition === undefined ? {} : { disposition: page.disposition }),
+          ...(text === null ? {} : { text }),
+          ...(page.queue === undefined ? {} : { queue: page.queue }),
+          ...(page.gateway === undefined ? {} : { gatewayProvider: page.gateway }),
+        },
       },
-    });
+      { range: page.range, from: page.from, to: page.to },
+    );
     // Who paid, as Telegram knows them — one read for the page (D7).
     const identities = await this.container.payments.customerIdentities(scope, actor, result.items);
     // How each receipt left review (WP10 follow-up §5): a credited FAILED is not a rejection.
@@ -120,14 +138,53 @@ export class PaymentsController {
       actor,
       result.items,
     );
+    // What each gateway attempt last recorded, for the queue rows (program §10).
+    const signals = await this.container.payments.gatewaySignals(scope, actor, result.items);
     return {
       // The LIST omits `evidenceNote`: it is an operator's own text about somebody's
       // bank transfer, and it is returned only on the detail, behind the same
       // permission. A list is the thing most likely to end up on a shared screen.
       payments: result.items.map((record) =>
-        toSummary(record, identities.get(record.customerId), dispositions.get(record.id) ?? null),
+        toSummary(
+          record,
+          identities.get(record.customerId),
+          dispositions.get(record.id) ?? null,
+          signals.get(record.id) ?? null,
+        ),
       ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
+    };
+  }
+
+  /**
+   * The Payment Operations Center's attention counts (program §10): per gateway route, how
+   * many payments sit in each queue, over an optional created-at window. `payments.view`,
+   * charged by the service. The shared read model B2 and B3 build on.
+   */
+  @Get(PAYMENT_OPS_ROUTES.attention)
+  async attention(
+    @Req() request: FastifyRequest,
+    @Query() raw: Record<string, unknown>,
+  ): Promise<PaymentAttentionResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const query = singleValued(raw);
+    const input = paymentAttentionQuerySchema.parse({
+      ...(query.range === undefined ? {} : { range: query.range }),
+      ...(query.from === undefined ? {} : { from: query.from }),
+      ...(query.to === undefined ? {} : { to: query.to }),
+    });
+    const view = await this.container.paymentOperations.attention(scope, actor, input);
+    return {
+      window:
+        view.window === null
+          ? null
+          : { start: view.window.start.toISOString(), end: view.window.end.toISOString() },
+      byGateway: view.byGateway.map((row) => ({
+        gatewayProvider: row.gatewayProvider,
+        counts: { ...row.counts },
+      })),
+      totals: { ...view.totals },
+      generatedAt: this.container.clock.now().toISOString(),
     };
   }
 
@@ -358,10 +415,26 @@ function compensationCursorFrom(raw: string): CompensationCursor {
   return { createdAt: position.createdAt, id: position.id as RefundId };
 }
 
+function toGatewaySignal(signal: PaymentGatewaySignalRecord): PaymentGatewaySignal {
+  const iso = (value: Date | null) => (value === null ? null : value.toISOString());
+  return {
+    creationState: signal.creationState as PaymentGatewaySignal['creationState'],
+    creationErrorCode: signal.creationErrorCode,
+    providerStatus: signal.providerStatus,
+    providerPaid: signal.providerPaid,
+    lastInquiryAt: iso(signal.lastInquiryAt),
+    lastInquiryErrorCode: signal.lastInquiryErrorCode,
+    outcome: signal.outcome as PaymentGatewaySignal['outcome'],
+    lateCompletionObservedAt: iso(signal.lateCompletionObservedAt),
+    reconcileInquiryRequestedAt: iso(signal.reconcileInquiryRequestedAt),
+  };
+}
+
 function toSummary(
   record: PaymentRecord,
   identity: PaymentCustomerIdentity | undefined,
   receiptDisposition: ReceiptDisposition | null,
+  gatewaySignal: PaymentGatewaySignalRecord | null = null,
 ): PaymentSummaryResponse {
   return {
     id: record.id,
@@ -394,6 +467,7 @@ function toSummary(
       record.providerReviewStartedAt === null ? null : record.providerReviewStartedAt.toISOString(),
     providerReviewUntil:
       record.providerReviewUntil === null ? null : record.providerReviewUntil.toISOString(),
+    gatewaySignal: gatewaySignal === null ? null : toGatewaySignal(gatewaySignal),
   };
 }
 

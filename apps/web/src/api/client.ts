@@ -181,6 +181,11 @@ import {
   type TrialResetResponse,
   IDENTITY_ERROR_CODES,
   PAYMENT_ROUTES,
+  PAYMENT_OPS_ROUTES,
+  paymentAttentionResponseSchema,
+  type PaymentAttentionResponse,
+  type PaymentGatewayProvider,
+  type PaymentOpsQueue,
   COMPENSATION_ROUTES,
   compensationListResponseSchema,
   type CompensationListResponse,
@@ -1395,6 +1400,23 @@ export function adjustWallet(input: {
   return post(WALLET_ROUTES.adjust(customerId), body, walletEntryResponseSchema);
 }
 
+/**
+ * The payment list's and the attention counts' window. `from` and `to` exist only for a
+ * CUSTOM range — the server refuses them with any other, and refuses a CUSTOM range
+ * without them — so they are sent with CUSTOM and never otherwise.
+ */
+function setPaymentWindow(
+  params: URLSearchParams,
+  query: { readonly range?: ReportRange; readonly from?: string; readonly to?: string },
+): void {
+  if (query.range === undefined) return;
+  params.set('range', query.range);
+  if (query.range === 'CUSTOM') {
+    if (query.from !== undefined) params.set('from', query.from);
+    if (query.to !== undefined) params.set('to', query.to);
+  }
+}
+
 export function fetchPayments(
   query: {
     limit?: number;
@@ -1406,6 +1428,13 @@ export function fetchPayments(
     reference?: string;
     disposition?: ReceiptDisposition;
     q?: string;
+    /** The Payment Operations Center's facets (program §10). */
+    queue?: PaymentOpsQueue;
+    gateway?: PaymentGatewayProvider;
+    range?: ReportRange;
+    /** Tenant-calendar dates; sent only with `range: 'CUSTOM'`, as `reportParams` does. */
+    from?: string;
+    to?: string;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1423,6 +1452,9 @@ export function fetchPayments(
   }
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.queue !== undefined) params.set('queue', query.queue);
+  if (query.gateway !== undefined) params.set('gateway', query.gateway);
+  setPaymentWindow(params, query);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
@@ -1563,6 +1595,22 @@ export function fetchPayment(id: string): Promise<PaymentResponse> {
  * One payment's history (WP17). Behind `payments.view` on the server, which also withholds —
  * and names — the receipt, refund and wallet sections the viewer may not see.
  */
+/**
+ * The Payment Operations Center's queue counts per gateway (program §10), over the same
+ * created-at range the list is filtered by. Absent range: every payment.
+ */
+export function fetchPaymentAttention(
+  query: { range?: ReportRange; from?: string; to?: string } = {},
+): Promise<PaymentAttentionResponse> {
+  const params = new URLSearchParams();
+  setPaymentWindow(params, query);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PAYMENT_OPS_ROUTES.attention}?${suffix}` : PAYMENT_OPS_ROUTES.attention,
+    paymentAttentionResponseSchema,
+  );
+}
+
 export function fetchPaymentTimeline(id: string): Promise<PaymentTimelineResponse> {
   return authedGet(PAYMENT_ROUTES.timeline(id), paymentTimelineResponseSchema);
 }

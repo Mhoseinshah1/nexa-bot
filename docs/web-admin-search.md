@@ -36,12 +36,12 @@ link target; no list renders it as the customer's identity any more.
 
 ## What each list matches
 
-| list        | Telegram id                                                                    | uuid                              | `@name`           | other text                                                                                   |
-| ----------- | ------------------------------------------------------------------------------ | --------------------------------- | ----------------- | -------------------------------------------------------------------------------------------- |
-| `/users`    | the customer, exact                                                            | the customer                      | username prefix   | prefix of username, display name (first + last) or last name                                 |
-| `/orders`   | the customer's orders                                                          | order, customer or product        | customer username | snapshot title prefix, OR a product whose current title contains it                          |
-| `/payments` | the customer's payments, OR reference / bank reference spelled in those digits | payment, customer or order        | customer username | reference or bank reference, **exact**                                                       |
-| `/services` | the customer's services, OR that provider username                             | service, customer, order or panel | customer username | provider username, **exact** (`providerUsernameLookupSchema`); anything else matches nothing |
+| list        | Telegram id                                                                                 | uuid                              | `@name`           | other text                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------- | --------------------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| `/users`    | the customer, exact                                                                         | the customer                      | username prefix   | prefix of username, display name (first + last) or last name                                  |
+| `/orders`   | the customer's orders                                                                       | order, customer or product        | customer username | snapshot title prefix, OR a product whose current title contains it                           |
+| `/payments` | the customer's payments, OR reference / bank reference / gateway id spelled in those digits | payment, customer or order        | customer username | reference, bank reference or a gateway's own order / invoice / charge / payment id, **exact** |
+| `/services` | the customer's services, OR that provider username                                          | service, customer, order or panel | customer username | provider username, **exact** (`providerUsernameLookupSchema`); anything else matches nothing  |
 
 `/users` still charges `users.search` for `q`, as for every other way of finding one person;
 the list without `q` stays `users.view`. Exact-only on money and account names is deliberate:
@@ -73,15 +73,17 @@ Built `CONCURRENTLY` through `ONLINE_INDEXES` (`online-indexes.ts`), because eve
 these tables is populated and written on a live installation and `botctl update` migrates
 while the outgoing release still serves. No drizzle migration is needed for them.
 
-| index                                    | serves                                                         |
-| ---------------------------------------- | -------------------------------------------------------------- |
-| `customers_tenant_full_name_idx`         | display-name prefix                                            |
-| `customers_tenant_last_name_idx`         | last-name prefix                                               |
-| `orders_tenant_line_title_idx`           | snapshot-title prefix                                          |
-| `orders_tenant_product_created_idx`      | product arm (and the old `?productId=`, which had no index)    |
-| `payments_tenant_order_idx`              | order arm (and the old `?orderId=`)                            |
-| `payments_tenant_external_reference_idx` | bank-reference arm                                             |
-| `services_tenant_panel_idx`              | panel arm, all states (the capacity index excludes TERMINATED) |
+| index                                        | serves                                                                                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `customers_tenant_full_name_idx`             | display-name prefix                                                                                                                  |
+| `customers_tenant_last_name_idx`             | last-name prefix                                                                                                                     |
+| `orders_tenant_line_title_idx`               | snapshot-title prefix                                                                                                                |
+| `orders_tenant_product_created_idx`          | product arm (and the old `?productId=`, which had no index)                                                                          |
+| `payments_tenant_order_idx`                  | order arm (and the old `?orderId=`)                                                                                                  |
+| `payments_tenant_external_reference_idx`     | bank-reference arm                                                                                                                   |
+| `services_tenant_panel_idx`                  | panel arm, all states (the capacity index excludes TERMINATED)                                                                       |
+| `gateway_invoices_tenant_hinted_payment_idx` | gateway payment-id arm (Payment Operations Center); the order, invoice and charge ids use the `(tenant_id, provider, …)` unique keys |
+| `gateway_invoices_tenant_hinted_invoice_idx` | the invoice id a verified webhook named for a lost create (CREATE_UNKNOWN), before an inquiry adopts it                              |
 
 An `OR` is a bounded BitmapOr only when **every** arm has an index; one unindexed arm turns
 the whole predicate into a filter over a walk of the tenant's table, returning the same rows.
