@@ -76,7 +76,6 @@ const gateway = {
   providerStatus: 'partially_paid',
   providerPaid: false,
   lastInquiryErrorCode: null,
-  reconcileInquiryRequestedAt: at(9),
   outcome: null,
   outcomeAt: null,
   lateCompletionObservedAt: null,
@@ -141,6 +140,7 @@ describe('the payment timeline’s operations entries', () => {
             providerStatus: 'partially_paid',
           },
         ],
+        reinquireRequests: [{ id: 'r1', at: at(9) }],
       }),
     );
     expect(entries.map((e) => e.kind)).toEqual([
@@ -164,6 +164,43 @@ describe('the payment timeline’s operations entries', () => {
         truncated: false,
       }),
     ).not.toThrow();
+  });
+
+  it('shows every recorded ask-again from its own record, answered or not', () => {
+    // Codex review of #154: the invoice column a request sets is cleared by the inquiry
+    // that answers it, so the history is the audit rows, one entry each.
+    const { entries } = assemblePaymentTimeline(
+      facts({
+        gateway,
+        reinquireRequests: [
+          { id: 'r1', at: at(3) },
+          { id: 'r2', at: at(7) },
+        ],
+      }),
+    );
+    expect(
+      entries.filter((e) => e.kind === 'GATEWAY_REINQUIRE_REQUESTED').map((e) => e.at),
+    ).toEqual([at(3).toISOString(), at(7).toISOString()]);
+  });
+
+  it('never presents the status an EARLIER inquiry saw as a failed inquiry’s answer', () => {
+    // Codex review of #154: a failed inquiry leaves the last observed status on the row.
+    const failed = assemblePaymentTimeline(
+      facts({ gateway: { ...gateway, lastInquiryErrorCode: 'HTTP_503' } }),
+    ).entries.find((e) => e.kind === 'GATEWAY_INQUIRY');
+    expect(failed).toMatchObject({
+      errorCode: 'HTTP_503',
+      providerStatus: null,
+      providerPaid: null,
+    });
+    const answered = assemblePaymentTimeline(facts({ gateway })).entries.find(
+      (e) => e.kind === 'GATEWAY_INQUIRY',
+    );
+    expect(answered).toMatchObject({
+      errorCode: null,
+      providerStatus: 'partially_paid',
+      providerPaid: false,
+    });
   });
 
   it('drops anything that is not a short machine code rather than showing it', () => {

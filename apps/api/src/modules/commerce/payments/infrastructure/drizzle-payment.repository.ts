@@ -1192,10 +1192,13 @@ function paymentTextCondition(tenantId: string, term: ListSearchTerm): SQL {
         sql`${payments.id} = ANY(${paymentIdsWithProviderReference(tenantId, term.value)})`,
       ) as SQL;
     case 'UUID':
+      // A gateway's own id can be uuid-shaped too (an invoice or charge id), and the box
+      // classifies by shape: the provider ids are asked here as they are for digits and text.
       return or(
         eq(payments.id, term.value),
         eq(payments.customerId, term.value),
         eq(payments.orderId, term.value),
+        sql`${payments.id} = ANY(${paymentIdsWithProviderReference(tenantId, term.value)})`,
       ) as SQL;
     case 'USERNAME':
       return sql`${payments.customerId} = ANY(${customerIdsWithUsernamePrefix(tenantId, term.value)})`;
@@ -1210,12 +1213,16 @@ function paymentTextCondition(tenantId: string, term: ListSearchTerm): SQL {
 
 /**
  * The payments whose gateway invoice carries this provider id EXACTLY — the provider's order
- * id, invoice id, charge / reference id, or the payment id a verified webhook named (Payment
- * Operations Center, program §10: what an operator copies out of a provider's dashboard).
+ * id, invoice id, charge / reference id, or the payment id or invoice id a verified webhook
+ * named (Payment Operations Center, program §10: what an operator copies out of a provider's
+ * dashboard). The hinted invoice id is the only invoice id an attempt whose create answer was
+ * lost (CREATE_UNKNOWN) carries until an inquiry adopts it, so leaving it out made exactly the
+ * attempts an operator is chasing unfindable by the id the provider shows them.
  * An InitPlan, like `customerIdsWithTelegramId`, so it is evaluated once. `provider = ANY`
- * lets the three `(tenant_id, provider, …)` unique keys serve their arms; the hinted payment
- * id has its own index (`gateway_invoices_tenant_hinted_payment_idx`). Exact only, for the
- * reason every arm here is exact.
+ * lets the three `(tenant_id, provider, …)` unique keys serve their arms; the two hinted ids
+ * have their own partial indexes (`gateway_invoices_tenant_hinted_payment_idx`,
+ * `gateway_invoices_tenant_hinted_invoice_idx`). Exact only, for the reason every arm here is
+ * exact.
  */
 function paymentIdsWithProviderReference(tenantId: string, value: string): SQL {
   const providers = sql.join(
@@ -1227,5 +1234,6 @@ function paymentIdsWithProviderReference(tenantId: string, value: string): SQL {
       AND ((${gatewayInvoices.provider} IN (${providers}) AND (${gatewayInvoices.providerOrderId} = ${value}
              OR ${gatewayInvoices.providerInvoiceId} = ${value}
              OR ${gatewayInvoices.providerChargeId} = ${value}))
-        OR ${gatewayInvoices.hintedPaymentId} = ${value}))`;
+        OR ${gatewayInvoices.hintedPaymentId} = ${value}
+        OR ${gatewayInvoices.hintedInvoiceId} = ${value}))`;
 }

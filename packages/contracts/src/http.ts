@@ -4512,7 +4512,11 @@ export const paymentTimelineEntrySchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('GATEWAY_INQUIRY'),
-    /** When the LAST inquiry was answered — the only approval this installation trusts. */
+    /**
+     * When the LAST inquiry was answered — the only approval this installation trusts. With an
+     * `errorCode` the inquiry failed, and `providerStatus`/`providerPaid` are null: the row
+     * keeps an EARLIER answer's status, which is not this inquiry's result.
+     */
     ...timelineAt,
     provider: paymentGatewayProviderSchema,
     providerStatus: z.string().nullable(),
@@ -4521,7 +4525,10 @@ export const paymentTimelineEntrySchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('GATEWAY_REINQUIRE_REQUESTED'),
-    /** The LAST operator "ask again"; each one is also an audit row. */
+    /**
+     * One operator "ask again" that was recorded, from its audit row — one entry per request.
+     * Not the invoice's request column, which the inquiry that answers it clears.
+     */
     ...timelineAt,
   }),
   z.object({

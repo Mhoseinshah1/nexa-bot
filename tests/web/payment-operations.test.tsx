@@ -6,6 +6,7 @@ import { PaymentsPage, queueCountsFor } from '../../apps/web/src/pages/payments'
 import { PaymentTimelineCard } from '../../apps/web/src/pages/payment-timeline';
 import { resolve } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { fetchPaymentAttention, fetchPayments } from '../../apps/web/src/api/client';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -156,7 +157,58 @@ describe('the Payment Operations Center', () => {
     const { container } = renderPage(<PaymentsPage route={routeOf()} denied={false} />);
     await screen.findByText('np-ref-0001');
     expect(container.textContent).toContain('CREATE_UNKNOWN');
+    // The create's own code is what makes a PROVIDER_ERROR row actionable (Codex review of #154).
+    expect(container.textContent).toContain('TIMEOUT');
     expect(container.textContent).toContain('HTTP_503');
+  });
+
+  it('shows a refused create’s error code on the row, with nothing else to explain it (Codex review of #154)', async () => {
+    stubApi(
+      routes([
+        gatewayRow({
+          state: 'FAILED',
+          gatewaySignal: {
+            creationState: 'CREATE_FAILED',
+            creationErrorCode: 'INVALID_API_KEY',
+            providerStatus: null,
+            providerPaid: null,
+            lastInquiryAt: null,
+            lastInquiryErrorCode: null,
+            outcome: null,
+            lateCompletionObservedAt: null,
+            reconcileInquiryRequestedAt: null,
+          },
+        }),
+      ]),
+    );
+    const { container } = renderPage(
+      <PaymentsPage route={routeOf({ queue: 'PROVIDER_ERROR' })} denied={false} />,
+    );
+    await screen.findByText('np-ref-0001');
+    expect(container.textContent).toContain('CREATE_FAILED');
+    expect(container.textContent).toContain('INVALID_API_KEY');
+  });
+
+  it('sends from and to with a CUSTOM window, and never with a named one (Codex review of #154)', async () => {
+    const api = stubApi(routes([]));
+    await fetchPayments({ range: 'CUSTOM', from: '1405-07-01', to: '1405-07-10' });
+    await fetchPaymentAttention({ range: 'CUSTOM', from: '1405-07-01', to: '1405-07-10' });
+    await fetchPayments({ range: 'LAST_7_DAYS', from: '1405-07-01', to: '1405-07-10' });
+    await fetchPaymentAttention({ range: 'TODAY', from: '1405-07-01', to: '1405-07-10' });
+    const [list, attention, named, namedAttention] = api.calls.map(
+      (call) => new URL(call.url, 'http://x').searchParams,
+    );
+    for (const params of [list, attention]) {
+      expect(params?.get('range')).toBe('CUSTOM');
+      expect(params?.get('from')).toBe('1405-07-01');
+      expect(params?.get('to')).toBe('1405-07-10');
+    }
+    for (const params of [named, namedAttention]) {
+      expect(params?.get('from')).toBeNull();
+      expect(params?.get('to')).toBeNull();
+    }
+    expect(named?.get('range')).toBe('LAST_7_DAYS');
+    expect(namedAttention?.get('range')).toBe('TODAY');
   });
 
   it('draws "ask again" only for an UNKNOWN gateway payment and only with payments.reconcile — and it sends the existing command with a key', async () => {

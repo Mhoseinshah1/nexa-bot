@@ -364,7 +364,11 @@ function SignalCell({ row }: { row: PaymentSummaryResponse }) {
       {signal.creationState !== 'CREATED' && (
         <>
           <Badge tone={signal.creationState === 'CREATING' ? 'info' : 'warn'}>
-            {t('web.payment_ops_signal_create')} <Ltr>{signal.creationState}</Ltr>
+            {t('web.payment_ops_signal_create')}{' '}
+            <Ltr>
+              {signal.creationState}
+              {signal.creationErrorCode === null ? '' : ` · ${signal.creationErrorCode}`}
+            </Ltr>
           </Badge>{' '}
         </>
       )}

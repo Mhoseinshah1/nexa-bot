@@ -19,6 +19,7 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/domain/gateway-reconciliation';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzlePaymentAttentionReader } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment-attention.reader';
+import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -585,5 +586,123 @@ describe('the Payment Operations Center', () => {
     const reviewers = await ctx.container.paymentTimeline.timeline(tenantA, support, paid);
     expect(reviewers.withheld).toEqual(expect.arrayContaining(['ORDER', 'AUDIT']));
     expect(reviewers.entries.map((e) => e.kind)).not.toContain('AUDIT_RECORDED');
+  });
+
+  /** The ids the one search box finds for `q`, through the operator's list. */
+  async function found(q: string): Promise<string[]> {
+    const text = classifyListSearch(q);
+    if (text === null) throw new Error('no search');
+    return (await ops().list(tenantA, owner, { search: { text } }, {})).items.map((i) => i.id);
+  }
+
+  it('finds a lost-create attempt by the invoice id a verified webhook named (Codex review of #154)', async () => {
+    const lost = await payment({ provider: 'NOWPAYMENTS' });
+    await invoice(lost, 'NOWPAYMENTS', {
+      creation_state: 'CREATE_UNKNOWN',
+      creation_sent_at: new Date(),
+      provider_invoice_id: null,
+      created_invoice_at: null,
+      creation_error_code: 'TIMEOUT',
+      hinted_invoice_id: '6612300045',
+    });
+    await payment({ provider: 'NOWPAYMENTS' });
+    // Digits and text are classified apart; both reach the hinted invoice id.
+    expect(await found('6612300045')).toEqual([lost]);
+    await exec(
+      sql`UPDATE gateway_invoices SET hinted_invoice_id = 'np-inv-hint-1' WHERE payment_id = ${lost}`,
+    );
+    expect(await found('np-inv-hint-1')).toEqual([lost]);
+  });
+
+  it('finds a payment by a uuid-shaped provider id, beside its own ids (Codex review of #154)', async () => {
+    const byInvoice = await payment({ provider: 'TONPAYS' });
+    const invoiceId = ctx.container.ids.uuid();
+    await invoice(byInvoice, 'TONPAYS', { provider_invoice_id: invoiceId });
+    const byCharge = await payment({ provider: 'CENTRALPAY', state: 'UNKNOWN' });
+    const chargeId = ctx.container.ids.uuid();
+    await invoice(byCharge, 'CENTRALPAY', { provider_charge_id: chargeId });
+    expect(classifyListSearch(invoiceId)?.kind).toBe('UUID');
+    expect(await found(invoiceId)).toEqual([byInvoice]);
+    expect(await found(chargeId)).toEqual([byCharge]);
+    // The uuid arms that were already there still answer.
+    expect(await found(byInvoice)).toEqual([byInvoice]);
+    // Another tenant's uuid-shaped provider id finds nothing here.
+    const theirs = await payment({ scope: tenantB, provider: 'TONPAYS' });
+    const theirInvoiceId = ctx.container.ids.uuid();
+    await invoice(theirs, 'TONPAYS', {
+      tenant_id: tenantB.tenantId,
+      provider_invoice_id: theirInvoiceId,
+    });
+    expect(await found(theirInvoiceId)).toEqual([]);
+  });
+
+  it('keeps an answered ask-again on the timeline, for a viewer without audit.view, and shows a failed inquiry without a stale status (Codex review of #154)', async () => {
+    const unknown = await payment({
+      provider: 'TONPAYS',
+      state: 'UNKNOWN',
+      createdAt: new Date(Date.now() - 30 * 60_000),
+    });
+    await invoice(unknown, 'TONPAYS', {
+      provider_status: 'pending',
+      provider_paid: false,
+      last_inquiry_at: new Date(Date.now() - 20 * 60_000),
+    });
+    expect(
+      await ctx.container.payments.reinquireGatewayPayment(tenantA, owner, unknown, {
+        idempotencyKey: 'ask-again-tl-1',
+      }),
+    ).toBe(true);
+    // Inside the spacing minute: audited, but nothing was requested — not an entry.
+    expect(
+      await ctx.container.payments.reinquireGatewayPayment(tenantA, owner, unknown, {
+        idempotencyKey: 'ask-again-tl-2',
+      }),
+    ).toBe(false);
+    const entriesFor = async (actor: ActorContext) =>
+      (await ctx.container.paymentTimeline.timeline(tenantA, actor, unknown)).entries;
+    expect(
+      (await entriesFor(owner)).filter((e) => e.kind === 'GATEWAY_REINQUIRE_REQUESTED'),
+    ).toHaveLength(1);
+
+    // The inquiry the request let through fails, and clears the request column.
+    await new DrizzleGatewayInvoiceRepository(ctx.container.database.db).recordInquiry(
+      tenantA,
+      unknown,
+      {
+        status: null,
+        paid: null,
+        requestAmount: null,
+        finalAmount: null,
+        errorCode: 'HTTP_503',
+        adoptInvoiceId: null,
+        nextInquiryAt: null,
+        postDeadline: true,
+      },
+      new Date(),
+    );
+    const cleared = (
+      await exec(
+        sql`SELECT reconcile_inquiry_requested_at, provider_status FROM gateway_invoices WHERE payment_id = ${unknown}`,
+      )
+    ).rows[0] as { reconcile_inquiry_requested_at: unknown; provider_status: string };
+    expect(cleared).toEqual({ reconcile_inquiry_requested_at: null, provider_status: 'pending' });
+
+    const support = adminActorFor(
+      await createAdmin(ctx.container, tenantA, {
+        username: 'rr-ask-again',
+        roleKeys: ['receipt_reviewer'],
+      }),
+    );
+    for (const actor of [owner, support]) {
+      const entries = await entriesFor(actor);
+      expect(entries.filter((e) => e.kind === 'GATEWAY_REINQUIRE_REQUESTED')).toHaveLength(1);
+      expect(entries.find((e) => e.kind === 'GATEWAY_INQUIRY')).toMatchObject({
+        errorCode: 'HTTP_503',
+        providerStatus: null,
+        providerPaid: null,
+      });
+    }
+    const supports = await ctx.container.paymentTimeline.timeline(tenantA, support, unknown);
+    expect(supports.withheld).toContain('AUDIT');
   });
 });

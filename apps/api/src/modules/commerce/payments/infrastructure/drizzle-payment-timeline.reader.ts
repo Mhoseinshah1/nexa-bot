@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type {
   ActorType,
   AuditResult,
@@ -38,6 +38,7 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import { PURCHASED_AS } from '../../provisioning/application/provisioner.service.js';
 import { PAYMENT_LOSE_TRACK_ACTION } from '../application/gateway-payment.service.js';
+import { RECONCILE_INQUIRY_ACTION } from '../application/payment.service.js';
 import type {
   PaymentTimelineFacts,
   TimelineAuditFacts,
@@ -45,6 +46,7 @@ import type {
   TimelineLoseTrackFacts,
   TimelineNotificationFacts,
   TimelineOrderFacts,
+  TimelineReinquireFacts,
 } from '../domain/payment-timeline.js';
 import type {
   PaymentTimelineReader,
@@ -224,6 +226,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
 
     const gateway = await this.gateway(q, tenantId, paymentId);
     const loseTrack = await this.loseTrack(q, tenantId, paymentId, limit);
+    const reinquireRequests = await this.reinquireRequests(q, tenantId, paymentId, limit);
     const order =
       include.order && payment.orderId !== null && payment.state === 'CONFIRMED'
         ? await this.order(q, tenantId, payment.orderId, limit)
@@ -233,6 +236,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
     return {
       gateway,
       loseTrack,
+      reinquireRequests,
       order,
       audit,
       payment: {
@@ -310,7 +314,6 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
         providerStatus: gatewayInvoices.providerStatus,
         providerPaid: gatewayInvoices.providerPaid,
         lastInquiryErrorCode: gatewayInvoices.lastInquiryErrorCode,
-        reconcileInquiryRequestedAt: gatewayInvoices.reconcileInquiryRequestedAt,
         outcome: gatewayInvoices.outcome,
         outcomeAt: gatewayInvoices.outcomeAt,
         lateCompletionObservedAt: gatewayInvoices.lateCompletionObservedAt,
@@ -362,6 +365,39 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
         providerStatus: text(after['providerStatus']),
       };
     });
+  }
+
+  /**
+   * Each recorded operator "ask the provider again", from its audit row — the durable record;
+   * the invoice's `reconcile_inquiry_requested_at` is cleared by the inquiry that answers it.
+   * Only `requested = true`: a request inside the spacing minute recorded nothing.
+   *
+   * Under `payments.view`, like `loseTrack`, and NOT gated by `audit.view`: before this read
+   * the entry came from the invoice row under `payments.view`, and an operator who may press
+   * "ask again" (`payments.reconcile`) must see that it was pressed without being granted
+   * the whole audit section. Only the time is carried — no actor, no `before`/`after`.
+   */
+  private async reinquireRequests(
+    q: Executor,
+    tenantId: string,
+    paymentId: PaymentId,
+    limit: number,
+  ): Promise<TimelineReinquireFacts[]> {
+    return q
+      .select({ id: auditLogs.id, at: auditLogs.occurredAt })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.tenantId, tenantId),
+          eq(auditLogs.entityType, 'Payment'),
+          eq(auditLogs.entityId, paymentId),
+          eq(auditLogs.action, RECONCILE_INQUIRY_ACTION),
+          eq(auditLogs.result, 'SUCCESS'),
+          sql`(${auditLogs.after} ->> 'requested') = 'true'`,
+        ),
+      )
+      .orderBy(asc(auditLogs.occurredAt), asc(auditLogs.id))
+      .limit(limit);
   }
 
   /**

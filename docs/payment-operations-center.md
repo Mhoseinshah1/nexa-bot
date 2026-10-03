@@ -37,18 +37,31 @@ to the same answer over every provider × status × `paid` × reference.
 Filters: queue, gateway route, state, method, receipt disposition, a created-at range (the
 reports' ranges, resolved by the reports' resolver in the tenant calendar, half-open; absent =
 no bound, so an UNKNOWN never ages out), and the one `q` — now also a gateway's order, invoice,
-charge or payment id, exact.
+charge or payment id, or the invoice id a verified webhook named for a lost create
+(`hinted_invoice_id`, the only invoice id a CREATE_UNKNOWN attempt carries), exact. Every search
+shape asks the provider ids — a uuid too, since a provider's id can be uuid-shaped and the box
+classifies by shape. The web client sends `from`/`to` only with `range=CUSTOM`, which is the only
+range the server accepts them with.
 
 ## Timeline
 
 `GET /payments/:id/timeline` gains (contract `PAYMENT_TIMELINE_KINDS`):
 
 - under `payments.view`: invoice requested (with creation state / code), invoice created, the
-  LAST webhook hint (with how many arrived), the LAST inquiry (status, `paid`, error code), the
-  last "ask again", provider review opened (with its deadline), outcome unknown (with the
+  LAST webhook hint (with how many arrived), the LAST inquiry (status, `paid`, error code), each
+  "ask again", provider review opened (with its deadline), outcome unknown (with the
   mismatch reason), the gateway outcome and a late completion. The invoice row keeps the last
   inquiry and webhook, not a log, so these are "the last one, at this time" — never a
   fabricated series;
+- a FAILED last inquiry (error code set) carries the error and NO status or `paid`: the row
+  keeps the last OBSERVED status through a failed call, so showing it at the failed inquiry's
+  time would present an earlier answer as that inquiry's result;
+- "ask again" is read from its `gateway_invoice.reconcile_inquiry_requested` audit rows with
+  `requested = true` (one entry each), not from `reconcile_inquiry_requested_at`, which the
+  inquiry that answers the request clears. Those rows are read under `payments.view` like the
+  `payment.lose_track` rows — not behind `audit.view` — because the entry was a `payments.view`
+  fact before and an operator who may press the button must see that it was pressed; only the
+  time is carried, no actor and no `before`/`after`. No migration;
 - under `orders.view` (new section `ORDER`): the settling order's settlement, the operation that
   delivers what it bought (`PURCHASED_AS`) and its refund — only on the CONFIRMED payment;
 - under `audit.view` (new section `AUDIT`): every audit row on the payment, by action code,
@@ -81,6 +94,6 @@ interface PaymentAttentionRow {
 
 ## Indexes
 
-Online (`ONLINE_INDEXES`), no migration: `gateway_invoices_tenant_hinted_payment_idx` (the
-payment-id search arm) and `provisioning_operations_tenant_order_idx` (the timeline's
-fulfilment read).
+Online (`ONLINE_INDEXES`), no migration: `gateway_invoices_tenant_hinted_payment_idx` and
+`gateway_invoices_tenant_hinted_invoice_idx` (the two webhook-named search arms) and
+`provisioning_operations_tenant_order_idx` (the timeline's fulfilment read).
