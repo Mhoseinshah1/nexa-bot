@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import {
   asId,
   isPermissionKey,
@@ -16,6 +16,7 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import {
   adminPermissionOverrides,
   adminRoles,
+  admins,
   rolePermissions,
   roles,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -258,6 +259,187 @@ export class DrizzleRoleRepository implements RoleRepository {
       }));
   }
 
+  // -------------------------------------------------------------------------
+  // Phase D3 — role management
+  // -------------------------------------------------------------------------
+
+  /**
+   * Every role with its version and the administrators holding it, for the editor.
+   * Holders are listed whatever their status — a disabled holder still names the role
+   * in history, and deleting a role they hold would orphan that.
+   */
+  async listForManagement(scope: ScopeContext, tx?: unknown): Promise<ManagedRole[]> {
+    const tenantId = requireTenantId(scope);
+    const executor = executorOf(this.db, tx);
+    const base = await this.list(scope, tx);
+    const versions = await executor
+      .select({ id: roles.id, version: roles.version })
+      .from(roles)
+      .where(eq(roles.tenantId, tenantId));
+    const versionOf = new Map(versions.map((row) => [row.id, row.version]));
+    const holders = await executor
+      .select({
+        roleId: adminRoles.roleId,
+        id: admins.id,
+        username: admins.username,
+        displayName: admins.displayName,
+        status: admins.status,
+      })
+      .from(adminRoles)
+      .innerJoin(
+        admins,
+        and(eq(admins.id, adminRoles.adminId), eq(admins.tenantId, adminRoles.tenantId)),
+      )
+      .where(eq(adminRoles.tenantId, tenantId))
+      .orderBy(asc(admins.username));
+    const byRole = new Map<string, ManagedRole['assignedAdmins'][number][]>();
+    for (const row of holders) {
+      const list = byRole.get(row.roleId) ?? [];
+      list.push({
+        id: row.id,
+        username: row.username,
+        displayName: row.displayName,
+        status: row.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+      });
+      byRole.set(row.roleId, list);
+    }
+    return base.map((role) => ({
+      ...role,
+      version: versionOf.get(role.id) ?? 1,
+      assignedAdmins: byRole.get(role.id) ?? [],
+    }));
+  }
+
+  /** One role, `FOR UPDATE`, with its version and permissions. */
+  async lockByKey(scope: ScopeContext, key: string, tx: unknown): Promise<LockedRole | null> {
+    const tenantId = requireTenantId(scope);
+    const executor = executorOf(this.db, tx);
+    const [row] = await executor
+      .select()
+      .from(roles)
+      .where(and(eq(roles.tenantId, tenantId), eq(roles.key, key)))
+      .for('update')
+      .limit(1);
+    if (row === undefined) return null;
+    const permissionRows = await executor
+      .select({ permissionKey: rolePermissions.permissionKey })
+      .from(rolePermissions)
+      .where(and(eq(rolePermissions.tenantId, tenantId), eq(rolePermissions.roleId, row.id)));
+    return {
+      id: asId<'RoleId'>(row.id),
+      key: row.key,
+      name: row.name,
+      isSystem: row.isSystem,
+      version: row.version,
+      permissions: permissionRows
+        .map((one) => one.permissionKey)
+        .filter(isPermissionKey)
+        .sort(),
+    };
+  }
+
+  /** A new CUSTOM role. Never a system one: those come only from the seed. */
+  async createCustom(
+    scope: ScopeContext,
+    input: {
+      readonly id: RoleId;
+      readonly key: string;
+      readonly name: string;
+      readonly permissions: readonly PermissionKey[];
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    const executor = executorOf(this.db, tx);
+    await executor.insert(roles).values({
+      id: input.id,
+      tenantId,
+      key: input.key,
+      name: input.name,
+      isSystem: false,
+      createdAt: input.now,
+      version: 1,
+      updatedAt: input.now,
+    });
+    await this.writePermissions(executor, tenantId, input.id, input.permissions);
+  }
+
+  /**
+   * Replaces a role's name and permission set, ONLY if it is still at `expectedVersion`.
+   * Returns false — and changes nothing — when somebody saved it first.
+   */
+  async replace(
+    scope: ScopeContext,
+    roleId: RoleId,
+    expectedVersion: number,
+    input: {
+      readonly name: string;
+      readonly permissions: readonly PermissionKey[];
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const executor = executorOf(this.db, tx);
+    const updated = await executor
+      .update(roles)
+      .set({ name: input.name, version: sql`${roles.version} + 1`, updatedAt: input.now })
+      .where(
+        and(eq(roles.tenantId, tenantId), eq(roles.id, roleId), eq(roles.version, expectedVersion)),
+      )
+      .returning({ id: roles.id });
+    if (updated.length === 0) return false;
+    await executor
+      .delete(rolePermissions)
+      .where(and(eq(rolePermissions.tenantId, tenantId), eq(rolePermissions.roleId, roleId)));
+    await this.writePermissions(executor, tenantId, roleId, input.permissions);
+    return true;
+  }
+
+  /** Deletes a CUSTOM role at `expectedVersion`. The system-role trigger backs this up. */
+  async deleteCustom(
+    scope: ScopeContext,
+    roleId: RoleId,
+    expectedVersion: number,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const executor = executorOf(this.db, tx);
+    const [row] = await executor
+      .select({ version: roles.version, isSystem: roles.isSystem })
+      .from(roles)
+      .where(and(eq(roles.tenantId, tenantId), eq(roles.id, roleId)))
+      .limit(1);
+    if (row === undefined || row.version !== expectedVersion || row.isSystem) return false;
+    await executor
+      .delete(rolePermissions)
+      .where(and(eq(rolePermissions.tenantId, tenantId), eq(rolePermissions.roleId, roleId)));
+    await executor.delete(roles).where(and(eq(roles.tenantId, tenantId), eq(roles.id, roleId)));
+    return true;
+  }
+
+  /** How many administrators hold this role, whatever their status. */
+  async holderCount(scope: ScopeContext, roleId: RoleId, tx?: unknown): Promise<number> {
+    const [row] = await executorOf(this.db, tx)
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .from(adminRoles)
+      .where(and(eq(adminRoles.tenantId, requireTenantId(scope)), eq(adminRoles.roleId, roleId)));
+    return row?.count ?? 0;
+  }
+
+  private async writePermissions(
+    executor: Executor,
+    tenantId: string,
+    roleId: RoleId,
+    permissions: readonly PermissionKey[],
+  ): Promise<void> {
+    if (permissions.length === 0) return;
+    await executor
+      .insert(rolePermissions)
+      .values(permissions.map((permissionKey) => ({ tenantId, roleId, permissionKey })));
+  }
+
   /** Resolves role keys to ids within the tenant. Unknown keys are reported. */
   async idsForKeys(
     scope: ScopeContext,
@@ -279,4 +461,24 @@ export class DrizzleRoleRepository implements RoleRepository {
     for (const row of rows) found.set(row.key, asId<'RoleId'>(row.id));
     return { found, missing: keys.filter((key) => !found.has(key)) };
   }
+}
+
+/** A role as the editor sees it. */
+export interface ManagedRole extends Role {
+  readonly version: number;
+  readonly assignedAdmins: readonly {
+    readonly id: string;
+    readonly username: string;
+    readonly displayName: string;
+    readonly status: 'ACTIVE' | 'DISABLED';
+  }[];
+}
+
+export interface LockedRole {
+  readonly id: RoleId;
+  readonly key: string;
+  readonly name: string;
+  readonly isSystem: boolean;
+  readonly version: number;
+  readonly permissions: readonly PermissionKey[];
 }

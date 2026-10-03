@@ -5,6 +5,7 @@ import { ReadinessProbe } from './surfaces/web/readiness.probe.js';
 import { HealthController } from './surfaces/web/health.controller.js';
 import { AuthController } from './surfaces/web/auth.controller.js';
 import { AccountSecurityController } from './surfaces/web/account-security.controller.js';
+import { RbacController } from './surfaces/web/rbac.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { CustomersController } from './surfaces/web/customers.controller.js';
@@ -88,6 +89,8 @@ export class AppModule implements NestModule {
         AuthController as never,
         // Phase D2: the signed-in administrator's own second factor, sessions and history.
         AccountSecurityController as never,
+        // Phase D3: role management over the existing authorization model.
+        RbacController as never,
         AdminsController as never,
         ControlController as never,
         CustomersController as never,

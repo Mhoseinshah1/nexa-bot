@@ -17,6 +17,16 @@ import {
   revokeAdminSessionsRequestSchema,
   resetAdminSecondFactorRequestSchema,
   stepUpSchema,
+  createRoleRequestSchema,
+  updateRoleRequestSchema,
+  deleteRoleRequestSchema,
+  criticalPermissionChanges,
+  holdsCriticalPermission,
+  incoherentPermissionGrants,
+  isImmutableRole,
+  isPermissionKey,
+  type EffectivePermissionsResponse,
+  type RoleView,
   type SecretCipher,
   type StepUp,
   type AdminSessionSummary,
@@ -48,7 +58,10 @@ import {
 } from '../../access/application/permission-guard.js';
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { DrizzleRoleRepository } from '../infrastructure/drizzle-role.repository.js';
+import type {
+  DrizzleRoleRepository,
+  ManagedRole,
+} from '../infrastructure/drizzle-role.repository.js';
 import type { AdminRepository, SecondFactorRepository, SessionRepository } from './ports.js';
 import { assertNotSelf, assertOwnerSurvives, diffRoles } from '../domain/admin-protection.js';
 import type { CredentialThrottle, Reservation } from './credential-throttle.js';
@@ -1787,6 +1800,428 @@ export class AdminManagementService {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Phase D3 — roles (program §18), over the EXISTING authorization model
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Every role, with its version and the administrators holding it. A READ: `admins.view`,
+   * the permission the roles catalogue has always charged.
+   */
+  async listManagedRoles(scope: ScopeContext, actor: ActorContext): Promise<RoleView[]> {
+    await this.guard.check(scope, actor, 'admins.view');
+    const rows = await this.roles.listForManagement(scope);
+    return rows.map(toRoleView);
+  }
+
+  /**
+   * One administrator's authority, explained — and computed by THE resolver, through the
+   * guard, as that administrator. Not a copy of the rule: what this answers is exactly
+   * what a request of theirs would be checked against, DENY overrides and the
+   * dependency pass included. A disabled administrator holds nothing, and says so.
+   */
+  async effectivePermissions(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+  ): Promise<EffectivePermissionsResponse> {
+    await this.guard.check(scope, actor, 'admins.view');
+    const target = await this.requireAdmin(scope, targetId);
+    const roleKeys = await this.admins.roleKeysFor(scope, target.id);
+    const held = (await this.roles.list(scope)).filter((role) => roleKeys.includes(role.key));
+    const rolePermissions = await this.roles.permissionsForAdmin(scope, target.id);
+    const overrides = await this.roles.overridesForAdmin(scope, target.id);
+    const effective = await this.guard.permissionsOf(scope, {
+      type: 'WEB_ADMIN',
+      id: target.id,
+      label: target.username,
+      surface: actor.surface,
+      correlationId: actor.correlationId,
+    });
+    const now = this.clock.now();
+    return {
+      adminId: target.id,
+      active: target.status === 'ACTIVE',
+      roles: held.map((role) => ({ key: role.key, name: role.name })),
+      rolePermissions: [...new Set(rolePermissions)].sort(),
+      overrides: overrides
+        .map((override) => ({
+          permissionKey: override.permissionKey,
+          effect: override.effect,
+          reason: override.reason,
+          expiresAt: override.expiresAt === null ? null : override.expiresAt.toISOString(),
+          active: override.expiresAt === null || override.expiresAt.getTime() > now.getTime(),
+        }))
+        .sort((a, b) => a.permissionKey.localeCompare(b.permissionKey)),
+      effective: [...effective].sort(),
+    };
+  }
+
+  /**
+   * Creates a CUSTOM role (create and clone are this one write; a clone names its source).
+   *
+   * `admins.permissions.edit`, charged twice like every privilege write here — a cheap
+   * audited preflight, and the check of record under the tenant lock. Beyond the
+   * permission, the four rules that make a role safe to compose:
+   *
+   *   - every key is in the frozen catalogue (`role.unknown_permission`);
+   *   - the set is COHERENT: no action without the read it needs, the same table the
+   *     resolver applies (`role.permissions_incoherent`) — refused here, where there is
+   *     still somebody to tell, rather than silently dropped on every request;
+   *   - nothing the ACTOR does not hold: a role is a way to hand authority out, and the
+   *     amplification rule `create` and `setRoles` follow applies to it too;
+   *   - a CRITICAL permission needs the typed confirmation, checked here, not only drawn.
+   */
+  async createRole(scope: ScopeContext, actor: ActorContext, input: unknown): Promise<RoleView> {
+    await this.assertMayAttempt(scope, actor, 'admins.permissions.edit', {
+      action: 'role.create',
+      entityId: null,
+      entityType: 'Role',
+    });
+    const command = createRoleRequestSchema.parse(input);
+    const permissions = coherentPermissionSet(command.permissions);
+    assertConfirmed(command.key, criticalPermissionChanges([], permissions), command.confirmation);
+
+    const requestHash = hashRequest({
+      op: 'role.create',
+      actorId: adminIdOf(actor),
+      key: command.key,
+      name: command.name,
+      permissions,
+      clonedFrom: command.clonedFrom ?? null,
+    });
+    const replay = replayOf(command.idempotencyKey);
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{ readonly key: string }>(
+        scope,
+        replay.namespace,
+        replay.idempotencyKey,
+        requestHash,
+      );
+      if (found !== null) return this.roleViewOf(scope, found.result.key);
+    }
+
+    await this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'role.create', entityId: command.key, entityType: 'Role' },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        if ((await this.roles.findByKey(scope, command.key, tx)) !== null) {
+          throw errors.conflict(
+            IDENTITY_ERROR_CODES.ROLE_KEY_TAKEN,
+            'A role with this key exists.',
+          );
+        }
+        await this.assertHoldsAll(scope, actor, permissions, tx);
+        const now = this.clock.now();
+        await this.roles.createCustom(
+          scope,
+          {
+            id: this.ids.uuid() as RoleId,
+            key: command.key,
+            name: command.name,
+            permissions,
+            now,
+          },
+          tx,
+        );
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'role.create',
+            entityType: 'Role',
+            entityId: command.key,
+            before: null,
+            after: {
+              key: command.key,
+              name: command.name,
+              permissions,
+              clonedFrom: command.clonedFrom ?? null,
+              criticalChanged: criticalPermissionChanges([], permissions),
+            },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.role_created',
+          `role ${command.key} was created`,
+          { roleKey: command.key, granted: permissions.length },
+        );
+        if (replay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            replay.namespace,
+            replay.idempotencyKey,
+            requestHash,
+            { key: command.key },
+            tx,
+          );
+        }
+      },
+    );
+    return this.roleViewOf(scope, command.key);
+  }
+
+  /**
+   * Edits a role's name and permission set — never its key — from the version it was
+   * read at. The OWNER role is immutable: it carries the whole catalogue and every
+   * last-owner protection counts its holders, so an owner role that could lose
+   * `admins.edit` would be an installation whose owners cannot administer it. Other
+   * system roles may be edited; their permissions were always a creation default.
+   *
+   * The actor must hold everything the role grants BEFORE and AFTER: adding authority
+   * one does not hold is the amplification rule, and rewriting a role more privileged
+   * than oneself is acting on people one could not otherwise touch.
+   */
+  async updateRole(
+    scope: ScopeContext,
+    actor: ActorContext,
+    key: string,
+    input: unknown,
+  ): Promise<RoleView> {
+    await this.assertMayAttempt(scope, actor, 'admins.permissions.edit', {
+      action: 'role.update',
+      entityId: key,
+      entityType: 'Role',
+    });
+    const command = updateRoleRequestSchema.parse(input);
+    if (isImmutableRole(key)) throw roleImmutable();
+    const permissions = coherentPermissionSet(command.permissions);
+    const requestHash = hashRequest({
+      op: 'role.update',
+      actorId: adminIdOf(actor),
+      key,
+      name: command.name,
+      permissions,
+      expectedVersion: command.expectedVersion,
+    });
+    const replay = replayOf(command.idempotencyKey);
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{ readonly key: string }>(
+        scope,
+        replay.namespace,
+        replay.idempotencyKey,
+        requestHash,
+      );
+      if (found !== null) return this.roleViewOf(scope, key);
+    }
+
+    await this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'role.update', entityId: key, entityType: 'Role' },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        const role = await this.roles.lockByKey(scope, key, tx);
+        if (role === null) throw roleNotFound();
+        if (isImmutableRole(role.key)) throw roleImmutable();
+        if (role.version !== command.expectedVersion) throw versionConflict(role.version);
+        const critical = criticalPermissionChanges(role.permissions, permissions);
+        assertConfirmed(role.key, critical, command.confirmation);
+        await this.assertHoldsAll(scope, actor, [...role.permissions, ...permissions], tx);
+
+        const added = permissions.filter((one) => !role.permissions.includes(one));
+        const removed = role.permissions.filter((one) => !permissions.includes(one));
+        if (added.length === 0 && removed.length === 0 && role.name === command.name) {
+          // Nothing to change: no version bump, no audit row claiming a change.
+          return;
+        }
+        const now = this.clock.now();
+        if (
+          !(await this.roles.replace(
+            scope,
+            role.id,
+            role.version,
+            { name: command.name, permissions, now },
+            tx,
+          ))
+        ) {
+          throw versionConflict(role.version);
+        }
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'role.update',
+            entityType: 'Role',
+            entityId: role.key,
+            before: { name: role.name, permissions: role.permissions, version: role.version },
+            after: {
+              name: command.name,
+              permissions,
+              version: role.version + 1,
+              added,
+              removed,
+              criticalChanged: critical,
+            },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.role_updated',
+          `role ${role.key} was changed`,
+          { roleKey: role.key, added: added.length, removed: removed.length, critical },
+        );
+        if (replay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            replay.namespace,
+            replay.idempotencyKey,
+            requestHash,
+            { key: role.key },
+            tx,
+          );
+        }
+      },
+    );
+    return this.roleViewOf(scope, key);
+  }
+
+  /**
+   * Deletes a CUSTOM role nobody holds. A system role is never deleted (the trigger in
+   * migration 0006 backs this up), and a role somebody holds is refused rather than
+   * silently unassigned: removing authority from people is `setRoles`, with its own
+   * last-owner and self rules, not a side effect of tidying the catalogue.
+   */
+  async deleteRole(
+    scope: ScopeContext,
+    actor: ActorContext,
+    key: string,
+    input: unknown,
+  ): Promise<{ deleted: true; key: string }> {
+    await this.assertMayAttempt(scope, actor, 'admins.permissions.edit', {
+      action: 'role.delete',
+      entityId: key,
+      entityType: 'Role',
+    });
+    const command = deleteRoleRequestSchema.parse(input);
+    if (isImmutableRole(key)) throw roleImmutable();
+    const requestHash = hashRequest({
+      op: 'role.delete',
+      actorId: adminIdOf(actor),
+      key,
+      expectedVersion: command.expectedVersion,
+    });
+    const replay = replayOf(command.idempotencyKey);
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{ readonly key: string }>(
+        scope,
+        replay.namespace,
+        replay.idempotencyKey,
+        requestHash,
+      );
+      if (found !== null) return { deleted: true, key };
+    }
+
+    await this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'role.delete', entityId: key, entityType: 'Role' },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        const role = await this.roles.lockByKey(scope, key, tx);
+        if (role === null) throw roleNotFound();
+        if (role.isSystem || isImmutableRole(role.key)) throw roleImmutable();
+        if (role.version !== command.expectedVersion) throw versionConflict(role.version);
+        const holders = await this.roles.holderCount(scope, role.id, tx);
+        if (holders > 0) {
+          throw errors.conflict(
+            IDENTITY_ERROR_CODES.ROLE_IN_USE,
+            'Administrators hold this role. Take it from them first.',
+            { holders },
+          );
+        }
+        assertConfirmed(
+          role.key,
+          holdsCriticalPermission(role.permissions)
+            ? criticalPermissionChanges(role.permissions, [])
+            : [],
+          command.confirmation,
+        );
+        await this.assertHoldsAll(scope, actor, role.permissions, tx);
+        if (!(await this.roles.deleteCustom(scope, role.id, role.version, tx))) {
+          throw versionConflict(role.version);
+        }
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'role.delete',
+            entityType: 'Role',
+            entityId: role.key,
+            before: { name: role.name, permissions: role.permissions, version: role.version },
+            after: null,
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.role_deleted',
+          `role ${role.key} was deleted`,
+          { roleKey: role.key },
+        );
+        if (replay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            replay.namespace,
+            replay.idempotencyKey,
+            requestHash,
+            { key: role.key },
+            tx,
+          );
+        }
+      },
+    );
+    return { deleted: true, key };
+  }
+
+  /** Refuses a permission set the actor does not wholly hold — by the guard's own rule. */
+  private async assertHoldsAll(
+    scope: ScopeContext,
+    actor: ActorContext,
+    permissions: readonly PermissionKey[],
+    tx: unknown,
+  ): Promise<void> {
+    if (adminIdOf(actor) === null) return;
+    const held = await this.guard.permissionsOf(scope, actor, tx);
+    const excess = [...new Set(permissions)].filter((one) => !held.has(one)).sort();
+    if (excess.length > 0) {
+      throw errors.permissionDenied(
+        IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION,
+        'You cannot grant, or change a role granting, a permission you do not hold yourself.',
+        { permissions: excess },
+      );
+    }
+  }
+
+  private async roleViewOf(scope: ScopeContext, key: string): Promise<RoleView> {
+    const found = (await this.roles.listForManagement(scope)).find((role) => role.key === key);
+    if (found === undefined) throw roleNotFound();
+    return toRoleView(found);
+  }
+
   /**
    * Refuses to grant a permission the acting administrator does not hold.
    *
@@ -1886,7 +2321,7 @@ export class AdminManagementService {
     scope: ScopeContext,
     actor: ActorContext,
     permission: PermissionKey,
-    denial: { action: string; entityId: string | null },
+    denial: { action: string; entityId: string | null; entityType?: string },
   ): Promise<void> {
     try {
       await this.guard.check(scope, actor, permission);
@@ -1894,7 +2329,7 @@ export class AdminManagementService {
       if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') {
         await this.audit.record(scope, actor, {
           action: denial.action,
-          entityType: 'Admin',
+          entityType: denial.entityType ?? 'Admin',
           entityId: denial.entityId,
           before: null,
           after: { deniedPermission: permission },
@@ -2041,7 +2476,7 @@ export class AdminManagementService {
   private async runLockedMutation<T>(
     scope: ScopeContext,
     actor: ActorContext,
-    denial: { action: string; entityId: string | null },
+    denial: { action: string; entityId: string | null; entityType?: string },
     fn: (tx: TransactionScope) => Promise<T>,
   ): Promise<T> {
     try {
@@ -2065,7 +2500,7 @@ export class AdminManagementService {
         // order is the only thing that decides which survives.
         await this.audit.record(scope, actor, {
           action: denial.action,
-          entityType: 'Admin',
+          entityType: denial.entityType ?? 'Admin',
           entityId: denial.entityId,
           before: null,
           after: {
@@ -2163,4 +2598,92 @@ function stepUpFailed() {
 
 function adminIdOf(actor: ActorContext): AdminId | null {
   return actor.id === null ? null : (actor.id as AdminId);
+}
+
+// ---------------------------------------------------------------------------
+// Phase D3 — role helpers
+// ---------------------------------------------------------------------------
+
+function toRoleView(role: ManagedRole): RoleView {
+  return {
+    key: role.key,
+    name: role.name,
+    isSystem: role.isSystem,
+    immutable: isImmutableRole(role.key),
+    version: role.version,
+    permissions: [...role.permissions].sort(),
+    assignedAdmins: role.assignedAdmins.map((admin) => ({ ...admin })),
+  };
+}
+
+/**
+ * The submitted set as catalogue keys, deduplicated and sorted — refused when a key is
+ * not in the frozen catalogue, or when an action is missing the read it needs. The
+ * dependency table is the resolver's own (`PERMISSION_REQUIRES`); this only refuses the
+ * set the resolver would silently shrink.
+ */
+function coherentPermissionSet(submitted: readonly string[]): PermissionKey[] {
+  const unknown = submitted.filter((key) => !isPermissionKey(key));
+  if (unknown.length > 0) {
+    throw errors.validation(
+      IDENTITY_ERROR_CODES.ROLE_UNKNOWN_PERMISSION,
+      'A permission in the set is not in the catalogue.',
+      { permissions: [...new Set(unknown)].sort() },
+    );
+  }
+  const permissions = [...new Set(submitted as PermissionKey[])].sort();
+  const incoherent = incoherentPermissionGrants(permissions);
+  if (incoherent.length > 0) {
+    throw errors.validation(
+      IDENTITY_ERROR_CODES.ROLE_PERMISSIONS_INCOHERENT,
+      'An action in the set is missing the permission it needs to be usable.',
+      {
+        missing: incoherent.map((one) => ({ permission: one.permission, requires: one.requires })),
+      },
+    );
+  }
+  return permissions;
+}
+
+/**
+ * A change touching a CRITICAL permission must carry the role's key, typed. Checked by
+ * the server: a confirmation that only the page draws is one a script skips.
+ */
+function assertConfirmed(
+  roleKey: string,
+  critical: readonly string[],
+  confirmation: string | undefined,
+): void {
+  if (critical.length === 0) return;
+  if (confirmation?.trim() === roleKey) return;
+  throw errors.validation(
+    IDENTITY_ERROR_CODES.ROLE_CONFIRMATION_REQUIRED,
+    'This change touches a critical permission. Type the role key to confirm it.',
+    { critical: [...critical] },
+  );
+}
+
+function replayOf(
+  idempotencyKey: string | undefined,
+): { readonly namespace: 'WEB'; readonly idempotencyKey: string } | undefined {
+  return idempotencyKey === undefined ? undefined : { namespace: 'WEB', idempotencyKey };
+}
+
+function roleNotFound() {
+  return errors.notFound(IDENTITY_ERROR_CODES.ROLE_NOT_FOUND, 'No such role.');
+}
+
+function roleImmutable() {
+  return errors.conflict(
+    IDENTITY_ERROR_CODES.ROLE_IMMUTABLE,
+    'This role cannot be changed or deleted.',
+  );
+}
+
+function versionConflict(current: number) {
+  return errors.conflict(
+    IDENTITY_ERROR_CODES.ROLE_VERSION_CONFLICT,
+    'The role changed since it was read. Reload it and decide again.',
+    { currentVersion: current },
+  );
 }

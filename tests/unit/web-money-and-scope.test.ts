@@ -171,6 +171,19 @@ const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = 
     file: 'apps/api/src/modules/platform/identity/application/account-security.service.ts',
     needle: "'admin.backup_codes_regenerated'",
   },
+  // Phase D3: privilege changes made through a role.
+  'admin.role_created': {
+    file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
+    needle: "'admin.role_created'",
+  },
+  'admin.role_updated': {
+    file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
+    needle: "'admin.role_updated'",
+  },
+  'admin.role_deleted': {
+    file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
+    needle: "'admin.role_deleted'",
+  },
   'backup.run_failed': {
     file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
     needle: "code: 'backup.run_failed'",
