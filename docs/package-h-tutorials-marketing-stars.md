@@ -21,7 +21,7 @@ every send. The receipt's shape is the right one: **store Telegram's reference**
 
 ### 7.2 Design
 
-- **Storage** — `client_app_videos` (migration 0158): one row per `(tenant, app, bot)` with
+- **Storage** — `client_app_videos` (migration 0159): one row per `(tenant, app, bot)` with
   `file_id`, `file_unique_id`, MIME type, duration, size, the administrator who set it and a
   `version`. Replacing is an upsert that bumps `version`; deleting removes the row; deleting
   the app cascades. The app's name and icon remain the title metadata (`client_apps`).
@@ -183,7 +183,7 @@ file. Recorded on the branch head before the §7 commit (counts from real output
 
 ## Rollback
 
-Migration 0158 is additive: a new table, a nullable column, widened CHECKs. The previous
+Migration 0159 is additive: a new table, a nullable column, widened CHECKs. The previous
 release ignores `client_app_videos` and never writes `CLIENT_APP_VIDEO`. Before rolling back
 past §8, re-enter a fixed rate on the Stars route (the previous release prices by it by
 default). The `customer_marketing_opt_out` flag row is ignored by the previous release, which
