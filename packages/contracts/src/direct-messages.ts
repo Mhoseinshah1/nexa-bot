@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { CustomerNotificationState } from './customer-notifications.js';
+import { uuidV7Schema } from './ids.js';
 import {
   TICKET_REPLY_FILE_MAX_BYTES,
   normalizeTicketText,
@@ -180,17 +181,28 @@ export type DirectMessageResponse = z.infer<typeof directMessageResponseSchema>;
 export const DIRECT_MESSAGE_PAGE_DEFAULT = 20;
 export const DIRECT_MESSAGE_PAGE_MAX = 50;
 
-/** Newest first; the cursor is the last row's `(createdAt, id)`. */
-export const directMessageListQuerySchema = z.object({
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(DIRECT_MESSAGE_PAGE_MAX)
-    .default(DIRECT_MESSAGE_PAGE_DEFAULT),
-  beforeAt: z.iso.datetime().optional(),
-  beforeId: z.string().min(1).max(64).optional(),
-});
+/**
+ * Newest first; the cursor is the last row's `(createdAt, id)`, supplied whole or not at all.
+ *
+ * `beforeId` is a UUIDv7 at the boundary: the repository compares it against a `uuid`
+ * column, so `beforeId=x` beside a valid `beforeAt` reached PostgreSQL as an invalid cast
+ * and answered 500 instead of 400. The ticket and alert cursors have the same rule.
+ */
+export const directMessageListQuerySchema = z
+  .object({
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(DIRECT_MESSAGE_PAGE_MAX)
+      .default(DIRECT_MESSAGE_PAGE_DEFAULT),
+    beforeAt: z.iso.datetime().optional(),
+    beforeId: uuidV7Schema.optional(),
+  })
+  .refine((query) => (query.beforeAt === undefined) === (query.beforeId === undefined), {
+    message: 'beforeAt and beforeId must be supplied together.',
+    path: ['beforeId'],
+  });
 export type DirectMessageListQuery = z.infer<typeof directMessageListQuerySchema>;
 
 export const directMessageListResponseSchema = z.object({
