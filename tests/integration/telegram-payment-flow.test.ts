@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
   TELEGRAM_SECRET_TOKEN_HEADER,
@@ -717,6 +717,98 @@ describe('the customer payment flow over Telegram', () => {
     sent = [];
     await tap(`i:${payment}`, { message: invoice });
     expect(messages()).toHaveLength(0);
+  });
+
+  /*
+   * Codex 4170910529: the receipt arrives WHILE the «پرداخت را انجام دادم» turn is still
+   * running — after its claim opened the upload window, before it put the prompt on the
+   * invoice. The receipt cannot find the prompt (the invoice is still held by the tap), so
+   * it is answered on its own; the tap must then NOT leave the stale prompt (and its cancel
+   * button) on the invoice: it finds the filed receipt and ends the message in the final,
+   * button-less state.
+   */
+  it('never leaves the receipt prompt on the invoice when the receipt beat the tap', async () => {
+    const orderId = await awaitingPayment();
+    const invoiceTap = (updateId += 1);
+    await tap(`m:${orderId}`, { update: invoiceTap });
+    const invoice = invoiceTap;
+    const payment = String((await payments())[0]?.['id']);
+
+    const payments$ = api.container.payments;
+    const original = payments$.signalTransferSent.bind(payments$);
+    const spy = vi
+      .spyOn(payments$, 'signalTransferSent')
+      .mockImplementation(async (...args: Parameters<typeof original>) => {
+        const result = await original(...args);
+        // The claim is committed and the window open: the receipt lands now, mid-turn.
+        await photo('race-receipt');
+        return result;
+      });
+    try {
+      sent = [];
+      await tap(`i:${payment}`, { message: invoice });
+    } finally {
+      spy.mockRestore();
+    }
+
+    const onInvoice = sent.filter(
+      (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
+    );
+    const lastOnInvoice = onInvoice.at(-1);
+    expect(String(lastOnInvoice?.body['text'])).toBe(
+      '✅ رسید شما دریافت شد و در حال بررسی می‌باشد.\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+    );
+    expect(lastOnInvoice?.body['reply_markup']).toEqual({ inline_keyboard: [] });
+    // The receipt is on the payment, once; nothing moved any money.
+    const filed = (await api.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM payment_receipts WHERE payment_id = ${payment}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    expect(filed.rows[0]?.n).toBe(1);
+    expect((await payments())[0]?.['state']).toBe('PENDING');
+  });
+
+  /*
+   * Codex 4170910529, the narrower half: the receipt arrives after the tap LANDED the prompt
+   * but before the prompt's edit went out. The prompt is landed held, so the receipt cannot
+   * finalise the message underneath an edit that is about to overwrite it; the tap ends it.
+   */
+  it('never lets the prompt edit overwrite a final state the receipt drew first', async () => {
+    const orderId = await awaitingPayment();
+    const invoiceTap = (updateId += 1);
+    await tap(`m:${orderId}`, { update: invoiceTap });
+    const invoice = invoiceTap;
+    const payment = String((await payments())[0]?.['id']);
+
+    // The runtime's own messenger: the prompt's edit waits for a receipt turn to run first.
+    const messenger = (
+      api.container.botRuntime as unknown as {
+        deps: { messenger: { edit: (...args: unknown[]) => Promise<unknown> } };
+      }
+    ).deps.messenger;
+    const original = messenger.edit.bind(messenger);
+    let raced = false;
+    const spy = vi.spyOn(messenger, 'edit').mockImplementation(async (...args: unknown[]) => {
+      const message = args[1] as { templateKey?: string };
+      if (!raced && message.templateKey === 'bot.payment.receipt_prompt') {
+        raced = true;
+        await photo('race-receipt-2');
+      }
+      return original(...args);
+    });
+    try {
+      sent = [];
+      await tap(`i:${payment}`, { message: invoice });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(raced).toBe(true);
+    const onInvoice = sent.filter(
+      (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
+    );
+    expect(String(onInvoice.at(-1)?.body['text'])).toBe(
+      '✅ رسید شما دریافت شد و در حال بررسی می‌باشد.\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+    );
+    expect(onInvoice.at(-1)?.body['reply_markup']).toEqual({ inline_keyboard: [] });
   });
 
   it('treats a REDELIVERED transfer tap as a replay: one pending payment', async () => {

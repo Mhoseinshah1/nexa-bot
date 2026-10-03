@@ -3802,7 +3802,7 @@ export interface BotRuntimeDeps {
    */
   readonly receipts: Pick<
     ReceiptService,
-    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf' | 'finalRecord'
+    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf' | 'finalRecord' | 'filedForCustomer'
   >;
   /**
    * The reviewer's amount capture for the credit-to-wallet disposition (Payment File 02
@@ -14786,7 +14786,7 @@ export class BotRuntime {
           },
         ],
         orderId: null,
-        wizard: screen('RECEIPT_WAIT'),
+        wizard: { ...screen('RECEIPT_WAIT'), receiptPrompt: { customerId: customer.id } },
         /*
          * The fallback is the CLAIM, not the prompt.
          *
@@ -15033,6 +15033,10 @@ export class BotRuntime {
       return null;
     }
     const loading = directive?.invoicePending === true && directive.paymentId != null;
+    const prompt =
+      directive?.receiptPrompt !== undefined && directive.paymentId != null
+        ? { customerId: directive.receiptPrompt.customerId, paymentId: directive.paymentId }
+        : null;
     const landed = await state.land(scope, actor, target, {
       kind:
         directive === undefined || directive.anchor?.anyKind === true
@@ -15042,8 +15046,9 @@ export class BotRuntime {
       subjectId: directive?.subjectId !== undefined ? directive.subjectId : target.subjectId,
       paymentId: directive?.paymentId !== undefined ? directive.paymentId : target.paymentId,
       updateKey: input.idempotencyKey,
-      // The loading screen is landed at INVOICE_LOADING and HELD until it is marked below.
-      ...(loading ? { hold: true } : {}),
+      // The loading screen is landed at INVOICE_LOADING and HELD until it is marked below; the
+      // receipt prompt is held until it is on the message (Codex 4170910529).
+      ...(loading || prompt !== null ? { hold: true } : {}),
     });
     if (!landed) return 'NOT_ATTEMPTED';
     let edited = await editSent(
@@ -15090,6 +15095,7 @@ export class BotRuntime {
      * of this turn and the worker moves the mark first edits the message into the invoice or
      * the attempt's end, so neither waits for a status-check tap.
      */
+    if (prompt !== null) await this.settleReceiptPrompt(scope, actor, target, prompt);
     if (loading && directive.paymentId != null) {
       await state.moveAll(
         scope,
@@ -15101,6 +15107,49 @@ export class BotRuntime {
       await this.deps.invoiceScreens?.refresh(scope, directive.paymentId);
     }
     return edited.outcome;
+  }
+
+  /**
+   * Owner spec §2.4 (Codex 4170910529): the receipt prompt is on the message. Release its
+   * hold FIRST — from here a receipt's own turn can claim it and draw the final state — and
+   * THEN ask whether a receipt was filed meanwhile; if so, move the prompt on to the final
+   * state (one conditional move: a receipt turn that got there first leaves nothing to move)
+   * and edit it, with no button. A receipt filed before the release found the message held
+   * and went out as its own message; this is what still ends the invoice in its final state.
+   */
+  private async settleReceiptPrompt(
+    scope: TenantContext,
+    actor: ActorContext,
+    target: TelegramWizardRecord,
+    prompt: { readonly customerId: string; readonly paymentId: string },
+  ): Promise<void> {
+    const state = this.deps.messageState;
+    if (state === undefined) return;
+    const where = { paymentId: prompt.paymentId, id: target.id };
+    await state.moveAll(scope, actor, where, ['RECEIPT_WAIT'], 'RECEIPT_WAIT');
+    const filed = await this.deps.receipts.filedForCustomer(
+      scope,
+      actor,
+      prompt.customerId as UserId,
+      prompt.paymentId as PaymentId,
+    );
+    if (!filed) return;
+    const moved = await state.moveAll(scope, actor, where, ['RECEIPT_WAIT'], 'RECEIPT_REVIEW');
+    for (const wizard of moved) {
+      await editSent(
+        this.deps.messenger,
+        scope,
+        {
+          chatId: wizard.chatId,
+          messageId: wizard.messageId,
+          botInstanceId: wizard.botInstanceId,
+          templateKey: 'bot.payment.receipt_received',
+          values: {},
+          buttons: [],
+        },
+        false,
+      );
+    }
   }
 
   /**

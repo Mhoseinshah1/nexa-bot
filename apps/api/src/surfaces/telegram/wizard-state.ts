@@ -119,6 +119,16 @@ export interface WizardDirective {
    * of this turn and the worker edits it into the invoice or the attempt's end.
    */
   readonly invoicePending?: boolean;
+  /**
+   * Owner spec §2.4 (Codex 4170910529): this screen is the manual transfer's receipt PROMPT,
+   * whose tap opened the upload window — so a receipt can be filed while this turn is still
+   * landing and editing it. The prompt is landed HELD (no receipt can claim the message
+   * until the prompt is on it), the hold is released after the edit, and only THEN is the
+   * payment asked whether a receipt is already filed: if one is, this turn moves the message
+   * on to the final no-button state itself. Either the receipt's own turn finds the released
+   * prompt, or this turn finds the receipt — the message never goes back to the prompt.
+   */
+  readonly receiptPrompt?: { readonly customerId: string };
 }
 
 /**
