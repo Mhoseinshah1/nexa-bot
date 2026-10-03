@@ -113,6 +113,8 @@ export * from './ports.js';
 export * from './http.js';
 /** Phase D2: the admin's second factor, own sessions and security history. */
 export * from './admin-security.js';
+/** Phase D3: role management over the existing authorization model. */
+export * from './rbac.js';
 export * from './reporting.js';
 /** Round W: the Web Admin dashboard and sidebar counters, over the reports above. */
 export * from './dashboard.js';
