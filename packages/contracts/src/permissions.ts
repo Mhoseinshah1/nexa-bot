@@ -329,7 +329,7 @@ export const PERMISSIONS = [
    * history and the acceptance statistics. EDIT writes the draft, which no customer sees.
    * PUBLISH is its own HIGH key: publishing makes a new version the one every customer is
    * asked to accept, and while enforcement is on it stops every customer who has not, at
-   * once. Turning enforcement on or off is the feature flag, under `features.edit`.
+   * once. Turning enforcement on or off is the feature flag, under `settings.edit`.
    */
   p('terms.view', 'View the terms and rules, their history and acceptance statistics', 'LOW'),
   p('terms.edit', 'Create or edit the draft of the terms and rules'),

@@ -1,5 +1,6 @@
 import { APPEARANCE_SLOTS, appearanceMarkersIn, isAppearanceSlot } from './appearance.js';
 import { CURRENCY_CODES, currencyCodeSchema, money, type Money } from './money.js';
+import { TERMS_BODY_MAX_LENGTH, TERMS_TITLE_MAX_LENGTH } from './terms.js';
 
 /**
  * Customer-facing text.
@@ -136,8 +137,11 @@ export interface TemplateDefinition {
    * own limit — a Stars invoice's title (1–32) and description (1–255): an override past
    * it would be accepted here and then refused by Telegram on every invoice for the
    * tenant, which is the failure landing on a customer instead of on the administrator
-   * who typed it. Counted in UTF-16 code units, as the generic ceiling is. Only keys with
-   * no placeholders set it, so the stored body IS the sent text.
+   * who typed it. Counted in UTF-16 code units, as the generic ceiling is. A key with no
+   * placeholders sets it to the field's own bound, so the stored body IS the sent text. A
+   * key whose placeholders carry bounded operator text sets it to what is LEFT once the
+   * longest values are substituted (`TERMS_TEMPLATE_MAX_LENGTH`), so no accepted override
+   * can render past Telegram's message limit.
    */
   readonly maxLength?: number;
 }
@@ -154,6 +158,20 @@ export interface TemplateDefinition {
  * `n/8192` (`UNK-TXT-003`). Neither is adopted.
  */
 export const TEMPLATE_BODY_MAX_LENGTH = 4096;
+
+/**
+ * The ceiling of `bot.terms.required` and `bot.terms.updated` (Codex 4172817732).
+ *
+ * Both substitute the published version's `{title}` (up to `TERMS_TITLE_MAX_LENGTH`) and
+ * `{body}` (up to `TERMS_BODY_MAX_LENGTH`). Under the generic 4,096 an override could
+ * render to roughly 7,700 characters — past Telegram's limit for one message. So the frame
+ * an operator may write is what remains after the longest title and body, without crediting
+ * the two tokens themselves: an accepted override plus any publishable version renders
+ * within one message, and the accept button rides on it. Every `{icon:…}` marker becomes
+ * an emoji shorter than itself, so markers only ever shrink the rendered text.
+ */
+export const TERMS_TEMPLATE_MAX_LENGTH =
+  TEMPLATE_BODY_MAX_LENGTH - TERMS_TITLE_MAX_LENGTH - TERMS_BODY_MAX_LENGTH;
 
 /**
  * The registered keys.
@@ -1325,6 +1343,7 @@ export const TEMPLATES = [
       'and they have not accepted the current published version. Carries that version’s title ' +
       'and text; the accept button follows it. It must not say the action was performed.',
     format: 'PLAIN_TEXT',
+    maxLength: TERMS_TEMPLATE_MAX_LENGTH,
     placeholders: [
       {
         token: 'title',
@@ -1349,6 +1368,7 @@ export const TEMPLATES = [
       'one — the rules changed after the customer was shown them. Nothing was accepted; the ' +
       'current version and its own accept button follow.',
     format: 'PLAIN_TEXT',
+    maxLength: TERMS_TEMPLATE_MAX_LENGTH,
     placeholders: [
       {
         token: 'title',
