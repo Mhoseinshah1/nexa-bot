@@ -3,7 +3,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { ActorContext, OrderId, UserId } from '@nexa/contracts';
 import { monitorBudgetReserveFor, usageSyncBudgetReserveFor } from '../../apps/api/src/container';
 import { DRAIN_LIMIT } from '../../apps/api/src/modules/commerce/provisioning/application/provisioner-loop';
-import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import { AudienceFixtures } from './audience-fixtures';
 import {
@@ -75,7 +74,6 @@ describe('Blocker C2: usage-sync load and priority', () => {
   let owner: ActorContext;
   let panelId: string;
   let buyer: UserId;
-  let services: DrizzleServiceRepository;
 
   beforeAll(async () => {
     ctx = await createTestContext({
@@ -98,7 +96,6 @@ describe('Blocker C2: usage-sync load and priority', () => {
   beforeEach(async () => {
     await ctx.reset();
     ctx.container.setInstallationTenant(tenantA.tenantId);
-    services = new DrizzleServiceRepository(ctx.container.database.db);
     panel = await startFakeRickpanel({ host: '127.0.0.2' });
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-c2', roleKeys: ['owner'] }),
@@ -194,8 +191,7 @@ describe('Blocker C2: usage-sync load and priority', () => {
       await h.loop.tick();
       const claimed = h.results
         .slice(from)
-        .filter((one) => one.kind !== 'IDLE')
-        .map((one) => (one.kind === 'IDLE' ? '' : one.operationId));
+        .flatMap((one) => (one.kind === 'IDLE' ? [] : [one.operationId]));
       const attempted = h.results
         .slice(from)
         .flatMap((one) => (one.kind === 'ATTEMPTED' ? [one.operationId] : []));
