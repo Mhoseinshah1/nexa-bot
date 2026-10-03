@@ -230,6 +230,14 @@ import {
   INCIDENT_EVENT_KINDS,
   INCIDENT_TITLE_MAX_LENGTH,
   INCIDENT_CUSTOMER_MESSAGE_MAX_LENGTH,
+  // Migration P4: legacy import metadata.
+  LEGACY_IMPORT_ENTITY_TYPES,
+  LEGACY_IMPORT_MAP_STATUSES,
+  LEGACY_IMPORT_REASON_CODES,
+  LEGACY_IMPORT_RUN_FAILURE_CODES,
+  LEGACY_IMPORT_RUN_MODES,
+  LEGACY_IMPORT_RUN_STATUSES,
+  LEGACY_IMPORT_SOURCE_TABLES,
   TICKET_CATEGORY_SORT_MAX,
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
   TICKET_MESSAGE_MAX_LENGTH,
@@ -12821,5 +12829,166 @@ export const legacyTrialEligibility = pgTable(
        OR (decision = 'LEGACY_LIMIT_UNREADABLE') = (legacy_limit_usertest IS NULL)`,
     ),
     check('legacy_trial_eligibility_hash_check', sql`input_hash ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+// --- Migration P4: legacy import metadata ----------------------------------------------
+
+/**
+ * One legacy import run (`docs/legacy-import-metadata.md`). Metadata about the run, never a
+ * copy of what it read: the source is named by a SHA-256 fingerprint, a failure by a closed
+ * code, and the counters are numbers.
+ *
+ * Lifecycle: inserted `RUNNING`; leaves it only by a conditional UPDATE naming `RUNNING`.
+ * At most one `RUNNING` run per tenant, by a partial unique index rather than by a process —
+ * two importer replicas are as normal here as two monitor replicas are elsewhere.
+ */
+export const legacyImportRuns = pgTable(
+  'legacy_import_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    mode: text('mode').notNull(),
+    status: text('status').notNull(),
+    /** SHA-256 hex of the source snapshot's identity (dump checksum, export manifest). */
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    /** The importer's commit or release, for provenance; never a path or a host. */
+    codeVersion: text('code_version'),
+    failureCode: text('failure_code'),
+    /** Rows the importer has read so far; advanced monotonically by checkpoints. */
+    rowsSeen: integer('rows_seen').notNull().default(0),
+    /** Snapshotted at the terminal transition from the map rows this run wrote. */
+    rowsImported: integer('rows_imported').notNull().default(0),
+    rowsSkipped: integer('rows_skipped').notNull().default(0),
+    rowsManualReview: integer('rows_manual_review').notNull().default(0),
+    rowsFailed: integer('rows_failed').notNull().default(0),
+    startedAt: timestamptz('started_at').notNull(),
+    lastProgressAt: timestamptz('last_progress_at').notNull(),
+    finishedAt: timestamptz('finished_at'),
+  },
+  (table) => [
+    unique('legacy_import_runs_tenant_id_key').on(table.tenantId, table.id),
+    index('legacy_import_runs_tenant_started_idx').on(table.tenantId, table.startedAt),
+    uniqueIndex('legacy_import_runs_one_running_idx')
+      .on(table.tenantId)
+      .where(sql`status = 'RUNNING'`),
+    check('legacy_import_runs_mode_check', enumCheck('mode', LEGACY_IMPORT_RUN_MODES)),
+    check('legacy_import_runs_status_check', enumCheck('status', LEGACY_IMPORT_RUN_STATUSES)),
+    check(
+      'legacy_import_runs_failure_code_check',
+      sql`failure_code IS NULL OR ${enumCheck('failure_code', LEGACY_IMPORT_RUN_FAILURE_CODES)}`,
+    ),
+    check('legacy_import_runs_fingerprint_check', sql`source_fingerprint ~ '^[0-9a-f]{64}$'`),
+    check(
+      'legacy_import_runs_code_version_check',
+      sql`code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'`,
+    ),
+    check(
+      'legacy_import_runs_counters_check',
+      sql`rows_seen >= 0 AND rows_imported >= 0 AND rows_skipped >= 0 AND rows_manual_review >= 0 AND rows_failed >= 0`,
+    ),
+    /** Each status carries exactly the stamps it implies; only FAILED names a failure. */
+    check(
+      'legacy_import_runs_status_stamps_check',
+      sql`CASE status
+            WHEN 'RUNNING' THEN finished_at IS NULL AND failure_code IS NULL
+            WHEN 'FAILED' THEN finished_at IS NOT NULL AND failure_code IS NOT NULL
+            ELSE finished_at IS NOT NULL AND failure_code IS NULL
+          END`,
+    ),
+    check('legacy_import_runs_window_check', sql`finished_at IS NULL OR finished_at >= started_at`),
+    /** A run cannot finish before the progress it recorded (a skewed clock is clamped). */
+    check(
+      'legacy_import_runs_finish_after_progress_check',
+      sql`finished_at IS NULL OR finished_at >= last_progress_at`,
+    ),
+  ],
+);
+
+/**
+ * What a legacy record became. One row per `(tenant, legacy_table, legacy_id)` for ever: a
+ * rerun updates the row it decided before rather than adding a second answer.
+ *
+ * No column can hold a source row or free text. `checksum` is the SHA-256 of the canonical
+ * source row the decision was made from, so a rerun can tell "already done" from "the
+ * source changed since" without keeping the row. `entity_id` has no foreign key on purpose:
+ * it names one of several tables (`entity_type`), and provenance must survive a later
+ * decision about that entity.
+ */
+export const legacyImportMap = pgTable(
+  'legacy_import_map',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    legacyTable: text('legacy_table').notNull(),
+    legacyId: text('legacy_id').notNull(),
+    /** The run that last wrote this row. */
+    runId: uuid('run_id').notNull(),
+    checksum: text('checksum').notNull(),
+    status: text('status').notNull(),
+    reasonCode: text('reason_code'),
+    entityType: text('entity_type'),
+    entityId: uuid('entity_id'),
+    /** How many runs have written a decision here; 1 on the first. */
+    attempts: integer('attempts').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'legacy_import_map_pk',
+      columns: [table.tenantId, table.legacyTable, table.legacyId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.runId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+      name: 'legacy_import_map_run_fk',
+    }),
+    index('legacy_import_map_tenant_run_idx').on(table.tenantId, table.runId, table.status),
+    /** The reconcile / manual-review walk. */
+    index('legacy_import_map_tenant_status_idx').on(
+      table.tenantId,
+      table.status,
+      table.legacyTable,
+      table.legacyId,
+    ),
+    index('legacy_import_map_tenant_entity_idx')
+      .on(table.tenantId, table.entityType, table.entityId)
+      .where(sql`entity_id IS NOT NULL`),
+    check('legacy_import_map_status_check', enumCheck('status', LEGACY_IMPORT_MAP_STATUSES)),
+    check(
+      'legacy_import_map_reason_check',
+      sql`reason_code IS NULL OR ${enumCheck('reason_code', LEGACY_IMPORT_REASON_CODES)}`,
+    ),
+    check(
+      'legacy_import_map_entity_type_check',
+      sql`entity_type IS NULL OR ${enumCheck('entity_type', LEGACY_IMPORT_ENTITY_TYPES)}`,
+    ),
+    check('legacy_import_map_table_check', enumCheck('legacy_table', LEGACY_IMPORT_SOURCE_TABLES)),
+    /**
+     * Per table, the evidenced key shape — `LEGACY_ID_PATTERNS`, mirrored here and held in
+     * step by `legacy-import-metadata.test.ts`. A table without an evidenced shape is not
+     * in the set at all (`OQ-P4-01`).
+     */
+    check(
+      'legacy_import_map_legacy_key_check',
+      sql`CASE legacy_table
+            WHEN 'user' THEN legacy_id ~ '^[1-9][0-9]{0,19}$'
+            ELSE false
+          END`,
+    ),
+    check('legacy_import_map_checksum_check', sql`checksum ~ '^[0-9a-f]{64}$'`),
+    check('legacy_import_map_attempts_check', sql`attempts >= 1`),
+    /** IMPORTED names exactly one entity; nothing else names any, and must say why. */
+    check(
+      'legacy_import_map_status_shape_check',
+      sql`CASE status
+            WHEN 'IMPORTED' THEN entity_type IS NOT NULL AND entity_id IS NOT NULL
+            ELSE entity_type IS NULL AND entity_id IS NULL AND reason_code IS NOT NULL
+          END`,
+    ),
   ],
 );
