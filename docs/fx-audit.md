@@ -7,6 +7,10 @@ real acceptance.
 
 Base: `39c5d53` (head of `claude/n-f-campaigns`, PR #118). Branch `claude/p-fx`.
 
+> **Superseded in part (spec §8, 2026-10-02):** the Stars route is now priced by the central
+> rate ONLY. `FIXED_RATE` and `stars.pricing_mode` no longer apply to Stars; see
+> `docs/package-h-tutorials-marketing-stars.md` §8.
+
 ## 1. What existed (the audit), and which boundary each new piece extends
 
 | Concern                            | Where                                                                                                                                                                | What it did at the base                                                                                                                                           | What this package does with it                                                                                                                                                                                                                                                                                            |

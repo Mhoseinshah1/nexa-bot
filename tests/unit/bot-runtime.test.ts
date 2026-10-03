@@ -528,10 +528,18 @@ describe('profile metadata, normalised before it is ever stored', () => {
      * touching. A constant listing them would be a second list to keep in step, and the
      * commit that forgot to update it is the commit this case exists to catch.
      */
-    const runtimeSource = readFileSync(
-      resolve(import.meta.dirname, '../../apps/api/src/surfaces/telegram/bot-runtime.ts'),
-      'utf8',
-    );
+    const runtimeSource = [
+      'bot-runtime.ts',
+      // Spec §7: the client apps section's screens live beside the runtime, routed by it.
+      'admin-tutorial-video.ts',
+    ]
+      .map((file) =>
+        readFileSync(
+          resolve(import.meta.dirname, '../../apps/api/src/surfaces/telegram', file),
+          'utf8',
+        ),
+      )
+      .join('\n');
     const sent = new Set<TemplateKey>();
     for (const [, key] of runtimeSource.matchAll(/'(bot\.[a-z0-9_.]+)'/g)) {
       if (key !== undefined && key in CATALOGUE_FA) sent.add(key as TemplateKey);
@@ -783,6 +791,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.marketing.opt_out_button',
       'bot.marketing.opted_in',
       'bot.marketing.opted_out',
+      /*
+       * Spec §9, reviewed: the answer while the installation does not let customers stop
+       * promotions. It says the choice is not available here and that account messages
+       * still arrive; it offers no button that could change anything.
+       */
+      'bot.marketing.unavailable',
       'bot.menu.main_button',
       // WP-A10: an app's detail points a customer with several services at their list.
       'bot.menu.services',
@@ -862,6 +876,13 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.manual_button',
       'bot.payment.manual_instructions',
       'bot.payment.not_pending',
+      /*
+       * NOWPayments: the «💳 پرداخت با ارز دیجیتال» URL button, coins confirming on chain, and
+       * the needs-review sentence. None names a coin, a crypto figure or says paid.
+       */
+      'bot.payment.nowpayments_in_review',
+      'bot.payment.nowpayments_pay_button',
+      'bot.payment.nowpayments_review_unresolved',
       'bot.payment.receipt_expired',
       'bot.payment.receipt_limit',
       'bot.payment.receipt_not_expected',
@@ -1132,8 +1153,32 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.admin_status_changed',
       'bot.admin.admins_back_button',
       'bot.admin.admins_none',
+      /*
+       * Spec §7's client apps section, reviewed: the list, one app with and without a
+       * video, the prompt and its cancel, the delete ask-then-act pair, and the answers.
+       * None carries the video or its reference — an app is named by the operator's own
+       * name and icon, carried as a value — and the stale answer stores nothing.
+       */
+      'bot.admin.app_back_button',
+      'bot.admin.app_detail_no_video',
+      'bot.admin.app_detail_video',
+      'bot.admin.app_not_found',
+      'bot.admin.app_video_cancel_button',
+      'bot.admin.app_video_cancelled',
+      'bot.admin.app_video_delete_ask',
+      'bot.admin.app_video_delete_button',
+      'bot.admin.app_video_delete_confirm_button',
+      'bot.admin.app_video_deleted',
+      'bot.admin.app_video_prompt',
+      'bot.admin.app_video_saved',
+      'bot.admin.app_video_set_button',
+      'bot.admin.app_video_stale',
       'bot.admin.approve_button',
       'bot.admin.approved',
+      'bot.admin.apps_back_button',
+      'bot.admin.apps_button',
+      'bot.admin.apps_empty',
+      'bot.admin.apps_section',
       /*
        * WP10 follow-up's twelve, Block User from the receipt. Reviewed against the same rule:
        * every one names a step the runtime routes (`xa:`…`xd:` and the reason capture), and

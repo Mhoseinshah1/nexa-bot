@@ -632,7 +632,12 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     }
     const buttons = await this.labelButtons(scope, message.buttons ?? []);
 
-    const method = message.kind === 'PHOTO' ? 'sendPhoto' : 'sendDocument';
+    const method =
+      message.kind === 'PHOTO'
+        ? 'sendPhoto'
+        : message.kind === 'VIDEO'
+          ? 'sendVideo'
+          : 'sendDocument';
     const content = (plain: boolean) => {
       const wire = plain ? rendered?.fallback : rendered;
       return {

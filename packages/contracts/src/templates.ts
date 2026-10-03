@@ -403,8 +403,9 @@ export const TEMPLATES = [
   {
     key: 'ops.group.topic_name.system',
     description:
-      'The name Nexa gives the forum topic it creates for system events and errors in the ' +
-      'operations log group. Read when the topic is created or recreated.',
+      'The name Nexa gives the forum topic it creates for system events in the operations ' +
+      'log group — and for any event no other topic claims. Read when the topic is created ' +
+      'or recreated.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -413,6 +414,56 @@ export const TEMPLATES = [
     description:
       'The name Nexa gives the forum topic it creates for the payments log in the operations ' +
       'log group. Read when the topic is created or recreated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  // Spec §12 — the topics beyond the first two, each named when created or recreated.
+  {
+    key: 'ops.group.topic_name.errors',
+    description:
+      'The name Nexa gives the operations log group topic for unanticipated failures: ' +
+      'unhandled exceptions and errors the API answered.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.services',
+    description:
+      'The name Nexa gives the operations log group topic for orders and the services ' +
+      'provisioned for them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.panels',
+    description:
+      'The name Nexa gives the operations log group topic for panel health, probes and ' +
+      'capacity.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.bot',
+    description:
+      'The name Nexa gives the operations log group topic for the bots themselves: sending ' +
+      'to customers, menus and commands, channel checks and token replacement.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.security',
+    description:
+      'The name Nexa gives the operations log group topic for refusals, sign-in lock-outs, ' +
+      'administrator changes and spam protection.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.backups',
+    description:
+      'The name Nexa gives the operations log group topic that receives the encrypted backup ' +
+      'archives, the notice for an archive too large to send, and the backup and recovery ' +
+      'events.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -4391,6 +4442,172 @@ export const TEMPLATES = [
    * authors — a name, an emoji — travels as a COMMAND carrying its argument, never as
    * a prompt that captures the next message (INCIDENT-FIN-001).
    */
+  // --- Spec §7: the client apps section and the tutorial video wizard ---------------
+  {
+    key: 'bot.admin.apps_button',
+    description:
+      'Spec §7: opens the client apps section of the management panel, where a tutorial video is set. Drawn for an administrator who holds `client_apps.view`; setting or deleting a video charges `client_apps.edit`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_section',
+    description:
+      'Spec §7: the client apps section — a heading over one button per app, each named by the app.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_empty',
+    description:
+      'Spec §7: the client apps section when the installation has no app entry yet (they are created in the Web Admin).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_detail_video',
+    description:
+      'Spec §7: one app in the management panel, when a tutorial video is stored for this bot. Carries «تنظیم ویدیو» (replace), delete and back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_detail_no_video',
+    description:
+      'Spec §7: one app in the management panel, when no tutorial video is stored for this bot. Carries «تنظیم ویدیو» and back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_set_button',
+    description:
+      'Spec §7: «تنظیم ویدیو» — opens the bounded prompt that reads the next video the administrator sends as this app’s tutorial.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_delete_button',
+    description: 'Spec §7: asks to delete this app’s tutorial video. Deletes nothing by itself.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_delete_ask',
+    description: 'Spec §7: the confirmation before a tutorial video is deleted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_delete_confirm_button',
+    description: 'Spec §7: confirms deleting the tutorial video.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_prompt',
+    description:
+      'Spec §7: asks the administrator to send the tutorial video now, as a video message; says the request expires. Carries the cancel button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_cancel_button',
+    description: 'Spec §7: cancels the open «send the video» prompt. Stores nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_saved',
+    description:
+      'Spec §7: the video was stored as this app’s tutorial (a first one or a replacement).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_deleted',
+    description: 'Spec §7: the tutorial video was deleted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_cancelled',
+    description: 'Spec §7: the «send the video» prompt was cancelled; nothing was stored.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_stale',
+    description:
+      'Spec §7: a video arrived, or a prompt button was tapped, with no open prompt — expired, cancelled, superseded or never opened. Nothing was stored.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_back_button',
+    description: 'Spec §7: back to the client apps section.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_back_button',
+    description: 'Spec §7: back to the app’s own screen.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_not_found',
+    description: 'Spec §7: the app a management-panel button named no longer exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.categories_button',
     description:
@@ -7980,6 +8197,56 @@ export const TEMPLATES = [
     placeholders: [],
   },
   /*
+   * NOWPayments (`docs/nowpayments-gateway-audit.md` §5.8). The customer chooses the coin on
+   * NOWPayments' own page; none of these names an asset, a crypto amount or the provider's
+   * figures, and none says paid until the payment is CONFIRMED by the provider's own read.
+   */
+  {
+    key: 'bot.payment.route_name_nowpayments',
+    description:
+      'The product’s own name for the NOWPayments crypto route (`NOWPAYMENTS`), used when the operator set no display name. The owner’s label: «💳 پرداخت با ارز دیجیتال».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.nowpayments_pay_button',
+    description:
+      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments.open`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.nowpayments_in_review',
+    description:
+      'NOWPayments: the provider reported the customer’s coins on their way (seen on chain, confirming or being forwarded) before the deadline, and the bounded review window is open while the chain confirms them. Shows the payable and the end of the window. It invites no new payment and never says paid, failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'The payment’s own payable (principal plus any fee), from Nexa’s snapshot — never a crypto figure.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reviewUntil',
+        type: 'DATETIME',
+        description:
+          'The end of the review window: twenty-four hours from when the coins were first seen, frozen.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.nowpayments_review_unresolved',
+    description:
+      'NOWPayments: the payment needs a person — the provider reported an amount that does not match the invoice (a partial payment), or the confirmation window ended without a final answer. Nothing has failed and nothing was settled; the operator is reconciling it. It must tell the customer not to pay again, and never says failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
    * Package A — Telegram Stars (`docs/package-a-telegram-stars-audit.md`). A Star is never
    * shown as the sales currency: the Toman figures are Nexa's snapshot, and the Star
    * figure is the conversion the invoice asks for.
@@ -10296,6 +10563,15 @@ export const TEMPLATES = [
     description:
       'Round N close: the button on the support screen that opts the customer out of promotional ' +
       'broadcasts (the same as /stop).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.marketing.unavailable',
+    description:
+      'Spec §9: answers /stop, or an old opt-out / opt-in button, while the installation does ' +
+      'not let customers stop promotional messages (the customer_marketing_opt_out flag is ' +
+      'off). Says the preference cannot be changed here; nothing is changed.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

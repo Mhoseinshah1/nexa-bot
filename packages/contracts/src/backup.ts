@@ -252,3 +252,55 @@ export const backupArchiveHeaderSchema = z.object({
   cipher: z.literal('aes-256-gcm'),
 });
 export type BackupArchiveHeader = z.infer<typeof backupArchiveHeaderSchema>;
+
+// ---------------------------------------------------------------------------
+// The automatic schedule, as the Web Admin edits it (spec §13.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The bounds on the interval between automatic backups, in MINUTES.
+ *
+ * The same bounds `BACKUP_INTERVAL_MS` has always had in the environment schema
+ * — fifteen minutes to thirty days — expressed in the unit an operator thinks in.
+ * The floor stops a misconfiguration from dumping the whole database back to
+ * back; the ceiling stops "off" being spelled as an interval nobody will reach.
+ * The environment schema reads these constants, so the two cannot drift.
+ */
+export const BACKUP_INTERVAL_MINUTES_MIN = 15;
+export const BACKUP_INTERVAL_MINUTES_MAX = 30 * 24 * 60;
+
+/**
+ * The settings-registry keys that hold the automatic schedule.
+ *
+ * Both are NULLABLE and default to null, and null means "the installation's
+ * environment value" (`BACKUP_SCHEDULE_ENABLED`, `BACKUP_INTERVAL_MS`). So an
+ * installation that never opens the backup page behaves exactly as it did, and
+ * one whose operator sets a value from the Web Admin no longer needs anybody to
+ * edit `/etc/nexa/nexa.env`. They are read on the INSTALLATION tenant — a backup
+ * is of the whole database — and edited on the backup page, not the generic
+ * settings page.
+ */
+export const BACKUP_SCHEDULE_SETTING_KEYS = {
+  enabled: 'backup.schedule_enabled',
+  intervalMinutes: 'backup.interval_minutes',
+} as const;
+
+/**
+ * Where an effective schedule value came from: a value an operator stored from
+ * the Web Admin, or the installation's environment default.
+ */
+export const BACKUP_SCHEDULE_SOURCES = ['SETTING', 'ENVIRONMENT'] as const;
+export type BackupScheduleSource = (typeof BACKUP_SCHEDULE_SOURCES)[number];
+
+/**
+ * Where a backup archive is delivered, decided per run (spec §13.1).
+ *
+ * - `OPS_GROUP_TOPIC`: the connected operations log group's «💾 بکاپ‌ها» topic, posted
+ *   by the group's own bot. The canonical destination whenever a group is connected.
+ * - `DEDICATED_CHAT`: `BACKUP_TELEGRAM_CHAT_ID` with `BACKUP_TELEGRAM_BOT_TOKEN` — the
+ *   pre-existing environment destination, kept as the explicit fallback for an
+ *   installation with no connected group.
+ * - `NONE`: neither. The archive is verified and retained on the server.
+ */
+export const BACKUP_DELIVERY_DESTINATIONS = ['OPS_GROUP_TOPIC', 'DEDICATED_CHAT', 'NONE'] as const;
+export type BackupDeliveryDestination = (typeof BACKUP_DELIVERY_DESTINATIONS)[number];

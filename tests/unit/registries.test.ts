@@ -297,6 +297,9 @@ describe('the feature flag registry', () => {
       'custom_service',
       // WP6-C. Off by default; the customer rotation path it switches on is reachable.
       'customer_link_rotation',
+      // Spec §9. ON by default (the behaviour before it existed); OFF hides the opt-out
+      // button, makes /stop and old buttons inert, and MARKETING ignores stored opt-outs.
+      'customer_marketing_opt_out',
       // WP19. Off by default; the customer's refund-request path it switches on is
       // reachable, and requests already filed stay decidable when it is turned off.
       'customer_refund_requests',

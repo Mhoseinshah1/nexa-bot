@@ -200,6 +200,7 @@ describe('round N close', () => {
       ids: c.ids,
       scopeIsActive: async () => true,
       logger: { info: () => undefined, error: () => undefined },
+      marketingOptOut: optOutPolicy(),
     });
     broadcasts = new BroadcastService({
       repository: new DrizzleBroadcastRepository(c.database.db),
@@ -219,6 +220,12 @@ describe('round N close', () => {
     });
     calendar = new IntlCampaignCalendar(new CachedTenantPresentationReader(c.tenants, clock));
     campaigns = new CampaignService(campaignDeps());
+  });
+
+  /** Spec §9: the container's own switch, as production wires it. */
+  const optOutPolicy = () => ({
+    honoured: (scope: typeof tenantA, tx?: unknown) =>
+      ctx.container.featureFlagResolver.isEnabled(scope, 'customer_marketing_opt_out', tx),
   });
 
   function processor(): BulkOperationProcessor {
@@ -936,7 +943,7 @@ describe('round N close', () => {
         ).map((r) => [r.chat_id, r.error_code === null ? r.state : `${r.state}:${r.error_code}`]),
       );
 
-    it('excludes an opted-out customer from MARKETING at the count, the materialisation and the send, and from nothing else', async () => {
+    it('excludes an opted-out customer from MARKETING at the send — counted and materialised, resolved SKIPPED by the stamp — and from nothing else', async () => {
       const [a, b, c] = await customers(3);
       const first = await optOut(b as string, true, 'stop-b');
       expect(first.changed).toBe(true);
@@ -950,18 +957,27 @@ describe('round N close', () => {
 
       const marketing = await draft('MARKETING');
       const notice = await draft('SERVICE_ANNOUNCEMENT');
-      expect((await broadcasts.preview(tenantA, owner, marketing.id)).customers).toBe(2);
+      /*
+       * Spec §9 (Codex review of #143): the opt-out is decided at ONE point, the stamp. The
+       * preview counts every member, as a frozen draft always has, and the launch writes the
+       * opted-out customer PENDING; the send resolves it.
+       */
+      expect((await broadcasts.preview(tenantA, owner, marketing.id)).customers).toBe(3);
       expect((await broadcasts.preview(tenantA, owner, notice.id)).customers).toBe(3);
-      // The shared audience itself still counts everybody: the exclusion is the send's.
       expect((await ctx.container.audience.evaluate(tenantA, { version: 1 })).customers).toBe(3);
 
       await launch(marketing.id);
-      expect(Object.keys(await states(marketing.id)).sort()).toEqual(['771000', '771002']);
+      expect(await states(marketing.id)).toEqual({
+        '771000': 'PENDING',
+        '771001': 'PENDING',
+        '771002': 'PENDING',
+      });
       // c opts out after the launch: re-read at the send, skipped before the stamp.
       await optOut(c as string, true);
       await dispatcher.pass(tenantA);
       expect(await states(marketing.id)).toEqual({
         '771000': 'SENT',
+        '771001': 'SKIPPED:broadcast.marketing_opted_out',
         '771002': 'SKIPPED:broadcast.marketing_opted_out',
       });
       expect(transport.delivered).toEqual(['771000']);
@@ -977,14 +993,21 @@ describe('round N close', () => {
       });
       expect(a).toBeTruthy();
 
-      // Opting back in: the next MARKETING send counts them again.
+      // Opting back in: the next MARKETING send reaches them again.
       expect((await optOut(b as string, false)).changed).toBe(true);
       expect((await optOut(b as string, false)).changed).toBe(false);
       const again = await draft('MARKETING');
-      expect((await broadcasts.preview(tenantA, owner, again.id)).customers).toBe(2);
+      await launch(again.id);
+      clock.advance(1_001);
+      await dispatcher.pass(tenantA);
+      expect(await states(again.id)).toEqual({
+        '771000': 'SENT',
+        '771001': 'SENT',
+        '771002': 'SKIPPED:broadcast.marketing_opted_out',
+      });
     });
 
-    it('a MARKETING send seeded from a frozen audience keeps the confirmed count and writes an opted-out member SKIPPED', async () => {
+    it('a MARKETING send seeded from a frozen audience keeps the confirmed count and resolves an opted-out member SKIPPED at the send', async () => {
       const [a, b] = await customers(2);
       const frozen = await ctx.container.uow.run(tenantA, (tx) =>
         ctx.container.audience.freeze(tenantA, { version: 1 }, clock.now(), null, tx),
@@ -997,11 +1020,13 @@ describe('round N close', () => {
       const launched = await launch(record.id);
       expect(launched.recipientCount).toBe(2);
       expect(launched.audienceFingerprint).toBe(frozen.fingerprint);
+      // Spec §9 (Codex review of #143): PENDING at the launch; the stamp decides.
+      expect(await states(record.id)).toEqual({ '771000': 'PENDING', '771001': 'PENDING' });
+      await dispatcher.pass(tenantA);
       expect(await states(record.id)).toEqual({
-        '771000': 'PENDING',
+        '771000': 'SENT',
         '771001': 'SKIPPED:broadcast.marketing_opted_out',
       });
-      await dispatcher.pass(tenantA);
       expect(transport.delivered).toEqual(['771000']);
       expect(a).toBeTruthy();
     });
@@ -1035,6 +1060,113 @@ describe('round N close', () => {
         '771000': 'SKIPPED:broadcast.marketing_opted_out',
       });
       expect(transport.delivered).toEqual([]);
+      expect(a).toBeTruthy();
+    });
+
+    async function setOptOutPolicy(enabled: boolean) {
+      const current = await ctx.container.featureFlagResolver.resolve(
+        tenantA,
+        'customer_marketing_opt_out',
+      );
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'customer_marketing_opt_out',
+        enabled,
+        expectedVersion: current.version,
+        idempotencyKey: key(),
+        reason: 'Spec §9 integration test.',
+      });
+    }
+
+    const storedOptOut = async (customerId: string) =>
+      (
+        await rows<{ at: Date | null }>(
+          sql`SELECT marketing_opt_out_at AS at FROM customers WHERE id = ${customerId}`,
+        )
+      )[0]?.at ?? null;
+
+    it('spec §9: with the policy OFF a MARKETING send ignores a stored opt-out — at the count, the materialisation and the send — without erasing it; ON again honours it', async () => {
+      const [a, b] = await customers(2);
+      await optOut(b as string, true);
+      const stored = await storedOptOut(b as string);
+      expect(stored).not.toBeNull();
+
+      await setOptOutPolicy(false);
+      const marketing = await draft('MARKETING');
+      expect((await broadcasts.preview(tenantA, owner, marketing.id)).customers).toBe(2);
+      await launch(marketing.id);
+      expect(await states(marketing.id)).toEqual({ '771000': 'PENDING', '771001': 'PENDING' });
+      await dispatcher.pass(tenantA);
+      expect(await states(marketing.id)).toEqual({ '771000': 'SENT', '771001': 'SENT' });
+      expect(transport.delivered.sort()).toEqual(['771000', '771001']);
+      // The stored preference is untouched.
+      expect(await storedOptOut(b as string)).toEqual(stored);
+
+      // ON again: the earlier choice is effective at once.
+      await setOptOutPolicy(true);
+      const again = await draft('MARKETING');
+      await launch(again.id);
+      clock.advance(1_001);
+      await dispatcher.pass(tenantA);
+      expect(await states(again.id)).toEqual({
+        '771000': 'SENT',
+        '771001': 'SKIPPED:broadcast.marketing_opted_out',
+      });
+      expect(a).toBeTruthy();
+    });
+
+    it('spec §9 (Codex review of #143): a send launched while the policy is ON and switched OFF before it goes reaches the opted-out customer — live and frozen alike', async () => {
+      const [a, b] = await customers(2);
+      await optOut(b as string, true);
+      const frozen = await ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.audience.freeze(tenantA, { version: 1 }, clock.now(), null, tx),
+      );
+      const live = await draft('MARKETING');
+      const seeded = await draft('MARKETING', frozen.id);
+      // Launched while the policy honours the opt-out: nothing is decided yet.
+      expect((await broadcasts.preview(tenantA, owner, live.id)).customers).toBe(2);
+      await launch(live.id);
+      await launch(seeded.id);
+      for (const id of [live.id, seeded.id]) {
+        expect(await states(id)).toEqual({ '771000': 'PENDING', '771001': 'PENDING' });
+      }
+      // The operator switches the policy OFF before the send.
+      await setOptOutPolicy(false);
+      for (let round = 0; round < 3; round += 1) {
+        await dispatcher.pass(tenantA);
+        clock.advance(1_001);
+      }
+      for (const id of [live.id, seeded.id]) {
+        expect(await states(id)).toEqual({ '771000': 'SENT', '771001': 'SENT' });
+      }
+      expect(await storedOptOut(b as string)).not.toBeNull();
+      expect(a).toBeTruthy();
+    });
+
+    it('spec §9: the send re-reads the policy at its stamp — rows materialised while OFF are SKIPPED if it is ON again before they go', async () => {
+      const [a, b] = await customers(2);
+      await optOut(b as string, true);
+      await setOptOutPolicy(false);
+      const marketing = await draft('MARKETING');
+      await launch(marketing.id);
+      expect(await states(marketing.id)).toEqual({ '771000': 'PENDING', '771001': 'PENDING' });
+      await setOptOutPolicy(true);
+      await dispatcher.pass(tenantA);
+      expect(await states(marketing.id)).toEqual({
+        '771000': 'SENT',
+        '771001': 'SKIPPED:broadcast.marketing_opted_out',
+      });
+      expect(transport.delivered).toEqual(['771000']);
+      expect(a).toBeTruthy();
+    });
+
+    it('spec §9: a service announcement is unaffected by the policy either way', async () => {
+      const [a, b] = await customers(2);
+      await optOut(b as string, true);
+      for (const enabled of [false, true]) {
+        await setOptOutPolicy(enabled);
+        const notice = await draft('SERVICE_ANNOUNCEMENT');
+        expect((await broadcasts.preview(tenantA, owner, notice.id)).customers).toBe(2);
+      }
       expect(a).toBeTruthy();
     });
 

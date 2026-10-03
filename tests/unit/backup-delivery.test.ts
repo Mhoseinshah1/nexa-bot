@@ -63,13 +63,31 @@ describe('backup delivery to Telegram', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  function delivery(overrides: { chatId?: string; token?: string; timeoutMs?: number } = {}) {
+  function delivery(
+    overrides: { chatId?: string; token?: string; timeoutMs?: number; threadId?: number } = {},
+  ) {
     return new TelegramBackupDelivery({
       apiBaseUrl: baseUrl,
       token: overrides.token ?? TOKEN,
       chatId: overrides.chatId ?? '-1001234567890',
+      ...(overrides.threadId === undefined ? {} : { messageThreadId: overrides.threadId }),
       timeoutMs: overrides.timeoutMs ?? 5_000,
     });
+  }
+
+  /** The multipart body of the next request, as text, then a canned answer. */
+  function capture(answer: { status: number; body: unknown }): { body: () => string } {
+    let text = '';
+    handler = (request, response) => {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        text = Buffer.concat(chunks).toString('utf8');
+        response.writeHead(answer.status, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(answer.body));
+      });
+    };
+    return { body: () => text };
   }
 
   const send = () =>
@@ -240,5 +258,51 @@ describe('backup delivery to Telegram', () => {
     const result = await delivery().sendMessage('NEXA BACKUP\nRETAINED: /var/lib/nexa/backups');
     expect(result.state).toBe('SUCCEEDED');
     expect(requests[0]?.url).toContain('/sendMessage');
+  });
+
+  // Spec §13.1: the operations group's «💾 بکاپ‌ها» topic is a THREAD in the group chat.
+  it('posts into the forum topic it was given, and only then', async () => {
+    const threaded = capture({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    await delivery({ threadId: 42 }).sendDocument({
+      archivePath,
+      filename: 'b.nxb',
+      caption: 'NEXA BACKUP',
+    });
+    expect(threaded.body()).toMatch(/name="message_thread_id"\r\n\r\n42\r\n/);
+
+    const plain = capture({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    await delivery().sendMessage('NEXA BACKUP');
+    // The environment's dedicated chat has always been posted to directly.
+    expect(plain.body()).not.toContain('message_thread_id');
+  });
+
+  it('flags a deleted topic on a definitive refusal, so the router may recreate it', async () => {
+    const gone = {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: message thread not found',
+    };
+    capture({ status: 400, body: gone });
+    const threaded = await delivery({ threadId: 42 }).sendDocument({
+      archivePath,
+      filename: 'b.nxb',
+      caption: 'c',
+    });
+    expect(threaded).toMatchObject({ state: 'FAILED_DEFINITIVE', topicMissing: true });
+
+    // Without a thread there is no topic to be missing.
+    capture({ status: 400, body: gone });
+    const direct = await send();
+    expect(direct.state).toBe('FAILED_DEFINITIVE');
+    expect(direct).not.toHaveProperty('topicMissing');
+
+    // And a 5xx is never "the topic is gone": the document may have landed.
+    capture({ status: 502, body: { ok: false, description: 'message thread not found' } });
+    const unknown = await delivery({ threadId: 42 }).sendDocument({
+      archivePath,
+      filename: 'b.nxb',
+      caption: 'c',
+    });
+    expect(unknown.state).toBe('OUTCOME_UNKNOWN');
   });
 });

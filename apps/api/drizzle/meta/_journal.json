@@ -1111,8 +1111,22 @@
     {
       "idx": 158,
       "version": "7",
-      "when": 1790984035991,
-      "tag": "0158_recovery_kit_installation_keys",
+      "when": 1790974128201,
+      "tag": "0158_nowpayments_gateway",
+      "breakpoints": true
+    },
+    {
+      "idx": 159,
+      "version": "7",
+      "when": 1791009597352,
+      "tag": "0159_spec7_client_app_tutorial_video",
+      "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1791009900767,
+      "tag": "0160_recovery_kit_installation_keys",
       "breakpoints": true
     }
   ]

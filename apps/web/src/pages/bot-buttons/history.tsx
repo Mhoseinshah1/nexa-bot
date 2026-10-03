@@ -8,7 +8,7 @@ import {
 import { fetchBotMenuRevisions } from '../../api/client';
 import { formatTimestamp } from '../../format';
 import { t } from '../../i18n/web.fa';
-import { Badge, Banner, Drawer, Ltr, StateSwitch } from '../../ui/kit';
+import { Badge, Banner, Drawer, StateSwitch } from '../../ui/kit';
 import { fill, labelOf, PreviewKeyboard } from './canvas';
 import { configOf, lookOf } from './model';
 
@@ -28,7 +28,6 @@ function arrangedRows(
         key: id,
         label: config.enabled ? label : `${label} (${t('web.bb_state_off')})`,
         look: lookOf(config),
-        iconSlot: config.iconSlot,
       };
     }),
   );
@@ -88,11 +87,14 @@ export function HistoryDrawer({
                   {fill(t('web.bb_revision_restored_from'), { n: revision.restoredFrom.revision })}
                 </p>
               )}
-              {revision.createdByAdminId !== null && (
-                <p className="muted small">
-                  {t('web.bb_revision_by')} <Ltr>{revision.createdByAdminId.slice(0, 8)}</Ltr>
-                </p>
-              )}
+              {/* The publisher by name, as the audit log names people (round-T QA-4) — never
+                  an id prefix nobody can read. No name, no line. */}
+              {revision.createdByAdminName !== null &&
+                revision.createdByAdminName !== undefined && (
+                  <p className="muted small" data-testid="bb-revision-by">
+                    {t('web.bb_revision_by')} <bdi>{revision.createdByAdminName}</bdi>
+                  </p>
+                )}
               {revision.layout === null ? (
                 <Banner tone="warn">{t('web.bb_revision_unreadable')}</Banner>
               ) : (

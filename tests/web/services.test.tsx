@@ -250,54 +250,49 @@ describe('the service list', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 
-  it('asks the server for the exact name, and sends it unfolded', async () => {
+  it('asks the server for the name through the one search box, sent unfolded', async () => {
     /*
-     * The filter WP3 added, and the reason it exists: a customer quotes the name on
-     * their account, never the internal id, so until this box existed the one handle a
-     * support conversation contains matched no search here.
+     * The lookup WP3 added, now through the page's ONE box (spec §10): a customer
+     * quotes the name on their account, never the internal id.
      *
      * Sent as TYPED. `providerUsernameLookupSchema` folds and validates once, at the
      * server's boundary; a client that lowercased it first would be the second opinion
-     * about what a username is that `ServiceSearch` names, and the two would drift the
-     * first time either changed.
+     * about what a username is that `ServiceSearch` names.
      */
     const api = stubApi(list([service()]));
     renderPage(
       <ServicesPage
-        route={{
-          path: '/services',
-          query: new URLSearchParams({ providerUsername: 'NX-7F3A91' }),
-        }}
+        route={{ path: '/services', query: new URLSearchParams({ q: 'NX-7F3A91' }) }}
         denied={false}
       />,
     );
     await screen.findByText('nx-7f3a91');
 
-    expect(api.calls[0]?.url).toContain('providerUsername=NX-7F3A91');
+    expect(api.calls[0]?.url).toContain('q=NX-7F3A91');
+    expect(api.calls[0]?.url).not.toContain('providerUsername=');
   });
 
-  it('refuses a name the server would refuse, without spending a request on it', async () => {
+  it('reads a leading @ as the customer’s Telegram username, and says so', async () => {
     /*
-     * The box checks against the SAME schema the endpoint applies — imported, not
-     * copied by eye, which is how a client comes to reject a name the server accepts.
-     *
-     * `@maryam` is what somebody pastes when they mean a Telegram username. Refusing it
-     * here is not duplicated authorization: the server validates it again, and this
-     * only stops a request that could never have matched.
+     * `@maryam` is what somebody pastes when they mean a Telegram username. It used to be
+     * refused by the provider-username box; the one box reads it as what it is — a
+     * customer's username — and says so before anything is sent.
      */
     const api = stubApi(list([service()]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('nx-7f3a91');
     const before = api.calls.length;
 
-    const box = screen.getByLabelText('نام کاربری روی پنل');
-    fireEvent.change(box, { target: { value: '@maryam' } });
-    fireEvent.click(screen.getByRole('button', { name: 'جست‌وجو' }));
+    fireEvent.change(screen.getByLabelText('جست‌وجو'), { target: { value: '@maryam' } });
+    expect(screen.getByTestId('list-search-kind').textContent).toContain('نام کاربری تلگرام');
+    expect(api.calls.length, 'typing issued a request').toBe(before);
+  });
 
-    expect(
-      await screen.findByText('این نام کاربری از شکلی نیست که اینجا ذخیره می‌شود.'),
-    ).toBeInTheDocument();
-    expect(api.calls.length, 'a request was spent on a string that cannot be one').toBe(before);
+  it('names the customer by Telegram id, never by the internal uuid', async () => {
+    stubApi(list([service({ customerTelegramUserId: '5559876543', customerUsername: null })]));
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('5559876543').closest('a')).not.toBeNull();
   });
 
   /**

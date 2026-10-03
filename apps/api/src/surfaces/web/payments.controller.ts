@@ -7,6 +7,7 @@ import {
   COMMERCE_ERROR_CODES,
   COMPENSATION_ROUTES,
   PAYMENT_ROUTES,
+  classifyListSearch,
   compensationListQuerySchema,
   errors,
   paymentIdSchema,
@@ -95,7 +96,9 @@ export class PaymentsController {
       ...(query.orderId === undefined ? {} : { orderId: query.orderId }),
       ...(query.reference === undefined ? {} : { reference: query.reference }),
       ...(query.disposition === undefined ? {} : { disposition: query.disposition }),
+      ...(query.q === undefined ? {} : { q: query.q }),
     });
+    const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.payments.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: paymentCursorFrom(page.cursor) }),
@@ -106,6 +109,7 @@ export class PaymentsController {
         ...(page.orderId === undefined ? {} : { orderId: page.orderId as OrderId }),
         ...(page.reference === undefined ? {} : { reference: page.reference }),
         ...(page.disposition === undefined ? {} : { disposition: page.disposition }),
+        ...(text === null ? {} : { text }),
       },
     });
     // Who paid, as Telegram knows them — one read for the page (D7).
@@ -407,6 +411,7 @@ function toGatewayInvoiceView(
     provider: invoice.provider,
     providerOrderId: invoice.providerOrderId,
     providerInvoiceId: invoice.providerInvoiceId,
+    hintedPaymentId: invoice.hintedPaymentId,
     creationState: invoice.creationState,
     creationErrorCode: invoice.creationErrorCode,
     providerStatus: invoice.providerStatus,

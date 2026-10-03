@@ -54,8 +54,12 @@ const BOT_A2 = SEED_IDS.botA2 as BotInstanceId;
 const BOT_B = SEED_IDS.botB1 as BotInstanceId;
 const MARYAM = 910910;
 const REZA = 920920;
-/** 1 Star = 1,300 Toman, the owner's `toman_per_star`. */
-const RATE = 1_300n;
+/**
+ * 1 Star = 1,300 Toman, the owner's `toman_per_star` — reached, since spec §8, only through
+ * the central rate: 130,000 Toman per USDT over 100 Stars per USDT. No manual rate exists.
+ */
+const USDT_TOMAN = 130_000n;
+const STARS_PER_USDT = '100';
 
 const OPEN_ROUTE: PaymentGatewayConfig = {
   displayName: null,
@@ -190,12 +194,50 @@ describe('Telegram Stars (Package A)', () => {
     return api.container.paymentGateways.configure(scope, actor, {
       idempotencyKey: `stars-cfg-${JSON.stringify(config, (_k, v: unknown) => (typeof v === 'bigint' ? String(v) : v))}`,
       provider: 'TELEGRAM_STARS',
-      config: { ...OPEN_ROUTE, providerUnitRateMinor: RATE, ...config },
+      config: { ...OPEN_ROUTE, ...config },
     });
+  }
+
+  async function setSetting(key: 'stars.per_usdt', value: string) {
+    const current = await api.container.settingsService.get(tenantA, owner, key);
+    return api.container.settingsService.set(tenantA, owner, {
+      key,
+      value,
+      expectedVersion: current.version,
+      idempotencyKey: `setting-${String((updateId += 1))}`,
+    });
+  }
+
+  async function centralFxOn() {
+    const current = await api.container.featureFlagResolver.resolve(tenantA, 'central_fx');
+    if (current.enabled) return;
+    await api.container.featureFlags.set(tenantA, owner, {
+      key: 'central_fx',
+      enabled: true,
+      expectedVersion: current.version,
+      idempotencyKey: `flag-${String((updateId += 1))}`,
+      reason: 'Telegram Stars integration test.',
+    });
+  }
+
+  /** The central USDT quote, stored as the refresh lane would store it (fetched now). */
+  async function storeQuote(tomanPerUsdt: bigint) {
+    await api.container.database.db.execute(
+      sql`INSERT INTO fx_quotes (tenant_id, base_asset, quote_currency, rate_mantissa, rate_scale,
+                                 source, fetched_at, quote_id, policy_version)
+          VALUES (${tenantA.tenantId}, 'USDT', 'IRT', ${tomanPerUsdt}, 0, 'NOBITEX', now(),
+                  ${`v1:NOBITEX:USDT-IRT:${String(tomanPerUsdt)}e-0:-:${String(Date.now())}`}, 1)
+          ON CONFLICT (tenant_id, base_asset, quote_currency) DO UPDATE
+            SET rate_mantissa = EXCLUDED.rate_mantissa, fetched_at = EXCLUDED.fetched_at,
+                quote_id = EXCLUDED.quote_id`,
+    );
   }
 
   async function enableStars(config: Parameters<typeof configureStars>[0] = {}) {
     await configureStars(config);
+    await centralFxOn();
+    await setSetting('stars.per_usdt', STARS_PER_USDT);
+    await storeQuote(USDT_TOMAN);
     await api.container.paymentGateways.setStatus(tenantA, owner, {
       idempotencyKey: `stars-on-${String((updateId += 1))}`,
       provider: 'TELEGRAM_STARS',
@@ -223,6 +265,8 @@ describe('Telegram Stars (Package A)', () => {
       provider_unit: string;
       sent_amount: string;
       conversion_rate_minor: string | null;
+      conversion_policy: string;
+      fx_rate_mantissa: string | null;
       bot_instance_id: string | null;
       provider_charge_id: string | null;
       provider_paid: boolean | null;
@@ -231,7 +275,8 @@ describe('Telegram Stars (Package A)', () => {
       late_completion_observed_at: Date | null;
     }>(
       sql`SELECT provider_order_id, provider_invoice_id, provider_unit, sent_amount::text AS sent_amount,
-                 conversion_rate_minor::text AS conversion_rate_minor, bot_instance_id,
+                 conversion_rate_minor::text AS conversion_rate_minor, conversion_policy,
+                 fx_rate_mantissa::text AS fx_rate_mantissa, bot_instance_id,
                  provider_charge_id, provider_paid, creation_state, outcome, late_completion_observed_at
           FROM gateway_invoices WHERE payment_id = ${paymentId}`,
     );
@@ -320,7 +365,7 @@ describe('Telegram Stars (Package A)', () => {
   // =====================================================================================
 
   describe('the route (A1)', () => {
-    it('starts disabled, and cannot be switched on without a rate', async () => {
+    it('starts disabled, and cannot be switched on while nothing could price it (spec §8: the central rate only)', async () => {
       const [route] = await rows<{ status: string; provider_unit_rate_minor: string | null }>(
         sql`SELECT status, provider_unit_rate_minor::text AS provider_unit_rate_minor
             FROM payment_gateways WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS'`,
@@ -337,14 +382,18 @@ describe('Telegram Stars (Package A)', () => {
       expect(isNexaError(refused) && refused.code).toBe(
         COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
       );
-      expect(isNexaError(refused) && refused.details).toMatchObject({ reason: 'RATE_MISSING' });
+      expect(isNexaError(refused) && refused.details).toMatchObject({
+        reason: 'FX_UNAVAILABLE',
+        detail: 'DISABLED',
+      });
 
       await enableStars();
-      const [enabled] = await rows<{ status: string; provider_unit_rate_minor: string }>(
+      const [enabled] = await rows<{ status: string; provider_unit_rate_minor: string | null }>(
         sql`SELECT status, provider_unit_rate_minor::text AS provider_unit_rate_minor
             FROM payment_gateways WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS'`,
       );
-      expect(enabled).toEqual({ status: 'ACTIVE', provider_unit_rate_minor: '1300' });
+      // Enabled with no manual rate at all.
+      expect(enabled).toEqual({ status: 'ACTIVE', provider_unit_rate_minor: null });
     });
 
     it('is created DISABLED by the boot reconcile for a tenant that has no row', async () => {
@@ -364,12 +413,14 @@ describe('Telegram Stars (Package A)', () => {
       expect(route).toEqual({ status: 'DISABLED', provider_unit_rate_minor: null });
     });
 
-    it('refuses clearing the rate of an enabled route, and a rate on a route that has no conversion', async () => {
+    it('refuses a manual rate on the Stars route (spec §8) and on a route that has no conversion', async () => {
       await enableStars();
-      const cleared = await configureStars({ providerUnitRateMinor: null }).catch(
+      const stars = await configureStars({ providerUnitRateMinor: 1_300n }).catch(
         (error: unknown) => error,
       );
-      expect(isNexaError(cleared) && cleared.details).toMatchObject({ reason: 'RATE_MISSING' });
+      expect(isNexaError(stars) && stars.code).toBe(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID);
+      // Clearing one (a legacy value) is harmless and accepted on the enabled route.
+      await configureStars({ providerUnitRateMinor: null });
 
       const onTonPays = await api.container.paymentGateways
         .configure(tenantA, owner, {
@@ -399,8 +450,9 @@ describe('Telegram Stars (Package A)', () => {
   });
 
   describe('the conversion and the invoice (A1, A2)', () => {
-    it('asks for ceil(payable / rate) Stars, snapshots the rate and bot, and sends one XTR price with no provider token', async () => {
-      // 5% fee: principal 100,000 + fee 5,000 = payable 105,000; 105,000 / 1,300 = 80.77 → 81.
+    it('asks for ceil(payable / (usdt rate / ratio)) Stars, snapshots the central rate and bot, and sends one XTR price with no provider token', async () => {
+      // 5% fee: principal 100,000 + fee 5,000 = payable 105,000; 130,000 / 100 = 1,300 Toman
+      // per Star; 105,000 / 1,300 = 80.77 → 81.
       await enableStars({ customerFeeBasisPoints: 500 });
       const { attempt, invoice } = await invoicedTopup(100_000n);
 
@@ -409,7 +461,9 @@ describe('Telegram Stars (Package A)', () => {
       expect(invoice).toMatchObject({
         provider_unit: 'XTR',
         sent_amount: '81',
-        conversion_rate_minor: '1300',
+        conversion_policy: 'CENTRAL_FX',
+        conversion_rate_minor: null,
+        fx_rate_mantissa: '130000',
         bot_instance_id: BOT_A,
         creation_state: 'CREATED',
       });
@@ -447,15 +501,15 @@ describe('Telegram Stars (Package A)', () => {
       expect(invoice.provider_invoice_id).toMatch(/^message:\d+:\d+$/u);
     });
 
-    it('keeps an open invoice at the rate it was issued at when the rate changes, and the row refuses a rewrite', async () => {
+    it('keeps an open invoice at the rate it was issued at when the central rate moves, and the row refuses a rewrite', async () => {
       await enableStars();
       const { attempt, invoice } = await invoicedTopup(100_000n);
       expect(invoice.sent_amount).toBe('77'); // 100,000 / 1,300 = 76.92 → 77
 
-      await configureStars({ providerUnitRateMinor: 1_000n });
+      await storeQuote(100_000n); // 1,000 Toman per Star now
       const after = await invoiceOf(attempt.payment.id);
       expect(after.sent_amount).toBe('77');
-      expect(after.conversion_rate_minor).toBe('1300');
+      expect(after.fx_rate_mantissa).toBe('130000');
 
       const refusal = (query: ReturnType<typeof sql>) =>
         api.container.database.db.execute(query).then(
@@ -469,13 +523,13 @@ describe('Telegram Stars (Package A)', () => {
       ).toMatch(/snapshot is immutable/u);
       expect(
         await refusal(
-          sql`UPDATE gateway_invoices SET conversion_rate_minor = 1 WHERE payment_id = ${attempt.payment.id}`,
+          sql`UPDATE gateway_invoices SET fx_rate_mantissa = 1 WHERE payment_id = ${attempt.payment.id}`,
         ),
       ).toMatch(/snapshot is immutable/u);
 
       // A NEW attempt for another amount is priced at the new rate.
       const next = await invoicedTopup(50_000n);
-      expect(next.invoice).toMatchObject({ sent_amount: '50', conversion_rate_minor: '1000' });
+      expect(next.invoice).toMatchObject({ sent_amount: '50', fx_rate_mantissa: '100000' });
     });
   });
 

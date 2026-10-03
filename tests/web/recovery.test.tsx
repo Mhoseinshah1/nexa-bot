@@ -114,6 +114,8 @@ function installationKey(overrides: Record<string, unknown> = {}): Record<string
 const status = (overrides: Record<string, unknown> = {}) => ({
   scheduleEnabled: true,
   intervalMs: 86_400_000,
+  scheduleSource: { enabled: 'SETTING', interval: 'SETTING' },
+  deliveryDestination: 'OPS_GROUP_TOPIC',
   lastSucceededAt: '2026-09-09T02:00:00.000Z',
   running: null,
   unknownDeliveries: 0,

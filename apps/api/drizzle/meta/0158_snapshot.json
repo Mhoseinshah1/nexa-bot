@@ -1,5 +1,5 @@
 {
-  "id": "07ed33d6-8d3e-434a-b1b9-200c97ed3b0c",
+  "id": "b71e59fc-6fd1-46fd-98fa-5c9bbc58ccf5",
   "prevId": "7523dd21-3308-40c6-be83-0348c094b8bc",
   "version": "7",
   "dialect": "postgresql",
@@ -8310,6 +8310,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "hinted_payment_id": {
+          "name": "hinted_payment_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -8527,7 +8533,7 @@
         },
         "gateway_invoices_provider_check": {
           "name": "gateway_invoices_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "gateway_invoices_creation_state_check": {
           "name": "gateway_invoices_creation_state_check",
@@ -8572,6 +8578,14 @@
         "gateway_invoices_tonpays_telegram_check": {
           "name": "gateway_invoices_tonpays_telegram_check",
           "value": "provider <> 'TONPAYS_TELEGRAM' OR (bot_instance_id IS NOT NULL AND provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT')"
+        },
+        "gateway_invoices_hinted_payment_id_check": {
+          "name": "gateway_invoices_hinted_payment_id_check",
+          "value": "hinted_payment_id IS NULL OR hinted_payment_id ~ '^[0-9]{1,20}$'"
+        },
+        "gateway_invoices_nowpayments_check": {
+          "name": "gateway_invoices_nowpayments_check",
+          "value": "provider <> 'NOWPAYMENTS' OR (provider_unit = 'USD' AND conversion_policy = 'CENTRAL_FX' AND bot_instance_id IS NULL)"
         },
         "gateway_invoices_card_check": {
           "name": "gateway_invoices_card_check",
@@ -9149,149 +9163,6 @@
         "gateway_receipt_submissions_bounds_check": {
           "name": "gateway_receipt_submissions_bounds_check",
           "value": "attempts >= 0 AND (byte_length IS NULL OR byte_length >= 0) AND (declared_size IS NULL OR declared_size > 0) AND (error_code IS NULL OR length(error_code) BETWEEN 1 AND 64) AND (provider_status IS NULL OR length(provider_status) BETWEEN 1 AND 32) AND length(telegram_file_unique_id) BETWEEN 1 AND 255 AND length(telegram_file_id) BETWEEN 1 AND 1024"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.installation_keys": {
-      "name": "installation_keys",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "key_id": {
-          "name": "key_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "fingerprint": {
-          "name": "fingerprint",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "wrapped_material": {
-          "name": "wrapped_material",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "wrapped_under_key_id": {
-          "name": "wrapped_under_key_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source": {
-          "name": "source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kit_id": {
-          "name": "kit_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "imported_at": {
-          "name": "imported_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "imported_by_admin_id": {
-          "name": "imported_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "imported_by_label": {
-          "name": "imported_by_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "removed_at": {
-          "name": "removed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "removed_by_label": {
-          "name": "removed_by_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "restored_at": {
-          "name": "restored_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "installation_keys_key_id_idx": {
-          "name": "installation_keys_key_id_idx",
-          "columns": [
-            {
-              "expression": "key_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "installation_keys_wrapped_under_idx": {
-          "name": "installation_keys_wrapped_under_idx",
-          "columns": [
-            {
-              "expression": "wrapped_under_key_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "installation_keys_source_check": {
-          "name": "installation_keys_source_check",
-          "value": "source IN ('RECOVERY_KIT')"
-        },
-        "installation_keys_key_id_check": {
-          "name": "installation_keys_key_id_check",
-          "value": "key_id ~ '^[A-Za-z0-9._-]{1,64}$'"
-        },
-        "installation_keys_fingerprint_check": {
-          "name": "installation_keys_fingerprint_check",
-          "value": "fingerprint ~ '^[0-9a-f]{32}$'"
-        },
-        "installation_keys_wrapped_under_check": {
-          "name": "installation_keys_wrapped_under_check",
-          "value": "wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)"
-        },
-        "installation_keys_tombstone_check": {
-          "name": "installation_keys_tombstone_check",
-          "value": "(removed_at IS NULL) = (wrapped_material IS NOT NULL) AND (wrapped_material IS NULL) = (wrapped_under_key_id IS NULL)"
         }
       },
       "isRLSEnabled": false
@@ -14215,7 +14086,7 @@
       "checkConstraints": {
         "payment_gateway_call_budgets_provider_check": {
           "name": "payment_gateway_call_budgets_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payment_gateway_call_budgets_used_check": {
           "name": "payment_gateway_call_budgets_used_check",
@@ -14263,6 +14134,36 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "webhook_secret_ciphertext": {
+          "name": "webhook_secret_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_secret_key_id": {
+          "name": "webhook_secret_key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_secret_set_at": {
+          "name": "webhook_secret_set_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_check_at": {
+          "name": "last_check_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_check_result": {
+          "name": "last_check_result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -14336,9 +14237,17 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "payment_gateway_credentials_webhook_secret_check": {
+          "name": "payment_gateway_credentials_webhook_secret_check",
+          "value": "(webhook_secret_ciphertext IS NULL) = (webhook_secret_key_id IS NULL) AND (webhook_secret_ciphertext IS NULL) = (webhook_secret_set_at IS NULL)"
+        },
+        "payment_gateway_credentials_last_check_check": {
+          "name": "payment_gateway_credentials_last_check_check",
+          "value": "(last_check_at IS NULL) = (last_check_result IS NULL) AND (last_check_result IS NULL OR length(last_check_result) BETWEEN 1 AND 64)"
+        },
         "payment_gateway_credentials_provider_check": {
           "name": "payment_gateway_credentials_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         }
       },
       "isRLSEnabled": false
@@ -14532,7 +14441,7 @@
       "checkConstraints": {
         "payment_gateways_provider_check": {
           "name": "payment_gateways_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payment_gateways_status_check": {
           "name": "payment_gateways_status_check",
@@ -15337,7 +15246,7 @@
         },
         "payments_gateway_provider_check": {
           "name": "payments_gateway_provider_check",
-          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM')"
+          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payments_topup_cashback_percent_check": {
           "name": "payments_topup_cashback_percent_check",
@@ -15349,7 +15258,7 @@
         },
         "payments_provider_review_check": {
           "name": "payments_provider_review_check",
-          "value": "(provider_review_started_at IS NULL) = (provider_review_until IS NULL) AND (provider_review_until IS NULL OR (method = 'GATEWAY' AND gateway_provider IN ('TONPAYS_TELEGRAM') AND expires_at IS NOT NULL AND provider_review_started_at < expires_at AND provider_review_until = provider_review_started_at + interval '24 hours'))"
+          "value": "(provider_review_started_at IS NULL) = (provider_review_until IS NULL) AND (provider_review_until IS NULL OR (method = 'GATEWAY' AND gateway_provider IN ('TONPAYS_TELEGRAM', 'NOWPAYMENTS') AND expires_at IS NOT NULL AND provider_review_started_at < expires_at AND provider_review_until = provider_review_started_at + interval '24 hours'))"
         }
       },
       "isRLSEnabled": false
@@ -17225,7 +17134,7 @@
         },
         "recovery_requests_failure_code_check": {
           "name": "recovery_requests_failure_code_check",
-          "value": "failure_code IS NULL OR failure_code IN ('recovery.upload_rejected', 'recovery.archive_malformed', 'recovery.archive_auth_failed', 'recovery.archive_foreign_key', 'recovery.checksum_mismatch', 'recovery.manifest_invalid', 'recovery.restore_test_failed', 'recovery.restored_database_empty', 'recovery.migration_state_unreadable', 'recovery.migration_incompatible', 'recovery.confirmation_invalid', 'recovery.emergency_backup_failed', 'recovery.emergency_backup_busy', 'recovery.quiesce_failed', 'recovery.candidate_create_failed', 'recovery.candidate_restore_failed', 'recovery.candidate_validation_failed', 'recovery.cutover_failed', 'recovery.readiness_failed', 'recovery.lease_expired', 'recovery.candidate_keys_missing', 'recovery.internal')"
+          "value": "failure_code IS NULL OR failure_code IN ('recovery.upload_rejected', 'recovery.archive_malformed', 'recovery.archive_auth_failed', 'recovery.archive_foreign_key', 'recovery.checksum_mismatch', 'recovery.manifest_invalid', 'recovery.restore_test_failed', 'recovery.restored_database_empty', 'recovery.migration_state_unreadable', 'recovery.migration_incompatible', 'recovery.confirmation_invalid', 'recovery.emergency_backup_failed', 'recovery.emergency_backup_busy', 'recovery.quiesce_failed', 'recovery.candidate_create_failed', 'recovery.candidate_restore_failed', 'recovery.candidate_validation_failed', 'recovery.cutover_failed', 'recovery.readiness_failed', 'recovery.lease_expired', 'recovery.internal')"
         },
         "recovery_requests_finished_at_check": {
           "name": "recovery_requests_finished_at_check",

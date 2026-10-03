@@ -154,10 +154,14 @@ const RECORDS = [
  * to the record's layer table (a review fix now holds their rows a second way).
  * 2635 → 2638: the Codex review of #136 — four CDX rows added, and REV-F6 moved to the layer
  * table (the stamp's own transaction now re-decides the window).
- * 2638 → 2648: the Recovery Kit (ADR-0032), `docs/recovery-kit-falsification.md` — ten rows.
- * 2648 → 2665: its PR #144 review fixes — seventeen rows, RK-11..RK-27.
+ * 2638 → 2636: the button icon retired (owner order 2026-10-02, round-T audit §16) — eight
+ * end-to-end icon citations of `telegram-reply-keyboard.test.ts` left the T2 record with their
+ * tests, and T3-07 and T3-27 were retired (−10); R-01 and T3-29..T3-32 added (+8). Each
+ * record says so above its table.
+ * 2636 → 2646: the Recovery Kit (ADR-0032), `docs/recovery-kit-falsification.md` — ten rows.
+ * 2646 → 2663: its PR #144 review fixes — seventeen rows, RK-11..RK-27.
  */
-const EXPECTED = 2665;
+const EXPECTED = 2663;
 /**
  * A table whose last column is one of these is making citations.
  *

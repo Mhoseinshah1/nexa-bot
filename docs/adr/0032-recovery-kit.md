@@ -92,7 +92,7 @@ different bytes — an attempt to replace the active key — is refused whole.
 
 ### 5. Storage that survives the restore it exists for
 
-Imported keys live in `installation_keys` (migration 0158), **installation-wide,
+Imported keys live in `installation_keys` (migration 0160), **installation-wide,
 with no tenant column and no tenant-bound encryption context**. Each key is
 AES-256-GCM-wrapped under the active configured key, with
 `nexa.installation_key.v1|keyId|wrappingKeyId` as associated data. It is not a
@@ -132,7 +132,7 @@ satisfies it.
 
 ### 7. The lifecycle, and its permissions
 
-Three new CRITICAL permissions, owner-only (backfilled in 0158):
+Three new CRITICAL permissions, owner-only (backfilled in 0160):
 
 | Operation | Permission            | Also requires                                                                                                   |
 | --------- | --------------------- | --------------------------------------------------------------------------------------------------------------- |

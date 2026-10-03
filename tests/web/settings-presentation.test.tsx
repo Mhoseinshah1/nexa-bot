@@ -498,7 +498,8 @@ describe('the settings page', () => {
    * its own: it names no feature switch, because the `trials` flag is gone.
    */
   it('draws no retired trial control, and the trial allowance without a feature switch', async () => {
-    expect(SETTINGS_RETIRED).toEqual(['trial.product_id']);
+    // Spec §8 retired the Stars pricing mode beside it.
+    expect(SETTINGS_RETIRED).toEqual(['trial.product_id', 'stars.pricing_mode']);
     for (const key of SETTINGS_RETIRED) {
       expect(settingDefinition(key).consumer, key).toBe('PLANNED');
     }

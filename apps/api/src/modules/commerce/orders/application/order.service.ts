@@ -71,7 +71,14 @@ import type {
 } from '../../custom-service/application/ports.js';
 import type { PricingService } from '../../pricing/application/pricing.service.js';
 import type { DiscountCodeCaptureRepository } from '../../pricing/application/ports.js';
-import type { OrderCursor, OrderPage, OrderRecord, OrderRepository, OrderSearch } from './ports.js';
+import type {
+  OrderCursor,
+  OrderCustomerIdentity,
+  OrderPage,
+  OrderRecord,
+  OrderRepository,
+  OrderSearch,
+} from './ports.js';
 
 /** What an operator needs to read the order list and an order's detail. */
 export const ORDER_VIEW_PERMISSION: PermissionKey = 'orders.view';
@@ -280,6 +287,23 @@ export class OrderService {
     await this.deps.guard.check(scope, actor, ORDER_VIEW_PERMISSION);
     const limit = Math.min(Math.max(query.limit ?? ORDER_PAGE_DEFAULT, 1), ORDER_PAGE_MAX);
     return this.deps.repository.list(scope, query.search, limit, query.cursor ?? null);
+  }
+
+  /**
+   * Who a page of orders' customers are on Telegram (spec §10): the operator-facing
+   * identity, so the list shows a Telegram id rather than an internal uuid. Charged like
+   * every other read of an order, and one query for the page.
+   */
+  async customerIdentities(
+    scope: TenantContext,
+    actor: ActorContext,
+    orders: readonly OrderRecord[],
+  ): Promise<ReadonlyMap<UserId, OrderCustomerIdentity>> {
+    await this.deps.guard.check(scope, actor, ORDER_VIEW_PERMISSION);
+    return this.deps.repository.customerIdentities(
+      scope,
+      orders.map((order) => order.customerId),
+    );
   }
 
   async get(scope: TenantContext, actor: ActorContext, id: string): Promise<OrderRecord> {

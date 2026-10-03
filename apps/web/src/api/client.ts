@@ -1010,6 +1010,7 @@ export function fetchCustomers(
     telegramUserId?: string;
     username?: string;
     status?: CustomerStatus;
+    q?: string;
   } = {},
 ): Promise<CustomerListResponse> {
   const params = new URLSearchParams();
@@ -1020,6 +1021,8 @@ export function fetchCustomers(
   }
   if (query.username !== undefined && query.username !== '') params.set('username', query.username);
   if (query.status !== undefined) params.set('status', query.status);
+  /** The page's ONE free-text search (spec §10); the server decides what it is. */
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CUSTOMER_ROUTES.list}?${suffix}` : CUSTOMER_ROUTES.list,
@@ -1261,6 +1264,7 @@ export function fetchOrders(
     state?: OrderState;
     customerId?: string;
     productId?: string;
+    q?: string;
   } = {},
 ): Promise<OrderListResponse> {
   const params = new URLSearchParams();
@@ -1273,6 +1277,8 @@ export function fetchOrders(
   if (query.productId !== undefined && query.productId !== '') {
     params.set('productId', query.productId);
   }
+  /** The page's ONE free-text search (spec §10); the server decides what it is. */
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${ORDER_ROUTES.list}?${suffix}` : ORDER_ROUTES.list,
@@ -1339,6 +1345,7 @@ export function fetchPayments(
     orderId?: string;
     reference?: string;
     disposition?: ReceiptDisposition;
+    q?: string;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1354,6 +1361,8 @@ export function fetchPayments(
   if (query.reference !== undefined && query.reference !== '') {
     params.set('reference', query.reference);
   }
+  /** The page's ONE free-text search (spec §10); the server decides what it is. */
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
@@ -1379,6 +1388,7 @@ export function fetchServices(
     orderId?: string;
     panelId?: string;
     providerUsername?: string;
+    q?: string;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
@@ -1406,6 +1416,8 @@ export function fetchServices(
   if (query.providerUsername !== undefined && query.providerUsername !== '') {
     params.set('providerUsername', query.providerUsername);
   }
+  /** The page's ONE free-text search (spec §10); the server decides what it is. */
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${SERVICE_ROUTES.list}?${suffix}` : SERVICE_ROUTES.list,
@@ -1809,6 +1821,25 @@ export function setPaymentGatewayCredential(input: {
 }): Promise<PaymentGatewayResponse> {
   const { provider, ...body } = input;
   return post(PAYMENT_GATEWAY_ROUTES.credential(provider), body, paymentGatewayResponseSchema);
+}
+
+/** Replaces a signed route's webhook secret (NOWPayments' IPN secret). Write-only. */
+export function setPaymentGatewayWebhookSecret(input: {
+  provider: string;
+  idempotencyKey: string;
+  secret: string;
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.webhookSecret(provider), body, paymentGatewayResponseSchema);
+}
+
+/** The operator's read-only credential check; the answer carries the route's last check. */
+export function checkPaymentGatewayCredential(input: {
+  provider: string;
+  idempotencyKey: string;
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.check(provider), body, paymentGatewayResponseSchema);
 }
 
 /**

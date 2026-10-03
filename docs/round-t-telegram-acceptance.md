@@ -9,6 +9,12 @@ The owner runs this on **staging**, never on production. It consolidates R-ACC-1
 `docs/round-t-button-builder-audit.md` §13/§15 and `docs/round-t-final-review.md` §8, plus
 the two QA findings that need a real client (QA-2, QA-3 in `docs/round-t-qa-report.md`).
 
+**Amended 2026-10-02 (owner order).** The builder's button icon («آیکون دکمه») and its
+screen slot («آیکون معنایی») are retired (`docs/round-t-button-builder-audit.md` §16). On a
+build that contains that change, **R-ACC-2 is replaced by R-ACC-2′** below, R-ACC-3 taps styled
+keys only, QA-3 is obsolete, and R-ACC-9 checks the rebuilt drag. R-ACC-2 as written stays
+for a staging still on `v0.4.x`.
+
 What counts as evidence here is only what an operator can actually observe: the Telegram
 client (screenshots), the Web Admin, the database queries below, and the operator's own
 direct Bot API call in R-ACC-2. The application deliberately does **not** log a customer's
@@ -167,7 +173,32 @@ restore the baseline revision and publish it, then reproduce the refusal with yo
 (R-ACC-2 part A's procedure, with a `style` field instead of an icon) to capture Telegram's
 exact response for `OQ-T-API-01`.
 
+## R-ACC-2′ — after the icon's retirement: a layout published WITH an icon draws none
+
+Run this instead of R-ACC-2 on a build containing the 2026-10-02 change.
+
+**Steps.**
+
+1. On `v0.4.x`, with Bot E eligible (Appearance test `SENT`, `wallet` slot configured), publish
+   a layout whose `wallet` key carries the wallet icon (R-ACC-2 part B, steps 1–2). `/start` on
+   Bot E: the icon is drawn (screenshot).
+2. Update staging to the build under test (`botctl update VERSION`). Do not publish anything.
+3. `/start` on Bot E from all three clients.
+4. `/bot-buttons`: no «آیکون دکمه» and no «آیکون معنایی» anywhere; the editor, the customer
+   preview and the live preview draw no icon; the state badge is not «unsaved» or «differs»
+   because of the icon alone.
+5. `botctl rollback` (no publish in between), `/start` on Bot E.
+
+**Pass.** Step 3: the same rows, labels and styles as step 1, **no** icon, one message per
+`/start`, and Bot E's `custom_emoji_test_outcome` still `SENT`. Step 5: the icon is drawn
+again (the stored snapshot was never rewritten). Then update again and publish once; after a
+second rollback the icon stays gone (the new snapshot carries `iconSlot: null`).
+
+**Record.** Screenshots of steps 1, 3 and 5; the evidence query for Bot E's outcome.
+
 ## R-ACC-2 — icons: eligible bot draws; the ineligible bot's refusal, recorded first-hand
+
+_Superseded on builds containing the 2026-10-02 change — see R-ACC-2′. Kept for `v0.4.x`._
 
 ### Part A — what Telegram answers an ineligible bot (your own probe, _fixture_)
 
@@ -272,6 +303,8 @@ show two glyphs (icon + emoji); the builder warns (`bb-icon-doubled`). Screensho
 client shows; the remedy is a label edit on **Texts**, not a code change.
 
 ## R-ACC-3 — a tap on a styled or iconed key routes by its label
+
+_On a build containing the 2026-10-02 change no key carries an icon: tap the styled keys._
 
 **Steps.** With the R-ACC-1/2 layout published, from the customer account tap every placed key
 on Bot E: catalog, services, wallet (iconed), help, apps, tickets, and — after opening their
@@ -439,23 +472,34 @@ retargeted to the key's own button, so the key drag never starts (a row drag wor
 whether this reproduces on a real Android Chrome and on iOS Safari. If it does, the Inspector's
 move buttons and the keyboard remain the working path, and the defect stands.
 
+**On a build containing the 2026-10-02 drag pass, also check:** the grip is a larger button
+(the ☰ beside the label); a tap on it without moving changes nothing; once the finger moves, a
+ghost of the key rides above the finger, the target row is outlined and a caret (or, between
+rows, a line with «رها کنید تا ردیف تازه‌ای اینجا ساخته شود») shows where it will land, and
+nothing on the page shifts while dragging; dropping where the key already is changes nothing;
+near the top or bottom of the screen the page scrolls. The CDP probe
+`scripts/web-shots/bot-buttons-drag.mjs` passes in headless Chromium but could not reproduce
+QA-2 on the old grip, so this real-phone record is still the answer.
+
 ---
 
 ## Sign-off
 
-| Item    | Result | Date | `botctl version` | Recorded by | Notes                           |
-| ------- | ------ | ---- | ---------------- | ----------- | ------------------------------- |
-| R-ACC-0 |        |      |                  |             | baseline revision:              |
-| R-ACC-1 |        |      |                  |             |                                 |
-| R-ACC-2 |        |      |                  |             | Bot I case (a/b/c/d):           |
-| R-ACC-3 |        |      |                  |             |                                 |
-| R-ACC-4 |        |      |                  |             |                                 |
-| R-ACC-5 |        |      |                  |             |                                 |
-| R-ACC-6 |        |      |                  |             |                                 |
-| R-ACC-7 |        |      |                  |             |                                 |
-| R-ACC-8 | n/a    |      |                  |             | tests only (`ports.ts:151-159`) |
-| R-ACC-9 |        |      |                  |             |                                 |
+| Item     | Result | Date | `botctl version` | Recorded by | Notes                           |
+| -------- | ------ | ---- | ---------------- | ----------- | ------------------------------- |
+| R-ACC-0  |        |      |                  |             | baseline revision:              |
+| R-ACC-1  |        |      |                  |             |                                 |
+| R-ACC-2  |        |      |                  |             | Bot I case (a/b/c/d):           |
+| R-ACC-2′ |        |      |                  |             | replaces R-ACC-2 after 10-02    |
+| R-ACC-3  |        |      |                  |             |                                 |
+| R-ACC-4  |        |      |                  |             |                                 |
+| R-ACC-5  |        |      |                  |             |                                 |
+| R-ACC-6  |        |      |                  |             |                                 |
+| R-ACC-7  |        |      |                  |             |                                 |
+| R-ACC-8  | n/a    |      |                  |             | tests only (`ports.ts:151-159`) |
+| R-ACC-9  |        |      |                  |             |                                 |
 
-Round T is accepted when R-ACC-0..5 pass (T4 §9) and R-ACC-6, 7 and 9 are recorded. Any
+Round T is accepted when R-ACC-0..5 pass (T4 §9) and R-ACC-6, 7 and 9 are recorded — with
+R-ACC-2′ in place of R-ACC-2 on a build containing the 2026-10-02 change. Any
 observed Telegram sentence goes into `docs/open-questions.md` under its `OQ-T-API-*` entry and
 into a test fixture in the same commit.

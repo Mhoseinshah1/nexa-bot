@@ -113,7 +113,28 @@ export interface CustomerServiceDeps {
   };
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * Spec §9: whether this installation lets a customer stop promotional messages at all
+   * (`customer_marketing_opt_out`). Optional so a narrow test wiring need not supply it;
+   * absent reads as ON, the behaviour every installation had before the switch existed.
+   */
+  readonly features?: {
+    isEnabled(
+      scope: TenantContext,
+      key: typeof MARKETING_OPT_OUT_FLAG,
+      tx?: unknown,
+    ): Promise<boolean>;
+  };
 }
+
+/** Spec §9: the switch that lets a customer stop MARKETING broadcasts themselves. */
+export const MARKETING_OPT_OUT_FLAG = 'customer_marketing_opt_out' as const;
+
+/**
+ * Spec §9: the refusal `setMarketingOptOut` answers while the switch is off. A conflict, not
+ * a denial — nobody lacks a permission; the installation does not offer the choice now.
+ */
+export const MARKETING_OPT_OUT_DISABLED_REASON = 'MARKETING_OPT_OUT_DISABLED';
 
 /**
  * Customers.
@@ -421,6 +442,7 @@ export class CustomerService {
     const searching =
       search.telegramUserId !== undefined ||
       search.username !== undefined ||
+      search.text !== undefined ||
       (search.usernamePrefix !== undefined && search.usernamePrefix !== '');
     if (searching) {
       await this.deps.guard.check(scope, actor, CUSTOMER_SEARCH_PERMISSION);
@@ -566,6 +588,16 @@ export class CustomerService {
    * Idempotent under the update's key; a replay answers the first result. The change is a
    * conditional UPDATE, audited, and a `CustomerMarketingOptOutChanged` event.
    */
+  /**
+   * Spec §9: whether a customer may change their promotional preference right now. A
+   * courtesy for the surface (draw the button or not, answer /stop with the refusal); the
+   * write below decides again inside its own transaction.
+   */
+  async marketingOptOutAllowed(scope: TenantContext, tx?: unknown): Promise<boolean> {
+    if (this.deps.features === undefined) return true;
+    return this.deps.features.isEnabled(scope, MARKETING_OPT_OUT_FLAG, tx);
+  }
+
   async setMarketingOptOut(
     scope: TenantContext,
     actor: ActorContext,
@@ -612,6 +644,20 @@ export class CustomerService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
             'This installation has stopped accepting work.',
+          );
+        }
+        /*
+         * Spec §9, authoritative: while the installation does not let customers stop
+         * promotions, /stop and every old opt-out or opt-in button change NOTHING — the
+         * stored preference is kept exactly as it is (it becomes effective again when the
+         * switch is turned back on). Decided here, inside the write's transaction, so a
+         * stale callback cannot slip past a surface that checked before the switch moved.
+         */
+        if (!(await this.marketingOptOutAllowed(scope, tx))) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'This installation does not let customers change their promotional preference.',
+            { reason: MARKETING_OPT_OUT_DISABLED_REASON },
           );
         }
         const before = await this.deps.repository.findById(scope, customerId, tx);

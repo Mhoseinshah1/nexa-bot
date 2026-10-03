@@ -139,6 +139,13 @@ export const ADMIN_CAPTURE_PURPOSES = [
    */
   'SERVICE_REFUND_AMOUNT',
   'SERVICE_REFUND_REJECT_REASON',
+  /**
+   * Spec §7: «تنظیم ویدیو» — the tutorial VIDEO for one client app (`client_app_id`). It reads
+   * neither an amount nor a reason: the next video message the same administrator sends to
+   * the same bot, newer than the tap, is stored as that app's tutorial and closes it
+   * CONFIRMED. In this table so the one-open-prompt index covers it with every other prompt.
+   */
+  'CLIENT_APP_VIDEO',
 ] as const;
 export type AdminCapturePurpose = (typeof ADMIN_CAPTURE_PURPOSES)[number];
 

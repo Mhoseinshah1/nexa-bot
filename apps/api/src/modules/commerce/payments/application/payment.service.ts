@@ -93,6 +93,7 @@ import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
 import { gatewaySettlementDeadline, settlementRefusal } from '../domain/settlement.js';
+import { reconciliationEvidenceAllows } from '../domain/gateway-reconciliation.js';
 import {
   GATEWAY_REVIEW_RECONCILED_CODE,
   GATEWAY_REVIEW_UNRESOLVED_CODE,
@@ -363,9 +364,6 @@ export const PAYMENT_RECONCILE_PERMISSION: PermissionKey = 'payments.reconcile';
 
 /** An operator's "ask the provider again" is spaced at least this far apart. */
 const RECONCILE_INQUIRY_SPACING_MS = 60_000;
-
-/** The provider statuses a recorded inquiry must show for each reconciliation (§9.6.4). */
-const RECONCILE_FAILED_STATUSES: readonly string[] = ['rejected', 'expired', 'canceled'];
 
 /**
  * What a customer's payment command carries. An ORDER ID AND NOTHING ELSE.
@@ -3779,12 +3777,62 @@ export class PaymentService {
     );
   }
 
+  /**
+   * NOWPayments (`docs/nowpayments-gateway-audit.md` §5.4): the provider's own inquiry
+   * reported the customer's coins on their way (`confirming`, `confirmed`, `sending`) — the
+   * acknowledgement that opens the bounded review window, so a slow chain can finish
+   * confirming after the 70-minute customer window. The SAME window, decided the same way:
+   * under the payment's lock, only on a PENDING GATEWAY payment of a route whose descriptor
+   * says `providerReview`, with `detectedAt` strictly before its deadline, written once. It
+   * moves no money and approves nothing; only a later `finished` inquiry settles.
+   * Returns whether a review opened.
+   */
+  async recordProviderFundsDetected(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: { readonly detectedAt: Date; readonly providerStatus: string },
+  ): Promise<boolean> {
+    const paymentId = this.paymentId(id);
+    const denial = { action: PROVIDER_REVIEW_ACTION, entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        return this.openProviderReview(
+          scope,
+          actor,
+          payment,
+          {
+            submissionId: null,
+            acknowledgedAt: input.detectedAt,
+            providerStatus: input.providerStatus,
+          },
+          now,
+          tx,
+        );
+      },
+    );
+  }
+
   /** The review window itself, under the payment's lock (§9.6.3 c). True when it opened. */
   private async openProviderReview(
     scope: TenantContext,
     actor: ActorContext,
     payment: PaymentRecord | null,
-    input: { readonly submissionId: string; readonly acknowledgedAt: Date },
+    input: {
+      /** The receipt whose acknowledgement opened it; null for coins detected on chain. */
+      readonly submissionId: string | null;
+      readonly acknowledgedAt: Date;
+      readonly providerStatus?: string | null;
+    },
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean> {
@@ -3810,7 +3858,9 @@ export class PaymentService {
       tx,
     );
     if (!opened) return false;
-    await this.deps.cardTransfer.markOpenedReview(scope, input.submissionId, tx);
+    if (input.submissionId !== null) {
+      await this.deps.cardTransfer.markOpenedReview(scope, input.submissionId, tx);
+    }
     /*
      * The review's first inquiry, in the review's own transaction (Codex review of #136):
      * the last inquiry before the 70-minute deadline may already have cleared the schedule,
@@ -3818,13 +3868,15 @@ export class PaymentService {
      * — UNKNOWN in 24 hours, whatever TonPays had decided.
      */
     await this.deps.gatewayInvoices.requestInquiry(scope, payment.id, now, tx);
-    await this.deps.cardTransfer.closeCapturesForPayment(
-      scope,
-      payment.id,
-      'PAYMENT_CLOSED',
-      now,
-      tx,
-    );
+    if (input.submissionId !== null) {
+      await this.deps.cardTransfer.closeCapturesForPayment(
+        scope,
+        payment.id,
+        'PAYMENT_CLOSED',
+        now,
+        tx,
+      );
+    }
     await this.deps.audit.record(
       scope,
       actor,
@@ -3837,6 +3889,10 @@ export class PaymentService {
           state: 'PENDING',
           gatewayProvider: payment.gatewayProvider,
           submissionId: input.submissionId,
+          // Coins the provider saw on chain (NOWPayments) rather than a receipt's acknowledgement.
+          ...(input.submissionId === null
+            ? { trigger: 'FUNDS_DETECTED', providerStatus: input.providerStatus ?? null }
+            : {}),
           providerReviewStartedAt: input.acknowledgedAt.toISOString(),
           providerReviewUntil: reviewUntil.toISOString(),
           expiresAt: payment.expiresAt.toISOString(),
@@ -3916,10 +3972,13 @@ export class PaymentService {
         }
         const invoice = await this.deps.gatewayInvoices.findByPayment(scope, paymentId, tx);
         const status = invoice?.providerStatus ?? null;
+        // The provider's own vocabulary, one table (`domain/gateway-reconciliation.ts`).
         const evidenceAllows =
-          input.to === 'CONFIRMED'
-            ? status === 'completed' && invoice?.providerPaid === true
-            : status !== null && RECONCILE_FAILED_STATUSES.includes(status);
+          invoice !== null &&
+          reconciliationEvidenceAllows(payment.gatewayProvider ?? invoice.provider, input.to, {
+            status,
+            paid: invoice.providerPaid,
+          });
         if (invoice === null || !evidenceAllows) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
@@ -4310,7 +4369,10 @@ export class PaymentService {
         return { policy: 'FIXED_RATE', rateMinor: gateway.providerUnitRateMinor };
       }
       case 'CENTRAL_FX': {
-        if (spec.fxBaseAsset === null || spec.unitRatioSetting === null) {
+        if (
+          spec.fxBaseAsset === null ||
+          (spec.unitRatioSetting === null && spec.fixedUnitRatio === undefined)
+        ) {
           // A descriptor that names the central policy names its asset and its ratio.
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
@@ -4318,9 +4380,21 @@ export class PaymentService {
             { reason: FX_UNAVAILABLE_REASON, detail: 'SPEC_INCOMPLETE' },
           );
         }
-        const unitRatio = parseUnitRatio(
-          await this.deps.settings.valueOf<string>(scope, settingKeyOf(spec.unitRatioSetting), tx),
-        );
+        /*
+         * A FIXED denomination (NOWPayments: 100 US cents per USDT) is the descriptor's own
+         * constant; only a configured ratio is read from its setting.
+         */
+        const unitRatio =
+          spec.fixedUnitRatio ??
+          (spec.unitRatioSetting === null
+            ? null
+            : parseUnitRatio(
+                await this.deps.settings.valueOf<string>(
+                  scope,
+                  settingKeyOf(spec.unitRatioSetting),
+                  tx,
+                ),
+              ));
         if (unitRatio === null) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,

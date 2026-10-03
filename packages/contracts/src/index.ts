@@ -51,6 +51,8 @@ export * from './pricing.js';
  * (`provisioning`), and what changes the price (`promotions`).
  */
 export * from './customer.js';
+// Spec §10: the one free-text search a Web Admin list page draws.
+export * from './list-search.js';
 export * from './catalog.js';
 export * from './traffic-input.js';
 export * from './commerce.js';
@@ -69,6 +71,7 @@ export * from './payment-gateways.js';
 export * from './gateway-invoices.js';
 export * from './tonpays.js';
 export * from './tonpays-telegram.js';
+export * from './nowpayments.js';
 export * from './telegram-stars.js';
 export * from './fx.js';
 export * from './refunds.js';

@@ -1,4 +1,5 @@
 import {
+  BACKUP_SCHEDULE_SETTING_KEYS,
   isSettingKey,
   settingIntegerRange,
   type FxFallbackSource,
@@ -101,7 +102,13 @@ export type SettingControl =
  * the main menu's arrangement is a list with an order and switches, edited on the
  * «دکمه‌های ربات» page beside the labels it arranges.
  */
-export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = ['bot.main_menu'];
+export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
+  'bot.main_menu',
+  // Spec 13.2: the automatic backup schedule is edited on «بکاپ و بازیابی», beside the
+  // backups it schedules, as a switch and an interval with a unit — never raw minutes.
+  BACKUP_SCHEDULE_SETTING_KEYS.enabled,
+  BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
+];
 
 /**
  * Retired registry keys, drawn on no page (F5). Each is `consumer: 'PLANNED'` in the
@@ -110,8 +117,9 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = ['bot.main_menu
  * nothing, which is the one thing this screen must never offer.
  *
  * `trial.product_id` (R1): a trial is configured on each panel's «سرویس تست» tab.
+ * `stars.pricing_mode` (spec §8): Stars are always priced by the central rate.
  */
-export const SETTINGS_RETIRED: readonly SettingKey[] = ['trial.product_id'];
+export const SETTINGS_RETIRED: readonly SettingKey[] = ['trial.product_id', 'stars.pricing_mode'];
 
 export interface SettingPresentation {
   readonly title: WebKey;
@@ -193,6 +201,28 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_ops_max_per_minute_desc',
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_messages' },
+  },
+  /*
+   * Spec 13.2. Drawn on the backup page (`SETTINGS_MANAGED_ELSEWHERE`); the entries exist
+   * because this map is total.
+   */
+  'backup.schedule_enabled': {
+    title: 'web.backup_schedule_auto',
+    description: 'web.backup_schedule_hint',
+    group: 'ops',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  'backup.interval_minutes': {
+    title: 'web.backup_schedule_interval',
+    description: 'web.backup_schedule_hint',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_minutes', optional: true },
   },
   'sales.currency': {
     title: 'web.setting_sales_currency',

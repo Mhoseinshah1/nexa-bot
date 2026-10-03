@@ -27,6 +27,7 @@ import {
   type SettingKey,
   type TenantContext,
   type UnitOfWork,
+  takesFixedRate,
 } from '@nexa/contracts';
 import type { PaymentGatewayRepository } from '../../payments/application/gateway-ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -342,7 +343,9 @@ export class FxService {
         provider,
         mode: conversionPolicyFor(spec, mode),
         unitRatioText,
-        fixedRateMinor: gateway?.providerUnitRateMinor ?? null,
+        // Spec §8: a retired fixed rate still on the row is not a figure anything prices by,
+        // so it is not reported as one.
+        fixedRateMinor: takesFixedRate(spec) ? (gateway?.providerUnitRateMinor ?? null) : null,
         centralRatePerUnit:
           usable === null || unitRatio === null
             ? null

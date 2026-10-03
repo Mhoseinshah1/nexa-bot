@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { APPEARANCE_SLOTS, type AppearanceSlot } from './appearance.js';
+import { APPEARANCE_SLOTS } from './appearance.js';
 import {
   DEFAULT_MAIN_MENU_LAYOUT,
   MAIN_MENU_BUTTON_IDS,
@@ -22,8 +22,24 @@ import { BOT_INSTANCE_STATUSES } from './tenant.js';
  * An EXTENSION of the main menu, not a second one: the same closed registry
  * (`MAIN_MENU_BUTTONS`), the same targets, the same `bot.menu.*` labels, the same gates and
  * the same appearance slots. What it adds is an explicit arrangement — rows the operator
- * chose, a style per button, an icon slot per button — and a draft/publish/revision
- * lifecycle around it.
+ * chose and a style per button — and a draft/publish/revision lifecycle around it.
+ *
+ * ## The two retired icon fields (owner order, 2026-10-02)
+ *
+ * The owner removed «آیکون دکمه» (`iconSlot`) and «آیکون معنایی» (`appearanceSlot`) from
+ * the builder. Appearance stays the one message-icon mechanism; the main-menu builder no
+ * longer has an icon of its own. Both fields STAY in the schema, required and nullable as
+ * before, because the previous release's `.strict()` parser requires them in every snapshot
+ * this release writes (a rollback would otherwise read every new layout as unreadable), and
+ * because a page loaded from the previous release still sends them mid-rollout.
+ *
+ * - `iconSlot` is RETIRED: still parsed, never drawn, and canonicalised to null by
+ *   `normalizeExplicitMainMenu` — which every read and every write of the builder and the
+ *   runtime goes through — so a stored icon is neither drawn nor carried into a new draft
+ *   or revision. Stored rows are not rewritten: rolling back without a new publish draws
+ *   the old icons again (expand/contract; no data migration in this release).
+ * - `appearanceSlot` never had a runtime consumer (audit §7). It is round-tripped
+ *   unchanged and still projected into `bot.main_menu`; only its control is gone.
  *
  * ## Where it is stored, and why not in `bot.main_menu`
  *
@@ -84,21 +100,16 @@ export const mainMenuButtonConfigSchema = z
     enabled: z.boolean(),
     style: z.enum(MAIN_MENU_BUTTON_STYLES),
     /**
-     * The appearance slot whose custom emoji is the button's ICON, or null for none.
-     *
-     * `KeyboardButton.icon_custom_emoji_id` is official Bot API, for bots able to use custom
-     * emoji (confirmed by the owner); whether a given bot is able is decided per BOT INSTANCE
-     * by Nexa's own appearance test, never by the tenant.
-     *
-     * Distinct from `appearanceSlot` on purpose (audit §7): that field names the slot of the
-     * screen the button OPENS, every button has a non-null default for it, and reusing it
-     * would give every eligible bot icons on upgrade with no operator action. Null is the
-     * default for every button and for every converted legacy layout. Resolved per SENDING
-     * bot at send time; on a bot not proven eligible the icon is omitted, and the label text
-     * is never altered — the tap is routed by that text.
+     * RETIRED (see the file header). Was the appearance slot whose custom emoji the button
+     * carried as `KeyboardButton.icon_custom_emoji_id`. Still accepted — the previous
+     * release's strict parser requires the key — and canonicalised to null by
+     * `normalizeExplicitMainMenu`; nothing draws it.
      */
     iconSlot: z.enum(APPEARANCE_SLOTS).nullable(),
-    /** Round P's slot for the screen the item opens; null is the button's default. Round-tripped. */
+    /**
+     * Round P's slot for the screen the item opens; null is the button's default. No runtime
+     * consumer and no control since the owner's 2026-10-02 order: round-tripped unchanged.
+     */
     appearanceSlot: z.enum(MENU_APPEARANCE_SLOTS).nullable(),
   })
   .strict();
@@ -164,9 +175,10 @@ export function defaultMainMenuButtonConfig(id: MainMenuButtonId): MainMenuButto
 
 /**
  * A parsed layout in canonical form: one configuration per DECLARED button, in declared
- * order, the missing ones completed as unplaced and enabled (OQ-T-2), and an
- * `appearanceSlot` equal to the button's default written as null — the form the server
- * stores and compares, so "nothing changed" is decided on meaning rather than key order.
+ * order, the missing ones completed as unplaced and enabled (OQ-T-2), an `appearanceSlot`
+ * equal to the button's default written as null, and the retired `iconSlot` written as null
+ * — the form the server stores and compares, so "nothing changed" is decided on meaning
+ * rather than key order, and a stored icon is never drawn or carried forward.
  */
 export function normalizeExplicitMainMenu(layout: ExplicitMainMenu): ExplicitMainMenu {
   const byId = new Map(layout.buttons.map((config) => [config.button, config]));
@@ -180,7 +192,8 @@ export function normalizeExplicitMainMenu(layout: ExplicitMainMenu): ExplicitMai
         button: id,
         enabled: config.enabled,
         style: config.style,
-        iconSlot: config.iconSlot,
+        // Retired (file header): whatever a stored snapshot or an older page carries.
+        iconSlot: null,
         appearanceSlot: slot === null || slot === mainMenuButton(id).appearanceSlot ? null : slot,
       };
     }),
@@ -213,7 +226,6 @@ export type MainMenuGateOpenById = Readonly<
 export interface CustomerMainMenuButton {
   readonly button: MainMenuButtonId;
   readonly style: MainMenuButtonStyle;
-  readonly iconSlot: AppearanceSlot | null;
 }
 
 /**
@@ -238,7 +250,8 @@ export function customerRowsOf(
       const config = byId.get(id);
       if (config === undefined || !config.enabled) continue;
       if (mainMenuButtonIsGated(mainMenuButton(id)) && gateOpenById[id] !== true) continue;
-      drawn.push({ button: id, style: config.style, iconSlot: config.iconSlot });
+      // No icon: `iconSlot` is retired (file header), so nothing here can draw one.
+      drawn.push({ button: id, style: config.style });
     }
     if (drawn.length > 0) rows.push(drawn);
   }
@@ -252,8 +265,8 @@ export function customerRowsOf(
  * The enabled items, in their order, packed by the SAME `packMainMenuRows` the legacy
  * keyboard uses (a wide button alone, two to a row), so with every gate open the explicit
  * keyboard is the legacy one, row for row (tested). A legacy "off" is unplaced — not on the
- * keyboard — and keeps its slot. Every style `default`, every icon null: a conversion adds
- * nothing an operator did not choose.
+ * keyboard — and keeps its slot. Every style `default`, every (retired) icon null: a
+ * conversion adds nothing an operator did not choose.
  */
 export function explicitFromLegacy(stored: readonly MainMenuLayoutEntry[]): ExplicitMainMenu {
   const resolved = resolveMainMenuLayout(stored);
@@ -278,7 +291,7 @@ export const DEFAULT_EXPLICIT_MAIN_MENU: ExplicitMainMenu =
 /**
  * The compatibility projection a publish writes to `bot.main_menu`: the placed buttons
  * row-major with their own switch, then the unplaced ones switched OFF, each with its
- * explicit target and its slot (null when default). Rows, styles and icons are not
+ * explicit target and its slot (null when default). Rows and styles are not
  * projected — the previous release has nowhere to put them.
  *
  * Parses under the FROZEN `mainMenuLayoutSchema` (pinned by a test): at most one entry per
@@ -424,7 +437,11 @@ export const mainMenuBuilderItemSchema = z.object({
 });
 export type MainMenuBuilderItem = z.infer<typeof mainMenuBuilderItemSchema>;
 
-/** Whether a bot may carry custom-emoji icons: its last appearance test was `SENT`. */
+/**
+ * Whether a bot passed its custom-emoji appearance test (`SENT`). Kept in the builder read
+ * for pages of the previous release mid-rollout; since the button icon was retired the
+ * builder uses it only to name the bot its preview phone shows.
+ */
 export const mainMenuIconEligibilitySchema = z.object({
   botInstanceId: z.string(),
   username: z.string(),
@@ -537,6 +554,13 @@ export const mainMenuRevisionViewSchema = z.object({
   layout: explicitMainMenuSchema.nullable(),
   createdAt: isoInstant,
   createdByAdminId: z.string().nullable(),
+  /**
+   * The publisher's display name, as the administrator directory has it now — what the
+   * history shows instead of an id (round-T QA-4). Null for a revision no administrator
+   * published, or one whose administrator row is gone. Optional only so that a page of this
+   * release reading an API replica of the previous one mid-rollout still parses the answer.
+   */
+  createdByAdminName: z.string().nullable().optional(),
   restoredFrom: mainMenuRevisionRefSchema.nullable(),
 });
 export type MainMenuRevisionView = z.infer<typeof mainMenuRevisionViewSchema>;

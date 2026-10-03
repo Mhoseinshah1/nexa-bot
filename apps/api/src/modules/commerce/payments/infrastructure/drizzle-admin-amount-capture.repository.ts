@@ -61,6 +61,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
       readonly paymentId?: PaymentId;
       readonly customerId?: UserId;
       readonly serviceRefundRequestId?: string;
+      readonly clientAppId?: string;
       readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
       readonly expiresAt: Date;
@@ -96,6 +97,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
         paymentId: input.paymentId ?? null,
         customerId: input.customerId ?? null,
         serviceRefundRequestId: input.serviceRefundRequestId ?? null,
+        clientAppId: input.clientAppId ?? null,
         purpose: input.purpose ?? 'RECEIPT_CREDIT_AMOUNT',
         openedAt: input.openedAt,
         expiresAt: input.expiresAt,
@@ -127,6 +129,29 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
           // capture has no amount either, and a refund request's amount is not a credit's.
           eq(adminAmountCaptures.purpose, purpose),
           isNull(adminAmountCaptures.amountMinor),
+        ),
+      )
+      .limit(1);
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async findOpenVideo(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    adminId: string,
+    tx?: unknown,
+  ): Promise<AdminAmountCaptureRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select()
+      .from(adminAmountCaptures)
+      .where(
+        and(
+          eq(adminAmountCaptures.tenantId, tenantId),
+          eq(adminAmountCaptures.botInstanceId, botInstanceId),
+          eq(adminAmountCaptures.adminId, adminId),
+          isNull(adminAmountCaptures.closedAt),
+          eq(adminAmountCaptures.purpose, 'CLIENT_APP_VIDEO'),
         ),
       )
       .limit(1);
@@ -265,6 +290,7 @@ function toRecord(row: typeof adminAmountCaptures.$inferSelect): AdminAmountCapt
     paymentId: row.paymentId as PaymentId | null,
     customerId: row.customerId as UserId | null,
     serviceRefundRequestId: row.serviceRefundRequestId,
+    clientAppId: row.clientAppId,
     // `admin_amount_captures_purpose_check` is built from the contract enum.
     purpose: row.purpose as AdminCapturePurpose,
     amountMinor: row.amountMinor,

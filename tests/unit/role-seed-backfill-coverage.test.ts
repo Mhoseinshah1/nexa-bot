@@ -177,7 +177,7 @@ describe('role seed backfill coverage', () => {
     // Named rather than derived: the eight pairs this hotfix exists for. A
     // derived expectation here would be the same computation as the code under
     // test, and would agree with it however wrong both were.
-    // `recovery.kit.*` and `recovery.key.*` are the Recovery Kit's (0158), named below.
+    // `recovery.kit.*` and `recovery.key.*` are the Recovery Kit's (0160), named below.
     const dr = [...backfilled]
       .filter((p) => /:(backup\.|recovery\.)/.test(p) && !/:recovery\.(kit|key)\./.test(p))
       .sort();
@@ -194,7 +194,7 @@ describe('role seed backfill coverage', () => {
   });
 
   it('accounts for the Recovery Kit release exactly: three CRITICAL keys, owner only', () => {
-    // ADR-0032, migration 0158. Named, for the reason the case above gives.
+    // ADR-0032, migration 0160. Named, for the reason the case above gives.
     const kit = [...backfilled].filter((p) => /:recovery\.(kit|key)\./.test(p)).sort();
     expect(kit).toEqual([
       'owner:recovery.key.remove',
