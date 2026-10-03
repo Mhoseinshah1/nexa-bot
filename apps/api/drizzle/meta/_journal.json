@@ -1254,6 +1254,20 @@
       "when": 1791041468432,
       "tag": "0178_panel_auto_balancing",
       "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1791042499780,
+      "tag": "0179_incidents",
+      "breakpoints": true
+    },
+    {
+      "idx": 180,
+      "version": "7",
+      "when": 1791042499825,
+      "tag": "0180_incidents_guards",
+      "breakpoints": true
     }
   ]
 }

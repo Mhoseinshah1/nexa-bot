@@ -3,6 +3,7 @@ import type { CustomerNotificationKind, ServiceReminderKind, TenantContext } fro
 import {
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
   DIRECT_MESSAGE_STALE_AFTER_MS,
+  INCIDENT_NOTICE_STALE_AFTER_MS,
   EXPIRY_REMINDER_KINDS,
   EXPIRY_REMINDER_STATES,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
@@ -56,6 +57,8 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   // Phase A2: answered from the direct message's own row.
   'DIRECT_MESSAGE',
   'DIRECT_MESSAGE_MEDIA',
+  // Phase E3: answered from the notice row and its incident.
+  'INCIDENT_NOTICE',
 ];
 
 /**
@@ -121,6 +124,23 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     }
     if (kind === 'DIRECT_MESSAGE' || kind === 'DIRECT_MESSAGE_MEDIA') {
       return this.directMessageFresh(tenantId, kind, subjectId, now);
+    }
+    /*
+     * Phase E3: a notice holds while its incident is still SCHEDULED or ACTIVE and the
+     * notice is younger than `INCIDENT_NOTICE_STALE_AFTER_MS` by the dispatcher's clock.
+     * A cancelled or resolved window, or a notice held back a day, is superseded unsent.
+     */
+    if (kind === 'INCIDENT_NOTICE') {
+      const result = await this.db.execute(sql`
+        SELECT 1
+          FROM incident_notices n
+          JOIN incidents i ON i.tenant_id = n.tenant_id AND i.id = n.incident_id
+         WHERE n.tenant_id = ${tenantId}
+           AND n.id = ${subjectId}
+           AND i.status IN ('SCHEDULED', 'ACTIVE')
+           AND n.created_at > ${new Date(now.getTime() - INCIDENT_NOTICE_STALE_AFTER_MS)}
+         LIMIT 1`);
+      return result.rows.length > 0;
     }
 
     /*
@@ -289,8 +309,8 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
   }
 
   /**
-   * See the port. The direct-message kinds only — their precondition is the one that lapses
-   * by the clock — read against the SAME instant `directMessageFresh` compares with, so
+   * See the port. The direct-message kinds and the incident notice — the preconditions that
+   * lapse by the clock or by another record's end — read against the SAME instant `directMessageFresh` compares with, so
    * the two can only agree: a row named here is one `stillHolds` would answer `false`.
    * Whatever the customer's status; that is the point.
    */
@@ -321,10 +341,35 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
       )
       .orderBy(asc(customerDirectMessages.createdAt), asc(customerDirectMessages.id))
       .limit(limit);
-    return rows.map((row) => ({
-      kind: row.kind as CustomerNotificationKind,
-      subjectId: row.subjectId,
-    }));
+    /*
+     * Phase E3: an incident notice lapses the same way — when its incident is no longer
+     * SCHEDULED or ACTIVE, or it is older than `INCIDENT_NOTICE_STALE_AFTER_MS` — and a
+     * customer who stays blocked would otherwise hold it QUEUED for ever (Codex, #162).
+     * The exact negation of the `INCIDENT_NOTICE` branch of `stillHolds`, same instant.
+     */
+    const notices = await this.db.execute(sql`
+      SELECT cn.kind, cn.subject_id
+        FROM customer_notifications cn
+        JOIN incident_notices n ON n.tenant_id = cn.tenant_id AND n.id = cn.subject_id
+        JOIN incidents i ON i.tenant_id = n.tenant_id AND i.id = n.incident_id
+       WHERE cn.tenant_id = ${tenantId}
+         AND cn.kind = 'INCIDENT_NOTICE'
+         AND cn.state = 'PENDING'
+         AND cn.send_started_at IS NULL
+         AND (i.status NOT IN ('SCHEDULED', 'ACTIVE')
+              OR n.created_at <= ${new Date(now.getTime() - INCIDENT_NOTICE_STALE_AFTER_MS)})
+       ORDER BY n.created_at, n.id
+       LIMIT ${Math.max(0, limit - rows.length)}`);
+    return [
+      ...rows.map((row) => ({
+        kind: row.kind as CustomerNotificationKind,
+        subjectId: row.subjectId,
+      })),
+      ...(notices.rows as { kind: string; subject_id: string }[]).map((row) => ({
+        kind: row.kind as CustomerNotificationKind,
+        subjectId: row.subject_id,
+      })),
+    ];
   }
 
   /**

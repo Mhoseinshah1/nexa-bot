@@ -11240,6 +11240,21 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.incident.notice',
+    description:
+      "Phase E3: an operator's notice about an incident or maintenance window, to a customer it affects (INCIDENT_NOTICE). The message is read at send time from the incident's communication row.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'message',
+        type: 'STRING',
+        description: 'The customer-facing message the operator wrote for this incident.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.direct_message.text',
     description:
       'Phase A2: a direct message an operator wrote to this one customer from Customer 360 (DIRECT_MESSAGE). The text is read at send time from the message row the notification names.',

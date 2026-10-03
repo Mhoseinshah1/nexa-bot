@@ -130,6 +130,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
   // Phase A2: a direct message an operator sends from the customer's page.
   { id: 'direct_message', label: 'پیام مستقیم به مشتری', prefixes: ['bot.direct_message.'] },
+  // Phase E3: the incident / maintenance notice.
+  { id: 'incidents', label: 'اطلاع‌رسانی رخداد و نگهداری', prefixes: ['bot.incident.'] },
   // Round N: the wrapper every broadcast is sent in.
   {
     id: 'broadcast',
@@ -551,6 +553,7 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.support_attachment': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'bot.direct_message.text': { text: 'متن پیام اپراتور' },
   'bot.direct_message.media': { caption: 'توضیح عکس یا فایل' },
+  'bot.incident.notice': { message: 'پیام اپراتور به مشتری' },
   'ops.support.ticket_opened': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'ops.support.customer_replied': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   // Round N: the broadcast wrapper and the two mass-action notices.
@@ -2308,6 +2311,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.direct_message.media': [
     'پیام مستقیم به مشتری (عکس یا فایل)',
     'زیرنویس عکس یا فایلی که اپراتور از صفحهٔ مشتری فرستاده است؛ اگر توضیحی نداشته باشد آن خط حذف می‌شود.',
+  ],
+  'bot.incident.notice': [
+    'اطلاع‌رسانی رخداد یا نگهداری (به مشتری)',
+    'پیامی که اپراتور دربارهٔ یک رخداد یا نگهداری برای مشتریان آسیب‌دیده می‌فرستد؛ متن هنگام ارسال از خود رخداد خوانده می‌شود.',
   ],
   'bot.ticket.category_default_1': [
     'دستهٔ پیش‌فرض تیکت ۱',

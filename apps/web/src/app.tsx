@@ -22,6 +22,7 @@ import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
 // Phase B3: the notification center and its top-bar bell.
 import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
+import { IncidentBanner, IncidentDetailPage, IncidentsPage } from './pages/incidents';
 import { AuditLogPage } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
@@ -213,6 +214,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/alerts',
   '/notifications',
   '/notification-center',
+  '/incidents',
+  '/incidents/:id',
   '/appearance',
   '/ops-group',
   '/recovery',
@@ -1078,6 +1081,34 @@ export function resolve(
     };
   }
 
+  // Phase E3: incidents and maintenance. View, manage and notify are three keys.
+  if (route.path === '/incidents') {
+    return {
+      element: (
+        <IncidentsPage denied={!may('incidents.view')} mayManage={may('incidents.manage')} />
+      ),
+      crumbs: [{ label: t('web.nav_incidents') }],
+      title: t('web.nav_incidents'),
+    };
+  }
+  const incident = match('/incidents/:id', route.path);
+  if (incident !== null) {
+    return {
+      element: (
+        // Keyed by id, for the reason the other detail pages give.
+        <IncidentDetailPage
+          key={incident['id'] ?? ''}
+          id={incident['id'] ?? ''}
+          denied={!may('incidents.view')}
+          mayManage={may('incidents.manage')}
+          mayNotify={may('incidents.notify')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_incidents'), href: '/incidents' }],
+      title: t('web.nav_incidents'),
+    };
+  }
+
   if (route.path === '/notification-center') {
     return {
       // Every administrator has an inbox; the server shows only the categories they may see.
@@ -1696,7 +1727,11 @@ function SignedIn({
         />
 
         <main className="content" id="main">
-          <div className="content-inner">{resolved.element}</div>
+          <div className="content-inner">
+            {/* Phase E3: every administrator sees an ACTIVE incident that asked to be seen. */}
+            <IncidentBanner mayView={permissions.includes('incidents.view')} />
+            {resolved.element}
+          </div>
         </main>
       </div>
 

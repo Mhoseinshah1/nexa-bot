@@ -147,6 +147,16 @@ export const PERMISSIONS = [
   p('users.wallet.debit', 'Debit a customer wallet', 'CRITICAL'),
   p('users.wallet.mass', 'Run a mass wallet operation', 'CRITICAL'),
 
+  /*
+   * Phase E3 (`docs/incidents.md`). Reading incidents is how anyone on call learns what is
+   * going on; managing one records and runs it, and its EFFECTS are still charged their own
+   * module's key (`panels.drain`, `catalog.edit`, `payments.gateways.edit`) — so holding
+   * this key alone switches nothing off. Telling customers is a separate, louder decision.
+   */
+  p('incidents.view', 'View incidents and maintenance windows', 'LOW'),
+  p('incidents.manage', 'Create, start, edit and resolve incidents and maintenance', 'HIGH'),
+  p('incidents.notify', 'Send an incident notice to the affected customers', 'HIGH'),
+
   // Orders
   p('orders.view', 'View orders', 'LOW'),
   p('orders.cancel', 'Cancel an order', 'HIGH'),
@@ -536,6 +546,10 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'payments.gateways.view',
       'reports.view',
       'opslog.view',
+      // Phase E3: the operator runs incidents and tells customers about them.
+      'incidents.view',
+      'incidents.manage',
+      'incidents.notify',
       // Whether this installation's backups are working is an operational
       // question, and an operator who cannot see the answer is an operator who
       // finds out during a disaster. Viewing is LOW; nothing else here is.
@@ -613,6 +627,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // Phase A2: a direct message to one customer, from their page.
       'users.message.send',
       'users.message.view',
+      // Phase E3: support answers "is something down" from the incident list.
+      'incidents.view',
     ],
   },
   {
@@ -648,6 +664,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // and a technical role that cannot do it will touch things anyway.
       // Download and restore stay with the owner.
       'backup.run',
+      // Phase E3: the role that operates panels during an incident.
+      'incidents.view',
+      'incidents.manage',
     ],
   },
   {
@@ -834,6 +853,9 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    */
   'terms.edit': 'terms.view' as PermissionKey,
   'terms.publish': 'terms.view' as PermissionKey,
+  // Phase E3: both are taken from the incident's page, which `incidents.view` reads.
+  'incidents.manage': 'incidents.view' as PermissionKey,
+  'incidents.notify': 'incidents.view' as PermissionKey,
 };
 
 /**
