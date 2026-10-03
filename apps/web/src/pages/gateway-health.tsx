@@ -99,10 +99,19 @@ export function healthRangeOf(value: string | null): ReportRange | null {
   return found === undefined ? 'LAST_7_DAYS' : found[0];
 }
 
-/** The Payment Operations Center, filtered to one route (and a queue, when given). */
-export function opsLinkFor(provider: PaymentGatewayProvider, queue?: PaymentOpsQueue): string {
+/**
+ * The Payment Operations Center, filtered to one route, the SAME created-at range the card
+ * counted over (Codex review of #160: an all-time list beside a seven-day count disagrees
+ * with it), and a queue when given. A null range is no bound, which is the list's default.
+ */
+export function opsLinkFor(
+  provider: PaymentGatewayProvider,
+  range: ReportRange | null,
+  queue?: PaymentOpsQueue,
+): string {
   const params = new URLSearchParams({ gateway: provider });
   if (queue !== undefined) params.set('queue', queue);
+  if (range !== null) params.set('range', range);
   return `/payments?${params.toString()}`;
 }
 
@@ -116,9 +125,12 @@ function when(value: string | null): ReactNode {
 
 function HealthCard({
   view,
+  range,
   onLink,
 }: {
   view: GatewayHealthView;
+  /** The range the card's counts were read over; every link carries it. */
+  range: ReportRange | null;
   onLink: ReturnType<typeof useLinkHandler>;
 }) {
   const a = view.answers;
@@ -130,7 +142,8 @@ function HealthCard({
       <KV
         items={[
           [
-            t('web.gateway_health_status_active'),
+            // A neutral label: the value says on or off (Codex review of #160).
+            t('web.gateway_health_status'),
             t(
               view.status === 'ACTIVE'
                 ? 'web.gateway_health_status_active'
@@ -254,7 +267,7 @@ function HealthCard({
         <div className="filter-row">
           <span className="muted small">{t('web.gateway_health_queues')}:</span>
           {CARD_QUEUES.map(([queue, label]) => (
-            <a key={queue} href={opsLinkFor(view.provider, queue)} onClick={onLink}>
+            <a key={queue} href={opsLinkFor(view.provider, range, queue)} onClick={onLink}>
               {t(label)} <Num value={view.queues?.[queue] ?? 0} />
             </a>
           ))}
@@ -265,9 +278,12 @@ function HealthCard({
         <a href="/payment-gateways" onClick={onLink}>
           {t('web.gateway_health_open_config')}
         </a>
-        <a href={opsLinkFor(view.provider)} onClick={onLink}>
-          {t('web.gateway_health_open_ops')}
-        </a>
+        {/* The route's payments only for a viewer who may read them (Codex review of #160). */}
+        {view.queues !== null && (
+          <a href={opsLinkFor(view.provider, range)} onClick={onLink}>
+            {t('web.gateway_health_open_ops')}
+          </a>
+        )}
       </div>
     </Card>
   );
@@ -304,7 +320,7 @@ export function GatewayHealthPanel({ route, denied }: { route: Route; denied: bo
               <Banner tone="info">{t('web.gateway_health_queues_withheld')}</Banner>
             )}
             {health.data.gateways.map((view) => (
-              <HealthCard key={view.provider} view={view} onLink={onLink} />
+              <HealthCard key={view.provider} view={view} range={range} onLink={onLink} />
             ))}
           </>
         )}
@@ -348,14 +364,8 @@ export function PaymentGatewaysTabbedPage({
       <PaymentGatewaysPage
         denied={denied}
         mayEdit={mayEdit}
-        tabs={
-          <>
-            {tabs}
-            <TabPanel id="gateways-panel" labelledBy="gateways-panel-tab-config">
-              {null}
-            </TabPanel>
-          </>
-        }
+        tabs={tabs}
+        panel={{ id: 'gateways-panel', labelledBy: 'gateways-panel-tab-config' }}
       />
     );
   }

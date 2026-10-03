@@ -2096,6 +2096,7 @@ export const WEB_FA = {
   'web.gateway_health_state_attention': 'نیازمند رسیدگی',
   'web.gateway_health_state_no_activity': 'فعالیتی ثبت نشده',
   'web.gateway_health_state_no_issues': 'مشکلی ثبت نشده',
+  'web.gateway_health_status': 'وضعیت',
   'web.gateway_health_status_active': 'روشن',
   'web.gateway_health_status_disabled': 'خاموش',
   'web.gateway_health_config': 'تنظیمات',

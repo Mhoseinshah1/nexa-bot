@@ -111,13 +111,13 @@ describe('gateway health signals and state', () => {
   it('raises nothing, and says NO_ACTIVITY rather than healthy, for a route with no record', () => {
     const signals = gatewayHealthSignals({ ...base, recorded: nothing, queues: zero });
     expect(signals).toEqual([]);
-    expect(gatewayHealthState({ status: 'ACTIVE', gaps: [], signals, recorded: nothing })).toBe(
-      'NO_ACTIVITY',
-    );
+    expect(
+      gatewayHealthState({ status: 'ACTIVE', gaps: [], signals, recorded: nothing, window: null }),
+    ).toBe('NO_ACTIVITY');
     const used = { ...nothing, lastInquiryAnsweredAt: new Date() };
-    expect(gatewayHealthState({ status: 'ACTIVE', gaps: [], signals, recorded: used })).toBe(
-      'NO_ISSUES_RECORDED',
-    );
+    expect(
+      gatewayHealthState({ status: 'ACTIVE', gaps: [], signals, recorded: used, window: null }),
+    ).toBe('NO_ISSUES_RECORDED');
   });
 
   it('orders the rule DISABLED > INCOMPLETE > ATTENTION', () => {
@@ -129,7 +129,13 @@ describe('gateway health signals and state', () => {
     });
     expect(failing.map((s) => s.kind)).toEqual(['CHECK_FAILED']);
     expect(
-      gatewayHealthState({ status: 'ACTIVE', gaps: [], signals: failing, recorded: nothing }),
+      gatewayHealthState({
+        status: 'ACTIVE',
+        gaps: [],
+        signals: failing,
+        recorded: nothing,
+        window: null,
+      }),
     ).toBe('ATTENTION');
     expect(
       gatewayHealthState({
@@ -137,6 +143,7 @@ describe('gateway health signals and state', () => {
         gaps: ['CREDENTIAL_MISSING'],
         signals: failing,
         recorded: nothing,
+        window: null,
       }),
     ).toBe('INCOMPLETE');
     expect(
@@ -145,6 +152,7 @@ describe('gateway health signals and state', () => {
         gaps: ['CREDENTIAL_MISSING'],
         signals: failing,
         recorded: nothing,
+        window: null,
       }),
     ).toBe('DISABLED');
   });
@@ -199,6 +207,31 @@ describe('gateway health signals and state', () => {
       count: 1,
       since: since.toISOString(),
     });
+  });
+});
+
+describe('the NO_ACTIVITY rule over the selected window (Codex review of #160)', () => {
+  const window = { start: new Date('2026-10-01T00:00:00Z'), end: new Date('2026-10-08T00:00:00Z') };
+  const state = (recorded: GatewayRecordedFacts, w: typeof window | null = window) =>
+    gatewayHealthState({ status: 'ACTIVE', gaps: [], signals: [], recorded, window: w });
+
+  it('is NO_ACTIVITY for a route whose only record is older than the window, and keeps the facts', () => {
+    const old = { ...nothing, lastInquiryAnsweredAt: new Date('2026-06-01T00:00:00Z') };
+    expect(state(old)).toBe('NO_ACTIVITY');
+    // The same record with no window (all history) is activity.
+    expect(state(old, null)).toBe('NO_ISSUES_RECORDED');
+  });
+
+  it('counts an attempt or an answer inside the window, half-open', () => {
+    expect(state({ ...nothing, attemptsInWindow: 1 })).toBe('NO_ISSUES_RECORDED');
+    expect(state({ ...nothing, lastInquiryAnsweredAt: window.start })).toBe('NO_ISSUES_RECORDED');
+    expect(state({ ...nothing, lastInquiryAnsweredAt: window.end })).toBe('NO_ACTIVITY');
+    expect(
+      state({
+        ...nothing,
+        lastInquiryFailure: { at: new Date('2026-10-02T00:00:00Z'), code: 'X' },
+      }),
+    ).toBe('NO_ISSUES_RECORDED');
   });
 });
 

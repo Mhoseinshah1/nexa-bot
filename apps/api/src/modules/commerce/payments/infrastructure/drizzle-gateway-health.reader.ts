@@ -111,7 +111,9 @@ export class DrizzleGatewayHealthReader implements GatewayHealthReader {
              (count(*) FILTER (WHERE ${paymentOpsQueueCondition('PROVIDER_ERROR')}))::int AS errored
         FROM ${payments}
        WHERE ${payments.tenantId} = ${tenantId}
-         AND ${payments.method} = 'GATEWAY'
+         -- Every payment the route was offered for, whatever settles it: a manual transfer
+         -- is a route with attempts too (Codex review of #160). Only a gateway payment
+         -- carries an invoice, so the error count stays a gateway fact.
          AND ${payments.gatewayProvider} IS NOT NULL
          AND ${inWindow}
        GROUP BY ${payments.gatewayProvider}`)) {
@@ -134,6 +136,13 @@ export class DrizzleGatewayHealthReader implements GatewayHealthReader {
       GATEWAY_HEALTH_OPERATIONAL_CODES.map((code) => sql`${code}`),
       sql`, `,
     );
+    /*
+     * The route a condition is about: its context's `provider` when the producer wrote one,
+     * otherwise the route of the PAYMENT it names — the receipt-unknown and card-change-unknown
+     * producers record `paymentId` and a reason only (Codex review of #160). Read-side only:
+     * the producers' rows are append-only and stay exactly as written. The id is cast only
+     * when it is one, so a malformed context names no payment rather than failing the read.
+     */
     for (const row of await rows<{
       provider: string;
       code: string;
@@ -141,16 +150,26 @@ export class DrizzleGatewayHealthReader implements GatewayHealthReader {
       count: number;
       since: string;
     }>(sql`
-      SELECT context ->> 'provider' AS provider, code,
-             (array_agg(severity ORDER BY last_seen_at DESC))[1] AS severity,
-             count(*)::int AS count, min(first_seen_at) AS since
-        FROM operational_events
-       WHERE code IN (${codes})
-         AND tenant_id = ${tenantId}
-         AND resolved_at IS NULL
-         AND context ->> 'provider' IS NOT NULL
-       GROUP BY context ->> 'provider', code
-       ORDER BY code`)) {
+      SELECT named.provider, named.code,
+             (array_agg(named.severity ORDER BY named.last_seen_at DESC))[1] AS severity,
+             count(*)::int AS count, min(named.first_seen_at) AS since
+        FROM (
+          SELECT COALESCE(e.context ->> 'provider', p.gateway_provider) AS provider,
+                 e.code, e.severity, e.last_seen_at, e.first_seen_at
+            FROM operational_events e
+            LEFT JOIN payments p
+              ON p.tenant_id = e.tenant_id
+             AND p.id = CASE
+                          WHEN e.context ->> 'paymentId' ~ '^[0-9a-fA-F-]{36}$'
+                          THEN (e.context ->> 'paymentId')::uuid
+                        END
+           WHERE e.code IN (${codes})
+             AND e.tenant_id = ${tenantId}
+             AND e.resolved_at IS NULL
+        ) named
+       WHERE named.provider IS NOT NULL
+       GROUP BY named.provider, named.code
+       ORDER BY named.code`)) {
       of(row.provider).openConditions.push({
         code: row.code as GatewayHealthOperationalCode,
         severity: row.severity as OperationalSeverity,

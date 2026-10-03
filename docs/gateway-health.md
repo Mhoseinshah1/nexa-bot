@@ -6,23 +6,24 @@ provider, writes a row or estimates anything.
 
 ## What each route shows, and where it comes from
 
-| Line                                  | Source                                                                                                                                                                                                      |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Switch                                | `payment_gateways.status`                                                                                                                                                                                   |
-| Configuration gaps                    | `PaymentGatewayService.readinessFacts` → `configurationGaps`: the enable refusals' own reasons, in `setStatus`'s order, plus an enabled receiving account for a manual transfer. Set or not, never a value. |
-| Credential check                      | whether the adapter offers a safe read-only call (NOWPayments `/v1/estimate` only — TonPays, TonPays Telegram, CentralPay and Stars document none, and none is invented), and the stored last result        |
-| Last invoice / last answer            | `gateway_invoices`: latest `created_invoice_at`; latest `last_inquiry_at` with a status and no error                                                                                                        |
-| Last inquiry / create failure         | latest `last_inquiry_error_code` with its time; latest `CREATE_FAILED`/`CREATE_UNKNOWN` with `creation_sent_at`                                                                                             |
-| Errors in the range                   | attempts created in the range, and how many match the Payment Operations Center's `PROVIDER_ERROR` predicate — two counts, never a percentage                                                               |
-| Provider calls                        | `payment_gateway_call_budgets`: calls used since the current budget window opened                                                                                                                           |
-| Open conditions                       | open `operational_events` with a `GATEWAY_HEALTH_OPERATIONAL_CODES` code whose context names the route                                                                                                      |
-| Queues (`payments.view`)              | `PaymentAttentionReader` (B1), each figure a link to `/payments?gateway=…&queue=…`                                                                                                                          |
-| Last reconciliation (`payments.view`) | latest successful `payment.reconcile_*` / `gateway_invoice.reconcile_inquiry_requested` audit row naming the route                                                                                          |
-| Latency                               | **not measured** — a create's elapsed time is logged, never stored — so it is said, not shown                                                                                                               |
+| Line                                  | Source                                                                                                                                                                                                                             |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Switch                                | `payment_gateways.status`                                                                                                                                                                                                          |
+| Configuration gaps                    | `PaymentGatewayService.readinessFacts` → `configurationGaps`: the enable refusals' own reasons, in `setStatus`'s order, plus an enabled receiving account for a manual transfer. Set or not, never a value.                        |
+| Credential check                      | whether the adapter offers a safe read-only call (NOWPayments `/v1/estimate` only — TonPays, TonPays Telegram, CentralPay and Stars document none, and none is invented), and the stored last result                               |
+| Last invoice / last answer            | `gateway_invoices`: latest `created_invoice_at`; latest `last_inquiry_at` with a status and no error                                                                                                                               |
+| Last inquiry / create failure         | latest `last_inquiry_error_code` with its time; latest `CREATE_FAILED`/`CREATE_UNKNOWN` with `creation_sent_at`                                                                                                                    |
+| Errors in the range                   | payments created in the range through the route (a manual transfer included), and how many match the Payment Operations Center's `PROVIDER_ERROR` predicate — two counts, never a percentage                                       |
+| Provider calls                        | `payment_gateway_call_budgets`: calls used since the current budget window opened                                                                                                                                                  |
+| Open conditions                       | open `operational_events` with a `GATEWAY_HEALTH_OPERATIONAL_CODES` code, filed under the route its context names — or, when the producer wrote only `paymentId` (receipt-unknown, card-change-unknown), the route of that payment |
+| Queues (`payments.view`)              | `PaymentAttentionReader` (B1), each figure a link to `/payments?gateway=…&queue=…`                                                                                                                                                 |
+| Last reconciliation (`payments.view`) | latest successful `payment.reconcile_*` / `gateway_invoice.reconcile_inquiry_requested` audit row naming the route                                                                                                                 |
+| Latency                               | **not measured** — a create's elapsed time is logged, never stored — so it is said, not shown                                                                                                                                      |
 
 Each attempt keeps only its LATEST inquiry, so the "last" lines are the latest answers still on
-record, not a log of every call. A route with no record shows "not recorded" everywhere and the
-state `NO_ACTIVITY`; the best state is `NO_ISSUES_RECORDED`, deliberately not "healthy".
+record, not a log of every call. A route with no record shows "not recorded" everywhere. `NO_ACTIVITY` is judged over the
+selected range — no payment created in it and no recorded answer falling in it — while older
+facts are still shown; the best state is `NO_ISSUES_RECORDED`, deliberately not "healthy".
 
 ## Health events and the Notification Center hook (for B3)
 

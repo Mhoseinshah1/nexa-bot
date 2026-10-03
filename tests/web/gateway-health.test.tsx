@@ -86,7 +86,7 @@ describe('gateway health', () => {
     expect(text).toContain(t('web.gateway_health_latency_not_measured'));
     expect(text).not.toMatch(/%|٪/u);
     const ops = [...container.querySelectorAll('a')].find(
-      (a) => a.getAttribute('href') === opsLinkFor('NOWPAYMENTS', 'UNKNOWN'),
+      (a) => a.getAttribute('href') === opsLinkFor('NOWPAYMENTS', 'LAST_7_DAYS', 'UNKNOWN'),
     );
     expect(ops?.textContent).toContain('2');
     expect(container.querySelector('a[href="/payment-gateways"]')).not.toBeNull();
@@ -152,6 +152,66 @@ describe('gateway health', () => {
     await screen.findByText(t('web.gateway_health_state_attention'));
     const call = api.calls.find((c) => c.url.includes('/payment-gateways-health'));
     expect(call?.url).not.toContain('range=');
+  });
+
+  // Codex review of #160: a link carries the range the card counted over.
+  it('links into the Payment Operations Center with the card’s own range, and none for all time', async () => {
+    expect(opsLinkFor('TONPAYS', 'LAST_30_DAYS', 'UNKNOWN')).toBe(
+      '/payments?gateway=TONPAYS&queue=UNKNOWN&range=LAST_30_DAYS',
+    );
+    expect(opsLinkFor('TONPAYS', null)).toBe('/payments?gateway=TONPAYS');
+    stubApi([{ url: '/payment-gateways-health', body: response([view()]) }]);
+    const { container } = renderPage(
+      <GatewayHealthPanel route={routeOf({ range: 'LAST_30_DAYS' })} denied={false} />,
+    );
+    await screen.findByText(t('web.gateway_health_state_attention'));
+    const hrefs = [...container.querySelectorAll('a')]
+      .map((a) => a.getAttribute('href') ?? '')
+      .filter((href) => href.startsWith('/payments?'));
+    expect(hrefs.length).toBeGreaterThan(1);
+    for (const href of hrefs) expect(href, href).toContain('range=LAST_30_DAYS');
+  });
+
+  // Codex review of #160: no way into payments for a viewer who may not read them.
+  it('draws no payments link at all when the payments facts are withheld', async () => {
+    stubApi([
+      {
+        url: '/payment-gateways-health',
+        body: response([view({ queues: null, lastReconciliation: null })], ['PAYMENTS']),
+      },
+    ]);
+    const { container } = renderPage(<GatewayHealthPanel route={routeOf()} denied={false} />);
+    await screen.findByText(t('web.gateway_health_queues_withheld'));
+    const hrefs = [...container.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
+    expect(hrefs.some((href) => href.startsWith('/payments'))).toBe(false);
+    expect(hrefs).toContain('/payment-gateways');
+  });
+
+  // Codex review of #160: the status row's label is neutral; the value says on or off.
+  it('labels the switch row neutrally, so a disabled route never reads "on: off"', async () => {
+    stubApi([
+      {
+        url: '/payment-gateways-health',
+        body: response([view({ status: 'DISABLED', state: 'DISABLED' })]),
+      },
+    ]);
+    renderPage(<GatewayHealthPanel route={routeOf()} denied={false} />);
+    const label = await screen.findByText(t('web.gateway_health_status'));
+    expect(label.textContent).toBe(t('web.gateway_health_status'));
+    expect(screen.queryAllByText(t('web.gateway_health_status_active'))).toEqual([]);
+  });
+
+  // Codex review of #160: the configuration tab's panel holds the configuration.
+  it('draws the configuration INSIDE its tabpanel', async () => {
+    stubApi([{ url: '/payment-gateways', body: { gateways: [] } }]);
+    renderPage(<PaymentGatewaysTabbedPage route={routeOf()} denied={false} mayEdit={false} />);
+    // The page's content — here its empty state, with no routes — once it has answered.
+    const empty = await screen.findByText(t('web.payment_gateways_empty'));
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.contains(empty)).toBe(true);
+    const tab = screen.getByRole('tab', { name: t('web.gateway_tab_config') });
+    expect(tab.getAttribute('aria-controls')).toBe(panel.id);
+    expect(panel.getAttribute('aria-labelledby')).toBe(tab.id);
   });
 
   it('is a tab beside the configuration, chosen by the URL', async () => {

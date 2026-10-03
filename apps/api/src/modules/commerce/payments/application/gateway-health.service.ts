@@ -223,12 +223,20 @@ export function gatewayHealthSignals(input: {
   return signals;
 }
 
-/** The summary by its fixed rule (`GATEWAY_HEALTH_STATES` states it in words). */
+/**
+ * The summary by its fixed rule (`GATEWAY_HEALTH_STATES` states it in words).
+ *
+ * "Activity" is judged over the SELECTED window (Codex review of #160): an attempt created in
+ * it, or a recorded provider answer or failure that falls in it. A route last used months ago
+ * reads NO_ACTIVITY for "the last seven days" even though its historical facts are still shown.
+ * A null window is all history.
+ */
 export function gatewayHealthState(input: {
   readonly status: PaymentGatewayStatus;
   readonly gaps: readonly GatewayConfigurationGap[];
   readonly signals: readonly GatewayHealthSignal[];
   readonly recorded: GatewayRecordedFacts;
+  readonly window: TimePeriod | null;
 }): GatewayHealthState {
   if (input.status === 'DISABLED') return 'DISABLED';
   if (input.gaps.length > 0) return 'INCOMPLETE';
@@ -236,12 +244,16 @@ export function gatewayHealthState(input: {
     return 'ATTENTION';
   }
   const r = input.recorded;
+  const inWindow = (at: Date | null): boolean =>
+    at !== null &&
+    (input.window === null ||
+      (at.getTime() >= input.window.start.getTime() && at.getTime() < input.window.end.getTime()));
   const anything =
     r.attemptsInWindow > 0 ||
-    r.lastInvoiceCreatedAt !== null ||
-    r.lastInquiryAnsweredAt !== null ||
-    r.lastInquiryFailure !== null ||
-    r.lastCreateFailure !== null;
+    inWindow(r.lastInvoiceCreatedAt) ||
+    inWindow(r.lastInquiryAnsweredAt) ||
+    inWindow(r.lastInquiryFailure?.at ?? null) ||
+    inWindow(r.lastCreateFailure?.at ?? null);
   return anything ? 'NO_ISSUES_RECORDED' : 'NO_ACTIVITY';
 }
 
@@ -318,7 +330,13 @@ export class GatewayHealthService {
       entries.push({
         provider: gateway.provider,
         status: gateway.status,
-        state: gatewayHealthState({ status: gateway.status, gaps, signals, recorded: visible }),
+        state: gatewayHealthState({
+          status: gateway.status,
+          gaps,
+          signals,
+          recorded: visible,
+          window,
+        }),
         gaps,
         check: { supported: this.deps.routes.checkSupported(gateway.provider), last: lastCheck },
         recorded: visible,

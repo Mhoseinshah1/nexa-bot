@@ -375,6 +375,59 @@ describe('gateway health', () => {
     ]);
   });
 
+  /*
+   * Codex review of #160: the receipt-unknown and card-change-unknown producers write
+   * `paymentId` and a reason, never `provider`. The route is the payment's, read through it.
+   */
+  it('files a condition that names only its payment under that payment’s route', async () => {
+    const paymentId = await attempt({ provider: 'CENTRALPAY' });
+    for (const code of [
+      'payments.gateway_receipt_unknown',
+      'payments.gateway_card_change_unknown',
+    ]) {
+      await ctx.container.opsLog.record(tenantA, {
+        code,
+        severity: 'WARN',
+        message: 'test condition',
+        dedupeKey: `${code}:${paymentId}`,
+        context: { paymentId, reason: 'TIMEOUT' },
+      });
+    }
+    // A context naming no payment, or not an id at all, names no route and breaks nothing.
+    await ctx.container.opsLog.record(tenantA, {
+      code: 'payments.gateway_receipt_unknown',
+      severity: 'WARN',
+      message: 'test condition',
+      dedupeKey: 'payments.gateway_receipt_unknown:not-an-id',
+      context: { paymentId: 'not-an-id', reason: 'TIMEOUT' },
+    });
+    const central = await entryOf('CENTRALPAY');
+    expect(central.recorded.openConditions.map((c) => c.code).sort()).toEqual([
+      'payments.gateway_card_change_unknown',
+      'payments.gateway_receipt_unknown',
+    ]);
+    expect((await entryOf('TONPAYS')).recorded.openConditions).toEqual([]);
+  });
+
+  /*
+   * Codex review of #160: a manual-transfer route has attempts too. They count as activity;
+   * only a gateway payment carries an invoice, so its provider-error count stays zero.
+   */
+  it('counts a manual-transfer route’s payments as its attempts, with no provider errors', async () => {
+    const id = ctx.container.ids.uuid();
+    const createdAt = new Date(Date.now() - 60_000);
+    await exec(sql`INSERT INTO payments
+      (id, tenant_id, customer_id, method, state, amount, currency, reference, expires_at,
+       gateway_provider, created_at, updated_at)
+      VALUES (${id}, ${tenantA.tenantId}, ${customerA}, 'MANUAL_TRANSFER', 'PENDING', 250000, 'IRT',
+              'gh-manual-1', ${new Date(createdAt.getTime() + 60 * 60_000)}, 'MANUAL_TRANSFER',
+              ${createdAt}, ${createdAt})`);
+    const manual = await entryOf('MANUAL_TRANSFER');
+    expect(manual.recorded.attemptsInWindow).toBe(1);
+    expect(manual.recorded.attemptsWithProviderError).toBe(0);
+    expect(manual.state).not.toBe('NO_ACTIVITY');
+  });
+
   it('names the last reconciliation from the audit log', async () => {
     const unknown = await attempt({
       provider: 'TONPAYS',
