@@ -340,7 +340,7 @@ describe('PaymentOperationsService', () => {
     correlationId: 'c' as CorrelationId,
   };
 
-  function service(held: readonly string[]) {
+  function service(held: readonly PermissionKey[]) {
     const resolved: string[] = [];
     const reader: PaymentAttentionReader = {
       counts: async () => [
@@ -358,7 +358,7 @@ describe('PaymentOperationsService', () => {
         },
       ],
     };
-    const permissions = async () => new Set(held as PermissionKey[]);
+    const permissions = async () => new Set(held);
     const guard = new PermissionGuard(
       { resolve: permissions, permissionsIfActive: permissions } as never,
       { record: async () => undefined } as never,

@@ -45,14 +45,14 @@ export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
 export const NOTIFICATION_CATEGORY_PERMISSIONS: Readonly<
   Record<NotificationCategory, PermissionKey>
 > = {
-  PAYMENTS: 'payments.view' as PermissionKey,
-  GATEWAYS: 'payments.gateways.view' as PermissionKey,
-  PANELS: 'panels.view' as PermissionKey,
-  PROVISIONING: 'services.view' as PermissionKey,
-  BACKUPS: 'backup.view' as PermissionKey,
-  RECOVERY: 'backup.view' as PermissionKey,
-  SECURITY: 'admins.view' as PermissionKey,
-  INCIDENTS: 'incidents.view' as PermissionKey,
+  PAYMENTS: 'payments.view',
+  GATEWAYS: 'payments.gateways.view',
+  PANELS: 'panels.view',
+  PROVISIONING: 'services.view',
+  BACKUPS: 'backup.view',
+  RECOVERY: 'backup.view',
+  SECURITY: 'admins.view',
+  INCIDENTS: 'incidents.view',
 };
 
 /**

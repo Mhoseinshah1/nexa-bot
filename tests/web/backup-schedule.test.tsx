@@ -7,6 +7,7 @@ import {
   settingDefinition,
   type BackupStatusResponse,
   type SettingKey,
+  type PermissionKey,
 } from '@nexa/contracts';
 import { BackupScheduleCard } from '../../apps/web/src/pages/backup-schedule';
 import { intervalMinutes, presetOf, splitInterval } from '../../apps/web/src/backup-interval';
@@ -22,7 +23,7 @@ import { renderPage, stubApi } from './harness';
  * write with the version it was read at; and the installation default named as such.
  */
 
-const EDIT = ['backup.view', 'settings.view', 'settings.edit'];
+const EDIT: readonly PermissionKey[] = ['backup.view', 'settings.view', 'settings.edit'];
 
 function settingRow(key: string, value: unknown, version: number | null) {
   const definition = settingDefinition(key as SettingKey);

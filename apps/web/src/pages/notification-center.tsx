@@ -7,6 +7,7 @@ import {
   type InboxNotification,
   type NotificationCategory,
   type OperationalSeverity,
+  type PermissionKey,
 } from '@nexa/contracts';
 import { fetchInbox, fetchInboxSummary, markAllInbox, markInbox } from '../api/client';
 import { formatTimestamp } from '../format';
@@ -192,7 +193,7 @@ export function NotificationBell() {
 
 type Show = 'ALL' | 'UNREAD';
 
-export function NotificationCenterPage({ permissions }: { permissions: readonly string[] }) {
+export function NotificationCenterPage({ permissions }: { permissions: readonly PermissionKey[] }) {
   const notify = useToast();
   const queries = useQueryClient();
   const onLink = useLinkHandler();

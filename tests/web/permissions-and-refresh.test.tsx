@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PermissionKey } from '@nexa/contracts';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
@@ -18,7 +19,7 @@ const READINESS = {
   body: { status: 'ok', dependencies: [{ name: 'postgres', status: 'up', latencyMs: 3 }] },
 };
 
-const routeFor = (path: string, permissions: readonly string[]): ReactElement =>
+const routeFor = (path: string, permissions: readonly PermissionKey[]): ReactElement =>
   resolve({ path, query: new URLSearchParams() }, permissions).element as ReactElement;
 
 /**
@@ -51,7 +52,7 @@ describe('the catalogue permission combinations', () => {
   const CREATE_FORM = 'محصول تازه';
   const DENIED = 'شما به این بخش دسترسی ندارید.';
 
-  const open = (permissions: readonly string[]) => {
+  const open = (permissions: readonly PermissionKey[]) => {
     stubApi([LIST, PANELS]);
     return renderPage(routeFor('/products', permissions));
   };
@@ -88,7 +89,7 @@ describe('the notification permission combinations', () => {
   const TEST_SEND = 'ارسال پیام آزمایشی';
   const DENIED = 'شما به این بخش دسترسی ندارید.';
 
-  const open = (permissions: readonly string[]) => {
+  const open = (permissions: readonly PermissionKey[]) => {
     stubApi([HISTORY]);
     return renderPage(routeFor('/notifications', permissions));
   };
@@ -139,13 +140,13 @@ describe('the notification permission combinations', () => {
    * everyone who does not hold all of them, which is the same defect again.
    */
   it('treats a list of permissions as any, not all', () => {
-    const both = { ...entry!, permission: ['a', 'b'] as const };
-    expect(navPermitted(both, ['a'])).toBe(true);
-    expect(navPermitted(both, ['b'])).toBe(true);
-    expect(navPermitted(both, ['c'])).toBe(false);
-    // A single string still means exactly that one.
-    expect(navPermitted({ ...entry!, permission: 'a' }, ['a'])).toBe(true);
-    expect(navPermitted({ ...entry!, permission: 'a' }, ['b'])).toBe(false);
+    const both = { ...entry!, permission: ['panels.view', 'services.view'] as const };
+    expect(navPermitted(both, ['panels.view'])).toBe(true);
+    expect(navPermitted(both, ['services.view'])).toBe(true);
+    expect(navPermitted(both, ['opslog.view'])).toBe(false);
+    // A single key still means exactly that one.
+    expect(navPermitted({ ...entry!, permission: 'panels.view' }, ['panels.view'])).toBe(true);
+    expect(navPermitted({ ...entry!, permission: 'panels.view' }, ['services.view'])).toBe(false);
     // Null still means everybody.
     expect(navPermitted({ ...entry!, permission: null }, [])).toBe(true);
   });

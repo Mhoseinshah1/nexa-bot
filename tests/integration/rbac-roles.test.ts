@@ -11,6 +11,8 @@ import {
   adminPermissionOverrides,
   auditLogs,
   operationalEvents,
+  rolePermissions,
+  roles as rolesTable,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   adminActorFor,
@@ -459,6 +461,71 @@ describe('the effective-permission preview', () => {
       'DENY:tickets.view',
       'GRANT:users.block',
     ]);
+  });
+
+  /*
+   * Item 2 (permission contracts). `PermissionKey` is the catalogue's literal union, and a
+   * row is a `string` until `isPermissionKey` says otherwise. A key stored in a role or an
+   * override that the catalogue does not name — nothing has been removed so far, but a row
+   * is not a contract — must confer nothing AND take nothing down: the role list, the
+   * guard and the preview all still answer, and an edit of the role succeeds.
+   */
+  it('skips a stored key the catalogue does not name, and still answers everywhere', async () => {
+    const helper = await createAdmin(ctx.container, tenantA, {
+      username: 'helper',
+      roleKeys: ['support'],
+    });
+    const db = ctx.container.database.db;
+    const [supportRow] = await db
+      .select({ id: rolesTable.id })
+      .from(rolesTable)
+      .where(
+        and(eq(rolesTable.tenantId, tenantA.tenantId as string), eq(rolesTable.key, 'support')),
+      );
+    await db.insert(rolePermissions).values({
+      tenantId: tenantA.tenantId as string,
+      roleId: supportRow!.id,
+      permissionKey: 'legacy.retired_power',
+    });
+    await grant(helper, 'legacy.other_power', 'GRANT');
+
+    const support = (await roleOf('support'))!;
+    expect(support.permissions).not.toContain('legacy.retired_power');
+    expect(support.permissions).toContain('tickets.reply');
+
+    const held = [...(await ctx.container.guard.permissionsOf(tenantA, adminActorFor(helper)))];
+    expect(held).toContain('tickets.reply');
+    expect(held).not.toContain('legacy.retired_power');
+    expect(held).not.toContain('legacy.other_power');
+
+    const preview = await mgmt().effectivePermissions(tenantA, ownerActor, helper.id);
+    expect(preview.effective).toEqual([...held].sort());
+    expect(preview.rolePermissions).not.toContain('legacy.retired_power');
+    expect(preview.overrides.map((one) => one.permissionKey)).not.toContain('legacy.other_power');
+
+    // Re-saving the set as read is a no-op: the uncatalogued row is invisible to the
+    // comparison, so it neither blocks the save nor counts as a change.
+    const unchanged = await mgmt().updateRole(tenantA, ownerActor, 'support', {
+      name: support.name,
+      permissions: support.permissions,
+      expectedVersion: support.version,
+      reason: 'routine review',
+    });
+    expect(unchanged.version).toBe(support.version);
+    // A real edit writes exactly the submitted set; the uncatalogued row, which conferred
+    // nothing, is not carried forward.
+    const edited = await mgmt().updateRole(tenantA, ownerActor, 'support', {
+      name: support.name,
+      permissions: support.permissions.filter((one) => one !== 'tickets.reply'),
+      expectedVersion: support.version,
+      reason: 'replies move to a new team',
+    });
+    expect(edited.version).toBe(support.version + 1);
+    const stored = await db
+      .select({ key: rolePermissions.permissionKey })
+      .from(rolePermissions)
+      .where(eq(rolePermissions.roleId, supportRow!.id));
+    expect(stored.map((one) => one.key)).not.toContain('legacy.retired_power');
   });
 
   it('shows a disabled administrator holding nothing', async () => {
