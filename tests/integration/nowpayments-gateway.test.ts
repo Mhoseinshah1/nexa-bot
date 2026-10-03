@@ -297,12 +297,14 @@ describe('NOWPayments, through the one settlement path', () => {
       provider: 'NOWPAYMENTS',
       secret: IPN_SECRET,
     });
+    // A route priced only by the central rate is switched on only while that rate is on
+    // (spec §8, #143), so the quote and its switch come first.
+    await centralQuote();
     await ctx.container.paymentGateways.setStatus(tenantA, owner, {
       idempotencyKey: key(),
       provider: 'NOWPAYMENTS',
       status: 'ACTIVE',
     });
-    await centralQuote();
   }
 
   const topup = (amountMinor = TOPUP_TOMAN) => {
