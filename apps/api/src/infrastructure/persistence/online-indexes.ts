@@ -343,6 +343,17 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "provisioning_operations" USING btree ("tenant_id","completed_at") ' +
       "WHERE (state = 'FAILED'::text)",
   },
+  {
+    /*
+     * Phase C3: a tenant's panels in one balancing group — the draft's candidate read and
+     * the catalogue's reach. Partial on the group being set, so it holds only the panels
+     * an operator has grouped; built online like the other panel keyset indexes.
+     */
+    name: 'panels_tenant_balancing_group_idx',
+    definition:
+      'ON "panels" USING btree ("tenant_id","balancing_group") ' +
+      'WHERE (balancing_group IS NOT NULL)',
+  },
 
   /*
    * ---------------------------------------------------------------------------------
@@ -402,6 +413,41 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "audit_logs" USING btree ("tenant_id","occurred_at","id") ' +
       "WHERE (result = 'DENIED'::text)",
+  },
+  {
+    /*
+     * A payment by the one provider id no unique key already serves (Payment Operations
+     * Center, program §10): NOWPayments' payment id a verified webhook named, which is what an
+     * operator copies out of the provider's dashboard. The order, invoice and charge ids are
+     * served by the `(tenant_id, provider, …)` unique keys. Partial: most invoices carry none.
+     */
+    name: 'gateway_invoices_tenant_hinted_payment_idx',
+    definition:
+      'ON "gateway_invoices" USING btree ("tenant_id","hinted_payment_id") ' +
+      'WHERE (hinted_payment_id IS NOT NULL)',
+  },
+  {
+    /*
+     * A payment by the invoice id a verified webhook named for an attempt whose create answer
+     * was lost (CREATE_UNKNOWN): until an inquiry adopts it as `provider_invoice_id`, this is
+     * the only place the provider's invoice id lives. Partial: most invoices carry none.
+     */
+    name: 'gateway_invoices_tenant_hinted_invoice_idx',
+    definition:
+      'ON "gateway_invoices" USING btree ("tenant_id","hinted_invoice_id") ' +
+      'WHERE (hinted_invoice_id IS NOT NULL)',
+  },
+  {
+    /*
+     * An order's provisioning operations (Payment Operations Center): the payment timeline
+     * reads the operation that delivers what the settling order bought. Nothing served
+     * `order_id` except the partial open-operation keys, so a timeline would have walked the
+     * tenant's operations. Concurrently: every delivery writes this table.
+     */
+    name: 'provisioning_operations_tenant_order_idx',
+    definition:
+      'ON "provisioning_operations" USING btree ("tenant_id","order_id","created_at","id") ' +
+      'WHERE (order_id IS NOT NULL)',
   },
 ];
 

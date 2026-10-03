@@ -7,6 +7,7 @@ import {
   orderListQuerySchema,
   type OrderId,
   type OrderListResponse,
+  type OrderPlacementEnvelope,
   type OrderResponse,
   type OrderSummaryResponse,
   type ProductId,
@@ -96,6 +97,33 @@ export class OrdersController {
     const order = await this.container.orders.get(scope, actor, id);
     const identities = await this.container.orders.customerIdentities(scope, actor, [order]);
     return { order: toSummary(order, identities.get(order.customerId)) };
+  }
+
+  /**
+   * Phase C3: why this order landed on its panel. `orders.view`, charged by the service;
+   * `placement: null` for an order routed to its product's own panel explicitly.
+   */
+  @Get('orders/:id/placement')
+  async placement(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<OrderPlacementEnvelope> {
+    const { scope, actor } = await this.authenticate(request);
+    const placement = await this.container.orders.placement(scope, actor, id);
+    return {
+      placement:
+        placement === null
+          ? null
+          : {
+              homePanelId: placement.homePanelId,
+              chosenPanelId: placement.chosenPanelId,
+              group: placement.group,
+              strategy: placement.strategy,
+              decidedBy: placement.decidedBy,
+              candidates: placement.candidates.map((row) => ({ ...row })),
+              decidedAt: placement.decidedAt.toISOString(),
+            },
+    };
   }
 
   private async authenticate(

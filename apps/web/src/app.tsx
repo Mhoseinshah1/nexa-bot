@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionResponse } from '@nexa/contracts';
 import { finalAnswer, pollSession } from './polling';
-import { ApiError, fetchSession, signIn, signOut } from './api/client';
+import { ApiError, completeSecondFactor, fetchSession, signIn, signOut } from './api/client';
 import { t } from './i18n/web.fa';
 import { match, navigate, useDocumentTitle, useLinkHandler, useRoute, type Route } from './router';
 import { useTheme } from './theme';
@@ -20,13 +20,14 @@ import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
-import { AuditLogPage } from './pages/audit-log';
 // Phase B3: the notification center and its top-bar bell.
 import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
 import { IncidentBanner, IncidentDetailPage, IncidentsPage } from './pages/incidents';
+import { AuditLogPage } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
+import { AccountPage } from './pages/account';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
@@ -158,6 +159,8 @@ interface Resolved {
  */
 export const ROUTE_PATTERNS: readonly string[] = [
   '/',
+  // Phase D2: the signed-in administrator's own account (security section).
+  '/account',
   '/users',
   '/users/:id',
   '/trials',
@@ -425,6 +428,11 @@ export function resolve(
           route={route}
           denied={!may('services.view')}
           mayViewRefundRequests={may('refunds.view')}
+          /* Program §13: the workspace's filters and its one mass action. */
+          mayViewPanels={may('panels.view')}
+          mayViewCatalog={may('catalog.view')}
+          mayMassStatus={may('services.mass.status') && may('services.edit')}
+          mayMassGrant={may('services.mass.grant')}
         />
       ),
       crumbs: [{ label: t('web.services_title') }],
@@ -450,6 +458,8 @@ export function resolve(
           /* WP19: a customer's refund request deletes the service AND moves money. */
           mayViewRefundRequests={may('refunds.view')}
           mayDecideRefundRequests={may('refunds.issue') && may('services.terminate')}
+          /* Program §13: an operator's free traffic or time. */
+          mayGrant={may('services.grant')}
         />
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],
@@ -499,7 +509,11 @@ export function resolve(
         <BulkOperationsPage
           route={route}
           denied={!may('bulk_operations.view')}
-          mayRun={may('users.wallet.mass') || may('services.mass.grant')}
+          mayRun={
+            may('users.wallet.mass') ||
+            may('services.mass.grant') ||
+            (may('services.mass.status') && may('services.edit'))
+          }
         />
       ),
       crumbs: [{ label: t('web.bulk_page_title') }],
@@ -512,6 +526,7 @@ export function resolve(
         <BulkOperationNewPage
           mayWallet={may('users.wallet.mass')}
           mayGrant={may('services.mass.grant')}
+          mayStatus={may('services.mass.status') && may('services.edit')}
         />
       ),
       crumbs: [nav('bulk-operations'), { label: t('web.bulk_new') }],
@@ -528,6 +543,7 @@ export function resolve(
           denied={!may('bulk_operations.view')}
           mayWallet={may('users.wallet.mass')}
           mayGrant={may('services.mass.grant')}
+          mayStatus={may('services.mass.status') && may('services.edit')}
         />
       ),
       crumbs: [nav('bulk-operations'), { label: t('web.bulk_detail') }],
@@ -779,9 +795,16 @@ export function resolve(
 
   if (route.path === '/payments') {
     return {
-      element: <PaymentsPage route={route} denied={!may('payments.view')} />,
-      crumbs: [{ label: t('web.payments_title') }],
-      title: t('web.payments_title'),
+      element: (
+        <PaymentsPage
+          route={route}
+          denied={!may('payments.view')}
+          // The queue rows' "ask again" (program §10); the server charges it itself.
+          mayReconcile={may('payments.reconcile')}
+        />
+      ),
+      crumbs: [{ label: t('web.payment_ops_title') }],
+      title: t('web.payment_ops_title'),
     };
   }
 
@@ -825,6 +848,8 @@ export function resolve(
            * this it says nothing about an order the operator may not open.
            */
           mayViewOrders={may('orders.view')}
+          // The history's audit rows (Payment Operations Center): a new question when it changes.
+          mayViewAudit={may('audit.view')}
           denied={!may('payments.view')}
         />
       ),
@@ -1124,6 +1149,17 @@ export function resolve(
     };
   }
 
+  // Phase D2: the signed-in administrator's own account. Every administrator may open
+  // it — it acts only on themselves — so no permission gates the route; the server
+  // checks every call.
+  if (route.path === '/account') {
+    return {
+      element: <AccountPage />,
+      crumbs: [{ label: t('web.account_title') }],
+      title: t('web.account_title'),
+    };
+  }
+
   if (route.path === '/system') {
     return {
       element: <SystemPage route={route} permissions={permissions} />,
@@ -1303,6 +1339,37 @@ function SignIn() {
   const client = useQueryClient();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  /*
+   * Phase D2: set when the password was right and the account owes a second factor.
+   * The challenge itself is an httpOnly cookie this page cannot read; all the page
+   * holds is that a code is owed.
+   */
+  const [challenged, setChallenged] = useState(false);
+  const [code, setCode] = useState('');
+  const [useBackup, setUseBackup] = useState(false);
+  const [expired, setExpired] = useState(false);
+
+  const enter = async () => {
+    /*
+     * Everything the PREVIOUS session cached is dropped before this one reads
+     * anything.
+     *
+     * The console is a single-page app and a session can end without anyone
+     * signing out: the cookie expires, the shell falls back to this screen, and
+     * someone else signs in — on the shared operations machine that the sign-out
+     * path below exists for. Every query key in this app is tenant-independent,
+     * so without this the first frame of `/users` renders the previous tenant's
+     * customer names, usernames and Telegram ids, and `staleTime` plus "keep the
+     * previous data through a failed refetch" can hold them there.
+     *
+     * Dropped HERE rather than by adding a tenant to ~40 query keys: the keys are
+     * correct as cache identities and the thing that changed is WHO is asking, so
+     * the boundary is the session change. `removeQueries` and not `clear`, so the
+     * session query this invalidate is about survives to be re-read.
+     */
+    client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'session' });
+    await client.invalidateQueries({ queryKey: ['session'] });
+  };
 
   const attempt = useMutation({
     // NEVER retried, whatever the global default is. Sign-in carries no
@@ -1312,27 +1379,33 @@ function SignIn() {
     // whose token the browser never received.
     retry: false,
     mutationFn: () => signIn(username, password),
-    onSuccess: async () => {
+    onSuccess: async (outcome) => {
       setPassword('');
-      /*
-       * Everything the PREVIOUS session cached is dropped before this one reads
-       * anything.
-       *
-       * The console is a single-page app and a session can end without anyone
-       * signing out: the cookie expires, the shell falls back to this screen, and
-       * someone else signs in — on the shared operations machine that the sign-out
-       * path below exists for. Every query key in this app is tenant-independent,
-       * so without this the first frame of `/users` renders the previous tenant's
-       * customer names, usernames and Telegram ids, and `staleTime` plus "keep the
-       * previous data through a failed refetch" can hold them there.
-       *
-       * Dropped HERE rather than by adding a tenant to ~40 query keys: the keys are
-       * correct as cache identities and the thing that changed is WHO is asking, so
-       * the boundary is the session change. `removeQueries` and not `clear`, so the
-       * session query this invalidate is about survives to be re-read.
-       */
-      client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'session' });
-      await client.invalidateQueries({ queryKey: ['session'] });
+      setExpired(false);
+      if ('secondFactorRequired' in outcome) {
+        setChallenged(true);
+        return;
+      }
+      await enter();
+    },
+  });
+
+  const second = useMutation({
+    // Never retried either: every attempt is a counted guess.
+    retry: false,
+    mutationFn: () =>
+      completeSecondFactor(useBackup ? { backupCode: code.trim() } : { code: code.trim() }),
+    onSuccess: async () => {
+      setCode('');
+      await enter();
+    },
+    onError: (error: unknown) => {
+      setCode('');
+      // A spent or expired challenge cannot be retried: back to the password.
+      if (error instanceof ApiError && error.code === 'auth.challenge_invalid') {
+        setChallenged(false);
+        setExpired(true);
+      }
     },
   });
 
@@ -1340,6 +1413,80 @@ function SignIn() {
     event.preventDefault();
     attempt.mutate();
   };
+
+  const onSubmitCode = (event: FormEvent) => {
+    event.preventDefault();
+    second.mutate();
+  };
+
+  const startOver = () => {
+    setChallenged(false);
+    setCode('');
+    setUseBackup(false);
+    second.reset();
+    attempt.reset();
+  };
+
+  if (challenged) {
+    return (
+      <main className="shell signin screen">
+        <div className="screen-card">
+          <header>
+            <Brand />
+          </header>
+          <form onSubmit={onSubmitCode} autoComplete="off">
+            <h2 className="strong">{t('web.second_factor_title')}</h2>
+            <p className="muted small">
+              {useBackup ? t('web.second_factor_backup_hint') : t('web.second_factor_hint')}
+            </p>
+            <div className="field">
+              <label htmlFor="second-factor-code">
+                {useBackup
+                  ? t('web.second_factor_backup_label')
+                  : t('web.second_factor_code_label')}
+              </label>
+              <input
+                id="second-factor-code"
+                name="code"
+                className="input"
+                dir="ltr"
+                inputMode={useBackup ? 'text' : 'numeric'}
+                autoComplete="one-time-code"
+                maxLength={useBackup ? 64 : 8}
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <button type="submit" className="btn primary" disabled={second.isPending}>
+              {second.isPending ? t('web.signing_in') : t('web.second_factor_submit')}
+            </button>
+            <div className="btn-group">
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() => {
+                  setUseBackup(!useBackup);
+                  setCode('');
+                }}
+              >
+                {useBackup ? t('web.second_factor_use_app') : t('web.second_factor_use_backup')}
+              </button>
+              <button type="button" className="btn ghost sm" onClick={startOver}>
+                {t('web.second_factor_start_over')}
+              </button>
+            </div>
+            {second.isError && (
+              <p className="error" role="alert">
+                {secondFactorMessage(second.error)}
+              </p>
+            )}
+          </form>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="shell signin screen">
@@ -1382,6 +1529,11 @@ function SignIn() {
             {attempt.isPending ? t('web.signing_in') : t('web.sign_in')}
           </button>
 
+          {expired && !attempt.isError && (
+            <p className="error" role="alert">
+              {t('web.second_factor_expired')}
+            </p>
+          )}
           {attempt.isError && (
             <p className="error" role="alert">
               {messageFor(attempt.error)}
@@ -1391,6 +1543,18 @@ function SignIn() {
       </div>
     </main>
   );
+}
+
+/**
+ * One message for every wrong code: wrong, replayed and already-used read the same,
+ * because the server refuses to tell them apart and this page must not undo that.
+ */
+function secondFactorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code === 'auth.rate_limited') return t('web.rate_limited');
+  if (error instanceof ApiError && error.code === 'auth.challenge_invalid') {
+    return t('web.second_factor_expired');
+  }
+  return t('web.second_factor_invalid');
 }
 
 /** The product mark and name, as the sidebar draws them. */

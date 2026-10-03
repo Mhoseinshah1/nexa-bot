@@ -332,6 +332,7 @@ export class PanelsController {
         since: view.panel.drain?.since.toISOString() ?? null,
         reason: view.panel.drain?.reason ?? null,
       },
+      balancingGroup: view.panel.balancingGroup,
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
     };

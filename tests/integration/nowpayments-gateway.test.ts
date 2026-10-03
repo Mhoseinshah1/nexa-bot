@@ -2,6 +2,8 @@ import { createHmac } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  PAYMENT_OPS_QUEUES,
+  classifyListSearch,
   isNexaError,
   money,
   type ActorContext,
@@ -716,6 +718,212 @@ describe('NOWPayments, through the one settlement path', () => {
       // A refused LIST is not a misconfigured key.
       expect(await openConditions()).not.toContain('payments.gateway_misconfigured');
       expect((await paymentOf(paymentId)).state).toBe('PENDING');
+    });
+  });
+
+  /*
+   * The Payment Operations Center (program §10, `docs/payment-operations-center.md`), over
+   * the REAL lane: the queues, the attention counts and the timeline read what this lane
+   * recorded — duplicate callbacks, a partial payment, a finish for another price, a late
+   * completion — and the operator's actions are the existing commands, idempotent.
+   */
+  describe('the Payment Operations Center over what the lane recorded', () => {
+    /** Every queue this payment is in, through the service the HTTP list calls. */
+    async function queuesOf(paymentId: string): Promise<string[]> {
+      const found: string[] = [];
+      for (const queue of PAYMENT_OPS_QUEUES) {
+        const page = await ctx.container.paymentOperations.list(
+          tenantA,
+          owner,
+          { limit: 100, search: { queue } },
+          {},
+        );
+        if (page.items.some((item) => item.id === paymentId)) found.push(queue);
+      }
+      return found;
+    }
+
+    const nowPaymentsCounts = async () =>
+      (await ctx.container.paymentOperations.attention(tenantA, owner, {})).byGateway.find(
+        (row) => row.gatewayProvider === 'NOWPAYMENTS',
+      )?.counts;
+
+    it('files a partial payment, held for an operator, under UNKNOWN, MISMATCH, PARTIAL and NEEDS_RECONCILIATION — and duplicate callbacks change none of it', async () => {
+      await enableNowPayments();
+      const { paymentId, invoiceId } = await createdAttempt();
+      expect(await queuesOf(paymentId)).toEqual(['PENDING']);
+
+      const partial = fake.pay(invoiceId, 155, 'partially_paid');
+      expect(await ipn(partial)).toBe('SCHEDULED');
+      // The same callback again: a duplicate, never a second hint.
+      expect(await ipn(partial)).toBe('DUPLICATE');
+      await pass();
+      expect((await paymentOf(paymentId)).state).toBe('UNKNOWN');
+      expect(await queuesOf(paymentId)).toEqual([
+        'UNKNOWN',
+        'NEEDS_RECONCILIATION',
+        'MISMATCH',
+        'PARTIAL',
+      ]);
+      expect(await nowPaymentsCounts()).toMatchObject({
+        PENDING: 0,
+        UNKNOWN: 1,
+        NEEDS_RECONCILIATION: 1,
+        MISMATCH: 1,
+        PARTIAL: 1,
+        LATE_COMPLETION: 0,
+      });
+
+      // A third delivery, after the hold: still one payment in each queue, nothing credited.
+      await ipn({ ...partial, updated_at: new Date(Date.now() + 5_000).toISOString() });
+      await inquireNow();
+      expect(await nowPaymentsCounts()).toMatchObject({ UNKNOWN: 1, MISMATCH: 1, PARTIAL: 1 });
+      expect(await ledger()).toEqual([]);
+
+      // The history names the mismatch, the provider's word and the callbacks — by code.
+      const timeline = await ctx.container.paymentTimeline.timeline(tenantA, owner, paymentId);
+      const kinds = timeline.entries.map((entry) => entry.kind);
+      expect(kinds).toEqual(
+        expect.arrayContaining([
+          'PAYMENT_CREATED',
+          'GATEWAY_INVOICE_REQUESTED',
+          'GATEWAY_INVOICE_CREATED',
+          'GATEWAY_WEBHOOK_HINT',
+          'GATEWAY_INQUIRY',
+          'PAYMENT_OUTCOME_UNKNOWN',
+          'AUDIT_RECORDED',
+        ]),
+      );
+      expect(timeline.entries.find((e) => e.kind === 'PAYMENT_OUTCOME_UNKNOWN')).toMatchObject({
+        reason: 'PROVIDER_AMOUNT_MISMATCH',
+        providerStatus: 'partially_paid',
+      });
+      expect(timeline.entries.find((e) => e.kind === 'GATEWAY_INQUIRY')).toMatchObject({
+        providerStatus: 'partially_paid',
+      });
+      expect(timeline.entries.find((e) => e.kind === 'GATEWAY_WEBHOOK_HINT')).toMatchObject({
+        webhookCount: 2,
+      });
+      // Never a secret, a link or the provider's raw body.
+      const wire = JSON.stringify(timeline);
+      expect(wire).not.toContain(API_KEY);
+      expect(wire).not.toContain(IPN_SECRET);
+      expect(wire).not.toContain('nowpayments.io/payment');
+    });
+
+    it('asks again and reconciles only through the existing commands — idempotent, audited, and the record facets stay', async () => {
+      await enableNowPayments();
+      const { paymentId, invoiceId } = await createdAttempt();
+      await ipn(fake.pay(invoiceId, 156, 'partially_paid'));
+      await pass();
+      // "Ask again" is spaced a minute from the lane's own last inquiry.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET last_inquiry_at = now() - interval '2 minutes'
+            WHERE payment_id = ${paymentId}`,
+      );
+
+      const asked = key();
+      expect(
+        await ctx.container.payments.reinquireGatewayPayment(tenantA, owner, paymentId, {
+          idempotencyKey: asked,
+        }),
+      ).toBe(true);
+      // The same key replays the first answer; a new key inside the minute records nothing.
+      expect(
+        await ctx.container.payments.reinquireGatewayPayment(tenantA, owner, paymentId, {
+          idempotencyKey: asked,
+        }),
+      ).toBe(true);
+      expect(
+        await ctx.container.payments.reinquireGatewayPayment(tenantA, owner, paymentId, {
+          idempotencyKey: key(),
+        }),
+      ).toBe(false);
+
+      const decided = key();
+      const failed = await ctx.container.payments.reconcileGatewayPayment(
+        tenantA,
+        owner,
+        paymentId,
+        { to: 'FAILED', note: 'partial refunded at NOWPayments', idempotencyKey: decided },
+      );
+      expect(failed.state).toBe('FAILED');
+      const replay = await ctx.container.payments.reconcileGatewayPayment(
+        tenantA,
+        owner,
+        paymentId,
+        { to: 'FAILED', note: 'partial refunded at NOWPayments', idempotencyKey: decided },
+      );
+      expect(replay.state).toBe('FAILED');
+      const audits = await rows<{ action: string }>(
+        sql`SELECT action FROM audit_logs WHERE entity_id = ${paymentId}
+            AND action IN ('payment.reconcile_failed', 'gateway_invoice.reconcile_inquiry_requested')
+            ORDER BY occurred_at, action`,
+      );
+      expect(audits.map((a) => a.action)).toEqual([
+        'gateway_invoice.reconcile_inquiry_requested',
+        'gateway_invoice.reconcile_inquiry_requested',
+        'payment.reconcile_failed',
+      ]);
+
+      // Out of the open queues; the RECORD facets (a mismatch, a partial) stay true.
+      expect(await queuesOf(paymentId)).toEqual(['MISMATCH', 'PARTIAL']);
+      const timeline = await ctx.container.paymentTimeline.timeline(tenantA, owner, paymentId);
+      expect(timeline.entries.map((e) => e.kind)).toEqual(
+        expect.arrayContaining(['GATEWAY_REINQUIRE_REQUESTED', 'PAYMENT_RESOLVED']),
+      );
+      expect(
+        timeline.entries
+          .filter((e) => e.kind === 'AUDIT_RECORDED')
+          .map((e) => (e.kind === 'AUDIT_RECORDED' ? e.action : '')),
+      ).toEqual(expect.arrayContaining(['payment.reconcile_failed', 'payment.lose_track']));
+      expect(await ledger()).toEqual([]);
+    });
+
+    it('files a finish for another price as MISMATCH and reconcilable, but not PARTIAL', async () => {
+      await enableNowPayments();
+      const { paymentId, invoiceId } = await createdAttempt();
+      await ipn(fake.pay(invoiceId, 157, 'finished', 9.99));
+      await pass();
+      expect(await queuesOf(paymentId)).toEqual(['UNKNOWN', 'NEEDS_RECONCILIATION', 'MISMATCH']);
+    });
+
+    it('files a finish after the deadline under LATE_COMPLETION only — still PENDING, nothing moved', async () => {
+      await enableNowPayments();
+      const { paymentId, invoiceId } = await createdAttempt();
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${paymentId}`,
+      );
+      offsetMs = -10 * 60_000;
+      await ipn(fake.pay(invoiceId, 158, 'finished'));
+      await pass();
+      expect(await queuesOf(paymentId)).toEqual(['PENDING', 'LATE_COMPLETION']);
+      const timeline = await ctx.container.paymentTimeline.timeline(tenantA, owner, paymentId);
+      expect(timeline.entries.map((e) => e.kind)).toEqual(
+        expect.arrayContaining(['GATEWAY_LATE_COMPLETION', 'GATEWAY_OUTCOME']),
+      );
+      expect(await ledger()).toEqual([]);
+    });
+
+    it('finds the attempt by the provider ids an operator copies from NOWPayments', async () => {
+      await enableNowPayments();
+      const { paymentId, invoiceId } = await createdAttempt();
+      await ipn(fake.pay(invoiceId, 4_400_159, 'waiting'));
+      await pass();
+      for (const q of [invoiceId, '4400159']) {
+        const text = classifyListSearch(q);
+        if (text === null) throw new Error('no search');
+        const page = await ctx.container.paymentOperations.list(
+          tenantA,
+          owner,
+          { search: { text } },
+          {},
+        );
+        expect(
+          page.items.map((item) => item.id),
+          q,
+        ).toEqual([paymentId]);
+      }
     });
   });
 });

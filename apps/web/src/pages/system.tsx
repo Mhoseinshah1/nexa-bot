@@ -1,3 +1,4 @@
+import { RolesSection } from './roles';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import {
@@ -16,6 +17,7 @@ import {
   fetchReadiness,
   fetchRoles,
   resetAdminPassword,
+  resetAdminSecondFactor,
   revokeAdminSessions,
   setAdminRoles,
   setAdminStatus,
@@ -71,7 +73,7 @@ import { DiagnosticsSection } from './system-diagnostics';
  * and what the background monitor is configured to do.
  */
 
-const SECTIONS = ['status', 'diagnostics', 'monitor', 'admins'] as const;
+const SECTIONS = ['status', 'diagnostics', 'monitor', 'admins', 'roles'] as const;
 type Section = (typeof SECTIONS)[number];
 
 function isSection(value: string | null): value is Section {
@@ -129,6 +131,8 @@ export function SystemPage({
           { id: 'diagnostics', label: t('web.system_tab_diagnostics') },
           { id: 'monitor', label: t('web.system_tab_monitor') },
           { id: 'admins', label: t('web.system_tab_admins') },
+          // Phase D3: roles, the permission matrix and the effective-permission preview.
+          { id: 'roles', label: t('web.system_tab_roles') },
         ]}
       />
 
@@ -142,6 +146,12 @@ export function SystemPage({
           <AdminsSection
             denied={!permissions.includes('admins.view')}
             mayEdit={permissions.includes('admins.edit')}
+          />
+        )}
+        {section === 'roles' && (
+          <RolesSection
+            denied={!permissions.includes('admins.view')}
+            mayEdit={permissions.includes('admins.permissions.edit')}
           />
         )}
       </TabPanel>
@@ -812,6 +822,7 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
   const rolesKey = useSubmissionKey();
   const passwordKey = useSubmissionKey();
   const revokeKey = useSubmissionKey();
+  const secondFactorKey = useSubmissionKey();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
   /*
@@ -829,6 +840,21 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
   const [edited, setEdited] = useState<readonly string[] | null>(null);
   const roleKeys = edited ?? row.roleKeys;
   const [newPassword, setNewPassword] = useState('');
+  /*
+   * The ACTING operator's own step-up (D2 review): a password reset or a 2FA removal is
+   * half a takeover, so the server asks who is at the keyboard. Cleared on every settle,
+   * success or failure, like the new password.
+   */
+  const [myPassword, setMyPassword] = useState('');
+  const [myCode, setMyCode] = useState('');
+  const stepUp = () => ({
+    password: myPassword,
+    ...(myCode.trim() === '' ? {} : { code: myCode.replace(/\s+/g, '') }),
+  });
+  const clearStepUp = () => {
+    setMyPassword('');
+    setMyCode('');
+  };
   const [problem, setProblem] = useState<string | null>(null);
 
   const roles = useQuery({ queryKey: ['roles'], queryFn: fetchRoles, enabled: open && mayEdit });
@@ -893,10 +919,18 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
   });
 
   const password = useMutation({
+    // Never retried: the step-up spends a one-time code.
+    retry: false,
     mutationFn: () => {
       passwordKey.current({ id: row.id, reason: reason.trim() });
-      return resetAdminPassword({ id: row.id, newPassword, reason: reason.trim() });
+      return resetAdminPassword({
+        id: row.id,
+        newPassword,
+        reason: reason.trim(),
+        stepUp: stepUp(),
+      });
     },
+    onSettled: clearStepUp,
     onSuccess: (result) => {
       passwordKey.settle();
       replaceRow(result.admin);
@@ -938,17 +972,61 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
     },
   });
 
+  /*
+   * Phase D2: removing ANOTHER administrator's two-step sign-in — their lost phone. The
+   * server applies the password reset's bounds (not oneself, no more privilege than you
+   * hold, an owner needs more) and ends every session the target holds.
+   */
+  const secondFactor = useMutation({
+    // Not auto-retried, AND keyed (Codex review): a retry of a reset whose answer was
+    // lost replays the first result instead of resetting again — which would report
+    // "had no factor" and could remove one the target has since re-enrolled.
+    retry: false,
+    mutationFn: () =>
+      resetAdminSecondFactor({
+        id: row.id,
+        reason: reason.trim(),
+        stepUp: stepUp(),
+        idempotencyKey: secondFactorKey.current({ id: row.id, reason: reason.trim() }),
+      }),
+    onSettled: clearStepUp,
+    onSuccess: (result) => {
+      secondFactorKey.settle();
+      replaceRow(result.admin);
+      notify({
+        tone: 'ok',
+        message: (result.hadSecondFactor
+          ? t('web.admin_second_factor_reset_done')
+          : t('web.admin_second_factor_reset_none')
+        ).replace('{count}', String(result.sessionsRevoked)),
+      });
+      void queries.invalidateQueries({ queryKey: ['admin-sessions', row.id] });
+    },
+    onError: (error: unknown) => {
+      secondFactorKey.settleOn(error);
+      fail(error);
+    },
+  });
+
   const live = sessions.data?.sessions ?? [];
   const busy =
-    status.isPending || rolesMutation.isPending || password.isPending || revoke.isPending;
+    status.isPending ||
+    rolesMutation.isPending ||
+    password.isPending ||
+    revoke.isPending ||
+    secondFactor.isPending;
   const close = () => {
     setOpen(false);
     setNewPassword('');
+    clearStepUp();
     setProblem(null);
   };
   // The reason and the roles survive a close; the new password is cleared by it, so a
   // close with one typed asks first.
-  const { requestClose, dialog: discardQuestion } = useConfirmedClose(newPassword !== '', close);
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(
+    newPassword !== '' || myPassword !== '',
+    close,
+  );
 
   return (
     <>
@@ -1067,6 +1145,37 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
                 </button>
               </div>
 
+              <Banner tone="info" title={t('web.admin_step_up_title')}>
+                {t('web.admin_step_up_hint')}
+              </Banner>
+              <Field label={t('web.admin_step_up_password')} htmlFor={`admin-stepup-${row.id}`}>
+                <input
+                  id={`admin-stepup-${row.id}`}
+                  className="input"
+                  type="password"
+                  dir="ltr"
+                  autoComplete="current-password"
+                  value={myPassword}
+                  onChange={(event) => setMyPassword(event.target.value)}
+                />
+              </Field>
+              <Field
+                label={t('web.admin_step_up_code')}
+                hint={t('web.admin_step_up_code_hint')}
+                htmlFor={`admin-stepup-code-${row.id}`}
+              >
+                <input
+                  id={`admin-stepup-code-${row.id}`}
+                  className="input"
+                  dir="ltr"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={8}
+                  value={myCode}
+                  onChange={(event) => setMyCode(event.target.value)}
+                />
+              </Field>
+
               <Banner tone="warn" title={t('web.admin_password_reset_title')}>
                 {t('web.admin_password_reset_hint')}
               </Banner>
@@ -1085,10 +1194,24 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
                 <button
                   type="button"
                   className="btn danger sm"
-                  disabled={busy || !reasonGiven || newPassword.length < 12}
+                  disabled={busy || !reasonGiven || newPassword.length < 12 || myPassword === ''}
                   onClick={() => password.mutate()}
                 >
                   {t('web.admin_password_reset')}
+                </button>
+              </div>
+
+              <Banner tone="warn" title={t('web.admin_second_factor_reset_title')}>
+                {t('web.admin_second_factor_reset_hint')}
+              </Banner>
+              <div className="toolbar">
+                <button
+                  type="button"
+                  className="btn danger sm"
+                  disabled={busy || !reasonGiven || myPassword === ''}
+                  onClick={() => secondFactor.mutate()}
+                >
+                  {t('web.admin_second_factor_reset')}
                 </button>
               </div>
             </>
@@ -1154,6 +1277,10 @@ function refusalText(error: unknown, fallback: string | null): string {
     }
     if (error.code === IDENTITY_ERROR_CODES.ADMIN_LAST_OWNER) {
       return t('web.admin_last_owner');
+    }
+    if (error.code === IDENTITY_ERROR_CODES.AUTH_STEP_UP_FAILED) return t('web.step_up_failed');
+    if (error.code === IDENTITY_ERROR_CODES.AUTH_STEP_UP_FACTOR_REQUIRED) {
+      return t('web.step_up_factor_required');
     }
     if (fallback !== null && error.code === IDENTITY_ERROR_CODES.ADMIN_USERNAME_TAKEN) {
       return fallback;

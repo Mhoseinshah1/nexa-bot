@@ -15,6 +15,20 @@ import {
   setAdminTelegramBindingRequestSchema,
   resetAdminPasswordRequestSchema,
   revokeAdminSessionsRequestSchema,
+  resetAdminSecondFactorRequestSchema,
+  stepUpSchema,
+  createRoleRequestSchema,
+  updateRoleRequestSchema,
+  deleteRoleRequestSchema,
+  criticalPermissionChanges,
+  holdsCriticalPermission,
+  incoherentPermissionGrants,
+  isImmutableRole,
+  isPermissionKey,
+  type EffectivePermissionsResponse,
+  type RoleView,
+  type SecretCipher,
+  type StepUp,
   type AdminSessionSummary,
   type ActorContext,
   type Admin,
@@ -44,10 +58,14 @@ import {
 } from '../../access/application/permission-guard.js';
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { DrizzleRoleRepository } from '../infrastructure/drizzle-role.repository.js';
-import type { AdminRepository, SessionRepository } from './ports.js';
+import type {
+  DrizzleRoleRepository,
+  ManagedRole,
+} from '../infrastructure/drizzle-role.repository.js';
+import type { AdminRepository, SecondFactorRepository, SessionRepository } from './ports.js';
 import { assertNotSelf, assertOwnerSurvives, diffRoles } from '../domain/admin-protection.js';
 import type { CredentialThrottle, Reservation } from './credential-throttle.js';
+import { verifySecondFactorProof } from './second-factor-proof.js';
 
 /**
  * Administrator management.
@@ -118,6 +136,10 @@ export class AdminManagementService {
      * person pressing a button twice, which the locked delta already answers.
      */
     private readonly idempotency: IdempotencyStore,
+    /** Phase D2: an operator removing another administrator's second factor. */
+    private readonly factors: SecondFactorRepository,
+    /** For a step-up's second-factor proof (D2 review). */
+    private readonly cipher: SecretCipher,
   ) {}
 
   async list(
@@ -964,6 +986,7 @@ export class AdminManagementService {
     actor: ActorContext,
     targetId: AdminId,
     input: unknown,
+    context: PasswordChangeContext = { ip: null },
   ): Promise<{ admin: Admin; roleKeys: string[]; sessionsRevoked: number }> {
     // A cheap rejection before the KDF, and NOT the authorization: read on the
     // pool, so it can be stale by the time the row is written. The check of
@@ -978,6 +1001,10 @@ export class AdminManagementService {
     // Before anything is read. An administrator changes their OWN password
     // through the path that asks for the current one.
     assertNotSelf(adminIdOf(actor), targetId);
+
+    // The ACTOR's step-up (D2 security review). Setting somebody's password is taking
+    // their account: `admins.edit` and a session are not enough on their own.
+    await this.verifyStepUp(scope, actor, command.stepUp, context, 'admin.password_reset');
 
     // Outside the transaction, like `create`: a KDF is intentionally slow and
     // holding a lock for its duration turns one request into contention for
@@ -1075,6 +1102,143 @@ export class AdminManagementService {
         });
 
         return { admin: target, roleKeys: targetRoleKeys, sessionsRevoked };
+      },
+    );
+  }
+
+  /**
+   * Removes ANOTHER administrator's second factor (Phase D2) — the in-product answer to
+   * "they lost their phone and their backup codes".
+   *
+   * Bound exactly as `resetPassword` is, for the same reason: removing somebody's second
+   * factor is half of taking their account. `admins.edit`; never oneself (the holder
+   * turns their own factor off with password + code); no more privilege than the actor
+   * holds; and an owner target needs `admins.permissions.edit` as well. Every session of
+   * the target ends, so whoever was signed in signs in again under the new state.
+   *
+   * It does NOT touch the password. The target still needs it to sign in. That alone
+   * does not make it safe — the password reset below is the other half, and together
+   * the two are a takeover — so BOTH require the acting operator's own step-up: their
+   * password, and their own second factor when they have one (D2 security review).
+   */
+  async resetSecondFactor(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    input: unknown,
+    context: PasswordChangeContext = { ip: null },
+  ): Promise<{
+    admin: Admin;
+    roleKeys: string[];
+    hadSecondFactor: boolean;
+    sessionsRevoked: number;
+  }> {
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.totp_reset',
+      entityId: targetId,
+    });
+    const command = resetAdminSecondFactorRequestSchema.parse(input);
+    assertNotSelf(adminIdOf(actor), targetId);
+
+    /*
+     * A replay key (Codex review), looked up BEFORE the step-up: the step-up spends a
+     * one-time code, so a retry of a reset whose response was lost would otherwise fail
+     * its step-up — or, without a key at all, run a SECOND reset that reports "had no
+     * factor" and could remove one the target has since re-enrolled. The stored result
+     * holds no secret. Bound to the actor and the target, never to the proof.
+     */
+    const requestHash = hashRequest({
+      op: 'admin.totp_reset',
+      actorId: adminIdOf(actor),
+      targetId,
+      reason: command.reason,
+    });
+    const replay =
+      command.idempotencyKey === undefined
+        ? undefined
+        : ({ namespace: 'WEB', idempotencyKey: command.idempotencyKey } as const);
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{
+        readonly hadSecondFactor: boolean;
+        readonly sessionsRevoked: number;
+      }>(scope, replay.namespace, replay.idempotencyKey, requestHash);
+      if (found !== null) {
+        const target = await this.requireAdmin(scope, targetId);
+        return {
+          admin: target,
+          roleKeys: await this.admins.roleKeysFor(scope, target.id),
+          ...found.result,
+        };
+      }
+    }
+
+    // The ACTOR's step-up (D2 security review): removing somebody's factor is half of
+    // taking their account, and a session holding `admins.edit` is not enough.
+    await this.verifyStepUp(scope, actor, command.stepUp, context, 'admin.totp_reset');
+
+    return this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.totp_reset', entityId: targetId },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        const now = this.clock.now();
+        await this.guard.check(scope, actor, 'admins.edit', tx);
+
+        const target = await this.requireAdmin(scope, targetId, tx);
+        assertNotSelf(adminIdOf(actor), target.id);
+        const targetRoleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
+        if (targetRoleKeys.includes(OWNER_ROLE_KEY)) {
+          await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        }
+        await this.assertRestoresNoMorePrivilegeThanHeld(scope, actor, target.id, tx);
+
+        const hadSecondFactor = await this.factors.deleteFactor(scope, target.id, tx);
+        const sessionsRevoked = await this.sessions.revokeAllForAdmin(
+          scope,
+          target.id,
+          now,
+          'second_factor_reset',
+          tx,
+        );
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.totp_reset',
+            entityType: 'Admin',
+            entityId: target.id,
+            // `endedSignIns`, never a key containing `session`: see `resetPassword`.
+            before: { hadSecondFactor, liveSignIns: sessionsRevoked },
+            after: { state: 'DISABLED', endedSignIns: sessionsRevoked, via: 'OPERATOR' },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.opsLog.record(
+          scope,
+          {
+            code: 'admin.second_factor_reset' satisfies ManagementAdminEventCode,
+            severity: 'WARN',
+            message: `two-step sign-in of administrator ${target.username} was reset by an operator`,
+            context: { adminId: target.id, hadSecondFactor, endedSignIns: sessionsRevoked },
+          },
+          tx,
+        );
+        if (replay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            replay.namespace,
+            replay.idempotencyKey,
+            requestHash,
+            { hadSecondFactor, sessionsRevoked },
+            tx,
+          );
+        }
+        return { admin: target, roleKeys: targetRoleKeys, hadSecondFactor, sessionsRevoked };
       },
     );
   }
@@ -1219,6 +1383,125 @@ export class AdminManagementService {
         return revoked;
       },
     );
+  }
+
+  /**
+   * A STEP-UP: the acting administrator proving, for one sensitive act, that they are
+   * the account holder and not merely somebody holding their session (D2 review).
+   *
+   * The password, through `verifyOwnPassword` — the same throttle, the same denial row.
+   * Then, when THIS administrator has two-step sign-in on, a current code or an unused
+   * backup code too: a step-up weaker than the factor the account signs in with would
+   * make the factor decorative for exactly the acts that matter most. The code goes
+   * through `verifySecondFactorProof` (the one checker, replay rule included), reserved
+   * on the shared throttle first; a wrong one keeps its reservation.
+   *
+   * Every failure is ONE validation code, `auth.step_up_failed`, so a failed step-up does
+   * not sign the operator out of the page. `auth.step_up_factor_required` says only that
+   * the actor's own factor is on and no code was sent.
+   */
+  async verifyStepUp(
+    scope: ScopeContext,
+    actor: ActorContext,
+    input: StepUp | unknown,
+    context: PasswordChangeContext,
+    action: string,
+  ): Promise<void> {
+    const stepUp = stepUpSchema.parse(input);
+    const adminId = adminIdOf(actor);
+    if (adminId === null) {
+      throw errors.unauthenticated(IDENTITY_ERROR_CODES.AUTH_REQUIRED, 'Sign in first.');
+    }
+    if (isSystemContext(scope)) {
+      throw errors.validation(
+        PLATFORM_ERROR_CODES.TENANT_CONTEXT_MISSING,
+        'Re-authentication needs a tenant scope.',
+      );
+    }
+    const tenantScope: TenantContext = scope;
+    try {
+      await this.verifyOwnPassword(scope, actor, stepUp.password, context, action);
+    } catch (error) {
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS) {
+        throw stepUpFailed();
+      }
+      throw error;
+    }
+
+    const factor = await this.factors.findFactor(tenantScope, adminId);
+    if (factor === null || factor.state !== 'ACTIVE') return;
+    if (stepUp.code === undefined && stepUp.backupCode === undefined) {
+      await this.audit.record(scope, actor, {
+        action,
+        entityType: 'Admin',
+        entityId: adminId,
+        before: null,
+        after: { reason: 'SECOND_FACTOR_REQUIRED' },
+        result: 'DENIED',
+      });
+      throw errors.validation(
+        IDENTITY_ERROR_CODES.AUTH_STEP_UP_FACTOR_REQUIRED,
+        'Your two-step sign-in is on: enter a code from your authenticator or a backup code.',
+      );
+    }
+
+    const admin = await this.requireAdmin(scope, adminId);
+    const method = stepUp.code !== undefined ? 'TOTP' : 'BACKUP_CODE';
+    let reserved: Reservation;
+    try {
+      reserved = await this.throttle.reserve(tenantScope, actor, admin.username, context.ip);
+    } catch (error) {
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) {
+        await this.audit.record(scope, actor, {
+          action,
+          entityType: 'Admin',
+          entityId: adminId,
+          before: null,
+          after: { reason: 'THROTTLED', method },
+          result: 'DENIED',
+        });
+      }
+      throw error;
+    }
+
+    let outcome: { kind: 'OK' } | { kind: 'GONE' } | { kind: 'REJECTED'; detail: string };
+    try {
+      outcome = await this.uow.run(scope, async (tx) => {
+        const locked = await this.factors.lockFactor(tenantScope, adminId, tx);
+        if (locked === null || locked.state !== 'ACTIVE') return { kind: 'GONE' as const };
+        const verdict = await verifySecondFactorProof(
+          { factors: this.factors, cipher: this.cipher },
+          tenantScope,
+          adminId,
+          locked,
+          stepUp,
+          this.clock.now(),
+          tx,
+        );
+        if (!verdict.accepted) return { kind: 'REJECTED' as const, detail: verdict.reason };
+        await this.throttle.releaseIn(tenantScope, admin.username, context.ip, reserved, tx);
+        return { kind: 'OK' as const };
+      });
+    } catch (error) {
+      await this.throttle.release(tenantScope, admin.username, context.ip, reserved);
+      throw error;
+    }
+    if (outcome.kind === 'GONE') {
+      // The factor was removed meanwhile: the password was the whole proof owed.
+      await this.throttle.release(tenantScope, admin.username, context.ip, reserved);
+      return;
+    }
+    if (outcome.kind === 'REJECTED') {
+      await this.audit.record(scope, actor, {
+        action,
+        entityType: 'Admin',
+        entityId: adminId,
+        before: null,
+        after: { reason: 'BAD_SECOND_FACTOR', method, detail: outcome.detail },
+        result: 'DENIED',
+      });
+      throw stepUpFailed();
+    }
   }
 
   /**
@@ -1517,6 +1800,474 @@ export class AdminManagementService {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Phase D3 — roles (program §18), over the EXISTING authorization model
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Every role, with its version and the administrators holding it. A READ: `admins.view`,
+   * the permission the roles catalogue has always charged.
+   */
+  async listManagedRoles(scope: ScopeContext, actor: ActorContext): Promise<RoleView[]> {
+    await this.guard.check(scope, actor, 'admins.view');
+    // ONE snapshot (Codex 4173474753): a role's permissions and the version an edit will
+    // name must come from the same state, or a stale set paired with a newer version
+    // defeats the optimistic check it exists for.
+    const rows = await this.uow.runSnapshot(scope, (tx) => this.roles.listForManagement(scope, tx));
+    return rows.map(toRoleView);
+  }
+
+  /**
+   * One administrator's authority, explained — and computed by THE resolver, through the
+   * guard, as that administrator. Not a copy of the rule: what this answers is exactly
+   * what a request of theirs would be checked against, DENY overrides and the
+   * dependency pass included. A disabled administrator holds nothing, and says so.
+   */
+  async effectivePermissions(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+  ): Promise<EffectivePermissionsResponse> {
+    await this.guard.check(scope, actor, 'admins.view');
+    // Every read — and the resolver's own — in ONE snapshot (Codex 4173474764), so the
+    // explanation and the answer describe the same state: a role unassigned between two
+    // reads must not appear in one half and not the other.
+    const read = await this.uow.runSnapshot(scope, async (tx) => {
+      const target = await this.requireAdmin(scope, targetId, tx);
+      const roleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
+      const held = (await this.roles.list(scope, tx)).filter((role) => roleKeys.includes(role.key));
+      const rolePermissions = await this.roles.permissionsForAdmin(scope, target.id, tx);
+      const overrides = await this.roles.overridesForAdmin(scope, target.id, tx);
+      const effective = await this.guard.permissionsOf(
+        scope,
+        {
+          type: 'WEB_ADMIN',
+          id: target.id,
+          label: target.username,
+          surface: actor.surface,
+          correlationId: actor.correlationId,
+        },
+        tx,
+      );
+      return { target, held, rolePermissions, overrides, effective };
+    });
+    const { target, held, rolePermissions, overrides, effective } = read;
+    const now = this.clock.now();
+    return {
+      adminId: target.id,
+      active: target.status === 'ACTIVE',
+      roles: held.map((role) => ({ key: role.key, name: role.name })),
+      rolePermissions: [...new Set(rolePermissions)].sort(),
+      overrides: overrides
+        .map((override) => ({
+          permissionKey: override.permissionKey,
+          effect: override.effect,
+          reason: override.reason,
+          expiresAt: override.expiresAt === null ? null : override.expiresAt.toISOString(),
+          active: override.expiresAt === null || override.expiresAt.getTime() > now.getTime(),
+        }))
+        .sort((a, b) => a.permissionKey.localeCompare(b.permissionKey)),
+      effective: [...effective].sort(),
+    };
+  }
+
+  /**
+   * Creates a CUSTOM role (create and clone are this one write; a clone names its source).
+   *
+   * `admins.permissions.edit`, charged twice like every privilege write here — a cheap
+   * audited preflight, and the check of record under the tenant lock. Beyond the
+   * permission, the four rules that make a role safe to compose:
+   *
+   *   - every key is in the frozen catalogue (`role.unknown_permission`);
+   *   - the set is COHERENT: no action without the read it needs, the same table the
+   *     resolver applies (`role.permissions_incoherent`) — refused here, where there is
+   *     still somebody to tell, rather than silently dropped on every request;
+   *   - nothing the ACTOR does not hold: a role is a way to hand authority out, and the
+   *     amplification rule `create` and `setRoles` follow applies to it too;
+   *   - a CRITICAL permission needs the typed confirmation, checked here, not only drawn.
+   */
+  async createRole(scope: ScopeContext, actor: ActorContext, input: unknown): Promise<RoleView> {
+    await this.assertMayAttempt(scope, actor, 'admins.permissions.edit', {
+      action: 'role.create',
+      entityId: null,
+      entityType: 'Role',
+    });
+    const command = createRoleRequestSchema.parse(input);
+    const permissions = coherentPermissionSet(command.permissions);
+    assertConfirmed(command.key, criticalPermissionChanges([], permissions), command.confirmation);
+
+    const requestHash = hashRequest({
+      op: 'role.create',
+      actorId: adminIdOf(actor),
+      key: command.key,
+      name: command.name,
+      permissions,
+      clonedFrom: command.clonedFrom ?? null,
+      // The reason is part of the command (Codex 4173474761): one key reused with a
+      // different reason is a different request, refused rather than replayed.
+      reason: command.reason,
+      confirmation: command.confirmation ?? null,
+    });
+    const replay = replayOf(command.idempotencyKey);
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{ readonly role: RoleView }>(
+        scope,
+        replay.namespace,
+        replay.idempotencyKey,
+        requestHash,
+      );
+      // The FIRST response, as stored with the write — not today's state of the role.
+      if (found !== null) return found.result.role;
+    }
+
+    return this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'role.create', entityId: command.key, entityType: 'Role' },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        if ((await this.roles.findByKey(scope, command.key, tx)) !== null) {
+          throw errors.conflict(
+            IDENTITY_ERROR_CODES.ROLE_KEY_TAKEN,
+            'A role with this key exists.',
+          );
+        }
+        await this.assertHoldsAll(scope, actor, permissions, tx);
+        const now = this.clock.now();
+        await this.roles.createCustom(
+          scope,
+          {
+            id: this.ids.uuid() as RoleId,
+            key: command.key,
+            name: command.name,
+            permissions,
+            now,
+          },
+          tx,
+        );
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'role.create',
+            entityType: 'Role',
+            entityId: command.key,
+            before: null,
+            after: {
+              key: command.key,
+              name: command.name,
+              permissions,
+              clonedFrom: command.clonedFrom ?? null,
+              criticalChanged: criticalPermissionChanges([], permissions),
+            },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.role_created',
+          `role ${command.key} was created`,
+          { roleKey: command.key, granted: permissions.length },
+        );
+        // Read on the locked connection, before the commit (Codex 4173474758): the
+        // answer is this write's result, never whatever the role is after somebody else.
+        const created = await this.lockedRoleView(scope, command.key, tx);
+        if (replay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            replay.namespace,
+            replay.idempotencyKey,
+            requestHash,
+            { role: created },
+            tx,
+          );
+        }
+        return created;
+      },
+    );
+  }
+
+  /**
+   * Edits a role's name and permission set — never its key — from the version it was
+   * read at. The OWNER role is immutable: it carries the whole catalogue and every
+   * last-owner protection counts its holders, so an owner role that could lose
+   * `admins.edit` would be an installation whose owners cannot administer it. Other
+   * system roles may be edited; their permissions were always a creation default.
+   *
+   * The actor must hold everything the role grants BEFORE and AFTER: adding authority
+   * one does not hold is the amplification rule, and rewriting a role more privileged
+   * than oneself is acting on people one could not otherwise touch.
+   */
+  async updateRole(
+    scope: ScopeContext,
+    actor: ActorContext,
+    key: string,
+    input: unknown,
+  ): Promise<RoleView> {
+    await this.assertMayAttempt(scope, actor, 'admins.permissions.edit', {
+      action: 'role.update',
+      entityId: key,
+      entityType: 'Role',
+    });
+    const command = updateRoleRequestSchema.parse(input);
+    if (isImmutableRole(key)) throw roleImmutable();
+    const permissions = coherentPermissionSet(command.permissions);
+    const requestHash = hashRequest({
+      op: 'role.update',
+      actorId: adminIdOf(actor),
+      key,
+      name: command.name,
+      permissions,
+      expectedVersion: command.expectedVersion,
+      reason: command.reason,
+      confirmation: command.confirmation ?? null,
+    });
+    const replay = replayOf(command.idempotencyKey);
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{ readonly role: RoleView }>(
+        scope,
+        replay.namespace,
+        replay.idempotencyKey,
+        requestHash,
+      );
+      if (found !== null) return found.result.role;
+    }
+
+    return this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'role.update', entityId: key, entityType: 'Role' },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        const role = await this.roles.lockByKey(scope, key, tx);
+        if (role === null) throw roleNotFound();
+        if (isImmutableRole(role.key)) throw roleImmutable();
+        if (role.version !== command.expectedVersion) throw versionConflict(role.version);
+        const critical = criticalPermissionChanges(role.permissions, permissions);
+        assertConfirmed(role.key, critical, command.confirmation);
+        await this.assertHoldsAll(scope, actor, [...role.permissions, ...permissions], tx);
+
+        const added = permissions.filter((one) => !role.permissions.includes(one));
+        const removed = role.permissions.filter((one) => !permissions.includes(one));
+        if (added.length === 0 && removed.length === 0 && role.name === command.name) {
+          // Nothing to change: no version bump, no audit row claiming a change — but the
+          // replay IS recorded (Codex 4173474756), so a retry of this request after
+          // somebody else's edit gets this answer, not a version conflict.
+          const unchanged = await this.lockedRoleView(scope, role.key, tx);
+          if (replay !== undefined) {
+            await rememberOnce(
+              this.idempotency,
+              scope,
+              replay.namespace,
+              replay.idempotencyKey,
+              requestHash,
+              { role: unchanged },
+              tx,
+            );
+          }
+          return unchanged;
+        }
+        const now = this.clock.now();
+        if (
+          !(await this.roles.replace(
+            scope,
+            role.id,
+            role.version,
+            { name: command.name, permissions, now },
+            tx,
+          ))
+        ) {
+          throw versionConflict(role.version);
+        }
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'role.update',
+            entityType: 'Role',
+            entityId: role.key,
+            before: { name: role.name, permissions: role.permissions, version: role.version },
+            after: {
+              name: command.name,
+              permissions,
+              version: role.version + 1,
+              added,
+              removed,
+              criticalChanged: critical,
+            },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.role_updated',
+          `role ${role.key} was changed`,
+          { roleKey: role.key, added: added.length, removed: removed.length, critical },
+        );
+        const updated = await this.lockedRoleView(scope, role.key, tx);
+        if (replay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            replay.namespace,
+            replay.idempotencyKey,
+            requestHash,
+            { role: updated },
+            tx,
+          );
+        }
+        return updated;
+      },
+    );
+  }
+
+  /**
+   * Deletes a CUSTOM role nobody holds. A system role is never deleted (the trigger in
+   * migration 0006 backs this up), and a role somebody holds is refused rather than
+   * silently unassigned: removing authority from people is `setRoles`, with its own
+   * last-owner and self rules, not a side effect of tidying the catalogue.
+   */
+  async deleteRole(
+    scope: ScopeContext,
+    actor: ActorContext,
+    key: string,
+    input: unknown,
+  ): Promise<{ deleted: true; key: string }> {
+    await this.assertMayAttempt(scope, actor, 'admins.permissions.edit', {
+      action: 'role.delete',
+      entityId: key,
+      entityType: 'Role',
+    });
+    const command = deleteRoleRequestSchema.parse(input);
+    if (isImmutableRole(key)) throw roleImmutable();
+    const requestHash = hashRequest({
+      op: 'role.delete',
+      actorId: adminIdOf(actor),
+      key,
+      expectedVersion: command.expectedVersion,
+      reason: command.reason,
+      confirmation: command.confirmation ?? null,
+    });
+    const replay = replayOf(command.idempotencyKey);
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{ readonly key: string }>(
+        scope,
+        replay.namespace,
+        replay.idempotencyKey,
+        requestHash,
+      );
+      if (found !== null) return { deleted: true, key };
+    }
+
+    await this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'role.delete', entityId: key, entityType: 'Role' },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        const role = await this.roles.lockByKey(scope, key, tx);
+        if (role === null) throw roleNotFound();
+        if (role.isSystem || isImmutableRole(role.key)) throw roleImmutable();
+        if (role.version !== command.expectedVersion) throw versionConflict(role.version);
+        const holders = await this.roles.holderCount(scope, role.id, tx);
+        if (holders > 0) {
+          throw errors.conflict(
+            IDENTITY_ERROR_CODES.ROLE_IN_USE,
+            'Administrators hold this role. Take it from them first.',
+            { holders },
+          );
+        }
+        assertConfirmed(
+          role.key,
+          holdsCriticalPermission(role.permissions)
+            ? criticalPermissionChanges(role.permissions, [])
+            : [],
+          command.confirmation,
+        );
+        await this.assertHoldsAll(scope, actor, role.permissions, tx);
+        if (!(await this.roles.deleteCustom(scope, role.id, role.version, tx))) {
+          throw versionConflict(role.version);
+        }
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'role.delete',
+            entityType: 'Role',
+            entityId: role.key,
+            before: { name: role.name, permissions: role.permissions, version: role.version },
+            after: null,
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.role_deleted',
+          `role ${role.key} was deleted`,
+          { roleKey: role.key },
+        );
+        if (replay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            replay.namespace,
+            replay.idempotencyKey,
+            requestHash,
+            { key: role.key },
+            tx,
+          );
+        }
+      },
+    );
+    return { deleted: true, key };
+  }
+
+  /** Refuses a permission set the actor does not wholly hold — by the guard's own rule. */
+  private async assertHoldsAll(
+    scope: ScopeContext,
+    actor: ActorContext,
+    permissions: readonly PermissionKey[],
+    tx: unknown,
+  ): Promise<void> {
+    if (adminIdOf(actor) === null) return;
+    const held = await this.guard.permissionsOf(scope, actor, tx);
+    const excess = [...new Set(permissions)].filter((one) => !held.has(one)).sort();
+    if (excess.length > 0) {
+      throw errors.permissionDenied(
+        IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION,
+        'You cannot grant, or change a role granting, a permission you do not hold yourself.',
+        { permissions: excess },
+      );
+    }
+  }
+
+  /** The role as this transaction sees it — inside the lock that wrote it. */
+  private async lockedRoleView(
+    scope: ScopeContext,
+    key: string,
+    tx: TransactionScope,
+  ): Promise<RoleView> {
+    const found = (await this.roles.listForManagement(scope, tx)).find((role) => role.key === key);
+    if (found === undefined) throw roleNotFound();
+    return toRoleView(found);
+  }
+
   /**
    * Refuses to grant a permission the acting administrator does not hold.
    *
@@ -1616,7 +2367,7 @@ export class AdminManagementService {
     scope: ScopeContext,
     actor: ActorContext,
     permission: PermissionKey,
-    denial: { action: string; entityId: string | null },
+    denial: { action: string; entityId: string | null; entityType?: string },
   ): Promise<void> {
     try {
       await this.guard.check(scope, actor, permission);
@@ -1624,7 +2375,7 @@ export class AdminManagementService {
       if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') {
         await this.audit.record(scope, actor, {
           action: denial.action,
-          entityType: 'Admin',
+          entityType: denial.entityType ?? 'Admin',
           entityId: denial.entityId,
           before: null,
           after: { deniedPermission: permission },
@@ -1771,7 +2522,7 @@ export class AdminManagementService {
   private async runLockedMutation<T>(
     scope: ScopeContext,
     actor: ActorContext,
-    denial: { action: string; entityId: string | null },
+    denial: { action: string; entityId: string | null; entityType?: string },
     fn: (tx: TransactionScope) => Promise<T>,
   ): Promise<T> {
     try {
@@ -1795,7 +2546,7 @@ export class AdminManagementService {
         // order is the only thing that decides which survives.
         await this.audit.record(scope, actor, {
           action: denial.action,
-          entityType: 'Admin',
+          entityType: denial.entityType ?? 'Admin',
           entityId: denial.entityId,
           before: null,
           after: {
@@ -1884,6 +2635,101 @@ function sessionIdOf(actor: ActorContext): string | null {
   return actor.sessionId ?? null;
 }
 
+function stepUpFailed() {
+  return errors.validation(
+    IDENTITY_ERROR_CODES.AUTH_STEP_UP_FAILED,
+    'The password or code was not accepted, so nothing was done.',
+  );
+}
+
 function adminIdOf(actor: ActorContext): AdminId | null {
   return actor.id === null ? null : (actor.id as AdminId);
+}
+
+// ---------------------------------------------------------------------------
+// Phase D3 — role helpers
+// ---------------------------------------------------------------------------
+
+function toRoleView(role: ManagedRole): RoleView {
+  return {
+    key: role.key,
+    name: role.name,
+    isSystem: role.isSystem,
+    immutable: isImmutableRole(role.key),
+    version: role.version,
+    permissions: [...role.permissions].sort(),
+    assignedAdmins: role.assignedAdmins.map((admin) => ({ ...admin })),
+  };
+}
+
+/**
+ * The submitted set as catalogue keys, deduplicated and sorted — refused when a key is
+ * not in the frozen catalogue, or when an action is missing the read it needs. The
+ * dependency table is the resolver's own (`PERMISSION_REQUIRES`); this only refuses the
+ * set the resolver would silently shrink.
+ */
+function coherentPermissionSet(submitted: readonly string[]): PermissionKey[] {
+  const unknown = submitted.filter((key) => !isPermissionKey(key));
+  if (unknown.length > 0) {
+    throw errors.validation(
+      IDENTITY_ERROR_CODES.ROLE_UNKNOWN_PERMISSION,
+      'A permission in the set is not in the catalogue.',
+      { permissions: [...new Set(unknown)].sort() },
+    );
+  }
+  const permissions = [...new Set(submitted as PermissionKey[])].sort();
+  const incoherent = incoherentPermissionGrants(permissions);
+  if (incoherent.length > 0) {
+    throw errors.validation(
+      IDENTITY_ERROR_CODES.ROLE_PERMISSIONS_INCOHERENT,
+      'An action in the set is missing the permission it needs to be usable.',
+      {
+        missing: incoherent.map((one) => ({ permission: one.permission, requires: one.requires })),
+      },
+    );
+  }
+  return permissions;
+}
+
+/**
+ * A change touching a CRITICAL permission must carry the role's key, typed. Checked by
+ * the server: a confirmation that only the page draws is one a script skips.
+ */
+function assertConfirmed(
+  roleKey: string,
+  critical: readonly string[],
+  confirmation: string | undefined,
+): void {
+  if (critical.length === 0) return;
+  if (confirmation?.trim() === roleKey) return;
+  throw errors.validation(
+    IDENTITY_ERROR_CODES.ROLE_CONFIRMATION_REQUIRED,
+    'This change touches a critical permission. Type the role key to confirm it.',
+    { critical: [...critical] },
+  );
+}
+
+function replayOf(
+  idempotencyKey: string | undefined,
+): { readonly namespace: 'WEB'; readonly idempotencyKey: string } | undefined {
+  return idempotencyKey === undefined ? undefined : { namespace: 'WEB', idempotencyKey };
+}
+
+function roleNotFound() {
+  return errors.notFound(IDENTITY_ERROR_CODES.ROLE_NOT_FOUND, 'No such role.');
+}
+
+function roleImmutable() {
+  return errors.conflict(
+    IDENTITY_ERROR_CODES.ROLE_IMMUTABLE,
+    'This role cannot be changed or deleted.',
+  );
+}
+
+function versionConflict(current: number) {
+  return errors.conflict(
+    IDENTITY_ERROR_CODES.ROLE_VERSION_CONFLICT,
+    'The role changed since it was read. Reload it and decide again.',
+    { currentVersion: current },
+  );
 }

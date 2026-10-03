@@ -5,6 +5,7 @@ import {
   type FxFallbackSource,
   type FxSource,
   type OperationalSeverity,
+  type PanelBalancingStrategy,
   type ReferralCommissionScope,
   type SettingKey,
   type StarsPricingMode,
@@ -149,6 +150,12 @@ function options(labels: Readonly<Record<string, WebKey>>): readonly SelectOptio
 }
 
 /** Package FX: the two sources, and "none" for the fallback only. */
+/** Phase C3: the two ranking strategies of automatic panel balancing. */
+const BALANCING_STRATEGY_OPTIONS: Readonly<Record<PanelBalancingStrategy, WebKey>> = {
+  LEAST_USED: 'web.balancing_strategy_least_used',
+  LOWEST_UTILISATION: 'web.balancing_strategy_lowest_utilisation',
+};
+
 const FX_SOURCE_OPTIONS: Readonly<Record<FxSource, WebKey>> = {
   NOBITEX: 'web.fx_source_nobitex',
   WALLEX: 'web.fx_source_wallex',
@@ -379,6 +386,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_trial_limit_per_customer_desc',
     group: 'trial',
     control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  'panels.balancing.strategy': {
+    title: 'web.setting_panels_balancing_strategy',
+    description: 'web.setting_panels_balancing_strategy_desc',
+    group: 'services',
+    control: { kind: 'select', options: options(BALANCING_STRATEGY_OPTIONS) },
   },
   'services.link_rotation_cooldown_hours': {
     title: 'web.setting_link_rotation_cooldown_hours',

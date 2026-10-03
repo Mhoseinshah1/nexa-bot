@@ -17,6 +17,7 @@ import type {
   ReportRange,
   ReportReferrerRanking,
   ReportTrendMetric,
+  RefundChannel,
   ScopeContext,
   ServiceState,
   TenantContext,
@@ -68,7 +69,12 @@ export interface ResolvedPeriod {
 
 export interface ReportPeriodResolver {
   resolve(
-    input: { readonly range: ReportRange; readonly from?: string; readonly to?: string },
+    input: {
+      readonly range: ReportRange;
+      readonly from?: string;
+      readonly to?: string;
+      readonly granularity?: ReportGranularity;
+    },
     now: Date,
     presentation: { readonly timezone: string; readonly calendar: Calendar },
   ): ResolvedPeriod;
@@ -400,6 +406,102 @@ export interface ReportingRepository {
     limit: number,
     after: KeysetPosition | null,
   ): Promise<Page<OperationRow>>;
+
+  // --- Phase E2: the financial statement (`docs/financial-reports.md`) -------------
+  //
+  // Each is ONE statement bucketed by `width_bucket` over `boundaries`, the way `trend`
+  // buckets, so a row lands in exactly one bucket and the period is the buckets' union.
+
+  /** `finance.sales`: settled orders (PAID or REFUNDED) of a sale purpose, by `settled_at`. */
+  financialSales(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<readonly FinancialSalesRow[]>;
+  /** `finance.refunds`: COMPLETED refunds by `completed_at`, per channel. */
+  financialRefunds(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<readonly FinancialRefundRow[]>;
+  /** `finance.customer_paid`: CONFIRMED non-wallet payments by `confirmed_at`, per route and kind. */
+  financialCash(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<readonly FinancialCashRow[]>;
+  /** The ledger by bucket, reason and direction, by `created_at`. */
+  financialLedger(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<readonly FinancialLedgerRow[]>;
+  /** Σ signed ledger entries strictly before `at`, per currency: the liability at that instant. */
+  walletBalancesBefore(scope: TenantContext, at: Date): Promise<readonly CurrencyAmount[]>;
+  /** `finance.sales_by_channel` over the window. */
+  financialSalesByChannel(
+    scope: TenantContext,
+    window: Window,
+  ): Promise<readonly FinancialChannelRow[]>;
+  /** `finance.sales_by_product` over the window, at most `limit` rows (sales desc). */
+  financialByProduct(
+    scope: TenantContext,
+    window: Window,
+    limit: number,
+  ): Promise<{ readonly rows: readonly FinancialProductRow[]; readonly truncated: boolean }>;
+  /** `finance.reseller_sales` over the window. */
+  financialResellerSales(scope: TenantContext, window: Window): Promise<readonly CountedAmount[]>;
+}
+
+export interface FinancialSalesRow {
+  readonly bucket: number;
+  readonly currency: CurrencyCode;
+  readonly count: number;
+  readonly gross: bigint;
+  readonly discount: bigint;
+  readonly total: bigint;
+}
+
+export interface FinancialRefundRow {
+  readonly bucket: number;
+  readonly currency: CurrencyCode;
+  readonly channel: RefundChannel;
+  readonly count: number;
+  readonly amount: bigint;
+}
+
+export interface FinancialCashRow {
+  readonly bucket: number;
+  readonly currency: CurrencyCode;
+  readonly method: PaymentMethod;
+  readonly provider: string | null;
+  readonly kind: ReportPaymentKind;
+  readonly count: number;
+  readonly principal: bigint;
+  readonly fee: bigint;
+  readonly payable: bigint;
+}
+
+export interface FinancialLedgerRow {
+  readonly bucket: number;
+  readonly currency: CurrencyCode;
+  readonly reason: LedgerReason;
+  readonly direction: LedgerDirection;
+  readonly count: number;
+  readonly amount: bigint;
+}
+
+export interface FinancialChannelRow {
+  readonly method: PaymentMethod | null;
+  readonly provider: string | null;
+  readonly currency: CurrencyCode;
+  readonly orders: number;
+  readonly sales: bigint;
+}
+
+export interface FinancialProductRow {
+  readonly productId: string;
+  readonly title: string;
+  readonly currency: CurrencyCode;
+  readonly orders: number;
+  readonly sales: bigint;
+  readonly refunds: bigint;
 }
 
 // --- Authority and presentation -------------------------------------------------
@@ -483,6 +585,28 @@ export const REPORT_EXPORT_COLUMN_KEYS = [
   'sales',
   'services',
   'creditInUse',
+  // Phase E2: the financial statement.
+  'bucket',
+  'bucketStartUtc',
+  'bucketEndUtc',
+  'salesCount',
+  'grossSales',
+  'discounts',
+  'refundCount',
+  'refunds',
+  'refundsToWallet',
+  'refundsPaidOut',
+  'netSales',
+  'externalPayments',
+  'principalReceived',
+  'customerFees',
+  'customerPaid',
+  'receiptCredits',
+  'walletTopups',
+  'walletSpending',
+  'cashbackNet',
+  'commissionNet',
+  'gifts',
 ] as const;
 export type ExportColumnKey = (typeof REPORT_EXPORT_COLUMN_KEYS)[number];
 

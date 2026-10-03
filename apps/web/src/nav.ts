@@ -506,16 +506,6 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
-    // Phase D1: who changed what. Read with `audit.view`; the export is `audit.export`,
-    // which the page draws for itself.
-    id: 'audit-log',
-    path: '/audit-log',
-    label: 'web.nav_audit_log',
-    icon: 'clock',
-    permission: 'audit.view',
-    group: 'web.navgroup_system',
-  },
-  {
     // Phase B3: the notification center. Every administrator has an inbox; the server
     // filters it by the categories their permissions admit.
     id: 'inbox',
@@ -523,6 +513,16 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_inbox',
     icon: 'bell',
     permission: null,
+    group: 'web.navgroup_system',
+  },
+  {
+    // Phase D1: who changed what. Read with `audit.view`; the export is `audit.export`,
+    // which the page draws for itself.
+    id: 'audit-log',
+    path: '/audit-log',
+    label: 'web.nav_audit_log',
+    icon: 'clock',
+    permission: 'audit.view',
     group: 'web.navgroup_system',
   },
   {

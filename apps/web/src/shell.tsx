@@ -281,6 +281,13 @@ export function Topbar({
         items={[
           { key: 'who', heading: `${admin.displayName} · ${roles}` },
           { key: 'sep', separator: true },
+          // Phase D2: the administrator's own account and its security section.
+          {
+            key: 'account',
+            label: t('web.account_title'),
+            icon: 'shield',
+            onSelect: () => navigate('/account'),
+          },
           {
             key: 'sign-out',
             label: t('web.sign_out'),

@@ -46,6 +46,7 @@ import {
 } from './services';
 import { PRICE_LAYER_LABELS, PRICE_LAYER_STEPS } from './resellers';
 import { CUSTOM_SERVICE_LEVEL_LABELS } from './custom-service';
+import { OrderPlacement } from './order-placement';
 import { ChipGroup } from './commerce-parts';
 import {
   Badge,
@@ -516,6 +517,9 @@ export function OrderDetailPage({
                   </Card>
 
                   {row.purpose === 'CUSTOM_SERVICE' && <OrderCustomService orderId={row.id} />}
+
+                  {/* Phase C3: why the new account landed on its panel. */}
+                  {row.purpose === 'NEW_SERVICE' && <OrderPlacement orderId={row.id} />}
 
                   <OrderPricing orderId={row.id} />
 

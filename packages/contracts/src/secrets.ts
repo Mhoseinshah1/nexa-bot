@@ -44,6 +44,11 @@
  * `payment_gateway.verify_key` is the second key of a route whose provider authorises its
  * INQUIRY with a separate credential (CentralPay's verify key, `docs/centralpay-gateway-
  * audit.md`), on the same row, under its own purpose for the same reason.
+ *
+ * `admin.totp_secret` is an administrator's RFC 6238 shared secret (Phase D2,
+ * `admin_totp_factors`). The entity is the factor row's own id, so a secret moved onto
+ * another administrator's row — or kept across a disable and a re-enrolment, which
+ * mints a new row — recomputes a different context and fails authentication.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -53,6 +58,7 @@ export const SECRET_PURPOSES = [
   'payment_gateway.api_key',
   'payment_gateway.webhook_secret',
   'payment_gateway.verify_key',
+  'admin.totp_secret',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

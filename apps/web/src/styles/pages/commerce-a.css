@@ -375,6 +375,85 @@
   }
 }
 
+/* Phase B3: the notification center and its bell. */
+.nc-bell {
+  position: relative;
+}
+.nc-bell-count {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
+  min-inline-size: 18px;
+  padding-inline: 4px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  line-height: 18px;
+  text-align: center;
+  color: var(--on-solid);
+  background: var(--warn);
+}
+.nc-bell-count.danger {
+  background: var(--danger);
+}
+.nc-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-block-end: 12px;
+}
+.nc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nc-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-block-end: 1px solid var(--line);
+}
+.nc-item.unread {
+  background: var(--bg-2);
+}
+.nc-head,
+.nc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.nc-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* --- Program §13: the Service Operations Center --------------------------------- */
+
+/* The workspace's further filters: wrap at 390px, never scroll sideways. */
+.soc-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin-block: 8px;
+}
+.soc-filters .field {
+  min-width: 0;
+  flex: 1 1 160px;
+}
+/* Grant traffic, grant time and move: side by side on a wide screen, stacked on a phone. */
+.soc-grant-move {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.soc-grant-move h4 {
+  margin: 0;
+  font-size: var(--fs-body);
+}
+
 /* Phase A2: «ارسال پیام» — the preview and the history's message text. */
 .dm-text {
   white-space: pre-wrap;
@@ -483,58 +562,4 @@
 }
 .filter-row .filter-select select {
   max-inline-size: 220px;
-}
-
-/* Phase B3: the notification center and its bell. */
-.nc-bell {
-  position: relative;
-}
-.nc-bell-count {
-  position: absolute;
-  inset-block-start: 2px;
-  inset-inline-end: 2px;
-  min-inline-size: 18px;
-  padding-inline: 4px;
-  border-radius: var(--radius-pill);
-  font-size: var(--fs-2xs);
-  line-height: 18px;
-  text-align: center;
-  color: var(--on-solid);
-  background: var(--warn);
-}
-.nc-bell-count.danger {
-  background: var(--danger);
-}
-.nc-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-block-end: 12px;
-}
-.nc-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.nc-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px;
-  border-block-end: 1px solid var(--line);
-}
-.nc-item.unread {
-  background: var(--bg-2);
-}
-.nc-head,
-.nc-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-.nc-title {
-  margin: 0;
-  overflow-wrap: anywhere;
 }

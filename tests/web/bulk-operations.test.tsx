@@ -16,7 +16,7 @@ import { renderPage, stubApi } from './harness';
 const ID = '019290ab-cdef-7012-8345-6789abcdef01';
 const OPTIONS = {
   url: '/audience/options',
-  body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+  body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
 };
 
 function operation(overrides: Record<string, unknown> = {}): Record<string, unknown> {

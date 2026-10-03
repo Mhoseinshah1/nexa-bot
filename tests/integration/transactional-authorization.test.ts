@@ -424,6 +424,7 @@ describe('fresh transactional authorization', () => {
         ctx.container.adminManagement.resetPassword(tenantA, actorA, victim.id, {
           newPassword: 'taken-by-a-revoked-actor',
           reason: 'Revocation race.',
+          stepUp: { password: 'a-perfectly-fine-password' },
         }),
       unchanged: async () => {
         // Read straight out of the column, because `Admin` deliberately does

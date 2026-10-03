@@ -6,6 +6,10 @@ export interface TimelineSectionsIncluded {
   readonly receipts: boolean;
   readonly refunds: boolean;
   readonly wallet: boolean;
+  /** The settling order's settlement, fulfilment and refund (`orders.view`). */
+  readonly order: boolean;
+  /** Every audit row on the payment (`audit.view`). */
+  readonly audit: boolean;
 }
 
 /**

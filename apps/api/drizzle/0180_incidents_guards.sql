@@ -1,4 +1,4 @@
--- Phase E3 (`docs/incidents.md`): what `drizzle-kit` does not model for 0174 — the
+-- Phase E3 (`docs/incidents.md`): what `drizzle-kit` does not model for 0179 — the
 -- append-only guard on the incident timeline, and the backfill of the three new
 -- `incidents.*` keys to the seeded roles that already exist. Hand-written, so no snapshot
 -- accompanies it.

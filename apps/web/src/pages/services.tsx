@@ -16,7 +16,13 @@ import {
   type ServiceState,
   type ServiceSummaryResponse,
 } from '@nexa/contracts';
-import { actOnService, fetchService, fetchServiceOperations, fetchServices } from '../api/client';
+import {
+  actOnService,
+  fetchService,
+  fetchServiceOperations,
+  fetchServices,
+  type ServiceSimpleAction,
+} from '../api/client';
 import { formatTimestamp, formatTrafficGbText } from '../format';
 import { messageFor } from './settings';
 import { useSubmissionKey } from '../submission-key';
@@ -56,6 +62,14 @@ import {
   OpenServiceRefundRequestsCard,
   ServiceRefundRequestsCard,
 } from './service-refund-requests';
+import {
+  INPUT_ACTIONS,
+  ServiceFilterSelects,
+  ServiceGrantMoveCard,
+  ServiceMassActionCard,
+  serviceFiltersOf,
+  useRefreshOnOperationChange,
+} from './service-ops';
 
 /**
  * Services — what the customer bought, and what was done to produce it.
@@ -233,11 +247,23 @@ export function ServicesPage({
   route,
   denied,
   mayViewRefundRequests = false,
+  mayViewPanels = false,
+  mayViewCatalog = false,
+  mayMassStatus = false,
+  mayMassGrant = false,
 }: {
   route: Route;
   denied: boolean;
   /** `refunds.view`: the customers' refund requests that still want an operator (WP19). */
   mayViewRefundRequests?: boolean;
+  /** Program §13: the panel filter's list (`panels.view`). */
+  mayViewPanels?: boolean;
+  /** Program §13: the product and location filters' lists (`catalog.view`). */
+  mayViewCatalog?: boolean;
+  /** Program §13: `services.mass.status` AND `services.edit`. */
+  mayMassStatus?: boolean;
+  /** Program §13: `services.mass.grant`. */
+  mayMassGrant?: boolean;
 }) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
@@ -249,15 +275,33 @@ export function ServicesPage({
    * single-purpose boxes, two of which wanted an internal uuid.
    */
   const appliedSearch = appliedListSearch(route);
+  // Program §13: the workspace's further filters, also in the URL.
+  const filters = serviceFiltersOf(route, appliedSearch);
 
   const services = useQuery({
-    queryKey: ['services', cursor, state, delivery, appliedSearch],
+    queryKey: [
+      'services',
+      cursor,
+      state,
+      delivery,
+      appliedSearch,
+      filters.panelId,
+      filters.productId,
+      filters.locationKey,
+      filters.expiringWithinHours,
+    ],
     queryFn: () =>
       fetchServices({
         ...(cursor === null ? {} : { cursor }),
         ...(state === null ? {} : { state: state as ServiceState }),
         ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
         ...(appliedSearch === '' ? {} : { q: appliedSearch }),
+        ...(filters.panelId === null ? {} : { panelId: filters.panelId }),
+        ...(filters.productId === null ? {} : { productId: filters.productId }),
+        ...(filters.locationKey === null ? {} : { locationKey: filters.locationKey }),
+        ...(filters.expiringWithinHours === null
+          ? {}
+          : { expiringWithinHours: filters.expiringWithinHours }),
       }),
     enabled: !denied,
   });
@@ -312,6 +356,12 @@ export function ServicesPage({
           <Ltr>{row.panelId.slice(0, 8)}</Ltr>
         </a>
       ),
+    },
+    {
+      // Program §13: where it is, as the panel's location configuration names it.
+      key: 'location',
+      header: t('web.soc_location'),
+      render: (row) => (row.locationLabel === null ? <Dash /> : row.locationLabel),
     },
     {
       key: 'expires',
@@ -384,6 +434,14 @@ export function ServicesPage({
             ]}
           />
         </div>
+        {!toolbarHidden && (
+          <ServiceFilterSelects
+            route={route}
+            filters={filters}
+            mayViewPanels={mayViewPanels}
+            mayViewCatalog={mayViewCatalog}
+          />
+        )}
 
         <StateSwitch query={services} denied={denied}>
           {services.data === undefined ? null : services.data.services.length === 0 ? (
@@ -419,6 +477,15 @@ export function ServicesPage({
         </StateSwitch>
       </Card>
 
+      {/* Program §13: one mass action over exactly what the filters above select. */}
+      {!denied && (mayMassStatus || mayMassGrant) && (
+        <ServiceMassActionCard
+          filters={filters}
+          mayStatus={mayMassStatus}
+          mayGrant={mayMassGrant}
+        />
+      )}
+
       {/* Owner revisions 12, 13 and 14, moved off the placeholder this route replaced.
           Revision 13 is DELIVERED — the repository pages descending because of it — and
           the other two are still absences. A decision recorded only on a screen nobody
@@ -448,6 +515,9 @@ const ACTION_LABELS: Readonly<Record<ServiceOperatorAction, WebKey>> = {
   RESUME: 'web.service_action_resume',
   TERMINATE: 'web.service_action_terminate',
   ROTATE_LINK: 'web.service_action_rotate_link',
+  ADD_TRAFFIC: 'web.service_action_add_traffic',
+  ADD_TIME: 'web.service_action_add_time',
+  CHANGE_LOCATION: 'web.service_action_change_location',
 };
 
 /**
@@ -465,6 +535,8 @@ const BLOCKER_LABELS: Readonly<Record<ServiceActionBlocker, WebKey>> = {
   IN_PROGRESS: 'web.service_blocker_in_progress',
   NO_CONFIGURATION: 'web.service_blocker_no_configuration',
   NO_CONTACT: 'web.service_blocker_no_contact',
+  UNLIMITED: 'web.service_blocker_unlimited',
+  NO_TARGET: 'web.service_blocker_no_target',
 };
 
 /**
@@ -484,6 +556,10 @@ const ACTION_NEEDS_TERMINATE: Readonly<Record<ServiceOperatorAction, boolean>> =
   RESUME: false,
   TERMINATE: true,
   ROTATE_LINK: false,
+  // Program §13: drawn by `ServiceGrantMoveCard`, each under its own key.
+  ADD_TRAFFIC: false,
+  ADD_TIME: false,
+  CHANGE_LOCATION: false,
 };
 
 /**
@@ -504,7 +580,7 @@ function useServiceAction(id: string, onActed: () => void, onTerminated: () => v
   const toast = useToast();
   const submission = useSubmissionKey();
   return useMutation({
-    mutationFn: (input: { action: ServiceOperatorAction; confirm?: string }) =>
+    mutationFn: (input: { action: ServiceSimpleAction; confirm?: string }) =>
       actOnService({
         id,
         action: input.action,
@@ -550,7 +626,10 @@ function ActionButtons({
   act: ServiceAct;
 }) {
   const byAction = new Map(actions.map((entry) => [entry.action, entry]));
-  const ordinary = SERVICE_OPERATOR_ACTIONS.filter((action) => !ACTION_NEEDS_TERMINATE[action]);
+  const ordinary = SERVICE_OPERATOR_ACTIONS.filter(
+    (action): action is ServiceSimpleAction =>
+      !ACTION_NEEDS_TERMINATE[action] && !INPUT_ACTIONS.has(action),
+  );
   return (
     <ButtonGroup label={t('web.service_actions_title')}>
       {ordinary.map((action) => {
@@ -690,11 +769,14 @@ export function ServiceDetailPage({
   mayTerminate,
   mayViewRefundRequests = false,
   mayDecideRefundRequests = false,
+  mayGrant = false,
 }: {
   id: string;
   denied: boolean;
   mayEdit: boolean;
   mayTerminate: boolean;
+  /** Program §13: `services.grant`, an operator's free traffic or time. */
+  mayGrant?: boolean;
   /** `refunds.view`: this service's customer refund requests (WP19). */
   mayViewRefundRequests?: boolean;
   /** `refunds.issue` AND `services.terminate`: deciding one. A courtesy; the server decides. */
@@ -736,7 +818,22 @@ export function ServiceDetailPage({
     queryKey: ['service-operations', id],
     queryFn: () => fetchServiceOperations(id),
     enabled: !denied,
+    /*
+     * Program §13: an action's progress. While any operation has not reached its own end,
+     * the history (and with it the row) is read again, so PLANNED → IN_FLIGHT → its outcome
+     * appears without a reload. UNKNOWN is an end for this purpose: it waits on a read, not
+     * on this page.
+     */
+    refetchInterval: (query) =>
+      (query.state.data?.operations ?? []).some(
+        (op) => op.state === 'PLANNED' || op.state === 'IN_FLIGHT',
+      )
+        ? 5_000
+        : false,
   });
+
+  // Program §13 (Codex review of #157): an operation's end re-reads the service it changed.
+  useRefreshOnOperationChange(id, operations.data?.operations);
 
   const [phrase, setPhrase] = useState('');
   const act = useServiceAction(id, refresh, () => setPhrase(''));
@@ -793,6 +890,15 @@ export function ServiceDetailPage({
             <ServiceStats row={row} />
 
             {refundRequests}
+
+            <ServiceGrantMoveCard
+              serviceId={row.id}
+              actions={row.actions}
+              mayGrant={mayGrant}
+              mayEdit={mayEdit}
+              blockerLabel={(blocker) => t(BLOCKER_LABELS[blocker])}
+              onActed={refresh}
+            />
 
             <TwoColumn
               main={<ServiceIdentity row={row} />}

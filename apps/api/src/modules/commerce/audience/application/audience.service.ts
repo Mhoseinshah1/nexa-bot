@@ -48,6 +48,8 @@ export const AUDIENCE_OPTIONS_PERMISSIONS: readonly PermissionKey[] = [
   'broadcasts.send',
   'users.wallet.mass',
   'services.mass.grant',
+  // Program §13: a mass suspend/resume is composed with the same builder (Codex review of #157).
+  'services.mass.status',
   // Round N, C1: the campaign form edits its audience with the same builder.
   'campaigns.manage',
 ];

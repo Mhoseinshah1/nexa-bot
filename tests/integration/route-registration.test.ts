@@ -203,6 +203,12 @@ describe('dynamic route registration', () => {
       ['POST', `services/${id}/suspend`],
       ['POST', `services/${id}/resume`],
       ['POST', `services/${id}/terminate`],
+      // Program §13: the operator's grant and move.
+      ['POST', `services/${id}/grant`],
+      ['POST', `services/${id}/change-location`],
+      ['GET', `services/${id}/location-targets`],
+      ['POST', `bulk-operations/${id}/retry/preview`],
+      ['POST', `bulk-operations/${id}/retry`],
       ['GET', `panels/${id}`],
       ['POST', `panels/${id}`],
       ['POST', `panels/${id}/credentials`],

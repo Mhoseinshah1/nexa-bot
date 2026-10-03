@@ -31,6 +31,9 @@ ENTRYPOINTS=(
   # The one that runs during a disaster. If its graph does not load from a
   # production runtime, the operator finds out at the worst possible moment.
   "apps/api/dist/backup.cli.js"
+  # Phase D2: the owner-recovery path for two-step sign-in. It runs when somebody
+  # is locked out, which is not the moment to learn its import graph is broken.
+  "apps/api/dist/admin-2fa-reset.cli.js"
 )
 
 # 1. The compiled entrypoints exist.
@@ -52,6 +55,7 @@ node --input-type=module -e "
   const bootstrapBot = await import('./apps/api/dist/bootstrap-bot.cli.js');
   const provision = await import('./apps/api/dist/provision-installation.cli.js');
   const backup = await import('./apps/api/dist/backup.cli.js');
+  const reset2fa = await import('./apps/api/dist/admin-2fa-reset.cli.js');
 
   const problems = [];
   if (typeof migrate.runMigrations !== 'function') problems.push('migrate.runMigrations');
@@ -68,6 +72,7 @@ node --input-type=module -e "
   // so it is the one whose presence is asserted rather than assumed.
   if (typeof backup.cmdVerify !== 'function') problems.push('backup.cmdVerify');
   if (typeof backup.parseArgs !== 'function') problems.push('backup.parseArgs');
+  if (typeof reset2fa.parseResetArgs !== 'function') problems.push('reset2fa.parseResetArgs');
 
   // The migrations have to be reachable FROM DIST. The folder is resolved
   // relative to the module, so a compiled layout that nests one level deeper

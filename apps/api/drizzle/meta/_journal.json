@@ -1216,22 +1216,57 @@
     {
       "idx": 173,
       "version": "7",
-      "when": 1791036055846,
-      "tag": "0173_admin_notification_reads",
+      "when": 1791036374074,
+      "tag": "0173_admin_security_2fa",
       "breakpoints": true
     },
     {
       "idx": 174,
       "version": "7",
-      "when": 1791039573291,
-      "tag": "0174_incidents",
+      "when": 1791038222588,
+      "tag": "0174_service_operations_center",
       "breakpoints": true
     },
     {
       "idx": 175,
       "version": "7",
-      "when": 1791039573391,
-      "tag": "0175_incidents_guards",
+      "when": 1791038228605,
+      "tag": "0175_service_operations_permissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1791038865379,
+      "tag": "0176_admin_notification_reads",
+      "breakpoints": true
+    },
+    {
+      "idx": 177,
+      "version": "7",
+      "when": 1791039471915,
+      "tag": "0177_role_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1791041468432,
+      "tag": "0178_panel_auto_balancing",
+      "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1791042499780,
+      "tag": "0179_incidents",
+      "breakpoints": true
+    },
+    {
+      "idx": 180,
+      "version": "7",
+      "when": 1791042499825,
+      "tag": "0180_incidents_guards",
       "breakpoints": true
     }
   ]

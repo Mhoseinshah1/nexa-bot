@@ -473,7 +473,53 @@ export const IDENTITY_ERROR_CODES = {
   ADMIN_PASSWORD_REUSED: 'admin.password_reused',
   ADMIN_PASSWORD_STALE: 'admin.password_stale',
   ROLE_NOT_FOUND: 'role.not_found',
+  /*
+   * Phase D3 — role management. `role.immutable` is the owner role (and a system role's
+   * key or deletion); `role.in_use` is a delete of a role somebody still holds;
+   * `role.permissions_incoherent` is an action stored without the read it needs
+   * (`PERMISSION_REQUIRES`); `role.version_conflict` is an edit made from a stale read;
+   * `role.confirmation_required` is a CRITICAL change without the typed role key.
+   */
+  ROLE_KEY_TAKEN: 'role.key_taken',
+  ROLE_IMMUTABLE: 'role.immutable',
+  ROLE_IN_USE: 'role.in_use',
+  ROLE_PERMISSIONS_INCOHERENT: 'role.permissions_incoherent',
+  ROLE_UNKNOWN_PERMISSION: 'role.unknown_permission',
+  ROLE_VERSION_CONFLICT: 'role.version_conflict',
+  ROLE_CONFIRMATION_REQUIRED: 'role.confirmation_required',
   BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',
+  /*
+   * Phase D2 — the second factor.
+   *
+   * `auth.second_factor_required` is what the password-only `login` reports for an
+   * account whose sign-in owes a second factor; the HTTP surface never sees it, because
+   * it calls the method that returns the challenge instead.
+   *
+   * `auth.second_factor_invalid` is the ONE failure a wrong, replayed, expired or
+   * already-used code produces, for the reason `auth.invalid_credentials` is one code:
+   * telling a guesser that a code was right but replayed tells them it was right.
+   *
+   * `auth.challenge_invalid` means the password step has to be repeated: the challenge
+   * is unknown, expired, spent, or out of guesses.
+   */
+  AUTH_SECOND_FACTOR_REQUIRED: 'auth.second_factor_required',
+  AUTH_SECOND_FACTOR_INVALID: 'auth.second_factor_invalid',
+  AUTH_CHALLENGE_INVALID: 'auth.challenge_invalid',
+  /*
+   * Phase D2 review: a STEP-UP (the actor re-proving who they are for one sensitive
+   * act) failed — wrong password, or a wrong, replayed or used code. One code for all of
+   * them, a VALIDATION kind so a failed step-up does not sign the operator out of the
+   * page. `auth.step_up_factor_required` says only that THIS actor's own factor is on and
+   * no code was sent, so the page can ask for one.
+   */
+  AUTH_STEP_UP_FAILED: 'auth.step_up_failed',
+  AUTH_STEP_UP_FACTOR_REQUIRED: 'auth.step_up_factor_required',
+  ADMIN_SECOND_FACTOR_ACTIVE: 'admin.second_factor_already_active',
+  ADMIN_SECOND_FACTOR_NOT_ACTIVE: 'admin.second_factor_not_active',
+  /** Activation with no enrolment waiting, or one older than `TOTP_ENROLMENT_TTL_SECONDS`. */
+  ADMIN_SECOND_FACTOR_NOT_PENDING: 'admin.second_factor_not_pending',
+  /** A session id that is not one of the caller's own. Another admin's reads the same. */
+  ADMIN_SESSION_NOT_FOUND: 'admin.session_not_found',
 } as const;
 
 /**

@@ -14,9 +14,9 @@ import {
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
   TICKET_REPLY_FILE_RETENTION_DAYS,
+  NOTIFICATION_RULES,
   DIRECT_MESSAGE_FILE_RETENTION_DAYS,
   INCIDENT_SCHEDULER_INTERVAL_MS,
-  NOTIFICATION_RULES,
   canAdjustDeviceLimit,
   canChangeLocation,
   // Round N: the mass credit's notification renders the amount the ledger holds.
@@ -24,6 +24,7 @@ import {
   faqNumberMarker,
   isSystemContext,
   systemJobActor,
+  type PanelBalancingStrategy,
 } from '@nexa/contracts';
 import type {
   AdminId,
@@ -69,6 +70,8 @@ import {
 import type { MonitorCadence } from './modules/platform/panels/domain/monitor-cadence.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
 import { PanelService } from './modules/platform/panels/application/panel.service.js';
+import { PanelPlacementService } from './modules/platform/panels/application/panel-placement.js';
+import { DrizzleOrderPlacementRepository } from './modules/platform/panels/infrastructure/drizzle-order-placement.repository.js';
 import { PanelHealthDashboardService } from './modules/platform/panels/application/panel-health-dashboard.js';
 import { DrizzlePanelFleetStatsReader } from './modules/platform/panels/infrastructure/drizzle-panel-fleet-stats.js';
 import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
@@ -152,6 +155,12 @@ import { DrizzleMainMenuBuilderRepository } from './modules/control/bot-menu-bui
 import { CommandMenu } from './modules/platform/tenancy/application/command-menu.js';
 import { DrizzleBotCommandSyncRepository } from './modules/platform/tenancy/infrastructure/drizzle-bot-command-sync.repository.js';
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
+import { AccountSecurityService } from './modules/platform/identity/application/account-security.service.js';
+import {
+  DrizzleLoginChallengeRepository,
+  DrizzleSecondFactorRepository,
+  DrizzleSecurityEventReader,
+} from './modules/platform/identity/infrastructure/drizzle-second-factor.repository.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
 import {
@@ -440,6 +449,11 @@ import { DrizzleAuditLogReader } from './modules/platform/audit/infrastructure/d
 import { AuditLogService } from './modules/platform/audit/application/audit-log.service.js';
 import { IntlReportPeriodResolver } from './infrastructure/time/report-calendar.js';
 import {
+  PaymentOperationsService,
+  type PaymentAttentionReader,
+} from './modules/commerce/payments/application/payment-operations.service.js';
+import { DrizzlePaymentAttentionReader } from './modules/commerce/payments/infrastructure/drizzle-payment-attention.reader.js';
+import {
   DrizzleReferralCommissionRepository,
   DrizzleReferralRepository,
 } from './modules/commerce/referrals/infrastructure/drizzle-referral.repository.js';
@@ -510,6 +524,7 @@ import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
+import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import {
   PURCHASED_AS,
@@ -745,6 +760,10 @@ export interface Container {
   readonly loginThrottle: DrizzleLoginThrottleRepository;
   readonly auth: AuthenticationService;
   readonly adminManagement: AdminManagementService;
+  /** Phase D2: an administrator's own second factor, sessions and history; owner recovery. */
+  readonly accountSecurity: AccountSecurityService;
+  readonly secondFactors: DrizzleSecondFactorRepository;
+  readonly loginChallenges: DrizzleLoginChallengeRepository;
   /**
    * The Telegram admin seam (Phase 5T): a binding resolved to the SAME administrator
    * identity the Web Admin authenticates, with no second role model behind it.
@@ -920,6 +939,14 @@ export interface Container {
    * permission that already guards them.
    */
   readonly paymentTimeline: PaymentTimelineService;
+  /** The Payment Operations Center's queue list and attention counts (program §10). */
+  readonly paymentOperations: PaymentOperationsService;
+  /**
+   * The shared "operational attention" read model (program §10–§12): per-gateway queue
+   * counts over a window, with no permission of its own — Gateway Health and the
+   * Notification Center read it under their own authority.
+   */
+  readonly paymentAttention: PaymentAttentionReader;
   /** The Telegram half of the credit-to-wallet disposition: the reviewer's amount capture (D3). */
   readonly receiptCreditCaptures: ReceiptCreditCaptureService;
   /** Block User from the receipt message (WP10 follow-up §4): confirm, reason, block. */
@@ -974,6 +1001,8 @@ export interface Container {
    * operation from a GET.
    */
   readonly serviceAdmin: ServiceAdminService;
+  /** Program §13: an operator's free traffic or time grant to one service. */
+  readonly serviceGrants: ServiceGrantService;
   /** The lane that creates services on panels. Driven by the `provisioner` role. */
   readonly provisioner: ProvisionerService;
   /**
@@ -1025,14 +1054,14 @@ export interface Container {
   readonly opsGroups: OpsGroupService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
+  /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
+  readonly notificationCenter: NotificationCenterService;
   /** Phase D1: the audit log browser and its export (`docs/audit-log.md`). */
   readonly auditLog: AuditLogService;
   /** Phase E3: incidents and maintenance windows. */
   readonly incidents: IncidentService;
   /** Phase E3: starts scheduled maintenance windows. Started by the WORKER only. */
   readonly incidentSchedulerLoop: IncidentSchedulerLoop;
-  /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
-  readonly notificationCenter: NotificationCenterService;
   /**
    * What the background monitor is configured to do, and what that
    * configuration can carry. A read of installation configuration plus two
@@ -1243,6 +1272,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const roles = new DrizzleRoleRepository(database.db, ids);
   const sessions = new DrizzleSessionRepository(database.db);
   const loginThrottle = new DrizzleLoginThrottleRepository(database.db);
+  const secondFactors = new DrizzleSecondFactorRepository(database.db);
+  const loginChallenges = new DrizzleLoginChallengeRepository(database.db);
 
   // The real resolver replaces Phase 0's placeholder, which granted nothing
   // because there were no admins. `SYSTEM_JOB` still holds only its explicit
@@ -1281,6 +1312,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     credentialThrottle,
     tenants,
     guard,
+    { factors: secondFactors, challenges: loginChallenges, cipher },
   );
 
   const adminManagement = new AdminManagementService(
@@ -1297,7 +1329,27 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     credentialThrottle,
     idempotency,
+    secondFactors,
+    cipher,
   );
+
+  const accountSecurity = new AccountSecurityService({
+    uow,
+    admins,
+    sessions,
+    factors: secondFactors,
+    events: new DrizzleSecurityEventReader(database.db),
+    cipher,
+    // The same dependency-free encoder the subscription QR uses; no second QR path.
+    qr: new PngQrCodeEncoder(),
+    audit,
+    opsLog,
+    clock,
+    ids,
+    throttle: credentialThrottle,
+    verifyOwnPassword: (scope, actor, password, context, action) =>
+      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+  });
 
   /*
    * The Telegram admin seam (Phase 5T).
@@ -1533,11 +1585,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const sessionSweeper = new RetentionSweeper(
     {
       name: 'admin-sessions',
-      purge: (now, limit) =>
-        sessions.purgeExpiredBefore(
-          new Date(now.getTime() - config.SESSION_RETENTION_SECONDS * 1000),
-          limit,
-        ),
+      // Phase D2: the pending sign-ins share this sweep and this cutoff. Sessions first;
+      // challenges take whatever is left of the batch, so the sum never exceeds `limit`
+      // and the sweeper's "a full batch means keep going" rule still holds.
+      purge: async (now, limit) => {
+        const cutoff = new Date(now.getTime() - config.SESSION_RETENTION_SECONDS * 1000);
+        const ended = await sessions.purgeExpiredBefore(cutoff, limit);
+        if (ended >= limit) return ended;
+        return ended + (await loginChallenges.purgeExpiredBefore(cutoff, limit - ended));
+      },
     },
     clock,
     logger,
@@ -1710,6 +1766,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     serviceAdapterExists: (providerType) =>
       SERVICE_PROVIDER_TYPES.includes(providerType as (typeof SERVICE_PROVIDER_TYPES)[number]),
   });
+  /*
+   * Phase C3: automatic balancing over the SAME sales gate — its verdicts are the only
+   * "may place here" — read by the draft (where an account goes) and by the catalogue
+   * (what may be offered). The flag and the strategy are read in the caller's transaction.
+   */
+  const panelPlacement = new PanelPlacementService({
+    panels: panelRepository,
+    sales: panelSalesGate,
+    enabled: (scope, tx) => featureFlagResolver.isEnabled(scope, 'panel_auto_balancing', tx),
+    strategy: async (scope, tx) =>
+      (await settingsResolver.resolve(scope, 'panels.balancing.strategy', tx))
+        .value as PanelBalancingStrategy,
+    clock,
+  });
+  const orderPlacementRepository = new DrizzleOrderPlacementRepository(database.db);
 
   /*
    * Constructed HERE rather than beside `OrderService`, which was its only reader
@@ -1722,6 +1793,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const productService = new ProductService({
     resellers: resellerService,
     panelSales: panelSalesGate,
+    placement: panelPlacement,
     repository: productRepository,
     /*
      * Membership only, never a panel projection.
@@ -2079,6 +2151,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const orderService = new OrderService({
     customService: { pricer: customServicePricer, terms: orderCustomServiceTermsRepository },
+    placement: panelPlacement,
+    placements: orderPlacementRepository,
     pricing: pricingService,
     resellers: resellerService,
     discountCodes: discountCodeCaptureRepository,
@@ -3544,6 +3618,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // same way and share one cache.
   const templatePresentation = new CachedTenantPresentationReader(tenants, clock);
 
+  // The Payment Operations Center (program §10): the reports' own range resolver, in the
+  // tenant's timezone and calendar, so a queue's date filter means what a report's does.
+  const paymentOpsPeriods = new IntlReportPeriodResolver();
+  const paymentAttentionReader = new DrizzlePaymentAttentionReader(database.db);
+  const paymentOperationsService = new PaymentOperationsService({
+    guard,
+    attention: paymentAttentionReader,
+    payments: paymentService,
+    windows: {
+      resolve: async (scope, input) => {
+        const resolved = paymentOpsPeriods.resolve(
+          input,
+          clock.now(),
+          await templatePresentation.presentationFor(scope),
+        );
+        return { start: resolved.current.start, end: resolved.current.end };
+      },
+    },
+  });
+
   const reportingService = new ReportingService({
     access: new ReportAccess(guard, admins, opsLog),
     repository: new DrizzleReportingRepository(database.db),
@@ -4453,6 +4547,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+    // Broadcast V2: the preview's opted-out estimate only; the stamp still decides.
+    marketingOptOut: marketingOptOutPolicy,
   });
   const broadcastDispatcher = new BroadcastDispatcher({
     repository: broadcastRepository,
@@ -4652,6 +4748,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // Read-only, both: "can this panel do X" and "is there anywhere to send this".
     panels: panelOperability,
     contacts: customerContacts,
+    // Program §13: whether an operator could move a service anywhere (a read).
+    locationTargets: locationChangeService,
+  });
+  // Program §13: an operator's free grant to one service, through `planGrant`.
+  const serviceGrantService = new ServiceGrantService({
+    provisioning: provisioningService,
+    services: serviceRepository,
+    operations: operationRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
   });
 
   const walletTopupFlow = new WalletTopupFlowService({
@@ -5087,14 +5199,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
-  const auditLogService = new AuditLogService({
-    guard,
-    reader: new DrizzleAuditLogReader(database.db),
-    audit,
-    opsLog,
-    writer: new DefaultAuditLogExportWriter(),
-    clock,
-  });
   /**
    * Phase B3 (`docs/notification-center.md`): the Notification Center reads the same
    * `operational_events` through `NOTIFICATION_RULES`; its one table is per-admin read marks.
@@ -5105,6 +5209,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     scopeActivity: tenants,
     uow,
+    clock,
+  });
+  const auditLogService = new AuditLogService({
+    guard,
+    reader: new DrizzleAuditLogReader(database.db),
+    audit,
+    opsLog,
+    writer: new DefaultAuditLogExportWriter(),
     clock,
   });
   const diagnostics = new DiagnosticsService({
@@ -5395,8 +5507,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // The same switch that selects the password hasher's cost, refused in
     // production by the config schema for the same reason.
     kdf: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KIT_KDF : PRODUCTION_KIT_KDF,
-    verifyPassword: (scope, actor, password, context, action) =>
-      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+    verifyStepUp: (scope, actor, stepUp, context, action) =>
+      adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
   });
   const recoveryService = new RecoveryService({
     requests: recoveryRequests,
@@ -5670,6 +5782,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     loginThrottle,
     auth,
     adminManagement,
+    accountSecurity,
+    secondFactors,
+    loginChallenges,
     telegramAdmins,
     bootstrapOwner,
     bootstrapBot,
@@ -5750,6 +5865,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     serviceRefundDecisions,
     receiptDispositions: receiptDispositionService,
     paymentTimeline: paymentTimelineService,
+    paymentOperations: paymentOperationsService,
+    paymentAttention: paymentAttentionReader,
     receiptCreditCaptures: receiptCreditCaptureService,
     receiptBlockCaptures: receiptBlockCaptureService,
     receiptRejectCaptures: receiptRejectCaptureService,
@@ -5761,6 +5878,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     receiptFiles,
     provisioning: provisioningService,
     serviceAdmin,
+    serviceGrants: serviceGrantService,
     provisioner,
     provisionerLoop,
     delivery: deliveryService,
@@ -6036,8 +6154,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsGroups,
     opsGroupMaintainer,
     opsLogService,
-    auditLog: auditLogService,
     notificationCenter,
+    auditLog: auditLogService,
     incidents: incidentService,
     incidentSchedulerLoop,
     monitorProfileService,

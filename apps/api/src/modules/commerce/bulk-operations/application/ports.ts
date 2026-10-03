@@ -4,6 +4,7 @@ import type {
   BulkItemState,
   BulkOperationKind,
   BulkOperationState,
+  BulkServiceKind,
   BulkSkipReason,
   CurrencyCode,
   CustomerNotificationState,
@@ -36,6 +37,8 @@ export interface BulkOperationRecord {
   readonly pausedAt: Date | null;
   readonly completedAt: Date | null;
   readonly cancelledAt: Date | null;
+  /** Program §13: the operation whose FAILED items this one retries. */
+  readonly retryOfId: string | null;
 }
 
 export interface BulkOperationDraft {
@@ -56,11 +59,13 @@ export interface BulkOperationDraft {
   readonly frozenAudienceId: string | null;
   readonly createdByAdminId: string;
   readonly now: Date;
+  /** Program §13: set on a retry. */
+  readonly retryOfId?: string | null;
 }
 
-/** Which services a traffic or time grant may reach, beyond the audience's own block. */
+/** Which services a service kind may reach, beyond the audience's own block. */
 export interface GrantEligibility {
-  readonly kind: 'SERVICE_TRAFFIC' | 'SERVICE_TIME';
+  readonly kind: BulkServiceKind;
   /** Panels on which the operation is operable now; a service elsewhere is not counted. */
   readonly operablePanelIds: readonly string[];
 }
@@ -144,9 +149,41 @@ export interface BulkOperationRepository {
   panelsFor(
     scope: TenantContext,
     evaluation: AudienceEvaluation,
-    kind: 'SERVICE_TRAFFIC' | 'SERVICE_TIME',
+    kind: BulkServiceKind,
     tx?: unknown,
   ): Promise<readonly string[]>;
+  /**
+   * Program §13, the dry run: of the services the audience's block selects, how many the
+   * rule leaves out and why, and a sample of them. The same eligibility predicate the
+   * preview counts and the materialisation copies, so the three cannot disagree.
+   */
+  previewIneligible(
+    scope: TenantContext,
+    evaluation: AudienceEvaluation,
+    rule: GrantEligibility,
+    sampleSize: number,
+  ): Promise<{
+    readonly selected: number;
+    readonly notInState: number;
+    readonly panelNotOperable: number;
+    readonly other: number;
+    readonly sample: readonly {
+      readonly serviceId: string;
+      readonly serviceLabel: string;
+      readonly customerId: string;
+      readonly reason: 'NOT_IN_STATE' | 'PANEL_NOT_OPERABLE' | 'OTHER';
+    }[];
+  }>;
+  /** Program §13: the FAILED service items of an operation — what a retry would copy. */
+  failedItems(scope: TenantContext, id: string, tx?: unknown): Promise<FrozenItems>;
+  /** Program §13: copies those FAILED items into the retry operation `id`. */
+  materialiseRetry(
+    scope: TenantContext,
+    id: string,
+    fromId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<FrozenItems>;
   previewServices(
     scope: TenantContext,
     evaluation: AudienceEvaluation,

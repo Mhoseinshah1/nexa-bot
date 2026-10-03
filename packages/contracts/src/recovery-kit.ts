@@ -279,6 +279,13 @@ export type InstallationKeysResponse = z.infer<typeof installationKeysResponseSc
 export const exportRecoveryKitRequestSchema = z
   .object({
     accountPassword: z.string().min(1).max(1024),
+    /**
+     * Phase D2 review: when the administrator has two-step sign-in ON, a current code or
+     * an unused backup code too — REQUIRED by the server then, ignored otherwise. The
+     * export must never be easier than turning the factor off.
+     */
+    code: z.string().max(16).optional(),
+    backupCode: z.string().max(64).optional(),
     passphrase: z.string().max(RECOVERY_KIT_PASSPHRASE_MAX_LENGTH),
     passphraseConfirmation: z.string().max(RECOVERY_KIT_PASSPHRASE_MAX_LENGTH),
   })
@@ -299,6 +306,9 @@ export const importRecoveryKitRequestSchema = z
      * open here and could be restored.
      */
     accountPassword: z.string().min(1).max(1024),
+    /** As on export: required by the server when the importer's factor is ON. */
+    code: z.string().max(16).optional(),
+    backupCode: z.string().max(64).optional(),
     idempotencyKey: z.string().min(8).max(255),
   })
   .strict();

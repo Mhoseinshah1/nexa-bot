@@ -146,6 +146,48 @@ export class PanelSalesGate {
     return eligible;
   }
 
+  /**
+   * Phase C3: the same two reads and the same verdicts as `evaluateMany`, with the view
+   * and the capacity each verdict was decided from — what automatic balancing ranks on.
+   * Not a second evaluator: the verdict is `verdictsOver`'s, and placement only orders
+   * the panels it called eligible.
+   */
+  async assessMany(
+    scope: TenantContext,
+    panelIds: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<
+    ReadonlyMap<
+      string,
+      {
+        readonly view: PanelView;
+        readonly capacity: PanelCapacity | null;
+        readonly verdict: PanelEligibility;
+      }
+    >
+  > {
+    const assessed = new Map<
+      string,
+      { view: PanelView; capacity: PanelCapacity | null; verdict: PanelEligibility }
+    >();
+    const unique = [...new Set(panelIds)];
+    if (unique.length === 0) return assessed;
+    const now = this.deps.clock.now();
+    const capacities = await this.deps.capacity.readMany(scope, unique, now, tx);
+    const views = await this.deps.panels.findMany(scope, unique, tx);
+    const verdicts = this.verdictsOver(views, capacities, now);
+    for (const view of views) {
+      const verdict = verdicts.get(view.panel.id);
+      if (verdict === undefined) continue;
+      assessed.set(view.panel.id, {
+        view,
+        capacity: capacities.get(view.panel.id) ?? null,
+        verdict,
+      });
+    }
+    return assessed;
+  }
+
   /** The mapping from rows to verdicts. One place, so the two readers agree. */
   private verdictsOver(
     views: readonly PanelView[],

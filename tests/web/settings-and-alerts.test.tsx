@@ -1213,8 +1213,9 @@ describe('system and operations', () => {
     // No tab leads to one, and nothing on the page is a log browser.
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
     // WP16's diagnostics tab is a queue of stuck work, not a log browser: it reads
-    // counts and the oldest rows of two lanes and links each to its entity.
-    expect(tabs).toEqual(['وضعیت', 'عیب‌یابی', 'پایش', 'مدیران']);
+    // counts and the oldest rows of two lanes and links each to its entity. D3's roles
+    // tab is the permission editor, not a log either.
+    expect(tabs).toEqual(['وضعیت', 'عیب‌یابی', 'پایش', 'مدیران', 'نقش‌ها و دسترسی‌ها']);
     expect(screen.getByText(/گروه گزارش تلگرام/)).toBeInTheDocument();
   });
 });

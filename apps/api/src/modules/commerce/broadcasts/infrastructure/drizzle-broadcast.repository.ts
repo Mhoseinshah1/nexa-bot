@@ -1,9 +1,12 @@
 import { sql, type SQL } from 'drizzle-orm';
 import {
+  BROADCAST_FAILURE_STATES,
   canonicalAudienceDefinition,
   type BroadcastButton,
   type BroadcastContentKind,
   type BroadcastCounts,
+  type BroadcastFailureReason,
+  type BroadcastFailureState,
   type BroadcastMediaMimeType,
   type BroadcastPauseReason,
   type BroadcastPinState,
@@ -657,6 +660,28 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       pinState: row.pin_state,
       pinErrorCode: row.pin_error_code,
     }));
+  }
+
+  async failureReasons(
+    scope: TenantContext,
+    id: string,
+  ): Promise<readonly BroadcastFailureReason[]> {
+    const tenantId = requireTenantId(scope);
+    // Served by `broadcast_recipients_state_idx` (tenant, broadcast, state, …); the code list
+    // is short — a transport's codes — so the grouped result is small whatever the audience.
+    const rows = await this.rows<{
+      state: BroadcastFailureState;
+      error_code: string | null;
+      n: number;
+    }>(
+      sql`SELECT state, error_code, count(*)::int AS n
+            FROM broadcast_recipients
+           WHERE tenant_id = ${tenantId}::uuid AND broadcast_id = ${id}::uuid
+             AND state = ANY(${sql.param([...BROADCAST_FAILURE_STATES])}::text[])
+           GROUP BY state, error_code
+           ORDER BY n DESC, state, error_code NULLS LAST`,
+    );
+    return rows.map((row) => ({ state: row.state, errorCode: row.error_code, count: row.n }));
   }
 
   async testTargetFor(scope: TenantContext, adminId: string) {
