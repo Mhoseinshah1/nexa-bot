@@ -298,7 +298,9 @@ export class PanelSalesGate {
     if (!(await this.deps.panels.lockPanel(scope, panelId, tx))) {
       return alreadyProvisioned ? { eligible: true } : { eligible: false, reason: 'ARCHIVED' };
     }
-    const held = await this.deps.capacity.release(scope, orderId, tx);
+    // `live`, not merely "a row existed": an expired hold the sweep has not reached
+    // holds no slot, and on a drained panel settling it would be a new allocation.
+    const { live: held } = await this.deps.capacity.releaseForSettlement(scope, orderId, now, tx);
     if (alreadyProvisioned) return { eligible: true };
 
     const view = await this.deps.panels.find(scope, panelId, tx);
