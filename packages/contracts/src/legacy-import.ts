@@ -19,7 +19,10 @@
 
 /**
  * - `DRY_RUN` — decides and counts, writes nothing to `legacy_import_map`. The repository
- *   refuses a map write under a dry run by construction.
+ *   refuses a map write under a dry run by construction; each decision instead increments
+ *   the run row's counter for its status (a conditional update under the run lock). A dry
+ *   run is NOT resumable — re-processing rows after a crash would count them twice — so a
+ *   second start while one is RUNNING is refused with its id, to be aborted.
  * - `APPLY` — the run whose decisions become provenance.
  */
 export const LEGACY_IMPORT_RUN_MODES = ['DRY_RUN', 'APPLY'] as const;
@@ -103,10 +106,39 @@ export const LEGACY_IMPORT_REASON_CODES = [
 ] as const;
 export type LegacyImportReasonCode = (typeof LEGACY_IMPORT_REASON_CODES)[number];
 
-/** A legacy table name as the source spells it: a plain SQL identifier, nothing else. */
-export const LEGACY_TABLE_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
-/** A legacy primary key as text: printable, bounded, no whitespace. */
-export const LEGACY_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+/**
+ * The legacy tables a map row may name, each with the ONE primary-key shape the repository
+ * evidence establishes for it. A closed set, mirrored exactly by
+ * `legacy_import_map_legacy_key_check`.
+ *
+ * - `user` — `user.id`, which is the customer's Telegram user id: all 197,461 values are
+ *   numeric strings (program §19, `docs/legacy-migration/sql-evidence.md`). Digits only, no
+ *   leading zero, at most 20. This is the key, and it is expected: the map holds an
+ *   identifier, never a credential or free text. A digit string is, by shape alone,
+ *   indistinguishable from other digit strings (a phone number among them); the CHECK
+ *   cannot and does not claim otherwise. What it does guarantee is that nothing with a
+ *   letter, a separator or whitespace — `hunter2`, `password:hunter2`, a name — fits.
+ *
+ * Not here, deliberately: `invoice` and any other table whose primary-key format the
+ * evidence does not establish (`OQ-P4-01`). A table joins this set, and the CHECK, in a
+ * forward migration once its key shape is evidenced — never by a guess.
+ */
+export const LEGACY_IMPORT_SOURCE_TABLES = ['user'] as const;
+export type LegacyImportSourceTable = (typeof LEGACY_IMPORT_SOURCE_TABLES)[number];
+
+/** Per table, the key shape. Kept in step with the SQL CHECK by an integration test. */
+export const LEGACY_ID_PATTERNS: Readonly<Record<LegacyImportSourceTable, RegExp>> = {
+  user: /^[1-9][0-9]{0,19}$/,
+};
+
+export function isLegacyImportSourceTable(value: string): value is LegacyImportSourceTable {
+  return (LEGACY_IMPORT_SOURCE_TABLES as readonly string[]).includes(value);
+}
+
+/** Whether `(table, id)` is a key a map row may carry. */
+export function isLegacyImportKey(legacyTable: string, legacyId: string): boolean {
+  return isLegacyImportSourceTable(legacyTable) && LEGACY_ID_PATTERNS[legacyTable].test(legacyId);
+}
 /** SHA-256, lowercase hex: the source fingerprint and every row checksum. */
 export const LEGACY_SHA256_PATTERN = /^[0-9a-f]{64}$/;
 /** A code version: a git SHA or a release string. */
