@@ -8,12 +8,14 @@ import {
   type AdminSessionListResponse,
   type AdminSummary,
   type ResetAdminPasswordResponse,
+  type ResetAdminSecondFactorResponse,
   type RevokeAdminSessionsResponse,
   type RoleListResponse,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { ipThrottleSubject } from '../../infrastructure/trusted-proxy.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { toSummary } from './auth.controller.js';
 
@@ -135,9 +137,41 @@ export class AdminsController {
   ): Promise<ResetAdminPasswordResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const targetId = uuidV7Schema.parse(id) as AdminId;
-    const result = await this.container.adminManagement.resetPassword(scope, actor, targetId, body);
+    const result = await this.container.adminManagement.resetPassword(
+      scope,
+      actor,
+      targetId,
+      body,
+      { ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS) },
+    );
     return {
       admin: toSummary(result.admin, result.roleKeys),
+      sessionsRevoked: result.sessionsRevoked,
+    };
+  }
+
+  /**
+   * Removes another administrator's second factor (Phase D2): their lost phone, answered
+   * by an operator. Same bounds as the password reset; never a credential in the reply.
+   */
+  @Post('admins/:id/second-factor/reset')
+  async resetSecondFactor(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ResetAdminSecondFactorResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const targetId = uuidV7Schema.parse(id) as AdminId;
+    const result = await this.container.adminManagement.resetSecondFactor(
+      scope,
+      actor,
+      targetId,
+      body,
+      { ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS) },
+    );
+    return {
+      admin: toSummary(result.admin, result.roleKeys),
+      hadSecondFactor: result.hadSecondFactor,
       sessionsRevoked: result.sessionsRevoked,
     };
   }

@@ -116,6 +116,8 @@ export * from './recovery-kit.js';
 export * from './secrets.js';
 export * from './ports.js';
 export * from './http.js';
+/** Phase D2: the admin's second factor, own sessions and security history. */
+export * from './admin-security.js';
 export * from './reporting.js';
 // Program §10: the Payment Operations Center's queues and the shared attention read model.
 export * from './payment-operations.js';

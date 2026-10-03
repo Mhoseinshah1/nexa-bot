@@ -87,11 +87,14 @@ export interface InstallationKeyServiceDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly kdf: KitKdfProfile;
-  /** Step-up: the administrator's own password, throttled like login. */
-  readonly verifyPassword: (
+  /**
+   * Step-up: the administrator's own password, throttled like login — and, when their
+   * two-step sign-in is on, a current code or backup code too (D2 review).
+   */
+  readonly verifyStepUp: (
     scope: ScopeContext,
     actor: ActorContext,
-    password: string,
+    stepUp: { password: string; code?: string; backupCode?: string },
     context: { ip: string | null },
     action: string,
   ) => Promise<void>;
@@ -259,7 +262,7 @@ export class InstallationKeyService {
       );
     }
 
-    await this.stepUp(scope, actor, command.accountPassword, context, 'recovery_kit.export');
+    await this.stepUp(scope, actor, stepUpOf(command), context, 'recovery_kit.export');
 
     // The keyring as of now, including keys another process imported a moment ago.
     await this.deps.loader.refresh();
@@ -366,7 +369,7 @@ export class InstallationKeyService {
       );
     }
     const command = parsed.data;
-    await this.stepUp(scope, actor, command.accountPassword, context, 'recovery_kit.import');
+    await this.stepUp(scope, actor, stepUpOf(command), context, 'recovery_kit.import');
 
     const kitBytes = Buffer.from(command.kit, 'base64');
     // Bound to the ACTOR as well as the kit: another administrator's replay of the
@@ -849,14 +852,18 @@ export class InstallationKeyService {
   private async stepUp(
     scope: TenantContext,
     actor: ActorContext,
-    password: string,
+    stepUp: { password: string; code?: string; backupCode?: string },
     context: { ip: string | null },
     action: string,
   ): Promise<void> {
     try {
-      await this.deps.verifyPassword(scope, actor, password, context, action);
+      await this.deps.verifyStepUp(scope, actor, stepUp, context, action);
     } catch (error) {
-      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS) {
+      if (
+        isNexaError(error) &&
+        (error.code === IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS ||
+          error.code === IDENTITY_ERROR_CODES.AUTH_STEP_UP_FAILED)
+      ) {
         // A VALIDATION refusal, not a 401: the session is fine, the step-up
         // failed, and a 401 here would sign the operator out of the page they
         // are working in. The DENIED audit row was written by the verifier.
@@ -934,4 +941,19 @@ export class InstallationKeyService {
 
 function totalOf(counts: InstallationKeyDependencies): number {
   return counts.secrets + counts.wrappedKeys + counts.retainedArchives + counts.openRecoveries;
+}
+
+/** The step-up fields of a kit request, without the passphrase. */
+function stepUpOf(command: {
+  readonly accountPassword: string;
+  readonly code?: string | undefined;
+  readonly backupCode?: string | undefined;
+}): { password: string; code?: string; backupCode?: string } {
+  return {
+    password: command.accountPassword,
+    ...(command.code === undefined || command.code === '' ? {} : { code: command.code }),
+    ...(command.backupCode === undefined || command.backupCode === ''
+      ? {}
+      : { backupCode: command.backupCode }),
+  };
 }

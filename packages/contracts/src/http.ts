@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { adminChangeReasonSchema, adminDisplayNameSchema } from './identity.js';
+import { adminChangeReasonSchema, adminDisplayNameSchema, stepUpSchema } from './identity.js';
 import {
   DELIVERY_OUTCOMES,
   NOTIFICATION_KINDS,
@@ -700,6 +700,11 @@ export type AdminListResponse = z.infer<typeof adminListResponseSchema>;
 export const resetAdminPasswordRequestSchema = z.object({
   newPassword: z.string().min(12).max(1024),
   reason: adminChangeReasonSchema,
+  /**
+   * Phase D2 review: the ACTING operator's own step-up. Setting somebody's password is
+   * taking their account; holding `admins.edit` and a session must not be enough.
+   */
+  stepUp: stepUpSchema,
 });
 export type ResetAdminPasswordRequest = z.infer<typeof resetAdminPasswordRequestSchema>;
 

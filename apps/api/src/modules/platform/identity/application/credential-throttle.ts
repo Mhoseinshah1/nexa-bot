@@ -48,6 +48,11 @@ export class CredentialThrottle {
     private readonly uow: UnitOfWork<unknown>,
   ) {}
 
+  /** The username limit, for a release that happens inside a transaction (Phase D2). */
+  get maxAttemptsPerUsername(): number {
+    return this.policy.maxAttemptsPerUsername;
+  }
+
   /** The IP limit, for the one release that happens inside a transaction. */
   get maxAttemptsPerIp(): number {
     return this.policy.maxAttemptsPerIp;
@@ -210,6 +215,39 @@ export class CredentialThrottle {
    * Used only where the attempt is abandoned without being verified. A failure
    * that WAS verified keeps its reservation — that is the failure being counted.
    */
+  /**
+   * `release`, inside the caller's transaction (D2 review). For a success whose state
+   * change and whose bookkeeping must commit together: done afterwards, a transient
+   * failure here reported an error for a change that had already happened — a
+   * regeneration whose new backup codes were never delivered.
+   */
+  async releaseIn(
+    scope: TenantContext,
+    username: string,
+    ip: string | null,
+    reserved: Reservation,
+    tx: unknown,
+  ): Promise<void> {
+    await this.throttle.releaseAttempt(
+      scope,
+      'USERNAME',
+      username,
+      this.policy.maxAttemptsPerUsername,
+      reserved.username.windowStartedAt,
+      tx,
+    );
+    if (ip !== null && reserved.ip !== null) {
+      await this.throttle.releaseAttempt(
+        scope,
+        'IP',
+        ip,
+        this.policy.maxAttemptsPerIp,
+        reserved.ip.windowStartedAt,
+        tx,
+      );
+    }
+  }
+
   async release(
     scope: TenantContext,
     username: string,

@@ -1212,6 +1212,13 @@
       "when": 1791034894028,
       "tag": "0172_panel_drain",
       "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1791036374074,
+      "tag": "0173_admin_security_2fa",
+      "breakpoints": true
     }
   ]
 }

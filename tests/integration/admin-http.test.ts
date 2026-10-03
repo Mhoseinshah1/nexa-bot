@@ -770,7 +770,11 @@ describe('admin HTTP surface', () => {
         method: 'POST',
         url: `${API_PREFIX}${ADMIN_ROUTES.password(target)}`,
         headers: asAdmin(owner),
-        payload: { newPassword: 'a-brand-new-password', reason: 'they forgot it' },
+        payload: {
+          newPassword: 'a-brand-new-password',
+          reason: 'they forgot it',
+          stepUp: { password: 'the-owners-real-password' },
+        },
       });
       expect(reset.statusCode).toBe(201);
       const body = reset.json();
@@ -828,7 +832,11 @@ describe('admin HTTP surface', () => {
         method: 'POST',
         url: `${API_PREFIX}${ADMIN_ROUTES.password(ownerId)}`,
         headers: asAdmin(owner),
-        payload: { newPassword: 'no-current-password-needed', reason: 'shortcut' },
+        payload: {
+          newPassword: 'no-current-password-needed',
+          reason: 'shortcut',
+          stepUp: { password: 'the-owners-real-password' },
+        },
       });
       // 409, the same answer every other self-modification refusal gives: the
       // caller is permitted and the TARGET is the problem, which is a conflict
@@ -846,7 +854,11 @@ describe('admin HTTP surface', () => {
         method: 'POST',
         url: `${API_PREFIX}${ADMIN_ROUTES.password(target)}`,
         headers: asAdmin(support),
-        payload: { newPassword: 'not-yours-to-set', reason: 'escalation' },
+        payload: {
+          newPassword: 'not-yours-to-set',
+          reason: 'escalation',
+          stepUp: { password: 'the-support-password' },
+        },
       });
       expect(denied.statusCode).toBe(403);
 
@@ -1006,7 +1018,11 @@ describe('admin HTTP surface', () => {
         method: 'POST',
         url: `${API_PREFIX}${ADMIN_ROUTES.password(target)}`,
         headers: asAdmin(cookie),
-        payload: { newPassword: 'becoming-somebody-else', reason: 'escalation' },
+        payload: {
+          newPassword: 'becoming-somebody-else',
+          reason: 'escalation',
+          stepUp: { password: 'the-manager-password' },
+        },
       });
       expect(refused.statusCode).toBe(403);
       expect(refused.json()).toMatchObject({
@@ -1030,7 +1046,11 @@ describe('admin HTTP surface', () => {
         method: 'POST',
         url: `${API_PREFIX}${ADMIN_ROUTES.password(peer)}`,
         headers: asAdmin(cookie),
-        payload: { newPassword: 'a-legitimate-reset', reason: 'they forgot it' },
+        payload: {
+          newPassword: 'a-legitimate-reset',
+          reason: 'they forgot it',
+          stepUp: { password: 'the-manager-password' },
+        },
       });
       expect(allowed.statusCode).toBe(201);
       expect((await login('equally-armed', 'a-legitimate-reset')).statusCode).toBe(201);
@@ -1180,7 +1200,11 @@ describe('admin HTTP surface', () => {
           method: 'POST',
           url: `${API_PREFIX}${ADMIN_ROUTES.password(target)}`,
           headers: asAdmin(cookieB),
-          payload: { newPassword: 'taking-this-account', reason: 'not mine' },
+          payload: {
+            newPassword: 'taking-this-account',
+            reason: 'not mine',
+            stepUp: { password: 'the-owner-b-password' },
+          },
         });
       } finally {
         api.container.setInstallationTenant(tenantA.tenantId);

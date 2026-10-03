@@ -147,6 +147,22 @@ duplicate callback there is indistinguishable from a second purchase.
 both the scope and the namespace; integration tests for replay, payload
 mismatch, per-tenant scoping and per-surface scoping.
 
+**Stated exception: an administrator's own second-factor and session writes**
+(Phase D2). Enrolling, activating, disabling two-step sign-in, regenerating backup
+codes, sign-in itself, and revoking one's own sessions take NO idempotency key, and
+that is deliberate, for two reasons that hold together:
+
+- their responses are SECRETS shown once — a TOTP secret, ten backup codes, a session
+  cookie. Storing a response so a replay can return it would persist exactly the value
+  the design shows once and never again;
+- their proofs are SINGLE-USE — a TOTP step is accepted once, a backup code is spent
+  once, a challenge is consumed once — so a replayed request cannot repeat the effect:
+  it is refused (or, for revocation, is a natural no-op that reports `revoked: false`).
+
+The client never retries them automatically (`retry: false`). An OPERATOR's write on
+somebody else's account is not covered by this exception: the operator 2FA reset takes
+a key, and stores only its non-secret result.
+
 ---
 
 ## Snapshots over references

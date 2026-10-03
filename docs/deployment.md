@@ -318,6 +318,10 @@ botctl update <version>    update to a version
 botctl rollback            return to the previous release
 botctl logs [service]      follow logs
 botctl restart             restart the stack
+botctl admin check-2fa --username NAME
+                           whether an administrator has two-step sign-in on
+botctl admin reset-2fa --username NAME --reason TEXT
+                           owner recovery: remove two-step sign-in (audited)
 ```
 
 None of these print a secret. `botctl status` reports container state and the
@@ -2261,6 +2265,61 @@ the duration of the restore — after which `botctl secrets rewrap` and
 the same rule as key retirement, stated for the other direction: **the live
 keyring is not the whole story, and a retained backup keeps its own
 requirements until it expires.**
+
+## Owner recovery: two-step sign-in
+
+Phase D2 gives every Web Admin administrator an optional second factor — a TOTP
+authenticator app (RFC 6238, SHA-1, six digits, thirty seconds, the parameters every
+mainstream app assumes) plus ten one-time backup codes. It is turned on from the
+administrator's own account page (user menu → «حساب من» → «امنیت»), with the password
+to start and a code from the device to finish, and from then on a correct password
+opens a five-minute challenge rather than a session; only a valid code turns the
+challenge into one. The secret is stored encrypted under the installation's keyring
+(purpose `admin.totp_secret`, so `botctl secrets status|rewrap|retire-check` cover it),
+displayed exactly once, and never readable again; backup codes are stored as hashes.
+
+A second factor can lock somebody out, so there are two documented ways back, and
+neither one signs anybody in:
+
+1. **Another administrator.** An owner (or anybody holding `admins.edit` and at least
+   the target's privileges; an owner target also needs `admins.permissions.edit`, and
+   the OPERATOR must re-enter their own password, plus their own code when their two-step
+   sign-in is on) opens
+   System → Administrators → the person → «برداشتن ورود دومرحله‌ای», with a reason. The
+   factor and its backup codes are removed and every session the target holds ends.
+   Their password is unchanged.
+2. **The server, when the only owner is locked out.** Nobody else can sign in to do (1),
+   so it is done from the host:
+
+   ```
+   botctl admin check-2fa --username owner          # prints on, pending or off
+   botctl admin reset-2fa --username owner --reason "lost phone, identity checked in person"
+   ```
+
+   Outside an installed host the same CLI is `pnpm admin:2fa-reset --username NAME
+--reason TEXT [--tenant SLUG] [--check]` (`admin:2fa-reset:dev` from source). It takes
+   the update lock, removes the factor and the backup codes, ends every session of that
+   administrator, and records `admin.totp_reset` in the audit log as `SYSTEM_JOB` with
+   your reason, plus a WARN `admin.second_factor_reset` on the alerts page. It never
+   sets a password, never creates a session and reads no secret: the administrator
+   still signs in with their password, and should enrol a new device straight away.
+
+   It is a CLI and never an endpoint — like `admin:bootstrap`, it has no caller to
+   authorise, so over HTTP it would be an unauthenticated way to strip a factor.
+   `scripts/check-boundaries.sh` fails the build if any surface reaches it. Whoever can
+   run it already holds the database credentials, which is strictly more.
+
+A lost PASSWORD is unchanged by this: another administrator with `admins.edit` resets
+it (System → Administrators). An installation whose only owner has lost both their
+password and their factor needs both paths — and if no other administrator exists,
+the password still has no server-side reset (`OQ-D2-01` in
+`docs/open-questions.md`).
+
+What the second factor does NOT cover yet: the Telegram admin surface, which is
+authenticated by the account binding rather than the password (`OQ-D2-02`). The Recovery
+Kit export and import take the step-up — the password, plus a code when the
+administrator's factor is on (ADR-0032 §7, amended). Nothing REQUIRES an administrator to
+turn it on (`OQ-D2-03`).
 
 ## Security properties
 

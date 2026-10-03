@@ -234,6 +234,24 @@ import {
   revokeAdminSessionsResponseSchema,
   API_PREFIX,
   AUTH_ROUTES,
+  ACCOUNT_SECURITY_ROUTES,
+  accountSecurityResponseSchema,
+  backupCodesResponseSchema,
+  loginOutcomeResponseSchema,
+  okResponseSchema,
+  resetAdminSecondFactorResponseSchema,
+  revokeOtherSessionsResponseSchema,
+  revokeOwnSessionResponseSchema,
+  securityEventListResponseSchema,
+  totpEnrolResponseSchema,
+  type AccountSecurityResponse,
+  type BackupCodesResponse,
+  type LoginOutcomeResponse,
+  type ResetAdminSecondFactorResponse,
+  type RevokeOtherSessionsResponse,
+  type RevokeOwnSessionResponse,
+  type SecurityEventListResponse,
+  type TotpEnrolResponse,
   errorResponseSchema,
   healthInfoResponseSchema,
   loginResponseSchema,
@@ -701,8 +719,87 @@ function toApiError(status: number, payload: unknown): ApiError {
   return new ApiError(status, 'unknown', `Request failed with ${status}`);
 }
 
-export function signIn(username: string, password: string): Promise<LoginResponse> {
-  return post(AUTH_ROUTES.login, { username, password }, loginResponseSchema);
+/**
+ * The password step. For an account with two-step sign-in it answers with a challenge
+ * (`secondFactorRequired`) and the server has set an httpOnly challenge cookie; the
+ * code goes to `completeSecondFactor`.
+ */
+export function signIn(username: string, password: string): Promise<LoginOutcomeResponse> {
+  return post(AUTH_ROUTES.login, { username, password }, loginOutcomeResponseSchema);
+}
+
+/** The second step: a current code or one backup code, never both. */
+export function completeSecondFactor(
+  proof: { code: string } | { backupCode: string },
+): Promise<LoginResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.loginSecondFactor, proof, loginResponseSchema);
+}
+
+// --- Phase D2: the signed-in administrator's own security -------------------
+
+export function fetchAccountSecurity(): Promise<AccountSecurityResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.overview, accountSecurityResponseSchema);
+}
+
+export function enrolTotp(password: string): Promise<TotpEnrolResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpEnrol, { password }, totpEnrolResponseSchema);
+}
+
+export function activateTotp(code: string): Promise<BackupCodesResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpActivate, { code }, backupCodesResponseSchema);
+}
+
+export type SecondFactorProofInput = { code: string } | { backupCode: string };
+
+export function disableTotp(
+  input: { password: string } & SecondFactorProofInput,
+): Promise<{ ok: true }> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpDisable, input, okResponseSchema);
+}
+
+export function regenerateBackupCodes(
+  input: { password: string } & SecondFactorProofInput,
+): Promise<BackupCodesResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.backupCodesRegenerate, input, backupCodesResponseSchema);
+}
+
+export function fetchOwnSessions(): Promise<AdminSessionListResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.sessions, adminSessionListResponseSchema);
+}
+
+export function revokeOwnSession(id: string): Promise<RevokeOwnSessionResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.revokeSession(id), {}, revokeOwnSessionResponseSchema);
+}
+
+export function revokeOtherSessions(): Promise<RevokeOtherSessionsResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.revokeOtherSessions, {}, revokeOtherSessionsResponseSchema);
+}
+
+export function fetchSecurityEvents(): Promise<SecurityEventListResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.events, securityEventListResponseSchema);
+}
+
+/** The holder's own password. Every session ends, this one included. */
+export function changeOwnPassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<{ ok: true }> {
+  return post(AUTH_ROUTES.password, input, okResponseSchema);
+}
+
+/** An operator removing ANOTHER administrator's two-step sign-in. */
+export function resetAdminSecondFactor(input: {
+  id: string;
+  reason: string;
+  stepUp: StepUpInput;
+  idempotencyKey: string;
+}): Promise<ResetAdminSecondFactorResponse> {
+  const { id, ...body } = input;
+  return post(
+    ACCOUNT_SECURITY_ROUTES.adminSecondFactorReset(id),
+    body,
+    resetAdminSecondFactorResponseSchema,
+  );
 }
 
 export function signOut(): Promise<LogoutResponse> {
@@ -794,10 +891,18 @@ export function setAdminRoles(input: {
  * The response carries no credential — the administrator as anybody may see
  * them, and how many sessions the reset ended.
  */
+/** The acting operator's own step-up: their password, and a code when their 2FA is on. */
+export interface StepUpInput {
+  password: string;
+  code?: string;
+  backupCode?: string;
+}
+
 export function resetAdminPassword(input: {
   id: string;
   newPassword: string;
   reason: string;
+  stepUp: StepUpInput;
 }): Promise<ResetAdminPasswordResponse> {
   const { id, ...body } = input;
   return post(ADMIN_ROUTES.password(id), body, resetAdminPasswordResponseSchema);
@@ -2445,6 +2550,8 @@ export function fetchInstallationKeys(): Promise<InstallationKeysResponse> {
  */
 export async function exportRecoveryKit(input: {
   accountPassword: string;
+  /** Required by the server when the administrator's two-step sign-in is on. */
+  code?: string;
   passphrase: string;
   passphraseConfirmation: string;
 }): Promise<{ blob: Blob; filename: string }> {
@@ -2469,6 +2576,7 @@ export async function importRecoveryKit(input: {
   file: File;
   passphrase: string;
   accountPassword: string;
+  code?: string;
   idempotencyKey: string;
 }): Promise<ImportRecoveryKitResponse> {
   // FileReader's data URL, the way the other file pickers here read a file: one
@@ -2488,6 +2596,7 @@ export async function importRecoveryKit(input: {
       kit,
       passphrase: input.passphrase,
       accountPassword: input.accountPassword,
+      ...(input.code === undefined || input.code === '' ? {} : { code: input.code }),
       idempotencyKey: input.idempotencyKey,
     },
     importRecoveryKitResponseSchema,
