@@ -121,7 +121,7 @@ export interface BotMenuBuilderServiceDeps {
   };
   /** The shared catalogue's own text for a key, in the default locale. */
   readonly defaultLabel: (key: TemplateKey) => string;
-  /** The tenant's bots with their last appearance test — icon eligibility is per bot. */
+  /** The tenant's bots with their last appearance test — the preview names one of them. */
   readonly bots: { listBots(scope: TenantContext): Promise<AppearanceBotRecord[]> };
 }
 
@@ -201,6 +201,7 @@ export class BotMenuBuilderService {
         layout: readLayout(row.snapshot),
         createdAt: row.createdAt.toISOString(),
         createdByAdminId: row.createdByAdminId,
+        createdByAdminName: row.createdByAdminName,
         restoredFrom: row.restoredFrom,
       })),
       // Revisions are numbered 1..n with no gaps, so the last one says whether more exist.

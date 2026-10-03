@@ -28,6 +28,8 @@ export interface StoredMainMenuRevision {
   readonly snapshot: unknown;
   readonly createdAt: Date;
   readonly createdByAdminId: string | null;
+  /** The publisher's display name now; null when no administrator published it or the row is gone. */
+  readonly createdByAdminName: string | null;
   readonly restoredFrom: { readonly id: string; readonly revision: number } | null;
 }
 

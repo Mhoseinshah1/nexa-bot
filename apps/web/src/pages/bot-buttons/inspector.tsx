@@ -1,20 +1,12 @@
 import { useId, useState } from 'react';
 import {
-  APPEARANCE_SLOTS,
-  APPEARANCE_SLOT_FALLBACKS,
   MAIN_MENU_BUTTON_STYLES,
-  MENU_APPEARANCE_SLOTS,
-  type AppearanceSlot,
-  type AppearanceSlotView,
   type ExplicitMainMenu,
   type MainMenuBuilderItem,
   type MainMenuButtonId,
   type MainMenuButtonStyle,
   type MainMenuGate,
-  type MainMenuIconEligibility,
-  type MenuAppearanceSlot,
 } from '@nexa/contracts';
-import { APPEARANCE_SLOT_LABEL } from '../../appearance-labels';
 import { t, type WebKey } from '../../i18n/web.fa';
 import { Badge, Banner, Disclosure, Ltr, Switch } from '../../ui/kit';
 import { Icon } from '../../ui/icons';
@@ -33,11 +25,8 @@ import {
   placeInNewRow,
   positionOf,
   removeToPool,
-  setAppearanceSlot,
   setEnabled,
-  setIconSlot,
   setStyle,
-  startsWithEmoji,
 } from './model';
 
 /** The Persian name of each style. Exactly the contract's four; no custom colour exists. */
@@ -65,8 +54,6 @@ export function Inspector({
   id,
   item,
   editable,
-  iconEligibility,
-  appearanceSlots,
   mayViewTemplates,
   onMove,
   onChange,
@@ -76,9 +63,6 @@ export function Inspector({
   id: MainMenuButtonId | null;
   item: MainMenuBuilderItem | undefined;
   editable: boolean;
-  iconEligibility: readonly MainMenuIconEligibility[];
-  /** The tenant's appearance slots, when readable — which slots carry a custom emoji. */
-  appearanceSlots: readonly AppearanceSlotView[] | null;
   mayViewTemplates: boolean;
   /** A placement change: announced with the button's new position. */
   onMove: (id: MainMenuButtonId, op: Op) => void;
@@ -104,11 +88,6 @@ export function Inspector({
   const moves = movesFor(layout, id);
   const rowCount = layout.rows.length;
   const chosenRow = targetRow === 'new' || Number(targetRow) < rowCount ? targetRow : 'new';
-  const eligibleBots = iconEligibility.filter((bot) => bot.eligible);
-  const slotView =
-    config.iconSlot === null
-      ? undefined
-      : appearanceSlots?.find((slot) => slot.slot === config.iconSlot);
   const moveButton = (
     key: WebKey,
     icon: 'arrowUp' | 'arrowDown' | 'chevronRight' | 'chevronLeft' | 'plus',
@@ -266,69 +245,6 @@ export function Inspector({
         <p className="muted small">{t('web.bb_style_hint')}</p>
       </fieldset>
 
-      <div className="bb-field">
-        <label htmlFor={`${base}-icon`}>{t('web.bb_icon_title')}</label>
-        <select
-          id={`${base}-icon`}
-          className="input sm"
-          value={config.iconSlot ?? ''}
-          disabled={!editable}
-          onChange={(event) => {
-            const value = event.target.value;
-            const slot = value === '' ? null : (value as AppearanceSlot);
-            onChange(
-              (l) => setIconSlot(l, id, slot),
-              fill(t('web.bb_announce_icon'), {
-                label,
-                icon: slot === null ? t('web.bb_icon_none') : t(APPEARANCE_SLOT_LABEL[slot]),
-              }),
-            );
-          }}
-        >
-          <option value="">{t('web.bb_icon_none')}</option>
-          {APPEARANCE_SLOTS.map((slot) => (
-            <option key={slot} value={slot}>
-              {APPEARANCE_SLOT_FALLBACKS[slot]} {t(APPEARANCE_SLOT_LABEL[slot])}
-            </option>
-          ))}
-        </select>
-        <p className="muted small">{t('web.bb_icon_hint')}</p>
-        {config.iconSlot !== null && startsWithEmoji(label) && (
-          <Banner tone="warn">
-            <span data-testid="bb-icon-doubled">{t('web.bb_icon_label_has_emoji')}</span>
-          </Banner>
-        )}
-        {config.iconSlot !== null && slotView !== undefined && (
-          <p className="muted small" data-testid="bb-icon-slot-state">
-            {t(
-              slotView.customEmojiId !== null && slotView.enabled
-                ? 'web.bb_icon_slot_configured'
-                : 'web.bb_icon_slot_unconfigured',
-            )}
-          </p>
-        )}
-        <div className="bb-eligibility" data-testid="bb-eligibility">
-          <p className="small">{t('web.bb_icon_eligibility')}</p>
-          {iconEligibility.length === 0 ? (
-            <p className="muted small">{t('web.bot_buttons_no_bots')}</p>
-          ) : (
-            <ul>
-              {iconEligibility.map((bot) => (
-                <li key={bot.botInstanceId}>
-                  <Ltr>@{bot.username}</Ltr>{' '}
-                  <Badge tone={bot.eligible ? 'ok' : 'neutral'}>
-                    {t(bot.eligible ? 'web.bb_icon_eligible' : 'web.bb_icon_not_eligible')}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-          )}
-          {config.iconSlot !== null && eligibleBots.length === 0 && (
-            <Banner tone="info">{t('web.bb_icon_no_eligible_bot')}</Banner>
-          )}
-        </div>
-      </div>
-
       {item?.gate !== null && item?.gate !== undefined && (
         <div className="bb-field" data-testid="bb-gate">
           <p className="small strong">{t('web.bb_gate_title')}</p>
@@ -367,35 +283,9 @@ export function Inspector({
       </div>
 
       <Disclosure summary={t('web.bb_advanced')} size="sm">
-        <div className="bb-field">
-          <label htmlFor={`${base}-screen`}>{t('web.bot_buttons_slot')}</label>
-          <select
-            id={`${base}-screen`}
-            className="input sm"
-            value={config.appearanceSlot ?? item?.defaultAppearanceSlot ?? ''}
-            disabled={!editable}
-            onChange={(event) => {
-              const slot = event.target.value as MenuAppearanceSlot;
-              onChange(
-                (l) => setAppearanceSlot(l, id, slot === item?.defaultAppearanceSlot ? null : slot),
-                fill(t('web.bb_announce_screen'), { label }),
-              );
-            }}
-          >
-            {MENU_APPEARANCE_SLOTS.map((slot) => (
-              <option key={slot} value={slot}>
-                {t(APPEARANCE_SLOT_LABEL[slot])}
-                {slot === item?.defaultAppearanceSlot
-                  ? ` (${t('web.bot_buttons_slot_default')})`
-                  : ''}
-              </option>
-            ))}
-          </select>
-          <p className="muted small">{t('web.bot_buttons_slot_hint')}</p>
-          <p className="muted small">
-            {t('web.bb_button_id')} <Ltr>{id}</Ltr>
-          </p>
-        </div>
+        <p className="muted small">
+          {t('web.bb_button_id')} <Ltr>{id}</Ltr>
+        </p>
       </Disclosure>
     </section>
   );

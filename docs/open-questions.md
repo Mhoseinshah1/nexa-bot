@@ -2749,6 +2749,8 @@ RESOLVED (owner, Bot API 9.4). Real-bot acceptance R-ACC-1 still checks the rend
 
 ## OQ-T-API-02 — who may use `KeyboardButton.icon_custom_emoji_id`
 
+**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
+
 Round T. Confirmed by the owner: `icon_custom_emoji_id` is official Bot API, usable by bots
 able to use custom emoji (bots with purchased Fragment usernames, or in the applicable
 cases a bot whose owner has Premium). Nexa keeps its per-BOT-INSTANCE empirical appearance
@@ -2817,6 +2819,8 @@ route is claimed as accepted before it.
 
 ## OQ-T-API-05 — the exact refusal an ineligible bot gets for `icon_custom_emoji_id`
 
+**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
+
 Round T (T2). UNKNOWN, and deliberately not guessed. Owner rule B5 lets only a RELIABLY
 classified eligibility denial switch a bot's shared custom-emoji state off. T2 reuses the
 appearance probe's classifier unchanged (`classifyProbeRefusal`, read by
@@ -2883,6 +2887,8 @@ paginated. No cap and no pruning job. Revisit only if a cap is wanted.
 Default in force, accepted by the owner for round T. Copied here by the T4 review (F-9).
 
 ## OQ-T-4 — icon eligibility is shared with message decoration
+
+**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
 
 Round T. DECISION. One custom-emoji eligibility per bot: the appearance test's recorded
 outcome, `SENT` only (`isCustomEmojiEligible`, used by the runtime's decoration and by the
