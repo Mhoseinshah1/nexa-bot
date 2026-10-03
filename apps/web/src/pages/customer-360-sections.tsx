@@ -136,13 +136,7 @@ export function GeneralInfoCard({
           ],
           [t('web.user_first_seen'), formatTimestamp(row.firstSeenAt)],
           [t('web.user_last_seen'), formatTimestamp(row.lastSeenAt)],
-          [
-            t('web.c360_terms'),
-            // There is no terms domain yet: said in words, never "not accepted".
-            <span key="terms" className="muted">
-              {t('web.c360_terms_unavailable')}
-            </span>,
-          ],
+          [t('web.c360_terms'), <TermsStanding key="terms" overview={overview} />],
           [
             t('web.c360_notifications'),
             row.marketingOptOutAt === null
@@ -162,6 +156,38 @@ export function GeneralInfoCard({
       />
       <p className="muted small">{t('web.c360_points_absent')}</p>
     </Card>
+  );
+}
+
+/**
+ * Program §6: the customer's terms standing, exactly as the Telegram gate decides it. A
+ * server without the terms domain says so in words — never "not accepted".
+ */
+function TermsStanding({ overview }: { overview: CustomerOverviewResponse | undefined }) {
+  if (overview === undefined) return <Dash />;
+  const terms = overview.terms;
+  if (!terms.available) return <span className="muted">{t('web.c360_terms_unavailable')}</span>;
+  if (terms.current === null) {
+    return <span className="muted">{t('web.c360_terms_none_published')}</span>;
+  }
+  return (
+    <span>
+      <Badge tone={terms.acceptedCurrent ? 'ok' : terms.reacceptanceRequired ? 'warn' : 'neutral'}>
+        {t(
+          terms.acceptedCurrent
+            ? 'web.c360_terms_accepted_current'
+            : terms.reacceptanceRequired
+              ? 'web.c360_terms_required'
+              : 'web.c360_terms_not_accepted',
+        )}
+      </Badge>{' '}
+      <span className="muted small">
+        {t('web.c360_terms_current')} {terms.current.versionNumber} ·{' '}
+        {terms.lastAccepted === null
+          ? t('web.c360_terms_never')
+          : `${t('web.c360_terms_last')} ${String(terms.lastAccepted.versionNumber)} · ${formatTimestamp(terms.lastAccepted.acceptedAt)}`}
+      </span>
+    </span>
   );
 }
 
@@ -624,6 +650,7 @@ const ACTION_LABELS: Readonly<Record<string, WebKey>> = {
   'customer.channel_exemption.revoke': 'web.c360_action_unexempt',
   'customer.marketing_opt_out': 'web.c360_action_marketing_out',
   'customer.marketing_opt_in': 'web.c360_action_marketing_in',
+  'customer.terms_accept': 'web.c360_action_terms_accept',
   'reseller.register': 'web.c360_action_reseller_register',
   'reseller.update': 'web.c360_action_reseller_update',
   'customer.account_transfer': 'web.c360_action_transfer_out',
@@ -646,6 +673,7 @@ const RESULT_TONES: Readonly<Record<string, Tone>> = {
 };
 
 export function TimelineCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
+  const onLink = useLinkHandler();
   const timeline = useQuery({
     queryKey: ['customer-timeline', customerId],
     queryFn: () => fetchCustomerTimeline(customerId),
@@ -701,6 +729,12 @@ export function TimelineCard({ customerId, mayView }: { customerId: string; mayV
           />
         )}
       </StateSwitch>
+      {/* Phase D1: the whole trail — this customer's orders, payments and services too. */}
+      <p className="small">
+        <a href={`/audit-log?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+          {t('web.c360_timeline_all')}
+        </a>
+      </p>
     </Card>
   );
 }

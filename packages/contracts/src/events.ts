@@ -111,6 +111,9 @@ export const EVENT_TYPES = [
   'CustomerPhoneVerificationChanged',
   'CustomerLocationChangeOverrideChanged',
   'CustomerAccountTransferred',
+  // Program §6: the terms and rules. Ids and numbers only, never the text.
+  'TermsVersionPublished',
+  'CustomerTermsAccepted',
   // Program §8: operator CRM metadata. Ids only — never a label, never a note body.
   'CustomerTagChanged',
   'CustomerTagAssigned',
@@ -176,6 +179,9 @@ export const EVENT_TYPES = [
   // the recipients are never in the payload: a state change is the fact.
   'BroadcastStateChanged',
   'BulkOperationStateChanged',
+  // Phase A2: an operator queued a direct message to one customer. Ids and the content's
+  // kind only — never its text, its caption or its file, which are on the message row.
+  'CustomerDirectMessageQueued',
   // Phase E3: an incident or maintenance window changed status. Ids and statuses only.
   'IncidentStateChanged',
 ] as const;
@@ -214,6 +220,8 @@ export const AGGREGATE_TYPES = [
   'Ticket',
   'Broadcast',
   'BulkOperation',
+  // Program §6: one version of a tenant's terms and rules.
+  'TermsVersion',
   // Program §8: one tag of a tenant's customer-tag catalogue.
   'CustomerTag',
   // Phase E3: an incident or maintenance window.
@@ -322,6 +330,15 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     servicesMoved: z.number().int().nonnegative(),
     walletMovedMinor: z.string(),
     currency: z.string(),
+  }),
+  /** Aggregate `TermsVersion`. The version is now the one customers are asked to accept. */
+  TermsVersionPublished: z.object({
+    versionNumber: z.number().int().positive(),
+  }),
+  /** Aggregate `Customer`. Written once per (customer, version): a repeated tap writes nothing. */
+  CustomerTermsAccepted: z.object({
+    termsVersionId: z.string(),
+    versionNumber: z.number().int().positive(),
   }),
   OrderConfirmed: z.object({
     customerId: z.string(),
@@ -592,6 +609,11 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     from: z.string().nullable(),
     to: z.string(),
     items: z.number().int().nonnegative(),
+  }),
+  CustomerDirectMessageQueued: z.object({
+    messageId: z.string(),
+    customerId: z.string(),
+    contentKind: z.enum(['TEXT', 'PHOTO', 'DOCUMENT']),
   }),
   IncidentStateChanged: z.object({
     incidentId: z.string(),

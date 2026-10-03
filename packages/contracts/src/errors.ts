@@ -1594,6 +1594,23 @@ export const BOT_ERROR_CODES = {
 export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];
 
 /**
+ * Program §6 — the terms and rules. A version of another tenant and one that does not exist
+ * are both `TERMS_VERSION_NOT_FOUND`, so the answer is not an oracle for which ids exist.
+ */
+export const TERMS_ERROR_CODES = {
+  TERMS_VERSION_NOT_FOUND: 'terms.version_not_found',
+  /** A second draft was asked for while one exists: there is at most one, and it is edited. */
+  TERMS_DRAFT_EXISTS: 'terms.draft_exists',
+  /**
+   * The draft moved since it was read — another edit, or it was published. Nothing was
+   * written; the `currentRevision` detail names where it stands now (null: no longer a draft).
+   */
+  TERMS_DRAFT_CONFLICT: 'terms.draft_conflict',
+  /** The version is published, and a published version is never edited or published again. */
+  TERMS_VERSION_PUBLISHED: 'terms.version_published',
+} as const;
+
+/**
  * WP-A7 — support tickets (`docs/wp-a7-tickets-audit.md`). One remedy each; a ticket of
  * another tenant, another customer's ticket and a ticket that does not exist are all
  * `TICKET_NOT_FOUND`, so the answer is not an oracle for which ids exist.

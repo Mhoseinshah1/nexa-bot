@@ -13,7 +13,7 @@ customers on its scope can be told. Program §21.
 every edit and transition compares. `incident_targets` is the scope — panels, service
 locations, products and payment gateways, at most 50. `incident_effects` is one row per
 thing actually changed, with its state. `incident_events` is the timeline and is
-append-only (0170's triggers). `incident_communications` / `incident_notices` are the
+append-only (0175's triggers; the lead renumbers at merge). `incident_communications` / `incident_notices` are the
 customer notices.
 
 Status moves only forward, each step a conditional UPDATE naming its `from` state and the

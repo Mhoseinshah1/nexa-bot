@@ -443,6 +443,12 @@ import {
   type SupportFaqListResponse,
   type SupportFaqResponse,
   type SupportFaqStatus,
+  // Program §6: the terms and rules.
+  TERMS_ROUTES,
+  termsOverviewSchema,
+  termsVersionWriteResponseSchema,
+  type TermsOverviewResponse,
+  type TermsVersionWriteResponse,
   // WP-A10: client apps and connection guides.
   CLIENT_APP_ROUTES,
   clientAppDeletedSchema,
@@ -468,6 +474,10 @@ import {
   type ServiceRefundRequestState,
   type RefundListResponse,
   type RefundResponse,
+  // Phase D1: the audit log browser.
+  AUDIT_LOG_ROUTES,
+  auditLogListResponseSchema,
+  type AuditLogListResponse,
   // WP-A7: support tickets.
   TICKET_ROUTES,
   ticketAssigneesResponseSchema,
@@ -535,6 +545,15 @@ import {
   type CustomerTransferPreviewResponse,
   type CustomerTransferRequest,
   type CustomerTransferResultResponse,
+} from '@nexa/contracts';
+// Phase A2: a direct message from Customer 360.
+import {
+  DIRECT_MESSAGE_ROUTES,
+  directMessageListResponseSchema,
+  directMessageResponseSchema,
+  type DirectMessageFile,
+  type DirectMessageListResponse,
+  type DirectMessageResponse,
 } from '@nexa/contracts';
 // Phase B3: the notification center.
 import {
@@ -1997,6 +2016,45 @@ export function setSupportFaqStatus(input: {
 }): Promise<SupportFaqResponse> {
   const { id, ...body } = input;
   return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
+}
+
+// --- Program §6: the terms and rules ------------------------------------------------
+
+export function fetchTerms(): Promise<TermsOverviewResponse> {
+  return authedGet(TERMS_ROUTES.overview, termsOverviewSchema);
+}
+
+export function createTermsDraft(input: {
+  idempotencyKey: string;
+  title: string;
+  body: string;
+}): Promise<TermsVersionWriteResponse> {
+  return post(TERMS_ROUTES.createDraft, input, termsVersionWriteResponseSchema);
+}
+
+/**
+ * `expectedRevision` is the revision the editor was opened from. A draft that moved since
+ * comes back as `terms.draft_conflict` with the current revision, never overwritten.
+ */
+export function updateTermsDraft(input: {
+  id: string;
+  idempotencyKey: string;
+  title: string;
+  body: string;
+  expectedRevision: number;
+}): Promise<TermsVersionWriteResponse> {
+  const { id, ...body } = input;
+  return post(TERMS_ROUTES.updateDraft(id), body, termsVersionWriteResponseSchema);
+}
+
+/** Publishes exactly the revision the operator previewed. */
+export function publishTermsDraft(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedRevision: number;
+}): Promise<TermsVersionWriteResponse> {
+  const { id, ...body } = input;
+  return post(TERMS_ROUTES.publish(id), body, termsVersionWriteResponseSchema);
 }
 
 // --- WP-A10: client apps and connection guides ------------------------------------
@@ -3913,6 +3971,83 @@ export function fetchCustomerFinancialSummary(
 
 export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
+}
+
+// --- Phase A2: «ارسال پیام» -------------------------------------------------------------
+
+/** The customer's direct messages, newest first; `cursor` is the previous page's last row. */
+export function fetchDirectMessages(
+  customerId: string,
+  cursor?: { readonly at: string; readonly id: string },
+): Promise<DirectMessageListResponse> {
+  const params = new URLSearchParams();
+  if (cursor !== undefined) {
+    params.set('beforeAt', cursor.at);
+    params.set('beforeId', cursor.id);
+  }
+  const suffix = params.toString();
+  const path = DIRECT_MESSAGE_ROUTES.list(customerId);
+  return authedGet(suffix ? `${path}?${suffix}` : path, directMessageListResponseSchema);
+}
+
+/** Queues one message; the same key answers with the same message (`replayed`). */
+export function sendDirectMessage(input: {
+  customerId: string;
+  idempotencyKey: string;
+  text: string;
+  file: DirectMessageFile | null;
+}): Promise<DirectMessageResponse> {
+  return post(
+    DIRECT_MESSAGE_ROUTES.send(input.customerId),
+    { idempotencyKey: input.idempotencyKey, text: input.text, file: input.file },
+    directMessageResponseSchema,
+  );
+}
+
+// --- Audit log (Phase D1) ------------------------------------------------------
+
+/** The audit log's filters as the page holds them; every one is ANDed on the server. */
+export interface AuditLogFilters {
+  readonly actor?: string;
+  readonly actorType?: string;
+  readonly customerId?: string;
+  readonly action?: string;
+  readonly entityType?: string;
+  readonly entityId?: string;
+  readonly result?: string;
+  readonly security?: string;
+  /** Half-open `[from, to)`, as ISO instants. */
+  readonly from?: string;
+  readonly to?: string;
+}
+
+function auditLogParams(filters: AuditLogFilters): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (typeof value === 'string' && value !== '') params.set(key, value);
+  }
+  return params;
+}
+
+/** One page of the audit log, newest first. `audit.view`. */
+export function fetchAuditLog(
+  filters: AuditLogFilters,
+  page: { readonly limit: number; readonly cursor?: string },
+): Promise<AuditLogListResponse> {
+  const params = auditLogParams(filters);
+  params.set('limit', String(page.limit));
+  if (page.cursor !== undefined) params.set('cursor', page.cursor);
+  return authedGet(`${AUDIT_LOG_ROUTES.list}?${params.toString()}`, auditLogListResponseSchema);
+}
+
+/**
+ * The CSV download of exactly these filters. A URL rather than a fetch, for the reason
+ * `reportExportUrl` gives. `audit.export`; the server records every export.
+ */
+export function auditLogExportUrl(filters: AuditLogFilters): string {
+  const params = auditLogParams(filters);
+  params.set('format', 'csv');
+  return `${API_PREFIX}${AUDIT_LOG_ROUTES.export}?${params.toString()}`;
 }
 
 // --- Customer notes and tags (program §8) ---------------------------------------------

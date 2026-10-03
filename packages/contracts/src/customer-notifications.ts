@@ -324,6 +324,22 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    */
   'SERVICE_GIFT_APPLIED',
   /*
+   * Phase A2 (`docs/direct-message-audit.md`): ONE message an operator wrote to ONE customer
+   * from Customer 360. `customer_direct_messages.id` is the subject — the `TICKET_REPLY`
+   * shape exactly: the operator's words are a ROW written in the transaction that queued
+   * this, and the dispatcher reads them back by the id at send time. The lane still carries
+   * a kind and an id and nothing else (ADR 0030 §1), and it is still not "send this
+   * customer some text": nothing but `CustomerDirectMessageService.send` — guarded by
+   * `users.message.send`, rate limited, audited — writes the row these name.
+   *
+   * Two kinds because a kind renders ONE frozen template: the text, and a photo or a
+   * document with its optional caption. A message is exactly one of them.
+   */
+  /** A text message. `customer_direct_messages.id` is the subject. */
+  'DIRECT_MESSAGE',
+  /** A photo or a document with an optional caption. `customer_direct_messages.id`. */
+  'DIRECT_MESSAGE_MEDIA',
+  /*
    * Phase E3 (`docs/incidents.md`): an operator's notice about an incident or maintenance
    * window, to one customer the incident affects. `incident_notices.id` is the subject —
    * one row per customer per communication — and the words are read at send time from the
@@ -499,6 +515,15 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   WALLET_MASS_CREDITED: false,
   SERVICE_GIFT_APPLIED: false,
   /*
+   * Phase A2: both `true`. What an operator wrote is a sentence about NOW — "your payment is
+   * fixed", "please try again" — and one that leaves the queue a day later, after a block
+   * was lifted or a long outage, is a message nobody would have sent then. The reader holds
+   * while the message is younger than `DIRECT_MESSAGE_STALE_AFTER_MS` and its customer is
+   * still the tenant's; afterwards the row is SUPERSEDED, unsent, and the operator sees so.
+   */
+  DIRECT_MESSAGE: true,
+  DIRECT_MESSAGE_MEDIA: true,
+  /*
    * Phase E3: `true`. A notice is about a window: once the incident is cancelled, or the
    * notice is older than `INCIDENT_NOTICE_STALE_AFTER_MS`, it is superseded unsent.
    */
@@ -577,6 +602,9 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   RESELLER_MINIMUM_ACHIEVED: false,
   WALLET_MASS_CREDITED: false,
   SERVICE_GIFT_APPLIED: false,
+  // Phase A2: an operator chose to write now; never held until morning.
+  DIRECT_MESSAGE: false,
+  DIRECT_MESSAGE_MEDIA: false,
   // Phase E3: an operator chose to tell customers now.
   INCIDENT_NOTICE: false,
 };
@@ -652,6 +680,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   RESELLER_MINIMUM_ACHIEVED: 'bot.reseller.minimum_achieved',
   WALLET_MASS_CREDITED: 'bot.wallet.mass_credited',
   SERVICE_GIFT_APPLIED: 'bot.service.gift_applied',
+  // Phase A2: the operator's text, or the caption, read at send time from the message row.
+  DIRECT_MESSAGE: 'bot.direct_message.text',
+  DIRECT_MESSAGE_MEDIA: 'bot.direct_message.media',
   // Phase E3: the notice's words, read at send time from the communication row.
   INCIDENT_NOTICE: 'bot.incident.notice',
 };

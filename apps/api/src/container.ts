@@ -1,3 +1,5 @@
+import { CustomerDirectMessageService } from './modules/commerce/direct-messages/application/customer-direct-message.service.js';
+import { DrizzleDirectMessageRepository } from './modules/commerce/direct-messages/infrastructure/drizzle-direct-message.repository.js';
 import { fileURLToPath } from 'node:url';
 import {
   ADMIN_MENU_BUTTON,
@@ -12,6 +14,7 @@ import {
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
   TICKET_REPLY_FILE_RETENTION_DAYS,
+  DIRECT_MESSAGE_FILE_RETENTION_DAYS,
   INCIDENT_ERROR_CODES,
   errors,
   INCIDENT_SCHEDULER_INTERVAL_MS,
@@ -289,6 +292,9 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { DrizzleTermsRepository } from './modules/control/terms/infrastructure/drizzle-terms.repository.js';
+import { TermsService } from './modules/control/terms/application/terms.service.js';
+import { TermsAcceptanceService } from './modules/control/terms/application/terms-acceptance.service.js';
 import { ClientAppVideoService } from './modules/control/client-apps/application/client-app-video.service.js';
 import { DrizzleClientAppVideoRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app-video.repository.js';
 import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
@@ -431,6 +437,9 @@ import { DrizzleReportingRepository } from './modules/commerce/reporting/infrast
 import { OperationsOverviewService } from './modules/commerce/reporting/application/operations-overview.service.js';
 import { DrizzleOperationsOverviewRepository } from './modules/commerce/reporting/infrastructure/drizzle-operations-overview.repository.js';
 import { DefaultReportExportWriter } from './infrastructure/export/report-export-writer.js';
+import { DefaultAuditLogExportWriter } from './infrastructure/export/audit-log-export-writer.js';
+import { DrizzleAuditLogReader } from './modules/platform/audit/infrastructure/drizzle-audit-log.reader.js';
+import { AuditLogService } from './modules/platform/audit/application/audit-log.service.js';
 import { IntlReportPeriodResolver } from './infrastructure/time/report-calendar.js';
 import {
   DrizzleReferralCommissionRepository,
@@ -655,6 +664,8 @@ export interface Container {
   readonly recoveryRequestSweeper: RetentionSweeper;
   /** HF-A7: clears support's reply files Telegram never took, after their retention. */
   readonly ticketReplyFileSweeper: RetentionSweeper;
+  /** Phase A2: clears direct-message files Telegram never took, after their retention. */
+  readonly directMessageFileSweeper: RetentionSweeper;
   /**
    * The lane that expires unpaid payments and the orders they were against.
    *
@@ -776,6 +787,8 @@ export interface Container {
   readonly customerInsights: CustomerInsightService;
   /** Customer 360 (§11.5): moving a customer's holdings to another Telegram identity. */
   readonly customerAccountTransfers: CustomerAccountTransferService;
+  /** Phase A2: «ارسال پیام» — one operator-written message to one customer. */
+  readonly customerDirectMessages: CustomerDirectMessageService;
   /** Customer 360 (§11.6): an operator's order for a customer, through the customer's path. */
   readonly manualOrders: ManualOrderService;
   /** Customer 360 (§11.4): suspend or resume all of one customer's configurations. */
@@ -984,6 +997,9 @@ export interface Container {
   readonly templateResolver: TemplateResolver;
   /** The tenant's FAQ as the operator maintains it (customer UX completion §J). */
   readonly supportFaqs: SupportFaqService;
+  /** Program §6: the operator's terms and rules, and the customer's acceptance of them. */
+  readonly terms: TermsService;
+  readonly termsAcceptance: TermsAcceptanceService;
   /** The customer's support screen: active FAQ in order, and the first support account's URL. */
   readonly supportScreen: SupportScreenReader;
   /** WP-A10: the tenant's client apps as the operator maintains them. */
@@ -1011,6 +1027,8 @@ export interface Container {
   readonly opsGroups: OpsGroupService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
+  /** Phase D1: the audit log browser and its export (`docs/audit-log.md`). */
+  readonly auditLog: AuditLogService;
   /** Phase E3: incidents and maintenance windows. */
   readonly incidents: IncidentService;
   /** Phase E3: starts scheduled maintenance windows. Started by the WORKER only. */
@@ -3695,6 +3713,40 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * operator's authority, and the toggle plans each service through the operator's
    * per-service request.
    */
+  /*
+   * Program §6 — the terms and rules. Two services over one repository: the operator's
+   * (versions, publication, statistics) and the customer's (the gate's one question, the
+   * accept button, and the standing Customer 360 shows).
+   */
+  const termsRepository = new DrizzleTermsRepository(database.db);
+  const termsService = new TermsService({
+    repository: termsRepository,
+    flags: featureFlagResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    ids,
+    clock,
+  });
+  const termsAcceptanceService = new TermsAcceptanceService({
+    repository: termsRepository,
+    flags: featureFlagResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    ids,
+    clock,
+  });
   const customerControlService = new CustomerControlService({
     customers: customerRepository,
     locationOverrides: customerLocationOverrides,
@@ -3707,6 +3759,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     outbox,
     clock,
+    terms: termsAcceptanceService,
   });
   const customerCrmService = new CustomerCrmService({
     crm: new DrizzleCustomerCrmRepository(database.db),
@@ -3802,6 +3855,40 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
   const ticketScreens = new TicketScreenComposer(templateResolver);
+  /**
+   * Phase A2 (`docs/direct-message-audit.md`): a direct message from Customer 360. Its own
+   * row and permission; delivered by the customer notification lane below, as
+   * `DIRECT_MESSAGE` / `DIRECT_MESSAGE_MEDIA` — no second transport.
+   */
+  const directMessageRepository = new DrizzleDirectMessageRepository(database.db);
+  const customerDirectMessageService = new CustomerDirectMessageService({
+    repository: directMessageRepository,
+    notifier: customerNotifier,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+    ids,
+  });
+  /** Phase A2: the direct-message files Telegram never took, cleared after retention. */
+  const directMessageFileSweeper = new RetentionSweeper(
+    {
+      name: 'direct-message-files',
+      purge: (now, limit) =>
+        directMessageRepository.purgeFileContentBefore(
+          new Date(now.getTime() - DIRECT_MESSAGE_FILE_RETENTION_DAYS * 24 * 3_600_000),
+          now,
+          limit,
+        ),
+    },
+    clock,
+    logger,
+    { intervalMs: 3_600_000, initialDelayMs: 95_000, batchSize: 50, maxBatchesPerTick: 100 },
+  );
   /**
    * HF-A7: retention for support's staged reply files. A delivered file's bytes are cleared
    * by the delivery itself; this clears what Telegram never took — a customer who blocked
@@ -4269,6 +4356,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       serviceTransfers: serviceTransferService,
       // WP-A7: support's reply, read from the ticket message the notification names.
       tickets: ticketService,
+      // Phase A2: an operator's direct message, read from the message row it names.
+      directMessages: customerDirectMessageService,
       // Phase E3: an incident notice's words, read from its communication row.
       incidents: incidentService,
       buttonsFor: notificationButtons,
@@ -5020,6 +5109,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
+  const auditLogService = new AuditLogService({
+    guard,
+    reader: new DrizzleAuditLogReader(database.db),
+    audit,
+    opsLog,
+    writer: new DefaultAuditLogExportWriter(),
+    clock,
+  });
   /**
    * Phase B3 (`docs/notification-center.md`): the Notification Center reads the same
    * `operational_events` through `NOTIFICATION_RULES`; its one table is per-admin read marks.
@@ -5560,6 +5657,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     backupRunSweeper,
     recoveryRequestSweeper,
     ticketReplyFileSweeper,
+    directMessageFileSweeper,
     paymentExpiryLoop,
     gatewayPayments,
     gatewayReceiptCaptures,
@@ -5616,6 +5714,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customerCrm: customerCrmService,
     customerInsights: customerInsightService,
     customerAccountTransfers: customerAccountTransferService,
+    customerDirectMessages: customerDirectMessageService,
     manualOrders: manualOrderService,
     customerServicesToggle: customerServicesToggleService,
     products: productService,
@@ -5694,6 +5793,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       antiSpam,
       // Package B: the REQUIRED channels, enforced before any business action; fails open.
       membership: channelMembership,
+      terms: termsAcceptanceService,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       // TonPays Telegram: «📤 ارسال فیش واریزی» and «🔄 تعویض کارت» (database writes only).
@@ -5943,6 +6043,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     templatesService,
     templateResolver,
     supportFaqs: supportFaqService,
+    terms: termsService,
+    termsAcceptance: termsAcceptanceService,
     supportScreen: supportScreenReader,
     clientApps: clientAppService,
     clientAppVideos: clientAppVideoService,
@@ -5956,6 +6058,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsGroups,
     opsGroupMaintainer,
     opsLogService,
+    auditLog: auditLogService,
     notificationCenter,
     incidents: incidentService,
     incidentSchedulerLoop,
@@ -5988,6 +6091,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
       await ticketReplyFileSweeper.stop();
+      await directMessageFileSweeper.stop();
       await paymentExpiryLoop.stop();
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
