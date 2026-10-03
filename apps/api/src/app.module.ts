@@ -7,6 +7,7 @@ import { AuthController } from './surfaces/web/auth.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { CustomersController } from './surfaces/web/customers.controller.js';
+import { Customer360Controller } from './surfaces/web/customer-360.controller.js';
 import { TrialsController } from './surfaces/web/trials.controller.js';
 import { ProductsController } from './surfaces/web/products.controller.js';
 import { ProductCategoriesController } from './surfaces/web/product-categories.controller.js';
@@ -41,6 +42,7 @@ import { ServiceRefundRequestsController } from './surfaces/web/service-refund-r
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
 import { RecoveryController } from './surfaces/web/recovery.controller.js';
+import { RecoveryKitController } from './surfaces/web/recovery-kit.controller.js';
 import { SystemController } from './surfaces/web/system.controller.js';
 import { AudienceController } from './surfaces/web/audience.controller.js';
 import { BroadcastsController } from './surfaces/web/broadcasts.controller.js';
@@ -86,6 +88,7 @@ export class AppModule implements NestModule {
         AdminsController as never,
         ControlController as never,
         CustomersController as never,
+        Customer360Controller as never,
         TrialsController as never,
         ProductsController as never,
         ProductCategoriesController as never,
@@ -122,6 +125,7 @@ export class AppModule implements NestModule {
         ServicesController as never,
         PanelsController as never,
         RecoveryController as never,
+        RecoveryKitController as never,
         // Round N: the shared audience.
         AudienceController as never,
         BroadcastsController as never,

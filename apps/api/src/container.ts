@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url';
 import {
   ADMIN_MENU_BUTTON,
   ADMIN_MENU_COMMAND,
+  BACKUP_LEASE_STALE_AFTER_MS,
+  BACKUP_SCHEDULE_SETTING_KEYS,
   PAYMENT_GATEWAY_DESCRIPTORS,
   CAMPAIGN_SCHEDULE_INTERVAL_MS,
   CHANNEL_MEMBERSHIP_TIMEOUT_MS,
@@ -80,6 +82,16 @@ import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
 import { hostname } from 'node:os';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
+import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
+import { FAST_KIT_KDF, PRODUCTION_KIT_KDF } from './infrastructure/crypto/recovery-kit.js';
+import { InstallationKeyService } from './modules/platform/recovery/application/installation-key.service.js';
+import { DrizzleInstallationKeyRepository } from './modules/platform/recovery/infrastructure/drizzle-installation-key.repository.js';
+import {
+  FilesystemRetainedArchiveScanner,
+  InstallationKeyLoader,
+  KeyringRecoveryKeyCoverage,
+  PgCandidateKeyStore,
+} from './modules/platform/recovery/infrastructure/installation-key-adapters.js';
 import { blocksReadiness } from './modules/platform/system/application/readiness.service.js';
 import { createLogger, newCorrelationId } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
@@ -156,6 +168,9 @@ import type { InstallationWriteGate } from './infrastructure/persistence/write-g
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
+import { RoutedBackupDelivery } from './modules/platform/backup/application/routed-backup-delivery.js';
+import { BackupSchedulePolicy } from './modules/platform/backup/application/backup-schedule.js';
+import { OpsGroupBackupTopicAdapter } from './modules/control/ops-group/application/backup-topic.js';
 import { FilesystemBackupWorkspaces } from './modules/platform/backup/infrastructure/workspace.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
@@ -182,7 +197,15 @@ import {
   TemplateResolver,
 } from './modules/control/templates/application/template-resolver.js';
 import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
+import { CustomerControlService } from './modules/commerce/customers/application/customer-control.service.js';
+import { CustomerInsightService } from './modules/commerce/customers/application/customer-insight.service.js';
+import { CustomerAccountTransferService } from './modules/commerce/customers/application/customer-account-transfer.service.js';
+import { DrizzleCustomerInsightReader } from './modules/commerce/customers/infrastructure/drizzle-customer-insight.reader.js';
+import { DrizzleCustomerAccountTransferRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-account-transfer.repository.js';
+import { ManualOrderService } from './modules/commerce/orders/application/manual-order.service.js';
+import { CustomerServicesToggleService } from './modules/commerce/provisioning/application/customer-services-toggle.service.js';
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
+import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/locations/infrastructure/drizzle-customer-location-override.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { ProductCategoryService } from './modules/commerce/catalog/application/product-category.service.js';
@@ -252,6 +275,8 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { ClientAppVideoService } from './modules/control/client-apps/application/client-app-video.service.js';
+import { DrizzleClientAppVideoRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app-video.repository.js';
 import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
 import { ClientAppCatalog } from './modules/control/client-apps/application/client-app-catalog.js';
 import { ProvisionedServiceFacts } from './modules/control/client-apps/application/customer-service-facts.js';
@@ -331,7 +356,7 @@ import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/ce
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
-import type { FxSource } from '@nexa/contracts';
+import type { FxSource, InlineButtonStyles } from '@nexa/contracts';
 import {
   FX_REFRESH_INTERVAL_MS,
   FxRefreshLoop,
@@ -729,6 +754,16 @@ export interface Container {
    * controller cannot get it wrong.
    */
   readonly customers: CustomerService;
+  /** Customer 360 (§11.4): the per-customer controls an operator sets. */
+  readonly customerControls: CustomerControlService;
+  /** Customer 360 (§11.7, §11.10): exact aggregates and the management timeline. */
+  readonly customerInsights: CustomerInsightService;
+  /** Customer 360 (§11.5): moving a customer's holdings to another Telegram identity. */
+  readonly customerAccountTransfers: CustomerAccountTransferService;
+  /** Customer 360 (§11.6): an operator's order for a customer, through the customer's path. */
+  readonly manualOrders: ManualOrderService;
+  /** Customer 360 (§11.4): suspend or resume all of one customer's configurations. */
+  readonly customerServicesToggle: CustomerServicesToggleService;
   readonly products: ProductService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
@@ -935,6 +970,8 @@ export interface Container {
   readonly supportScreen: SupportScreenReader;
   /** WP-A10: the tenant's client apps as the operator maintains them. */
   readonly clientApps: ClientAppService;
+  /** Spec §7: the tutorial videos set from Telegram. */
+  readonly clientAppVideos: ClientAppVideoService;
   /** WP-A10: the customer's read of them, filtered by what their services are. */
   readonly clientAppCatalog: ClientAppCatalog;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
@@ -992,6 +1029,15 @@ export interface Container {
    */
   readonly backupArchiver: KeyringBackupArchiver;
   readonly backupTools: PostgresDatabaseTools;
+  /**
+   * The Recovery Kit (ADR-0032): the keyring every cipher in this process reads
+   * — configured keys plus imported decrypt-only ones — its loader, and the
+   * lifecycle service the Web Admin calls.
+   */
+  readonly keyring: InstallationKeyring;
+  readonly installationKeyLoader: InstallationKeyLoader;
+  readonly installationKeyRepository: DrizzleInstallationKeyRepository;
+  readonly installationKeys: InstallationKeyService;
 
   shutdown(): Promise<void>;
 }
@@ -1050,8 +1096,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // One resolution of the keyring, used for both the cipher's keys and the
   // v1-acceptance default that depends on which spelling configured them.
   // Resolving it twice would let the two answers come from different parses.
-  const keyring = resolveKeyring(config);
-  const cipher = new AesGcmSecretCipher(keyring, acceptsV1(config, keyring));
+  //
+  // Wrapped in the INSTALLATION keyring (ADR-0032), which adds the decrypt-only
+  // keys imported from Recovery Kits and changes nothing about which key
+  // encrypts: `activeKeyId` is the configured one, read-only. The cipher and the
+  // archive read `keys` at the moment of use, so a kit imported later is usable
+  // by both without either knowing kits exist.
+  const configuredKeyring = resolveKeyring(config);
+  const keyring = new InstallationKeyring(configuredKeyring);
+  const cipher = new AesGcmSecretCipher(keyring, acceptsV1(config, configuredKeyring));
   const translator = createTranslator();
 
   const database = createDatabase(
@@ -1572,6 +1625,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+    // Spec §9: whether a customer may stop promotional messages at all.
+    features: featureFlagResolver,
   });
 
   /**
@@ -1731,9 +1786,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const serviceLocationRepository = new DrizzleServiceLocationRepository(database.db);
   const locationChangeRepository = new DrizzleLocationChangeRepository(database.db);
+  const customerLocationOverrides = new DrizzleCustomerLocationOverrideRepository(database.db);
   const locationChangePolicy = new LocationChangePolicy({
     locations: serviceLocationRepository,
     changes: locationChangeRepository,
+    overrides: customerLocationOverrides,
     settings: settingsResolver,
     clock,
   });
@@ -2332,6 +2389,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     credentials: gatewayCredentialStore,
     adapters: gatewayAdapters,
     callbackUrlFor: gatewayCallbackUrlFor,
+    // Spec §8: a route priced only by the central rate cannot be enabled while it is off.
+    features: featureFlagResolver,
   });
 
   /**
@@ -3169,10 +3228,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      */
     [
       new SalesCurrencyChangeGuard(refundRepository),
-      // Package FX-STARS: the central pricing mode needs the feature on and a ratio set,
-      // and the ratio cannot be cleared while the mode depends on it.
-      new StarsPricingModeGuard(featureFlagResolver, settingsResolver),
-      new StarsPerUsdtGuard(settingsResolver),
+      // Spec §8: the Stars pricing mode is retired (every change refused), and the ratio
+      // cannot be cleared while the Stars route is switched on.
+      new StarsPricingModeGuard(),
+      new StarsPerUsdtGuard(paymentGatewayRepository),
       // The trial product must be a product of this tenant (WP6-A).
       new TrialProductGuard(productRepository),
       // One per reminder threshold. The five have to agree with one another, and no
@@ -3605,6 +3664,68 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
   /*
+   * Customer 360 (spec §11, `docs/customer-account-transfer-audit.md`). Each is a thin
+   * composition of the services above: the controls write the customer row and the
+   * location override, the transfer reuses Package F's ownership rows and evaluator and the
+   * wallet ledger, the manual order runs the customer's own four commands under the
+   * operator's authority, and the toggle plans each service through the operator's
+   * per-service request.
+   */
+  const customerControlService = new CustomerControlService({
+    customers: customerRepository,
+    locationOverrides: customerLocationOverrides,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+  });
+  const customerInsightService = new CustomerInsightService({
+    reader: new DrizzleCustomerInsightReader(database.db),
+    customers: customerRepository,
+    auditHistory: new DrizzleAuditHistoryReader(database.db),
+    guard,
+  });
+  const customerAccountTransferService = new CustomerAccountTransferService({
+    repository: new DrizzleCustomerAccountTransferRepository(database.db),
+    customers: customerRepository,
+    services: serviceRepository,
+    serviceTransfers: new DrizzleServiceTransferRepository(database.db),
+    transferability: serviceTransferService,
+    wallet: walletRepository,
+    sellingCurrency: (scope, tx) =>
+      settingsResolver.valueOf<CurrencyCode>(scope, 'sales.currency', tx),
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
+  const manualOrderService = new ManualOrderService({
+    orders: orderService,
+    payments: paymentService,
+    guard,
+    audit,
+    opsLog,
+  });
+  const customerServicesToggleService = new CustomerServicesToggleService({
+    services: serviceRepository,
+    provisioning: provisioningService,
+    guard,
+    audit,
+    uow,
+    idempotency,
+  });
+  /*
    * WP-A7 — support tickets. ONE service for the bot and the Web Admin. An administrator's
    * reply enqueues `TICKET_REPLY` on the customer lane in the transaction that writes it,
    * through the same notifier every other producer uses.
@@ -3906,6 +4027,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     config.NOTIFICATION_SEND_TIMEOUT_MS,
     mainMenuLayout,
     appearanceReader,
+    // Owner spec §6: the inline buttons' styles, the tenant's `bot.inline_buttons`.
+    {
+      stylesFor: (scope) =>
+        settingsResolver.valueOf<InlineButtonStyles>(scope, 'bot.inline_buttons'),
+    },
   );
   const appearance = new AppearanceService({
     repository: appearanceRepository,
@@ -4113,6 +4239,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const broadcastFacts = new DrizzleRecipientFactsReader(database.db, (scope) =>
     settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
   );
+  /*
+   * Spec §9: a customer's stored promotional opt-out is honoured exactly while the
+   * `customer_marketing_opt_out` switch is on, decided by the dispatcher's stamp alone: the
+   * preview and the launch count and materialise every member (Codex review of #143).
+   */
+  const marketingOptOutPolicy = {
+    honoured: (scope: TenantContext, tx?: unknown) =>
+      featureFlagResolver.isEnabled(scope, 'customer_marketing_opt_out', tx),
+  };
   const broadcastService = new BroadcastService({
     repository: broadcastRepository,
     audience: audienceService,
@@ -4139,6 +4274,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
     logger,
+    marketingOptOut: marketingOptOutPolicy,
   });
   const broadcastLoop = new BroadcastLoop(broadcastDispatcher, {
     scope: () =>
@@ -4500,6 +4636,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     clock,
   });
+  // Spec §7: the tutorial video set from Telegram («تنظیم ویدیو»), one per app and bot.
+  const clientAppVideoService = new ClientAppVideoService({
+    videos: new DrizzleClientAppVideoRepository(database.db),
+    apps: clientAppRepository,
+    captures: new DrizzleAdminAmountCaptureRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
   const clientAppCatalog = new ClientAppCatalog({
     repository: clientAppRepository,
     facts: new ProvisionedServiceFacts({
@@ -4625,10 +4776,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     config.TELEGRAM_API_BASE_URL,
     config.NOTIFICATION_SEND_TIMEOUT_MS,
   );
+  const opsGroupBots = new OpsGroupBotSource(botInstances);
   const opsGroups = new OpsGroupService({
     repository: opsGroupRepository,
     telegram: opsGroupTelegram,
-    bots: new OpsGroupBotSource(botInstances),
+    bots: opsGroupBots,
     provisioner: new OpsTopicProvisioner({
       repository: opsGroupRepository,
       telegram: opsGroupTelegram,
@@ -4903,6 +5055,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ),
   });
   const backupArchiver = new KeyringBackupArchiver(keyring);
+  /*
+   * The automatic schedule (spec §13.2): the Web Admin's registry values on the
+   * installation tenant, the environment as the compatible default. One policy, read by
+   * the scheduler on every tick and by the status card, so they cannot disagree.
+   */
+  const backupSchedule = new BackupSchedulePolicy({
+    settings: {
+      read: async (scope) => ({
+        enabled: await settingsResolver.valueOf<boolean | null>(
+          scope,
+          BACKUP_SCHEDULE_SETTING_KEYS.enabled,
+        ),
+        intervalMinutes: await settingsResolver.valueOf<number | null>(
+          scope,
+          BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
+        ),
+      }),
+    },
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    environment: {
+      enabled: config.BACKUP_SCHEDULE_ENABLED,
+      intervalMs: config.BACKUP_INTERVAL_MS,
+    },
+  });
   const backup = new BackupService({
     runs: backupRuns,
     tools: backupTools,
@@ -4912,11 +5091,35 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // in this installation does.
     archiver: backupArchiver,
     workspaces: new FilesystemBackupWorkspaces(config.BACKUP_WORK_DIR),
-    delivery: new TelegramBackupDelivery({
-      apiBaseUrl: config.TELEGRAM_API_BASE_URL,
-      token: config.BACKUP_TELEGRAM_BOT_TOKEN,
-      chatId: config.BACKUP_TELEGRAM_CHAT_ID,
-      timeoutMs: config.BACKUP_DELIVERY_TIMEOUT_MS,
+    /*
+     * Spec §13.1: the connected operations log group's «💾 بکاپ‌ها» topic first, posted
+     * by the group's own bot through the ONE topic provisioner; the environment's
+     * dedicated chat only as the explicit fallback. Precedence: `RoutedBackupDelivery`.
+     */
+    delivery: new RoutedBackupDelivery({
+      opsGroup: new OpsGroupBackupTopicAdapter(opsGroups, opsGroupBots, () =>
+        systemJobActor('backup-delivery', newCorrelationId(ids.uuid())),
+      ),
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      channelFor: (target) =>
+        new TelegramBackupDelivery({
+          apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+          token: target.token,
+          chatId: target.chatId,
+          messageThreadId: target.threadId,
+          timeoutMs: config.BACKUP_DELIVERY_TIMEOUT_MS,
+        }),
+      dedicated: new TelegramBackupDelivery({
+        apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+        token: config.BACKUP_TELEGRAM_BOT_TOKEN,
+        chatId: config.BACKUP_TELEGRAM_CHAT_ID,
+        timeoutMs: config.BACKUP_DELIVERY_TIMEOUT_MS,
+      }),
+      clock,
+      logger,
     }),
     clock,
     ids,
@@ -4948,6 +5151,43 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const recoveryWorkspaces = new FilesystemRecoveryWorkspaces(config.RECOVERY_WORK_DIR);
   const recoveryJournal = new FileCutoverJournal(config.RECOVERY_WORK_DIR);
+  /*
+   * The Recovery Kit's key lifecycle (ADR-0032). The loader keeps this
+   * process's keyring in step with `installation_keys`; the coverage adapter is
+   * what both halves of a recovery ask about keys.
+   */
+  const installationKeyRepository = new DrizzleInstallationKeyRepository(database.db);
+  const installationKeyLoader = new InstallationKeyLoader(
+    keyring,
+    installationKeyRepository,
+    logger,
+  );
+  const recoveryKeyCoverage = new KeyringRecoveryKeyCoverage(
+    keyring,
+    installationKeyLoader,
+    installationKeyRepository,
+    new PgCandidateKeyStore(config.DATABASE_URL, backupTools.liveDatabase),
+  );
+  const installationKeys = new InstallationKeyService({
+    keyring,
+    loader: installationKeyLoader,
+    keys: installationKeyRepository,
+    archives: new FilesystemRetainedArchiveScanner(config.BACKUP_WORK_DIR),
+    recoveries: recoveryRequests,
+    workspaces: recoveryWorkspaces,
+    uow,
+    idempotency,
+    guard,
+    audit,
+    opsLog,
+    clock,
+    ids,
+    // The same switch that selects the password hasher's cost, refused in
+    // production by the config schema for the same reason.
+    kdf: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KIT_KDF : PRODUCTION_KIT_KDF,
+    verifyPassword: (scope, actor, password, context, action) =>
+      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+  });
   const recoveryService = new RecoveryService({
     requests: recoveryRequests,
     workspaces: recoveryWorkspaces,
@@ -4956,6 +5196,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // proving a path nobody restores through.
     archiver: backupArchiver,
     engine: backupTools,
+    keys: recoveryKeyCoverage,
     guard,
     audit,
     opsLog,
@@ -4991,8 +5232,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     clock,
     workRoot: config.BACKUP_WORK_DIR,
-    scheduleEnabled: config.BACKUP_SCHEDULE_ENABLED,
-    intervalMs: config.BACKUP_INTERVAL_MS,
+    schedule: () => backupSchedule.effective(),
   });
 
   const recoveryExecutor = new RecoveryExecutor({
@@ -5000,6 +5240,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recovery: recoveryService,
     engine: backupTools,
     workspaces: recoveryWorkspaces,
+    keys: recoveryKeyCoverage,
+    audit,
     journal: recoveryJournal,
     // The unmodified pipeline. `PRE_RESTORE` is a trigger VALUE, not a second
     // code path: same lock, same six stages, same mandatory verification.
@@ -5055,8 +5297,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       return lock !== null && lock.quiescing;
     },
     clock,
-    intervalMs: config.BACKUP_INTERVAL_MS,
+    schedule: () => backupSchedule.effective(),
     tickIntervalMs: config.BACKUP_TICK_MS,
+    // A run in flight is alive while its lease heartbeat is — the same rule that decides
+    // when another process may reclaim it as abandoned.
+    runHeartbeatAt: () => backup.leaseHeartbeatAt(),
+    runStaleAfterMs: BACKUP_LEASE_STALE_AFTER_MS,
     logger,
   });
 
@@ -5231,6 +5477,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     recordPing,
     customers: customerService,
+    customerControls: customerControlService,
+    customerInsights: customerInsightService,
+    customerAccountTransfers: customerAccountTransferService,
+    manualOrders: manualOrderService,
+    customerServicesToggle: customerServicesToggleService,
     products: productService,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
@@ -5434,6 +5685,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       }),
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
       clientApps: clientAppCatalog,
+      // Spec §7: the tutorial video — the admin wizard and the customer's app screen.
+      clientAppVideos: clientAppVideoService,
       serviceTransfers: serviceTransferService,
       /*
        * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
@@ -5546,6 +5799,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportFaqs: supportFaqService,
     supportScreen: supportScreenReader,
     clientApps: clientAppService,
+    clientAppVideos: clientAppVideoService,
     clientAppCatalog,
     templateRepository,
     notifications,
@@ -5569,7 +5823,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recoveryExecutor,
     recoveryRequests,
     recoveryWorkspaces,
+    keyring,
+    installationKeyLoader,
+    installationKeyRepository,
+    installationKeys,
     async shutdown() {
+      installationKeyLoader.stop();
       backupScheduler.stop();
       recoveryExecutor.stop();
       await relay.stop();

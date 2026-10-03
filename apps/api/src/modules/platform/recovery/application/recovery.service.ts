@@ -35,6 +35,7 @@ import type {
   RecoveryWorkspaceFactory,
   RestoreEngine,
 } from './ports.js';
+import type { RecoveryKeyCoverage } from './installation-key.ports.js';
 
 /**
  * The operator's half of a recovery: everything that happens BEFORE the
@@ -66,6 +67,13 @@ export interface RecoveryServiceDeps {
   readonly workspaces: RecoveryWorkspaceFactory;
   readonly archiver: BackupArchiver;
   readonly engine: RestoreEngine;
+  /**
+   * The keyring, as a restore needs it (ADR-0032): re-read before an archive is
+   * opened, so a Recovery Kit imported through another process a moment ago is
+   * already usable; and asked, after the scratch restore, whether every key the
+   * restored database's secrets name is held.
+   */
+  readonly keys: RecoveryKeyCoverage;
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
   readonly opsLog: { record(scope: ScopeContext, event: unknown): Promise<unknown> };
@@ -266,6 +274,10 @@ export class RecoveryService {
   ): Promise<RecoveryStepOutcome> {
     let verification: RecoveryVerification;
     try {
+      // The keyring as it is NOW. A Recovery Kit imported through the API a
+      // moment ago may have been imported by a different process; without this
+      // the archive it was imported for fails as foreign until the next tick.
+      await this.deps.keys.refresh();
       // `openArchive`, through the archiver -- the SAME function the pipeline's
       // own verification and the operator's `backup restore` use. A second
       // decrypt path here would be a path nobody restores through.
@@ -406,7 +418,30 @@ export class RecoveryService {
           expectedMigrations: compatibility.expected,
           cutoverPermitted: compatibility.permitted || compatibility.migratable,
         };
-        if (!restoreTest.cutoverPermitted) failure = 'recovery.migration_incompatible';
+        if (!restoreTest.cutoverPermitted) {
+          failure = 'recovery.migration_incompatible';
+        } else {
+          /*
+           * The restored database's SECRETS, as well as its archive.
+           *
+           * The archive opened, so its own key is held. That says nothing about
+           * the bot tokens and panel credentials inside it, which are sealed
+           * under whatever key the old installation was using when it wrote
+           * them — possibly a rotation-era key the archive's key never touched.
+           * Cutting over to a database this installation cannot read the
+           * credentials of is a restore that "succeeds" into an outage, so it is
+           * refused HERE, before the operator is asked to confirm anything, and
+           * again by the executor before the renames.
+           */
+          const missing = await this.deps.keys.missingFrom(scratch);
+          if (missing.length > 0) {
+            this.deps.logger.error(
+              { recoveryId: id, missingKeyIds: missing },
+              'a restored database names keys this installation does not hold',
+            );
+            failure = 'recovery.candidate_keys_missing';
+          }
+        }
       }
     } catch (error) {
       this.deps.logger.error(
@@ -576,6 +611,9 @@ export class RecoveryService {
      */
     confirmedChecksum: string,
   ): Promise<void> {
+    // In the EXECUTOR's process, whose keyring only the timer would otherwise
+    // have refreshed since the operator imported a kit through the API.
+    await this.deps.keys.refresh();
     const opened = await this.deps.archiver.open({
       archivePath: workspace.archivePath,
       dumpPath: workspace.dumpPath,

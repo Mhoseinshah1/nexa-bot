@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
@@ -6,7 +6,6 @@ import {
   formatBasisPointsPercent,
   PAYMENT_STATES,
   RECEIPT_DISPOSITIONS,
-  uuidV7Schema,
   type RefundChannel,
   type RefundResponse,
   type RefundState,
@@ -38,6 +37,8 @@ import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { ListSearchBox, appliedListSearch } from '../ui/list-search';
+import { CustomerIdentityLink } from '../ui/customer-identity';
 import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
 import { ChipGroup } from './commerce-parts';
@@ -273,12 +274,6 @@ function GatewayName({ provider }: { provider: string | null }) {
   return <Ltr>{provider}</Ltr>;
 }
 
-/** A full id, or the field's own error. The same guard `/orders` uses on its filters. */
-function idProblem(value: string): string | undefined {
-  if (value === '') return undefined;
-  return uuidV7Schema.safeParse(value).success ? undefined : t('web.payments_filter_invalid_id');
-}
-
 // ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
@@ -289,74 +284,26 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
   const state = route.query.get('state');
   const method = route.query.get('method');
   const disposition = route.query.get('disposition');
-  const appliedCustomer = route.query.get('customerId') ?? '';
-  const appliedOrder = route.query.get('orderId') ?? '';
-  const appliedReference = route.query.get('reference') ?? '';
-
   /*
-   * The drafts are keyed to the APPLIED values, so navigation that drops the query
-   * clears the boxes. `users.tsx` records the defect this prevents: the sidebar link
-   * re-renders this component with an empty query instead of remounting it, and a
-   * `useState` initialiser runs once per mount — leaving criteria on screen that are no
-   * longer applied.
+   * ONE search box (spec §10), in the URL as `q`: a Telegram id, a reference or bank
+   * reference, a payment / order / customer id, or an `@username`. It replaced three
+   * single-purpose boxes, two of which wanted an internal uuid nobody outside this admin
+   * has ever seen.
    */
-  const appliedSignature = `${appliedCustomer}|${appliedOrder}|${appliedReference}`;
-  const [draft, setDraft] = useState({
-    signature: appliedSignature,
-    customerId: appliedCustomer,
-    orderId: appliedOrder,
-    reference: appliedReference,
-  });
-  if (draft.signature !== appliedSignature) {
-    setDraft({
-      signature: appliedSignature,
-      customerId: appliedCustomer,
-      orderId: appliedOrder,
-      reference: appliedReference,
-    });
-  }
+  const appliedSearch = appliedListSearch(route);
 
   const payments = useQuery({
-    queryKey: [
-      'payments',
-      cursor,
-      state,
-      method,
-      disposition,
-      appliedCustomer,
-      appliedOrder,
-      appliedReference,
-    ],
+    queryKey: ['payments', cursor, state, method, disposition, appliedSearch],
     queryFn: () =>
       fetchPayments({
         ...(cursor === null ? {} : { cursor }),
         ...(state === null ? {} : { state: state as PaymentState }),
         ...(method === null ? {} : { method: method as PaymentMethod }),
         ...(disposition === null ? {} : { disposition: disposition as ReceiptDisposition }),
-        ...(appliedCustomer === '' ? {} : { customerId: appliedCustomer }),
-        ...(appliedOrder === '' ? {} : { orderId: appliedOrder }),
-        ...(appliedReference === '' ? {} : { reference: appliedReference }),
+        ...(appliedSearch === '' ? {} : { q: appliedSearch }),
       }),
     enabled: !denied,
   });
-
-  const customerProblem = idProblem(draft.customerId);
-  const orderProblem = idProblem(draft.orderId);
-
-  const apply = (event: FormEvent) => {
-    event.preventDefault();
-    if (customerProblem !== undefined || orderProblem !== undefined) return;
-    // ONE navigation for all three. Separate `setQuery` calls each build from the
-    // `route.query` this render captured, so the earlier ones are dropped.
-    setQueries(route, [
-      ['customerId', draft.customerId === '' ? null : draft.customerId],
-      ['orderId', draft.orderId === '' ? null : draft.orderId],
-      ['reference', draft.reference === '' ? null : draft.reference],
-      // A new filter starts at the first page. Carrying a cursor from one filter to
-      // another pages through a list that no longer exists.
-      ['cursor', null],
-    ]);
-  };
 
   const columns: readonly Column<PaymentSummaryResponse>[] = [
     {
@@ -419,21 +366,19 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
       render: (row) => <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
     },
     {
+      /*
+       * Who paid, by their Telegram numeric id (spec §10). This was two columns — an
+       * eight-character uuid prefix headed «مشتری» and the Telegram id beside it — and the
+       * one an operator could quote was the second. Now it is the link.
+       */
       key: 'customer',
       header: t('web.payment_customer'),
       render: (row) => (
-        <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
-          <Ltr>{row.customerId.slice(0, 8)}</Ltr>
-        </a>
-      ),
-    },
-    {
-      key: 'telegram',
-      header: t('web.payment_telegram'),
-      render: (row) => (
-        <TelegramIdentity
+        <CustomerIdentityLink
+          customerId={row.customerId}
           telegramUserId={row.customerTelegramUserId}
           username={row.customerUsername}
+          onLink={onLink}
         />
       ),
     },
@@ -501,59 +446,14 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
       <PageHead title={t('web.payments_title')} subtitle={t('web.payments_intro')} />
 
       <Card className="ca-list">
-        <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
-          <Field
-            compact
-            label={t('web.payment_reference')}
-            hint={t('web.payments_filter_reference_hint')}
-            htmlFor="payments-reference"
-          >
-            <Input
-              id="payments-reference"
-              size="sm"
-              dir="ltr"
-              value={draft.reference}
-              onChange={(event) => setDraft({ ...draft, reference: event.target.value.trim() })}
-            />
-          </Field>
-          <Field
-            compact
-            label={t('web.payment_customer')}
-            hint={t('web.payments_filter_customer_hint')}
-            htmlFor="payments-customer"
-            {...(customerProblem === undefined ? {} : { error: customerProblem })}
-          >
-            <Input
-              id="payments-customer"
-              size="sm"
-              dir="ltr"
-              aria-invalid={customerProblem !== undefined}
-              value={draft.customerId}
-              onChange={(event) => setDraft({ ...draft, customerId: event.target.value.trim() })}
-            />
-          </Field>
-          <Field
-            compact
-            label={t('web.payment_order')}
-            hint={t('web.payments_filter_order_hint')}
-            htmlFor="payments-order"
-            {...(orderProblem === undefined ? {} : { error: orderProblem })}
-          >
-            <Input
-              id="payments-order"
-              size="sm"
-              dir="ltr"
-              aria-invalid={orderProblem !== undefined}
-              value={draft.orderId}
-              onChange={(event) => setDraft({ ...draft, orderId: event.target.value.trim() })}
-            />
-          </Field>
-          <div className="ca-search-actions">
-            <Button type="submit" variant="primary" size="sm" icon="search">
-              {t('web.payments_search_apply')}
-            </Button>
-          </div>
-        </form>
+        <ListSearchBox
+          route={route}
+          id="payments-search"
+          hint={t('web.payments_search_hint')}
+          hidden={toolbarHidden}
+          // A new search starts at the first page: this list keeps its cursor in the URL.
+          resetKeys={['cursor']}
+        />
 
         <div className="filter-row" hidden={toolbarHidden}>
           <ChipGroup

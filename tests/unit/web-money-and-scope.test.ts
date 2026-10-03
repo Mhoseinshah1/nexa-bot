@@ -527,8 +527,15 @@ describe('the settings the owner revisions add', () => {
      *
      * `trial.product_id` joined it in R1, for the same reason: a trial is configured per
      * panel and issued from no product, so nothing reads the product id any more.
+     *
+     * `stars.pricing_mode` joined it with spec §8: Stars are priced by the central rate
+     * only, so nothing reads the mode, and its guard refuses every change.
      */
-    expect(planned.sort()).toEqual(['ops.notifications.min_severity', 'trial.product_id']);
+    expect(planned.sort()).toEqual([
+      'ops.notifications.min_severity',
+      'stars.pricing_mode',
+      'trial.product_id',
+    ]);
     for (const key of [
       'sales.currency',
       'wallet.topup.minimum',

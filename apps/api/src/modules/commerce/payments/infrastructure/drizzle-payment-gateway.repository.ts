@@ -163,6 +163,22 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
     return row === undefined ? null : toRecord(row);
   }
 
+  async lockForUpdate(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx: unknown,
+  ): Promise<PaymentGatewayRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select(COLUMNS)
+      .from(paymentGateways)
+      .where(and(eq(paymentGateways.tenantId, tenantId), eq(paymentGateways.provider, provider)))
+      .limit(1)
+      .for('update');
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
   /**
    * The zero row for every route this release can operate, for a tenant missing one.
    *
@@ -195,7 +211,9 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
            */
           status:
             PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials ||
-            takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion)
+            takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion) ||
+            // Spec §8: a central-rate route (Stars) needs its unit ratio and the feed first.
+            PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion.policies.includes('CENTRAL_FX')
               ? ('DISABLED' as const)
               : ('ACTIVE' as const),
           /*

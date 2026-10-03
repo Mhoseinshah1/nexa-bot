@@ -139,6 +139,38 @@ const CUSTOMER_NAMESPACE = 'TELEGRAM' as const;
 /** The surface an operator's confirmation arrives through. */
 const OPERATOR_NAMESPACE = 'WEB' as const;
 
+/**
+ * Who a wallet settlement is made under (Customer 360, §11.6). A customer paying their own
+ * order is the default, unchanged. An operator's manual order passes
+ * `MANUAL_ORDER_WALLET_SETTLEMENT` — `orders.manual.create` in the `WEB` namespace — and
+ * otherwise runs exactly this path: the same customer lock, the same sufficiency check,
+ * the same `PURCHASE` debit and the same refusal (never a refund) when it cannot be funded.
+ */
+export interface WalletSettlementAuthority {
+  readonly permission: PermissionKey;
+  readonly namespace: 'WEB' | 'TELEGRAM';
+  /**
+   * Run inside the settling transaction, after the money moved and before the key is
+   * remembered — so whatever it writes (the manual order's own audit row, its extra
+   * permission re-check) commits with the settlement or not at all, and a replay, which
+   * never reaches the transaction, writes it no second time.
+   */
+  readonly inTransaction?: (
+    tx: TransactionScope,
+    settled: { readonly payment: PaymentRecord; readonly order: OrderRecord },
+  ) => Promise<void>;
+}
+
+export const CUSTOMER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
+  permission: PAYMENT_PLACE_PERMISSION,
+  namespace: CUSTOMER_NAMESPACE,
+};
+
+export const MANUAL_ORDER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
+  permission: 'orders.manual.create',
+  namespace: OPERATOR_NAMESPACE,
+};
+
 export interface PaymentServiceDeps {
   readonly repository: PaymentRepository;
   readonly orders: OrderRepository;
@@ -736,15 +768,16 @@ export class PaymentService {
     actor: ActorContext,
     customerId: UserId,
     intent: PaymentIntent,
+    authority: WalletSettlementAuthority = CUSTOMER_WALLET_SETTLEMENT,
   ): Promise<{ readonly payment: PaymentRecord; readonly order: OrderRecord }> {
     const orderId = this.orderId(intent.orderId);
     const denial = { action: 'payment.wallet_settle', entityType: 'Order', entityId: orderId };
-    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+    await this.authorize(scope, actor, authority.permission, denial);
 
     const requestHash = hashRequest({ customerId, orderId });
     const replay = await this.replayed(
       scope,
-      CUSTOMER_NAMESPACE,
+      authority.namespace,
       intent.idempotencyKey,
       requestHash,
     );
@@ -758,7 +791,7 @@ export class PaymentService {
       this.mutationDeps(),
       scope,
       actor,
-      PAYMENT_PLACE_PERMISSION,
+      authority.permission,
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
@@ -1011,10 +1044,12 @@ export class PaymentService {
           });
         }
 
+        if (authority.inTransaction !== undefined) await authority.inTransaction(tx, confirmed);
+
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          CUSTOMER_NAMESPACE,
+          authority.namespace,
           intent.idempotencyKey,
           requestHash,
           { paymentId: confirmed.payment.id },

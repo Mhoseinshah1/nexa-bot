@@ -35,6 +35,13 @@ export const PLACEHOLDER_TYPES = [
   'NUMBER',
   'MONEY',
   'DATETIME',
+  /**
+   * Owner spec §3: the calendar DATE of an instant alone, and its TIME of day alone, each in
+   * the tenant's zone and calendar — `۱۴۰۵/۰۷/۱۰` and `23:22` as separate lines. A `Date`
+   * value, exactly like `DATETIME`; only the rendering differs.
+   */
+  'DATE',
+  'TIME',
   'DURATION_DAYS',
   /** A byte QUANTITY — used, or added. Zero is zero bytes. The renderer owns the unit. */
   'BYTES',
@@ -403,8 +410,9 @@ export const TEMPLATES = [
   {
     key: 'ops.group.topic_name.system',
     description:
-      'The name Nexa gives the forum topic it creates for system events and errors in the ' +
-      'operations log group. Read when the topic is created or recreated.',
+      'The name Nexa gives the forum topic it creates for system events in the operations ' +
+      'log group — and for any event no other topic claims. Read when the topic is created ' +
+      'or recreated.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -413,6 +421,56 @@ export const TEMPLATES = [
     description:
       'The name Nexa gives the forum topic it creates for the payments log in the operations ' +
       'log group. Read when the topic is created or recreated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  // Spec §12 — the topics beyond the first two, each named when created or recreated.
+  {
+    key: 'ops.group.topic_name.errors',
+    description:
+      'The name Nexa gives the operations log group topic for unanticipated failures: ' +
+      'unhandled exceptions and errors the API answered.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.services',
+    description:
+      'The name Nexa gives the operations log group topic for orders and the services ' +
+      'provisioned for them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.panels',
+    description:
+      'The name Nexa gives the operations log group topic for panel health, probes and ' +
+      'capacity.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.bot',
+    description:
+      'The name Nexa gives the operations log group topic for the bots themselves: sending ' +
+      'to customers, menus and commands, channel checks and token replacement.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.security',
+    description:
+      'The name Nexa gives the operations log group topic for refusals, sign-in lock-outs, ' +
+      'administrator changes and spam protection.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.backups',
+    description:
+      'The name Nexa gives the operations log group topic that receives the encrypted backup ' +
+      'archives, the notice for an archive too large to send, and the backup and recovery ' +
+      'events.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -1904,6 +1962,27 @@ export const TEMPLATES = [
       'The label on the button that starts a wallet top-up. Shown under the balance, and ' +
       'only when the tenant has configured at least one preset amount and an enabled ' +
       'payment account to transfer to.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * Owner spec §2.2: the two next actions under the wallet-credit message. Inline buttons
+   * (`inline-buttons.ts`), so their own keys: `bot.menu.*` is the REPLY keyboard, whose
+   * labels are its routes, and must not be relabelled by editing a glass button.
+   */
+  {
+    key: 'bot.wallet.open_button',
+    description:
+      'The inline button that opens the wallet screen (balance and account summary) as a ' +
+      'new message. Shown under the wallet-credit messages.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.open_button',
+    description:
+      'The inline button that opens the catalogue (buy a service) as a new message. Shown ' +
+      'under the wallet-credit messages.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -4391,6 +4470,172 @@ export const TEMPLATES = [
    * authors — a name, an emoji — travels as a COMMAND carrying its argument, never as
    * a prompt that captures the next message (INCIDENT-FIN-001).
    */
+  // --- Spec §7: the client apps section and the tutorial video wizard ---------------
+  {
+    key: 'bot.admin.apps_button',
+    description:
+      'Spec §7: opens the client apps section of the management panel, where a tutorial video is set. Drawn for an administrator who holds `client_apps.view`; setting or deleting a video charges `client_apps.edit`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_section',
+    description:
+      'Spec §7: the client apps section — a heading over one button per app, each named by the app.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_empty',
+    description:
+      'Spec §7: the client apps section when the installation has no app entry yet (they are created in the Web Admin).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_detail_video',
+    description:
+      'Spec §7: one app in the management panel, when a tutorial video is stored for this bot. Carries «تنظیم ویدیو» (replace), delete and back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_detail_no_video',
+    description:
+      'Spec §7: one app in the management panel, when no tutorial video is stored for this bot. Carries «تنظیم ویدیو» and back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_set_button',
+    description:
+      'Spec §7: «تنظیم ویدیو» — opens the bounded prompt that reads the next video the administrator sends as this app’s tutorial.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_delete_button',
+    description: 'Spec §7: asks to delete this app’s tutorial video. Deletes nothing by itself.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_delete_ask',
+    description: 'Spec §7: the confirmation before a tutorial video is deleted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_delete_confirm_button',
+    description: 'Spec §7: confirms deleting the tutorial video.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_prompt',
+    description:
+      'Spec §7: asks the administrator to send the tutorial video now, as a video message; says the request expires. Carries the cancel button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_cancel_button',
+    description: 'Spec §7: cancels the open «send the video» prompt. Stores nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_saved',
+    description:
+      'Spec §7: the video was stored as this app’s tutorial (a first one or a replacement).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_deleted',
+    description: 'Spec §7: the tutorial video was deleted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.app_video_cancelled',
+    description: 'Spec §7: the «send the video» prompt was cancelled; nothing was stored.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_video_stale',
+    description:
+      'Spec §7: a video arrived, or a prompt button was tapped, with no open prompt — expired, cancelled, superseded or never opened. Nothing was stored.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.apps_back_button',
+    description: 'Spec §7: back to the client apps section.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_back_button',
+    description: 'Spec §7: back to the app’s own screen.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.app_not_found',
+    description: 'Spec §7: the app a management-panel button named no longer exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.categories_button',
     description:
@@ -7994,7 +8239,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.nowpayments_pay_button',
     description:
-      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments.open`.',
+      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments_open`.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -8043,7 +8288,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.centralpay_pay_button',
     description:
-      'CentralPay: the URL button that opens the payment page CentralPay returned. The owner’s label: «💳 پرداخت با CentralPay». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.centralpay.open`.',
+      'CentralPay: the URL button that opens the payment page CentralPay returned. The owner’s label: «💳 پرداخت با CentralPay». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.centralpay_open`.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -8791,6 +9036,25 @@ export const TEMPLATES = [
         type: 'STRING',
         description: 'Rendered `bot.wallet.group_customer` or `bot.wallet.group_reseller`.',
         required: true,
+        repeatable: false,
+      },
+      /*
+       * Owner spec §3: the moment the screen was RENDERED — never the registration or the
+       * last activity — in the tenant's zone and calendar. OPTIONAL, so an override saved
+       * before these existed stays valid and simply does not show them.
+       */
+      {
+        token: 'nowDate',
+        type: 'DATE',
+        description: 'Today, in the tenant’s zone and calendar, when the screen was drawn.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'nowTime',
+        type: 'TIME',
+        description: 'The time of day, in the tenant’s zone, when the screen was drawn.',
+        required: false,
         repeatable: false,
       },
     ],
@@ -10375,6 +10639,15 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.marketing.unavailable',
+    description:
+      'Spec §9: answers /stop, or an old opt-out / opt-in button, while the installation does ' +
+      'not let customers stop promotional messages (the customer_marketing_opt_out flag is ' +
+      'off). Says the preference cannot be changed here; nothing is changed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.marketing.opt_in_button',
     description:
       'Round N close: the button, on the opted-out reply and on the support screen, that opts the ' +
@@ -11213,7 +11486,9 @@ export function coerceTemplateValue(
       return { ok: true, value };
     }
 
-    case 'DATETIME': {
+    case 'DATETIME':
+    case 'DATE':
+    case 'TIME': {
       const trimmed = raw.trim();
       // ISO-8601 or nothing. `new Date` alone accepts JavaScript's legacy
       // parsing, under which `'0'` is the year 2000 and `'2026-02-30'` is the
@@ -11474,6 +11749,8 @@ export function validateTemplateValues(
         if (!isMoneyValue(value)) wrong('a Money value');
         break;
       case 'DATETIME':
+      case 'DATE':
+      case 'TIME':
         if (!(value instanceof Date)) wrong('a Date');
         break;
       case 'NUMBER':

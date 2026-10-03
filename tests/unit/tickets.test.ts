@@ -284,8 +284,16 @@ describe("the bot's ticket desk vocabulary", () => {
 
   it("gives support's reply its two buttons, derived from the subject and nothing stored", () => {
     expect(notificationButtons('TICKET_REPLY', { ticketId: TICKET })).toEqual([
-      { label: { kind: 'TEMPLATE', key: 'bot.ticket.reply_button' }, data: `tkr:${TICKET}` },
-      { label: { kind: 'TEMPLATE', key: 'bot.ticket.view_button' }, data: `tkv:${TICKET}` },
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.ticket.reply_button' },
+        inline: 'tickets.reply',
+        data: `tkr:${TICKET}`,
+      },
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.ticket.view_button' },
+        inline: 'tickets.view',
+        data: `tkv:${TICKET}`,
+      },
     ]);
     expect(notificationButtons('TICKET_REPLY', {})).toEqual([]);
     expect(notificationButtons('PAYMENT_REJECTED', { ticketId: TICKET })).toEqual([]);

@@ -411,6 +411,18 @@ customer after an operator has STOPPED the tenant". Adding the check —
 `scopeActivity` on the announcer's deps and a refusal at the top of `announce`,
 which is exactly the shape a well-meaning fix takes — fails that test.
 
+**A second, installation-level exception: the Recovery Kit's keys (ADR-0032).**
+`InstallationKeyService` (import, removal) does not read `ScopeActivityReader`,
+for the reason the backup and recovery modules do not: what it writes —
+`installation_keys` — belongs to the INSTALLATION, not to a tenant, and has no
+tenant column. A stopped tenant must still be restorable, and restoring it may
+first need the old installation's keys. What bounds it instead: the CRITICAL
+permission plus the administrator's own password, the installation write gate
+(every write goes through `DrizzleUnitOfWork.run`, so a quiesce refuses it), and
+an explicit refusal while a destructive recovery holds the installation, checked
+on arrival and again under the table lock. It creates no order, payment, service
+or operation, and holds no dependency that could.
+
 ---
 
 ## Idempotency keys are namespaced per surface

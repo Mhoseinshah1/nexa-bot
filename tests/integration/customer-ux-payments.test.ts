@@ -441,14 +441,18 @@ describe('a customer pays through the approved screens', () => {
       expect(body.startsWith('🎡 اطلاعات حساب کاربری شما:\n\n')).toBe(true);
       expect(body).toContain('🪪 آی دی عددی: 910910');
       expect(body).toContain('👤 نام: مریم احمدی');
-      expect(body).toContain('⚫ شماره تماس: 🔴 ارسال نشده است');
+      // Owner spec §4: every icon is an Appearance slot (phone 📱, balance `wallet`, referrals
+      // `referral`), and §3 closes the screen with the date and time it was drawn.
+      expect(body).toContain('📱 شماره تماس: 🔴 ارسال نشده است');
       expect(body).toMatch(/⏳ زمان ثبت نام: 14\d\d\/\d\d\/\d\d \d\d:\d\d/u);
-      expect(body).toContain('⭐ موجودی: 750,000 تومان');
+      expect(body).toContain('💰 موجودی: 750,000 تومان');
       expect(body).not.toContain('5,000,000');
       expect(body).toContain('🛒 تعداد سرویس های خریداری شده: 0 عدد');
       expect(body).toContain('🧾 تعداد فاکتورهای پرداخت شده: 0 عدد');
-      expect(body).toContain('👥 تعداد زیرمجموعه های شما: 0 نفر');
-      expect(body).toContain('🔖 گروه کاربری: کاربر عادی');
+      expect(body).toContain('🎁 تعداد زیرمجموعه های شما: 0 نفر');
+      expect(body).toMatch(
+        /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
+      );
       expect(labelsOf(lastMarkup())).toEqual(['💰 افزایش موجودی', '🏠 بازگشت به منوی اصلی']);
     });
 

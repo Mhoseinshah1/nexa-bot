@@ -1,4 +1,5 @@
 import type {
+  ListSearchTerm,
   Money,
   OrderId,
   PaymentEvidenceKind,
@@ -192,6 +193,14 @@ export interface PaymentSearch {
    * exact match a unique lookup within the tenant.
    */
   readonly reference?: string;
+  /**
+   * The list's ONE free-text search (spec §10), already classified. A Telegram id matches
+   * the customer exactly — or a reference or bank reference spelled in the same digits; a
+   * uuid matches the payment, its customer or its order; `@name` a customer username
+   * prefix; other text the reference or the external reference EXACTLY, for the reason
+   * `reference` above gives.
+   */
+  readonly text?: ListSearchTerm;
   /**
    * How the receipt left review (WP10 follow-up §5), by the SAME derivation the list and
    * detail report — one SQL expression, so the filter and the column cannot disagree.

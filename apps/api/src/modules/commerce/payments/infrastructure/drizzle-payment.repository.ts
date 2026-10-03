@@ -13,7 +13,7 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
-import { money, PROVIDER_REVIEW_GATEWAY_PROVIDERS } from '@nexa/contracts';
+import { money, PROVIDER_REVIEW_GATEWAY_PROVIDERS, type ListSearchTerm } from '@nexa/contracts';
 import type {
   CurrencyCode,
   OrderId,
@@ -29,11 +29,15 @@ import type {
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  customerIdsWithTelegramId,
+  customerIdsWithUsernamePrefix,
+  readCustomerIdentities,
+} from '../../../../infrastructure/persistence/list-search.js';
+import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
-  customers,
   paymentReceipts,
   payments,
   receiptCredits,
@@ -195,33 +199,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     cursor: PaymentCursor | null,
     tx?: unknown,
   ): Promise<PaymentPage> {
-    const tenantId = requireTenantId(scope);
-    const conditions: SQL[] = [eq(payments.tenantId, tenantId)];
-    if (search.state !== undefined) conditions.push(eq(payments.state, search.state));
-    if (search.method !== undefined) conditions.push(eq(payments.method, search.method));
-    if (search.customerId !== undefined)
-      conditions.push(eq(payments.customerId, search.customerId));
-    if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
-    if (search.reference !== undefined) conditions.push(eq(payments.reference, search.reference));
-    if (search.disposition !== undefined) {
-      conditions.push(sql`(${receiptDispositionSql()}) = ${search.disposition}`);
-    }
-    if (cursor !== null) {
-      conditions.push(
-        sql`(${payments.createdAt}, ${payments.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
-      );
-    }
-
-    const rows = await this.exec(tx)
-      .select({
-        ...getTableColumns(payments),
-        createdAtText: sql<string>`to_char(${payments.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
-      })
-      .from(payments)
-      .where(and(...conditions))
-      .orderBy(asc(payments.createdAt), asc(payments.id))
-      .limit(limit + 1);
-
+    const rows = await this.listStatement(scope, search, limit, cursor, tx);
     const page = rows.slice(0, limit);
     const last = page[page.length - 1];
     return {
@@ -231,6 +209,47 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           ? { createdAt: last.createdAtText, id: last.id as PaymentId }
           : null,
     };
+  }
+
+  /**
+   * The page statement, exposed so a PLAN regression can explain it — for the reason
+   * `DrizzleCustomerRepository.listStatement` gives: a retyped query in a test proves a
+   * plan for something nobody runs (`list-search-plan.test.ts`).
+   */
+  listStatement(
+    scope: TenantContext,
+    search: PaymentSearch,
+    limit: number,
+    cursor: PaymentCursor | null,
+    tx?: unknown,
+  ) {
+    const tenantId = requireTenantId(scope);
+    const conditions: SQL[] = [eq(payments.tenantId, tenantId)];
+    if (search.state !== undefined) conditions.push(eq(payments.state, search.state));
+    if (search.method !== undefined) conditions.push(eq(payments.method, search.method));
+    if (search.customerId !== undefined)
+      conditions.push(eq(payments.customerId, search.customerId));
+    if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
+    if (search.reference !== undefined) conditions.push(eq(payments.reference, search.reference));
+    if (search.text !== undefined) conditions.push(paymentTextCondition(tenantId, search.text));
+    if (search.disposition !== undefined) {
+      conditions.push(sql`(${receiptDispositionSql()}) = ${search.disposition}`);
+    }
+    if (cursor !== null) {
+      conditions.push(
+        sql`(${payments.createdAt}, ${payments.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+
+    return this.exec(tx)
+      .select({
+        ...getTableColumns(payments),
+        createdAtText: sql<string>`to_char(${payments.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
+      .from(payments)
+      .where(and(...conditions))
+      .orderBy(asc(payments.createdAt), asc(payments.id))
+      .limit(limit + 1);
   }
 
   /**
@@ -645,26 +664,12 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     customerIds: readonly UserId[],
     tx?: unknown,
   ): Promise<ReadonlyMap<UserId, PaymentCustomerIdentity>> {
-    const tenantId = requireTenantId(scope);
-    const identities = new Map<UserId, PaymentCustomerIdentity>();
-    if (customerIds.length === 0) return identities;
-    const rows = await this.exec(tx)
-      .select({
-        id: customers.id,
-        telegramUserId: customers.telegramUserId,
-        username: customers.username,
-      })
-      .from(customers)
-      .where(
-        and(eq(customers.tenantId, tenantId), inArray(customers.id, [...new Set(customerIds)])),
-      );
-    for (const row of rows) {
-      identities.set(row.id as UserId, {
-        telegramUserId: row.telegramUserId,
-        username: row.username,
-      });
-    }
-    return identities;
+    // The one shared reader (spec §10), so every list names a customer the same way.
+    return (await readCustomerIdentities(
+      this.exec(tx),
+      requireTenantId(scope),
+      customerIds,
+    )) as ReadonlyMap<UserId, PaymentCustomerIdentity>;
   }
 
   async receiptDispositions(
@@ -1112,4 +1117,36 @@ function receiptInFlight(): SQL {
        AND s.payment_id = ${payments.id}
        AND (s.state IN ('QUEUED', 'SENDING', 'ACCEPTED')
             OR (s.state = 'UNKNOWN' AND s.inquiry_resolved_at IS NULL)))`;
+}
+
+/**
+ * The payment list's one search box (spec §10), as a predicate every arm of which an index
+ * serves — `payments_customer_created_idx`, the primary key, `payments_tenant_order_idx`,
+ * `payments_tenant_reference_key` and `payments_tenant_external_reference_idx` — so an
+ * `OR` of them is a BitmapOr rather than a walk of the tenant's payments. Exact matches
+ * only: a partial match over money opens somebody else's payment by typing four characters.
+ */
+function paymentTextCondition(tenantId: string, term: ListSearchTerm): SQL {
+  switch (term.kind) {
+    case 'TELEGRAM_ID':
+      // Digits are also what a bank tracking number is, so the references are asked too.
+      return or(
+        sql`${payments.customerId} = ANY(${customerIdsWithTelegramId(tenantId, term.value)})`,
+        eq(payments.reference, term.value),
+        eq(payments.externalReference, term.value),
+      ) as SQL;
+    case 'UUID':
+      return or(
+        eq(payments.id, term.value),
+        eq(payments.customerId, term.value),
+        eq(payments.orderId, term.value),
+      ) as SQL;
+    case 'USERNAME':
+      return sql`${payments.customerId} = ANY(${customerIdsWithUsernamePrefix(tenantId, term.value)})`;
+    case 'TEXT':
+      return or(
+        eq(payments.reference, term.value),
+        eq(payments.externalReference, term.value),
+      ) as SQL;
+  }
 }

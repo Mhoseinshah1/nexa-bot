@@ -1,66 +1,58 @@
-import { parseUnitRatio, type ScopeContext } from '@nexa/contracts';
+import {
+  PAYMENT_GATEWAY_PROVIDERS,
+  PAYMENT_GATEWAY_DESCRIPTORS,
+  isSystemContext,
+  parseUnitRatio,
+  type PaymentGatewayProvider,
+  type ScopeContext,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { SettingChangeGuard } from '../../../control/settings/application/settings.service.js';
-import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
-import { CENTRAL_FX_FLAG } from './fx.service.js';
+import type { PaymentGatewayRepository } from '../../payments/application/gateway-ports.js';
 
 /** The two keys these guards speak for, named once. */
 export const STARS_PRICING_MODE_KEY = 'stars.pricing_mode';
 export const STARS_PER_USDT_KEY = 'stars.per_usdt';
 
 /**
- * `stars.pricing_mode` cannot be switched to the central rate while nothing could price
- * a Star by it (package FX-STARS).
- *
- * Both reads happen inside the setting write's transaction. The refusal is a courtesy:
- * the payment core decides again, authoritatively, in the transaction that opens an
- * attempt — a mode switched on with no ratio, or with the feature off, refuses the
- * attempt with `FX_UNAVAILABLE` rather than pricing it by anything else. So this guard
- * stops the operator where the mistake is still cheap, and never widens what the core
- * accepts.
+ * `stars.pricing_mode` is RETIRED (spec §8, "Stars price from central FX only"): the Stars
+ * route is priced by the central USDT quote and `stars.per_usdt`, and nothing reads the
+ * mode. It stays declared so a value stored before the retirement keeps parsing, and this
+ * guard refuses every CHANGE to it — a setting that changes nothing must not be writable,
+ * or an operator (or an old Web Admin tab) could believe they had switched Stars back to a
+ * manual rate. Writing the value already stored is not a change and is let through.
  */
 export class StarsPricingModeGuard implements SettingChangeGuard {
   readonly key = STARS_PRICING_MODE_KEY;
 
-  constructor(
-    private readonly features: Pick<FeatureFlagResolver, 'isEnabled'>,
-    private readonly settings: Pick<SettingsResolver, 'valueOf'>,
-  ) {}
-
-  async refuseChange(
-    scope: ScopeContext,
+  refuseChange(
+    _scope: ScopeContext,
     change: { readonly from: unknown; readonly to: unknown },
-    tx: TransactionScope,
   ): Promise<string | null> {
-    if (change.to !== 'CENTRAL_FX_RATIO') return null;
-    if (!(await this.features.isEnabled(scope, CENTRAL_FX_FLAG, tx))) {
-      return (
-        'The Stars route can only be priced by the central exchange rate while the central_fx ' +
-        'feature is on. Turn the feature on first; until then the route keeps its fixed rate.'
-      );
-    }
-    const ratio = await this.settings.valueOf<string>(scope, STARS_PER_USDT_KEY, tx);
-    if (parseUnitRatio(ratio) === null) {
-      return (
-        'The Stars route can only be priced by the central exchange rate once stars.per_usdt ' +
-        'holds a positive ratio. Set how many Stars one USDT buys first.'
-      );
-    }
-    return null;
+    if (change.from === change.to) return Promise.resolve(null);
+    return Promise.resolve(
+      'stars.pricing_mode is retired: the Telegram Stars route is always priced by the central ' +
+        'exchange rate and stars.per_usdt. There is no manual Stars rate to switch to.',
+    );
   }
 }
 
+/** The routes whose price depends on `stars.per_usdt`, read from their descriptors. */
+const RATIO_ROUTES: readonly PaymentGatewayProvider[] = PAYMENT_GATEWAY_PROVIDERS.filter(
+  (provider) =>
+    PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion.unitRatioSetting === STARS_PER_USDT_KEY,
+);
+
 /**
- * `stars.per_usdt` cannot be cleared while the Stars route is priced by it. Clearing it
- * would leave the mode pointing at a ratio that does not exist, and every new Stars
- * attempt refused — the payment core's honest answer, but an operator saving a blank
- * field should be told before customers are.
+ * `stars.per_usdt` cannot be cleared while a route priced by it is switched ON. Clearing it
+ * would leave every new Stars attempt refused — the payment core's honest answer, but an
+ * operator saving a blank field should be told before customers are. Decided on the route's
+ * row read inside the setting write's transaction; the attempt decides again regardless.
  */
 export class StarsPerUsdtGuard implements SettingChangeGuard {
   readonly key = STARS_PER_USDT_KEY;
 
-  constructor(private readonly settings: Pick<SettingsResolver, 'valueOf'>) {}
+  constructor(private readonly gateways: Pick<PaymentGatewayRepository, 'lockForUpdate'>) {}
 
   async refuseChange(
     scope: ScopeContext,
@@ -68,11 +60,18 @@ export class StarsPerUsdtGuard implements SettingChangeGuard {
     tx: TransactionScope,
   ): Promise<string | null> {
     if (typeof change.to === 'string' && parseUnitRatio(change.to) !== null) return null;
-    const mode = await this.settings.valueOf<string>(scope, STARS_PRICING_MODE_KEY, tx);
-    if (mode !== 'CENTRAL_FX_RATIO') return null;
-    return (
-      'The Stars route is priced by the central exchange rate and this ratio. Switch ' +
-      'stars.pricing_mode back to FIXED_RATE before clearing it, or set a positive ratio.'
-    );
+    if (isSystemContext(scope)) return null;
+    for (const provider of RATIO_ROUTES) {
+      // FOR UPDATE (Codex review of #143): the enable takes the same row lock before it reads
+      // the ratio, so the two serialise and neither decides on what the other overwrites.
+      const route = await this.gateways.lockForUpdate(scope, provider, tx);
+      if (route?.status === 'ACTIVE') {
+        return (
+          'The Telegram Stars route is switched on and is priced by this ratio and the central ' +
+          'exchange rate. Switch the route off before clearing it, or set a positive ratio.'
+        );
+      }
+    }
+    return null;
   }
 }

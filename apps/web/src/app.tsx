@@ -291,6 +291,14 @@ export function resolve(
           mayViewReferrals={may('referrals.view')}
           mayViewReseller={may('resellers.view')}
           mayEditReseller={may('resellers.edit')}
+          mayExemptChannel={may('users.channel_membership.exempt')}
+          mayVerifyPhone={may('users.phone.verify')}
+          mayEditLocation={may('users.location.edit')}
+          mayEditNotifications={may('users.notifications.edit')}
+          mayTransfer={may('users.transfer')}
+          mayManualOrder={may('orders.manual.create')}
+          mayEditServices={may('services.edit')}
+          mayViewAudit={may('audit.view')}
           denied={!may('users.view')}
         />
       ),

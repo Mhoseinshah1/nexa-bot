@@ -236,6 +236,7 @@ back the installation in the middle of it. The quiesce is reported as its own
 field on the authenticated status, and the Web Admin shows it as a banner.
 
 **D-10 — foreign-installation archives are refused, in words, and recorded.**
+_Superseded by ADR-0032 (the Recovery Kit); kept as written._
 Supporting them means one of: a web form that accepts a KEK (explicitly
 forbidden, and correctly), or an out-of-band key import that is its own feature
 with its own storage, rotation and audit. V1 supports same-installation

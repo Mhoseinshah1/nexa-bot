@@ -1222,6 +1222,79 @@ export class AdminManagementService {
   }
 
   /**
+   * Proves the caller still knows their OWN password, for an action that needs
+   * more than a session (step-up). Returns normally on success; throws on
+   * failure. Changes nothing.
+   *
+   * The first caller is the Recovery Kit export (ADR-0032), which hands every
+   * key-encryption key to whoever knows a passphrase: a stolen session must not
+   * be enough for that, and the password is what a session thief does not have.
+   *
+   * Throttled by the SAME counter login and `changeOwnPassword` use, keyed by
+   * the same username, for the reason that method gives: a second, unthrottled
+   * door to the same credential turns a session into an unlimited guessing
+   * oracle — and each guess spends a production-cost scrypt. A verified failure
+   * keeps its reservation; a success gives it back.
+   *
+   * `action` names the audit row a refusal leaves, so the trail says WHAT the
+   * failed step-up was for.
+   */
+  async verifyOwnPassword(
+    scope: ScopeContext,
+    actor: ActorContext,
+    password: string,
+    context: PasswordChangeContext,
+    action: string,
+  ): Promise<void> {
+    const adminId = adminIdOf(actor);
+    if (adminId === null) {
+      throw errors.unauthenticated(IDENTITY_ERROR_CODES.AUTH_REQUIRED, 'Sign in first.');
+    }
+    if (isSystemContext(scope)) {
+      throw errors.validation(
+        PLATFORM_ERROR_CODES.TENANT_CONTEXT_MISSING,
+        'Re-authentication needs a tenant scope.',
+      );
+    }
+    const tenantScope: TenantContext = scope;
+    const admin = await this.requireAdmin(scope, adminId);
+    const credentials = await this.admins.findCredentialsByUsername(scope, admin.username);
+    if (credentials === null) {
+      throw errors.notFound(IDENTITY_ERROR_CODES.ADMIN_NOT_FOUND, 'No such administrator.');
+    }
+
+    const reserved = await this.reservePasswordAttempt(
+      tenantScope,
+      actor,
+      admin.username,
+      context.ip,
+      adminId,
+    );
+    let matches: boolean;
+    try {
+      matches = await this.hasher.verify(password, credentials.passwordHash);
+    } catch (error) {
+      await this.throttle.release(tenantScope, admin.username, context.ip, reserved);
+      throw error;
+    }
+    if (!matches) {
+      await this.audit.record(scope, actor, {
+        action,
+        entityType: 'Admin',
+        entityId: adminId,
+        before: null,
+        after: { reason: 'REAUTHENTICATION_FAILED' },
+        result: 'DENIED',
+      });
+      throw errors.unauthenticated(
+        IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS,
+        'The password is incorrect.',
+      );
+    }
+    await this.throttle.release(tenantScope, admin.username, context.ip, reserved);
+  }
+
+  /**
    * Changing one's OWN password.
    *
    * Not covered by `assertNotSelf`: it requires the current password, grants

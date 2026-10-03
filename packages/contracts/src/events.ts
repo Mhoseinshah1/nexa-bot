@@ -106,6 +106,11 @@ export const EVENT_TYPES = [
    * durable fact with a correlation id, like a block.
    */
   'CustomerMarketingOptOutChanged',
+  // Customer 360 (§11.4–11.5). Ids and booleans only: never a phone number.
+  'CustomerChannelMembershipExemptionChanged',
+  'CustomerPhoneVerificationChanged',
+  'CustomerLocationChangeOverrideChanged',
+  'CustomerAccountTransferred',
   'OrderConfirmed',
   'OrderSettled',
   'OrderCancelled',
@@ -278,6 +283,23 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   CustomerBlocked: z.object({ reason: z.string().max(500).nullable() }),
   CustomerUnblocked: z.object({ reason: z.string().max(500).nullable() }),
   CustomerMarketingOptOutChanged: z.object({ optedOut: z.boolean() }),
+  CustomerChannelMembershipExemptionChanged: z.object({ exempt: z.boolean() }),
+  /** Whether a verified number is now recorded. The number itself is never in an event. */
+  CustomerPhoneVerificationChanged: z.object({ verified: z.boolean() }),
+  CustomerLocationChangeOverrideChanged: z.object({ overridden: z.boolean() }),
+  /*
+   * Aggregate is the SOURCE customer. `customer_account_transfers` carries the full record;
+   * each moved service also has its own `ServiceOwnershipTransferred`, and each wallet
+   * entry its own `WalletEntryRecorded`.
+   */
+  CustomerAccountTransferred: z.object({
+    transferId: z.string(),
+    fromCustomerId: z.string(),
+    toCustomerId: z.string(),
+    servicesMoved: z.number().int().nonnegative(),
+    walletMovedMinor: z.string(),
+    currency: z.string(),
+  }),
   OrderConfirmed: z.object({
     customerId: z.string(),
     /** Null for a custom service (Package D), which is bought from no product. */

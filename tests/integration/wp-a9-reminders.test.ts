@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   featureFlagDefinition,
@@ -26,6 +27,10 @@ import { DrizzleServiceReminderSnapshotReader } from '../../apps/api/src/modules
 import { DrizzleServiceReminderRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
 import { ServiceReminderService } from '../../apps/api/src/modules/commerce/provisioning/application/service-reminder.service';
 import { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
+import {
+  TOPUP_MENU_CALLBACK_PREFIX,
+  notificationButtons,
+} from '../../apps/api/src/surfaces/telegram/bot-runtime';
 import { DrizzleWalletThresholdAlertRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet-threshold-alert.repository';
 import {
   adminActorFor,
@@ -282,7 +287,10 @@ describe('WP-A9 reminders', () => {
    * a messenger that records what it was asked to send. The readers are the point: every
    * supersession below is decided by the production query over the production tables.
    */
-  function dispatcher(clock: Clock = ctx.container.clock): CustomerNotificationService {
+  function dispatcher(
+    clock: Clock = ctx.container.clock,
+    buttonsFor?: typeof notificationButtons,
+  ): CustomerNotificationService {
     const db = ctx.container.database.db;
     const people = new DrizzleCustomerRepository(db);
     return new CustomerNotificationService({
@@ -313,6 +321,7 @@ describe('WP-A9 reminders', () => {
       clock,
       scopeIsActive: async () => true,
       logger: { info: () => {}, error: () => {} },
+      ...(buttonsFor === undefined ? {} : { buttonsFor }),
     });
   }
   const deliver = (clock?: Clock) => dispatcher(clock).deliverDue(tenantA, 200);
@@ -463,6 +472,34 @@ describe('WP-A9 reminders', () => {
   // =========================================================================
   // 2. Once per instance; nothing per idle scan
   // =========================================================================
+
+  /*
+   * Owner spec §2.1: the low-balance alert carries the top-up as an inline button (the
+   * wallet screen's own «افزایش موجودی», label and style from the registry) and its copy
+   * names no command. The button is derived from the KIND by the composition root's
+   * `buttonsFor` — nothing is stored on the row (ADR 0030 §1).
+   */
+  it('sends the low-balance alert with the top-up button and no /wallet', async () => {
+    await setFlag('wallet_low_balance_reminders', true);
+    expect(
+      await setSetting('wallet.low_balance.threshold', { amountMinor: '50000', currency: 'IRT' }),
+    ).toBeNull();
+    await ledger(customerA, 'CREDIT', 100_000n);
+    await ledger(customerA, 'DEBIT', 70_000n);
+    await walletPass();
+    expect(
+      (await dispatcher(undefined, notificationButtons).deliverDue(tenantA, 200)).delivered,
+    ).toBe(1);
+    const alert = sends.find((one) => one.templateKey === 'bot.wallet.low_balance');
+    expect(alert?.buttons).toEqual([
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_button' },
+        inline: 'wallet.topup',
+        data: TOPUP_MENU_CALLBACK_PREFIX,
+      },
+    ]);
+    expect(CATALOGUE_FA['bot.wallet.low_balance']).not.toContain('/wallet');
+  });
 
   it('writes no row on a scan that has nothing to send', async () => {
     await service({ expiresInDays: 20, usedBytes: (ALLOWANCE * 10n) / 100n });
@@ -652,6 +689,22 @@ describe('WP-A9 reminders', () => {
       balance: { amountMinor: 30_000n, currency: 'IRT' },
       threshold: { amountMinor: 50_000n, currency: 'IRT' },
     });
+  });
+
+  it('never tells a wallet emptied by an account transfer (Customer 360)', async () => {
+    await setFlag('wallet_low_balance_reminders', true);
+    expect(
+      await setSetting('wallet.low_balance.threshold', { amountMinor: '50000', currency: 'IRT' }),
+    ).toBeNull();
+    await ledger(customerA, 'CREDIT', 100_000n);
+    // The whole balance moved to the account that replaces this one.
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
+                                  currency, reference)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, 'DEBIT',
+              'ACCOUNT_TRANSFER_OUT', 100000, 'IRT', ${`ref-${key()}`})`);
+    expect(await walletPass()).toEqual({ alerts: 0 });
+    expect(await count('wallet_threshold_alerts')).toBe(0);
   });
 
   it('never tells a wallet that never held the threshold', async () => {

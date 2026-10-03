@@ -249,15 +249,18 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     invoiceCredential: 'BOT_TOKEN',
     approval: 'RECORDED_PAYMENT',
     /*
-     * Priced by the operator's fixed rate (Package A) OR, when `stars.pricing_mode` is
-     * switched to `CENTRAL_FX_RATIO`, by the central USDT quote and `stars.per_usdt`
-     * (package FX-STARS). The default mode is the fixed rate, so an installation that
-     * upgrades keeps pricing exactly as before until an operator switches it.
+     * Priced ONLY by the central USDT quote and `stars.per_usdt` (spec §8, "Stars price
+     * from central FX only"). The operator-set Toman-per-Star rate of Package A and the
+     * `stars.pricing_mode` switch that chose between the two are retired: there is no
+     * manual Stars FX rate and no Stars-only fallback. `stars.per_usdt` stays — it is not
+     * an exchange rate but the provider-side ratio (how many Stars one USDT buys), which no
+     * fiat feed can supply. A single policy, so `conversionPolicyFor` ignores any mode.
+     * Invoices issued under the old fixed rate keep their own frozen snapshot.
      */
     conversion: {
-      policies: ['FIXED_RATE', 'CENTRAL_FX'],
+      policies: ['CENTRAL_FX'],
       fxBaseAsset: 'USDT',
-      modeSetting: 'stars.pricing_mode',
+      modeSetting: null,
       unitRatioSetting: 'stars.per_usdt',
     },
     invoiceForm: 'BOT_INVOICE',

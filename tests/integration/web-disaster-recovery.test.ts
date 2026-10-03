@@ -856,10 +856,13 @@ describe('web disaster recovery', () => {
   // --- Capabilities --------------------------------------------------------
 
   describe('capabilities', () => {
-    it('reports the foreign-installation limitation rather than omitting it', async () => {
+    it('reports foreign-installation recovery as supported through the Recovery Kit', async () => {
+      // ADR-0032 superseded ADR-0028 § 10: an archive from another installation
+      // restores once that installation's kit is imported. The refusal itself —
+      // `recovery.archive_foreign_key` with no kit — is still asserted above.
       const response = await get(RECOVERY_ROUTES.capabilities, ownerCookie);
       const capabilities = recoveryCapabilitiesResponseSchema.parse(response.json());
-      expect(capabilities.foreignInstallationSupported).toBe(false);
+      expect(capabilities.foreignInstallationSupported).toBe(true);
       expect(capabilities.uploadEnabled).toBe(true);
       expect(capabilities.confirmationPhrase).toBe(RECOVERY_CONFIRMATION_PHRASE);
       // Reported so the Web Admin refuses a too-large file before sending it, and

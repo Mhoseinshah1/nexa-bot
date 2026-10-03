@@ -21,7 +21,10 @@ import {
   type SalesCurrencyCode,
   type UnitOfWork,
   type UserId,
+  isSettingKey,
+  parseUnitRatio,
   takesFixedRate,
+  type GatewayConversionSpec,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -110,6 +113,22 @@ export interface PaymentGatewayServiceDeps {
     scope: TenantContext,
     provider: PaymentGatewayProvider,
   ) => Promise<string | null>;
+  /**
+   * Spec §8: whether the central exchange rate (`central_fx`) is switched on, read when a
+   * route priced ONLY by it is switched on. Optional so a narrow test wiring need not
+   * supply it; absent is read as "off" for that one gate, never as "on".
+   */
+  readonly features?: {
+    isEnabled(scope: TenantContext, key: 'central_fx', tx?: unknown): Promise<boolean>;
+  };
+}
+
+/**
+ * Spec §8: a route priced ONLY by the central exchange rate — no fixed rate, no same-unit
+ * pricing. Telegram Stars since the manual Toman-per-Star rate was retired.
+ */
+export function pricedOnlyByCentralFx(spec: GatewayConversionSpec): boolean {
+  return spec.policies.length > 0 && spec.policies.every((policy) => policy === 'CENTRAL_FX');
 }
 
 /** A route's credential and callback, as the operator's list shows them. Never a value. */
@@ -639,9 +658,19 @@ export class PaymentGatewayService {
          * A conversion rate exists only on a `FIXED_RATE` route (Package A). Anywhere else
          * it is a number nothing reads, refused rather than stored for an operator to
          * believe — the rule the customer fee below states for itself.
+         *
+         * Spec §8: the Stars route's fixed rate is RETIRED, not erased. A legacy value
+         * already on the row is kept, unread (an invoice snapshotted from it stays
+         * explainable, and a rollback finds it), so only a rate this REQUEST carries is
+         * refused — judging the merged row would make every later edit of the route fail
+         * on a figure the operator can no longer see. Clearing it (`null`) is allowed.
          */
         const pricedByRate = takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion);
-        if (config.providerUnitRateMinor !== null && !pricedByRate) {
+        if (
+          input.config.providerUnitRateMinor !== undefined &&
+          input.config.providerUnitRateMinor !== null &&
+          !pricedByRate
+        ) {
           throw errors.validation(
             COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
             'A conversion rate applies only to a route priced in another unit.',
@@ -808,6 +837,42 @@ export class PaymentGatewayService {
             'This payment route needs its conversion rate before it can be switched on.',
             { reason: 'RATE_MISSING' },
           );
+        }
+
+        /*
+         * Spec §8: a route priced ONLY by the central rate (Stars) cannot be switched ON while
+         * nothing could price it — the central rate switched off, or its unit ratio unset.
+         * A courtesy where the mistake is still cheap: the attempt decides again, inside its
+         * own transaction, and refuses `FX_UNAVAILABLE` rather than price by anything else.
+         * A stale or missing QUOTE is not checked here: that is a transient state of the
+         * feed, which the attempt answers honestly, not a configuration.
+         */
+        const spec = PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion;
+        if (input.status === 'ACTIVE' && pricedOnlyByCentralFx(spec)) {
+          /*
+           * The route's row lock FIRST (Codex review of #143): `StarsPerUsdtGuard` takes the
+           * same lock before it lets the ratio be cleared, so an enable and a clear cannot
+           * both pass on what each read before the other committed. The ratio read below
+           * is a new statement after the lock, so it sees a clear that committed first.
+           */
+          await this.deps.repository.lockForUpdate(scope, provider, tx);
+          const flagOn =
+            this.deps.features !== undefined &&
+            (await this.deps.features.isEnabled(scope, 'central_fx', tx));
+          if (!flagOn) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+              'This payment route is priced by the central exchange rate, which is switched off.',
+              { reason: 'FX_UNAVAILABLE', detail: 'DISABLED' },
+            );
+          }
+          if ((await this.centralUnitRatio(scope, spec, tx)) === null) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+              'This payment route needs its unit ratio before it can be switched on.',
+              { reason: 'FX_UNAVAILABLE', detail: 'UNIT_RATIO_MISSING' },
+            );
+          }
         }
 
         const after = await this.deps.repository.setStatus(
@@ -1102,10 +1167,26 @@ export class PaymentGatewayService {
      * purposes, and its absence drops the route from the list rather than the tap.
      */
     const destination = await this.deps.accounts.hasEnabled(scope, tx);
+    /*
+     * Spec §8, a COURTESY: a route priced only by the central rate is not offered while its
+     * unit ratio is unset — every tap would be refused. The attempt decides authoritatively.
+     */
+    const unpriceable = new Set<PaymentGatewayProvider>();
+    for (const gateway of gateways) {
+      const spec = PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion;
+      if (
+        gateway.status === 'ACTIVE' &&
+        pricedOnlyByCentralFx(spec) &&
+        (await this.centralUnitRatio(scope, spec, tx)) === null
+      ) {
+        unpriceable.add(gateway.provider);
+      }
+    }
     const routes = gateways
       .filter(
         (gateway) =>
           gateway.status === 'ACTIVE' &&
+          !unpriceable.has(gateway.provider) &&
           (PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia !== 'MANUAL_TRANSFER' ||
             destination) &&
           allowsPurpose(gateway, purpose) &&
@@ -1146,25 +1227,28 @@ export class PaymentGatewayService {
      * and without one is offered for nothing, since enabling it requires one. Under the
      * central policy the answer is the same: a positive payable is at least one unit
      * either way, and "does this amount have an exact value in the unit" is a question
-     * only a same-unit route can answer no to.
+     * only a same-unit route can answer no to. A route priced ONLY by the central rate
+     * (Stars, spec §8; NOWPayments) is therefore admitted for any positive amount; the
+     * attempt decides the rest, including refusing when no usable quote exists.
      */
-    /*
-     * A route priced ONLY by the central quote (NOWPayments) has no fixed rate and no same
-     * unit to ask with: a positive payable is at least one provider unit under it, and the
-     * attempt decides the rest — including refusing when no usable quote exists.
-     */
-    if (
-      !takesFixedRate(descriptor.conversion) &&
-      !descriptor.conversion.policies.includes('SAME_UNIT')
-    ) {
-      return amount.amountMinor > 0n;
-    }
+    if (pricedOnlyByCentralFx(descriptor.conversion)) return amount.amountMinor > 0n;
     const conversion: ResolvedConversion | null = takesFixedRate(descriptor.conversion)
       ? gateway.providerUnitRateMinor === null
         ? null
         : { policy: 'FIXED_RATE', rateMinor: gateway.providerUnitRateMinor }
       : { policy: 'SAME_UNIT' };
     return conversion !== null && adapter.providerAmountOf(amount, conversion) !== null;
+  }
+
+  /** The central route's unit ratio as configured now, or null when it is unset. */
+  private async centralUnitRatio(
+    scope: TenantContext,
+    spec: GatewayConversionSpec,
+    tx?: unknown,
+  ): Promise<ReturnType<typeof parseUnitRatio>> {
+    if (spec.unitRatioSetting === null || !isSettingKey(spec.unitRatioSetting)) return null;
+    const text = await this.deps.settings.valueOf<unknown>(scope, spec.unitRatioSetting, tx);
+    return typeof text === 'string' ? parseUnitRatio(text) : null;
   }
 
   private async audienceFor(scope: TenantContext, customerId: UserId, tx?: unknown) {

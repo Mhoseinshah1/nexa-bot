@@ -166,15 +166,20 @@ export interface TelegramMessageStateRepository {
     tx: TransactionScope,
   ): Promise<boolean>;
 
-  /** The chat's most recently touched wizard at one of `steps`, not held by a turn. */
+  /**
+   * The chat's most recently touched wizard at one of `steps`, not held by a turn. `kind`
+   * null is either kind; `paymentId`, when given, is the payment the wizard must show (owner
+   * spec §2.4: a receipt continues the invoice of ITS payment, whichever flow drew it).
+   */
   latestWizard(
     scope: TenantContext,
     where: {
       readonly botInstanceId: BotInstanceId;
       readonly chatId: string;
-      readonly kind: TelegramWizardKind;
+      readonly kind: TelegramWizardKind | null;
       readonly steps: readonly TelegramWizardStep[];
       readonly subjectId: string | null;
+      readonly paymentId?: string | null;
     },
     now: Date,
     tx?: TransactionScope,
@@ -443,9 +448,10 @@ export class TelegramMessageStateService {
     input: {
       readonly botInstanceId: BotInstanceId;
       readonly chatId: string;
-      readonly kind: TelegramWizardKind;
+      readonly kind: TelegramWizardKind | null;
       readonly steps: readonly TelegramWizardStep[];
       readonly subjectId: string | null;
+      readonly paymentId?: string | null;
       readonly updateKey: string;
     },
   ): Promise<TelegramWizardRecord | null> {

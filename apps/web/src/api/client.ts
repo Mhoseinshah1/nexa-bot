@@ -273,6 +273,14 @@ import {
   type MonitorProfileResponse,
   BACKUP_ROUTES,
   RECOVERY_ROUTES,
+  // ADR-0032: the Recovery Kit.
+  RECOVERY_KIT_ROUTES,
+  importRecoveryKitResponseSchema,
+  installationKeysResponseSchema,
+  removeInstallationKeyResponseSchema,
+  type ImportRecoveryKitResponse,
+  type InstallationKeysResponse,
+  type RemoveInstallationKeyResponse,
   backupHistoryResponseSchema,
   backupStatusResponseSchema,
   recoveryCapabilitiesResponseSchema,
@@ -459,6 +467,31 @@ import {
   type CampaignScheduleRequest,
   type CampaignState,
   type CampaignUpdateRequest,
+  CUSTOMER_360_ROUTES,
+  customerControlResponseSchema,
+  customerFinancialSummaryResponseSchema,
+  customerManualOrderResponseSchema,
+  customerOverviewResponseSchema,
+  customerServicesToggleResponseSchema,
+  customerTimelineResponseSchema,
+  customerTransferPreviewResponseSchema,
+  customerTransferResponseSchema,
+  type CustomerChannelExemptionRequest,
+  type CustomerControlResponse,
+  type CustomerFinancialSummaryResponse,
+  type CustomerLocationOverrideRequest,
+  type CustomerManualOrderRequest,
+  type CustomerManualOrderResponse,
+  type CustomerNotificationsRequest,
+  type CustomerOverviewResponse,
+  type CustomerPhoneVerificationRequest,
+  type CustomerServicesToggleRequest,
+  type CustomerServicesToggleResponse,
+  type CustomerTimelineResponse,
+  type CustomerTransferPreviewRequest,
+  type CustomerTransferPreviewResponse,
+  type CustomerTransferRequest,
+  type CustomerTransferResultResponse,
 } from '@nexa/contracts';
 
 /**
@@ -1002,6 +1035,7 @@ export function fetchCustomers(
     telegramUserId?: string;
     username?: string;
     status?: CustomerStatus;
+    q?: string;
   } = {},
 ): Promise<CustomerListResponse> {
   const params = new URLSearchParams();
@@ -1012,6 +1046,8 @@ export function fetchCustomers(
   }
   if (query.username !== undefined && query.username !== '') params.set('username', query.username);
   if (query.status !== undefined) params.set('status', query.status);
+  /** The page's ONE free-text search (spec §10); the server decides what it is. */
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CUSTOMER_ROUTES.list}?${suffix}` : CUSTOMER_ROUTES.list,
@@ -1253,6 +1289,7 @@ export function fetchOrders(
     state?: OrderState;
     customerId?: string;
     productId?: string;
+    q?: string;
   } = {},
 ): Promise<OrderListResponse> {
   const params = new URLSearchParams();
@@ -1265,6 +1302,8 @@ export function fetchOrders(
   if (query.productId !== undefined && query.productId !== '') {
     params.set('productId', query.productId);
   }
+  /** The page's ONE free-text search (spec §10); the server decides what it is. */
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${ORDER_ROUTES.list}?${suffix}` : ORDER_ROUTES.list,
@@ -1331,6 +1370,7 @@ export function fetchPayments(
     orderId?: string;
     reference?: string;
     disposition?: ReceiptDisposition;
+    q?: string;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1346,6 +1386,8 @@ export function fetchPayments(
   if (query.reference !== undefined && query.reference !== '') {
     params.set('reference', query.reference);
   }
+  /** The page's ONE free-text search (spec §10); the server decides what it is. */
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
@@ -1371,6 +1413,7 @@ export function fetchServices(
     orderId?: string;
     panelId?: string;
     providerUsername?: string;
+    q?: string;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
@@ -1398,6 +1441,8 @@ export function fetchServices(
   if (query.providerUsername !== undefined && query.providerUsername !== '') {
     params.set('providerUsername', query.providerUsername);
   }
+  /** The page's ONE free-text search (spec §10); the server decides what it is. */
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${SERVICE_ROUTES.list}?${suffix}` : SERVICE_ROUTES.list,
@@ -2199,6 +2244,79 @@ export async function uploadRecoveryArchive(file: File): Promise<RecoveryDetailR
 
 export function verifyRecovery(id: string): Promise<RecoveryDetailResponse> {
   return post(`${RECOVERY_ROUTES.detail(id)}/verify`, {}, recoveryDetailResponseSchema);
+}
+
+// --- The Recovery Kit (ADR-0032) ---------------------------------------------
+
+export function fetchInstallationKeys(): Promise<InstallationKeysResponse> {
+  return authedGet(RECOVERY_KIT_ROUTES.keys, installationKeysResponseSchema);
+}
+
+/**
+ * Exports the kit and hands it to the browser as a file.
+ *
+ * A POST with the password and the passphrase in the BODY — never a link the
+ * browser could replay, cache or put in its history. The bytes come back sealed;
+ * nothing on this page can read them, and nothing here keeps them after the
+ * download is handed over.
+ */
+export async function exportRecoveryKit(input: {
+  accountPassword: string;
+  passphrase: string;
+  passphraseConfirmation: string;
+}): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${API_PREFIX}${RECOVERY_KIT_ROUTES.export}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json', accept: 'application/octet-stream' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw toApiError(response.status, payload);
+  }
+  const disposition = response.headers.get('content-disposition') ?? '';
+  const match = /filename="([A-Za-z0-9._-]+)"/.exec(disposition);
+  return { blob: await response.blob(), filename: match?.[1] ?? 'nexa-recovery-kit.nxkit' };
+}
+
+/** Reads a chosen kit file as base64 and imports it. The passphrase goes in the body only. */
+export async function importRecoveryKit(input: {
+  file: File;
+  passphrase: string;
+  accountPassword: string;
+  idempotencyKey: string;
+}): Promise<ImportRecoveryKitResponse> {
+  // FileReader's data URL, the way the other file pickers here read a file: one
+  // API every browser and the test DOM implement alike.
+  const kit = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('The kit file could not be read.'));
+    reader.onload = () => {
+      const url = typeof reader.result === 'string' ? reader.result : '';
+      resolve(url.slice(url.indexOf(',') + 1));
+    };
+    reader.readAsDataURL(input.file);
+  });
+  return post(
+    RECOVERY_KIT_ROUTES.import,
+    {
+      kit,
+      passphrase: input.passphrase,
+      accountPassword: input.accountPassword,
+      idempotencyKey: input.idempotencyKey,
+    },
+    importRecoveryKitResponseSchema,
+  );
+}
+
+export function removeInstallationKey(input: {
+  keyId: string;
+  confirmation: string;
+  idempotencyKey: string;
+}): Promise<RemoveInstallationKeyResponse> {
+  return post(RECOVERY_KIT_ROUTES.remove, input, removeInstallationKeyResponseSchema);
 }
 
 export function confirmRecovery(input: {
@@ -3624,4 +3742,86 @@ export function steerBulkOperation(
   action: 'pause' | 'resume',
 ): Promise<BulkOperationResponse> {
   return post(BULK_OPERATION_ROUTES[action](id), {}, bulkOperationResponseSchema);
+}
+
+// --- Customer 360 (spec §11) -----------------------------------------------------------
+//
+// Every write carries its idempotency key in the body, as every other command here does;
+// every read and write is charged on the server, so a control this page does not draw is a
+// courtesy and never the enforcement.
+
+const customer360ControlResponseSchema = customerControlResponseSchema;
+export type Customer360ControlResponse = CustomerControlResponse;
+
+export function fetchCustomerOverview(id: string): Promise<{ overview: CustomerOverviewResponse }> {
+  return authedGet(CUSTOMER_360_ROUTES.overview(id), customerOverviewResponseSchema);
+}
+
+export function setCustomerChannelExemption(
+  id: string,
+  body: CustomerChannelExemptionRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.channelExemption(id), body, customer360ControlResponseSchema);
+}
+
+export function setCustomerPhone(
+  id: string,
+  body: CustomerPhoneVerificationRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.phone(id), body, customer360ControlResponseSchema);
+}
+
+export function setCustomerLocationOverride(
+  id: string,
+  body: CustomerLocationOverrideRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.locationOverride(id), body, customer360ControlResponseSchema);
+}
+
+export function setCustomerNotifications(
+  id: string,
+  body: CustomerNotificationsRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.notifications(id), body, customer360ControlResponseSchema);
+}
+
+export function toggleCustomerServices(
+  id: string,
+  body: CustomerServicesToggleRequest,
+): Promise<CustomerServicesToggleResponse> {
+  return post(CUSTOMER_360_ROUTES.servicesToggle(id), body, customerServicesToggleResponseSchema);
+}
+
+export function previewCustomerTransfer(
+  id: string,
+  body: CustomerTransferPreviewRequest,
+): Promise<{ preview: CustomerTransferPreviewResponse }> {
+  return post(CUSTOMER_360_ROUTES.transferPreview(id), body, customerTransferPreviewResponseSchema);
+}
+
+export function transferCustomer(
+  id: string,
+  body: CustomerTransferRequest,
+): Promise<{ transfer: CustomerTransferResultResponse }> {
+  return post(CUSTOMER_360_ROUTES.transfer(id), body, customerTransferResponseSchema);
+}
+
+export function placeManualOrder(
+  id: string,
+  body: CustomerManualOrderRequest,
+): Promise<CustomerManualOrderResponse> {
+  return post(CUSTOMER_360_ROUTES.manualOrder(id), body, customerManualOrderResponseSchema);
+}
+
+export function fetchCustomerFinancialSummary(
+  id: string,
+): Promise<{ summary: CustomerFinancialSummaryResponse }> {
+  return authedGet(
+    CUSTOMER_360_ROUTES.financialSummary(id),
+    customerFinancialSummaryResponseSchema,
+  );
+}
+
+export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
+  return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
 }

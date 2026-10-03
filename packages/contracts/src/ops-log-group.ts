@@ -27,7 +27,16 @@ import { z } from 'zod';
  * reason, and a reader meeting a category this release does not know routes it to
  * `SYSTEM` rather than refusing it (`opsLogTopicCategoryOf`).
  */
-export const OPS_LOG_TOPIC_CATEGORIES = ['SYSTEM', 'PAYMENTS'] as const;
+export const OPS_LOG_TOPIC_CATEGORIES = [
+  'SYSTEM',
+  'ERRORS',
+  'PAYMENTS',
+  'SERVICES',
+  'PANELS',
+  'BOT',
+  'SECURITY',
+  'BACKUPS',
+] as const;
 export type OpsLogTopicCategory = (typeof OPS_LOG_TOPIC_CATEGORIES)[number];
 
 /** The shape a category key has, in the database and on a stored destination. */
@@ -62,7 +71,13 @@ export type OpsLogTopicState = (typeof OPS_LOG_TOPIC_STATES)[number];
 /** The template each owned topic is NAMED from, in Telegram. */
 export const OPS_LOG_TOPIC_NAME_TEMPLATES = {
   SYSTEM: 'ops.group.topic_name.system',
+  ERRORS: 'ops.group.topic_name.errors',
   PAYMENTS: 'ops.group.topic_name.payments',
+  SERVICES: 'ops.group.topic_name.services',
+  PANELS: 'ops.group.topic_name.panels',
+  BOT: 'ops.group.topic_name.bot',
+  SECURITY: 'ops.group.topic_name.security',
+  BACKUPS: 'ops.group.topic_name.backups',
 } as const satisfies Record<OpsLogTopicCategory, string>;
 
 // ---------------------------------------------------------------------------
@@ -76,13 +91,27 @@ export const OPS_LOG_TOPIC_NAME_TEMPLATES = {
  * operational event is eligible for delivery, and this table decides WHERE, not
  * WHETHER. Severity stays on the event, internally, and is printed in the message.
  *
- * First match wins; anything unmatched goes to `SYSTEM`. The financial log (WP18) is
- * routed to `PAYMENTS` by its own caller, not through this table.
+ * First match wins; anything unmatched goes to `SYSTEM`, which is the explicit fallback.
+ * The financial log (WP18) is routed to `PAYMENTS` by its own caller, not through this
+ * table, and the backup ARCHIVE goes to `BACKUPS` by the backup pipeline's own delivery.
+ *
+ * The categories normalise the code prefixes this installation actually records (spec
+ * §12; `docs/ops-log-topics.md` lists every prefix and why it lands where it does). A
+ * concern with no operational events of its own gets no topic: support and broadcasts
+ * record only DENIALS here (`access.permission_denied`, which is SECURITY's), and the
+ * audit log is a separate store that is never projected to Telegram — a topic for any of
+ * them would be a topic that stays empty for ever.
+ *
+ * Changing where a prefix routes changes only where its NEXT message goes: a queued
+ * message keeps the topic it was queued for (`destination.opsTopic`), and the codes
+ * themselves are untouched — a code is schema (CLAUDE.md), a route is not.
  */
 export const OPS_LOG_TOPIC_ROUTES: readonly {
   readonly prefix: string;
   readonly category: OpsLogTopicCategory;
 }[] = [
+  // Money. Listed first, and `order.refunded_undeliverable` before the `order.` prefix
+  // below: a refund is the payments log's even though its code names the order.
   { prefix: 'payments.', category: 'PAYMENTS' },
   { prefix: 'payment.', category: 'PAYMENTS' },
   { prefix: 'refunds.', category: 'PAYMENTS' },
@@ -90,6 +119,32 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   { prefix: 'wallet.', category: 'PAYMENTS' },
   { prefix: 'gateway', category: 'PAYMENTS' },
   { prefix: 'order.refunded_undeliverable', category: 'PAYMENTS' },
+  // The exchange rate prices every central-rate invoice; a stale or missing quote
+  // refuses payments, so it is read beside them.
+  { prefix: 'fx.', category: 'PAYMENTS' },
+  // Backup and disaster recovery: a run's outcome lands beside its archive.
+  { prefix: 'backup.', category: 'BACKUPS' },
+  { prefix: 'recovery.', category: 'BACKUPS' },
+  // Panels: health, probes, capacity.
+  { prefix: 'panel.', category: 'PANELS' },
+  // What a customer bought: provisioning on a panel, and the order around it.
+  { prefix: 'provisioning.', category: 'SERVICES' },
+  { prefix: 'order.', category: 'SERVICES' },
+  { prefix: 'service.', category: 'SERVICES' },
+  // Who may do what: refusals, lock-outs, administrator changes, spam protection.
+  { prefix: 'access.', category: 'SECURITY' },
+  { prefix: 'auth.', category: 'SECURITY' },
+  { prefix: 'admin.', category: 'SECURITY' },
+  { prefix: 'antispam.', category: 'SECURITY' },
+  // The bots themselves: sends to customers, menus, commands, channel checks, tokens.
+  { prefix: 'telegram.', category: 'BOT' },
+  { prefix: 'bot.', category: 'BOT' },
+  { prefix: 'bot_menu.', category: 'BOT' },
+  { prefix: 'channels.', category: 'BOT' },
+  // Failures nobody anticipated: an unhandled exception, an error the API answered.
+  { prefix: 'internal.', category: 'ERRORS' },
+  { prefix: 'http.', category: 'ERRORS' },
+  { prefix: 'request.', category: 'ERRORS' },
 ];
 
 export function opsLogTopicForCode(code: string): OpsLogTopicCategory {

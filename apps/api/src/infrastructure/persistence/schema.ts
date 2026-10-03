@@ -55,6 +55,7 @@ import {
   RECOVERY_ACTIVE_DESTRUCTIVE_STATES,
   RECOVERY_FAILURE_CODES,
   RECOVERY_SOURCES,
+  INSTALLATION_KEY_SOURCES,
   RECOVERY_STAGES,
   RECOVERY_STATES,
   TEMPLATE_REVISION_ACTIONS,
@@ -191,6 +192,8 @@ import {
   CLIENT_APP_IMAGE_MIN_SIDE,
   CLIENT_APP_NAME_MAX_LENGTH,
   CLIENT_APP_PLATFORMS,
+  CLIENT_APP_VIDEO_FILE_ID_MAX_LENGTH,
+  CLIENT_APP_VIDEO_FILE_UNIQUE_ID_MAX_LENGTH,
   CLIENT_APP_PROTOCOLS,
   CLIENT_APP_SORT_MAX,
   CLIENT_APP_SORT_MIN,
@@ -2934,6 +2937,79 @@ export const recoveryRequests = pgTable(
   ],
 );
 
+/**
+ * Decrypt-only key-encryption keys imported from a Recovery Kit (ADR-0032).
+ *
+ * INSTALLATION-WIDE, and the one table here with neither `tenant_id` nor a
+ * tenant-bound encryption context, for a reason that is the whole point of it:
+ * it must SURVIVE a restore. A restore replaces every tenant row with the
+ * backup's, so a key bound to the current primary tenant would be bound to a
+ * tenant that no longer exists the moment it was needed. The recovery executor
+ * carries these rows into the restored candidate before the cutover, exactly as
+ * it re-asserts its own request row afterwards.
+ *
+ * `wrapped_material` is the key, AES-256-GCM-wrapped under a CONFIGURED key
+ * (`wrapped_under_key_id`) with the key id and the wrapping id as associated
+ * data. Deliberately not named `*_ciphertext`: that suffix marks a
+ * `SecretCipher` column, which this is not (see `installation-keyring.ts`), and
+ * `secrets status|rewrap|retire-check` walk this table by name instead.
+ *
+ * Nothing here can make a key ENCRYPT. Which key encrypts is
+ * `SECRETS_ACTIVE_KEY_ID`, and this table has no column that could say
+ * otherwise.
+ */
+export const installationKeys = pgTable(
+  'installation_keys',
+  {
+    id: uuid('id').primaryKey(),
+    /** The key's label, unique across the installation. Never a configured key's id. */
+    keyId: text('key_id').notNull(),
+    /** `kekFingerprint` of the key. Safe to show; compared on every unwrap. */
+    fingerprint: text('fingerprint').notNull(),
+    /**
+     * The wrapped key. NULL exactly when the row is a TOMBSTONE: removal erases
+     * the bytes and keeps the row, so a restore of an older backup — which still
+     * holds this key — cannot quietly bring it back (the executor carries the
+     * tombstone into the candidate).
+     */
+    wrappedMaterial: text('wrapped_material'),
+    /** Which CONFIGURED key wraps it — what `secrets retire-check` counts. NULL on a tombstone. */
+    wrappedUnderKeyId: text('wrapped_under_key_id'),
+    source: text('source').notNull(),
+    /** The kit it arrived in. An identifier, never the kit. */
+    kitId: uuid('kit_id'),
+    importedAt: timestamptz('imported_at').notNull(),
+    /** Captured as a label too, so the row still names somebody after a restore. */
+    importedByAdminId: uuid('imported_by_admin_id'),
+    importedByLabel: text('imported_by_label'),
+    /** Set by removal; the row is then a tombstone. Cleared only by a later import. */
+    removedAt: timestamptz('removed_at'),
+    removedByLabel: text('removed_by_label'),
+    /**
+     * Set by the recovery executor on a row the CANDIDATE held and this
+     * installation did not: a key that came back inside a restored backup rather
+     * than through an import here. Shown in the list, and audited at the cutover.
+     */
+    restoredAt: timestamptz('restored_at'),
+  },
+  (table) => [
+    uniqueIndex('installation_keys_key_id_idx').on(table.keyId),
+    check('installation_keys_source_check', enumCheck('source', INSTALLATION_KEY_SOURCES)),
+    check('installation_keys_key_id_check', sql`key_id ~ '^[A-Za-z0-9._-]{1,64}$'`),
+    check('installation_keys_fingerprint_check', sql`fingerprint ~ '^[0-9a-f]{32}$'`),
+    check(
+      'installation_keys_wrapped_under_check',
+      sql`wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)`,
+    ),
+    /** A live row has its wrap; a tombstone has neither half of it. Both directions. */
+    check(
+      'installation_keys_tombstone_check',
+      sql`(removed_at IS NULL) = (wrapped_material IS NOT NULL) AND (wrapped_material IS NULL) = (wrapped_under_key_id IS NULL)`,
+    ),
+    index('installation_keys_wrapped_under_idx').on(table.wrappedUnderKeyId),
+  ],
+);
+
 export const schema = {
   tenants,
   botInstances,
@@ -3071,6 +3147,20 @@ export const customers = pgTable(
      * Set and cleared by the customer's own Telegram turn through a conditional UPDATE.
      */
     marketingOptOutAt: timestamptz('marketing_opt_out_at'),
+    /**
+     * Customer 360 (§11.4): when an operator exempted this customer from MANDATORY channel
+     * membership; NULL while the gate applies to them. Read by the Telegram gate itself
+     * (`BotRuntime.guardedAct`) from the row it resolves on every update — not a Web Admin
+     * decoration. Set and cleared only by `CustomerControlService`, conditionally.
+     */
+    channelMembershipExemptAt: timestamptz('channel_membership_exempt_at'),
+    /**
+     * Customer 360 (§11.4): a phone number an OPERATOR verified out of band, and when. The
+     * bot never asks for one. Both or neither (`customers_phone_check`), so a number is
+     * never stored without the verification that justified storing it.
+     */
+    phoneNumber: text('phone_number'),
+    phoneVerifiedAt: timestamptz('phone_verified_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3107,6 +3197,11 @@ export const customers = pgTable(
     check('customers_status_check', enumCheck('status', CUSTOMER_STATUSES)),
     /** A blocked customer has a time; an active one does not. Neither state can lie. */
     check('customers_blocked_at_check', sql`(status = 'BLOCKED') = (blocked_at IS NOT NULL)`),
+    check('customers_phone_check', sql`(phone_number IS NULL) = (phone_verified_at IS NULL)`),
+    check(
+      'customers_phone_format_check',
+      sql`phone_number IS NULL OR phone_number ~ '^[+][1-9][0-9]{7,14}$'`,
+    ),
     /** The target of the composite references the child tables use. */
     unique('customers_tenant_id_key').on(table.tenantId, table.id),
   ],
@@ -5573,6 +5668,11 @@ export const adminAmountCaptures = pgTable(
      * every other purpose, and for a prompt opened with no update behind it.
      */
     openedUpdateId: bigint('opened_update_id', { mode: 'bigint' }),
+    /**
+     * Spec §7: the client app whose tutorial video a `CLIENT_APP_VIDEO` prompt reads, and
+     * set for that purpose only. Deleting the app deletes its open prompt with it.
+     */
+    clientAppId: uuid('client_app_id'),
   },
   (table) => [
     foreignKey({
@@ -5580,6 +5680,12 @@ export const adminAmountCaptures = pgTable(
       foreignColumns: [admins.tenantId, admins.id],
       name: 'admin_amount_captures_admin_fk',
     }),
+    // Declared further down this file; the builder runs lazily, after it exists.
+    foreignKey({
+      columns: [table.tenantId, table.clientAppId],
+      foreignColumns: [clientApps.tenantId, clientApps.id],
+      name: 'admin_amount_captures_client_app_fk',
+    }).onDelete('cascade'),
     foreignKey({
       columns: [table.tenantId, table.paymentId],
       foreignColumns: [payments.tenantId, payments.id],
@@ -5604,11 +5710,15 @@ export const adminAmountCaptures = pgTable(
     check(
       'admin_amount_captures_target_check',
       sql`(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON')
-            AND payment_id IS NOT NULL AND customer_id IS NULL AND service_refund_request_id IS NULL)
+            AND payment_id IS NOT NULL AND customer_id IS NULL AND service_refund_request_id IS NULL
+            AND client_app_id IS NULL)
           OR (purpose = 'CUSTOMER_BLOCK_REASON' AND customer_id IS NOT NULL AND payment_id IS NULL
-            AND service_refund_request_id IS NULL)
+            AND service_refund_request_id IS NULL AND client_app_id IS NULL)
           OR (purpose IN ('SERVICE_REFUND_AMOUNT', 'SERVICE_REFUND_REJECT_REASON')
-            AND service_refund_request_id IS NOT NULL AND payment_id IS NULL AND customer_id IS NULL)`,
+            AND service_refund_request_id IS NOT NULL AND payment_id IS NULL AND customer_id IS NULL
+            AND client_app_id IS NULL)
+          OR (purpose = 'CLIENT_APP_VIDEO' AND client_app_id IS NOT NULL AND payment_id IS NULL
+            AND customer_id IS NULL AND service_refund_request_id IS NULL)`,
     ),
     /** ONE open capture per administrator per bot, decided by the database. */
     uniqueIndex('admin_amount_captures_open_key')
@@ -5630,14 +5740,16 @@ export const adminAmountCaptures = pgTable(
       'admin_amount_captures_confirmed_check',
       sql`close_reason IS DISTINCT FROM 'CONFIRMED'
           OR (purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND amount_minor IS NOT NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND reason IS NOT NULL)`,
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND reason IS NOT NULL)
+          OR purpose = 'CLIENT_APP_VIDEO'`,
     ),
     check('admin_amount_captures_purpose_check', enumCheck('purpose', ADMIN_CAPTURE_PURPOSES)),
     /** Each purpose reads its own column and never the other's. */
     check(
       'admin_amount_captures_purpose_column_check',
       sql`(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND reason IS NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND amount_minor IS NULL)`,
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND amount_minor IS NULL)
+          OR (purpose = 'CLIENT_APP_VIDEO' AND amount_minor IS NULL AND reason IS NULL)`,
     ),
     check(
       'admin_amount_captures_reason_check',
@@ -9734,10 +9846,12 @@ export const serviceOwnershipTransfers = pgTable(
     serviceId: uuid('service_id').notNull(),
     fromCustomerId: uuid('from_customer_id').notNull(),
     toCustomerId: uuid('to_customer_id').notNull(),
-    /** The bot the sender confirmed through. */
-    botInstanceId: uuid('bot_instance_id')
-      .notNull()
-      .references(() => botInstances.id),
+    /**
+     * The bot the sender confirmed through. NULL only for a move no customer confirmed — a
+     * Web Admin operator's account transfer (Customer 360), which happens on no bot. Every
+     * other actor's transfer names one (`service_ownership_transfers_bot_check`).
+     */
+    botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
     /**
      * The confirmation's idempotency key — the Telegram update that carried the tap. Unique
      * for ever, so a redelivered update answers with this row and never transfers again.
@@ -9773,6 +9887,130 @@ export const serviceOwnershipTransfers = pgTable(
     check('service_ownership_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
     check('service_ownership_transfers_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
     check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
+    check(
+      'service_ownership_transfers_bot_check',
+      sql`bot_instance_id IS NOT NULL OR actor_type = 'WEB_ADMIN'`,
+    ),
+  ],
+);
+
+// --- Customer 360 ------------------------------------------------------------------------
+
+/**
+ * A customer's location-change limit override (Customer 360, §11.4): the cooldown and the
+ * rolling limit that REPLACE the configured location's for every service this customer
+ * owns, while the row exists. The shape of `trial_limit_overrides`: one row per customer,
+ * deleted to remove. Null fields mean "no limit of that kind" — exactly what they mean on
+ * `service_locations`, so `locationChangeWindow` reads either without translation.
+ *
+ * Only the WINDOW is replaced. Which targets exist, their prices and whether the panel can
+ * move the service are still decided by `LocationChangePolicy` from the configuration.
+ */
+export const customerLocationChangeOverrides = pgTable(
+  'customer_location_change_overrides',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    cooldownHours: integer('cooldown_hours'),
+    maxChanges: integer('max_changes'),
+    periodDays: integer('period_days'),
+    setAt: timestamptz('set_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'customer_location_change_overrides_pkey',
+      columns: [table.tenantId, table.customerId],
+    }),
+    foreignKey({
+      name: 'customer_location_change_overrides_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    check(
+      'customer_location_change_overrides_limits_check',
+      sql`(cooldown_hours IS NULL OR cooldown_hours BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_COOLDOWN_HOURS_MAX))})
+        AND (max_changes IS NULL OR max_changes BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_MAX_CHANGES_MAX))})
+        AND (period_days IS NULL OR period_days BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_PERIOD_DAYS_MAX))})
+        AND ((max_changes IS NULL) = (period_days IS NULL))`,
+    ),
+  ],
+);
+
+/**
+ * One operator account transfer (Customer 360, §11.5, `docs/customer-account-transfer-audit.md`).
+ *
+ * Append-only (`nexa_reject_mutation`), written in the transaction that moves the services
+ * and the balance. It is the record a replay answers from — `(tenant_id, idempotency_key)`
+ * is unique for ever — and the evidence of what moved: the service ids, the amount, and the
+ * two wallet entries. Each moved service ALSO has its own `service_ownership_transfers` row,
+ * because that row is what `nexa_services_ownership_guard` admits a change of owner on.
+ */
+export const customerAccountTransfers = pgTable(
+  'customer_account_transfers',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    fromCustomerId: uuid('from_customer_id').notNull(),
+    toCustomerId: uuid('to_customer_id').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    /** The ids of the services that changed hands, in the order they were moved. */
+    serviceIds: jsonb('service_ids').notNull(),
+    walletAmount: bigint('wallet_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The DEBIT of the source and the CREDIT of the destination; NULL when nothing moved. */
+    debitEntryId: uuid('debit_entry_id'),
+    creditEntryId: uuid('credit_entry_id'),
+    fingerprint: text('fingerprint').notNull(),
+    reason: text('reason').notNull(),
+    actorAdminId: uuid('actor_admin_id').references(() => admins.id),
+    correlationId: text('correlation_id').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('customer_account_transfers_key').on(table.tenantId, table.idempotencyKey),
+    index('customer_account_transfers_from_idx').on(
+      table.tenantId,
+      table.fromCustomerId,
+      table.createdAt,
+    ),
+    index('customer_account_transfers_to_idx').on(
+      table.tenantId,
+      table.toCustomerId,
+      table.createdAt,
+    ),
+    foreignKey({
+      name: 'customer_account_transfers_from_fk',
+      columns: [table.tenantId, table.fromCustomerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'customer_account_transfers_to_fk',
+      columns: [table.tenantId, table.toCustomerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'customer_account_transfers_debit_fk',
+      columns: [table.tenantId, table.debitEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+    }),
+    foreignKey({
+      name: 'customer_account_transfers_credit_fk',
+      columns: [table.tenantId, table.creditEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+    }),
+    check('customer_account_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
+    check('customer_account_transfers_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('customer_account_transfers_amount_check', sql`wallet_amount >= 0`),
+    check(
+      'customer_account_transfers_entries_check',
+      sql`(wallet_amount = 0) = (debit_entry_id IS NULL) AND (debit_entry_id IS NULL) = (credit_entry_id IS NULL)`,
+    ),
+    check('customer_account_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 255`),
+    check('customer_account_transfers_reason_check', sql`length(reason) BETWEEN 1 AND 500`),
   ],
 );
 
@@ -10045,6 +10283,73 @@ export const clientApps = pgTable(
             AND image_height BETWEEN ${sql.raw(String(CLIENT_APP_IMAGE_MIN_SIDE))} AND ${sql.raw(String(CLIENT_APP_IMAGE_MAX_SIDE))}
             AND image_sha256 ~ '^[0-9a-f]{64}$')`,
     ),
+  ],
+);
+
+/**
+ * Spec §7: a client app's tutorial VIDEO, set from Telegram by an administrator («تنظیم
+ * ویدیو»), one per (app, bot).
+ *
+ * The media architecture decides the shape (`docs/package-h-tutorials-marketing-stars.md`): the app's
+ * PICTURE is bytes in `client_apps` because it is uploaded in the Web Admin and must be
+ * sent by any bot; a VIDEO arrives at Telegram from the administrator's phone, so the bytes
+ * are already there and this installation keeps only Telegram's reference — `file_id`, which
+ * re-sends it with nothing downloaded, and `file_unique_id`, stable across bots. A `file_id`
+ * is valid only for the bot that received it, which is why the row is keyed by bot: the bot
+ * an administrator sent the video to is the bot that shows it, and a tenant's other bot gets
+ * its own. Known limitation, as for receipts: a backup carries this row, not the video.
+ *
+ * Replacing is an UPDATE that bumps `version`; deleting removes the row. Both are audited
+ * (`client_app.video_set`, `client_app.video_delete`). Deleting the app deletes its videos.
+ */
+export const clientAppVideos = pgTable(
+  'client_app_videos',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    clientAppId: uuid('client_app_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /** What `sendVideo` takes. Bot-scoped, and never returned to a browser. */
+    fileId: text('file_id').notNull(),
+    fileUniqueId: text('file_unique_id').notNull(),
+    mimeType: text('mime_type'),
+    durationSeconds: integer('duration_seconds'),
+    fileSize: bigint('file_size', { mode: 'bigint' }),
+    /** The administrator whose message set it. */
+    setByAdminId: uuid('set_by_admin_id').notNull(),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('client_app_videos_app_bot_key').on(
+      table.tenantId,
+      table.clientAppId,
+      table.botInstanceId,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.clientAppId],
+      foreignColumns: [clientApps.tenantId, clientApps.id],
+      name: 'client_app_videos_app_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.tenantId, table.setByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'client_app_videos_admin_fk',
+    }),
+    check(
+      'client_app_videos_file_check',
+      sql`length(file_id) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_VIDEO_FILE_ID_MAX_LENGTH))}
+          AND length(file_unique_id) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_VIDEO_FILE_UNIQUE_ID_MAX_LENGTH))}
+          AND (mime_type IS NULL OR length(mime_type) BETWEEN 1 AND 128)
+          AND (duration_seconds IS NULL OR duration_seconds >= 0)
+          AND (file_size IS NULL OR file_size > 0)`,
+    ),
+    check('client_app_videos_version_check', sql`version >= 1`),
   ],
 );
 

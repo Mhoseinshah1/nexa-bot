@@ -185,6 +185,12 @@ current database is an operator who must not replace it.
 
 ### 10. Foreign-installation archives are refused
 
+> **Superseded by [ADR-0032](0032-recovery-kit.md).** The "out-of-band key import
+> … with its own storage, rotation, audit and revocation" described below now
+> exists as the Recovery Kit: a passphrase-sealed file, imported decrypt-only,
+> carried across the cutover. The pasted-key form stays refused. Kept as written
+> for the record.
+
 Restoring an archive from another installation means holding another
 installation's KEK. The two ways to do that are a web form that accepts a key —
 which is forbidden, and rightly, because it puts a KEK in a browser, a request

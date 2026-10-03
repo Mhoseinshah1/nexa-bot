@@ -10,7 +10,8 @@ export interface ServiceTransferRecord {
   readonly serviceId: string;
   readonly fromCustomerId: UserId;
   readonly toCustomerId: UserId;
-  readonly botInstanceId: BotInstanceId;
+  /** Null for an operator's account transfer (Customer 360), which no bot carried. */
+  readonly botInstanceId: BotInstanceId | null;
   readonly idempotencyKey: string;
   readonly actorType: ActorType;
   readonly actorLabel: string | null;
@@ -23,7 +24,8 @@ export interface ServiceTransferDraft {
   readonly serviceId: string;
   readonly fromCustomerId: UserId;
   readonly toCustomerId: UserId;
-  readonly botInstanceId: BotInstanceId;
+  /** Null only for an operator's account transfer; a customer's always names a bot. */
+  readonly botInstanceId: BotInstanceId | null;
   readonly idempotencyKey: string;
   readonly actorType: ActorType;
   readonly actorLabel: string | null;

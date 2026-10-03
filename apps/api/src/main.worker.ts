@@ -151,11 +151,11 @@ async function main(): Promise<void> {
           config.NOTIFICATION_DISPATCH_ENABLED,
           () => container.notificationDispatcher.isFresh(now),
         ],
-        [
-          'backup-scheduler',
-          config.BACKUP_SCHEDULE_ENABLED,
-          () => container.backupScheduler.isFresh(now),
-        ],
+        // Always running since spec §13.2: whether a backup is TAKEN is a setting read on
+        // every tick, so a stalled loop is visible whatever the schedule says. Fresh from
+        // `start()` for one slack window, and an immediate first tick — so readiness no
+        // longer waits on a first tick a whole `BACKUP_TICK_MS` away (spec §14).
+        ['backup-scheduler', true, () => container.backupScheduler.isFresh(now)],
       ];
       const stalled = stalledLoops(loops);
       if (stalled.length > 0) {
@@ -270,18 +270,23 @@ async function main(): Promise<void> {
   // Two replicas both running this is the normal case on a rolling update, and
   // is safe by construction: the lock is a partial unique index, so the second
   // one is told BUSY by PostgreSQL rather than by any agreement between them.
-  if (config.BACKUP_SCHEDULE_ENABLED) {
-    container.backupScheduler.start();
-    container.logger.info(
-      { intervalMs: config.BACKUP_INTERVAL_MS, tickMs: config.BACKUP_TICK_MS },
-      'backup scheduler started',
-    );
-  } else {
-    container.logger.warn(
-      {},
-      'the backup scheduler is disabled; no backup will be taken unless one is run by hand',
-    );
-  }
+  //
+  // ALWAYS started (spec §13.2). Whether it takes backups, and how often, is the
+  // Web Admin's setting, read on every tick; BACKUP_SCHEDULE_ENABLED and
+  // BACKUP_INTERVAL_MS are the default when the Web Admin has set nothing. A
+  // worker booted with the environment saying "off" still starts backing up the
+  // tick after an operator switches it on, with no restart.
+  container.backupScheduler.start();
+  container.logger.info(
+    {
+      environmentDefault: {
+        enabled: config.BACKUP_SCHEDULE_ENABLED,
+        intervalMs: config.BACKUP_INTERVAL_MS,
+      },
+      tickMs: config.BACKUP_TICK_MS,
+    },
+    'backup scheduler started; the schedule is read from the backup settings on every tick',
+  );
 
   container.logger.info({ env: config.NODE_ENV }, 'worker running');
 }

@@ -1,5 +1,5 @@
 {
-  "id": "3fe5d01a-6273-406d-a697-98f273c47feb",
+  "id": "d245345b-0100-457a-9b72-cb90f588f8fe",
   "prevId": "b71e59fc-6fd1-46fd-98fa-5c9bbc58ccf5",
   "version": "7",
   "dialect": "postgresql",
@@ -99,6 +99,12 @@
           "type": "bigint",
           "primaryKey": false,
           "notNull": false
+        },
+        "client_app_id": {
+          "name": "client_app_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -173,6 +179,21 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "admin_amount_captures_client_app_fk": {
+          "name": "admin_amount_captures_client_app_fk",
+          "tableFrom": "admin_amount_captures",
+          "tableTo": "client_apps",
+          "columnsFrom": [
+            "tenant_id",
+            "client_app_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
         "admin_amount_captures_payment_fk": {
           "name": "admin_amount_captures_payment_fk",
           "tableFrom": "admin_amount_captures",
@@ -225,7 +246,7 @@
       "checkConstraints": {
         "admin_amount_captures_target_check": {
           "name": "admin_amount_captures_target_check",
-          "value": "(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON')\n            AND payment_id IS NOT NULL AND customer_id IS NULL AND service_refund_request_id IS NULL)\n          OR (purpose = 'CUSTOMER_BLOCK_REASON' AND customer_id IS NOT NULL AND payment_id IS NULL\n            AND service_refund_request_id IS NULL)\n          OR (purpose IN ('SERVICE_REFUND_AMOUNT', 'SERVICE_REFUND_REJECT_REASON')\n            AND service_refund_request_id IS NOT NULL AND payment_id IS NULL AND customer_id IS NULL)"
+          "value": "(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON')\n            AND payment_id IS NOT NULL AND customer_id IS NULL AND service_refund_request_id IS NULL\n            AND client_app_id IS NULL)\n          OR (purpose = 'CUSTOMER_BLOCK_REASON' AND customer_id IS NOT NULL AND payment_id IS NULL\n            AND service_refund_request_id IS NULL AND client_app_id IS NULL)\n          OR (purpose IN ('SERVICE_REFUND_AMOUNT', 'SERVICE_REFUND_REJECT_REASON')\n            AND service_refund_request_id IS NOT NULL AND payment_id IS NULL AND customer_id IS NULL\n            AND client_app_id IS NULL)\n          OR (purpose = 'CLIENT_APP_VIDEO' AND client_app_id IS NOT NULL AND payment_id IS NULL\n            AND customer_id IS NULL AND service_refund_request_id IS NULL)"
         },
         "admin_amount_captures_close_reason_check": {
           "name": "admin_amount_captures_close_reason_check",
@@ -245,15 +266,15 @@
         },
         "admin_amount_captures_confirmed_check": {
           "name": "admin_amount_captures_confirmed_check",
-          "value": "close_reason IS DISTINCT FROM 'CONFIRMED'\n          OR (purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND amount_minor IS NOT NULL)\n          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND reason IS NOT NULL)"
+          "value": "close_reason IS DISTINCT FROM 'CONFIRMED'\n          OR (purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND amount_minor IS NOT NULL)\n          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND reason IS NOT NULL)\n          OR purpose = 'CLIENT_APP_VIDEO'"
         },
         "admin_amount_captures_purpose_check": {
           "name": "admin_amount_captures_purpose_check",
-          "value": "purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_AMOUNT', 'SERVICE_REFUND_REJECT_REASON')"
+          "value": "purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_AMOUNT', 'SERVICE_REFUND_REJECT_REASON', 'CLIENT_APP_VIDEO')"
         },
         "admin_amount_captures_purpose_column_check": {
           "name": "admin_amount_captures_purpose_column_check",
-          "value": "(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND reason IS NULL)\n          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND amount_minor IS NULL)"
+          "value": "(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND reason IS NULL)\n          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND amount_minor IS NULL)\n          OR (purpose = 'CLIENT_APP_VIDEO' AND amount_minor IS NULL AND reason IS NULL)"
         },
         "admin_amount_captures_reason_check": {
           "name": "admin_amount_captures_reason_check",
@@ -4858,6 +4879,194 @@
       },
       "isRLSEnabled": false
     },
+    "public.client_app_videos": {
+      "name": "client_app_videos",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_app_id": {
+          "name": "client_app_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bot_instance_id": {
+          "name": "bot_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_id": {
+          "name": "file_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_unique_id": {
+          "name": "file_unique_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duration_seconds": {
+          "name": "duration_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "file_size": {
+          "name": "file_size",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "set_by_admin_id": {
+          "name": "set_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "client_app_videos_app_bot_key": {
+          "name": "client_app_videos_app_bot_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "client_app_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "bot_instance_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "client_app_videos_tenant_id_tenants_id_fk": {
+          "name": "client_app_videos_tenant_id_tenants_id_fk",
+          "tableFrom": "client_app_videos",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "client_app_videos_bot_instance_id_bot_instances_id_fk": {
+          "name": "client_app_videos_bot_instance_id_bot_instances_id_fk",
+          "tableFrom": "client_app_videos",
+          "tableTo": "bot_instances",
+          "columnsFrom": [
+            "bot_instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "client_app_videos_app_fk": {
+          "name": "client_app_videos_app_fk",
+          "tableFrom": "client_app_videos",
+          "tableTo": "client_apps",
+          "columnsFrom": [
+            "tenant_id",
+            "client_app_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "client_app_videos_admin_fk": {
+          "name": "client_app_videos_admin_fk",
+          "tableFrom": "client_app_videos",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "set_by_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "client_app_videos_file_check": {
+          "name": "client_app_videos_file_check",
+          "value": "length(file_id) BETWEEN 1 AND 256\n          AND length(file_unique_id) BETWEEN 1 AND 128\n          AND (mime_type IS NULL OR length(mime_type) BETWEEN 1 AND 128)\n          AND (duration_seconds IS NULL OR duration_seconds >= 0)\n          AND (file_size IS NULL OR file_size > 0)"
+        },
+        "client_app_videos_version_check": {
+          "name": "client_app_videos_version_check",
+          "value": "version >= 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.client_apps": {
       "name": "client_apps",
       "schema": "",
@@ -7819,119 +8028,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.gateway_customer_numbers": {
-      "name": "gateway_customer_numbers",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider": {
-          "name": "provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "number": {
-          "name": "number",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "gateway_customer_numbers_number_key": {
-          "name": "gateway_customer_numbers_number_key",
-          "columns": [
-            {
-              "expression": "provider",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "number",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "gateway_customer_numbers_tenant_id_tenants_id_fk": {
-          "name": "gateway_customer_numbers_tenant_id_tenants_id_fk",
-          "tableFrom": "gateway_customer_numbers",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "gateway_customer_numbers_customer_fk": {
-          "name": "gateway_customer_numbers_customer_fk",
-          "tableFrom": "gateway_customer_numbers",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "gateway_customer_numbers_pk": {
-          "name": "gateway_customer_numbers_pk",
-          "columns": [
-            "tenant_id",
-            "provider",
-            "customer_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "gateway_customer_numbers_provider_check": {
-          "name": "gateway_customer_numbers_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
-        },
-        "gateway_customer_numbers_number_check": {
-          "name": "gateway_customer_numbers_number_check",
-          "value": "number BETWEEN 1000000000 AND 2147483647"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.gateway_invoice_cards": {
       "name": "gateway_invoice_cards",
       "schema": "",
@@ -8429,12 +8525,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "provider_user_id": {
-          "name": "provider_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -8577,22 +8667,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "gateway_invoices_centralpay_order_id_key": {
-          "name": "gateway_invoices_centralpay_order_id_key",
-          "columns": [
-            {
-              "expression": "provider_order_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "provider = 'CENTRALPAY'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -8668,7 +8742,7 @@
         },
         "gateway_invoices_provider_check": {
           "name": "gateway_invoices_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "gateway_invoices_creation_state_check": {
           "name": "gateway_invoices_creation_state_check",
@@ -8721,14 +8795,6 @@
         "gateway_invoices_nowpayments_check": {
           "name": "gateway_invoices_nowpayments_check",
           "value": "provider <> 'NOWPAYMENTS' OR (provider_unit = 'USD' AND conversion_policy = 'CENTRAL_FX' AND bot_instance_id IS NULL)"
-        },
-        "gateway_invoices_centralpay_check": {
-          "name": "gateway_invoices_centralpay_check",
-          "value": "provider <> 'CENTRALPAY' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_user_id IS NOT NULL AND provider_order_id ~ '^[0-9]{10}$')"
-        },
-        "gateway_invoices_provider_user_id_check": {
-          "name": "gateway_invoices_provider_user_id_check",
-          "value": "provider_user_id IS NULL OR (provider = 'CENTRALPAY' AND provider_user_id ~ '^[0-9]{10}$')"
         },
         "gateway_invoices_card_check": {
           "name": "gateway_invoices_card_check",
@@ -14229,7 +14295,7 @@
       "checkConstraints": {
         "payment_gateway_call_budgets_provider_check": {
           "name": "payment_gateway_call_budgets_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payment_gateway_call_budgets_used_check": {
           "name": "payment_gateway_call_budgets_used_check",
@@ -14305,24 +14371,6 @@
         "last_check_result": {
           "name": "last_check_result",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verify_key_ciphertext": {
-          "name": "verify_key_ciphertext",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verify_key_key_id": {
-          "name": "verify_key_key_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verify_key_set_at": {
-          "name": "verify_key_set_at",
-          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -14402,17 +14450,13 @@
           "name": "payment_gateway_credentials_webhook_secret_check",
           "value": "(webhook_secret_ciphertext IS NULL) = (webhook_secret_key_id IS NULL) AND (webhook_secret_ciphertext IS NULL) = (webhook_secret_set_at IS NULL)"
         },
-        "payment_gateway_credentials_verify_key_check": {
-          "name": "payment_gateway_credentials_verify_key_check",
-          "value": "(verify_key_ciphertext IS NULL) = (verify_key_key_id IS NULL) AND (verify_key_ciphertext IS NULL) = (verify_key_set_at IS NULL)"
-        },
         "payment_gateway_credentials_last_check_check": {
           "name": "payment_gateway_credentials_last_check_check",
           "value": "(last_check_at IS NULL) = (last_check_result IS NULL) AND (last_check_result IS NULL OR length(last_check_result) BETWEEN 1 AND 64)"
         },
         "payment_gateway_credentials_provider_check": {
           "name": "payment_gateway_credentials_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         }
       },
       "isRLSEnabled": false
@@ -14606,7 +14650,7 @@
       "checkConstraints": {
         "payment_gateways_provider_check": {
           "name": "payment_gateways_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payment_gateways_status_check": {
           "name": "payment_gateways_status_check",
@@ -15411,7 +15455,7 @@
         },
         "payments_gateway_provider_check": {
           "name": "payments_gateway_provider_check",
-          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
+          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS')"
         },
         "payments_topup_cashback_percent_check": {
           "name": "payments_topup_cashback_percent_check",

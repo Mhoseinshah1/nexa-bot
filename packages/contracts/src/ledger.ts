@@ -61,6 +61,13 @@ export const LEDGER_REASONS = [
   'ADMIN_DEBIT',
   'MASS_CREDIT',
   'MASS_DEBIT',
+  // Customer 360 (`docs/customer-account-transfer-audit.md`): an operator moving a
+  // customer's whole balance to the account that replaces it. Always a PAIR written in one
+  // transaction — a DEBIT of the source and a CREDIT of the destination for the same
+  // amount — never a set-balance, and never `ADMIN_*`, which would read as money an
+  // operator granted or took rather than money that changed hands.
+  'ACCOUNT_TRANSFER_OUT',
+  'ACCOUNT_TRANSFER_IN',
   // Reseller
   'RESELLER_SETTLEMENT',
   'RESELLER_MEMBERSHIP_FEE',
@@ -81,6 +88,8 @@ export const ADMINISTRATIVE_REASONS: readonly LedgerReason[] = [
   'ADMIN_DEBIT',
   'MASS_CREDIT',
   'MASS_DEBIT',
+  'ACCOUNT_TRANSFER_OUT',
+  'ACCOUNT_TRANSFER_IN',
   'CORRECTION',
 ];
 

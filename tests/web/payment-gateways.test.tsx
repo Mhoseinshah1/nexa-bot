@@ -595,8 +595,8 @@ describe('the customer gateway fee', () => {
 
 /** Package A: the Telegram Stars rate — sales-currency minor units per Star. */
 describe('the Web Admin rate field', () => {
-  it('is shown for a fixed-rate route only', () => {
-    expect(takesConversionRate('TELEGRAM_STARS')).toBe(true);
+  it('is shown for a fixed-rate route only — none since spec §8 priced Stars by the central rate', () => {
+    expect(takesConversionRate('TELEGRAM_STARS')).toBe(false);
     expect(takesConversionRate('TONPAYS')).toBe(false);
     expect(takesConversionRate('MANUAL_TRANSFER')).toBe(false);
   });

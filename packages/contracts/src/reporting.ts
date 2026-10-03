@@ -137,6 +137,12 @@ export const WALLET_REPORT_GROUPS = [
   'SPENDING',
   'REFUND',
   'ADMINISTRATIVE',
+  /*
+   * Customer 360: a balance moved between two customers by an account transfer. Its own
+   * group because it is neither money in nor money out of the tenant — the pair nets to
+   * zero — and counting it as ADMINISTRATIVE would read as an operator granting money.
+   */
+  'TRANSFER',
   'OTHER',
 ] as const;
 export type WalletReportGroup = (typeof WALLET_REPORT_GROUPS)[number];
@@ -166,6 +172,8 @@ export const WALLET_REPORT_GROUP_OF: Readonly<Record<LedgerReason, WalletReportG
   MASS_CREDIT: 'ADMINISTRATIVE',
   MASS_DEBIT: 'ADMINISTRATIVE',
   CORRECTION: 'ADMINISTRATIVE',
+  ACCOUNT_TRANSFER_OUT: 'TRANSFER',
+  ACCOUNT_TRANSFER_IN: 'TRANSFER',
   RESELLER_SETTLEMENT: 'OTHER',
   RESELLER_MEMBERSHIP_FEE: 'OTHER',
   CHARGEBACK: 'OTHER',

@@ -468,6 +468,8 @@ describe('the recovery page', () => {
         body: {
           scheduleEnabled: true,
           intervalMs: 21_600_000,
+          scheduleSource: { enabled: 'SETTING', interval: 'SETTING' },
+          deliveryDestination: 'OPS_GROUP_TOPIC',
           lastSucceededAt: null,
           running: null,
           unknownDeliveries: 0,

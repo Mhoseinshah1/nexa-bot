@@ -1,16 +1,15 @@
 import {
   MAIN_MENU_BUTTON_IDS,
   defaultMainMenuButtonConfig,
+  explicitMainMenusEqual,
   normalizeExplicitMainMenu,
   unplacedMainMenuButtons,
-  type AppearanceSlot,
   type ExplicitMainMenu,
   type MainMenuButtonConfig,
   type CustomerMainMenuButton,
   type MainMenuButtonId,
   type MainMenuButtonStyle,
   type MainMenuGateOpenById,
-  type MenuAppearanceSlot,
   type MainMenuBuilderItem,
 } from '@nexa/contracts';
 
@@ -164,24 +163,6 @@ export function lookOf(config: MainMenuButtonConfig | CustomerMainMenuButton): M
   return style;
 }
 
-/** The ICON slot. Never touches `appearanceSlot`, which names the screen the button opens. */
-export function setIconSlot(
-  layout: ExplicitMainMenu,
-  id: MainMenuButtonId,
-  iconSlot: AppearanceSlot | null,
-): ExplicitMainMenu {
-  return withConfig(layout, id, { iconSlot });
-}
-
-/** Round P's slot for the screen the button opens; null is the button's default. */
-export function setAppearanceSlot(
-  layout: ExplicitMainMenu,
-  id: MainMenuButtonId,
-  appearanceSlot: MenuAppearanceSlot | null,
-): ExplicitMainMenu {
-  return withConfig(layout, id, { appearanceSlot });
-}
-
 // --- The non-drag moves: each one is a primitive above, never a second implementation ---
 
 /** One place earlier in its row. */
@@ -299,9 +280,12 @@ export function rowLooksCramped(
   return row.length > COMFORTABLE_ROW_LENGTH || (row.length > 1 && row.some(wide));
 }
 
-/** One button's difference between two layouts, for the publish confirmation. */
-export type ButtonChange =
-  'added' | 'removed' | 'moved' | 'enabled' | 'disabled' | 'look' | 'icon' | 'screen';
+/**
+ * One button's difference between two layouts, for the publish confirmation. Only what a
+ * customer's keyboard can show: the retired icon and the screen slot (no control, no runtime
+ * consumer since the owner's 2026-10-02 order) are not changes an operator is asked about.
+ */
+export type ButtonChange = 'added' | 'removed' | 'moved' | 'enabled' | 'disabled' | 'look';
 
 export function diffLayouts(
   before: ExplicitMainMenu,
@@ -323,14 +307,118 @@ export function diffLayouts(
     const cb = configOf(to, id);
     if (ca.enabled !== cb.enabled) changes.push(cb.enabled ? 'enabled' : 'disabled');
     if (lookOf(ca) !== lookOf(cb)) changes.push('look');
-    if (ca.iconSlot !== cb.iconSlot) changes.push('icon');
-    if (ca.appearanceSlot !== cb.appearanceSlot) changes.push('screen');
     if (changes.length > 0) out.push({ id, changes });
   }
   return out;
 }
 
-/** A label that already starts with an emoji: an icon beside it draws two symbols. */
-export function startsWithEmoji(label: string): boolean {
-  return /^\p{Extended_Pictographic}/u.test(label.trimStart());
+// --- Drag and drop: what a drop DOES, decided here, never in the pointer code -----------
+
+/** What is being dragged: one button (placed or pooled), or a whole row. */
+export type DragSource =
+  | { readonly kind: 'button'; readonly id: MainMenuButtonId }
+  | { readonly kind: 'row'; readonly row: number };
+
+export type DropTarget =
+  /** Before a placed button. */
+  | { readonly kind: 'chip'; readonly id: MainMenuButtonId }
+  /** At the end of a row. */
+  | { readonly kind: 'row'; readonly row: number }
+  /** A NEW row, inserted before row `at` (`rows.length`: after the last). */
+  | { readonly kind: 'gap'; readonly at: number }
+  /** The Available pool: off the keyboard. */
+  | { readonly kind: 'pool' };
+
+/**
+ * The layout a drop produces — through the SAME primitives the Inspector and the keyboard
+ * call — or null when the drop would change nothing or is not a move at all (a row dropped
+ * on a button, a pooled button dropped on the pool, a button dropped where it already is).
+ *
+ * Null is how "no accidental reorder" is decided: the page draws no insertion placeholder
+ * for it, announces nothing, and leaves the draft untouched.
+ */
+export function applyDrop(
+  layout: ExplicitMainMenu,
+  source: DragSource,
+  target: DropTarget,
+): ExplicitMainMenu | null {
+  let next: ExplicitMainMenu;
+  if (source.kind === 'row') {
+    if (target.kind !== 'gap') return null;
+    next = moveRow(layout, source.row, target.at);
+  } else {
+    const id = source.id;
+    switch (target.kind) {
+      case 'chip':
+        if (target.id === id) return null;
+        next = placeBefore(layout, id, target.id);
+        break;
+      case 'row':
+        next = placeAtRowEnd(layout, id, target.row);
+        break;
+      case 'gap':
+        next = placeInNewRow(layout, id, target.at);
+        break;
+      case 'pool':
+        next = removeToPool(layout, id);
+        break;
+    }
+  }
+  return explicitMainMenusEqual(next, layout) ? null : next;
+}
+
+/** Where the insertion placeholder is drawn for a drop that would change something. */
+export type DropHint =
+  /** A caret on the start edge of button `id`, in row `row` (the row is highlighted). */
+  | { readonly kind: 'before'; readonly id: MainMenuButtonId; readonly row: number }
+  /** A caret after the last button of row `row` (the row is highlighted). */
+  | { readonly kind: 'row-end'; readonly row: number }
+  /** A line between rows, where a new row would be made. */
+  | { readonly kind: 'new-row'; readonly at: number }
+  | { readonly kind: 'pool' };
+
+/** The placeholder for `target`, or null when dropping there would change nothing. */
+export function dropHintOf(
+  layout: ExplicitMainMenu,
+  source: DragSource | null,
+  target: DropTarget | null,
+): DropHint | null {
+  if (source === null || target === null) return null;
+  if (applyDrop(layout, source, target) === null) return null;
+  switch (target.kind) {
+    case 'chip': {
+      const at = positionOf(layout, target.id);
+      return at === null ? null : { kind: 'before', id: target.id, row: at.row };
+    }
+    case 'row':
+      return { kind: 'row-end', row: target.row };
+    case 'gap':
+      return { kind: 'new-row', at: target.at };
+    case 'pool':
+      return { kind: 'pool' };
+  }
+}
+
+/** The row a hint highlights as the drop's target row, if it names one. */
+export function hintedRow(hint: DropHint | null): number | null {
+  return hint !== null && (hint.kind === 'before' || hint.kind === 'row-end') ? hint.row : null;
+}
+
+/**
+ * Which half of a button the pointer is over, in READING order: the half a line starts
+ * from is `before`, the other `after` — the right half in Persian, the left in a
+ * left-to-right page. Within `band` pixels of the middle the previous answer is kept, so a
+ * pointer resting on the boundary does not make the placeholder flicker between two places.
+ */
+export function chipSide(
+  rect: { readonly left: number; readonly width: number },
+  x: number,
+  rtl: boolean,
+  previous: 'before' | 'after' | null,
+  band = 6,
+): 'before' | 'after' {
+  const middle = rect.left + rect.width / 2;
+  if (previous !== null && Math.abs(x - middle) < band) return previous;
+  const startSide = rtl ? x >= middle : x <= middle;
+  return startSide ? 'before' : 'after';
 }

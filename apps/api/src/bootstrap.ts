@@ -51,7 +51,19 @@ const BROADCAST_MEDIA_BODY_LIMIT_BYTES = Math.ceil((BROADCAST_MEDIA_MAX_BYTES * 
  * would make the health endpoints unreachable during provisioning, exactly when
  * they are most useful.
  */
+/** How often every process re-reads `installation_keys`. */
+export const INSTALLATION_KEY_REFRESH_MS = 60_000;
+
 export async function resolveInstallationTenant(container: Container): Promise<void> {
+  // The decrypt-only keys imported from Recovery Kits (ADR-0032), loaded before
+  // anything in this process reads a secret, then kept in step on a timer: a kit
+  // imported through the API reaches the worker, the monitor, the provisioner and
+  // the recovery executor within one interval, and a restored database's keys
+  // reach every process that reconnects to it. Every role calls this function,
+  // which is why it lives here. A failed load is logged and keeps what it had.
+  await container.installationKeyLoader.refreshQuietly();
+  container.installationKeyLoader.start(INSTALLATION_KEY_REFRESH_MS);
+
   const primary = await container.tenants.findPrimary();
   container.setInstallationTenant(primary?.id ?? null);
 

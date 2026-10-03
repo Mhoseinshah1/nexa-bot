@@ -1118,8 +1118,43 @@
     {
       "idx": 159,
       "version": "7",
-      "when": 1790981565601,
-      "tag": "0159_centralpay_gateway",
+      "when": 1791009597352,
+      "tag": "0159_spec7_client_app_tutorial_video",
+      "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1791009900767,
+      "tag": "0160_recovery_kit_installation_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 161,
+      "version": "7",
+      "when": 1791010080938,
+      "tag": "0161_inline_buttons_receipt_states_appearance_slots",
+      "breakpoints": true
+    },
+    {
+      "idx": 162,
+      "version": "7",
+      "when": 1791011302574,
+      "tag": "0162_customer_360",
+      "breakpoints": true
+    },
+    {
+      "idx": 163,
+      "version": "7",
+      "when": 1791011314014,
+      "tag": "0163_customer_360_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 164,
+      "version": "7",
+      "when": 1791012268199,
+      "tag": "0164_centralpay_gateway",
       "breakpoints": true
     }
   ]

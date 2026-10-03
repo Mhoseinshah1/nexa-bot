@@ -18,7 +18,7 @@ CentralPay is a fifth `settlesVia: 'GATEWAY'` route. It adds **no** second payme
 
 | Concern                 | Existing mechanism                                                                         | CentralPay                                                                                                                                               |
 | ----------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Provider roster, CHECKs | `PAYMENT_GATEWAY_PROVIDERS`; five CHECKs generated from it                                 | One member; migration 0159 regenerates the five CHECKs                                                                                                   |
+| Provider roster, CHECKs | `PAYMENT_GATEWAY_PROVIDERS`; five CHECKs generated from it                                 | One member; migration 0164 regenerates the five CHECKs                                                                                                   |
 | Descriptor              | `PAYMENT_GATEWAY_DESCRIPTORS`                                                              | `GATEWAY / GATEWAY_KEY / INQUIRY / LINK / SAME_UNIT`; three new fields `verifyKey`, `browserReturn`, `numericIdentity`                                   |
 | Adapter port            | `ExternalGatewayAdapter`                                                                   | `CentralPayAdapter`; the port gains `providerUserId` (create + inquiry context), `providerReference`/`mismatchReason` on an answer, `newCustomerNumber?` |
 | Credentials             | `payment_gateway_credentials`, Secret Envelope v2, write-only                              | The same row gains the verify key (`payment_gateway.verify_key`, its own AEAD purpose)                                                                   |
@@ -119,7 +119,7 @@ CentralPay is a fifth `settlesVia: 'GATEWAY'` route. It adds **no** second payme
 | Browser return                                               | `surfaces/gateway/return.controller.ts`                                             |
 | Web Admin route                                              | `surfaces/web/payment-gateways.controller.ts` (`verify-key`)                        |
 | Telegram screens                                             | `surfaces/telegram/bot-runtime.ts`                                                  |
-| Migration                                                    | `apps/api/drizzle/0159_centralpay_gateway.sql` (number reassigned at integration)   |
+| Migration                                                    | `apps/api/drizzle/0164_centralpay_gateway.sql`                                      |
 
 ### 5.2 Creating the link
 
@@ -186,10 +186,10 @@ name, the reference (charge id) and the provider user id.
 
 ### 5.7 Telegram
 
-Route name «💳 پرداخت با CentralPay» (`bot.payment.route_name_centralpay`); the link button
+Route name «پرداخت با CentralPay» (`bot.payment.route_name_centralpay`, plain: a body never types a slotted emoji); the link button
 carries the same label under its own key `bot.payment.centralpay_pay_button`, isolated in
-`PROVIDER_PAY_BUTTON_KEYS` so the central inline-button registry can route it as
-**`payment.centralpay.open`**; a held payment shows `bot.payment.centralpay_review_unresolved`
+`PROVIDER_PAY_BUTTON_KEYS` and registered in the central inline-button registry (`inline-buttons.ts`) as
+**`payment.centralpay_open`**; a held payment shows `bot.payment.centralpay_review_unresolved`
 (no pay link). Everything else is the existing screen, edited in place by the worker.
 
 ### 5.8 Spec §18 consistency
@@ -235,4 +235,4 @@ Record every real shape that differs from §2 and correct the fake in the same c
 
 ## 8. Rollback
 
-See `docs/deployment.md`, "Before rolling back past CentralPay (`0159`)".
+See `docs/deployment.md`, "Before rolling back past CentralPay (`0164`)".

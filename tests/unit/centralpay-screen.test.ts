@@ -8,7 +8,7 @@ import type { GatewayInvoiceRecord } from '../../apps/api/src/modules/commerce/p
  * The CentralPay customer screen (`docs/centralpay-gateway-audit.md` §5.8), through the one
  * pure function the turn and the worker both render: the link's URL button carries the
  * owner's «💳 پرداخت با CentralPay» under its OWN key (isolated for the inline-button registry
- * as `payment.centralpay.open`), and a held (UNKNOWN) payment uses CentralPay's own
+ * as `payment.centralpay_open`), and a held (UNKNOWN) payment uses CentralPay's own
  * needs-review sentence with no payment link.
  */
 

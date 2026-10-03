@@ -104,6 +104,13 @@ export interface WizardDirective {
   readonly anchor?: {
     readonly steps: readonly TelegramWizardStep[];
     readonly subjectId?: string | null;
+    /**
+     * Owner spec §2.4: the wizard must show THIS payment, and may be either kind — a
+     * receipt continues the invoice of its own payment, an order's or a top-up's alike. The
+     * landing keeps the kind the wizard already has.
+     */
+    readonly paymentId?: string | null;
+    readonly anyKind?: true;
   };
   /**
    * The invoice this screen shows is still being created by the gateway worker. The loading
@@ -112,6 +119,16 @@ export interface WizardDirective {
    * of this turn and the worker edits it into the invoice or the attempt's end.
    */
   readonly invoicePending?: boolean;
+  /**
+   * Owner spec §2.4 (Codex 4170910529): this screen is the manual transfer's receipt PROMPT,
+   * whose tap opened the upload window — so a receipt can be filed while this turn is still
+   * landing and editing it. The prompt is landed HELD (no receipt can claim the message
+   * until the prompt is on it), the hold is released after the edit, and only THEN is the
+   * payment asked whether a receipt is already filed: if one is, this turn moves the message
+   * on to the final no-button state itself. Either the receipt's own turn finds the released
+   * prompt, or this turn finds the receipt — the message never goes back to the prompt.
+   */
+  readonly receiptPrompt?: { readonly customerId: string };
 }
 
 /**
@@ -232,6 +249,13 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
    * invoice, which is an `INVOICE` screen. A tap from any other screen is stale.
    */
   ['GATEWAY_RECEIPT', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
+  /*
+   * Owner spec §2.4: «✅ پرداخت را انجام دادم | ارسال رسید» is drawn only on the manual
+   * transfer invoice. Its tap EDITS that invoice into the receipt prompt (`RECEIPT_WAIT`),
+   * so a second tap — a double tap, an old keyboard — finds the message past `INVOICE` and
+   * is answered with nothing: the claim is never signalled twice from one message.
+   */
+  ['PAY_SENT', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
   ['GATEWAY_CARD_CHANGE', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
 ]);
 

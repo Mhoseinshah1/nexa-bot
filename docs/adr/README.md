@@ -46,3 +46,4 @@ ADR says so explicitly.
 | [0029](0029-telegram-fresh-install-bootstrap.md)    | Telegram fresh-install bootstrap                                  | Accepted                                     |
 | [0030](0030-customer-notification-lane.md)          | The customer notification lane, and what a failed send means      | Accepted — Phase 4H                          |
 | [0031](0031-admin-receipt-push.md)                  | The administrators' receipt push                                  | Accepted — WP10 follow-up                    |
+| [0032](0032-recovery-kit.md)                        | Portable disaster recovery: the encrypted Recovery Kit            | Accepted — supersedes 0028 § 10              |

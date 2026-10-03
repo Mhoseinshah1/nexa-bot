@@ -1193,7 +1193,12 @@ export function deserialiseValues(intent: {
     const raw = intent.payload[placeholder.token];
     if (raw === undefined || raw === null) continue;
 
-    if (placeholder.type === 'DATETIME' && typeof raw === 'string') {
+    if (
+      (placeholder.type === 'DATETIME' ||
+        placeholder.type === 'DATE' ||
+        placeholder.type === 'TIME') &&
+      typeof raw === 'string'
+    ) {
       out[placeholder.token] = new Date(raw);
       continue;
     }

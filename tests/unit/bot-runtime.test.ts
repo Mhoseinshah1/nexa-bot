@@ -32,6 +32,7 @@ import {
   RECEIPT_CAPTION_MAX_LENGTH,
   normalizeReceiptCaption,
 } from '@nexa/contracts';
+import { INLINE_BUTTONS } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   CONNECTED_CALLBACK_PREFIX,
@@ -528,13 +529,30 @@ describe('profile metadata, normalised before it is ever stored', () => {
      * touching. A constant listing them would be a second list to keep in step, and the
      * commit that forgot to update it is the commit this case exists to catch.
      */
-    const runtimeSource = readFileSync(
-      resolve(import.meta.dirname, '../../apps/api/src/surfaces/telegram/bot-runtime.ts'),
-      'utf8',
-    );
+    const runtimeSource = [
+      'bot-runtime.ts',
+      // Spec §7: the client apps section's screens live beside the runtime, routed by it.
+      'admin-tutorial-video.ts',
+    ]
+      .map((file) =>
+        readFileSync(
+          resolve(import.meta.dirname, '../../apps/api/src/surfaces/telegram', file),
+          'utf8',
+        ),
+      )
+      .join('\n');
     const sent = new Set<TemplateKey>();
     for (const [, key] of runtimeSource.matchAll(/'(bot\.[a-z0-9_.]+)'/g)) {
       if (key !== undefined && key in CATALOGUE_FA) sent.add(key as TemplateKey);
+    }
+    /*
+     * Owner spec §6: a button label is named by its REGISTRY key (`inlineLabel('…')`), and
+     * the registry names the template — so the label templates a screen draws are read
+     * through the registry, and the set below is unchanged by the routing.
+     */
+    for (const [, key] of runtimeSource.matchAll(/'([a-z_]+(?:\.[a-z_]+)?)'/g)) {
+      const label = INLINE_BUTTONS.find((entry) => entry.key === key)?.label ?? null;
+      if (label !== null) sent.add(label);
     }
     /*
      * Seven keys joined this list in 4C, and this case is what forced each to be
@@ -750,6 +768,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.catalog.empty',
       'bot.catalog.heading',
       'bot.catalog.next_page_button',
+      // Owner spec §2.2: a button label under a wallet credit, opening the catalogue.
+      'bot.catalog.open_button',
       'bot.catalog.previous_page_button',
       // Package B: the join screen and its check button.
       'bot.channels.check_button',
@@ -783,6 +803,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.marketing.opt_out_button',
       'bot.marketing.opted_in',
       'bot.marketing.opted_out',
+      /*
+       * Spec §9, reviewed: the answer while the installation does not let customers stop
+       * promotions. It says the choice is not available here and that account messages
+       * still arrive; it offers no button that could change anything.
+       */
+      'bot.marketing.unavailable',
       'bot.menu.main_button',
       // WP-A10: an app's detail points a customer with several services at their list.
       'bot.menu.services',
@@ -1095,6 +1121,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.taken',
       'bot.username.unavailable',
       'bot.wallet.insufficient',
+      // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.
+      'bot.wallet.open_button',
       'bot.wallet.topup_above_maximum',
       'bot.wallet.topup_amount_invalid',
       'bot.wallet.topup_amount_prompt',
@@ -1145,8 +1173,32 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.admin_status_changed',
       'bot.admin.admins_back_button',
       'bot.admin.admins_none',
+      /*
+       * Spec §7's client apps section, reviewed: the list, one app with and without a
+       * video, the prompt and its cancel, the delete ask-then-act pair, and the answers.
+       * None carries the video or its reference — an app is named by the operator's own
+       * name and icon, carried as a value — and the stale answer stores nothing.
+       */
+      'bot.admin.app_back_button',
+      'bot.admin.app_detail_no_video',
+      'bot.admin.app_detail_video',
+      'bot.admin.app_not_found',
+      'bot.admin.app_video_cancel_button',
+      'bot.admin.app_video_cancelled',
+      'bot.admin.app_video_delete_ask',
+      'bot.admin.app_video_delete_button',
+      'bot.admin.app_video_delete_confirm_button',
+      'bot.admin.app_video_deleted',
+      'bot.admin.app_video_prompt',
+      'bot.admin.app_video_saved',
+      'bot.admin.app_video_set_button',
+      'bot.admin.app_video_stale',
       'bot.admin.approve_button',
       'bot.admin.approved',
+      'bot.admin.apps_back_button',
+      'bot.admin.apps_button',
+      'bot.admin.apps_empty',
+      'bot.admin.apps_section',
       /*
        * WP10 follow-up's twelve, Block User from the receipt. Reviewed against the same rule:
        * every one names a step the runtime routes (`xa:`…`xd:` and the reason capture), and
@@ -1983,6 +2035,7 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
       expect(notificationButtons('SERVICE_TRANSFER_RECEIVED', { serviceId: service })).toEqual([
         {
           label: { kind: 'TEMPLATE', key: 'bot.service.transfer_details_button' },
+          inline: 'service.transfer_details',
           data: `s:${service}`,
         },
       ]);

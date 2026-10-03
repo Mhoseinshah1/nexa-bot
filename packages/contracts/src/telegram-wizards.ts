@@ -60,6 +60,15 @@ export const TELEGRAM_WIZARD_STEPS = [
   'INVOICE',
   'NOTICE',
   'CLOSED',
+  /*
+   * Owner spec §2.4 — the manual card-transfer invoice, edited in place twice more:
+   * `RECEIPT_WAIT` after «پرداخت را انجام دادم | ارسال رسید» (the card details gone, the
+   * receipt asked for), then `RECEIPT_REVIEW` once a receipt is filed (one sentence, NO
+   * button). A received receipt edits the chat's invoice waiting at either of the two; no
+   * tap is honoured from `RECEIPT_REVIEW`, which carries none.
+   */
+  'RECEIPT_WAIT',
+  'RECEIPT_REVIEW',
 ] as const;
 export type TelegramWizardStep = (typeof TELEGRAM_WIZARD_STEPS)[number];
 

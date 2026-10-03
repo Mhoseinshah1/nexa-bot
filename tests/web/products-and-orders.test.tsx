@@ -572,48 +572,70 @@ describe('the order list', () => {
     }
   });
 
-  it('applies BOTH filters, in one navigation, and clears both', async () => {
+  it('applies the one search in one navigation that keeps the state filter, and clears it', async () => {
     /*
-     * The page's own use of `setQueries`, not the helper's behaviour.
-     *
-     * `router.test.tsx` proves the helper applies every parameter; nothing proved THIS
-     * page calls it. Reverting the handler to two `setQuery` calls left that suite
-     * green — a falsification (M34) survived, which is the definition of a rule with no
-     * test. The reverted handler applies `productId` and silently drops `customerId`,
-     * so the operator sees the id they typed in the box and a list that ignored it.
+     * Spec §10: ONE box where there were two internal-uuid boxes — the commonest dead end
+     * this page had was pasting the Telegram id the customer list shows into a box that
+     * wanted the internal one. The page's own use of `setQueries` is what is under test:
+     * applying a search must not drop the state filter, and Clear must leave nothing of
+     * the search applied.
      */
     stubApi(orderList([order()]));
-    window.history.replaceState(null, '', '/orders');
-    renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
+    window.history.replaceState(null, '', '/orders?state=PAID');
+    renderPage(
+      <OrdersPage
+        route={{ path: '/orders', query: new URLSearchParams({ state: 'PAID' }) }}
+        denied={false}
+      />,
+    );
     await screen.findByText('پلن یک‌ماهه');
 
-    const CUSTOMER = '019220ab-cdef-7012-8345-6789abcdef11';
-    const PRODUCT = '019220ab-cdef-7012-8345-6789abcdef22';
-    fireEvent.change(screen.getByLabelText('مشتری'), { target: { value: CUSTOMER } });
-    fireEvent.change(screen.getByLabelText('محصول'), { target: { value: PRODUCT } });
-    fireEvent.click(screen.getByText('جست‌وجو'));
+    fireEvent.change(screen.getByLabelText('جست‌وجو'), { target: { value: '5551234567' } });
+    // Read as a Telegram id, and said so before anything is sent.
+    expect(screen.getByTestId('list-search-kind').textContent).toContain('شناسهٔ عددی تلگرام');
+    fireEvent.click(screen.getByRole('button', { name: 'جست‌وجو' }));
 
     await waitFor(() => {
       const applied = new URLSearchParams(window.location.search);
-      expect(applied.get('customerId'), 'the customer filter was dropped').toBe(CUSTOMER);
-      expect(applied.get('productId')).toBe(PRODUCT);
+      expect(applied.get('q')).toBe('5551234567');
+      expect(applied.get('state'), 'the state filter was dropped').toBe('PAID');
     });
 
-    // And the CLEAR button, which had the same defect in the other direction: it
-    // removed `productId` and left `customerId` applied, so pressing Clear left a
-    // filter on with an empty box above it.
-    stubApi(orderList([order()]));
+    const api = stubApi(orderList([order()]));
     renderPage(
       <OrdersPage
         route={{ path: '/orders', query: new URLSearchParams(window.location.search) }}
         denied={false}
       />,
     );
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.includes('q=5551234567'))).toBe(true),
+    );
     const clear = (await screen.findAllByText('پاک کردن'))[0] as HTMLButtonElement;
     fireEvent.click(clear);
     await waitFor(() => {
-      expect(window.location.search).toBe('');
+      expect(window.location.search).toBe('?state=PAID');
     });
+  });
+
+  it('names the customer by Telegram id, never by the internal uuid', async () => {
+    const CUSTOMER = '019220ab-cdef-7012-8345-6789abcdef11';
+    stubApi(
+      orderList([
+        order({
+          customerId: CUSTOMER,
+          customerTelegramUserId: '5551234567',
+          customerUsername: 'ali_tehran',
+        }),
+      ]),
+    );
+    renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
+    const table = await screen.findByRole('table');
+    const who = within(table).getByText('5551234567');
+    // Still the customer's page, addressed by the uuid — which is the link, never the text.
+    expect(who.closest('a')?.getAttribute('href')).toBe(`/users/${CUSTOMER}`);
+    expect(within(table).getByText('@ali_tehran')).toBeInTheDocument();
+    expect(table.textContent).not.toContain(CUSTOMER.slice(0, 8));
   });
 
   it('presses every control it has and still issues nothing but reads', async () => {
