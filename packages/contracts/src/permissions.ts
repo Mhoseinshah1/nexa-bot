@@ -324,6 +324,17 @@ export const PERMISSIONS = [
   p('campaigns.view', 'View campaigns, their preview and their results', 'LOW'),
   p('campaigns.manage', 'Create, schedule, pause, resume or cancel a campaign', 'HIGH'),
 
+  /*
+   * Terms and rules (program §6, `docs/terms-audit.md`). VIEW reads the versions, the
+   * history and the acceptance statistics. EDIT writes the draft, which no customer sees.
+   * PUBLISH is its own HIGH key: publishing makes a new version the one every customer is
+   * asked to accept, and while enforcement is on it stops every customer who has not, at
+   * once. Turning enforcement on or off is the feature flag, under `features.edit`.
+   */
+  p('terms.view', 'View the terms and rules, their history and acceptance statistics', 'LOW'),
+  p('terms.edit', 'Create or edit the draft of the terms and rules'),
+  p('terms.publish', 'Publish the draft as the current terms and rules', 'HIGH'),
+
   // Reporting and logs
   p('reports.view', 'View reports', 'LOW'),
   p('reports.pii.view', 'View personal data inside reports', 'HIGH'),
@@ -475,6 +486,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'tickets.assign',
       'tickets.close',
       'tickets.categories.edit',
+      // Program §6: an operator drafts the rules; PUBLISHING them stays the owner's.
+      'terms.view',
+      'terms.edit',
     ],
   },
   {
@@ -529,6 +543,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'reports.view',
       // WP-A10: "which app, and where do I get it" is the question support answers most.
       'client_apps.view',
+      // Program §6: "why is the bot asking me to accept the rules" is a support question.
+      'terms.view',
       // WP-A7: answering tickets is this role's job. The categories are configuration.
       'tickets.view',
       'tickets.reply',
@@ -722,6 +738,12 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * `campaigns.view` reads, and each answers with the campaign's preview and results.
    */
   'campaigns.manage': 'campaigns.view' as PermissionKey,
+  /*
+   * Program §6. A draft is written, previewed and published FROM the terms page, which
+   * `terms.view` reads.
+   */
+  'terms.edit': 'terms.view' as PermissionKey,
+  'terms.publish': 'terms.view' as PermissionKey,
 };
 
 /**

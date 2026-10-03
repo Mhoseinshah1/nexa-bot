@@ -111,6 +111,9 @@ export const EVENT_TYPES = [
   'CustomerPhoneVerificationChanged',
   'CustomerLocationChangeOverrideChanged',
   'CustomerAccountTransferred',
+  // Program §6: the terms and rules. Ids and numbers only, never the text.
+  'TermsVersionPublished',
+  'CustomerTermsAccepted',
   'OrderConfirmed',
   'OrderSettled',
   'OrderCancelled',
@@ -207,6 +210,8 @@ export const AGGREGATE_TYPES = [
   'Ticket',
   'Broadcast',
   'BulkOperation',
+  // Program §6: one version of a tenant's terms and rules.
+  'TermsVersion',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -299,6 +304,15 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     servicesMoved: z.number().int().nonnegative(),
     walletMovedMinor: z.string(),
     currency: z.string(),
+  }),
+  /** Aggregate `TermsVersion`. The version is now the one customers are asked to accept. */
+  TermsVersionPublished: z.object({
+    versionNumber: z.number().int().positive(),
+  }),
+  /** Aggregate `Customer`. Written once per (customer, version): a repeated tap writes nothing. */
+  CustomerTermsAccepted: z.object({
+    termsVersionId: z.string(),
+    versionNumber: z.number().int().positive(),
   }),
   OrderConfirmed: z.object({
     customerId: z.string(),

@@ -1319,6 +1319,68 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.terms.required',
+    description:
+      'Program §6: shown INSTEAD of what the customer asked for while terms enforcement is on ' +
+      'and they have not accepted the current published version. Carries that version’s title ' +
+      'and text; the accept button follows it. It must not say the action was performed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'title',
+        type: 'STRING',
+        description: 'The title of the current published version, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'body',
+        type: 'STRING',
+        description: 'The text of the current published version, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.terms.updated',
+    description:
+      'Program §6: the answer to an accept button of a version that is no longer the current ' +
+      'one — the rules changed after the customer was shown them. Nothing was accepted; the ' +
+      'current version and its own accept button follow.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'title',
+        type: 'STRING',
+        description: 'The title of the current published version, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'body',
+        type: 'STRING',
+        description: 'The text of the current published version, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.terms.accepted',
+    description:
+      'Program §6: the answer to the accept button once the acceptance is recorded (or was ' +
+      'already). The main menu keyboard comes with it, so the customer carries on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.terms.accept_button',
+    description: 'Program §6: the button that accepts the terms and rules shown above it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.blocked',
     description:
       'Shown to a customer an operator has blocked. Says that the account cannot be ' +
