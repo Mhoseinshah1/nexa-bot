@@ -2999,3 +2999,15 @@ rule).
 - **OQ-D2-03 — no policy to REQUIRE two-step sign-in.** It is each administrator's choice
   today. A required-for-owners policy is a setting plus an enrolment-on-next-sign-in
   flow, and a lockout risk to design carefully; not built.
+
+## OQ-D3 — role management (Phase D3): what is deliberately not built
+
+- **OQ-D3-01 — per-administrator overrides have no editor.** The model has GRANT/DENY
+  overrides (`admin_permission_overrides`) and the resolver applies them; Phase D3 SHOWS
+  them in the effective-permission preview but adds no way to write one. An override
+  editor is a privilege write with its own expiry and reason semantics, and is left for an
+  explicit instruction.
+- **OQ-D3-02 — the owner role is immutable by APPLICATION rule only.** Tests and
+  backfill migrations delete owner `role_permissions` rows on purpose, so a database
+  trigger refusing that would break them; the service refuses every edit and delete of
+  the owner role, and the last-owner triggers of migration 0006 still guard its holders.
