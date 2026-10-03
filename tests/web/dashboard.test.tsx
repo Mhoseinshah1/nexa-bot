@@ -11,6 +11,7 @@ import {
   reportFailuresResponseSchema,
   reportProductsResponseSchema,
   reportSummaryResponseSchema,
+  type PermissionKey,
 } from '@nexa/contracts';
 import { DashboardPage, healthSlices, providerSlices } from '../../apps/web/src/pages/dashboard';
 import {
@@ -205,11 +206,17 @@ const OWNER_ROUTES = [
   { url: '/ops-log', body: { events: [], nextCursor: null } },
 ];
 
-const OWNER = ['reports.view', 'panels.view', 'services.view', 'opslog.view'];
-const OPERATOR = ['panels.view', 'services.view', 'opslog.view'];
+const OWNER: PermissionKey[] = ['reports.view', 'panels.view', 'services.view', 'opslog.view'];
+const OPERATOR: PermissionKey[] = ['panels.view', 'services.view', 'opslog.view'];
 
 /** The page as the app mounts it: the route comes from the real router. */
-function Routed({ permissions, superAdmin }: { permissions: string[]; superAdmin: boolean }) {
+function Routed({
+  permissions,
+  superAdmin,
+}: {
+  permissions: PermissionKey[];
+  superAdmin: boolean;
+}) {
   const route = useRoute();
   return <DashboardPage permissions={permissions} route={route} superAdmin={superAdmin} />;
 }

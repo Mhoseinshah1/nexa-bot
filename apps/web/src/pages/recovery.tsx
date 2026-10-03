@@ -5,6 +5,7 @@ import {
   isRecoveryConfirmationPhrase,
   type BackupRunSummary,
   type RecoveryRequestSummary,
+  type PermissionKey,
 } from '@nexa/contracts';
 import {
   backupArchiveUrl,
@@ -75,7 +76,7 @@ export function RecoveryPage({
   permissions,
 }: {
   route: Route;
-  permissions: readonly string[];
+  permissions: readonly PermissionKey[];
 }) {
   const onLink = useLinkHandler();
   const client = useQueryClient();

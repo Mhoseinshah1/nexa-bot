@@ -16,7 +16,6 @@ import {
   type IdGenerator,
   type Money,
   type OperationalEventRecorder,
-  type PermissionKey,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -667,7 +666,7 @@ export class ServiceRefundDecisionService {
     actor: ActorContext,
     denial: { action: string; entityType: string; entityId: string | null },
   ): Promise<void> {
-    for (const permission of SERVICE_REFUND_DECIDE_PERMISSIONS as readonly PermissionKey[]) {
+    for (const permission of SERVICE_REFUND_DECIDE_PERMISSIONS) {
       try {
         await this.deps.guard.check(scope, actor, permission);
       } catch (error) {

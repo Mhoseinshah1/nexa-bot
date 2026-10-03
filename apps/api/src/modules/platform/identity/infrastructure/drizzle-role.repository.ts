@@ -249,14 +249,20 @@ export class DrizzleRoleRepository implements RoleRepository {
         ),
       );
 
-    return rows
-      .filter((row) => isPermissionKey(row.permissionKey))
-      .map((row) => ({
-        permissionKey: row.permissionKey as PermissionKey,
-        effect: row.effect as PermissionOverrideEffect,
-        reason: row.reason,
-        expiresAt: row.expiresAt,
-      }));
+    // A stored key the catalogue does not name confers nothing and is skipped, never thrown:
+    // one stale row must not take every request this administrator makes down with it.
+    return rows.flatMap((row) => {
+      const permissionKey = row.permissionKey;
+      if (!isPermissionKey(permissionKey)) return [];
+      return [
+        {
+          permissionKey,
+          effect: row.effect as PermissionOverrideEffect,
+          reason: row.reason,
+          expiresAt: row.expiresAt,
+        },
+      ];
+    });
   }
 
   // -------------------------------------------------------------------------

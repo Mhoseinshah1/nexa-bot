@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PermissionKey } from '@nexa/contracts';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { BotsPage } from '../../apps/web/src/pages/bots';
@@ -551,7 +552,7 @@ describe('the Bots page', () => {
  * is absent, so an empty page cannot pass for a refused control.
  */
 describe('the /bots route wires the token replacement to settings.destructive', () => {
-  const open = (permissions: readonly string[]) => {
+  const open = (permissions: readonly PermissionKey[]) => {
     stubApi([listRoute()]);
     const resolved = resolve({ path: '/bots', query: new URLSearchParams() }, permissions);
     return renderPage(resolved.element as ReactElement);

@@ -7,6 +7,7 @@ import {
   RECOVERY_CONFIRMATION_PHRASE,
   RECOVERY_KIT_ROUTES,
   RECOVERY_ROUTES,
+  type PermissionKey,
 } from '@nexa/contracts';
 import { RecoveryPage } from '../../apps/web/src/pages/recovery';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
@@ -30,7 +31,7 @@ import { renderPage, stubApi } from './harness';
 
 const route = { path: '/recovery', query: new URLSearchParams() };
 
-const ALL = [
+const ALL: PermissionKey[] = [
   'backup.view',
   'backup.run',
   'backup.download',
@@ -605,7 +606,7 @@ describe('the recovery page', () => {
     });
 
     /** Uploads a file and verifies it, leaving the page at RESTORE_TEST_PASSED. */
-    async function reachConfirmation(permissions: readonly string[]) {
+    async function reachConfirmation(permissions: readonly PermissionKey[]) {
       const api = stubApi([
         ...routes(),
         { url: `${API_PREFIX}${RECOVERY_ROUTES.upload}`, body: { recovery: recovery() } },

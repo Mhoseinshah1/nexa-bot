@@ -1,3 +1,4 @@
+import type { PermissionKey } from '@nexa/contracts';
 import type { WebKey } from './i18n/web.fa';
 import type { IconName } from './ui/icons';
 import { isSuperAdmin } from './report-view';
@@ -37,7 +38,7 @@ export interface NavEntry {
    * permits, which is the same defect as offering one it refuses, in the
    * direction nobody looks.
    */
-  readonly permission: string | readonly string[] | null;
+  readonly permission: PermissionKey | readonly PermissionKey[] | null;
   readonly group: WebKey;
   /**
    * WP12: shown only to the Super Admin — the owner role AND the permission. The server
@@ -57,7 +58,7 @@ export interface NavEntry {
  */
 export function navPermitted(
   entry: NavEntry,
-  permissions: readonly string[],
+  permissions: readonly PermissionKey[],
   roleKeys: readonly string[] = [],
 ): boolean {
   if (entry.ownerOnly === true && !isSuperAdmin(roleKeys, permissions)) return false;

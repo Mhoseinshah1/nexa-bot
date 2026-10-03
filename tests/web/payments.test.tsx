@@ -6,7 +6,7 @@ import { resolve } from '../../apps/web/src/app';
 import { formatTimestamp } from '../../apps/web/src/format';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
-import { PAYMENT_ROUTES } from '@nexa/contracts';
+import { PAYMENT_ROUTES, type PermissionKey } from '@nexa/contracts';
 import * as client from '../../apps/web/src/api/client';
 import { leaveGuarded } from '../../apps/web/src/router';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
@@ -418,8 +418,8 @@ describe('the payment detail', () => {
 });
 
 describe('the payments route', () => {
-  const ALL = ['payments.view', 'receipts.review'];
-  const NONE: readonly string[] = [];
+  const ALL: readonly PermissionKey[] = ['payments.view', 'receipts.review'];
+  const NONE: readonly PermissionKey[] = [];
 
   it('resolves to the real page, not the planned placeholder', () => {
     stubApi(list([payment()]));
