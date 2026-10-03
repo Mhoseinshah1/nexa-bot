@@ -351,9 +351,10 @@ export function gatewayProviderFacts(invoice: GatewayInvoiceRecord | null): Temp
    * need — and its amount is the Stars it asked for, which the record step proved equal to
    * what was charged. Never the payload or a token.
    */
-  // Spec §8: Stars are now always CENTRAL_FX, with no fixed rate on the invoice — the
-  // policy, not the rate's presence, is what says the attempt was converted.
-  if (invoice.conversionRateMinor !== null || invoice.conversionPolicy === 'CENTRAL_FX') {
+  // Spec §8: Stars are now always CENTRAL_FX, with no fixed rate on the invoice, so the rate's
+  // presence no longer says the attempt was converted. The PROVIDER does: NOWPayments is
+  // CENTRAL_FX too, and its dollar figures are shown by the branch below, never as Stars.
+  if (invoice.conversionRateMinor !== null || invoice.provider === 'TELEGRAM_STARS') {
     // A rate-converted attempt's only provider amount is the one it asked for (XTR).
     return {
       providerInvoiceId:
