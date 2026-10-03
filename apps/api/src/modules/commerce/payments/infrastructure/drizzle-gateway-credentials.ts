@@ -22,8 +22,9 @@ import type {
  * The panel-credential store's rules: the AEAD context `(payment_gateway.api_key,
  * tenant, row id)` is rebuilt from the caller's scope on every read, never stored; this
  * file is the only place the key exists in plaintext, for the length of one expression;
- * and nothing here logs. `setAt` is the only read a response builder can reach, and it
- * selects a timestamp — never the ciphertext.
+ * and nothing here logs. The webhook secret and the verify key (CentralPay) follow the same
+ * rules on the same row, each under its own purpose. `setAt` is the only read a response
+ * builder can reach, and it selects a timestamp — never the ciphertext.
  */
 export class DrizzleGatewayCredentialStore implements GatewayCredentialStore {
   constructor(
@@ -229,6 +230,95 @@ export class DrizzleGatewayCredentialStore implements GatewayCredentialStore {
     return now;
   }
 
+  async verifyKeySetAt(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx?: unknown,
+  ): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ setAt: paymentGatewayCredentials.verifyKeySetAt })
+      .from(paymentGatewayCredentials)
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.provider, provider),
+        ),
+      )
+      .limit(1);
+    return row?.setAt ?? null;
+  }
+
+  async readVerifyKey(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select({
+        id: paymentGatewayCredentials.id,
+        ciphertext: paymentGatewayCredentials.verifyKeyCiphertext,
+        keyId: paymentGatewayCredentials.verifyKeyKeyId,
+      })
+      .from(paymentGatewayCredentials)
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.provider, provider),
+        ),
+      )
+      .limit(1);
+    if (row === undefined || row.ciphertext === null || row.keyId === null) return null;
+    return this.cipher.decrypt(
+      { keyId: row.keyId, ciphertext: row.ciphertext },
+      { purpose: 'payment_gateway.verify_key', tenantId, entityId: row.id },
+    );
+  }
+
+  async replaceVerifyKey(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    verifyKey: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const executor = this.exec(tx);
+    const [existing] = await executor
+      .select({ id: paymentGatewayCredentials.id })
+      .from(paymentGatewayCredentials)
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.provider, provider),
+        ),
+      )
+      .for('update')
+      .limit(1);
+    // The verify key lives on the API key's row and is bound to its id: no row, no key.
+    if (existing === undefined) return null;
+    const sealed = this.cipher.encrypt(verifyKey, {
+      purpose: 'payment_gateway.verify_key',
+      tenantId,
+      entityId: existing.id,
+    });
+    await executor
+      .update(paymentGatewayCredentials)
+      .set({
+        verifyKeyCiphertext: sealed.ciphertext,
+        verifyKeyKeyId: sealed.keyId,
+        verifyKeySetAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.id, existing.id),
+        ),
+      );
+    return now;
+  }
+
   async lastCheck(
     scope: TenantContext,
     provider: PaymentGatewayProvider,
@@ -338,5 +428,24 @@ export class DrizzlePublicOriginReader implements PublicOriginReader {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The same bot's link for a browser coming back from a provider's page (CentralPay):
+   * `https://t.me/<username>` from the STORED username — no Telegram call on a public GET —
+   * and only for a username of Telegram's own shape, so the redirect cannot be steered.
+   */
+  async botLinkFor(scope: TenantContext): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select({ username: botInstances.username })
+      .from(botInstances)
+      .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.status, 'ACTIVE')))
+      .orderBy(asc(botInstances.createdAt), asc(botInstances.id))
+      .limit(1);
+    const username = row?.username ?? null;
+    return username !== null && /^[A-Za-z][A-Za-z0-9_]{4,31}$/u.test(username)
+      ? `https://t.me/${username}`
+      : null;
   }
 }

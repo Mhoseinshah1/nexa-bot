@@ -128,6 +128,8 @@ export const INLINE_BUTTONS = [
   // A provider whose pay button reads differently (spec §16): its own key, so the label and
   // style are the operator's to set without touching the generic gateway button.
   button('payment.nowpayments_open', 'PAYMENT', 'bot.payment.nowpayments_pay_button', 'URL'),
+  // CentralPay's «💳 پرداخت با CentralPay» link (spec §17), isolated the same way.
+  button('payment.centralpay_open', 'PAYMENT', 'bot.payment.centralpay_pay_button', 'URL'),
   button('payment.gateway_check', 'PAYMENT', 'bot.payment.gateway_check_button'),
   button('payment.gateway_card_check', 'PAYMENT', 'bot.payment.gateway_card_check_button'),
   button('payment.gateway_receipt', 'PAYMENT', 'bot.payment.gateway_receipt_button'),

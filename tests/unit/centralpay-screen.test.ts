@@ -5,11 +5,11 @@ import type { PaymentRecord } from '../../apps/api/src/modules/commerce/payments
 import type { GatewayInvoiceRecord } from '../../apps/api/src/modules/commerce/payments/application/gateway-invoice-ports';
 
 /**
- * The NOWPayments customer screen (`docs/nowpayments-gateway-audit.md` §5.8), through the one
- * pure function the turn and the worker both render: the hosted invoice's URL button carries
- * the owner's «💳 پرداخت با ارز دیجیتال» under its OWN key (isolated for the inline-button
- * registry as `payment.nowpayments_open`), and the review and needs-review screens use
- * NOWPayments' own sentences — never TonPays' receipt wording, and never a payment link.
+ * The CentralPay customer screen (`docs/centralpay-gateway-audit.md` §5.8), through the one
+ * pure function the turn and the worker both render: the link's URL button carries the
+ * owner's «💳 پرداخت با CentralPay» under its OWN key (isolated for the inline-button registry
+ * as `payment.centralpay_open`), and a held (UNKNOWN) payment uses CentralPay's own
+ * needs-review sentence with no payment link.
  */
 
 const PAYMENT_ID = '01a0fa00-0000-7000-8000-000000000001' as PaymentId;
@@ -27,7 +27,7 @@ function payment(overrides: Partial<PaymentRecord> = {}): PaymentRecord {
     reference: 'ref',
     evidenceKind: null,
     evidenceNote: null,
-    externalReference: 'TPT-1',
+    externalReference: '1234567890',
     confirmedAt: null,
     confirmedByAdminId: null,
     resolvedAt: null,
@@ -36,7 +36,7 @@ function payment(overrides: Partial<PaymentRecord> = {}): PaymentRecord {
     customerSignalledAt: null,
     checkoutHeldUntil: null,
     expiresAt: EXPIRES_AT,
-    gatewayProvider: 'NOWPAYMENTS',
+    gatewayProvider: 'CENTRALPAY',
     topupCashbackPercent: null,
     customerFee: null,
     providerReviewStartedAt: null,
@@ -50,12 +50,12 @@ function payment(overrides: Partial<PaymentRecord> = {}): PaymentRecord {
 function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceRecord {
   return {
     paymentId: PAYMENT_ID,
-    provider: 'NOWPAYMENTS',
-    providerOrderId: 'NTAAAAAAAAAAAAAAAAAA',
-    providerInvoiceId: 'TPT-1',
+    provider: 'CENTRALPAY',
+    providerOrderId: '1234567890',
+    providerInvoiceId: '1234567890',
     hintedInvoiceId: null,
     hintedPaymentId: null,
-    providerUserId: null,
+    providerUserId: '1987654321',
     creationState: 'CREATED',
     creationAttempts: 1,
     creationSentAt: CREATED_AT,
@@ -64,12 +64,12 @@ function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceR
     createdInvoiceAt: CREATED_AT,
     buyerChatIdSent: true,
     callbackUrlSent: true,
-    invoiceUrl: 'https://nowpayments.io/payment/?iid=4522625843',
+    invoiceUrl: 'https://pay.centralapi.org/p/abc',
     webInvoiceUrl: null,
-    providerUnit: 'USD',
-    sentAmount: 1000n,
+    providerUnit: 'IRT',
+    sentAmount: 250_000n,
     conversionRateMinor: null,
-    conversionPolicy: 'CENTRAL_FX',
+    conversionPolicy: 'SAME_UNIT',
     fx: null,
     botInstanceId: null,
     providerChargeId: null,
@@ -106,52 +106,32 @@ function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceR
 
 const AT = new Date('2026-10-02T10:30:00Z');
 
-describe('the NOWPayments screen', () => {
-  it('opens the hosted invoice with its own pay button key, beside the status check', () => {
+describe('the CentralPay screen', () => {
+  it('opens the link with its own pay button key, beside the status check', () => {
     const reply = gatewayAttemptScreen({ payment: payment(), invoice: invoice() }, null, AT);
     expect(reply.key).toBe('bot.payment.gateway_invoice');
-    const pay = reply.buttons[0];
-    expect(pay).toMatchObject({
-      label: { kind: 'TEMPLATE', key: 'bot.payment.nowpayments_pay_button' },
-      url: 'https://nowpayments.io/payment/?iid=4522625843',
-    });
-  });
-
-  it('keeps the generic pay button for every other link route', () => {
-    const reply = gatewayAttemptScreen(
-      {
-        payment: payment({ gatewayProvider: 'TONPAYS' }),
-        invoice: invoice({ provider: 'TONPAYS' }),
-      },
-      null,
-      AT,
-    );
     expect(reply.buttons[0]).toMatchObject({
-      label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_pay_button' },
+      label: { kind: 'TEMPLATE', key: 'bot.payment.centralpay_pay_button' },
+      url: 'https://pay.centralapi.org/p/abc',
     });
   });
 
-  it('says the coins are confirming while the review window is open, with no pay link', () => {
-    const reviewUntil = new Date(AT.getTime() + 23 * 3_600_000);
-    const reply = gatewayAttemptScreen(
-      {
-        payment: payment({ providerReviewStartedAt: AT, providerReviewUntil: reviewUntil }),
-        invoice: invoice(),
-      },
-      null,
-      AT,
-    );
-    expect(reply.key).toBe('bot.payment.nowpayments_in_review');
-    expect(reply.buttons.some((button) => 'url' in button)).toBe(false);
-  });
-
-  it('says a person is reconciling it once the payment is UNKNOWN (a partial payment)', () => {
+  it('says a person is reconciling it once a verify did not match (UNKNOWN), with no pay link', () => {
     const reply = gatewayAttemptScreen(
       { payment: payment({ state: 'UNKNOWN' }), invoice: invoice() },
       null,
       AT,
     );
-    expect(reply.key).toBe('bot.payment.nowpayments_review_unresolved');
+    expect(reply.key).toBe('bot.payment.centralpay_review_unresolved');
+    expect(reply.buttons.some((button) => 'url' in button)).toBe(false);
+  });
+
+  it('shows a confirmed payment as confirmed, with no pay link', () => {
+    const reply = gatewayAttemptScreen(
+      { payment: payment({ state: 'CONFIRMED' }), invoice: invoice({ outcome: 'SETTLED' }) },
+      null,
+      AT,
+    );
     expect(reply.buttons.some((button) => 'url' in button)).toBe(false);
   });
 });

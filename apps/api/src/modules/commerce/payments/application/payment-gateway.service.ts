@@ -97,6 +97,8 @@ export interface PaymentGatewayServiceDeps {
     | 'replaceWebhookSecret'
     | 'lastCheck'
     | 'recordCheck'
+    | 'verifyKeySetAt'
+    | 'replaceVerifyKey'
   >;
   /**
    * The adapter behind an external route, for the one question route selection asks of
@@ -137,6 +139,8 @@ export interface GatewayOperatorFacts {
   readonly webhookSecretSetAt: Date | null;
   /** The operator's last credential check, latest state only. */
   readonly lastCheck: { readonly at: Date; readonly result: string } | null;
+  /** A route's separate verify key (CentralPay): when it was last replaced. Never the key. */
+  readonly verifyKeySetAt: Date | null;
 }
 
 /**
@@ -243,17 +247,22 @@ export class PaymentGatewayService {
         callbackUrl: null,
         webhookSecretSetAt: null,
         lastCheck: null,
+        verifyKeySetAt: null,
       };
     }
-    const [credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck] = await Promise.all([
-      this.deps.credentials.setAt(scope, provider),
-      this.deps.callbackUrlFor(scope, provider),
-      descriptor.webhookSecret
-        ? this.deps.credentials.webhookSecretSetAt(scope, provider)
-        : Promise.resolve(null),
-      this.deps.credentials.lastCheck(scope, provider),
-    ]);
-    return { credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck };
+    const [credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck, verifyKeySetAt] =
+      await Promise.all([
+        this.deps.credentials.setAt(scope, provider),
+        this.deps.callbackUrlFor(scope, provider),
+        descriptor.webhookSecret
+          ? this.deps.credentials.webhookSecretSetAt(scope, provider)
+          : Promise.resolve(null),
+        this.deps.credentials.lastCheck(scope, provider),
+        descriptor.verifyKey
+          ? this.deps.credentials.verifyKeySetAt(scope, provider)
+          : Promise.resolve(null),
+      ]);
+    return { credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck, verifyKeySetAt };
   }
 
   /**
@@ -316,6 +325,81 @@ export class PaymentGatewayService {
         }
         await this.record(scope, actor, tx, {
           action: 'payment_gateway.set_webhook_secret',
+          entityId: provider,
+          // Whether one was stored and when — never the value or a fingerprint of it.
+          before: {
+            provider,
+            configured: before !== null,
+            replacedAt: before?.toISOString() ?? null,
+          },
+          after: { provider, configured: true, replacedAt: setAt.toISOString() },
+        });
+        await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
+        return gateway;
+      },
+    );
+  }
+
+  /**
+   * Replaces a route's separate verify key (CentralPay, `docs/centralpay-gateway-audit.md`
+   * §3). Write-only, exactly like `setCredential`: encrypted at rest under its own purpose, on
+   * the API key's row, and in no request hash, response, audit row or log line. The API key
+   * is set first — the verify key is bound to that row's id — so a route with no API key
+   * refuses this with `CREDENTIAL_MISSING`.
+   */
+  async setVerifyKey(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly provider: string;
+      readonly verifyKey: string;
+    },
+  ): Promise<PaymentGatewayRecord> {
+    const provider = this.provider(input.provider);
+    const denial = {
+      action: 'payment_gateway.set_verify_key',
+      entityType: 'PaymentGateway',
+      entityId: provider,
+    };
+    await this.authorize(scope, actor, denial);
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].verifyKey) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This payment route takes no separate verify key.',
+      );
+    }
+    const requestHash = hashRequest({ provider, credential: 'VERIFY_KEY' });
+    const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_GATEWAY_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const gateway = await this.require(scope, provider, tx);
+        const before = await this.deps.credentials.verifyKeySetAt(scope, provider, tx);
+        const setAt = await this.deps.credentials.replaceVerifyKey(
+          scope,
+          provider,
+          input.verifyKey,
+          now,
+          tx,
+        );
+        if (setAt === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'Set this payment route’s API key before its verify key.',
+            { reason: 'CREDENTIAL_MISSING' },
+          );
+        }
+        await this.record(scope, actor, tx, {
+          action: 'payment_gateway.set_verify_key',
           entityId: provider,
           // Whether one was stored and when — never the value or a fingerprint of it.
           before: {
@@ -720,6 +804,22 @@ export class PaymentGatewayService {
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
             'This payment route needs its webhook secret before it can be switched on.',
             { reason: 'WEBHOOK_SECRET_MISSING' },
+          );
+        }
+
+        /*
+         * And a route whose provider authorises its inquiry with a SEPARATE key (CentralPay)
+         * cannot be switched ON without it: no payment through it could ever be verified.
+         */
+        if (
+          input.status === 'ACTIVE' &&
+          PAYMENT_GATEWAY_DESCRIPTORS[provider].verifyKey &&
+          (await this.deps.credentials.verifyKeySetAt(scope, provider, tx)) === null
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route needs its verify key before it can be switched on.',
+            { reason: 'VERIFY_KEY_MISSING' },
           );
         }
 

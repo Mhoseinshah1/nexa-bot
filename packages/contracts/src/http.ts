@@ -32,6 +32,7 @@ import {
 import { PAYMENT_RECEIPT_KINDS, RECEIPT_DISPOSITIONS } from './payment-receipts.js';
 import { gatewayInvoiceViewSchema } from './gateway-invoices.js';
 import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
+import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import { listSearchQuerySchema } from './list-search.js';
 import {
@@ -4832,6 +4833,13 @@ export const paymentGatewaySchema = z.object({
        */
       lastCheckAt: z.iso.datetime().nullable().default(null),
       lastCheckResult: z.string().nullable().default(null),
+      /**
+       * A route whose provider authorises its inquiry with a SEPARATE key (`verifyKey` in
+       * the descriptor, CentralPay's verify key): whether one is required and when it was
+       * last replaced. A set-at time, never a value, never a masked stand-in.
+       */
+      verifyKeyRequired: z.boolean().default(false),
+      verifyKeySetAt: z.iso.datetime().nullable().default(null),
     })
     // Defaulted, like the D7 fields: a response from the previous release has neither.
     .default({
@@ -4841,6 +4849,8 @@ export const paymentGatewaySchema = z.object({
       webhookSecretSetAt: null,
       lastCheckAt: null,
       lastCheckResult: null,
+      verifyKeyRequired: false,
+      verifyKeySetAt: null,
     }),
   /**
    * The URL this installation sends the gateway as its webhook, GENERATED and never
@@ -5011,6 +5021,29 @@ export type SetPaymentGatewayWebhookSecretRequest = z.input<
 >;
 
 /**
+ * Replacing a route's separate INQUIRY key (CentralPay's verify key,
+ * `docs/centralpay-gateway-audit.md` §3). Write-only, exactly like the API key: the response
+ * is the route view with the key's set-at time, never the key, and there is no clear.
+ * Refused for a route whose provider has no separate inquiry key.
+ */
+export const setPaymentGatewayVerifyKeyRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  verifyKey: z
+    .string()
+    .transform((value) => value.trim())
+    .pipe(
+      z
+        .string()
+        .min(1)
+        .max(CENTRALPAY_VERIFY_KEY_MAX_LENGTH)
+        .regex(/^[\x21-\x7E]+$/u, { message: 'must be printable ASCII with no spaces' }),
+    ),
+});
+export type SetPaymentGatewayVerifyKeyRequest = z.input<
+  typeof setPaymentGatewayVerifyKeyRequestSchema
+>;
+
+/**
  * The operator's credential check: one read-only call to the provider with the stored key,
  * made by the API outside any transaction and recorded on the route (`lastCheckAt`,
  * `lastCheckResult`). It moves no money and changes no route state.
@@ -5030,6 +5063,7 @@ export const PAYMENT_GATEWAY_ROUTES = {
   webhookSecret: (provider: string) =>
     `/payment-gateways/${encodeURIComponent(provider)}/webhook-secret`,
   check: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/check`,
+  verifyKey: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/verify-key`,
 } as const;
 
 // --- Central exchange rates (package FX) ----------------------------------------------

@@ -74,6 +74,8 @@ import {
   ORDER_STATES,
   PAYMENT_GATEWAY_PROVIDERS,
   PROVIDER_REVIEW_GATEWAY_PROVIDERS,
+  CENTRALPAY_INTEGER_MAX,
+  CENTRALPAY_INTEGER_MIN,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_HOURS,
   GATEWAY_CARD_NAME_MAX_LENGTH,
   GATEWAY_CARD_NUMBER_MAX_LENGTH,
@@ -4356,6 +4358,13 @@ export const gatewayInvoices = pgTable(
      * attempt, and never evidence: only that inquiry's answer decides anything.
      */
     hintedPaymentId: text('hinted_payment_id'),
+    /**
+     * The integer the provider knows this attempt's customer by (CentralPay's `userId`,
+     * `docs/centralpay-gateway-audit.md` §3): the customer's stable random number from
+     * `gateway_customer_numbers`, frozen here when the attempt opened so a verify is judged
+     * against what was SENT. Write-once (`nexa_gateway_invoices_provider_user_guard`).
+     */
+    providerUserId: text('provider_user_id'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -4487,6 +4496,25 @@ export const gatewayInvoices = pgTable(
       'gateway_invoices_nowpayments_check',
       sql`provider <> 'NOWPAYMENTS' OR (provider_unit = 'USD' AND conversion_policy = 'CENTRAL_FX' AND bot_instance_id IS NULL)`,
     ),
+    /**
+     * A CentralPay attempt is billed in Toman with no conversion and no bot, and carries the
+     * integers the provider was sent: a ten-digit order id and the customer's number.
+     */
+    check(
+      'gateway_invoices_centralpay_check',
+      sql`provider <> 'CENTRALPAY' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_user_id IS NOT NULL AND provider_order_id ~ '^[0-9]{10}$')`,
+    ),
+    check(
+      'gateway_invoices_provider_user_id_check',
+      sql`provider_user_id IS NULL OR (provider = 'CENTRALPAY' AND provider_user_id ~ '^[0-9]{10}$')`,
+    ),
+    /*
+     * CentralPay's `orderId` is unique across EVERY tenant: tenants that share one merchant
+     * account share its order namespace, and `verify` is asked by order id alone.
+     */
+    uniqueIndex('gateway_invoices_centralpay_order_id_key')
+      .on(table.providerOrderId)
+      .where(sql`provider = 'CENTRALPAY'`),
     /** A current card is a whole card, only on a card-transfer route, bounded by length only. */
     check(
       'gateway_invoices_card_check',
@@ -5106,6 +5134,15 @@ export const paymentGatewayCredentials = pgTable(
      */
     lastCheckAt: timestamptz('last_check_at'),
     lastCheckResult: text('last_check_result'),
+    /*
+     * A route whose provider authorises its INQUIRY with a separate key (CentralPay's verify
+     * key, `docs/centralpay-gateway-audit.md` §3): its own AEAD purpose
+     * (`payment_gateway.verify_key`) bound to this row's id. All three or none; replaced,
+     * never cleared, and never selected by a projection — only its set-at time is.
+     */
+    verifyKeyCiphertext: text('verify_key_ciphertext'),
+    verifyKeyKeyId: text('verify_key_key_id'),
+    verifyKeySetAt: timestamptz('verify_key_set_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -5113,6 +5150,10 @@ export const paymentGatewayCredentials = pgTable(
     check(
       'payment_gateway_credentials_webhook_secret_check',
       sql`(webhook_secret_ciphertext IS NULL) = (webhook_secret_key_id IS NULL) AND (webhook_secret_ciphertext IS NULL) = (webhook_secret_set_at IS NULL)`,
+    ),
+    check(
+      'payment_gateway_credentials_verify_key_check',
+      sql`(verify_key_ciphertext IS NULL) = (verify_key_key_id IS NULL) AND (verify_key_ciphertext IS NULL) = (verify_key_set_at IS NULL)`,
     ),
     check(
       'payment_gateway_credentials_last_check_check',
@@ -5130,6 +5171,50 @@ export const paymentGatewayCredentials = pgTable(
     check(
       'payment_gateway_credentials_provider_check',
       enumCheck('provider', PAYMENT_GATEWAY_PROVIDERS),
+    ),
+  ],
+);
+
+/**
+ * The integer a provider knows a customer by, for a route whose descriptor says
+ * `numericIdentity` (CentralPay's `userId`, `docs/centralpay-gateway-audit.md` §3).
+ *
+ * Drawn at random from the contract's ten-digit range the first time the customer opens an
+ * attempt through the route, and never changed (`nexa_gateway_customer_numbers_guard`):
+ * the provider may tie its own records — the paying card — to it. Unique per provider across
+ * EVERY tenant, because tenants sharing one merchant account share its user namespace; not
+ * the Telegram id, whose width the provider's integer may not hold (`OQ-CP-02`) and which
+ * would hand the provider an identity it does not need.
+ */
+export const gatewayCustomerNumbers = pgTable(
+  'gateway_customer_numbers',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    provider: text('provider').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    number: bigint('number', { mode: 'bigint' }).notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'gateway_customer_numbers_pk',
+      columns: [table.tenantId, table.provider, table.customerId],
+    }),
+    uniqueIndex('gateway_customer_numbers_number_key').on(table.provider, table.number),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'gateway_customer_numbers_customer_fk',
+    }),
+    check(
+      'gateway_customer_numbers_provider_check',
+      enumCheck('provider', PAYMENT_GATEWAY_PROVIDERS),
+    ),
+    check(
+      'gateway_customer_numbers_number_check',
+      sql`number BETWEEN ${sql.raw(CENTRALPAY_INTEGER_MIN.toString())} AND ${sql.raw(CENTRALPAY_INTEGER_MAX.toString())}`,
     ),
   ],
 );

@@ -87,6 +87,10 @@ describe('the conversion (A1)', () => {
       providerReview: false,
       // NOWPayments: only a provider that signs its webhooks takes a second secret.
       webhookSecret: false,
+      // CentralPay: a separate verify key, a browser return and integer ids are its alone.
+      verifyKey: false,
+      browserReturn: false,
+      numericIdentity: false,
     });
     expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS.approval).toBe('INQUIRY');
   });

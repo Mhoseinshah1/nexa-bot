@@ -15961,15 +15961,25 @@ const PROVIDER_REVIEW_SCREEN_KEYS: Partial<
     inReview: 'bot.payment.nowpayments_in_review',
     unresolved: 'bot.payment.nowpayments_review_unresolved',
   },
+  /*
+   * CentralPay has no review window (`docs/centralpay-gateway-audit.md` §5.8): it reaches
+   * UNKNOWN only when a verify did not match the payment, which its own sentence says.
+   */
+  CENTRALPAY: {
+    inReview: 'bot.payment.gateway_in_review',
+    unresolved: 'bot.payment.centralpay_review_unresolved',
+  },
 };
 
 /**
  * The label of the URL button that opens a provider's invoice page. NOWPayments carries the
  * owner's «💳 پرداخت با ارز دیجیتال» under its OWN key, isolated so the central inline-button
- * registry can take it over as `payment.nowpayments_open` without touching any other route.
+ * registry can take it over as `payment.nowpayments_open` without touching any other route;
+ * CentralPay's «💳 پرداخت با CentralPay» is isolated the same way (`payment.centralpay_open`).
  */
 const PROVIDER_PAY_BUTTON_KEYS: Partial<Record<PaymentGatewayProvider, InlineButtonKey>> = {
   NOWPAYMENTS: 'payment.nowpayments_open',
+  CENTRALPAY: 'payment.centralpay_open',
 };
 
 export function gatewayAttemptScreen(

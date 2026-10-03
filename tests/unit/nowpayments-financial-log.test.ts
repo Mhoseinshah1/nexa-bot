@@ -20,6 +20,7 @@ function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceR
     providerInvoiceId: 'NP-INV',
     hintedInvoiceId: null,
     hintedPaymentId: null,
+    providerUserId: null,
     creationState: 'CREATED',
     creationAttempts: 1,
     creationSentAt: CREATED_AT,
@@ -79,5 +80,37 @@ describe('the financial log’s NOWPayments provider facts', () => {
       providerFinalAmount: '9.99 USD ≠ 10.00 USD',
     });
     expect(gatewayProviderFacts(invoice({ requestAmount: null })).providerFinalAmount).toBe('—');
+  });
+});
+
+/**
+ * CentralPay (`docs/centralpay-gateway-audit.md` §5.4): the Toman the provider's verify
+ * REPORTED, the invoiced figure beside it when they differ, and the bound reference.
+ */
+describe('the financial log’s CentralPay provider facts', () => {
+  const centralpay = (overrides: Partial<GatewayInvoiceRecord>) =>
+    invoice({
+      provider: 'CENTRALPAY',
+      providerOrderId: '1234567890',
+      providerInvoiceId: '1234567890',
+      providerUserId: '1987654321',
+      providerUnit: 'IRT',
+      sentAmount: 150_000n,
+      conversionPolicy: 'SAME_UNIT',
+      finalAmount: null,
+      ...overrides,
+    });
+  it('shows the verified Toman and the reference, and a mismatch beside the invoiced figure', () => {
+    expect(
+      gatewayProviderFacts(centralpay({ requestAmount: 150_000n, providerChargeId: 'REF-1' })),
+    ).toEqual({
+      providerInvoiceId: '1234567890/ref:REF-1',
+      providerFinalAmount: '150000 IRT',
+    });
+    expect(gatewayProviderFacts(centralpay({ requestAmount: 149_999n }))).toEqual({
+      providerInvoiceId: '1234567890',
+      providerFinalAmount: '149999 IRT ≠ 150000 IRT',
+    });
+    expect(gatewayProviderFacts(centralpay({ requestAmount: null })).providerFinalAmount).toBe('—');
   });
 });

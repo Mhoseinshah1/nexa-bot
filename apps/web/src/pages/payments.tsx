@@ -270,6 +270,7 @@ function GatewayName({ provider }: { provider: string | null }) {
     return <>{t('web.payment_gateway_provider_telegram_stars')}</>;
   }
   if (provider === 'NOWPAYMENTS') return <>{t('web.payment_gateway_provider_nowpayments')}</>;
+  if (provider === 'CENTRALPAY') return <>{t('web.payment_gateway_provider_centralpay')}</>;
   return <Ltr>{provider}</Ltr>;
 }
 
@@ -1549,6 +1550,18 @@ export function PaymentDetailPage({
                                       key="pp"
                                       value={row.gatewayInvoice.hintedPaymentId}
                                     />,
+                                  ] as [ReactNode, ReactNode],
+                                ]),
+                            /*
+                             * CentralPay: the integer the gateway knows this customer by —
+                             * what an operator matches against CentralPay's own records.
+                             */
+                            ...(row.gatewayInvoice.providerUserId === null
+                              ? []
+                              : [
+                                  [
+                                    t('web.payment_gateway_provider_user_id'),
+                                    <Copyable key="pu" value={row.gatewayInvoice.providerUserId} />,
                                   ] as [ReactNode, ReactNode],
                                 ]),
                             [

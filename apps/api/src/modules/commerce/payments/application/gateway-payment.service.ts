@@ -1,4 +1,5 @@
 import {
+  GATEWAY_RETURN_PATH_PREFIX,
   PAYMENT_GATEWAY_DESCRIPTORS,
   TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS,
   TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS,
@@ -149,6 +150,22 @@ export function gatewayWebhookPath(provider: PaymentGatewayProvider, tenantId: s
  * the invoice is then created without one and reconciliation alone decides. No secret
  * travels in it: the path names the tenant, and a webhook only ever schedules an inquiry.
  */
+/**
+ * The return URL base a `browserReturn` route's provider is sent (CentralPay): the tenant's
+ * registered public origin plus the return path. The adapter appends the attempt's own
+ * `orderId`. Null when no origin is registered — the create is then refused as the
+ * installation's configuration, because the provider requires the URL.
+ */
+export function gatewayReturnUrl(
+  origin: string | null,
+  provider: PaymentGatewayProvider,
+  tenantId: string,
+): string | null {
+  return origin === null
+    ? null
+    : `${origin}${GATEWAY_RETURN_PATH_PREFIX}/${provider.toLowerCase()}/${tenantId}`;
+}
+
 export function gatewayCallbackUrl(
   origin: string | null,
   provider: PaymentGatewayProvider,
@@ -238,6 +255,12 @@ export interface GatewayPaymentServiceDeps {
   readonly invoiceScreens?: {
     refresh(scope: TenantContext, paymentId: string): Promise<void>;
   };
+  /**
+   * CentralPay's browser return (§5.6): the tenant's bot as a `https://t.me/<username>` link
+   * the result redirects to, from the stored bot row (no Telegram call on a public GET), or
+   * null. Absent, the return answers without a link.
+   */
+  readonly botLinkFor?: (scope: TenantContext) => Promise<string | null>;
 }
 
 /** What one pass did, for the loop's log and for a test. Counts only; no identifiers. */
@@ -270,6 +293,20 @@ export type GatewayWebhookResult =
   | 'IGNORED_INACTIVE'
   /** A signed route's webhook whose signature did not verify: dropped before it was read. */
   | 'IGNORED_UNVERIFIED';
+
+/**
+ * What a browser return found (CentralPay), for the result page: the payment is CONFIRMED,
+ * its verify was brought forward (CHECKING), it is closed or held (CLOSED), or nothing this
+ * return can name (UNKNOWN). Never anything the caller could turn into money.
+ */
+export type BrowserReturnState = 'CONFIRMED' | 'CHECKING' | 'CLOSED' | 'UNKNOWN';
+
+/** The state, and where the browser goes next: the tenant's bot, or nowhere known. */
+export interface BrowserReturnResult {
+  readonly state: BrowserReturnState;
+  /** `https://t.me/<bot>` for the tenant's first active bot, or null. Never a payment link. */
+  readonly botLink: string | null;
+}
 
 /** An attempt as a customer's own surface may see it. */
 export interface GatewayAttemptView {
@@ -541,6 +578,8 @@ export class GatewayPaymentService {
       callbackUrl,
       buyerChatId,
       presentation,
+      // A `numericIdentity` route's customer number, frozen on the attempt (CentralPay).
+      providerUserId: invoice.providerUserId,
     });
     const at = this.deps.clock.now();
     /*
@@ -741,8 +780,16 @@ export class GatewayPaymentService {
     }
 
     const adapter = this.deps.adapters(invoice.provider);
+    /*
+     * What the inquiry is authorised by, by the route's descriptor: the API key, or a SEPARATE
+     * verify key (CentralPay — never assumed to be the same credential). Never logged.
+     */
     const apiKey =
-      adapter === null ? null : await this.deps.credentials.read(scope, invoice.provider);
+      adapter === null
+        ? null
+        : PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].verifyKey
+          ? await this.deps.credentials.readVerifyKey(scope, invoice.provider)
+          : await this.deps.credentials.read(scope, invoice.provider);
     if (
       invoiceId === null ||
       adapter === null ||
@@ -796,6 +843,8 @@ export class GatewayPaymentService {
       providerOrderId: invoice.providerOrderId,
       sentAmount: invoice.sentAmount,
       hintedPaymentId: invoice.hintedPaymentId,
+      // CentralPay: the customer's number as SENT — a verify naming another never approves.
+      providerUserId: invoice.providerUserId,
     });
     const at = this.deps.clock.now();
     const next = postDeadline
@@ -866,7 +915,32 @@ export class GatewayPaymentService {
       return 'ERROR';
     }
 
+    /*
+     * CentralPay (`docs/centralpay-gateway-audit.md` §5.4): the provider's reference for the
+     * money is bound to THIS attempt, write-once, in the transaction that records the answer —
+     * BEFORE anything can settle. A reference another payment already holds (or a second
+     * reference for this one) turns the answer into a MISMATCH: never settled, recorded unpaid,
+     * the payment held for an operator. A repeated verify of a settled payment never gets
+     * here: its outcome is recorded and nothing more is asked.
+     */
+    let verdict = outcome.verdict;
+    let mismatchReason = outcome.mismatchReason ?? null;
+    const reference = outcome.providerReference ?? null;
     await this.deps.uow.run(scope, async (tx) => {
+      if (reference !== null && (verdict === 'APPROVED' || verdict === 'MISMATCH')) {
+        const bound = await this.deps.invoices.bindProviderReference(
+          scope,
+          invoice.paymentId,
+          invoice.provider,
+          reference,
+          at,
+          tx,
+        );
+        if (bound !== 'BOUND') {
+          verdict = 'MISMATCH';
+          mismatchReason = 'PROVIDER_REFERENCE_REUSED';
+        }
+      }
       /*
        * TonPays Telegram (§9.1): an answer about THIS attempt resolves a lost receipt upload
        * FOR DISPLAY — a later `pending` lets the customer send a different photo — and never
@@ -887,7 +961,8 @@ export class GatewayPaymentService {
         invoice.paymentId,
         {
           status: outcome.status,
-          paid: outcome.paid,
+          // Paid only while the verdict is still an approval (a reused reference is not).
+          paid: verdict === 'APPROVED' ? outcome.paid : outcome.paid === null ? null : false,
           requestAmount: outcome.requestAmount,
           finalAmount: outcome.finalAmount,
           errorCode: null,
@@ -913,7 +988,7 @@ export class GatewayPaymentService {
       );
     });
 
-    if (outcome.verdict === 'OPEN') {
+    if (verdict === 'OPEN') {
       /*
        * NOWPayments (§5.4): the provider's own read says the customer's coins are on their
        * way. On a route that reviews, inside the customer window and with no review yet, that
@@ -948,24 +1023,27 @@ export class GatewayPaymentService {
       return 'OPEN';
     }
 
-    if (outcome.verdict === 'MISMATCH') {
+    if (verdict === 'MISMATCH') {
       /*
        * Money the provider holds that is not what this attempt invoiced (§5.5): never
        * settled and never failed. Inside the deadline the payment goes to UNKNOWN for an
        * operator; a payment already UNKNOWN stays as it is; one already closed records the
        * money as a late completion — nothing moves either way.
        */
+      const reason = mismatchReason ?? 'PROVIDER_AMOUNT_MISMATCH';
       if (eligible) {
-        return (await this.holdMismatch(scope, actor, invoice, outcome.status)) ? 'HELD' : 'ERROR';
+        return (await this.holdMismatch(scope, actor, invoice, outcome.status, reason))
+          ? 'HELD'
+          : 'ERROR';
       }
       if (claimed.paymentState !== 'UNKNOWN') {
-        await this.lateCompletion(scope, actor, invoice, 'PROVIDER_AMOUNT_MISMATCH');
+        await this.lateCompletion(scope, actor, invoice, reason);
         return 'LATE';
       }
       return 'OPEN';
     }
 
-    if (outcome.verdict === 'UNSUCCESSFUL') {
+    if (verdict === 'UNSUCCESSFUL') {
       if (eligible) {
         await this.deps.payments.failGatewayPayment(scope, actor, invoice.paymentId, {
           reasonCode: `${invoice.provider.toLowerCase()}:${outcome.status}`,
@@ -984,6 +1062,7 @@ export class GatewayPaymentService {
       eligible,
       `${invoice.provider.toLowerCase()}:${outcome.status}:paid`,
       at,
+      reference,
     );
   }
 
@@ -999,7 +1078,9 @@ export class GatewayPaymentService {
     eligible: boolean,
     evidenceNote: string,
     at: Date,
-  ): Promise<'SETTLED' | 'LATE' | 'ERROR'> {
+    /** The provider reference bound to this attempt (CentralPay), re-checked under the lock. */
+    providerReference: string | null = null,
+  ): Promise<'SETTLED' | 'LATE' | 'ERROR' | 'HELD'> {
     if (!eligible) {
       await this.lateCompletion(scope, actor, invoice, 'DEADLINE_PASSED');
       return 'LATE';
@@ -1010,7 +1091,7 @@ export class GatewayPaymentService {
         scope,
         actor,
         invoice.paymentId,
-        { evidenceNote },
+        { evidenceNote, providerReference },
       );
     } catch (error) {
       /*
@@ -1032,6 +1113,21 @@ export class GatewayPaymentService {
         await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'ALREADY_SETTLED', at);
         return 'SETTLED';
       case 'NOT_ELIGIBLE':
+        /*
+         * The reference the lane bound is not this attempt's under the payment's lock: the
+         * money is not provably this payment's. Held for an operator, never settled.
+         */
+        if (confirmation.reason === 'PROVIDER_REFERENCE_MISMATCH') {
+          return (await this.holdMismatch(
+            scope,
+            actor,
+            invoice,
+            invoice.providerStatus ?? 'verified',
+            'PROVIDER_REFERENCE_REUSED',
+          ))
+            ? 'HELD'
+            : 'ERROR';
+        }
         await this.lateCompletion(scope, actor, invoice, confirmation.reason);
         return 'LATE';
     }
@@ -1082,7 +1178,8 @@ export class GatewayPaymentService {
       ),
     );
     if (!recorded) return 'OPEN';
-    return this.settleApproved(
+    // A recorded payment carries no provider reference, so it is never held here.
+    const settled = await this.settleApproved(
       scope,
       actor,
       invoice,
@@ -1090,6 +1187,7 @@ export class GatewayPaymentService {
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
     );
+    return settled === 'HELD' ? 'ERROR' : settled;
   }
 
   /**
@@ -1119,7 +1217,7 @@ export class GatewayPaymentService {
     const deadline = gatewaySettlementDeadline(payment);
     const eligible =
       payment.state === 'PENDING' && deadline !== null && now.getTime() < deadline.getTime();
-    return this.settleApproved(
+    const settled = await this.settleApproved(
       scope,
       this.actor(),
       invoice,
@@ -1127,6 +1225,7 @@ export class GatewayPaymentService {
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
     );
+    return settled === 'HELD' ? 'ERROR' : settled;
   }
 
   /** What an invoice is sent with, by the route's descriptor. Never logged. */
@@ -1181,6 +1280,7 @@ export class GatewayPaymentService {
     actor: ActorContext,
     invoice: GatewayInvoiceRecord,
     providerStatus: string,
+    reason = 'PROVIDER_AMOUNT_MISMATCH',
   ): Promise<boolean> {
     const now = this.deps.clock.now();
     const held = await this.deps.uow.run(scope, async (tx) => {
@@ -1198,7 +1298,7 @@ export class GatewayPaymentService {
           after: {
             state: 'UNKNOWN',
             gatewayProvider: payment.gatewayProvider,
-            reason: 'PROVIDER_AMOUNT_MISMATCH',
+            reason,
             providerStatus,
           },
           result: 'SUCCESS',
@@ -1224,13 +1324,13 @@ export class GatewayPaymentService {
           severity: 'WARN',
           message:
             'A payment gateway reported money for an attempt that does not match what was invoiced ' +
-            '(a partial payment, or another price). Nothing was settled or failed; reconcile it ' +
-            'against the gateway’s records.',
+            '(a partial payment, another price, another customer or a reference already used). ' +
+            'Nothing was settled or failed; reconcile it against the gateway’s records.',
           dedupeKey: `${GATEWAY_REVIEW_UNRESOLVED_CODE}:${payment.id}`,
           context: {
             paymentId: payment.id,
             provider: payment.gatewayProvider,
-            reason: 'PROVIDER_AMOUNT_MISMATCH',
+            reason,
             providerStatus,
           },
         },
@@ -1866,6 +1966,8 @@ export class GatewayPaymentService {
   ): Promise<GatewayWebhookResult | 'MALFORMED' | 'NO_ADAPTER'> {
     const adapter = this.deps.adapters(provider);
     if (adapter === null) return 'NO_ADAPTER';
+    // A browser-return route documents no webhook (CentralPay): nothing posted is read.
+    if (PAYMENT_GATEWAY_DESCRIPTORS[provider].browserReturn) return 'NO_ADAPTER';
     /*
      * A route whose provider SIGNS its webhooks (NOWPayments): verified against the stored
      * secret, in constant time, BEFORE a single field of the body is read. Unverified is
@@ -2114,6 +2216,98 @@ export class GatewayPaymentService {
     await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.requestInquiry(scope, view.payment.id, at, tx),
     );
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // The browser return — a hint, never evidence (CentralPay, `docs/centralpay-gateway-audit.md`
+  // §5.6).
+  // ---------------------------------------------------------------------------------------
+
+  /**
+   * The customer's browser came back from the provider's page to the return URL Nexa
+   * generated for `tenantId`, naming `orderIdParam` (a GET: it carries no payment data).
+   *
+   * It proves NOTHING. It locates the attempt by the provider order id WITHIN the tenant the
+   * URL names, and:
+   *
+   * - an attempt already decided (settled, failed, expired, held, recorded late) is answered
+   *   from its LOCAL state and nothing is asked — a repeated return can never verify, settle
+   *   or credit again;
+   * - an open attempt has its next verify brought forward (no sooner than five seconds after
+   *   the last, under the worker's call budget) — a database write only; the worker asks
+   *   the provider and only its answer reaches the settlement path;
+   * - after the deadline, at most the bounded diagnostic verifies a webhook may trigger.
+   *
+   * The answer is what the result page needs and nothing about any other attempt: an unknown
+   * tenant, order or route is `UNKNOWN`, indistinguishable from a closed attempt to a caller.
+   */
+  async receiveBrowserReturn(
+    tenantId: string,
+    provider: PaymentGatewayProvider,
+    orderIdParam: string | undefined,
+  ): Promise<BrowserReturnResult> {
+    const state = await this.browserReturnState(tenantId, provider, orderIdParam);
+    const scope: TenantContext = {
+      tenantId: tenantId as TenantContext['tenantId'],
+      botInstanceId: null,
+    };
+    /*
+     * The link depends on the TENANT only, never on whether the order exists, so where the
+     * browser is sent says nothing about which attempts exist.
+     */
+    const botLink =
+      this.deps.botLinkFor === undefined || !(await this.deps.scopeActivity.scopeIsActive(scope))
+        ? null
+        : await this.deps.botLinkFor(scope);
+    return { state, botLink };
+  }
+
+  private async browserReturnState(
+    tenantId: string,
+    provider: PaymentGatewayProvider,
+    orderIdParam: string | undefined,
+  ): Promise<BrowserReturnState> {
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].browserReturn) return 'UNKNOWN';
+    if (orderIdParam === undefined || !/^[0-9]{1,20}$/u.test(orderIdParam)) return 'UNKNOWN';
+    const scope: TenantContext = {
+      tenantId: tenantId as TenantContext['tenantId'],
+      botInstanceId: null,
+    };
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return 'UNKNOWN';
+    const invoice = await this.deps.invoices.findByProviderOrderId(scope, provider, orderIdParam);
+    if (invoice === null) return 'UNKNOWN';
+    const payment = await this.deps.paymentRecords.findById(scope, invoice.paymentId);
+    if (payment === null) return 'UNKNOWN';
+    if (payment.state === 'CONFIRMED') return 'CONFIRMED';
+    const now = this.deps.clock.now();
+    const deadline = gatewaySettlementDeadline(payment);
+    const eligible =
+      payment.state === 'PENDING' && deadline !== null && now.getTime() < deadline.getTime();
+    const askable =
+      invoice.creationState === 'CREATED' &&
+      invoice.outcome === null &&
+      payment.state !== 'UNKNOWN';
+    const diagnostic =
+      !eligible &&
+      askable &&
+      invoice.lateCompletionObservedAt === null &&
+      invoice.postDeadlineInquiries < POST_DEADLINE_INQUIRY_MAX;
+    if (askable && (eligible || diagnostic)) {
+      const at =
+        invoice.lastInquiryAt === null
+          ? now
+          : new Date(
+              Math.max(now.getTime(), invoice.lastInquiryAt.getTime() + INQUIRY_MIN_SPACING_MS),
+            );
+      await this.deps.uow.run(scope, (tx) =>
+        this.deps.invoices.requestInquiry(scope, invoice.paymentId, at, tx),
+      );
+      this.deps.logger.info(
+        { paymentId: invoice.paymentId, provider, eligible },
+        'gateway browser return brought a verify forward',
+      );
+    }
+    return eligible ? 'CHECKING' : 'CLOSED';
   }
 
   // ---------------------------------------------------------------------------------------

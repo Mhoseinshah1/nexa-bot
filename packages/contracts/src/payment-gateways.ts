@@ -90,6 +90,14 @@ const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
  *   approves — `finished`, for exactly the invoice's price. Needs an API key AND an IPN
  *   secret; a row starts DISABLED and cannot be enabled without both. Not accepted
  *   against the real provider yet (`OQ-NP-01`).
+ * - `CENTRALPAY` — CentralPay's redirect + verify deposit (`docs/centralpay-gateway-audit.md`).
+ *   Nexa asks for a link (`getLink`) in TOMAN with integer `orderId`/`userId`, the customer
+ *   pays on CentralPay's page and is sent back to a Nexa return URL — which is NOT proof of
+ *   anything. Only `verify`, asked server to server with a SEPARATE verify key, can approve,
+ *   and only for exactly the Toman asked, the customer's own `userId` and a `referenceId` no
+ *   other payment has consumed. No webhook exists. Needs both keys; a row starts DISABLED
+ *   and cannot be enabled without them. Not accepted against the real provider yet
+ *   (`OQ-CP-01`).
  */
 export const PAYMENT_GATEWAY_PROVIDERS = [
   'MANUAL_TRANSFER',
@@ -97,6 +105,7 @@ export const PAYMENT_GATEWAY_PROVIDERS = [
   'TELEGRAM_STARS',
   'TONPAYS_TELEGRAM',
   'NOWPAYMENTS',
+  'CENTRALPAY',
 ] as const;
 export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
@@ -174,6 +183,27 @@ export interface PaymentGatewayDescriptor {
    * dropped before a single field of it is read. A verified webhook is still only a hint.
    */
   readonly webhookSecret: boolean;
+  /**
+   * Whether the provider's INQUIRY is authorised by a SECOND key, separate from the one
+   * that creates the invoice (CentralPay: `getLink`'s static key and `verify`'s MD5 key —
+   * never assumed to be the same credential). Such a route stores it write-only beside the
+   * API key, under its own AEAD purpose, and cannot be enabled without it.
+   */
+  readonly verifyKey: boolean;
+  /**
+   * Whether the provider sends the customer's BROWSER back to a Nexa return URL instead of
+   * posting a webhook (CentralPay). The return carries nothing that is evidence: it only
+   * brings the next inquiry forward. No webhook is accepted for such a route, and the URL
+   * generated for it is the return URL rather than the webhook path.
+   */
+  readonly browserReturn: boolean;
+  /**
+   * Whether the provider identifies the order and the customer by INTEGERS (CentralPay's
+   * `orderId` and `userId`). Such an attempt carries a random per-attempt integer order id
+   * and the customer's stable random integer number, both unique across the installation
+   * (`docs/centralpay-gateway-audit.md` §3).
+   */
+  readonly numericIdentity: boolean;
 }
 
 export const PAYMENT_GATEWAY_DESCRIPTORS: {
@@ -191,6 +221,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresBuyerChatId: false,
     providerReview: false,
     webhookSecret: false,
+    verifyKey: false,
+    browserReturn: false,
+    numericIdentity: false,
   },
   TONPAYS: {
     provider: 'TONPAYS',
@@ -204,6 +237,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresBuyerChatId: false,
     providerReview: false,
     webhookSecret: false,
+    verifyKey: false,
+    browserReturn: false,
+    numericIdentity: false,
   },
   TELEGRAM_STARS: {
     provider: 'TELEGRAM_STARS',
@@ -232,6 +268,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresBuyerChatId: false,
     providerReview: false,
     webhookSecret: false,
+    verifyKey: false,
+    browserReturn: false,
+    numericIdentity: false,
   },
   TONPAYS_TELEGRAM: {
     provider: 'TONPAYS_TELEGRAM',
@@ -246,6 +285,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresBuyerChatId: true,
     providerReview: true,
     webhookSecret: false,
+    verifyKey: false,
+    browserReturn: false,
+    numericIdentity: false,
   },
   NOWPAYMENTS: {
     provider: 'NOWPAYMENTS',
@@ -277,6 +319,27 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
      */
     providerReview: true,
     webhookSecret: true,
+    verifyKey: false,
+    browserReturn: false,
+    numericIdentity: false,
+  },
+  CENTRALPAY: {
+    provider: 'CENTRALPAY',
+    settlesVia: 'GATEWAY',
+    requiresCredentials: true,
+    invoiceCredential: 'GATEWAY_KEY',
+    approval: 'INQUIRY',
+    // Billed in Toman with no conversion: TonPays' unit rule (an IRR payable must divide).
+    conversion: SAME_UNIT_CONVERSION,
+    invoiceForm: 'LINK',
+    boundToBot: false,
+    requiresBuyerChatId: false,
+    // Nothing the provider says before verify means the money is with it: no review window.
+    providerReview: false,
+    webhookSecret: false,
+    verifyKey: true,
+    browserReturn: true,
+    numericIdentity: true,
   },
 };
 

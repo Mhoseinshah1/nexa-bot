@@ -93,7 +93,10 @@ import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
 import { gatewaySettlementDeadline, settlementRefusal } from '../domain/settlement.js';
-import { reconciliationEvidenceAllows } from '../domain/gateway-reconciliation.js';
+import {
+  reconciliationEvidenceAllows,
+  requiresProviderReference,
+} from '../domain/gateway-reconciliation.js';
 import {
   GATEWAY_REVIEW_RECONCILED_CODE,
   GATEWAY_REVIEW_UNRESOLVED_CODE,
@@ -309,7 +312,13 @@ export interface PaymentServiceDeps {
    */
   readonly gatewayInvoices: Pick<
     GatewayInvoiceRepository,
-    'open' | 'findOpenAttempt' | 'findByPayment' | 'requestReconcileInquiry' | 'requestInquiry'
+    | 'open'
+    | 'findOpenAttempt'
+    | 'findByPayment'
+    | 'requestReconcileInquiry'
+    | 'requestInquiry'
+    | 'providerOrderIdTaken'
+    | 'customerNumberFor'
   >;
   /**
    * TonPays Telegram (§9.6.3 c): the two rows the acknowledgement's own transaction also
@@ -328,7 +337,7 @@ export interface PaymentServiceDeps {
     provider: PaymentGatewayProvider,
   ) => Pick<
     ExternalGatewayAdapter,
-    'unit' | 'providerAmountOf' | 'newOrderId' | 'attemptLifetimeMs'
+    'unit' | 'providerAmountOf' | 'newOrderId' | 'newCustomerNumber' | 'attemptLifetimeMs'
   > | null;
   /** Whether a route's API key is stored — READ only; never the key. */
   readonly gatewayCredentials: Pick<GatewayCredentialStore, 'setAt'>;
@@ -377,9 +386,17 @@ export type GatewayConfirmation =
         | 'DEADLINE_PASSED'
         | 'PAYMENT_NOT_PENDING'
         | 'NOT_A_GATEWAY_PAYMENT'
-        | 'ORDER_NOT_AWAITING_PAYMENT';
+        | 'ORDER_NOT_AWAITING_PAYMENT'
+        /*
+         * CentralPay: the provider reference the lane bound is not this attempt's under the
+         * payment's lock — the money is not provably this payment's. Held, never settled.
+         */
+        | 'PROVIDER_REFERENCE_MISMATCH';
       readonly payment: PaymentRecord;
     };
+
+/** How many random order ids a `numericIdentity` attempt draws before refusing (§3). */
+const NUMERIC_ORDER_ID_DRAWS = 5;
 
 /** The action every gateway audit row carries, one per command. */
 const GATEWAY_REQUEST_ACTION = 'payment.gateway_request';
@@ -3531,7 +3548,14 @@ export class PaymentService {
     scope: TenantContext,
     actor: ActorContext,
     id: string,
-    input: { readonly evidenceNote: string | null },
+    input: {
+      readonly evidenceNote: string | null;
+      /**
+       * The provider's reference for the money (CentralPay's `referenceId`), which the lane
+       * bound to this attempt before calling: re-checked here, under the payment's lock.
+       */
+      readonly providerReference?: string | null;
+    },
   ): Promise<GatewayConfirmation> {
     const paymentId = this.paymentId(id);
     const denial = { action: GATEWAY_CONFIRM_ACTION, entityType: 'Payment', entityId: paymentId };
@@ -3568,6 +3592,22 @@ export class PaymentService {
         const deadline = gatewaySettlementDeadline(payment);
         if (deadline === null || now.getTime() >= deadline.getTime()) {
           return { outcome: 'NOT_ELIGIBLE', reason: 'DEADLINE_PASSED', payment };
+        }
+        /*
+         * CentralPay (`docs/centralpay-gateway-audit.md` §5.4): an approval that names the
+         * provider's reference settles only if that reference is bound to THIS attempt — read
+         * under the payment's lock. The charge id is write-once and unique per tenant and
+         * provider, so a reference can pay one attempt and never two.
+         */
+        const reference = input.providerReference ?? null;
+        if (
+          reference !== null ||
+          (payment.gatewayProvider !== null && requiresProviderReference(payment.gatewayProvider))
+        ) {
+          const bound = await this.deps.gatewayInvoices.findByPayment(scope, paymentId, tx);
+          if (reference === null || bound === null || bound.providerChargeId !== reference) {
+            return { outcome: 'NOT_ELIGIBLE', reason: 'PROVIDER_REFERENCE_MISMATCH', payment };
+          }
         }
         /*
          * The evidence is what APPROVED it, by the route's own descriptor (Codex review of
@@ -4013,7 +4053,11 @@ export class PaymentService {
           reconciliationEvidenceAllows(payment.gatewayProvider ?? invoice.provider, input.to, {
             status,
             paid: invoice.providerPaid,
-          });
+          }) &&
+          // A reference-bound route (CentralPay) confirms only with its reference bound.
+          (input.to !== 'CONFIRMED' ||
+            !requiresProviderReference(invoice.provider) ||
+            invoice.providerChargeId !== null);
         if (invoice === null || !evidenceAllows) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
@@ -4609,12 +4653,62 @@ export class PaymentService {
         },
         tx,
       );
+      /*
+       * A `numericIdentity` route (CentralPay, `docs/centralpay-gateway-audit.md` §3): the
+       * order id is a random ten-digit integer unique across EVERY tenant (tenants sharing one
+       * merchant account share its namespace), redrawn a bounded number of times on a
+       * collision; and the customer's stable random number, drawn once and kept. Both are in
+       * this transaction, so a refused attempt leaves neither behind.
+       */
+      let providerOrderId = adapter.newOrderId();
+      let providerUserId: string | null = null;
+      if (descriptor.numericIdentity) {
+        for (let draws = 1; ; draws += 1) {
+          if (
+            !(await this.deps.gatewayInvoices.providerOrderIdTaken(
+              input.provider,
+              providerOrderId,
+              tx,
+            ))
+          ) {
+            break;
+          }
+          if (draws >= NUMERIC_ORDER_ID_DRAWS) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+              'This payment route cannot open an attempt right now.',
+              { reason: 'ORDER_ID_UNAVAILABLE' },
+            );
+          }
+          providerOrderId = adapter.newOrderId();
+        }
+        const drawCustomer = adapter.newCustomerNumber?.bind(adapter);
+        providerUserId =
+          drawCustomer === undefined
+            ? null
+            : await this.deps.gatewayInvoices.customerNumberFor(
+                scope,
+                input.provider,
+                input.customerId,
+                drawCustomer,
+                input.now,
+                tx,
+              );
+        if (providerUserId === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route cannot open an attempt right now.',
+            { reason: 'CUSTOMER_NUMBER_UNAVAILABLE' },
+          );
+        }
+      }
       invoice = await this.deps.gatewayInvoices.open(
         scope,
         {
           paymentId: payment.id,
           provider: input.provider,
-          providerOrderId: adapter.newOrderId(),
+          providerOrderId,
+          providerUserId,
           providerUnit: adapter.unit,
           sentAmount,
           conversionRateMinor,

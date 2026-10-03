@@ -388,6 +388,27 @@ export function gatewayProviderFacts(invoice: GatewayInvoiceRecord | null): Temp
             : `${dollars(reported)} ≠ ${dollars(invoice.sentAmount)}`,
     };
   }
+  /*
+   * CentralPay (`docs/centralpay-gateway-audit.md` §5.4): the Toman the provider's own verify
+   * REPORTED (`request_amount`) — never the invoiced figure under the provider's label — with
+   * the invoiced one beside it when they differ; and the order id with the bound reference.
+   * Nothing verified yet is NONE. The customer's card number is never read.
+   */
+  if (invoice.provider === 'CENTRALPAY') {
+    const toman = (amount: bigint) => `${amount.toString()} ${invoice.providerUnit}`;
+    const reported = invoice.requestAmount;
+    const orderId = invoice.providerInvoiceId ?? invoice.providerOrderId;
+    return {
+      providerInvoiceId:
+        invoice.providerChargeId === null ? orderId : `${orderId}/ref:${invoice.providerChargeId}`,
+      providerFinalAmount:
+        reported === null
+          ? NONE
+          : reported === invoice.sentAmount
+            ? toman(reported)
+            : `${toman(reported)} ≠ ${toman(invoice.sentAmount)}`,
+    };
+  }
   return {
     providerInvoiceId: invoice.providerInvoiceId ?? invoice.hintedInvoiceId ?? NONE,
     providerFinalAmount:

@@ -170,6 +170,7 @@ const ROUTE_NAME_KEYS: Readonly<Record<PaymentGatewayProvider, TemplateKey>> = {
   TELEGRAM_STARS: 'bot.payment.route_name_telegram_stars',
   TONPAYS_TELEGRAM: 'bot.payment.route_name_tonpays_telegram',
   NOWPAYMENTS: 'bot.payment.route_name_nowpayments',
+  CENTRALPAY: 'bot.payment.route_name_centralpay',
 };
 
 export class CustomerScreenComposer {

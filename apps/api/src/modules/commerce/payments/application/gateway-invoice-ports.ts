@@ -61,6 +61,11 @@ export interface GatewayCreateRequest {
   /** Null when this customer's Telegram id is not known; the field is then omitted. */
   readonly buyerChatId: string | null;
   /**
+   * The integer the provider knows the customer by, for a `numericIdentity` route
+   * (CentralPay's `userId`): the number frozen on the attempt. Null for every other route.
+   */
+  readonly providerUserId?: string | null;
+  /**
    * The invoice's own customer-facing text, rendered from templates by the caller, for a
    * provider whose invoice is a message this installation sends (Telegram Stars). Null
    * for a provider that draws its own page.
@@ -213,6 +218,14 @@ export type GatewayInquiryOutcome =
        * the bounded review window. Never an approval.
        */
       readonly fundsDetected?: boolean;
+      /**
+       * The provider's own reference for the money it says arrived (CentralPay's
+       * `referenceId`): bound write-once to this attempt before anything settles, and refused
+       * when another payment already holds it. Absent for every other provider.
+       */
+      readonly providerReference?: string | null;
+      /** Why a MISMATCH is one (a machine reason for the audit row and the condition). */
+      readonly mismatchReason?: string | null;
     }
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
   | { readonly kind: 'RATE_LIMITED'; readonly code: string }
@@ -242,6 +255,8 @@ export interface GatewayInquiryContext {
   readonly providerOrderId: string;
   readonly sentAmount: bigint;
   readonly hintedPaymentId: string | null;
+  /** The customer's integer as sent, for a `numericIdentity` route; null otherwise. */
+  readonly providerUserId?: string | null;
 }
 
 /**
@@ -283,6 +298,11 @@ export interface ExternalGatewayAdapter {
   providerAmountOf(amount: Money, conversion: ResolvedConversion): bigint | null;
   /** A fresh provider order id for one attempt. Never reused, never re-keyed. */
   newOrderId(): string;
+  /**
+   * A fresh candidate for a customer's stable provider number, for a route whose descriptor
+   * says `numericIdentity` (CentralPay's `userId`). Drawn once per customer and stored.
+   */
+  newCustomerNumber?(): string;
   /**
    * `credential` is what the route's descriptor says an invoice is sent with: the stored
    * gateway key (`GATEWAY_KEY`), or the token of the attempt's bot (`BOT_TOKEN`).
@@ -382,6 +402,8 @@ export interface GatewayInvoiceRecord {
   readonly reconcileInquiryRequestedAt: Date | null;
   /** The provider payment id a verified webhook (or a listing inquiry) last named. A hint. */
   readonly hintedPaymentId: string | null;
+  /** The customer's integer as sent (CentralPay's `userId`), frozen at open. Null otherwise. */
+  readonly providerUserId: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -410,10 +432,52 @@ export interface GatewayInvoiceRepository {
       readonly conversionPolicy: GatewayConversionPolicy;
       readonly fx: GatewayInvoiceFxSnapshot | null;
       readonly botInstanceId: string | null;
+      /** A `numericIdentity` route's customer number as sent; null for every other route. */
+      readonly providerUserId?: string | null;
       readonly now: Date;
     },
     tx: unknown,
   ): Promise<GatewayInvoiceRecord>;
+
+  /**
+   * Whether a provider order id is already used by ANY attempt of `provider`, across every
+   * tenant (CentralPay: tenants sharing one merchant account share its order namespace). An
+   * existence check only; nothing about the other attempt is returned.
+   */
+  providerOrderIdTaken(
+    provider: PaymentGatewayProvider,
+    providerOrderId: string,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * The customer's stable provider number (`gateway_customer_numbers`), drawing one with
+   * `draw` the first time — retried on a collision with another customer's, bounded. Null
+   * only when every draw collided.
+   */
+  customerNumberFor(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    customerId: string,
+    draw: () => string,
+    now: Date,
+    tx: unknown,
+  ): Promise<string | null>;
+
+  /**
+   * Binds the provider's reference for the money (CentralPay's `referenceId`) to this attempt,
+   * write-once, as its charge id. `BOUND` — written now, or already this attempt's; `TAKEN`
+   * — another attempt of the tenant holds it; `DIFFERENT` — this attempt already holds
+   * another reference. Nothing is written unless `BOUND`.
+   */
+  bindProviderReference(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    provider: PaymentGatewayProvider,
+    reference: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<'BOUND' | 'TAKEN' | 'DIFFERENT'>;
 
   findByPayment(
     scope: TenantContext,
@@ -730,6 +794,25 @@ export interface GatewayCredentialStore {
     scope: TenantContext,
     provider: PaymentGatewayProvider,
     secret: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<Date | null>;
+  /** When the separate inquiry (verify) key was last replaced, or null. Never the key. */
+  verifyKeySetAt(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx?: unknown,
+  ): Promise<Date | null>;
+  /** The separate inquiry (verify) key, decrypted, or null. For the inquiry call only. */
+  readVerifyKey(scope: TenantContext, provider: PaymentGatewayProvider): Promise<string | null>;
+  /**
+   * Replaces the verify key on the route's EXISTING credential row (the API key is set
+   * first). Returns the new set-at time, or null when no row exists yet.
+   */
+  replaceVerifyKey(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    verifyKey: string,
     now: Date,
     tx: unknown,
   ): Promise<Date | null>;

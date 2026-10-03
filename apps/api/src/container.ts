@@ -352,6 +352,7 @@ import { GatewayReceiptCaptureService } from './modules/commerce/payments/applic
 import { DrizzleGatewayCardTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository.js';
 import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
 import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/nowpayments-adapter.js';
+import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/centralpay-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -385,6 +386,7 @@ import {
   GATEWAY_RECEIPT_BATCH,
   GatewayPaymentService,
   gatewayCallbackUrl,
+  gatewayReturnUrl,
 } from './modules/commerce/payments/application/gateway-payment.service.js';
 import {
   GATEWAY_PAYMENT_INTERVAL_MS,
@@ -2309,6 +2311,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const nowpaymentsAdapter = new NowPaymentsAdapter();
   /*
+   * CentralPay (`docs/centralpay-gateway-audit.md`): redirect + verify. Its own adapter, the
+   * only code that speaks its HTTP; `getLink` with the API key, `verify` with the SEPARATE
+   * verify key; no webhook. Not accepted against the real provider yet (`OQ-CP-01`).
+   */
+  const centralpayAdapter = new CentralPayAdapter();
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -2327,6 +2335,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         return tonpaysTelegramAdapter;
       case 'NOWPAYMENTS':
         return nowpaymentsAdapter;
+      case 'CENTRALPAY':
+        return centralpayAdapter;
       case 'MANUAL_TRANSFER':
         return null;
       default:
@@ -2356,7 +2366,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     provider: PaymentGatewayProvider,
   ): Promise<string | null> => {
     if (gatewayAdapters(provider) === null || scope.tenantId === null) return null;
-    return gatewayCallbackUrl(await publicOrigins.originFor(scope), provider, scope.tenantId);
+    const origin = await publicOrigins.originFor(scope);
+    // A browser-return route (CentralPay) is sent its RETURN URL base; it takes no webhook.
+    return PAYMENT_GATEWAY_DESCRIPTORS[provider].browserReturn
+      ? gatewayReturnUrl(origin, provider, scope.tenantId)
+      : gatewayCallbackUrl(origin, provider, scope.tenantId);
   };
 
   const paymentGatewayService = new PaymentGatewayService({
@@ -2778,6 +2792,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     invoiceScreens: {
       refresh: (scope, paymentId): Promise<void> => wizardScreens.refresh(scope, paymentId),
     },
+    // CentralPay's browser return goes back to the tenant's bot (stored username, no call).
+    botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
   });
   /*
    * TonPays Telegram (§8.2, §8.3): the customer's three commands — another card, the receipt

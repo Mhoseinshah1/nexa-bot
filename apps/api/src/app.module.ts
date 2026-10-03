@@ -49,6 +49,7 @@ import { BroadcastsController } from './surfaces/web/broadcasts.controller.js';
 import { BulkOperationsController } from './surfaces/web/bulk-operations.controller.js';
 import { TelegramWebhookController } from './surfaces/telegram/webhook.controller.js';
 import { GatewayWebhookController } from './surfaces/gateway/webhook.controller.js';
+import { GatewayReturnController } from './surfaces/gateway/return.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
 import { securityHeaders } from './surfaces/web/security-headers.middleware.js';
 import { DomainErrorFilter } from './surfaces/web/error.filter.js';
@@ -149,6 +150,8 @@ export class AppModule implements NestModule {
     // on an attempt this installation created, and only by scheduling an inquiry — it
     // can settle nothing, so there is nothing to gate behind a flag.
     controllers.push(GatewayWebhookController as never);
+    // A provider's browser return (CentralPay): a GET that only brings a verify forward.
+    controllers.push(GatewayReturnController as never);
 
     return {
       module: AppModule,

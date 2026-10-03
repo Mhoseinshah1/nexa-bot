@@ -8275,6 +8275,31 @@ export const TEMPLATES = [
     placeholders: [],
   },
   /*
+   * CentralPay (`docs/centralpay-gateway-audit.md` §5.8). None of these says paid until the
+   * payment is CONFIRMED by CentralPay's own verify, and none names the customer's card.
+   */
+  {
+    key: 'bot.payment.route_name_centralpay',
+    description:
+      'The product’s own name for the CentralPay route (`CENTRALPAY`), used when the operator set no display name. The owner’s label: «💳 پرداخت با CentralPay».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.centralpay_pay_button',
+    description:
+      'CentralPay: the URL button that opens the payment page CentralPay returned. The owner’s label: «💳 پرداخت با CentralPay». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.centralpay_open`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.centralpay_review_unresolved',
+    description:
+      'CentralPay: the payment needs a person — CentralPay’s verify reported an amount, a customer or a reference that does not match this payment. Nothing has failed and nothing was settled; the operator is reconciling it. It must tell the customer not to pay again, and never says failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
    * Package A — Telegram Stars (`docs/package-a-telegram-stars-audit.md`). A Star is never
    * shown as the sales currency: the Toman figures are Nexa's snapshot, and the Star
    * figure is the conversion the invoice asks for.

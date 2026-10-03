@@ -1153,6 +1153,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '🕓 پرداخت ارز دیجیتال شما دریافت شده و در انتظار تأیید شبکه است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت تأیید: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید نهایی درگاه در همین پیام نمایش داده می‌شود.',
   'bot.payment.nowpayments_review_unresolved':
     'پرداخت ارز دیجیتال شما نیاز به بررسی دارد؛ مبلغ دریافتی با فاکتور مطابقت ندارد یا تأیید نهایی آن هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.',
+  'bot.payment.route_name_centralpay': 'پرداخت با CentralPay',
+  'bot.payment.centralpay_pay_button': '💳 پرداخت با CentralPay',
+  'bot.payment.centralpay_review_unresolved':
+    'پرداخت شما از طریق CentralPay نیاز به بررسی دارد؛ اطلاعات تأیید درگاه با این پرداخت مطابقت ندارد. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.route_name_telegram_stars': '⭐ تلگرام استارز',
   'bot.payment.stars_invoice_order':
     '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:wallet} مبلغ سفارش: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',

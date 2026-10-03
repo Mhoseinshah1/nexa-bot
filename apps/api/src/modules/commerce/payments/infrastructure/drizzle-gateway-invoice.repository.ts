@@ -20,6 +20,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
+  gatewayCustomerNumbers,
   gatewayInvoiceCards,
   gatewayInvoices,
   payments,
@@ -35,6 +36,9 @@ import type {
 } from '../application/gateway-invoice-ports.js';
 
 type Row = typeof gatewayInvoices.$inferSelect;
+
+/** How many random draws a customer's provider number takes before giving up. */
+const CUSTOMER_NUMBER_DRAWS = 5;
 
 /**
  * The FX snapshot as the row holds it, whole or absent: `gateway_invoices_fx_snapshot_check`
@@ -127,6 +131,7 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     cardChangeExhausted: row.cardChangeExhausted,
     reconcileInquiryRequestedAt: row.reconcileInquiryRequestedAt,
     hintedPaymentId: row.hintedPaymentId,
+    providerUserId: row.providerUserId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -161,6 +166,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly conversionPolicy: GatewayConversionPolicy;
       readonly fx: GatewayInvoiceFxSnapshot | null;
       readonly botInstanceId: string | null;
+      readonly providerUserId?: string | null;
       readonly now: Date;
     },
     tx: unknown,
@@ -173,6 +179,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         tenantId,
         provider: input.provider,
         providerOrderId: input.providerOrderId,
+        providerUserId: input.providerUserId ?? null,
         creationState: 'CREATING',
         providerUnit: input.providerUnit,
         sentAmount: input.sentAmount,
@@ -281,6 +288,99 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       )
       .limit(1);
     return row === undefined ? null : toRecord(row);
+  }
+
+  async providerOrderIdTaken(
+    provider: PaymentGatewayProvider,
+    providerOrderId: string,
+    tx: unknown,
+  ): Promise<boolean> {
+    /*
+     * Deliberately across EVERY tenant (CentralPay, `docs/centralpay-gateway-audit.md` §3):
+     * tenants sharing one merchant account share its order namespace, and the partial unique
+     * index `gateway_invoices_centralpay_order_id_key` is the same rule for a racing writer.
+     * Existence only — nothing about the other attempt leaves this method.
+     */
+    const [row] = await this.exec(tx)
+      .select({ one: sql<number>`1` })
+      .from(gatewayInvoices)
+      .where(
+        and(
+          eq(gatewayInvoices.provider, provider),
+          eq(gatewayInvoices.providerOrderId, providerOrderId),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
+  }
+
+  async customerNumberFor(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    customerId: string,
+    draw: () => string,
+    now: Date,
+    tx: unknown,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const executor = this.exec(tx);
+    const find = async (): Promise<string | null> => {
+      const [row] = await executor
+        .select({ number: gatewayCustomerNumbers.number })
+        .from(gatewayCustomerNumbers)
+        .where(
+          and(
+            eq(gatewayCustomerNumbers.tenantId, tenantId),
+            eq(gatewayCustomerNumbers.provider, provider),
+            eq(gatewayCustomerNumbers.customerId, customerId),
+          ),
+        )
+        .limit(1);
+      return row === undefined ? null : row.number.toString();
+    };
+    const existing = await find();
+    if (existing !== null) return existing;
+    /*
+     * A fresh number, bounded retries: `ON CONFLICT DO NOTHING` covers BOTH keys — this
+     * customer already numbered by a racing attempt (read back below), or the drawn number
+     * already another customer's (draw again). A conflict never aborts the transaction.
+     */
+    for (let attempt = 0; attempt < CUSTOMER_NUMBER_DRAWS; attempt += 1) {
+      await executor
+        .insert(gatewayCustomerNumbers)
+        .values({ tenantId, provider, customerId, number: BigInt(draw()), createdAt: now })
+        .onConflictDoNothing();
+      const found = await find();
+      if (found !== null) return found;
+    }
+    return null;
+  }
+
+  async bindProviderReference(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    provider: PaymentGatewayProvider,
+    reference: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<'BOUND' | 'TAKEN' | 'DIFFERENT'> {
+    const tenantId = requireTenantId(scope);
+    const holder = await this.findByChargeId(scope, provider, reference, tx);
+    if (holder !== null) return holder.paymentId === paymentId ? 'BOUND' : 'TAKEN';
+    // Write-once: only an attempt with no charge id takes one (the snapshot guard agrees).
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({ providerChargeId: reference, updatedAt: now })
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          eq(gatewayInvoices.provider, provider),
+          isNull(gatewayInvoices.providerChargeId),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length > 0 ? 'BOUND' : 'DIFFERENT';
   }
 
   async recordCharge(

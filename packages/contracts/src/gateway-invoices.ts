@@ -167,7 +167,11 @@ const gatewayInvoiceViewShape = z.object({
    * priced. Never recomputed from a newer quote. Null for any other policy.
    */
   fx: fxSnapshotViewSchema.nullable().default(null),
-  /** The provider's charge id, recorded from a pushed payment (Stars). Null until then. */
+  /**
+   * The provider's charge id: recorded from a pushed payment (Stars), or the `referenceId` a
+   * CentralPay verify reported, bound write-once and unique per tenant and provider so one
+   * reference can never pay two attempts. Null until then.
+   */
   providerChargeId: z.string().nullable(),
   /**
    * The provider's own id for the payment a VERIFIED webhook last named under this invoice
@@ -175,6 +179,12 @@ const gatewayInvoiceViewShape = z.object({
    * Defaulted so a response from the previous release reads "none".
    */
   hintedPaymentId: z.string().nullable().default(null),
+  /**
+   * The integer the provider knows this attempt's customer by (CentralPay's `userId`, the
+   * customer's stable random number), frozen when the attempt opened; a verify naming any
+   * other is never an approval. Null for every other route. Defaulted for older responses.
+   */
+  providerUserId: z.string().nullable().default(null),
   requestAmount: z.string().nullable(),
   finalAmount: z.string().nullable(),
   creditAmount: z.string().nullable(),

@@ -2057,6 +2057,7 @@ export const WEB_FA = {
   'web.payment_gateway_provider_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
   'web.payment_gateway_provider_telegram_stars': 'تلگرام استارز (⭐)',
   'web.payment_gateway_provider_nowpayments': 'درگاه ارز دیجیتال (NOWPayments)',
+  'web.payment_gateway_provider_centralpay': 'درگاه CentralPay',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
   'web.payment_gateway_rate_hint':
@@ -2157,6 +2158,16 @@ export const WEB_FA = {
   'web.payment_gateway_webhook_secret_save': 'ذخیرهٔ کلید IPN',
   'web.payment_gateway_webhook_secret_saved': 'کلید IPN ذخیره شد.',
   'web.payment_gateway_provider_payment_id': 'شناسهٔ پرداخت در درگاه',
+  'web.payment_gateway_centralpay_hint':
+    'مبلغ به تومان و دقیقاً برابر مبلغ قابل پرداخت ارسال می‌شود. بازگشت مشتری از صفحهٔ پرداخت به‌تنهایی چیزی را تأیید نمی‌کند؛ پرداخت فقط پس از استعلام مستقیم (verify) با کلید تأیید و تطبیق مبلغ، کاربر و شمارهٔ مرجع ثبت می‌شود. این درگاه سرویس سالم‌سنجی ندارد.',
+  'web.payment_gateway_verify_key_missing': 'کلید تأیید (verify) تنظیم نشده',
+  'web.payment_gateway_verify_key_configured': 'کلید تأیید تنظیم شده ••••••••',
+  'web.payment_gateway_verify_key_input': 'کلید تأیید جدید (verify)',
+  'web.payment_gateway_verify_key_hint':
+    'کلید جداگانه‌ای که CentralPay برای استعلام پرداخت داده است (غیر از کلید ساخت لینک). کلید ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید. بدون کلید تأیید، این درگاه قابل فعال‌سازی نیست.',
+  'web.payment_gateway_verify_key_save': 'ذخیرهٔ کلید تأیید',
+  'web.payment_gateway_verify_key_saved': 'کلید تأیید ذخیره شد.',
+  'web.payment_gateway_provider_user_id': 'شناسهٔ کاربر در درگاه',
   'web.payment_gateway_check': 'بررسی اتصال',
   'web.payment_gateway_check_done': 'بررسی اتصال انجام شد.',
   'web.payment_gateway_last_check': 'آخرین بررسی',
@@ -3450,6 +3461,7 @@ export const WEB_FA = {
   'web.ib_button_payment_cancel_confirm': 'تأیید انصراف از پرداخت',
   'web.ib_button_payment_gateway_pay': 'پرداخت آنلاین (لینک درگاه)',
   'web.ib_button_payment_nowpayments_open': 'پرداخت با ارز دیجیتال (NOWPayments)',
+  'web.ib_button_payment_centralpay_open': 'پرداخت با CentralPay',
   'web.ib_button_payment_gateway_check': 'بررسی وضعیت پرداخت',
   'web.ib_button_payment_gateway_card_check': 'بررسی وضعیت (کارت‌به‌کارت درگاه)',
   'web.ib_button_payment_gateway_receipt': 'ارسال فیش واریزی (درگاه)',
