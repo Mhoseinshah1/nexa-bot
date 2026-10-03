@@ -269,4 +269,27 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
       .returning({ id: panelCapacityReservations.id });
     return deleted.length > 0;
   }
+
+  async releaseForSettlement(
+    scope: TenantContext,
+    orderId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<{ readonly released: boolean; readonly live: boolean }> {
+    // One statement: the row it deletes is the row it judges, so nothing can renew or
+    // expire it in between. Strictly `>`, exactly as the capacity count reads a hold.
+    const deleted = await tx.tx
+      .delete(panelCapacityReservations)
+      .where(
+        and(
+          eq(panelCapacityReservations.tenantId, scope.tenantId),
+          eq(panelCapacityReservations.orderId, orderId),
+        ),
+      )
+      .returning({ expiresAt: panelCapacityReservations.expiresAt });
+    return {
+      released: deleted.length > 0,
+      live: deleted.some((row) => row.expiresAt.getTime() > now.getTime()),
+    };
+  }
 }

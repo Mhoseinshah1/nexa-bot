@@ -303,6 +303,26 @@ export class DrizzleAdminRepository implements AdminRepository {
     return (row?.status ?? 'DISABLED') as TenantStatus;
   }
 
+  async lockActiveCredential(
+    scope: ScopeContext,
+    id: AdminId,
+    tx: unknown,
+  ): Promise<string | null> {
+    const [row] = await executorOf(this.db, tx)
+      .select({ passwordHash: admins.passwordHash })
+      .from(admins)
+      .where(
+        and(
+          eq(admins.tenantId, requireTenantId(scope)),
+          eq(admins.id, id),
+          eq(admins.status, 'ACTIVE'),
+        ),
+      )
+      .for('update')
+      .limit(1);
+    return row?.passwordHash ?? null;
+  }
+
   async lockIfPasswordHashMatches(
     scope: ScopeContext,
     id: AdminId,

@@ -38,6 +38,7 @@ import {
 } from '../../apps/api/src/modules/platform/panels/application/panel-monitor.service';
 import type { ProbeCoreDeps } from '../../apps/api/src/modules/platform/panels/application/probe-core';
 import {
+  claimTenantsQuery,
   DrizzlePanelMonitorRepository,
   DrizzlePanelRepository,
 } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
@@ -2122,50 +2123,277 @@ describe('the panel health monitor', () => {
       expect(bound!.nextEligibleAt.getTime()).toBe(SCHEDULE_SUSPENDED_AT.getTime());
     });
 
+    /**
+     * Races `claimers` replicas, each asking for one tenant, over `rounds`
+     * rounds in which all `due` tenants are due and their turns level. Returns
+     * how many rounds handed one tenant to two replicas, and how many served
+     * fewer tenants than were due and asked for.
+     *
+     * `claimers` must not exceed `due`. With more claimers than tenants a
+     * claim that starts after the others COMMITTED correctly takes a turn
+     * again — the rotation is a queue of turns, not a lease — so a repeat is
+     * only a violation while every claim could have had a tenant of its own.
+     *
+     * `servedAt` is the `last_served_at` each round starts from. A value
+     * different from `now` is the ordinary case; `now` itself is a frozen
+     * clock — the claim's own reading is the value already stored, which is the
+     * case where a spent turn would compare equal to an unspent one unless the
+     * write is strictly monotonic.
+     */
+    async function race(
+      claimers: number,
+      rounds: number,
+      servedAt: Date,
+      due = 2,
+    ): Promise<{ doubled: number; starved: number }> {
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      let doubled = 0;
+      let starved = 0;
+      for (let round = 0; round < rounds; round += 1) {
+        await ctx.container.database.db.execute(
+          sql`UPDATE panel_monitor_tenants
+                 SET next_eligible_at = ${new Date(now.getTime() - 60_000)},
+                     last_served_at = ${servedAt}` as never,
+        );
+        const results = await Promise.all(
+          Array.from({ length: claimers }, () => discovery.claimTenants(now, 1)),
+        );
+        const taken = results.flat();
+        if (new Set(taken).size !== taken.length) doubled += 1;
+        if (taken.length < Math.min(due, claimers)) starved += 1;
+      }
+      return { doubled, starved };
+    }
+
+    /** Puts `tenantA` at the front of the rotation and `tenantB` behind it. */
+    async function aBeforeB(): Promise<void> {
+      await ctx.container.database.db.execute(
+        sql`UPDATE panel_monitor_tenants
+               SET last_served_at = CASE WHEN tenant_id = ${tenantA.tenantId}::uuid
+                                         THEN ${new Date(now.getTime() - 120_000)}::timestamptz
+                                         ELSE ${new Date(now.getTime() - 60_000)}::timestamptz END` as never,
+      );
+    }
+
     it('never hands one tenant to two replicas, over many races', async () => {
       // ONE race decides nothing here, and that is the point: this file's
       // single-race version of the check above failed about once in two
       // hundred runs and passed every time it was re-run in isolation, which
       // reads exactly like an infrastructure flake and was not one.
       //
-      // The claim's own comment used to say `FOR UPDATE SKIP LOCKED` was what
-      // made replicas disjoint. It is not sufficient. Under READ COMMITTED the
-      // second claim's snapshot predates the first one's commit, so it orders
-      // by a `last_served_at` whose turn has already been spent; by the time
-      // it reaches the row the first claim has committed and released the
-      // lock, so SKIP LOCKED has nothing to skip, and the row's re-check
-      // passes because spending a turn does not move `next_eligible_at`.
-      //
-      // Six hundred races here, against a real database. The unguarded
-      // statement produced a double claim about five times in a thousand, so
-      // this fails within a run or two of a regression rather than needing a
-      // lucky one.
+      // Two generations of the claim have failed this. `FOR UPDATE SKIP
+      // LOCKED` alone: the second claim's snapshot predates the first one's
+      // commit, the lock is already released when it arrives, and the row's
+      // re-check passes because spending a turn does not move
+      // `next_eligible_at`. Then `t.last_served_at = due.last_served_at` beside
+      // it: PostgreSQL's re-check (EvalPlanQual) re-reads the LOCKED subquery
+      // at its latest version too, so `due.last_served_at` became the value the
+      // first claim had just written and the guard compared it with itself —
+      // one doubled claim in six hundred, seen in CI. The snapshot side of the
+      // comparison now lives in a MATERIALIZED CTE that the re-check does not
+      // refresh; see `claimTenants`.
       await createPanel(ownerA, tenantA, 'a');
       await createPanel(ownerB, tenantB, 'b');
-      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-      let doubled = 0;
-      let starved = 0;
-      for (let round = 0; round < 600; round += 1) {
-        // Both tenants due again, and their turns level, so both claims want
-        // the same one and the ordering is decided rather than incidental.
-        await ctx.container.database.db.execute(
-          sql`UPDATE panel_monitor_tenants
-                 SET next_eligible_at = ${new Date(now.getTime() - 60_000)},
-                     last_served_at = ${new Date(now.getTime() - 60_000)}` as never,
-        );
-        const [a, b] = await Promise.all([
-          discovery.claimTenants(now, 1),
-          discovery.claimTenants(now, 1),
-        ]);
-        const taken = [...a, ...b];
-        if (new Set(taken).size !== taken.length) doubled += 1;
-        if (taken.length < 2) starved += 1;
-      }
+      const { doubled, starved } = await race(2, 600, new Date(now.getTime() - 60_000));
       expect(doubled, 'one tenant was claimed by both replicas').toBe(0);
-      // Losing a claim to the re-check is the SAFE direction and is allowed:
-      // that tenant waits one tick. Asserted rather than left implicit, so a
-      // "fix" that made every race starve one side would be visible here.
-      expect(starved).toBeLessThan(180);
+      // And nobody starves. A loser whose candidate is held moves past it
+      // (SKIP LOCKED), and one whose candidate was spent under it fails the
+      // re-check and moves on to the next (`LIMIT` sits above the lock), so
+      // with two tenants due and two replicas asking for one each, every
+      // round serves both. Exactly zero, not a bound: the previous claim came
+      // back short about once in a hundred rounds — a tenant waiting a tick it
+      // did not need to — and a "fix" that decides the front of the queue
+      // before locking it does the same.
+      expect(starved, 'a replica came back empty while a tenant was due').toBe(0);
+    });
+
+    it('never hands one tenant to two of four replicas, over many races', async () => {
+      // More claimers per round is more interleavings per round: a third and
+      // a fourth replica arrive while the first two are committing, which is
+      // exactly the window the re-check has to get right. Four tenants, so
+      // that in ANY serial order of the four claims each takes its own — a
+      // repeat is then a non-serialisable claim and nothing else.
+      await createPanel(ownerA, tenantA, 'a');
+      await createPanel(ownerB, tenantB, 'b');
+      // Two more tenants need only their rotation rows: the claim reads
+      // nothing else. Reseller sub-tenants, the shape the schema requires of a
+      // non-PRIMARY tenant.
+      await ctx.container.database.withClient(async (client) => {
+        await client.query(
+          `INSERT INTO tenants (id, kind, parent_tenant_id, slug, display_name)
+           SELECT id, 'RESELLER_BOT', $2::uuid, 'race-' || ord, 'Race ' || ord
+             FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord)`,
+          [
+            ['01a40000-0000-7000-8000-000000000001', '01a40000-0000-7000-8000-000000000002'],
+            SEED_IDS.tenantA,
+          ],
+        );
+        await client.query(
+          `INSERT INTO panel_monitor_tenants (tenant_id, next_eligible_at, last_served_at)
+           SELECT id, $2::timestamptz, $2::timestamptz FROM unnest($1::uuid[]) AS t(id)`,
+          [['01a40000-0000-7000-8000-000000000001', '01a40000-0000-7000-8000-000000000002'], now],
+        );
+      });
+      const { doubled, starved } = await race(4, 300, new Date(now.getTime() - 60_000), 4);
+      expect(doubled, 'one tenant was claimed by two replicas').toBe(0);
+      // Four replicas, four due tenants: every round serves all four.
+      expect(starved, 'a replica came back empty while a tenant was due').toBe(0);
+    });
+
+    it('never hands one tenant to two replicas when their clocks read the same instant', async () => {
+      // The frozen-clock case: every round starts with `last_served_at` equal
+      // to the very `now` both claims carry. Without the strictly monotonic
+      // write a claim stores the value it found, the loser's snapshot equality
+      // still holds against the spent row, and the guard proves nothing.
+      await createPanel(ownerA, tenantA, 'a');
+      await createPanel(ownerB, tenantB, 'b');
+      const { doubled } = await race(2, 400, now);
+      expect(doubled, 'one tenant was claimed by both replicas').toBe(0);
+    });
+
+    it('moves a turn strictly forward, and to the clock when the clock is ahead', async () => {
+      // Cadence unchanged: an ordinary claim writes the clock's reading, so
+      // the rotation order is what it always was. Only a claim whose clock
+      // has NOT moved past the stored turn writes one microsecond later.
+      await createPanel(ownerA, tenantA, 'a');
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const servedAt = async (): Promise<Date> => {
+        const [row] = await ctx.container.database.db
+          .select({ at: panelMonitorTenants.lastServedAt })
+          .from(panelMonitorTenants)
+          .where(eq(panelMonitorTenants.tenantId, tenantA.tenantId));
+        return row!.at;
+      };
+
+      expect(await discovery.claimTenants(now, 1)).toEqual([tenantA.tenantId]);
+      expect((await servedAt()).getTime()).toBe(now.getTime());
+
+      // Same instant again: still claimable (nothing else is due), and the
+      // turn is still spent — strictly later than the one it replaced.
+      expect(await discovery.claimTenants(now, 1)).toEqual([tenantA.tenantId]);
+      const later = await ctx.container.database.db.execute(
+        sql`SELECT (last_served_at > ${now}::timestamptz) AS later
+              FROM panel_monitor_tenants WHERE tenant_id = ${tenantA.tenantId}::uuid` as never,
+      );
+      expect((later.rows as { later: boolean }[])[0]?.later).toBe(true);
+
+      const next = new Date(now.getTime() + 30_000);
+      expect(await discovery.claimTenants(next, 1)).toEqual([tenantA.tenantId]);
+      expect((await servedAt()).getTime()).toBe(next.getTime());
+    });
+
+    it('lets a second replica take another tenant while the first holds one', async () => {
+      // A replica mid-claim holds its tenant's row. Another replica must not
+      // wait for it — it takes the next tenant at once — and when the first
+      // one dies before committing, the tenant it held is not stranded: its
+      // turn rolls back unspent and it is first in line again.
+      await createPanel(ownerA, tenantA, 'a');
+      await createPanel(ownerB, tenantB, 'b');
+      await aBeforeB();
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+
+      await ctx.container.database.withClient(async (held) => {
+        await held.query('BEGIN');
+        try {
+          await held.query('SELECT 1 FROM panel_monitor_tenants WHERE tenant_id = $1 FOR UPDATE', [
+            tenantA.tenantId,
+          ]);
+          // `tenantA` is at the front of the queue and locked. A claim that
+          // waited on it would still be waiting when this timer fires.
+          const other = await Promise.race([
+            discovery.claimTenants(now, 2),
+            new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 5_000)),
+          ]);
+          expect(other).toEqual([tenantB.tenantId]);
+        } finally {
+          // The holder dies without committing.
+          await held.query('ROLLBACK');
+        }
+      });
+
+      // Nothing stranded: the next round hands `tenantA` out, oldest first.
+      expect(await discovery.claimTenants(now, 1)).toEqual([tenantA.tenantId]);
+    });
+
+    it('does not strand a tenant whose replica died after claiming it', async () => {
+      // A claim commits before any probe, so a replica that crashes after it
+      // has spent the tenant's turn and done nothing. There is no lease to
+      // expire: the tenant is simply at the back of the rotation, and the
+      // surviving replica reaches it again within `ceil(due / perTick)` ticks.
+      await createPanel(ownerA, tenantA, 'a');
+      await createPanel(ownerB, tenantB, 'b');
+      await aBeforeB();
+      const crashed = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const survivor = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+
+      expect(await crashed.claimTenants(now, 1)).toEqual([tenantA.tenantId]);
+      // ...and then nothing: no probe, no refresh. The survivor's next ticks:
+      const tick1 = new Date(now.getTime() + 30_000);
+      const tick2 = new Date(now.getTime() + 60_000);
+      expect(await survivor.claimTenants(tick1, 1)).toEqual([tenantB.tenantId]);
+      expect(await survivor.claimTenants(tick2, 1)).toEqual([tenantA.tenantId]);
+    });
+
+    it('limits the claim above the lock, so a loser moves on rather than coming back short', async () => {
+      // The plan shape the race tests depend on, asserted over EXACTLY the
+      // statement production issues. `LIMIT` above `LockRows` means a row
+      // that is skipped (held) or fails its re-check (spent) does not count
+      // toward the limit, and the claim takes the next candidate instead.
+      await createPanel(ownerA, tenantA, 'a');
+      const plan = await ctx.container.database.db.execute(
+        sql`EXPLAIN ${claimTenantsQuery(now, 1)}` as never,
+      );
+      const lines = (plan.rows as { 'QUERY PLAN': string }[]).map((r) => r['QUERY PLAN']);
+      const taken = lines.findIndex((l) => l.includes('CTE taken'));
+      expect(taken, lines.join('\n')).toBeGreaterThanOrEqual(0);
+      const limit = lines.findIndex((l, i) => i > taken && l.includes('Limit'));
+      const lock = lines.findIndex((l, i) => i > taken && l.includes('LockRows'));
+      expect(limit, lines.join('\n')).toBeGreaterThan(taken);
+      expect(lock, 'LIMIT must sit above the lock').toBeGreaterThan(limit);
+      // And both steps are CTEs evaluated once, never a subquery a nested
+      // loop could rescan per outer row.
+      expect(lines.some((l) => l.includes('CTE candidates'))).toBe(true);
+    });
+
+    it('grants one per-panel claim to two racing replicas, over many races', async () => {
+      // The second half of discovery has no claim of its own to get wrong:
+      // `dueForTenants` is a plain read, and what keeps two replicas that both
+      // see a panel from both dialling it is `claimProbe`. That is ONE
+      // `INSERT ... ON CONFLICT DO UPDATE ... WHERE`, whose predicate is
+      // row-local and is evaluated against the row as it stands after the
+      // conflict lock — there is no subquery whose output a re-check could
+      // refresh, which is the shape that broke `claimTenants`. Proved here
+      // rather than asserted, on both paths: no row yet (the INSERT races) and
+      // an expired row (the conditional UPDATE races).
+      const panelId = await createPanel(ownerA, tenantA, 'contended');
+      const repository = new DrizzlePanelRepository(ctx.container.database.db);
+      const cooldownMs = 60_000;
+      let wrong = 0;
+      for (let round = 0; round < 200; round += 1) {
+        if (round % 2 === 0) {
+          await ctx.container.database.db
+            .delete(panelProbeClaims)
+            .where(eq(panelProbeClaims.panelId, panelId));
+        } else {
+          await ctx.container.database.db
+            .update(panelProbeClaims)
+            .set({ claimedAt: new Date(now.getTime() - 2 * cooldownMs) })
+            .where(eq(panelProbeClaims.panelId, panelId));
+        }
+        const results = await Promise.all(
+          [0, 1].map(() =>
+            repository.claimProbe(
+              tenantA,
+              panelId,
+              'fingerprint',
+              now,
+              new Date(now.getTime() - cooldownMs),
+            ),
+          ),
+        );
+        if (results.filter(Boolean).length !== 1) wrong += 1;
+      }
+      expect(wrong, 'a round granted the claim to both replicas, or to neither').toBe(0);
     });
 
     it('does not overlap its own ticks: the second call does no work at all', async () => {

@@ -188,6 +188,7 @@ describe('the panel connection-test throttle', () => {
       create: real.create.bind(real),
       update: real.update.bind(real),
       setStatus: real.setStatus.bind(real),
+      setDrain: real.setDrain.bind(real),
       readSchedule: real.readSchedule.bind(real),
       scheduleNext: real.scheduleNext.bind(real),
       setScheduleEligibility: real.setScheduleEligibility.bind(real),

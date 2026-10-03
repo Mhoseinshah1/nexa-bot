@@ -109,6 +109,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        notification_delivery_attempts, notification_released_claims, notifications,
        template_revisions, template_overrides, setting_values, feature_flag_states,
        admin_login_throttle, admin_sessions, admin_permission_overrides,
+       -- Phase D2: the second factor, its backup codes and pending sign-ins.
+       admin_totp_factors, admin_backup_codes, admin_login_challenges,
        admin_roles, role_permissions, roles, admins,
        panel_health, panel_probe_claims, panel_probe_budgets, panel_credentials,
        panel_capacity_reservations, panel_policies, panels,

@@ -129,6 +129,13 @@ export interface CustomerSearch {
    * Charged `users.search`, like every other way of finding one customer.
    */
   readonly text?: ListSearchTerm;
+  /**
+   * Program §8: only customers carrying this tag, by its id. A FILTER like `status`, not a
+   * search — so charged `users.view` alone — served by an EXISTS over the tenant-led
+   * `customer_tag_assignments` keys (`customerTagCondition`). Another tenant's tag id
+   * matches nothing, because the assignment is looked up inside this tenant.
+   */
+  readonly tagId?: string;
 }
 
 export interface CustomerRepository {

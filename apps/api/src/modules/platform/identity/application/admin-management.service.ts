@@ -15,6 +15,10 @@ import {
   setAdminTelegramBindingRequestSchema,
   resetAdminPasswordRequestSchema,
   revokeAdminSessionsRequestSchema,
+  resetAdminSecondFactorRequestSchema,
+  stepUpSchema,
+  type SecretCipher,
+  type StepUp,
   type AdminSessionSummary,
   type ActorContext,
   type Admin,
@@ -45,9 +49,10 @@ import {
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { DrizzleRoleRepository } from '../infrastructure/drizzle-role.repository.js';
-import type { AdminRepository, SessionRepository } from './ports.js';
+import type { AdminRepository, SecondFactorRepository, SessionRepository } from './ports.js';
 import { assertNotSelf, assertOwnerSurvives, diffRoles } from '../domain/admin-protection.js';
 import type { CredentialThrottle, Reservation } from './credential-throttle.js';
+import { verifySecondFactorProof } from './second-factor-proof.js';
 
 /**
  * Administrator management.
@@ -118,6 +123,10 @@ export class AdminManagementService {
      * person pressing a button twice, which the locked delta already answers.
      */
     private readonly idempotency: IdempotencyStore,
+    /** Phase D2: an operator removing another administrator's second factor. */
+    private readonly factors: SecondFactorRepository,
+    /** For a step-up's second-factor proof (D2 review). */
+    private readonly cipher: SecretCipher,
   ) {}
 
   async list(
@@ -964,6 +973,7 @@ export class AdminManagementService {
     actor: ActorContext,
     targetId: AdminId,
     input: unknown,
+    context: PasswordChangeContext = { ip: null },
   ): Promise<{ admin: Admin; roleKeys: string[]; sessionsRevoked: number }> {
     // A cheap rejection before the KDF, and NOT the authorization: read on the
     // pool, so it can be stale by the time the row is written. The check of
@@ -978,6 +988,10 @@ export class AdminManagementService {
     // Before anything is read. An administrator changes their OWN password
     // through the path that asks for the current one.
     assertNotSelf(adminIdOf(actor), targetId);
+
+    // The ACTOR's step-up (D2 security review). Setting somebody's password is taking
+    // their account: `admins.edit` and a session are not enough on their own.
+    await this.verifyStepUp(scope, actor, command.stepUp, context, 'admin.password_reset');
 
     // Outside the transaction, like `create`: a KDF is intentionally slow and
     // holding a lock for its duration turns one request into contention for
@@ -1075,6 +1089,143 @@ export class AdminManagementService {
         });
 
         return { admin: target, roleKeys: targetRoleKeys, sessionsRevoked };
+      },
+    );
+  }
+
+  /**
+   * Removes ANOTHER administrator's second factor (Phase D2) — the in-product answer to
+   * "they lost their phone and their backup codes".
+   *
+   * Bound exactly as `resetPassword` is, for the same reason: removing somebody's second
+   * factor is half of taking their account. `admins.edit`; never oneself (the holder
+   * turns their own factor off with password + code); no more privilege than the actor
+   * holds; and an owner target needs `admins.permissions.edit` as well. Every session of
+   * the target ends, so whoever was signed in signs in again under the new state.
+   *
+   * It does NOT touch the password. The target still needs it to sign in. That alone
+   * does not make it safe — the password reset below is the other half, and together
+   * the two are a takeover — so BOTH require the acting operator's own step-up: their
+   * password, and their own second factor when they have one (D2 security review).
+   */
+  async resetSecondFactor(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    input: unknown,
+    context: PasswordChangeContext = { ip: null },
+  ): Promise<{
+    admin: Admin;
+    roleKeys: string[];
+    hadSecondFactor: boolean;
+    sessionsRevoked: number;
+  }> {
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.totp_reset',
+      entityId: targetId,
+    });
+    const command = resetAdminSecondFactorRequestSchema.parse(input);
+    assertNotSelf(adminIdOf(actor), targetId);
+
+    /*
+     * A replay key (Codex review), looked up BEFORE the step-up: the step-up spends a
+     * one-time code, so a retry of a reset whose response was lost would otherwise fail
+     * its step-up — or, without a key at all, run a SECOND reset that reports "had no
+     * factor" and could remove one the target has since re-enrolled. The stored result
+     * holds no secret. Bound to the actor and the target, never to the proof.
+     */
+    const requestHash = hashRequest({
+      op: 'admin.totp_reset',
+      actorId: adminIdOf(actor),
+      targetId,
+      reason: command.reason,
+    });
+    const replay =
+      command.idempotencyKey === undefined
+        ? undefined
+        : ({ namespace: 'WEB', idempotencyKey: command.idempotencyKey } as const);
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{
+        readonly hadSecondFactor: boolean;
+        readonly sessionsRevoked: number;
+      }>(scope, replay.namespace, replay.idempotencyKey, requestHash);
+      if (found !== null) {
+        const target = await this.requireAdmin(scope, targetId);
+        return {
+          admin: target,
+          roleKeys: await this.admins.roleKeysFor(scope, target.id),
+          ...found.result,
+        };
+      }
+    }
+
+    // The ACTOR's step-up (D2 security review): removing somebody's factor is half of
+    // taking their account, and a session holding `admins.edit` is not enough.
+    await this.verifyStepUp(scope, actor, command.stepUp, context, 'admin.totp_reset');
+
+    return this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.totp_reset', entityId: targetId },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        const now = this.clock.now();
+        await this.guard.check(scope, actor, 'admins.edit', tx);
+
+        const target = await this.requireAdmin(scope, targetId, tx);
+        assertNotSelf(adminIdOf(actor), target.id);
+        const targetRoleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
+        if (targetRoleKeys.includes(OWNER_ROLE_KEY)) {
+          await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        }
+        await this.assertRestoresNoMorePrivilegeThanHeld(scope, actor, target.id, tx);
+
+        const hadSecondFactor = await this.factors.deleteFactor(scope, target.id, tx);
+        const sessionsRevoked = await this.sessions.revokeAllForAdmin(
+          scope,
+          target.id,
+          now,
+          'second_factor_reset',
+          tx,
+        );
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.totp_reset',
+            entityType: 'Admin',
+            entityId: target.id,
+            // `endedSignIns`, never a key containing `session`: see `resetPassword`.
+            before: { hadSecondFactor, liveSignIns: sessionsRevoked },
+            after: { state: 'DISABLED', endedSignIns: sessionsRevoked, via: 'OPERATOR' },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.opsLog.record(
+          scope,
+          {
+            code: 'admin.second_factor_reset' satisfies ManagementAdminEventCode,
+            severity: 'WARN',
+            message: `two-step sign-in of administrator ${target.username} was reset by an operator`,
+            context: { adminId: target.id, hadSecondFactor, endedSignIns: sessionsRevoked },
+          },
+          tx,
+        );
+        if (replay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            replay.namespace,
+            replay.idempotencyKey,
+            requestHash,
+            { hadSecondFactor, sessionsRevoked },
+            tx,
+          );
+        }
+        return { admin: target, roleKeys: targetRoleKeys, hadSecondFactor, sessionsRevoked };
       },
     );
   }
@@ -1219,6 +1370,125 @@ export class AdminManagementService {
         return revoked;
       },
     );
+  }
+
+  /**
+   * A STEP-UP: the acting administrator proving, for one sensitive act, that they are
+   * the account holder and not merely somebody holding their session (D2 review).
+   *
+   * The password, through `verifyOwnPassword` — the same throttle, the same denial row.
+   * Then, when THIS administrator has two-step sign-in on, a current code or an unused
+   * backup code too: a step-up weaker than the factor the account signs in with would
+   * make the factor decorative for exactly the acts that matter most. The code goes
+   * through `verifySecondFactorProof` (the one checker, replay rule included), reserved
+   * on the shared throttle first; a wrong one keeps its reservation.
+   *
+   * Every failure is ONE validation code, `auth.step_up_failed`, so a failed step-up does
+   * not sign the operator out of the page. `auth.step_up_factor_required` says only that
+   * the actor's own factor is on and no code was sent.
+   */
+  async verifyStepUp(
+    scope: ScopeContext,
+    actor: ActorContext,
+    input: StepUp | unknown,
+    context: PasswordChangeContext,
+    action: string,
+  ): Promise<void> {
+    const stepUp = stepUpSchema.parse(input);
+    const adminId = adminIdOf(actor);
+    if (adminId === null) {
+      throw errors.unauthenticated(IDENTITY_ERROR_CODES.AUTH_REQUIRED, 'Sign in first.');
+    }
+    if (isSystemContext(scope)) {
+      throw errors.validation(
+        PLATFORM_ERROR_CODES.TENANT_CONTEXT_MISSING,
+        'Re-authentication needs a tenant scope.',
+      );
+    }
+    const tenantScope: TenantContext = scope;
+    try {
+      await this.verifyOwnPassword(scope, actor, stepUp.password, context, action);
+    } catch (error) {
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS) {
+        throw stepUpFailed();
+      }
+      throw error;
+    }
+
+    const factor = await this.factors.findFactor(tenantScope, adminId);
+    if (factor === null || factor.state !== 'ACTIVE') return;
+    if (stepUp.code === undefined && stepUp.backupCode === undefined) {
+      await this.audit.record(scope, actor, {
+        action,
+        entityType: 'Admin',
+        entityId: adminId,
+        before: null,
+        after: { reason: 'SECOND_FACTOR_REQUIRED' },
+        result: 'DENIED',
+      });
+      throw errors.validation(
+        IDENTITY_ERROR_CODES.AUTH_STEP_UP_FACTOR_REQUIRED,
+        'Your two-step sign-in is on: enter a code from your authenticator or a backup code.',
+      );
+    }
+
+    const admin = await this.requireAdmin(scope, adminId);
+    const method = stepUp.code !== undefined ? 'TOTP' : 'BACKUP_CODE';
+    let reserved: Reservation;
+    try {
+      reserved = await this.throttle.reserve(tenantScope, actor, admin.username, context.ip);
+    } catch (error) {
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) {
+        await this.audit.record(scope, actor, {
+          action,
+          entityType: 'Admin',
+          entityId: adminId,
+          before: null,
+          after: { reason: 'THROTTLED', method },
+          result: 'DENIED',
+        });
+      }
+      throw error;
+    }
+
+    let outcome: { kind: 'OK' } | { kind: 'GONE' } | { kind: 'REJECTED'; detail: string };
+    try {
+      outcome = await this.uow.run(scope, async (tx) => {
+        const locked = await this.factors.lockFactor(tenantScope, adminId, tx);
+        if (locked === null || locked.state !== 'ACTIVE') return { kind: 'GONE' as const };
+        const verdict = await verifySecondFactorProof(
+          { factors: this.factors, cipher: this.cipher },
+          tenantScope,
+          adminId,
+          locked,
+          stepUp,
+          this.clock.now(),
+          tx,
+        );
+        if (!verdict.accepted) return { kind: 'REJECTED' as const, detail: verdict.reason };
+        await this.throttle.releaseIn(tenantScope, admin.username, context.ip, reserved, tx);
+        return { kind: 'OK' as const };
+      });
+    } catch (error) {
+      await this.throttle.release(tenantScope, admin.username, context.ip, reserved);
+      throw error;
+    }
+    if (outcome.kind === 'GONE') {
+      // The factor was removed meanwhile: the password was the whole proof owed.
+      await this.throttle.release(tenantScope, admin.username, context.ip, reserved);
+      return;
+    }
+    if (outcome.kind === 'REJECTED') {
+      await this.audit.record(scope, actor, {
+        action,
+        entityType: 'Admin',
+        entityId: adminId,
+        before: null,
+        after: { reason: 'BAD_SECOND_FACTOR', method, detail: outcome.detail },
+        result: 'DENIED',
+      });
+      throw stepUpFailed();
+    }
   }
 
   /**
@@ -1882,6 +2152,13 @@ const SESSION_LIST_LIMIT = 50;
  */
 function sessionIdOf(actor: ActorContext): string | null {
   return actor.sessionId ?? null;
+}
+
+function stepUpFailed() {
+  return errors.validation(
+    IDENTITY_ERROR_CODES.AUTH_STEP_UP_FAILED,
+    'The password or code was not accepted, so nothing was done.',
+  );
 }
 
 function adminIdOf(actor: ActorContext): AdminId | null {

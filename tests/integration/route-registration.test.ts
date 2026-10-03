@@ -231,6 +231,11 @@ describe('dynamic route registration', () => {
       ['POST', 'support/faqs'],
       ['POST', `support/faqs/${id}`],
       ['POST', `support/faqs/${id}/status`],
+      // Program §6: the terms and rules.
+      ['GET', 'terms'],
+      ['POST', 'terms/draft'],
+      ['POST', `terms/versions/${id}`],
+      ['POST', `terms/versions/${id}/publish`],
       ['GET', `templates/bot.start.greeting`],
       ['GET', `templates/bot.start.greeting/revisions`],
       ['POST', `templates/bot.start.greeting`],

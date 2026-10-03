@@ -474,6 +474,38 @@ export const IDENTITY_ERROR_CODES = {
   ADMIN_PASSWORD_STALE: 'admin.password_stale',
   ROLE_NOT_FOUND: 'role.not_found',
   BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',
+  /*
+   * Phase D2 — the second factor.
+   *
+   * `auth.second_factor_required` is what the password-only `login` reports for an
+   * account whose sign-in owes a second factor; the HTTP surface never sees it, because
+   * it calls the method that returns the challenge instead.
+   *
+   * `auth.second_factor_invalid` is the ONE failure a wrong, replayed, expired or
+   * already-used code produces, for the reason `auth.invalid_credentials` is one code:
+   * telling a guesser that a code was right but replayed tells them it was right.
+   *
+   * `auth.challenge_invalid` means the password step has to be repeated: the challenge
+   * is unknown, expired, spent, or out of guesses.
+   */
+  AUTH_SECOND_FACTOR_REQUIRED: 'auth.second_factor_required',
+  AUTH_SECOND_FACTOR_INVALID: 'auth.second_factor_invalid',
+  AUTH_CHALLENGE_INVALID: 'auth.challenge_invalid',
+  /*
+   * Phase D2 review: a STEP-UP (the actor re-proving who they are for one sensitive
+   * act) failed — wrong password, or a wrong, replayed or used code. One code for all of
+   * them, a VALIDATION kind so a failed step-up does not sign the operator out of the
+   * page. `auth.step_up_factor_required` says only that THIS actor's own factor is on and
+   * no code was sent, so the page can ask for one.
+   */
+  AUTH_STEP_UP_FAILED: 'auth.step_up_failed',
+  AUTH_STEP_UP_FACTOR_REQUIRED: 'auth.step_up_factor_required',
+  ADMIN_SECOND_FACTOR_ACTIVE: 'admin.second_factor_already_active',
+  ADMIN_SECOND_FACTOR_NOT_ACTIVE: 'admin.second_factor_not_active',
+  /** Activation with no enrolment waiting, or one older than `TOTP_ENROLMENT_TTL_SECONDS`. */
+  ADMIN_SECOND_FACTOR_NOT_PENDING: 'admin.second_factor_not_pending',
+  /** A session id that is not one of the caller's own. Another admin's reads the same. */
+  ADMIN_SESSION_NOT_FOUND: 'admin.session_not_found',
 } as const;
 
 /**
@@ -1492,6 +1524,16 @@ export const COMMERCE_ERROR_CODES = {
   CUSTOMER_TRANSFER_CONFIRMATION_MISMATCH: 'commerce.customer_transfer_confirmation_mismatch',
   /** Not a phone number this installation can store. */
   CUSTOMER_PHONE_INVALID: 'commerce.customer_phone_invalid',
+
+  // --- Customer notes and tags (program §8, docs/customer-notes-tags.md) ---------------
+  /** No such tag in this tenant. */
+  CUSTOMER_TAG_NOT_FOUND: 'commerce.customer_tag_not_found',
+  /** Another ACTIVE tag of this tenant already has this name, compared case-insensitively. */
+  CUSTOMER_TAG_NAME_TAKEN: 'commerce.customer_tag_name_taken',
+  /** The tag is archived: it stays where it is assigned and cannot be newly assigned. */
+  CUSTOMER_TAG_ARCHIVED: 'commerce.customer_tag_archived',
+  /** The tenant already defines `CUSTOMER_TAGS_PER_TENANT_MAX` tags. */
+  CUSTOMER_TAG_LIMIT: 'commerce.customer_tag_limit',
 } as const;
 
 /*
@@ -1582,6 +1624,23 @@ export const BOT_ERROR_CODES = {
 } as const;
 
 export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];
+
+/**
+ * Program §6 — the terms and rules. A version of another tenant and one that does not exist
+ * are both `TERMS_VERSION_NOT_FOUND`, so the answer is not an oracle for which ids exist.
+ */
+export const TERMS_ERROR_CODES = {
+  TERMS_VERSION_NOT_FOUND: 'terms.version_not_found',
+  /** A second draft was asked for while one exists: there is at most one, and it is edited. */
+  TERMS_DRAFT_EXISTS: 'terms.draft_exists',
+  /**
+   * The draft moved since it was read — another edit, or it was published. Nothing was
+   * written; the `currentRevision` detail names where it stands now (null: no longer a draft).
+   */
+  TERMS_DRAFT_CONFLICT: 'terms.draft_conflict',
+  /** The version is published, and a published version is never edited or published again. */
+  TERMS_VERSION_PUBLISHED: 'terms.version_published',
+} as const;
 
 /**
  * WP-A7 — support tickets (`docs/wp-a7-tickets-audit.md`). One remedy each; a ticket of

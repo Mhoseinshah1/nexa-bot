@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionResponse } from '@nexa/contracts';
 import { finalAnswer, pollSession } from './polling';
-import { ApiError, fetchSession, signIn, signOut } from './api/client';
+import { ApiError, completeSecondFactor, fetchSession, signIn, signOut } from './api/client';
 import { t } from './i18n/web.fa';
 import { match, navigate, useDocumentTitle, useLinkHandler, useRoute, type Route } from './router';
 import { useTheme } from './theme';
@@ -13,15 +13,18 @@ import { useNavCounters } from './nav-counters';
 import { CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
+import { PanelHealthPage } from './pages/panel-health';
 import { SettingsPage } from './pages/settings';
 import { BotButtonsPage } from './pages/bot-buttons';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
+import { AuditLogPage } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
+import { AccountPage } from './pages/account';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
@@ -30,6 +33,7 @@ import { PaymentAccountsPage } from './pages/payment-accounts';
 import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
+import { TermsPage } from './pages/terms';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
@@ -152,6 +156,8 @@ interface Resolved {
  */
 export const ROUTE_PATTERNS: readonly string[] = [
   '/',
+  // Phase D2: the signed-in administrator's own account (security section).
+  '/account',
   '/users',
   '/users/:id',
   '/trials',
@@ -191,14 +197,17 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/panels',
   '/panels/new',
   '/panels/:id',
+  '/panel-health',
   '/providers',
   '/settings',
   '/support',
+  '/terms',
   '/client-apps',
   '/features',
   '/reminders',
   '/bot-buttons',
   '/content',
+  '/audit-log',
   '/alerts',
   '/notifications',
   '/appearance',
@@ -261,6 +270,7 @@ export function resolve(
           // narrows by Telegram id or username, `users.block` changes a status.
           // Collapsing them would hide a capability the server permits.
           maySearch={may('users.search')}
+          mayManageTags={may('users.tags.manage')}
           denied={!may('users.view')}
         />
       ),
@@ -296,9 +306,15 @@ export function resolve(
           mayEditLocation={may('users.location.edit')}
           mayEditNotifications={may('users.notifications.edit')}
           mayTransfer={may('users.transfer')}
+          mayMessage={may('users.message.send')}
+          mayViewMessages={may('users.message.view')}
           mayManualOrder={may('orders.manual.create')}
           mayEditServices={may('services.edit')}
           mayViewAudit={may('audit.view')}
+          mayViewNotes={may('users.notes.view')}
+          mayWriteNotes={may('users.notes.write')}
+          mayAssignTags={may('users.tags.assign')}
+          mayManageTags={may('users.tags.manage')}
           denied={!may('users.view')}
         />
       ),
@@ -864,6 +880,22 @@ export function resolve(
     };
   }
 
+  if (route.path === '/panel-health') {
+    return {
+      element: (
+        <PanelHealthPage
+          denied={!may('panels.view')}
+          // The connection test is charged `panels.edit` by the server.
+          mayProbe={may('panels.edit')}
+          mayDrain={may('panels.drain')}
+          mayViewServices={may('services.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_panel_health') }],
+      title: t('web.nav_panel_health'),
+    };
+  }
+
   if (route.path === '/panels/new') {
     return {
       element: (
@@ -944,6 +976,21 @@ export function resolve(
     };
   }
 
+  if (route.path === '/terms') {
+    return {
+      element: (
+        <TermsPage
+          denied={!may('terms.view')}
+          mayEdit={may('terms.edit')}
+          mayPublish={may('terms.publish')}
+          mayToggle={may('settings.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_terms') }],
+      title: t('web.nav_terms'),
+    };
+  }
+
   if (route.path === '/client-apps') {
     return {
       element: (
@@ -1000,6 +1047,16 @@ export function resolve(
     };
   }
 
+  if (route.path === '/audit-log') {
+    return {
+      element: (
+        <AuditLogPage route={route} denied={!may('audit.view')} mayExport={may('audit.export')} />
+      ),
+      crumbs: [{ label: t('web.nav_audit_log') }],
+      title: t('web.audit_title'),
+    };
+  }
+
   if (route.path === '/alerts') {
     return {
       element: <AlertsPage denied={!may('opslog.view')} />,
@@ -1037,6 +1094,17 @@ export function resolve(
       element: <RecoveryPage route={route} permissions={permissions} />,
       crumbs: [{ label: t('web.nav_recovery') }],
       title: t('web.nav_recovery'),
+    };
+  }
+
+  // Phase D2: the signed-in administrator's own account. Every administrator may open
+  // it — it acts only on themselves — so no permission gates the route; the server
+  // checks every call.
+  if (route.path === '/account') {
+    return {
+      element: <AccountPage />,
+      crumbs: [{ label: t('web.account_title') }],
+      title: t('web.account_title'),
     };
   }
 
@@ -1219,6 +1287,37 @@ function SignIn() {
   const client = useQueryClient();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  /*
+   * Phase D2: set when the password was right and the account owes a second factor.
+   * The challenge itself is an httpOnly cookie this page cannot read; all the page
+   * holds is that a code is owed.
+   */
+  const [challenged, setChallenged] = useState(false);
+  const [code, setCode] = useState('');
+  const [useBackup, setUseBackup] = useState(false);
+  const [expired, setExpired] = useState(false);
+
+  const enter = async () => {
+    /*
+     * Everything the PREVIOUS session cached is dropped before this one reads
+     * anything.
+     *
+     * The console is a single-page app and a session can end without anyone
+     * signing out: the cookie expires, the shell falls back to this screen, and
+     * someone else signs in — on the shared operations machine that the sign-out
+     * path below exists for. Every query key in this app is tenant-independent,
+     * so without this the first frame of `/users` renders the previous tenant's
+     * customer names, usernames and Telegram ids, and `staleTime` plus "keep the
+     * previous data through a failed refetch" can hold them there.
+     *
+     * Dropped HERE rather than by adding a tenant to ~40 query keys: the keys are
+     * correct as cache identities and the thing that changed is WHO is asking, so
+     * the boundary is the session change. `removeQueries` and not `clear`, so the
+     * session query this invalidate is about survives to be re-read.
+     */
+    client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'session' });
+    await client.invalidateQueries({ queryKey: ['session'] });
+  };
 
   const attempt = useMutation({
     // NEVER retried, whatever the global default is. Sign-in carries no
@@ -1228,27 +1327,33 @@ function SignIn() {
     // whose token the browser never received.
     retry: false,
     mutationFn: () => signIn(username, password),
-    onSuccess: async () => {
+    onSuccess: async (outcome) => {
       setPassword('');
-      /*
-       * Everything the PREVIOUS session cached is dropped before this one reads
-       * anything.
-       *
-       * The console is a single-page app and a session can end without anyone
-       * signing out: the cookie expires, the shell falls back to this screen, and
-       * someone else signs in — on the shared operations machine that the sign-out
-       * path below exists for. Every query key in this app is tenant-independent,
-       * so without this the first frame of `/users` renders the previous tenant's
-       * customer names, usernames and Telegram ids, and `staleTime` plus "keep the
-       * previous data through a failed refetch" can hold them there.
-       *
-       * Dropped HERE rather than by adding a tenant to ~40 query keys: the keys are
-       * correct as cache identities and the thing that changed is WHO is asking, so
-       * the boundary is the session change. `removeQueries` and not `clear`, so the
-       * session query this invalidate is about survives to be re-read.
-       */
-      client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'session' });
-      await client.invalidateQueries({ queryKey: ['session'] });
+      setExpired(false);
+      if ('secondFactorRequired' in outcome) {
+        setChallenged(true);
+        return;
+      }
+      await enter();
+    },
+  });
+
+  const second = useMutation({
+    // Never retried either: every attempt is a counted guess.
+    retry: false,
+    mutationFn: () =>
+      completeSecondFactor(useBackup ? { backupCode: code.trim() } : { code: code.trim() }),
+    onSuccess: async () => {
+      setCode('');
+      await enter();
+    },
+    onError: (error: unknown) => {
+      setCode('');
+      // A spent or expired challenge cannot be retried: back to the password.
+      if (error instanceof ApiError && error.code === 'auth.challenge_invalid') {
+        setChallenged(false);
+        setExpired(true);
+      }
     },
   });
 
@@ -1256,6 +1361,80 @@ function SignIn() {
     event.preventDefault();
     attempt.mutate();
   };
+
+  const onSubmitCode = (event: FormEvent) => {
+    event.preventDefault();
+    second.mutate();
+  };
+
+  const startOver = () => {
+    setChallenged(false);
+    setCode('');
+    setUseBackup(false);
+    second.reset();
+    attempt.reset();
+  };
+
+  if (challenged) {
+    return (
+      <main className="shell signin screen">
+        <div className="screen-card">
+          <header>
+            <Brand />
+          </header>
+          <form onSubmit={onSubmitCode} autoComplete="off">
+            <h2 className="strong">{t('web.second_factor_title')}</h2>
+            <p className="muted small">
+              {useBackup ? t('web.second_factor_backup_hint') : t('web.second_factor_hint')}
+            </p>
+            <div className="field">
+              <label htmlFor="second-factor-code">
+                {useBackup
+                  ? t('web.second_factor_backup_label')
+                  : t('web.second_factor_code_label')}
+              </label>
+              <input
+                id="second-factor-code"
+                name="code"
+                className="input"
+                dir="ltr"
+                inputMode={useBackup ? 'text' : 'numeric'}
+                autoComplete="one-time-code"
+                maxLength={useBackup ? 64 : 8}
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <button type="submit" className="btn primary" disabled={second.isPending}>
+              {second.isPending ? t('web.signing_in') : t('web.second_factor_submit')}
+            </button>
+            <div className="btn-group">
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() => {
+                  setUseBackup(!useBackup);
+                  setCode('');
+                }}
+              >
+                {useBackup ? t('web.second_factor_use_app') : t('web.second_factor_use_backup')}
+              </button>
+              <button type="button" className="btn ghost sm" onClick={startOver}>
+                {t('web.second_factor_start_over')}
+              </button>
+            </div>
+            {second.isError && (
+              <p className="error" role="alert">
+                {secondFactorMessage(second.error)}
+              </p>
+            )}
+          </form>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="shell signin screen">
@@ -1298,6 +1477,11 @@ function SignIn() {
             {attempt.isPending ? t('web.signing_in') : t('web.sign_in')}
           </button>
 
+          {expired && !attempt.isError && (
+            <p className="error" role="alert">
+              {t('web.second_factor_expired')}
+            </p>
+          )}
           {attempt.isError && (
             <p className="error" role="alert">
               {messageFor(attempt.error)}
@@ -1307,6 +1491,18 @@ function SignIn() {
       </div>
     </main>
   );
+}
+
+/**
+ * One message for every wrong code: wrong, replayed and already-used read the same,
+ * because the server refuses to tell them apart and this page must not undo that.
+ */
+function secondFactorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code === 'auth.rate_limited') return t('web.rate_limited');
+  if (error instanceof ApiError && error.code === 'auth.challenge_invalid') {
+    return t('web.second_factor_expired');
+  }
+  return t('web.second_factor_invalid');
 }
 
 /** The product mark and name, as the sidebar draws them. */

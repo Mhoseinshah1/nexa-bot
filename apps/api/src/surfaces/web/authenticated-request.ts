@@ -2,6 +2,8 @@ import type { FastifyRequest } from 'fastify';
 import {
   errors,
   IDENTITY_ERROR_CODES,
+  SECOND_FACTOR_COOKIE_NAME,
+  SECOND_FACTOR_COOKIE_NAME_SECURE,
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_NAME_SECURE,
   type ActorContext,
@@ -56,6 +58,22 @@ export function readSessionToken(request: FastifyRequest, isProduction: boolean)
   const accepted = isProduction
     ? [SESSION_COOKIE_NAME_SECURE]
     : [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME];
+  for (const name of accepted) {
+    const token = cookies.get(name);
+    if (token !== undefined) return token;
+  }
+  return null;
+}
+
+/**
+ * The login challenge this request presented (Phase D2), by the same rule as the
+ * session: in production only the `__Host-` spelling, for the shadowing reason above.
+ */
+export function readChallengeToken(request: FastifyRequest, isProduction: boolean): string | null {
+  const cookies = parseCookies(request.headers.cookie);
+  const accepted = isProduction
+    ? [SECOND_FACTOR_COOKIE_NAME_SECURE]
+    : [SECOND_FACTOR_COOKIE_NAME_SECURE, SECOND_FACTOR_COOKIE_NAME];
   for (const name of accepted) {
     const token = cookies.get(name);
     if (token !== undefined) return token;

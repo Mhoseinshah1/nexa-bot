@@ -43,6 +43,7 @@ function health(over: Json = {}): Json {
     status: 200,
     providerVersion: '0.8.4',
     lastHealthyAt: ago(2),
+    unusableStreak: 0,
     stale: false,
     ...over,
   };
@@ -80,6 +81,7 @@ export function panel(id: string, name: string, over: Json = {}): Json {
       prefix: 'nx',
       template: null,
     },
+    drain: { draining: false, since: null, reason: null },
     createdAt: ago(60 * 24 * 200),
     updatedAt: ago(60 * 24 * 3),
     ...over,

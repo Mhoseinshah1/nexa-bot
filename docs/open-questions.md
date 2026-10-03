@@ -2982,3 +2982,20 @@ rule).
   bound to another payment of the tenant (write-once charge id, unique per tenant and
   provider) and holds that payment for an operator. Whether CentralPay can legitimately reuse
   a reference (for example across merchants) is unknown.
+
+## OQ-D2 — admin security (Phase D2): what is deliberately not covered yet
+
+- **OQ-D2-01 — a sole owner who has lost the PASSWORD has no server-side reset.** Phase D2
+  added `botctl admin reset-2fa` for a lost second factor, and it deliberately sets no
+  password and opens no session. An operator reset of a password needs another
+  administrator with `admins.edit`. Whether the server should also offer a password reset
+  (and with what proof of who is at the keyboard beyond holding the host) is an owner
+  decision, not resolved here.
+- **OQ-D2-02 — the Telegram admin surface ignores the second factor.** Telegram
+  administrators are authenticated by their account binding, not the password, and no
+  Telegram admin action asks for a code. Whether any should is open. (The Recovery Kit
+  half of this question is RESOLVED: export and import now take the step-up — the
+  password, plus a code when the administrator's factor is on — ADR-0032 §7, amended.)
+- **OQ-D2-03 — no policy to REQUIRE two-step sign-in.** It is each administrator's choice
+  today. A required-for-owners policy is a setting plus an enrolment-on-next-sign-in
+  flow, and a lockout risk to design carefully; not built.
