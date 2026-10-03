@@ -341,6 +341,17 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
   },
   {
     /*
+     * A payment by the invoice id a verified webhook named for an attempt whose create answer
+     * was lost (CREATE_UNKNOWN): until an inquiry adopts it as `provider_invoice_id`, this is
+     * the only place the provider's invoice id lives. Partial: most invoices carry none.
+     */
+    name: 'gateway_invoices_tenant_hinted_invoice_idx',
+    definition:
+      'ON "gateway_invoices" USING btree ("tenant_id","hinted_invoice_id") ' +
+      'WHERE (hinted_invoice_id IS NOT NULL)',
+  },
+  {
+    /*
      * An order's provisioning operations (Payment Operations Center): the payment timeline
      * reads the operation that delivers what the settling order bought. Nothing served
      * `order_id` except the partial open-operation keys, so a timeline would have walked the

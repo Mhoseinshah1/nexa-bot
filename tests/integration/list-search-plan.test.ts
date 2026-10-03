@@ -109,14 +109,17 @@ describe('the list-search query plans', () => {
           );
           // A gateway invoice per payment (Payment Operations Center, program §10), so the
           // provider-reference arm is planned against a populated table: an order id and an
-          // invoice id on each, and a NOWPayments-style payment id on one in ten.
+          // invoice id on each, and a NOWPayments-style payment id and a webhook-named
+          // invoice id on one in ten.
           await client.query(
             `INSERT INTO gateway_invoices
                (payment_id, tenant_id, provider, provider_order_id, provider_invoice_id,
-                creation_state, created_invoice_at, provider_unit, sent_amount, hinted_payment_id)
+                creation_state, created_invoice_at, provider_unit, sent_amount, hinted_payment_id,
+                hinted_invoice_id)
                SELECT p.id, p.tenant_id, 'TONPAYS', 'po-' || p.id, 'pi-' || p.id, 'CREATED',
                       p.created_at, 'IRT', 250000,
-                      CASE WHEN n % 10 = 0 THEN ($2::bigint + n)::text END
+                      CASE WHEN n % 10 = 0 THEN ($2::bigint + n)::text END,
+                      CASE WHEN n % 10 = 0 THEN 'hi-' || ($2::bigint + n)::text END
                  FROM (SELECT p.*, row_number() OVER (ORDER BY p.created_at, p.id) AS n
                          FROM payments p WHERE p.tenant_id = $1::uuid) p`,
             [scope.tenantId, 880_000_000_000 + offset],
@@ -300,7 +303,7 @@ describe('the list-search query plans', () => {
       ]);
     }, 60_000);
 
-    it('serves a uuid from the primary key, the customer and the order indexes', async () => {
+    it('serves a uuid from the primary key, the customer and the order indexes, and a uuid-shaped provider id from the invoice keys', async () => {
       const plan = await planFor(
         payments().listStatement(tenantA, { text: term(facts.orderId) }, PAGE, null),
       );
@@ -308,7 +311,15 @@ describe('the list-search query plans', () => {
         'payments_pkey',
         'payments_customer_created_idx',
         'payments_tenant_order_idx',
+        'gateway_invoices_invoice_id_key',
       ]);
+    }, 60_000);
+
+    it('serves the invoice id a webhook named for a lost create from its own index', async () => {
+      const plan = await planFor(
+        payments().listStatement(tenantA, { text: term('hi-880000000010') }, PAGE, null),
+      );
+      expectBounded(plan, ['gateway_invoices_tenant_hinted_invoice_idx', 'payments_tenant_id_key']);
     }, 60_000);
 
     it('serves a gateway’s own order or invoice id from the invoice unique keys, then the payment’s tenant key', async () => {

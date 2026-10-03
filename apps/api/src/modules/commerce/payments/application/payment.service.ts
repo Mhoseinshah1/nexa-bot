@@ -407,7 +407,12 @@ const GATEWAY_FAIL_ACTION = 'payment.gateway_fail';
 const PROVIDER_REVIEW_ACTION = 'payment.provider_review_started';
 const RECONCILE_CONFIRM_ACTION = 'payment.reconcile_confirmed';
 const RECONCILE_FAIL_ACTION = 'payment.reconcile_failed';
-const RECONCILE_INQUIRY_ACTION = 'gateway_invoice.reconcile_inquiry_requested';
+/**
+ * An operator's "ask the provider again". Exported because its SUCCESS rows with
+ * `after.requested = true` are the payment timeline's durable record of each request: the
+ * invoice's `reconcile_inquiry_requested_at` is cleared by the inquiry that answers it.
+ */
+export const RECONCILE_INQUIRY_ACTION = 'gateway_invoice.reconcile_inquiry_requested';
 
 /** What reconciling an UNKNOWN gateway payment acts under (OQ-TPTG-19). */
 export const PAYMENT_RECONCILE_PERMISSION: PermissionKey = 'payments.reconcile';

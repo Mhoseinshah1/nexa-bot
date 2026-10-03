@@ -70,7 +70,6 @@ export interface TimelineGatewayFacts {
   readonly providerStatus: string | null;
   readonly providerPaid: boolean | null;
   readonly lastInquiryErrorCode: string | null;
-  readonly reconcileInquiryRequestedAt: Date | null;
   readonly outcome: GatewayInvoiceOutcome | null;
   readonly outcomeAt: Date | null;
   readonly lateCompletionObservedAt: Date | null;
@@ -83,6 +82,17 @@ export interface TimelineLoseTrackFacts {
   /** The machine reason a mismatch hold records; null for a lapsed review. */
   readonly reason: string | null;
   readonly providerStatus: string | null;
+}
+
+/**
+ * One operator "ask the provider again" that was recorded (`requested = true`), from its
+ * `gateway_invoice.reconcile_inquiry_requested` audit row. Not from the invoice's
+ * `reconcile_inquiry_requested_at`: the inquiry that answers a request clears that column,
+ * so an ask-again read from it vanished from the history once it had been answered.
+ */
+export interface TimelineReinquireFacts {
+  readonly id: string;
+  readonly at: Date;
 }
 
 /** The order this payment settled, behind `orders.view`. */
@@ -163,6 +173,7 @@ export interface PaymentTimelineFacts {
   /** Null for a payment that is not a `GATEWAY` payment. */
   readonly gateway?: TimelineGatewayFacts | null;
   readonly loseTrack?: readonly TimelineLoseTrackFacts[];
+  readonly reinquireRequests?: readonly TimelineReinquireFacts[];
   /** Null when the payment settles no order, or the section is withheld. */
   readonly order?: TimelineOrderFacts | null;
   readonly audit?: readonly TimelineAuditFacts[];
@@ -379,22 +390,21 @@ export function assemblePaymentTimeline(
       );
     }
     if (g.lastInquiryAt !== null) {
+      /*
+       * A failed inquiry leaves the last OBSERVED status standing on the row (`recordInquiry`:
+       * "a failed call says nothing new"), so the status and paid flag beside an error code
+       * are an EARLIER answer's. Shown at the failed inquiry's time they would read as what
+       * that inquiry returned; an error entry carries the error and no status.
+       */
+      const failed = g.lastInquiryErrorCode !== null;
       all.push(
         sortable(g.lastInquiryAt, 'gateway', {
           kind: 'GATEWAY_INQUIRY',
           at: g.lastInquiryAt.toISOString(),
           provider: g.provider,
-          providerStatus: machineCode(g.providerStatus),
-          providerPaid: g.providerPaid,
+          providerStatus: failed ? null : machineCode(g.providerStatus),
+          providerPaid: failed ? null : g.providerPaid,
           errorCode: machineCode(g.lastInquiryErrorCode),
-        }),
-      );
-    }
-    if (g.reconcileInquiryRequestedAt !== null) {
-      all.push(
-        sortable(g.reconcileInquiryRequestedAt, 'gateway', {
-          kind: 'GATEWAY_REINQUIRE_REQUESTED',
-          at: g.reconcileInquiryRequestedAt.toISOString(),
         }),
       );
     }
@@ -415,6 +425,14 @@ export function assemblePaymentTimeline(
         }),
       );
     }
+  }
+  for (const r of facts.reinquireRequests ?? []) {
+    all.push(
+      sortable(r.at, r.id, {
+        kind: 'GATEWAY_REINQUIRE_REQUESTED',
+        at: r.at.toISOString(),
+      }),
+    );
   }
   for (const l of facts.loseTrack ?? []) {
     all.push(

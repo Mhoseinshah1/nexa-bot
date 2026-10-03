@@ -83,6 +83,7 @@ while the outgoing release still serves. No drizzle migration is needed for them
 | `payments_tenant_external_reference_idx`     | bank-reference arm                                                                                                                   |
 | `services_tenant_panel_idx`                  | panel arm, all states (the capacity index excludes TERMINATED)                                                                       |
 | `gateway_invoices_tenant_hinted_payment_idx` | gateway payment-id arm (Payment Operations Center); the order, invoice and charge ids use the `(tenant_id, provider, …)` unique keys |
+| `gateway_invoices_tenant_hinted_invoice_idx` | the invoice id a verified webhook named for a lost create (CREATE_UNKNOWN), before an inquiry adopts it                              |
 
 An `OR` is a bounded BitmapOr only when **every** arm has an index; one unindexed arm turns
 the whole predicate into a filter over a walk of the tenant's table, returning the same rows.
