@@ -1146,6 +1146,9 @@ export class PaymentGatewayService {
     spec: GatewayConversionSpec,
     tx?: unknown,
   ): Promise<ReturnType<typeof parseUnitRatio>> {
+    // A FIXED denomination (NOWPayments: 100 US cents per USDT) is the descriptor's own
+    // constant, exactly as the attempt reads it; only a configured ratio (Stars) is a setting.
+    if (spec.fixedUnitRatio !== undefined) return spec.fixedUnitRatio;
     if (spec.unitRatioSetting === null || !isSettingKey(spec.unitRatioSetting)) return null;
     const text = await this.deps.settings.valueOf<unknown>(scope, spec.unitRatioSetting, tx);
     return typeof text === 'string' ? parseUnitRatio(text) : null;
