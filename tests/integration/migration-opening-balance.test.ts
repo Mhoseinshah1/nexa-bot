@@ -129,7 +129,7 @@ describe('Migration P2: the legacy opening balance', () => {
 
     expect(outcome.kind).toBe('POSTED');
     if (outcome.kind !== 'POSTED') throw new Error('unreachable');
-    expect(outcome.balanceAfterMinor).toBe(1_250_000n);
+    expect(outcome.signedAmountMinor).toBe(1_250_000n);
     expect(outcome.entry.reason).toBe('MIGRATION_OPENING_BALANCE');
     expect(outcome.entry.direction).toBe('CREDIT');
     expect(outcome.entry.amount).toEqual(money(1_250_000n, 'IRT'));
@@ -153,7 +153,7 @@ describe('Migration P2: the legacy opening balance', () => {
   it('preserves a NEGATIVE legacy balance as a DEBIT, through this path only', async () => {
     const c = await customer(tenantA, '700300');
     const outcome = await post(tenantA, c, '700300', -45_000n);
-    expect(outcome.kind).toBe('POSTED');
+    expect(outcome.kind === 'POSTED' && outcome.signedAmountMinor).toBe(-45_000n);
     expect(await openings(tenantA, c)).toMatchObject([{ direction: 'DEBIT', amount: '45000' }]);
     expect(await balance(tenantA, c)).toBe(-45_000n);
   });
@@ -210,12 +210,51 @@ describe('Migration P2: the legacy opening balance', () => {
     }
 
     const up = await post(tenantA, rich, '700500', 50_000n);
-    expect(up.kind === 'POSTED' && up.balanceAfterMinor).toBe(120_000n);
+    expect(up.kind === 'POSTED' && up.signedAmountMinor).toBe(50_000n);
     expect(await balance(tenantA, rich)).toBe(120_000n);
 
     const down = await post(tenantA, poor, '700501', -100_000n);
-    expect(down.kind === 'POSTED' && down.balanceAfterMinor).toBe(-30_000n);
+    expect(down.kind === 'POSTED' && down.signedAmountMinor).toBe(-100_000n);
     expect(await balance(tenantA, poor)).toBe(-30_000n);
+  });
+
+  /*
+   * Codex review of PR #170: credits do not take the customer lock, so a credit that
+   * commits while the opening's transaction runs is absent from any balance read inside it
+   * and present in the wallet afterwards. So neither the outcome nor the audit may carry a
+   * balance at all — only facts of the opening entry itself. Pinned by SHAPE: a field named
+   * like a balance coming back is the regression, whatever value it happens to hold.
+   */
+  it('reports and audits the entry’s signed amount, never a balance a credit could falsify', async () => {
+    const c = await customer(tenantA, '700550');
+    await ctx.container.wallet.adjust(tenantA, owner, c, {
+      idempotencyKey: 'pre-shape',
+      direction: 'CREDIT',
+      amountMinor: 70_000n,
+      currency: 'IRT',
+      note: 'pre-import',
+    });
+    const outcome = await post(tenantA, c, '700550', -20_000n);
+    expect(Object.keys(outcome).sort()).toEqual(['entry', 'kind', 'signedAmountMinor']);
+
+    const [row] = (
+      await ctx.container.database.db.execute(sql`
+        SELECT before, after FROM audit_logs
+         WHERE action = 'wallet.migration_opening_balance' AND entity_id = ${c}
+           AND result = 'SUCCESS'`)
+    ).rows as { before: unknown; after: Record<string, unknown> }[];
+    expect(row?.before).toBeNull();
+    expect(Object.keys(row?.after ?? {}).sort()).toEqual([
+      'amountMinor',
+      'currency',
+      'direction',
+      'entryId',
+      'reason',
+      'signedAmountMinor',
+    ]);
+    expect(row?.after.signedAmountMinor).toBe('-20000');
+    // No KEY names a balance anywhere in the row (the reason VALUE says BALANCE, legitimately).
+    expect(JSON.stringify(row)).not.toMatch(/"[A-Za-z_]*[Bb]alance[A-Za-z_]*":/);
   });
 
   // ---------------------------------------------------------------------------
