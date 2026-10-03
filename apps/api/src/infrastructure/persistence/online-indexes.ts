@@ -327,6 +327,22 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     name: 'services_tenant_panel_idx',
     definition: 'ON "services" USING btree ("tenant_id","panel_id")',
   },
+  {
+    /*
+     * Phase C2: a tenant's FAILED provisioning operations in a recent window, for the
+     * panel health dashboard's "failed in the last 24 hours" per panel.
+     *
+     * Partial on FAILED and ordered by `completed_at` (which FAILED always carries —
+     * `provisioning_operations_completed_check`), so the read is bounded by the window
+     * rather than by every operation the tenant has ever run. CONCURRENTLY for the
+     * reason `provisioning_operations_unannounced_idx` gives: an ordinary build would
+     * block every operation transition on a live installation.
+     */
+    name: 'provisioning_operations_failed_recent_idx',
+    definition:
+      'ON "provisioning_operations" USING btree ("tenant_id","completed_at") ' +
+      "WHERE (state = 'FAILED'::text)",
+  },
 
   /*
    * ---------------------------------------------------------------------------------

@@ -67,6 +67,8 @@ import {
 import type { MonitorCadence } from './modules/platform/panels/domain/monitor-cadence.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
 import { PanelService } from './modules/platform/panels/application/panel.service.js';
+import { PanelHealthDashboardService } from './modules/platform/panels/application/panel-health-dashboard.js';
+import { DrizzlePanelFleetStatsReader } from './modules/platform/panels/infrastructure/drizzle-panel-fleet-stats.js';
 import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
 import type { ProbeCoreDeps } from './modules/platform/panels/application/probe-core.js';
 import {
@@ -960,6 +962,8 @@ export interface Container {
 
   // Control plane — Phase 2
   readonly panels: PanelService;
+  /** Phase C2: the live fleet's health, load and failures, read-only. */
+  readonly panelHealth: PanelHealthDashboardService;
   /** WP-A8: a panel's capability registry, operator policy and diagnostics. */
   readonly panelAdvanced: PanelAdvancedService;
   /** The Telegram admin section's reminder seam. See the construction site. */
@@ -5963,6 +5967,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       },
     }),
     panels: panelService,
+    /*
+     * Over the SAME panel service — its list charges `panels.view` and computes the
+     * health, capacity, sellability and drain every other screen shows.
+     */
+    panelHealth: new PanelHealthDashboardService({
+      panels: panelService,
+      stats: new DrizzlePanelFleetStatsReader(database.db),
+      conditions: new DrizzleOperationalConditionReader(database.db),
+      clock,
+    }),
     panelAdvanced,
     /*
      * The bot's own reminder-configuration seam, exposed so a test can read the path

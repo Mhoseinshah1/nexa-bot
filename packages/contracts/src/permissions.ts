@@ -247,6 +247,14 @@ export const PERMISSIONS = [
   p('panels.edit', 'Create or edit provider panels', 'HIGH'),
   p('panels.credentials.rotate', 'Rotate panel credentials', 'CRITICAL'),
   /*
+   * Phase C2: drain a panel (no new allocations) or let it sell again. Its own key rather
+   * than `panels.edit`, because it is the operational lever a technical operator pulls
+   * during an incident — and `panels.edit` also reaches the address, the activation and
+   * the cap. HIGH: it decides whether customers can buy on a machine. It touches no
+   * existing service and no credential.
+   */
+  p('panels.drain', 'Drain a panel, or let it take new business again', 'HIGH'),
+  /*
    * WP-A8: the read-only technical view of one panel — raw capability keys, the credential
    * shape, the stored activation and policy exactly as stored. For the owner debugging an
    * integration; normal operators read the same facts in Persian through `panels.view`.
@@ -620,6 +628,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
     permissions: [
       'panels.view',
       'panels.edit',
+      // Phase C2: draining is this role's lever during an incident.
+      'panels.drain',
       'services.view',
       'services.edit',
       'settings.view',

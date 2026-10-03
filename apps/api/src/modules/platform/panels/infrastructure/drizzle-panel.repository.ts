@@ -34,6 +34,7 @@ import type {
   HealthWriteOutcome,
   PanelHealthRecord,
   PanelMonitorRepository,
+  PanelDrain,
   PanelRecord,
   PanelRepository,
   PanelScheduleRecord,
@@ -440,6 +441,27 @@ export class DrizzlePanelRepository implements PanelRepository {
       }
       throw error;
     }
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async setDrain(
+    scope: TenantContext,
+    panelId: string,
+    drain: PanelDrain | null,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<PanelRecord | null> {
+    const [row] = await tx.tx
+      .update(panels)
+      .set({
+        // Both or neither, set together so `panels_drain_reason_check` is never the
+        // thing that notices a caller forgot one.
+        drainedAt: drain?.since ?? null,
+        drainReason: drain?.reason ?? null,
+        updatedAt: at,
+      })
+      .where(and(eq(panels.id, panelId), eq(panels.tenantId, scope.tenantId)))
+      .returning();
     return row === undefined ? null : toRecord(row);
   }
 
@@ -1298,6 +1320,10 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     // owns the schema that decides it. See `PanelRecord.activation`.
     activation: row.activation,
     archivedAt: row.archivedAt,
+    drain:
+      row.drainedAt === null || row.drainReason === null
+        ? null
+        : { since: row.drainedAt, reason: row.drainReason },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

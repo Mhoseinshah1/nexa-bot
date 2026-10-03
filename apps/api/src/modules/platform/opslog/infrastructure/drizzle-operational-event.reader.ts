@@ -250,6 +250,60 @@ export class DrizzleOperationalConditionReader implements OperationalConditionRe
     return rows.map((row) => row.code);
   }
 
+  /**
+   * The unresolved rows among these dedupe keys, with what an operator reads off
+   * them. Phase C2's panel health dashboard: keyed exactly as `openConditions`,
+   * through `operational_events_dedupe_key`, so the answer is about the rows a
+   * recovery would resolve — never a scan by code or by context.
+   */
+  async openConditionDetails(
+    scope: ScopeContext,
+    dedupeKeys: readonly string[],
+  ): Promise<
+    {
+      dedupeKey: string;
+      code: string;
+      severity: OperationalSeverity;
+      firstSeenAt: Date;
+      lastSeenAt: Date;
+      occurrences: number;
+    }[]
+  > {
+    if (dedupeKeys.length === 0) return [];
+    const rows = await this.db
+      .select({
+        dedupeKey: operationalEvents.dedupeKey,
+        code: operationalEvents.code,
+        severity: operationalEvents.severity,
+        firstSeenAt: operationalEvents.firstSeenAt,
+        lastSeenAt: operationalEvents.lastSeenAt,
+        occurrences: operationalEvents.occurrenceCount,
+      })
+      .from(operationalEvents)
+      .where(
+        and(
+          eq(operationalEvents.dedupeScope, scopeRef(scope, 'OPSLOG')),
+          inArray(operationalEvents.dedupeKey, [...dedupeKeys]),
+          isNull(operationalEvents.resolvedAt),
+        ),
+      );
+    return rows.flatMap((row) =>
+      row.dedupeKey === null
+        ? []
+        : [
+            {
+              dedupeKey: row.dedupeKey,
+              code: row.code,
+              // The CHECK constraint is what makes this narrowing safe.
+              severity: row.severity as OperationalSeverity,
+              firstSeenAt: row.firstSeenAt,
+              lastSeenAt: row.lastSeenAt,
+              occurrences: row.occurrences,
+            },
+          ],
+    );
+  }
+
   async systemConditionIsOpen(code: string): Promise<boolean> {
     const rows = await this.db
       .select({ id: operationalEvents.id })

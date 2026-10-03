@@ -62,8 +62,21 @@ export interface PanelRecord {
    */
   readonly usernamePolicy: PanelUsernamePolicy;
   readonly archivedAt: Date | null;
+  /**
+   * The operator's drain, or null when the panel takes new business (Phase C2).
+   *
+   * Read by `decideEligibility` and by nothing that decides an OPERATION: a drained
+   * panel stays operable for every service already on it.
+   */
+  readonly drain: PanelDrain | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+}
+
+/** When a drain began and why. Both or neither, as `panels_drain_reason_check` requires. */
+export interface PanelDrain {
+  readonly since: Date;
+  readonly reason: string;
 }
 
 /** Which credentials a panel has, and when each was last replaced. Never the values. */
@@ -364,6 +377,18 @@ export interface PanelRepository {
      * no such moment.
      */
     name?: string,
+  ): Promise<PanelRecord | null>;
+  /**
+   * Set or clear the drain, in the caller's transaction, which holds the panel's
+   * lock. Null when no panel of this tenant has that id. Touches nothing but the
+   * two drain columns and `updated_at`.
+   */
+  setDrain(
+    scope: TenantContext,
+    panelId: string,
+    drain: PanelDrain | null,
+    at: Date,
+    tx: TransactionScope,
   ): Promise<PanelRecord | null>;
   /** Whether a LIVE panel of this tenant already uses the name. */
   nameTaken(
