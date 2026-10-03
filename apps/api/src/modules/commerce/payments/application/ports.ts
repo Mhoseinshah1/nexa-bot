@@ -6,10 +6,12 @@ import type {
   PaymentGatewayProvider,
   PaymentId,
   PaymentMethod,
+  PaymentOpsQueue,
   PaymentResolvedState,
   PaymentState,
   ReceiptDisposition,
   TenantContext,
+  TimePeriod,
   UserId,
 } from '@nexa/contracts';
 
@@ -206,6 +208,31 @@ export interface PaymentSearch {
    * detail report — one SQL expression, so the filter and the column cannot disagree.
    */
   readonly disposition?: ReceiptDisposition;
+  /**
+   * A Payment Operations Center queue (program §10): one SQL predicate per queue, shared
+   * with the attention counts (`infrastructure/payment-ops-queue-sql.ts`).
+   */
+  readonly queue?: PaymentOpsQueue;
+  /** The route the payment was offered through (`payments.gateway_provider`). */
+  readonly gatewayProvider?: PaymentGatewayProvider;
+  /** Created inside this half-open window, `[start, end)`. */
+  readonly createdIn?: TimePeriod;
+}
+
+/**
+ * What the gateway side last recorded about one payment, for a queue row: states, codes
+ * and times only — never a link, a card or a provider amount.
+ */
+export interface PaymentGatewaySignalRecord {
+  readonly creationState: string;
+  readonly creationErrorCode: string | null;
+  readonly providerStatus: string | null;
+  readonly providerPaid: boolean | null;
+  readonly lastInquiryAt: Date | null;
+  readonly lastInquiryErrorCode: string | null;
+  readonly outcome: string | null;
+  readonly lateCompletionObservedAt: Date | null;
+  readonly reconcileInquiryRequestedAt: Date | null;
 }
 
 export interface PaymentRepository {
@@ -500,6 +527,16 @@ export interface PaymentRepository {
     paymentIds: readonly PaymentId[],
     tx?: unknown,
   ): Promise<ReadonlyMap<PaymentId, ReceiptDisposition>>;
+
+  /**
+   * The gateway side of each of these payments, one query for a page (Payment Operations
+   * Center). Absent for a payment with no `gateway_invoices` row. Read-only and unlocked.
+   */
+  gatewaySignals(
+    scope: TenantContext,
+    paymentIds: readonly PaymentId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<PaymentId, PaymentGatewaySignalRecord>>;
 
   /**
    * The reason an administrator REJECTED this payment (File 01 §7): its `resolution_note`,

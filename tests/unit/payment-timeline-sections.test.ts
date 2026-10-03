@@ -104,8 +104,10 @@ describe('the payment timeline receipts section', () => {
   it('does not read receipts for a viewer without receipts.view, and names them withheld', async () => {
     const { view, asked } = await timelineFor(['payments.view', 'refunds.view', 'users.view']);
 
-    expect(asked).toEqual([{ receipts: false, refunds: true, wallet: true }]);
-    expect(view.withheld).toEqual(['RECEIPTS']);
+    expect(asked).toEqual([
+      { receipts: false, refunds: true, wallet: true, order: false, audit: false },
+    ]);
+    expect(view.withheld).toEqual(['RECEIPTS', 'ORDER', 'AUDIT']);
     expect(view.entries.map((entry) => entry.kind)).not.toContain('RECEIPT_SUBMITTED');
   });
 
@@ -117,16 +119,37 @@ describe('the payment timeline receipts section', () => {
       'users.view',
     ]);
 
-    expect(asked).toEqual([{ receipts: true, refunds: true, wallet: true }]);
-    expect(view.withheld).toEqual([]);
+    expect(asked).toEqual([
+      { receipts: true, refunds: true, wallet: true, order: false, audit: false },
+    ]);
+    expect(view.withheld).toEqual(['ORDER', 'AUDIT']);
     expect(view.entries.map((entry) => entry.kind)).toContain('RECEIPT_SUBMITTED');
   });
 
   it('withholds and names every gated section from a viewer holding payments.view alone', async () => {
     const { view, asked } = await timelineFor(['payments.view']);
 
-    expect(asked).toEqual([{ receipts: false, refunds: false, wallet: false }]);
-    expect(view.withheld).toEqual(['RECEIPTS', 'REFUNDS', 'WALLET']);
+    expect(asked).toEqual([
+      { receipts: false, refunds: false, wallet: false, order: false, audit: false },
+    ]);
+    expect(view.withheld).toEqual(['RECEIPTS', 'REFUNDS', 'WALLET', 'ORDER', 'AUDIT']);
+  });
+
+  /*
+   * Payment Operations Center (program §10): the order's settlement and delivery sit behind
+   * `orders.view`, and the payment's audit rows behind `audit.view` — the permissions that
+   * already guard those facts elsewhere. Neither is read without its key.
+   */
+  it('reads the ORDER section only under orders.view and the AUDIT section only under audit.view', async () => {
+    const order = await timelineFor(['payments.view', 'orders.view']);
+    expect(order.asked[0]).toMatchObject({ order: true, audit: false });
+    expect(order.view.withheld).not.toContain('ORDER');
+    expect(order.view.withheld).toContain('AUDIT');
+
+    const audit = await timelineFor(['payments.view', 'audit.view']);
+    expect(audit.asked[0]).toMatchObject({ order: false, audit: true });
+    expect(audit.view.withheld).toContain('ORDER');
+    expect(audit.view.withheld).not.toContain('AUDIT');
   });
 
   it('decides the receipts section on receipts.view alone, not on receipts.review', async () => {

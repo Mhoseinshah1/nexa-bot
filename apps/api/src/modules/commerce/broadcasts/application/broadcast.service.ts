@@ -42,6 +42,10 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
+import {
+  excludesMarketingOptOuts,
+  type MarketingOptOutPolicy,
+} from './marketing-opt-out-policy.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   freezeAudience,
@@ -81,6 +85,11 @@ export interface BroadcastServiceDeps {
   readonly outbox: OutboxWriter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * Broadcast V2: the same switch the dispatcher's stamp reads, used here ONLY for the
+   * preview's opted-out estimate. It never narrows what is counted or materialised.
+   */
+  readonly marketingOptOut?: MarketingOptOutPolicy;
 }
 
 /**
@@ -191,6 +200,16 @@ export class BroadcastService {
     await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
     await this.require(scope, id);
     return this.deps.repository.recipients(scope, id, input);
+  }
+
+  /**
+   * Broadcast V2 (program §19): why recipients were not delivered, grouped by state and
+   * reason. `broadcasts.view`, like the recipients it summarises.
+   */
+  async failureReasons(scope: TenantContext, actor: ActorContext, id: string) {
+    await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
+    await this.require(scope, id);
+    return this.deps.repository.failureReasons(scope, id);
   }
 
   // --- composing -----------------------------------------------------------------------
@@ -532,7 +551,17 @@ export class BroadcastService {
       result.asOf,
       options,
     );
-    return toPreview(result, sample);
+    /*
+     * Broadcast V2 (program §19): the estimate of who a MARKETING send would skip, shown
+     * beside the count — only where the send would honour the opt-out NOW. The count itself is
+     * unchanged: the stamp decides at the send.
+     */
+    const estimate = await excludesMarketingOptOuts(
+      record.purpose,
+      this.deps.marketingOptOut,
+      scope,
+    );
+    return { ...toPreview(result, sample), optedOut: estimate ? (result.optedOut ?? 0) : null };
   }
 
   /**
