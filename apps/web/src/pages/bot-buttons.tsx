@@ -155,7 +155,9 @@ export function BotButtonsPage({
         mayViewTemplates={mayViewTemplates}
         mayEditTemplates={mayEditTemplates}
         templates={templates.data?.templates}
-        onLabelChanged={() => client.invalidateQueries({ queryKey: ['templates'] })}
+        // Codex 4170910525: a glass label can be a main-menu template (`bot.menu.services`),
+        // so a label save re-reads both menu read models, as the texts cards do.
+        onLabelChanged={refreshMenu}
       />
       <Card title={t('web.bot_buttons_labels_title')} hint={t('web.bot_buttons_labels_hint')}>
         {!mayViewTemplates ? (

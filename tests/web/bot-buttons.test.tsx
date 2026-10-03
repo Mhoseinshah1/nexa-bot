@@ -171,6 +171,16 @@ function api(
       }),
     },
     { url: '/appearance', body: { slots: [], bots: [], operatorTelegramBound: false } },
+    // Owner spec §6: the glass-button section reads the settings; a label save writes a template.
+    { url: '/settings', body: { settings: [] } },
+    {
+      url: '/templates/bot.menu.services',
+      body: {
+        template: view('bot.menu.services', CATALOGUE_FA['bot.menu.services']),
+        revision: 1,
+        changed: true,
+      },
+    },
     {
       url: '/templates/bot.menu.wallet',
       body: {
@@ -241,6 +251,32 @@ describe('«دکمه‌های ربات»', () => {
       (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     expect(follows(sync, glass)).toBe(true);
     expect(follows(glass, texts)).toBe(true);
+  });
+
+  it('re-reads both menu models after a glass label that is a main-menu template is saved (Codex 4170910525)', async () => {
+    const calls = api();
+    renderPage(page());
+    const reads = (suffix: string) =>
+      calls.calls.filter((call) => call.method === 'GET' && call.url.endsWith(suffix)).length;
+    const host = await waitFor(() => {
+      const found = document.querySelector('[data-inline-button="apps.services"]');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    await waitFor(() => expect(reads('/bot-menu')).toBe(1));
+    const menuReads = reads('/bot-menu');
+    const builderReads = reads('/bot-menu/builder');
+    const details = host.querySelector('details') as HTMLDetailsElement;
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    fireEvent.click(await within(host).findByRole('button', { name: t('web.save') }));
+    await waitFor(() =>
+      expect(calls.calls.some((call) => call.url.includes('/templates/bot.menu.services'))).toBe(
+        true,
+      ),
+    );
+    await waitFor(() => expect(reads('/bot-menu')).toBeGreaterThan(menuReads));
+    await waitFor(() => expect(reads('/bot-menu/builder')).toBeGreaterThan(builderReads));
   });
 
   it('lists every main-menu button, the trial and the referral included, with its label and its gate', async () => {

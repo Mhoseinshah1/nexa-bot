@@ -15,7 +15,16 @@ import {
 import { fetchSettings, saveSetting } from '../../api/client';
 import { t, type WebKey } from '../../i18n/web.fa';
 import { useSubmissionKey } from '../../submission-key';
-import { Badge, Banner, Button, Card, Disclosure, StateSwitch, useToast } from '../../ui/kit';
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  Disclosure,
+  StateSwitch,
+  useToast,
+  useUnsavedChanges,
+} from '../../ui/kit';
 import { TemplateCard } from '../content';
 import { ErrorReport } from '../settings';
 import { fill } from './canvas';
@@ -202,11 +211,35 @@ export function InlineButtonsSection({
     const parsed = inlineButtonStylesSchema.safeParse(setting?.value ?? {});
     return parsed.success ? parsed.data : {};
   }, [setting?.value]);
-  const [draft, setDraft] = useState<InlineButtonStyles | null>(null);
+  /*
+   * The draft carries the VERSION it was edited from (Codex 4170910503). A refetch after a
+   * local edit advances `setting.version` while the draft is still the older copy; saving
+   * with the fresh version would send stale values under a version that says they are
+   * current, and silently revert another administrator's change. So a save always states
+   * the draft's own basis, a conflict is the server's answer, and fresh values are adopted
+   * only when the operator asks for them.
+   */
+  const [draft, setDraft] = useState<{
+    readonly styles: InlineButtonStyles;
+    readonly basisVersion: number | null;
+  } | null>(null);
   const [filter, setFilter] = useState('');
-  const current = draft ?? stored;
-  const unsaved = draft !== null && !sameStyles(draft, stored);
+  const current = draft?.styles ?? stored;
+  /*
+   * A stored value this release cannot read (Codex 4170910512) is shown as the defaults, and
+   * the row must still be repairable: Save writes what is on screen (the defaults, or the
+   * operator's edit) over it, and Reset is offered even with nothing overridden.
+   */
+  const invalid = setting?.storedValueInvalid === true;
+  const unsaved = draft !== null && (invalid || !sameStyles(draft.styles, stored));
+  const changedElsewhere =
+    draft !== null && setting !== undefined && setting.version !== draft.basisVersion;
   const overridden = Object.keys(canonicalStyles(current)).length;
+  const basisVersion = setting?.version ?? null;
+  const edit = (styles: InlineButtonStyles) =>
+    setDraft((before) => ({ styles, basisVersion: before?.basisVersion ?? basisVersion }));
+  // Codex 4170910519: a leave (sidebar, back, reload, close) asks before dropping an edit.
+  useUnsavedChanges(mayEdit && unsaved);
 
   const save = useMutation({
     mutationFn: (command: {
@@ -298,7 +331,7 @@ export function InlineButtonsSection({
                           disabled={!mayEdit || save.isPending}
                           aria-label={`${t('web.ib_style')} — ${name}`}
                           onChange={(event) =>
-                            setDraft({
+                            edit({
                               ...current,
                               [entry.key]: event.target.value as InlineButtonStyle,
                             })
@@ -335,26 +368,35 @@ export function InlineButtonsSection({
           <p className="muted">{t('web.ib_none_found')}</p>
         )}
         {save.isError && <ErrorReport error={save.error} />}
+        {mayEdit && changedElsewhere && (
+          <Banner tone="warn">
+            {t('web.ib_changed_elsewhere')}{' '}
+            <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>
+              {t('web.ib_reload')}
+            </Button>
+          </Banner>
+        )}
         {mayEdit && (
           <div className="ib-actions">
             {unsaved && <span className="muted small">{t('web.ib_unsaved')}</span>}
             <Button
               variant="ghost"
               size="sm"
-              disabled={save.isPending || Object.keys(canonicalStyles(current)).length === 0}
-              onClick={() => setDraft({})}
+              disabled={save.isPending || (overridden === 0 && !invalid)}
+              onClick={() => edit({})}
             >
               {t('web.ib_reset')}
             </Button>
             <Button
               variant="primary"
               size="sm"
-              disabled={!unsaved || save.isPending || setting === undefined}
+              disabled={!(unsaved || invalid) || save.isPending || setting === undefined}
               onClick={() => {
-                // Snapshotted at the click, so a retry cannot carry a later edit.
+                // Snapshotted at the click, so a retry cannot carry a later edit; the version
+                // is the one the DRAFT was edited from, never a later read's.
                 const command = {
                   value: canonicalStyles(current),
-                  expectedVersion: setting?.version ?? null,
+                  expectedVersion: draft === null ? basisVersion : draft.basisVersion,
                 };
                 save.mutate({ ...command, idempotencyKey: submission.current(command) });
               }}

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   INLINE_BUTTONS,
   templateDefinition,
@@ -13,6 +13,8 @@ import {
   canonicalStyles,
 } from '../../apps/web/src/pages/bot-buttons/inline-buttons';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
+import { navigate } from '../../apps/web/src/router';
 import { renderPage, setting, stubApi } from './harness';
 
 /**
@@ -187,6 +189,145 @@ describe('«دکمه‌های شیشه‌ای ربات»', () => {
     });
     expect(row('service.renew')).not.toBeNull();
     expect(row('payment.sent')).toBeNull();
+  });
+});
+
+afterEach(() => {
+  // The leave-guard case moves the router; put it back past any guard.
+  act(() => navigate('/', { replace: true, force: true }));
+});
+
+/** The tab hidden and shown again: react-query refetches what the page shows. */
+function refocus(): void {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+  window.dispatchEvent(new Event('visibilitychange'));
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+  window.dispatchEvent(new Event('visibilitychange'));
+}
+
+describe('«دکمه‌های شیشه‌ای ربات» — Codex review of #145', () => {
+  it('4170910503: a refetch after an edit never lends the draft the newer version', async () => {
+    const listing = {
+      settings: [setting({ key: 'bot.inline_buttons', value: {}, version: 4, configures: null })],
+    };
+    const calls = stubApi([
+      { url: '/settings', body: listing },
+      {
+        url: '/settings/bot.inline_buttons',
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'control.version_conflict',
+            message: 'stale',
+            correlationId: 't',
+          },
+        },
+      },
+    ]);
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    fireEvent.change(within(row('payment.sent') as HTMLElement).getByRole('combobox'), {
+      target: { value: 'success' },
+    });
+    // Another administrator saves meanwhile; this page re-reads version 5.
+    listing.settings = [
+      setting({
+        key: 'bot.inline_buttons',
+        value: { main_menu: 'danger' },
+        version: 5,
+        configures: null,
+      }),
+    ];
+    const reads = calls.calls.filter((call) => call.url.endsWith('/settings')).length;
+    refocus();
+    await waitFor(() =>
+      expect(calls.calls.filter((call) => call.url.endsWith('/settings')).length).toBeGreaterThan(
+        reads,
+      ),
+    );
+    expect(
+      await screen.findByText(t('web.ib_changed_elsewhere'), { exact: false }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    await waitFor(() =>
+      expect(calls.calls.some((call) => call.url.endsWith('/settings/bot.inline_buttons'))).toBe(
+        true,
+      ),
+    );
+    const write = calls.calls.find((call) => call.url.endsWith('/settings/bot.inline_buttons'));
+    // The version the DRAFT was edited from: the server refuses it rather than reverting.
+    expect(write?.body).toMatchObject({ expectedVersion: 4, value: { 'payment.sent': 'success' } });
+    // Adopting the fresh value is explicit.
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_reload') }));
+    await waitFor(() =>
+      expect(
+        (within(row('main_menu') as HTMLElement).getByRole('combobox') as HTMLSelectElement).value,
+      ).toBe('danger'),
+    );
+    expect(
+      (within(row('payment.sent') as HTMLElement).getByRole('combobox') as HTMLSelectElement).value,
+    ).toBe('default');
+  });
+
+  it('4170910519: an unsaved style edit holds an in-app navigation', async () => {
+    api();
+    renderPage(
+      <>
+        {section()}
+        <LeaveGuardHost />
+      </>,
+    );
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    fireEvent.change(within(row('payment.sent') as HTMLElement).getByRole('combobox'), {
+      target: { value: 'danger' },
+    });
+    act(() => navigate('/elsewhere'));
+    expect(await screen.findByText(t('web.unsaved_question'))).toBeInTheDocument();
+  });
+
+  it('4170910512: a stored value this release cannot read can still be repaired', async () => {
+    const calls = stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            {
+              ...setting({
+                key: 'bot.inline_buttons',
+                value: { 'no.such.button': 'primary' },
+                version: 3,
+                configures: null,
+              }),
+              source: 'DEFAULT',
+              storedValueInvalid: true,
+            },
+          ],
+        },
+      },
+      {
+        url: '/settings/bot.inline_buttons',
+        body: {
+          setting: setting({ key: 'bot.inline_buttons', value: {}, version: 4, configures: null }),
+          changed: true,
+        },
+      },
+    ]);
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    expect(screen.getByText(t('web.ib_stored_invalid'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.ib_reset') })).toBeEnabled();
+    const save = screen.getByRole('button', { name: t('web.ib_save') });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(calls.calls.some((call) => call.url.endsWith('/settings/bot.inline_buttons'))).toBe(
+        true,
+      ),
+    );
+    expect(
+      calls.calls.find((call) => call.url.endsWith('/settings/bot.inline_buttons'))?.body,
+    ).toMatchObject({ value: {}, expectedVersion: 3 });
   });
 });
 
