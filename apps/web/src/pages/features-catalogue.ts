@@ -134,6 +134,12 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     summary: 'web.feature_referral_signup_gift_summary',
     disableEffect: null,
   },
+  // Off: new drafts go to their product's own panel again; nothing already placed moves.
+  panel_auto_balancing: {
+    title: 'web.feature_panel_auto_balancing_title',
+    summary: 'web.feature_panel_auto_balancing_summary',
+    disableEffect: null,
+  },
   // Off withdraws the button; orders already confirmed are still paid for and delivered.
   custom_service: {
     title: 'web.feature_custom_service_title',

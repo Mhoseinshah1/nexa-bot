@@ -256,6 +256,7 @@ import {
   type PanelTechnicalResponse,
   type UpdatePanelPolicyResponse,
   panelHealthDashboardResponseSchema,
+  orderPlacementResponseSchema,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -264,6 +265,7 @@ import {
   type PanelUsernamePolicyInput,
   type PanelListArchivedMode,
   type PanelHealthDashboardResponse,
+  type OrderPlacementEnvelope,
   type PanelListResponse,
   type PanelResponse,
   type PanelStatus,
@@ -2068,10 +2070,17 @@ export function updatePanel(input: {
    * whatever happens to be stored.
    */
   usernamePolicy?: PanelUsernamePolicyInput;
+  /** Phase C3: absent leaves it; `null` takes the panel out of its group; a label sets it. */
+  balancingGroup?: string | null;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   const { id, ...body } = input;
   return post(PANEL_ROUTES.update(id), body, panelResponseSchema);
+}
+
+/** Phase C3: why an order landed on its panel, or `placement: null` (the explicit route). */
+export function fetchOrderPlacement(id: string): Promise<OrderPlacementEnvelope> {
+  return authedGet(ORDER_ROUTES.placement(id), orderPlacementResponseSchema);
 }
 
 /**

@@ -3660,6 +3660,47 @@ export const WEB_FA = {
   'web.panel_reason_unvalidated': 'تست اتصال انجام نشده',
   'web.panel_reason_unvalidated_help':
     'برای پیکربندی فعلی هیچ تست اتصال موفقی ثبت نشده است. دکمهٔ «تست اتصال» در همین صفحه کافی است.',
+  // --- Automatic panel balancing (Phase C3) ------------------------------------
+  'web.flag_panel_auto_balancing': 'توزیع خودکار سرویس بین پنل‌ها',
+  'web.feature_panel_auto_balancing_title': 'توزیع خودکار سرویس بین پنل‌ها',
+  'web.feature_panel_auto_balancing_summary':
+    'هر سرویس جدید روی بهترین پنلِ واجد شرایط از گروه توزیعِ پنلِ محصول ساخته می‌شود: پنل‌های سالم اول، سپس بر اساس شیوهٔ توزیع. پنلی که در هیچ گروهی نیست مثل قبل عمل می‌کند و هیچ سرویس موجودی جابه‌جا نمی‌شود.',
+  'web.setting_panels_balancing_strategy': 'شیوهٔ توزیع بین پنل‌ها',
+  'web.setting_panels_balancing_strategy_desc':
+    'پس از مقایسهٔ سلامت، پنل‌های واجد شرایط یک گروه با این معیار مرتب می‌شوند. در تساوی، پنل خودِ محصول و سپس کوچک‌ترین شناسه انتخاب می‌شود.',
+  'web.balancing_strategy_least_used': 'کمترین تعداد ظرفیت اشغال‌شده',
+  'web.balancing_strategy_lowest_utilisation': 'کمترین درصد پرشدگی (پنل بدون سقف در آخر)',
+  'web.bal_group': 'گروه توزیع',
+  'web.bal_group_none': 'بدون گروه',
+  'web.bal_group_edit': 'ویرایش گروه',
+  'web.bal_group_title': 'گروه توزیع این پنل',
+  'web.bal_group_explain':
+    'پنل‌های یک گروه برای سرویس جدید جایگزین یکدیگر محسوب می‌شوند (فقط با ارائه‌دهندهٔ یکسان). وقتی توزیع خودکار روشن است، سفارش جدیدِ محصولِ هر پنلِ این گروه روی بهترین پنل واجد شرایط گروه ساخته می‌شود. خالی بگذارید تا پنل از گروه خارج شود.',
+  'web.bal_group_hint': 'حروف کوچک لاتین، عدد، خط تیره یا زیرخط؛ حداکثر ۴۰ نویسه.',
+  'web.bal_group_save': 'ذخیره',
+  'web.bal_group_done': 'گروه توزیع ذخیره شد.',
+  'web.bal_placement_title': 'انتخاب پنل',
+  'web.bal_placement_none': 'این سفارش بدون توزیع خودکار، روی پنلِ خودِ محصول ثبت شده است.',
+  'web.bal_placement_group': 'گروه',
+  'web.bal_placement_decided_at': 'زمان تصمیم',
+  'web.bal_placement_strategy': 'شیوه',
+  'web.bal_placement_decided_by': 'دلیل انتخاب',
+  'web.bal_placement_home': 'پنل محصول',
+  'web.bal_placement_chosen': 'پنل انتخاب‌شده',
+  'web.bal_placement_rank': 'رتبه',
+  'web.bal_placement_used': 'اشغال',
+  'web.bal_placement_healthy': 'سالم',
+  'web.bal_placement_status': 'وضعیت',
+  'web.bal_decided_sole_candidate': 'تنها پنل واجد شرایط گروه',
+  'web.bal_decided_health': 'سالم‌تر از پنل بعدی',
+  'web.bal_decided_load': 'کم‌بارتر از پنل بعدی',
+  'web.bal_decided_home_preference': 'برابر با بقیه؛ پنل خودِ محصول ترجیح داده شد',
+  'web.bal_decided_panel_id': 'برابر با بقیه؛ کوچک‌ترین شناسه برای پایداری',
+  'web.bal_decided_no_eligible_candidate':
+    'هیچ پنلی در گروه واجد شرایط نبود؛ سفارش روی پنل محصول ماند و تأیید آن رد می‌شود',
+  'web.bal_excluded_ineligible': 'غیرقابل‌فروش',
+  'web.bal_excluded_provider_mismatch': 'ارائه‌دهندهٔ متفاوت',
+  'web.bal_excluded_not_entitled': 'خارج از مجوز نماینده',
   // --- Panel health dashboard and drain (Phase C2) ------------------------------
   'web.panel_reason_draining': 'فروش جدید متوقف است (Drain)',
   'web.panel_reason_draining_help':
