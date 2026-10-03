@@ -22,6 +22,7 @@ import {
   audienceOptionsResponseSchema,
   broadcastListResponseSchema,
   broadcastRecipientListResponseSchema,
+  broadcastFailureReasonsResponseSchema,
   broadcastResponseSchema,
   bulkItemListResponseSchema,
   bulkOperationListResponseSchema,
@@ -1352,6 +1353,10 @@ export const COMMERCE_B: readonly ShotFixture[] = [
       { id: PANEL_A, name: 'Frankfurt A' },
       { id: PANEL_B, name: 'Frankfurt B' },
     ],
+    tags: [
+      { id: '0192c0de-0000-7000-8000-000000000901', label: 'مشتری ویژه', archived: false },
+      { id: '0192c0de-0000-7000-8000-000000000902', label: 'قدیمی', archived: true },
+    ],
   }),
   fixture('/broadcasts', broadcastListResponseSchema, { broadcasts: BROADCASTS, nextCursor: null }),
   fixture('/broadcasts/:id', broadcastResponseSchema, { broadcast: BROADCASTS[0] }),
@@ -1361,6 +1366,9 @@ export const COMMERCE_B: readonly ShotFixture[] = [
   fixture('/broadcasts/:id/recipients', broadcastRecipientListResponseSchema, {
     recipients: RECIPIENTS,
     nextCursor: null,
+  }),
+  fixture('/broadcasts/:id/failures', broadcastFailureReasonsResponseSchema, {
+    reasons: [{ state: 'UNREACHABLE', errorCode: 'telegram.rejected.403', count: 3 }],
   }),
   fixture('/bulk-operations', bulkOperationListResponseSchema, {
     operations: BULK_OPERATIONS,

@@ -565,6 +565,62 @@ export const broadcastRecipientListResponseSchema = z.object({
 });
 export type BroadcastRecipientListResponse = z.infer<typeof broadcastRecipientListResponseSchema>;
 
+/**
+ * Broadcast V2 (program §19): why recipients did not receive the message, grouped. One row per
+ * (recipient state, transport error code) over the states that are NOT a delivery —
+ * `FAILED`, `UNREACHABLE`, `UNCONFIRMED`, `SKIPPED` — with how many recipients ended that way.
+ * The codes are the transport's (`telegram.rejected.403`, `broadcast.customer_blocked`, …),
+ * never Telegram's free text. Counted from the recipient rows, so the sum per state equals
+ * that state's count in `counts`.
+ */
+export const BROADCAST_FAILURE_STATES = [
+  'FAILED',
+  'UNREACHABLE',
+  'UNCONFIRMED',
+  'SKIPPED',
+] as const;
+export type BroadcastFailureState = (typeof BROADCAST_FAILURE_STATES)[number];
+
+export const broadcastFailureReasonSchema = z.object({
+  state: z.enum(BROADCAST_FAILURE_STATES),
+  /** Null when the row carries no code (a recipient that predates codes on that path). */
+  errorCode: z.string().nullable(),
+  count: z.number().int().positive(),
+});
+export type BroadcastFailureReason = z.infer<typeof broadcastFailureReasonSchema>;
+
+export const broadcastFailureReasonsResponseSchema = z.object({
+  reasons: z.array(broadcastFailureReasonSchema),
+});
+export type BroadcastFailureReasonsResponse = z.infer<typeof broadcastFailureReasonsResponseSchema>;
+
+/**
+ * Broadcast V2 (program §19, "completed / failed"): how a FINISHED broadcast went, DERIVED from
+ * its recipient counts rather than stored as a state. A stored `FAILED` state would have to be
+ * left again by "retry failed" (which re-opens a COMPLETED broadcast), and a second record of
+ * the outcome could disagree with the rows it summarises. Null while it is not COMPLETED.
+ *
+ * - `DELIVERED`: nothing that was attempted went undelivered;
+ * - `PARTIAL`: some were delivered and some were not;
+ * - `FAILED`: something was attempted and nothing was delivered.
+ *
+ * `SKIPPED` (opted out, blocked by an operator) and `CANCELLED` are decisions, not delivery
+ * failures, and count toward neither side. `UNCONFIRMED` counts as not delivered: it may have
+ * arrived, and the report does not claim that it did.
+ */
+export const BROADCAST_OUTCOMES = ['DELIVERED', 'PARTIAL', 'FAILED'] as const;
+export type BroadcastOutcome = (typeof BROADCAST_OUTCOMES)[number];
+
+export function broadcastOutcome(
+  state: BroadcastState,
+  counts: Pick<BroadcastCounts, 'sent' | 'failed' | 'unreachable' | 'unconfirmed'>,
+): BroadcastOutcome | null {
+  if (state !== 'COMPLETED') return null;
+  const undelivered = counts.failed + counts.unreachable + counts.unconfirmed;
+  if (undelivered === 0) return 'DELIVERED';
+  return counts.sent === 0 ? 'FAILED' : 'PARTIAL';
+}
+
 /** `POST /broadcasts/:id/test`: what the operator's own Telegram answered. */
 export const broadcastTestResponseSchema = z.object({
   outcome: z.enum(['SENT', 'NOT_SENT', 'UNCONFIRMED', 'RATE_LIMITED']),
@@ -587,6 +643,8 @@ export const BROADCAST_ROUTES = {
   cancel: (id: string) => `/broadcasts/${id}/cancel`,
   retryFailed: (id: string) => `/broadcasts/${id}/retry-failed`,
   recipients: (id: string) => `/broadcasts/${id}/recipients`,
+  /** Broadcast V2: the failures, grouped by state and reason. */
+  failures: (id: string) => `/broadcasts/${id}/failures`,
 } as const;
 
 export const BROADCAST_ERROR_CODES = {

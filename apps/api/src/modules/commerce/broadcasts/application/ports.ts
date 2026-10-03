@@ -3,6 +3,7 @@ import type {
   BroadcastButton,
   BroadcastContentKind,
   BroadcastCounts,
+  BroadcastFailureReason,
   BroadcastMediaMimeType,
   BroadcastPauseReason,
   BroadcastPinState,
@@ -281,6 +282,11 @@ export interface BroadcastRepository {
       readonly after: string | null;
     },
   ): Promise<readonly RecipientPageRow[]>;
+  /**
+   * Broadcast V2 (program §19): the recipients that were not delivered, grouped by state and
+   * transport error code, from the rows themselves — so each state's sum is that state's count.
+   */
+  failureReasons(scope: TenantContext, id: string): Promise<readonly BroadcastFailureReason[]>;
 
   /**
    * Where an operator's test send goes: the customer this tenant knows by the operator's own

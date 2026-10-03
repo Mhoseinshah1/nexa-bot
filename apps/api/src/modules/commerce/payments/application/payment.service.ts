@@ -105,6 +105,7 @@ import type {
   PaymentCursor,
   PaymentCustomerFee,
   PaymentCustomerIdentity,
+  PaymentGatewaySignalRecord,
   PaymentPage,
   PaymentRecord,
   PaymentRepository,
@@ -406,7 +407,12 @@ const GATEWAY_FAIL_ACTION = 'payment.gateway_fail';
 const PROVIDER_REVIEW_ACTION = 'payment.provider_review_started';
 const RECONCILE_CONFIRM_ACTION = 'payment.reconcile_confirmed';
 const RECONCILE_FAIL_ACTION = 'payment.reconcile_failed';
-const RECONCILE_INQUIRY_ACTION = 'gateway_invoice.reconcile_inquiry_requested';
+/**
+ * An operator's "ask the provider again". Exported because its SUCCESS rows with
+ * `after.requested = true` are the payment timeline's durable record of each request: the
+ * invoice's `reconcile_inquiry_requested_at` is cleared by the inquiry that answers it.
+ */
+export const RECONCILE_INQUIRY_ACTION = 'gateway_invoice.reconcile_inquiry_requested';
 
 /** What reconciling an UNKNOWN gateway payment acts under (OQ-TPTG-19). */
 export const PAYMENT_RECONCILE_PERMISSION: PermissionKey = 'payments.reconcile';
@@ -714,6 +720,22 @@ export class PaymentService {
     return this.deps.repository.receiptDispositions(
       scope,
       payments.map((payment) => payment.id),
+    );
+  }
+
+  /**
+   * What each gateway attempt on a page last recorded (Payment Operations Center): states,
+   * codes and times. Charged like every other read of a payment; one query for a page.
+   */
+  async gatewaySignals(
+    scope: TenantContext,
+    actor: ActorContext,
+    payments: readonly PaymentRecord[],
+  ): Promise<ReadonlyMap<PaymentId, PaymentGatewaySignalRecord>> {
+    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
+    return this.deps.repository.gatewaySignals(
+      scope,
+      payments.filter((payment) => payment.method === 'GATEWAY').map((payment) => payment.id),
     );
   }
 

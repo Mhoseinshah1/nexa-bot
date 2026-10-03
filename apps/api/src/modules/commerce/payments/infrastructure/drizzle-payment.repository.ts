@@ -13,7 +13,12 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
-import { money, PROVIDER_REVIEW_GATEWAY_PROVIDERS, type ListSearchTerm } from '@nexa/contracts';
+import {
+  money,
+  PAYMENT_GATEWAY_PROVIDERS,
+  PROVIDER_REVIEW_GATEWAY_PROVIDERS,
+  type ListSearchTerm,
+} from '@nexa/contracts';
 import type {
   CurrencyCode,
   OrderId,
@@ -38,15 +43,18 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
+  gatewayInvoices,
   paymentReceipts,
   payments,
   receiptCredits,
 } from '../../../../infrastructure/persistence/schema.js';
+import { paymentOpsQueueCondition } from './payment-ops-queue-sql.js';
 import type {
   PaymentConfirmation,
   PaymentCustomerIdentity,
   PaymentCursor,
   PaymentDraft,
+  PaymentGatewaySignalRecord,
   PaymentPage,
   PaymentRecord,
   PaymentRepository,
@@ -234,6 +242,19 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     if (search.text !== undefined) conditions.push(paymentTextCondition(tenantId, search.text));
     if (search.disposition !== undefined) {
       conditions.push(sql`(${receiptDispositionSql()}) = ${search.disposition}`);
+    }
+    // The Payment Operations Center's facets (program §10). The queue is the SAME predicate
+    // the attention counts use, so a count and the list it opens cannot disagree.
+    if (search.queue !== undefined) conditions.push(paymentOpsQueueCondition(search.queue));
+    if (search.gatewayProvider !== undefined) {
+      conditions.push(eq(payments.gatewayProvider, search.gatewayProvider));
+    }
+    if (search.createdIn !== undefined) {
+      // Half-open, `[start, end)`.
+      conditions.push(
+        sql`${payments.createdAt} >= ${search.createdIn.start.toISOString()}::timestamptz`,
+        sql`${payments.createdAt} < ${search.createdIn.end.toISOString()}::timestamptz`,
+      );
     }
     if (cursor !== null) {
       conditions.push(
@@ -692,6 +713,38 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return found;
   }
 
+  async gatewaySignals(
+    scope: TenantContext,
+    paymentIds: readonly PaymentId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<PaymentId, PaymentGatewaySignalRecord>> {
+    const tenantId = requireTenantId(scope);
+    const found = new Map<PaymentId, PaymentGatewaySignalRecord>();
+    if (paymentIds.length === 0) return found;
+    const rows = await this.exec(tx)
+      .select({
+        paymentId: gatewayInvoices.paymentId,
+        creationState: gatewayInvoices.creationState,
+        creationErrorCode: gatewayInvoices.creationErrorCode,
+        providerStatus: gatewayInvoices.providerStatus,
+        providerPaid: gatewayInvoices.providerPaid,
+        lastInquiryAt: gatewayInvoices.lastInquiryAt,
+        lastInquiryErrorCode: gatewayInvoices.lastInquiryErrorCode,
+        outcome: gatewayInvoices.outcome,
+        lateCompletionObservedAt: gatewayInvoices.lateCompletionObservedAt,
+        reconcileInquiryRequestedAt: gatewayInvoices.reconcileInquiryRequestedAt,
+      })
+      .from(gatewayInvoices)
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          inArray(gatewayInvoices.paymentId, [...new Set(paymentIds)]),
+        ),
+      );
+    for (const { paymentId, ...signal } of rows) found.set(paymentId as PaymentId, signal);
+    return found;
+  }
+
   async recordProviderReview(
     scope: TenantContext,
     id: PaymentId,
@@ -1129,17 +1182,23 @@ function receiptInFlight(): SQL {
 function paymentTextCondition(tenantId: string, term: ListSearchTerm): SQL {
   switch (term.kind) {
     case 'TELEGRAM_ID':
-      // Digits are also what a bank tracking number is, so the references are asked too.
+      // Digits are also what a bank tracking number is, so the references are asked too —
+      // and a gateway's own ids, which are often digits (CentralPay's order id, NOWPayments'
+      // payment id).
       return or(
         sql`${payments.customerId} = ANY(${customerIdsWithTelegramId(tenantId, term.value)})`,
         eq(payments.reference, term.value),
         eq(payments.externalReference, term.value),
+        sql`${payments.id} = ANY(${paymentIdsWithProviderReference(tenantId, term.value)})`,
       ) as SQL;
     case 'UUID':
+      // A gateway's own id can be uuid-shaped too (an invoice or charge id), and the box
+      // classifies by shape: the provider ids are asked here as they are for digits and text.
       return or(
         eq(payments.id, term.value),
         eq(payments.customerId, term.value),
         eq(payments.orderId, term.value),
+        sql`${payments.id} = ANY(${paymentIdsWithProviderReference(tenantId, term.value)})`,
       ) as SQL;
     case 'USERNAME':
       return sql`${payments.customerId} = ANY(${customerIdsWithUsernamePrefix(tenantId, term.value)})`;
@@ -1147,6 +1206,34 @@ function paymentTextCondition(tenantId: string, term: ListSearchTerm): SQL {
       return or(
         eq(payments.reference, term.value),
         eq(payments.externalReference, term.value),
+        sql`${payments.id} = ANY(${paymentIdsWithProviderReference(tenantId, term.value)})`,
       ) as SQL;
   }
+}
+
+/**
+ * The payments whose gateway invoice carries this provider id EXACTLY — the provider's order
+ * id, invoice id, charge / reference id, or the payment id or invoice id a verified webhook
+ * named (Payment Operations Center, program §10: what an operator copies out of a provider's
+ * dashboard). The hinted invoice id is the only invoice id an attempt whose create answer was
+ * lost (CREATE_UNKNOWN) carries until an inquiry adopts it, so leaving it out made exactly the
+ * attempts an operator is chasing unfindable by the id the provider shows them.
+ * An InitPlan, like `customerIdsWithTelegramId`, so it is evaluated once. `provider = ANY`
+ * lets the three `(tenant_id, provider, …)` unique keys serve their arms; the two hinted ids
+ * have their own partial indexes (`gateway_invoices_tenant_hinted_payment_idx`,
+ * `gateway_invoices_tenant_hinted_invoice_idx`). Exact only, for the reason every arm here is
+ * exact.
+ */
+function paymentIdsWithProviderReference(tenantId: string, value: string): SQL {
+  const providers = sql.join(
+    PAYMENT_GATEWAY_PROVIDERS.map((provider) => sql`${provider}`),
+    sql`, `,
+  );
+  return sql`ARRAY(SELECT ${gatewayInvoices.paymentId} FROM ${gatewayInvoices}
+    WHERE ${gatewayInvoices.tenantId} = ${tenantId}
+      AND ((${gatewayInvoices.provider} IN (${providers}) AND (${gatewayInvoices.providerOrderId} = ${value}
+             OR ${gatewayInvoices.providerInvoiceId} = ${value}
+             OR ${gatewayInvoices.providerChargeId} = ${value}))
+        OR ${gatewayInvoices.hintedPaymentId} = ${value}
+        OR ${gatewayInvoices.hintedInvoiceId} = ${value}))`;
 }

@@ -76,6 +76,8 @@ export interface ReportRangeInput {
   readonly range: ReportRange;
   readonly from?: string | undefined;
   readonly to?: string | undefined;
+  /** Overrides the length rule (Phase E2's DAY/WEEK/MONTH statement). */
+  readonly granularity?: ReportGranularity | undefined;
 }
 
 // --- ICU access ---------------------------------------------------------------
@@ -493,7 +495,9 @@ export function resolveReportPeriod(
   const spans = spansFor(input, today, calendar);
   const localDays = daysBetween(spans.current.start, spans.current.end, calendar);
   const previousDays = daysBetween(spans.previous.start, spans.previous.end, calendar);
-  const granularity = reportGranularityFor(localDays);
+  // A caller may name the granularity (the financial statement's day/week/month); otherwise
+  // the one length rule decides. Either way both sides share it, so bucket i pairs with i.
+  const granularity = input.granularity ?? reportGranularityFor(localDays);
 
   const start = midnight(spans.current.start, presentation);
   const end = midnight(spans.current.end, presentation);
