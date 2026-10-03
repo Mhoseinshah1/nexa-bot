@@ -111,6 +111,8 @@ export * from './recovery-kit.js';
 export * from './secrets.js';
 export * from './ports.js';
 export * from './http.js';
+/** Phase D2: the admin's second factor, own sessions and security history. */
+export * from './admin-security.js';
 export * from './reporting.js';
 /** Round W: the Web Admin dashboard and sidebar counters, over the reports above. */
 export * from './dashboard.js';

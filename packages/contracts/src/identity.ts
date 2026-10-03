@@ -162,5 +162,9 @@ export const LOGIN_FAILURE_REASONS = [
   'ADMIN_DISABLED',
   'TENANT_INACTIVE',
   'THROTTLED',
+  /** Phase D2: the password was right and the second factor was not. */
+  'BAD_SECOND_FACTOR',
+  /** Phase D2: the challenge was unknown, expired, spent or out of guesses. */
+  'CHALLENGE_INVALID',
 ] as const;
 export type LoginFailureReason = (typeof LOGIN_FAILURE_REASONS)[number];
