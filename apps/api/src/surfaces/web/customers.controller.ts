@@ -70,6 +70,7 @@ export class CustomersController {
       ...(query.username === undefined ? {} : { username: query.username }),
       ...(query.status === undefined ? {} : { status: query.status }),
       ...(query.q === undefined ? {} : { q: query.q }),
+      ...(query.tag === undefined ? {} : { tag: query.tag }),
     });
     const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.customers.list(scope, actor, {
@@ -82,6 +83,8 @@ export class CustomersController {
         ...(page.username === undefined ? {} : { usernamePrefix: page.username }),
         ...(page.status === undefined ? {} : { status: page.status }),
         ...(text === null ? {} : { text }),
+        // Program §8: a filter beside `status`, by the tag's id. `users.view` alone.
+        ...(page.tag === undefined ? {} : { tagId: page.tag.toLowerCase() }),
       },
     });
     return {

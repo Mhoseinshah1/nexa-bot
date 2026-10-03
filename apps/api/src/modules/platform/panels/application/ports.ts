@@ -549,10 +549,13 @@ export interface PanelMonitorRepository {
    * Takes a turn for up to `limit` tenants that have at least one eligible
    * panel, least recently served first.
    *
-   * Atomic and exclusive: the claim moves `last_served_at` under
-   * `FOR UPDATE SKIP LOCKED`, so two monitor replicas take DISJOINT tenant sets
-   * instead of both working the same one. That is what makes fairness a
-   * property of the installation rather than of one process.
+   * Atomic and exclusive: the claim moves `last_served_at` strictly forward
+   * under `FOR UPDATE SKIP LOCKED`, and takes a tenant only if the turn it
+   * locked is still the one its snapshot ordered by — so two monitor replicas
+   * take DISJOINT tenant sets instead of both working the same one, and a
+   * loser moves on to the next tenant rather than coming back short. That is
+   * what makes fairness a property of the installation rather than of one
+   * process.
    *
    * Every claimed tenant's turn is spent whether or not it turns out to have
    * work — the bound is a lower bound, so a claim that finds nothing is the

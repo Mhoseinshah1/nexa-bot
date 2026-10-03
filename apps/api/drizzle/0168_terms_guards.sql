@@ -1,5 +1,5 @@
 -- Program §6 — the terms and rules (`docs/terms-audit.md`): what `drizzle-kit` does not model
--- for 0165 — the guards that make a published version and an acceptance immutable, and the
+-- for 0167 — the guards that make a published version and an acceptance immutable, and the
 -- backfill of the three new `terms.*` keys to the seeded roles that already exist.
 -- Hand-written, so no snapshot accompanies it and the drift check has nothing to compare.
 --

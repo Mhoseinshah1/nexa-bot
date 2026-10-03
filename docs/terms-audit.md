@@ -8,7 +8,7 @@ Telegram gate. This note records the decisions and where each rule is tested.
 - `terms_versions`: at most one `DRAFT` per tenant (partial unique index), edited in
   place with a `revision` every edit and the publication name. Publishing is a
   conditional UPDATE from `DRAFT` at that revision, giving the next `version_number` in
-  the same statement. A `PUBLISHED` row is immutable: `0166_terms_guards.sql` refuses
+  the same statement. A `PUBLISHED` row is immutable: `0168_terms_guards.sql` refuses
   any UPDATE or DELETE of one.
 - There is no `ARCHIVED` state and no stored "current" flag. The current version is the
   published row with the greatest number. A superseded version is history.

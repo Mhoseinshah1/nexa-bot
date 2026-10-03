@@ -1,4 +1,25 @@
 import {
+  // Program §8: operator-only customer notes and tags.
+  CUSTOMER_CRM_ROUTES,
+  customerNoteCreateResponseSchema,
+  customerNoteListResponseSchema,
+  customerTagAssignmentResponseSchema,
+  customerTagListResponseSchema,
+  customerTagWriteResponseSchema,
+  customerTagsResponseSchema,
+  type CustomerNoteCreateRequest,
+  type CustomerNoteCreateResponse,
+  type CustomerNoteListResponse,
+  type CustomerTagArchiveRequest,
+  type CustomerTagAssignmentRequest,
+  type CustomerTagAssignmentResponse,
+  type CustomerTagCreateRequest,
+  type CustomerTagListResponse,
+  type CustomerTagUpdateRequest,
+  type CustomerTagWriteResponse,
+  type CustomerTagsResponse,
+} from '@nexa/contracts';
+import {
   // Round N: the shared audience, broadcast and mass operations.
   AUDIENCE_ROUTES,
   BROADCAST_ROUTES,
@@ -1042,6 +1063,8 @@ export function fetchCustomers(
     username?: string;
     status?: CustomerStatus;
     q?: string;
+    /** Program §8: a tag's id. A filter beside `status`, charged `users.view` alone. */
+    tag?: string;
   } = {},
 ): Promise<CustomerListResponse> {
   const params = new URLSearchParams();
@@ -1054,6 +1077,7 @@ export function fetchCustomers(
   if (query.status !== undefined) params.set('status', query.status);
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.tag !== undefined && query.tag !== '') params.set('tag', query.tag);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CUSTOMER_ROUTES.list}?${suffix}` : CUSTOMER_ROUTES.list,
@@ -3869,4 +3893,82 @@ export function fetchCustomerFinancialSummary(
 
 export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
+}
+
+// --- Customer notes and tags (program §8) ---------------------------------------------
+//
+// Operator-only. Reading tags is `users.view`; the catalogue is `users.tags.manage`, a
+// customer's tags `users.tags.assign`, notes `users.notes.view` / `users.notes.write` — all
+// charged on the server.
+
+export function fetchCustomerTagCatalogue(): Promise<CustomerTagListResponse> {
+  return authedGet(CUSTOMER_CRM_ROUTES.tags, customerTagListResponseSchema);
+}
+
+export function createCustomerTag(
+  body: CustomerTagCreateRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tags, body, customerTagWriteResponseSchema);
+}
+
+export function updateCustomerTag(
+  tagId: string,
+  body: CustomerTagUpdateRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tag(tagId), body, customerTagWriteResponseSchema);
+}
+
+export function archiveCustomerTag(
+  tagId: string,
+  body: CustomerTagArchiveRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tagArchive(tagId), body, customerTagWriteResponseSchema);
+}
+
+export function fetchCustomerTags(customerId: string): Promise<CustomerTagsResponse> {
+  return authedGet(CUSTOMER_CRM_ROUTES.customerTags(customerId), customerTagsResponseSchema);
+}
+
+export function assignCustomerTag(
+  customerId: string,
+  body: CustomerTagAssignmentRequest,
+): Promise<CustomerTagAssignmentResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerTags(customerId),
+    body,
+    customerTagAssignmentResponseSchema,
+  );
+}
+
+export function removeCustomerTag(
+  customerId: string,
+  body: CustomerTagAssignmentRequest,
+): Promise<CustomerTagAssignmentResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerTagRemove(customerId),
+    body,
+    customerTagAssignmentResponseSchema,
+  );
+}
+
+export function fetchCustomerNotes(
+  customerId: string,
+  cursor?: string,
+): Promise<CustomerNoteListResponse> {
+  const path = CUSTOMER_CRM_ROUTES.customerNotes(customerId);
+  return authedGet(
+    cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
+    customerNoteListResponseSchema,
+  );
+}
+
+export function addCustomerNote(
+  customerId: string,
+  body: CustomerNoteCreateRequest,
+): Promise<CustomerNoteCreateResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerNotes(customerId),
+    body,
+    customerNoteCreateResponseSchema,
+  );
 }

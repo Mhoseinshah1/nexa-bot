@@ -131,8 +131,11 @@ and only as a sibling of the StateSwitch. Previous pops one page.
 
 **Extra card.** `web.users_scope_title` and `web.users_scope_body`.
 
-**Must NOT appear:** tags, total spent, purchase count, balance column, reseller column
-(T `carries no user-tag concept anywhere`).
+**Must NOT appear:** total spent, purchase count, balance column, reseller column, a tag
+column. Tags themselves were REVERSED by the owner in program §8 (Phase A3): the list has a
+tag FILTER beside the status chips, and a customer's tags and notes are read on Customer 360
+(`docs/customer-notes-tags.md`; T `draws no tag control while the tenant has defined no tag
+(program §8)` and `tests/web/customer-crm.test.tsx`).
 
 ## 2. `/users/:id` — `UserDetailPage`
 
