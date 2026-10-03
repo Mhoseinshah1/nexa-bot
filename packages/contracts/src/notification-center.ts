@@ -76,6 +76,8 @@ export const NOTIFICATION_LINK_TARGETS = [
   // Phase E3: an incident's page, and the incident list.
   'INCIDENT',
   'INCIDENTS',
+  // The automatic wallet refunds of paid orders that could not be delivered (`payments.view`).
+  'COMPENSATIONS',
 ] as const;
 export type NotificationLinkTarget = (typeof NOTIFICATION_LINK_TARGETS)[number];
 
@@ -206,10 +208,16 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
   },
   // --- provisioning that did not happen --------------------------------------------------
   { code: 'provisioning.stalled', category: 'PROVISIONING', link: 'SERVICE', minSeverity: 'WARN' },
+  /*
+   * A paid order that could not be delivered was refunded to the wallet. Under PAYMENTS and
+   * linked to the compensation list, both `payments.view`: under PROVISIONING
+   * (`services.view`) it linked to an order page that charges `orders.view`, which the
+   * category never checked (Codex, #162). A link is reachable under its category's key.
+   */
   {
     code: 'order.refunded_undeliverable',
-    category: 'PROVISIONING',
-    link: 'ORDER',
+    category: 'PAYMENTS',
+    link: 'COMPENSATIONS',
     minSeverity: 'INFO',
   },
   // --- backup and recovery ---------------------------------------------------------------

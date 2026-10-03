@@ -72,6 +72,13 @@ export type IncidentEffectKind = (typeof INCIDENT_EFFECT_KINDS)[number];
  * - `REVERTED` — restored at resolution.
  * - `KEPT` — at resolution the target was no longer in the state this incident set
  *   (somebody changed it since), so it was left as it is.
+ * - `HANDED_OVER` — at this incident's end another ACTIVE stop-sales incident still wanted
+ *   the target withdrawn, so this one restored nothing and passed ownership on: the other
+ *   incident's row became `APPLIED` and it restores the target when IT ends. Overlapping
+ *   incidents on one subject never lift a withdrawal another still needs (Codex, #162).
+ *
+ * At most one claim (`PENDING` / `REVERTING`) is live per SUBJECT across every incident,
+ * so the decision to restore, hand over or adopt is taken with no other change in flight.
  */
 export const INCIDENT_EFFECT_STATES = [
   'PENDING',
@@ -81,6 +88,7 @@ export const INCIDENT_EFFECT_STATES = [
   'REVERTING',
   'REVERTED',
   'KEPT',
+  'HANDED_OVER',
 ] as const;
 export type IncidentEffectState = (typeof INCIDENT_EFFECT_STATES)[number];
 export const INCIDENT_EFFECT_CLAIM_STALE_MS = 5 * 60_000;
@@ -262,7 +270,11 @@ export const incidentDetailResponseSchema = z.object({
 });
 export type IncidentDetailResponse = z.infer<typeof incidentDetailResponseSchema>;
 
-export const incidentListResponseSchema = z.object({ incidents: z.array(incidentSchema) });
+/** One page of the list, newest first; `nextCursor` names the page after it. */
+export const incidentListResponseSchema = z.object({
+  incidents: z.array(incidentSchema),
+  nextCursor: z.string().nullable(),
+});
 export type IncidentListResponse = z.infer<typeof incidentListResponseSchema>;
 
 /** What a notice would reach now: customers with a live service on the scope. */
@@ -292,6 +304,36 @@ export const incidentBannerResponseSchema = z.object({
   ),
 });
 export type IncidentBannerResponse = z.infer<typeof incidentBannerResponseSchema>;
+
+/** How many incidents one list page holds. */
+export const INCIDENT_LIST_PAGE_SIZE = 50;
+/**
+ * The list's keyset cursor: the last row's `createdAt` and id. Opaque to the client, which
+ * only echoes `nextCursor`; anything else is refused as invalid, never read as a filter.
+ */
+export const incidentListQuerySchema = z
+  .object({
+    cursor: z
+      .string()
+      .regex(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+      )
+      .optional(),
+  })
+  .strict();
+export type IncidentListQuery = z.infer<typeof incidentListQuerySchema>;
+
+export function incidentListCursor(row: {
+  readonly createdAt: string;
+  readonly id: string;
+}): string {
+  return `${row.createdAt}_${row.id}`;
+}
+
+/** An incident id, as the routes accept it: anything else is NOT_FOUND, never a 500. */
+export function isIncidentId(value: string): boolean {
+  return UUID.test(value);
+}
 
 export const INCIDENT_ROUTES = {
   list: '/incidents',
