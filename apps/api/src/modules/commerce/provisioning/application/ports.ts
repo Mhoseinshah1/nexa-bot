@@ -889,13 +889,20 @@ export interface OperationRepository {
    * customer recorded when it was one — instead of a second read being planned beside it
    * or their request waiting behind the whole backlog.
    *
+   * The row also takes the REQUEST's derived `operation_id`, replacing the sweep's
+   * window-derived one, so a retry of the same idempotency key — `findCustomerRequest`, the
+   * customer replay, an operator's retry — finds this row and replays it rather than
+   * planning a second read and a second audit row. Nothing is derived from a scheduled
+   * read's id, so dropping the sweep's id loses nothing.
+   *
    * Conditional on the row still being a PLANNED background row; returns null when it is
-   * not (claimed in between), and the caller answers with the open row as it always has.
+   * not (claimed in between), and the caller then plans a request of its own.
    */
   promoteBackground(
     scope: TenantContext,
     id: string,
     requestedByCustomerId: UserId | null,
+    operationId: OperationId,
     now: Date,
     tx: TransactionScope,
   ): Promise<OperationRecord | null>;
