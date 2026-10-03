@@ -5212,6 +5212,7 @@ export const WEB_FA = {
   'web.report_view_all': 'مشاهدهٔ همه',
   'web.report_wallet_admin': 'اصلاح مدیریتی',
   'web.report_wallet_transfer': 'انتقال حساب کاربری',
+  'web.report_wallet_opening_balance': 'موجودی افتتاحیه (انتقال از ربات قبلی)',
   'web.report_wallet_balance': 'موجودی کل کیف پول‌ها (اکنون):',
   'web.report_wallet_cashback': 'کش‌بک',
   'web.report_wallet_cashback_reversal': 'برگشت کش‌بک',

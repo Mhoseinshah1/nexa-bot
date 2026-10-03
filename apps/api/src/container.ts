@@ -284,6 +284,7 @@ import {
 } from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
 import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet.repository.js';
 import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
+import { MigrationOpeningBalanceService } from './modules/commerce/wallet/application/migration-opening-balance.service.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
 import {
   DrizzlePaymentAccountRepository,
@@ -900,6 +901,11 @@ export interface Container {
   readonly bulkOperationProcessor: BulkOperationProcessor;
   readonly bulkOperationLoop: BulkOperationLoop;
   readonly wallet: WalletService;
+  /**
+   * Migration P2: the legacy opening balance. Migration-only — no surface reaches it; the
+   * importer (P7, HOLD) is its one intended caller (`docs/migration-opening-balance.md`).
+   */
+  readonly migrationOpeningBalance: MigrationOpeningBalanceService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
   /** WP13 — the Web Admin's management of this tenant's Telegram bot instances. */
@@ -2002,6 +2008,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     operationId: (key) => operationIdFor('payment', key),
+  });
+  const migrationOpeningBalance = new MigrationOpeningBalanceService({
+    repository: walletRepository,
+    customers: customerRepository,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    settings: settingsResolver,
+    uow,
+    outbox,
+    clock,
+    ids,
   });
 
   // ---------------------------------------------------------------------------
@@ -5927,6 +5947,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     bulkOperationProcessor,
     bulkOperationLoop,
     wallet: walletService,
+    migrationOpeningBalance,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
     botManagement,

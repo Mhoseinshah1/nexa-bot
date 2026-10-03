@@ -103,6 +103,37 @@ describe('financialStatement', () => {
     expect(s.wallet[0]).toMatchObject({ closing: 0n });
   });
 
+  it('files a legacy opening balance on the wallet only, as its own movement, either sign', () => {
+    // Migration P2: an inherited liability. Never a top-up, spending, a gift or cash.
+    const s = financialStatement({
+      begunBuckets: [0],
+      sales: [],
+      refunds: [],
+      cash: [],
+      ledger: [
+        ledger(0, 'MIGRATION_OPENING_BALANCE', 'CREDIT', 900n),
+        ledger(0, 'MIGRATION_OPENING_BALANCE', 'DEBIT', 300n),
+      ],
+      opening: [{ currency: 'IRT', amount: 50n }],
+    });
+    expect(s.totals[0]).toMatchObject({
+      sales: 0n,
+      walletTopups: 0n,
+      walletSpending: 0n,
+      gifts: 0n,
+      cashbackNet: 0n,
+      commissionNet: 0n,
+      receiptCredits: 0n,
+      principalReceived: 0n,
+    });
+    expect(s.wallet[0]).toEqual({
+      currency: 'IRT',
+      opening: 50n,
+      closing: 650n,
+      movements: [{ group: 'OPENING_BALANCE', amount: 600n }],
+    });
+  });
+
   it('ignores a row in a bucket that has not begun, in the buckets and the totals alike', () => {
     const s = financialStatement({
       begunBuckets: [0],

@@ -1,0 +1,6 @@
+ALTER TABLE "wallet_entries" DROP CONSTRAINT "wallet_entries_reason_check";--> statement-breakpoint
+CREATE UNIQUE INDEX "wallet_entries_migration_opening_customer_key" ON "wallet_entries" USING btree ("tenant_id","customer_id") WHERE reason = 'MIGRATION_OPENING_BALANCE';--> statement-breakpoint
+ALTER TABLE "wallet_entries" ADD CONSTRAINT "wallet_entries_migration_opening_shape_check" CHECK ((reason = 'MIGRATION_OPENING_BALANCE') = (left(reference, 15) = 'legacy:opening:')
+        AND (reason <> 'MIGRATION_OPENING_BALANCE' OR (order_id IS NULL AND payment_id IS NULL
+          AND reverses_entry_id IS NULL AND actor_admin_id IS NULL)));--> statement-breakpoint
+ALTER TABLE "wallet_entries" ADD CONSTRAINT "wallet_entries_reason_check" CHECK (reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'RECEIPT_CREDIT', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'ACCOUNT_TRANSFER_OUT', 'ACCOUNT_TRANSFER_IN', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'MIGRATION_OPENING_BALANCE', 'CHARGEBACK', 'CORRECTION', 'OTHER'));

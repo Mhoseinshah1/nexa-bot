@@ -6258,6 +6258,31 @@ export const walletEntries = pgTable(
     uniqueIndex('wallet_entries_topup_gateway_payment_key')
       .on(table.tenantId, table.paymentId)
       .where(sql`reason = 'TOPUP_GATEWAY'`),
+    /**
+     * Migration P2: a legacy opening balance and its reference prefix are ONE thing.
+     *
+     * In both directions. A `MIGRATION_OPENING_BALANCE` entry is written under
+     * `legacy:opening:<telegram_user_id>` and nothing else, so its idempotency identity is
+     * the legacy identity; and the prefix belongs to that reason alone, so no other writer
+     * can occupy the reference a rerun of the import would conflict on and turn the
+     * opening into a silent no-op. It names no order, payment, reversal or administrator:
+     * it is an inherited balance, not a sale, a top-up, an undo or an operator's grant.
+     * `left(...)` rather than `LIKE`, whose `_` would be a wildcard.
+     */
+    check(
+      'wallet_entries_migration_opening_shape_check',
+      sql`(reason = 'MIGRATION_OPENING_BALANCE') = (left(reference, 15) = 'legacy:opening:')
+        AND (reason <> 'MIGRATION_OPENING_BALANCE' OR (order_id IS NULL AND payment_id IS NULL
+          AND reverses_entry_id IS NULL AND actor_admin_id IS NULL))`,
+    ),
+    /**
+     * ONE opening balance per customer, decided by the database. The reference key above
+     * already makes one per Telegram id; this is the rule stated about the CUSTOMER, so a
+     * writer that derived the reference from anything else still cannot open a wallet twice.
+     */
+    uniqueIndex('wallet_entries_migration_opening_customer_key')
+      .on(table.tenantId, table.customerId)
+      .where(sql`reason = 'MIGRATION_OPENING_BALANCE'`),
     unique('wallet_entries_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
