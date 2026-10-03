@@ -30,7 +30,16 @@ import {
   customerFeeBasisPointsSchema,
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS, RECEIPT_DISPOSITIONS } from './payment-receipts.js';
-import { gatewayInvoiceViewSchema } from './gateway-invoices.js';
+import {
+  GATEWAY_INVOICE_CREATION_STATES,
+  GATEWAY_INVOICE_OUTCOMES,
+  gatewayInvoiceViewSchema,
+} from './gateway-invoices.js';
+import {
+  paymentOpsQueueSchema,
+  paymentOpsWindowShape,
+  refinePaymentOpsWindow,
+} from './payment-operations.js';
 import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
@@ -143,6 +152,8 @@ import {
 import { PLACEHOLDER_TYPES, TEMPLATE_FORMATS, TEMPLATE_REVISION_ACTIONS } from './templates.js';
 import {
   PANEL_BASE_URL_MAX_LENGTH,
+  PANEL_DRAIN_REASON_MAX_LENGTH,
+  PANEL_DRAIN_REASON_MIN_LENGTH,
   PANEL_HEALTH_VIEWS,
   PANEL_INELIGIBILITY_REASONS,
   PANEL_NAME_MAX_LENGTH,
@@ -1338,6 +1349,16 @@ export const panelHealthSchema = z.object({
   providerVersion: z.string().nullable(),
   lastHealthyAt: nullableIsoTimestamp,
   /**
+   * Consecutive probes that concluded an UNUSABLE state (`UNREACHABLE`,
+   * `AUTH_FAILED`), as `panel_health.unusable_streak` stores it; zero when the
+   * latest probe was usable and null when the panel has never been probed.
+   *
+   * The failure streak an operator reads, and the same number the sales gate
+   * compares with `PANEL_UNHEALTHY_AFTER_FAILURES` — never a count re-derived
+   * from a history this installation does not keep.
+   */
+  unusableStreak: z.number().int().nonnegative().nullable(),
+  /**
    * Whether the result is old enough that an operator should not act on it.
    *
    * Computed server-side against one constant rather than sent as a threshold
@@ -1457,6 +1478,23 @@ export const panelSellabilitySchema = z.object({
 });
 export type PanelSellability = z.infer<typeof panelSellabilitySchema>;
 
+/**
+ * Whether the operator has drained this panel (Phase C2).
+ *
+ * Its own field and not a `status`: a drained panel is `ACTIVE`, monitored, and
+ * operable for every service already on it. `DRAINING` in the sellability reason
+ * is what drain does to a sale; this is the fact itself, with who-and-why
+ * available from the audit row and the why repeated here while it lasts.
+ */
+export const panelDrainSchema = z.object({
+  draining: z.boolean(),
+  /** When the current drain began. Null when not draining. */
+  since: nullableIsoTimestamp,
+  /** The operator's reason for the current drain. Null when not draining. */
+  reason: z.string().nullable(),
+});
+export type PanelDrainResponse = z.infer<typeof panelDrainSchema>;
+
 export const panelSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1519,6 +1557,8 @@ export const panelSummarySchema = z.object({
   usernamePolicy: panelUsernamePolicySchema,
   /** Whether this panel may be sold onto, and if not, what to fix. */
   sellability: panelSellabilitySchema,
+  /** Whether the operator has stopped new allocations here. See `panelDrainSchema`. */
+  drain: panelDrainSchema,
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1847,8 +1887,82 @@ export const testPanelResponseSchema = z.object({
 });
 export type TestPanelResponse = z.infer<typeof testPanelResponseSchema>;
 
+/**
+ * Drain a panel, or let it take new business again (Phase C2). `panels.drain`.
+ *
+ * Idempotency-keyed like every state change. A request that asks for the state
+ * the panel is already in is answered with the panel and changes nothing — and
+ * writes no audit row claiming it did.
+ */
+export const setPanelDrainRequestSchema = z.object({
+  draining: z.boolean(),
+  reason: z.string().trim().min(PANEL_DRAIN_REASON_MIN_LENGTH).max(PANEL_DRAIN_REASON_MAX_LENGTH),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetPanelDrainRequest = z.infer<typeof setPanelDrainRequestSchema>;
+
+/**
+ * One open operational condition about a panel, as the ops log holds it.
+ *
+ * Read from `operational_events` by the exact dedupe keys the monitor and the
+ * capacity alerts write — never a second record of the same failure.
+ */
+export const panelOpenConditionSchema = z.object({
+  code: z.string(),
+  severity: z.enum(OPERATIONAL_SEVERITIES),
+  firstSeenAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+  occurrences: z.number().int().positive(),
+});
+export type PanelOpenCondition = z.infer<typeof panelOpenConditionSchema>;
+
+/**
+ * One row of the panel health dashboard (Phase C2).
+ *
+ * Every number is a measurement this installation already holds; nothing is
+ * estimated and nothing is a history it does not keep. `panel` is the same
+ * summary the panel list returns, so health, capacity, sellability and drain are
+ * computed once, by the same code, whichever screen asks.
+ */
+export const panelHealthRowSchema = z.object({
+  panel: panelSummarySchema,
+  /** Services on this panel by state, every state but TERMINATED. */
+  services: z.object({
+    active: z.number().int().nonnegative(),
+    suspended: z.number().int().nonnegative(),
+    expired: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+    unreconciled: z.number().int().nonnegative(),
+  }),
+  /** Provisioning operations against this panel that went wrong. */
+  provisioning: z.object({
+    /** FAILED operations completed in `[generatedAt - window, generatedAt)`. */
+    failedInWindow: z.number().int().nonnegative(),
+    /** Operations whose outcome is UNKNOWN right now: each waits for a read. */
+    unknownOpen: z.number().int().nonnegative(),
+    /** The newest FAILED operation in the window, or null. */
+    lastFailureAt: nullableIsoTimestamp,
+    lastFailureKind: z.enum(PROVIDER_FAILURE_KINDS).nullable(),
+  }),
+  /** The panel's open health and capacity conditions in the ops log. */
+  conditions: z.array(panelOpenConditionSchema),
+});
+export type PanelHealthRow = z.infer<typeof panelHealthRowSchema>;
+
+export const panelHealthDashboardResponseSchema = z.object({
+  rows: z.array(panelHealthRowSchema),
+  nextCursor: z.string().nullable(),
+  generatedAt: isoTimestamp,
+  /** `PANEL_HEALTH_FAILURE_WINDOW_MS`, echoed so the screen states the window it counted. */
+  failureWindowMs: z.number().int().positive(),
+});
+export type PanelHealthDashboardResponse = z.infer<typeof panelHealthDashboardResponseSchema>;
+
 export const PANEL_ROUTES = {
   list: '/panels',
+  /** Phase C2: the live fleet with health, load and failures. `panels.view`. */
+  health: '/panel-health',
+  drain: (id: string) => `/panels/${encodeURIComponent(id)}/drain`,
   create: '/panels',
   detail: (id: string) => `/panels/${encodeURIComponent(id)}`,
   update: (id: string) => `/panels/${encodeURIComponent(id)}`,
@@ -1980,6 +2094,12 @@ export const customerListQuerySchema = z.object({
    * matches on this list is documented in `docs/web-admin-search.md`.
    */
   q: listSearchQuerySchema.optional(),
+  /**
+   * Program §8: only customers carrying this tag (by its id, never its editable label). A
+   * FILTER beside `status`, not a second search: charged `users.view` like `status`, and
+   * an EXISTS over `customer_tag_assignments`' tenant-led index.
+   */
+  tag: uuidV7Schema.optional(),
 });
 export type CustomerListQuery = z.infer<typeof customerListQuerySchema>;
 
@@ -4074,6 +4194,21 @@ export const receiptCreditViewSchema = z.object({
 });
 export type ReceiptCreditView = z.infer<typeof receiptCreditViewSchema>;
 
+/** The gateway side of one payment as a queue row shows it (Payment Operations Center). */
+export const paymentGatewaySignalSchema = z.object({
+  creationState: z.enum(GATEWAY_INVOICE_CREATION_STATES),
+  creationErrorCode: z.string().nullable(),
+  providerStatus: z.string().nullable(),
+  providerPaid: z.boolean().nullable(),
+  lastInquiryAt: z.iso.datetime().nullable(),
+  lastInquiryErrorCode: z.string().nullable(),
+  outcome: z.enum(GATEWAY_INVOICE_OUTCOMES).nullable(),
+  lateCompletionObservedAt: z.iso.datetime().nullable(),
+  /** The last operator "ask again", when there was one. */
+  reconcileInquiryRequestedAt: z.iso.datetime().nullable(),
+});
+export type PaymentGatewaySignal = z.infer<typeof paymentGatewaySignalSchema>;
+
 /**
  * One payment, as the Web Admin renders it.
  *
@@ -4168,6 +4303,13 @@ export const paymentSummarySchema = z.object({
    */
   providerReviewStartedAt: z.iso.datetime().nullable().default(null),
   providerReviewUntil: z.iso.datetime().nullable().default(null),
+  /**
+   * What the gateway side last recorded, for the Payment Operations Center's queue rows
+   * (program §10): the creation state, the inquiry's last word and error, the outcome and a
+   * late completion. Never a link, an amount the provider reported or a card. Null for a
+   * payment that is not a `GATEWAY` payment. Defaulted on parse, like the D7 fields.
+   */
+  gatewaySignal: paymentGatewaySignalSchema.nullable().default(null),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
@@ -4253,24 +4395,34 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
-export const paymentListQuerySchema = z.object({
-  limit: z.coerce.number().int().positive().max(PAYMENT_PAGE_MAX).optional(),
-  cursor: z.string().min(1).max(255).optional(),
-  state: z.enum(PAYMENT_STATES).optional(),
-  /** Only payments whose receipt left review this way (WP10 follow-up §5). */
-  disposition: z.enum(RECEIPT_DISPOSITIONS).optional(),
-  method: z.enum(PAYMENT_METHODS).optional(),
-  /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
-  customerId: uuidV7Schema.optional(),
-  orderId: uuidV7Schema.optional(),
-  /** The quotable code, matched exactly. What an operator has in front of them. */
-  reference: z.string().trim().min(1).max(64).optional(),
-  /**
-   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
-   * matches on this list is documented in `docs/web-admin-search.md`.
-   */
-  q: listSearchQuerySchema.optional(),
-});
+export const paymentListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().positive().max(PAYMENT_PAGE_MAX).optional(),
+    cursor: z.string().min(1).max(255).optional(),
+    state: z.enum(PAYMENT_STATES).optional(),
+    /** Only payments whose receipt left review this way (WP10 follow-up §5). */
+    disposition: z.enum(RECEIPT_DISPOSITIONS).optional(),
+    method: z.enum(PAYMENT_METHODS).optional(),
+    /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
+    customerId: uuidV7Schema.optional(),
+    orderId: uuidV7Schema.optional(),
+    /** The quotable code, matched exactly. What an operator has in front of them. */
+    reference: z.string().trim().min(1).max(64).optional(),
+    /**
+     * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+     * matches on this list is documented in `docs/web-admin-search.md`.
+     */
+    q: listSearchQuerySchema.optional(),
+    /**
+     * The Payment Operations Center's facets (program §10, `payment-operations.ts`): a queue,
+     * the route the payment was offered through, and a created-at window. Each narrows; none
+     * is a state.
+     */
+    queue: paymentOpsQueueSchema.optional(),
+    gateway: paymentGatewayProviderSchema.optional(),
+    ...paymentOpsWindowShape,
+  })
+  .superRefine(refinePaymentOpsWindow);
 export type PaymentListQuery = z.infer<typeof paymentListQuerySchema>;
 
 export const paymentListResponseSchema = z.object({
@@ -4319,10 +4471,18 @@ export const PAYMENT_TIMELINE_MAX_ENTRIES = 200;
  * The parts of a payment's history that sit behind a permission OTHER than
  * `payments.view`, each the permission that already guards the same fact elsewhere:
  * receipts behind `receipts.view`, refunds behind `refunds.view`, and the wallet ledger
- * behind `users.view`. A section the viewer may not see is WITHHELD and named in the
- * response, so an empty history is never mistaken for a complete one.
+ * behind `users.view`, the order's settlement, fulfilment and refund behind `orders.view`,
+ * and the payment's audit rows behind `audit.view` (Payment Operations Center). A section
+ * the viewer may not see is WITHHELD and named in the response, so an empty history is
+ * never mistaken for a complete one.
  */
-export const PAYMENT_TIMELINE_SECTIONS = ['RECEIPTS', 'REFUNDS', 'WALLET'] as const;
+export const PAYMENT_TIMELINE_SECTIONS = [
+  'RECEIPTS',
+  'REFUNDS',
+  'WALLET',
+  'ORDER',
+  'AUDIT',
+] as const;
 export type PaymentTimelineSection = (typeof PAYMENT_TIMELINE_SECTIONS)[number];
 
 /**
@@ -4333,19 +4493,41 @@ export type PaymentTimelineSection = (typeof PAYMENT_TIMELINE_SECTIONS)[number];
  * truthful its timestamp is. `REFUND_CLOSED_FAILED` is timed by the refund row's
  * `updated_at`: a FAILED refund is terminal in the database (migration 0073) and only a
  * conditional write from an open state reaches it, so that is the time it failed.
+ *
+ * The gateway kinds (Payment Operations Center, program §10) are read from the one
+ * `gateway_invoices` row, which keeps the LATEST inquiry and the LATEST webhook rather than a
+ * log of each: `GATEWAY_INQUIRY` and `GATEWAY_WEBHOOK_HINT` are therefore "the last one, at
+ * this time" — the webhook entry carries how many arrived — and never a fabricated series.
+ * `PAYMENT_OUTCOME_UNKNOWN` is the lane's own `payment.lose_track` audit row, its machine
+ * reason (a mismatch) included; `AUDIT_RECORDED` is every audit row on the payment, behind
+ * `audit.view`. The order kinds are the settling order's own timestamps and the operation
+ * that delivers what it bought (`PURCHASED_AS`), behind `orders.view`.
  */
 export const PAYMENT_TIMELINE_KINDS = [
   'PAYMENT_CREATED',
+  'GATEWAY_INVOICE_REQUESTED',
+  'GATEWAY_INVOICE_CREATED',
   'CUSTOMER_SIGNALLED',
   'RECEIPT_SUBMITTED',
+  'GATEWAY_WEBHOOK_HINT',
+  'GATEWAY_INQUIRY',
+  'GATEWAY_REINQUIRE_REQUESTED',
+  'PROVIDER_REVIEW_OPENED',
+  'PAYMENT_OUTCOME_UNKNOWN',
   'PAYMENT_CONFIRMED',
   'PAYMENT_RESOLVED',
+  'GATEWAY_OUTCOME',
+  'GATEWAY_LATE_COMPLETION',
   'RECEIPT_CREDITED',
+  'ORDER_SETTLED',
+  'ORDER_FULFILMENT',
   'WALLET_ENTRY',
   'REFUND_REQUESTED',
   'REFUND_COMPLETED',
   'REFUND_CLOSED_FAILED',
+  'ORDER_REFUNDED',
   'CUSTOMER_NOTIFIED',
+  'AUDIT_RECORDED',
 ] as const;
 export type PaymentTimelineKind = (typeof PAYMENT_TIMELINE_KINDS)[number];
 
@@ -4420,6 +4602,90 @@ export const paymentTimelineEntrySchema = z.discriminatedUnion('kind', [
     ...timelineAt,
     refundId: z.string(),
     ...timelineMoney,
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_INVOICE_REQUESTED'),
+    ...timelineAt,
+    provider: paymentGatewayProviderSchema,
+    /** Where creating the invoice got to: `CREATED`, refused, lost or still waiting. */
+    creationState: z.enum(GATEWAY_INVOICE_CREATION_STATES),
+    /** The provider's documented refusal code, or Nexa's own machine note. */
+    errorCode: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_INVOICE_CREATED'),
+    ...timelineAt,
+    provider: paymentGatewayProviderSchema,
+    providerInvoiceId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_WEBHOOK_HINT'),
+    /** When the LAST webhook arrived. A hint: it schedules an inquiry and decides nothing. */
+    ...timelineAt,
+    provider: paymentGatewayProviderSchema,
+    statusHint: z.string().nullable(),
+    webhookCount: z.number().int(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_INQUIRY'),
+    /**
+     * When the LAST inquiry was answered — the only approval this installation trusts. With an
+     * `errorCode` the inquiry failed, and `providerStatus`/`providerPaid` are null: the row
+     * keeps an EARLIER answer's status, which is not this inquiry's result.
+     */
+    ...timelineAt,
+    provider: paymentGatewayProviderSchema,
+    providerStatus: z.string().nullable(),
+    providerPaid: z.boolean().nullable(),
+    errorCode: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_REINQUIRE_REQUESTED'),
+    /**
+     * One operator "ask again" that was recorded, from its audit row — one entry per request.
+     * Not the invoice's request column, which the inquiry that answers it clears.
+     */
+    ...timelineAt,
+  }),
+  z.object({
+    kind: z.literal('PROVIDER_REVIEW_OPENED'),
+    ...timelineAt,
+    /** The settlement deadline the review opened, frozen. */
+    until: z.iso.datetime(),
+  }),
+  z.object({
+    kind: z.literal('PAYMENT_OUTCOME_UNKNOWN'),
+    ...timelineAt,
+    /** The lane's machine reason when it was a mismatch hold; null for a lapsed review. */
+    reason: z.string().nullable(),
+    providerStatus: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_OUTCOME'),
+    ...timelineAt,
+    outcome: z.enum(GATEWAY_INVOICE_OUTCOMES),
+  }),
+  z.object({ kind: z.literal('GATEWAY_LATE_COMPLETION'), ...timelineAt }),
+  z.object({ kind: z.literal('ORDER_SETTLED'), ...timelineAt, orderId: z.string() }),
+  z.object({
+    kind: z.literal('ORDER_FULFILMENT'),
+    /** When the delivering operation ended; when it was planned, while it has not. */
+    ...timelineAt,
+    orderId: z.string(),
+    operationType: z.enum(OPERATION_TYPES),
+    operationState: z.enum(OPERATION_STATES),
+  }),
+  z.object({ kind: z.literal('ORDER_REFUNDED'), ...timelineAt, orderId: z.string() }),
+  z.object({
+    kind: z.literal('AUDIT_RECORDED'),
+    ...timelineAt,
+    auditId: z.string(),
+    /** The machine action code. Never `before`/`after`, never a note. */
+    action: z.string(),
+    actorType: z.enum(ACTOR_TYPES),
+    /** The administrator, when an administrator acted; null for anyone else. */
+    adminId: z.string().nullable(),
+    result: z.enum(AUDIT_RESULTS),
   }),
   z.object({
     kind: z.literal('CUSTOMER_NOTIFIED'),
@@ -5340,6 +5606,12 @@ export const serviceSummarySchema = z.object({
    */
   customerTelegramUserId: z.string().nullable().default(null),
   customerUsername: z.string().nullable().default(null),
+  /**
+   * Program §13: where the service is, as the panel's location configuration names it.
+   * Null when it was never moved and its panel has no initial location recorded.
+   * Defaulted on parse, like the identity pair above.
+   */
+  locationLabel: z.string().nullable().default(null),
 });
 export type ServiceSummaryResponse = z.infer<typeof serviceSummarySchema>;
 
@@ -5381,6 +5653,17 @@ export const SERVICE_OPERATOR_ACTIONS = [
   'SUSPEND',
   'RESUME',
   'TERMINATE',
+  /*
+   * Program §13 (the Service Operations Center): an operator's FREE grant of traffic or
+   * time to one service, and an operator's move of one service to another configured
+   * location of its panel. Each takes input (an amount, a target) and a reason, so each
+   * has its own request rather than the bare idempotency key the eight above take. All
+   * three plan the same provisioning operation a purchase plans (`ADD_TRAFFIC`,
+   * `ADD_TIME`, `CHANGE_LOCATION`); no provider write path is added.
+   */
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'CHANGE_LOCATION',
 ] as const;
 export type ServiceOperatorAction = (typeof SERVICE_OPERATOR_ACTIONS)[number];
 
@@ -5401,6 +5684,13 @@ export const SERVICE_ACTION_BLOCKERS = [
   'IN_PROGRESS',
   'NO_CONFIGURATION',
   'NO_CONTACT',
+  /*
+   * Program §13. `UNLIMITED`: a grant in a dimension the service has no limit in (no
+   * expiry, or unlimited traffic) — there is nothing to add to. `NO_TARGET`: no other
+   * configured location of this panel is offered for this service's product.
+   */
+  'UNLIMITED',
+  'NO_TARGET',
 ] as const;
 export type ServiceActionBlocker = (typeof SERVICE_ACTION_BLOCKERS)[number];
 
@@ -5460,6 +5750,20 @@ export const serviceListQuerySchema = z.object({
    * matches on this list is documented in `docs/web-admin-search.md`.
    */
   q: listSearchQuerySchema.optional(),
+  /*
+   * Program §13, the workspace's three further filters. The product the service was
+   * bought as; the location it is in (a panel location KEY, as stored on the service);
+   * and services that EXPIRE within the next N hours (not already expired), decided
+   * against the server's clock.
+   */
+  productId: uuidV7Schema.optional(),
+  locationKey: z.string().trim().min(1).max(120).optional(),
+  expiringWithinHours: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 366)
+    .optional(),
 });
 export type ServiceListQuery = z.infer<typeof serviceListQuerySchema>;
 
@@ -5543,6 +5847,55 @@ export const serviceActionRequestSchema = z.object({
 });
 export type ServiceActionRequest = z.infer<typeof serviceActionRequestSchema>;
 
+/**
+ * Program §13: an operator's free grant to ONE service. `trafficGb` (typed in GB, at most
+ * two decimals) for `ADD_TRAFFIC`, `durationDays` for `ADD_TIME`; a reason is mandatory —
+ * it is free service, and the audit row is where "why" is answered later.
+ */
+export const SERVICE_GRANT_DURATION_MAX_DAYS = 365;
+export const SERVICE_OPERATOR_REASON_MAX_LENGTH = 300;
+export const serviceGrantRequestSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      idempotencyKey: z.string().min(8).max(255),
+      kind: z.literal('ADD_TRAFFIC'),
+      trafficGb: z.string().regex(TRAFFIC_GB_PATTERN),
+      reason: z.string().trim().min(1).max(SERVICE_OPERATOR_REASON_MAX_LENGTH),
+    })
+    .strict(),
+  z
+    .object({
+      idempotencyKey: z.string().min(8).max(255),
+      kind: z.literal('ADD_TIME'),
+      durationDays: z.number().int().min(1).max(SERVICE_GRANT_DURATION_MAX_DAYS),
+      reason: z.string().trim().min(1).max(SERVICE_OPERATOR_REASON_MAX_LENGTH),
+    })
+    .strict(),
+]);
+export type ServiceGrantRequest = z.infer<typeof serviceGrantRequestSchema>;
+
+/** Program §13: an operator's move of one service to a configured location of its panel. */
+export const serviceChangeLocationRequestSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    locationId: uuidV7Schema,
+    reason: z.string().trim().min(1).max(SERVICE_OPERATOR_REASON_MAX_LENGTH),
+  })
+  .strict();
+export type ServiceChangeLocationRequest = z.infer<typeof serviceChangeLocationRequestSchema>;
+
+/**
+ * The locations an operator may move this service to: its panel's enabled targets for its
+ * product, other than where it is. The customer's cooldown and rolling limit are NOT
+ * applied to an operator's move — they ration what a customer may ask for, not what the
+ * installation may do — and no price is charged.
+ */
+export const serviceLocationTargetsResponseSchema = z.object({
+  current: z.object({ key: z.string(), label: z.string() }).nullable(),
+  targets: z.array(z.object({ id: z.string(), locationKey: z.string(), label: z.string() })),
+});
+export type ServiceLocationTargetsResponse = z.infer<typeof serviceLocationTargetsResponseSchema>;
+
 export const serviceTerminateRequestSchema = serviceActionRequestSchema.extend({
   /** The phrase, exactly. See `SERVICE_TERMINATE_CONFIRMATION`. */
   confirm: z.string().max(64),
@@ -5597,6 +5950,11 @@ export const SERVICE_ROUTES = {
   terminate: (id: string) => `/services/${encodeURIComponent(id)}/terminate`,
   /** `ROTATE_LINK`: a new subscription link, minted by the panel. `services.edit`. */
   rotateLink: (id: string) => `/services/${encodeURIComponent(id)}/rotate-link`,
+  /** Program §13: a free traffic or time grant to one service. `services.grant`. */
+  grant: (id: string) => `/services/${encodeURIComponent(id)}/grant`,
+  /** Program §13: an operator's location move. `services.edit`. */
+  changeLocation: (id: string) => `/services/${encodeURIComponent(id)}/change-location`,
+  locationTargets: (id: string) => `/services/${encodeURIComponent(id)}/location-targets`,
 } as const;
 
 // --- Service refund requests (WP19) --------------------------------------------

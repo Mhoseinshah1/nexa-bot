@@ -4,6 +4,7 @@ import {
   desc,
   eq,
   getTableColumns,
+  gte,
   inArray,
   isNotNull,
   isNull,
@@ -352,6 +353,15 @@ export class DrizzleServiceRepository implements ServiceRepository {
     if (search.orderId !== undefined) filters.push(eq(services.orderId, search.orderId));
     if (search.panelId !== undefined) filters.push(eq(services.panelId, search.panelId));
     if (search.state !== undefined) filters.push(eq(services.state, search.state));
+    // Program §13: the workspace's product, location and expiry filters.
+    if (search.productId !== undefined) filters.push(eq(services.productId, search.productId));
+    if (search.locationKey !== undefined) {
+      filters.push(eq(services.locationKey, search.locationKey));
+    }
+    if (search.expiresWithin !== undefined) {
+      filters.push(gte(services.expiresAt, search.expiresWithin.from));
+      filters.push(lt(services.expiresAt, search.expiresWithin.to));
+    }
     if (search.deliveryState !== undefined) {
       filters.push(eq(services.deliveryState, search.deliveryState));
     }

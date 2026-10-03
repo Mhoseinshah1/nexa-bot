@@ -44,7 +44,7 @@ import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
 /** Each severity in the operator's words — the same names the settings page uses. */
-const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
+export const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
   DEBUG: 'web.setting_severity_debug',
   INFO: 'web.setting_severity_info',
   WARN: 'web.setting_severity_warn',

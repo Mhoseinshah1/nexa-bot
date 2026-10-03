@@ -82,7 +82,7 @@ function preview(customers: number): Record<string, unknown> {
 
 const OPTIONS = {
   url: '/audience/options',
-  body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+  body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
 };
 
 describe('broadcast in the Web Admin', () => {

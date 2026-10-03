@@ -62,8 +62,21 @@ export interface PanelRecord {
    */
   readonly usernamePolicy: PanelUsernamePolicy;
   readonly archivedAt: Date | null;
+  /**
+   * The operator's drain, or null when the panel takes new business (Phase C2).
+   *
+   * Read by `decideEligibility` and by nothing that decides an OPERATION: a drained
+   * panel stays operable for every service already on it.
+   */
+  readonly drain: PanelDrain | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+}
+
+/** When a drain began and why. Both or neither, as `panels_drain_reason_check` requires. */
+export interface PanelDrain {
+  readonly since: Date;
+  readonly reason: string;
 }
 
 /** Which credentials a panel has, and when each was last replaced. Never the values. */
@@ -365,6 +378,18 @@ export interface PanelRepository {
      */
     name?: string,
   ): Promise<PanelRecord | null>;
+  /**
+   * Set or clear the drain, in the caller's transaction, which holds the panel's
+   * lock. Null when no panel of this tenant has that id. Touches nothing but the
+   * two drain columns and `updated_at`.
+   */
+  setDrain(
+    scope: TenantContext,
+    panelId: string,
+    drain: PanelDrain | null,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<PanelRecord | null>;
   /** Whether a LIVE panel of this tenant already uses the name. */
   nameTaken(
     scope: TenantContext,
@@ -549,10 +574,13 @@ export interface PanelMonitorRepository {
    * Takes a turn for up to `limit` tenants that have at least one eligible
    * panel, least recently served first.
    *
-   * Atomic and exclusive: the claim moves `last_served_at` under
-   * `FOR UPDATE SKIP LOCKED`, so two monitor replicas take DISJOINT tenant sets
-   * instead of both working the same one. That is what makes fairness a
-   * property of the installation rather than of one process.
+   * Atomic and exclusive: the claim moves `last_served_at` strictly forward
+   * under `FOR UPDATE SKIP LOCKED`, and takes a tenant only if the turn it
+   * locked is still the one its snapshot ordered by — so two monitor replicas
+   * take DISJOINT tenant sets instead of both working the same one, and a
+   * loser moves on to the next tenant rather than coming back short. That is
+   * what makes fairness a property of the installation rather than of one
+   * process.
    *
    * Every claimed tenant's turn is spent whether or not it turns out to have
    * work — the bound is a lower bound, so a claim that finds nothing is the

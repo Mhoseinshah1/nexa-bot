@@ -13,12 +13,16 @@ import { useNavCounters } from './nav-counters';
 import { CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
+import { PanelHealthPage } from './pages/panel-health';
 import { SettingsPage } from './pages/settings';
 import { BotButtonsPage } from './pages/bot-buttons';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
+// Phase B3: the notification center and its top-bar bell.
+import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
+import { AuditLogPage } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
@@ -31,6 +35,7 @@ import { PaymentAccountsPage } from './pages/payment-accounts';
 import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
+import { TermsPage } from './pages/terms';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
@@ -194,16 +199,20 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/panels',
   '/panels/new',
   '/panels/:id',
+  '/panel-health',
   '/providers',
   '/settings',
   '/support',
+  '/terms',
   '/client-apps',
   '/features',
   '/reminders',
   '/bot-buttons',
   '/content',
+  '/audit-log',
   '/alerts',
   '/notifications',
+  '/notification-center',
   '/appearance',
   '/ops-group',
   '/recovery',
@@ -264,6 +273,7 @@ export function resolve(
           // narrows by Telegram id or username, `users.block` changes a status.
           // Collapsing them would hide a capability the server permits.
           maySearch={may('users.search')}
+          mayManageTags={may('users.tags.manage')}
           denied={!may('users.view')}
         />
       ),
@@ -299,9 +309,15 @@ export function resolve(
           mayEditLocation={may('users.location.edit')}
           mayEditNotifications={may('users.notifications.edit')}
           mayTransfer={may('users.transfer')}
+          mayMessage={may('users.message.send')}
+          mayViewMessages={may('users.message.view')}
           mayManualOrder={may('orders.manual.create')}
           mayEditServices={may('services.edit')}
           mayViewAudit={may('audit.view')}
+          mayViewNotes={may('users.notes.view')}
+          mayWriteNotes={may('users.notes.write')}
+          mayAssignTags={may('users.tags.assign')}
+          mayManageTags={may('users.tags.manage')}
           denied={!may('users.view')}
         />
       ),
@@ -409,6 +425,11 @@ export function resolve(
           route={route}
           denied={!may('services.view')}
           mayViewRefundRequests={may('refunds.view')}
+          /* Program §13: the workspace's filters and its one mass action. */
+          mayViewPanels={may('panels.view')}
+          mayViewCatalog={may('catalog.view')}
+          mayMassStatus={may('services.mass.status') && may('services.edit')}
+          mayMassGrant={may('services.mass.grant')}
         />
       ),
       crumbs: [{ label: t('web.services_title') }],
@@ -434,6 +455,8 @@ export function resolve(
           /* WP19: a customer's refund request deletes the service AND moves money. */
           mayViewRefundRequests={may('refunds.view')}
           mayDecideRefundRequests={may('refunds.issue') && may('services.terminate')}
+          /* Program §13: an operator's free traffic or time. */
+          mayGrant={may('services.grant')}
         />
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],
@@ -483,7 +506,11 @@ export function resolve(
         <BulkOperationsPage
           route={route}
           denied={!may('bulk_operations.view')}
-          mayRun={may('users.wallet.mass') || may('services.mass.grant')}
+          mayRun={
+            may('users.wallet.mass') ||
+            may('services.mass.grant') ||
+            (may('services.mass.status') && may('services.edit'))
+          }
         />
       ),
       crumbs: [{ label: t('web.bulk_page_title') }],
@@ -496,6 +523,7 @@ export function resolve(
         <BulkOperationNewPage
           mayWallet={may('users.wallet.mass')}
           mayGrant={may('services.mass.grant')}
+          mayStatus={may('services.mass.status') && may('services.edit')}
         />
       ),
       crumbs: [nav('bulk-operations'), { label: t('web.bulk_new') }],
@@ -512,6 +540,7 @@ export function resolve(
           denied={!may('bulk_operations.view')}
           mayWallet={may('users.wallet.mass')}
           mayGrant={may('services.mass.grant')}
+          mayStatus={may('services.mass.status') && may('services.edit')}
         />
       ),
       crumbs: [nav('bulk-operations'), { label: t('web.bulk_detail') }],
@@ -763,9 +792,16 @@ export function resolve(
 
   if (route.path === '/payments') {
     return {
-      element: <PaymentsPage route={route} denied={!may('payments.view')} />,
-      crumbs: [{ label: t('web.payments_title') }],
-      title: t('web.payments_title'),
+      element: (
+        <PaymentsPage
+          route={route}
+          denied={!may('payments.view')}
+          // The queue rows' "ask again" (program §10); the server charges it itself.
+          mayReconcile={may('payments.reconcile')}
+        />
+      ),
+      crumbs: [{ label: t('web.payment_ops_title') }],
+      title: t('web.payment_ops_title'),
     };
   }
 
@@ -809,6 +845,8 @@ export function resolve(
            * this it says nothing about an order the operator may not open.
            */
           mayViewOrders={may('orders.view')}
+          // The history's audit rows (Payment Operations Center): a new question when it changes.
+          mayViewAudit={may('audit.view')}
           denied={!may('payments.view')}
         />
       ),
@@ -851,6 +889,22 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.nav_panels') }],
       title: t('web.nav_panels'),
+    };
+  }
+
+  if (route.path === '/panel-health') {
+    return {
+      element: (
+        <PanelHealthPage
+          denied={!may('panels.view')}
+          // The connection test is charged `panels.edit` by the server.
+          mayProbe={may('panels.edit')}
+          mayDrain={may('panels.drain')}
+          mayViewServices={may('services.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_panel_health') }],
+      title: t('web.nav_panel_health'),
     };
   }
 
@@ -934,6 +988,21 @@ export function resolve(
     };
   }
 
+  if (route.path === '/terms') {
+    return {
+      element: (
+        <TermsPage
+          denied={!may('terms.view')}
+          mayEdit={may('terms.edit')}
+          mayPublish={may('terms.publish')}
+          mayToggle={may('settings.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_terms') }],
+      title: t('web.nav_terms'),
+    };
+  }
+
   if (route.path === '/client-apps') {
     return {
       element: (
@@ -990,11 +1059,30 @@ export function resolve(
     };
   }
 
+  if (route.path === '/audit-log') {
+    return {
+      element: (
+        <AuditLogPage route={route} denied={!may('audit.view')} mayExport={may('audit.export')} />
+      ),
+      crumbs: [{ label: t('web.nav_audit_log') }],
+      title: t('web.audit_title'),
+    };
+  }
+
   if (route.path === '/alerts') {
     return {
       element: <AlertsPage denied={!may('opslog.view')} />,
       crumbs: [{ label: t('web.nav_alerts') }],
       title: t('web.nav_alerts'),
+    };
+  }
+
+  if (route.path === '/notification-center') {
+    return {
+      // Every administrator has an inbox; the server shows only the categories they may see.
+      element: <NotificationCenterPage permissions={permissions} />,
+      crumbs: [{ label: t('web.nav_inbox') }],
+      title: t('web.nc_title'),
     };
   }
 
@@ -1603,6 +1691,7 @@ function SignedIn({
           onSearch={() => setSearching(true)}
           admin={admin}
           onSignOut={() => leave.mutate()}
+          bell={<NotificationBell />}
         />
 
         <main className="content" id="main">

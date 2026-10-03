@@ -159,7 +159,36 @@ const TEXT_SENSITIVE_FRAGMENTS = [
   'signature',
   'cookie',
   'session',
+  /*
+   * A subscription URL is a bearer capability and `subscription_ref` the panel's half of it
+   * (the `subscription` entry of `SENSITIVE_FRAGMENTS`). Here the COMPOUND names only, in
+   * each spelling the codebase and the panels use — `subscriptionUrl`, `subscription_url`,
+   * `subscription-ref`, … (the pattern is case-insensitive). Bare `subscription` stays out
+   * for the reason bare `auth` does: `subscription: renewed` is an operator's sentence. A
+   * bare `subscription` label is still caught when its value is a URL, by
+   * `SUBSCRIPTION_URL_VALUE` below.
+   */
+  'subscriptionurl',
+  'subscription_url',
+  'subscription-url',
+  'subscriptionref',
+  'subscription_ref',
+  'subscription-ref',
+  'subscriptionlink',
+  'subscription_link',
+  'subscription-link',
+  'sub_url',
+  'sub-url',
 ];
+
+/**
+ * `subscription: https://…` — a subscription-labelled value that IS a URL, whatever the rest
+ * of the label says. The compound names above take any value; the bare word takes only a
+ * URL, which is never the next word of a sentence. The URL ends at whitespace or a quote, so
+ * a JSON value keeps its closing quote.
+ */
+const SUBSCRIPTION_URL_VALUE =
+  /(["']?)([A-Za-z0-9_.-]{0,64}subscription[A-Za-z0-9_.-]{0,64})(["']?)(\s*[=:]\s*)(["']?)[a-z][a-z0-9+.-]{0,16}:\/\/[^\s"'<>]{1,8192}/gi;
 
 /**
  * Secrets inside FREE TEXT, as opposed to inside a key.
@@ -378,6 +407,11 @@ export function redactSecretText(text: string): string {
   return (
     bounded
       .replace(TELEGRAM_BOT_TOKEN, REDACTED)
+      .replace(
+        SUBSCRIPTION_URL_VALUE,
+        (_match, open: string, name: string, close: string, separator: string, quote: string) =>
+          `${open}${name}${close}${separator}${quote}${REDACTED}`,
+      )
       // FIRST, because a credential header's whole value is the credential
       // whatever scheme it names, and the labelled rule below would otherwise
       // take only its first token.

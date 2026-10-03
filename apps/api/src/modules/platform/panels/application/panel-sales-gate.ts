@@ -4,6 +4,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { PanelCapacity, PanelCapacityRepository } from './capacity-ports.js';
 import {
   decideEligibility,
+  drainOf,
   provisioningInputFor,
   type PanelEligibility,
 } from './panel-eligibility.js';
@@ -163,6 +164,8 @@ export class PanelSalesGate {
           used: capacity?.used ?? 0,
           now,
           provisioning: this.provisioningOf(view),
+          // The catalogue's read: nothing is held, so a drained panel offers nothing.
+          drain: drainOf(view.panel.drain),
         }),
       );
     }
@@ -237,6 +240,12 @@ export class PanelSalesGate {
        * facts that decide whether the thing being sold can be produced.
        */
       provisioning: this.provisioningOf(view),
+      /*
+       * Confirmation TAKES a slot, so it is the new allocation drain exists to
+       * refuse — decided here, under the panel's lock, against the row a drain
+       * would have to wait on.
+       */
+      drain: drainOf(view.panel.drain),
     });
     if (!before.eligible) return before;
 
@@ -289,7 +298,9 @@ export class PanelSalesGate {
     if (!(await this.deps.panels.lockPanel(scope, panelId, tx))) {
       return alreadyProvisioned ? { eligible: true } : { eligible: false, reason: 'ARCHIVED' };
     }
-    await this.deps.capacity.release(scope, orderId, tx);
+    // `live`, not merely "a row existed": an expired hold the sweep has not reached
+    // holds no slot, and on a drained panel settling it would be a new allocation.
+    const { live: held } = await this.deps.capacity.releaseForSettlement(scope, orderId, now, tx);
     if (alreadyProvisioned) return { eligible: true };
 
     const view = await this.deps.panels.find(scope, panelId, tx);
@@ -310,6 +321,15 @@ export class PanelSalesGate {
        * Which is precisely what happened to order `01a0c54b`.
        */
       provisioning: this.provisioningOf(view),
+      /*
+       * Drain refuses only a NEW allocation. An order whose hold was still here
+       * was confirmed — and given its slot — before the drain, so settling it
+       * allocates nothing; refusing it would refund a customer for a decision
+       * taken after they bought. A hold that lapsed is gone, and that
+       * settlement is new business on a drained panel: refused, and refunded by
+       * the ordinary undeliverable path.
+       */
+      drain: { draining: view.panel.drain !== null, slotHeld: held },
     });
   }
 

@@ -2,6 +2,7 @@ import {
   COMMERCE_ERROR_CODES,
   errors,
   SERVICE_PAGE_MAX,
+  UNLIMITED_TRAFFIC_BYTES,
   type ActorContext,
   type OperationType,
   type PermissionKey,
@@ -82,6 +83,13 @@ export interface ServiceAdminServiceDeps {
   readonly panels: PanelOperabilityReader;
   /** Whether there is anywhere to resend a configuration to. Read-only. */
   readonly contacts: CustomerContactReader;
+  /**
+   * Program §13: whether an operator could move this service anywhere — the location
+   * policy's operator targets, a read. Absent: no move is offered.
+   */
+  readonly locationTargets?: {
+    hasOperatorTarget(scope: TenantContext, service: ServiceRecord): Promise<boolean>;
+  };
 }
 
 /**
@@ -185,11 +193,14 @@ export class ServiceAdminService {
     id: string,
   ): Promise<{ service: ServiceRecord; actions: readonly ServiceActionAvailability[] }> {
     const service = await this.get(scope, actor, id);
-    const [openOperations, operability, contact] = await Promise.all([
-      this.openOperationsFor(scope, service.id),
-      this.operabilityFor(scope, service),
-      this.contactPresenceFor(scope, service),
-    ]);
+    const [openOperations, operability, contact, hasLocationTarget, openCommercial] =
+      await Promise.all([
+        this.openOperationsFor(scope, service.id),
+        this.operabilityFor(scope, service),
+        this.contactPresenceFor(scope, service),
+        this.deps.locationTargets?.hasOperatorTarget(scope, service) ?? Promise.resolve(false),
+        this.deps.operations.findOpenCommercial(scope, service.id),
+      ]);
     return {
       service,
       actions: evaluateServiceActions({
@@ -198,8 +209,33 @@ export class ServiceAdminService {
         contact,
         openOperations,
         operability,
+        grantLimits: {
+          trafficUnlimited: service.trafficLimitBytes === UNLIMITED_TRAFFIC_BYTES,
+          noExpiry: service.expiresAt === null,
+        },
+        hasLocationTarget,
+        openCommercial: openCommercial !== null,
       }),
     };
+  }
+
+  /**
+   * Program §13: one operation of this service, by its row id — what an action that planned
+   * it answers with. Through `get`, so another tenant's service is NOT_FOUND, and an
+   * operation of a different service is NOT_FOUND too.
+   */
+  async operation(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+    operationRowId: string,
+  ): Promise<OperationRecord> {
+    const service = await this.get(scope, actor, serviceId);
+    const found = await this.deps.operations.findById(scope, operationRowId);
+    if (found === null || found.serviceId !== service.id) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown operation.');
+    }
+    return found;
   }
 
   private async openOperationsFor(

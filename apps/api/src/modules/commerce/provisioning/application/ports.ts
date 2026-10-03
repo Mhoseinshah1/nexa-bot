@@ -213,6 +213,15 @@ export interface ServiceSearch {
    * a prefix over account names is an enumeration of a panel's accounts.
    */
   readonly text?: ListSearchTerm;
+  /** Program §13: the product the service was bought as. */
+  readonly productId?: string;
+  /** Program §13: the location the service is in, by the key stored on it. */
+  readonly locationKey?: string;
+  /**
+   * Program §13: services whose expiry falls in `[from, to)` — the "expiring within" filter,
+   * resolved against the clock by the caller, half-open like every interval here.
+   */
+  readonly expiresWithin?: { readonly from: Date; readonly to: Date };
 }
 
 /**

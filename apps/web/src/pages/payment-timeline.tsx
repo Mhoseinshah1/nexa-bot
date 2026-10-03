@@ -27,6 +27,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { pollUnlessFinalWhile } from '../polling';
+import { useLinkHandler } from '../router';
 import { retryOf } from '../view-state';
 
 /**
@@ -77,6 +78,19 @@ const KIND_LABELS: Readonly<Record<PaymentTimelineKind, WebKey>> = {
   REFUND_COMPLETED: 'web.payment_timeline_refund_completed',
   REFUND_CLOSED_FAILED: 'web.payment_timeline_refund_failed',
   CUSTOMER_NOTIFIED: 'web.payment_timeline_notified',
+  GATEWAY_INVOICE_REQUESTED: 'web.payment_timeline_invoice_requested',
+  GATEWAY_INVOICE_CREATED: 'web.payment_timeline_invoice_created',
+  GATEWAY_WEBHOOK_HINT: 'web.payment_timeline_webhook',
+  GATEWAY_INQUIRY: 'web.payment_timeline_inquiry',
+  GATEWAY_REINQUIRE_REQUESTED: 'web.payment_timeline_reinquire',
+  PROVIDER_REVIEW_OPENED: 'web.payment_timeline_review_opened',
+  PAYMENT_OUTCOME_UNKNOWN: 'web.payment_timeline_outcome_unknown',
+  GATEWAY_OUTCOME: 'web.payment_timeline_gateway_outcome',
+  GATEWAY_LATE_COMPLETION: 'web.payment_timeline_late_completion',
+  ORDER_SETTLED: 'web.payment_timeline_order_settled',
+  ORDER_FULFILMENT: 'web.payment_timeline_order_fulfilment',
+  ORDER_REFUNDED: 'web.payment_timeline_order_refunded',
+  AUDIT_RECORDED: 'web.payment_timeline_audit',
 };
 
 /**
@@ -96,13 +110,43 @@ const KIND_TONES: Readonly<Record<PaymentTimelineKind, Tone>> = {
   REFUND_COMPLETED: 'violet',
   REFUND_CLOSED_FAILED: 'neutral',
   CUSTOMER_NOTIFIED: 'teal',
+  GATEWAY_INVOICE_REQUESTED: 'info',
+  GATEWAY_INVOICE_CREATED: 'info',
+  GATEWAY_WEBHOOK_HINT: 'neutral',
+  GATEWAY_INQUIRY: 'info',
+  GATEWAY_REINQUIRE_REQUESTED: 'neutral',
+  PROVIDER_REVIEW_OPENED: 'info',
+  PAYMENT_OUTCOME_UNKNOWN: 'warn',
+  GATEWAY_OUTCOME: 'neutral',
+  GATEWAY_LATE_COMPLETION: 'warn',
+  ORDER_SETTLED: 'ok',
+  ORDER_FULFILMENT: 'violet',
+  ORDER_REFUNDED: 'warn',
+  AUDIT_RECORDED: 'neutral',
 };
 
 const SECTION_LABELS: Readonly<Record<PaymentTimelineSection, WebKey>> = {
   RECEIPTS: 'web.payment_timeline_withheld_receipts',
   REFUNDS: 'web.payment_timeline_withheld_refunds',
   WALLET: 'web.payment_timeline_withheld_wallet',
+  ORDER: 'web.payment_timeline_withheld_order',
+  AUDIT: 'web.payment_timeline_withheld_audit',
 };
+
+/** An order named by an entry: a link to it, the way the detail links one. */
+function OrderLink({ orderId }: { orderId: string }) {
+  const onLink = useLinkHandler();
+  return (
+    <a href={`/orders/${encodeURIComponent(orderId)}`} onClick={onLink}>
+      <Ltr>{orderId.slice(0, 8)}</Ltr>
+    </a>
+  );
+}
+
+/** A provider's own status or code, as recorded: left-to-right, or a dash. */
+function code(value: string | null): ReactNode {
+  return <Ltr>{value ?? '—'}</Ltr>;
+}
 
 const DELIVERY_LABELS: Readonly<Record<CustomerNotificationState, WebKey>> = {
   PENDING: 'web.payment_timeline_delivery_pending',
@@ -223,6 +267,83 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
         <>
           <Ltr>{entry.notificationKind}</Ltr> · {t(DELIVERY_LABELS[entry.deliveryState])}
           {entry.resolvedAt === null ? null : ` · ${formatTimestamp(entry.resolvedAt)}`}
+        </>
+      );
+    case 'GATEWAY_INVOICE_REQUESTED':
+      return (
+        <>
+          <Ltr>{entry.provider}</Ltr> · {code(entry.creationState)}
+          {entry.errorCode === null ? null : <> · {code(entry.errorCode)}</>}
+        </>
+      );
+    case 'GATEWAY_INVOICE_CREATED':
+      return (
+        <>
+          <Ltr>{entry.provider}</Ltr>
+          {entry.providerInvoiceId === null ? null : (
+            <>
+              {' · '}
+              <Copyable value={entry.providerInvoiceId} />
+            </>
+          )}
+        </>
+      );
+    case 'GATEWAY_WEBHOOK_HINT':
+      return (
+        <>
+          {code(entry.statusHint)} · {t('web.payment_timeline_webhook_count')}{' '}
+          <Ltr>{String(entry.webhookCount)}</Ltr>
+        </>
+      );
+    case 'GATEWAY_INQUIRY':
+      return (
+        <>
+          {code(entry.providerStatus)}
+          {entry.providerPaid === null ? null : (
+            <>
+              {' · '}
+              <Ltr>{`paid=${String(entry.providerPaid)}`}</Ltr>
+            </>
+          )}
+          {entry.errorCode === null ? null : <> · {code(entry.errorCode)}</>}
+        </>
+      );
+    case 'GATEWAY_REINQUIRE_REQUESTED':
+      return null;
+    case 'PROVIDER_REVIEW_OPENED':
+      return (
+        <>
+          {t('web.payment_timeline_review_until')} {formatTimestamp(entry.until)}
+        </>
+      );
+    case 'PAYMENT_OUTCOME_UNKNOWN':
+      return entry.reason === null ? (
+        <span className="muted small">{t('web.payment_timeline_review_lapsed')}</span>
+      ) : (
+        <>
+          {t('web.payment_timeline_mismatch_reason')}: {code(entry.reason)}
+          {entry.providerStatus === null ? null : <> · {code(entry.providerStatus)}</>}
+        </>
+      );
+    case 'GATEWAY_OUTCOME':
+      return code(entry.outcome);
+    case 'GATEWAY_LATE_COMPLETION':
+      return null;
+    case 'ORDER_SETTLED':
+    case 'ORDER_REFUNDED':
+      return <OrderLink orderId={entry.orderId} />;
+    case 'ORDER_FULFILMENT':
+      return (
+        <>
+          <OrderLink orderId={entry.orderId} /> · {code(entry.operationType)} ·{' '}
+          {code(entry.operationState)}
+        </>
+      );
+    case 'AUDIT_RECORDED':
+      return (
+        <>
+          {code(entry.action)} · {code(entry.result)} ·{' '}
+          {entry.adminId === null ? code(entry.actorType) : actor(entry.adminId)}
         </>
       );
   }

@@ -327,6 +327,117 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     name: 'services_tenant_panel_idx',
     definition: 'ON "services" USING btree ("tenant_id","panel_id")',
   },
+  {
+    /*
+     * Phase C2: a tenant's FAILED provisioning operations in a recent window, for the
+     * panel health dashboard's "failed in the last 24 hours" per panel.
+     *
+     * Partial on FAILED and ordered by `completed_at` (which FAILED always carries —
+     * `provisioning_operations_completed_check`), so the read is bounded by the window
+     * rather than by every operation the tenant has ever run. CONCURRENTLY for the
+     * reason `provisioning_operations_unannounced_idx` gives: an ordinary build would
+     * block every operation transition on a live installation.
+     */
+    name: 'provisioning_operations_failed_recent_idx',
+    definition:
+      'ON "provisioning_operations" USING btree ("tenant_id","completed_at") ' +
+      "WHERE (state = 'FAILED'::text)",
+  },
+
+  /*
+   * ---------------------------------------------------------------------------------
+   * The audit log browser (Phase D1, `docs/audit-log.md`).
+   *
+   * `audit_logs` had `(tenant_id, occurred_at)` and an `(entity_type, entity_id)` index that
+   * does not lead with the tenant. The browser pages `(occurred_at, id)` DESC under a tenant,
+   * optionally narrowed to one actor, one entity or one action, and each narrowing needs its
+   * own tenant-led keyset or the planner walks the tenant's whole log backwards and filters.
+   * Every one ends `occurred_at, id`, so a filtered page is read in order and stops at the
+   * page size: the `ROW(occurred_at, id) < ROW(...)` continuation is an index condition.
+   * `audit-log-plan.test.ts` reads the planner's answer on the statements the reader sends.
+   *
+   * Concurrently, and this table is the strongest case for it in the file: nearly every
+   * business transaction writes an audit row, so a blocking build would hold all of them
+   * during `botctl update`.
+   * ---------------------------------------------------------------------------------
+   */
+  {
+    // The unfiltered browser, the date range, the result and the security slices. The
+    // existing `(tenant_id, occurred_at)` cannot carry the id tie-break.
+    name: 'audit_logs_tenant_occurred_page_idx',
+    definition: 'ON "audit_logs" USING btree ("tenant_id","occurred_at","id")',
+  },
+  {
+    // One administrator's (or one job's) actions.
+    name: 'audit_logs_tenant_actor_page_idx',
+    definition: 'ON "audit_logs" USING btree ("tenant_id","actor_id","occurred_at","id")',
+  },
+  {
+    /*
+     * One entity's history, and the customer filter's four arms. Also serves the Customer 360
+     * timeline and the reseller histories, which until now probed `audit_logs_entity_idx`
+     * across every tenant's rows for that entity and filtered the tenant afterwards.
+     */
+    name: 'audit_logs_tenant_entity_page_idx',
+    definition:
+      'ON "audit_logs" USING btree ("tenant_id","entity_type","entity_id","occurred_at","id")',
+  },
+  {
+    /*
+     * One action, or one family by prefix. `text_pattern_ops` so a `LIKE 'payment.%'` prefix
+     * is an index range whatever the database collation is; equality uses it too.
+     */
+    name: 'audit_logs_tenant_action_page_idx',
+    definition:
+      'ON "audit_logs" USING btree ("tenant_id",action text_pattern_ops,"occurred_at","id")',
+  },
+  {
+    /*
+     * The denials: the security slice an operator investigating an incident opens first, and
+     * the rarest rows in the log. Without this the planner walks the time keyset backwards
+     * discarding every successful row until it has a page of refusals — measured at 22 548
+     * rows read for 51 on the plan fixture. PARTIAL, so it holds only the refusals.
+     */
+    name: 'audit_logs_tenant_denied_page_idx',
+    definition:
+      'ON "audit_logs" USING btree ("tenant_id","occurred_at","id") ' +
+      "WHERE (result = 'DENIED'::text)",
+  },
+  {
+    /*
+     * A payment by the one provider id no unique key already serves (Payment Operations
+     * Center, program §10): NOWPayments' payment id a verified webhook named, which is what an
+     * operator copies out of the provider's dashboard. The order, invoice and charge ids are
+     * served by the `(tenant_id, provider, …)` unique keys. Partial: most invoices carry none.
+     */
+    name: 'gateway_invoices_tenant_hinted_payment_idx',
+    definition:
+      'ON "gateway_invoices" USING btree ("tenant_id","hinted_payment_id") ' +
+      'WHERE (hinted_payment_id IS NOT NULL)',
+  },
+  {
+    /*
+     * A payment by the invoice id a verified webhook named for an attempt whose create answer
+     * was lost (CREATE_UNKNOWN): until an inquiry adopts it as `provider_invoice_id`, this is
+     * the only place the provider's invoice id lives. Partial: most invoices carry none.
+     */
+    name: 'gateway_invoices_tenant_hinted_invoice_idx',
+    definition:
+      'ON "gateway_invoices" USING btree ("tenant_id","hinted_invoice_id") ' +
+      'WHERE (hinted_invoice_id IS NOT NULL)',
+  },
+  {
+    /*
+     * An order's provisioning operations (Payment Operations Center): the payment timeline
+     * reads the operation that delivers what the settling order bought. Nothing served
+     * `order_id` except the partial open-operation keys, so a timeline would have walked the
+     * tenant's operations. Concurrently: every delivery writes this table.
+     */
+    name: 'provisioning_operations_tenant_order_idx',
+    definition:
+      'ON "provisioning_operations" USING btree ("tenant_id","order_id","created_at","id") ' +
+      'WHERE (order_id IS NOT NULL)',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

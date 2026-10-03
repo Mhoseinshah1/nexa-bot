@@ -156,6 +156,22 @@ export interface PanelCapacityRepository {
    * retried lane.
    */
   release(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean>;
+  /**
+   * The settlement's release: the same delete, and whether the hold it removed was
+   * still LIVE at `now` — `expires_at > now`, the predicate the capacity count uses.
+   *
+   * Separate from `release` because only settlement asks "did this order still hold its
+   * slot", and an expired hold the sweep has not reached yet does not hold one: it stopped
+   * counting the moment it expired, so a drained panel may have refused the slot to
+   * nobody and settling it would be a NEW allocation (Codex P1 on #158). Every other
+   * caller wants the row gone whatever its age and keeps `release`.
+   */
+  releaseForSettlement(
+    scope: TenantContext,
+    orderId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<{ readonly released: boolean; readonly live: boolean }>;
 }
 
 /**

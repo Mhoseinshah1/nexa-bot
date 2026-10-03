@@ -10,6 +10,7 @@ import {
   activationIssues,
   connectionIdentityOf,
   decideEligibility,
+  drainOf,
   isConfirmedUnusable,
   provisioningInputFor,
   validationAuthorisesEnable,
@@ -78,6 +79,7 @@ const base: EligibilityInput = {
   used: 0,
   now: NOW,
   provisioning: PROVISIONING,
+  drain: { draining: false, slotHeld: false },
 };
 
 const withHealth = (
@@ -90,6 +92,92 @@ const withHealth = (
 });
 
 describe('whether a panel may be sold onto', () => {
+  // -------------------------------------------------------------------------
+  // Drain (Phase C2): an operator's decision that refuses NEW allocations only
+  // -------------------------------------------------------------------------
+
+  describe('a drained panel', () => {
+    const drained = { draining: true, slotHeld: false } as const;
+
+    it('refuses a new allocation as DRAINING, before any measurement', () => {
+      expect(decideEligibility({ ...base, drain: drained })).toEqual({
+        eligible: false,
+        reason: 'DRAINING',
+      });
+      // Before health and capacity: a decision is never reported as a measurement.
+      expect(
+        decideEligibility({
+          ...withHealth('UNREACHABLE', PANEL_UNHEALTHY_AFTER_FAILURES),
+          maxServices: 1,
+          used: 5,
+          drain: drained,
+        }),
+      ).toEqual({ eligible: false, reason: 'DRAINING' });
+    });
+
+    it('is reported after ARCHIVED and DISABLED, the stronger decisions', () => {
+      expect(decideEligibility({ ...base, status: 'DISABLED', drain: drained })).toEqual({
+        eligible: false,
+        reason: 'DISABLED',
+      });
+      expect(decideEligibility({ ...base, status: 'ARCHIVED', drain: drained })).toEqual({
+        eligible: false,
+        reason: 'ARCHIVED',
+      });
+    });
+
+    it('settles an allocation that already holds its slot', () => {
+      // An order confirmed before the drain: its slot was taken then, so settling
+      // it allocates nothing new. Everything else is still decided.
+      expect(decideEligibility({ ...base, drain: { draining: true, slotHeld: true } })).toEqual({
+        eligible: true,
+      });
+      expect(
+        decideEligibility({
+          ...base,
+          status: 'DISABLED',
+          drain: { draining: true, slotHeld: true },
+        }),
+      ).toEqual({ eligible: false, reason: 'DISABLED' });
+    });
+
+    it('leaves every operation on an existing service alone', () => {
+      // `decideOperability` never reads drain: a drained panel's row, drain and all,
+      // is operable for each operation an existing service needs, exactly as an
+      // undrained one is.
+      const panel = {
+        status: 'ACTIVE',
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        archivedAt: null,
+        activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS_TCP'] } },
+        drain: { since: NOW, reason: 'نگهداری' },
+      };
+      for (const type of [
+        'RENEW',
+        'ADD_TRAFFIC',
+        'ADD_TIME',
+        'SUSPEND',
+        'RESUME',
+        'TERMINATE',
+        'SYNC_USAGE',
+      ] as const) {
+        const verdict = decideOperability({
+          panel,
+          credentials: CREDENTIALS,
+          type,
+          serviceAdapterExists: true,
+        });
+        expect(verdict.ok, type).toBe(true);
+      }
+    });
+
+    it('drainOf never claims a held slot', () => {
+      expect(drainOf(null)).toEqual({ draining: false, slotHeld: false });
+      expect(drainOf({ since: NOW })).toEqual({ draining: true, slotHeld: false });
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Status: somebody's decision, and it always wins
   // -------------------------------------------------------------------------

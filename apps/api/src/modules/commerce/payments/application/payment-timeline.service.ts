@@ -15,14 +15,17 @@ import type { PaymentTimelineReader } from './timeline-ports.js';
 
 /**
  * The permission that already guards each gated section's facts elsewhere. Not new keys:
- * the receipts card is `receipts.view`, the refunds card is `refunds.view`, and the
- * wallet ledger is `users.view` (`WALLET_VIEW_PERMISSION`).
+ * the receipts card is `receipts.view`, the refunds card is `refunds.view`, the
+ * wallet ledger is `users.view` (`WALLET_VIEW_PERMISSION`), an order is `orders.view` and
+ * the audit log is `audit.view`.
  */
 export const TIMELINE_SECTION_PERMISSIONS: Readonly<Record<PaymentTimelineSection, PermissionKey>> =
   {
     RECEIPTS: 'receipts.view' as PermissionKey,
     REFUNDS: 'refunds.view' as PermissionKey,
     WALLET: 'users.view' as PermissionKey,
+    ORDER: 'orders.view' as PermissionKey,
+    AUDIT: 'audit.view' as PermissionKey,
   };
 
 export interface PaymentTimelineServiceDeps {
@@ -68,7 +71,13 @@ export class PaymentTimelineService {
     const held = await this.deps.guard.permissionsOf(scope, actor);
     const may = (section: PaymentTimelineSection) =>
       held.has(TIMELINE_SECTION_PERMISSIONS[section]);
-    const include = { receipts: may('RECEIPTS'), refunds: may('REFUNDS'), wallet: may('WALLET') };
+    const include = {
+      receipts: may('RECEIPTS'),
+      refunds: may('REFUNDS'),
+      wallet: may('WALLET'),
+      order: may('ORDER'),
+      audit: may('AUDIT'),
+    };
 
     const facts = await this.deps.reader.facts(
       scope,
@@ -84,6 +93,8 @@ export class PaymentTimelineService {
     if (!include.receipts) withheld.push('RECEIPTS');
     if (!include.refunds) withheld.push('REFUNDS');
     if (!include.wallet) withheld.push('WALLET');
+    if (!include.order) withheld.push('ORDER');
+    if (!include.audit) withheld.push('AUDIT');
     return { ...assembled, paymentId: parsed.data, withheld };
   }
 }

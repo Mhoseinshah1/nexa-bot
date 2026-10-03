@@ -183,7 +183,8 @@ coverage:
   nothing to revert. The tables and contracts they will use exist; no behaviour
   does.
 - **No mutation of the Web Admin page.** `tests/web/users.test.tsx` asserts the
-  absences directly — no tag concept, no wallet column, no disabled block button —
+  absences directly — no tag concept (reversed by program §8, `docs/customer-notes-tags.md`),
+  no wallet column, no disabled block button —
   and an absence is already the mutation's result rather than its input. The
   permission-shaped rules it draws (no search form without `users.search`, no
   block control without `users.block`) are each asserted against a rendered page

@@ -263,6 +263,43 @@ describe('the feature flags page', () => {
   });
 
   /**
+   * Codex 4172817735: the features page is a SECOND path to `terms_enforcement`, and its
+   * switch-ON stops every customer who has not accepted at once. It asks first, in the
+   * terms page's own words; cancelling sends nothing.
+   */
+  it('asks before switching terms enforcement ON, in the terms page’s words', async () => {
+    const terms = (over: Record<string, unknown>) =>
+      flag({ key: 'terms_enforcement', blastRadius: 'TENANT_WIDE', ...over });
+    const api = stubApi([
+      { url: '/features', body: { flags: [terms({ enabled: false, version: 3 })] } },
+      {
+        url: '/features/terms_enforcement',
+        status: 201,
+        body: { flag: terms({ enabled: true, version: 4 }), changed: true },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    const posts = () => api.calls.filter((call) => call.method === 'POST');
+    const name = t('web.feature_terms_enforcement_title');
+
+    fireEvent.click(await screen.findByRole('switch', { name }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent(t('web.terms_enforce_confirm_question'));
+    expect(dialog).toHaveTextContent(t('web.terms_enforce_confirm_detail'));
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.feature_confirm_cancel') }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('switch', { name }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.terms_enforce_confirm') }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.url).toContain('/features/terms_enforcement');
+    expect(posts()[0]?.body).toMatchObject({ enabled: true, expectedVersion: 3 });
+  });
+
+  /**
    * The dialog holds focus: Tab from its last button goes to its first and Shift+Tab
    * back, never to the switches behind it. A second switch pressed behind it opens
    * nothing and sends nothing. Cancelling hands focus back to the switch that opened it.
@@ -455,6 +492,21 @@ describe('the feature presentation catalogue', () => {
       'template_overrides',
       'wallet_low_balance_reminders',
     ]);
+  });
+});
+
+describe('the enable-confirmation policy', () => {
+  /** Which switch-ONs ask first. Like the switch-off set, a product decision pinned. */
+  it('asks before switching on exactly terms enforcement, with the terms page’s wording', () => {
+    const asking = FEATURE_FLAGS.filter((f) => FEATURE_PRESENTATION[f.key].confirmEnable !== null)
+      .map((f) => f.key)
+      .sort();
+    expect(asking).toEqual(['terms_enforcement']);
+    expect(FEATURE_PRESENTATION.terms_enforcement.confirmEnable).toEqual({
+      question: 'web.terms_enforce_confirm_question',
+      detail: 'web.terms_enforce_confirm_detail',
+      confirmLabel: 'web.terms_enforce_confirm',
+    });
   });
 });
 

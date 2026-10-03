@@ -6,6 +6,7 @@ import {
   TENANT_MEDIA_MAX_BYTES,
   TICKET_MESSAGE_MAX_LENGTH,
   TICKET_REPLY_FILE_MAX_BYTES,
+  DIRECT_MESSAGE_TEXT_MAX_LENGTH,
   BROADCAST_MEDIA_MAX_BYTES,
   type SalesCurrencyCode,
   type TenantContext,
@@ -40,6 +41,12 @@ const TICKET_REPLY_BODY_LIMIT_BYTES =
 /** Round N: a broadcast's media, as base64 inside JSON — the tenant-media shape. */
 const BROADCAST_MEDIA_ROUTE = /\/broadcasts\/[^/]+\/media$/u;
 const BROADCAST_MEDIA_BODY_LIMIT_BYTES = Math.ceil((BROADCAST_MEDIA_MAX_BYTES * 4) / 3) + 16 * 1024;
+/** Phase A2: a direct message, which may carry a file as base64 beside its text. */
+const DIRECT_MESSAGE_ROUTE = /\/users\/[^/]+\/direct-messages$/u;
+const DIRECT_MESSAGE_BODY_LIMIT_BYTES =
+  Math.ceil((TICKET_REPLY_FILE_MAX_BYTES * 4) / 3) +
+  DIRECT_MESSAGE_TEXT_MAX_LENGTH * 4 * 6 +
+  16 * 1024;
 
 /**
  * Resolves the primary tenant this installation serves.
@@ -245,6 +252,10 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
     // Round N: a broadcast's photo, video or document, bounded by the schema and the service.
     if (methods.includes('POST') && BROADCAST_MEDIA_ROUTE.test(route.url)) {
       route.bodyLimit = BROADCAST_MEDIA_BODY_LIMIT_BYTES;
+    }
+    // Phase A2: a direct message's file, bounded by the schema and the service.
+    if (methods.includes('POST') && DIRECT_MESSAGE_ROUTE.test(route.url)) {
+      route.bodyLimit = DIRECT_MESSAGE_BODY_LIMIT_BYTES;
     }
   });
 

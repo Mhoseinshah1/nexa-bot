@@ -33,7 +33,28 @@ import { TRAFFIC_GB_PATTERN } from './traffic-input.js';
  * its own authoritative end.
  */
 
-export const BULK_OPERATION_KINDS = ['WALLET_CREDIT', 'SERVICE_TRAFFIC', 'SERVICE_TIME'] as const;
+/*
+ * Program §13: `SERVICE_SUSPEND` / `SERVICE_RESUME`, one durable `SUSPEND` / `RESUME`
+ * provisioning operation per eligible service, planned through the operator request path's
+ * own planner and executed by the same provisioner. Both are reversible by the other, which
+ * is why they — and not terminate — are offered in bulk. They notify nobody: there is no
+ * customer notification kind for an operator's status change (ADR-0030 is closed).
+ */
+export const BULK_OPERATION_KINDS = [
+  'WALLET_CREDIT',
+  'SERVICE_TRAFFIC',
+  'SERVICE_TIME',
+  'SERVICE_SUSPEND',
+  'SERVICE_RESUME',
+] as const;
+/** The kinds whose items are services. */
+export const BULK_SERVICE_KINDS = [
+  'SERVICE_TRAFFIC',
+  'SERVICE_TIME',
+  'SERVICE_SUSPEND',
+  'SERVICE_RESUME',
+] as const satisfies readonly (typeof BULK_OPERATION_KINDS)[number][];
+export type BulkServiceKind = (typeof BULK_SERVICE_KINDS)[number];
 export type BulkOperationKind = (typeof BULK_OPERATION_KINDS)[number];
 
 export const BULK_OPERATION_STATES = ['RUNNING', 'PAUSED', 'COMPLETED', 'CANCELLED'] as const;
@@ -158,6 +179,8 @@ export const bulkGrantSchema = z.discriminatedUnion('kind', [
       durationDays: z.number().int().min(1).max(BULK_DURATION_MAX_DAYS),
     })
     .strict(),
+  z.object({ kind: z.literal('SERVICE_SUSPEND') }).strict(),
+  z.object({ kind: z.literal('SERVICE_RESUME') }).strict(),
 ]);
 export type BulkGrant = z.infer<typeof bulkGrantSchema>;
 
@@ -191,6 +214,30 @@ export const bulkPreviewSchema = z.object({
       serviceLabel: z.string().nullable(),
     }),
   ),
+  /**
+   * Program §13, the dry run for a service kind: of the services the audience's service
+   * block selects, how many are left out and why — not in a state the operation is legal
+   * from, on a panel that cannot perform it now (capability or health), or otherwise (no
+   * limit in the granted dimension) — and a sample of them with that reason. Null for a
+   * wallet credit. Each item is still re-decided when it is processed.
+   */
+  ineligible: z
+    .object({
+      selected: z.number().int().nonnegative(),
+      notInState: z.number().int().nonnegative(),
+      panelNotOperable: z.number().int().nonnegative(),
+      other: z.number().int().nonnegative(),
+      sample: z.array(
+        z.object({
+          serviceId: z.string(),
+          serviceLabel: z.string(),
+          customerId: z.string(),
+          reason: z.enum(['NOT_IN_STATE', 'PANEL_NOT_OPERABLE', 'OTHER']),
+        }),
+      ),
+    })
+    .nullable()
+    .default(null),
 });
 export type BulkPreview = z.infer<typeof bulkPreviewSchema>;
 export const bulkPreviewResponseSchema = z.object({ preview: bulkPreviewSchema });
@@ -294,6 +341,8 @@ export const bulkOperationSchema = z.object({
   pausedAt: z.iso.datetime().nullable(),
   completedAt: z.iso.datetime().nullable(),
   cancelledAt: z.iso.datetime().nullable(),
+  /** Program §13: the operation whose FAILED items this one retries; null for a fresh one. */
+  retryOfId: z.string().nullable().default(null),
 });
 export type BulkOperationResponseItem = z.infer<typeof bulkOperationSchema>;
 export const bulkOperationResponseSchema = z.object({ operation: bulkOperationSchema });
@@ -340,7 +389,44 @@ export const BULK_OPERATION_ROUTES = {
   cancel: (id: string) => `/bulk-operations/${id}/cancel`,
   pause: (id: string) => `/bulk-operations/${id}/pause`,
   resume: (id: string) => `/bulk-operations/${id}/resume`,
+  /** Program §13: the FAILED items of a service operation, counted (a read). */
+  retryPreview: (id: string) => `/bulk-operations/${id}/retry/preview`,
+  /** Program §13: a NEW operation over exactly those items, confirmed against the count. */
+  retry: (id: string) => `/bulk-operations/${id}/retry`,
 } as const;
+
+/**
+ * Program §13 — retrying the FAILED items of a service operation.
+ *
+ * Only `FAILED`: the provider REFUSED the write, authoritatively (or a reconciliation read
+ * decided it was not applied), so asking again cannot apply it twice. An item whose
+ * outcome is UNKNOWN is still `PLANNED` and is never offered — the reconciliation read
+ * decides it, not a second write. A `SKIPPED` item was never written and its reason is a
+ * live fact; it is not "failed". The retry is a NEW operation (`retryOfId`) whose items
+ * are copied from the failed ones, so the original's history is never rewritten, each
+ * retry plans NEW provisioning operations under its own id, and a retry of a retry is the
+ * same mechanism.
+ */
+export const bulkRetryPreviewSchema = z.object({
+  operationId: z.string(),
+  kind: z.enum(BULK_OPERATION_KINDS),
+  count: z.number().int().nonnegative(),
+  fingerprint: audienceFingerprintSchema,
+});
+export type BulkRetryPreview = z.infer<typeof bulkRetryPreviewSchema>;
+export const bulkRetryPreviewResponseSchema = z.object({ preview: bulkRetryPreviewSchema });
+
+export const bulkRetryRequestSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    note: z.string().trim().min(1).max(BULK_NOTE_MAX_LENGTH),
+    expectedCount: z.number().int().positive(),
+    expectedFingerprint: audienceFingerprintSchema,
+    confirmed: z.literal(true),
+    typedCount: z.number().int().positive().nullable().default(null),
+  })
+  .strict();
+export type BulkRetryRequest = z.input<typeof bulkRetryRequestSchema>;
 
 export const BULK_ERROR_CODES = {
   NOT_FOUND: 'bulk.not_found',
@@ -352,4 +438,8 @@ export const BULK_ERROR_CODES = {
   /** A wallet credit in a currency this installation does not sell in. */
   CURRENCY_UNSUPPORTED: 'bulk.currency_unsupported',
   AMOUNT_INVALID: 'bulk.amount_invalid',
+  /** Program §13: a retry was asked of an operation with no FAILED service item. */
+  RETRY_NOTHING: 'bulk.retry_nothing',
+  /** Program §13: a status change asked to notify customers, which no notice exists for. */
+  NOTIFY_UNSUPPORTED: 'bulk.notify_unsupported',
 } as const;
