@@ -6029,6 +6029,32 @@ export const WEB_FA = {
   'web.c360_action_tag_assign': 'افزودن برچسب',
   'web.c360_action_tag_remove': 'برداشتن برچسب',
   'web.c360_action_note_add': 'ثبت یادداشت داخلی',
+  // --- Broadcast V2 (program §19) -------------------------------------------------------
+  'web.aud_tags': 'برچسب‌ها',
+  'web.aud_tags_hint':
+    'برای هر برچسب بگویید مخاطب باید آن را داشته باشد، نداشته باشد یا فرقی نمی‌کند. «دارد» یعنی دست‌کم یکی از برچسب‌های انتخاب‌شده.',
+  'web.aud_tag_ignore': 'فرقی نمی‌کند',
+  'web.aud_tag_any_of': 'دارد',
+  'web.aud_tag_none_of': 'ندارد',
+  'web.aud_tag_archived': 'بایگانی‌شده',
+  'web.aud_active_service': 'سرویس فعال',
+  'web.aud_active_service_has': 'دارد',
+  'web.aud_active_service_none': 'ندارد',
+  'web.bc_estimate_opted_out': 'لغو اشتراک تبلیغاتی (تخمین)',
+  'web.bc_estimate_opted_out_hint':
+    'این تعداد اکنون پیام‌های تبلیغاتی را لغو کرده‌اند و اگر تا لحظهٔ ارسال همین‌طور بماند، رد می‌شوند. تصمیم نهایی هنگام ارسال گرفته می‌شود.',
+  'web.bc_outcome': 'نتیجه',
+  'web.bc_outcome_delivered': 'همه رسید',
+  'web.bc_outcome_partial': 'بخشی نرسید',
+  'web.bc_outcome_failed': 'هیچ‌کدام نرسید',
+  'web.bc_failures_title': 'علت‌های نرسیدن',
+  'web.bc_failures_hint':
+    'از روی ردیف گیرندگان شمرده می‌شود. «نامعلوم» ممکن است رسیده باشد و هرگز دوباره فرستاده نمی‌شود؛ «ارسال دوباره به ناموفق‌ها» فقط ردشده‌ها را دوباره می‌فرستد.',
+  'web.bc_failures_empty': 'همهٔ تلاش‌ها رسیده‌اند.',
+  'web.bc_failures_state': 'وضعیت',
+  'web.bc_failures_reason': 'علت',
+  'web.bc_failures_count': 'تعداد',
+  'web.bc_failures_no_code': 'بدون کد',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

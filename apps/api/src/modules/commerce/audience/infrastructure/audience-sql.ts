@@ -15,6 +15,7 @@ import { SALE_ORDER_PURPOSES, type AudienceDefinition } from '@nexa/contracts';
  *   trial_grants         (tenant_id, customer_id)  `trial_grants_customer_idx` (round N)
  *   referrals            (tenant_id, referee_id) / (referrer_id, …)
  *   services             (customer_id, …)          `services_customer_created_idx`
+ *   customer_tag_assignments (tenant_id, customer_id, tag_id)  its primary key (program §8)
  *
  * Every relative criterion is computed from `asOf`, a bound parameter, NEVER from the
  * database's `now()`: the same definition evaluated twice at the same instant selects the
@@ -211,6 +212,37 @@ export function audienceCustomerPredicate(
     }
   }
 
+  /*
+   * Broadcast V2 (program §19): the customer's tags (program §8), by id, through the
+   * tenant-led `customer_tag_assignments` primary key `(tenant_id, customer_id, tag_id)`. An
+   * archived tag still selects the customers that carry it.
+   */
+  const tags = d.tags ?? null;
+  if (tags !== null) {
+    const carries = (ids: readonly string[]) => sql`EXISTS (
+      SELECT 1 FROM customer_tag_assignments ta
+       WHERE ta.tenant_id = ${c}.tenant_id AND ta.customer_id = ${c}.id
+         AND ta.tag_id = ANY(${uuids(ids)}))`;
+    if (tags.anyOf.length > 0) parts.push(carries(tags.anyOf));
+    if (tags.noneOf.length > 0) parts.push(sql`NOT ${carries(tags.noneOf)}`);
+  }
+
+  /*
+   * Broadcast V2: a service that is ACTIVE at `asOf` — state ACTIVE and an expiry that is
+   * open or still ahead. The expiry is read at `asOf` like every relative criterion, so a
+   * service the expiry sweep has not reached yet does not count as active (the `expired`
+   * service criterion treats it the same way).
+   */
+  const activeService = d.activeService ?? 'ANY';
+  if (activeService !== 'ANY') {
+    const active = sql`EXISTS (
+      SELECT 1 FROM services sa
+       WHERE sa.tenant_id = ${c}.tenant_id AND sa.customer_id = ${c}.id
+         AND sa.state = 'ACTIVE'
+         AND (sa.expires_at IS NULL OR sa.expires_at > ${instant(evaluation.asOf)}))`;
+    parts.push(activeService === 'HAS' ? active : sql`NOT ${active}`);
+  }
+
   if (d.service !== null) {
     parts.push(sql`EXISTS (
       SELECT 1 FROM services s
@@ -230,7 +262,8 @@ export function audienceCustomerPredicate(
 export function audienceCustomersQuery(evaluation: AudienceEvaluation): SQL {
   return sql`SELECT c.id AS customer_id,
                     c.first_bot_instance_id AS bot_instance_id,
-                    c.telegram_user_id AS chat_id
+                    c.telegram_user_id AS chat_id,
+                    (c.marketing_opt_out_at IS NOT NULL) AS opted_out
                FROM customers c
               WHERE ${audienceCustomerPredicate(evaluation, sql`c`)}`;
 }

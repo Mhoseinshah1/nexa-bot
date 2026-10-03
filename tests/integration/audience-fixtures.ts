@@ -222,4 +222,31 @@ export class AudienceFixtures {
       ],
     );
   }
+
+  /** Broadcast V2: a tenant customer tag (program §8); archived when asked. */
+  async tag(label: string, archived = false): Promise<string> {
+    const id = this.id();
+    await this.q(
+      `INSERT INTO customer_tags (id, tenant_id, label, archived_at)
+         VALUES ($1::uuid, $2::uuid, $3, CASE WHEN $4::boolean THEN now() END)`,
+      [id, this.tenantId, label, archived],
+    );
+    return id;
+  }
+
+  async tagCustomer(customerId: string, tagId: string): Promise<void> {
+    await this.q(
+      `INSERT INTO customer_tag_assignments (tenant_id, customer_id, tag_id)
+         VALUES ($1::uuid, $2::uuid, $3::uuid)`,
+      [this.tenantId, customerId, tagId],
+    );
+  }
+
+  async optOutOfMarketing(customerId: string): Promise<void> {
+    await this.q(
+      `UPDATE customers SET marketing_opt_out_at = now()
+        WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+      [this.tenantId, customerId],
+    );
+  }
 }

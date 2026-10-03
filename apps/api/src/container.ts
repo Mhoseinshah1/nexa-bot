@@ -4281,6 +4281,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+    // Broadcast V2: the preview's opted-out estimate only; the stamp still decides.
+    marketingOptOut: marketingOptOutPolicy,
   });
   const broadcastDispatcher = new BroadcastDispatcher({
     repository: broadcastRepository,
