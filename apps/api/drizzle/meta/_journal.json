@@ -1331,6 +1331,13 @@
       "when": 1791067180808,
       "tag": "0189_usage_sync_background_lane",
       "breakpoints": true
+    },
+    {
+      "idx": 190,
+      "version": "7",
+      "when": 1791068005226,
+      "tag": "0190_legacy_import_metadata",
+      "breakpoints": true
     }
   ]
 }
