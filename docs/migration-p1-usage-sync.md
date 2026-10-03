@@ -27,8 +27,9 @@ Found while fixing them, and fixed with them because each defeats the protection
 **Eligibility.** The `provider_user_id` predicate is removed. Every adapter's `readUsage` is addressed by
 `providerRefFor` — the stored username, subscription reference and client id, all `NOT NULL` — never by
 that column. `ACTIVE` is what says an account exists. No provider id is invented or written. The listing
-also skips a service with a `SYNC_USAGE` that is open, or was created within the cadence whatever became of
-it (one cadence of back-off for a broken account).
+also skips a service with a `SYNC_USAGE` that is open, or whose last activity (creation, last transition or
+completion — never creation alone) falls within the cadence, whatever became of it: one cadence of back-off
+for a broken account, counted from its failure.
 
 **An explicit lane.** `provisioning_operations.background boolean NOT NULL DEFAULT false` (migration
 `0189_usage_sync_background_lane`). Only `planUsageSyncs` writes `true`. The database refuses it on
@@ -52,7 +53,10 @@ tokens of a tenant: **paid / interactive (0) → panel monitor (40) → schedule
 **Promotion.** A customer's or operator's sync that finds a PLANNED scheduled row for the same service
 promotes it (`background = false`, `requested_by_customer_id` = the customer or null) — one read, at the
 asker's priority, with the card and audit row a new request leaves — instead of waiting behind the backlog
-or planning a second read beside it.
+or planning a second read beside it. The promoted row takes the request's own derived `operation_id`, so a
+retry of the same idempotency key (customer or operator) replays it with no new read and no new audit row.
+If the scheduled row is claimed between the lookup and the promotion, the request plans its own
+interactive row rather than adopting a row a hold-off could return to the backlog.
 
 **Bounded queue.** The sweep tops the UNTRIED scheduled queue (`PLANNED`, `attempts = 0`) up to
 `USAGE_SYNC_PLAN_LIMIT` (50) per tenant. Untried, not open: a read backing off after a failure does not
@@ -160,15 +164,19 @@ bucket must not fall below the sweep floor except by paid/interactive spends.
 `scripts/mutate-migration-p1.py` reverts one rule at a time against
 `tests/integration/usage-sync-priority.test.ts`; every mutation is killed:
 
-| Mutation                                        | Failing cases                                                |
-| ----------------------------------------------- | ------------------------------------------------------------ |
-| M1 require `provider_user_id` again             | 7                                                            |
-| M2 drop the `background` claim key              | 6 (paid create, retry, floor, customer, operator, reconcile) |
-| M3 background reserve 0                         | 2 (floor, customer)                                          |
-| M4 no promotion (return the open scheduled row) | 2 (customer, operator)                                       |
-| M5 no within-cadence exclusion                  | 1 (terminally failed reads)                                  |
-| M6 no queue cap (plan 50 every tick)            | 1 (floor case's queue bound)                                 |
-| M7 sweep plans `background = false`             | 6                                                            |
+| Mutation                                          | Failing cases                                                |
+| ------------------------------------------------- | ------------------------------------------------------------ |
+| M1 require `provider_user_id` again               | 7                                                            |
+| M2 drop the `background` claim key                | 6 (paid create, retry, floor, customer, operator, reconcile) |
+| M3 background reserve 0                           | 2 (floor, customer)                                          |
+| M4 no promotion (return the open scheduled row)   | 2 (customer, operator)                                       |
+| M5 no within-cadence exclusion                    | 1 (terminally failed reads)                                  |
+| M6 no queue cap (plan 50 every tick)              | 1 (floor case's queue bound)                                 |
+| M7 sweep plans `background = false`               | 6                                                            |
+| M8 cadence measured from `created_at` only        | 1 (failure after a cadence of retries)                       |
+| M9 promotion keeps the sweep's `operation_id`     | 1 (promoted-request replay)                                  |
+| M10 no operator replay by derived id              | 1 (promoted-request replay)                                  |
+| M11 a lost promotion race returns the claimed row | 1 (promotion race)                                           |
 
 ## 7. Known limitations
 
