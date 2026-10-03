@@ -55,7 +55,7 @@ Drain means **no new allocations on this panel**. Nothing else changes.
   or the sale sees the drain and is refused.
 - **Nothing is migrated, terminated or deleted** by draining.
 - **Write path:** permission `panels.drain` (HIGH), seeded on owner and
-  technical, and backfilled by migration 0165. Then zod validation (a reason is
+  technical, and backfilled by migration 0172. Then zod validation (a reason is
   required for both drain and undrain), the idempotency key, and scope activity
   checked inside the transaction. The write itself is a conditional state change
   under the lock, with a `panel.drain` audit row holding before and after values
