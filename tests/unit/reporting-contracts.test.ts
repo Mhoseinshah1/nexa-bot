@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   LEDGER_REASONS,
+  MIGRATION_OPENING_REFERENCE_PREFIX,
   ORDER_PURPOSES,
   REPORT_FAILED_PAYMENT_STATES,
   PAYMENT_RESOLVED_STATES,
   SALE_ORDER_PURPOSES,
   WALLET_REPORT_GROUP_OF,
   ledgerReasonsIn,
+  migrationOpeningReference,
   orderPurposeIsSale,
   reportGranularityFor,
   reportRangeQuerySchema,
@@ -52,6 +54,18 @@ describe('reporting contracts', () => {
     }
     expect(WALLET_REPORT_GROUP_OF.RECEIPT_CREDIT).toBe('RECEIPT_CREDIT');
     expect(WALLET_REPORT_GROUP_OF.PURCHASE).toBe('SPENDING');
+  });
+
+  it('files a legacy opening balance alone, never as a top-up, a sale, a grant or a gift', () => {
+    // Migration P2: an inherited liability. Filed anywhere else it reads as money that
+    // arrived (TOPUP), something sold (SPENDING), or an operator's grant (ADMINISTRATIVE).
+    expect(WALLET_REPORT_GROUP_OF.MIGRATION_OPENING_BALANCE).toBe('OPENING_BALANCE');
+    expect(ledgerReasonsIn('OPENING_BALANCE')).toEqual(['MIGRATION_OPENING_BALANCE']);
+    expect(migrationOpeningReference('123456789')).toBe('legacy:opening:123456789');
+    expect(MIGRATION_OPENING_REFERENCE_PREFIX).toBe('legacy:opening:');
+    for (const bad of ['', '0', '-5', '012', 'abc', '1 2']) {
+      expect(() => migrationOpeningReference(bad)).toThrow();
+    }
   });
 
   it('counts only the money-less terminal states as a failed payment', () => {
