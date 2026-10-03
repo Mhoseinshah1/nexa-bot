@@ -111,6 +111,11 @@ export const EVENT_TYPES = [
   'CustomerPhoneVerificationChanged',
   'CustomerLocationChangeOverrideChanged',
   'CustomerAccountTransferred',
+  // Program §8: operator CRM metadata. Ids only — never a label, never a note body.
+  'CustomerTagChanged',
+  'CustomerTagAssigned',
+  'CustomerTagRemoved',
+  'CustomerNoteAdded',
   'OrderConfirmed',
   'OrderSettled',
   'OrderCancelled',
@@ -287,6 +292,18 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   /** Whether a verified number is now recorded. The number itself is never in an event. */
   CustomerPhoneVerificationChanged: z.object({ verified: z.boolean() }),
   CustomerLocationChangeOverrideChanged: z.object({ overridden: z.boolean() }),
+  /*
+   * Program §8. Aggregate `CustomerTag` for a catalogue change, `Customer` for the rest. Ids
+   * and a change kind only: a label is operator text and a note is private, so neither is
+   * carried — the rows have them.
+   */
+  CustomerTagChanged: z.object({
+    tagId: z.string(),
+    change: z.enum(['CREATED', 'UPDATED', 'ARCHIVED', 'RESTORED']),
+  }),
+  CustomerTagAssigned: z.object({ tagId: z.string() }),
+  CustomerTagRemoved: z.object({ tagId: z.string() }),
+  CustomerNoteAdded: z.object({ noteId: z.string() }),
   /*
    * Aggregate is the SOURCE customer. `customer_account_transfers` carries the full record;
    * each moved service also has its own `ServiceOwnershipTransferred`, and each wallet
