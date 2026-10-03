@@ -496,6 +496,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
+    // Phase D1: who changed what. Read with `audit.view`; the export is `audit.export`,
+    // which the page draws for itself.
+    id: 'audit-log',
+    path: '/audit-log',
+    label: 'web.nav_audit_log',
+    icon: 'clock',
+    permission: 'audit.view',
+    group: 'web.navgroup_system',
+  },
+  {
     id: 'alerts',
     path: '/alerts',
     label: 'web.nav_alerts',

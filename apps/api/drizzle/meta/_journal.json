@@ -1184,6 +1184,13 @@
       "when": 1791030050110,
       "tag": "0168_terms_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 169,
+      "version": "7",
+      "when": 1791032298274,
+      "tag": "0169_audit_log_export_permission",
+      "breakpoints": true
     }
   ]
 }

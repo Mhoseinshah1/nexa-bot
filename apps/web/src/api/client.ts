@@ -465,6 +465,10 @@ import {
   type ServiceRefundRequestState,
   type RefundListResponse,
   type RefundResponse,
+  // Phase D1: the audit log browser.
+  AUDIT_LOG_ROUTES,
+  auditLogListResponseSchema,
+  type AuditLogListResponse,
   // WP-A7: support tickets.
   TICKET_ROUTES,
   ticketAssigneesResponseSchema,
@@ -3981,6 +3985,52 @@ export function fetchCustomerFinancialSummary(
 
 export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
+}
+
+// --- Audit log (Phase D1) ------------------------------------------------------
+
+/** The audit log's filters as the page holds them; every one is ANDed on the server. */
+export interface AuditLogFilters {
+  readonly actor?: string;
+  readonly actorType?: string;
+  readonly customerId?: string;
+  readonly action?: string;
+  readonly entityType?: string;
+  readonly entityId?: string;
+  readonly result?: string;
+  readonly security?: string;
+  /** Half-open `[from, to)`, as ISO instants. */
+  readonly from?: string;
+  readonly to?: string;
+}
+
+function auditLogParams(filters: AuditLogFilters): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (typeof value === 'string' && value !== '') params.set(key, value);
+  }
+  return params;
+}
+
+/** One page of the audit log, newest first. `audit.view`. */
+export function fetchAuditLog(
+  filters: AuditLogFilters,
+  page: { readonly limit: number; readonly cursor?: string },
+): Promise<AuditLogListResponse> {
+  const params = auditLogParams(filters);
+  params.set('limit', String(page.limit));
+  if (page.cursor !== undefined) params.set('cursor', page.cursor);
+  return authedGet(`${AUDIT_LOG_ROUTES.list}?${params.toString()}`, auditLogListResponseSchema);
+}
+
+/**
+ * The CSV download of exactly these filters. A URL rather than a fetch, for the reason
+ * `reportExportUrl` gives. `audit.export`; the server records every export.
+ */
+export function auditLogExportUrl(filters: AuditLogFilters): string {
+  const params = auditLogParams(filters);
+  params.set('format', 'csv');
+  return `${API_PREFIX}${AUDIT_LOG_ROUTES.export}?${params.toString()}`;
 }
 
 // --- Customer notes and tags (program §8) ---------------------------------------------

@@ -925,6 +925,46 @@ form.set-row > * + * {
   }
 }
 
+/* --- Phase D1 audit log -------------------------------------------------------- */
+
+/* The filter row: compact fields that wrap at 390px, the two buttons kept together. */
+.audit-filters {
+  align-items: flex-end;
+}
+.audit-filters .field {
+  min-width: 140px;
+  flex: 1 1 140px;
+}
+.audit-filter-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.audit-code {
+  font-size: var(--fs-ui);
+}
+.audit-badges,
+.audit-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+/* A refusal or a failure stays in the log, marked rather than hidden. */
+.audit-row-refused td:first-child {
+  box-shadow: inset -3px 0 0 var(--warn);
+}
+/* The recorded values: long JSON wraps inside its cell instead of widening the page. */
+.audit-diff td {
+  max-width: 260px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.audit-diff-changed td {
+  font-weight: 600;
+}
+
 /* --- Program §6: terms and rules ----------------------------------------------- */
 
 /* The operator's own text, as written: line breaks kept, long words wrapped at 390px. */

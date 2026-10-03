@@ -19,6 +19,7 @@ import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
+import { AuditLogPage } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
@@ -201,6 +202,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/reminders',
   '/bot-buttons',
   '/content',
+  '/audit-log',
   '/alerts',
   '/notifications',
   '/appearance',
@@ -1016,6 +1018,16 @@ export function resolve(
       element: <ContentPage mayEdit={may('templates.edit')} denied={!may('templates.view')} />,
       crumbs: [{ label: t('web.nav_templates') }],
       title: t('web.nav_templates'),
+    };
+  }
+
+  if (route.path === '/audit-log') {
+    return {
+      element: (
+        <AuditLogPage route={route} denied={!may('audit.view')} mayExport={may('audit.export')} />
+      ),
+      crumbs: [{ label: t('web.nav_audit_log') }],
+      title: t('web.audit_title'),
     };
   }
 

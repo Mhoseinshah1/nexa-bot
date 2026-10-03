@@ -422,6 +422,9 @@ import { DrizzleReportingRepository } from './modules/commerce/reporting/infrast
 import { OperationsOverviewService } from './modules/commerce/reporting/application/operations-overview.service.js';
 import { DrizzleOperationsOverviewRepository } from './modules/commerce/reporting/infrastructure/drizzle-operations-overview.repository.js';
 import { DefaultReportExportWriter } from './infrastructure/export/report-export-writer.js';
+import { DefaultAuditLogExportWriter } from './infrastructure/export/audit-log-export-writer.js';
+import { DrizzleAuditLogReader } from './modules/platform/audit/infrastructure/drizzle-audit-log.reader.js';
+import { AuditLogService } from './modules/platform/audit/application/audit-log.service.js';
 import { IntlReportPeriodResolver } from './infrastructure/time/report-calendar.js';
 import {
   PaymentOperationsService,
@@ -1023,6 +1026,8 @@ export interface Container {
   readonly opsGroups: OpsGroupService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
+  /** Phase D1: the audit log browser and its export (`docs/audit-log.md`). */
+  readonly auditLog: AuditLogService;
   /**
    * What the background monitor is configured to do, and what that
    * configuration can carry. A read of installation configuration plus two
@@ -5014,6 +5019,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
+  const auditLogService = new AuditLogService({
+    guard,
+    reader: new DrizzleAuditLogReader(database.db),
+    audit,
+    opsLog,
+    writer: new DefaultAuditLogExportWriter(),
+    clock,
+  });
   const diagnostics = new DiagnosticsService({
     guard,
     reader: new DrizzleDiagnosticsReader(database.db),
@@ -5934,6 +5947,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsGroups,
     opsGroupMaintainer,
     opsLogService,
+    auditLog: auditLogService,
     monitorProfileService,
     diagnostics,
     panelMonitor,
