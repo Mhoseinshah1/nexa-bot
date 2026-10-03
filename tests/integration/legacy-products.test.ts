@@ -502,6 +502,46 @@ describe('hidden legacy products', () => {
     await db.execute(sql`UPDATE products SET audience = 'EVERYONE' WHERE id = ${ordinary}`);
   });
 
+  it("refuses, at the database, a change to the shape's traffic or duration", async () => {
+    /*
+     * The two figures ARE the shape: the shape row records them, the tariff is matched on
+     * them, and a renewal buys them. An edit through the catalogue would split the three.
+     */
+    const shape = await ensured(BAC6_10GB);
+    const db = ctx.container.database.db;
+    expect(
+      await refusal(
+        db.execute(sql`UPDATE products SET duration_days = 60 WHERE id = ${shape.productId}`),
+      ),
+    ).toMatch(/legacy shape/u);
+    expect(
+      await refusal(
+        db.execute(
+          sql`UPDATE products SET traffic_bytes = ${20n * BYTES_PER_GB} WHERE id = ${shape.productId}`,
+        ),
+      ),
+    ).toMatch(/legacy shape/u);
+    // Writing the same figures back, the price and the status all stay allowed.
+    await db.execute(
+      sql`UPDATE products SET duration_days = 30, traffic_bytes = ${10n * BYTES_PER_GB},
+                              title = 'تغییر نام' WHERE id = ${shape.productId}`,
+    );
+    const stored = await products.findById(tenantA, shape.productId);
+    expect(stored?.specification).toMatchObject({
+      durationDays: 30,
+      trafficBytes: 10n * BYTES_PER_GB,
+    });
+    // An ordinary product's figures remain editable.
+    const ordinary = await publicProduct(35_000n);
+    await db.execute(
+      sql`UPDATE products SET duration_days = 60, traffic_bytes = ${20n * BYTES_PER_GB} WHERE id = ${ordinary}`,
+    );
+    expect((await products.findById(tenantA, ordinary as ProductId))?.specification).toMatchObject({
+      durationDays: 60,
+      trafficBytes: 20n * BYTES_PER_GB,
+    });
+  });
+
   it('keeps tenants apart: one shape is two products, and no tenant reads the other', async () => {
     await publicProduct(35_000n, { trafficGb: 10n, days: 30 }, tenantB);
     const a = await ensured(BAC6_10GB);

@@ -107,69 +107,143 @@ GROUP BY 1;
 
 ### Q1b — The distinct-shape table for Hidden Legacy Products (supplementary)
 
-Aggregate counts only. Grouped by the five tariff dimensions Item 14 keys on —
-`code_panel, Volume, Service_time, time_unit, is_custom` — with `price_product` reported
-as **historical evidence**, never as a grouping column: two invoices of one shape bought
-at two prices are one hidden product (`docs/legacy-migration/hidden-legacy-products.md`).
+Aggregate counts only. Each row is first reduced **exactly as `legacyShapeKey` (v1)
+reduces it** — the same trimming, the same accepted spellings, the same refusals in the
+same order — and only then grouped. So spellings the key treats as one shape (`NULL`,
+`''`, `d`, `day`, `DAYS` as the unit; `10` and `10.0` as the volume; ` 30` and `30` as the
+duration) are one row here, and the number of `MAPPABLE` rows is exactly the number of
+hidden products `ensureShape` would create for the tenant. Rows the key refuses are
+counted per refusal reason, with no shape. `price_product` is reported as **historical
+evidence**, never grouped on: two invoices of one shape bought at two prices are one
+hidden product (`docs/legacy-migration/hidden-legacy-products.md`).
+
+Requires MySQL 8.0 (`REGEXP_REPLACE`). `TRIM_WS` below stands for
+`REGEXP_REPLACE(x, '^[[:space:]]+|[[:space:]]+$', '')`, written out in full in the query
+— POSIX `[[:space:]]` is the closest MySQL has to JavaScript's `String.prototype.trim`;
+the only difference is exotic Unicode spaces (U+00A0, U+2000…), which Q1c would show as
+`VOLUME_INVALID`/`TIME_UNIT_UNKNOWN` spellings if they existed.
 
 ```sql
 SELECT
-  is_custom,
-  NULLIF(TRIM(code_panel), '')      AS code_panel,
-  Volume,
-  Service_time,
-  NULLIF(TRIM(time_unit), '')       AS time_unit,
-  COUNT(*)                          AS n,
-  COUNT(DISTINCT price_product)     AS distinct_historical_prices,
-  MIN(CAST(price_product AS SIGNED)) AS min_historical_price,
-  MAX(CAST(price_product AS SIGNED)) AS max_historical_price
-FROM invoice
-WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume')
-  AND is_test = 0
-  AND (code_product IS NULL OR code_product = '')
+  outcome,
+  IF(outcome = 'MAPPABLE', ic, NULL)                         AS is_custom,
+  IF(outcome = 'MAPPABLE', BINARY NULLIF(cp, ''), NULL)      AS code_panel,  -- BINARY: case is kept, as the key keeps it
+  IF(outcome = 'MAPPABLE', CAST(vol AS DECIMAL(13,2)), NULL) AS volume_gb,   -- 10, 10.0 and 10.00 are one value
+  IF(outcome = 'MAPPABLE', CAST(st AS UNSIGNED), NULL)       AS duration_days,
+  COUNT(*)                                                   AS n,
+  COUNT(DISTINCT price_product)                              AS distinct_historical_prices,
+  MIN(CAST(price_product AS SIGNED))                         AS min_historical_price,
+  MAX(CAST(price_product AS SIGNED))                         AS max_historical_price
+FROM (
+  SELECT t.*,
+    -- The refusals of legacyShapeKey, in its order; the first that applies wins.
+    CASE
+      WHEN CHAR_LENGTH(cp) > 200 OR cp REGEXP '[[:cntrl:]]'                       THEN 'CODE_PANEL_INVALID'
+      WHEN vol IS NULL
+        OR NOT vol REGEXP '^(0|[1-9][0-9]{0,8})([.][0-9]{1,2})?$'
+        OR CAST(vol AS DECIMAL(13,2)) > 1024000                                   THEN 'VOLUME_INVALID'
+      WHEN CAST(vol AS DECIMAL(13,2)) = 0                                         THEN 'VOLUME_ZERO'
+      WHEN LOWER(tu) NOT IN ('', 'd', 'day', 'days')                              THEN 'TIME_UNIT_UNKNOWN'
+      WHEN st IS NULL OR NOT st REGEXP '^[0-9]{1,6}$'                             THEN 'DURATION_INVALID'
+      WHEN CAST(st AS UNSIGNED) = 0                                               THEN 'DURATION_ZERO'
+      WHEN CAST(st AS UNSIGNED) > 3650                                            THEN 'DURATION_INVALID'
+      WHEN ic IS NULL OR ic NOT IN ('0', '1')                                     THEN 'IS_CUSTOM_INVALID'
+      ELSE 'MAPPABLE'
+    END AS outcome
+  FROM (
+    SELECT
+      REGEXP_REPLACE(COALESCE(code_panel, ''),        '^[[:space:]]+|[[:space:]]+$', '') AS cp,
+      REGEXP_REPLACE(CAST(Volume AS CHAR),            '^[[:space:]]+|[[:space:]]+$', '') AS vol,
+      REGEXP_REPLACE(COALESCE(time_unit, ''),         '^[[:space:]]+|[[:space:]]+$', '') AS tu,
+      REGEXP_REPLACE(CAST(Service_time AS CHAR),      '^[[:space:]]+|[[:space:]]+$', '') AS st,
+      CAST(is_custom AS CHAR)                                                            AS ic,
+      price_product
+    FROM invoice
+    WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume')
+      AND is_test = 0
+      AND (code_product IS NULL OR code_product = '')
+  ) t
+) c
 GROUP BY 1, 2, 3, 4, 5
-ORDER BY n DESC;
+ORDER BY outcome, n DESC;
 ```
 
-`GROUP BY` keeps NULLs as their own group, unlike Q1's `COUNT(DISTINCT …)`.
+How each line mirrors the key (`apps/api/src/modules/commerce/catalog/application/legacy-shape.ts`):
+
+| Key step                                                                                           | SQL                                                                                                  |
+| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `codePanel` trimmed, `''` → NULL, case kept, >200 chars or a control character refused             | `cp`, `NULLIF(cp, '')`, `BINARY`, `CODE_PANEL_INVALID`                                               |
+| `Volume` through `parseTrafficGb`: `TRAFFIC_GB_PATTERN`, then ≤ `MAX_TRAFFIC_BYTES` (1,024,000 GB) | the same pattern, `> 1024000`                                                                        |
+| zero volume refused                                                                                | `VOLUME_ZERO`                                                                                        |
+| unit NULL/empty/`d`/`day`/`days`, any case                                                         | `LOWER(tu) IN (…)`                                                                                   |
+| `Service_time` `^[0-9]{1,6}$`, zero refused, > 3650 refused                                        | the same                                                                                             |
+| `is_custom` 0/1 only                                                                               | `ic IN ('0','1')`                                                                                    |
+| grouping on bytes                                                                                  | grouping on `DECIMAL(13,2)` hundredths, which is one-to-one with the bytes `parseTrafficGb` produces |
+
 `code_panel` is a panel CODE (for example `bac6`), not a credential, and may be reported.
 
-| is_custom | code_panel | Volume | Service_time | time_unit | n   | distinct_historical_prices | min_historical_price | max_historical_price |
-| --------- | ---------- | ------ | ------------ | --------- | --- | -------------------------- | -------------------- | -------------------- |
-|           |            |        |              |           |     |                            |                      |                      |
+| outcome | is_custom | code_panel | volume_gb | duration_days | n   | distinct_historical_prices | min_historical_price | max_historical_price |
+| ------- | --------- | ---------- | --------- | ------------- | --- | -------------------------- | -------------------- | -------------------- |
+|         |           |            |           |               |     |                            |                      |                      |
 
-Sanity check to record with it: `SUM(n)` over Q1b must equal `SUM(n)` over Q1.
+Sanity checks to record with it: `SUM(n)` over Q1b equals `SUM(n)` over Q1; the count of
+`MAPPABLE` rows is the hidden-product count per tenant; every non-`MAPPABLE` row is a
+population blocked from P6 until its reason is decided (`OQ-I14-03`).
 
 ### Q1c — Unit and volume spellings (supplementary)
 
 The canonical shape key (`legacyShapeKey`) accepts only spellings this evidence has
 shown. It refuses anything else as `UNMAPPABLE` rather than guessing what an unknown
-unit means — so this inventory is what decides whether the accepted set must grow.
+unit means — so this inventory is what decides whether the accepted set must grow. The
+categories are the key's own, so an accepted `10.5` and a refused `10.125` never share a
+row; a refused spelling is listed by its trimmed value so the owner can see what it is.
 
 ```sql
-SELECT NULLIF(TRIM(time_unit), '') AS time_unit, COUNT(*) AS n,
-       MIN(CAST(Service_time AS SIGNED)) AS min_time, MAX(CAST(Service_time AS SIGNED)) AS max_time
-FROM invoice
-WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume')
-  AND is_test = 0
-  AND (code_product IS NULL OR code_product = '')
-GROUP BY 1 ORDER BY n DESC;
+SELECT
+  CASE WHEN LOWER(tu) IN ('', 'd', 'day', 'days') THEN 'ACCEPTED' ELSE 'TIME_UNIT_UNKNOWN' END AS category,
+  tu AS trimmed_time_unit,
+  COUNT(*) AS n,
+  MIN(CAST(Service_time AS SIGNED)) AS min_time, MAX(CAST(Service_time AS SIGNED)) AS max_time
+FROM (
+  SELECT REGEXP_REPLACE(COALESCE(time_unit, ''), '^[[:space:]]+|[[:space:]]+$', '') AS tu, Service_time
+  FROM invoice
+  WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume')
+    AND is_test = 0
+    AND (code_product IS NULL OR code_product = '')
+) t
+GROUP BY 1, 2 ORDER BY n DESC;
 
-SELECT (Volume REGEXP '^[0-9]+$') AS whole_gb, (CAST(Volume AS DECIMAL(20,4)) = 0) AS zero, COUNT(*) AS n
-FROM invoice
-WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume')
-  AND is_test = 0
-  AND (code_product IS NULL OR code_product = '')
-GROUP BY 1, 2;
+SELECT
+  category,
+  IF(category = 'VALID', NULL, vol) AS trimmed_volume,  -- accepted values are counted, not listed
+  COUNT(*) AS n
+FROM (
+  SELECT vol,
+    CASE
+      WHEN vol IS NULL                                                       THEN 'NULL'
+      WHEN NOT vol REGEXP '^(0|[1-9][0-9]{0,8})([.][0-9]{1,2})?$'            THEN 'INVALID_PATTERN'  -- sign, exponent, 3+ decimals, leading zero, text
+      WHEN CAST(vol AS DECIMAL(13,2)) > 1024000                              THEN 'OVER_MAX'
+      WHEN CAST(vol AS DECIMAL(13,2)) = 0                                    THEN 'ZERO'
+      ELSE 'VALID'
+    END AS category
+  FROM (
+    SELECT REGEXP_REPLACE(CAST(Volume AS CHAR), '^[[:space:]]+|[[:space:]]+$', '') AS vol
+    FROM invoice
+    WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume')
+      AND is_test = 0
+      AND (code_product IS NULL OR code_product = '')
+  ) t
+) c
+GROUP BY 1, 2 ORDER BY n DESC;
 ```
 
-| time_unit | n   | min_time | max_time |
-| --------- | --- | -------- | -------- |
-|           |     |          |          |
+| category | trimmed_time_unit | n   | min_time | max_time |
+| -------- | ----------------- | --- | -------- | -------- |
+|          |                   |     |          |          |
 
-| whole_gb | zero | n   |
-| -------- | ---- | --- |
-|          |      |     |
+| category | trimmed_volume | n   |
+| -------- | -------------- | --- |
+|          |                |     |
 
 ### Q2 — Trial eligibility × actual trial history
 
@@ -193,6 +267,39 @@ GROUP BY 1,2;
 | limit_usertest | had_trial | COUNT(*) |
 | -------------- | --------- | -------- |
 |                |           |          |
+
+### Q2b — Q2 as Item 15's decisions (supplementary)
+
+Q2 groups raw `limit_usertest` values; this counts the four mutually exclusive branches
+`decideLegacyTrial` takes for a customer with no existing NEXA override, normalising the
+limit exactly as `normaliseLegacyLimit` does (trimmed, `^-?[0-9]{1,10}$`, |value| ≤
+2,147,483,647, anything else unreadable). Aggregate counts only.
+
+```sql
+SELECT decision, COUNT(*) AS n
+FROM (
+  SELECT CASE
+      WHEN lim IS NULL OR NOT lim REGEXP '^-?[0-9]{1,10}$'
+        OR ABS(CAST(lim AS SIGNED)) > 2147483647           THEN 'LEGACY_LIMIT_UNREADABLE'
+      WHEN CAST(lim AS SIGNED) <= 0                         THEN 'LEGACY_NO_TRIALS'
+      WHEN had_trial = 1                                    THEN 'LEGACY_TRIAL_CONSUMED'
+      ELSE 'INHERIT_NEXA_POLICY'
+    END AS decision
+  FROM (
+    SELECT
+      REGEXP_REPLACE(CAST(u.limit_usertest AS CHAR), '^[[:space:]]+|[[:space:]]+$', '') AS lim,
+      EXISTS (SELECT 1 FROM invoice i WHERE i.id_user = u.id AND i.is_test = 1) AS had_trial
+    FROM user u
+  ) x
+) d
+GROUP BY decision ORDER BY decision;
+```
+
+| decision | n   |
+| -------- | --- |
+|          |     |
+
+Sanity check: `SUM(n)` over Q2b equals `SUM(COUNT(*))` over Q2.
 
 ### Q3 — Is `affiliates` a user ID?
 
@@ -280,42 +387,48 @@ WHERE i.Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volu
 
 ### Item 14 — Hidden Legacy Products
 
-- **Q1b is the input.** Each row becomes at most one `legacy_product_shapes` row per
-  tenant, through `LegacyProductService.ensureShape`, keyed by
-  `legacyShapeKey({ codePanel, volume, serviceTime, timeUnit, isCustom })`. Rows that
-  differ only in `price_product` collapse into one shape — the reason Q1b reports prices
-  as min/max/distinct rather than grouping on them.
+- **Q1b is the input.** Each `MAPPABLE` row is exactly one `legacy_product_shapes` row
+  per tenant, through `LegacyProductService.ensureShape`, keyed by
+  `legacyShapeKey({ codePanel, volume, serviceTime, timeUnit, isCustom })` — Q1b already
+  applies the key's canonicalisation, so spellings the key merges are merged there too.
+  Rows that differ only in `price_product` collapse into one shape — the reason Q1b
+  reports prices as min/max/distinct rather than grouping on them.
 - **Q1c decides the canonical key's accepted spellings.** Today the key accepts a NULL
   or empty unit and `day`/`days`/`d` (case-insensitive) as days, and a positive decimal
   GB figure. Any other unit, a zero volume and a zero duration come back `UNMAPPABLE`
   with a reason, and no hidden product is created for them. If Q1c shows, say,
   `month`, the owner decides what a month is (30 days? calendar?) and the accepted set
   grows in a reviewed commit — it is never inferred.
-- **What to check after running:** the number of distinct Q1b rows is the number of
-  hidden products per tenant; the `is_custom=1` rows are the custom services that must
-  stay renewable; every shape whose `(Volume, Service_time)` has no current public NEXA
+- **What to check after running:** the number of `MAPPABLE` Q1b rows is the number of
+  hidden products per tenant; the `is_custom=1` rows among them are the custom services
+  that must stay
+  renewable; every shape whose `(Volume, Service_time)` has no current public NEXA
   product at the same traffic and duration will resolve `UNRESOLVED/NO_CURRENT_TARIFF`
   and block that service from P6 until an operator states a current tariff.
 
 ### Item 15 — Trial eligibility
 
-The Q2 rows map onto `decideLegacyTrial` one-to-one:
+For a customer with no existing NEXA override, `decideLegacyTrial` takes exactly one of
+four mutually exclusive branches, tried in this order (Q2b counts them directly):
 
-| Q2 `limit_usertest`                    | Q2 `had_trial` | Decision                  | NEXA effect                                |
-| -------------------------------------- | -------------- | ------------------------- | ------------------------------------------ |
-| `0` (or negative)                      | any            | `LEGACY_NO_TRIALS`        | `trial_limit_overrides.trial_limit = 0`    |
-| `≥ 1`                                  | `1`            | `LEGACY_TRIAL_CONSUMED`   | `trial_limit_overrides.trial_limit = 0`    |
-| `≥ 1`                                  | `0`            | `INHERIT_NEXA_POLICY`     | no override; NEXA's current policy applies |
-| NULL / unreadable                      | any            | `LEGACY_LIMIT_UNREADABLE` | `trial_limit_overrides.trial_limit = 0`    |
-| (customer already has a NEXA override) | any            | `KEPT_EXISTING_OVERRIDE`  | untouched                                  |
+| Branch | Normalised `limit_usertest`                     | `had_trial` | Decision                  | NEXA effect                                |
+| ------ | ----------------------------------------------- | ----------- | ------------------------- | ------------------------------------------ |
+| 1      | NULL / not a whole number / out of `int4` range | any         | `LEGACY_LIMIT_UNREADABLE` | `trial_limit_overrides.trial_limit = 0`    |
+| 2      | whole number `≤ 0` (zero or negative)           | any         | `LEGACY_NO_TRIALS`        | `trial_limit_overrides.trial_limit = 0`    |
+| 3      | whole number `≥ 1`                              | `1`         | `LEGACY_TRIAL_CONSUMED`   | `trial_limit_overrides.trial_limit = 0`    |
+| 4      | whole number `≥ 1`                              | `0`         | `INHERIT_NEXA_POLICY`     | no override; NEXA's current policy applies |
 
-**What to check after running:** the sum of the `0`-limit rows and the `had_trial=1`
-rows is the number of overrides the import will write per tenant; any row whose
-`limit_usertest` is not a non-negative integer (NULL, text) is counted as unreadable and
-gets no trial. If Q2 shows a large `limit_usertest ≥ 1, had_trial = 0` population, that
-population gets NEXA's current trial — the decision recorded in
-`docs/legacy-migration/trial-eligibility.md` §3, which is the one row to re-read
-against the evidence before P7.
+A customer who already holds a NEXA override takes none of them: `KEPT_EXISTING_OVERRIDE`,
+untouched.
+
+**What to check after running:** the overrides the import will write per tenant are
+branches 1 + 2 + 3 of Q2b — equivalently, all users minus branch 4 — less any customers
+who already hold a NEXA override. Each user is counted once: a `limit_usertest = 0` user
+with a test invoice is branch 2 only, and a negative or unreadable limit with
+`had_trial = 0` is still branch 2 or 1, not "no evidence". Branch 4 is the population
+that gets NEXA's current trial — the decision recorded in
+`docs/legacy-migration/trial-eligibility.md` §3, and the one number to re-read against
+the evidence before P7.
 
 ## Filling this page in
 

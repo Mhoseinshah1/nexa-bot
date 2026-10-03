@@ -99,9 +99,11 @@ changes. `OQ-I14-01` records the choice between a scheduled re-resolution and a 
   no category means no category page lists it either.
 - **New sales.** No category → `NOT_CATEGORISED` at order confirmation; no panel →
   `NOT_FULFILLABLE`. A direct product reference cannot buy one.
-- **Edits.** `nexa_legacy_shape_product_hidden` (migration 0182) refuses an UPDATE that
-  would make a shape's product non-HIDDEN or give it a category. Price and status stay
-  editable — they are what a resolution writes.
+- **Edits.** `nexa_legacy_shape_product_hidden` (migrations 0182, widened by 0185)
+  refuses an UPDATE that would make a shape's product non-HIDDEN, give it a category, or
+  CHANGE its `duration_days` or `traffic_bytes` — the two figures that are the shape, that
+  the tariff is matched on, and that a renewal buys. Price, status and title stay
+  editable — price and status are what a resolution writes.
 - **Discounts, reseller terms, cashback.** The renewal goes through
   `PricingService.price` like any renewal, so exactly the current rules apply: a
   tenant-wide renewal discount applies, a product- or category-scoped one does not (the
@@ -123,7 +125,8 @@ changes. `OQ-I14-01` records the choice between a scheduled re-resolution and a 
   follows a tariff change on re-resolution; an accepted tariff survives a run that finds
   none; an operator states a custom tariff with a reason and it renews; never in the
   customer catalogue or a category page, never ordered new; the database refuses listing
-  or categorising it; tenant isolation (same key, two products, no cross-tenant tariff,
+  or categorising it, and changing its traffic or duration (an ordinary product's stay
+  editable — reverting 0185 to 0182's guard fails this case); tenant isolation (same key, two products, no cross-tenant tariff,
   no cross-tenant id); `observer` is denied and nothing is written.
 
 Mutation checked: removing `lockKey` from `ensureShape` fails the race case.
