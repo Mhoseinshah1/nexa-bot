@@ -41,7 +41,7 @@ import {
 } from '../api/client';
 import { formatMoneyText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
-import { mayRequest, queryState } from '../view-state';
+import { mayRequest, queryState, staleAfterError } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListSearchBox, appliedListSearch } from '../ui/list-search';
@@ -676,7 +676,11 @@ export function PaymentsPage({
               </FilterChip>
             ))}
           </FilterChips>
-          {attention.isError && <p className="muted small">{t('web.payment_ops_counts_error')}</p>}
+          {/* The counts' own failure, said beside the chips rather than drawn over the list —
+              including a refresh that failed behind counts still on screen. */}
+          {(queryState(attention) === 'error' || staleAfterError(attention)) && (
+            <p className="muted small">{t('web.payment_ops_counts_error')}</p>
+          )}
           {queue !== null && <p className="muted small">{t(QUEUE_HINTS[queue])}</p>}
         </div>
 
