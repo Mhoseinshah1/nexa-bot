@@ -134,3 +134,5 @@ export * from './bulk-operations.js';
 export * from './notification-center.js';
 export * from './direct-messages.js';
 export * from './incidents.js';
+/** Legacy migration prerequisites: hidden legacy product shapes, legacy trial decisions. */
+export * from './legacy-migration.js';
