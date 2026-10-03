@@ -261,6 +261,11 @@ export const resetAdminSecondFactorRequestSchema = z.object({
   reason: adminChangeReasonSchema,
   /** The ACTING operator's own step-up: removing somebody's factor is half a takeover. */
   stepUp: stepUpSchema,
+  /**
+   * A replay key (Codex review): a retry of a reset whose response was lost returns the
+   * first result instead of resetting again. The stored result holds no secret.
+   */
+  idempotencyKey: z.string().min(8).max(255).optional(),
 });
 export const resetAdminSecondFactorResponseSchema = z.object({
   admin: adminSummarySchema,
