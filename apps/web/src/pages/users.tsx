@@ -1,10 +1,9 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
   TRIAL_ADMIN_REASON_MAX_LENGTH,
   WALLET_PAGE_DEFAULT,
-  telegramUserIdSchema,
   type CustomerReferralResponse,
   type CustomerStatus,
   type CustomerSummaryResponse,
@@ -33,7 +32,8 @@ import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { setQuery, useLinkHandler, type Route } from '../router';
+import { ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { messageFor } from './settings';
 /*
  * The OTHER two screens' badge vocabularies, borrowed rather than copied.
@@ -162,47 +162,11 @@ export function UsersPage({
   const onLink = useLinkHandler();
 
   /*
-   * The search lives in the URL; the draft lives in component state.
-   *
-   * In the URL because an operator answering a support message wants to reload
-   * and link to the row they found, and because it is the only way this state
-   * is reachable by anything driving the app by address — which includes the
-   * visual harness. The draft is separate so typing does not issue a request
-   * per keystroke against a permission the actor may not even hold.
+   * ONE search box (spec §10), in the URL as `q`. The server reads a Telegram id, an
+   * internal id, an `@username` or a name prefix from it by shape; see `ListSearchBox`.
    */
-  const appliedTelegramId = route.query.get('telegramUserId') ?? '';
-  const appliedUsername = route.query.get('username') ?? '';
+  const appliedSearch = appliedListSearch(route);
   const appliedStatus = statusFromQuery(route.query.get('status'));
-
-  /*
-   * The draft FOLLOWS the applied values, derived rather than initialised.
-   *
-   * `useState(appliedTelegramId)` runs its initialiser once per mount, and the
-   * sidebar's own «کاربران» link re-renders THIS component with an empty query
-   * instead of remounting it. So after a search, clicking that link left the
-   * inputs showing the old criteria over an unfiltered list, with the Clear
-   * button disabled because nothing was applied any more — three things on the
-   * screen disagreeing about what the operator had asked for.
-   *
-   * Compared rather than synchronised in an effect, the same shape the cursor
-   * trail below uses: an effect would render one frame of the stale draft first,
-   * and React's own guidance is to derive during render. The signature covers the
-   * two URL values the form owns and NOT the status, so changing the status
-   * dropdown does not wipe a half-typed username.
-   */
-  const appliedSignature = [appliedTelegramId, appliedUsername].join('|');
-  const [draft, setDraft] = useState<{
-    signature: string;
-    telegramId: string;
-    username: string;
-  }>({ signature: appliedSignature, telegramId: appliedTelegramId, username: appliedUsername });
-  const fresh = draft.signature === appliedSignature;
-  const draftTelegramId = fresh ? draft.telegramId : appliedTelegramId;
-  const draftUsername = fresh ? draft.username : appliedUsername;
-  const setDraftTelegramId = (value: string) =>
-    setDraft({ signature: appliedSignature, telegramId: value, username: draftUsername });
-  const setDraftUsername = (value: string) =>
-    setDraft({ signature: appliedSignature, telegramId: draftTelegramId, username: value });
 
   /*
    * The cursor stack, and the SEARCH it belongs to.
@@ -214,23 +178,11 @@ export function UsersPage({
    * while re-rendering this same component, so a trail cleared only inside the
    * form's submit handler would survive into a different list — and a cursor
    * minted under one filter strands every row before it under another, silently.
-   */
-  /*
-   * Joined on `|`, which cannot appear in any of the three parts.
    *
-   * A Telegram id is digits, a Telegram username is `[A-Za-z0-9_]`, and the status is
-   * one of two literals, so no two different searches can produce the same signature.
-   * An EMPTY separator could: a username of `1` with no id and an id of `1` with no
-   * username would both be the string `1`, sharing a query key and a cursor trail, and
-   * the page would serve one search's cached rows under the other's heading.
-   *
-   * This was a literal U+001F until the self-review. It WORKED — a unit separator cannot
-   * appear in any part either — and it was invisible in every tool that reads the source,
-   * which is the argument against it: a separator nobody can see in a grep, a diff or a
-   * review is a separator nobody checks. `users.test.tsx` now asserts the behaviour the
-   * string exists for, so neither spelling has to be trusted.
+   * Joined on `|`, which a status literal cannot contain; the search text is LAST, so
+   * whatever it contains, no two (status, search) pairs produce the same signature.
    */
-  const searchSignature = [appliedTelegramId, appliedUsername, appliedStatus ?? ''].join('|');
+  const searchSignature = [appliedStatus ?? '', appliedSearch].join('|');
   const [trail, setTrail] = useState<{ signature: string; cursors: readonly string[] }>({
     signature: searchSignature,
     cursors: [],
@@ -242,30 +194,11 @@ export function UsersPage({
   const popCursor = () => setTrail({ signature: searchSignature, cursors: cursors.slice(0, -1) });
 
   /*
-   * The Telegram id is checked against the CONTRACT's own schema before it is
-   * applied, not after the server refuses it.
-   *
-   * `telegramUserIdSchema` is the same regex the service parses with, so there
-   * is exactly one definition of what a Telegram id is. Checked here because
-   * the server's refusal for a malformed one is a 400 that an operator would
-   * read as "no such customer" — a different and false answer.
-   */
-  const telegramIdProblem =
-    draftTelegramId !== '' && !telegramUserIdSchema.safeParse(draftTelegramId).success
-      ? t('web.users_search_invalid_telegram')
-      : undefined;
-
-  /*
-   * Two predicates, because they answer different questions.
-   *
    * `searching` is about the ROWS — whether the empty state should read "nothing
    * matched your search" or "no customers yet" — so it is the applied URL and
-   * nothing else. `clearable` is about the FORM: there is something to clear if
-   * either the URL carries a filter or the inputs hold text. Folding them left
-   * Clear disabled over inputs full of text nobody could empty by button.
+   * nothing else — and only a search this actor may actually send.
    */
-  const searching = appliedTelegramId !== '' || appliedUsername !== '';
-  const clearable = searching || draftTelegramId !== '' || draftUsername !== '';
+  const searching = appliedSearch !== '' && maySearch;
 
   const customers = useQuery({
     // The search is part of the key. Sharing one key across filters would serve
@@ -275,8 +208,9 @@ export function UsersPage({
     queryFn: () =>
       fetchCustomers({
         ...(cursor === undefined ? {} : { cursor }),
-        ...(appliedTelegramId === '' ? {} : { telegramUserId: appliedTelegramId }),
-        ...(appliedUsername === '' ? {} : { username: appliedUsername }),
+        // Only for an actor holding `users.search`: the server charges it for `q`, and a
+        // search left in the URL by somebody else must not turn the list into a 403.
+        ...(searching ? { q: appliedSearch } : {}),
         ...(appliedStatus === null ? {} : { status: appliedStatus }),
       }),
     enabled: !denied,
@@ -284,29 +218,6 @@ export function UsersPage({
 
   const rows = customers.data?.customers ?? [];
   const nextCursor = customers.data?.nextCursor ?? null;
-
-  const apply = (event: FormEvent) => {
-    event.preventDefault();
-    if (telegramIdProblem !== undefined) return;
-    // ONE navigation for both fields. Two `setQuery` calls here dropped the first:
-    // each builds from the `route.query` prop this render captured. See `setQueries`.
-    setQueries(route, [
-      ['telegramUserId', draftTelegramId === '' ? null : draftTelegramId],
-      ['username', draftUsername === '' ? null : draftUsername],
-    ]);
-  };
-
-  const clear = () => {
-    // Both, because the two can differ: the URL may already be empty while the
-    // inputs hold text the operator typed and never applied. Clearing the URL
-    // alone would leave that text on screen, and clearing the draft alone would
-    // leave the filter applied.
-    setDraft({ signature: appliedSignature, telegramId: '', username: '' });
-    setQueries(route, [
-      ['telegramUserId', null],
-      ['username', null],
-    ]);
-  };
 
   const columns: readonly Column<CustomerSummaryResponse>[] = [
     {
@@ -376,53 +287,12 @@ export function UsersPage({
 
       <Card className="ca-list">
         {maySearch ? (
-          <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
-            <Field
-              compact
-              label={t('web.users_search_telegram')}
-              hint={t('web.users_search_telegram_hint')}
-              htmlFor="users-telegram-id"
-              {...(telegramIdProblem === undefined ? {} : { error: telegramIdProblem })}
-            >
-              <Input
-                id="users-telegram-id"
-                size="sm"
-                dir="ltr"
-                inputMode="numeric"
-                aria-invalid={telegramIdProblem !== undefined}
-                value={draftTelegramId}
-                onChange={(event) => setDraftTelegramId(event.target.value.trim())}
-              />
-            </Field>
-            <Field
-              compact
-              label={t('web.users_search_username')}
-              hint={t('web.users_search_username_hint')}
-              htmlFor="users-username"
-            >
-              <Input
-                id="users-username"
-                size="sm"
-                dir="ltr"
-                value={draftUsername}
-                onChange={(event) => setDraftUsername(event.target.value.trim())}
-              />
-            </Field>
-            <div className="ca-search-actions">
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                icon="search"
-                disabled={telegramIdProblem !== undefined}
-              >
-                {t('web.users_search_apply')}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={clear} disabled={!clearable}>
-                {t('web.users_search_clear')}
-              </Button>
-            </div>
-          </form>
+          <ListSearchBox
+            route={route}
+            id="users-search"
+            hint={t('web.users_search_hint')}
+            hidden={toolbarHidden}
+          />
         ) : (
           /*
             No search form for an actor without `users.search`, and a sentence
@@ -437,8 +307,8 @@ export function UsersPage({
 
         {/*
           The status filter is NOT gated on `users.search`: the server charges
-          that permission for an id or username lookup, not for narrowing the
-          tenant's own list to its blocked half.
+          that permission for the search box, not for narrowing the tenant's own
+          list to its blocked half. A non-text filter, so it stays its own control.
         */}
         <div className="filter-row" hidden={toolbarHidden}>
           <ChipGroup
@@ -1063,7 +933,7 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
       title={t('web.user_orders_title')}
       hint={t('web.user_orders_hint')}
       actions={
-        <a href={`/orders?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+        <a href={`/orders?q=${encodeURIComponent(customerId)}`} onClick={onLink}>
           {t('web.user_orders_all')}
         </a>
       }
@@ -1189,7 +1059,7 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
       title={t('web.user_services_title')}
       hint={t('web.user_services_hint')}
       actions={
-        <a href={`/services?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+        <a href={`/services?q=${encodeURIComponent(customerId)}`} onClick={onLink}>
           {t('web.user_services_all')}
         </a>
       }

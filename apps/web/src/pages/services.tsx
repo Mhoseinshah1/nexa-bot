@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SERVICE_DELIVERY_STATES,
@@ -6,8 +6,6 @@ import {
   SERVICE_STATES,
   SERVICE_TERMINATE_CONFIRMATION,
   UNLIMITED_TRAFFIC_BYTES,
-  providerUsernameLookupSchema,
-  uuidV7Schema,
   type OperationState,
   type OperationType,
   type ServiceActionAvailability,
@@ -25,6 +23,8 @@ import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { ListSearchBox, appliedListSearch } from '../ui/list-search';
+import { CustomerIdentityLink } from '../ui/customer-identity';
 import { ChipGroup } from './commerce-parts';
 import {
   Badge,
@@ -225,31 +225,6 @@ function Bytes({ bytes }: { bytes: bigint }) {
   );
 }
 
-/** A full id, or the field's own error. The guard `/payments` and `/orders` both use. */
-function idProblem(value: string): string | undefined {
-  if (value === '') return undefined;
-  return uuidV7Schema.safeParse(value).success ? undefined : t('web.services_filter_invalid_id');
-}
-
-/**
- * The account name, checked against the SAME schema the server applies.
- *
- * `providerUsernameLookupSchema` is the contract, so this box refuses exactly what the
- * endpoint would refuse — a local rule copied by eye is how a client comes to reject a
- * name the server accepts, or to spend a request on one it does not. It is deliberately
- * not a local regex for that reason.
- *
- * The match is EXACT, which is also why there is no "contains" affordance here: a
- * prefix search over account names is an enumeration of a panel's accounts, and every
- * service row leads to a subscription the operator must not hand out in bulk.
- */
-function usernameProblem(value: string): string | undefined {
-  if (value === '') return undefined;
-  return providerUsernameLookupSchema.safeParse(value).success
-    ? undefined
-    : t('web.services_filter_invalid_username');
-}
-
 // ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
@@ -268,70 +243,24 @@ export function ServicesPage({
   const cursor = route.query.get('cursor');
   const state = route.query.get('state');
   const delivery = route.query.get('deliveryState');
-  const appliedCustomer = route.query.get('customerId') ?? '';
-  const appliedPanel = route.query.get('panelId') ?? '';
-  const appliedUsername = route.query.get('providerUsername') ?? '';
-
   /*
-   * The drafts are keyed to the APPLIED values, so navigation that drops the query
-   * clears the boxes. `users.tsx` records the defect: the sidebar link re-renders this
-   * component with an empty query rather than remounting it, and a `useState`
-   * initialiser runs once per mount — leaving criteria on screen that no longer apply.
+   * ONE search box (spec §10), in the URL as `q`: a provider username (exact), a Telegram
+   * id, an `@username`, or a service / order / customer / panel id. It replaced three
+   * single-purpose boxes, two of which wanted an internal uuid.
    */
-  const appliedSignature = `${appliedCustomer}|${appliedPanel}|${appliedUsername}`;
-  const [draft, setDraft] = useState({
-    signature: appliedSignature,
-    customerId: appliedCustomer,
-    panelId: appliedPanel,
-    providerUsername: appliedUsername,
-  });
-  if (draft.signature !== appliedSignature) {
-    setDraft({
-      signature: appliedSignature,
-      customerId: appliedCustomer,
-      panelId: appliedPanel,
-      providerUsername: appliedUsername,
-    });
-  }
+  const appliedSearch = appliedListSearch(route);
 
   const services = useQuery({
-    queryKey: ['services', cursor, state, delivery, appliedCustomer, appliedPanel, appliedUsername],
+    queryKey: ['services', cursor, state, delivery, appliedSearch],
     queryFn: () =>
       fetchServices({
         ...(cursor === null ? {} : { cursor }),
         ...(state === null ? {} : { state: state as ServiceState }),
         ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
-        ...(appliedCustomer === '' ? {} : { customerId: appliedCustomer }),
-        ...(appliedPanel === '' ? {} : { panelId: appliedPanel }),
-        ...(appliedUsername === '' ? {} : { providerUsername: appliedUsername }),
+        ...(appliedSearch === '' ? {} : { q: appliedSearch }),
       }),
     enabled: !denied,
   });
-
-  const customerProblem = idProblem(draft.customerId);
-  const panelProblem = idProblem(draft.panelId);
-  const usernameProblemText = usernameProblem(draft.providerUsername);
-
-  const apply = (event: FormEvent) => {
-    event.preventDefault();
-    if (
-      customerProblem !== undefined ||
-      panelProblem !== undefined ||
-      usernameProblemText !== undefined
-    ) {
-      return;
-    }
-    // ONE navigation for both. Separate `setQuery` calls each build from the
-    // `route.query` this render captured, so the earlier ones are dropped.
-    setQueries(route, [
-      ['customerId', draft.customerId === '' ? null : draft.customerId],
-      ['panelId', draft.panelId === '' ? null : draft.panelId],
-      ['providerUsername', draft.providerUsername === '' ? null : draft.providerUsername],
-      // A new filter starts at the first page. Carrying a cursor from one filter to
-      // another pages through a list that no longer exists.
-      ['cursor', null],
-    ]);
-  };
 
   const columns: readonly Column<ServiceSummaryResponse>[] = [
     {
@@ -365,10 +294,14 @@ export function ServicesPage({
     {
       key: 'customer',
       header: t('web.service_customer'),
+      // The Telegram numeric id, never the internal uuid (spec §10).
       render: (row) => (
-        <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
-          <Ltr>{row.customerId.slice(0, 8)}</Ltr>
-        </a>
+        <CustomerIdentityLink
+          customerId={row.customerId}
+          telegramUserId={row.customerTelegramUserId}
+          username={row.customerUsername}
+          onLink={onLink}
+        />
       ),
     },
     {
@@ -408,63 +341,14 @@ export function ServicesPage({
       {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
       <Card className="ca-list">
-        <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
-          <Field
-            compact
-            label={t('web.service_username')}
-            hint={t('web.services_filter_username_hint')}
-            htmlFor="services-username"
-            {...(usernameProblemText === undefined ? {} : { error: usernameProblemText })}
-          >
-            <Input
-              id="services-username"
-              size="sm"
-              dir="ltr"
-              aria-invalid={usernameProblemText !== undefined}
-              value={draft.providerUsername}
-              onChange={(event) =>
-                setDraft({ ...draft, providerUsername: event.target.value.trim() })
-              }
-            />
-          </Field>
-          <Field
-            compact
-            label={t('web.service_customer')}
-            hint={t('web.services_filter_customer_hint')}
-            htmlFor="services-customer"
-            {...(customerProblem === undefined ? {} : { error: customerProblem })}
-          >
-            <Input
-              id="services-customer"
-              size="sm"
-              dir="ltr"
-              aria-invalid={customerProblem !== undefined}
-              value={draft.customerId}
-              onChange={(event) => setDraft({ ...draft, customerId: event.target.value.trim() })}
-            />
-          </Field>
-          <Field
-            compact
-            label={t('web.service_panel')}
-            hint={t('web.services_filter_panel_hint')}
-            htmlFor="services-panel"
-            {...(panelProblem === undefined ? {} : { error: panelProblem })}
-          >
-            <Input
-              id="services-panel"
-              size="sm"
-              dir="ltr"
-              aria-invalid={panelProblem !== undefined}
-              value={draft.panelId}
-              onChange={(event) => setDraft({ ...draft, panelId: event.target.value.trim() })}
-            />
-          </Field>
-          <div className="ca-search-actions">
-            <Button type="submit" variant="primary" size="sm" icon="search">
-              {t('web.services_search_apply')}
-            </Button>
-          </div>
-        </form>
+        <ListSearchBox
+          route={route}
+          id="services-search"
+          hint={t('web.services_search_hint')}
+          hidden={toolbarHidden}
+          // A new search starts at the first page: this list keeps its cursor in the URL.
+          resetKeys={['cursor']}
+        />
 
         <div className="filter-row" hidden={toolbarHidden}>
           <ChipGroup

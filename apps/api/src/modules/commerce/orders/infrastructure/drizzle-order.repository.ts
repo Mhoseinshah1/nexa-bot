@@ -1,5 +1,17 @@
-import { and, asc, eq, getTableColumns, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
-import { money, priceQuoteWireSchema, type PriceQuote } from '@nexa/contracts';
+import {
+  and,
+  asc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
+import { money, priceQuoteWireSchema, type ListSearchTerm, type PriceQuote } from '@nexa/contracts';
 import { priceQuoteToWire } from '../application/order-pricing.js';
 import type {
   CurrencyCode,
@@ -17,9 +29,17 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { orders } from '../../../../infrastructure/persistence/schema.js';
+import { orders, products } from '../../../../infrastructure/persistence/schema.js';
+import {
+  customerIdsWithTelegramId,
+  customerIdsWithUsernamePrefix,
+  escapeLike,
+  lowerPrefix,
+  readCustomerIdentities,
+} from '../../../../infrastructure/persistence/list-search.js';
 import type {
   OrderCursor,
+  OrderCustomerIdentity,
   OrderDraft,
   OrderPage,
   OrderRecord,
@@ -138,7 +158,11 @@ export class DrizzleOrderRepository implements OrderRepository {
     cursor: OrderCursor | null,
     tx?: unknown,
   ): Promise<OrderPage> {
-    const rows = await this.listStatement(scope, search, limit, cursor, tx);
+    const productIds =
+      search.text?.kind === 'TEXT'
+        ? await this.productIdsTitled(scope, search.text.folded, tx)
+        : [];
+    const rows = await this.listStatement(scope, search, limit, cursor, tx, productIds);
     const page = rows.slice(0, limit);
     const last = page[page.length - 1];
     return {
@@ -150,13 +174,48 @@ export class DrizzleOrderRepository implements OrderRepository {
     };
   }
 
-  /** Exposed so a plan regression can explain the statement production actually sends. */
+  /**
+   * The ids of this tenant's products whose CURRENT title contains the text: the
+   * product-name arm of the search box, resolved BEFORE the page statement.
+   *
+   * An infix match, and the one this search makes, because it runs over the catalogue —
+   * tens of rows per tenant — and never over `orders`. Resolved as its own statement
+   * rather than as an `ARRAY(SELECT …)` InitPlan inside the page query, and that was
+   * measured, not assumed: the planner cannot see an InitPlan's result when it plans, so
+   * it guessed the product arm unselective and walked `orders_tenant_created_idx`,
+   * discarding 19 980 of 20 000 rows to find a product on one order in a thousand
+   * (`list-search-plan.test.ts`). With the ids as literals it estimates them, and reads
+   * `orders_tenant_product_created_idx`.
+   */
+  async productIdsTitled(
+    scope: TenantContext,
+    folded: string,
+    tx?: unknown,
+  ): Promise<readonly string[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: products.id })
+      .from(products)
+      .where(
+        and(
+          eq(products.tenantId, tenantId),
+          sql`lower(${products.title}) like ${`%${escapeLike(folded)}%`}`,
+        ),
+      );
+    return rows.map((row) => row.id);
+  }
+
+  /**
+   * Exposed so a plan regression can explain the statement production actually sends.
+   * `productIds` is `productIdsTitled`'s answer for a text search, and empty otherwise.
+   */
   listStatement(
     scope: TenantContext,
     search: OrderSearch,
     limit: number,
     cursor: OrderCursor | null,
     tx?: unknown,
+    productIds: readonly string[] = [],
   ) {
     const tenantId = requireTenantId(scope);
     const conditions: SQL[] = [eq(orders.tenantId, tenantId)];
@@ -164,6 +223,9 @@ export class DrizzleOrderRepository implements OrderRepository {
     if (search.state !== undefined) conditions.push(eq(orders.state, search.state));
     if (search.customerId !== undefined) conditions.push(eq(orders.customerId, search.customerId));
     if (search.productId !== undefined) conditions.push(eq(orders.productId, search.productId));
+    if (search.text !== undefined) {
+      conditions.push(orderTextCondition(tenantId, search.text, productIds));
+    }
     if (cursor !== null) {
       conditions.push(
         sql`(${orders.createdAt}, ${orders.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
@@ -179,6 +241,19 @@ export class DrizzleOrderRepository implements OrderRepository {
       .where(and(...conditions))
       .orderBy(asc(orders.createdAt), asc(orders.id))
       .limit(limit + 1);
+  }
+
+  async customerIdentities(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<UserId, OrderCustomerIdentity>> {
+    // The one shared reader (spec §10), so every list names a customer the same way.
+    return (await readCustomerIdentities(
+      this.exec(tx),
+      requireTenantId(scope),
+      customerIds,
+    )) as ReadonlyMap<UserId, OrderCustomerIdentity>;
   }
 
   /**
@@ -457,4 +532,42 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * The order list's one search box (spec §10), with an index behind every arm so an `OR` of
+ * them is a BitmapOr rather than a walk of the tenant's orders:
+ *
+ * - a Telegram id / `@username` — the customer's ids, resolved ONCE as an InitPlan (see
+ *   `customerIdsWithTelegramId`), then `orders_customer_created_idx`;
+ * - a uuid — the primary key, `orders_customer_created_idx`, `orders_tenant_product_created_idx`;
+ * - text — the SNAPSHOT title by prefix (`orders_tenant_line_title_idx`), which is what
+ *   the customer bought even if the product was renamed since; OR a product whose CURRENT
+ *   title contains the text. That one infix match is over `products`, a catalogue of tens
+ *   of rows per tenant, resolved to ids first (`productIdsTitled`) and then served by the
+ *   product index. It is never applied to `orders` itself, which grows with every sale.
+ */
+function orderTextCondition(
+  tenantId: string,
+  term: ListSearchTerm,
+  productIds: readonly string[],
+): SQL {
+  switch (term.kind) {
+    case 'TELEGRAM_ID':
+      return sql`${orders.customerId} = ANY(${customerIdsWithTelegramId(tenantId, term.value)})`;
+    case 'USERNAME':
+      return sql`${orders.customerId} = ANY(${customerIdsWithUsernamePrefix(tenantId, term.value)})`;
+    case 'UUID':
+      return or(
+        eq(orders.id, term.value),
+        eq(orders.customerId, term.value),
+        eq(orders.productId, term.value),
+      ) as SQL;
+    case 'TEXT': {
+      const byTitle = lowerPrefix(sql`${orders.lineTitle}`, term.folded);
+      return productIds.length === 0
+        ? byTitle
+        : (or(byTitle, inArray(orders.productId, [...productIds])) as SQL);
+    }
+  }
 }

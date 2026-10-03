@@ -1440,12 +1440,16 @@ export const WEB_FA = {
   'web.users_empty_hint': 'مشتری با نخستین پیام /start به ربات ساخته می‌شود.',
   'web.users_search_empty': 'هیچ مشتری‌ای با این جست‌وجو پیدا نشد.',
   'web.users_search_empty_hint':
-    'شناسهٔ عددی تلگرام باید کامل و دقیق باشد؛ نام کاربری با ابتدای آن جست‌وجو می‌شود.',
-  'web.users_search_telegram': 'شناسهٔ تلگرام',
-  'web.users_search_telegram_hint': 'تطبیق کامل و دقیق. بخشی از شناسه جست‌وجو نمی‌شود.',
-  'web.users_search_username': 'نام کاربری',
-  'web.users_search_username_hint': 'با ابتدای نام کاربری، بدون حساسیت به بزرگی و کوچکی حرف‌ها.',
-  'web.users_search_invalid_telegram': 'شناسهٔ تلگرام فقط رقم است و با صفر آغاز نمی‌شود.',
+    'شناسهٔ عددی تلگرام باید کامل و دقیق باشد؛ نام کاربری و نام با ابتدای آنها جست‌وجو می‌شوند.',
+  'web.users_search_hint':
+    'شناسهٔ عددی تلگرام (دقیق)، ‎@نام کاربری، یا ابتدای نام یا نام خانوادگی.',
+  // Spec §10: the one search box every list page draws (`ui/list-search.tsx`).
+  'web.list_search_label': 'جست‌وجو',
+  'web.list_search_reads_telegram': 'به‌عنوان شناسهٔ عددی تلگرام جست‌وجو می‌شود.',
+  'web.list_search_reads_id': 'به‌عنوان شناسهٔ داخلی جست‌وجو می‌شود.',
+  'web.list_search_reads_username': 'به‌عنوان ابتدای نام کاربری تلگرام جست‌وجو می‌شود.',
+  'web.list_search_reads_text': 'به‌عنوان متن جست‌وجو می‌شود.',
+  'web.customer_identity_unknown': 'مشتری نامشخص',
   'web.users_search_apply': 'جست‌وجو',
   'web.users_search_clear': 'پاک کردن',
   'web.users_search_denied':
@@ -1683,12 +1687,9 @@ export const WEB_FA = {
   'web.payment_customer_signalled_none': 'مشتری چیزی نگفته است.',
   'web.payment_customer_signalled_hint':
     'این فقط گفتهٔ مشتری است، نه رسید و نه تأیید. پرداخت همچنان در انتظار بررسی شماست.',
-  'web.payments_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
-  'web.payments_filter_order_hint': 'شناسهٔ سفارش را کامل وارد کنید.',
-  'web.payments_filter_reference_hint': 'کد پیگیری دقیقاً همان چیزی است که مشتری می‌خواند.',
+  'web.payments_search_hint':
+    'شناسهٔ عددی تلگرام، کد پیگیری یا شمارهٔ مرجع بانک (دقیق)، شناسهٔ پرداخت یا سفارش، یا ‎@نام کاربری.',
   'web.payments_filter_all': 'همه',
-  'web.payments_filter_invalid_id': 'شناسه معتبر نیست.',
-  'web.payments_search_apply': 'جست‌وجو',
   'web.payment_confirm_title': 'بررسی رسید',
   /*
    * Payment File 02 §10: card-to-card review is Telegram's alone. The Web Admin says
@@ -2524,11 +2525,9 @@ export const WEB_FA = {
   'web.orders_empty': 'هنوز سفارشی ثبت نشده است.',
   'web.orders_empty_hint': 'وقتی مشتری از فهرست ربات چیزی انتخاب کند، اینجا دیده می‌شود.',
   'web.orders_filter_empty': 'سفارشی با این مشخصات پیدا نشد.',
-  'web.orders_filter_empty_hint': 'شناسه را بررسی کنید یا صافی‌ها را پاک کنید.',
-  'web.orders_filter_customer_hint': 'شناسهٔ داخلی مشتری، نه شناسهٔ تلگرام.',
-  'web.orders_filter_product_hint': 'شناسهٔ محصول.',
-  'web.orders_filter_invalid_id':
-    'این یک شناسهٔ معتبر نیست. شناسهٔ داخلی را از صفحهٔ همان مشتری یا محصول بردارید.',
+  'web.orders_filter_empty_hint': 'متن جست‌وجو را بررسی کنید یا صافی‌ها را پاک کنید.',
+  'web.orders_search_hint':
+    'شناسهٔ عددی تلگرام، شناسهٔ سفارش یا محصول، نام محصول، یا ‎@نام کاربری.',
   'web.order_detail': 'جزئیات سفارش',
   'web.order_line': 'سرویس',
   'web.order_line_title': 'آنچه خریداری شده',
@@ -2694,21 +2693,8 @@ export const WEB_FA = {
   'web.service_delivery_next_attempt': 'تلاش بعدی',
 
   'web.services_filter_all': 'همه',
-  'web.services_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
-  'web.services_filter_panel_hint': 'شناسهٔ پنل را کامل وارد کنید.',
-  'web.services_filter_invalid_id': 'شناسه معتبر نیست.',
-  /*
-   * The lookup an operator actually arrives with.
-   *
-   * A customer quotes the name on their account, never the internal id, so until
-   * this existed the one handle a support conversation contains matched no search
-   * on either surface. EXACT, and the hint says so: a prefix over account names
-   * would enumerate a panel's accounts, and every row here leads to a
-   * subscription.
-   */
-  'web.services_filter_username_hint': 'نام کاربری روی پنل را کامل وارد کنید؛ جست‌وجو دقیق است.',
-  'web.services_filter_invalid_username': 'این نام کاربری از شکلی نیست که اینجا ذخیره می‌شود.',
-  'web.services_search_apply': 'جست‌وجو',
+  'web.services_search_hint':
+    'نام کاربری سرویس روی پنل (کامل و دقیق)، شناسهٔ عددی تلگرام، ‎@نام کاربری، یا شناسهٔ سرویس، سفارش یا پنل.',
 
   /*
    * Three banners, each naming what an operator should DO.

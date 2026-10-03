@@ -173,47 +173,48 @@ describe('the payment list', () => {
   });
 
   /*
-   * The PAGE's use of `setQueries`, not the helper's behaviour.
-   *
-   * `router.test.tsx` proves the helper applies every parameter; nothing would prove
-   * this page calls it. On the 4B branch that exact gap let a falsification survive:
-   * the reverted handler applied the last field and silently dropped the others, so an
-   * operator saw the ids they typed and a list that ignored them.
+   * Spec §10: ONE search box. What used to be three single-purpose boxes — two of them
+   * wanting an internal uuid — is one `q` the server classifies, and the non-text
+   * filters stay their own controls. The PAGE's use of `setQueries` is what is under
+   * test: a new search must start at the first page and keep the other filters.
    */
-  it('applies all three filters in ONE navigation, and drops the cursor', async () => {
+  it('applies the one search in ONE navigation, keeps the filters, and drops the cursor', async () => {
     stubApi(list([payment()]));
-    window.history.replaceState(null, '', '/payments?cursor=stale-page');
-    const route = { path: '/payments', query: new URLSearchParams({ cursor: 'stale-page' }) };
+    window.history.replaceState(null, '', '/payments?cursor=stale-page&state=PENDING');
+    const route = {
+      path: '/payments',
+      query: new URLSearchParams({ cursor: 'stale-page', state: 'PENDING' }),
+    };
     renderPage(<PaymentsPage route={route} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718:manual');
 
-    fireEvent.change(screen.getByLabelText('مشتری'), { target: { value: CUSTOMER_ID } });
-    fireEvent.change(screen.getByLabelText('سفارش'), { target: { value: ORDER_ID } });
-    fireEvent.change(screen.getByLabelText('کد پیگیری'), { target: { value: 'abc:manual' } });
-    fireEvent.click(screen.getByText('جست‌وجو'));
+    fireEvent.change(screen.getByLabelText('جست‌وجو'), { target: { value: '5550001234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'جست‌وجو' }));
 
     await waitFor(() => {
       const applied = new URLSearchParams(window.location.search);
-      expect(applied.get('customerId'), 'customerId was dropped').toBe(CUSTOMER_ID);
-      expect(applied.get('orderId'), 'orderId was dropped').toBe(ORDER_ID);
-      expect(applied.get('reference'), 'reference was dropped').toBe('abc:manual');
-      // A new filter starts at the first page: carrying the old cursor pages through a
+      expect(applied.get('q')).toBe('5550001234');
+      expect(applied.get('state'), 'the state filter was dropped').toBe('PENDING');
+      // A new search starts at the first page: carrying the old cursor pages through a
       // list that no longer exists.
-      expect(applied.get('cursor'), 'a stale cursor survived a new filter').toBeNull();
+      expect(applied.get('cursor'), 'a stale cursor survived a new search').toBeNull();
+      // None of the retired single-purpose parameters.
+      expect(applied.get('customerId')).toBeNull();
+      expect(applied.get('reference')).toBeNull();
     });
   });
 
-  it('refuses a partial id at the field rather than sending it', async () => {
+  it('sends the search as q, beside the non-text filters', async () => {
     const api = stubApi(list([payment()]));
-    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    const route = {
+      path: '/payments',
+      query: new URLSearchParams({ q: 'abc:manual', method: 'MANUAL_TRANSFER' }),
+    };
+    renderPage(<PaymentsPage route={route} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718:manual');
-    const before = api.calls.length;
-
-    fireEvent.change(screen.getByLabelText('مشتری'), { target: { value: '0192' } });
-    fireEvent.click(screen.getByText('جست‌وجو'));
-
-    expect(await screen.findByText(/شناسه معتبر نیست/u)).toBeInTheDocument();
-    expect(api.calls.length, 'a partial id was sent to the server').toBe(before);
+    const url = api.calls[api.calls.length - 1]?.url ?? '';
+    expect(url).toContain('q=abc%3Amanual');
+    expect(url).toContain('method=MANUAL_TRANSFER');
   });
 
   it('keeps the evidence note off the LIST', async () => {
@@ -1420,7 +1421,7 @@ describe('the payment diagnostics (§21)', () => {
       .map((cell) => cell.textContent);
     for (const header of [
       'شناسهٔ پرداخت',
-      'تلگرام مشتری',
+      'مشتری',
       'درگاه',
       'شناسهٔ پیگیری بیرونی',
       'آخرین تغییر',
@@ -1428,7 +1429,15 @@ describe('the payment diagnostics (§21)', () => {
       expect(headers, header).toContain(header);
     }
     expect(within(table).getByText(ROW_ID.slice(0, 8))).toBeInTheDocument();
-    expect(within(table).getByText('5550001234')).toBeInTheDocument();
+    /*
+     * Spec §10: the customer IS the Telegram id — the link to their page — and the
+     * internal uuid is not drawn. This used to be two columns, a uuid prefix headed
+     * «مشتری» and the Telegram id beside it.
+     */
+    const who = within(table).getByText('5550001234');
+    expect(who.closest('a')?.getAttribute('href')).toBe(`/users/${CUSTOMER_ID}`);
+    expect(table.textContent).not.toContain(CUSTOMER_ID.slice(0, 8));
+    expect(headers).not.toContain('تلگرام مشتری');
     expect(within(table).getByText('@zahra_pay')).toBeInTheDocument();
     expect(within(table).getByText('BANK-778899')).toBeInTheDocument();
     expect(within(table).getAllByText('کارت به کارت').length).toBeGreaterThan(0);

@@ -13,7 +13,11 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
-import { SERVICE_REFUND_REQUEST_ACTIVE_STATES } from '@nexa/contracts';
+import {
+  providerUsernameLookupSchema,
+  SERVICE_REFUND_REQUEST_ACTIVE_STATES,
+  type ListSearchTerm,
+} from '@nexa/contracts';
 import type {
   OrderId,
   PanelId,
@@ -35,9 +39,15 @@ import {
   serviceRefundRequests,
   services,
 } from '../../../../infrastructure/persistence/schema.js';
+import {
+  customerIdsWithTelegramId,
+  customerIdsWithUsernamePrefix,
+  readCustomerIdentities,
+} from '../../../../infrastructure/persistence/list-search.js';
 import type {
   ProvisionOutcome,
   ServiceCursor,
+  ServiceCustomerIdentity,
   ServiceDraft,
   ServicePage,
   ServiceRecord,
@@ -304,6 +314,19 @@ export class DrizzleServiceRepository implements ServiceRepository {
     };
   }
 
+  async customerIdentities(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<UserId, ServiceCustomerIdentity>> {
+    // The one shared reader (spec §10), so every list names a customer the same way.
+    return (await readCustomerIdentities(
+      this.exec(tx),
+      requireTenantId(scope),
+      customerIds,
+    )) as ReadonlyMap<UserId, ServiceCustomerIdentity>;
+  }
+
   /**
    * The page statement, exposed so a PLAN regression can explain it.
    *
@@ -350,6 +373,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
        */
       filters.push(eq(services.providerUsername, search.providerUsername));
     }
+    if (search.text !== undefined) filters.push(serviceTextCondition(tenantId, search.text));
     if (cursor !== null) {
       /*
        * Keyset, on `(created_at, id)`, DESCENDING.
@@ -1258,4 +1282,39 @@ function lastSeenColumns(
   if (lastSeen === undefined || lastSeen.kind === 'UNSUPPORTED') return {};
   if (lastSeen.kind === 'AT') return { lastSeenAt: lastSeen.at, lastSeenState: 'AT' };
   return { lastSeenAt: null, lastSeenState: 'NEVER' };
+}
+
+/**
+ * The service list's one search box (spec §10), with an index behind every arm so an `OR`
+ * of them is a BitmapOr rather than a walk of the tenant's services: the customer's ids
+ * resolved once as an InitPlan, then `services_customer_created_idx`; the primary key,
+ * `services_tenant_order_key` and `services_tenant_panel_idx` for a uuid; and
+ * `services_tenant_provider_username_idx` for a provider username, EXACT — see
+ * `ServiceSearch.providerUsername` for why never a prefix.
+ */
+function serviceTextCondition(tenantId: string, term: ListSearchTerm): SQL {
+  const accountName = (raw: string): SQL | null => {
+    const parsed = providerUsernameLookupSchema.safeParse(raw);
+    return parsed.success ? eq(services.providerUsername, parsed.data) : null;
+  };
+  switch (term.kind) {
+    case 'TELEGRAM_ID': {
+      const byCustomer = sql`${services.customerId} = ANY(${customerIdsWithTelegramId(tenantId, term.value)})`;
+      const byName = accountName(term.value);
+      return byName === null ? byCustomer : (or(byCustomer, byName) as SQL);
+    }
+    case 'USERNAME':
+      return sql`${services.customerId} = ANY(${customerIdsWithUsernamePrefix(tenantId, term.value)})`;
+    case 'UUID':
+      return or(
+        eq(services.id, term.value),
+        eq(services.customerId, term.value),
+        eq(services.orderId, term.value),
+        eq(services.panelId, term.value),
+      ) as SQL;
+    case 'TEXT':
+      // Text that is not a name this product stores matches nothing, by statement rather
+      // than by a query that scans to find so.
+      return accountName(term.value) ?? sql`false`;
+  }
 }

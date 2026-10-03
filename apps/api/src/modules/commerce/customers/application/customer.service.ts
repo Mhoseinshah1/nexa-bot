@@ -421,6 +421,7 @@ export class CustomerService {
     const searching =
       search.telegramUserId !== undefined ||
       search.username !== undefined ||
+      search.text !== undefined ||
       (search.usernamePrefix !== undefined && search.usernamePrefix !== '');
     if (searching) {
       await this.deps.guard.check(scope, actor, CUSTOMER_SEARCH_PERMISSION);
