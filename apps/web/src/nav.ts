@@ -441,6 +441,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_comms',
   },
   {
+    // Program §6: the terms and rules. `terms.view`, the key `GET /terms` charges; the
+    // draft, publication and enforcement switch are each drawn under their own key.
+    id: 'terms',
+    path: '/terms',
+    label: 'web.nav_terms',
+    icon: 'shield',
+    permission: 'terms.view',
+    group: 'web.navgroup_comms',
+  },
+  {
     // WP-A10: the client apps and connection guides the bot recommends. Its own pair,
     // `client_apps.*`: the list charges the view and every write the edit.
     id: 'client-apps',

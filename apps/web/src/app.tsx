@@ -30,6 +30,7 @@ import { PaymentAccountsPage } from './pages/payment-accounts';
 import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
+import { TermsPage } from './pages/terms';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
@@ -194,6 +195,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/providers',
   '/settings',
   '/support',
+  '/terms',
   '/client-apps',
   '/features',
   '/reminders',
@@ -928,6 +930,21 @@ export function resolve(
       element: <SupportPage mayEdit={may('settings.edit')} denied={!may('settings.view')} />,
       crumbs: [{ label: t('web.nav_support') }],
       title: t('web.nav_support'),
+    };
+  }
+
+  if (route.path === '/terms') {
+    return {
+      element: (
+        <TermsPage
+          denied={!may('terms.view')}
+          mayEdit={may('terms.edit')}
+          mayPublish={may('terms.publish')}
+          mayToggle={may('features.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_terms') }],
+      title: t('web.nav_terms'),
     };
   }
 

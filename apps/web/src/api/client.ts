@@ -400,6 +400,12 @@ import {
   type SupportFaqListResponse,
   type SupportFaqResponse,
   type SupportFaqStatus,
+  // Program §6: the terms and rules.
+  TERMS_ROUTES,
+  termsOverviewSchema,
+  termsVersionWriteResponseSchema,
+  type TermsOverviewResponse,
+  type TermsVersionWriteResponse,
   // WP-A10: client apps and connection guides.
   CLIENT_APP_ROUTES,
   clientAppDeletedSchema,
@@ -1938,6 +1944,45 @@ export function setSupportFaqStatus(input: {
 }): Promise<SupportFaqResponse> {
   const { id, ...body } = input;
   return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
+}
+
+// --- Program §6: the terms and rules ------------------------------------------------
+
+export function fetchTerms(): Promise<TermsOverviewResponse> {
+  return authedGet(TERMS_ROUTES.overview, termsOverviewSchema);
+}
+
+export function createTermsDraft(input: {
+  idempotencyKey: string;
+  title: string;
+  body: string;
+}): Promise<TermsVersionWriteResponse> {
+  return post(TERMS_ROUTES.createDraft, input, termsVersionWriteResponseSchema);
+}
+
+/**
+ * `expectedRevision` is the revision the editor was opened from. A draft that moved since
+ * comes back as `terms.draft_conflict` with the current revision, never overwritten.
+ */
+export function updateTermsDraft(input: {
+  id: string;
+  idempotencyKey: string;
+  title: string;
+  body: string;
+  expectedRevision: number;
+}): Promise<TermsVersionWriteResponse> {
+  const { id, ...body } = input;
+  return post(TERMS_ROUTES.updateDraft(id), body, termsVersionWriteResponseSchema);
+}
+
+/** Publishes exactly the revision the operator previewed. */
+export function publishTermsDraft(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedRevision: number;
+}): Promise<TermsVersionWriteResponse> {
+  const { id, ...body } = input;
+  return post(TERMS_ROUTES.publish(id), body, termsVersionWriteResponseSchema);
 }
 
 // --- WP-A10: client apps and connection guides ------------------------------------

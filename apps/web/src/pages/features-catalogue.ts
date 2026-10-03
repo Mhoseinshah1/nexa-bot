@@ -148,6 +148,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     summary: 'web.feature_central_fx_summary',
     disableEffect: 'web.feature_central_fx_off_effect',
   },
+  // Program §6. Off lets every customer through at once; no acceptance is erased, and
+  // turning it back on asks only those who have not accepted the current version.
+  terms_enforcement: {
+    title: 'web.feature_terms_enforcement_title',
+    summary: 'web.feature_terms_enforcement_summary',
+    disableEffect: null,
+  },
 };
 
 /**
