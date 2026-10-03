@@ -32,6 +32,7 @@ import {
 import { PAYMENT_RECEIPT_KINDS, RECEIPT_DISPOSITIONS } from './payment-receipts.js';
 import { gatewayInvoiceViewSchema } from './gateway-invoices.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
+import { listSearchQuerySchema } from './list-search.js';
 import {
   CASHBACK_PERCENT_MAX,
   CASHBACK_PERCENT_MIN,
@@ -1965,6 +1966,11 @@ export const customerListQuerySchema = z.object({
   telegramUserId: telegramUserIdSchema.optional(),
   username: z.string().max(64).optional(),
   status: z.enum(CUSTOMER_STATUSES).optional(),
+  /**
+   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+   * matches on this list is documented in `docs/web-admin-search.md`.
+   */
+  q: listSearchQuerySchema.optional(),
 });
 export type CustomerListQuery = z.infer<typeof customerListQuerySchema>;
 
@@ -3647,6 +3653,14 @@ export const orderSummarySchema = z.object({
   settledAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  /**
+   * Who the order is for, as Telegram knows them (spec §10): the numeric id is the
+   * operator-facing customer identity, the internal `customerId` stays for links. Defaulted
+   * on PARSE like the payment summary's pair, so a response from the previous release reads
+   * "not known" rather than failing. The server sends both on every list row.
+   */
+  customerTelegramUserId: z.string().nullable().default(null),
+  customerUsername: z.string().nullable().default(null),
 });
 export type OrderSummaryResponse = z.infer<typeof orderSummarySchema>;
 
@@ -3675,6 +3689,11 @@ export const orderListQuerySchema = z.object({
    */
   customerId: uuidV7Schema.optional(),
   productId: uuidV7Schema.optional(),
+  /**
+   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+   * matches on this list is documented in `docs/web-admin-search.md`.
+   */
+  q: listSearchQuerySchema.optional(),
 });
 export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
 
@@ -4237,6 +4256,11 @@ export const paymentListQuerySchema = z.object({
   orderId: uuidV7Schema.optional(),
   /** The quotable code, matched exactly. What an operator has in front of them. */
   reference: z.string().trim().min(1).max(64).optional(),
+  /**
+   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+   * matches on this list is documented in `docs/web-admin-search.md`.
+   */
+  q: listSearchQuerySchema.optional(),
 });
 export type PaymentListQuery = z.infer<typeof paymentListQuerySchema>;
 
@@ -5207,6 +5231,14 @@ export const serviceSummarySchema = z.object({
   terminatedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  /**
+   * Who the service is for, as Telegram knows them (spec §10): the numeric id is the
+   * operator-facing customer identity, the internal `customerId` stays for links. Defaulted
+   * on PARSE like the payment summary's pair, so a response from the previous release reads
+   * "not known" rather than failing. The server sends both on every list row.
+   */
+  customerTelegramUserId: z.string().nullable().default(null),
+  customerUsername: z.string().nullable().default(null),
 });
 export type ServiceSummaryResponse = z.infer<typeof serviceSummarySchema>;
 
@@ -5322,6 +5354,11 @@ export const serviceListQuerySchema = z.object({
    * prefix, and why a prefix here would be an enumeration of a panel's accounts.
    */
   providerUsername: providerUsernameLookupSchema.optional(),
+  /**
+   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+   * matches on this list is documented in `docs/web-admin-search.md`.
+   */
+  q: listSearchQuerySchema.optional(),
 });
 export type ServiceListQuery = z.infer<typeof serviceListQuerySchema>;
 

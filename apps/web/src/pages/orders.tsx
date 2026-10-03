@@ -1,10 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ORDER_STATES,
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
-  uuidV7Schema,
   type CashbackState,
   type OrderCustomServiceTermsResponse,
   type OrderPricingResponse,
@@ -26,7 +25,9 @@ import {
 import { currencyLabel, formatTimestamp, formatTrafficGbText } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { setQuery, useLinkHandler, type Route } from '../router';
+import { ListSearchBox, appliedListSearch } from '../ui/list-search';
+import { CustomerIdentityLink } from '../ui/customer-identity';
 /*
  * The SERVICES page's vocabularies, borrowed rather than copied — the same rule
  * `users.tsx` follows when it borrows this page's order maps. A second
@@ -49,14 +50,11 @@ import { ChipGroup } from './commerce-parts';
 import {
   Badge,
   Banner,
-  Button,
   Card,
   Copyable,
   CursorPager,
   DataTable,
   Empty,
-  Field,
-  Input,
   KV,
   Ltr,
   Money,
@@ -183,30 +181,20 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
   const onLink = useLinkHandler();
 
   const appliedState = stateFromQuery(route.query.get('state'));
-  const appliedCustomer = route.query.get('customerId') ?? '';
-  const appliedProduct = route.query.get('productId') ?? '';
-
   /*
-   * The draft FOLLOWS the applied values — derived, not initialised. The sidebar link
-   * re-renders this component with an empty query rather than remounting it, so an
-   * initialiser would leave the boxes showing a filter that is no longer applied.
+   * ONE search box (spec §10), in the URL as `q`: a Telegram id, an order / customer /
+   * product id, an `@username`, or a product name. The old pair of internal-uuid boxes is
+   * gone, and with it the commonest dead end this page had — pasting the Telegram id the
+   * customer list shows into a box that wanted the internal one.
    */
-  const appliedSignature = [appliedCustomer, appliedProduct].join('|');
-  const [draft, setDraft] = useState<{ signature: string; customerId: string; productId: string }>({
-    signature: appliedSignature,
-    customerId: appliedCustomer,
-    productId: appliedProduct,
-  });
-  const fresh = draft.signature === appliedSignature;
-  const draftCustomer = fresh ? draft.customerId : appliedCustomer;
-  const draftProduct = fresh ? draft.productId : appliedProduct;
+  const appliedSearch = appliedListSearch(route);
 
   /*
    * The cursor trail, keyed by the filter it was minted under. A cursor minted under
-   * one filter strands every row before it under another. Joined on `|`, which cannot
-   * appear in a uuid or in an order state.
+   * one filter strands every row before it under another. Joined on `|`, which an order
+   * state cannot contain; the search text is last.
    */
-  const searchSignature = [appliedState ?? '', appliedCustomer, appliedProduct].join('|');
+  const searchSignature = [appliedState ?? '', appliedSearch].join('|');
   const [trail, setTrail] = useState<{ signature: string; cursors: readonly string[] }>({
     signature: searchSignature,
     cursors: [],
@@ -220,43 +208,14 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
       fetchOrders({
         ...(cursor === undefined ? {} : { cursor }),
         ...(appliedState === null ? {} : { state: appliedState }),
-        ...(appliedCustomer === '' ? {} : { customerId: appliedCustomer }),
-        ...(appliedProduct === '' ? {} : { productId: appliedProduct }),
+        ...(appliedSearch === '' ? {} : { q: appliedSearch }),
       }),
     enabled: !denied,
   });
 
   const rows = orders.data?.orders ?? [];
   const nextCursor = orders.data?.nextCursor ?? null;
-  const filtering = appliedCustomer !== '' || appliedProduct !== '';
-  const clearable = filtering || draftCustomer !== '' || draftProduct !== '';
-
-  /*
-   * Checked against the CONTRACT's own id schema before it is applied.
-   *
-   * The server refuses a non-id with a 400, which an operator reads as "something is
-   * wrong" without saying which of the two boxes. The commonest mistake here is pasting
-   * a TELEGRAM id — which is what the customer list shows — into a field that wants the
-   * internal one, so naming it is the whole difference between a dead end and a fix.
-   * Same schema as the server parses with, so there is one definition of what an id is.
-   */
-  const idProblem = (value: string): string | undefined =>
-    value !== '' && !uuidV7Schema.safeParse(value).success
-      ? t('web.orders_filter_invalid_id')
-      : undefined;
-  const customerProblem = idProblem(draftCustomer);
-  const productProblem = idProblem(draftProduct);
-
-  const apply = (event: FormEvent) => {
-    event.preventDefault();
-    if (customerProblem !== undefined || productProblem !== undefined) return;
-    // ONE navigation for both fields. Two `setQuery` calls here dropped the first:
-    // each builds from the `route.query` prop this render captured. See `setQueries`.
-    setQueries(route, [
-      ['customerId', draftCustomer === '' ? null : draftCustomer],
-      ['productId', draftProduct === '' ? null : draftProduct],
-    ]);
-  };
+  const filtering = appliedSearch !== '';
 
   const columns: readonly Column<OrderSummaryResponse>[] = [
     {
@@ -279,10 +238,14 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
     {
       key: 'customer',
       header: t('web.order_customer'),
+      // The Telegram numeric id, never the internal uuid (spec §10).
       render: (row) => (
-        <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
-          <Ltr>{row.customerId.slice(0, 8)}</Ltr>
-        </a>
+        <CustomerIdentityLink
+          customerId={row.customerId}
+          telegramUserId={row.customerTelegramUserId}
+          username={row.customerUsername}
+          onLink={onLink}
+        />
       ),
     },
     {
@@ -311,77 +274,12 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
       <PageHead title={t('web.orders_title')} subtitle={t('web.orders_intro')} />
 
       <Card className="ca-list">
-        <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
-          <Field
-            compact
-            label={t('web.order_customer')}
-            hint={t('web.orders_filter_customer_hint')}
-            htmlFor="orders-customer"
-            {...(customerProblem === undefined ? {} : { error: customerProblem })}
-          >
-            <Input
-              id="orders-customer"
-              size="sm"
-              dir="ltr"
-              aria-invalid={customerProblem !== undefined}
-              value={draftCustomer}
-              onChange={(event) =>
-                setDraft({
-                  signature: appliedSignature,
-                  customerId: event.target.value.trim(),
-                  productId: draftProduct,
-                })
-              }
-            />
-          </Field>
-          <Field
-            compact
-            label={t('web.order_product')}
-            hint={t('web.orders_filter_product_hint')}
-            htmlFor="orders-product"
-            {...(productProblem === undefined ? {} : { error: productProblem })}
-          >
-            <Input
-              id="orders-product"
-              size="sm"
-              dir="ltr"
-              aria-invalid={productProblem !== undefined}
-              value={draftProduct}
-              onChange={(event) =>
-                setDraft({
-                  signature: appliedSignature,
-                  customerId: draftCustomer,
-                  productId: event.target.value.trim(),
-                })
-              }
-            />
-          </Field>
-          <div className="ca-search-actions">
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              icon="search"
-              disabled={customerProblem !== undefined || productProblem !== undefined}
-            >
-              {t('web.users_search_apply')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!clearable}
-              onClick={() => {
-                setDraft({ signature: appliedSignature, customerId: '', productId: '' });
-                setQueries(route, [
-                  ['customerId', null],
-                  ['productId', null],
-                ]);
-              }}
-            >
-              {t('web.users_search_clear')}
-            </Button>
-          </div>
-        </form>
+        <ListSearchBox
+          route={route}
+          id="orders-search"
+          hint={t('web.orders_search_hint')}
+          hidden={toolbarHidden}
+        />
 
         <div className="filter-row" hidden={toolbarHidden}>
           <ChipGroup
