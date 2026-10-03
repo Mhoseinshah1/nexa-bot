@@ -2282,7 +2282,9 @@ A second factor can lock somebody out, so there are two documented ways back, an
 neither one signs anybody in:
 
 1. **Another administrator.** An owner (or anybody holding `admins.edit` and at least
-   the target's privileges; an owner target also needs `admins.permissions.edit`) opens
+   the target's privileges; an owner target also needs `admins.permissions.edit`, and
+   the OPERATOR must re-enter their own password, plus their own code when their two-step
+   sign-in is on) opens
    System → Administrators → the person → «برداشتن ورود دومرحله‌ای», with a reason. The
    factor and its backup codes are removed and every session the target holds ends.
    Their password is unchanged.
@@ -2313,10 +2315,11 @@ password and their factor needs both paths — and if no other administrator exi
 the password still has no server-side reset (`OQ-D2-01` in
 `docs/open-questions.md`).
 
-What the second factor does NOT cover yet: the Telegram admin surface (authenticated by
-the account binding, not the password), and the Recovery Kit export's step-up, which
-asks for the password only (`OQ-D2-02`). Nothing REQUIRES an administrator to turn it on
-(`OQ-D2-03`).
+What the second factor does NOT cover yet: the Telegram admin surface, which is
+authenticated by the account binding rather than the password (`OQ-D2-02`). The Recovery
+Kit export and import take the step-up — the password, plus a code when the
+administrator's factor is on (ADR-0032 §7, amended). Nothing REQUIRES an administrator to
+turn it on (`OQ-D2-03`).
 
 ## Security properties
 

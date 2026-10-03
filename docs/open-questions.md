@@ -2991,10 +2991,11 @@ rule).
   administrator with `admins.edit`. Whether the server should also offer a password reset
   (and with what proof of who is at the keyboard beyond holding the host) is an owner
   decision, not resolved here.
-- **OQ-D2-02 — the Telegram admin surface and the Recovery Kit step-up ignore the second
-  factor.** Telegram administrators are authenticated by their account binding, not the
-  password; the Recovery Kit export asks for the password only. Whether either should
-  also demand a code is open.
+- **OQ-D2-02 — the Telegram admin surface ignores the second factor.** Telegram
+  administrators are authenticated by their account binding, not the password, and no
+  Telegram admin action asks for a code. Whether any should is open. (The Recovery Kit
+  half of this question is RESOLVED: export and import now take the step-up — the
+  password, plus a code when the administrator's factor is on — ADR-0032 §7, amended.)
 - **OQ-D2-03 — no policy to REQUIRE two-step sign-in.** It is each administrator's choice
   today. A required-for-owners policy is a setting plus an enrolment-on-next-sign-in
   flow, and a lockout risk to design carefully; not built.
