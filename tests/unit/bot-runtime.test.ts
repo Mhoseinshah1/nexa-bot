@@ -32,6 +32,7 @@ import {
   RECEIPT_CAPTION_MAX_LENGTH,
   normalizeReceiptCaption,
 } from '@nexa/contracts';
+import { INLINE_BUTTONS } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   CONNECTED_CALLBACK_PREFIX,
@@ -545,6 +546,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       if (key !== undefined && key in CATALOGUE_FA) sent.add(key as TemplateKey);
     }
     /*
+     * Owner spec §6: a button label is named by its REGISTRY key (`inlineLabel('…')`), and
+     * the registry names the template — so the label templates a screen draws are read
+     * through the registry, and the set below is unchanged by the routing.
+     */
+    for (const [, key] of runtimeSource.matchAll(/'([a-z_]+(?:\.[a-z_]+)?)'/g)) {
+      const label = INLINE_BUTTONS.find((entry) => entry.key === key)?.label ?? null;
+      if (label !== null) sent.add(label);
+    }
+    /*
      * Seven keys joined this list in 4C, and this case is what forced each to be
      * looked at — which is the whole reason it pins the SET rather than the wording.
      * Reviewed, one at a time:
@@ -758,6 +768,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.catalog.empty',
       'bot.catalog.heading',
       'bot.catalog.next_page_button',
+      // Owner spec §2.2: a button label under a wallet credit, opening the catalogue.
+      'bot.catalog.open_button',
       'bot.catalog.previous_page_button',
       // Package B: the join screen and its check button.
       'bot.channels.check_button',
@@ -1103,6 +1115,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.taken',
       'bot.username.unavailable',
       'bot.wallet.insufficient',
+      // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.
+      'bot.wallet.open_button',
       'bot.wallet.topup_above_maximum',
       'bot.wallet.topup_amount_invalid',
       'bot.wallet.topup_amount_prompt',
@@ -2015,6 +2029,7 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
       expect(notificationButtons('SERVICE_TRANSFER_RECEIVED', { serviceId: service })).toEqual([
         {
           label: { kind: 'TEMPLATE', key: 'bot.service.transfer_details_button' },
+          inline: 'service.transfer_details',
           data: `s:${service}`,
         },
       ]);

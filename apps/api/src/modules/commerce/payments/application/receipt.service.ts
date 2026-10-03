@@ -534,6 +534,25 @@ export class ReceiptService {
     return { disposition, credit };
   }
 
+  /**
+   * Owner spec §2.4 (Codex 4170910529): whether the customer's OWN payment already holds a
+   * filed receipt — a yes/no, never the files. The bot's «پرداخت را انجام دادم» turn asks it
+   * after drawing the receipt prompt, so a receipt filed while that turn was still running
+   * ends the invoice message in its final state rather than leaving the prompt on it.
+   * Charged the permission the customer files with; another customer's payment is `false`.
+   */
+  async filedForCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    paymentId: PaymentId,
+  ): Promise<boolean> {
+    await this.deps.guard.check(scope, actor, RECEIPT_SUBMIT_PERMISSION);
+    const payment = await this.deps.payments.findById(scope, paymentId);
+    if (payment === null || payment.customerId !== customerId) return false;
+    return (await this.deps.receipts.countForPayment(scope, paymentId, undefined)) > 0;
+  }
+
   async listForPayment(
     scope: TenantContext,
     actor: ActorContext,

@@ -32,10 +32,12 @@ describe('the promotional opt-out on Telegram', () => {
   it('offers the reverse of the held preference, and registers /stop with a described command', () => {
     expect(marketingPreferenceButton(true)).toEqual({
       label: { kind: 'TEMPLATE', key: 'bot.marketing.opt_in_button' },
+      inline: 'marketing.opt_in',
       data: MARKETING_OPT_IN_CALLBACK_DATA,
     });
     expect(marketingPreferenceButton(false)).toEqual({
       label: { kind: 'TEMPLATE', key: 'bot.marketing.opt_out_button' },
+      inline: 'marketing.opt_out',
       data: MARKETING_OPT_OUT_CALLBACK_DATA,
     });
     const stop = BOT_COMMANDS.find((entry) => entry.command === 'stop');

@@ -347,7 +347,7 @@ import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/n
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
-import type { FxSource } from '@nexa/contracts';
+import type { FxSource, InlineButtonStyles } from '@nexa/contracts';
 import {
   FX_REFRESH_INTERVAL_MS,
   FxRefreshLoop,
@@ -3929,6 +3929,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     config.NOTIFICATION_SEND_TIMEOUT_MS,
     mainMenuLayout,
     appearanceReader,
+    // Owner spec §6: the inline buttons' styles, the tenant's `bot.inline_buttons`.
+    {
+      stylesFor: (scope) =>
+        settingsResolver.valueOf<InlineButtonStyles>(scope, 'bot.inline_buttons'),
+    },
   );
   const appearance = new AppearanceService({
     repository: appearanceRepository,

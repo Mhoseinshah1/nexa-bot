@@ -4,6 +4,7 @@ import {
   DEFAULT_TEMPLATE_PRESENTATION,
   formatDateOnly,
   formatDateTime,
+  formatTimeOnly,
   renderTemplateBody,
   type TemplatePresentation,
 } from '@nexa/i18n';
@@ -94,5 +95,43 @@ describe('renderTemplateBody with a presentation', () => {
     expect(renderTemplateBody(definition, 'در {at}', { at: AT })).toBe(
       'در 2026-09-24T18:30:00.000Z',
     );
+  });
+});
+
+/*
+ * Owner spec §3: the account screen shows TODAY and the TIME separately, in the tenant's zone
+ * and calendar — `DATE` and `TIME` placeholders over the same `Date`.
+ */
+describe('DATE and TIME placeholders', () => {
+  const definition: TemplateDefinition = {
+    key: 'test.now',
+    description: 'Not registered. Exists only in this file.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      { token: 'd', type: 'DATE', description: 'Day.', required: true, repeatable: false },
+      { token: 't', type: 'TIME', description: 'Time.', required: true, repeatable: false },
+    ],
+  };
+  // 23:22 in Tehran on 1405/07/10 (2026-10-02T19:52Z): the evening crosses no day boundary.
+  const NOW = new Date('2026-10-02T19:52:00Z');
+
+  it('renders the Jalali date and the 24-hour time in the tenant zone', () => {
+    expect(
+      renderTemplateBody(
+        definition,
+        'تاریخ: {d}\nساعت: {t}',
+        { d: NOW, t: NOW },
+        'fa',
+        TEHRAN_JALALI,
+      ),
+    ).toBe('تاریخ: 1405/07/10\nساعت: 23:22');
+    expect(formatTimeOnly(NOW, UTC_GREGORIAN)).toBe('19:52');
+  });
+
+  it('follows the zone across midnight: the date is the tenant’s, not UTC’s', () => {
+    const late = new Date('2026-10-02T21:00:00Z'); // 00:30 on the 3rd in Tehran
+    expect(formatDateOnly(late, TEHRAN_JALALI)).toBe('1405/07/11');
+    expect(formatTimeOnly(late, TEHRAN_JALALI)).toBe('00:30');
+    expect(formatDateOnly(late, UTC_GREGORIAN)).toBe('2026/10/02');
   });
 });

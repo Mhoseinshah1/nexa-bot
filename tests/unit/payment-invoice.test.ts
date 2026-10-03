@@ -7,6 +7,7 @@ import {
 } from '@nexa/contracts';
 import { createTranslator } from '@nexa/i18n';
 import { PaymentDestinationRenderer } from '../../apps/api/src/modules/commerce/payments/infrastructure/destination-renderer';
+import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 
 /**
  * The invoice layout is a requirement, so it is pinned by a test rather than by the
@@ -30,11 +31,14 @@ describe('the manual-transfer invoice', () => {
     }) as PaymentDestinationSnapshot;
 
   async function invoice(over: Partial<PaymentDestinationSnapshot> = {}): Promise<string> {
-    return translator.translate('bot.payment.transfer_instructions', {
-      destination: await renderer.render(scope, snapshot(over)),
-      total,
-      reference: 'NX-7781',
-    });
+    // As a customer with no custom emoji reads it (owner spec §4: markers, fallback emoji).
+    return appearanceFallbackText(
+      translator.translate('bot.payment.transfer_instructions', {
+        destination: await renderer.render(scope, snapshot(over)),
+        total,
+        reference: 'NX-7781',
+      }),
+    );
   }
 
   it('renders the owner layout in order: heading, invoice id, amount, card, holder', async () => {

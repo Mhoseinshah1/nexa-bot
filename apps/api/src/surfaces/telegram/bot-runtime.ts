@@ -108,6 +108,11 @@ import type {
   CustomerEditMessage,
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
+import {
+  inlineDataLabel,
+  inlineLabel,
+} from '../../modules/commerce/messaging/application/inline-buttons.js';
+import type { InlineButtonKey } from '@nexa/contracts';
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
 import {
   CATEGORY_SORT_ORDER_MAX,
@@ -1135,6 +1140,14 @@ export { SERVICE_CARD_CALLBACK_PREFIX };
 export const SERVICE_NOTE_CALLBACK_PREFIX = 'nt:';
 export const SERVICE_RENEW_QUOTE_CALLBACK_PREFIX = 'nr:';
 export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
+/**
+ * Owner spec §2.2: open the wallet screen, or the catalogue, as a NEW message — the two
+ * buttons under a wallet-credit message, which must stay in the chat as the record of the
+ * credit. No id and no state: a tap on one a year later opens today's wallet or catalogue,
+ * which is exactly what it says. Neither is a wizard button, so neither edits the message.
+ */
+export const WALLET_OPEN_CALLBACK_DATA = 'wo:';
+export const CATALOG_OPEN_CALLBACK_DATA = 'co:';
 
 /**
  * The management panel's prefixes (Phase 5T), deliberately UPPERCASE.
@@ -1349,19 +1362,14 @@ function membershipRequired(
     const url = telegramChannelJoinUrl(channel);
     if (url === null) return;
     buttons.push({
-      label:
-        channel.handle !== undefined
-          ? { kind: 'TEXT', text: channel.handle }
-          : {
-              kind: 'TEMPLATE',
-              key: 'bot.channels.join_private_button',
-              values: { number: index + 1 },
-            },
+      ...(channel.handle !== undefined
+        ? inlineDataLabel('channels.join_public', { kind: 'TEXT', text: channel.handle })
+        : inlineLabel('channels.join_private', { number: index + 1 })),
       url,
     });
   });
   buttons.push({
-    label: { kind: 'TEMPLATE', key: 'bot.channels.check_button' },
+    ...inlineLabel('channels.check'),
     data: MEMBERSHIP_CHECK_CALLBACK_DATA,
   });
   return {
@@ -2567,6 +2575,13 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === MAIN_MENU_CALLBACK_DATA) {
       return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };
+    }
+    // Owner spec §2.2: the wallet-credit message's two next actions.
+    if (data === WALLET_OPEN_CALLBACK_DATA) {
+      return { intent: 'WALLET', targetId: null, callbackQueryId: id };
+    }
+    if (data === CATALOG_OPEN_CALLBACK_DATA) {
+      return { intent: 'CATALOG', targetId: null, callbackQueryId: id };
     }
     if (data === MEMBERSHIP_CHECK_CALLBACK_DATA) {
       return { intent: 'MEMBERSHIP_CHECK', targetId: null, callbackQueryId: id };
@@ -3835,7 +3850,7 @@ export interface BotRuntimeDeps {
    */
   readonly receipts: Pick<
     ReceiptService,
-    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf' | 'finalRecord'
+    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf' | 'finalRecord' | 'filedForCustomer'
   >;
   /**
    * The reviewer's amount capture for the credit-to-wallet disposition (Payment File 02
@@ -9953,10 +9968,15 @@ export class BotRuntime {
       return this.serviceRefresh(scope, actor, customer, command.targetId, input.idempotencyKey);
     }
     if (command.intent === 'SERVICE_CARD' && command.targetId !== null) {
-      return {
-        ...(await this.serviceDetail(scope, actor, customer, command.targetId)),
-        edit: true,
-      };
+      const card = await this.serviceDetail(scope, actor, customer, command.targetId);
+      /*
+       * Owner spec §2.3: a stale tap — a service transferred, refunded or never theirs —
+       * still edits the list's message, and keeps the way back to the list on it, so the
+       * customer is never left on a dead end where their list was.
+       */
+      return card.key === 'bot.service.not_found'
+        ? { ...card, buttons: [backToListButton()], edit: true }
+        : { ...card, edit: true };
     }
     /*
      * Round N (F4): every screen a service card's button opens is edited INTO the card's
@@ -10217,7 +10237,9 @@ export class BotRuntime {
     if (command.intent === 'SERVICES_PAGE') {
       // A keyset token from a message older than the paged list lands on page 1: the
       // token names a position in an ordering this list no longer uses.
-      return this.services(scope, customer, command.page ?? 1);
+      // Owner spec §2.3: a page, and «back to the list» from a card, EDIT the tapped
+      // message — the list, the card and the list again are one message.
+      return { ...(await this.services(scope, customer, command.page ?? 1)), edit: true };
     }
     if (command.intent === 'SERVICE' && command.targetId !== null) {
       return this.serviceDetail(scope, actor, customer, command.targetId);
@@ -10395,12 +10417,9 @@ export class BotRuntime {
     }
     const buttons: CustomerButton[] = page.items.map((service) => ({
       // The REAL username on the panel, as the approved list shows it; never the title.
-      label: {
-        kind: 'TEMPLATE' as const,
-        key: 'bot.service.list_item_button' as const,
-        values: { username: service.providerUsername },
-      },
-      data: `${SERVICE_CALLBACK_PREFIX}${service.id}`,
+      ...inlineLabel('services.item', { username: service.providerUsername }),
+      // Owner spec §2.3: the card IN PLACE of the list (`sv:`); its back (`sl:`) the list again.
+      data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
     }));
     buttons.push(...servicesListControls(page.page, page.pages));
     return {
@@ -10487,13 +10506,13 @@ export class BotRuntime {
       const buttons: CustomerButton[] = [];
       if (await this.deps.services.customerSyncOffered(scope, service)) {
         buttons.push({
-          label: { kind: 'TEMPLATE', key: 'bot.service.refresh_button' },
+          ...inlineLabel('service.refresh'),
           data: `${SERVICE_REFRESH_CALLBACK_PREFIX}${service.id}`,
           row: 0,
         });
       }
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+        ...inlineLabel('service.back_to_list'),
         data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
         row: 5,
       });
@@ -10512,7 +10531,7 @@ export class BotRuntime {
     const buttons: CustomerButton[] = [];
     if (await this.deps.services.customerSyncOffered(scope, service)) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.refresh_button' },
+        ...inlineLabel('service.refresh'),
         data: `${SERVICE_REFRESH_CALLBACK_PREFIX}${service.id}`,
         row: 0,
       });
@@ -10523,14 +10542,14 @@ export class BotRuntime {
       (await this.deps.subscriptionFiles.offered(scope, service))
     ) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.files_button' },
+        ...inlineLabel('service.files'),
         data: `${SERVICE_FILES_CALLBACK_PREFIX}${service.id}`,
         row: 0,
       });
     }
     if (ProvisioningService.isDeliverable(service)) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.link_button' },
+        ...inlineLabel('service.link'),
         data: `${SERVICE_RESEND_CALLBACK_PREFIX}${service.id}`,
         row: 1,
       });
@@ -10538,27 +10557,27 @@ export class BotRuntime {
     const rotation = await this.deps.services.customerRotationFor(scope, service);
     if (rotation.offered) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.rotate_button' },
+        ...inlineLabel('service.rotate'),
         data: `${SERVICE_ROTATE_ASK_CALLBACK_PREFIX}${service.id}`,
         row: 1,
       });
     }
     buttons.push({
-      label: { kind: 'TEMPLATE', key: 'bot.service.note_button' },
+      ...inlineLabel('service.note'),
       data: `${SERVICE_NOTE_CALLBACK_PREFIX}${service.id}`,
       row: 2,
     });
     const commercial = await this.deps.commercial.availableFor(scope, actor, service);
     if (commercial.includes('ADD_TRAFFIC')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.add_traffic_button' },
+        ...inlineLabel('service.add_traffic'),
         data: `${SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX}${service.id}`,
         row: 2,
       });
     }
     if (commercial.includes('RENEW') || commercial.includes('ADD_TIME')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.renew_button' },
+        ...inlineLabel('service.renew'),
         data: `${SERVICE_RENEW_CALLBACK_PREFIX}${service.id}`,
         row: 3,
       });
@@ -10571,7 +10590,7 @@ export class BotRuntime {
      */
     if (commercial.includes('ADD_DEVICES')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.add_devices_button' },
+        ...inlineLabel('service.add_devices'),
         data: `${SERVICE_ADD_DEVICES_CALLBACK_PREFIX}${service.id}`,
         // Its own row, drawn just below renew: an unused number is a new row where it
         // first appears, and 3 already holds renew and the on/off switch.
@@ -10586,7 +10605,7 @@ export class BotRuntime {
      */
     if (commercial.includes('CHANGE_LOCATION')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.change_location_button' },
+        ...inlineLabel('service.change_location'),
         data: `${SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX}${service.id}`,
         row: 8,
       });
@@ -10594,14 +10613,14 @@ export class BotRuntime {
     const actions = await this.deps.services.customerActionsFor(scope, service);
     if (actions.includes('SUSPEND')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.suspend_button' },
+        ...inlineLabel('service.suspend'),
         data: `${SERVICE_SUSPEND_CALLBACK_PREFIX}${service.id}`,
         row: 3,
       });
     }
     if (actions.includes('RESUME')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.resume_button' },
+        ...inlineLabel('service.resume'),
         data: `${SERVICE_RESUME_CALLBACK_PREFIX}${service.id}`,
         row: 3,
       });
@@ -10610,7 +10629,7 @@ export class BotRuntime {
     // apart from the everyday actions above it.
     if ((await this.deps.serviceRefunds?.offeredFor(scope, service)) === true) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.refund_request_button' },
+        ...inlineLabel('service.refund_request'),
         data: `${SERVICE_REFUND_ASK_CALLBACK_PREFIX}${service.id}`,
         row: 4,
       });
@@ -10618,13 +10637,13 @@ export class BotRuntime {
     // Package F: beside the refund request — both hand the service away for good.
     if ((await this.deps.serviceTransfers?.offered(scope, service)) === true) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.transfer_button' },
+        ...inlineLabel('service.transfer'),
         data: `${SERVICE_TRANSFER_ASK_CALLBACK_PREFIX}${service.id}`,
         row: 4,
       });
     }
     buttons.push({
-      label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+      ...inlineLabel('service.back_to_list'),
       data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
       row: 5,
     });
@@ -10725,15 +10744,11 @@ export class BotRuntime {
         ...offer.addons
           .filter((addon): addon is typeof addon & { price: Money } => addon.price !== null)
           .map((addon) => ({
-            label: {
-              kind: 'TEMPLATE' as const,
-              key: 'bot.service.addon_option' as const,
-              // The VALUES the key declares. Before the customer UX completion they were
-              // put on a label that carried none, so the resolver threw and the screen
-              // never sent; the label type carries values now and the messenger renders
-              // them. A MONEY value, so the currency is the catalogue's, never typed.
-              values: { title: addon.title, price: addon.price },
-            },
+            // The VALUES the key declares. Before the customer UX completion they were
+            // put on a label that carried none, so the resolver threw and the screen
+            // never sent; the label type carries values now and the messenger renders
+            // them. A MONEY value, so the currency is the catalogue's, never typed.
+            ...inlineLabel('service.addon_option', { title: addon.title, price: addon.price }),
             data: `${prefix}${encodeIdPair(serviceId, addon.id)}`,
           })),
         backToServiceButton(serviceId),
@@ -10772,14 +10787,10 @@ export class BotRuntime {
     const buttons: CustomerButton[] = [];
     for (let quantity = 1; quantity <= shown; quantity += 1) {
       buttons.push({
-        label: {
-          kind: 'TEMPLATE',
-          key: 'bot.service.devices_option',
-          values: {
-            quantity,
-            price: money(unit.amountMinor * BigInt(quantity), unit.currency),
-          },
-        },
+        ...inlineLabel('service.devices_option', {
+          quantity,
+          price: money(unit.amountMinor * BigInt(quantity), unit.currency),
+        }),
         data: encodeDeviceQuantity(serviceId, devices.addon.id, quantity),
         // Two to a row, so a maximum of twenty stays a readable keyboard.
         row: Math.floor((quantity - 1) / 2),
@@ -10829,18 +10840,9 @@ export class BotRuntime {
     }
     const shown = locations.targets.slice(0, LOCATION_TARGETS_SHOWN);
     const buttons: CustomerButton[] = shown.map((target, index) => ({
-      label:
-        target.price.amountMinor === 0n
-          ? {
-              kind: 'TEMPLATE' as const,
-              key: 'bot.service.location_option_free' as const,
-              values: { location: target.label },
-            }
-          : {
-              kind: 'TEMPLATE' as const,
-              key: 'bot.service.location_option' as const,
-              values: { location: target.label, price: target.price },
-            },
+      ...(target.price.amountMinor === 0n
+        ? inlineLabel('service.location_option_free', { location: target.label })
+        : inlineLabel('service.location_option', { location: target.label, price: target.price })),
       data: `${SERVICE_LOCATION_TARGET_CALLBACK_PREFIX}${encodeIdPair(serviceId, target.id)}`,
       row: index,
     }));
@@ -10900,7 +10902,7 @@ export class BotRuntime {
       values: { fromLocation: decided.current.label, toLocation: decided.target.label },
       buttons: [
         {
-          label: { kind: 'TEMPLATE', key: 'bot.service.location_confirm_button' },
+          ...inlineLabel('service.location_confirm'),
           data: `${SERVICE_LOCATION_CONFIRM_CALLBACK_PREFIX}${encodeIdPair(serviceId, locationId)}`,
           row: 0,
         },
@@ -11281,7 +11283,7 @@ export class BotRuntime {
       values: { cooldownHours: offer.cooldownHours },
       buttons: [
         {
-          label: { kind: 'TEMPLATE', key: 'bot.service.rotate_confirm_button' },
+          ...inlineLabel('service.rotate_confirm'),
           data: `${SERVICE_ROTATE_CALLBACK_PREFIX}${service.id}`,
           row: 0,
         },
@@ -11517,12 +11519,9 @@ export class BotRuntime {
         values: { query: query.toLowerCase() },
         buttons: [
           ...found.map((service) => ({
-            label: {
-              kind: 'TEMPLATE' as const,
-              key: 'bot.service.list_item_button' as const,
-              values: { username: service.providerUsername },
-            },
-            data: `${SERVICE_CALLBACK_PREFIX}${service.id}`,
+            ...inlineLabel('services.item', { username: service.providerUsername }),
+            // Owner spec §2.3: the card IN PLACE of the list (`sv:`); its back (`sl:`) the list again.
+            data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
           })),
           backToListButton(),
         ],
@@ -11605,7 +11604,7 @@ export class BotRuntime {
   ): Promise<PendingReply> {
     const amountStep: WizardDirective = { kind: 'TOPUP', step: 'AMOUNT', subjectId: captureId };
     const close = {
-      label: { kind: 'TEMPLATE' as const, key: 'bot.wallet.topup_close_button' as const },
+      ...inlineLabel('list.close'),
       data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
     };
     if (result.outcome === 'GONE') {
@@ -11652,7 +11651,7 @@ export class BotRuntime {
     routes: readonly TopupRoute[],
   ): Promise<PendingReply> {
     const close = {
-      label: { kind: 'TEMPLATE' as const, key: 'bot.wallet.topup_close_button' as const },
+      ...inlineLabel('list.close'),
       data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
     };
     const methods: WizardDirective = { kind: 'TOPUP', step: 'METHODS', subjectId: captureId };
@@ -11669,14 +11668,9 @@ export class BotRuntime {
     for (const route of routes) {
       const name = await this.deps.screens.routeName(scope, route);
       buttons.push({
-        label:
-          route.topupCashbackPercent > 0
-            ? {
-                kind: 'TEMPLATE',
-                key: 'bot.wallet.topup_method_gift_button',
-                values: { name, percent: route.topupCashbackPercent },
-              }
-            : { kind: 'TEMPLATE', key: 'bot.wallet.topup_method_button', values: { name } },
+        ...(route.topupCashbackPercent > 0
+          ? inlineLabel('payment.route_gift', { name, percent: route.topupCashbackPercent })
+          : inlineLabel('payment.route', { name })),
         data: `${TOPUP_ROUTE_CALLBACK_PREFIX}${captureId}.${route.provider}`,
       });
     }
@@ -11826,7 +11820,7 @@ export class BotRuntime {
       values: { service: service.providerUsername, product: title ?? '—' },
       buttons: [
         {
-          label: { kind: 'TEMPLATE', key: 'bot.service.refund_request_confirm_button' },
+          ...inlineLabel('service.refund_request_confirm'),
           data: `${SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX}${service.id}`,
           row: 0,
         },
@@ -12064,7 +12058,7 @@ export class BotRuntime {
       values: preview.values,
       buttons: [
         {
-          label: { kind: 'TEMPLATE', key: 'bot.service.transfer_confirm_button' },
+          ...inlineLabel('service.transfer_confirm'),
           data: confirm,
           row: 0,
         },
@@ -12105,7 +12099,7 @@ export class BotRuntime {
         // The service is not theirs any more: back to the list, not to it.
         buttons: [
           {
-            label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+            ...inlineLabel('service.back_to_list'),
             data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
           },
         ],
@@ -12190,11 +12184,7 @@ export class BotRuntime {
       const product = renewal?.product ?? null;
       if (product !== null && product.price !== null) {
         buttons.push({
-          label: {
-            kind: 'TEMPLATE',
-            key: 'bot.service.renew_option_button',
-            values: { title: product.title, price: product.price },
-          },
+          ...inlineLabel('service.renew_option', { title: product.title, price: product.price }),
           data: `${SERVICE_RENEW_QUOTE_CALLBACK_PREFIX}${service.id}`,
         });
       }
@@ -12204,11 +12194,7 @@ export class BotRuntime {
       for (const addon of packages?.addons ?? []) {
         if (addon.price === null) continue;
         buttons.push({
-          label: {
-            kind: 'TEMPLATE',
-            key: 'bot.service.addon_option',
-            values: { title: addon.title, price: addon.price },
-          },
+          ...inlineLabel('service.addon_option', { title: addon.title, price: addon.price }),
           data: `${SERVICE_BUY_TIME_CALLBACK_PREFIX}${encodeIdPair(service.id, addon.id)}`,
         });
       }
@@ -12329,15 +12315,11 @@ export class BotRuntime {
     const buttons: CustomerButton[] = [];
     for (const ticket of tickets) {
       buttons.push({
-        label: {
-          kind: 'TEMPLATE',
-          key: 'bot.ticket.list_item_button',
-          values: {
-            status: await desk.screens.statusLabel(scope, ticket.status),
-            number: ticket.number,
-            category: ticket.categoryTitle,
-          },
-        },
+        ...inlineLabel('tickets.item', {
+          status: await desk.screens.statusLabel(scope, ticket.status),
+          number: ticket.number,
+          category: ticket.categoryTitle,
+        }),
         data: `${TICKET_VIEW_CALLBACK_PREFIX}${ticket.id}`,
       });
     }
@@ -12382,11 +12364,7 @@ export class BotRuntime {
       values: {},
       buttons: [
         ...categories.map((category) => ({
-          label: {
-            kind: 'TEMPLATE' as const,
-            key: 'bot.ticket.category_button' as const,
-            values: { title: category.title },
-          },
+          ...inlineLabel('tickets.category', { title: category.title }),
           data: `${TICKET_CATEGORY_CALLBACK_PREFIX}${category.id}`,
         })),
         ticketsButton(),
@@ -12472,11 +12450,11 @@ export class BotRuntime {
         ...(active
           ? [
               {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.ticket.reply_button' as const },
+                ...inlineLabel('tickets.reply'),
                 data: `${TICKET_REPLY_CALLBACK_PREFIX}${ticket.id}`,
               },
               {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.ticket.close_button' as const },
+                ...inlineLabel('tickets.close'),
                 data: `${TICKET_CLOSE_ASK_CALLBACK_PREFIX}${ticket.id}`,
               },
             ]
@@ -12546,7 +12524,7 @@ export class BotRuntime {
       values: { number: found.ticket.number },
       buttons: [
         {
-          label: { kind: 'TEMPLATE', key: 'bot.ticket.close_confirm_button' },
+          ...inlineLabel('tickets.close_confirm'),
           data: `${TICKET_CLOSE_CALLBACK_PREFIX}${found.ticket.id}`,
         },
         ticketViewButton(found.ticket.id),
@@ -12826,7 +12804,7 @@ export class BotRuntime {
         ? []
         : [
             {
-              label: { kind: 'TEMPLATE' as const, key: 'bot.support.contact_button' as const },
+              ...inlineLabel('support.contact'),
               url: screen.supportUrl,
             },
           ]),
@@ -12995,7 +12973,7 @@ export class BotRuntime {
     const leading: CustomerButton[] = [];
     if (page === 0 && (await this.customServiceOffered(scope, actor, customer))) {
       leading.push({
-        label: { kind: 'TEMPLATE', key: 'bot.custom_service.button' },
+        ...inlineLabel('catalog.custom_service'),
         data: CUSTOM_SERVICE_CALLBACK_DATA,
       });
     }
@@ -13008,22 +12986,22 @@ export class BotRuntime {
       ...items.map((category) => ({
         // Operator text, exactly as a product title is. The emoji is optional and its
         // absence renders as an ordinary category — §6.1.
-        label: {
-          kind: 'TEXT' as const,
+        ...inlineDataLabel('catalog.category', {
+          kind: 'TEXT',
           text: category.emoji === null ? category.name : `${category.emoji} ${category.name}`,
-        },
+        }),
         data: `${CATEGORY_CALLBACK_PREFIX}${category.id}.0`,
       })),
     );
     if (page > 0) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.catalog.previous_page_button' },
+        ...inlineLabel('catalog.previous_page'),
         data: `${CATALOG_PAGE_CALLBACK_PREFIX}${page - 1}`,
       });
     }
     if (hasMore && page < CATALOG_BROWSE_MAX_PAGE) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.catalog.next_page_button' },
+        ...inlineLabel('catalog.next_page'),
         data: `${CATALOG_PAGE_CALLBACK_PREFIX}${page + 1}`,
       });
     }
@@ -13063,7 +13041,7 @@ export class BotRuntime {
       key: 'bot.custom_service.locations',
       values: {},
       buttons: locations.map((location) => ({
-        label: { kind: 'TEXT' as const, text: location.label },
+        ...inlineDataLabel('custom_service.location', { kind: 'TEXT', text: location.label }),
         data: `${CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX}${location.panelId}`,
       })),
       orderId: null,
@@ -13192,15 +13170,11 @@ export class BotRuntime {
       values: {},
       buttons: [
         ...result.offers.map((offer) => ({
-          label: {
-            kind: 'TEMPLATE' as const,
-            key: 'bot.trial.panel_button' as const,
-            values: {
-              label: offer.label,
-              traffic: offer.trafficBytes,
-              hours: offer.durationHours,
-            },
-          },
+          ...inlineLabel('trial.panel', {
+            label: offer.label,
+            traffic: offer.trafficBytes,
+            hours: offer.durationHours,
+          }),
           data: `${TRIAL_PANEL_CALLBACK_PREFIX}${offer.panelId}`,
         })),
         mainMenuButton(),
@@ -13275,7 +13249,7 @@ export class BotRuntime {
       customerId,
     );
     const back: CustomerButton = {
-      label: { kind: 'TEMPLATE', key: 'bot.catalog.back_to_categories_button' },
+      ...inlineLabel('catalog.back_to_categories'),
       data: `${CATALOG_PAGE_CALLBACK_PREFIX}0`,
     };
     if (items.length === 0) {
@@ -13295,19 +13269,23 @@ export class BotRuntime {
       // because a plan whose price a customer cannot see is one they cannot consent to.
       if (product.price === null) continue;
       buttons.push({
-        label: { kind: 'TEXT', text: product.title, amount: product.price },
+        ...inlineDataLabel('catalog.product', {
+          kind: 'TEXT',
+          text: product.title,
+          amount: product.price,
+        }),
         data: `${ORDER_CALLBACK_PREFIX}${product.id}`,
       });
     }
     if (page > 0) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.catalog.previous_page_button' },
+        ...inlineLabel('catalog.previous_page'),
         data: `${CATEGORY_CALLBACK_PREFIX}${categoryId}.${page - 1}`,
       });
     }
     if (hasMore && page < CATALOG_BROWSE_MAX_PAGE) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.catalog.next_page_button' },
+        ...inlineLabel('catalog.next_page'),
         data: `${CATEGORY_CALLBACK_PREFIX}${categoryId}.${page + 1}`,
       });
     }
@@ -13593,13 +13571,13 @@ export class BotRuntime {
     const buttons: CustomerButton[] = [];
     if (step.modes.includes('CUSTOM')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.username.custom_button' },
+        ...inlineLabel('username.custom'),
         data: `${USERNAME_CUSTOM_CALLBACK_PREFIX}${order.id}`,
       });
     }
     if (step.modes.includes('AUTOMATIC')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.username.automatic_button' },
+        ...inlineLabel('username.automatic'),
         data: `${USERNAME_AUTOMATIC_CALLBACK_PREFIX}${order.id}`,
       });
     }
@@ -13884,6 +13862,8 @@ export class BotRuntime {
       paidInvoiceCount: counters.paidInvoices,
       referralCount,
       group: reseller === null ? 'CUSTOMER' : 'RESELLER',
+      // Owner spec §3: when the screen was drawn, not when anything happened.
+      now: this.deps.clock.now(),
     });
     return {
       key: summary.key,
@@ -13892,7 +13872,7 @@ export class BotRuntime {
         ...(fundable
           ? [
               {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.wallet.topup_button' as const },
+                ...inlineLabel('wallet.topup'),
                 data: TOPUP_MENU_CALLBACK_PREFIX,
               },
             ]
@@ -13984,14 +13964,14 @@ export class BotRuntime {
       values: dashboard.values,
       buttons: [
         {
-          label: { kind: 'TEMPLATE', key: 'bot.referral.share_button' },
+          ...inlineLabel('referral.share'),
           // Telegram's own share sheet, with the customer's link as the payload.
           url: `https://t.me/share/url?url=${encodeURIComponent(invite.link)}`,
         },
         ...(claimable
           ? [
               {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.referral.gift_button' as const },
+                ...inlineLabel('referral.gift'),
                 data: REFERRAL_GIFT_CALLBACK_DATA,
               },
             ]
@@ -14056,11 +14036,11 @@ export class BotRuntime {
       },
       buttons: [
         ...presets.map((preset) => ({
-          label: { kind: 'AMOUNT' as const, amount: preset },
+          ...inlineDataLabel('wallet.topup_amount', { kind: 'AMOUNT', amount: preset }),
           data: `${TOPUP_PICK_CALLBACK_PREFIX}${preset.amountMinor.toString()}`,
         })),
         {
-          label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_close_button' },
+          ...inlineLabel('list.close'),
           data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${begun.capture.id}`,
         },
       ],
@@ -14355,7 +14335,7 @@ export class BotRuntime {
         orderId,
       });
       const close: CustomerButton = {
-        label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_close_button' },
+        ...inlineLabel('list.close'),
         data: `${PAY_METHODS_CLOSE_CALLBACK_PREFIX}${order.id}`,
       };
       if (order.state !== 'DRAFT' && order.state !== 'AWAITING_PAYMENT') {
@@ -14701,12 +14681,12 @@ export class BotRuntime {
         ? []
         : [
             {
-              label: { kind: 'TEMPLATE', key: 'bot.payment.copy_card_button' },
+              ...inlineLabel('payment.copy_card'),
               copyText: destination.cardNumber,
               row: 0,
             },
             {
-              label: { kind: 'TEMPLATE', key: 'bot.payment.copy_amount_button' },
+              ...inlineLabel('payment.copy_amount'),
               copyText: plainAmount(payment.amount),
               row: 0,
             },
@@ -14763,11 +14743,11 @@ export class BotRuntime {
          * the nearest thumb.
          */
         {
-          label: { kind: 'TEMPLATE', key: 'bot.payment.sent_button' },
+          ...inlineLabel('payment.sent'),
           data: `${PAY_SENT_CALLBACK_PREFIX}${payment.id}`,
         },
         {
-          label: { kind: 'TEMPLATE', key: 'bot.payment.cancel_button' },
+          ...inlineLabel('payment.cancel'),
           data: `${CANCEL_PAY_ASK_CALLBACK_PREFIX}${payment.id}`,
         },
       ],
@@ -14825,7 +14805,7 @@ export class BotRuntime {
       values: {},
       buttons: [
         {
-          label: { kind: 'TEMPLATE', key: 'bot.payment.cancel_confirm_button' },
+          ...inlineLabel('payment.cancel_confirm'),
           data: `${CANCEL_PAY_CALLBACK_PREFIX}${payment.id}`,
         },
       ],
@@ -14883,19 +14863,32 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      const { receiptWindow } = await this.deps.payments.signalTransferSent(
+      const { payment, receiptWindow } = await this.deps.payments.signalTransferSent(
         scope,
         actor,
         customer.id,
         { idempotencyKey: `${idempotencyKey}:pay-sent`, paymentId, botInstanceId },
       );
+      /*
+       * Owner spec §2.4: the tap EDITS the invoice it was on (its claim, `PAY_SENT`'s gate).
+       * The card details and the copy buttons go with the old screen; the wizard keeps its
+       * kind and its order, and names the payment so the receipt can find this message.
+       */
+      const screen = (step: 'RECEIPT_WAIT' | 'RECEIPT_REVIEW'): WizardDirective => ({
+        kind: payment.orderId === null ? 'TOPUP' : 'ORDER',
+        step,
+        paymentId: payment.id,
+        ...(payment.orderId === null ? {} : { subjectId: payment.orderId }),
+      });
       if (receiptWindow === null) {
         return {
           key: 'bot.payment.received_for_review',
           values: {},
+          // Nothing more to do on this message: no button, as the receipt's final state.
           buttons: [],
           orderId: null,
           fallback: { kind: 'PAYMENT_TRANSFER_RECORDED', subjectId: paymentId },
+          wizard: screen('RECEIPT_REVIEW'),
         };
       }
       return {
@@ -14907,8 +14900,19 @@ export class BotRuntime {
          * customer was told nothing at all after tapping the button.
          */
         values: { minutes: receiptWindow.minutes },
-        buttons: [],
+        /*
+         * Owner spec §2.4, state 2: the receipt is asked for, with no card details and no
+         * copy buttons. The withdrawal stays — the invoice it replaced offered it, and a
+         * customer who did not pay after all must still be able to close the payment.
+         */
+        buttons: [
+          {
+            ...inlineLabel('payment.cancel'),
+            data: `${CANCEL_PAY_ASK_CALLBACK_PREFIX}${payment.id}`,
+          },
+        ],
         orderId: null,
+        wizard: { ...screen('RECEIPT_WAIT'), receiptPrompt: { customerId: customer.id } },
         /*
          * The fallback is the CLAIM, not the prompt.
          *
@@ -14953,7 +14957,7 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      await this.deps.receipts.submit(scope, actor, customer.id, {
+      const submitted = await this.deps.receipts.submit(scope, actor, customer.id, {
         idempotencyKey: `${idempotencyKey}:receipt`,
         botInstanceId,
         file,
@@ -14964,7 +14968,30 @@ export class BotRuntime {
        * push is that event's consumer and its own lane — durable with the receipt, never
        * able to cost the customer this answer, and not lost by a crash after the commit.
        */
-      return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.payment.receipt_received',
+        values: {},
+        /*
+         * Owner spec §2.4, state 3: the ORIGINAL payment message is edited once more into
+         * the final sentence, with NO button — no status check, no resend, no cancel, no
+         * copy, no card details. Anchored on the chat's invoice of THIS payment waiting at
+         * the receipt prompt (or already final, for a further receipt of the same payment),
+         * either kind. With no such message — an invoice from before this release, or one
+         * Telegram will not edit — the same sentence goes out as its own message, as before.
+         */
+        buttons: [],
+        orderId: null,
+        wizard: {
+          kind: 'ORDER',
+          step: 'RECEIPT_REVIEW',
+          paymentId: submitted.paymentId,
+          anchor: {
+            steps: ['RECEIPT_WAIT', 'RECEIPT_REVIEW'],
+            paymentId: submitted.paymentId,
+            anyKind: true,
+          },
+        },
+      };
     } catch (error) {
       return refusal(error);
     }
@@ -15005,7 +15032,7 @@ export class BotRuntime {
         values: {},
         buttons: [
           {
-            label: { kind: 'TEMPLATE', key: 'bot.order.cancel_confirm_button' },
+            ...inlineLabel('order.cancel_confirm'),
             data: `${CANCEL_ORDER_CALLBACK_PREFIX}${order.id}`,
           },
         ],
@@ -15106,9 +15133,10 @@ export class BotRuntime {
       target = await state.claimLatest(scope, actor, {
         botInstanceId: input.botInstanceId,
         chatId,
-        kind: directive.kind,
+        kind: directive.anchor.anyKind === true ? null : directive.kind,
         steps: directive.anchor.steps,
         subjectId: directive.anchor.subjectId ?? null,
+        paymentId: directive.anchor.paymentId ?? null,
         updateKey: input.idempotencyKey,
       });
       if (target === null) return null;
@@ -15131,14 +15159,22 @@ export class BotRuntime {
       return null;
     }
     const loading = directive?.invoicePending === true && directive.paymentId != null;
+    const prompt =
+      directive?.receiptPrompt !== undefined && directive.paymentId != null
+        ? { customerId: directive.receiptPrompt.customerId, paymentId: directive.paymentId }
+        : null;
     const landed = await state.land(scope, actor, target, {
-      kind: directive?.kind ?? target.kind,
+      kind:
+        directive === undefined || directive.anchor?.anyKind === true
+          ? target.kind
+          : directive.kind,
       step: directive?.step ?? 'NOTICE',
       subjectId: directive?.subjectId !== undefined ? directive.subjectId : target.subjectId,
       paymentId: directive?.paymentId !== undefined ? directive.paymentId : target.paymentId,
       updateKey: input.idempotencyKey,
-      // The loading screen is landed at INVOICE_LOADING and HELD until it is marked below.
-      ...(loading ? { hold: true } : {}),
+      // The loading screen is landed at INVOICE_LOADING and HELD until it is marked below; the
+      // receipt prompt is held until it is on the message (Codex 4170910529).
+      ...(loading || prompt !== null ? { hold: true } : {}),
     });
     if (!landed) return 'NOT_ATTEMPTED';
     let edited = await editSent(
@@ -15185,6 +15221,7 @@ export class BotRuntime {
      * of this turn and the worker moves the mark first edits the message into the invoice or
      * the attempt's end, so neither waits for a status-check tap.
      */
+    if (prompt !== null) await this.settleReceiptPrompt(scope, actor, target, prompt);
     if (loading && directive.paymentId != null) {
       await state.moveAll(
         scope,
@@ -15196,6 +15233,49 @@ export class BotRuntime {
       await this.deps.invoiceScreens?.refresh(scope, directive.paymentId);
     }
     return edited.outcome;
+  }
+
+  /**
+   * Owner spec §2.4 (Codex 4170910529): the receipt prompt is on the message. Release its
+   * hold FIRST — from here a receipt's own turn can claim it and draw the final state — and
+   * THEN ask whether a receipt was filed meanwhile; if so, move the prompt on to the final
+   * state (one conditional move: a receipt turn that got there first leaves nothing to move)
+   * and edit it, with no button. A receipt filed before the release found the message held
+   * and went out as its own message; this is what still ends the invoice in its final state.
+   */
+  private async settleReceiptPrompt(
+    scope: TenantContext,
+    actor: ActorContext,
+    target: TelegramWizardRecord,
+    prompt: { readonly customerId: string; readonly paymentId: string },
+  ): Promise<void> {
+    const state = this.deps.messageState;
+    if (state === undefined) return;
+    const where = { paymentId: prompt.paymentId, id: target.id };
+    await state.moveAll(scope, actor, where, ['RECEIPT_WAIT'], 'RECEIPT_WAIT');
+    const filed = await this.deps.receipts.filedForCustomer(
+      scope,
+      actor,
+      prompt.customerId as UserId,
+      prompt.paymentId as PaymentId,
+    );
+    if (!filed) return;
+    const moved = await state.moveAll(scope, actor, where, ['RECEIPT_WAIT'], 'RECEIPT_REVIEW');
+    for (const wizard of moved) {
+      await editSent(
+        this.deps.messenger,
+        scope,
+        {
+          chatId: wizard.chatId,
+          messageId: wizard.messageId,
+          botInstanceId: wizard.botInstanceId,
+          templateKey: 'bot.payment.receipt_received',
+          values: {},
+          buttons: [],
+        },
+        false,
+      );
+    }
   }
 
   /**
@@ -15581,7 +15661,7 @@ export type { CustomerRecord };
 /** One route in a payment-method selector: the route's customer-facing name, and its tap. */
 function routeButton(name: string, data: string): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_method_button', values: { name } },
+    ...inlineLabel('payment.route', { name }),
     data,
   };
 }
@@ -15593,7 +15673,7 @@ function routeButton(name: string, data: string): CustomerButton {
  */
 function payMethodsButton(orderId: string): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.payment.manual_button' },
+    ...inlineLabel('payment.methods'),
     data: `${PAY_METHODS_CALLBACK_PREFIX}${orderId}`,
   };
 }
@@ -15629,7 +15709,7 @@ function starsInvoiceBody(
 function preinvoiceButtons(order: OrderRecord, routesOffered: boolean): readonly CustomerButton[] {
   return [
     {
-      label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
+      ...inlineLabel('payment.wallet'),
       data: `${WALLET_PAY_CALLBACK_PREFIX}${order.id}`,
     },
     ...(routesOffered ? [payMethodsButton(order.id)] : []),
@@ -15638,11 +15718,11 @@ function preinvoiceButtons(order: OrderRecord, routesOffered: boolean): readonly
       ? [
           order.discountCode === null
             ? {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.discount.enter_button' as const },
+                ...inlineLabel('discount.enter'),
                 data: `${DISCOUNT_CODE_ENTER_CALLBACK_PREFIX}${order.id}`,
               }
             : {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.discount.remove_button' as const },
+                ...inlineLabel('discount.remove'),
                 data: `${DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX}${order.id}`,
               },
         ]
@@ -15654,7 +15734,7 @@ function preinvoiceButtons(order: OrderRecord, routesOffered: boolean): readonly
 /** WP-A7: back to the customer's ticket list. */
 function ticketsButton(): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.ticket.back_button' },
+    ...inlineLabel('tickets.back'),
     data: TICKETS_CALLBACK_DATA,
   };
 }
@@ -15662,7 +15742,7 @@ function ticketsButton(): CustomerButton {
 /** WP-A7: the support screen's (and /paysupport's) way into the ticket desk. */
 function ticketDeskButton(): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.support.tickets_button' },
+    ...inlineLabel('support.tickets'),
     data: TICKETS_CALLBACK_DATA,
   };
 }
@@ -15670,7 +15750,7 @@ function ticketDeskButton(): CustomerButton {
 /** WP-A7: start a new ticket. */
 function newTicketButton(): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.ticket.new_button' },
+    ...inlineLabel('tickets.new'),
     data: TICKET_NEW_CALLBACK_DATA,
   };
 }
@@ -15678,7 +15758,7 @@ function newTicketButton(): CustomerButton {
 /** WP-A7: open one ticket's conversation. */
 function ticketViewButton(ticketId: string): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.ticket.view_button' },
+    ...inlineLabel('tickets.view'),
     data: `${TICKET_VIEW_CALLBACK_PREFIX}${ticketId}`,
   };
 }
@@ -15703,7 +15783,7 @@ function ticketAlreadyClosed(): PendingReply {
  */
 function cardCheck(paymentId: string): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_card_check_button' },
+    ...inlineLabel('payment.gateway_card_check'),
     data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${paymentId}`,
   };
 }
@@ -15747,11 +15827,11 @@ function cardTransferScreen(
     payment.expiresAt !== null &&
     at.getTime() < payment.expiresAt.getTime();
   const receipt: CustomerButton = {
-    label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_receipt_button' },
+    ...inlineLabel('payment.gateway_receipt'),
     data: `${GATEWAY_RECEIPT_CALLBACK_PREFIX}${payment.id}`,
   };
   const change: CustomerButton = {
-    label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_change_card_button' },
+    ...inlineLabel('payment.gateway_change_card'),
     data: `${GATEWAY_CARD_CHANGE_CALLBACK_PREFIX}${payment.id}`,
   };
   const actions = [
@@ -15880,10 +15960,10 @@ const PROVIDER_REVIEW_SCREEN_KEYS: Partial<
 /**
  * The label of the URL button that opens a provider's invoice page. NOWPayments carries the
  * owner's «💳 پرداخت با ارز دیجیتال» under its OWN key, isolated so the central inline-button
- * registry can take it over as `payment.nowpayments.open` without touching any other route.
+ * registry can take it over as `payment.nowpayments_open` without touching any other route.
  */
-const PROVIDER_PAY_BUTTON_KEYS: Partial<Record<PaymentGatewayProvider, TemplateKey>> = {
-  NOWPAYMENTS: 'bot.payment.nowpayments_pay_button',
+const PROVIDER_PAY_BUTTON_KEYS: Partial<Record<PaymentGatewayProvider, InlineButtonKey>> = {
+  NOWPAYMENTS: 'payment.nowpayments_open',
 };
 
 export function gatewayAttemptScreen(
@@ -15900,7 +15980,7 @@ export function gatewayAttemptScreen(
   const { payment, invoice } = attempt;
   const kind = payment.orderId === null ? ('TOPUP' as const) : ('ORDER' as const);
   const check: CustomerButton = {
-    label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_check_button' },
+    ...inlineLabel('payment.gateway_check'),
     data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${payment.id}`,
   };
   const retry: CustomerButton =
@@ -16054,10 +16134,7 @@ export function gatewayAttemptScreen(
     ...invoiceBody,
     buttons: [
       {
-        label: {
-          kind: 'TEMPLATE',
-          key: PROVIDER_PAY_BUTTON_KEYS[invoice.provider] ?? 'bot.payment.gateway_pay_button',
-        },
+        ...inlineLabel(PROVIDER_PAY_BUTTON_KEYS[invoice.provider] ?? 'payment.gateway_pay'),
         url: link,
       },
       check,
@@ -16082,7 +16159,7 @@ function trialUnavailable(): PendingReply {
 
 function mainMenuButton(): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.menu.main_button' },
+    ...inlineLabel('main_menu'),
     data: MAIN_MENU_CALLBACK_DATA,
   };
 }
@@ -16100,25 +16177,25 @@ function isMarketingOptOutDisabled(error: unknown): boolean {
 export function marketingPreferenceButton(optedOut: boolean): CustomerButton {
   return optedOut
     ? {
-        label: { kind: 'TEMPLATE', key: 'bot.marketing.opt_in_button' },
+        ...inlineLabel('marketing.opt_in'),
         data: MARKETING_OPT_IN_CALLBACK_DATA,
       }
     : {
-        label: { kind: 'TEMPLATE', key: 'bot.marketing.opt_out_button' },
+        ...inlineLabel('marketing.opt_out'),
         data: MARKETING_OPT_OUT_CALLBACK_DATA,
       };
 }
 
 function topupButton(): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_button' },
+    ...inlineLabel('wallet.topup'),
     data: TOPUP_MENU_CALLBACK_PREFIX,
   };
 }
 
 function backToListButton(): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+    ...inlineLabel('service.back_to_list'),
     data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
   };
 }
@@ -16217,8 +16294,10 @@ export function decodeTransferConfirm(data: string): {
  * (Package F). Handed to the notification lane by the composition root, because the
  * callback vocabulary is this surface's: the lane stores no button and carries no payload.
  *
- * Only `SERVICE_TRANSFER_RECEIVED` has one — «مشخصات سرویس», opening the service through
- * `getForCustomer` for whoever taps it.
+ * A transfer's and a renewal's open the service; support's reply opens the ticket; the
+ * low-balance alert offers the top-up and a wallet credit the wallet and the catalogue
+ * (owner spec §2) — those last are derived from the KIND alone. Every label and style is
+ * the registry's (`inlineLabel`); a button key is not a payload.
  */
 export function notificationButtons(
   kind: CustomerNotificationKind,
@@ -16228,20 +16307,39 @@ export function notificationButtons(
   if (kind === 'TICKET_REPLY' && subject.ticketId !== undefined) {
     return [
       {
-        label: { kind: 'TEMPLATE', key: 'bot.ticket.reply_button' },
+        ...inlineLabel('tickets.reply'),
         data: `${TICKET_REPLY_CALLBACK_PREFIX}${subject.ticketId}`,
       },
       {
-        label: { kind: 'TEMPLATE', key: 'bot.ticket.view_button' },
+        ...inlineLabel('tickets.view'),
         data: `${TICKET_VIEW_CALLBACK_PREFIX}${subject.ticketId}`,
       },
+    ];
+  }
+  /*
+   * Owner spec §2.1: the low-balance alert's one action, the top-up — the wallet screen's
+   * own «افزایش موجودی», so the flow it opens is the existing one, not a copy. No id: the
+   * tap's customer is the subject, and the top-up re-decides what it may offer.
+   */
+  if (kind === 'WALLET_LOW_BALANCE') {
+    return [{ ...inlineLabel('wallet.topup'), data: TOPUP_MENU_CALLBACK_PREFIX }];
+  }
+  /*
+   * Owner spec §2.2: a credit to the wallet — a confirmed top-up, or a receipt a reviewer
+   * credited — answers with the two useful next actions, side by side. Both open a NEW
+   * message, so the credit stays in the chat as its record.
+   */
+  if (kind === 'WALLET_TOPUP_CREDITED' || kind === 'RECEIPT_CREDITED_TO_WALLET') {
+    return [
+      { ...inlineLabel('wallet.open'), data: WALLET_OPEN_CALLBACK_DATA, row: 0 },
+      { ...inlineLabel('catalog.open'), data: CATALOG_OPEN_CALLBACK_DATA, row: 0 },
     ];
   }
   // R2 (item 11): the renewal result's one button opens the renewed service's card.
   if (kind === 'SERVICE_RENEWED' && subject.serviceId !== undefined) {
     return [
       {
-        label: { kind: 'TEMPLATE', key: 'bot.service.renewed_details_button' },
+        ...inlineLabel('service.renewed_details'),
         data: `${SERVICE_CALLBACK_PREFIX}${subject.serviceId}`,
       },
     ];
@@ -16249,7 +16347,7 @@ export function notificationButtons(
   if (kind !== 'SERVICE_TRANSFER_RECEIVED' || subject.serviceId === undefined) return [];
   return [
     {
-      label: { kind: 'TEMPLATE', key: 'bot.service.transfer_details_button' },
+      ...inlineLabel('service.transfer_details'),
       data: `${SERVICE_CALLBACK_PREFIX}${subject.serviceId}`,
     },
   ];
@@ -16258,7 +16356,7 @@ export function notificationButtons(
 /** R3: back to the service card, drawn IN PLACE (`sv:`). */
 function backToCardButton(serviceId: string): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_card_button' },
+    ...inlineLabel('service.back_to_card'),
     data: `${SERVICE_CARD_CALLBACK_PREFIX}${serviceId}`,
   };
 }
@@ -16326,37 +16424,37 @@ function inCard(serviceId: string, reply: PendingReply): PendingReply {
 function servicesListControls(page: number, pages: number): readonly CustomerButton[] {
   const controls: CustomerButton[] = [
     {
-      label: { kind: 'TEMPLATE', key: 'bot.service.search_label_button' },
+      ...inlineLabel('services.search_label'),
       data: SERVICES_SEARCH_CALLBACK_DATA,
       row: 100,
     },
     {
-      label: { kind: 'TEMPLATE', key: 'bot.service.search_button' },
+      ...inlineLabel('services.search'),
       data: SERVICES_SEARCH_CALLBACK_DATA,
       row: 100,
     },
   ];
   if (page > 1) {
     controls.push({
-      label: { kind: 'TEMPLATE', key: 'bot.service.prev_page_button' },
+      ...inlineLabel('services.previous_page'),
       data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page - 1}`,
       row: 101,
     });
   }
   controls.push({
-    label: { kind: 'TEMPLATE', key: 'bot.service.page_button', values: { page, pages } },
+    ...inlineLabel('services.page', { page, pages }),
     data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page}`,
     row: 101,
   });
   if (page < pages) {
     controls.push({
-      label: { kind: 'TEMPLATE', key: 'bot.service.next_page_button' },
+      ...inlineLabel('services.next_page'),
       data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page + 1}`,
       row: 101,
     });
   }
   controls.push({
-    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_menu_button' },
+    ...inlineLabel('services.back_to_menu'),
     data: MAIN_MENU_CALLBACK_DATA,
     row: 102,
   });
@@ -16384,13 +16482,13 @@ function displayNameOf(customer: CustomerRecord): string {
 }
 
 /** Each platform's button on the choice screen. `OTHER` has a button and no guide of its own. */
-const PLATFORM_BUTTON_KEYS: Readonly<Record<ClientAppPlatform, TemplateKey>> = {
-  ANDROID: 'bot.tutorial.android_button',
-  IOS: 'bot.tutorial.ios_button',
-  WINDOWS: 'bot.tutorial.windows_button',
-  MACOS: 'bot.tutorial.macos_button',
-  LINUX: 'bot.tutorial.linux_button',
-  OTHER: 'bot.tutorial.other_button',
+const PLATFORM_BUTTONS: Readonly<Record<ClientAppPlatform, InlineButtonKey>> = {
+  ANDROID: 'apps.platform_android',
+  IOS: 'apps.platform_ios',
+  WINDOWS: 'apps.platform_windows',
+  MACOS: 'apps.platform_macos',
+  LINUX: 'apps.platform_linux',
+  OTHER: 'apps.platform_other',
 };
 
 /** The guide a platform shows when no client app is configured for it — the pre-WP-A10 screen. */
@@ -16412,7 +16510,7 @@ export function tutorialChoice(platforms: readonly ClientAppPlatform[]): Pending
     values: {},
     buttons: [
       ...platforms.map((platform, index) => ({
-        label: { kind: 'TEMPLATE' as const, key: PLATFORM_BUTTON_KEYS[platform] },
+        ...inlineLabel(PLATFORM_BUTTONS[platform]),
         data: `${TUTORIAL_PLATFORM_CALLBACK_PREFIX}${platform}`,
         row: Math.floor(index / 2),
       })),
@@ -16449,7 +16547,7 @@ export function clientAppPlatformScreen(
       values: {},
       buttons: [
         {
-          label: { kind: 'TEMPLATE', key: 'bot.service.tutorial_button' },
+          ...inlineLabel('service.tutorial'),
           data: TUTORIAL_CALLBACK_DATA,
         },
         mainMenuButton(),
@@ -16462,7 +16560,7 @@ export function clientAppPlatformScreen(
     values: {},
     buttons: [
       ...apps.map((app) => ({
-        label: { kind: 'TEXT' as const, text: app.label },
+        ...inlineDataLabel('apps.app', { kind: 'TEXT', text: app.label }),
         data: `${CLIENT_APP_CALLBACK_PREFIX}${app.id}`,
       })),
       platformsButton(),
@@ -16502,41 +16600,41 @@ export function clientAppScreen(
   const buttons: CustomerButton[] = [];
   if (detail.officialUrl !== null) {
     buttons.push({
-      label: { kind: 'TEMPLATE', key: 'bot.apps.download_button' },
+      ...inlineLabel('apps.download'),
       url: detail.officialUrl,
     });
   }
   if (detail.alternativeUrl !== null) {
     buttons.push({
-      label: { kind: 'TEMPLATE', key: 'bot.apps.alternative_button' },
+      ...inlineLabel('apps.alternative'),
       url: detail.alternativeUrl,
     });
   }
   if (detail.helpUrl !== null) {
-    buttons.push({ label: { kind: 'TEMPLATE', key: 'bot.apps.help_button' }, url: detail.helpUrl });
+    buttons.push({ ...inlineLabel('apps.help'), url: detail.helpUrl });
   }
   if (detail.service !== null) {
     if (detail.service.link) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.link_button' },
+        ...inlineLabel('service.link'),
         data: `${SERVICE_RESEND_CALLBACK_PREFIX}${detail.service.id}`,
       });
     }
     if (detail.service.files) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.files_button' },
+        ...inlineLabel('service.files'),
         data: `${SERVICE_FILES_CALLBACK_PREFIX}${detail.service.id}`,
       });
     }
   } else if (detail.manyServices) {
     buttons.push({
-      label: { kind: 'TEMPLATE', key: 'bot.menu.services' },
+      ...inlineLabel('apps.services'),
       data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
     });
   }
   buttons.push(
     {
-      label: { kind: 'TEMPLATE', key: 'bot.apps.back_button' },
+      ...inlineLabel('apps.back'),
       data: `${TUTORIAL_PLATFORM_CALLBACK_PREFIX}${detail.platform}`,
     },
     mainMenuButton(),
@@ -16563,7 +16661,7 @@ export function clientAppScreen(
 
 function platformsButton(): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.apps.platforms_button' },
+    ...inlineLabel('apps.platforms'),
     data: TUTORIAL_CALLBACK_DATA,
   };
 }
@@ -16571,7 +16669,7 @@ function platformsButton(): CustomerButton {
 function paymentButtons(orderId: string, routesOffered: boolean): readonly CustomerButton[] {
   return [
     {
-      label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
+      ...inlineLabel('payment.wallet'),
       data: `${WALLET_PAY_CALLBACK_PREFIX}${orderId}`,
     },
     /*
@@ -16595,7 +16693,7 @@ function paymentButtons(orderId: string, routesOffered: boolean): readonly Custo
      * would take the customer's quoted price with it.
      */
     {
-      label: { kind: 'TEMPLATE', key: 'bot.order.cancel_button' },
+      ...inlineLabel('order.cancel'),
       data: `${CANCEL_ORDER_ASK_CALLBACK_PREFIX}${orderId}`,
     },
   ];

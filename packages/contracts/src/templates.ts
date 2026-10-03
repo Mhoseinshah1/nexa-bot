@@ -35,6 +35,13 @@ export const PLACEHOLDER_TYPES = [
   'NUMBER',
   'MONEY',
   'DATETIME',
+  /**
+   * Owner spec §3: the calendar DATE of an instant alone, and its TIME of day alone, each in
+   * the tenant's zone and calendar — `۱۴۰۵/۰۷/۱۰` and `23:22` as separate lines. A `Date`
+   * value, exactly like `DATETIME`; only the rendering differs.
+   */
+  'DATE',
+  'TIME',
   'DURATION_DAYS',
   /** A byte QUANTITY — used, or added. Zero is zero bytes. The renderer owns the unit. */
   'BYTES',
@@ -1955,6 +1962,27 @@ export const TEMPLATES = [
       'The label on the button that starts a wallet top-up. Shown under the balance, and ' +
       'only when the tenant has configured at least one preset amount and an enabled ' +
       'payment account to transfer to.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * Owner spec §2.2: the two next actions under the wallet-credit message. Inline buttons
+   * (`inline-buttons.ts`), so their own keys: `bot.menu.*` is the REPLY keyboard, whose
+   * labels are its routes, and must not be relabelled by editing a glass button.
+   */
+  {
+    key: 'bot.wallet.open_button',
+    description:
+      'The inline button that opens the wallet screen (balance and account summary) as a ' +
+      'new message. Shown under the wallet-credit messages.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.open_button',
+    description:
+      'The inline button that opens the catalogue (buy a service) as a new message. Shown ' +
+      'under the wallet-credit messages.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -8211,7 +8239,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.nowpayments_pay_button',
     description:
-      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments.open`.',
+      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments_open`.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -8983,6 +9011,25 @@ export const TEMPLATES = [
         type: 'STRING',
         description: 'Rendered `bot.wallet.group_customer` or `bot.wallet.group_reseller`.',
         required: true,
+        repeatable: false,
+      },
+      /*
+       * Owner spec §3: the moment the screen was RENDERED — never the registration or the
+       * last activity — in the tenant's zone and calendar. OPTIONAL, so an override saved
+       * before these existed stays valid and simply does not show them.
+       */
+      {
+        token: 'nowDate',
+        type: 'DATE',
+        description: 'Today, in the tenant’s zone and calendar, when the screen was drawn.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'nowTime',
+        type: 'TIME',
+        description: 'The time of day, in the tenant’s zone, when the screen was drawn.',
+        required: false,
         repeatable: false,
       },
     ],
@@ -11414,7 +11461,9 @@ export function coerceTemplateValue(
       return { ok: true, value };
     }
 
-    case 'DATETIME': {
+    case 'DATETIME':
+    case 'DATE':
+    case 'TIME': {
       const trimmed = raw.trim();
       // ISO-8601 or nothing. `new Date` alone accepts JavaScript's legacy
       // parsing, under which `'0'` is the year 2000 and `'2026-02-30'` is the
@@ -11675,6 +11724,8 @@ export function validateTemplateValues(
         if (!isMoneyValue(value)) wrong('a Money value');
         break;
       case 'DATETIME':
+      case 'DATE':
+      case 'TIME':
         if (!(value instanceof Date)) wrong('a Date');
         break;
       case 'NUMBER':

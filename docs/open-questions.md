@@ -2755,6 +2755,13 @@ and OMITS `style` for `default`. No custom colours exist and none are offered.
 
 RESOLVED (owner, Bot API 9.4). Real-bot acceptance R-ACC-1 still checks the rendering.
 
+Owner spec §6 (2026-10-02): `InlineKeyboardButton.style` takes the SAME closed set in the
+same release (cross-checked against the published Bot API type docs of two client
+libraries, aiogram and gramio, since `core.telegram.org` is not reachable from the build
+session). The inline button registry (`inline-buttons.ts`) reuses `MAIN_MENU_BUTTON_STYLES`
+and omits `default` on the wire. Real-bot acceptance still owes one look at a styled inline
+button.
+
 ## OQ-T-API-02 — who may use `KeyboardButton.icon_custom_emoji_id`
 
 **Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.

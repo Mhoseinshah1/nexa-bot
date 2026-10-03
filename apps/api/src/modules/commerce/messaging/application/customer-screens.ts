@@ -82,6 +82,12 @@ export interface WalletSummaryFacts {
   readonly paidInvoiceCount: number;
   readonly referralCount: number;
   readonly group: 'CUSTOMER' | 'RESELLER';
+  /**
+   * Owner spec §3: the moment the screen is drawn, from the `Clock` — shown as today's date
+   * and the time of day in the tenant's zone and calendar. Never the registration and never
+   * the last activity: reopening or refreshing the screen shows the time again.
+   */
+  readonly now: Date;
 }
 
 export interface ServiceCardFacts {
@@ -265,6 +271,9 @@ export class CustomerScreenComposer {
           facts.group === 'RESELLER' ? 'bot.wallet.group_reseller' : 'bot.wallet.group_customer',
           {},
         ),
+        // DATE and TIME placeholders: the renderer applies the tenant's zone and calendar.
+        nowDate: facts.now,
+        nowTime: facts.now,
       },
     };
   }

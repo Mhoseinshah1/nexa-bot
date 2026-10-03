@@ -104,6 +104,8 @@ export type SettingControl =
  */
 export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   'bot.main_menu',
+  // Owner spec §6: the inline buttons' styles, on the same page («دکمه‌های شیشه‌ای ربات»).
+  'bot.inline_buttons',
   // Spec 13.2: the automatic backup schedule is edited on «بکاپ و بازیابی», beside the
   // backups it schedules, as a switch and an interval with a unit — never raw minutes.
   BACKUP_SCHEDULE_SETTING_KEYS.enabled,
@@ -349,6 +351,16 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   'bot.main_menu': {
     title: 'web.setting_bot_main_menu',
     description: 'web.setting_bot_main_menu_desc',
+    group: 'support',
+    control: { kind: 'text' },
+  },
+  /*
+   * Owner spec §6: the inline buttons' styles. Edited on the «دکمه‌های ربات» page, never
+   * here (`SETTINGS_MANAGED_ELSEWHERE`); the entry exists because this map is total.
+   */
+  'bot.inline_buttons': {
+    title: 'web.setting_bot_inline_buttons',
+    description: 'web.setting_bot_inline_buttons_desc',
     group: 'support',
     control: { kind: 'text' },
   },
