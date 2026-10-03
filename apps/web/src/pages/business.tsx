@@ -593,7 +593,7 @@ function ExportButtons({
   selection: ReportRangeSelection;
   report: ReportExportKind;
   /** The financial statement's bucket size, so the file holds the rows the page shows. */
-  granularity?: FinancialGranularity;
+  granularity?: FinancialGranularity | undefined;
 }) {
   const allowed = useContext(ReportExportAllowed);
   if (!allowed || !rangeIsComplete(selection)) return null;
@@ -1778,13 +1778,17 @@ function FinancialReport({ selection, route }: { selection: ReportRangeSelection
     rangeIsComplete(selection),
   );
   const data: ReportFinancialResponse | undefined = report.data;
-  const shown = data?.granularity ?? granularity ?? 'DAY';
+  // What the server decided, else what the URL asked for. Unresolved (`undefined`) while an
+  // automatic report loads: the export then lets the server pick by the same rule, rather
+  // than a DAY placeholder that the page will not show once the answer arrives.
+  const resolved = data?.granularity ?? granularity;
+  const shown = resolved ?? 'DAY';
   return (
     <>
       <Card
         title={t('web.finance_title')}
         hint={t('web.finance_hint')}
-        actions={<ExportButtons selection={selection} report="FINANCIAL" granularity={shown} />}
+        actions={<ExportButtons selection={selection} report="FINANCIAL" granularity={resolved} />}
       >
         <div className="finance-controls">
           <Pills

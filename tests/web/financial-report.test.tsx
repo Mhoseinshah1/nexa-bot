@@ -178,6 +178,26 @@ describe('the financial statement tab', () => {
     expect(params.get('range')).toBe('THIS_MONTH');
   });
 
+  it('never exports a DAY placeholder while an automatic granularity is still loading', async () => {
+    stubApi([{ url: '/reports/financial', body: REPORT }]);
+    renderPage(
+      <ReportsPage route={route('tab=finance&range=THIS_MONTH')} denied={false} mayExport />,
+    );
+    // Before the answer: no granularity, so the server resolves it by the page's own rule.
+    const before = screen.getByRole('link', { name: 'خروجی CSV' });
+    expect(new URL(before.getAttribute('href')!, 'http://x').searchParams.has('granularity')).toBe(
+      false,
+    );
+    // After it: the bucket size the server chose and the page shows.
+    await screen.findByText(t('web.finance_def_topup'));
+    await waitFor(() => {
+      const after = screen.getByRole('link', { name: 'خروجی CSV' });
+      expect(new URL(after.getAttribute('href')!, 'http://x').searchParams.get('granularity')).toBe(
+        'WEEK',
+      );
+    });
+  });
+
   it('draws no export without reports.export', async () => {
     stubApi([{ url: '/reports/financial', body: REPORT }]);
     renderPage(<ReportsPage route={route('tab=finance&range=THIS_MONTH')} denied={false} />);
