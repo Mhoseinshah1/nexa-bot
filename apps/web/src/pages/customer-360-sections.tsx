@@ -633,6 +633,10 @@ const ACTION_LABELS: Readonly<Record<string, WebKey>> = {
   'customer.services.resume_all': 'web.c360_action_resume_all',
   'customer.registered': 'web.c360_action_registered',
   'trial.claim': 'web.c360_action_trial_claim',
+  // Program §8. A note's text is never in the audit row, so the timeline names only the act.
+  'customer.tag.assign': 'web.c360_action_tag_assign',
+  'customer.tag.remove': 'web.c360_action_tag_remove',
+  'customer.note.add': 'web.c360_action_note_add',
 };
 
 const RESULT_TONES: Readonly<Record<string, Tone>> = {

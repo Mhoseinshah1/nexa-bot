@@ -203,6 +203,8 @@ import {
 } from './modules/control/templates/application/template-resolver.js';
 import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
 import { CustomerControlService } from './modules/commerce/customers/application/customer-control.service.js';
+import { CustomerCrmService } from './modules/commerce/customers/application/customer-crm.service.js';
+import { DrizzleCustomerCrmRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-crm.repository.js';
 import { CustomerInsightService } from './modules/commerce/customers/application/customer-insight.service.js';
 import { CustomerAccountTransferService } from './modules/commerce/customers/application/customer-account-transfer.service.js';
 import { DrizzleCustomerInsightReader } from './modules/commerce/customers/infrastructure/drizzle-customer-insight.reader.js';
@@ -761,6 +763,8 @@ export interface Container {
   readonly customers: CustomerService;
   /** Customer 360 (§11.4): the per-customer controls an operator sets. */
   readonly customerControls: CustomerControlService;
+  /** Program §8: operator-only customer notes and tags. Never held by a customer surface. */
+  readonly customerCrm: CustomerCrmService;
   /** Customer 360 (§11.7, §11.10): exact aggregates and the management timeline. */
   readonly customerInsights: CustomerInsightService;
   /** Customer 360 (§11.5): moving a customer's holdings to another Telegram identity. */
@@ -3693,6 +3697,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
   });
+  const customerCrmService = new CustomerCrmService({
+    crm: new DrizzleCustomerCrmRepository(database.db),
+    customers: customerRepository,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
   const customerInsightService = new CustomerInsightService({
     reader: new DrizzleCustomerInsightReader(database.db),
     customers: customerRepository,
@@ -5498,6 +5516,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     customers: customerService,
     customerControls: customerControlService,
+    customerCrm: customerCrmService,
     customerInsights: customerInsightService,
     customerAccountTransfers: customerAccountTransferService,
     manualOrders: manualOrderService,

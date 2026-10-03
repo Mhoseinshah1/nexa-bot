@@ -103,6 +103,25 @@ export const PERMISSIONS = [
   p('users.notifications.edit', "Change a customer's promotional notification preference"),
   p('users.transfer', "Transfer a customer's account to another Telegram identity", 'CRITICAL'),
   /*
+   * Customer notes and tags (program §8, `docs/customer-notes-tags.md`). Operator-only CRM
+   * metadata, read and written apart:
+   *
+   * - `users.notes.view` reads the internal notes. MEDIUM, not LOW, deliberately: a note is
+   *   what one operator tells the next about a customer — a dispute, a suspicion, a promise
+   *   made on the phone — and `observer` (every LOW key) is a role for watching the
+   *   installation, not for reading what was written about the people it serves.
+   * - `users.notes.write` appends one. Notes are append-only, so there is no edit or delete key.
+   * - `users.tags.assign` puts a tag on a customer or takes it off.
+   * - `users.tags.manage` defines the tenant's catalogue: create, rename, recolour, archive.
+   *
+   * READING a customer's tags, and filtering the customer list by one, is `users.view`: a
+   * tag is a label on the row an operator is already allowed to read, like its status.
+   */
+  p('users.notes.view', "Read the operators' internal notes on a customer"),
+  p('users.notes.write', 'Add an internal note to a customer'),
+  p('users.tags.assign', 'Assign or remove a tag on a customer'),
+  p('users.tags.manage', "Create, rename, recolour or archive the tenant's customer tags"),
+  /*
    * Phase 7, both of them, and neither is charged by anything here. There is no
    * tier column, no tier type and no tier surface; there is no mass tool at all.
    * `CLAUDE.md` forbids building either without an explicit instruction, and the
@@ -446,6 +465,11 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'users.phone.verify',
       'users.location.edit',
       'users.notifications.edit',
+      // Program §8: the notes and tags an operator keeps on the customers they support.
+      'users.notes.view',
+      'users.notes.write',
+      'users.tags.assign',
+      'users.tags.manage',
       'orders.view',
       'services.view',
       'services.edit',
@@ -710,6 +734,16 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
   'users.location.edit': 'users.view' as PermissionKey,
   'users.notifications.edit': 'users.view' as PermissionKey,
   'users.transfer': 'users.view' as PermissionKey,
+  /*
+   * Program §8. Notes and tags are read and written FROM a customer's page, which
+   * `users.view` reads. `users.notes.write` depends on `users.view` rather than on
+   * `users.notes.view` because this table is one level deep (asserted): a writer without
+   * the read appends a note and is answered with that note alone, never the others.
+   */
+  'users.notes.view': 'users.view' as PermissionKey,
+  'users.notes.write': 'users.view' as PermissionKey,
+  'users.tags.assign': 'users.view' as PermissionKey,
+  'users.tags.manage': 'users.view' as PermissionKey,
   /*
    * WP-A7. Every ticket action is taken FROM a ticket (or, for categories, from the
    * inbox that lists them), which `tickets.view` reads. Holding the action alone would be

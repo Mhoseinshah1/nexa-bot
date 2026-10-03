@@ -1,6 +1,6 @@
 {
-  "id": "6a0f407e-de27-4e23-84c1-c4773cb3e55b",
-  "prevId": "0933052c-32d7-454c-ad41-85a6f1a06dad",
+  "id": "bce113f1-1f0b-4bfc-8a07-70a228a8aa6f",
+  "prevId": "7e48ce5d-c6ec-414f-80b0-1fc166727e84",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -14831,6 +14831,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "drained_at": {
+          "name": "drained_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "drain_reason": {
+          "name": "drain_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -14919,6 +14931,10 @@
       },
       "policies": {},
       "checkConstraints": {
+        "panels_drain_reason_check": {
+          "name": "panels_drain_reason_check",
+          "value": "(\"panels\".\"drained_at\" IS NULL) = (\"panels\".\"drain_reason\" IS NULL)"
+        },
         "panels_username_policy_check": {
           "name": "panels_username_policy_check",
           "value": "\"panels\".\"allow_custom_username\" OR \"panels\".\"allow_automatic_username\""
@@ -27248,6 +27264,100 @@
           "value": "threshold_amount > 0"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.admin_notification_reads": {
+      "name": "admin_notification_reads",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "admin_id": {
+          "name": "admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "read_through": {
+          "name": "read_through",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "admin_notification_reads_tenant_id_tenants_id_fk": {
+          "name": "admin_notification_reads_tenant_id_tenants_id_fk",
+          "tableFrom": "admin_notification_reads",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "admin_notification_reads_event_id_operational_events_id_fk": {
+          "name": "admin_notification_reads_event_id_operational_events_id_fk",
+          "tableFrom": "admin_notification_reads",
+          "tableTo": "operational_events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "admin_notification_reads_admin_fk": {
+          "name": "admin_notification_reads_admin_fk",
+          "tableFrom": "admin_notification_reads",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "admin_notification_reads_pk": {
+          "name": "admin_notification_reads_pk",
+          "columns": [
+            "tenant_id",
+            "admin_id",
+            "event_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },

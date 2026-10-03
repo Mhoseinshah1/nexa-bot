@@ -1492,6 +1492,16 @@ export const COMMERCE_ERROR_CODES = {
   CUSTOMER_TRANSFER_CONFIRMATION_MISMATCH: 'commerce.customer_transfer_confirmation_mismatch',
   /** Not a phone number this installation can store. */
   CUSTOMER_PHONE_INVALID: 'commerce.customer_phone_invalid',
+
+  // --- Customer notes and tags (program §8, docs/customer-notes-tags.md) ---------------
+  /** No such tag in this tenant. */
+  CUSTOMER_TAG_NOT_FOUND: 'commerce.customer_tag_not_found',
+  /** Another ACTIVE tag of this tenant already has this name, compared case-insensitively. */
+  CUSTOMER_TAG_NAME_TAKEN: 'commerce.customer_tag_name_taken',
+  /** The tag is archived: it stays where it is assigned and cannot be newly assigned. */
+  CUSTOMER_TAG_ARCHIVED: 'commerce.customer_tag_archived',
+  /** The tenant already defines `CUSTOMER_TAGS_PER_TENANT_MAX` tags. */
+  CUSTOMER_TAG_LIMIT: 'commerce.customer_tag_limit',
 } as const;
 
 /*
