@@ -1750,6 +1750,7 @@ export const WEB_FA = {
   'web.payment_gateway_provider_tonpays': 'درگاه پرداخت تون پی وبسایت',
   'web.payment_gateway_provider_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
   'web.payment_gateway_provider_telegram_stars': 'تلگرام استارز (⭐)',
+  'web.payment_gateway_provider_nowpayments': 'درگاه ارز دیجیتال (NOWPayments)',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
   'web.payment_gateway_rate_hint':
@@ -1841,6 +1842,21 @@ export const WEB_FA = {
   'web.payment_gateway_credential_input': 'کلید API جدید',
   'web.payment_gateway_credential_save': 'ذخیرهٔ کلید',
   'web.payment_gateway_credential_saved': 'کلید API ذخیره شد.',
+  'web.payment_gateway_nowpayments_hint':
+    'مبلغ فاکتور به دلار و فقط از نرخ مرکزی ارز (USDT) محاسبه می‌شود؛ مشتری نوع ارز دیجیتال را در صفحهٔ NOWPayments انتخاب می‌کند. پرداخت فقط پس از وضعیت «finished» با استعلام مستقیم از NOWPayments تأیید می‌شود.',
+  'web.payment_gateway_webhook_secret_missing': 'کلید IPN تنظیم نشده',
+  'web.payment_gateway_webhook_secret_configured': 'کلید IPN تنظیم شده ••••••••',
+  'web.payment_gateway_webhook_secret_input': 'کلید IPN جدید (IPN Secret)',
+  'web.payment_gateway_webhook_secret_hint':
+    'اعلان‌های NOWPayments فقط با این کلید امضا و بررسی می‌شوند. کلید ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید. بدون کلید IPN، این درگاه قابل فعال‌سازی نیست.',
+  'web.payment_gateway_webhook_secret_save': 'ذخیرهٔ کلید IPN',
+  'web.payment_gateway_webhook_secret_saved': 'کلید IPN ذخیره شد.',
+  'web.payment_gateway_provider_payment_id': 'شناسهٔ پرداخت در درگاه',
+  'web.payment_gateway_check': 'بررسی اتصال',
+  'web.payment_gateway_check_done': 'بررسی اتصال انجام شد.',
+  'web.payment_gateway_last_check': 'آخرین بررسی',
+  'web.payment_gateway_check_ok': 'اتصال موفق',
+  'web.payment_gateway_check_failed': 'اتصال ناموفق',
   'web.payment_gateway_callback_url': 'آدرس وب‌هوک (تولیدشده)',
   'web.payment_gateway_callback_url_hint':
     'این آدرس به‌صورت خودکار ساخته می‌شود و همراه هر فاکتور برای درگاه ارسال می‌شود. وب‌هوک فقط یک اعلان است؛ تأیید پرداخت همیشه با استعلام مستقیم از درگاه انجام می‌شود.',

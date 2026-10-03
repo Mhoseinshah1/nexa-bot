@@ -411,6 +411,7 @@ function toGatewayInvoiceView(
     provider: invoice.provider,
     providerOrderId: invoice.providerOrderId,
     providerInvoiceId: invoice.providerInvoiceId,
+    hintedPaymentId: invoice.hintedPaymentId,
     creationState: invoice.creationState,
     creationErrorCode: invoice.creationErrorCode,
     providerStatus: invoice.providerStatus,

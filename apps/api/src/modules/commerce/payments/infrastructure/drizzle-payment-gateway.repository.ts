@@ -122,7 +122,19 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
     const query = this.exec(tx)
       .select(COLUMNS)
       .from(paymentGateways)
-      .where(eq(paymentGateways.tenantId, tenantId))
+      /*
+       * Only providers THIS binary knows (Codex review of #141). A rollback to a release
+       * that predates a provider leaves that provider's row in the table, and every reader
+       * of this list indexes `PAYMENT_GATEWAY_DESCRIPTORS` by the row's provider — the admin
+       * list, the customer's route evaluator. A row this code has no descriptor for is not
+       * a route it can offer or describe, so it is not listed; it is never deleted either.
+       */
+      .where(
+        and(
+          eq(paymentGateways.tenantId, tenantId),
+          inArray(paymentGateways.provider, [...PAYMENT_GATEWAY_PROVIDERS]),
+        ),
+      )
       .orderBy(asc(paymentGateways.sortOrder), asc(paymentGateways.provider));
     /*
      * Inside a transaction, FOR SHARE. A caller that passes one is ISSUING a payment on

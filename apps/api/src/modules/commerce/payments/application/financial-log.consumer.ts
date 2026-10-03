@@ -135,7 +135,7 @@ export class FinancialLogConsumer implements EventConsumer {
           reference: facts.payment.reference,
           paymentId: facts.payment.id,
           ...amounts(facts.payment),
-          ...provider(facts.invoice),
+          ...gatewayProviderFacts(facts.invoice),
           evidence: payload.evidenceKind,
           at: facts.payment.confirmedAt ?? new Date(event.occurredAt),
         };
@@ -191,7 +191,7 @@ export class FinancialLogConsumer implements EventConsumer {
             paymentId: facts.payment.id,
             orderId: facts.payment.orderId ?? NONE,
             ...amounts(facts.payment),
-            ...provider(facts.invoice),
+            ...gatewayProviderFacts(facts.invoice),
             at: new Date(event.occurredAt),
           },
         };
@@ -208,7 +208,7 @@ export class FinancialLogConsumer implements EventConsumer {
             paymentId: facts.payment.id,
             orderId: facts.payment.orderId ?? NONE,
             ...amounts(facts.payment),
-            ...provider(facts.invoice),
+            ...gatewayProviderFacts(facts.invoice),
             at: new Date(event.occurredAt),
           },
         };
@@ -343,7 +343,7 @@ function amounts(payment: PaymentRecord): {
  * The provider's side, for a gateway payment: its invoice id and the final amount it
  * reported, in ITS unit. Diagnostic only — the template says so, and nothing reads it back.
  */
-function provider(invoice: GatewayInvoiceRecord | null): TemplateValues {
+export function gatewayProviderFacts(invoice: GatewayInvoiceRecord | null): TemplateValues {
   if (invoice === null) return { providerInvoiceId: NONE, providerFinalAmount: NONE };
   /*
    * A rate-converted attempt (Telegram Stars, Package A): once paid, its provider id is
@@ -359,6 +359,30 @@ function provider(invoice: GatewayInvoiceRecord | null): TemplateValues {
           ? `charge:${invoice.providerChargeId}`
           : (invoice.providerInvoiceId ?? NONE),
       providerFinalAmount: `${invoice.sentAmount.toString()} ${invoice.providerUnit}`,
+    };
+  }
+  /*
+   * A dollar-priced attempt (NOWPayments, central FX). The provider's figure is the price the
+   * provider's own last read REPORTED for the payment (`request_amount`, exact cents) — not
+   * what Nexa invoiced: an operator must see a mismatch, never the expected price under the
+   * provider's label (Codex review of #141). When the two differ, both are shown. Nothing
+   * read yet is NONE. The crypto the customer chose is the provider's business.
+   */
+  if (invoice.providerUnit === 'USD') {
+    const dollars = (cents: bigint) =>
+      `${(cents / 100n).toString()}.${(cents % 100n).toString().padStart(2, '0')} USD`;
+    const reported = invoice.requestAmount;
+    return {
+      providerInvoiceId:
+        invoice.hintedPaymentId === null
+          ? (invoice.providerInvoiceId ?? NONE)
+          : `${invoice.providerInvoiceId ?? NONE}/${invoice.hintedPaymentId}`,
+      providerFinalAmount:
+        reported === null
+          ? NONE
+          : reported === invoice.sentAmount
+            ? dollars(reported)
+            : `${dollars(reported)} ≠ ${dollars(invoice.sentAmount)}`,
     };
   }
   return {

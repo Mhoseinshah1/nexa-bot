@@ -970,6 +970,7 @@ describe('TonPays Telegram, through the one settlement path', () => {
         payments: {
           confirmGatewayPayment: (...args) => real.confirmGatewayPayment(...args),
           failGatewayPayment: (...args) => real.failGatewayPayment(...args),
+          recordProviderFundsDetected: (...args) => real.recordProviderFundsDetected(...args),
           // Commits the review, then the worker dies before its own next step.
           recordProviderReview: async (...args) => {
             await real.recordProviderReview(...args);
@@ -1008,6 +1009,7 @@ describe('TonPays Telegram, through the one settlement path', () => {
           findByIdForUpdate: (scope, id, tx) => repo.findByIdForUpdate(scope, id, tx),
           setExternalReference: (...args) => repo.setExternalReference(...args),
           loseTrackOfReviewed: (...args) => repo.loseTrackOfReviewed(...args),
+          loseTrack: (...args) => repo.loseTrack(...args),
         }),
       });
       await racing.runOnce(tenantA);

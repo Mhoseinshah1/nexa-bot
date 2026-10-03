@@ -535,6 +535,20 @@ export interface PaymentRepository {
   ): Promise<readonly PaymentRecord[]>;
 
   /**
+   * `LOSE_TRACK` for ONE payment (NOWPayments' MISMATCH, `docs/nowpayments-gateway-audit.md`
+   * §5.5): `PENDING -> UNKNOWN`, conditional on a PENDING GATEWAY payment whose effective
+   * deadline (`COALESCE(provider_review_until, expires_at)`) is still ahead of `now`. The
+   * provider holds money that is not what was invoiced: never settled, never failed, and
+   * never left to expire — an operator reconciles it. Null when nothing moved.
+   */
+  loseTrack(
+    scope: TenantContext,
+    id: PaymentId,
+    now: Date,
+    tx: unknown,
+  ): Promise<PaymentRecord | null>;
+
+  /**
    * `RECONCILE_CONFIRMED` (§9.6.4): the confirm edge from `UNKNOWN`, conditional on it, every
    * confirmation column in the same statement. Reached only through
    * `PaymentService.reconcileGatewayPayment`, after the recorded evidence was checked.
