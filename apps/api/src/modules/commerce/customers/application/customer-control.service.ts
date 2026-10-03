@@ -83,6 +83,16 @@ interface ControlChange {
  *
  * Each control has its own key (`permissions.ts` says why `users.edit` is none of them).
  */
+/**
+ * A phone number as a durable log may hold it: the last four digits, never the number. The
+ * audit log is append-only — a full number written there could never be taken back — and
+ * the customer's timeline reads it.
+ */
+export function maskPhone(phone: string | null): string | null {
+  if (phone === null) return null;
+  return `…${phone.slice(-4)}`;
+}
+
 export class CustomerControlService {
   constructor(private readonly deps: CustomerControlDeps) {}
 
@@ -142,8 +152,8 @@ export class CustomerControlService {
   /**
    * Record a phone number an operator verified out of band, or revoke it (`null`). The
    * number is normalised to `+` and digits and refused rather than guessed when it has no
-   * country code. It is never put in an event; the audit row carries it, redacted by the
-   * writer like any other durable payload.
+   * country code. It is never put in an event, and the audit row carries only its last four
+   * digits (`maskPhone`).
    */
   async setVerifiedPhone(
     scope: TenantContext,
@@ -179,8 +189,10 @@ export class CustomerControlService {
         );
         return {
           changed,
-          before: { phoneNumber: before.phoneNumber },
-          after: { phoneNumber: phone },
+          // Masked: the audit log is append-only and the timeline reads it, so the full
+          // number is never written there (Codex review of #146). The row keeps it.
+          before: { phoneNumber: maskPhone(before.phoneNumber) },
+          after: { phoneNumber: maskPhone(phone) },
           emit: (tx) =>
             this.deps.outbox.write(tx, actor, {
               eventType: 'CustomerPhoneVerificationChanged',

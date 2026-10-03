@@ -633,7 +633,9 @@ export class CustomerAccountTransferService {
       facts.trialOverride ||
       facts.locationOverride ||
       source.channelMembershipExemptAt !== null ||
-      source.phoneNumber !== null;
+      source.phoneNumber !== null ||
+      // The promotional opt-out is the source's own setting too (Codex review of #146).
+      source.marketingOptOutAt !== null;
     if (overrides) warnings.push('SOURCE_OVERRIDES_STAY');
     if (facts.openTickets > 0) warnings.push('OPEN_TICKETS_STAY');
     // Credits tied to the source's history keep landing on the source (audit §5).

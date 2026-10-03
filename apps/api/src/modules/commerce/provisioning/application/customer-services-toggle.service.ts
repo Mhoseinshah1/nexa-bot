@@ -19,8 +19,17 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import { OPERATOR_OPERATION_PERMISSION, type ProvisioningService } from './provisioning.service.js';
 import type { ServiceCursor, ServiceRecord, ServiceRepository } from './ports.js';
 
-/** The most services one command walks. Past it the operator is told to run it again. */
-export const CUSTOMER_SERVICES_TOGGLE_MAX = 200;
+/**
+ * The refusals that are a fact about ONE service — its state, its panel, an operation already
+ * open on it — and are reported beside it. Anything else (a permission revoked mid-run, the
+ * installation stopped, a session gone) is about the COMMAND and propagates.
+ */
+const ITEM_REFUSALS: ReadonlySet<string> = new Set([
+  COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+  COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+  COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+  COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+]);
 
 export interface CustomerServicesToggleDeps {
   readonly services: Pick<ServiceRepository, 'list'>;
@@ -74,8 +83,34 @@ export class CustomerServicesToggleService {
     const customerId = parsed.data;
     const permission: PermissionKey = OPERATOR_OPERATION_PERMISSION[input.action];
     await this.deps.guard.check(scope, actor, 'users.view');
+    // Enumerating services and answering with their account names is reading them.
+    await this.deps.guard.check(scope, actor, 'services.view');
     await this.deps.guard.check(scope, actor, permission);
 
+    /*
+     * The COMMAND's key, claimed before anything is planned: the same key for another
+     * customer or another action is a caller bug and is refused here, before a single
+     * per-service operation commits under it (Codex review of #146).
+     */
+    const stem = `toggle:${hashRequest({ key: input.idempotencyKey }).slice(0, 40)}`;
+    const commandKey = `${stem}:command`;
+    const commandHash = hashRequest({ customerId, action: input.action });
+    const claimed = await this.deps.idempotency.find(scope, actor.surface, commandKey, commandHash);
+    if (claimed === null) {
+      await this.deps.uow.run(scope, async (tx) => {
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          actor.surface,
+          commandKey,
+          commandHash,
+          { customerId, action: input.action },
+          tx,
+        );
+      });
+    }
+
+    // EVERY service in the state, page by page — never a silent cap.
     const from = input.action === 'SUSPEND' ? 'ACTIVE' : 'SUSPENDED';
     const targets: ServiceRecord[] = [];
     let cursor: ServiceCursor | null = null;
@@ -88,11 +123,10 @@ export class CustomerServicesToggleService {
       );
       targets.push(...page.items);
       cursor = page.nextCursor;
-    } while (cursor !== null && targets.length < CUSTOMER_SERVICES_TOGGLE_MAX);
+    } while (cursor !== null);
 
-    const stem = `toggle:${hashRequest({ key: input.idempotencyKey, action: input.action }).slice(0, 40)}`;
     const results: CustomerServicesToggleResult[] = [];
-    for (const service of targets.slice(0, CUSTOMER_SERVICES_TOGGLE_MAX)) {
+    for (const service of targets) {
       try {
         await this.deps.provisioning.requestFromOperator(scope, actor, service.id, input.action, {
           idempotencyKey: `${stem}:${service.id}`,
@@ -106,7 +140,7 @@ export class CustomerServicesToggleService {
       } catch (error) {
         // A decided refusal for THIS service. Anything else is not ours to swallow — but the
         // customer's timeline still says the command ran, and how far, before it stopped.
-        if (!isNexaError(error) || error.httpStatus >= 500) {
+        if (!isNexaError(error) || !ITEM_REFUSALS.has(error.code)) {
           await this.summarise(scope, actor, customerId, input.action, results, stem, 'FAILED');
           throw error;
         }

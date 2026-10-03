@@ -705,6 +705,24 @@ export function TimelineCard({ customerId, mayView }: { customerId: string; mayV
 // Manual order (§11.6)
 // ---------------------------------------------------------------------------
 
+/** Every ACTIVE product, following the cursor to the end. */
+export async function allActiveProducts(): Promise<{
+  products: Awaited<ReturnType<typeof fetchProducts>>['products'];
+}> {
+  const products: Awaited<ReturnType<typeof fetchProducts>>['products'] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await fetchProducts({
+      status: 'ACTIVE',
+      limit: 100,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    products.push(...page.products);
+    if (page.nextCursor === null) return { products };
+    cursor = page.nextCursor;
+  }
+}
+
 export function ManualOrderModal({
   customerId,
   open,
@@ -723,7 +741,9 @@ export function ManualOrderModal({
   const [reason, setReason] = useState('');
   const products = useQuery({
     queryKey: ['manual-order-products'],
-    queryFn: () => fetchProducts({ status: 'ACTIVE', limit: 100 }),
+    // EVERY active product, page by page — a picker that showed the first hundred would
+    // hide the rest without saying so (Codex review of #146).
+    queryFn: () => allActiveProducts(),
     enabled: open,
   });
 

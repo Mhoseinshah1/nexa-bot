@@ -286,7 +286,8 @@ export function UserDetailPage({
                       {t('web.c360_decrease_balance')}
                     </a>
                   )}
-                  {mayManualOrder && (
+                  {/* A manual order spends the wallet: the server also charges users.wallet.debit. */}
+                  {mayManualOrder && mayDebit && (
                     <Button size="sm" icon="plus" onClick={() => setManualOrderOpen(true)}>
                       {t('web.c360_manual_order')}
                     </Button>
@@ -294,7 +295,7 @@ export function UserDetailPage({
                   {mayViewOrders && (
                     <a
                       className="btn sm ghost"
-                      href={`/orders?customerId=${encodeURIComponent(id)}`}
+                      href={`/orders?q=${encodeURIComponent(id)}`}
                       onClick={onLink}
                     >
                       {t('web.c360_view_orders')}
@@ -421,7 +422,7 @@ export function UserDetailPage({
 
             <ManualOrderModal
               customerId={id}
-              open={mayManualOrder && manualOrderOpen}
+              open={mayManualOrder && mayDebit && manualOrderOpen}
               onClose={() => setManualOrderOpen(false)}
             />
 
@@ -531,7 +532,8 @@ export function UserDetailPage({
                   <DangerZoneCard
                     customerId={id}
                     mayTransfer={mayTransfer}
-                    mayEditServices={mayEditServices}
+                    // The toggle lists the services it planned: it reads them too.
+                    mayEditServices={mayEditServices && mayViewServices}
                   />
 
                   <Card tone="muted" title={t('web.users_scope_title')}>

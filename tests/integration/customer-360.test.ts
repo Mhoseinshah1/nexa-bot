@@ -348,6 +348,14 @@ describe('Customer 360 — backend controls', () => {
         sql`SELECT payload FROM outbox_messages WHERE event_type = 'CustomerPhoneVerificationChanged'`,
       );
       expect(payloads.map((row) => row.payload)).toEqual([{ verified: true }, { verified: false }]);
+      // Nor in the append-only audit log, nor the timeline: the last four digits only.
+      const audits = await rows<{ before: unknown; after: unknown }>(
+        sql`SELECT before, after FROM audit_logs WHERE action LIKE 'customer.phone.%' ORDER BY occurred_at`,
+      );
+      expect(JSON.stringify(audits)).not.toContain('9121234567');
+      expect((audits[0]?.after as { phoneNumber?: string }).phoneNumber).toBe('…4567');
+      const timeline = await ctx.container.customerInsights.timeline(tenantA, owner, source);
+      expect(JSON.stringify(timeline)).not.toContain('9121234567');
     });
 
     it('refuses half a rolling limit, and stores and removes an override', async () => {
@@ -580,6 +588,18 @@ describe('Customer 360 — backend controls', () => {
       await run(sql`INSERT INTO resellers (id, tenant_id, customer_id, tier_id, status, credit_limit_amount)
                     VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${source}, ${tier}, 'ACTIVE', NULL)`);
       expect(await blockersNow()).toContain('SOURCE_IS_RESELLER');
+    });
+
+    it("warns that the source's own promotional opt-out stays with it", async () => {
+      await fund(source, 10_000n);
+      expect((await preview()).warnings).not.toContain('SOURCE_OVERRIDES_STAY');
+      await ctx.container.customerControls.setMarketingPreference(tenantA, owner, {
+        idempotencyKey: 'mkt-stay',
+        customerId: source,
+        optedOut: true,
+        reason: 'asked',
+      });
+      expect((await preview()).warnings).toContain('SOURCE_OVERRIDES_STAY');
     });
 
     it('refuses a negative (legacy-debt) balance', async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
-import { customer, renderPage, stubApi } from './harness';
+import { customer, product, renderPage, stubApi } from './harness';
 
 /**
  * Customer 360 (spec §11) — the redesigned customer page, rendered against the shapes the
@@ -322,5 +322,46 @@ describe('Customer 360 — the customer page', () => {
     renderPage(<UserDetailPage id={ID} {...OFF} mayViewAudit denied={false} />);
     await screen.findByText('معافیت از عضویت کانال');
     expect(screen.getByText('owner — VIP')).toBeTruthy();
+  });
+
+  it('offers a manual order only with the wallet-debit key too, and lists every product page', async () => {
+    stubApi(
+      routes([
+        {
+          url: '/products',
+          body: { products: [product({ title: 'پلن اول' })], nextCursor: 'p2' },
+        },
+        {
+          url: 'limit=100&cursor=p2',
+          body: {
+            products: [product({ id: '019220ab-cdef-7012-8345-6789abcdef09', title: 'پلن دوم' })],
+            nextCursor: null,
+          },
+        },
+      ]),
+    );
+    const { unmount } = renderPage(
+      <UserDetailPage id={ID} {...OFF} mayManualOrder denied={false} />,
+    );
+    await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' });
+    // orders.manual.create without users.wallet.debit: a guaranteed refusal, so no button.
+    expect(screen.queryByRole('button', { name: 'افزودن دستی سفارش' })).toBeNull();
+    unmount();
+
+    renderPage(<UserDetailPage id={ID} {...OFF} mayManualOrder mayDebit denied={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'افزودن دستی سفارش' }));
+    // The second page's product is offered too.
+    expect(await screen.findByRole('option', { name: 'پلن دوم' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'پلن اول' })).toBeTruthy();
+  });
+
+  it("links the head's order list by the unified search, ?q=<customerId>", async () => {
+    stubApi(routes());
+    const { container } = renderPage(
+      <UserDetailPage id={ID} {...OFF} mayViewOrders denied={false} />,
+    );
+    const link = await screen.findByRole('link', { name: 'مشاهده سفارش‌ها' });
+    expect(link.getAttribute('href')).toBe(`/orders?q=${ID}`);
+    expect(container).toBeTruthy();
   });
 });
