@@ -167,6 +167,8 @@ export class DrizzleGatewayHealthReader implements GatewayHealthReader {
          AND action IN (${RECONCILE_CONFIRM_ACTION}, ${RECONCILE_FAIL_ACTION}, ${RECONCILE_INQUIRY_ACTION})
          AND result = 'SUCCESS'
          AND after ->> 'gatewayProvider' IS NOT NULL
+         -- An "ask again" inside the minute's spacing records nothing (requested = false).
+         AND (action <> ${RECONCILE_INQUIRY_ACTION} OR after ->> 'requested' = 'true')
        ORDER BY after ->> 'gatewayProvider', occurred_at DESC, id DESC`)) {
       of(row.provider).lastReconciliation = { at: new Date(row.at), action: row.action };
     }

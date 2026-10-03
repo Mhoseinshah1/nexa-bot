@@ -393,6 +393,17 @@ describe('gateway health', () => {
     expect((await entryOf('TONPAYS')).recorded.lastReconciliation).toMatchObject({
       action: 'payment.reconcile_failed',
     });
+    // A later "ask again" that the minute's spacing refused records no request, so it is
+    // not the last reconciliation activity.
+    await exec(sql`INSERT INTO audit_logs (id, tenant_id, occurred_at, actor_type, action,
+                     entity_type, entity_id, after, correlation_id, source_surface, result)
+                   VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, now() + interval '1 minute',
+                           'WEB_ADMIN', 'gateway_invoice.reconcile_inquiry_requested', 'Payment',
+                           ${unknown}, ${JSON.stringify({ gatewayProvider: 'TONPAYS', requested: false })},
+                           'gh-test', 'WEB', 'SUCCESS')`);
+    expect((await entryOf('TONPAYS')).recorded.lastReconciliation).toMatchObject({
+      action: 'payment.reconcile_failed',
+    });
   });
 
   it('never shows another tenant’s attempts, conditions or reconciliations', async () => {
