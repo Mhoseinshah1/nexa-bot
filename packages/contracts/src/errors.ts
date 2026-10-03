@@ -491,6 +491,15 @@ export const IDENTITY_ERROR_CODES = {
   AUTH_SECOND_FACTOR_REQUIRED: 'auth.second_factor_required',
   AUTH_SECOND_FACTOR_INVALID: 'auth.second_factor_invalid',
   AUTH_CHALLENGE_INVALID: 'auth.challenge_invalid',
+  /*
+   * Phase D2 review: a STEP-UP (the actor re-proving who they are for one sensitive
+   * act) failed — wrong password, or a wrong, replayed or used code. One code for all of
+   * them, a VALIDATION kind so a failed step-up does not sign the operator out of the
+   * page. `auth.step_up_factor_required` says only that THIS actor's own factor is on and
+   * no code was sent, so the page can ask for one.
+   */
+  AUTH_STEP_UP_FAILED: 'auth.step_up_failed',
+  AUTH_STEP_UP_FACTOR_REQUIRED: 'auth.step_up_factor_required',
   ADMIN_SECOND_FACTOR_ACTIVE: 'admin.second_factor_already_active',
   ADMIN_SECOND_FACTOR_NOT_ACTIVE: 'admin.second_factor_not_active',
   /** Activation with no enrolment waiting, or one older than `TOTP_ENROLMENT_TTL_SECONDS`. */

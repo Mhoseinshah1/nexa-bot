@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AUDIT_RESULTS } from './ports.js';
-import { adminChangeReasonSchema } from './identity.js';
+import { adminChangeReasonSchema, stepUpSchema } from './identity.js';
 import { adminSummarySchema, loginResponseSchema } from './http.js';
 
 /**
@@ -76,6 +76,14 @@ export const LOGIN_CHALLENGE_TTL_SECONDS = 300;
  * five guesses and not the throttle's whole allowance.
  */
 export const LOGIN_CHALLENGE_MAX_ATTEMPTS = 5;
+
+/**
+ * Wrong codes one PENDING enrolment allows before it is discarded and enrolment must
+ * start again (with the password). Each guess is ALSO counted on the credential
+ * throttle; this bounds one displayed secret, so a stolen session cannot sit on a
+ * pending enrolment and guess its way to the backup codes.
+ */
+export const TOTP_ACTIVATION_MAX_ATTEMPTS = 5;
 
 /** The challenge cookie, in the same two spellings as the session cookie. */
 export const SECOND_FACTOR_COOKIE_NAME = 'nexa_admin_2fa';
@@ -249,7 +257,11 @@ export type SecurityEventListResponse = z.infer<typeof securityEventListResponse
  * not oneself, no more privilege than the actor holds, and an owner target needs
  * `admins.permissions.edit`. Every session of the target ends.
  */
-export const resetAdminSecondFactorRequestSchema = z.object({ reason: adminChangeReasonSchema });
+export const resetAdminSecondFactorRequestSchema = z.object({
+  reason: adminChangeReasonSchema,
+  /** The ACTING operator's own step-up: removing somebody's factor is half a takeover. */
+  stepUp: stepUpSchema,
+});
 export const resetAdminSecondFactorResponseSchema = z.object({
   admin: adminSummarySchema,
   /** False when the target had no factor; the call still ends their sessions. */
