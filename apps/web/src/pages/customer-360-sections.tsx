@@ -642,6 +642,7 @@ const RESULT_TONES: Readonly<Record<string, Tone>> = {
 };
 
 export function TimelineCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
+  const onLink = useLinkHandler();
   const timeline = useQuery({
     queryKey: ['customer-timeline', customerId],
     queryFn: () => fetchCustomerTimeline(customerId),
@@ -697,6 +698,12 @@ export function TimelineCard({ customerId, mayView }: { customerId: string; mayV
           />
         )}
       </StateSwitch>
+      {/* Phase D1: the whole trail — this customer's orders, payments and services too. */}
+      <p className="small">
+        <a href={`/audit-log?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+          {t('web.c360_timeline_all')}
+        </a>
+      </p>
     </Card>
   );
 }
