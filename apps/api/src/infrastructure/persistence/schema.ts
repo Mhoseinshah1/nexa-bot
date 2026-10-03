@@ -11831,6 +11831,49 @@ export const bulkOperationItems = pgTable(
   ],
 );
 
+// --- Phase B3: the Web Admin Notification Center ----------------------------------------
+
+/**
+ * One administrator's read mark on one notification (`docs/notification-center.md`).
+ *
+ * The notification IS the `operational_events` row; this is only what one person has
+ * seen of it. `read_through` is the event's `last_seen_at` at the moment it was read, so a
+ * condition that recurs afterwards — the recorder bumps `last_seen_at` on the same row —
+ * reads as unread again for this administrator and nobody else. NULL is an explicit
+ * "mark unread". No row means never read.
+ *
+ * Nothing here touches the event: the operational log stays append-only and still has no
+ * "mark as seen", and a read mark resolves nothing. Tenant-scoped end to end: the
+ * administrator is a composite foreign key on `(tenant_id, admin_id)`, and every query
+ * also names the event's tenant.
+ */
+export const adminNotificationReads = pgTable(
+  'admin_notification_reads',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => operationalEvents.id),
+    /** The event's `last_seen_at` when this administrator read it; NULL = marked unread. */
+    readThrough: timestamptz('read_through'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'admin_notification_reads_pk',
+      columns: [table.tenantId, table.adminId, table.eventId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'admin_notification_reads_admin_fk',
+    }),
+  ],
+);
+
 // --- Phase A2: a direct message from Customer 360 ---------------------------------------
 
 /**

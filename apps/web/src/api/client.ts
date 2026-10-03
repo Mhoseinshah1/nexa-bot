@@ -562,6 +562,19 @@ import {
   type CustomerTransferRequest,
   type CustomerTransferResultResponse,
 } from '@nexa/contracts';
+// Phase B3: the notification center.
+import {
+  NOTIFICATION_CENTER_ROUTES,
+  inboxListResponseSchema,
+  inboxSummaryResponseSchema,
+  markAllInboxResponseSchema,
+  markInboxResponseSchema,
+  type InboxListResponse,
+  type InboxSummaryResponse,
+  type MarkAllInboxResponse,
+  type MarkInboxResponse,
+  type NotificationCategory,
+} from '@nexa/contracts';
 // Phase A2: a direct message from Customer 360.
 import {
   DIRECT_MESSAGE_ROUTES,
@@ -4206,6 +4219,48 @@ export function fetchCustomerFinancialSummary(
 
 export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
+}
+
+// --- Phase B3: the notification center -----------------------------------------------
+
+export function fetchInboxSummary(): Promise<InboxSummaryResponse> {
+  return authedGet(NOTIFICATION_CENTER_ROUTES.summary, inboxSummaryResponseSchema);
+}
+
+export function fetchInbox(filters: {
+  unread?: boolean;
+  category?: NotificationCategory;
+  cursor?: { readonly at: string; readonly id: string };
+}): Promise<InboxListResponse> {
+  const params = new URLSearchParams();
+  if (filters.unread === true) params.set('unread', 'true');
+  if (filters.category !== undefined) params.set('category', filters.category);
+  if (filters.cursor !== undefined) {
+    params.set('beforeAt', filters.cursor.at);
+    params.set('beforeId', filters.cursor.id);
+  }
+  const suffix = params.toString();
+  const path = NOTIFICATION_CENTER_ROUTES.list;
+  return authedGet(suffix ? `${path}?${suffix}` : path, inboxListResponseSchema);
+}
+
+/** Read or unread: a SET of this administrator's own state, so a repeat changes nothing. */
+export function markInbox(input: { id: string; read: boolean }): Promise<MarkInboxResponse> {
+  return post(
+    NOTIFICATION_CENTER_ROUTES.mark(input.id),
+    { read: input.read },
+    markInboxResponseSchema,
+  );
+}
+
+export function markAllInbox(input: {
+  category?: NotificationCategory;
+}): Promise<MarkAllInboxResponse> {
+  return post(
+    NOTIFICATION_CENTER_ROUTES.markAll,
+    input.category === undefined ? {} : { category: input.category },
+    markAllInboxResponseSchema,
+  );
 }
 
 // --- Phase A2: «ارسال پیام» -------------------------------------------------------------

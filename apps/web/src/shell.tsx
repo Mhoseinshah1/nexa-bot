@@ -219,6 +219,7 @@ export function Topbar({
   onSearch,
   admin,
   onSignOut,
+  bell,
 }: {
   crumbs: readonly Crumb[];
   collapsed: boolean;
@@ -226,6 +227,8 @@ export function Topbar({
   onSearch: () => void;
   admin: { displayName: string; roleKeys: readonly string[] };
   onSignOut: () => void;
+  /** Phase B3: the notification bell, drawn beside the search. */
+  bell?: React.ReactNode;
 }) {
   const initial = Array.from(admin.displayName.trim())[0] ?? '·';
   const roles = admin.roleKeys.join(t('web.list_separator')) || '—';
@@ -257,6 +260,8 @@ export function Topbar({
         <span>{t('web.search_open')}</span>
         <kbd>Ctrl K</kbd>
       </button>
+
+      {bell}
 
       <Menu
         label={t('web.user_menu')}

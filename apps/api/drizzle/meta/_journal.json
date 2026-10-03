@@ -1233,6 +1233,13 @@
       "when": 1791038228605,
       "tag": "0175_service_operations_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1791038865379,
+      "tag": "0176_admin_notification_reads",
+      "breakpoints": true
     }
   ]
 }
