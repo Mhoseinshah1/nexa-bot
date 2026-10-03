@@ -939,7 +939,12 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
   const steer = useMutation({
     mutationFn: (action: 'pause' | 'resume' | 'cancel' | 'retryFailed') =>
       steerBroadcast(record.id, action),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ['broadcast', record.id] }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
+      // A retry on a PAUSED broadcast leaves its state — the failures' key — unchanged and
+      // nothing polls while paused, so the reasons are asked again here, not left stale.
+      void client.invalidateQueries({ queryKey: ['broadcast-failures', record.id] });
+    },
   });
   const [cancelAsked, setCancelAsked] = useState(false);
   const c = record.counts;
@@ -1333,7 +1338,9 @@ export function BroadcastDetailPage({
                 <>
                   <Composer key={record.version} record={record} onDirtyChange={setComposerDirty} />
                   <MediaCard record={record} blocked={composerDirty} />
-                  <LaunchCard record={record} />
+                  {/* Keyed by version: a saved edit (purpose, audience, text) voids the count
+                      and its estimate, which were answers about the draft as it was. */}
+                  <LaunchCard key={record.version} record={record} />
                 </>
               )}
               {summary}

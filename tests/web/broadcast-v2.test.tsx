@@ -241,6 +241,50 @@ describe('the broadcast page, Broadcast V2', () => {
     expect(screen.getByRole('button', { name: 'ارسال دوباره به ناموفق‌ها' })).toBeInTheDocument();
   });
 
+  it('asks the failure reasons again after a retry on a paused broadcast', async () => {
+    const paused = broadcast({
+      state: 'PAUSED',
+      recipientCount: 10,
+      fingerprint: FINGERPRINT,
+      audienceAsOf: '2026-09-20T10:00:00.000Z',
+      progressPercent: 60,
+      counts: { ...ZERO, total: 10, sent: 4, failed: 2, pending: 4 },
+    });
+    const api = stubApi([
+      { url: `/broadcasts/${ID}`, body: { broadcast: paused } },
+      { url: `/broadcasts/${ID}/recipients`, body: { recipients: [], nextCursor: null } },
+      {
+        url: `/broadcasts/${ID}/failures`,
+        body: { reasons: [{ state: 'FAILED', errorCode: 'telegram.rejected.400', count: 2 }] },
+      },
+      { url: `/broadcasts/${ID}/retry-failed`, body: { broadcast: paused } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    await screen.findByRole('table', { name: 'علت‌های نرسیدن' });
+    const asked = () => api.calls.filter((c) => c.url.includes('/failures')).length;
+    const before = asked();
+    fireEvent.click(screen.getByRole('button', { name: 'ارسال دوباره به ناموفق‌ها' }));
+    await waitFor(() => expect(asked()).toBeGreaterThan(before));
+  });
+
+  it('drops the count and its estimate when the draft is saved again', async () => {
+    const draft = { broadcast: broadcast() };
+    stubApi([
+      OPTIONS,
+      { url: `/broadcasts/${ID}`, body: draft },
+      { url: `/broadcasts/${ID}/preview`, body: previewBody(3) },
+      { url: `/broadcasts/${ID}/test`, body: { outcome: 'SENT' } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    fireEvent.click(await screen.findByRole('button', { name: 'شمارش دقیق گیرندگان' }));
+    expect(await screen.findByText('لغو اشتراک تبلیغاتی (تخمین)')).toBeInTheDocument();
+    // The draft is saved elsewhere as a service announcement: a new version is read back.
+    draft.broadcast = broadcast({ purpose: 'SERVICE_ANNOUNCEMENT', version: 4 });
+    fireEvent.click(screen.getByRole('button', { name: 'ارسال آزمایشی به تلگرام من' }));
+    await waitFor(() => expect(screen.queryByText('لغو اشتراک تبلیغاتی (تخمین)')).toBeNull());
+    expect(screen.queryByRole('button', { name: 'ارسال همین حالا' })).toBeNull();
+  });
+
   it('says nothing failed when every attempt was delivered', async () => {
     stubApi([
       {
