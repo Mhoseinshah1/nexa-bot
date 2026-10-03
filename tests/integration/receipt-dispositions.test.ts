@@ -589,7 +589,11 @@ describe('a submitted receipt and its three dispositions', () => {
         (one) => one.templateKey === 'bot.payment.receipt_credited_to_wallet',
       );
       expect(said.map((one) => one.values)).toEqual([{ amount: money(240_000n, 'IRT') }]);
-      expect(lane.rendered().join('\n')).toContain('مبلغ 240,000 تومان به کیف پول شما واریز گردید');
+      // Owner spec §2.2: the reviewer's figure in the approved credit copy, and no command.
+      expect(lane.rendered().join('\n')).toContain(
+        '💎 مبلغ 240,000 تومان به کیف پول شما اضافه شد.',
+      );
+      expect(lane.rendered().join('\n')).not.toContain('/wallet');
     });
 
     it('lets the customer pay the still-open order from the credited wallet', async () => {

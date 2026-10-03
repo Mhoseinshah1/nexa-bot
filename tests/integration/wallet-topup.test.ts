@@ -1014,7 +1014,11 @@ describe('a customer topping up their wallet', () => {
         ['bot.wallet.topup_gift_credited', { amount: money(50_000n, 'IRT') }],
       ]);
       const [principal, gift] = lane.rendered();
-      expect(principal).toContain('✅ مبلغ 500,000 تومان به کیف پول شما اضافه شد.');
+      // Owner spec §2.2: the two approved lines, the principal named, and no command.
+      expect(principal).toContain(
+        '✅ پرداخت شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما اضافه شد.',
+      );
+      expect(principal).not.toContain('/wallet');
       expect(gift).toContain('🎁 مبلغ 50,000 تومان نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.');
     });
 
