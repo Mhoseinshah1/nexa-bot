@@ -5621,9 +5621,7 @@ export type ServiceChangeLocationRequest = z.infer<typeof serviceChangeLocationR
  */
 export const serviceLocationTargetsResponseSchema = z.object({
   current: z.object({ key: z.string(), label: z.string() }).nullable(),
-  targets: z.array(
-    z.object({ id: z.string(), locationKey: z.string(), label: z.string() }),
-  ),
+  targets: z.array(z.object({ id: z.string(), locationKey: z.string(), label: z.string() })),
 });
 export type ServiceLocationTargetsResponse = z.infer<typeof serviceLocationTargetsResponseSchema>;
 
