@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GATEWAY_HEALTH_OPERATIONAL_CODES,
   MANAGEMENT_CONDITION_RECOVERY_CODES,
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_CATEGORY_PERMISSIONS,
@@ -33,6 +34,17 @@ describe('the notification rules', () => {
         expect(codes.has(rule.code), rule.code).toBe(false);
         codes.add(rule.code);
       }
+    }
+  });
+
+  it('routes every gateway health code to the inbox (Gateway Health × Notification Center)', () => {
+    // The two phases meet here: a code Gateway Health watches (B2) with no rule would show on
+    // the gateway's card and never reach an operator's inbox.
+    for (const code of GATEWAY_HEALTH_OPERATIONAL_CODES) {
+      const rule = notificationRuleFor(code);
+      expect(rule, code).not.toBeNull();
+      expect(['PAYMENTS', 'GATEWAYS'], code).toContain(rule?.category);
+      expect(rule?.minSeverity, code).toBe('WARN');
     }
   });
 
