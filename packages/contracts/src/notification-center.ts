@@ -303,17 +303,24 @@ export const inboxNotificationSchema = z.object({
 });
 export type InboxNotification = z.infer<typeof inboxNotificationSchema>;
 
-export const inboxListQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(INBOX_PAGE_MAX).default(INBOX_PAGE_DEFAULT),
-  category: z.enum(NOTIFICATION_CATEGORIES).optional(),
-  unread: z
-    .enum(['true', 'false'])
-    .transform((value) => value === 'true')
-    .optional(),
-  /** Keyset on `(last_seen_at, id)`, newest activity first. */
-  beforeAt: z.iso.datetime().optional(),
-  beforeId: z.string().regex(UUID_PATTERN).optional(),
-});
+export const inboxListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(INBOX_PAGE_MAX).default(INBOX_PAGE_DEFAULT),
+    category: z.enum(NOTIFICATION_CATEGORIES).optional(),
+    unread: z
+      .enum(['true', 'false'])
+      .transform((value) => value === 'true')
+      .optional(),
+    /** Keyset on the immutable `(first_seen_at, id)`, newest first. Both halves or neither. */
+    beforeAt: z.iso.datetime().optional(),
+    beforeId: z.string().regex(UUID_PATTERN).optional(),
+  })
+  // Half a cursor is no cursor: accepting one would silently answer page 1 to a caller
+  // that asked for a later page, so it is refused, as the ticket cursor refuses it.
+  .refine((query) => (query.beforeAt === undefined) === (query.beforeId === undefined), {
+    message: 'beforeAt and beforeId must be supplied together.',
+    path: ['beforeId'],
+  });
 export type InboxListQuery = z.infer<typeof inboxListQuerySchema>;
 
 export const inboxListResponseSchema = z.object({
