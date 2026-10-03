@@ -45,6 +45,25 @@ export function normalisePhoneNumber(raw: string): string | null {
   return /^\+[1-9][0-9]{7,14}$/u.test(plus) ? plus : null;
 }
 
+/**
+ * A Telegram numeric id as an operator TYPES it: Persian `۰-۹` and Arabic-Indic `٠-٩` digits
+ * read as ASCII and surrounding space dropped, THEN held to `telegramUserIdSchema`. At the
+ * boundary, so an id copied onto a Persian keyboard is not refused before any code that
+ * would have normalised it runs (Codex review of #146).
+ */
+export function typedDigitsAsAscii(text: string): string {
+  return text
+    .trim()
+    .replace(/[۰-۹]/gu, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/gu, (digit) => String(digit.charCodeAt(0) - 0x0660));
+}
+
+export const typedTelegramUserIdSchema = z
+  .string()
+  .max(40)
+  .transform(typedDigitsAsAscii)
+  .pipe(telegramUserIdSchema);
+
 // --- The overview -------------------------------------------------------------------
 
 export const customerLocationOverrideSchema = z.object({
@@ -200,7 +219,7 @@ export const CUSTOMER_TRANSFER_WARNINGS = [
 export type CustomerTransferWarning = (typeof CUSTOMER_TRANSFER_WARNINGS)[number];
 
 export const customerTransferPreviewRequestSchema = z.object({
-  destinationTelegramUserId: telegramUserIdSchema,
+  destinationTelegramUserId: typedTelegramUserIdSchema,
 });
 export type CustomerTransferPreviewRequest = z.infer<typeof customerTransferPreviewRequestSchema>;
 
@@ -260,7 +279,7 @@ export const customerTransferPreviewResponseSchema = z.object({
 
 export const customerTransferRequestSchema = z.object({
   idempotencyKey: idempotencyKeySchema,
-  destinationTelegramUserId: telegramUserIdSchema,
+  destinationTelegramUserId: typedTelegramUserIdSchema,
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/u),
   /** The destination's numeric id, typed again by the operator: the explicit confirmation. */
   confirmTelegramUserId: z.string().max(40),
