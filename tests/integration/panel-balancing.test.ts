@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { Client } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
@@ -521,6 +522,139 @@ describe('automatic panel balancing', () => {
         strategy: 'LOWEST_UTILISATION',
         decidedBy: 'LOAD',
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Codex review of #163
+  // -------------------------------------------------------------------------
+
+  describe('the review findings', () => {
+    beforeEach(async () => {
+      await group(home, 'eu');
+      await group(peer, 'eu');
+    });
+
+    async function resellerOnly(panelIds: readonly string[]): Promise<UserId> {
+      const tier = await ctx.container.resellersAdmin.createTier(tenantA, owner, {
+        idempotencyKey: key(),
+        write: {
+          name: `Tier ${n}`,
+          pricingMode: 'LIST_PRICE',
+          discountPercentage: null,
+          creditLimit: money(0n, 'IRT'),
+        },
+      });
+      await ctx.container.resellersAdmin.replaceGrants(tenantA, owner, {
+        idempotencyKey: key(),
+        tierId: tier.id,
+        grants: [
+          { kind: 'OPERATION', subject: null },
+          { kind: 'PRODUCT', subject: null },
+          ...panelIds.map((id) => ({ kind: 'PANEL' as const, subject: id })),
+          { kind: 'BOT', subject: null },
+        ],
+      });
+      const buyer = await customer(String(920_000 + (n += 1)));
+      await ctx.container.resellersAdmin.register(tenantA, owner, {
+        idempotencyKey: key(),
+        customerId: buyer,
+        write: {
+          tierId: tier.id,
+          pricingMode: 'TIER',
+          discountPercentage: null,
+          creditLimit: null,
+        },
+      });
+      return buyer;
+    }
+
+    it('4173603194: an ARCHIVED or DISABLED home is never balanced onto a peer', async () => {
+      const product = await productOn(home);
+      await setFlag(true);
+      for (const status of ['DISABLED', 'ARCHIVED']) {
+        await ctx.container.database.db.execute(sql`
+          UPDATE panels SET status = ${status},
+                 archived_at = CASE WHEN ${status} = 'ARCHIVED' THEN now() ELSE NULL END
+           WHERE id = ${home}`);
+        const buyer = await customer(String(930_000 + (n += 1)));
+        const order = await draft(buyer, product);
+        expect(order.line.panelId, status).toBe(home);
+        expect(await ctx.container.orders.placement(tenantA, owner, order.id)).toBeNull();
+        await expect(confirm(buyer, order.id)).rejects.toMatchObject({
+          details: { reason: status },
+        });
+        // And the catalogue does not offer it through the group either.
+        expect(
+          (await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items,
+        ).toHaveLength(0);
+      }
+    });
+
+    it('4173603198: a reseller is offered a product only through peers their tier grants', async () => {
+      await productOn(home);
+      await setDrained(home);
+      await setFlag(true);
+      const browseAs = async (buyer: UserId) =>
+        (await ctx.container.products.browse(tenantA, systemActor(key()), 20, buyer)).items;
+
+      // Granted the home only: the home is drained and the only open peer is not granted.
+      const homeOnly = await resellerOnly([home]);
+      expect(await browseAs(homeOnly)).toHaveLength(0);
+
+      // Granted both: reachable through the granted peer, and placed there.
+      const both = await resellerOnly([home, peer]);
+      const offered = await browseAs(both);
+      expect(offered).toHaveLength(1);
+      const order = await draft(both, offered[0]!);
+      expect(order.line.panelId).toBe(peer);
+    });
+
+    it('4173603207: a reseller draft costs the same statements however large the group', async () => {
+      /*
+       * Counted at `pg.Client.prototype.query`, not the pool: the draft runs in a
+       * transaction on a checked-out client, which never touches `pool.query`.
+       */
+      const proto = Client.prototype as unknown as { query: (...args: unknown[]) => unknown };
+      const real = proto.query;
+      let statements = 0;
+      const counted = async (buyer: UserId, product: ProductRecord): Promise<number> => {
+        statements = 0;
+        proto.query = function (this: unknown, ...args: unknown[]) {
+          statements += 1;
+          return real.apply(this, args);
+        };
+        try {
+          await draft(buyer, product);
+        } finally {
+          proto.query = real;
+        }
+        return statements;
+      };
+      await setFlag(true);
+      const product = await productOn(home);
+      const all = await resellerOnly([]);
+      await ctx.container.resellersAdmin.replaceGrants(tenantA, owner, {
+        idempotencyKey: key(),
+        tierId: (await ctx.container.resellersAdmin.get(tenantA, owner, all)).tierId,
+        grants: [
+          { kind: 'OPERATION', subject: null },
+          { kind: 'PRODUCT', subject: null },
+          { kind: 'PANEL', subject: null },
+          { kind: 'BOT', subject: null },
+        ],
+      });
+      const withTwo = await counted(all, product);
+      for (let i = 0; i < 4; i += 1) {
+        const extra = `01a0c300-0000-7000-8000-0000000001${String(i).padStart(2, '0')}`;
+        await ctx.container.database.db.execute(sql`
+          INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status, balancing_group)
+          VALUES (${extra}, ${tenantA.tenantId}, ${'Extra ' + i}, 'sanaei',
+                  ${'https://extra' + i + '.example.test'}, 'ACTIVE', 'eu')`);
+        await makePanelSellable(ctx.container, tenantA, extra);
+      }
+      const withSix = await counted(all, product);
+      expect(withSix, 'no read per group member').toBe(withTwo);
     });
   });
 });

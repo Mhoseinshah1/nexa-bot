@@ -409,7 +409,7 @@ export interface PanelRepository {
   groupedPanels(
     scope: TenantContext,
     tx?: TransactionScope,
-  ): Promise<{ id: string; group: string; providerType: string }[]>;
+  ): Promise<{ id: string; group: string; providerType: string; status: PanelStatus }[]>;
   /** Whether a LIVE panel of this tenant already uses the name. */
   nameTaken(
     scope: TenantContext,

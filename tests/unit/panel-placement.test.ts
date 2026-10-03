@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   decidePlacement,
+  PanelPlacementService,
   type PlacementCandidate,
 } from '../../apps/api/src/modules/platform/panels/application/panel-placement';
+import type { PanelView } from '../../apps/api/src/modules/platform/panels/application/ports';
 
 /**
  * Phase C3: the placement decision, as a pure function.
@@ -153,5 +155,86 @@ describe('automatic panel placement', () => {
       [B, 1, false],
       [HOME, 2, true],
     ]);
+  });
+});
+
+describe('PanelPlacementService.place', () => {
+  const NOW = new Date('2026-09-06T08:00:00.000Z');
+
+  function view(id: string, healthy: boolean): PanelView {
+    return {
+      panel: {
+        id,
+        tenantId: 't',
+        name: id.slice(-1),
+        providerType: 'sanaei',
+        baseUrl: 'https://x.example.test',
+        status: 'ACTIVE',
+        activation: null,
+        maxServices: null,
+        usernamePolicy: {
+          allowCustom: true,
+          allowAutomatic: true,
+          strategy: 'PREFIX_RANDOM',
+          prefix: 'nx',
+          template: null,
+        },
+        archivedAt: null,
+        drain: null,
+        balancingGroup: 'eu',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+      credentials: { usernameSetAt: null, passwordSetAt: null, apiTokenSetAt: null },
+      health: {
+        state: healthy ? 'HEALTHY' : 'UNREACHABLE',
+        checkedAt: NOW,
+        latencyMs: 5,
+        failure: healthy ? null : 'TIMEOUT',
+        statusCode: null,
+        providerVersion: null,
+        lastHealthyAt: NOW,
+        unusableStreak: healthy ? 0 : 1,
+        validatedIdentity: null,
+      },
+    };
+  }
+
+  const capacity = (used: number) => ({
+    services: used,
+    reservations: 0,
+    used,
+    maxServices: null,
+    available: null,
+  });
+
+  it('4173603204: ranks on the view the verdict was decided from, not the earlier list', async () => {
+    // The member list read `B` as healthy; by the time `assessMany` decided its verdict
+    // the row it read was failing. Ranking must use that assessed row, so the healthy
+    // home wins on HEALTH even though `B` carries less load.
+    const service = new PanelPlacementService({
+      panels: {
+        find: async () => view(HOME, true),
+        groupMembers: async () => [view(HOME, true), view(B, true)],
+        groupedPanels: async () => [],
+      },
+      sales: {
+        assessMany: async () =>
+          new Map([
+            [HOME, { view: view(HOME, true), capacity: capacity(5), verdict: { eligible: true } }],
+            [B, { view: view(B, false), capacity: capacity(0), verdict: { eligible: true } }],
+          ]),
+      },
+      enabled: async () => true,
+      strategy: async () => 'LEAST_USED',
+      clock: { now: () => NOW },
+    });
+    const placed = await service.place(
+      { tenantId: 't' as never, botInstanceId: null },
+      { homePanelId: HOME, entitled: () => true },
+      {} as never,
+    );
+    expect(placed.panelId).toBe(HOME);
+    expect(placed.placement?.decidedBy).toBe('HEALTH');
   });
 });

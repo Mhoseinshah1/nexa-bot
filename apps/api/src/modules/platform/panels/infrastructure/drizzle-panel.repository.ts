@@ -329,9 +329,14 @@ export class DrizzlePanelRepository implements PanelRepository {
   async groupedPanels(
     scope: TenantContext,
     tx?: TransactionScope,
-  ): Promise<{ id: string; group: string; providerType: string }[]> {
+  ): Promise<{ id: string; group: string; providerType: string; status: PanelStatus }[]> {
     const rows = await executorOf(this.db, tx)
-      .select({ id: panels.id, group: panels.balancingGroup, providerType: panels.providerType })
+      .select({
+        id: panels.id,
+        group: panels.balancingGroup,
+        providerType: panels.providerType,
+        status: panels.status,
+      })
       .from(panels)
       .where(
         and(
@@ -341,7 +346,17 @@ export class DrizzlePanelRepository implements PanelRepository {
         ),
       );
     return rows.flatMap((row) =>
-      row.group === null ? [] : [{ id: row.id, group: row.group, providerType: row.providerType }],
+      row.group === null
+        ? []
+        : [
+            {
+              id: row.id,
+              group: row.group,
+              providerType: row.providerType,
+              // Narrowed from `text`; the CHECK constraint is what makes it safe.
+              status: row.status as PanelStatus,
+            },
+          ],
     );
   }
 

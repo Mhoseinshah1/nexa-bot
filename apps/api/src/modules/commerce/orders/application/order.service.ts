@@ -7,7 +7,6 @@ import {
   DISCOUNT_CODE_CAPTURE_TTL_MS,
   normaliseDiscountCode,
   COMMERCE_ERROR_CODES,
-  isNexaError,
   MAX_ORDER_QUANTITY,
   ORDER_MACHINE,
   errors,
@@ -250,7 +249,7 @@ export interface OrderServiceDeps {
    */
   readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
   /** A buyer's reseller standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6). */
-  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled'>;
+  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled' | 'entitles'>;
   /** Phase C3: where a new account goes, decided at the draft. */
   readonly placement: Pick<PanelPlacementService, 'place'>;
   /** Phase C3: the explanation of that decision, written beside the draft. */
@@ -368,34 +367,6 @@ export class OrderService {
   }
 
   /**
-   * Whether a reseller may buy this product on one candidate panel — the ONE entitlement
-   * evaluator, asked for a candidate rather than a refusal. Only its own refusal is a
-   * "no"; anything else is a fault and propagates.
-   */
-  private async entitledOn(
-    scope: TenantContext,
-    standing: NonNullable<Awaited<ReturnType<ResellerService['standing']>>>,
-    productId: string,
-    panelId: string,
-    tx: TransactionScope,
-  ): Promise<boolean> {
-    try {
-      await this.deps.resellers.assertEntitled(
-        scope,
-        standing,
-        { operation: 'NEW_SERVICE', productId, panelId },
-        tx,
-      );
-      return true;
-    } catch (error) {
-      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED) {
-        return false;
-      }
-      throw error;
-    }
-  }
-
-  /**
    * Creates a DRAFT for one product, priced and snapshotted.
    *
    * Nothing is owed at the end of this. The customer is looking at a summary, and the
@@ -498,10 +469,19 @@ export class OrderService {
           scope,
           {
             homePanelId,
+            /*
+             * One pure decision per candidate over the grants `standing` already holds and
+             * the product already read — no read per member (Codex on #163). The chosen
+             * panel is still refused authoritatively by `assertEntitled` just below.
+             */
             entitled: (candidate) =>
-              standing === null
-                ? Promise.resolve(true)
-                : this.entitledOn(scope, standing, product.id, candidate, tx),
+              standing === null ||
+              this.deps.resellers.entitles(scope, standing, {
+                operation: 'NEW_SERVICE',
+                productId: product.id,
+                categoryId: product.categoryId,
+                panelId: candidate,
+              }),
           },
           tx,
         );

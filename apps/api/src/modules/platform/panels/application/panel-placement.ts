@@ -251,7 +251,12 @@ export class PanelPlacementService {
     scope: TenantContext,
     input: {
       readonly homePanelId: string;
-      readonly entitled: (panelId: string) => Promise<boolean>;
+      /**
+       * Synchronous, and that is the point (Codex on #163): it is a pure decision over
+       * grants the caller has ALREADY read, never a read per member under the draft's
+       * locks. The caller passes `() => true` for an ordinary customer.
+       */
+      readonly entitled: (panelId: string) => boolean;
     },
     tx: TransactionScope,
   ): Promise<{ panelId: string; placement: PlacementRecord | null }> {
@@ -259,6 +264,15 @@ export class PanelPlacementService {
     if (!(await this.deps.enabled(scope, tx))) return fixed;
     const home = await this.deps.panels.find(scope, input.homePanelId, tx);
     if (home === null || home.panel.balancingGroup === null) return fixed;
+    /*
+     * Only a LIVE home is balanced (Codex on #163). An ARCHIVED panel keeps its group label,
+     * so without this a product still pointing at one would be placed on a peer and walk
+     * round the ARCHIVED refusal its own panel answers. DISABLED is treated the same, for
+     * the same reason and to agree with the catalogue's reach: the operator said "stop
+     * using this panel", and its products are paused, not redirected. A DRAINED home is
+     * ACTIVE and is balanced — sending its new accounts elsewhere is what drain is for.
+     */
+    if (home.panel.status !== 'ACTIVE') return fixed;
     const group = home.panel.balancingGroup;
 
     const views = await this.deps.panels.groupMembers(scope, group, tx);
@@ -269,11 +283,22 @@ export class PanelPlacementService {
     );
     const now = this.deps.clock.now();
     const members: PlacementCandidate[] = [];
-    for (const view of views) {
-      const assessment = assessed.get(view.panel.id);
+    for (const listed of views) {
+      const assessment = assessed.get(listed.panel.id);
       if (assessment === undefined) continue;
+      /*
+       * `assessment.view`, NOT the member list's row (Codex on #163): the verdict was
+       * decided from the row `assessMany` read, and ranking from an earlier read could
+       * pair one panel's health with another moment's eligibility.
+       */
       members.push(
-        await this.candidateOf(view, assessment.capacity, assessment.verdict, now, input.entitled),
+        this.candidateOf(
+          assessment.view,
+          assessment.capacity,
+          assessment.verdict,
+          now,
+          input.entitled,
+        ),
       );
     }
     const strategy = await this.deps.strategy(scope, tx);
@@ -321,18 +346,21 @@ export class PanelPlacementService {
     );
     const reach = new Set(eligible);
     for (const panel of grouped) {
+      // Only a LIVE home is widened — the same rule `place` applies, so the catalogue
+      // never offers a product the draft would then keep on its disabled panel.
+      if (panel.status !== 'ACTIVE') continue;
       if (open.has(`${panel.group}\u0000${panel.providerType}`)) reach.add(panel.id);
     }
     return [...reach];
   }
 
-  private async candidateOf(
+  private candidateOf(
     view: PanelView,
     capacity: PanelCapacity | null,
     verdict: PanelEligibility,
     now: Date,
-    entitled: (panelId: string) => Promise<boolean>,
-  ): Promise<PlacementCandidate> {
+    entitled: (panelId: string) => boolean,
+  ): PlacementCandidate {
     const health = readHealth(view.panel, view.health, now);
     return {
       panelId: view.panel.id,
@@ -342,7 +370,7 @@ export class PanelPlacementService {
       healthy: health.state === 'HEALTHY' && !health.stale,
       used: capacity?.used ?? 0,
       maxServices: capacity?.maxServices ?? view.panel.maxServices,
-      entitled: await entitled(view.panel.id),
+      entitled: entitled(view.panel.id),
     };
   }
 }
