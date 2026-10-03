@@ -46,6 +46,7 @@ import {
   reportSummaryResponseSchema,
   reportTrendResponseSchema,
   reportWalletResponseSchema,
+  reportFinancialResponseSchema,
   type OrderPurpose as ReportOrderPurpose,
   type ReportExportFormat,
   type ReportExportKind,
@@ -64,6 +65,8 @@ import {
   type ReportTrendMetric,
   type ReportTrendResponse,
   type ReportWalletResponse,
+  type FinancialGranularity,
+  type ReportFinancialResponse,
   COMMERCE_ERROR_CODES,
   RESELLER_MINIMUM_ROUTES,
   RESELLER_ROUTES,
@@ -3165,6 +3168,18 @@ export function fetchReportWallet(s: ReportRangeSelection): Promise<ReportWallet
   return reportGet(REPORT_ROUTES.wallet, reportWalletResponseSchema, reportParams(s));
 }
 
+/** Phase E2: the financial statement, bucketed by the granularity the page shows. */
+export function fetchReportFinancial(
+  s: ReportRangeSelection,
+  granularity: FinancialGranularity | undefined,
+): Promise<ReportFinancialResponse> {
+  return reportGet(
+    REPORT_ROUTES.financial,
+    reportFinancialResponseSchema,
+    reportParams(s, { granularity }),
+  );
+}
+
 export function fetchReportReferrals(
   s: ReportRangeSelection,
   query: { by: ReportReferrerRanking; limit?: number; page?: number },
@@ -3204,8 +3219,10 @@ export function reportExportUrl(
   s: ReportRangeSelection,
   report: ReportExportKind,
   format: ReportExportFormat,
+  /** FINANCIAL only: the bucket size the page shows, so the file is the page. */
+  granularity?: FinancialGranularity,
 ): string {
-  return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format }).toString()}`;
+  return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format, granularity }).toString()}`;
 }
 
 // --- Dashboard and sidebar counters (round W) ----------------------------------
