@@ -13,6 +13,7 @@ import { useNavCounters } from './nav-counters';
 import { CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
+import { PanelHealthPage } from './pages/panel-health';
 import { SettingsPage } from './pages/settings';
 import { BotButtonsPage } from './pages/bot-buttons';
 import { FeaturesPage } from './pages/features';
@@ -191,6 +192,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/panels',
   '/panels/new',
   '/panels/:id',
+  '/panel-health',
   '/providers',
   '/settings',
   '/support',
@@ -848,6 +850,22 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.nav_panels') }],
       title: t('web.nav_panels'),
+    };
+  }
+
+  if (route.path === '/panel-health') {
+    return {
+      element: (
+        <PanelHealthPage
+          denied={!may('panels.view')}
+          // The connection test is charged `panels.edit` by the server.
+          mayProbe={may('panels.edit')}
+          mayDrain={may('panels.drain')}
+          mayViewServices={may('services.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_panel_health') }],
+      title: t('web.nav_panel_health'),
     };
   }
 
