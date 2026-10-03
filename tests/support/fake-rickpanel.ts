@@ -55,6 +55,27 @@ export type RickpanelRevokeMode =
   /** A 200 that changes nothing. */
   | 'no-op-200';
 
+/**
+ * How `GET /api/users` pages (Migration P5).
+ *
+ * NOT EVIDENCE about RickPanel (`OQ-P5-01`). `documented` is Marzban v0.8.4's documented
+ * list route — `?offset=&limit=`, answering `{"users": [...], "total": N}` — which a
+ * Marzban-derived panel is inferred to share. The other modes are the ways a panel could
+ * page badly, each of which the inventory must refuse or survive:
+ */
+export type RickpanelListMode =
+  | 'documented'
+  /** Returns the first page whatever `offset` says: a loop that never ends. */
+  | 'ignores-offset'
+  /** Returns everything from `offset` whatever `limit` says. */
+  | 'ignores-limit'
+  /** Caps every page at `listPageCap` rows, below what was asked. */
+  | 'caps-page-size'
+  /** A bare JSON array instead of the page object. */
+  | 'bare-array'
+  /** The page object without `total`. */
+  | 'no-total';
+
 export interface FakeRickpanelOptions {
   readonly username?: string;
   readonly password?: string;
@@ -131,6 +152,16 @@ export interface FakeRickpanel {
   createCalls(): number;
   /** How many `revoke_sub` calls reached the panel, whatever they did. */
   revokeCalls(): number;
+  /** Migration P5: how `GET /api/users` pages. */
+  listMode: RickpanelListMode;
+  /** The row cap for `caps-page-size`. */
+  listPageCap: number;
+  /** Run before each list page is answered: a hook to change the panel mid-walk. */
+  beforeListPage: ((offset: number) => void) | null;
+  /** How many `GET /api/users` reached the panel. */
+  listCalls(): number;
+  /** Put an account on the panel directly, as an operator's own panel would hold it. */
+  seedUser(name: string, fields?: Partial<Omit<FakeRickpanelUser, 'username'>>): void;
   /**
    * Package E: the body `GET /api/user/{name}/files` answers with, or null for the
    * panel's own — one JSON config and one plain-text list per user, both built from the
@@ -207,6 +238,9 @@ export async function startFakeRickpanel(
   let filesCallsForgotten = 0;
   let omitUsedTraffic = false;
   let rotationCounter = 0;
+  let listMode: RickpanelListMode = 'documented';
+  let listPageCap = 10;
+  let beforeListPage: ((offset: number) => void) | null = null;
 
   const num = (value: number): number | string => (stringNumbers ? String(value) : value);
   const present = (user: FakeRickpanelUser): Record<string, unknown> => ({
@@ -256,6 +290,25 @@ export async function startFakeRickpanel(
       }
 
       if (path === '/api/system') return void json(200, { version: '2.1.0' });
+
+      if (path === '/api/users' && method === 'GET') {
+        const query = new URLSearchParams(rawUrl.split('?')[1] ?? '');
+        const offset = Number(query.get('offset') ?? '0');
+        const limit = Number(query.get('limit') ?? '0');
+        beforeListPage?.(offset);
+        const all = [...users.values()];
+        const from = listMode === 'ignores-offset' ? 0 : offset;
+        const count =
+          listMode === 'ignores-limit'
+            ? all.length
+            : listMode === 'caps-page-size'
+              ? Math.min(limit, listPageCap)
+              : limit;
+        const page = all.slice(from, from + count).map(present);
+        if (listMode === 'bare-array') return void json(200, page);
+        if (listMode === 'no-total') return void json(200, { users: page });
+        return void json(200, { users: page, total: all.length });
+      }
 
       if (path === '/api/user' && method === 'POST') {
         const payload = parse(body);
@@ -492,6 +545,39 @@ export async function startFakeRickpanel(
     },
     requests,
     users,
+    get listMode() {
+      return listMode;
+    },
+    set listMode(next: RickpanelListMode) {
+      listMode = next;
+    },
+    get listPageCap() {
+      return listPageCap;
+    },
+    set listPageCap(next: number) {
+      listPageCap = next;
+    },
+    get beforeListPage() {
+      return beforeListPage;
+    },
+    set beforeListPage(next: ((offset: number) => void) | null) {
+      beforeListPage = next;
+    },
+    listCalls: () =>
+      requests.filter((one) => one.method === 'GET' && one.path.split('?')[0] === '/api/users')
+        .length,
+    seedUser: (name: string, fields: Partial<Omit<FakeRickpanelUser, 'username'>> = {}) => {
+      userCounter += 1;
+      users.set(name, {
+        username: name,
+        status: fields.status ?? 'active',
+        expire: fields.expire ?? 0,
+        dataLimit: fields.dataLimit ?? 0,
+        usedTraffic: fields.usedTraffic ?? 0,
+        proxies: fields.proxies ?? { vless: { id: `seeded-${String(userCounter)}` } },
+        subToken: fields.subToken ?? `seeded-token-${String(userCounter)}`,
+      });
+    },
     createCalls: () =>
       requests.filter((one) => one.method === 'POST' && one.path.split('?')[0] === '/api/user')
         .length,
