@@ -5,9 +5,11 @@ import {
   type BulkItemState,
   type BulkOperationKind,
   type BulkOperationState,
+  type BulkServiceKind,
   type BulkSkipReason,
   type CurrencyCode,
   type CustomerNotificationState,
+  type ServiceState,
   type TenantContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -59,6 +61,7 @@ interface OperationRow {
   paused_at: Instant | null;
   completed_at: Instant | null;
   cancelled_at: Instant | null;
+  retry_of_id: string | null;
 }
 
 function toRecord(row: OperationRow): BulkOperationRecord {
@@ -87,6 +90,7 @@ function toRecord(row: OperationRow): BulkOperationRecord {
     pausedAt: maybeDate(row.paused_at),
     completedAt: maybeDate(row.completed_at),
     cancelledAt: maybeDate(row.cancelled_at),
+    retryOfId: row.retry_of_id,
   };
 }
 
@@ -120,12 +124,46 @@ const NOTICE_JOIN = sql`LEFT JOIN customer_notifications n
  * materialisation, so the count the operator confirmed and the set frozen are one question.
  */
 function eligibility(rule: GrantEligibility, service: SQL = sql`s`): SQL {
-  const finite =
-    rule.kind === 'SERVICE_TRAFFIC'
-      ? sql`${service}.traffic_limit_bytes > 0`
-      : sql`${service}.expires_at IS NOT NULL`;
-  return sql`${service}.state = 'ACTIVE' AND ${finite}
+  return sql`${legalState(rule.kind, service)} AND ${finite(rule.kind, service)}
              AND ${service}.panel_id = ANY(${sql.param([...rule.operablePanelIds])}::uuid[])`;
+}
+
+/**
+ * The one state each service kind's operation is legal from — `OPERATION_LEGAL_FROM`'s
+ * `ADD_TRAFFIC`/`ADD_TIME`/`SUSPEND` (ACTIVE) and `RESUME` (SUSPENDED), transcribed and
+ * pinned against it by `tests/unit/bulk-service-kinds.test.ts`.
+ */
+export const BULK_KIND_LEGAL_STATE: Readonly<Record<BulkServiceKind, ServiceState>> = {
+  SERVICE_TRAFFIC: 'ACTIVE',
+  SERVICE_TIME: 'ACTIVE',
+  SERVICE_SUSPEND: 'ACTIVE',
+  SERVICE_RESUME: 'SUSPENDED',
+};
+
+function legalState(kind: BulkServiceKind, service: SQL = sql`s`): SQL {
+  return sql`${service}.state = ${BULK_KIND_LEGAL_STATE[kind]}`;
+}
+
+/** A grant needs a limit to add to; a status change needs nothing more. */
+function finite(kind: BulkServiceKind, service: SQL = sql`s`): SQL {
+  if (kind === 'SERVICE_TRAFFIC') return sql`${service}.traffic_limit_bytes > 0`;
+  if (kind === 'SERVICE_TIME') return sql`${service}.expires_at IS NOT NULL`;
+  return sql`true`;
+}
+
+/**
+ * Program §13: a failed item is retried ONCE from its operation. A service already carried
+ * by a retry of `operationId` — in any state but CANCELLED, which wrote nothing — is not
+ * offered again from the original: retrying twice from the same original would plan the
+ * same grant twice for every item the first retry applied. A retry's own failures are
+ * retried from the RETRY. Read under the original's row lock, so two retries serialise.
+ */
+function notRetriedYet(tenantId: string, operationId: string): SQL {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM bulk_operation_items r
+      JOIN bulk_operations ro ON ro.tenant_id = r.tenant_id AND ro.id = r.bulk_operation_id
+     WHERE r.tenant_id = ${tenantId}::uuid AND ro.retry_of_id = ${operationId}::uuid
+       AND r.service_id = i.service_id AND r.state <> 'CANCELLED')`;
 }
 
 /**
@@ -150,7 +188,7 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
                       o.audience_definition, o.audience_hash, o.audience_as_of, o.item_count,
                       o.audience_fingerprint, o.not_before, o.frozen_audience_id,
                       o.created_by_admin_id AS created_by_id, a.username AS created_by_username,
-                      o.created_at, o.paused_at, o.completed_at, o.cancelled_at
+                      o.created_at, o.paused_at, o.completed_at, o.cancelled_at, o.retry_of_id
                  FROM bulk_operations o
                  LEFT JOIN admins a ON a.id = o.created_by_admin_id
                 WHERE ${where} ${suffix}`;
@@ -163,7 +201,8 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
       INSERT INTO bulk_operations (id, tenant_id, kind, state, amount_minor, currency, traffic_bytes,
                                    duration_days, notify, note, audience_definition, audience_hash,
                                    audience_as_of, item_count, audience_fingerprint, not_before,
-                                   frozen_audience_id, created_by_admin_id, created_at, updated_at)
+                                   frozen_audience_id, created_by_admin_id, created_at, updated_at,
+                                   retry_of_id)
       VALUES (${draft.id}::uuid, ${tenantId}::uuid, ${draft.kind}, 'RUNNING',
               ${draft.amountMinor?.toString() ?? null}::bigint, ${draft.currency},
               ${draft.trafficBytes?.toString() ?? null}::bigint, ${draft.durationDays},
@@ -171,7 +210,8 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
               ${draft.audienceAsOf.toISOString()}::timestamptz, ${draft.itemCount},
               ${draft.fingerprint}, ${draft.notBefore?.toISOString() ?? null}::timestamptz,
               ${draft.frozenAudienceId}::uuid,
-              ${draft.createdByAdminId}::uuid, ${at}::timestamptz, ${at}::timestamptz)`);
+              ${draft.createdByAdminId}::uuid, ${at}::timestamptz, ${at}::timestamptz,
+              ${draft.retryOfId ?? null}::uuid)`);
   }
 
   async find(scope: TenantContext, id: string, tx?: unknown) {
@@ -328,20 +368,115 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
   async panelsFor(
     scope: TenantContext,
     evaluation: AudienceEvaluation,
-    kind: 'SERVICE_TRAFFIC' | 'SERVICE_TIME',
+    kind: BulkServiceKind,
     tx?: unknown,
   ) {
-    const finite =
-      kind === 'SERVICE_TRAFFIC' ? sql`s.traffic_limit_bytes > 0` : sql`s.expires_at IS NOT NULL`;
     requireTenantId(scope);
     const rows = await this.rows<{ panel_id: string }>(
       sql`SELECT DISTINCT a.panel_id FROM (${audienceServicesQuery(
         evaluation,
-        sql`s.state = 'ACTIVE' AND ${finite}`,
+        sql`${legalState(kind)} AND ${finite(kind)}`,
       )}) a`,
       tx,
     );
     return rows.map((row) => row.panel_id);
+  }
+
+  async previewIneligible(
+    scope: TenantContext,
+    evaluation: AudienceEvaluation,
+    rule: GrantEligibility,
+    sampleSize: number,
+  ) {
+    requireTenantId(scope);
+    const operable = sql`s.panel_id = ANY(${sql.param([...rule.operablePanelIds])}::uuid[])`;
+    // One classification for the counts and the sample, so they cannot disagree.
+    const classified = sql`
+      SELECT a.service_id, a.customer_id, a.service_label,
+             CASE WHEN NOT (${legalState(rule.kind)}) THEN 'NOT_IN_STATE'
+                  WHEN NOT (${operable}) THEN 'PANEL_NOT_OPERABLE'
+                  WHEN NOT (${finite(rule.kind)}) THEN 'OTHER'
+                  ELSE NULL END AS reason
+        FROM (${audienceServicesQuery(evaluation)}) a
+        JOIN services s ON s.tenant_id = ${evaluation.tenantId}::uuid AND s.id = a.service_id`;
+    const [summary] = await this.rows<{
+      selected: number;
+      not_in_state: number;
+      panel: number;
+      other: number;
+    }>(
+      sql`SELECT count(*)::int AS selected,
+                 count(*) FILTER (WHERE c.reason = 'NOT_IN_STATE')::int AS not_in_state,
+                 count(*) FILTER (WHERE c.reason = 'PANEL_NOT_OPERABLE')::int AS panel,
+                 count(*) FILTER (WHERE c.reason = 'OTHER')::int AS other
+            FROM (${classified}) c`,
+    );
+    const sample = await this.rows<{
+      service_id: string;
+      customer_id: string;
+      service_label: string;
+      reason: 'NOT_IN_STATE' | 'PANEL_NOT_OPERABLE' | 'OTHER';
+    }>(
+      sql`SELECT c.service_id, c.customer_id, c.service_label, c.reason
+            FROM (${classified}) c
+           WHERE c.reason IS NOT NULL
+           ORDER BY c.service_id LIMIT ${sampleSize}`,
+    );
+    return {
+      selected: summary?.selected ?? 0,
+      notInState: summary?.not_in_state ?? 0,
+      panelNotOperable: summary?.panel ?? 0,
+      other: summary?.other ?? 0,
+      sample: sample.map((row) => ({
+        serviceId: row.service_id,
+        serviceLabel: row.service_label,
+        customerId: row.customer_id,
+        reason: row.reason,
+      })),
+    };
+  }
+
+  async failedItems(scope: TenantContext, id: string, tx?: unknown) {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.rows<{ count: number; customers: number; fingerprint: string }>(
+      sql`SELECT count(*)::int AS count, count(DISTINCT i.customer_id)::int AS customers,
+                 ${fingerprintOf(sql`i.service_id`)} AS fingerprint
+            FROM bulk_operation_items i
+           WHERE i.tenant_id = ${tenantId}::uuid AND i.bulk_operation_id = ${id}::uuid
+             AND i.state = 'FAILED' AND i.service_id IS NOT NULL
+             AND ${notRetriedYet(tenantId, id)}`,
+      tx,
+    );
+    return {
+      count: row?.count ?? 0,
+      customers: row?.customers ?? 0,
+      fingerprint: row?.fingerprint ?? '',
+    };
+  }
+
+  async materialiseRetry(
+    scope: TenantContext,
+    id: string,
+    fromId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<FrozenItems> {
+    const tenantId = requireTenantId(scope);
+    const at = now.toISOString();
+    /*
+     * A COPY of the failed items, never a re-selection. FAILED only: an UNKNOWN outcome is
+     * still PLANNED and is the reconciliation read's to decide, never a second write's.
+     */
+    await this.exec(tx).execute(sql`
+      INSERT INTO bulk_operation_items (id, tenant_id, bulk_operation_id, customer_id, service_id,
+                                        created_at, updated_at)
+      SELECT gen_random_uuid(), ${tenantId}::uuid, ${id}::uuid, i.customer_id, i.service_id,
+             ${at}::timestamptz, ${at}::timestamptz
+        FROM bulk_operation_items i
+       WHERE i.tenant_id = ${tenantId}::uuid AND i.bulk_operation_id = ${fromId}::uuid
+         AND i.state = 'FAILED' AND i.service_id IS NOT NULL
+         AND ${notRetriedYet(tenantId, fromId)}`);
+    return this.frozen(tenantId, id, sql`i.service_id`, tx);
   }
 
   async previewServices(

@@ -16,6 +16,8 @@ import {
   type BulkItemState,
   type BulkOperationKind,
   type BulkPreview,
+  type BulkRetryPreview,
+  type BulkServiceKind,
   type Clock,
   type CurrencyCode,
   type FrozenAudienceKind,
@@ -58,12 +60,39 @@ export const BULK_VIEW: PermissionKey = 'bulk_operations.view';
 /** The wallet half: declared since Phase 0, charged at last (`permissions.ts`). */
 export const BULK_WALLET: PermissionKey = 'users.wallet.mass';
 export const BULK_SERVICE: PermissionKey = 'services.mass.grant';
+/** Program §13: a mass suspend or resume. Charged TOGETHER with `services.edit`. */
+export const BULK_STATUS: PermissionKey = 'services.mass.status';
+export const BULK_STATUS_COMPANION: PermissionKey = 'services.edit';
 
 const NAMESPACE = 'WEB' as const;
 const NOT_BEFORE_MAX_LEAD_MS = 60 * 86_400_000;
 
 export function permissionFor(kind: BulkOperationKind): PermissionKey {
-  return kind === 'WALLET_CREDIT' ? BULK_WALLET : BULK_SERVICE;
+  if (kind === 'WALLET_CREDIT') return BULK_WALLET;
+  if (kind === 'SERVICE_SUSPEND' || kind === 'SERVICE_RESUME') return BULK_STATUS;
+  return BULK_SERVICE;
+}
+
+/**
+ * Program §13: the one-service permission a mass kind must ALSO hold, so a mass operation
+ * is never a way to do to many services what its operator could not do to one. Null where
+ * the mass key is the only authority (credits and grants have no one-service equivalent
+ * charged by a different key).
+ */
+export function companionPermissionFor(kind: BulkOperationKind): PermissionKey | null {
+  return kind === 'SERVICE_SUSPEND' || kind === 'SERVICE_RESUME' ? BULK_STATUS_COMPANION : null;
+}
+
+/** The provisioning operation each service kind plans. */
+export const BULK_KIND_OPERATION: Readonly<Record<BulkServiceKind, OperationType>> = {
+  SERVICE_TRAFFIC: 'ADD_TRAFFIC',
+  SERVICE_TIME: 'ADD_TIME',
+  SERVICE_SUSPEND: 'SUSPEND',
+  SERVICE_RESUME: 'RESUME',
+};
+
+function isServiceKind(kind: BulkOperationKind): kind is BulkServiceKind {
+  return kind !== 'WALLET_CREDIT';
 }
 
 /** A grant, validated and in the units it is stored in. */
@@ -191,6 +220,8 @@ export class BulkOperationService {
     input: { readonly grant: BulkGrant; readonly definition: unknown },
   ): Promise<BulkPreview> {
     await this.deps.guard.check(scope, actor, permissionFor(input.grant.kind));
+    const companion = companionPermissionFor(input.grant.kind);
+    if (companion !== null) await this.deps.guard.check(scope, actor, companion);
     const grant = await this.checkedGrant(scope, input.grant);
     const audience = freezeAudience(input.definition);
     const asOf = this.deps.clock.now();
@@ -215,14 +246,16 @@ export class BulkOperationService {
         sample,
       );
     }
+    if (!isServiceKind(grant.kind)) throw new Error('unreachable: a wallet credit returned above');
     const eligibility = await this.eligibility(scope, evaluation, grant.kind);
-    const preview = await this.deps.repository.previewServices(
-      scope,
-      evaluation,
-      eligibility,
-      AUDIENCE_SAMPLE_SIZE,
-    );
-    return this.toPreview(grant, audience, asOf, preview, preview.sample);
+    const [preview, ineligible] = await Promise.all([
+      this.deps.repository.previewServices(scope, evaluation, eligibility, AUDIENCE_SAMPLE_SIZE),
+      this.deps.repository.previewIneligible(scope, evaluation, eligibility, AUDIENCE_SAMPLE_SIZE),
+    ]);
+    return {
+      ...this.toPreview(grant, audience, asOf, preview, preview.sample),
+      ineligible: { ...ineligible, sample: [...ineligible.sample] },
+    };
   }
 
   // --- the confirmation ----------------------------------------------------------------
@@ -244,6 +277,17 @@ export class BulkOperationService {
     const permission = permissionFor(input.grant.kind);
     const denial = { action: 'bulk.create', entityType: 'BulkOperation', entityId: null };
     await this.authorize(scope, actor, permission, denial);
+    const companion = companionPermissionFor(input.grant.kind);
+    if (companion !== null) await this.authorize(scope, actor, companion, denial);
+    if (
+      (input.grant.kind === 'SERVICE_SUSPEND' || input.grant.kind === 'SERVICE_RESUME') &&
+      input.notify
+    ) {
+      throw errors.validation(
+        BULK_ERROR_CODES.NOTIFY_UNSUPPORTED,
+        'A suspend or resume notifies nobody; there is no notice for it.',
+      );
+    }
     const createdBy = adminIdOf(actor);
     if (createdBy === null) {
       throw errors.permissionDenied(
@@ -387,7 +431,7 @@ export class BulkOperationService {
                 now,
                 tx,
               )
-            : grant.kind === 'WALLET_CREDIT'
+            : !isServiceKind(grant.kind)
               ? await this.deps.repository.materialiseCustomers(scope, id, evaluation, now, tx)
               : await this.deps.repository.materialiseServices(
                   scope,
@@ -549,10 +593,10 @@ export class BulkOperationService {
   ): Promise<FrozenAudienceRecord> {
     await this.deps.guard.check(scope, actor, permissionFor(input.grant.kind), tx);
     const grant = await this.checkedGrant(scope, input.grant);
-    if (grant.kind === 'WALLET_CREDIT') {
+    if (grant.kind !== 'SERVICE_TRAFFIC' && grant.kind !== 'SERVICE_TIME') {
       throw errors.validation(
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-        'A wallet credit freezes customers, not services.',
+        'Only a traffic or time grant freezes its services in advance.',
       );
     }
     const kind = grant.kind;
@@ -591,6 +635,8 @@ export class BulkOperationService {
     const permission = permissionFor(existing.kind);
     const denial = { action, entityType: 'BulkOperation', entityId: id };
     await this.authorize(scope, actor, permission, denial);
+    const companion = companionPermissionFor(existing.kind);
+    if (companion !== null) await this.authorize(scope, actor, companion, denial);
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
       this.mutationDeps(),
@@ -703,10 +749,10 @@ export class BulkOperationService {
       readonly definition: FrozenAudience['definition'];
       readonly asOf: Date;
     },
-    kind: 'SERVICE_TRAFFIC' | 'SERVICE_TIME',
+    kind: BulkServiceKind,
     tx?: TransactionScope,
   ): Promise<GrantEligibility> {
-    const type: OperationType = kind === 'SERVICE_TRAFFIC' ? 'ADD_TRAFFIC' : 'ADD_TIME';
+    const type = BULK_KIND_OPERATION[kind];
     const panels = await this.deps.repository.panelsFor(scope, evaluation, kind, tx);
     const operable: string[] = [];
     for (const panelId of panels) {
@@ -749,6 +795,15 @@ export class BulkOperationService {
         durationDays: null,
       };
     }
+    if (grant.kind === 'SERVICE_SUSPEND' || grant.kind === 'SERVICE_RESUME') {
+      return {
+        kind: grant.kind,
+        amountMinor: null,
+        currency: null,
+        trafficBytes: null,
+        durationDays: null,
+      };
+    }
     if (grant.durationDays < 1 || grant.durationDays > BULK_DURATION_MAX_DAYS) {
       throw errors.validation(BULK_ERROR_CODES.AMOUNT_INVALID, 'That duration cannot be granted.');
     }
@@ -786,7 +841,206 @@ export class BulkOperationService {
       trafficBytesPerItem: grant.trafficBytes?.toString() ?? null,
       durationDaysPerItem: grant.durationDays,
       sample: [...sample],
+      ineligible: null,
     };
+  }
+
+  // --- retry (program §13) ----------------------------------------------------------------
+
+  /** The FAILED service items of an operation, counted: what a retry would copy. A read. */
+  async retryPreview(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+  ): Promise<BulkRetryPreview> {
+    const existing = await this.require(scope, id);
+    await this.deps.guard.check(scope, actor, permissionFor(existing.kind));
+    const companion = companionPermissionFor(existing.kind);
+    if (companion !== null) await this.deps.guard.check(scope, actor, companion);
+    const failed = await this.deps.repository.failedItems(scope, id);
+    return {
+      operationId: id,
+      kind: existing.kind,
+      count: failed.count,
+      fingerprint: failed.fingerprint,
+    };
+  }
+
+  /**
+   * Program §13 — a NEW operation over exactly the FAILED service items of `id`.
+   *
+   * FAILED means the provider refused the write authoritatively (or a reconciliation read
+   * decided it was not applied), so asking again cannot apply it twice; an UNKNOWN outcome
+   * is still PLANNED and is never copied — its reconciliation read decides it. The new
+   * operation carries the original's grant and definition (for the record), `retryOfId`,
+   * and its own id — so every provisioning operation it plans is a NEW one, derived from
+   * the retry's id, and none collides with the failed attempt it replaces. The items are
+   * copied and compared, in one transaction, with the count and fingerprint the operator
+   * confirmed; from `BULK_LARGE_OPERATION` items the count must also be typed back.
+   * Idempotent under its key: a replayed retry answers with the first retry.
+   */
+  async retry(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly note: string;
+      readonly expectedCount: number;
+      readonly expectedFingerprint: string;
+      readonly typedCount: number | null;
+    },
+  ): Promise<BulkOperationRecord> {
+    const original = await this.require(scope, id);
+    const permission = permissionFor(original.kind);
+    const denial = { action: 'bulk.retry', entityType: 'BulkOperation', entityId: id };
+    await this.authorize(scope, actor, permission, denial);
+    const companion = companionPermissionFor(original.kind);
+    if (companion !== null) await this.authorize(scope, actor, companion, denial);
+    const createdBy = adminIdOf(actor);
+    if (createdBy === null) {
+      throw errors.permissionDenied(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'A mass operation is a person’s decision.',
+      );
+    }
+    if (!isServiceKind(original.kind)) {
+      throw errors.validation(
+        BULK_ERROR_CODES.RETRY_NOTHING,
+        'A wallet credit has nothing to retry.',
+      );
+    }
+    const note = input.note.trim();
+    if (note.length === 0) {
+      throw errors.validation(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID, 'Give a reason.');
+    }
+    if (input.expectedCount >= BULK_LARGE_OPERATION && input.typedCount !== input.expectedCount) {
+      throw errors.validation(
+        BULK_ERROR_CODES.CONFIRMATION_REQUIRED,
+        `Type the number of items (${String(input.expectedCount)}) to confirm.`,
+        { count: input.expectedCount },
+      );
+    }
+    const requestHash = hashRequest({
+      retryOf: id,
+      note,
+      expectedCount: input.expectedCount,
+      expectedFingerprint: input.expectedFingerprint,
+    });
+    const replay = await this.deps.idempotency.find<{ operationId: string }>(
+      scope,
+      NAMESPACE,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) return this.require(scope, replay.result.operationId);
+
+    const now = this.deps.clock.now();
+    const retryId = this.deps.ids.uuid();
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      permission,
+      { ...denial, entityId: id },
+      async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'This installation has stopped accepting work.',
+          );
+        }
+        // The original, locked: a settle moving an item to FAILED waits for this, or this
+        // waits for it — the copy and the confirmation see one set.
+        const locked = await this.deps.repository.lock(scope, id, tx);
+        if (locked === null) throw this.notFound();
+        const audienceJson = JSON.stringify(locked.audienceDefinition);
+        await this.deps.repository.create(
+          scope,
+          {
+            id: retryId,
+            kind: locked.kind,
+            amountMinor: locked.amountMinor,
+            currency: locked.currency,
+            trafficBytes: locked.trafficBytes,
+            durationDays: locked.durationDays,
+            notify: locked.notify,
+            note,
+            audienceJson,
+            audienceHash: locked.audienceHash,
+            audienceAsOf: now,
+            itemCount: input.expectedCount,
+            fingerprint: input.expectedFingerprint,
+            notBefore: null,
+            frozenAudienceId: null,
+            createdByAdminId: createdBy,
+            now,
+            retryOfId: id,
+          },
+          tx,
+        );
+        const copied = await this.deps.repository.materialiseRetry(scope, retryId, id, now, tx);
+        if (copied.count === 0) {
+          throw errors.preconditionFailed(
+            BULK_ERROR_CODES.RETRY_NOTHING,
+            'This operation has no failed item to retry.',
+          );
+        }
+        if (
+          copied.count !== input.expectedCount ||
+          copied.fingerprint !== input.expectedFingerprint
+        ) {
+          throw errors.conflict(
+            AUDIENCE_ERROR_CODES.CHANGED,
+            `The preview showed ${String(input.expectedCount)} failed items and there are ${String(
+              copied.count,
+            )} now. Nothing was done; preview again.`,
+            { expected: input.expectedCount, current: copied.count },
+          );
+        }
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'bulk.retry',
+            entityType: 'BulkOperation',
+            entityId: retryId,
+            before: { retryOf: id },
+            after: {
+              kind: locked.kind,
+              items: copied.count,
+              fingerprint: copied.fingerprint,
+              retryOf: id,
+            },
+            result: 'SUCCESS',
+            reason: note,
+          },
+          tx,
+        );
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'BulkOperationStateChanged',
+          aggregateType: 'BulkOperation',
+          aggregateId: retryId,
+          payload: {
+            operationId: retryId,
+            kind: locked.kind,
+            from: null,
+            to: 'RUNNING',
+            items: copied.count,
+          },
+        });
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { operationId: retryId },
+          tx,
+        );
+      },
+    );
+    return this.require(scope, retryId);
   }
 
   private async require(scope: TenantContext, id: string): Promise<BulkOperationRecord> {

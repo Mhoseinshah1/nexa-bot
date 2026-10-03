@@ -489,6 +489,7 @@ import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
+import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import {
   PURCHASED_AS,
@@ -945,6 +946,8 @@ export interface Container {
    * operation from a GET.
    */
   readonly serviceAdmin: ServiceAdminService;
+  /** Program §13: an operator's free traffic or time grant to one service. */
+  readonly serviceGrants: ServiceGrantService;
   /** The lane that creates services on panels. Driven by the `provisioner` role. */
   readonly provisioner: ProvisionerService;
   /**
@@ -4462,6 +4465,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // Read-only, both: "can this panel do X" and "is there anywhere to send this".
     panels: panelOperability,
     contacts: customerContacts,
+    // Program §13: whether an operator could move a service anywhere (a read).
+    locationTargets: locationChangeService,
+  });
+  // Program §13: an operator's free grant to one service, through `planGrant`.
+  const serviceGrantService = new ServiceGrantService({
+    provisioning: provisioningService,
+    services: serviceRepository,
+    operations: operationRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
   });
 
   const walletTopupFlow = new WalletTopupFlowService({
@@ -5548,6 +5567,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     receiptFiles,
     provisioning: provisioningService,
     serviceAdmin,
+    serviceGrants: serviceGrantService,
     provisioner,
     provisionerLoop,
     delivery: deliveryService,

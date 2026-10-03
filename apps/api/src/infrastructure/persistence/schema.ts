@@ -11498,9 +11498,22 @@ export const bulkOperations = pgTable(
     pausedAt: timestamptz('paused_at'),
     completedAt: timestamptz('completed_at'),
     cancelledAt: timestamptz('cancelled_at'),
+    /**
+     * Program §13: the operation whose FAILED items this one retries. Its items are a copy
+     * of those, so the original's history is never rewritten.
+     */
+    retryOfId: uuid('retry_of_id'),
   },
   (table) => [
     unique('bulk_operations_tenant_id_key').on(table.tenantId, table.id),
+    foreignKey({
+      columns: [table.tenantId, table.retryOfId],
+      foreignColumns: [table.tenantId, table.id],
+      name: 'bulk_operations_retry_of_fk',
+    }),
+    index('bulk_operations_retry_of_idx')
+      .on(table.tenantId, table.retryOfId)
+      .where(sql`retry_of_id IS NOT NULL`),
     foreignKey({
       columns: [table.tenantId, table.frozenAudienceId],
       foreignColumns: [frozenAudiences.tenantId, frozenAudiences.id],
@@ -11524,6 +11537,10 @@ export const bulkOperations = pgTable(
                  AND amount_minor IS NULL AND currency IS NULL AND duration_days IS NULL
             WHEN 'SERVICE_TIME' THEN duration_days IS NOT NULL AND duration_days > 0
                  AND amount_minor IS NULL AND currency IS NULL AND traffic_bytes IS NULL
+            WHEN 'SERVICE_SUSPEND' THEN amount_minor IS NULL AND currency IS NULL
+                 AND traffic_bytes IS NULL AND duration_days IS NULL AND NOT notify
+            WHEN 'SERVICE_RESUME' THEN amount_minor IS NULL AND currency IS NULL
+                 AND traffic_bytes IS NULL AND duration_days IS NULL AND NOT notify
             ELSE false
           END`,
     ),
