@@ -180,7 +180,7 @@ describe('the central conversion (FX-STARS)', () => {
 });
 
 describe('the conversion policy', () => {
-  it('resolves a single-policy route without a mode, and the Stars route by its mode', () => {
+  it('resolves a single-policy route without a mode; Stars is ALWAYS central, whatever a stored mode says (spec §8)', () => {
     expect(conversionPolicyFor(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS.conversion, undefined)).toBe(
       'SAME_UNIT',
     );
@@ -191,12 +191,25 @@ describe('the conversion policy', () => {
       ),
     ).toBe('SAME_UNIT');
     const stars = PAYMENT_GATEWAY_DESCRIPTORS.TELEGRAM_STARS.conversion;
-    expect(conversionPolicyFor(stars, 'FIXED_RATE')).toBe('FIXED_RATE');
+    // A legacy `stars.pricing_mode = FIXED_RATE` row cannot bring the manual rate back.
+    expect(conversionPolicyFor(stars, 'FIXED_RATE')).toBe('CENTRAL_FX');
     expect(conversionPolicyFor(stars, 'CENTRAL_FX_RATIO')).toBe('CENTRAL_FX');
-    // Backward compatibility: no value, or a value that is not the central mode, is the fixed rate.
-    expect(conversionPolicyFor(stars, undefined)).toBe('FIXED_RATE');
-    expect(conversionPolicyFor(stars, null)).toBe('FIXED_RATE');
-    expect(conversionPolicyFor(stars, 'garbage')).toBe('FIXED_RATE');
+    expect(conversionPolicyFor(stars, undefined)).toBe('CENTRAL_FX');
+    expect(conversionPolicyFor(stars, null)).toBe('CENTRAL_FX');
+    expect(conversionPolicyFor(stars, 'garbage')).toBe('CENTRAL_FX');
+    expect(stars.modeSetting).toBeNull();
+    expect(stars.unitRatioSetting).toBe('stars.per_usdt');
+  });
+
+  it('a two-policy spec still defaults to its fixed rate unless the mode names the central one', () => {
+    const both = {
+      policies: ['FIXED_RATE', 'CENTRAL_FX'] as const,
+      fxBaseAsset: 'USDT' as const,
+      modeSetting: 'stars.pricing_mode',
+      unitRatioSetting: 'stars.per_usdt',
+    };
+    expect(conversionPolicyFor(both, 'CENTRAL_FX_RATIO')).toBe('CENTRAL_FX');
+    expect(conversionPolicyFor(both, 'garbage')).toBe('FIXED_RATE');
   });
 
   it("reads the previous release's invoice view, a rate and no policy, as FIXED_RATE (Codex #122)", () => {
@@ -243,8 +256,8 @@ describe('the conversion policy', () => {
     ).toBe('CENTRAL_FX');
   });
 
-  it('says which routes take an operator rate', () => {
-    expect(takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS.TELEGRAM_STARS.conversion)).toBe(true);
+  it('says which routes take an operator rate: none, since the Stars rate is retired (spec §8)', () => {
+    expect(takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS.TELEGRAM_STARS.conversion)).toBe(false);
     expect(takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS.conversion)).toBe(false);
     expect(takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS.MANUAL_TRANSFER.conversion)).toBe(false);
   });

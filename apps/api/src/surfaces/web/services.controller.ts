@@ -6,6 +6,7 @@ import {
   errors,
   SERVICE_ROUTES,
   SERVICE_TERMINATE_CONFIRMATION,
+  classifyListSearch,
   serviceActionRequestSchema,
   serviceListQuerySchema,
   serviceTerminateRequestSchema,
@@ -29,6 +30,7 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 import type {
   OperationRecord,
   ServiceCursor,
+  ServiceCustomerIdentity,
   ServiceRecord,
 } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -90,7 +92,9 @@ export class ServicesController {
       ...(query.orderId === undefined ? {} : { orderId: query.orderId }),
       ...(query.panelId === undefined ? {} : { panelId: query.panelId }),
       ...(query.providerUsername === undefined ? {} : { providerUsername: query.providerUsername }),
+      ...(query.q === undefined ? {} : { q: query.q }),
     });
+    const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.serviceAdmin.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: serviceCursorFrom(page.cursor) }),
@@ -107,10 +111,17 @@ export class ServicesController {
          * be the second opinion `ServiceSearch` names.
          */
         ...(page.providerUsername === undefined ? {} : { providerUsername: page.providerUsername }),
+        ...(text === null ? {} : { text }),
       },
     });
+    // Who each service is for, as Telegram knows them — one read for the page (spec §10).
+    const identities = await this.container.serviceAdmin.customerIdentities(
+      scope,
+      actor,
+      result.items,
+    );
     return {
-      services: result.items.map(toSummary),
+      services: result.items.map((record) => toSummary(record, identities.get(record.customerId))),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -378,10 +389,16 @@ function serviceCursorFrom(raw: string): ServiceCursor {
  * whether the customer has something to be sent, which is what distinguishes "the send
  * failed" from "there is nothing to send".
  */
-function toSummary(record: ServiceRecord): ServiceSummaryResponse {
+function toSummary(
+  record: ServiceRecord,
+  identity: ServiceCustomerIdentity | undefined,
+): ServiceSummaryResponse {
   return {
     id: record.id,
     customerId: record.customerId,
+    // Null on the detail, which this branch does not redesign; every list row carries it.
+    customerTelegramUserId: identity?.telegramUserId ?? null,
+    customerUsername: identity?.username ?? null,
     orderId: record.orderId,
     panelId: record.panelId,
     productId: record.productId,
@@ -418,7 +435,7 @@ function toDetail(
   actions: readonly ServiceActionAvailability[],
 ): ServiceDetailResponse {
   return {
-    ...toSummary(record),
+    ...toSummary(record, undefined),
     deliveryAttempts: record.deliveryAttempts,
     deliveryNextAttemptAt:
       record.deliveryNextAttemptAt === null ? null : record.deliveryNextAttemptAt.toISOString(),

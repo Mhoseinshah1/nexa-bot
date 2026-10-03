@@ -37,8 +37,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'ops.notification.operational_event':
     '{severity} — <code>{code}</code>\n{message}\n\n{details}\n🏢 مستأجر: <code>{tenantId}</code>\n🤖 ربات: <code>{botInstanceId}</code>\n🔗 شناسه پیگیری: <code>{correlationId}</code>\n🔁 تعداد رخداد: {occurrences}\n🕒 نخستین بار: {firstSeenAt}\n🕒 این بار: {lastSeenAt}',
   // WP-A4 — the operations log group Nexa manages.
-  'ops.group.topic_name.system': '⚙️ سیستم و خطاها',
+  'ops.group.topic_name.system': '⚙️ سیستم',
   'ops.group.topic_name.payments': '💳 پرداخت‌ها',
+  'ops.group.topic_name.errors': '🚨 خطاها',
+  'ops.group.topic_name.services': '🧩 سفارش‌ها و سرویس‌ها',
+  'ops.group.topic_name.panels': '🖥 پنل‌ها',
+  'ops.group.topic_name.bot': '🤖 ربات و پیام‌رسانی',
+  'ops.group.topic_name.security': '🛡 امنیت و دسترسی',
+  'ops.group.topic_name.backups': '💾 بکاپ‌ها',
   'ops.group.connected':
     '✅ این گروه به‌عنوان «گروه گزارش‌های مدیریتی» Nexa متصل شد.\nNexa اکنون دسترسی‌های ربات را بررسی می‌کند و تاپیک‌های خود را می‌سازد. نتیجه را در پنل مدیریت، بخش «گروه گزارش‌های مدیریتی» ببینید.',
   'ops.group.connect_refused':
@@ -591,6 +597,31 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.customer_unblock_ask': 'مسدودی کاربر {customer} برداشته شود؟',
   'bot.admin.customer_unblock_confirm_button': '✅ رفع مسدودی شود',
   'bot.admin.customer_usage': 'دستور ناقص یا نامعتبر است.\n\n/customer <شناسهٔ عددی تلگرام>',
+  // Spec §7: the client apps section and the tutorial video wizard.
+  'bot.admin.apps_button': '📱 برنامه‌ها و ویدیوی آموزشی',
+  'bot.admin.apps_section':
+    '📱 برنامه‌ها\n\nبرنامه‌ای را انتخاب کنید تا ویدیوی آموزشی آن را تنظیم یا حذف کنید.',
+  'bot.admin.apps_empty':
+    '📱 برنامه‌ها\n\nهنوز برنامه‌ای ثبت نشده است. برنامه‌ها از پنل مدیریت وب افزوده می‌شوند.',
+  'bot.admin.app_detail_video':
+    '📱 {app}\n\n🎬 ویدیوی آموزشی برای این ربات تنظیم شده است. با «تنظیم ویدیو» می‌توانید آن را جایگزین کنید.',
+  'bot.admin.app_detail_no_video': '📱 {app}\n\nهنوز ویدیوی آموزشی برای این ربات تنظیم نشده است.',
+  'bot.admin.app_video_set_button': '🎬 تنظیم ویدیو',
+  'bot.admin.app_video_delete_button': '🗑 حذف ویدیو',
+  'bot.admin.app_video_delete_ask':
+    'ویدیوی آموزشی «{app}» حذف شود؟ مشتریان دیگر این ویدیو را نخواهند دید.',
+  'bot.admin.app_video_delete_confirm_button': '✅ بله، حذف شود',
+  'bot.admin.app_video_prompt':
+    '🎬 ویدیوی آموزشی «{app}» را همین حالا به‌صورت ویدیو در همین گفتگو بفرستید.\n\nاین درخواست تا ۱۵ دقیقه معتبر است.',
+  'bot.admin.app_video_cancel_button': '✖️ انصراف',
+  'bot.admin.app_video_saved': '✅ ویدیوی آموزشی «{app}» ذخیره شد.',
+  'bot.admin.app_video_deleted': '🗑 ویدیوی آموزشی «{app}» حذف شد.',
+  'bot.admin.app_video_cancelled': 'ارسال ویدیو لغو شد؛ چیزی ذخیره نشد.',
+  'bot.admin.app_video_stale':
+    '⌛️ درخواست ارسال ویدیو باز نیست یا منقضی شده است و چیزی ذخیره نشد. برای تنظیم ویدیو، برنامه را انتخاب و دوباره «تنظیم ویدیو» را بزنید.',
+  'bot.admin.apps_back_button': '🔙 بازگشت به برنامه‌ها',
+  'bot.admin.app_back_button': '🔙 بازگشت',
+  'bot.admin.app_not_found': 'این برنامه دیگر وجود ندارد.',
   'bot.admin.categories_button': '🗂 دسته‌بندی‌ها',
   'bot.admin.categories_section':
     'دسته‌بندی‌ها به همان ترتیبی که مشتری می‌بیند. کنار هر دسته وضعیت و نمایش آن آمده است؛ برای مدیریت روی هرکدام بزنید.\n\nبرای ساختن دستهٔ تازه:\n/category_new <نام>',
@@ -1116,6 +1147,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.route_name_manual_transfer': 'کارت به کارت',
   'bot.payment.route_name_tonpays': 'درگاه پرداخت تون پی وبسایت',
   'bot.payment.route_name_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
+  'bot.payment.route_name_nowpayments': 'پرداخت با ارز دیجیتال',
+  'bot.payment.nowpayments_pay_button': '💳 پرداخت با ارز دیجیتال',
+  'bot.payment.nowpayments_in_review':
+    '🕓 پرداخت ارز دیجیتال شما دریافت شده و در انتظار تأیید شبکه است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت تأیید: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید نهایی درگاه در همین پیام نمایش داده می‌شود.',
+  'bot.payment.nowpayments_review_unresolved':
+    'پرداخت ارز دیجیتال شما نیاز به بررسی دارد؛ مبلغ دریافتی با فاکتور مطابقت ندارد یا تأیید نهایی آن هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.route_name_telegram_stars': '⭐ تلگرام استارز',
   'bot.payment.stars_invoice_order':
     '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:wallet} مبلغ سفارش: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',
@@ -1285,6 +1322,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.marketing.opted_in': '🔔 پیام‌های تبلیغاتی دوباره برای شما فعال شد.',
   'bot.marketing.opt_out_button': '🔕 قطع پیام‌های تبلیغاتی',
   'bot.marketing.opt_in_button': '🔔 دریافت پیام‌های تبلیغاتی',
+  'bot.marketing.unavailable':
+    '{icon:info} در حال حاضر امکان قطع یا وصل پیام‌های تبلیغاتی در این ربات فعال نیست.\nاطلاع‌رسانی‌های مربوط به پرداخت، سرویس و پشتیبانی شما مثل همیشه ارسال می‌شود.',
   'bot.menu.tickets': '🎫 پشتیبانی / تیکت‌ها',
   'bot.support.tickets_button': '🎫 تیکت‌های پشتیبانی',
   'bot.ticket.list':

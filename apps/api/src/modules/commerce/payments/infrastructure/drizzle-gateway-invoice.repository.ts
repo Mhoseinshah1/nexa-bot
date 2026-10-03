@@ -13,6 +13,7 @@ import type {
   SalesCurrencyCode,
   TenantContext,
 } from '@nexa/contracts';
+import { PAYMENT_GATEWAY_PROVIDERS } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -125,6 +126,7 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     cardChangeCooldownUntil: row.cardChangeCooldownUntil,
     cardChangeExhausted: row.cardChangeExhausted,
     reconcileInquiryRequestedAt: row.reconcileInquiryRequestedAt,
+    hintedPaymentId: row.hintedPaymentId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -322,6 +324,9 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     const leaseUntil = new Date(now.getTime() + leaseMs);
     const claimable = and(
       eq(gatewayInvoices.tenantId, tenantId),
+      // Only providers this binary has a descriptor for (Codex review of #141): after a
+      // rollback, a newer provider's row must not stall the whole lane on every pass.
+      inArray(gatewayInvoices.provider, [...PAYMENT_GATEWAY_PROVIDERS]),
       eq(gatewayInvoices.creationState, 'CREATING'),
       or(
         isNull(gatewayInvoices.creationClaimedUntil),
@@ -664,6 +669,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     const leaseUntil = new Date(now.getTime() + leaseMs);
     const claimable = and(
       eq(gatewayInvoices.tenantId, tenantId),
+      inArray(gatewayInvoices.provider, [...PAYMENT_GATEWAY_PROVIDERS]),
       isNotNull(gatewayInvoices.nextInquiryAt),
       lte(gatewayInvoices.nextInquiryAt, now),
       or(
@@ -737,6 +743,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly adoptInvoiceId: string | null;
       readonly nextInquiryAt: Date | null;
       readonly postDeadline: boolean;
+      readonly hintedPaymentId?: string | null;
     },
     now: Date,
     tx?: unknown,
@@ -755,6 +762,10 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
               finalAmount: result.finalAmount,
             }),
         ...(result.adoptInvoiceId === null ? {} : { providerInvoiceId: result.adoptInvoiceId }),
+        // The payment an identity-checked answer described is the one the next read follows.
+        ...(result.hintedPaymentId === undefined || result.hintedPaymentId === null
+          ? {}
+          : { hintedPaymentId: result.hintedPaymentId }),
         lastInquiryAt: now,
         lastInquiryErrorCode: result.errorCode,
         inquiryAttempts: sql`${gatewayInvoices.inquiryAttempts} + 1`,
@@ -821,6 +832,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly deliveryId: string | null;
       readonly creditAmount: bigint | null;
       readonly hintedInvoiceId: string | null;
+      readonly hintedPaymentId?: string | null;
       readonly inquireAt: Date | null;
     },
     now: Date,
@@ -841,6 +853,13 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           : {
               hintedInvoiceId: sql`COALESCE(${gatewayInvoices.hintedInvoiceId}, ${hint.hintedInvoiceId})`,
             }),
+        /*
+         * A VERIFIED webhook's payment id under this invoice (NOWPayments): the latest one
+         * the provider wrote about is the one the next inquiry reads. Still only a hint.
+         */
+        ...(hint.hintedPaymentId === undefined || hint.hintedPaymentId === null
+          ? {}
+          : { hintedPaymentId: hint.hintedPaymentId }),
         // Brought FORWARD only, never pushed back.
         ...(hint.inquireAt === null
           ? {}

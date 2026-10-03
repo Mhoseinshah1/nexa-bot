@@ -1859,6 +1859,70 @@ counted. After the roll-forward:
 
 `botctl rollback` never restores the database.
 
+### Before rolling back past NOWPayments (`0158`)
+
+Migration `0158_nowpayments_gateway` adds the `NOWPAYMENTS` route
+(`docs/nowpayments-gateway-audit.md`). It is additive, and on its first boot the release
+seeds a `NOWPAYMENTS` route row for every tenant (`DISABLED`). The release before it (the
+`0157` binary) has no `NOWPAYMENTS` entry in `PAYMENT_GATEWAY_DESCRIPTORS`, and it indexes
+that map by the provider of every row it reads:
+
+- **Its Web Admin gateway list fails.** `PaymentGatewayService.list` calls `factsFor` for
+  every row, and `factsFor` reads `PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials`
+  — a `TypeError` for the `NOWPAYMENTS` row, so the whole Payment Gateways page errors,
+  whether or not NOWPayments was ever enabled.
+- **Its customer route evaluator fails once the row is `ACTIVE`.** `evaluateRoutes` tests
+  `status === 'ACTIVE'` first and then reads `.settlesVia`, so a `DISABLED` row is skipped and
+  an `ACTIVE` one throws on every payment-method screen and top-up.
+- **Its gateway worker stalls on an open NOWPayments attempt.** Its `claimInquiries` and
+  `claimCreating` take rows of any provider; `processInquiry` reads
+  `PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].approval` and its adapter switch returns
+  `undefined` for an unknown provider, so the pass throws on that row — and the row, due
+  first, keeps every TonPays row behind it waiting.
+- **A NOWPayments payment's detail page fails** (`cardFactsFor` reads the descriptor). The
+  payments list and every other payment are unaffected.
+
+This release lists and claims only providers it knows, so a later release's rows cannot do
+the same to it; the `0157` binary cannot be changed. **Before rolling back past 0158:**
+
+1. Switch the `NOWPAYMENTS` route to DISABLED on the Payment Gateways page.
+2. Wait until nothing is in flight — attempts end at their 70-minute deadline, a review
+   within 24 hours, and each `UNKNOWN` payment is reconciled from its page — and read:
+
+   ```bash
+   docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+     exec -T postgres psql -U nexa -d nexa -c \
+     "SELECT 'payments' AS what, count(*) FROM payments
+       WHERE gateway_provider = 'NOWPAYMENTS' AND state IN ('PENDING', 'UNKNOWN')
+      UNION ALL
+      SELECT 'scheduled', count(*) FROM gateway_invoices
+       WHERE provider = 'NOWPAYMENTS' AND (next_inquiry_at IS NOT NULL OR creation_state = 'CREATING')"
+   ```
+
+   Both must be zero. A `scheduled` count left over for a payment that is already closed is
+   only a diagnostic read; clear it with
+   `UPDATE gateway_invoices SET next_inquiry_at = NULL, inquiry_claimed_until = NULL WHERE provider = 'NOWPAYMENTS' AND creation_state <> 'CREATING';`
+
+3. Remove the route rows the old binary cannot read (the credential row first: it references
+   the route). The key and IPN secret are lost and must be entered again after the
+   roll-forward, which re-seeds the route `DISABLED`:
+
+   ```sql
+   BEGIN;
+   DELETE FROM payment_gateway_call_budgets WHERE provider = 'NOWPAYMENTS';
+   DELETE FROM payment_gateway_credentials WHERE provider = 'NOWPAYMENTS';
+   DELETE FROM payment_gateways WHERE provider = 'NOWPAYMENTS';
+   COMMIT;
+   ```
+
+4. Roll back. Closed NOWPayments payments and their invoice rows stay as history; only their
+   detail pages are unreadable until the roll-forward.
+
+The same descriptor indexing applies to every earlier provider added the same way
+(`TELEGRAM_STARS` in 0127, `TONPAYS_TELEGRAM` in 0157): their rollback notes' "offers nothing"
+holds for the customer path only while the route is `DISABLED`. `botctl rollback` never
+restores the database.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

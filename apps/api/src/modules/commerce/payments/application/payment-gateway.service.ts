@@ -21,7 +21,10 @@ import {
   type SalesCurrencyCode,
   type UnitOfWork,
   type UserId,
+  isSettingKey,
+  parseUnitRatio,
   takesFixedRate,
+  type GatewayConversionSpec,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -85,7 +88,16 @@ export interface PaymentGatewayServiceDeps {
    * the write for replacing it. Never a read of the key itself — this service has no
    * reason to hold one.
    */
-  readonly credentials: Pick<GatewayCredentialStore, 'setAt' | 'replace'>;
+  readonly credentials: Pick<
+    GatewayCredentialStore,
+    | 'setAt'
+    | 'replace'
+    | 'read'
+    | 'webhookSecretSetAt'
+    | 'replaceWebhookSecret'
+    | 'lastCheck'
+    | 'recordCheck'
+  >;
   /**
    * The adapter behind an external route, for the one question route selection asks of
    * it: whether an amount has an exact value in the provider's unit. Null for a route
@@ -93,18 +105,38 @@ export interface PaymentGatewayServiceDeps {
    */
   readonly adapters: (
     provider: PaymentGatewayProvider,
-  ) => Pick<ExternalGatewayAdapter, 'providerAmountOf'> | null;
+  ) => Pick<ExternalGatewayAdapter, 'providerAmountOf' | 'checkCredential'> | null;
   /** The GENERATED callback URL a route's provider is sent, for the operator to see. */
   readonly callbackUrlFor: (
     scope: TenantContext,
     provider: PaymentGatewayProvider,
   ) => Promise<string | null>;
+  /**
+   * Spec §8: whether the central exchange rate (`central_fx`) is switched on, read when a
+   * route priced ONLY by it is switched on. Optional so a narrow test wiring need not
+   * supply it; absent is read as "off" for that one gate, never as "on".
+   */
+  readonly features?: {
+    isEnabled(scope: TenantContext, key: 'central_fx', tx?: unknown): Promise<boolean>;
+  };
+}
+
+/**
+ * Spec §8: a route priced ONLY by the central exchange rate — no fixed rate, no same-unit
+ * pricing. Telegram Stars since the manual Toman-per-Star rate was retired.
+ */
+export function pricedOnlyByCentralFx(spec: GatewayConversionSpec): boolean {
+  return spec.policies.length > 0 && spec.policies.every((policy) => policy === 'CENTRAL_FX');
 }
 
 /** A route's credential and callback, as the operator's list shows them. Never a value. */
 export interface GatewayOperatorFacts {
   readonly credentialSetAt: Date | null;
   readonly callbackUrl: string | null;
+  /** A signed route's webhook secret: when it was last replaced. Never the secret. */
+  readonly webhookSecretSetAt: Date | null;
+  /** The operator's last credential check, latest state only. */
+  readonly lastCheck: { readonly at: Date; readonly result: string } | null;
 }
 
 /**
@@ -204,14 +236,167 @@ export class PaymentGatewayService {
     scope: TenantContext,
     provider: PaymentGatewayProvider,
   ): Promise<GatewayOperatorFacts> {
-    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials) {
-      return { credentialSetAt: null, callbackUrl: null };
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[provider];
+    if (!descriptor.requiresCredentials) {
+      return {
+        credentialSetAt: null,
+        callbackUrl: null,
+        webhookSecretSetAt: null,
+        lastCheck: null,
+      };
     }
-    const [credentialSetAt, callbackUrl] = await Promise.all([
+    const [credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck] = await Promise.all([
       this.deps.credentials.setAt(scope, provider),
       this.deps.callbackUrlFor(scope, provider),
+      descriptor.webhookSecret
+        ? this.deps.credentials.webhookSecretSetAt(scope, provider)
+        : Promise.resolve(null),
+      this.deps.credentials.lastCheck(scope, provider),
     ]);
-    return { credentialSetAt, callbackUrl };
+    return { credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck };
+  }
+
+  /**
+   * Replaces a signed route's webhook secret (NOWPayments' IPN secret,
+   * `docs/nowpayments-gateway-audit.md` §5.6). Write-only, exactly like `setCredential`: the
+   * secret is encrypted at rest under its own purpose, on the key's row, and is in no
+   * request hash, response, audit row or log line. The key is set first — the secret is
+   * bound to that row's id — so a route with no key refuses this with `CREDENTIAL_MISSING`.
+   */
+  async setWebhookSecret(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly provider: string;
+      readonly secret: string;
+    },
+  ): Promise<PaymentGatewayRecord> {
+    const provider = this.provider(input.provider);
+    const denial = {
+      action: 'payment_gateway.set_webhook_secret',
+      entityType: 'PaymentGateway',
+      entityId: provider,
+    };
+    await this.authorize(scope, actor, denial);
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This payment route takes no webhook secret.',
+      );
+    }
+    const requestHash = hashRequest({ provider, credential: 'WEBHOOK_SECRET' });
+    const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_GATEWAY_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const gateway = await this.require(scope, provider, tx);
+        const before = await this.deps.credentials.webhookSecretSetAt(scope, provider, tx);
+        const setAt = await this.deps.credentials.replaceWebhookSecret(
+          scope,
+          provider,
+          input.secret,
+          now,
+          tx,
+        );
+        if (setAt === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'Set this payment route’s API key before its webhook secret.',
+            { reason: 'CREDENTIAL_MISSING' },
+          );
+        }
+        await this.record(scope, actor, tx, {
+          action: 'payment_gateway.set_webhook_secret',
+          entityId: provider,
+          // Whether one was stored and when — never the value or a fingerprint of it.
+          before: {
+            provider,
+            configured: before !== null,
+            replacedAt: before?.toISOString() ?? null,
+          },
+          after: { provider, configured: true, replacedAt: setAt.toISOString() },
+        });
+        await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
+        return gateway;
+      },
+    );
+  }
+
+  /**
+   * The operator's credential check (`docs/nowpayments-gateway-audit.md` §5.7): one read-only
+   * provider call with the stored key, made OUTSIDE any transaction, its machine result then
+   * recorded on the route (latest state only) with an audit row. It changes no route state
+   * and moves no money; the result is `ok` or the classified code — never a body or the key.
+   * Refused for a route whose adapter offers no safe read, or that has no key yet.
+   */
+  async checkCredential(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly idempotencyKey: string; readonly provider: string },
+  ): Promise<PaymentGatewayRecord> {
+    const provider = this.provider(input.provider);
+    const denial = {
+      action: 'payment_gateway.check_credential',
+      entityType: 'PaymentGateway',
+      entityId: provider,
+    };
+    await this.authorize(scope, actor, denial);
+    const adapter = this.deps.adapters(provider);
+    if (adapter === null || adapter.checkCredential === undefined) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This payment route offers no credential check.',
+      );
+    }
+    const requestHash = hashRequest({ provider, check: 'CREDENTIAL' });
+    const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This installation has stopped accepting work.',
+      );
+    }
+    const apiKey = await this.deps.credentials.read(scope, provider);
+    if (apiKey === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+        'This payment route needs its API key before it can be checked.',
+        { reason: 'CREDENTIAL_MISSING' },
+      );
+    }
+    const check = await adapter.checkCredential(apiKey);
+    const result = check.kind === 'OK' ? 'ok' : `${check.kind.toLowerCase()}:${check.code}`;
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_GATEWAY_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const gateway = await this.require(scope, provider, tx);
+        await this.deps.credentials.recordCheck(scope, provider, result, now, tx);
+        await this.record(scope, actor, tx, {
+          action: 'payment_gateway.check_credential',
+          entityId: provider,
+          before: null,
+          after: { provider, checkedAt: now.toISOString(), result: result.slice(0, 64) },
+        });
+        await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
+        return gateway;
+      },
+    );
   }
 
   /**
@@ -389,9 +574,19 @@ export class PaymentGatewayService {
          * A conversion rate exists only on a `FIXED_RATE` route (Package A). Anywhere else
          * it is a number nothing reads, refused rather than stored for an operator to
          * believe — the rule the customer fee below states for itself.
+         *
+         * Spec §8: the Stars route's fixed rate is RETIRED, not erased. A legacy value
+         * already on the row is kept, unread (an invoice snapshotted from it stays
+         * explainable, and a rollback finds it), so only a rate this REQUEST carries is
+         * refused — judging the merged row would make every later edit of the route fail
+         * on a figure the operator can no longer see. Clearing it (`null`) is allowed.
          */
         const pricedByRate = takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion);
-        if (config.providerUnitRateMinor !== null && !pricedByRate) {
+        if (
+          input.config.providerUnitRateMinor !== undefined &&
+          input.config.providerUnitRateMinor !== null &&
+          !pricedByRate
+        ) {
           throw errors.validation(
             COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
             'A conversion rate applies only to a route priced in another unit.',
@@ -512,6 +707,23 @@ export class PaymentGatewayService {
         }
 
         /*
+         * And a route whose provider SIGNS its webhooks (NOWPayments) cannot be switched ON
+         * without the secret: every notification would be dropped unverified, leaving only
+         * the bounded reconciliation to find a payment.
+         */
+        if (
+          input.status === 'ACTIVE' &&
+          PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret &&
+          (await this.deps.credentials.webhookSecretSetAt(scope, provider, tx)) === null
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route needs its webhook secret before it can be switched on.',
+            { reason: 'WEBHOOK_SECRET_MISSING' },
+          );
+        }
+
+        /*
          * And a route priced by an operator's rate cannot be switched ON without one
          * (Package A): an attempt could not say how many Stars to ask for.
          */
@@ -525,6 +737,42 @@ export class PaymentGatewayService {
             'This payment route needs its conversion rate before it can be switched on.',
             { reason: 'RATE_MISSING' },
           );
+        }
+
+        /*
+         * Spec §8: a route priced ONLY by the central rate (Stars) cannot be switched ON while
+         * nothing could price it — the central rate switched off, or its unit ratio unset.
+         * A courtesy where the mistake is still cheap: the attempt decides again, inside its
+         * own transaction, and refuses `FX_UNAVAILABLE` rather than price by anything else.
+         * A stale or missing QUOTE is not checked here: that is a transient state of the
+         * feed, which the attempt answers honestly, not a configuration.
+         */
+        const spec = PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion;
+        if (input.status === 'ACTIVE' && pricedOnlyByCentralFx(spec)) {
+          /*
+           * The route's row lock FIRST (Codex review of #143): `StarsPerUsdtGuard` takes the
+           * same lock before it lets the ratio be cleared, so an enable and a clear cannot
+           * both pass on what each read before the other committed. The ratio read below
+           * is a new statement after the lock, so it sees a clear that committed first.
+           */
+          await this.deps.repository.lockForUpdate(scope, provider, tx);
+          const flagOn =
+            this.deps.features !== undefined &&
+            (await this.deps.features.isEnabled(scope, 'central_fx', tx));
+          if (!flagOn) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+              'This payment route is priced by the central exchange rate, which is switched off.',
+              { reason: 'FX_UNAVAILABLE', detail: 'DISABLED' },
+            );
+          }
+          if ((await this.centralUnitRatio(scope, spec, tx)) === null) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+              'This payment route needs its unit ratio before it can be switched on.',
+              { reason: 'FX_UNAVAILABLE', detail: 'UNIT_RATIO_MISSING' },
+            );
+          }
         }
 
         const after = await this.deps.repository.setStatus(
@@ -819,10 +1067,26 @@ export class PaymentGatewayService {
      * purposes, and its absence drops the route from the list rather than the tap.
      */
     const destination = await this.deps.accounts.hasEnabled(scope, tx);
+    /*
+     * Spec §8, a COURTESY: a route priced only by the central rate is not offered while its
+     * unit ratio is unset — every tap would be refused. The attempt decides authoritatively.
+     */
+    const unpriceable = new Set<PaymentGatewayProvider>();
+    for (const gateway of gateways) {
+      const spec = PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion;
+      if (
+        gateway.status === 'ACTIVE' &&
+        pricedOnlyByCentralFx(spec) &&
+        (await this.centralUnitRatio(scope, spec, tx)) === null
+      ) {
+        unpriceable.add(gateway.provider);
+      }
+    }
     const routes = gateways
       .filter(
         (gateway) =>
           gateway.status === 'ACTIVE' &&
+          !unpriceable.has(gateway.provider) &&
           (PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia !== 'MANUAL_TRANSFER' ||
             destination) &&
           allowsPurpose(gateway, purpose) &&
@@ -863,14 +1127,28 @@ export class PaymentGatewayService {
      * and without one is offered for nothing, since enabling it requires one. Under the
      * central policy the answer is the same: a positive payable is at least one unit
      * either way, and "does this amount have an exact value in the unit" is a question
-     * only a same-unit route can answer no to.
+     * only a same-unit route can answer no to. A route priced ONLY by the central rate
+     * (Stars, spec §8; NOWPayments) is therefore admitted for any positive amount; the
+     * attempt decides the rest, including refusing when no usable quote exists.
      */
+    if (pricedOnlyByCentralFx(descriptor.conversion)) return amount.amountMinor > 0n;
     const conversion: ResolvedConversion | null = takesFixedRate(descriptor.conversion)
       ? gateway.providerUnitRateMinor === null
         ? null
         : { policy: 'FIXED_RATE', rateMinor: gateway.providerUnitRateMinor }
       : { policy: 'SAME_UNIT' };
     return conversion !== null && adapter.providerAmountOf(amount, conversion) !== null;
+  }
+
+  /** The central route's unit ratio as configured now, or null when it is unset. */
+  private async centralUnitRatio(
+    scope: TenantContext,
+    spec: GatewayConversionSpec,
+    tx?: unknown,
+  ): Promise<ReturnType<typeof parseUnitRatio>> {
+    if (spec.unitRatioSetting === null || !isSettingKey(spec.unitRatioSetting)) return null;
+    const text = await this.deps.settings.valueOf<unknown>(scope, spec.unitRatioSetting, tx);
+    return typeof text === 'string' ? parseUnitRatio(text) : null;
   }
 
   private async audienceFor(scope: TenantContext, customerId: UserId, tx?: unknown) {

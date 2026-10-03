@@ -12,6 +12,10 @@ import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import type { KeyringFormat, SecretKeyring } from './infrastructure/crypto/keyring.js';
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { SECRET_COLUMNS, type SecretColumn } from './infrastructure/crypto/secret-registry.js';
+import {
+  unwrapInstallationKey,
+  wrapInstallationKey,
+} from './infrastructure/crypto/installation-keyring.js';
 
 /**
  * `secrets status` and `secrets rewrap` — cryptographic maintenance.
@@ -364,18 +368,114 @@ async function rewrapColumn(
   return { scanned, rewrapped, skipped };
 }
 
+/**
+ * Re-wraps every imported decrypt-only key (ADR-0032) under the ACTIVE key.
+ *
+ * `installation_keys` is not a `SecretCipher` column, so `SECRET_COLUMNS` does
+ * not walk it; this does, with the same shape — one row per short transaction,
+ * a compare-and-set on the wrap that was read, a skip predicate so a converged
+ * run changes nothing, and an audit row naming ids and never bytes. Without it,
+ * retiring the key that wraps them would strand every imported key.
+ */
+async function rewrapInstallationKeys(
+  container: Container,
+  activeKeyId: string,
+): Promise<{ rewrapped: number; skipped: number; unavailable: number }> {
+  const activeKey = container.keyring.configuredKeys.get(activeKeyId);
+  if (activeKey === undefined) throw new Error('the active key is not configured');
+  let rewrapped = 0;
+  let skipped = 0;
+  let unavailable = 0;
+  // The installation's tenant, for the audit row: these keys are installation-
+  // wide, and the installation's primary tenant is whose trail records them.
+  const tenantId =
+    container.installationTenantId ?? (await container.tenants.findPrimary())?.id ?? null;
+  for (const row of await container.installationKeyRepository.all()) {
+    // A tombstone holds no key: nothing to re-wrap.
+    if (row.wrappedMaterial === null) continue;
+    const wrapped = row.wrappedMaterial;
+    if (row.wrappedUnderKeyId === activeKeyId) {
+      skipped += 1;
+      continue;
+    }
+    const material = unwrapInstallationKey({
+      keyId: row.keyId,
+      wrapped,
+      fingerprint: row.fingerprint,
+      keys: container.keyring.keys,
+    });
+    if (material === null) {
+      unavailable += 1;
+      continue;
+    }
+    try {
+      const next = wrapInstallationKey({
+        keyId: row.keyId,
+        material,
+        wrappingKeyId: activeKeyId,
+        wrappingKey: activeKey,
+      });
+      const done = await container.database.db.transaction(async (tx) => {
+        const won = await container.installationKeyRepository.rewrap(
+          { tx } as never,
+          row.keyId,
+          wrapped,
+          { wrappedMaterial: next, wrappedUnderKeyId: activeKeyId },
+        );
+        if (!won) return false;
+        if (tenantId !== null) {
+          const scope: TenantContext = { tenantId: tenantId as TenantId, botInstanceId: null };
+          await container.audit.record(
+            scope,
+            systemJobActor('secrets:rewrap', container.ids.uuid() as CorrelationId),
+            {
+              action: 'installation_key.rewrap',
+              entityType: 'InstallationKey',
+              entityId: row.keyId,
+              before: { wrappedUnderKeyId: row.wrappedUnderKeyId },
+              after: { wrappedUnderKeyId: activeKeyId },
+              reason: 'Cryptographic maintenance: re-wrapped under the active key.',
+              result: 'SUCCESS',
+            },
+            { tx, scope },
+          );
+        }
+        return true;
+      });
+      if (done) rewrapped += 1;
+      else skipped += 1;
+    } finally {
+      material.fill(0);
+    }
+  }
+  return { rewrapped, skipped, unavailable };
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const config = loadConfig();
   const container = createContainer(config, 'worker');
 
   try {
+    // The imported decrypt-only keys (ADR-0032), so a rewrap can read a secret a
+    // restore brought in under the old installation's key — and so the counts
+    // below include what those keys wrap.
+    // Not quietly: a rewrap or a retirement check on a keyring that failed to load
+    // would answer from the configured keys alone.
+    await container.installationKeyLoader.refresh();
+    const wrappedKeys = await container.installationKeyRepository.countsByWrappingKey();
     const keyring = resolveKeyring(config);
     const activeKeyId = keyring.activeKeyId;
     const statuses: ColumnStatus[] = [];
     for (const column of SECRET_COLUMNS) statuses.push(await statusOf(container, column));
     const { text, healthy } = report(statuses);
-    const preamble = configurationLines(keyring, config).join('\n');
+    const imported = [...wrappedKeys.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([keyId, count]) => `${keyId}=${String(count)}`)
+      .join('  ');
+    const preamble =
+      configurationLines(keyring, config).join('\n') +
+      `imported keys  (decrypt-only, from Recovery Kits) wrapped under: ${imported || '-'}\n\n`;
 
     if (args.command === 'status') {
       if (args.json) {
@@ -446,7 +546,9 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      const dependencies = dependenciesOn(statuses, keyId);
+      // An imported key stored wrapped under this one is a dependency too: removing
+      // the wrapping key strands it, and with it whatever it decrypts.
+      const dependencies = dependenciesOn(statuses, keyId) + (wrappedKeys.get(keyId) ?? 0);
       if (dependencies > 0) {
         process.stdout.write(
           `${preamble}${text}\nREFUSED: ${dependencies} row(s) still decrypt with "${keyId}". Run ` +
@@ -477,6 +579,14 @@ async function main(): Promise<void> {
     process.stdout.write(
       `scanned ${scanned}, re-encrypted ${rewrapped}, already current ${skipped}, active key ${activeKeyId}\n`,
     );
+    const keys = await rewrapInstallationKeys(container, activeKeyId);
+    process.stdout.write(
+      `imported keys: re-wrapped ${keys.rewrapped}, already current ${keys.skipped}` +
+        (keys.unavailable > 0
+          ? `, UNAVAILABLE ${keys.unavailable} (their wrapping key is not held)`
+          : '') +
+        '\n',
+    );
   } finally {
     await container.shutdown();
   }
@@ -491,5 +601,13 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   });
 }
 
-export { parseArgs, report, dependenciesOn, statusOf, rewrapColumn, evidenceFrom };
+export {
+  parseArgs,
+  report,
+  dependenciesOn,
+  statusOf,
+  rewrapColumn,
+  rewrapInstallationKeys,
+  evidenceFrom,
+};
 export type { ColumnStatus, ShutdownEvidence, ShutdownVerdict };

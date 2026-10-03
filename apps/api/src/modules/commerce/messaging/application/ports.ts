@@ -216,7 +216,8 @@ export type MainMenuVariant = 'MAIN_MENU' | 'MAIN_MENU_ADMIN';
 export interface CustomerFileMessage {
   readonly chatId: string;
   readonly botInstanceId: BotInstanceId;
-  readonly kind: 'PHOTO' | 'DOCUMENT';
+  /** Spec §7: `VIDEO` — a client app's tutorial, by the `file_id` the bot itself received. */
+  readonly kind: 'PHOTO' | 'DOCUMENT' | 'VIDEO';
   /**
    * Where the bytes come from.
    *

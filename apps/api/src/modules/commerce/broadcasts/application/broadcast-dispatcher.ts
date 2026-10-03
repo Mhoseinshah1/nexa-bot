@@ -16,6 +16,10 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  excludesMarketingOptOuts,
+  type MarketingOptOutPolicy,
+} from './marketing-opt-out-policy.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type {
   BroadcastContent,
@@ -65,6 +69,8 @@ export interface BroadcastDispatcherDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
+  /** Spec §9: whether a stored opt-out is honoured; absent reads as honoured. */
+  readonly marketingOptOut?: MarketingOptOutPolicy;
   readonly logger: {
     info: (context: Record<string, unknown>, message: string) => void;
     error: (context: Record<string, unknown>, message: string) => void;
@@ -275,14 +281,20 @@ export class BroadcastDispatcher {
        * before anything looks sent. A service announcement asks nothing of it.
        */
       const stampedAt = this.deps.clock.now();
-      const stamped = await this.deps.uow.run(scope, (tx) =>
+      const stamped = await this.deps.uow.run(scope, async (tx) =>
         this.deps.repository.stamp(
           scope,
           recipient,
           {
             now: stampedAt,
             leaseUntil: new Date(stampedAt.getTime() + BROADCAST_LEASE_MS),
-            marketing: content.purpose === 'MARKETING',
+            // Spec §9: the opt-out is re-read only while the installation honours it.
+            marketing: await excludesMarketingOptOuts(
+              content.purpose,
+              this.deps.marketingOptOut,
+              scope,
+              tx,
+            ),
           },
           tx,
         ),

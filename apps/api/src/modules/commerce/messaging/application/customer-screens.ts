@@ -169,6 +169,7 @@ const ROUTE_NAME_KEYS: Readonly<Record<PaymentGatewayProvider, TemplateKey>> = {
   TONPAYS: 'bot.payment.route_name_tonpays',
   TELEGRAM_STARS: 'bot.payment.route_name_telegram_stars',
   TONPAYS_TELEGRAM: 'bot.payment.route_name_tonpays_telegram',
+  NOWPAYMENTS: 'bot.payment.route_name_nowpayments',
 };
 
 export class CustomerScreenComposer {

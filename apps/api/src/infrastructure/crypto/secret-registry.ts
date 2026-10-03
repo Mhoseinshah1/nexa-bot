@@ -306,10 +306,87 @@ const paymentGatewayApiKey: SecretColumn = {
   },
 };
 
+/**
+ * A payment route's webhook signing secret (NOWPayments' IPN secret,
+ * `docs/nowpayments-gateway-audit.md` §5.6), on the same row as the key, under its own
+ * purpose. NULLABLE: a route that signs nothing never has one, so the panel-credential
+ * rule applies — a row without it is not a stored secret and is never counted as one.
+ */
+const paymentGatewayWebhookSecret: SecretColumn = {
+  purpose: 'payment_gateway.webhook_secret',
+  table: 'payment_gateway_credentials',
+  ciphertextColumn: 'webhook_secret_ciphertext',
+  keyIdColumn: 'webhook_secret_key_id',
+
+  async all(db) {
+    const rows = await db
+      .select({
+        ciphertext: paymentGatewayCredentials.webhookSecretCiphertext,
+        keyId: paymentGatewayCredentials.webhookSecretKeyId,
+      })
+      .from(paymentGatewayCredentials)
+      .where(isNotNull(paymentGatewayCredentials.webhookSecretCiphertext));
+    return rows.flatMap((row) =>
+      typeof row.ciphertext === 'string' && typeof row.keyId === 'string'
+        ? [{ ciphertext: row.ciphertext, keyId: row.keyId }]
+        : [],
+    );
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: paymentGatewayCredentials.id })
+      .from(paymentGatewayCredentials)
+      .where(
+        cursor === null
+          ? isNotNull(paymentGatewayCredentials.webhookSecretCiphertext)
+          : and(
+              isNotNull(paymentGatewayCredentials.webhookSecretCiphertext),
+              gt(paymentGatewayCredentials.id, cursor),
+            ),
+      )
+      .orderBy(asc(paymentGatewayCredentials.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: paymentGatewayCredentials.id,
+        tenantId: paymentGatewayCredentials.tenantId,
+        ciphertext: paymentGatewayCredentials.webhookSecretCiphertext,
+        keyId: paymentGatewayCredentials.webhookSecretKeyId,
+      })
+      .from(paymentGatewayCredentials)
+      .where(eq(paymentGatewayCredentials.id, id))
+      .for('update')
+      .limit(1);
+    if (row === undefined) return null;
+    if (typeof row.ciphertext !== 'string' || typeof row.keyId !== 'string') return null;
+    return { id: row.id, tenantId: row.tenantId, ciphertext: row.ciphertext, keyId: row.keyId };
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(paymentGatewayCredentials)
+      .set({ webhookSecretCiphertext: next.ciphertext, webhookSecretKeyId: next.keyId })
+      .where(
+        and(
+          eq(paymentGatewayCredentials.id, id),
+          eq(paymentGatewayCredentials.webhookSecretCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: paymentGatewayCredentials.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
   panelPassword,
   panelApiToken,
   paymentGatewayApiKey,
+  paymentGatewayWebhookSecret,
 ];

@@ -246,12 +246,12 @@ export const WEB_FA = {
   'web.setting_fx_max_stale_seconds': 'حداکثر کهنگی مجاز نرخ',
   'web.setting_fx_max_stale_seconds_desc':
     'اگر هر دو صرافی از کار بیفتند، آخرین نرخ معتبر تا این سن هنوز می‌تواند فاکتور جدید صادر کند (و این استفاده ثبت می‌شود). بعد از آن فاکتور جدید با نرخ مرکزی رد می‌شود؛ فاکتورهای صادرشده نرخ ثبت‌شدهٔ خودشان را نگه می‌دارند.',
-  'web.setting_stars_pricing_mode': 'حالت قیمت‌گذاری استارز',
+  'web.setting_stars_pricing_mode': 'حالت قیمت‌گذاری استارز (بازنشسته)',
   'web.setting_stars_pricing_mode_desc':
-    'نرخ ثابت: همان نرخ هر ستاره که روی روش پرداخت تنظیم شده (رفتار نسخه‌های قبل، تا وقتی عوضش نکنید). نرخ مرکزی: قیمت هر ستاره از نرخ تتر و «تعداد استارز به ازای هر تتر» به‌دست می‌آید. تغییر آن فقط روی فاکتورهای بعدی اثر دارد.',
+    'دیگر استفاده نمی‌شود: قیمت هر ستاره همیشه از نرخ مرکزی تتر و «تعداد استارز به ازای هر تتر» به‌دست می‌آید و نرخ دستی برای استارز وجود ندارد.',
   'web.setting_stars_per_usdt': 'تعداد استارز به ازای هر تتر',
   'web.setting_stars_per_usdt_desc':
-    'تلگرام نرخ رسمی تبدیل ستاره به تتر منتشر نمی‌کند؛ این عدد را شما تعیین می‌کنید (مثلاً ۱۰۰ یا ۷۷٫۵؛ حداکثر چهار رقم اعشار). خالی یعنی تنظیم نشده و حالت نرخ مرکزی قابل انتخاب نیست.',
+    'قیمت هر ستاره به تومان همیشه خودکار از نرخ مرکزی تتر تقسیم بر این عدد محاسبه می‌شود. تلگرام نرخ رسمی تبدیل ستاره به تتر منتشر نمی‌کند؛ این عدد را شما تعیین می‌کنید (مثلاً ۱۰۰ یا ۷۷٫۵؛ حداکثر چهار رقم اعشار). خالی یعنی تنظیم نشده: روش پرداخت استارز روشن نمی‌شود و تا روشن است نمی‌توان آن را خالی کرد.',
   'web.setting_referral_commission_scope': 'سفارش‌های مشمول پورسانت',
   'web.setting_referral_commission_scope_desc':
     'پورسانت فقط برای نخستین سفارش پرداخت‌شدهٔ کاربر معرفی‌شده داده شود یا برای همهٔ سفارش‌هایش. تغییر آن فقط روی معرفی‌های بعدی اثر دارد.',
@@ -341,6 +341,11 @@ export const WEB_FA = {
   'web.feature_customer_refund_requests_title': 'درخواست بازپرداخت توسط مشتری',
   'web.feature_customer_refund_requests_summary':
     'مشتری می‌تواند از ربات برای سرویس پرداخت‌شدهٔ خود درخواست بازپرداخت ثبت کند. مبلغ را مدیر تعیین می‌کند و پس از حذف سرویس از پنل، به کیف پول مشتری واریز می‌شود.',
+  'web.feature_customer_marketing_opt_out_title': 'اجازه قطع پیام‌های تبلیغاتی توسط مشتری',
+  'web.feature_customer_marketing_opt_out_summary':
+    'مشتری می‌تواند با /stop یا دکمهٔ «قطع پیام‌های تبلیغاتی» پیام‌های تبلیغاتی را برای خود قطع یا دوباره وصل کند و ارسال‌های تبلیغاتی انتخاب او را رعایت می‌کنند. پیام‌های پرداخت، سرویس و پشتیبانی همیشه ارسال می‌شوند.',
+  'web.feature_customer_marketing_opt_out_off_effect':
+    'دکمهٔ قطع پنهان می‌شود و /stop یا دکمه‌های قدیمی چیزی را تغییر نمی‌دهند. ارسال‌های تبلیغاتی به مشتریانی هم که قبلاً قطع کرده بودند فرستاده می‌شود — حتی ارسالی که پیش از خاموش‌کردن زمان‌بندی شده است، چون تصمیم در لحظهٔ ارسال گرفته می‌شود؛ انتخاب آن‌ها پاک نمی‌شود و با روشن‌کردن دوباره، دوباره اعمال می‌شود.',
   'web.feature_referrals_title': 'برنامهٔ معرفی (زیرمجموعه‌گیری)',
   'web.feature_referrals_summary':
     'مشتری با لینک اختصاصی خود دیگران را معرفی می‌کند و از خریدهای آن‌ها پورسانت به کیف پولش واریز می‌شود. درصد پورسانت باید در تنظیمات تعیین شده باشد.',
@@ -357,9 +362,9 @@ export const WEB_FA = {
     'مشتری موقعیت، حجم و مدت دلخواه خود را انتخاب می‌کند و قیمت بر اساس قیمت هر گیگابایت و هر روز محاسبه می‌شود.',
   'web.feature_central_fx_title': 'نرخ ارز مرکزی',
   'web.feature_central_fx_summary':
-    'نرخ تتر به تومان از صرافی عمومی (نوبیتکس، و والکس به‌عنوان پشتیبان) خوانده و تازه نگه داشته می‌شود تا روش‌های پرداختی که با آن قیمت‌گذاری می‌شوند از یک نرخ واحد استفاده کنند. استارز تلگرام تا وقتی حالتش را عوض نکنید روی نرخ ثابت می‌ماند.',
+    'نرخ تتر به تومان از صرافی عمومی (نوبیتکس، و والکس به‌عنوان پشتیبان) خوانده و تازه نگه داشته می‌شود تا روش‌های پرداختی که با آن قیمت‌گذاری می‌شوند از یک نرخ واحد استفاده کنند. قیمت هر ستارهٔ تلگرام همیشه از همین نرخ و «تعداد استارز به ازای هر تتر» محاسبه می‌شود و نرخ دستی ندارد.',
   'web.feature_central_fx_off_effect':
-    'با خاموش شدن، خواندن نرخ متوقف می‌شود و روش‌هایی که با نرخ مرکزی قیمت‌گذاری می‌شوند فاکتور جدید صادر نمی‌کنند (فاکتورهای صادرشده نرخ ثبت‌شدهٔ خودشان را نگه می‌دارند).',
+    'با خاموش شدن، خواندن نرخ متوقف می‌شود و روش‌هایی که با نرخ مرکزی قیمت‌گذاری می‌شوند (از جمله استارز تلگرام) فاکتور جدید صادر نمی‌کنند (فاکتورهای صادرشده نرخ ثبت‌شدهٔ خودشان را نگه می‌دارند).',
 
   // Templates
   'web.templates_title': 'متن‌های ربات',
@@ -666,6 +671,44 @@ export const WEB_FA = {
   'web.recovery_schedule_off_hint':
     'بکاپ خودکار خاموش است. تاریخچه‌ی سالم به‌تنهایی معنایش این نیست که بکاپی گرفته می‌شود.',
   'web.recovery_interval': 'فاصله‌ی بکاپ‌ها',
+  // Spec §13.2 — the automatic schedule, edited here instead of in the server's settings.
+  'web.backup_schedule_title': 'زمان‌بندی بکاپ خودکار',
+  'web.backup_schedule_hint':
+    'بکاپ خودکار و فاصله‌ی آن از همین صفحه تنظیم می‌شود و بدون راه‌اندازی دوباره اعمال می‌شود.',
+  'web.backup_schedule_auto': 'بکاپ خودکار',
+  'web.backup_schedule_auto_hint':
+    'وقتی روشن است، پس از گذشت فاصله‌ی تعیین‌شده از آخرین بکاپ موفق، بکاپ تازه‌ای گرفته می‌شود.',
+  'web.backup_schedule_on': 'روشن',
+  'web.backup_schedule_off': 'خاموش',
+  'web.backup_schedule_interval': 'فاصله‌ی بکاپ‌ها',
+  'web.backup_schedule_interval_edit': 'تغییر فاصله',
+  'web.backup_interval_1h': 'هر ۱ ساعت',
+  'web.backup_interval_3h': 'هر ۳ ساعت',
+  'web.backup_interval_6h': 'هر ۶ ساعت',
+  'web.backup_interval_12h': 'هر ۱۲ ساعت',
+  'web.backup_interval_24h': 'هر ۲۴ ساعت',
+  'web.backup_interval_custom': 'سفارشی',
+  'web.backup_interval_value': 'مقدار',
+  'web.backup_interval_unit': 'واحد',
+  'web.backup_interval_bounds': 'کمترین فاصله ۱۵ دقیقه و بیشترین ۳۰ روز است.',
+  'web.backup_interval_invalid': 'یک عدد صحیح وارد کنید.',
+  'web.backup_interval_too_short': 'فاصله نمی‌تواند کمتر از ۱۵ دقیقه باشد.',
+  'web.backup_interval_too_long': 'فاصله نمی‌تواند بیشتر از ۳۰ روز باشد.',
+  'web.backup_interval_save': 'ذخیره‌ی فاصله',
+  'web.backup_schedule_reset_enabled': 'بازگشت روشن/خاموش به پیش‌فرض نصب',
+  'web.backup_schedule_reset_interval': 'بازگشت فاصله به پیش‌فرض نصب',
+  'web.backup_schedule_saved': 'ذخیره شد. از نوبت بعدی بررسی زمان‌بندی اعمال می‌شود.',
+  'web.backup_schedule_read_only': 'برای تغییر زمان‌بندی، دسترسی ویرایش تنظیمات لازم است.',
+  'web.backup_source_setting': 'تنظیم‌شده در پنل',
+  'web.backup_source_environment': 'پیش‌فرض نصب',
+  'web.backup_schedule_technical':
+    'مقداری که در این صفحه ذخیره نشده باشد، از پیکربندی سرور (متغیرهای محیطی زیر) خوانده می‌شود. مقدار ذخیره‌شده در این صفحه همیشه بر آن مقدم است.',
+  'web.backup_destination': 'مقصد ارسال فایل بکاپ',
+  'web.backup_destination_ops_group': 'تاپیک «💾 بکاپ‌ها» در گروه گزارش‌های مدیریتی',
+  'web.backup_destination_dedicated': 'گفت‌وگوی اختصاصی بکاپ (پیکربندی سرور)',
+  'web.backup_destination_none': 'هیچ‌جا — فقط روی سرور نگه داشته می‌شود',
+  'web.backup_destination_none_hint':
+    'برای دریافت فایل بکاپ در تلگرام، «گروه گزارش‌های مدیریتی» را متصل کنید؛ Nexa تاپیک «💾 بکاپ‌ها» را خودش می‌سازد.',
   'web.recovery_last_success': 'آخرین موفقیت',
   'web.recovery_never': 'هرگز',
   'web.recovery_running': 'در حال اجرا',
@@ -709,15 +752,20 @@ export const WEB_FA = {
   // Upload and verification
   'web.recovery_upload_title': 'بارگذاری آرشیو',
   'web.recovery_upload_hint':
-    'فقط آرشیو رمزشده‌ی همین نصب. فایل روی سرور رمزگشایی و راستی‌آزمایی می‌شود؛ کلید هرگز به مرورگر نمی‌آید.',
+    'آرشیو رمزشده‌ی همین نصب، یا آرشیو سرور دیگری پس از وارد کردن کیت بازیابی آن. فایل روی سرور رمزگشایی و راستی‌آزمایی می‌شود؛ کلید هرگز به مرورگر نمی‌آید.',
   'web.recovery_upload_choose': 'انتخاب فایل',
   'web.recovery_upload_send': 'بارگذاری',
   'web.recovery_uploading': 'در حال بارگذاری…',
   'web.recovery_upload_disabled': 'بارگذاری روی این نصب غیرفعال است.',
   'web.recovery_upload_too_large': 'این فایل از حد مجاز این نصب بزرگ‌تر است.',
-  'web.recovery_foreign_unsupported': 'پشتیبانی نمی‌شود',
-  'web.recovery_foreign_hint':
-    'بازیابی از آرشیو نصب دیگر پشتیبانی نمی‌شود: کلید آن نصب اینجا نیست، و هیچ فرمی برای وارد کردن کلید وجود ندارد.',
+  // A failure code an operator can act on, said in words (ADR-0032). The raw code
+  // stays beside it in an LTR run for whoever reads the server log.
+  'web.recovery_failure_foreign':
+    'این فایل پشتیبان روی سرور دیگری ساخته شده و کلید باز کردن آن روی این سرور نیست. کیت بازیابی همان سرور را در بخش «کیت بازیابی» همین صفحه وارد کنید و سپس فایل پشتیبان را دوباره بارگذاری کنید.',
+  'web.recovery_failure_keys_missing':
+    'فایل پشتیبان باز شد، اما بخشی از اطلاعات محرمانه‌ی داخل آن (مثل توکن ربات یا رمز پنل‌ها) با کلیدی قفل شده که روی این سرور نیست. کیت بازیابی کامل سرور قبلی را وارد کنید و دوباره امتحان کنید. هیچ تغییری در این سرور داده نشد.',
+  'web.recovery_failure_auth':
+    'فایل پشتیبان باز نشد: یا آسیب دیده است یا با کلیدی ساخته شده که با کلیدهای این سرور جور نیست.',
   'web.recovery_verify': 'راستی‌آزمایی و آزمون بازگردانی',
   'web.recovery_verifying': 'در حال راستی‌آزمایی…',
   'web.recovery_verify_hint':
@@ -738,6 +786,82 @@ export const WEB_FA = {
   'web.recovery_confirm_expires': 'اعتبار تأیید',
   'web.recovery_no_permission_restore':
     'شما اجازه‌ی بازگرداندن این نصب را ندارید. راستی‌آزمایی آرشیو همچنان ممکن است.',
+
+  // --- The Recovery Kit (ADR-0032) -----------------------------------------
+  'web.kit_title': 'کیت بازیابی',
+  'web.kit_intro':
+    'برای وقتی که این سرور از دست برود و بخواهید روی سرور تازه‌ای همه‌چیز را برگردانید.',
+  'web.kit_warning_title': 'فایل پشتیبان به‌تنهایی برای بازیابی روی سرور جدید کافی نیست',
+  'web.kit_warning_body':
+    'هر فایل پشتیبان (.nxb) با کلید رمزنگاری همین سرور قفل شده است. سرور تازه کلید دیگری دارد و آن فایل را باز نمی‌کند. کیت بازیابی همان کلید است که با رمزی که خودتان انتخاب می‌کنید قفل شده. آن را دریافت کنید و جایی جدا از سرور و جدا از فایل‌های پشتیبان نگه دارید، و رمز آن را جای امنی یادداشت کنید.',
+  'web.kit_export_title': 'دریافت کیت بازیابی',
+  'web.kit_export_hint':
+    'کیت همه‌ی کلیدهایی را که این سرور دارد در بر می‌گیرد. هر بار که کلید سرور عوض شد، کیت تازه‌ای دریافت کنید.',
+  'web.kit_account_password': 'رمز ورود حساب شما',
+  'web.kit_passphrase': 'رمز کیت (دست‌کم ۱۲ نویسه)',
+  'web.kit_passphrase_again': 'تکرار رمز کیت',
+  'web.kit_passphrase_mismatch': 'دو رمز یکسان نیستند.',
+  'web.kit_passphrase_short': 'رمز کیت باید دست‌کم ۱۲ نویسه باشد و با فاصله شروع یا تمام نشود.',
+  'web.kit_passphrase_warning':
+    'این رمز هیچ‌جا ذخیره نمی‌شود و قابل بازیابی نیست. بدون آن، کیت باز نمی‌شود.',
+  'web.kit_export_button': 'ساخت و دریافت کیت',
+  'web.kit_exporting': 'در حال ساخت کیت…',
+  'web.kit_exported':
+    'کیت بازیابی دریافت شد. آن را جدا از فایل‌های پشتیبان و جدا از رمزش نگه دارید.',
+  'web.kit_no_permission_export': 'شما اجازه‌ی دریافت کیت بازیابی را ندارید.',
+  'web.kit_import_title': 'بازیابی روی سرور تازه: وارد کردن کیت',
+  'web.kit_import_hint':
+    'اگر فایل پشتیبان از سرور دیگری است، اول کیت بازیابی همان سرور را اینجا وارد کنید، بعد فایل پشتیبان را در بخش بازیابی بارگذاری کنید. کلیدهای واردشده فقط برای باز کردن اطلاعات قدیمی به کار می‌روند و هرگز جای کلید این سرور را نمی‌گیرند.',
+  'web.kit_import_choose': 'فایل کیت بازیابی (.nxkit)',
+  'web.kit_import_passphrase': 'رمز کیت',
+  'web.kit_import_button': 'وارد کردن کیت',
+  'web.kit_importing': 'در حال بررسی کیت…',
+  'web.kit_imported': 'کیت وارد شد. کلیدهای تازه',
+  'web.kit_already_held': 'از قبل روی این سرور بودند',
+  'web.kit_imported_next':
+    'حالا فایل پشتیبان سرور قبلی را در بخش «بازیابی» بارگذاری و راستی‌آزمایی کنید.',
+  'web.kit_no_permission_import': 'شما اجازه‌ی وارد کردن کیت بازیابی را ندارید.',
+  'web.kit_keys_title': 'کلیدهای این سرور',
+  'web.kit_key_name': 'نام',
+  'web.kit_key_role': 'نقش',
+  'web.kit_key_fingerprint': 'اثر انگشت',
+  'web.kit_key_uses': 'وابستگی',
+  'web.kit_key_imported_at': 'زمان ورود',
+  'web.kit_role_active': 'کلید فعلی سرور',
+  'web.kit_role_configured': 'کلید تنظیم‌شده‌ی سرور',
+  'web.kit_role_imported': 'واردشده — فقط برای باز کردن',
+  'web.kit_key_unavailable': 'در دسترس نیست',
+  'web.kit_key_arrived_by_restore': 'همراه بازیابی آمده',
+  'web.kit_dep_none': 'بدون وابستگی',
+  'web.kit_dep_secrets': 'اطلاعات محرمانه',
+  'web.kit_dep_wrapped': 'کلید دیگر',
+  'web.kit_dep_archives': 'فایل پشتیبان روی سرور',
+  'web.kit_dep_recoveries': 'بازیابی نیمه‌تمام',
+  'web.kit_remove': 'حذف',
+  'web.kit_remove_title': 'حذف کلید واردشده',
+  'web.kit_remove_danger':
+    'پس از حذف، هر فایل پشتیبان یا اطلاعاتی که با این کلید قفل شده و جای دیگری نگه داشته‌اید (مثلاً در تلگرام) دیگر روی این سرور باز نمی‌شود — از جمله پشتیبان‌هایی از همین سرور که پیش از جابه‌جایی رمزها گرفته شده‌اند. فقط وقتی حذف کنید که مطمئن باشید دیگر لازم نیست.',
+  'web.kit_remove_confirm_label': 'برای حذف، نام کلید را دقیقاً تایپ کنید',
+  'web.kit_remove_button': 'حذف کلید',
+  'web.kit_remove_cancel': 'انصراف',
+  'web.kit_remove_blocked': 'هنوز چیزی روی این سرور به این کلید نیاز دارد و حذف نمی‌شود.',
+  'web.kit_configured_not_removable':
+    'کلیدهای تنظیم‌شده‌ی سرور از اینجا حذف نمی‌شوند؛ تغییر آن‌ها کار مدیر سرور است.',
+  'web.kit_advanced': 'جزئیات فنی',
+  'web.kit_advanced_body':
+    'کیت با scrypt و AES-256-GCM رمز می‌شود و پارامترهای آن داخل فایل است. کلیدهای واردشده فقط رمزگشایی می‌کنند؛ رمزنگاری تازه همیشه با کلید تنظیم‌شده‌ی سرور است.',
+  'web.kit_error_auth': 'کیت باز نشد: یا رمز درست نیست یا فایل آسیب دیده است.',
+  'web.kit_error_malformed': 'این فایل یک کیت بازیابی معتبر نیست.',
+  'web.kit_error_version': 'این کیت با نسخه‌ی دیگری از نکسا ساخته شده که این نسخه آن را نمی‌خواند.',
+  'web.kit_error_collision':
+    'کیت کلیدی دارد که نامش با کلید دیگری روی این سرور یکی است. هیچ کلیدی وارد نشد.',
+  'web.kit_error_reauth': 'رمز ورود حساب درست نیست؛ کیتی ساخته نشد.',
+  'web.kit_error_passphrase': 'رمز کیت پذیرفته نشد.',
+  'web.kit_error_busy':
+    'الان ممکن نیست: یا یک بازیابی در جریان است، یا کیت دیگری در حال بررسی است. کمی بعد دوباره امتحان کنید.',
+  'web.kit_error_too_many':
+    'با این کیت تعداد کلیدهای سرور از حدی که یک کیت بازیابی جا می‌دهد بیشتر می‌شود. هیچ کلیدی وارد نشد.',
+  'web.kit_error_in_use': 'هنوز چیزی روی این سرور به این کلید نیاز دارد؛ حذف نشد.',
 
   // Recovery list
   'web.recovery_requests_title': 'درخواست‌های بازیابی',
@@ -1440,12 +1564,16 @@ export const WEB_FA = {
   'web.users_empty_hint': 'مشتری با نخستین پیام /start به ربات ساخته می‌شود.',
   'web.users_search_empty': 'هیچ مشتری‌ای با این جست‌وجو پیدا نشد.',
   'web.users_search_empty_hint':
-    'شناسهٔ عددی تلگرام باید کامل و دقیق باشد؛ نام کاربری با ابتدای آن جست‌وجو می‌شود.',
-  'web.users_search_telegram': 'شناسهٔ تلگرام',
-  'web.users_search_telegram_hint': 'تطبیق کامل و دقیق. بخشی از شناسه جست‌وجو نمی‌شود.',
-  'web.users_search_username': 'نام کاربری',
-  'web.users_search_username_hint': 'با ابتدای نام کاربری، بدون حساسیت به بزرگی و کوچکی حرف‌ها.',
-  'web.users_search_invalid_telegram': 'شناسهٔ تلگرام فقط رقم است و با صفر آغاز نمی‌شود.',
+    'شناسهٔ عددی تلگرام باید کامل و دقیق باشد؛ نام کاربری و نام با ابتدای آنها جست‌وجو می‌شوند.',
+  'web.users_search_hint':
+    'شناسهٔ عددی تلگرام (دقیق)، ‎@نام کاربری، یا ابتدای نام یا نام خانوادگی.',
+  // Spec §10: the one search box every list page draws (`ui/list-search.tsx`).
+  'web.list_search_label': 'جست‌وجو',
+  'web.list_search_reads_telegram': 'به‌عنوان شناسهٔ عددی تلگرام جست‌وجو می‌شود.',
+  'web.list_search_reads_id': 'به‌عنوان شناسهٔ داخلی جست‌وجو می‌شود.',
+  'web.list_search_reads_username': 'به‌عنوان ابتدای نام کاربری تلگرام جست‌وجو می‌شود.',
+  'web.list_search_reads_text': 'به‌عنوان متن جست‌وجو می‌شود.',
+  'web.customer_identity_unknown': 'مشتری نامشخص',
   'web.users_search_apply': 'جست‌وجو',
   'web.users_search_clear': 'پاک کردن',
   'web.users_search_denied':
@@ -1683,12 +1811,9 @@ export const WEB_FA = {
   'web.payment_customer_signalled_none': 'مشتری چیزی نگفته است.',
   'web.payment_customer_signalled_hint':
     'این فقط گفتهٔ مشتری است، نه رسید و نه تأیید. پرداخت همچنان در انتظار بررسی شماست.',
-  'web.payments_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
-  'web.payments_filter_order_hint': 'شناسهٔ سفارش را کامل وارد کنید.',
-  'web.payments_filter_reference_hint': 'کد پیگیری دقیقاً همان چیزی است که مشتری می‌خواند.',
+  'web.payments_search_hint':
+    'شناسهٔ عددی تلگرام، کد پیگیری یا شمارهٔ مرجع بانک (دقیق)، شناسهٔ پرداخت یا سفارش، یا ‎@نام کاربری.',
   'web.payments_filter_all': 'همه',
-  'web.payments_filter_invalid_id': 'شناسه معتبر نیست.',
-  'web.payments_search_apply': 'جست‌وجو',
   'web.payment_confirm_title': 'بررسی رسید',
   /*
    * Payment File 02 §10: card-to-card review is Telegram's alone. The Web Admin says
@@ -1749,6 +1874,7 @@ export const WEB_FA = {
   'web.payment_gateway_provider_tonpays': 'درگاه پرداخت تون پی وبسایت',
   'web.payment_gateway_provider_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
   'web.payment_gateway_provider_telegram_stars': 'تلگرام استارز (⭐)',
+  'web.payment_gateway_provider_nowpayments': 'درگاه ارز دیجیتال (NOWPayments)',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
   'web.payment_gateway_rate_hint':
@@ -1824,7 +1950,6 @@ export const WEB_FA = {
   'web.fx_stars_mode_central': 'نرخ مرکزی × نسبت استارز به تتر',
   'web.fx_stars_ratio': 'تعداد استارز به ازای هر تتر',
   'web.fx_stars_ratio_unset': 'تنظیم نشده',
-  'web.fx_stars_fixed_rate': 'نرخ ثابت هر ستاره',
   'web.fx_stars_central_rate': 'قیمت هر ستاره با نرخ مرکزی',
   'web.fx_stars_central_rate_none': 'قابل محاسبه نیست (نرخ یا نسبت در دسترس نیست)',
   'web.payment_gateway_credential': 'کلید API',
@@ -1840,6 +1965,21 @@ export const WEB_FA = {
   'web.payment_gateway_credential_input': 'کلید API جدید',
   'web.payment_gateway_credential_save': 'ذخیرهٔ کلید',
   'web.payment_gateway_credential_saved': 'کلید API ذخیره شد.',
+  'web.payment_gateway_nowpayments_hint':
+    'مبلغ فاکتور به دلار و فقط از نرخ مرکزی ارز (USDT) محاسبه می‌شود؛ مشتری نوع ارز دیجیتال را در صفحهٔ NOWPayments انتخاب می‌کند. پرداخت فقط پس از وضعیت «finished» با استعلام مستقیم از NOWPayments تأیید می‌شود.',
+  'web.payment_gateway_webhook_secret_missing': 'کلید IPN تنظیم نشده',
+  'web.payment_gateway_webhook_secret_configured': 'کلید IPN تنظیم شده ••••••••',
+  'web.payment_gateway_webhook_secret_input': 'کلید IPN جدید (IPN Secret)',
+  'web.payment_gateway_webhook_secret_hint':
+    'اعلان‌های NOWPayments فقط با این کلید امضا و بررسی می‌شوند. کلید ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید. بدون کلید IPN، این درگاه قابل فعال‌سازی نیست.',
+  'web.payment_gateway_webhook_secret_save': 'ذخیرهٔ کلید IPN',
+  'web.payment_gateway_webhook_secret_saved': 'کلید IPN ذخیره شد.',
+  'web.payment_gateway_provider_payment_id': 'شناسهٔ پرداخت در درگاه',
+  'web.payment_gateway_check': 'بررسی اتصال',
+  'web.payment_gateway_check_done': 'بررسی اتصال انجام شد.',
+  'web.payment_gateway_last_check': 'آخرین بررسی',
+  'web.payment_gateway_check_ok': 'اتصال موفق',
+  'web.payment_gateway_check_failed': 'اتصال ناموفق',
   'web.payment_gateway_callback_url': 'آدرس وب‌هوک (تولیدشده)',
   'web.payment_gateway_callback_url_hint':
     'این آدرس به‌صورت خودکار ساخته می‌شود و همراه هر فاکتور برای درگاه ارسال می‌شود. وب‌هوک فقط یک اعلان است؛ تأیید پرداخت همیشه با استعلام مستقیم از درگاه انجام می‌شود.',
@@ -2524,11 +2664,9 @@ export const WEB_FA = {
   'web.orders_empty': 'هنوز سفارشی ثبت نشده است.',
   'web.orders_empty_hint': 'وقتی مشتری از فهرست ربات چیزی انتخاب کند، اینجا دیده می‌شود.',
   'web.orders_filter_empty': 'سفارشی با این مشخصات پیدا نشد.',
-  'web.orders_filter_empty_hint': 'شناسه را بررسی کنید یا صافی‌ها را پاک کنید.',
-  'web.orders_filter_customer_hint': 'شناسهٔ داخلی مشتری، نه شناسهٔ تلگرام.',
-  'web.orders_filter_product_hint': 'شناسهٔ محصول.',
-  'web.orders_filter_invalid_id':
-    'این یک شناسهٔ معتبر نیست. شناسهٔ داخلی را از صفحهٔ همان مشتری یا محصول بردارید.',
+  'web.orders_filter_empty_hint': 'متن جست‌وجو را بررسی کنید یا صافی‌ها را پاک کنید.',
+  'web.orders_search_hint':
+    'شناسهٔ عددی تلگرام، شناسهٔ سفارش یا محصول، نام محصول، یا ‎@نام کاربری.',
   'web.order_detail': 'جزئیات سفارش',
   'web.order_line': 'سرویس',
   'web.order_line_title': 'آنچه خریداری شده',
@@ -2694,21 +2832,8 @@ export const WEB_FA = {
   'web.service_delivery_next_attempt': 'تلاش بعدی',
 
   'web.services_filter_all': 'همه',
-  'web.services_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
-  'web.services_filter_panel_hint': 'شناسهٔ پنل را کامل وارد کنید.',
-  'web.services_filter_invalid_id': 'شناسه معتبر نیست.',
-  /*
-   * The lookup an operator actually arrives with.
-   *
-   * A customer quotes the name on their account, never the internal id, so until
-   * this existed the one handle a support conversation contains matched no search
-   * on either surface. EXACT, and the hint says so: a prefix over account names
-   * would enumerate a panel's accounts, and every row here leads to a
-   * subscription.
-   */
-  'web.services_filter_username_hint': 'نام کاربری روی پنل را کامل وارد کنید؛ جست‌وجو دقیق است.',
-  'web.services_filter_invalid_username': 'این نام کاربری از شکلی نیست که اینجا ذخیره می‌شود.',
-  'web.services_search_apply': 'جست‌وجو',
+  'web.services_search_hint':
+    'نام کاربری سرویس روی پنل (کامل و دقیق)، شناسهٔ عددی تلگرام، ‎@نام کاربری، یا شناسهٔ سرویس، سفارش یا پنل.',
 
   /*
    * Three banners, each naming what an operator should DO.
@@ -3142,6 +3267,7 @@ export const WEB_FA = {
   'web.ib_button_payment_cancel': 'انصراف از پرداخت',
   'web.ib_button_payment_cancel_confirm': 'تأیید انصراف از پرداخت',
   'web.ib_button_payment_gateway_pay': 'پرداخت آنلاین (لینک درگاه)',
+  'web.ib_button_payment_nowpayments_open': 'پرداخت با ارز دیجیتال (NOWPayments)',
   'web.ib_button_payment_gateway_check': 'بررسی وضعیت پرداخت',
   'web.ib_button_payment_gateway_card_check': 'بررسی وضعیت (کارت‌به‌کارت درگاه)',
   'web.ib_button_payment_gateway_receipt': 'ارسال فیش واریزی (درگاه)',
@@ -4770,8 +4896,14 @@ export const WEB_FA = {
   'web.opsgroup_topics': 'تاپیک‌ها',
   'web.opsgroup_topics_hint':
     'Nexa این تاپیک‌ها را خودش می‌سازد و نگه می‌دارد؛ اگر یکی حذف شود، دوباره ساخته می‌شود.',
-  'web.opsgroup_topic_system': '⚙️ سیستم و خطاها',
+  'web.opsgroup_topic_system': '⚙️ سیستم',
   'web.opsgroup_topic_payments': '💳 پرداخت‌ها',
+  'web.opsgroup_topic_errors': '🚨 خطاها',
+  'web.opsgroup_topic_services': '🧩 سفارش‌ها و سرویس‌ها',
+  'web.opsgroup_topic_panels': '🖥 پنل‌ها',
+  'web.opsgroup_topic_bot': '🤖 ربات و پیام‌رسانی',
+  'web.opsgroup_topic_security': '🛡 امنیت و دسترسی',
+  'web.opsgroup_topic_backups': '💾 بکاپ‌ها',
   'web.opsgroup_topic_pending': 'هنوز ساخته نشده',
   'web.opsgroup_topic_ready': 'آماده',
   'web.opsgroup_topic_missing': 'حذف شده — دوباره ساخته می‌شود',
@@ -5186,7 +5318,7 @@ export const WEB_FA = {
     'تبلیغاتی — به مشتریانی که پیام تبلیغاتی را قطع کرده‌اند فرستاده نمی‌شود',
   'web.bc_purpose_service': 'اطلاع‌رسانی سرویس — به همهٔ مخاطبان فرستاده می‌شود',
   'web.bc_purpose_hint':
-    'مشتری با دستور /stop پیام‌های تبلیغاتی را قطع می‌کند. پیام تبلیغاتی به او نمی‌رسد؛ اطلاع‌رسانی سرویس، پرداخت و پشتیبانی همچنان می‌رسد.',
+    'مشتری با دستور /stop پیام‌های تبلیغاتی را قطع می‌کند. پیام تبلیغاتی به او نمی‌رسد؛ اطلاع‌رسانی سرویس، پرداخت و پشتیبانی همچنان می‌رسد. این مشتریان در شمار مخاطبان می‌مانند و در لحظهٔ ارسال، طبق تنظیم «اجازه قطع پیام‌های تبلیغاتی توسط مشتری» در همان لحظه، «ردشده» یا ارسال می‌شوند.',
   'web.bc_source': 'پیام مبدأ',
   'web.bc_source_hint':
     'شناسهٔ چت (مثلاً ‎-1001234567890 برای کانال یا @username) و شمارهٔ پیام در همان چت. ربات باید به آن چت دسترسی داشته باشد: کانالی که در آن مدیر است یا چتی که عضو آن است. توکن یا لینک دعوت لازم نیست و پذیرفته نمی‌شود.',

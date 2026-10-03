@@ -55,6 +55,7 @@ import {
   RECOVERY_ACTIVE_DESTRUCTIVE_STATES,
   RECOVERY_FAILURE_CODES,
   RECOVERY_SOURCES,
+  INSTALLATION_KEY_SOURCES,
   RECOVERY_STAGES,
   RECOVERY_STATES,
   TEMPLATE_REVISION_ACTIONS,
@@ -189,6 +190,8 @@ import {
   CLIENT_APP_IMAGE_MIN_SIDE,
   CLIENT_APP_NAME_MAX_LENGTH,
   CLIENT_APP_PLATFORMS,
+  CLIENT_APP_VIDEO_FILE_ID_MAX_LENGTH,
+  CLIENT_APP_VIDEO_FILE_UNIQUE_ID_MAX_LENGTH,
   CLIENT_APP_PROTOCOLS,
   CLIENT_APP_SORT_MAX,
   CLIENT_APP_SORT_MIN,
@@ -2932,6 +2935,79 @@ export const recoveryRequests = pgTable(
   ],
 );
 
+/**
+ * Decrypt-only key-encryption keys imported from a Recovery Kit (ADR-0032).
+ *
+ * INSTALLATION-WIDE, and the one table here with neither `tenant_id` nor a
+ * tenant-bound encryption context, for a reason that is the whole point of it:
+ * it must SURVIVE a restore. A restore replaces every tenant row with the
+ * backup's, so a key bound to the current primary tenant would be bound to a
+ * tenant that no longer exists the moment it was needed. The recovery executor
+ * carries these rows into the restored candidate before the cutover, exactly as
+ * it re-asserts its own request row afterwards.
+ *
+ * `wrapped_material` is the key, AES-256-GCM-wrapped under a CONFIGURED key
+ * (`wrapped_under_key_id`) with the key id and the wrapping id as associated
+ * data. Deliberately not named `*_ciphertext`: that suffix marks a
+ * `SecretCipher` column, which this is not (see `installation-keyring.ts`), and
+ * `secrets status|rewrap|retire-check` walk this table by name instead.
+ *
+ * Nothing here can make a key ENCRYPT. Which key encrypts is
+ * `SECRETS_ACTIVE_KEY_ID`, and this table has no column that could say
+ * otherwise.
+ */
+export const installationKeys = pgTable(
+  'installation_keys',
+  {
+    id: uuid('id').primaryKey(),
+    /** The key's label, unique across the installation. Never a configured key's id. */
+    keyId: text('key_id').notNull(),
+    /** `kekFingerprint` of the key. Safe to show; compared on every unwrap. */
+    fingerprint: text('fingerprint').notNull(),
+    /**
+     * The wrapped key. NULL exactly when the row is a TOMBSTONE: removal erases
+     * the bytes and keeps the row, so a restore of an older backup — which still
+     * holds this key — cannot quietly bring it back (the executor carries the
+     * tombstone into the candidate).
+     */
+    wrappedMaterial: text('wrapped_material'),
+    /** Which CONFIGURED key wraps it — what `secrets retire-check` counts. NULL on a tombstone. */
+    wrappedUnderKeyId: text('wrapped_under_key_id'),
+    source: text('source').notNull(),
+    /** The kit it arrived in. An identifier, never the kit. */
+    kitId: uuid('kit_id'),
+    importedAt: timestamptz('imported_at').notNull(),
+    /** Captured as a label too, so the row still names somebody after a restore. */
+    importedByAdminId: uuid('imported_by_admin_id'),
+    importedByLabel: text('imported_by_label'),
+    /** Set by removal; the row is then a tombstone. Cleared only by a later import. */
+    removedAt: timestamptz('removed_at'),
+    removedByLabel: text('removed_by_label'),
+    /**
+     * Set by the recovery executor on a row the CANDIDATE held and this
+     * installation did not: a key that came back inside a restored backup rather
+     * than through an import here. Shown in the list, and audited at the cutover.
+     */
+    restoredAt: timestamptz('restored_at'),
+  },
+  (table) => [
+    uniqueIndex('installation_keys_key_id_idx').on(table.keyId),
+    check('installation_keys_source_check', enumCheck('source', INSTALLATION_KEY_SOURCES)),
+    check('installation_keys_key_id_check', sql`key_id ~ '^[A-Za-z0-9._-]{1,64}$'`),
+    check('installation_keys_fingerprint_check', sql`fingerprint ~ '^[0-9a-f]{32}$'`),
+    check(
+      'installation_keys_wrapped_under_check',
+      sql`wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)`,
+    ),
+    /** A live row has its wrap; a tombstone has neither half of it. Both directions. */
+    check(
+      'installation_keys_tombstone_check',
+      sql`(removed_at IS NULL) = (wrapped_material IS NOT NULL) AND (wrapped_material IS NULL) = (wrapped_under_key_id IS NULL)`,
+    ),
+    index('installation_keys_wrapped_under_idx').on(table.wrappedUnderKeyId),
+  ],
+);
+
 export const schema = {
   tenants,
   botInstances,
@@ -4254,6 +4330,13 @@ export const gatewayInvoices = pgTable(
      * let through. A flag on the row rather than a raised constant.
      */
     reconcileInquiryRequestedAt: timestamptz('reconcile_inquiry_requested_at'),
+    /**
+     * The provider's own id for the payment a VERIFIED webhook last named under this
+     * invoice (NOWPayments' `payment_id`, `docs/nowpayments-gateway-audit.md` §5.6): what
+     * the next inquiry reads. A hint, replaced by each verified webhook whose ids match the
+     * attempt, and never evidence: only that inquiry's answer decides anything.
+     */
+    hintedPaymentId: text('hinted_payment_id'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -4372,6 +4455,18 @@ export const gatewayInvoices = pgTable(
     check(
       'gateway_invoices_tonpays_telegram_check',
       sql`provider <> 'TONPAYS_TELEGRAM' OR (bot_instance_id IS NOT NULL AND provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT')`,
+    ),
+    check(
+      'gateway_invoices_hinted_payment_id_check',
+      sql`hinted_payment_id IS NULL OR hinted_payment_id ~ '^[0-9]{1,20}$'`,
+    ),
+    /**
+     * A NOWPayments attempt is billed in US cents, priced from the central USDT quote
+     * (package FX) and never by a fixed rate or in the sales currency.
+     */
+    check(
+      'gateway_invoices_nowpayments_check',
+      sql`provider <> 'NOWPAYMENTS' OR (provider_unit = 'USD' AND conversion_policy = 'CENTRAL_FX' AND bot_instance_id IS NULL)`,
     ),
     /** A current card is a whole card, only on a card-transfer route, bounded by length only. */
     check(
@@ -4975,10 +5070,35 @@ export const paymentGatewayCredentials = pgTable(
     apiKeyCiphertext: text('api_key_ciphertext').notNull(),
     apiKeyKeyId: text('api_key_key_id').notNull(),
     apiKeySetAt: timestamptz('api_key_set_at').notNull(),
+    /*
+     * A route whose provider SIGNS its webhooks (NOWPayments' IPN secret,
+     * `docs/nowpayments-gateway-audit.md` §5.6): the second secret, its own AEAD purpose
+     * (`payment_gateway.webhook_secret`) bound to this row's id. All three or none
+     * (`payment_gateway_credentials_webhook_secret_check`); replaced, never cleared, and
+     * never selected by a projection — only its set-at time is.
+     */
+    webhookSecretCiphertext: text('webhook_secret_ciphertext'),
+    webhookSecretKeyId: text('webhook_secret_key_id'),
+    webhookSecretSetAt: timestamptz('webhook_secret_set_at'),
+    /*
+     * The operator's last credential check (a read-only provider call with the stored key):
+     * when, and its machine result — `ok` or the classified code. Latest state only, the
+     * panel-health rule; never a body, a header or the key.
+     */
+    lastCheckAt: timestamptz('last_check_at'),
+    lastCheckResult: text('last_check_result'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
+    check(
+      'payment_gateway_credentials_webhook_secret_check',
+      sql`(webhook_secret_ciphertext IS NULL) = (webhook_secret_key_id IS NULL) AND (webhook_secret_ciphertext IS NULL) = (webhook_secret_set_at IS NULL)`,
+    ),
+    check(
+      'payment_gateway_credentials_last_check_check',
+      sql`(last_check_at IS NULL) = (last_check_result IS NULL) AND (last_check_result IS NULL OR length(last_check_result) BETWEEN 1 AND 64)`,
+    ),
     uniqueIndex('payment_gateway_credentials_tenant_provider_key').on(
       table.tenantId,
       table.provider,
@@ -5444,6 +5564,11 @@ export const adminAmountCaptures = pgTable(
      * every other purpose, and for a prompt opened with no update behind it.
      */
     openedUpdateId: bigint('opened_update_id', { mode: 'bigint' }),
+    /**
+     * Spec §7: the client app whose tutorial video a `CLIENT_APP_VIDEO` prompt reads, and
+     * set for that purpose only. Deleting the app deletes its open prompt with it.
+     */
+    clientAppId: uuid('client_app_id'),
   },
   (table) => [
     foreignKey({
@@ -5451,6 +5576,12 @@ export const adminAmountCaptures = pgTable(
       foreignColumns: [admins.tenantId, admins.id],
       name: 'admin_amount_captures_admin_fk',
     }),
+    // Declared further down this file; the builder runs lazily, after it exists.
+    foreignKey({
+      columns: [table.tenantId, table.clientAppId],
+      foreignColumns: [clientApps.tenantId, clientApps.id],
+      name: 'admin_amount_captures_client_app_fk',
+    }).onDelete('cascade'),
     foreignKey({
       columns: [table.tenantId, table.paymentId],
       foreignColumns: [payments.tenantId, payments.id],
@@ -5475,11 +5606,15 @@ export const adminAmountCaptures = pgTable(
     check(
       'admin_amount_captures_target_check',
       sql`(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON')
-            AND payment_id IS NOT NULL AND customer_id IS NULL AND service_refund_request_id IS NULL)
+            AND payment_id IS NOT NULL AND customer_id IS NULL AND service_refund_request_id IS NULL
+            AND client_app_id IS NULL)
           OR (purpose = 'CUSTOMER_BLOCK_REASON' AND customer_id IS NOT NULL AND payment_id IS NULL
-            AND service_refund_request_id IS NULL)
+            AND service_refund_request_id IS NULL AND client_app_id IS NULL)
           OR (purpose IN ('SERVICE_REFUND_AMOUNT', 'SERVICE_REFUND_REJECT_REASON')
-            AND service_refund_request_id IS NOT NULL AND payment_id IS NULL AND customer_id IS NULL)`,
+            AND service_refund_request_id IS NOT NULL AND payment_id IS NULL AND customer_id IS NULL
+            AND client_app_id IS NULL)
+          OR (purpose = 'CLIENT_APP_VIDEO' AND client_app_id IS NOT NULL AND payment_id IS NULL
+            AND customer_id IS NULL AND service_refund_request_id IS NULL)`,
     ),
     /** ONE open capture per administrator per bot, decided by the database. */
     uniqueIndex('admin_amount_captures_open_key')
@@ -5501,14 +5636,16 @@ export const adminAmountCaptures = pgTable(
       'admin_amount_captures_confirmed_check',
       sql`close_reason IS DISTINCT FROM 'CONFIRMED'
           OR (purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND amount_minor IS NOT NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND reason IS NOT NULL)`,
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND reason IS NOT NULL)
+          OR purpose = 'CLIENT_APP_VIDEO'`,
     ),
     check('admin_amount_captures_purpose_check', enumCheck('purpose', ADMIN_CAPTURE_PURPOSES)),
     /** Each purpose reads its own column and never the other's. */
     check(
       'admin_amount_captures_purpose_column_check',
       sql`(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND reason IS NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND amount_minor IS NULL)`,
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND amount_minor IS NULL)
+          OR (purpose = 'CLIENT_APP_VIDEO' AND amount_minor IS NULL AND reason IS NULL)`,
     ),
     check(
       'admin_amount_captures_reason_check',
@@ -9916,6 +10053,73 @@ export const clientApps = pgTable(
             AND image_height BETWEEN ${sql.raw(String(CLIENT_APP_IMAGE_MIN_SIDE))} AND ${sql.raw(String(CLIENT_APP_IMAGE_MAX_SIDE))}
             AND image_sha256 ~ '^[0-9a-f]{64}$')`,
     ),
+  ],
+);
+
+/**
+ * Spec §7: a client app's tutorial VIDEO, set from Telegram by an administrator («تنظیم
+ * ویدیو»), one per (app, bot).
+ *
+ * The media architecture decides the shape (`docs/package-h-tutorials-marketing-stars.md`): the app's
+ * PICTURE is bytes in `client_apps` because it is uploaded in the Web Admin and must be
+ * sent by any bot; a VIDEO arrives at Telegram from the administrator's phone, so the bytes
+ * are already there and this installation keeps only Telegram's reference — `file_id`, which
+ * re-sends it with nothing downloaded, and `file_unique_id`, stable across bots. A `file_id`
+ * is valid only for the bot that received it, which is why the row is keyed by bot: the bot
+ * an administrator sent the video to is the bot that shows it, and a tenant's other bot gets
+ * its own. Known limitation, as for receipts: a backup carries this row, not the video.
+ *
+ * Replacing is an UPDATE that bumps `version`; deleting removes the row. Both are audited
+ * (`client_app.video_set`, `client_app.video_delete`). Deleting the app deletes its videos.
+ */
+export const clientAppVideos = pgTable(
+  'client_app_videos',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    clientAppId: uuid('client_app_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /** What `sendVideo` takes. Bot-scoped, and never returned to a browser. */
+    fileId: text('file_id').notNull(),
+    fileUniqueId: text('file_unique_id').notNull(),
+    mimeType: text('mime_type'),
+    durationSeconds: integer('duration_seconds'),
+    fileSize: bigint('file_size', { mode: 'bigint' }),
+    /** The administrator whose message set it. */
+    setByAdminId: uuid('set_by_admin_id').notNull(),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('client_app_videos_app_bot_key').on(
+      table.tenantId,
+      table.clientAppId,
+      table.botInstanceId,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.clientAppId],
+      foreignColumns: [clientApps.tenantId, clientApps.id],
+      name: 'client_app_videos_app_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.tenantId, table.setByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'client_app_videos_admin_fk',
+    }),
+    check(
+      'client_app_videos_file_check',
+      sql`length(file_id) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_VIDEO_FILE_ID_MAX_LENGTH))}
+          AND length(file_unique_id) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_VIDEO_FILE_UNIQUE_ID_MAX_LENGTH))}
+          AND (mime_type IS NULL OR length(mime_type) BETWEEN 1 AND 128)
+          AND (duration_seconds IS NULL OR duration_seconds >= 0)
+          AND (file_size IS NULL OR file_size > 0)`,
+    ),
+    check('client_app_videos_version_check', sql`version >= 1`),
   ],
 );
 

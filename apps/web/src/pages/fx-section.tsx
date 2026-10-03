@@ -222,14 +222,8 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
               <h3 className="fx-subhead">{t('web.fx_stars_title')}</h3>
               <KV
                 items={[
-                  [
-                    t('web.fx_stars_mode'),
-                    t(
-                      status.data.stars.pricingMode === 'CENTRAL_FX_RATIO'
-                        ? 'web.fx_stars_mode_central'
-                        : 'web.fx_stars_mode_fixed',
-                    ),
-                  ],
+                  // Spec §8: Stars are always priced by the central rate; there is no mode.
+                  [t('web.fx_stars_mode'), t('web.fx_stars_mode_central')],
                   [
                     t('web.fx_stars_ratio'),
                     status.data.stars.starsPerUsdt === '' ? (
@@ -238,17 +232,6 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                       </span>
                     ) : (
                       <Num key="ra" value={status.data.stars.starsPerUsdt} />
-                    ),
-                  ],
-                  [
-                    t('web.fx_stars_fixed_rate'),
-                    status.data.stars.fixedRateMinor === null ? (
-                      '—'
-                    ) : (
-                      <span key="fr">
-                        <Num value={status.data.stars.fixedRateMinor} />{' '}
-                        {currencyLabel(status.data.quoteCurrency)}
-                      </span>
                     ),
                   ],
                   [

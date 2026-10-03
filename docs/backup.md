@@ -22,27 +22,118 @@ prefix, not because a table looks transient.
 
 ## Configuration
 
-All of it is environment configuration in `/etc/nexa/nexa.env`, not tenant
-settings: a dump is of the whole database, and the restore CLI has to work when
-the database is what is broken.
+Most of it is environment configuration in `/etc/nexa/nexa.env`: a dump is of the
+whole database, and the restore CLI has to work when the database is what is broken.
+The two things an operator changes in normal operation — whether automatic backups
+run, and how often — are also in the Web Admin (see **The automatic schedule** below),
+and the environment values are then only their defaults.
 
-| Variable                     | Default                 | Notes                                                            |
-| ---------------------------- | ----------------------- | ---------------------------------------------------------------- |
-| `BACKUP_SCHEDULE_ENABLED`    | `false`                 | Off until you turn it on.                                        |
-| `BACKUP_INTERVAL_MS`         | 24 h                    | Measured from the last **verified** run, not from process start. |
-| `BACKUP_TICK_MS`             | 5 min                   | How often the worker asks whether one is due.                    |
-| `BACKUP_WORK_DIR`            | `/var/lib/nexa/backups` | On the data volume. Never `/tmp`.                                |
-| `BACKUP_TELEGRAM_CHAT_ID`    | empty                   | Set with the token, or not at all.                               |
-| `BACKUP_TELEGRAM_BOT_TOKEN`  | empty                   | Its own bot, not the customer-facing one.                        |
-| `BACKUP_DUMP_TIMEOUT_MS`     | 2 h                     | A dump that never ends holds the lock until its lease expires.   |
-| `BACKUP_RESTORE_TIMEOUT_MS`  | 2 h                     |                                                                  |
-| `BACKUP_DELIVERY_TIMEOUT_MS` | 10 min                  |                                                                  |
-| `BACKUP_PG_BIN_DIR`          | empty                   | Where `pg_dump`/`pg_restore`/`psql` live, if not on `PATH`.      |
+| Variable                     | Default                 | Notes                                                                          |
+| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------ |
+| `BACKUP_SCHEDULE_ENABLED`    | `false`                 | The DEFAULT; a value set in the Web Admin wins.                                |
+| `BACKUP_INTERVAL_MS`         | 24 h                    | The DEFAULT; measured from the last **verified** run, not from process start.  |
+| `BACKUP_TICK_MS`             | 5 min                   | How often the worker asks whether one is due. Not a readiness knob.            |
+| `BACKUP_WORK_DIR`            | `/var/lib/nexa/backups` | On the data volume. Never `/tmp`.                                              |
+| `BACKUP_TELEGRAM_CHAT_ID`    | empty                   | The FALLBACK destination, used only with no operations group connected.        |
+| `BACKUP_TELEGRAM_BOT_TOKEN`  | empty                   | Set with the chat id, or not at all. Its own bot, not the customer-facing one. |
+| `BACKUP_DUMP_TIMEOUT_MS`     | 2 h                     | A dump that never ends holds the lock until its lease expires.                 |
+| `BACKUP_RESTORE_TIMEOUT_MS`  | 2 h                     |                                                                                |
+| `BACKUP_DELIVERY_TIMEOUT_MS` | 10 min                  |                                                                                |
+| `BACKUP_PG_BIN_DIR`          | empty                   | Where `pg_dump`/`pg_restore`/`psql` live, if not on `PATH`.                    |
 
 The chat id and the bot token are refused unless BOTH are set or NEITHER is.
 Neither set is a real configuration: the archive is verified and kept on the
 server, which is a backup. One alone is an installation whose operator believes
 their backups are leaving the host when they are not.
+
+## Where the archive goes
+
+Decided per run, at `DELIVER`, in this order (`RoutedBackupDelivery`):
+
+1. **The operations log group's «💾 بکاپ‌ها» topic**, when a group is connected
+   («گروه گزارش‌های مدیریتی» in the Web Admin). This is the canonical destination:
+   scheduled runs, «تهیه بکاپ جدید» and the recovery's pre-restore backup all post
+   there. Nexa creates the topic itself, through the same conditional claim as every
+   other topic it owns, so two worker replicas delivering at once create it once. A
+   topic an operator deleted is recreated — once per stale thread — and the archive is
+   sent once more, which is safe only because Telegram's "thread not found" is a
+   definitive refusal: nothing was posted.
+2. **The dedicated chat** (`BACKUP_TELEGRAM_CHAT_ID` + `BACKUP_TELEGRAM_BOT_TOKEN`),
+   only when no group is connected, when the group's latest check found a PROBLEM (bot
+   removed, cannot send, no topic right) or its bot has no token, or when its topic
+   could not be made ready — an answer or a thrown error — before anything was sent. It is the explicit fallback, kept so an
+   installation configured that way keeps working unchanged.
+3. **Nowhere**: the run is `NOT_ATTEMPTED` with nothing configured, or
+   `FAILED_DEFINITIVE` naming why when a group is connected and unusable with no
+   fallback. The archive is verified and on disk either way.
+
+The status card's «مقصد ارسال فایل بکاپ» is computed by the same decision from the
+database, so it names the recipient the next run would actually pick.
+
+**Why the group's own bot, and not `BACKUP_TELEGRAM_BOT_TOKEN`.** Only a member of a
+chat can post in it, and the group's bot is the one Nexa has verified is an
+administrator there with the topic right. A second token is therefore not needed for
+the group; the environment token is read only for the fallback chat. ADR-0011's
+control that the backup chat is DEDICATED now applies to the operations group: its
+membership is who can read the encrypted archives, so review it as such (an archive is
+useless without the KEK, which never reaches Telegram).
+
+A fallback is taken only when nothing was sent to the group. Once a send to the group
+has been attempted its answer is the run's answer: an `OUTCOME_UNKNOWN` is never
+followed by a copy anywhere else, and nothing resends automatically.
+
+**Delivery never fails the backup.** A destination that cannot be resolved, a group
+that is unusable, a channel that throws — each is recorded on the run's delivery
+columns, and the run stays `SUCCEEDED` with its verified archive retained on the
+server.
+
+**Above Telegram's 50 MiB bot ceiling** the topic receives a notice instead — Persian
+first, naming the backup, its checksum and where on the server it is retained — and
+the run's delivery detail says the archive was retained. Nothing pretends a document
+was delivered.
+
+## The automatic schedule
+
+«بکاپ و بازیابی» → «زمان‌بندی بکاپ خودکار» in the Web Admin: a switch, and an interval
+chosen from presets (1, 3, 6, 12, 24 hours) or typed as a number with a unit (minutes,
+hours, days). Bounds: 15 minutes to 30 days, the same as `BACKUP_INTERVAL_MS`. Saving
+needs `settings.edit`; it is the ordinary settings write — versioned, idempotent and
+audited — of two registry keys read on the installation tenant,
+`backup.schedule_enabled` and `backup.interval_minutes`.
+
+Each is NULL until somebody sets it, and NULL means the environment value. So:
+
+- an installation configured through `nexa.env` keeps exactly its schedule, with no edit;
+- a value set in the Web Admin wins over the environment, half by half;
+- «بازگشت به پیش‌فرض نصب» writes NULL back.
+
+The worker reads the schedule on **every tick**, so a change applies within one tick
+and needs no restart. That is also why the scheduler is always started now: with the
+schedule off, a tick decides nothing is due. `botctl status` reads the configuration,
+not the database, so it reports the environment default only, and says so.
+
+## Scheduler health
+
+The worker's health check includes the backup scheduler. Before this release the
+scheduler reported "stalled" from start until its first tick, which arrived one whole
+`BACKUP_TICK_MS` (five minutes) later — longer than the container health check waits —
+so a fresh deploy with backups on was reported unhealthy, and `BACKUP_TICK_MS=30000`
+was used in production to hide it. Now:
+
+- `start()` runs the first check immediately (safe: one tick at a time in a process,
+  one backup at a time in the installation by the partial unique index);
+- the scheduler is healthy from `start()` for three tick intervals before any tick
+  has completed, after which health is purely progress-based (`LoopProgress`, the
+  same rule every other worker loop uses);
+- a backup this process is running counts as progress for as long as its LEASE
+  heartbeat is alive (refreshed every minute; silent for `BACKUP_LEASE_STALE_AFTER_MS`,
+  15 minutes, means abandoned) — the same rule another process uses to reclaim it. There
+  is no run-length budget, because the checksum, encrypt and decrypt stages stream the
+  whole database with no timeout of their own, so a large legitimate run is never
+  reported stalled and a run whose heartbeat stops always is.
+
+**`BACKUP_TICK_MS=30000` is no longer needed.** It is harmless if left set; remove it
+at your convenience.
 
 **The client tools must be version-compatible with the server.** `pg_restore`
 cannot read a dump from a newer `pg_dump`. The manifest records both versions
@@ -55,6 +146,9 @@ pnpm backup run                                  # take one now, trigger MANUAL
 pnpm backup list [--limit N]                     # recent runs and their delivery state
 pnpm backup verify --archive PATH                # decrypt and checksum; touches no database
 pnpm backup restore --archive PATH --target DB   # restore into an explicit, empty database
+
+# Another installation's archive (ADR-0032): add --kit; the passphrase comes on stdin.
+read -rs P; printf %s "$P" | pnpm backup verify --archive PATH --kit old.nxkit
 ```
 
 In a deployed installation these run inside the api container; `backup:dev` is
@@ -122,10 +216,10 @@ significant gap in V1.
 never observed is recorded as `OUTCOME_UNKNOWN` and left alone. Check for them
 with `pnpm backup list`; the archive is on disk either way.
 
-**No enforcement of who can read the channel.** Give the backup bot its own
-dedicated channel, review its membership, and write down who is in it. Nothing
-in this codebase can check that, and anyone in that channel holding the KEK has
-your whole database.
+**No enforcement of who can read the channel.** The archives go to the operations
+log group's backups topic (or the fallback chat): review that group's membership and
+write down who is in it. Nothing in this codebase can check that, and anyone in that
+group holding the KEK has your whole database.
 
 ## Restore drill
 
@@ -225,14 +319,25 @@ psql -c "SELECT datname FROM pg_database WHERE datname LIKE 'nexa_pre_restore_%'
 dropdb nexa_pre_restore_<id>        # only when you are sure
 ```
 
-### Foreign archives are not supported
+### Another installation's archive: the Recovery Kit
 
-An archive from ANOTHER installation cannot be restored here, and the Web Admin
-says so — «پشتیبانی نمی‌شود» — rather than omitting the option. Its data key is
-wrapped under that installation's KEK, which this one does not hold, and the two
-ways to change that are a form that accepts a pasted key (refused: see ADR-0028)
-and a key-import feature that does not exist. Move the KEK into `SECRETS_KEYS`
-deliberately, out of band, and the archive becomes an ordinary one.
+An archive from ANOTHER installation — the usual case after a server is rebuilt
+from scratch — is sealed under that installation's key, which a fresh install
+does not have. Without its **Recovery Kit** the upload fails as
+`recovery.archive_foreign_key` and the Web Admin says what to do. With it:
+
+1. On the fresh install, sign in as the owner and open **بکاپ و بازیابی**.
+2. Under **کیت بازیابی**, import the old server's `.nxkit` with its passphrase.
+   Its keys are added **decrypt-only**: this server's own key stays the one every
+   new secret and backup is sealed with.
+3. Upload the old `.nxb`, verify, confirm — the ordinary restore above.
+
+The restore-test also checks the secrets INSIDE the backup (bot tokens, panel
+credentials): if any is sealed under a key neither this server nor the kit
+holds, it refuses with `recovery.candidate_keys_missing` before anything is
+confirmed. The executor carries the imported keys into the restored database
+before the cutover, so they survive it. Details: ADR-0032 and
+`docs/recovery-kit-format.md`.
 
 ### What the Web path does NOT do
 
@@ -246,6 +351,30 @@ pools, and their own pool error listeners are what let them survive it. A
 uploaded archive's workspace after success.** Debris is reported on the row and
 in the operational log rather than cleaned up silently; a recovery that removed
 its own evidence would be a recovery nobody could audit.
+
+## The Recovery Kit — keep one, apart from the backups
+
+**A `.nxb` alone is not enough to restore on a new server.** Export a Recovery
+Kit from the Web Admin (owner, account password, a passphrase of at least 12
+characters typed twice), and keep it somewhere that is neither this server nor
+the place the backups go; keep the passphrase somewhere else again. Kit +
+passphrase + any backup is the whole database, so treat the kit like the KEK it
+contains. Export a new kit after every key rotation: a kit holds the keys that
+existed when it was made.
+
+Imported keys are listed with what still depends on each. An imported key can be
+removed only when no stored secret, other imported key, archive on this server's
+disk (sealed under it, or taken while it was held) or unfinished recovery needs
+it. Copies elsewhere (Telegram, a laptop) cannot be counted — and that includes
+this server's own older backups taken before a `secrets rewrap`, which may hold
+credentials still sealed under the key — so remove one only when you are sure.
+A removed key leaves a tombstone, so restoring an older backup does not bring it
+back; importing its kit again does. Import, like export, asks for your account
+password. Configured keys are never
+removed from the Web Admin; `botctl secrets retire-check --key ID` is the gate for
+those, and it counts imported keys wrapped under the key as dependencies.
+`botctl secrets rewrap` re-wraps imported keys under the active key along with
+everything else.
 
 ## Relationship to `botctl backup`
 

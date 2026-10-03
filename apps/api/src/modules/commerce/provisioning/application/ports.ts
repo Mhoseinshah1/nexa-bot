@@ -1,5 +1,6 @@
 import type {
   BotInstanceId,
+  ListSearchTerm,
   OperationId,
   OperationState,
   OperationTarget,
@@ -169,6 +170,12 @@ export interface ServicePage {
   readonly nextCursor: ServiceCursor | null;
 }
 
+/** A customer as Telegram knows them, for the service list (spec §10). */
+export interface ServiceCustomerIdentity {
+  readonly telegramUserId: string;
+  readonly username: string | null;
+}
+
 export interface ServiceSearch {
   readonly customerId?: UserId;
   /**
@@ -198,6 +205,14 @@ export interface ServiceSearch {
    * would be a second opinion about what a username is.
    */
   readonly providerUsername?: string;
+  /**
+   * The list's ONE free-text search (spec §10), already classified: a Telegram id or
+   * `@username` prefix names the customer; a uuid the service, its customer, its order or
+   * its panel; other text a provider username EXACTLY, canonicalised by the same
+   * `providerUsernameLookupSchema` as `providerUsername` above and for the same reason —
+   * a prefix over account names is an enumeration of a panel's accounts.
+   */
+  readonly text?: ListSearchTerm;
 }
 
 /**
@@ -298,6 +313,13 @@ export interface ServiceRepository {
     cursor: ServiceCursor | null,
     tx?: unknown,
   ): Promise<ServicePage>;
+
+  /** The Telegram identity of each of these customers, inside the tenant, in one read. */
+  customerIdentities(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<UserId, ServiceCustomerIdentity>>;
 
   /**
    * Moves a service between two states, and reports whether the row actually moved.

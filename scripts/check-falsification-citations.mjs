@@ -113,6 +113,7 @@ const RECORDS = [
   'docs/round-t-t2-falsification.md',
   'docs/round-t-t3-falsification.md',
   'docs/tonpays-telegram-falsification.md',
+  'docs/recovery-kit-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -157,8 +158,10 @@ const RECORDS = [
  * end-to-end icon citations of `telegram-reply-keyboard.test.ts` left the T2 record with their
  * tests, and T3-07 and T3-27 were retired (−10); R-01 and T3-29..T3-32 added (+8). Each
  * record says so above its table.
+ * 2636 → 2646: the Recovery Kit (ADR-0032), `docs/recovery-kit-falsification.md` — ten rows.
+ * 2646 → 2663: its PR #144 review fixes — seventeen rows, RK-11..RK-27.
  */
-const EXPECTED = 2636;
+const EXPECTED = 2663;
 /**
  * A table whose last column is one of these is making citations.
  *

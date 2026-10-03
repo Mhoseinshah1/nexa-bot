@@ -41,7 +41,28 @@ describe('the backup CLI arguments', () => {
       archive: '/tmp/a.nxb',
       target: 'nexa_drill',
       limit: 20,
+      kit: null,
     });
+  });
+
+  it('takes a Recovery Kit for verify and restore, and for nothing else', () => {
+    expect(parseArgs(['verify', '--archive', '/tmp/a.nxb', '--kit', '/tmp/k.nxkit']).kit).toBe(
+      '/tmp/k.nxkit',
+    );
+    expect(() => parseArgs(['run', '--kit', '/tmp/k.nxkit'])).toThrowError(/verify and restore/);
+  });
+
+  it('refuses a kit passphrase given as an argument', () => {
+    // argv is world-readable in /proc and lands in shell history.
+    expect(() =>
+      parseArgs(['verify', '--archive', '/tmp/a.nxb', '--kit', 'k', '--passphrase', 'x']),
+    ).toThrowError(/standard input/);
+  });
+
+  it('refuses a kit passphrase given as --passphrase=VALUE too', () => {
+    expect(() =>
+      parseArgs(['verify', '--archive', '/tmp/a.nxb', '--kit', 'k', '--passphrase=hunter2-long']),
+    ).toThrowError(/standard input/);
   });
 
   it('refuses an unknown command with the usage text', () => {

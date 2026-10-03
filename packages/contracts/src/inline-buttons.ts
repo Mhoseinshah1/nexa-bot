@@ -125,6 +125,9 @@ export const INLINE_BUTTONS = [
   button('payment.cancel', 'PAYMENT', 'bot.payment.cancel_button'),
   button('payment.cancel_confirm', 'PAYMENT', 'bot.payment.cancel_confirm_button'),
   button('payment.gateway_pay', 'PAYMENT', 'bot.payment.gateway_pay_button', 'URL'),
+  // A provider whose pay button reads differently (spec §16): its own key, so the label and
+  // style are the operator's to set without touching the generic gateway button.
+  button('payment.nowpayments.open', 'PAYMENT', 'bot.payment.nowpayments_pay_button', 'URL'),
   button('payment.gateway_check', 'PAYMENT', 'bot.payment.gateway_check_button'),
   button('payment.gateway_card_check', 'PAYMENT', 'bot.payment.gateway_card_check_button'),
   button('payment.gateway_receipt', 'PAYMENT', 'bot.payment.gateway_receipt_button'),

@@ -7,6 +7,9 @@ import {
   OPS_CONNECT_CODE_ALPHABET,
   OPS_CONNECT_CODE_LENGTH,
   OPS_GROUP_MANAGED_SETTING_KEYS,
+  OPS_LOG_TOPIC_CATEGORIES,
+  OPS_LOG_TOPIC_NAME_TEMPLATES,
+  OPS_LOG_TOPIC_ROUTES,
   settingDefinition,
   type SettingKey,
 } from '@nexa/contracts';
@@ -105,12 +108,64 @@ describe('the webhook shapes', () => {
 });
 
 describe('routing, not severity', () => {
-  it('sends payments events to the payments topic and the rest to the system topic', () => {
+  it('sends payments events to the payments topic and anything unclaimed to the system topic', () => {
     expect(opsLogTopicForCode('payments.gateway_misconfigured')).toBe('PAYMENTS');
     expect(opsLogTopicForCode('order.refunded_undeliverable')).toBe('PAYMENTS');
-    expect(opsLogTopicForCode('panel.health.unreachable')).toBe('SYSTEM');
-    expect(opsLogTopicForCode('backup.run_failed')).toBe('SYSTEM');
     expect(opsLogTopicForCode('')).toBe('SYSTEM');
+    expect(opsLogTopicForCode('something.nobody_routed')).toBe('SYSTEM');
+  });
+
+  /**
+   * Spec §12: every code prefix the installation records today, each in the topic its
+   * concern belongs to. The table is the real vocabulary (grepped from the recorders), so
+   * a route that is deleted or reordered — `order.` above `order.refunded_undeliverable`,
+   * say, which would move a refund out of the payments log — fails here by name.
+   */
+  it.each([
+    ['payments.gateway_late_completion', 'PAYMENTS'],
+    ['payments.receipt_push_failed', 'PAYMENTS'],
+    ['order.refunded_undeliverable', 'PAYMENTS'],
+    ['fx.source_unavailable', 'PAYMENTS'],
+    ['backup.run_failed', 'BACKUPS'],
+    ['backup.run_ok', 'BACKUPS'],
+    ['recovery.run_failed', 'BACKUPS'],
+    ['panel.health.unreachable', 'PANELS'],
+    ['panel.capacity.full', 'PANELS'],
+    ['provisioning.stalled', 'SERVICES'],
+    ['provisioning.delivered', 'SERVICES'],
+    ['access.permission_denied', 'SECURITY'],
+    ['auth.login_locked_out', 'SECURITY'],
+    ['admin.roles_changed', 'SECURITY'],
+    ['antispam.unavailable', 'SECURITY'],
+    ['telegram.customer_send_failed', 'BOT'],
+    ['bot.command_sync_failing', 'BOT'],
+    ['bot_menu.published_unreadable', 'BOT'],
+    ['channels.membership_unavailable', 'BOT'],
+    ['internal.unhandled', 'ERRORS'],
+    ['http.error', 'ERRORS'],
+    ['outbox.message_exhausted', 'SYSTEM'],
+    ['notification.attempts_exhausted', 'SYSTEM'],
+    ['settings.stored_value_invalid', 'SYSTEM'],
+    ['ops_group.topic_recreated', 'SYSTEM'],
+    ['system.ping', 'SYSTEM'],
+  ] as const)('routes %s to %s', (code, category) => {
+    expect(opsLogTopicForCode(code)).toBe(category);
+  });
+
+  it('gives every topic a route, a Persian name and its own template', () => {
+    // A category nothing routes to is a topic that is created and stays empty — except
+    // SYSTEM, the explicit fallback, which needs no route of its own.
+    const routed = new Set(OPS_LOG_TOPIC_ROUTES.map((route) => route.category));
+    for (const category of OPS_LOG_TOPIC_CATEGORIES) {
+      if (category !== 'SYSTEM') expect(routed.has(category), category).toBe(true);
+    }
+    const keys = Object.values(OPS_LOG_TOPIC_NAME_TEMPLATES);
+    expect(new Set(keys).size).toBe(OPS_LOG_TOPIC_CATEGORIES.length);
+    for (const key of keys) {
+      expect(CATALOGUE_FA[key as keyof typeof CATALOGUE_FA], key).toMatch(/[؀-ۿ]/);
+    }
+    // The owner named this one exactly (spec §13.1).
+    expect(CATALOGUE_FA[OPS_LOG_TOPIC_NAME_TEMPLATES.BACKUPS]).toBe('💾 بکاپ‌ها');
   });
 
   it('routes a category a later release wrote to the system topic instead of failing it', () => {

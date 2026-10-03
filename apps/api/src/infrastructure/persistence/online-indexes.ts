@@ -259,6 +259,74 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     name: 'telegram_review_messages_updated_idx',
     definition: 'ON "telegram_review_messages" USING btree ("tenant_id","updated_at")',
   },
+
+  /*
+   * ---------------------------------------------------------------------------------
+   * The Web Admin's one search box (spec §10, `docs/web-admin-search.md`).
+   *
+   * Each list's `q` is an OR of exact and prefix matches, and an OR is a BitmapOr only
+   * when EVERY arm has an index; one arm without one turns the whole predicate into a
+   * filter over a walk of the tenant's table. These are the arms that had none. All are
+   * `tenant_id`-led, and all are built concurrently because every one of these tables is
+   * populated and written on every installation that has sold anything — the reason this
+   * file exists. `customers-plan.test.ts`, `orders-plan.test.ts`, `payments-plan.test.ts`
+   * and `services-plan.test.ts` read the planner's answer for each, on the statements the
+   * repositories actually send.
+   * ---------------------------------------------------------------------------------
+   */
+  {
+    /*
+     * A customer by display name, first name then last, by PREFIX. The expression is
+     * spelled as PostgreSQL stores it and exactly as `drizzle-customer.repository.ts`
+     * writes it; `concat_ws` would read better and is STABLE, so it cannot be indexed.
+     */
+    name: 'customers_tenant_full_name_idx',
+    definition:
+      'ON "customers" USING btree ("tenant_id",' +
+      "lower(((COALESCE(first_name, '') || ' ') || COALESCE(last_name, ''))) text_pattern_ops)",
+  },
+  {
+    // A customer by last name alone, by prefix: "Rezaei" must find "Ali Rezaei".
+    name: 'customers_tenant_last_name_idx',
+    definition: 'ON "customers" USING btree ("tenant_id",lower(last_name) text_pattern_ops)',
+  },
+  {
+    // An order by the SNAPSHOT title the customer bought, by prefix.
+    name: 'orders_tenant_line_title_idx',
+    definition: 'ON "orders" USING btree ("tenant_id",lower(line_title) text_pattern_ops)',
+  },
+  {
+    /*
+     * An order by its product: a uuid typed into the box, and the product-name arm, which
+     * resolves the catalogue's matching ids first. `?productId=` had no index either —
+     * `orders_product_fk` is a constraint, not an index — so it walked the tenant's orders.
+     * Keyed like the other order keysets so a single product's page is read in order.
+     */
+    name: 'orders_tenant_product_created_idx',
+    definition: 'ON "orders" USING btree ("tenant_id","product_id","created_at","id")',
+  },
+  {
+    /*
+     * A payment by its order. `payments_order_confirmed_key` is partial on CONFIRMED and
+     * serves only the double-charge guard; `?orderId=` had nothing else.
+     */
+    name: 'payments_tenant_order_idx',
+    definition: 'ON "payments" USING btree ("tenant_id","order_id")',
+  },
+  {
+    // A payment by the gateway's or bank's own reference — what a customer's receipt shows.
+    name: 'payments_tenant_external_reference_idx',
+    definition: 'ON "payments" USING btree ("tenant_id","external_reference")',
+  },
+  {
+    /*
+     * A service by its panel, every state. `services_panel_capacity_idx` is partial on
+     * `state <> 'TERMINATED'` for the capacity count, so it cannot serve a uuid arm that
+     * must also find terminated services — the ones a support question is often about.
+     */
+    name: 'services_tenant_panel_idx',
+    definition: 'ON "services" USING btree ("tenant_id","panel_id")',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */
