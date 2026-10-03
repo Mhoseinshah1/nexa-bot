@@ -466,13 +466,14 @@ export class DrizzleOperationRepository implements OperationRepository {
     scope: TenantContext,
     id: string,
     requestedByCustomerId: UserId | null,
+    operationId: OperationId,
     now: Date,
     tx: TransactionScope,
   ): Promise<OperationRecord | null> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .update(provisioningOperations)
-      .set({ background: false, requestedByCustomerId, updatedAt: now })
+      .set({ background: false, requestedByCustomerId, operationId, updatedAt: now })
       .where(
         and(
           eq(provisioningOperations.tenantId, tenantId),

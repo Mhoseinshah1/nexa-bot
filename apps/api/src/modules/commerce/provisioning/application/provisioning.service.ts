@@ -1533,19 +1533,37 @@ export class ProvisioningService {
         'This service is being moved to another location; try again once it has moved.',
       );
     }
+    /*
+     * An operator's retry of the same key replays what it planned, as a customer's does
+     * above. Before promotion it needed no lookup: `plan` collapses on the derived id. A
+     * promoted row now carries that id too, and must be replayed rather than audited
+     * again.
+     */
+    if (origin.requestedBy === 'OPERATOR') {
+      const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
+      if (replay !== null) return replay;
+    }
     const requestedByCustomerId = origin.requestedBy === 'OPERATOR' ? null : origin.requestedBy;
     if (scheduled !== null) {
       const promoted = await this.deps.operations.promoteBackground(
         scope,
         scheduled.id,
         requestedByCustomerId,
+        operationId,
         now,
         tx,
       );
-      // Claimed between the read and the update: it is being read right now, which is
-      // the answer the open-row return has always given.
-      if (promoted === null) return scheduled;
-      return this.recordRequest(scope, actor, service, type, origin, promoted, now, tx);
+      if (promoted !== null) {
+        return this.recordRequest(scope, actor, service, type, origin, promoted, now, tx);
+      }
+      /*
+       * The scheduled row was claimed between `findOpen` and the promotion. It is NOT the
+       * answer: if the executor then holds it off at the sweep's floor it goes back to
+       * PLANNED as housekeeping with nobody's name on it, and the request would be lost
+       * behind the backlog (Codex review of #172). So the request is planned as its own
+       * interactive row below; the claim's one-in-flight-per-service rule runs it after
+       * the scheduled read finishes, ahead of every background row.
+       */
     }
     const operation = await this.deps.operations.plan(
       scope,

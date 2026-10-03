@@ -918,20 +918,28 @@ export class DrizzleServiceRepository implements ServiceRepository {
            * Open: a second scheduled read of a figure still waiting to be read is a
            * request spent for nothing, and so is one queued beside a customer's own.
            *
-           * Attempted within the cadence (`created_at > staleBefore`), whatever became of
-           * it: a read that FAILED terminally — an account deleted on the panel, a panel
+           * Attempted within the cadence, whatever became of it: a read that FAILED terminally — an account deleted on the panel, a panel
            * now refusing — leaves the figure stale, so without this the same services sat
            * at the top of this stalest-first page every tick, their window-derived ids
            * conflicted, nothing was planned, and every other service of the tenant waited
            * behind fifty broken ones for good. Skipping them for one cadence lets the page
            * move on, and they are asked again in the next window.
+           *
+           * "Within the cadence" is measured from the read's LAST activity — its completion
+           * or its last transition — not from when it was planned. Measured from
+           * `created_at`, a read that spent a whole cadence queued and retrying (15-minute
+           * cadence, five attempts with back-off) was already "old" the moment it failed
+           * for good, so the same broken services were planned again at once, every time,
+           * and kept the healthy fleet behind them (Codex review of #172).
            */
           sql`NOT EXISTS (
             SELECT 1 FROM ${provisioningOperations} AS sync
              WHERE sync.tenant_id = ${services.tenantId}
                AND sync.service_id = ${services.id}
                AND sync.type = 'SYNC_USAGE'
-               AND (sync.state IN ('PLANNED', 'IN_FLIGHT') OR sync.created_at > ${staleBefore})
+               AND (sync.state IN ('PLANNED', 'IN_FLIGHT')
+                    OR GREATEST(sync.created_at, sync.updated_at,
+                                COALESCE(sync.completed_at, sync.created_at)) > ${staleBefore})
           )`,
           /*
            * A service that has never been synced is measured from when it was CREATED.
