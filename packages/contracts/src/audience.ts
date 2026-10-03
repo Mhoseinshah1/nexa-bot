@@ -384,6 +384,15 @@ export const audiencePreviewSchema = z.object({
   reachable: z.number().int().nonnegative(),
   /** md5 of the sorted ids: a confirmation binds to the SET, not only to its size. */
   fingerprint: audienceFingerprintSchema,
+  /**
+   * Broadcast V2 (program §19), the audience ESTIMATE for a MARKETING broadcast: of
+   * `customers`, how many have opted out of promotions right now and would be skipped at
+   * the send if they still have when it goes and the installation still honours the opt-out.
+   * An estimate, not a promise — since #143 the SEND alone decides, so it is not subtracted
+   * from `customers` and binds nothing. Absent or null where it does not apply: a service
+   * announcement, a mass action, the policy switched off, or a frozen audience.
+   */
+  optedOut: z.number().int().nonnegative().nullable().optional(),
   sample: z.array(audienceSampleCustomerSchema).max(AUDIENCE_SAMPLE_SIZE),
 });
 export type AudiencePreview = z.infer<typeof audiencePreviewSchema>;
