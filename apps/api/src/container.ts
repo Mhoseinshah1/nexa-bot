@@ -232,6 +232,8 @@ import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastr
 import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/locations/infrastructure/drizzle-customer-location-override.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
+import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
+import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
 import { ProductCategoryService } from './modules/commerce/catalog/application/product-category.service.js';
 import { ServiceAddonService } from './modules/commerce/catalog/application/addon.service.js';
 import { CommercialActionService } from './modules/commerce/commercial/application/commercial-action.service.js';
@@ -813,6 +815,11 @@ export interface Container {
   /** Customer 360 (§11.4): suspend or resume all of one customer's configurations. */
   readonly customerServicesToggle: CustomerServicesToggleService;
   readonly products: ProductService;
+  /**
+   * Program Item 14: hidden legacy product shapes and their current tariff. Migration
+   * prerequisites only — no surface calls it yet (P6/P7 are on hold).
+   */
+  readonly legacyProducts: LegacyProductService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   /** Discount rules, as an operator manages them (WP8). */
@@ -1821,6 +1828,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     uow,
     idempotency,
+    clock,
+    ids,
+  });
+
+  /**
+   * Program Item 14 (`docs/legacy-migration/hidden-legacy-products.md`): one hidden product
+   * per legacy tariff shape, on the same product repository, so a migrated service renews
+   * through the ordinary renewal path and the one pricing boundary.
+   */
+  const legacyProductService = new LegacyProductService({
+    shapes: new DrizzleLegacyProductShapeRepository(database.db),
+    products: productRepository,
+    settings: settingsResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
     clock,
     ids,
   });
@@ -5834,6 +5861,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     manualOrders: manualOrderService,
     customerServicesToggle: customerServicesToggleService,
     products: productService,
+    legacyProducts: legacyProductService,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,

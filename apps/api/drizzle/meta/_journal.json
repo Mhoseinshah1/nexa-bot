@@ -1268,6 +1268,20 @@
       "when": 1791042499825,
       "tag": "0180_incidents_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 181,
+      "version": "7",
+      "when": 1791059571235,
+      "tag": "0181_legacy_product_shapes",
+      "breakpoints": true
+    },
+    {
+      "idx": 182,
+      "version": "7",
+      "when": 1791059591123,
+      "tag": "0182_legacy_product_shapes_guard",
+      "breakpoints": true
     }
   ]
 }
