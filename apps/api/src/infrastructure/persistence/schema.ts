@@ -1826,11 +1826,30 @@ export const panels = pgTable(
     usernameTemplate: text('username_template'),
     /** Set when the panel is archived, so the event has a time and not just a state. */
     archivedAt: timestamptz('archived_at'),
+    /**
+     * When an operator DRAINED this panel, or NULL when it is taking new business.
+     *
+     * Phase C2. Its own column and deliberately not a `status`: `DISABLED` stops the
+     * monitor probing the panel and every operation that needs it, and a drained
+     * panel must keep both — it is `ACTIVE`, monitored, and every existing service on
+     * it keeps working. What drain does is refuse NEW allocations, and it does that
+     * through `decideEligibility` (reason `DRAINING`), the one evaluator the
+     * catalogue, confirmation and settlement already ask. `decideOperability` never
+     * reads it. Nothing is migrated, terminated or deleted by setting it.
+     */
+    drainedAt: timestamptz('drained_at'),
+    /** The operator's reason for the current drain. Present exactly when `drained_at` is. */
+    drainReason: text('drain_reason'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
+    /** A drain and its reason, or neither — the same biconditional shape as the username policy. */
+    check(
+      'panels_drain_reason_check',
+      sql`(${table.drainedAt} IS NULL) = (${table.drainReason} IS NULL)`,
+    ),
     /**
      * At least one username mode, always.
      *
@@ -2591,7 +2610,12 @@ export const panelMonitorTenants = pgTable(
       .references(() => tenants.id),
     /** A lower bound on this tenant's earliest eligible panel. Never later than the truth. */
     nextEligibleAt: timestamptz('next_eligible_at').notNull(),
-    /** When this tenant last had a turn. The rotation order. */
+    /**
+     * When this tenant last had a turn. The rotation order, and the claim's
+     * turn token: every claim moves it STRICTLY forward, so a turn spent under
+     * a concurrent claim never compares equal to the snapshot that claim
+     * ordered by (`claimTenantsQuery`).
+     */
     lastServedAt: timestamptz('last_served_at').notNull(),
   },
   (table) => [

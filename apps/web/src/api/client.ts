@@ -255,6 +255,7 @@ import {
   type PanelPolicy,
   type PanelTechnicalResponse,
   type UpdatePanelPolicyResponse,
+  panelHealthDashboardResponseSchema,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -262,6 +263,7 @@ import {
   type PanelCredentialsInput,
   type PanelUsernamePolicyInput,
   type PanelListArchivedMode,
+  type PanelHealthDashboardResponse,
   type PanelListResponse,
   type PanelResponse,
   type PanelStatus,
@@ -2158,6 +2160,36 @@ export function testPanel(input: {
 }): Promise<TestPanelResponse> {
   const { id, ...body } = input;
   return post(PANEL_ROUTES.test(id), body, testPanelResponseSchema);
+}
+
+/**
+ * Phase C2: the panel health dashboard, one keyset page of the live fleet.
+ * `panels.view`; the server computes every figure, this only carries them.
+ */
+export function fetchPanelHealth(
+  query: { cursor?: string } = {},
+): Promise<PanelHealthDashboardResponse> {
+  const params = new URLSearchParams();
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PANEL_ROUTES.health}?${suffix}` : PANEL_ROUTES.health,
+    panelHealthDashboardResponseSchema,
+  );
+}
+
+/**
+ * Phase C2: drain a panel (no new allocations) or let it sell again. `panels.drain`.
+ * A reason is required both ways; the key is the submission's own, never a clock.
+ */
+export function setPanelDrain(input: {
+  id: string;
+  draining: boolean;
+  reason: string;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.drain(id), body, panelResponseSchema);
 }
 
 // ---------------------------------------------------------------------------

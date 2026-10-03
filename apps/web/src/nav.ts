@@ -336,6 +336,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_infra',
   },
   {
+    // Phase C2: the live fleet's health, load, failures and drain. `panels.view` is
+    // what the page's one query charges; probe and drain are gated on the page.
+    id: 'panel-health',
+    path: '/panel-health',
+    label: 'web.nav_panel_health',
+    icon: 'activity',
+    permission: 'panels.view',
+    group: 'web.navgroup_infra',
+  },
+  {
     id: 'providers',
     path: '/providers',
     label: 'web.nav_providers',

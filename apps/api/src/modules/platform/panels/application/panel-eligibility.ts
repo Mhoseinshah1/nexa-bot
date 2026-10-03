@@ -49,6 +49,34 @@ export interface EligibilityInput {
    * check.
    */
   readonly provisioning: ProvisioningInput;
+  /**
+   * The operator's drain, and whether the allocation being decided is NEW.
+   *
+   * REQUIRED, for the reason `provisioning` is: a caller that forgot it must fail
+   * to build rather than quietly sell onto a drained panel.
+   */
+  readonly drain: DrainInput;
+}
+
+/**
+ * Phase C2. Two facts, because drain refuses only NEW allocations.
+ *
+ * `slotHeld` is true only at settlement, when the order's own capacity hold was
+ * there to hand over: that order was confirmed — and its slot taken — before
+ * the drain began, so settling it allocates nothing new and refunding it would
+ * punish a customer for an operator's later decision. Everywhere else (the
+ * catalogue, confirmation, the operator's read) nothing is held and a drain
+ * refuses. A hold that lapsed and was swept is gone, so that settlement WOULD
+ * be a new allocation and is refused like any other.
+ */
+export interface DrainInput {
+  readonly draining: boolean;
+  readonly slotHeld: boolean;
+}
+
+/** The drain input for every caller deciding a NEW allocation: nothing is held. */
+export function drainOf(drain: { readonly since: Date } | null): DrainInput {
+  return { draining: drain !== null, slotHeld: false };
 }
 
 /**
@@ -116,7 +144,7 @@ const ELIGIBLE: PanelEligibility = { eligible: true };
  *
  * ## The order is the argument
  *
- * `ARCHIVED` and `DISABLED` first, because they are DECISIONS. An operator who
+ * `ARCHIVED`, `DISABLED` and `DRAINING` first, because they are DECISIONS. An operator who
  * archived a panel is not asking to be told it is also at capacity, and a
  * measurement must never be reported in place of somebody's own instruction.
  *
@@ -165,6 +193,11 @@ const ELIGIBLE: PanelEligibility = { eligible: true };
 export function decideEligibility(input: EligibilityInput): PanelEligibility {
   if (input.status === 'ARCHIVED') return { eligible: false, reason: 'ARCHIVED' };
   if (input.status !== 'ACTIVE') return { eligible: false, reason: 'DISABLED' };
+  // A decision too, so before every measurement — and after DISABLED, which is the
+  // stronger of the two: a disabled panel that is also drained is reported disabled.
+  if (input.drain.draining && !input.drain.slotHeld) {
+    return { eligible: false, reason: 'DRAINING' };
+  }
 
   const provisioning = input.provisioning;
   if (!canProvision(provisioning)) {

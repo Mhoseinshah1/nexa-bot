@@ -836,3 +836,57 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --- Panel health dashboard (Phase C2) ------------------------------------- */
+
+/* Five figures that wrap to two or three a row on a phone, never a scrolling strip. */
+.ph-summary {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  margin-block-end: 8px;
+}
+.ph-summary > .stat {
+  margin: 0;
+}
+/* One card per panel: a single column at 390px, as many as fit on a desk. */
+.ph-cards {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  margin-block: 12px;
+}
+.ph-card .kv {
+  overflow-wrap: anywhere;
+}
+.ph-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.ph-conditions ul {
+  margin: 0;
+  padding-inline-start: 18px;
+}
+.ph-conditions li {
+  margin-block: 4px;
+  overflow-wrap: anywhere;
+}
+/* The safe actions, then the one that changes who can buy, set apart at the far end. */
+.ph-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.ph-actions-safe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ph-actions-danger {
+  border-inline-start: 1px solid var(--line);
+  padding-inline-start: 8px;
+}
