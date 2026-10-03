@@ -755,16 +755,12 @@ function NoticeModal({ incident, onClose }: { incident: IncidentItem; onClose: (
     >
       <Banner tone="info">{t('web.inc_notice_explain')}</Banner>
       <p className="incident-text">{incident.customerMessage}</p>
-      {preview.isError && (
-        <Banner tone="danger" role="alert">
-          {incidentMessageFor(preview.error)}
-        </Banner>
-      )}
-      {recipients !== undefined && (
+      {/* The count's own loading, error and stale states are the kit's one rule. */}
+      <StateSwitch query={preview}>
         <p>
-          {t('web.inc_notice_recipients')} <Num value={recipients} />
+          {t('web.inc_notice_recipients')} <Num value={recipients ?? 0} />
         </p>
-      )}
+      </StateSwitch>
       {run.isError && (
         <Banner tone="danger" role="alert">
           {incidentMessageFor(run.error)}
