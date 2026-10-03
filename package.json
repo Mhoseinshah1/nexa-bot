@@ -33,7 +33,7 @@
     "admin:2fa-reset": "pnpm --filter @nexa/api admin:2fa-reset",
     "provision": "pnpm --filter @nexa/api provision",
     "check:runtime": "bash scripts/check-runtime-cli.sh",
-    "test:deploy": "bash tests/deploy/botctl.test.sh && bash tests/deploy/check-shell.test.sh",
+    "test:deploy": "bash tests/deploy/botctl.test.sh && bash tests/deploy/check-shell.test.sh && bash tests/deploy/release-ci-gate.test.sh",
     "test:exhaustive": "vitest run --project exhaustive",
     "db:migrate:dev": "pnpm --filter @nexa/api db:migrate:dev",
     "db:seed:dev": "pnpm --filter @nexa/api db:seed:dev",
