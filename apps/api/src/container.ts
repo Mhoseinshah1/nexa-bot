@@ -275,6 +275,9 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { DrizzleTermsRepository } from './modules/control/terms/infrastructure/drizzle-terms.repository.js';
+import { TermsService } from './modules/control/terms/application/terms.service.js';
+import { TermsAcceptanceService } from './modules/control/terms/application/terms-acceptance.service.js';
 import { ClientAppVideoService } from './modules/control/client-apps/application/client-app-video.service.js';
 import { DrizzleClientAppVideoRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app-video.repository.js';
 import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
@@ -966,6 +969,9 @@ export interface Container {
   readonly templateResolver: TemplateResolver;
   /** The tenant's FAQ as the operator maintains it (customer UX completion §J). */
   readonly supportFaqs: SupportFaqService;
+  /** Program §6: the operator's terms and rules, and the customer's acceptance of them. */
+  readonly terms: TermsService;
+  readonly termsAcceptance: TermsAcceptanceService;
   /** The customer's support screen: active FAQ in order, and the first support account's URL. */
   readonly supportScreen: SupportScreenReader;
   /** WP-A10: the tenant's client apps as the operator maintains them. */
@@ -3671,6 +3677,40 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * operator's authority, and the toggle plans each service through the operator's
    * per-service request.
    */
+  /*
+   * Program §6 — the terms and rules. Two services over one repository: the operator's
+   * (versions, publication, statistics) and the customer's (the gate's one question, the
+   * accept button, and the standing Customer 360 shows).
+   */
+  const termsRepository = new DrizzleTermsRepository(database.db);
+  const termsService = new TermsService({
+    repository: termsRepository,
+    flags: featureFlagResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    ids,
+    clock,
+  });
+  const termsAcceptanceService = new TermsAcceptanceService({
+    repository: termsRepository,
+    flags: featureFlagResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    ids,
+    clock,
+  });
   const customerControlService = new CustomerControlService({
     customers: customerRepository,
     locationOverrides: customerLocationOverrides,
@@ -3683,6 +3723,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     outbox,
     clock,
+    terms: termsAcceptanceService,
   });
   const customerInsightService = new CustomerInsightService({
     reader: new DrizzleCustomerInsightReader(database.db),
@@ -5558,6 +5599,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       antiSpam,
       // Package B: the REQUIRED channels, enforced before any business action; fails open.
       membership: channelMembership,
+      terms: termsAcceptanceService,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       // TonPays Telegram: «📤 ارسال فیش واریزی» and «🔄 تعویض کارت» (database writes only).
@@ -5797,6 +5839,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     templatesService,
     templateResolver,
     supportFaqs: supportFaqService,
+    terms: termsService,
+    termsAcceptance: termsAcceptanceService,
     supportScreen: supportScreenReader,
     clientApps: clientAppService,
     clientAppVideos: clientAppVideoService,
