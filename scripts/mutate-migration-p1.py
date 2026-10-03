@@ -59,6 +59,34 @@ M = {
         '        scope, staleBefore, USAGE_SYNC_PLAN_LIMIT, tx);',
     ),
     'M7-planner-not-background': (PR, '            background: true,\n', ''),
+    # Codex review of #172.
+    'M8-cadence-from-created-at': (
+        SV,
+        'OR GREATEST(sync.created_at, sync.updated_at,\n'
+        '                                COALESCE(sync.completed_at, sync.created_at)) > ${staleBefore})',
+        'OR sync.created_at > ${staleBefore})',
+    ),
+    'M9-promotion-keeps-sweep-id': (
+        OP,
+        '.set({ background: false, requestedByCustomerId, operationId, updatedAt: now })',
+        '.set({ background: false, requestedByCustomerId, updatedAt: now })',
+    ),
+    'M10-no-operator-replay': (
+        PS,
+        "    if (origin.requestedBy === 'OPERATOR') {\n"
+        '      const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);\n'
+        '      if (replay !== null) return replay;\n'
+        '    }\n',
+        '',
+    ),
+    'M11-lost-race-returns-scheduled': (
+        PS,
+        '      if (promoted !== null) {\n'
+        '        return this.recordRequest(scope, actor, service, type, origin, promoted, now, tx);\n'
+        '      }\n',
+        '      if (promoted === null) return scheduled;\n'
+        '      return this.recordRequest(scope, actor, service, type, origin, promoted, now, tx);\n',
+    ),
 }
 
 for name in sys.argv[1:] or list(M):

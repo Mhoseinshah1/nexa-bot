@@ -1,6 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { USAGE_SYNC_PLAN_LIMIT, type ActorContext, type UserId } from '@nexa/contracts';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
+import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
+import {
+  ProvisioningService,
+  type ProvisioningServiceDeps,
+} from '../../apps/api/src/modules/commerce/provisioning/application/provisioning.service';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import { AudienceFixtures } from './audience-fixtures';
 import {
@@ -432,6 +437,192 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     expect(claimed?.type, 'the reconcile is not housekeeping').toBe('RECONCILE');
     expect(claimed?.background).toBe(false);
     expect(panel.createCalls(), 'an UNKNOWN create is never retried as a create').toBe(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Codex review of #172
+  // -------------------------------------------------------------------------
+
+  it('a read that failed for good after a cadence of retries is skipped for a cadence FROM THE FAILURE', async () => {
+    // Fifty stalest services whose scheduled read was planned six hours ago — more than one
+    // 240-minute cadence — and only failed for good a minute ago. Measured from when it was
+    // planned it is already "old", so the same fifty were listed again at once.
+    await seedFleet(ctx, tenantA.tenantId, panelId, {
+      count: 50,
+      prefix: 'slow',
+      createdBefore: new Date(FIVE_YEARS_AGO.getTime() - 86_400_000),
+    });
+    const healthy = await fleet(10, 'well');
+    const now = new Date();
+    const planned = new Date(now.getTime() - 6 * 3_600_000);
+    const failed = new Date(now.getTime() - 60_000);
+    await ctx.container.database.withClient((client) =>
+      client.query(
+        `INSERT INTO provisioning_operations
+           (id, tenant_id, operation_id, service_id, order_id, panel_id, type, state, attempts,
+            failure_kind, completed_at, background, created_at, updated_at)
+         SELECT gen_random_uuid(), s.tenant_id, substr(md5(s.id::text || ':slow'), 1, 16), s.id,
+                s.order_id, s.panel_id, 'SYNC_USAGE', 'FAILED', 5, 'TIMEOUT', $3::timestamptz,
+                true, $2::timestamptz, $3::timestamptz
+           FROM services s WHERE s.tenant_id = $1::uuid AND s.provider_username LIKE 'slow%'`,
+        [tenantA.tenantId, planned.toISOString(), failed.toISOString()],
+      ),
+    );
+    const due = await services.listUsageSyncDue(
+      tenantA,
+      new Date(now.getTime() - 240 * 60_000),
+      USAGE_SYNC_PLAN_LIMIT,
+    );
+    expect(due.map((one) => one.providerUsername).sort()).toEqual([...healthy].sort());
+
+    // And through the real sweep: the healthy services behind them are read.
+    const h = harnessFor(ctx, tenantA, now);
+    await h.loop.tick();
+    for (const name of healthy) {
+      const service = await services.findById(tenantA, (await serviceIdOf(name)).id);
+      expect(service?.usageSyncedAt, `${name} was synced`).not.toBeNull();
+    }
+  });
+
+  async function auditCount(action: string): Promise<number> {
+    const result = await ctx.container.database.withClient((client) =>
+      client.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM audit_logs WHERE tenant_id = $1::uuid AND action = $2',
+        [tenantA.tenantId, action],
+      ),
+    );
+    return result.rows[0]?.n ?? 0;
+  }
+
+  it('a promoted request keeps its idempotency key: a retry replays it, with no new read and no new audit', async () => {
+    const names = await fleet(2);
+    const h = harnessFor(ctx, tenantA, new Date());
+    await planBacklogAt(h, new Date(Date.now() - 10 * 60_000));
+    const customerTarget = await serviceIdOf(names[0] ?? '');
+    const operatorTarget = await serviceIdOf(names[1] ?? '');
+
+    const asked = await ctx.container.provisioning.requestSyncFromCustomer(
+      tenantA,
+      systemActor('replay'),
+      customerTarget.customerId as UserId,
+      customerTarget.id,
+      { idempotencyKey: 'p1-replay' },
+    );
+    const byOperator = await ctx.container.provisioning.requestFromOperator(
+      tenantA,
+      owner,
+      operatorTarget.id,
+      'SYNC_USAGE',
+      { idempotencyKey: 'p1-op-replay' },
+    );
+    expect(asked.background).toBe(false);
+    expect(byOperator.background).toBe(false);
+    expect(
+      (
+        await ctx.container.provisioning.findCustomerRequest(
+          tenantA,
+          customerTarget.id,
+          'SYNC_USAGE',
+          'p1-replay',
+        )
+      )?.id,
+      'the request is found by its own key',
+    ).toBe(asked.id);
+
+    // Both reads run to completion.
+    const later = new Date(Date.now() + 60_000);
+    h.clock.set(later);
+    await setBucket(ctx, tenantA.tenantId, 100, later);
+    await h.executor.runOnce(tenantA);
+    await h.executor.runOnce(tenantA);
+    const done = await operationsOf(ctx, tenantA.tenantId);
+    expect(done.find((one) => one.id === asked.id)?.state).toBe('SUCCEEDED');
+    expect(done.find((one) => one.id === byOperator.id)?.state).toBe('SUCCEEDED');
+    const audits = await auditCount('service.request_sync_usage');
+    expect(audits).toBe(2);
+
+    const again = await ctx.container.provisioning.requestSyncFromCustomer(
+      tenantA,
+      systemActor('replay-2'),
+      customerTarget.customerId as UserId,
+      customerTarget.id,
+      { idempotencyKey: 'p1-replay' },
+    );
+    const operatorAgain = await ctx.container.provisioning.requestFromOperator(
+      tenantA,
+      owner,
+      operatorTarget.id,
+      'SYNC_USAGE',
+      { idempotencyKey: 'p1-op-replay' },
+    );
+    expect(again.id, 'the customer retry replays').toBe(asked.id);
+    expect(operatorAgain.id, 'the operator retry replays').toBe(byOperator.id);
+    expect(await operationsOf(ctx, tenantA.tenantId)).toHaveLength(done.length);
+    expect(await auditCount('service.request_sync_usage')).toBe(audits);
+  });
+
+  it('a scheduled row claimed between the lookup and the promotion does not swallow the request', async () => {
+    const [name] = await fleet(1);
+    const h = harnessFor(ctx, tenantA, new Date());
+    await planBacklogAt(h, new Date(Date.now() - 10 * 60_000));
+    const target = await serviceIdOf(name ?? '');
+    const scheduled = (await operationsOf(ctx, tenantA.tenantId)).find(
+      (one) => one.type === 'SYNC_USAGE',
+    );
+    expect(scheduled?.background).toBe(true);
+
+    // The race, made deterministic: the provisioner claims the scheduled row in its own
+    // transaction at the instant the request tries to promote it.
+    const real = new DrizzleOperationRepository(ctx.container.database.db);
+    const claimAt = new Date(Date.now() + 60_000);
+    let raced = false;
+    const racing = new Proxy(real, {
+      get(target_, property, receiver) {
+        if (property === 'promoteBackground') {
+          return async (...args: Parameters<DrizzleOperationRepository['promoteBackground']>) => {
+            const claimed = await ctx.container.uow.run(tenantA, (tx) =>
+              real.claimDue(
+                tenantA,
+                'provisioner:racer',
+                claimAt,
+                new Date(claimAt.getTime() + 60_000),
+                tx,
+              ),
+            );
+            raced = claimed?.id === scheduled?.id;
+            return real.promoteBackground(...args);
+          };
+        }
+        const value: unknown = Reflect.get(target_, property, receiver);
+        return typeof value === 'function'
+          ? (value as (...a: unknown[]) => unknown).bind(real)
+          : value;
+      },
+    });
+    const deps = (ctx.container.provisioning as unknown as { deps: ProvisioningServiceDeps }).deps;
+    const provisioning = new ProvisioningService({ ...deps, operations: racing });
+
+    const asked = await provisioning.requestSyncFromCustomer(
+      tenantA,
+      systemActor('race'),
+      target.customerId as UserId,
+      target.id,
+      { idempotencyKey: 'p1-race' },
+    );
+    expect(raced, 'the scheduled row was claimed mid-request').toBe(true);
+    expect(asked.id, 'the request is not the claimed housekeeping row').not.toBe(scheduled?.id);
+    expect(asked.background).toBe(false);
+    expect(asked.requestedByCustomerId).toBe(target.customerId);
+
+    // The claimed read is held off at the sweep's floor and goes back to the backlog...
+    await ctx.container.uow.run(tenantA, (tx) =>
+      real.holdOff(tenantA, scheduled?.id ?? '', claimAt, 'floor', claimAt, tx),
+    );
+    // ...and the customer's own read is still claimed first, below the floor.
+    h.clock.set(new Date(claimAt.getTime() + 1_000));
+    await setBucket(ctx, tenantA.tenantId, SWEEP_FLOOR, h.clock.now());
+    const first = await h.executor.runOnce(tenantA);
+    expect(first.kind === 'ATTEMPTED' && first.operationId).toBe(asked.id);
   });
 
   it('the database refuses a background row that is not a scheduled usage read', async () => {
