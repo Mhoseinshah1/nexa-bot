@@ -34,9 +34,9 @@ describe('auditSecurityClasses', () => {
       'DENIED',
     ]);
     expect(auditSecurityClasses({ action: 'auth.login', result: 'SUCCESS' })).toEqual(['AUTH']);
-    expect(auditSecurityClasses({ action: 'admin.password_change', result: 'SUCCESS' })).toEqual(
-      ['AUTH'],
-    );
+    expect(auditSecurityClasses({ action: 'admin.password_change', result: 'SUCCESS' })).toEqual([
+      'AUTH',
+    ]);
     expect(auditSecurityClasses({ action: 'wallet.debit', result: 'DENIED' })).toEqual([
       'DENIED',
       'CRITICAL',
@@ -63,9 +63,9 @@ describe('audit.export', () => {
 describe('the filter schemas', () => {
   it('refuses an entity id without its type, and a range that is not ordered', () => {
     expect(auditLogListQuerySchema.safeParse({ entityId: 'x' }).success).toBe(false);
-    expect(
-      auditLogListQuerySchema.safeParse({ entityType: 'Order', entityId: 'x' }).success,
-    ).toBe(true);
+    expect(auditLogListQuerySchema.safeParse({ entityType: 'Order', entityId: 'x' }).success).toBe(
+      true,
+    );
     const at = '2026-10-01T00:00:00.000Z';
     expect(auditLogListQuerySchema.safeParse({ from: at, to: at }).success).toBe(false);
     expect(auditLogExportQuerySchema.safeParse({ from: at, to: at }).success).toBe(false);
@@ -81,8 +81,6 @@ describe('the filter schemas', () => {
   it('bounds the page size, and refuses a year PostgreSQL cannot store', () => {
     expect(auditLogListQuerySchema.safeParse({ limit: '101' }).success).toBe(false);
     expect(auditLogListQuerySchema.safeParse({ limit: '100' }).success).toBe(true);
-    expect(auditLogListQuerySchema.safeParse({ from: '0000-01-01T00:00:00Z' }).success).toBe(
-      false,
-    );
+    expect(auditLogListQuerySchema.safeParse({ from: '0000-01-01T00:00:00Z' }).success).toBe(false);
   });
 });

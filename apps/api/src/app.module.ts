@@ -37,6 +37,7 @@ import { FxController } from './surfaces/web/fx.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
 import { TicketsController } from './surfaces/web/tickets.controller.js';
+import { AuditLogController } from './surfaces/web/audit-log.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServiceRefundRequestsController } from './surfaces/web/service-refund-requests.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
@@ -130,6 +131,8 @@ export class AppModule implements NestModule {
         AudienceController as never,
         BroadcastsController as never,
         BulkOperationsController as never,
+        // Phase D1: the audit log browser and its export.
+        AuditLogController as never,
       );
     }
 

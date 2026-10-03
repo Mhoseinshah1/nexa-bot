@@ -1,6 +1,7 @@
 import type {
   ActorType,
   AuditResult,
+  AuditSecurityFilter,
   PermissionKey,
   SourceSurface,
   TenantContext,
@@ -8,6 +9,9 @@ import type {
 
 /** Reading the audit trail. Held by owner, observer and finance (seeded roles). */
 export const AUDIT_VIEW_PERMISSION: PermissionKey = 'audit.view';
+
+/** Taking the filtered log away as a file (Phase D1). HIGH, owner-seeded; requires `audit.view`. */
+export const AUDIT_EXPORT_PERMISSION: PermissionKey = 'audit.export';
 
 /**
  * Reading the audit log back (`docs/wp14-reseller-phase2-audit.md` D3).
@@ -55,4 +59,100 @@ export interface AuditHistoryReader {
     customerId: string,
     limit: number,
   ): Promise<readonly (AuditHistoryRecord & { readonly reason: string | null })[]>;
+}
+
+/**
+ * The audit log BROWSER (Phase D1, `docs/audit-log.md`) — the "different surface with its own
+ * permission story" the paragraph above anticipated. `audit.view` to read, `audit.export` on
+ * top to take a file. Like the entity reader it never selects `ip` or `user_agent`.
+ */
+export interface AuditLogFilter {
+  /** `actor_id` is one of these. Resolved by the service from an id or a username. */
+  readonly actorIds?: readonly string[];
+  readonly actorType?: ActorType;
+  /**
+   * Rows about ONE customer: recorded against them (`Customer`, `Wallet`), or against an
+   * order, payment or service that belongs to them.
+   */
+  readonly customerId?: string;
+  readonly action?: { readonly exact: string } | { readonly prefix: string };
+  readonly entityType?: string;
+  readonly entityId?: string;
+  readonly result?: AuditResult;
+  readonly security?: AuditSecurityFilter;
+  /** Half-open: `from <= occurred_at < to`. */
+  readonly from?: Date;
+  readonly to?: Date;
+}
+
+/**
+ * Where a page ended. `occurredAt` is PostgreSQL's own microsecond text, never a `Date`, for
+ * the reason `keyset-cursor.ts` gives: a millisecond `Date` sits BELOW its own row.
+ */
+export interface AuditLogPosition {
+  readonly occurredAt: string;
+  readonly id: string;
+}
+
+export interface AuditLogRecord extends AuditHistoryRecord {
+  readonly actorId: string | null;
+  readonly entityType: string;
+  readonly entityId: string | null;
+  readonly reason: string | null;
+  readonly correlationId: string;
+  readonly position: AuditLogPosition;
+}
+
+/** The export's columns, in file order. Each has a Persian header in `@nexa/i18n`. */
+export const AUDIT_EXPORT_COLUMNS = [
+  'occurredAt',
+  'actorType',
+  'actorLabel',
+  'actorId',
+  'surface',
+  'action',
+  'entityType',
+  'entityId',
+  'result',
+  'security',
+  'reason',
+  'before',
+  'after',
+  'correlationId',
+  'id',
+] as const;
+export type AuditExportColumn = (typeof AUDIT_EXPORT_COLUMNS)[number];
+
+/** Renders the export's rows to a file. Infrastructure, because the headers are Persian. */
+export interface AuditLogExportWriter {
+  csv(rows: readonly Readonly<Record<AuditExportColumn, string>>[]): Uint8Array;
+}
+
+export interface AuditLogReader {
+  /**
+   * At most `limit` rows, newest first by `(occurred_at, id)`, strictly after `after` in
+   * that order. Another tenant's rows, and rows with no tenant, are never returned.
+   */
+  page(
+    scope: TenantContext,
+    filter: AuditLogFilter,
+    limit: number,
+    after: AuditLogPosition | null,
+  ): Promise<readonly AuditLogRecord[]>;
+
+  /** The ids of this tenant's administrators whose CURRENT username is this one. */
+  adminIdsByUsername(scope: TenantContext, username: string): Promise<readonly string[]>;
+
+  /**
+   * The customer each of these orders, payments and services belongs to, keyed
+   * `Order:<id>` and so on. Ids that name nothing in this tenant are simply absent.
+   */
+  ownersOf(
+    scope: TenantContext,
+    refs: {
+      readonly orders: readonly string[];
+      readonly payments: readonly string[];
+      readonly services: readonly string[];
+    },
+  ): Promise<ReadonlyMap<string, string>>;
 }

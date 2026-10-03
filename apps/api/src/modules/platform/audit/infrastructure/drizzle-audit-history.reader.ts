@@ -3,6 +3,7 @@ import type { ActorType, AuditResult, SourceSurface, TenantContext } from '@nexa
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { auditLogs } from '../../../../infrastructure/persistence/schema.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { redactRecord } from '../../../../infrastructure/redaction.js';
 import type { AuditHistoryReader, AuditHistoryRecord } from '../application/ports.js';
 
 /**
@@ -108,8 +109,13 @@ export class DrizzleAuditHistoryReader implements AuditHistoryReader {
 /** The entity types a customer's own audit rows are recorded under. */
 const CUSTOMER_TIMELINE_ENTITY_TYPES = ['Customer', 'Wallet'];
 
+/**
+ * Redacted AGAIN on the way out (Phase D1), by the one implementation the writer used: a
+ * row is read for years, and the redactor has learned keys since that older rows were
+ * written without. The audit log browser does the same.
+ */
 function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+    ? redactRecord(value as Record<string, unknown>)
     : null;
 }
