@@ -212,6 +212,8 @@ export const AGGREGATE_TYPES = [
   'Ticket',
   'Broadcast',
   'BulkOperation',
+  // Program §8: one tag of a tenant's customer-tag catalogue.
+  'CustomerTag',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
