@@ -269,6 +269,19 @@ export class DrizzleRoleRepository implements RoleRepository {
    * in history, and deleting a role they hold would orphan that.
    */
   async listForManagement(scope: ScopeContext, tx?: unknown): Promise<ManagedRole[]> {
+    /*
+     * Several statements, so they must share ONE snapshot (Codex 4173474753): read on
+     * the pool, a commit between the permissions and the versions paired a stale set
+     * with a newer version, and the editor's optimistic check then accepted an edit
+     * made from a state nobody saw. With no caller transaction this opens its own,
+     * REPEATABLE READ and read-only.
+     */
+    if (tx === undefined) {
+      return this.db.transaction(
+        (snapshot) => this.listForManagement(scope, { tx: snapshot, scope }),
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
+      );
+    }
     const tenantId = requireTenantId(scope);
     const executor = executorOf(this.db, tx);
     const base = await this.list(scope, tx);

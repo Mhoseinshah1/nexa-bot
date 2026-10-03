@@ -1810,7 +1810,10 @@ export class AdminManagementService {
    */
   async listManagedRoles(scope: ScopeContext, actor: ActorContext): Promise<RoleView[]> {
     await this.guard.check(scope, actor, 'admins.view');
-    const rows = await this.roles.listForManagement(scope);
+    // ONE snapshot (Codex 4173474753): a role's permissions and the version an edit will
+    // name must come from the same state, or a stale set paired with a newer version
+    // defeats the optimistic check it exists for.
+    const rows = await this.uow.runSnapshot(scope, (tx) => this.roles.listForManagement(scope, tx));
     return rows.map(toRoleView);
   }
 
@@ -1826,18 +1829,29 @@ export class AdminManagementService {
     targetId: AdminId,
   ): Promise<EffectivePermissionsResponse> {
     await this.guard.check(scope, actor, 'admins.view');
-    const target = await this.requireAdmin(scope, targetId);
-    const roleKeys = await this.admins.roleKeysFor(scope, target.id);
-    const held = (await this.roles.list(scope)).filter((role) => roleKeys.includes(role.key));
-    const rolePermissions = await this.roles.permissionsForAdmin(scope, target.id);
-    const overrides = await this.roles.overridesForAdmin(scope, target.id);
-    const effective = await this.guard.permissionsOf(scope, {
-      type: 'WEB_ADMIN',
-      id: target.id,
-      label: target.username,
-      surface: actor.surface,
-      correlationId: actor.correlationId,
+    // Every read — and the resolver's own — in ONE snapshot (Codex 4173474764), so the
+    // explanation and the answer describe the same state: a role unassigned between two
+    // reads must not appear in one half and not the other.
+    const read = await this.uow.runSnapshot(scope, async (tx) => {
+      const target = await this.requireAdmin(scope, targetId, tx);
+      const roleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
+      const held = (await this.roles.list(scope, tx)).filter((role) => roleKeys.includes(role.key));
+      const rolePermissions = await this.roles.permissionsForAdmin(scope, target.id, tx);
+      const overrides = await this.roles.overridesForAdmin(scope, target.id, tx);
+      const effective = await this.guard.permissionsOf(
+        scope,
+        {
+          type: 'WEB_ADMIN',
+          id: target.id,
+          label: target.username,
+          surface: actor.surface,
+          correlationId: actor.correlationId,
+        },
+        tx,
+      );
+      return { target, held, rolePermissions, overrides, effective };
     });
+    const { target, held, rolePermissions, overrides, effective } = read;
     const now = this.clock.now();
     return {
       adminId: target.id,
@@ -1889,19 +1903,24 @@ export class AdminManagementService {
       name: command.name,
       permissions,
       clonedFrom: command.clonedFrom ?? null,
+      // The reason is part of the command (Codex 4173474761): one key reused with a
+      // different reason is a different request, refused rather than replayed.
+      reason: command.reason,
+      confirmation: command.confirmation ?? null,
     });
     const replay = replayOf(command.idempotencyKey);
     if (replay !== undefined) {
-      const found = await this.idempotency.find<{ readonly key: string }>(
+      const found = await this.idempotency.find<{ readonly role: RoleView }>(
         scope,
         replay.namespace,
         replay.idempotencyKey,
         requestHash,
       );
-      if (found !== null) return this.roleViewOf(scope, found.result.key);
+      // The FIRST response, as stored with the write — not today's state of the role.
+      if (found !== null) return found.result.role;
     }
 
-    await this.runLockedMutation(
+    return this.runLockedMutation(
       scope,
       actor,
       { action: 'role.create', entityId: command.key, entityType: 'Role' },
@@ -1955,6 +1974,9 @@ export class AdminManagementService {
           `role ${command.key} was created`,
           { roleKey: command.key, granted: permissions.length },
         );
+        // Read on the locked connection, before the commit (Codex 4173474758): the
+        // answer is this write's result, never whatever the role is after somebody else.
+        const created = await this.lockedRoleView(scope, command.key, tx);
         if (replay !== undefined) {
           await rememberOnce(
             this.idempotency,
@@ -1962,13 +1984,13 @@ export class AdminManagementService {
             replay.namespace,
             replay.idempotencyKey,
             requestHash,
-            { key: command.key },
+            { role: created },
             tx,
           );
         }
+        return created;
       },
     );
-    return this.roleViewOf(scope, command.key);
   }
 
   /**
@@ -2003,19 +2025,21 @@ export class AdminManagementService {
       name: command.name,
       permissions,
       expectedVersion: command.expectedVersion,
+      reason: command.reason,
+      confirmation: command.confirmation ?? null,
     });
     const replay = replayOf(command.idempotencyKey);
     if (replay !== undefined) {
-      const found = await this.idempotency.find<{ readonly key: string }>(
+      const found = await this.idempotency.find<{ readonly role: RoleView }>(
         scope,
         replay.namespace,
         replay.idempotencyKey,
         requestHash,
       );
-      if (found !== null) return this.roleViewOf(scope, key);
+      if (found !== null) return found.result.role;
     }
 
-    await this.runLockedMutation(
+    return this.runLockedMutation(
       scope,
       actor,
       { action: 'role.update', entityId: key, entityType: 'Role' },
@@ -2034,8 +2058,22 @@ export class AdminManagementService {
         const added = permissions.filter((one) => !role.permissions.includes(one));
         const removed = role.permissions.filter((one) => !permissions.includes(one));
         if (added.length === 0 && removed.length === 0 && role.name === command.name) {
-          // Nothing to change: no version bump, no audit row claiming a change.
-          return;
+          // Nothing to change: no version bump, no audit row claiming a change — but the
+          // replay IS recorded (Codex 4173474756), so a retry of this request after
+          // somebody else's edit gets this answer, not a version conflict.
+          const unchanged = await this.lockedRoleView(scope, role.key, tx);
+          if (replay !== undefined) {
+            await rememberOnce(
+              this.idempotency,
+              scope,
+              replay.namespace,
+              replay.idempotencyKey,
+              requestHash,
+              { role: unchanged },
+              tx,
+            );
+          }
+          return unchanged;
         }
         const now = this.clock.now();
         if (
@@ -2077,6 +2115,7 @@ export class AdminManagementService {
           `role ${role.key} was changed`,
           { roleKey: role.key, added: added.length, removed: removed.length, critical },
         );
+        const updated = await this.lockedRoleView(scope, role.key, tx);
         if (replay !== undefined) {
           await rememberOnce(
             this.idempotency,
@@ -2084,13 +2123,13 @@ export class AdminManagementService {
             replay.namespace,
             replay.idempotencyKey,
             requestHash,
-            { key: role.key },
+            { role: updated },
             tx,
           );
         }
+        return updated;
       },
     );
-    return this.roleViewOf(scope, key);
   }
 
   /**
@@ -2117,6 +2156,8 @@ export class AdminManagementService {
       actorId: adminIdOf(actor),
       key,
       expectedVersion: command.expectedVersion,
+      reason: command.reason,
+      confirmation: command.confirmation ?? null,
     });
     const replay = replayOf(command.idempotencyKey);
     if (replay !== undefined) {
@@ -2216,8 +2257,13 @@ export class AdminManagementService {
     }
   }
 
-  private async roleViewOf(scope: ScopeContext, key: string): Promise<RoleView> {
-    const found = (await this.roles.listForManagement(scope)).find((role) => role.key === key);
+  /** The role as this transaction sees it — inside the lock that wrote it. */
+  private async lockedRoleView(
+    scope: ScopeContext,
+    key: string,
+    tx: TransactionScope,
+  ): Promise<RoleView> {
+    const found = (await this.roles.listForManagement(scope, tx)).find((role) => role.key === key);
     if (found === undefined) throw roleNotFound();
     return toRoleView(found);
   }

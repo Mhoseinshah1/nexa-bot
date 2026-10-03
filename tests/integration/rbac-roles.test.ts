@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   IDENTITY_ERROR_CODES,
   isNexaError,
@@ -524,5 +524,165 @@ describe('the last viable owner', () => {
         }),
       ),
     ).toBe(IDENTITY_ERROR_CODES.ROLE_IMMUTABLE);
+  });
+});
+
+describe('Codex review of #161', () => {
+  const repo = () =>
+    ctx.container.roles as unknown as Record<string, (...args: unknown[]) => unknown>;
+
+  /** Replaces one repository method for the length of `work`, restoring it after. */
+  async function patched<T>(
+    method: string,
+    replacement: (original: (...args: unknown[]) => unknown) => (...args: unknown[]) => unknown,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const target = repo();
+    const original = target[method]!.bind(target);
+    target[method] = replacement(original);
+    try {
+      return await work();
+    } finally {
+      delete target[method];
+    }
+  }
+
+  /** A commit on its OWN connection, as a racing operator's would be. */
+  async function racingRename(key: string, name: string) {
+    await ctx.container.database.db.execute(
+      sql`UPDATE roles SET name = ${name}, version = version + 1
+          WHERE tenant_id = ${tenantA.tenantId} AND key = ${key}`,
+    );
+  }
+
+  it('4173474753: a listed role pairs its permissions with the version they were read at', async () => {
+    const before = (await roleOf('support'))!;
+    let raced = false;
+    const listed = await patched(
+      'list',
+      (original) =>
+        async (...args: unknown[]) => {
+          const result = await original(...args);
+          // Another operator commits between the permissions read and the version read.
+          if (!raced) {
+            raced = true;
+            await ctx.container.database.db.execute(
+              sql`UPDATE roles SET version = version + 1
+                  WHERE tenant_id = ${tenantA.tenantId} AND key = 'support'`,
+            );
+            await ctx.container.database.db.execute(
+              sql`DELETE FROM role_permissions rp USING roles r
+                  WHERE rp.role_id = r.id AND r.key = 'support' AND rp.permission_key = 'tickets.reply'`,
+            );
+          }
+          return result;
+        },
+      () => mgmt().listManagedRoles(tenantA, ownerActor),
+    );
+    const support = listed.find((role) => role.key === 'support')!;
+    // One snapshot: the old set with the OLD version, never the old set with the new one.
+    expect(support.version).toBe(before.version);
+    expect(support.permissions).toContain('tickets.reply');
+  });
+
+  it('4173474761: one key reused with a different reason is refused, not replayed', async () => {
+    const base = {
+      key: 'keyed',
+      name: 'Keyed',
+      permissions: ['users.view'],
+      idempotencyKey: 'role-reason-key-1',
+    };
+    await mgmt().createRole(tenantA, ownerActor, { ...base, reason: 'first reason' });
+    expect(
+      await codeOf(mgmt().createRole(tenantA, ownerActor, { ...base, reason: 'another reason' })),
+    ).toBe('platform.idempotency_payload_mismatch');
+    const support = (await roleOf('support'))!;
+    const edit = {
+      name: 'Support desk',
+      permissions: support.permissions,
+      expectedVersion: support.version,
+      idempotencyKey: 'role-reason-key-2',
+    };
+    await mgmt().updateRole(tenantA, ownerActor, 'support', { ...edit, reason: 'one' });
+    expect(
+      await codeOf(mgmt().updateRole(tenantA, ownerActor, 'support', { ...edit, reason: 'two' })),
+    ).toBe('platform.idempotency_payload_mismatch');
+  });
+
+  it('4173474758: an update answers with ITS result, read inside its own lock', async () => {
+    const support = (await roleOf('support'))!;
+    // Anything that reads the role AFTER the lock is released lets a racer in first:
+    // simulate that racer at the moment such a read would happen.
+    const result = await patched(
+      'listForManagement',
+      (original) =>
+        async (...args: unknown[]) => {
+          if (args[1] === undefined) await racingRename('support', 'Racer');
+          return original(...args);
+        },
+      () =>
+        mgmt().updateRole(tenantA, ownerActor, 'support', {
+          name: 'Ours',
+          permissions: support.permissions,
+          expectedVersion: support.version,
+          reason: 'rename',
+        }),
+    );
+    expect(result.name).toBe('Ours');
+    expect(result.version).toBe(support.version + 1);
+  });
+
+  it('4173474756: a no-op update records its replay, so a retry after another edit is answered', async () => {
+    const support = (await roleOf('support'))!;
+    const noop = {
+      name: support.name,
+      permissions: support.permissions,
+      expectedVersion: support.version,
+      reason: 'nothing to change',
+      idempotencyKey: 'role-noop-key-1',
+    };
+    const first = await mgmt().updateRole(tenantA, ownerActor, 'support', noop);
+    expect(first.version).toBe(support.version);
+    // Somebody else edits the role; then the lost-response retry arrives.
+    await mgmt().updateRole(tenantA, ownerActor, 'support', {
+      name: 'Changed by someone else',
+      permissions: support.permissions,
+      expectedVersion: support.version,
+      reason: 'other',
+    });
+    const retry = await mgmt().updateRole(tenantA, ownerActor, 'support', noop);
+    expect(retry).toEqual(first);
+  });
+
+  it('4173474764: the effective preview describes ONE state, the resolver included', async () => {
+    const helper = await createAdmin(ctx.container, tenantA, {
+      username: 'helper',
+      roleKeys: ['support'],
+    });
+    const admins = ctx.container.admins as unknown as Record<string, (...a: unknown[]) => unknown>;
+    const original = admins['roleKeysFor']!.bind(admins);
+    let raced = false;
+    admins['roleKeysFor'] = async (...args: unknown[]) => {
+      const result = await original(...args);
+      if (!raced) {
+        raced = true;
+        // The role is taken away between the preview's first read and the rest.
+        await ctx.container.database.db.execute(
+          sql`DELETE FROM admin_roles WHERE admin_id = ${helper.id}`,
+        );
+      }
+      return result;
+    };
+    let preview;
+    try {
+      preview = await mgmt().effectivePermissions(tenantA, ownerActor, helper.id);
+    } finally {
+      delete admins['roleKeysFor'];
+    }
+    // Whichever state it describes, it describes it whole: support in the roles AND its
+    // permissions in both the role set and the effective set.
+    expect(preview.roles.map((role) => role.key)).toEqual(['support']);
+    expect(preview.rolePermissions).toContain('tickets.reply');
+    expect(preview.effective).toContain('tickets.reply');
   });
 });
