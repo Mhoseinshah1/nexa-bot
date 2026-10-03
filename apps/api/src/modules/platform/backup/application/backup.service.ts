@@ -4,21 +4,25 @@ import {
   BACKUP_TELEGRAM_DOCUMENT_MAX_BYTES,
   NexaError,
   PLATFORM_ERROR_CODES,
+  type BackupDeliveryDestination,
   type BackupDeliveryState,
   type BackupManifest,
   type BackupStage,
   type BackupTrigger,
 } from '@nexa/contracts';
 import type { Clock, IdGenerator, OperationalEventRecorder, ScopeContext } from '@nexa/contracts';
-import type {
-  BackupArchiver,
-  BackupDelivery,
-  BackupRunRepository,
-  BackupRunRow,
-  BackupWorkspace,
-  BackupWorkspaceFactory,
-  DatabaseTools,
+import {
+  isBackupDeliveryRouter,
+  type BackupArchiver,
+  type BackupDelivery,
+  type BackupDeliveryResolution,
+  type BackupRunRepository,
+  type BackupRunRow,
+  type BackupWorkspace,
+  type BackupWorkspaceFactory,
+  type DatabaseTools,
 } from './ports.js';
+import { backupCaption, backupRetainedNotice } from './backup-caption.js';
 
 /**
  * The backup pipeline.
@@ -118,7 +122,23 @@ export type BackupOutcome =
   | { readonly kind: 'COMPLETED'; readonly run: BackupRunRow };
 
 export class BackupService {
+  /**
+   * When the lease of the run THIS process is executing was last refreshed, or null when
+   * it is executing none. The scheduler's health reads it (Codex review of PR #142,
+   * finding 5): the lease heartbeat is the installation's own definition of "this run is
+   * alive" — a run whose heartbeat stops is reclaimed as abandoned after
+   * `BACKUP_LEASE_STALE_AFTER_MS` — so health and reclamation give one answer, through
+   * every stage, the unbounded checksum/encrypt/decrypt streaming included.
+   */
+  private leaseRefreshedAt: number | null = null;
+  /** Which run `leaseRefreshedAt` is about, so a late heartbeat of a finished run is ignored. */
+  private leaseRunId: string | null = null;
+
   constructor(private readonly deps: BackupServiceDeps) {}
+
+  leaseHeartbeatAt(): number | null {
+    return this.leaseRefreshedAt;
+  }
 
   /**
    * Runs one backup, end to end, or reports truthfully that one is running.
@@ -179,6 +199,8 @@ export class BackupService {
       return { kind: 'BUSY', holder: claim.holder };
     }
 
+    this.leaseRunId = id;
+    this.leaseRefreshedAt = startedAt.getTime();
     const heartbeat = this.startHeartbeat(id);
 
     let stage: BackupStage = 'DUMP';
@@ -440,6 +462,8 @@ export class BackupService {
       });
     } finally {
       heartbeat.stop();
+      this.leaseRunId = null;
+      this.leaseRefreshedAt = null;
     }
 
     const run = await this.deps.runs.byId(id);
@@ -541,57 +565,94 @@ export class BackupService {
     detail: string | null;
     attemptedAt: Date | null;
   }> {
-    if (!this.deps.delivery.configured) {
+    /*
+     * WHERE, decided now, once, for this run (spec §13.1): the operations group's backups
+     * topic, else the environment's dedicated chat, else nowhere. See
+     * `RoutedBackupDelivery` for the precedence.
+     *
+     * Nothing in delivery may fail the RUN. The archive is verified and on disk by now, so
+     * a destination that cannot be resolved — a database hiccup reading the group, a topic
+     * Telegram will not create — is recorded as a delivery that did not happen, never as a
+     * backup that did not happen. Resolution sends nothing, so a throw here is definitive.
+     */
+    let resolution: BackupDeliveryResolution;
+    try {
+      resolution = await this.resolveDelivery();
+    } catch (error) {
+      return {
+        state: 'FAILED_DEFINITIVE',
+        detail: `The backup destination could not be resolved: ${messageOf(error)}`,
+        attemptedAt: this.deps.clock.now(),
+      };
+    }
+    if (resolution.kind === 'NONE') {
       return {
         state: 'NOT_ATTEMPTED',
         detail: 'No backup destination is configured.',
         attemptedAt: null,
       };
     }
-
     const attemptedAt = this.deps.clock.now();
-    const caption = this.caption(input);
-
-    if (input.archiveBytes > BACKUP_TELEGRAM_DOCUMENT_MAX_BYTES) {
-      const attempt = await this.deps.delivery.sendMessage(
-        `${caption}\n\nRETAINED: ${this.deps.retainedArchiveHint}\n` +
-          'The archive is larger than Telegram accepts from a bot, so it stays on the server.',
-      );
-      return { state: attempt.state, detail: attempt.detail, attemptedAt };
+    if (resolution.kind === 'UNAVAILABLE') {
+      return { state: 'FAILED_DEFINITIVE', detail: resolution.detail, attemptedAt };
     }
 
-    const attempt = await this.deps.delivery.sendDocument({
-      archivePath: input.archivePath,
-      filename: `nexa-backup-${input.id}.nxb`,
-      caption,
-    });
-    return { state: attempt.state, detail: attempt.detail, attemptedAt };
+    const { channel } = resolution;
+    const caption = backupCaption(input);
+    try {
+      if (input.archiveBytes > BACKUP_TELEGRAM_DOCUMENT_MAX_BYTES) {
+        // Too large for a bot to send. The group is TOLD — a notice, never a pretend
+        // document — and the run records that notice's own outcome. The archive is the
+        // operator's to fetch from the server.
+        const attempt = await channel.sendMessage(
+          backupRetainedNotice({
+            caption,
+            retainedHint: this.deps.retainedArchiveHint,
+            archiveBytes: input.archiveBytes,
+          }),
+        );
+        return {
+          state: attempt.state,
+          detail:
+            attempt.state === 'SUCCEEDED'
+              ? 'The archive is larger than Telegram accepts from a bot and was retained on the ' +
+                'server; a notice was delivered instead of the document.'
+              : attempt.detail,
+          attemptedAt,
+        };
+      }
+
+      const attempt = await channel.sendDocument({
+        archivePath: input.archivePath,
+        filename: `nexa-backup-${input.id}.nxb`,
+        caption,
+      });
+      return { state: attempt.state, detail: attempt.detail, attemptedAt };
+    } catch (error) {
+      // A channel is built not to throw. If one did anyway, bytes may have left: that is
+      // precisely an outcome nobody observed, and it is recorded as one — never resent.
+      return {
+        state: 'OUTCOME_UNKNOWN',
+        detail: `The delivery did not complete: ${messageOf(error)}`,
+        attemptedAt,
+      };
+    }
   }
 
-  /**
-   * What the group is told about a backup.
-   *
-   * Identity, time, size, the checksum that makes the artifact verifiable, and
-   * the verification result. No token, no connection string, no database URL,
-   * no key id — the key id names a KEK an operator holds and would be a hint
-   * nobody needs in a chat, and the checksum is a digest, which is not one.
-   */
-  private caption(input: {
-    id: string;
-    manifest: BackupManifest;
-    archiveBytes: number;
-    tableCount: number;
-  }): string {
-    return [
-      'NEXA BACKUP',
-      `Backup: ${input.id}`,
-      `Taken: ${input.manifest.createdAt}`,
-      `Database: ${input.manifest.databaseName} (PostgreSQL ${input.manifest.postgresVersion})`,
-      `Dump: ${input.manifest.dumpBytes} bytes`,
-      `Archive: ${input.archiveBytes} bytes`,
-      `SHA-256: ${input.manifest.checksum}`,
-      `Verified: restored into an empty database, ${input.tableCount} tables`,
-    ].join('\n');
+  /** Where the next archive would go, for the status card. A read; no Telegram call. */
+  async deliveryDestination(): Promise<BackupDeliveryDestination> {
+    const { delivery } = this.deps;
+    if (isBackupDeliveryRouter(delivery)) return delivery.describe();
+    return delivery.configured ? 'DEDICATED_CHAT' : 'NONE';
+  }
+
+  /** A fixed channel is a degenerate router: itself, or nothing. */
+  private async resolveDelivery(): Promise<BackupDeliveryResolution> {
+    const { delivery } = this.deps;
+    if (isBackupDeliveryRouter(delivery)) return delivery.resolve();
+    return delivery.configured
+      ? { kind: 'READY', destination: 'DEDICATED_CHAT', channel: delivery }
+      : { kind: 'NONE' };
   }
 
   /**
@@ -643,6 +704,9 @@ export class BackupService {
     const timer = setInterval(() => {
       void this.deps.runs
         .heartbeat({ id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
+        .then(() => {
+          if (this.leaseRunId === id) this.leaseRefreshedAt = this.deps.clock.now().getTime();
+        })
         .catch((error: unknown) => {
           // Not fatal to the run: the work is still progressing, and a lost
           // heartbeat costs the lock, not the dump. Loud, because a run whose
@@ -658,4 +722,9 @@ export class BackupService {
       stop: () => clearInterval(timer),
     };
   }
+}
+
+/** An error's message and nothing else: never a stack, never a cause chain. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

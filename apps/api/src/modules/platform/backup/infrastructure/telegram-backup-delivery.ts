@@ -1,6 +1,7 @@
 import { openAsBlob } from 'node:fs';
-import type { BackupDelivery, DeliveryAttempt } from '../application/ports.js';
+import type { BackupDeliveryChannel, DeliveryAttempt } from '../application/ports.js';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
+import { isMissingForumTopicError } from '../../../../infrastructure/telegram/send-message.js';
 
 /**
  * Sends a backup to Telegram, and is honest about what it learns.
@@ -26,10 +27,16 @@ export interface TelegramBackupDeliveryOptions {
   readonly token: string;
   /** The destination chat. Empty means delivery is not configured. */
   readonly chatId: string;
+  /**
+   * The forum topic inside that chat, or absent for the chat itself. Set for the
+   * operations log group's «💾 بکاپ‌ها» topic (spec §13.1); never for the environment's
+   * dedicated chat, which has always been posted to directly.
+   */
+  readonly messageThreadId?: number | null;
   readonly timeoutMs: number;
 }
 
-export class TelegramBackupDelivery implements BackupDelivery {
+export class TelegramBackupDelivery implements BackupDeliveryChannel {
   constructor(private readonly options: TelegramBackupDeliveryOptions) {}
 
   get configured(): boolean {
@@ -55,6 +62,7 @@ export class TelegramBackupDelivery implements BackupDelivery {
       const blob = await openAsBlob(input.archivePath);
       body = new FormData();
       body.set('chat_id', this.options.chatId);
+      this.setThread(body);
       body.set('caption', input.caption);
       body.set('document', blob, input.filename);
     } catch (error) {
@@ -72,9 +80,15 @@ export class TelegramBackupDelivery implements BackupDelivery {
     assertOutsideTransaction('A backup delivery message');
     const body = new FormData();
     body.set('chat_id', this.options.chatId);
+    this.setThread(body);
     body.set('text', text);
     body.set('link_preview_options', JSON.stringify({ is_disabled: true }));
     return this.post('sendMessage', body);
+  }
+
+  private setThread(body: FormData): void {
+    const thread = this.options.messageThreadId;
+    if (thread !== undefined && thread !== null) body.set('message_thread_id', String(thread));
   }
 
   /**
@@ -146,12 +160,18 @@ export class TelegramBackupDelivery implements BackupDelivery {
 
       // A 4xx that parsed: a bad chat id, a bot that is not a member, a file
       // too large. Telegram considered the request and refused it.
-      return {
-        state: 'FAILED_DEFINITIVE',
-        detail: `HTTP ${response.status} (${payload.error_code ?? 'no code'}): ${
-          payload.description ?? 'no description'
-        }`,
-      };
+      const detail = `HTTP ${response.status} (${payload.error_code ?? 'no code'}): ${
+        payload.description ?? 'no description'
+      }`;
+      // A deleted forum topic is a refusal like any other — nothing was posted — and the
+      // one the router can act on: recreate the topic and send once more.
+      const topicMissing =
+        this.options.messageThreadId !== undefined &&
+        this.options.messageThreadId !== null &&
+        isMissingForumTopicError(payload.description ?? '');
+      return topicMissing
+        ? { state: 'FAILED_DEFINITIVE', detail, topicMissing: true }
+        : { state: 'FAILED_DEFINITIVE', detail };
     } catch (error) {
       // A timeout or a transport failure, AFTER the body began uploading. The
       // upload may well have completed on Telegram's side while our socket

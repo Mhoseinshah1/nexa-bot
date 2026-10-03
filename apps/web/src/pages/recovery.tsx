@@ -43,6 +43,7 @@ import {
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { BackupScheduleCard } from './backup-schedule';
 
 /**
  * Backup and disaster recovery.
@@ -144,6 +145,15 @@ export function RecoveryPage({
             error={runNow.error}
             onRun={() => runNow.mutate()}
           />
+        </StateSwitch>
+      </Card>
+
+      {/* Spec 13.2: the automatic schedule, where its backups are. */}
+      <Card title={t('web.backup_schedule_title')} hint={t('web.backup_schedule_hint')}>
+        <StateSwitch query={status} denied={!mayView}>
+          {status.data !== undefined && (
+            <BackupScheduleCard status={status.data} permissions={permissions} />
+          )}
         </StateSwitch>
       </Card>
 

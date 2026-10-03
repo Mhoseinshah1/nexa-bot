@@ -424,8 +424,14 @@ status_capabilities_untraced() {
   # service-specific recreation those three can hold different destinations, so
   # naming only the worker would point a diagnosis away from the process that is
   # actually delivering. BACKUP_SCHEDULE_ENABLED above is genuinely the worker's —
-  # it gates the scheduler in `main.worker.ts` and nothing else.
+  # it is the DEFAULT its scheduler reads when the Web Admin has stored no schedule
+  # (spec 13.2), and nothing else reads it.
+  #
+  # These two variables are the FALLBACK destination since spec 13.1: a connected
+  # operations log group receives the archive in its backups topic, and this section
+  # reads the configuration, not the database, so it cannot see a group.
   printf '  backup delivery    %-8s %s\n' "$destination" 'worker, api, recovery'
+  printf '                     (the fallback chat; a connected operations group is used first)\n'
 
   if [ "$webhook" = short-secret ]; then
     printf '\n  TELEGRAM_WEBHOOK_ENABLED is on but TELEGRAM_WEBHOOK_SECRET is shorter than the\n'
@@ -515,9 +521,11 @@ status_capabilities_untraced() {
   printf '  paragraphs below do inspect the running API, and say so where they do.\n'
 
   if [ "$scheduled" = off ]; then
-    printf '\n  This configuration takes no AUTOMATIC backup. `botctl backup` still works, and\n'
-    printf '  a backup an operator remembers to run is not a backup policy. To schedule\n'
-    printf '  them, set BACKUP_SCHEDULE_ENABLED=true in %s and run `botctl restart`.\n' "$file"
+    printf '\n  This configuration takes no AUTOMATIC backup by default. `botctl backup` still\n'
+    printf '  works, and a backup an operator remembers to run is not a backup policy. To\n'
+    printf '  schedule them, switch automatic backups on in the Web Admin (Backup & recovery),\n'
+    printf '  which overrides this default with no restart, or set BACKUP_SCHEDULE_ENABLED=true\n'
+    printf '  in %s and run `botctl restart`. This section cannot see the Web Admin value.\n' "$file"
     if [ "$destination" = 'not configured' ]; then
       printf '  With no delivery destination a run still dumps, verifies and RETAINS locally;\n'
       printf '  its delivery outcome is recorded as NOT_ATTEMPTED.\n'

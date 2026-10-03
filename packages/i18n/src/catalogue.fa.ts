@@ -37,8 +37,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'ops.notification.operational_event':
     '{severity} — <code>{code}</code>\n{message}\n\n{details}\n🏢 مستأجر: <code>{tenantId}</code>\n🤖 ربات: <code>{botInstanceId}</code>\n🔗 شناسه پیگیری: <code>{correlationId}</code>\n🔁 تعداد رخداد: {occurrences}\n🕒 نخستین بار: {firstSeenAt}\n🕒 این بار: {lastSeenAt}',
   // WP-A4 — the operations log group Nexa manages.
-  'ops.group.topic_name.system': '⚙️ سیستم و خطاها',
+  'ops.group.topic_name.system': '⚙️ سیستم',
   'ops.group.topic_name.payments': '💳 پرداخت‌ها',
+  'ops.group.topic_name.errors': '🚨 خطاها',
+  'ops.group.topic_name.services': '🧩 سفارش‌ها و سرویس‌ها',
+  'ops.group.topic_name.panels': '🖥 پنل‌ها',
+  'ops.group.topic_name.bot': '🤖 ربات و پیام‌رسانی',
+  'ops.group.topic_name.security': '🛡 امنیت و دسترسی',
+  'ops.group.topic_name.backups': '💾 بکاپ‌ها',
   'ops.group.connected':
     '✅ این گروه به‌عنوان «گروه گزارش‌های مدیریتی» Nexa متصل شد.\nNexa اکنون دسترسی‌های ربات را بررسی می‌کند و تاپیک‌های خود را می‌سازد. نتیجه را در پنل مدیریت، بخش «گروه گزارش‌های مدیریتی» ببینید.',
   'ops.group.connect_refused':
