@@ -736,17 +736,30 @@ export class ProvisionerService {
      * The SAME bucket the monitor spends from, never a second one: a second bucket
      * would raise a tenant's total outbound rate, which is the bound's entire purpose.
      *
-     * The reserve is ZERO, and that is the only difference from the monitor. The
-     * monitor reserves capacity so a background sweep cannot lock an operator out of
-     * their own panel; provisioning is not background in that sense — a customer has
-     * paid and is waiting — so it spends at an operator's priority, and the monitor's
-     * reserve is what stops a sweep from starving it.
+     * Scheduled SYNC_USAGE is the one background operation in this lane. P1 may queue
+     * tens of thousands of those after legacy adoption, so it must not spend the final
+     * token a paid create/renew or an interactive customer refresh can use. It therefore
+     * leaves a one-token floor in the existing bucket. Every other operation — including
+     * customer-requested SYNC_USAGE, identified by requestedByCustomerId — keeps reserve
+     * zero and can spend down to empty.
+     *
+     * At a tenant capacity of one this intentionally means scheduled usage sync waits
+     * forever until the operator raises the capacity. That is the safe direction:
+     * housekeeping may lag; paid and interactive work must remain possible.
      *
      * A refusal here is NOT a failure: nothing was contacted. The operation goes back
      * to PLANNED with the bound's own retry-after, so the next tick tries again.
      */
+    const backgroundUsageSync =
+      operation.type === 'SYNC_USAGE' && operation.requestedByCustomerId === null;
     const budget = await this.deps.uow.run(scope, async (tx) =>
-      this.deps.panels.takeProbeBudget(scope, this.deps.probeBudget, now, tx, 0),
+      this.deps.panels.takeProbeBudget(
+        scope,
+        this.deps.probeBudget,
+        now,
+        tx,
+        backgroundUsageSync ? 1 : 0,
+      ),
     );
     if (!budget.permitted) {
       await this.holdOff(
