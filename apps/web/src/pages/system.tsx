@@ -16,6 +16,7 @@ import {
   fetchReadiness,
   fetchRoles,
   resetAdminPassword,
+  resetAdminSecondFactor,
   revokeAdminSessions,
   setAdminRoles,
   setAdminStatus,
@@ -812,6 +813,7 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
   const rolesKey = useSubmissionKey();
   const passwordKey = useSubmissionKey();
   const revokeKey = useSubmissionKey();
+  const secondFactorKey = useSubmissionKey();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
   /*
@@ -938,9 +940,41 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
     },
   });
 
+  /*
+   * Phase D2: removing ANOTHER administrator's two-step sign-in — their lost phone. The
+   * server applies the password reset's bounds (not oneself, no more privilege than you
+   * hold, an owner needs more) and ends every session the target holds.
+   */
+  const secondFactor = useMutation({
+    mutationFn: () => {
+      secondFactorKey.current({ id: row.id, reason: reason.trim() });
+      return resetAdminSecondFactor({ id: row.id, reason: reason.trim() });
+    },
+    onSuccess: (result) => {
+      secondFactorKey.settle();
+      replaceRow(result.admin);
+      notify({
+        tone: 'ok',
+        message: (result.hadSecondFactor
+          ? t('web.admin_second_factor_reset_done')
+          : t('web.admin_second_factor_reset_none')
+        ).replace('{count}', String(result.sessionsRevoked)),
+      });
+      void queries.invalidateQueries({ queryKey: ['admin-sessions', row.id] });
+    },
+    onError: (error: unknown) => {
+      secondFactorKey.settleOn(error);
+      fail(error);
+    },
+  });
+
   const live = sessions.data?.sessions ?? [];
   const busy =
-    status.isPending || rolesMutation.isPending || password.isPending || revoke.isPending;
+    status.isPending ||
+    rolesMutation.isPending ||
+    password.isPending ||
+    revoke.isPending ||
+    secondFactor.isPending;
   const close = () => {
     setOpen(false);
     setNewPassword('');
@@ -1089,6 +1123,20 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
                   onClick={() => password.mutate()}
                 >
                   {t('web.admin_password_reset')}
+                </button>
+              </div>
+
+              <Banner tone="warn" title={t('web.admin_second_factor_reset_title')}>
+                {t('web.admin_second_factor_reset_hint')}
+              </Banner>
+              <div className="toolbar">
+                <button
+                  type="button"
+                  className="btn danger sm"
+                  disabled={busy || !reasonGiven}
+                  onClick={() => secondFactor.mutate()}
+                >
+                  {t('web.admin_second_factor_reset')}
                 </button>
               </div>
             </>
