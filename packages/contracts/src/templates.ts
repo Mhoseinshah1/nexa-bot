@@ -8239,7 +8239,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.nowpayments_pay_button',
     description:
-      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments.open`.',
+      'NOWPayments: the URL button that opens the hosted invoice, where the customer chooses the coin. The owner’s label: «💳 پرداخت با ارز دیجیتال». Isolated from the generic pay button so the central inline-button registry can take it over as `payment.nowpayments_open`.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

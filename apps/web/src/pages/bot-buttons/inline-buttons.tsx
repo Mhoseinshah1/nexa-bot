@@ -98,7 +98,7 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'payment.cancel': 'web.ib_button_payment_cancel',
   'payment.cancel_confirm': 'web.ib_button_payment_cancel_confirm',
   'payment.gateway_pay': 'web.ib_button_payment_gateway_pay',
-  'payment.nowpayments.open': 'web.ib_button_payment_nowpayments_open',
+  'payment.nowpayments_open': 'web.ib_button_payment_nowpayments_open',
   'payment.gateway_check': 'web.ib_button_payment_gateway_check',
   'payment.gateway_card_check': 'web.ib_button_payment_gateway_card_check',
   'payment.gateway_receipt': 'web.ib_button_payment_gateway_receipt',

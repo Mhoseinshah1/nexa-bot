@@ -233,7 +233,7 @@ The route's default name, used in the payment-method selector when the operator 
 display title, is «💳 پرداخت با ارز دیجیتال» (`bot.payment.route_name_nowpayments`). The ready
 invoice's URL button carries the same label under its OWN key,
 `bot.payment.nowpayments_pay_button`, isolated in `PROVIDER_PAY_BUTTON_KEYS` so the central
-inline-button registry (Agent A/C) can route it as **`payment.nowpayments.open`** without
+inline-button registry (Agent A/C) can route it as **`payment.nowpayments_open`** without
 touching any other route. In review: `bot.payment.nowpayments_in_review` (no pay link); held or
 lapsed: `bot.payment.nowpayments_review_unresolved`. Everything else (preparing, check,
 confirmed, closed, edit-in-place by the worker) is the existing screen.

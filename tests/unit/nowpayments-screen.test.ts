@@ -8,7 +8,7 @@ import type { GatewayInvoiceRecord } from '../../apps/api/src/modules/commerce/p
  * The NOWPayments customer screen (`docs/nowpayments-gateway-audit.md` §5.8), through the one
  * pure function the turn and the worker both render: the hosted invoice's URL button carries
  * the owner's «💳 پرداخت با ارز دیجیتال» under its OWN key (isolated for the inline-button
- * registry as `payment.nowpayments.open`), and the review and needs-review screens use
+ * registry as `payment.nowpayments_open`), and the review and needs-review screens use
  * NOWPayments' own sentences — never TonPays' receipt wording, and never a payment link.
  */
 

@@ -15960,10 +15960,10 @@ const PROVIDER_REVIEW_SCREEN_KEYS: Partial<
 /**
  * The label of the URL button that opens a provider's invoice page. NOWPayments carries the
  * owner's «💳 پرداخت با ارز دیجیتال» under its OWN key, isolated so the central inline-button
- * registry can take it over as `payment.nowpayments.open` without touching any other route.
+ * registry can take it over as `payment.nowpayments_open` without touching any other route.
  */
 const PROVIDER_PAY_BUTTON_KEYS: Partial<Record<PaymentGatewayProvider, InlineButtonKey>> = {
-  NOWPAYMENTS: 'payment.nowpayments.open',
+  NOWPAYMENTS: 'payment.nowpayments_open',
 };
 
 export function gatewayAttemptScreen(
