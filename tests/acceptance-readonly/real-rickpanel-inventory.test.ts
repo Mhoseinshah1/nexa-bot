@@ -46,6 +46,7 @@ function optionalInt(name: string): number | undefined {
 describe('C1: real RickPanel read-only inventory', () => {
   it('walks, re-walks, looks up, and writes nothing', async () => {
     const baseUrl = required(ENV.url);
+    const pageSize = optionalInt(ENV.pageSize);
     const report = await runInventoryAcceptance({
       target: {
         baseUrl,
@@ -61,7 +62,7 @@ describe('C1: real RickPanel read-only inventory', () => {
         maxResponseBytes: 2 * 1024 * 1024,
       }).forBase(baseUrl),
       knownUsername: required(ENV.known),
-      ...(optionalInt(ENV.pageSize) === undefined ? {} : { pageSize: optionalInt(ENV.pageSize) }),
+      ...(pageSize === undefined ? {} : { pageSize }),
       driftTolerance: optionalInt(ENV.drift) ?? 0,
     });
 
