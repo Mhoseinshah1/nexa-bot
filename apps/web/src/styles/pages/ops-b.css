@@ -924,3 +924,77 @@ form.set-row > * + * {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --- Phase D1 audit log -------------------------------------------------------- */
+
+/* The filter row: compact fields that wrap at 390px, the two buttons kept together. */
+.audit-filters {
+  align-items: flex-end;
+}
+.audit-filters .field {
+  min-width: 140px;
+  flex: 1 1 140px;
+}
+.audit-filter-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.audit-code {
+  font-size: var(--fs-ui);
+}
+.audit-badges,
+.audit-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+/* A refusal or a failure stays in the log, marked rather than hidden. */
+.audit-row-refused td:first-child {
+  box-shadow: inset -3px 0 0 var(--warn);
+}
+/* The recorded values: long JSON wraps inside its cell instead of widening the page. */
+.audit-diff td {
+  max-width: 260px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.audit-diff-changed td {
+  font-weight: 600;
+}
+
+/* --- Program §6: terms and rules ----------------------------------------------- */
+
+/* The operator's own text, as written: line breaks kept, long words wrapped at 390px. */
+.terms-body {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+.terms-version h3 {
+  margin: 4px 0 8px;
+  font-size: var(--fs-body);
+}
+/* The customer's view: one chat bubble, and the accept button under it. */
+.tg-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-3);
+  max-width: 100%;
+}
+.tg-preview-button {
+  display: block;
+  padding: 8px;
+  border-radius: var(--radius-ctl);
+  background: var(--accent-soft);
+  color: var(--fg);
+  text-align: center;
+  font-weight: 600;
+}

@@ -6,7 +6,10 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { customers } from '../../../../infrastructure/persistence/schema.js';
+import {
+  customerTagAssignments,
+  customers,
+} from '../../../../infrastructure/persistence/schema.js';
 import { lowerPrefix } from '../../../../infrastructure/persistence/list-search.js';
 import type {
   CustomerCursor,
@@ -241,6 +244,7 @@ export class DrizzleCustomerRepository implements CustomerRepository {
       conditions.push(eq(customers.status, search.status));
     }
     if (search.text !== undefined) conditions.push(customerTextCondition(search.text));
+    if (search.tagId !== undefined) conditions.push(customerTagCondition(tenantId, search.tagId));
     if (cursor !== null) {
       conditions.push(
         sql`(${customers.createdAt}, ${customers.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
@@ -410,6 +414,19 @@ function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
  * parameter, and a parameter is not the indexed expression.
  */
 const fullName = sql`coalesce(${customers.firstName}, '') || ' ' || coalesce(${customers.lastName}, '')`;
+
+/**
+ * Program §8: the tag filter, an EXISTS over `customer_tag_assignments`.
+ *
+ * Correlated on `(tenant_id, customer_id)` and naming the tag, which is exactly the primary
+ * key's prefix order, so each candidate row is one index probe; the planner may instead drive
+ * from `customer_tag_assignments_tag_idx` `(tenant_id, tag_id, customer_id)` as a semi-join.
+ * Both are index-backed and tenant-led — `customers-plan.test.ts` reads the plan. The tenant
+ * is named on the assignment too, so a tag id from another tenant matches nothing.
+ */
+function customerTagCondition(tenantId: string, tagId: string): SQL {
+  return sql`EXISTS (SELECT 1 FROM ${customerTagAssignments} WHERE ${customerTagAssignments.tenantId} = ${tenantId} AND ${customerTagAssignments.customerId} = ${customers.id} AND ${customerTagAssignments.tagId} = ${tagId}::uuid)`;
+}
 
 /**
  * The customer list's one search box (spec §10).

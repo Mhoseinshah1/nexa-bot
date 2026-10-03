@@ -315,7 +315,36 @@ function toOverview(overview: CustomerOverview): CustomerOverviewResponse {
         ? null
         : { ...locationOverride.limits, setAt: locationOverride.setAt.toISOString() },
     marketingOptOutAt: customer.marketingOptOutAt?.toISOString() ?? null,
-    terms: { available: false },
+    terms: overview.terms === null ? { available: false } : toTermsStanding(overview.terms),
+  };
+}
+
+/** Program §6: the customer's terms standing, exactly as the Telegram gate decides it. */
+function toTermsStanding(
+  standing: NonNullable<CustomerOverview['terms']>,
+): CustomerOverviewResponse['terms'] {
+  return {
+    available: true,
+    enforced: standing.enforced,
+    current:
+      standing.current === null
+        ? null
+        : {
+            versionId: standing.current.id,
+            versionNumber: standing.current.versionNumber,
+            title: standing.current.title,
+            publishedAt: standing.current.publishedAt.toISOString(),
+          },
+    lastAccepted:
+      standing.lastAccepted === null
+        ? null
+        : {
+            versionId: standing.lastAccepted.termsVersionId,
+            versionNumber: standing.lastAccepted.versionNumber,
+            acceptedAt: standing.lastAccepted.acceptedAt.toISOString(),
+          },
+    acceptedCurrent: standing.acceptedCurrent,
+    reacceptanceRequired: standing.reacceptanceRequired,
   };
 }
 

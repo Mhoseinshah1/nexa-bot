@@ -8,7 +8,7 @@
 -- role_permissions                  backfills `panels.drain` into the existing owner
 --                                   and technical system roles, below.
 --
--- Numbered 0165 on its branch; renumber at merge time if another lands first. The
+-- Numbered 0165 on its branch, renumbered 0172 at merge. The
 -- hand-written backfill is the separated tail after the generated DDL.
 ALTER TABLE "panels" ADD COLUMN "drained_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "panels" ADD COLUMN "drain_reason" text;--> statement-breakpoint

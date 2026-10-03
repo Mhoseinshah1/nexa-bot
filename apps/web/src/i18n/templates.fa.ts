@@ -58,6 +58,7 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
     ],
   },
   { id: 'channels', label: 'عضویت اجباری در کانال', prefixes: ['bot.channels.'] },
+  { id: 'terms', label: 'قوانین و مقررات', prefixes: ['bot.terms.'] },
   { id: 'catalog', label: 'فروشگاه، سفارش و پیش‌فاکتور', prefixes: ['bot.catalog.', 'bot.order.'] },
   { id: 'username', label: 'انتخاب یوزرنیم سرویس', prefixes: ['bot.username.'] },
   { id: 'discount', label: 'کد تخفیف', prefixes: ['bot.discount.'] },
@@ -127,6 +128,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'referral', label: 'معرفی دوستان و هدیهٔ عضویت', prefixes: ['bot.referral.'] },
   { id: 'support', label: 'پشتیبانی و پرسش‌های متداول', prefixes: ['bot.faq.', 'bot.support.'] },
   { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
+  // Phase A2: a direct message an operator sends from the customer's page.
+  { id: 'direct_message', label: 'پیام مستقیم به مشتری', prefixes: ['bot.direct_message.'] },
   // Round N: the wrapper every broadcast is sent in.
   {
     id: 'broadcast',
@@ -255,6 +258,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   automatic: 'نشانهٔ روشن بودن انتخاب خودکار',
   availableAt: 'زمان مجاز بعدی',
   balance: 'موجودی کیف پول',
+  body: 'متن',
   botInstanceId: 'شناسهٔ ربات',
   bytes: 'مقدار حجم',
   cap: 'سقف ظرفیت پنل',
@@ -471,6 +475,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
 > = {
   'ops.notification.operational_event': { code: 'کد رخداد' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
+  'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
+  'bot.terms.updated': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.order.summary': { username: 'نام کاربری سرویس' },
   'bot.order.summary_discounted': { username: 'نام کاربری سرویس' },
   'bot.order.summary_cashback': { username: 'نام کاربری سرویس' },
@@ -543,6 +549,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.message_prompt': { category: 'موضوع تیکت' },
   'bot.ticket.support_replied': { text: 'متن پاسخ پشتیبانی', category: 'موضوع تیکت' },
   'bot.ticket.support_attachment': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
+  'bot.direct_message.text': { text: 'متن پیام اپراتور' },
+  'bot.direct_message.media': { caption: 'توضیح عکس یا فایل' },
   'ops.support.ticket_opened': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'ops.support.customer_replied': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   // Round N: the broadcast wrapper and the two mass-action notices.
@@ -717,6 +725,19 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'دکمهٔ بررسی عضویت',
     'دکمه‌ای که مشتری پس از عضویت در کانال‌ها می‌زند تا عضویتش بررسی شود.',
   ],
+  'bot.terms.required': [
+    'درخواست پذیرش قوانین',
+    'وقتی پذیرش قوانین اجباری است و مشتری نسخهٔ فعلی را نپذیرفته، به جای پاسخ درخواستش نشان داده می‌شود؛ عنوان و متن قوانین و دکمهٔ پذیرش در آن می‌آید.',
+  ],
+  'bot.terms.updated': [
+    'قوانین به‌روز شده است',
+    'وقتی مشتری دکمهٔ پذیرش نسخهٔ قدیمی‌تری را می‌زند؛ چیزی ثبت نمی‌شود و نسخهٔ فعلی با دکمهٔ پذیرش خودش نشان داده می‌شود.',
+  ],
+  'bot.terms.accepted': [
+    'پذیرش قوانین ثبت شد',
+    'پاسخ دکمهٔ پذیرش قوانین؛ همراه با منوی اصلی، تا مشتری کارش را ادامه دهد.',
+  ],
+  'bot.terms.accept_button': ['دکمهٔ پذیرش قوانین', 'دکمه‌ای که زیر متن قوانین می‌آید.'],
   'bot.channels.join_private_button': [
     'دکمهٔ عضویت در کانال خصوصی',
     'دکمهٔ عضویت برای کانال اجباری بدون آیدی عمومی که با لینک دعوت باز می‌شود؛ با شمارهٔ کانال در فهرست.',
@@ -2280,6 +2301,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'زیرنویس عکس یا فایلی که پشتیبانی همراه پاسخ فرستاده است؛ جدا از متن پاسخ برای مشتری ارسال می‌شود.',
   ],
   'bot.ticket.view_button': ['دکمهٔ مشاهدهٔ تیکت', 'در اعلان پاسخ پشتیبانی، تیکت را باز می‌کند.'],
+  'bot.direct_message.text': [
+    'پیام مستقیم به مشتری (متن)',
+    'وقتی اپراتور از صفحهٔ مشتری پیامی می‌فرستد ارسال می‌شود؛ متن پیام هنگام ارسال از خود پیام خوانده می‌شود.',
+  ],
+  'bot.direct_message.media': [
+    'پیام مستقیم به مشتری (عکس یا فایل)',
+    'زیرنویس عکس یا فایلی که اپراتور از صفحهٔ مشتری فرستاده است؛ اگر توضیحی نداشته باشد آن خط حذف می‌شود.',
+  ],
   'bot.ticket.category_default_1': [
     'دستهٔ پیش‌فرض تیکت ۱',
     'دستهٔ نمونهٔ ۱ که نخستین بار در دسته‌های تیکت هر مجموعه کپی می‌شود.',

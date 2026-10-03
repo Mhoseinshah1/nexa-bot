@@ -140,4 +140,54 @@ describe('the customer query plans', () => {
     expect(plan, `the cursor did not bound the scan:\n${plan}`).toMatch(/Index Cond:.*ROW\(/s);
     expect(plan, 'the page was sorted rather than read in order').not.toContain('Sort Key:');
   }, 60_000);
+
+  /**
+   * Program §8: the tag filter is an EXISTS over `customer_tag_assignments`, and it must stay
+   * index-backed and tenant-led — never a walk of the assignment table, and never a walk of
+   * the tenant's customers testing each one.
+   *
+   * A RARE tag (a hundred customers of twenty thousand), on both tenants, because that is the
+   * shape that punishes a plan driving from the customer side.
+   */
+  it('serves the tag filter from the tenant-led assignment indexes', async () => {
+    const tagId = '01900000-0000-7000-8000-0000000c7a01';
+    await ctx.container.database.withClient(async (client) => {
+      await client.query(
+        `INSERT INTO customer_tags (id, tenant_id, label) VALUES ($1, $2, 'Rare')`,
+        [tagId, tenantA.tenantId],
+      );
+      await client.query(
+        `INSERT INTO customer_tag_assignments (tenant_id, customer_id, tag_id)
+           SELECT tenant_id, id, $2 FROM customers WHERE tenant_id = $1
+            ORDER BY created_at DESC LIMIT 100`,
+        [tenantA.tenantId, tagId],
+      );
+      // Noise under other tags, so the table is not trivially small.
+      await client.query(
+        `WITH tags AS (
+           INSERT INTO customer_tags (id, tenant_id, label)
+           SELECT gen_random_uuid(), t, 'Common ' || g
+             FROM unnest(ARRAY[$1::uuid, $2::uuid]) AS t, generate_series(1, 3) AS g
+           RETURNING id, tenant_id)
+         INSERT INTO customer_tag_assignments (tenant_id, customer_id, tag_id)
+         SELECT c.tenant_id, c.id, tags.id FROM customers c JOIN tags ON tags.tenant_id = c.tenant_id`,
+        [tenantA.tenantId, tenantB.tenantId],
+      );
+      await client.query('ANALYZE customer_tags');
+      await client.query('ANALYZE customer_tag_assignments');
+    });
+    const repository = new DrizzleCustomerRepository(ctx.container.database.db);
+    const plan = await planFor(() => {
+      const compiled = repository.listStatement(tenantA, { tagId }, PAGE, null).toSQL();
+      return { sql: compiled.sql, params: compiled.params };
+    });
+    expect(plan, `the assignment indexes are not in the plan:\n${plan}`).toMatch(
+      /customer_tag_assignments_(pkey|tag_idx)/,
+    );
+    expect(plan, `the assignments were walked:\n${plan}`).not.toContain(
+      'Seq Scan on customer_tag_assignments',
+    );
+    expect(plan, `the customers were walked:\n${plan}`).not.toContain('Seq Scan on customers');
+    expect(removedByFilter(plan), `too many rows discarded:\n${plan}`).toBeLessThan(500);
+  }, 60_000);
 });

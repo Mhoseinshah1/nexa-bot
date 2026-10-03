@@ -10,6 +10,7 @@ import {
   SERVICE_LOCATION_MAX_CHANGES_MAX,
   SERVICE_LOCATION_PERIOD_DAYS_MAX,
 } from './service-location.js';
+import { customerTermsStandingSchema } from './terms.js';
 
 /**
  * Customer 360 — the operator's controls on one customer, and the reads the redesigned
@@ -94,12 +95,14 @@ export const customerOverviewSchema = z.object({
   locationOverride: customerLocationOverrideSchema.nullable(),
   marketingOptOutAt: z.iso.datetime().nullable(),
   /**
-   * Terms and rules acceptance (§11.3). There is no terms domain in this installation yet,
-   * so the honest answer is "not available" — never "not accepted", which would be a claim
-   * about a customer the data cannot support. When the domain lands, this widens to a
-   * union whose other branch carries the accepted version and time.
+   * Terms and rules acceptance (§11.3, program §6). `available: false` remains for a server
+   * built without the terms domain — said as "not available", never as "not accepted",
+   * which would be a claim the data cannot support. Otherwise the customer's standing.
    */
-  terms: z.object({ available: z.literal(false) }),
+  terms: z.discriminatedUnion('available', [
+    z.object({ available: z.literal(false) }),
+    customerTermsStandingSchema,
+  ]),
 });
 export type CustomerOverviewResponse = z.infer<typeof customerOverviewSchema>;
 

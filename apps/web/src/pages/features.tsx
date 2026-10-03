@@ -69,7 +69,10 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   // page asks, with a generic sentence, rather than switching it off on one click.
   const disableEffect =
     presentation === undefined ? 'web.feature_unknown_off_effect' : presentation.disableEffect;
-  const [asking, setAsking] = useState(false);
+  // A switch-ON that stops customers at once asks too (`terms_enforcement`). An unknown
+  // flag's switch-on is not asked about: its default and its page are the newer server's.
+  const confirmEnable = presentation?.confirmEnable ?? null;
+  const [asking, setAsking] = useState<'off' | 'on' | null>(null);
   const switchSlot = useRef<HTMLSpanElement>(null);
 
   const refresh = async () => {
@@ -109,20 +112,24 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
     // One question at a time, and nothing is sent behind an open one.
     if (confirmDialogOpen()) return;
     if (!next && disableEffect !== null) {
-      setAsking(true);
+      setAsking('off');
+      return;
+    }
+    if (next && confirmEnable !== null) {
+      setAsking('on');
       return;
     }
     send(next);
   };
 
-  const cancel = useCallback(() => setAsking(false), []);
+  const cancel = useCallback(() => setAsking(null), []);
   const returnFocus = useCallback(
     () => switchSlot.current?.querySelector<HTMLElement>('[role="switch"]') ?? null,
     [],
   );
 
   /*
-   * Focus after a CONFIRMED switch-off.
+   * Focus after a CONFIRMED switch-off (or a confirmed switch-on).
    *
    * «بله، خاموش شود» closes the dialog and starts the write, and the switch is disabled
    * while the write is pending. The dialog hands focus back to a switch that is disabled,
@@ -170,7 +177,7 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
                 checked={flag.enabled}
                 onChange={onSwitch}
                 label={title}
-                disabled={toggle.isPending || asking}
+                disabled={toggle.isPending || asking !== null}
               />
             </span>
           )}
@@ -181,7 +188,7 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
 
       {toggle.isError && <ErrorReport error={toggle.error} />}
 
-      {asking && disableEffect !== null && (
+      {asking === 'off' && disableEffect !== null && (
         <ConfirmDialog
           title={title}
           question={t('web.feature_confirm_disable')}
@@ -190,8 +197,25 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
           cancelLabel={t('web.feature_confirm_cancel')}
           onConfirm={() => {
             restoreAfterWrite.current = 'armed';
-            setAsking(false);
+            setAsking(null);
             send(false);
+          }}
+          onCancel={cancel}
+          returnFocusTo={returnFocus}
+        />
+      )}
+
+      {asking === 'on' && confirmEnable !== null && (
+        <ConfirmDialog
+          title={title}
+          question={t(confirmEnable.question)}
+          detail={t(confirmEnable.detail)}
+          confirmLabel={t(confirmEnable.confirmLabel)}
+          cancelLabel={t('web.feature_confirm_cancel')}
+          onConfirm={() => {
+            restoreAfterWrite.current = 'armed';
+            setAsking(null);
+            send(true);
           }}
           onCancel={cancel}
           returnFocusTo={returnFocus}

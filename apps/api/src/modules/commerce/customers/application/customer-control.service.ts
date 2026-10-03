@@ -29,6 +29,7 @@ import type {
   CustomerLocationOverrideRecord,
   CustomerLocationOverrideRepository,
 } from '../../locations/application/ports.js';
+import type { CustomerTermsStanding } from '../../../control/terms/application/terms-acceptance.service.js';
 import { CUSTOMER_VIEW_PERMISSION } from './customer.service.js';
 import type { CustomerRecord, CustomerRepository } from './ports.js';
 
@@ -41,6 +42,8 @@ export const NOTIFICATIONS_PERMISSION: PermissionKey = 'users.notifications.edit
 export interface CustomerOverview {
   readonly customer: CustomerRecord;
   readonly locationOverride: CustomerLocationOverrideRecord | null;
+  /** Program §6: the customer's terms standing; null when no terms domain is wired. */
+  readonly terms: CustomerTermsStanding | null;
 }
 
 export interface CustomerControlDeps {
@@ -58,6 +61,10 @@ export interface CustomerControlDeps {
   readonly idempotency: IdempotencyStore;
   readonly outbox: OutboxWriter;
   readonly clock: Clock;
+  /** Program §6: the terms standing the overview shows. Optional for the unit fixtures. */
+  readonly terms?: {
+    standing(scope: TenantContext, customerId: string): Promise<CustomerTermsStanding>;
+  };
 }
 
 /** What one control's write did, for the shared skeleton below. */
@@ -417,6 +424,7 @@ export class CustomerControlService {
     return {
       customer,
       locationOverride: await this.deps.locationOverrides.find(scope, customerId),
+      terms: (await this.deps.terms?.standing(scope, customerId)) ?? null,
     };
   }
 
