@@ -3,6 +3,7 @@ import type { SecretPurpose } from '@nexa/contracts';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Database, Executor } from '../persistence/database.js';
 import {
+  adminTotpFactors,
   botInstances,
   panelCredentials,
   paymentGatewayCredentials,
@@ -458,6 +459,66 @@ const paymentGatewayVerifyKey: SecretColumn = {
   },
 };
 
+/**
+ * An administrator's TOTP shared secret (Phase D2). One row per administrator; the
+ * entity in the AEAD context is the factor row's own id. NOT NULL: a row exists only
+ * while a factor is pending or active, and disabling deletes it.
+ */
+const adminTotpSecret: SecretColumn = {
+  purpose: 'admin.totp_secret',
+  table: 'admin_totp_factors',
+  ciphertextColumn: 'totp_secret_ciphertext',
+  keyIdColumn: 'totp_secret_key_id',
+
+  async all(db) {
+    return db
+      .select({
+        ciphertext: adminTotpFactors.totpSecretCiphertext,
+        keyId: adminTotpFactors.totpSecretKeyId,
+      })
+      .from(adminTotpFactors);
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: adminTotpFactors.id })
+      .from(adminTotpFactors)
+      .where(cursor === null ? undefined : gt(adminTotpFactors.id, cursor))
+      .orderBy(asc(adminTotpFactors.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: adminTotpFactors.id,
+        tenantId: adminTotpFactors.tenantId,
+        ciphertext: adminTotpFactors.totpSecretCiphertext,
+        keyId: adminTotpFactors.totpSecretKeyId,
+      })
+      .from(adminTotpFactors)
+      .where(eq(adminTotpFactors.id, id))
+      .for('update')
+      .limit(1);
+    return row ?? null;
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(adminTotpFactors)
+      .set({ totpSecretCiphertext: next.ciphertext, totpSecretKeyId: next.keyId })
+      .where(
+        and(
+          eq(adminTotpFactors.id, id),
+          eq(adminTotpFactors.totpSecretCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: adminTotpFactors.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
@@ -466,4 +527,5 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   paymentGatewayApiKey,
   paymentGatewayWebhookSecret,
   paymentGatewayVerifyKey,
+  adminTotpSecret,
 ];

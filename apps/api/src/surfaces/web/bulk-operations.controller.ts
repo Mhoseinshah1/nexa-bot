@@ -6,7 +6,9 @@ import {
   bulkItemListQuerySchema,
   bulkOperationListQuerySchema,
   bulkPreviewRequestSchema,
+  bulkRetryRequestSchema,
   createBulkOperationRequestSchema,
+  type BulkRetryPreview,
   type BulkCounts,
   type BulkItemListResponse,
   type BulkOperationListResponse,
@@ -149,6 +151,42 @@ export class BulkOperationsController {
     return this.respond(scope, actor, await this.container.bulkOperations.resume(scope, actor, id));
   }
 
+  /**
+   * Program §13: the FAILED service items a retry would copy, counted. A read through POST
+   * like `preview`, because it is the first step of a destructive flow and is fetched on
+   * demand rather than cached.
+   */
+  @Post(':id/retry/preview')
+  async retryPreview(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<{ preview: BulkRetryPreview }> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return { preview: await this.container.bulkOperations.retryPreview(scope, actor, id) };
+  }
+
+  /** Program §13: a NEW operation over exactly the FAILED items, confirmed against the count. */
+  @Post(':id/retry')
+  async retry(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<BulkOperationResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const input = bulkRetryRequestSchema.parse(body);
+    return this.respond(
+      scope,
+      actor,
+      await this.container.bulkOperations.retry(scope, actor, id, {
+        idempotencyKey: input.idempotencyKey,
+        note: input.note,
+        expectedCount: input.expectedCount,
+        expectedFingerprint: input.expectedFingerprint,
+        typedCount: input.typedCount,
+      }),
+    );
+  }
+
   @Get(':id/items')
   async items(
     @Req() request: FastifyRequest,
@@ -254,5 +292,6 @@ export function toItem(
     pausedAt: record.pausedAt?.toISOString() ?? null,
     completedAt: record.completedAt?.toISOString() ?? null,
     cancelledAt: record.cancelledAt?.toISOString() ?? null,
+    retryOfId: record.retryOfId,
   };
 }

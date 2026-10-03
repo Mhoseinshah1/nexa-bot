@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import {
   asId,
   type AdminId,
@@ -175,6 +175,71 @@ export class DrizzleSessionRepository implements SessionRepository {
       .update(adminSessions)
       .set({ revokedAt: now, revokedReason: reason })
       .where(and(eq(adminSessions.id, id), isNull(adminSessions.revokedAt)));
+  }
+
+  async revokeOwn(
+    scope: ScopeContext,
+    adminId: AdminId,
+    id: AdminSessionId,
+    now: Date,
+    reason: string,
+    tx?: unknown,
+  ): Promise<'REVOKED' | 'ALREADY_ENDED' | 'NOT_FOUND'> {
+    const tenantId = requireTenantId(scope);
+    const executor = executorOf(this.db, tx);
+    const ended = await executor
+      .update(adminSessions)
+      .set({ revokedAt: now, revokedReason: reason })
+      .where(
+        and(
+          eq(adminSessions.tenantId, tenantId),
+          eq(adminSessions.adminId, adminId),
+          eq(adminSessions.id, id),
+          isNull(adminSessions.revokedAt),
+          gt(adminSessions.expiresAt, now),
+        ),
+      )
+      .returning({ id: adminSessions.id });
+    if (ended.length > 0) return 'REVOKED';
+    // Owner-scoped in the predicate, so another administrator's session is NOT_FOUND —
+    // the same answer as an id that never existed.
+    const [mine] = await executor
+      .select({ id: adminSessions.id })
+      .from(adminSessions)
+      .where(
+        and(
+          eq(adminSessions.tenantId, tenantId),
+          eq(adminSessions.adminId, adminId),
+          eq(adminSessions.id, id),
+        ),
+      )
+      .limit(1);
+    return mine === undefined ? 'NOT_FOUND' : 'ALREADY_ENDED';
+  }
+
+  async revokeOthersForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    keep: AdminSessionId,
+    now: Date,
+    reason: string,
+    tx?: unknown,
+  ): Promise<number> {
+    // Live ones only, for the count's sake — the reasoning on `revokeAllForAdmin`.
+    const rows = await executorOf(this.db, tx)
+      .update(adminSessions)
+      .set({ revokedAt: now, revokedReason: reason })
+      .where(
+        and(
+          eq(adminSessions.tenantId, requireTenantId(scope)),
+          eq(adminSessions.adminId, adminId),
+          ne(adminSessions.id, keep),
+          isNull(adminSessions.revokedAt),
+          gt(adminSessions.expiresAt, now),
+        ),
+      )
+      .returning({ id: adminSessions.id });
+    return rows.length;
   }
 
   async revokeAllForAdmin(

@@ -23,6 +23,7 @@ import {
   type ReportProductRanking,
   type ReportReferrerRanking,
   type ReportTrendMetric,
+  type RefundChannel,
   type ServiceState,
   type TenantContext,
 } from '@nexa/contracts';
@@ -32,6 +33,12 @@ import type {
   CountedAmount,
   CurrencyAmount,
   FailureTotals,
+  FinancialCashRow,
+  FinancialChannelRow,
+  FinancialLedgerRow,
+  FinancialProductRow,
+  FinancialRefundRow,
+  FinancialSalesRow,
   KeysetPosition,
   OperationRow,
   OrderRow,
@@ -1099,6 +1106,298 @@ export class DrizzleReportingRepository implements ReportingRepository {
       }),
     );
   }
+
+  // --- Phase E2: the financial statement (`docs/financial-reports.md`) -----------------
+  //
+  // Each statement is bucketed exactly as `trend` is: `width_bucket(ts, thresholds) - 1`
+  // under the window `[first threshold, last threshold)`, so every row lands in one bucket
+  // and the buckets' union is the window. Each reads ONE kind of fact on ITS OWN
+  // timestamp; none joins another section's table to add its money in.
+
+  async financialSales(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<readonly FinancialSalesRow[]> {
+    if (boundaries.length < 2) return [];
+    const ts = sql`o.settled_at`;
+    const rows = await this.rows<{
+      bucket: number;
+      currency: CurrencyCode;
+      n: number;
+      gross: string;
+      discount: string;
+      total: string;
+    }>(sql`
+      SELECT ${bucketOf(ts, boundaries)} AS bucket, o.currency, count(*)::int AS n,
+             sum(o.subtotal_amount)::text AS gross, sum(o.discount_amount)::text AS discount,
+             sum(o.total_amount)::text AS total
+        FROM orders o
+       WHERE o.tenant_id = ${tenant(scope)}
+         AND o.state = ANY(${text(FINANCIAL_SETTLED_ORDER_STATES)})
+         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${within(ts, windowOf(boundaries))}
+       GROUP BY 1, 2`);
+    return rows.map((row) => ({
+      bucket: Number(row.bucket),
+      currency: row.currency,
+      count: row.n,
+      gross: BigInt(row.gross),
+      discount: BigInt(row.discount),
+      total: BigInt(row.total),
+    }));
+  }
+
+  async financialRefunds(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<readonly FinancialRefundRow[]> {
+    if (boundaries.length < 2) return [];
+    const ts = sql`r.completed_at`;
+    const rows = await this.rows<{
+      bucket: number;
+      currency: CurrencyCode;
+      channel: RefundChannel;
+      n: number;
+      amount: string;
+    }>(sql`
+      SELECT ${bucketOf(ts, boundaries)} AS bucket, r.currency, r.channel, count(*)::int AS n,
+             sum(r.amount)::text AS amount
+        FROM refunds r
+       WHERE r.tenant_id = ${tenant(scope)}
+         AND r.state = 'COMPLETED'
+         AND ${within(ts, windowOf(boundaries))}
+       GROUP BY 1, 2, 3`);
+    return rows.map((row) => ({
+      bucket: Number(row.bucket),
+      currency: row.currency,
+      channel: row.channel,
+      count: row.n,
+      amount: BigInt(row.amount),
+    }));
+  }
+
+  async financialCash(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<readonly FinancialCashRow[]> {
+    if (boundaries.length < 2) return [];
+    const ts = sql`p.confirmed_at`;
+    // `payable_amount` is null on every payment without a fee snapshot (every method but a
+    // post-WP18 gateway attempt), where what the customer paid IS the principal.
+    const rows = await this.rows<{
+      bucket: number;
+      currency: CurrencyCode;
+      method: PaymentMethod;
+      provider: string | null;
+      topup: boolean;
+      n: number;
+      principal: string;
+      fee: string;
+      payable: string;
+    }>(sql`
+      SELECT ${bucketOf(ts, boundaries)} AS bucket, p.currency, p.method,
+             p.gateway_provider AS provider, (p.order_id IS NULL) AS topup, count(*)::int AS n,
+             sum(p.amount)::text AS principal,
+             coalesce(sum(p.customer_fee_amount), 0)::text AS fee,
+             sum(coalesce(p.payable_amount, p.amount))::text AS payable
+        FROM payments p
+       WHERE p.tenant_id = ${tenant(scope)}
+         AND p.state = 'CONFIRMED'
+         AND p.method <> 'WALLET'
+         AND ${within(ts, windowOf(boundaries))}
+       GROUP BY 1, 2, 3, 4, 5`);
+    return rows.map((row) => ({
+      bucket: Number(row.bucket),
+      currency: row.currency,
+      method: row.method,
+      provider: row.provider,
+      kind: row.topup ? 'TOPUP' : 'ORDER',
+      count: row.n,
+      principal: BigInt(row.principal),
+      fee: BigInt(row.fee),
+      payable: BigInt(row.payable),
+    }));
+  }
+
+  async financialLedger(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<readonly FinancialLedgerRow[]> {
+    if (boundaries.length < 2) return [];
+    const ts = sql`w.created_at`;
+    const rows = await this.rows<{
+      bucket: number;
+      currency: CurrencyCode;
+      reason: LedgerReason;
+      direction: LedgerDirection;
+      n: number;
+      amount: string;
+    }>(sql`
+      SELECT ${bucketOf(ts, boundaries)} AS bucket, w.currency, w.reason, w.direction,
+             count(*)::int AS n, sum(w.amount)::text AS amount
+        FROM wallet_entries w
+       WHERE w.tenant_id = ${tenant(scope)}
+         AND ${within(ts, windowOf(boundaries))}
+       GROUP BY 1, 2, 3, 4`);
+    return rows.map((row) => ({
+      bucket: Number(row.bucket),
+      currency: row.currency,
+      reason: row.reason,
+      direction: row.direction,
+      count: row.n,
+      amount: BigInt(row.amount),
+    }));
+  }
+
+  async walletBalancesBefore(scope: TenantContext, at: Date): Promise<readonly CurrencyAmount[]> {
+    const rows = await this.rows<{ currency: CurrencyCode; balance: string }>(sql`
+      SELECT w.currency, ${signedSum(sql`w`)} AS balance
+        FROM wallet_entries w
+       WHERE w.tenant_id = ${tenant(scope)}
+         AND w.created_at < ${at.toISOString()}::timestamptz
+       GROUP BY w.currency
+       ORDER BY w.currency`);
+    return rows.map((row) => ({ currency: row.currency, amount: BigInt(row.balance) }));
+  }
+
+  async financialSalesByChannel(
+    scope: TenantContext,
+    window: Window,
+  ): Promise<readonly FinancialChannelRow[]> {
+    // Through `payments_order_confirmed_key`: at most one CONFIRMED payment per order, so the
+    // join can never multiply a sale by its attempts. A sale with none (nothing to pay) is
+    // the null method.
+    const rows = await this.rows<{
+      method: PaymentMethod | null;
+      provider: string | null;
+      currency: CurrencyCode;
+      n: number;
+      sales: string;
+    }>(sql`
+      SELECT p.method, p.gateway_provider AS provider, o.currency, count(*)::int AS n,
+             sum(o.total_amount)::text AS sales
+        FROM orders o
+        LEFT JOIN payments p
+          ON p.tenant_id = o.tenant_id AND p.order_id = o.id AND p.state = 'CONFIRMED'
+       WHERE o.tenant_id = ${tenant(scope)}
+         AND o.state = ANY(${text(FINANCIAL_SETTLED_ORDER_STATES)})
+         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${within(sql`o.settled_at`, window)}
+       GROUP BY 1, 2, 3
+       ORDER BY 1 NULLS LAST, 2 NULLS FIRST, 3`);
+    return rows.map((row) => ({
+      method: row.method,
+      provider: row.provider,
+      currency: row.currency,
+      orders: row.n,
+      sales: BigInt(row.sales),
+    }));
+  }
+
+  async financialByProduct(
+    scope: TenantContext,
+    window: Window,
+    limit: number,
+  ): Promise<{ readonly rows: readonly FinancialProductRow[]; readonly truncated: boolean }> {
+    // Sales by the snapshot title they were sold under; refunds COMPLETED in the same window,
+    // attributed to the product of the order they gave back. Two aggregates joined on the
+    // group key, never a join of refunds onto sales rows (which would repeat a sale per
+    // refund).
+    const rows = await this.rows<{
+      product_id: string;
+      title: string;
+      currency: CurrencyCode;
+      n: number;
+      sales: string;
+      refunds: string;
+    }>(sql`
+      WITH s AS (
+        SELECT o.product_id, o.line_title AS title, o.currency, count(*)::int AS n,
+               sum(o.total_amount) AS sales
+          FROM orders o
+         WHERE o.tenant_id = ${tenant(scope)}
+           AND o.state = ANY(${text(FINANCIAL_SETTLED_ORDER_STATES)})
+           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND o.product_id IS NOT NULL
+           AND ${within(sql`o.settled_at`, window)}
+         GROUP BY 1, 2, 3
+      ), r AS (
+        SELECT o.product_id, o.line_title AS title, r.currency, sum(r.amount) AS refunds
+          FROM refunds r
+          JOIN orders o ON o.tenant_id = r.tenant_id AND o.id = r.order_id
+         WHERE r.tenant_id = ${tenant(scope)}
+           AND r.state = 'COMPLETED'
+           AND o.product_id IS NOT NULL
+           AND ${within(sql`r.completed_at`, window)}
+         GROUP BY 1, 2, 3
+      )
+      SELECT coalesce(s.product_id, r.product_id)::text AS product_id,
+             coalesce(s.title, r.title) AS title,
+             coalesce(s.currency, r.currency) AS currency,
+             coalesce(s.n, 0)::int AS n,
+             coalesce(s.sales, 0)::text AS sales,
+             coalesce(r.refunds, 0)::text AS refunds
+        FROM s
+        FULL JOIN r ON r.product_id = s.product_id AND r.title = s.title AND r.currency = s.currency
+       ORDER BY coalesce(s.sales, 0) DESC, 2, 1, 3
+       LIMIT ${limit + 1}`);
+    return {
+      truncated: rows.length > limit,
+      rows: rows.slice(0, limit).map((row) => ({
+        productId: row.product_id,
+        title: row.title,
+        currency: row.currency,
+        orders: row.n,
+        sales: BigInt(row.sales),
+        refunds: BigInt(row.refunds),
+      })),
+    };
+  }
+
+  async financialResellerSales(
+    scope: TenantContext,
+    window: Window,
+  ): Promise<readonly CountedAmount[]> {
+    // `order_reseller_terms` is written once per reseller order; only `orders.total_amount`
+    // is read — what the reseller was charged — never `margin_amount` or `cost_amount`.
+    const rows = await this.rows<{ currency: CurrencyCode; n: number; amount: string }>(sql`
+      SELECT o.currency, count(*)::int AS n, sum(o.total_amount)::text AS amount
+        FROM order_reseller_terms t
+        JOIN orders o ON o.tenant_id = t.tenant_id AND o.id = t.order_id
+       WHERE t.tenant_id = ${tenant(scope)}
+         AND o.state = ANY(${text(FINANCIAL_SETTLED_ORDER_STATES)})
+         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${within(sql`o.settled_at`, window)}
+       GROUP BY 1
+       ORDER BY 1`);
+    return rows.map((row) => ({
+      currency: row.currency,
+      entries: row.n,
+      amount: BigInt(row.amount),
+    }));
+  }
+}
+
+/**
+ * The order states a financial SALE is read from: every settled order, PAID or REFUNDED.
+ * A refund is its own line on the day it completed, so a refunded order stays a sale in the
+ * period its money was taken (`docs/financial-reports.md` §2). `orders_settled_at_check`
+ * pins `settled_at` to exactly these.
+ */
+const FINANCIAL_SETTLED_ORDER_STATES = ['PAID', 'REFUNDED'] as const;
+
+/** `[first threshold, last threshold)`: the window a bucketed statement is bounded by. */
+function windowOf(boundaries: readonly Date[]): Window {
+  return { from: boundaries[0] as Date, to: boundaries[boundaries.length - 1] as Date };
+}
+
+/**
+ * The 0-based bucket of `ts`, by `width_bucket` over explicit thresholds — the rule `trend`
+ * states: the window keeps 0 and n+1 out, and a repeated threshold receives no row.
+ */
+function bucketOf(ts: SQL, boundaries: readonly Date[]): SQL {
+  const bounds = sql`${sql.param(boundaries.map((b) => b.toISOString()))}::timestamptz[]`;
+  return sql`(width_bucket(${ts}, ${bounds}) - 1)`;
 }
 
 // --- Fragments --------------------------------------------------------------------

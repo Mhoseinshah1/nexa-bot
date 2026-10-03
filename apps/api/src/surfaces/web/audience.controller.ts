@@ -45,6 +45,7 @@ export class AudienceController {
       resellerTiers: [...options.resellerTiers],
       products: [...options.products],
       panels: [...options.panels],
+      tags: [...options.tags],
     };
   }
 

@@ -28,12 +28,19 @@ import {
   audiencePreviewResponseSchema,
   broadcastListResponseSchema,
   broadcastRecipientListResponseSchema,
+  broadcastFailureReasonsResponseSchema,
+  type BroadcastFailureReasonsResponse,
   broadcastResponseSchema,
   broadcastTestResponseSchema,
   bulkItemListResponseSchema,
   bulkOperationListResponseSchema,
   bulkOperationResponseSchema,
   bulkPreviewResponseSchema,
+  bulkRetryPreviewResponseSchema,
+  serviceLocationTargetsResponseSchema,
+  type BulkRetryPreview,
+  type ServiceGrantRequest,
+  type ServiceLocationTargetsResponse,
   type AudienceOptionsResponse,
   type AudiencePreviewResponse,
   type BroadcastContentKind,
@@ -67,6 +74,7 @@ import {
   reportSummaryResponseSchema,
   reportTrendResponseSchema,
   reportWalletResponseSchema,
+  reportFinancialResponseSchema,
   type OrderPurpose as ReportOrderPurpose,
   type ReportExportFormat,
   type ReportExportKind,
@@ -85,6 +93,8 @@ import {
   type ReportTrendMetric,
   type ReportTrendResponse,
   type ReportWalletResponse,
+  type FinancialGranularity,
+  type ReportFinancialResponse,
   COMMERCE_ERROR_CODES,
   RESELLER_MINIMUM_ROUTES,
   RESELLER_ROUTES,
@@ -176,6 +186,11 @@ import {
   type TrialResetResponse,
   IDENTITY_ERROR_CODES,
   PAYMENT_ROUTES,
+  PAYMENT_OPS_ROUTES,
+  paymentAttentionResponseSchema,
+  type PaymentAttentionResponse,
+  type PaymentGatewayProvider,
+  type PaymentOpsQueue,
   COMPENSATION_ROUTES,
   compensationListResponseSchema,
   type CompensationListResponse,
@@ -221,6 +236,33 @@ import {
   revokeAdminSessionsResponseSchema,
   API_PREFIX,
   AUTH_ROUTES,
+  ACCOUNT_SECURITY_ROUTES,
+  RBAC_ROUTES,
+  deleteRoleResponseSchema,
+  effectivePermissionsResponseSchema,
+  roleMutationResponseSchema,
+  roleViewListResponseSchema,
+  type DeleteRoleResponse,
+  type EffectivePermissionsResponse,
+  type RoleMutationResponse,
+  type RoleViewListResponse,
+  accountSecurityResponseSchema,
+  backupCodesResponseSchema,
+  loginOutcomeResponseSchema,
+  okResponseSchema,
+  resetAdminSecondFactorResponseSchema,
+  revokeOtherSessionsResponseSchema,
+  revokeOwnSessionResponseSchema,
+  securityEventListResponseSchema,
+  totpEnrolResponseSchema,
+  type AccountSecurityResponse,
+  type BackupCodesResponse,
+  type LoginOutcomeResponse,
+  type ResetAdminSecondFactorResponse,
+  type RevokeOtherSessionsResponse,
+  type RevokeOwnSessionResponse,
+  type SecurityEventListResponse,
+  type TotpEnrolResponse,
   errorResponseSchema,
   healthInfoResponseSchema,
   loginResponseSchema,
@@ -528,6 +570,19 @@ import {
   type CustomerTransferRequest,
   type CustomerTransferResultResponse,
 } from '@nexa/contracts';
+// Phase B3: the notification center.
+import {
+  NOTIFICATION_CENTER_ROUTES,
+  inboxListResponseSchema,
+  inboxSummaryResponseSchema,
+  markAllInboxResponseSchema,
+  markInboxResponseSchema,
+  type InboxListResponse,
+  type InboxSummaryResponse,
+  type MarkAllInboxResponse,
+  type MarkInboxResponse,
+  type NotificationCategory,
+} from '@nexa/contracts';
 // Phase A2: a direct message from Customer 360.
 import {
   DIRECT_MESSAGE_ROUTES,
@@ -690,8 +745,133 @@ function toApiError(status: number, payload: unknown): ApiError {
   return new ApiError(status, 'unknown', `Request failed with ${status}`);
 }
 
-export function signIn(username: string, password: string): Promise<LoginResponse> {
-  return post(AUTH_ROUTES.login, { username, password }, loginResponseSchema);
+/**
+ * The password step. For an account with two-step sign-in it answers with a challenge
+ * (`secondFactorRequired`) and the server has set an httpOnly challenge cookie; the
+ * code goes to `completeSecondFactor`.
+ */
+export function signIn(username: string, password: string): Promise<LoginOutcomeResponse> {
+  return post(AUTH_ROUTES.login, { username, password }, loginOutcomeResponseSchema);
+}
+
+/** The second step: a current code or one backup code, never both. */
+export function completeSecondFactor(
+  proof: { code: string } | { backupCode: string },
+): Promise<LoginResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.loginSecondFactor, proof, loginResponseSchema);
+}
+
+// --- Phase D2: the signed-in administrator's own security -------------------
+
+export function fetchAccountSecurity(): Promise<AccountSecurityResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.overview, accountSecurityResponseSchema);
+}
+
+export function enrolTotp(password: string): Promise<TotpEnrolResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpEnrol, { password }, totpEnrolResponseSchema);
+}
+
+export function activateTotp(code: string): Promise<BackupCodesResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpActivate, { code }, backupCodesResponseSchema);
+}
+
+export type SecondFactorProofInput = { code: string } | { backupCode: string };
+
+export function disableTotp(
+  input: { password: string } & SecondFactorProofInput,
+): Promise<{ ok: true }> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpDisable, input, okResponseSchema);
+}
+
+export function regenerateBackupCodes(
+  input: { password: string } & SecondFactorProofInput,
+): Promise<BackupCodesResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.backupCodesRegenerate, input, backupCodesResponseSchema);
+}
+
+export function fetchOwnSessions(): Promise<AdminSessionListResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.sessions, adminSessionListResponseSchema);
+}
+
+export function revokeOwnSession(id: string): Promise<RevokeOwnSessionResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.revokeSession(id), {}, revokeOwnSessionResponseSchema);
+}
+
+export function revokeOtherSessions(): Promise<RevokeOtherSessionsResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.revokeOtherSessions, {}, revokeOtherSessionsResponseSchema);
+}
+
+export function fetchSecurityEvents(): Promise<SecurityEventListResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.events, securityEventListResponseSchema);
+}
+
+/** The holder's own password. Every session ends, this one included. */
+export function changeOwnPassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<{ ok: true }> {
+  return post(AUTH_ROUTES.password, input, okResponseSchema);
+}
+
+// --- Phase D3: roles ----------------------------------------------------------
+
+export function fetchManagedRoles(): Promise<RoleViewListResponse> {
+  return authedGet(RBAC_ROUTES.roles, roleViewListResponseSchema);
+}
+
+export function createRole(input: {
+  key: string;
+  name: string;
+  permissions: string[];
+  reason: string;
+  clonedFrom?: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<RoleMutationResponse> {
+  return post(RBAC_ROUTES.roles, input, roleMutationResponseSchema);
+}
+
+export function updateRole(input: {
+  key: string;
+  name: string;
+  permissions: string[];
+  expectedVersion: number;
+  reason: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<RoleMutationResponse> {
+  const { key, ...body } = input;
+  return post(RBAC_ROUTES.role(key), body, roleMutationResponseSchema);
+}
+
+export function deleteRole(input: {
+  key: string;
+  expectedVersion: number;
+  reason: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<DeleteRoleResponse> {
+  const { key, ...body } = input;
+  return post(RBAC_ROUTES.deleteRole(key), body, deleteRoleResponseSchema);
+}
+
+export function fetchEffectivePermissions(adminId: string): Promise<EffectivePermissionsResponse> {
+  return authedGet(RBAC_ROUTES.effective(adminId), effectivePermissionsResponseSchema);
+}
+
+/** An operator removing ANOTHER administrator's two-step sign-in. */
+export function resetAdminSecondFactor(input: {
+  id: string;
+  reason: string;
+  stepUp: StepUpInput;
+  idempotencyKey: string;
+}): Promise<ResetAdminSecondFactorResponse> {
+  const { id, ...body } = input;
+  return post(
+    ACCOUNT_SECURITY_ROUTES.adminSecondFactorReset(id),
+    body,
+    resetAdminSecondFactorResponseSchema,
+  );
 }
 
 export function signOut(): Promise<LogoutResponse> {
@@ -783,10 +963,18 @@ export function setAdminRoles(input: {
  * The response carries no credential — the administrator as anybody may see
  * them, and how many sessions the reset ended.
  */
+/** The acting operator's own step-up: their password, and a code when their 2FA is on. */
+export interface StepUpInput {
+  password: string;
+  code?: string;
+  backupCode?: string;
+}
+
 export function resetAdminPassword(input: {
   id: string;
   newPassword: string;
   reason: string;
+  stepUp: StepUpInput;
 }): Promise<ResetAdminPasswordResponse> {
   const { id, ...body } = input;
   return post(ADMIN_ROUTES.password(id), body, resetAdminPasswordResponseSchema);
@@ -1407,6 +1595,23 @@ export function adjustWallet(input: {
   return post(WALLET_ROUTES.adjust(customerId), body, walletEntryResponseSchema);
 }
 
+/**
+ * The payment list's and the attention counts' window. `from` and `to` exist only for a
+ * CUSTOM range — the server refuses them with any other, and refuses a CUSTOM range
+ * without them — so they are sent with CUSTOM and never otherwise.
+ */
+function setPaymentWindow(
+  params: URLSearchParams,
+  query: { readonly range?: ReportRange; readonly from?: string; readonly to?: string },
+): void {
+  if (query.range === undefined) return;
+  params.set('range', query.range);
+  if (query.range === 'CUSTOM') {
+    if (query.from !== undefined) params.set('from', query.from);
+    if (query.to !== undefined) params.set('to', query.to);
+  }
+}
+
 export function fetchPayments(
   query: {
     limit?: number;
@@ -1418,6 +1623,13 @@ export function fetchPayments(
     reference?: string;
     disposition?: ReceiptDisposition;
     q?: string;
+    /** The Payment Operations Center's facets (program §10). */
+    queue?: PaymentOpsQueue;
+    gateway?: PaymentGatewayProvider;
+    range?: ReportRange;
+    /** Tenant-calendar dates; sent only with `range: 'CUSTOM'`, as `reportParams` does. */
+    from?: string;
+    to?: string;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1435,6 +1647,9 @@ export function fetchPayments(
   }
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.queue !== undefined) params.set('queue', query.queue);
+  if (query.gateway !== undefined) params.set('gateway', query.gateway);
+  setPaymentWindow(params, query);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
@@ -1461,6 +1676,10 @@ export function fetchServices(
     panelId?: string;
     providerUsername?: string;
     q?: string;
+    /** Program §13: the workspace's product, location and expiry filters. */
+    productId?: string;
+    locationKey?: string;
+    expiringWithinHours?: number;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
@@ -1490,6 +1709,15 @@ export function fetchServices(
   }
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.productId !== undefined && query.productId !== '') {
+    params.set('productId', query.productId);
+  }
+  if (query.locationKey !== undefined && query.locationKey !== '') {
+    params.set('locationKey', query.locationKey);
+  }
+  if (query.expiringWithinHours !== undefined) {
+    params.set('expiringWithinHours', String(query.expiringWithinHours));
+  }
   const suffix = params.toString();
   return authedGet(
     suffix ? `${SERVICE_ROUTES.list}?${suffix}` : SERVICE_ROUTES.list,
@@ -1514,7 +1742,16 @@ export function fetchServiceOperations(id: string): Promise<ServiceOperationsRes
  * separately would be seven chances to point a label at the wrong URL. The server
  * charges a different permission for terminate; that is its business, not the client's.
  */
-const SERVICE_ACTION_PATHS: Readonly<Record<ServiceOperatorAction, (id: string) => string>> = {
+/**
+ * The actions that take nothing but a key (and terminate's phrase). Program §13's grant and
+ * move carry input of their own and have their own functions below.
+ */
+export type ServiceSimpleAction = Exclude<
+  ServiceOperatorAction,
+  'ADD_TRAFFIC' | 'ADD_TIME' | 'CHANGE_LOCATION'
+>;
+
+const SERVICE_ACTION_PATHS: Readonly<Record<ServiceSimpleAction, (id: string) => string>> = {
   SYNC_USAGE: SERVICE_ROUTES.syncUsage,
   RESEND_CONFIG: SERVICE_ROUTES.resend,
   RETRY_PROVISION: SERVICE_ROUTES.retryProvision,
@@ -1538,7 +1775,7 @@ const SERVICE_ACTION_PATHS: Readonly<Record<ServiceOperatorAction, (id: string) 
  */
 export function actOnService(input: {
   id: string;
-  action: ServiceOperatorAction;
+  action: ServiceSimpleAction;
   idempotencyKey: string;
   confirm?: string;
 }): Promise<ServiceActionResponse> {
@@ -1547,6 +1784,27 @@ export function actOnService(input: {
       ? { idempotencyKey: input.idempotencyKey, confirm: input.confirm ?? '' }
       : { idempotencyKey: input.idempotencyKey };
   return post(SERVICE_ACTION_PATHS[input.action](input.id), body, serviceActionResponseSchema);
+}
+
+/** Program §13: an operator's free traffic or time grant to one service. */
+export function grantService(
+  id: string,
+  body: ServiceGrantRequest,
+): Promise<ServiceActionResponse> {
+  return post(SERVICE_ROUTES.grant(id), body, serviceActionResponseSchema);
+}
+
+/** Program §13: where an operator may move this service. */
+export function fetchServiceLocationTargets(id: string): Promise<ServiceLocationTargetsResponse> {
+  return authedGet(SERVICE_ROUTES.locationTargets(id), serviceLocationTargetsResponseSchema);
+}
+
+/** Program §13: an operator's move of one service to another configured location. */
+export function changeServiceLocation(
+  id: string,
+  body: { idempotencyKey: string; locationId: string; reason: string },
+): Promise<ServiceActionResponse> {
+  return post(SERVICE_ROUTES.changeLocation(id), body, serviceActionResponseSchema);
 }
 
 /**
@@ -1575,6 +1833,22 @@ export function fetchPayment(id: string): Promise<PaymentResponse> {
  * One payment's history (WP17). Behind `payments.view` on the server, which also withholds —
  * and names — the receipt, refund and wallet sections the viewer may not see.
  */
+/**
+ * The Payment Operations Center's queue counts per gateway (program §10), over the same
+ * created-at range the list is filtered by. Absent range: every payment.
+ */
+export function fetchPaymentAttention(
+  query: { range?: ReportRange; from?: string; to?: string } = {},
+): Promise<PaymentAttentionResponse> {
+  const params = new URLSearchParams();
+  setPaymentWindow(params, query);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PAYMENT_OPS_ROUTES.attention}?${suffix}` : PAYMENT_OPS_ROUTES.attention,
+    paymentAttentionResponseSchema,
+  );
+}
+
 export function fetchPaymentTimeline(id: string): Promise<PaymentTimelineResponse> {
   return authedGet(PAYMENT_ROUTES.timeline(id), paymentTimelineResponseSchema);
 }
@@ -2385,6 +2659,8 @@ export function fetchInstallationKeys(): Promise<InstallationKeysResponse> {
  */
 export async function exportRecoveryKit(input: {
   accountPassword: string;
+  /** Required by the server when the administrator's two-step sign-in is on. */
+  code?: string;
   passphrase: string;
   passphraseConfirmation: string;
 }): Promise<{ blob: Blob; filename: string }> {
@@ -2409,6 +2685,7 @@ export async function importRecoveryKit(input: {
   file: File;
   passphrase: string;
   accountPassword: string;
+  code?: string;
   idempotencyKey: string;
 }): Promise<ImportRecoveryKitResponse> {
   // FileReader's data URL, the way the other file pickers here read a file: one
@@ -2428,6 +2705,7 @@ export async function importRecoveryKit(input: {
       kit,
       passphrase: input.passphrase,
       accountPassword: input.accountPassword,
+      ...(input.code === undefined || input.code === '' ? {} : { code: input.code }),
       idempotencyKey: input.idempotencyKey,
     },
     importRecoveryKitResponseSchema,
@@ -3288,6 +3566,18 @@ export function fetchReportWallet(s: ReportRangeSelection): Promise<ReportWallet
   return reportGet(REPORT_ROUTES.wallet, reportWalletResponseSchema, reportParams(s));
 }
 
+/** Phase E2: the financial statement, bucketed by the granularity the page shows. */
+export function fetchReportFinancial(
+  s: ReportRangeSelection,
+  granularity: FinancialGranularity | undefined,
+): Promise<ReportFinancialResponse> {
+  return reportGet(
+    REPORT_ROUTES.financial,
+    reportFinancialResponseSchema,
+    reportParams(s, { granularity }),
+  );
+}
+
 export function fetchReportReferrals(
   s: ReportRangeSelection,
   query: { by: ReportReferrerRanking; limit?: number; page?: number },
@@ -3327,8 +3617,10 @@ export function reportExportUrl(
   s: ReportRangeSelection,
   report: ReportExportKind,
   format: ReportExportFormat,
+  /** FINANCIAL only: the bucket size the page shows, so the file is the page. */
+  granularity?: FinancialGranularity,
 ): string {
-  return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format }).toString()}`;
+  return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format, granularity }).toString()}`;
 }
 
 // --- Dashboard and sidebar counters (round W) ----------------------------------
@@ -3744,6 +4036,11 @@ export function fetchBroadcastRecipients(
   );
 }
 
+/** Broadcast V2 (program §19): failures grouped by state and transport code. */
+export function fetchBroadcastFailures(id: string): Promise<BroadcastFailureReasonsResponse> {
+  return authedGet(BROADCAST_ROUTES.failures(id), broadcastFailureReasonsResponseSchema);
+}
+
 export interface BroadcastContentWire {
   title: string;
   contentKind: BroadcastContentKind;
@@ -3859,6 +4156,29 @@ export function cancelBulkOperation(id: string): Promise<BulkOperationResponse> 
   return post(BULK_OPERATION_ROUTES.cancel(id), {}, bulkOperationResponseSchema);
 }
 
+/** Program §13: the FAILED service items a retry would copy, counted. */
+export function previewBulkRetry(id: string): Promise<{ preview: BulkRetryPreview }> {
+  return post(BULK_OPERATION_ROUTES.retryPreview(id), {}, bulkRetryPreviewResponseSchema);
+}
+
+/** Program §13: a NEW operation over exactly those FAILED items. */
+export function retryBulkOperation(
+  id: string,
+  input: {
+    idempotencyKey: string;
+    note: string;
+    expectedCount: number;
+    expectedFingerprint: string;
+    typedCount: number | null;
+  },
+): Promise<BulkOperationResponse> {
+  return post(
+    BULK_OPERATION_ROUTES.retry(id),
+    { ...input, confirmed: true },
+    bulkOperationResponseSchema,
+  );
+}
+
 /** Round N close (§B): pause or resume a mass operation. */
 export function steerBulkOperation(
   id: string,
@@ -3947,6 +4267,48 @@ export function fetchCustomerFinancialSummary(
 
 export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
+}
+
+// --- Phase B3: the notification center -----------------------------------------------
+
+export function fetchInboxSummary(): Promise<InboxSummaryResponse> {
+  return authedGet(NOTIFICATION_CENTER_ROUTES.summary, inboxSummaryResponseSchema);
+}
+
+export function fetchInbox(filters: {
+  unread?: boolean;
+  category?: NotificationCategory;
+  cursor?: { readonly at: string; readonly id: string };
+}): Promise<InboxListResponse> {
+  const params = new URLSearchParams();
+  if (filters.unread === true) params.set('unread', 'true');
+  if (filters.category !== undefined) params.set('category', filters.category);
+  if (filters.cursor !== undefined) {
+    params.set('beforeAt', filters.cursor.at);
+    params.set('beforeId', filters.cursor.id);
+  }
+  const suffix = params.toString();
+  const path = NOTIFICATION_CENTER_ROUTES.list;
+  return authedGet(suffix ? `${path}?${suffix}` : path, inboxListResponseSchema);
+}
+
+/** Read or unread: a SET of this administrator's own state, so a repeat changes nothing. */
+export function markInbox(input: { id: string; read: boolean }): Promise<MarkInboxResponse> {
+  return post(
+    NOTIFICATION_CENTER_ROUTES.mark(input.id),
+    { read: input.read },
+    markInboxResponseSchema,
+  );
+}
+
+export function markAllInbox(input: {
+  category?: NotificationCategory;
+}): Promise<MarkAllInboxResponse> {
+  return post(
+    NOTIFICATION_CENTER_ROUTES.markAll,
+    input.category === undefined ? {} : { category: input.category },
+    markAllInboxResponseSchema,
+  );
 }
 
 // --- Phase A2: «ارسال پیام» -------------------------------------------------------------

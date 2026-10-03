@@ -49,6 +49,21 @@ const systemActor = (correlationId: string): ActorContext => ({
   correlationId: correlationId as CorrelationId,
 });
 
+/**
+ * The sections the Payment Operations Center added (program §10) — the settling order's own
+ * facts under `orders.view` and the audit rows under `audit.view`. The WP17 assertions below
+ * are about the payment's own sections, so they read the history without these; the order
+ * and audit entries have their own test at the end of the file.
+ */
+const OPS_SECTION_KINDS: ReadonlySet<string> = new Set([
+  'ORDER_SETTLED',
+  'ORDER_FULFILMENT',
+  'ORDER_REFUNDED',
+  'AUDIT_RECORDED',
+]);
+const withoutOpsSections = <T extends { readonly kind: string }>(entries: readonly T[]): T[] =>
+  entries.filter((entry) => !OPS_SECTION_KINDS.has(entry.kind));
+
 describe('payment timeline', () => {
   let ctx: TestContext;
   let products: DrizzleProductRepository;
@@ -116,7 +131,7 @@ describe('payment timeline', () => {
 
     expect(view.withheld).toEqual([]);
     expect(view.truncated).toBe(false);
-    expect(view.entries.map((e) => e.kind)).toEqual([
+    expect(withoutOpsSections(view.entries).map((e) => e.kind)).toEqual([
       'PAYMENT_CREATED',
       'PAYMENT_CONFIRMED',
       'WALLET_ENTRY',
@@ -133,15 +148,16 @@ describe('payment timeline', () => {
         .filter((e) => e.kind === 'CUSTOMER_NOTIFIED')
         .map((e) => ('notificationKind' in e ? e.notificationKind : null)),
     ).toEqual(['REFUND_COMPLETED', 'REFUND_COMPLETED']);
-    expect(view.entries[0]).toMatchObject({
+    const own = withoutOpsSections(view.entries);
+    expect(own[0]).toMatchObject({
       method: 'WALLET',
       amountMinor: '250000',
       currency: 'IRT',
     });
-    expect(view.entries[1]).toMatchObject({ evidenceKind: 'WALLET_DEBIT', adminId: null });
+    expect(own[1]).toMatchObject({ evidenceKind: 'WALLET_DEBIT', adminId: null });
     // The purchase debit is this payment's; the two REFUND credits are the refund rows'
     // money and are not repeated as wallet entries.
-    expect(view.entries[2]).toMatchObject({
+    expect(own[2]).toMatchObject({
       direction: 'DEBIT',
       reason: 'PURCHASE',
       amountMinor: '250000',
@@ -171,7 +187,7 @@ describe('payment timeline', () => {
 
     const view = await timeline(reviewer, payment.id);
 
-    expect(view.withheld).toEqual(['REFUNDS', 'WALLET']);
+    expect(view.withheld).toEqual(['REFUNDS', 'WALLET', 'ORDER', 'AUDIT']);
     expect(view.entries.map((e) => e.kind)).toEqual(['PAYMENT_CREATED', 'PAYMENT_CONFIRMED']);
     // Nothing about the refund leaks through another section — not its notification either.
     expect(JSON.stringify(view.entries)).not.toContain('REFUND');
@@ -218,7 +234,7 @@ describe('payment timeline', () => {
     });
 
     const view = await timeline(owner, payment.id);
-    const kinds = view.entries.map((e) => e.kind);
+    const kinds = withoutOpsSections(view.entries).map((e) => e.kind);
 
     expect(kinds).toEqual([
       'PAYMENT_CREATED',
@@ -283,7 +299,7 @@ describe('payment timeline', () => {
         };
       },
     });
-    const include = { receipts: true, refunds: true, wallet: true };
+    const include = { receipts: true, refunds: true, wallet: true, order: true, audit: true };
     const during = await new DrizzlePaymentTimelineReader(racing).facts(
       tenantA,
       payment.id,
@@ -414,6 +430,49 @@ describe('payment timeline', () => {
     await expect(timeline(owner, 'not-a-uuid')).rejects.toMatchObject({
       code: 'commerce.request_invalid',
     });
+  });
+
+  /*
+   * The Payment Operations Center (program §10): the settling order's settlement and the
+   * operation that delivers what it bought, under `orders.view`; every audit row on the
+   * payment under `audit.view`, by action code only — never a note, never `before`/`after`.
+   */
+  it('names the settling order’s settlement and delivery, and the payment’s audit rows, behind their own permissions', async () => {
+    const payment = await walletPayment('o1');
+    await refund(owner, payment.id, 250_000n, 'o1-refund-all');
+
+    const view = await timeline(owner, payment.id);
+    const settled = view.entries.find((e) => e.kind === 'ORDER_SETTLED');
+    const delivered = view.entries.find((e) => e.kind === 'ORDER_FULFILMENT');
+    expect(settled).toBeDefined();
+    expect(delivered).toMatchObject({ operationType: 'PROVISION', operationState: 'SUCCEEDED' });
+    // A full refund moved the order to REFUNDED in its own transaction.
+    expect(view.entries.map((e) => e.kind)).toContain('ORDER_REFUNDED');
+    const audits = view.entries.filter((e) => e.kind === 'AUDIT_RECORDED');
+    expect(audits.length).toBeGreaterThan(0);
+    for (const entry of audits) {
+      expect(Object.keys(entry).sort()).toEqual(
+        ['action', 'actorType', 'adminId', 'at', 'auditId', 'kind', 'result'].sort(),
+      );
+    }
+    // Neither section reaches a viewer without its key, and neither leaks through another.
+    const reviewerView = await timeline(reviewer, payment.id);
+    expect(reviewerView.withheld).toEqual(expect.arrayContaining(['ORDER', 'AUDIT']));
+    expect(reviewerView.entries.filter((e) => OPS_SECTION_KINDS.has(e.kind))).toEqual([]);
+    expect(() =>
+      paymentTimelineResponseSchema.parse({
+        paymentId: payment.id,
+        entries: view.entries,
+        withheld: view.withheld,
+        truncated: view.truncated,
+      }),
+    ).not.toThrow();
+  });
+
+  it('puts no order on a payment that did not settle it', async () => {
+    const payment = await manualPayment('o2');
+    const view = await timeline(owner, payment.id);
+    expect(view.entries.filter((e) => e.kind.startsWith('ORDER_'))).toEqual([]);
   });
 
   // -------------------------------------------------------------------------

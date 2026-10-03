@@ -925,6 +925,119 @@ form.set-row > * + * {
   }
 }
 
+/* --- Account security (Phase D2) ------------------------------------------------- */
+/*
+ * The signed-in administrator's own account page. Usable at 390px: every block is a
+ * single column, and the only wide content (a user agent, a secret) wraps.
+ */
+.account-page .section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.account-page .row-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.account-page .totp-qr {
+  width: min(220px, 100%);
+  height: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  image-rendering: pixelated;
+}
+.account-page .backup-codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.account-page .backup-codes code {
+  display: block;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+.account-page .session-list,
+.account-page .security-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.account-page .security-event {
+  display: grid;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.account-page .system-session dd,
+.account-page .security-event {
+  overflow-wrap: anywhere;
+}
+
+/* --- Roles and permissions (Phase D3) ------------------------------------------- */
+/*
+ * One column at 390px: a permission row wraps its key and badge under its label, and
+ * the matrix's domain groups stack.
+ */
+.rbac .row-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.rbac .rbac-roles {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rbac .rbac-role {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+.rbac-domain {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+}
+.rbac-perm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+.rbac-perm-text {
+  display: grid;
+  flex: 1 1 200px;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.rbac-perm.risk-critical .rbac-perm-text > span:first-child {
+  font-weight: 600;
+}
+.rbac-effective-domain ul {
+  margin: 4px 0 0;
+}
+
 /* --- Phase D1 audit log -------------------------------------------------------- */
 
 /* The filter row: compact fields that wrap at 390px, the two buttons kept together. */

@@ -1007,9 +1007,17 @@ export const roles = pgTable(
     name: text('name').notNull(),
     isSystem: boolean('is_system').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /**
+     * Phase D3: optimistic concurrency for the role editor. An edit names the version it
+     * was made from and the UPDATE matches on it; a zero row count is a conflict, never
+     * a merge (ADR-0021's rule for every versioned edit).
+     */
+    version: integer('version').notNull().default(1),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     unique('roles_tenant_id_key').on(table.tenantId, table.id),
+    check('roles_version_check', sql`version >= 1`),
     uniqueIndex('roles_tenant_key_key').on(table.tenantId, table.key),
     check('roles_key_shape_check', sql`key ~ '^[a-z][a-z0-9_]{1,63}$'`),
   ],
@@ -1225,6 +1233,148 @@ export const adminLoginThrottle = pgTable(
     index('admin_login_throttle_retention_idx').on(table.windowStartedAt, table.lockedUntil),
     check('admin_login_throttle_kind_check', enumCheck('subject_kind', ['USERNAME', 'IP'])),
     check('admin_login_throttle_count_check', sql`failed_count >= 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Admin security — Phase D2 (program §17)
+// ---------------------------------------------------------------------------
+
+/**
+ * An administrator's TOTP factor (RFC 6238). At most ONE row per administrator.
+ *
+ * `PENDING` is an enrolment that has displayed its secret and is waiting for the first
+ * code; `ACTIVE` is a factor sign-in demands. No row is "disabled": disabling DELETES the
+ * row, so a turned-off factor leaves no ciphertext behind, and enrolling again mints a new
+ * row id — which is the entity the secret's AEAD context names, so an old ciphertext
+ * cannot be put back.
+ *
+ * `last_used_step` is the replay defence: the 30-second step of the last code accepted.
+ * A code is accepted only for a step STRICTLY greater, decided by a conditional UPDATE
+ * under the row lock, so one code is good once even when two requests carry it at the
+ * same instant. `integer` is enough: the step count passes 2^31 in the year 4011.
+ */
+export const adminTotpFactors = pgTable(
+  'admin_totp_factors',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    state: text('state').notNull(),
+    totpSecretCiphertext: text('totp_secret_ciphertext').notNull(),
+    totpSecretKeyId: text('totp_secret_key_id').notNull(),
+    lastUsedStep: integer('last_used_step'),
+    /**
+     * The session that started a PENDING enrolment. Activation is refused from any other
+     * session: the secret was shown to that one, and a different session presenting a
+     * code is somebody guessing rather than somebody scanning (security review, D2).
+     * Null once active, and for an enrolment made without a session.
+     */
+    enrolledSessionId: uuid('enrolled_session_id'),
+    /** Wrong activation codes against this PENDING row; past the cap it is discarded. */
+    activationAttempts: integer('activation_attempts').notNull().default(0),
+    createdAt: timestamptz('created_at').notNull(),
+    activatedAt: timestamptz('activated_at'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('admin_totp_factors_admin_key').on(table.tenantId, table.adminId),
+    check('admin_totp_factors_state_check', enumCheck('state', ['PENDING', 'ACTIVE'])),
+    // The two columns cannot disagree about whether the factor is on.
+    check(
+      'admin_totp_factors_activated_check',
+      sql`(state = 'ACTIVE') = (activated_at IS NOT NULL)`,
+    ),
+    check('admin_totp_factors_step_check', sql`last_used_step IS NULL OR last_used_step >= 0`),
+    check('admin_totp_factors_attempts_check', sql`activation_attempts >= 0`),
+    foreignKey({
+      name: 'admin_totp_factors_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+/**
+ * Backup codes: one row per code of the administrator's CURRENT generation.
+ *
+ * Only a hash is stored. The code is 80 bits from the CSPRNG, so — as with a session
+ * token — a plain SHA-256 is right and a slow KDF would only add latency: there is
+ * nothing to brute-force. The hash is domain-separated and salted with the tenant and
+ * administrator, so equal hashes in two rows say nothing.
+ *
+ * Regenerating DELETES the previous generation in the transaction that inserts the new
+ * one; disabling the factor deletes them all. A used code keeps its row (with `used_at`)
+ * until then, which is what "N of 10 remaining" counts. Consumption is one conditional
+ * UPDATE on `used_at IS NULL`, so a code is spent once however many requests race it.
+ */
+export const adminBackupCodes = pgTable(
+  'admin_backup_codes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    codeHash: text('code_hash').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    usedAt: timestamptz('used_at'),
+  },
+  (table) => [
+    uniqueIndex('admin_backup_codes_hash_key').on(table.tenantId, table.adminId, table.codeHash),
+    foreignKey({
+      name: 'admin_backup_codes_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+/**
+ * A password-verified sign-in waiting for its second factor.
+ *
+ * Not a session, and deliberately not a row in `admin_sessions` with a flag: every reader
+ * of that table — authentication, `isLive`, the session list, revocation counts — would
+ * have to remember the flag, and the one that forgot would be a session that skipped
+ * the second factor. A separate table cannot be mistaken for a session.
+ *
+ * Only the SHA-256 of the challenge token is stored, like a session's. The
+ * `credential_fingerprint` is a SHA-256 of the password hash the first step verified:
+ * the session is minted only if the stored hash still matches it, so a password rotated
+ * between the two steps voids the challenge exactly as it voids a login in flight.
+ * `attempts` bounds the guesses one challenge allows; `consumed_at` makes it single-use.
+ */
+export const adminLoginChallenges = pgTable(
+  'admin_login_challenges',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    credentialFingerprint: text('credential_fingerprint').notNull(),
+    issuedAt: timestamptz('issued_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    consumedAt: timestamptz('consumed_at'),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+  },
+  (table) => [
+    // Global, like the session token: it is presented before any tenant is known.
+    uniqueIndex('admin_login_challenges_token_key').on(table.tokenHash),
+    index('admin_login_challenges_admin_idx').on(table.tenantId, table.adminId),
+    // Retention.
+    index('admin_login_challenges_retention_idx').on(table.expiresAt),
+    check('admin_login_challenges_attempts_check', sql`attempts >= 0`),
+    foreignKey({
+      name: 'admin_login_challenges_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
   ],
 );
 
@@ -11602,9 +11752,22 @@ export const bulkOperations = pgTable(
     pausedAt: timestamptz('paused_at'),
     completedAt: timestamptz('completed_at'),
     cancelledAt: timestamptz('cancelled_at'),
+    /**
+     * Program §13: the operation whose FAILED items this one retries. Its items are a copy
+     * of those, so the original's history is never rewritten.
+     */
+    retryOfId: uuid('retry_of_id'),
   },
   (table) => [
     unique('bulk_operations_tenant_id_key').on(table.tenantId, table.id),
+    foreignKey({
+      columns: [table.tenantId, table.retryOfId],
+      foreignColumns: [table.tenantId, table.id],
+      name: 'bulk_operations_retry_of_fk',
+    }),
+    index('bulk_operations_retry_of_idx')
+      .on(table.tenantId, table.retryOfId)
+      .where(sql`retry_of_id IS NOT NULL`),
     foreignKey({
       columns: [table.tenantId, table.frozenAudienceId],
       foreignColumns: [frozenAudiences.tenantId, frozenAudiences.id],
@@ -11628,6 +11791,10 @@ export const bulkOperations = pgTable(
                  AND amount_minor IS NULL AND currency IS NULL AND duration_days IS NULL
             WHEN 'SERVICE_TIME' THEN duration_days IS NOT NULL AND duration_days > 0
                  AND amount_minor IS NULL AND currency IS NULL AND traffic_bytes IS NULL
+            WHEN 'SERVICE_SUSPEND' THEN amount_minor IS NULL AND currency IS NULL
+                 AND traffic_bytes IS NULL AND duration_days IS NULL AND NOT notify
+            WHEN 'SERVICE_RESUME' THEN amount_minor IS NULL AND currency IS NULL
+                 AND traffic_bytes IS NULL AND duration_days IS NULL AND NOT notify
             ELSE false
           END`,
     ),
@@ -11740,6 +11907,49 @@ export const bulkOperationItems = pgTable(
       'bulk_operation_items_processed_check',
       sql`(state IN ('PENDING', 'CANCELLED')) = (processed_at IS NULL)`,
     ),
+  ],
+);
+
+// --- Phase B3: the Web Admin Notification Center ----------------------------------------
+
+/**
+ * One administrator's read mark on one notification (`docs/notification-center.md`).
+ *
+ * The notification IS the `operational_events` row; this is only what one person has
+ * seen of it. `read_through` is the event's `last_seen_at` at the moment it was read, so a
+ * condition that recurs afterwards — the recorder bumps `last_seen_at` on the same row —
+ * reads as unread again for this administrator and nobody else. NULL is an explicit
+ * "mark unread". No row means never read.
+ *
+ * Nothing here touches the event: the operational log stays append-only and still has no
+ * "mark as seen", and a read mark resolves nothing. Tenant-scoped end to end: the
+ * administrator is a composite foreign key on `(tenant_id, admin_id)`, and every query
+ * also names the event's tenant.
+ */
+export const adminNotificationReads = pgTable(
+  'admin_notification_reads',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => operationalEvents.id),
+    /** The event's `last_seen_at` when this administrator read it; NULL = marked unread. */
+    readThrough: timestamptz('read_through'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'admin_notification_reads_pk',
+      columns: [table.tenantId, table.adminId, table.eventId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'admin_notification_reads_admin_fk',
+    }),
   ],
 );
 

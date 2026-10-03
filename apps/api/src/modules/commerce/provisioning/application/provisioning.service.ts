@@ -2098,6 +2098,12 @@ export class ProvisioningService {
       readonly customerId: UserId;
       readonly locationKey: string;
       readonly changeId: string;
+      /**
+       * Program §13: false for an OPERATOR's move. The customer did not ask for it, so the
+       * outcome announcer owes them no answer to a request — the rule an operator's suspend
+       * and rotation already follow (`requested_by_customer_id` NULL).
+       */
+      readonly requestedByCustomer?: boolean;
     },
     now: Date,
     tx: TransactionScope,
@@ -2124,8 +2130,9 @@ export class ProvisioningService {
         operationId: this.deps.operationId(`${service.id}:CHANGE_LOCATION:${input.changeId}`),
         serviceId: service.id,
         orderId: null,
-        // The customer asked for this, so they are owed its outcome.
-        requestedByCustomerId: service.customerId,
+        // The customer asked for this, so they are owed its outcome; an operator's move is not
+        // theirs to be answered about.
+        requestedByCustomerId: input.requestedByCustomer === false ? null : service.customerId,
         panelId: service.panelId,
         type: 'CHANGE_LOCATION',
         target: {
@@ -2157,6 +2164,69 @@ export class ProvisioningService {
       tx,
     );
     return operation;
+  }
+
+  /**
+   * Program §13: plans ONE service's share of a mass SUSPEND or RESUME, inside the bulk
+   * item's transaction — the operator request path's own planner (`planWithin`), so the
+   * open-operation return, the audit row and the operation are exactly an operator's
+   * suspend. The permission was charged when the mass operation was confirmed
+   * (`services.mass.status` AND `services.edit`); the processor that calls this acts as
+   * `SYSTEM_JOB`, which is why no guard is asked here.
+   *
+   * Asked as a VERDICT, like `planGrant`: a service that left the legal state, or whose
+   * panel can no longer do it, is UNFULFILLABLE (the item is SKIPPED, nothing written). An
+   * open operation of the same type is RETURNED, not duplicated — the item then follows
+   * that operation's own authoritative end. The idempotency key is the bulk operation's,
+   * so a replayed item plans the same operation.
+   */
+  async planStatusWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly serviceId: string;
+      readonly customerId: UserId;
+      readonly type: 'SUSPEND' | 'RESUME';
+      readonly key: string;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<
+    | { readonly outcome: 'PLANNED'; readonly operation: OperationRecord }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  > {
+    const service = await this.deps.services.findById(scope, input.serviceId, tx);
+    if (service === null) return { outcome: 'UNFULFILLABLE', reason: 'SERVICE_NOT_ELIGIBLE' };
+    // The frozen item named this customer's service; a service moved to another customer
+    // since is not this item's to change.
+    if (service.customerId !== input.customerId) {
+      return { outcome: 'UNFULFILLABLE', reason: 'SERVICE_NOT_OWNED' };
+    }
+    if (!OPERATION_LEGAL_FROM[input.type].includes(service.state)) {
+      return { outcome: 'UNFULFILLABLE', reason: `SERVICE_${service.state}` };
+    }
+    const operable = await this.deps.panels.operability(scope, service.panelId, input.type, tx);
+    if (!operable.ok) {
+      return { outcome: 'UNFULFILLABLE', reason: operable.reason ?? 'UNKNOWN' };
+    }
+    try {
+      const operation = await this.planWithin(
+        scope,
+        actor,
+        service,
+        input.type,
+        { idempotencyKey: input.key },
+        { requestedBy: 'OPERATOR' },
+        now,
+        tx,
+      );
+      return { outcome: 'PLANNED', operation };
+    } catch (error) {
+      if (isActionInProgress(error)) {
+        return { outcome: 'UNFULFILLABLE', reason: 'ACTION_IN_PROGRESS' };
+      }
+      throw error;
+    }
   }
 
   /**

@@ -116,11 +116,18 @@ export * from './recovery-kit.js';
 export * from './secrets.js';
 export * from './ports.js';
 export * from './http.js';
+/** Phase D2: the admin's second factor, own sessions and security history. */
+export * from './admin-security.js';
+/** Phase D3: role management over the existing authorization model. */
+export * from './rbac.js';
 export * from './reporting.js';
+// Program §10: the Payment Operations Center's queues and the shared attention read model.
+export * from './payment-operations.js';
 /** Round W: the Web Admin dashboard and sidebar counters, over the reports above. */
 export * from './dashboard.js';
 /** Round N: the shared audience, broadcast, and safe mass actions. */
 export * from './audience.js';
 export * from './broadcasts.js';
 export * from './bulk-operations.js';
+export * from './notification-center.js';
 export * from './direct-messages.js';

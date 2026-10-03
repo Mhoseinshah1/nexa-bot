@@ -219,6 +219,7 @@ export function Topbar({
   onSearch,
   admin,
   onSignOut,
+  bell,
 }: {
   crumbs: readonly Crumb[];
   collapsed: boolean;
@@ -226,6 +227,8 @@ export function Topbar({
   onSearch: () => void;
   admin: { displayName: string; roleKeys: readonly string[] };
   onSignOut: () => void;
+  /** Phase B3: the notification bell, drawn beside the search. */
+  bell?: React.ReactNode;
 }) {
   const initial = Array.from(admin.displayName.trim())[0] ?? '·';
   const roles = admin.roleKeys.join(t('web.list_separator')) || '—';
@@ -258,6 +261,8 @@ export function Topbar({
         <kbd>Ctrl K</kbd>
       </button>
 
+      {bell}
+
       <Menu
         label={t('web.user_menu')}
         triggerClassName="btn ghost user-trigger"
@@ -276,6 +281,13 @@ export function Topbar({
         items={[
           { key: 'who', heading: `${admin.displayName} · ${roles}` },
           { key: 'sep', separator: true },
+          // Phase D2: the administrator's own account and its security section.
+          {
+            key: 'account',
+            label: t('web.account_title'),
+            icon: 'shield',
+            onSelect: () => navigate('/account'),
+          },
           {
             key: 'sign-out',
             label: t('web.sign_out'),

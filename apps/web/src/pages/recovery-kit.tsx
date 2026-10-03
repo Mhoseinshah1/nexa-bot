@@ -110,6 +110,7 @@ function passphraseAcceptable(value: string): boolean {
 
 function ExportForm() {
   const [accountPassword, setAccountPassword] = useState('');
+  const [code, setCode] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [again, setAgain] = useState('');
   const [done, setDone] = useState(false);
@@ -132,6 +133,7 @@ function ExportForm() {
       // Cleared whatever happened: a secret in a form field outlives the reason
       // it was typed for.
       setAccountPassword('');
+      setCode('');
       setPassphrase('');
       setAgain('');
     },
@@ -145,7 +147,12 @@ function ExportForm() {
     event.preventDefault();
     if (!ready) return;
     setDone(false);
-    exporter.mutate({ accountPassword, passphrase, passphraseConfirmation: again });
+    exporter.mutate({
+      accountPassword,
+      ...(code.trim() === '' ? {} : { code: code.replace(/\s+/g, '') }),
+      passphrase,
+      passphraseConfirmation: again,
+    });
   };
 
   return (
@@ -161,6 +168,7 @@ function ExportForm() {
           onChange={(event) => setAccountPassword(event.currentTarget.value)}
         />
       </label>
+      <StepUpCodeField value={code} onChange={setCode} />
       <label className="field">
         <span className="field-label">{t('web.kit_passphrase')}</span>
         <input
@@ -200,11 +208,16 @@ function ImportForm({ onImported }: { onImported: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [passphrase, setPassphrase] = useState('');
   const [accountPassword, setAccountPassword] = useState('');
+  const [code, setCode] = useState('');
   const [result, setResult] = useState<ImportRecoveryKitResponse | null>(null);
 
   const importer = useMutation({
-    mutationFn: (input: { file: File; passphrase: string; accountPassword: string }) =>
-      importRecoveryKit({ ...input, idempotencyKey: newIdempotencyKey() }),
+    mutationFn: (input: {
+      file: File;
+      passphrase: string;
+      accountPassword: string;
+      code?: string;
+    }) => importRecoveryKit({ ...input, idempotencyKey: newIdempotencyKey() }),
     onSuccess: (response) => {
       setResult(response);
       onImported();
@@ -212,6 +225,7 @@ function ImportForm({ onImported }: { onImported: () => void }) {
     onSettled: () => {
       setPassphrase('');
       setAccountPassword('');
+      setCode('');
     },
   });
 
@@ -220,7 +234,12 @@ function ImportForm({ onImported }: { onImported: () => void }) {
     event.preventDefault();
     if (file === null || !ready) return;
     setResult(null);
-    importer.mutate({ file, passphrase, accountPassword });
+    importer.mutate({
+      file,
+      passphrase,
+      accountPassword,
+      ...(code.trim() === '' ? {} : { code: code.replace(/\s+/g, '') }),
+    });
   };
 
   return (
@@ -253,6 +272,7 @@ function ImportForm({ onImported }: { onImported: () => void }) {
           onChange={(event) => setAccountPassword(event.currentTarget.value)}
         />
       </label>
+      <StepUpCodeField value={code} onChange={setCode} />
       <div className="btn-group">
         <button type="submit" className="btn primary" disabled={!ready || importer.isPending}>
           <Icon name="upload" />
@@ -449,6 +469,8 @@ function RemoveKey({
  * restoring under pressure should not have to decode.
  */
 const KIT_ERRORS: Record<string, WebKey> = {
+  'auth.step_up_factor_required': 'web.step_up_factor_required',
+  'auth.step_up_failed': 'web.step_up_failed',
   [PLATFORM_ERROR_CODES.RECOVERY_KIT_AUTH_FAILED]: 'web.kit_error_auth',
   [PLATFORM_ERROR_CODES.RECOVERY_KIT_MALFORMED]: 'web.kit_error_malformed',
   [PLATFORM_ERROR_CODES.RECOVERY_KIT_UNSUPPORTED_VERSION]: 'web.kit_error_version',
@@ -459,6 +481,28 @@ const KIT_ERRORS: Record<string, WebKey> = {
   [PLATFORM_ERROR_CODES.RECOVERY_KIT_TOO_MANY_KEYS]: 'web.kit_error_too_many',
   [PLATFORM_ERROR_CODES.INSTALLATION_KEY_IN_USE]: 'web.kit_error_in_use',
 };
+
+/**
+ * The code half of the step-up (D2 review): required by the server when the
+ * administrator's own two-step sign-in is on, and ignored when it is off.
+ */
+function StepUpCodeField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="field">
+      <span className="field-label">{t('web.admin_step_up_code')}</span>
+      <input
+        className="input"
+        dir="ltr"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        maxLength={8}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+      <span className="muted small">{t('web.admin_step_up_code_hint')}</span>
+    </label>
+  );
+}
 
 export function kitMessage(error: unknown): string {
   if (error instanceof ApiError) {

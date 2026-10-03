@@ -59,6 +59,10 @@ export const SERVICE_ACTION_OPERATION: Readonly<
   RESUME: 'RESUME',
   TERMINATE: 'TERMINATE',
   ROTATE_LINK: 'ROTATE_SUBSCRIPTION',
+  // Program §13: the operator's free grant and move plan what a purchase plans.
+  ADD_TRAFFIC: 'ADD_TRAFFIC',
+  ADD_TIME: 'ADD_TIME',
+  CHANGE_LOCATION: 'CHANGE_LOCATION',
 };
 
 /**
@@ -92,7 +96,26 @@ export interface ServiceActionFacts {
    * `OPERATION_REQUIRED_CAPABILITIES` exists to serve.
    */
   readonly operability: Readonly<Partial<Record<OperationType, PanelOperability>>>;
+  /**
+   * Program §13: whether the service has a limit to add to — `trafficUnlimited` (the
+   * allowance is the unlimited sentinel) and `noExpiry` (it never expires). Absent is
+   * treated as "nothing to add to", fail closed, as an absent operability verdict is.
+   */
+  readonly grantLimits?: { readonly trafficUnlimited: boolean; readonly noExpiry: boolean };
+  /** Program §13: whether any other location is offered for this service. Absent: none. */
+  readonly hasLocationTarget?: boolean;
+  /**
+   * Program §13 (Codex review of #157): whether ANY commercial operation (renew, add
+   * traffic/time/devices, location change) is open on this service. `planGrant` and
+   * `planLocationChange` refuse on any of them (`prepareCommercialAction`'s
+   * `findOpenCommercial`), not only on one of their own type. Absent: treated as open.
+   */
+  readonly openCommercial?: boolean;
 }
+
+/** The operator actions planned through `prepareCommercialAction`. */
+const COMMERCIAL_OPERATOR_ACTIONS: ReadonlySet<ServiceOperatorAction> =
+  new Set<ServiceOperatorAction>(['ADD_TRAFFIC', 'ADD_TIME', 'CHANGE_LOCATION']);
 
 /**
  * The panel reason, mapped to the blocker an operator can act on.
@@ -146,6 +169,24 @@ function evaluate(
   }
   if (!verdict.ok) {
     return { action, available: false, blocker: blockerFor(verdict.reason) };
+  }
+
+  /*
+   * Program §13: a grant needs a limit to add to and a move needs somewhere to go. After
+   * the panel (both are facts about THIS service, not about its configuration) and before
+   * IN_PROGRESS, which is the only transient answer.
+   */
+  if (action === 'ADD_TRAFFIC' && facts.grantLimits?.trafficUnlimited !== false) {
+    return { action, available: false, blocker: 'UNLIMITED' };
+  }
+  if (action === 'ADD_TIME' && facts.grantLimits?.noExpiry !== false) {
+    return { action, available: false, blocker: 'UNLIMITED' };
+  }
+  if (action === 'CHANGE_LOCATION' && facts.hasLocationTarget !== true) {
+    return { action, available: false, blocker: 'NO_TARGET' };
+  }
+  if (COMMERCIAL_OPERATOR_ACTIONS.has(action) && facts.openCommercial !== false) {
+    return { action, available: false, blocker: 'IN_PROGRESS' };
   }
 
   if (facts.openOperations.includes(type)) {

@@ -8,7 +8,10 @@ import {
   SERVICE_TERMINATE_CONFIRMATION,
   classifyListSearch,
   serviceActionRequestSchema,
+  serviceChangeLocationRequestSchema,
+  serviceGrantRequestSchema,
   serviceListQuerySchema,
+  type ServiceLocationTargetsResponse,
   serviceTerminateRequestSchema,
   type PanelId,
   type ServiceActionAvailability,
@@ -93,7 +96,17 @@ export class ServicesController {
       ...(query.panelId === undefined ? {} : { panelId: query.panelId }),
       ...(query.providerUsername === undefined ? {} : { providerUsername: query.providerUsername }),
       ...(query.q === undefined ? {} : { q: query.q }),
+      ...(query.productId === undefined ? {} : { productId: query.productId }),
+      ...(query.locationKey === undefined ? {} : { locationKey: query.locationKey }),
+      ...(query.expiringWithinHours === undefined
+        ? {}
+        : { expiringWithinHours: query.expiringWithinHours }),
     });
+    /*
+     * Program §13: "expiring within N hours" is `[now, now + N h)` against the server's
+     * clock — half-open, and an already-expired service is not "expiring".
+     */
+    const now = this.container.clock.now();
     const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.serviceAdmin.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
@@ -112,6 +125,16 @@ export class ServicesController {
          */
         ...(page.providerUsername === undefined ? {} : { providerUsername: page.providerUsername }),
         ...(text === null ? {} : { text }),
+        ...(page.productId === undefined ? {} : { productId: page.productId }),
+        ...(page.locationKey === undefined ? {} : { locationKey: page.locationKey }),
+        ...(page.expiringWithinHours === undefined
+          ? {}
+          : {
+              expiresWithin: {
+                from: now,
+                to: new Date(now.getTime() + page.expiringWithinHours * 3_600_000),
+              },
+            }),
       },
     });
     // Who each service is for, as Telegram knows them — one read for the page (spec §10).
@@ -268,6 +291,71 @@ export class ServicesController {
   }
 
   /**
+   * Program §13: an operator's FREE traffic or time grant to this service.
+   *
+   * `ServiceGrantService` charges `services.grant` and plans the same `ADD_TRAFFIC` /
+   * `ADD_TIME` operation a purchased add-on plans; the provisioner applies it. The answer
+   * is the operation as PLANNED — never "done".
+   */
+  @Post('services/:id/grant')
+  async grant(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ServiceActionResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const input = serviceGrantRequestSchema.parse(body);
+    const operation = await this.container.serviceGrants.grant(scope, actor, id, input);
+    return this.answer(scope, actor, id, operation);
+  }
+
+  /** Program §13: where an operator may move this service. `services.view`. */
+  @Get('services/:id/location-targets')
+  async locationTargets(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<ServiceLocationTargetsResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const found = await this.container.locationChanges.operatorTargets(scope, actor, id);
+    return {
+      current: found.current,
+      targets: found.targets.map((target) => ({
+        id: target.id,
+        locationKey: target.locationKey,
+        label: target.label,
+      })),
+    };
+  }
+
+  /**
+   * Program §13: an operator's move of this service to another configured location.
+   * `LocationChangeService.requestFromOperator` charges `services.edit` and plans the same
+   * `CHANGE_LOCATION` operation a customer's move plans.
+   */
+  @Post('services/:id/change-location')
+  async changeLocation(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ServiceActionResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const input = serviceChangeLocationRequestSchema.parse(body);
+    const result = await this.container.locationChanges.requestFromOperator(scope, actor, {
+      serviceId: id,
+      locationId: input.locationId,
+      reason: input.reason,
+      idempotencyKey: input.idempotencyKey,
+    });
+    const operation = await this.container.serviceAdmin.operation(
+      scope,
+      actor,
+      id,
+      result.operationId,
+    );
+    return this.answer(scope, actor, id, operation);
+  }
+
+  /**
    * Retrying a provisioning attempt, which is NOT `requestFromOperator`'s.
    *
    * `retryProvisioning` has refusals of its own that matter more than the shared ones:
@@ -419,6 +507,7 @@ function toSummary(
     terminatedAt: record.terminatedAt === null ? null : record.terminatedAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+    locationLabel: record.locationLabel,
   };
 }
 

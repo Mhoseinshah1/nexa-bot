@@ -1,6 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
   errors,
+  money,
   serviceIdSchema,
   serviceLocationIdSchema,
   type ActorContext,
@@ -25,7 +26,7 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { ServiceRepository } from '../../provisioning/application/ports.js';
+import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
 import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
@@ -46,9 +47,17 @@ export const LOCATION_CHANGE_PERMISSION: PermissionKey = 'maintenance.run';
 /** The customer namespace, shared with ordering and commercial actions. */
 const CUSTOMER_NAMESPACE = 'TELEGRAM' as const;
 
+/** Program §13: an operator's move is `services.edit`, the weight of a suspend. */
+export const OPERATOR_LOCATION_CHANGE_PERMISSION: PermissionKey = 'services.edit';
+/** Program §13: reading where a service could be moved is reading the service. */
+export const OPERATOR_LOCATION_VIEW_PERMISSION: PermissionKey = 'services.view';
+
+/** An operator's move is not rationed by the customer's window. */
+const NO_WINDOW = { cooldownHours: null, maxChanges: null, periodDays: null } as const;
+
 export interface LocationChangeServiceDeps {
   readonly services: Pick<ServiceRepository, 'findById' | 'lockLifecycle'>;
-  readonly policy: Pick<LocationChangePolicy, 'decide'>;
+  readonly policy: Pick<LocationChangePolicy, 'decide' | 'operatorTargets'>;
   readonly changes: Pick<LocationChangeRepository, 'create'>;
   readonly provisioning: Pick<ProvisioningService, 'planLocationChange'>;
   /**
@@ -290,6 +299,200 @@ export class LocationChangeService {
     );
   }
 
+  /** Program §13: where an operator may move this service. `services.view`. */
+  async operatorTargets(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+  ): Promise<Awaited<ReturnType<LocationChangePolicy['operatorTargets']>>> {
+    await this.deps.guard.check(scope, actor, OPERATOR_LOCATION_VIEW_PERMISSION);
+    const service = await this.deps.services.findById(scope, this.operatorServiceId(serviceId));
+    if (service === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+    }
+    return this.deps.policy.operatorTargets(scope, service);
+  }
+
+  /**
+   * Whether an operator could move this service anywhere. Charges nothing: its one caller,
+   * the service detail, has already charged `services.view` for this service.
+   */
+  async hasOperatorTarget(scope: TenantContext, service: ServiceRecord): Promise<boolean> {
+    return (await this.deps.policy.operatorTargets(scope, service)).targets.length > 0;
+  }
+
+  /**
+   * Program §13 — an OPERATOR moves one service to another configured location of its
+   * panel. The customer's request path with three differences, each because nobody bought
+   * or asked for anything: no price (an operator's move is free, recorded at zero), no
+   * customer window (cooldown and rolling limit ration a customer's requests), and no
+   * customer panel-policy switch or reseller entitlement (both decide what a CUSTOMER is
+   * offered). Everything else is the same transaction: the lifecycle lock first, the legal
+   * state, the panel's capability, the chosen target decided again under the lock, the
+   * same `planLocationChange` with all of `prepareCommercialAction`'s refusals, the frozen
+   * change record, the audit row with the reason, and the idempotency record. The customer
+   * is not answered about a "request" they never made (`requestedByCustomer: false`).
+   */
+  async requestFromOperator(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly serviceId: string;
+      readonly locationId: string;
+      readonly reason: string;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<{ readonly changeId: string; readonly operationId: string }> {
+    const serviceId = this.operatorServiceId(input.serviceId);
+    const locationId = this.locationId(input.locationId);
+    const reason = input.reason.trim();
+    const denial = {
+      action: 'service.operator_change_location',
+      entityType: 'Service',
+      entityId: serviceId,
+    };
+    try {
+      await this.deps.guard.check(scope, actor, OPERATOR_LOCATION_CHANGE_PERMISSION);
+    } catch (error) {
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        OPERATOR_LOCATION_CHANGE_PERMISSION,
+        denial,
+        error,
+      );
+      throw error;
+    }
+    const requestHash = hashRequest({ serviceId, locationId, reason, operator: true });
+    const replay = await this.deps.idempotency.find<{ changeId: string; operationId: string }>(
+      scope,
+      'WEB',
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) return replay.result;
+
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      OPERATOR_LOCATION_CHANGE_PERMISSION,
+      denial,
+      async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'This installation has stopped accepting work.',
+          );
+        }
+        await this.deps.services.lockLifecycle(scope, serviceId, tx);
+        const service = await this.deps.services.findById(scope, serviceId, tx);
+        if (service === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+        }
+        if (!OPERATION_LEGAL_FROM.CHANGE_LOCATION.includes(service.state)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+            'That service is not in a state this action can be taken from.',
+            { state: service.state },
+          );
+        }
+        const operable = await this.deps.panels.operability(
+          scope,
+          service.panelId,
+          'CHANGE_LOCATION',
+          tx,
+        );
+        if (!operable.ok) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+            'The panel this service lives on cannot perform that action.',
+            { reason: operable.reason ?? 'UNKNOWN' },
+          );
+        }
+        const { current, target } = await this.deps.policy.decide(
+          scope,
+          service,
+          locationId,
+          now,
+          null,
+          tx,
+          NO_WINDOW,
+        );
+        const changeId = this.deps.ids.uuid();
+        const operation = await this.deps.provisioning.planLocationChange(
+          scope,
+          actor,
+          {
+            serviceId,
+            customerId: service.customerId,
+            locationKey: target.locationKey,
+            changeId,
+            requestedByCustomer: false,
+          },
+          now,
+          tx,
+        );
+        await this.deps.changes.create(
+          scope,
+          {
+            id: changeId,
+            serviceId,
+            customerId: service.customerId,
+            locationId: target.id,
+            locationVersion: target.version,
+            fromLocationKey: current.key,
+            fromLocationLabel: current.label,
+            toLocationKey: target.locationKey,
+            toLocationLabel: target.label,
+            // Nothing is charged for an operator's move.
+            price: money(0n, target.price.currency),
+            limits: NO_WINDOW,
+            orderId: null,
+            operationId: operation.id,
+            now,
+          },
+          tx,
+        );
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: denial.action,
+            entityType: 'Service',
+            entityId: serviceId,
+            before: { locationKey: current.key, locationLabel: current.label },
+            after: {
+              requestedBy: 'OPERATOR',
+              changeId,
+              locationId: target.id,
+              locationVersion: target.version,
+              toLocationKey: target.locationKey,
+              toLocationLabel: target.label,
+              operationId: operation.operationId,
+            },
+            result: 'SUCCESS',
+            reason,
+          },
+          tx,
+        );
+        const result = { changeId, operationId: operation.id };
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          'WEB',
+          input.idempotencyKey,
+          requestHash,
+          result,
+          tx,
+        );
+        return result;
+      },
+    );
+  }
+
   private mutationDeps() {
     return {
       uow: this.deps.uow,
@@ -329,6 +532,18 @@ export class LocationChangeService {
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
         'That is not a valid service identifier.',
       );
+    }
+    return parsed.data;
+  }
+
+  /**
+   * Program §13: on the operator's surface a malformed service id is `SERVICE_NOT_FOUND`, the
+   * answer every other operator service route gives it, rather than a validation error.
+   */
+  private operatorServiceId(candidate: string): string {
+    const parsed = serviceIdSchema.safeParse(candidate);
+    if (!parsed.success) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
     return parsed.data;
   }

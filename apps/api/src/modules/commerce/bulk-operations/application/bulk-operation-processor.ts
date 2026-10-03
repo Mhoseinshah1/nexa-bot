@@ -49,6 +49,22 @@ export interface GrantPlanner {
     | { readonly outcome: 'PLANNED'; readonly operation: { readonly id: string } }
     | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
   >;
+  /** Program §13: one service's share of a mass SUSPEND or RESUME (`planStatusWithin`). */
+  planStatusWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly serviceId: string;
+      readonly customerId: UserId;
+      readonly type: 'SUSPEND' | 'RESUME';
+      readonly key: string;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<
+    | { readonly outcome: 'PLANNED'; readonly operation: { readonly id: string } }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  >;
 }
 
 export interface BulkOperationProcessorDeps {
@@ -272,20 +288,36 @@ export class BulkOperationProcessor {
     tx: TransactionScope,
   ): Promise<'planned' | 'skipped'> {
     if (item.serviceId === null) throw new Error(`grant item ${item.id} names no service`);
-    const planned = await this.deps.grants.planGrant(
-      scope,
-      actor,
-      {
-        serviceId: item.serviceId,
-        customerId: item.customerId as UserId,
-        kind: item.kind === 'SERVICE_TRAFFIC' ? 'ADD_TRAFFIC' : 'ADD_TIME',
-        trafficBytes: item.trafficBytes ?? 0n,
-        durationDays: item.durationDays ?? 0,
-        grantKey: item.operationId,
-      },
-      now,
-      tx,
-    );
+    const planned =
+      item.kind === 'SERVICE_SUSPEND' || item.kind === 'SERVICE_RESUME'
+        ? await this.deps.grants.planStatusWithin(
+            scope,
+            actor,
+            {
+              serviceId: item.serviceId,
+              customerId: item.customerId as UserId,
+              type: item.kind === 'SERVICE_SUSPEND' ? 'SUSPEND' : 'RESUME',
+              // The bulk operation's own key: a replayed item plans the same operation, and a
+              // RETRY (a new bulk operation) plans a new one.
+              key: `bulk:${item.operationId}`,
+            },
+            now,
+            tx,
+          )
+        : await this.deps.grants.planGrant(
+            scope,
+            actor,
+            {
+              serviceId: item.serviceId,
+              customerId: item.customerId as UserId,
+              kind: item.kind === 'SERVICE_TRAFFIC' ? 'ADD_TRAFFIC' : 'ADD_TIME',
+              trafficBytes: item.trafficBytes ?? 0n,
+              durationDays: item.durationDays ?? 0,
+              grantKey: item.operationId,
+            },
+            now,
+            tx,
+          );
     if (planned.outcome === 'UNFULFILLABLE') {
       await this.deps.repository.markSkipped(
         scope,

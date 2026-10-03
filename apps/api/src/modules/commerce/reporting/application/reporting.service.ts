@@ -12,6 +12,7 @@ import {
   SERVICE_STATES,
   WALLET_REPORT_GROUP_OF,
   dashboardSaleKindOf,
+  financialGranularityFor,
   errors,
   money,
   type ActorContext,
@@ -21,6 +22,7 @@ import {
   type DashboardFixedWindow,
   type DashboardSaleKind,
   type DashboardSummaryResponse,
+  type FinancialGranularity,
   type Money,
   type MoneyComparison,
   type OrderPurpose,
@@ -28,6 +30,7 @@ import {
   type PaymentState,
   type ReportExportFormat,
   type ReportExportKind,
+  type ReportFinancialResponse,
   type ReportFailuresResponse,
   type ReportInfrastructureResponse,
   type ReportOperationGroup,
@@ -53,6 +56,7 @@ import {
   type WalletReportGroup,
 } from '@nexa/contracts';
 import { creditAllowanceOf, creditFigures } from '../../resellers/domain/reseller-credit.js';
+import { financialStatement, linesOnWire, type Statement } from './financial-statement.js';
 import {
   REPORTS_EXPORT_PERMISSION,
   REPORTS_VIEW_PERMISSION,
@@ -709,6 +713,85 @@ export class ReportingService {
     };
   }
 
+  // --- Financial statement (Phase E2) -----------------------------------------------
+
+  /**
+   * The financial statement (`docs/financial-reports.md`): sales, cash from customers and
+   * the wallet liability, per bucket and per currency, with the period totals that are the
+   * buckets' exact sum. Same gate as every report, charged FIRST.
+   */
+  async financial(
+    scope: TenantContext,
+    actor: ActorContext,
+    request: ReportRangeRequest,
+    granularity?: FinancialGranularity,
+  ): Promise<ReportFinancialResponse> {
+    const r = await this.prepareFinancial(
+      scope,
+      actor,
+      request,
+      REPORTS_VIEW_PERMISSION,
+      granularity,
+    );
+    const repo = this.deps.repository;
+    const statement = await this.statementOf(scope, r);
+    const side = r.period.current;
+    const byProduct = await repo.financialByProduct(scope, r.current, REPORT_ENTITY_ROWS_MAX);
+    return {
+      period: r.wire,
+      granularity: r.period.granularity as FinancialGranularity,
+      buckets: side.buckets.map((bucket) => ({
+        index: bucket.index,
+        start: bucket.start.toISOString(),
+        end: bucket.end.toISOString(),
+        label: bucket.label,
+        lines: begun(bucket, side)
+          ? (statement.buckets.get(bucket.index) ?? []).map(linesOnWire)
+          : null,
+      })),
+      totals: statement.totals.map(linesOnWire),
+      salesByChannel: (await repo.financialSalesByChannel(scope, r.current)).map((row) => ({
+        method: row.method,
+        provider: row.provider,
+        currency: row.currency,
+        orders: row.orders,
+        sales: row.sales.toString(),
+      })),
+      cashByRoute: statement.cashByRoute.map((row) => ({
+        method: row.method,
+        provider: row.provider,
+        kind: row.kind,
+        currency: row.currency,
+        payments: row.payments,
+        principal: row.principal.toString(),
+        customerFees: row.customerFees.toString(),
+        customerPaid: row.customerPaid.toString(),
+      })),
+      byProduct: byProduct.rows.map((row) => ({
+        productId: row.productId,
+        title: row.title,
+        currency: row.currency,
+        orders: row.orders,
+        sales: row.sales.toString(),
+        refunds: row.refunds.toString(),
+      })),
+      byProductTruncated: byProduct.truncated,
+      resellerSales: (await repo.financialResellerSales(scope, r.current)).map((row) => ({
+        currency: row.currency,
+        orders: row.entries,
+        sales: row.amount.toString(),
+      })),
+      wallet: statement.wallet.map((row) => ({
+        currency: row.currency,
+        opening: row.opening.toString(),
+        closing: row.closing.toString(),
+        movements: row.movements.map((m) => ({ group: m.group, amount: m.amount.toString() })),
+      })),
+      providerFeeRecorded: false,
+      profitSupported: false,
+    };
+  }
+
   // --- Export -------------------------------------------------------------------
 
   /**
@@ -724,8 +807,13 @@ export class ReportingService {
     request: ReportRangeRequest,
     report: ReportExportKind,
     format: ReportExportFormat,
+    granularity?: FinancialGranularity,
   ): Promise<ReportExportFile> {
-    const r = await this.prepare(scope, actor, request, REPORTS_EXPORT_PERMISSION);
+    // The financial file is bucketed as the page is, by the same resolution.
+    const r =
+      report === 'FINANCIAL'
+        ? await this.prepareFinancial(scope, actor, request, REPORTS_EXPORT_PERMISSION, granularity)
+        : await this.prepare(scope, actor, request, REPORTS_EXPORT_PERMISSION);
     const presentation = { timezone: r.period.timezone, calendar: r.period.calendar };
     const table = await this.exportTable(scope, r, report, presentation);
     if (table.rows.length > REPORT_EXPORT_ROW_MAX) {
@@ -1013,6 +1101,80 @@ export class ReportingService {
           out,
         );
       }
+      case 'FINANCIAL': {
+        /*
+         * One row per begun bucket and currency — exactly the cells the page's table shows —
+         * and no total row: a spreadsheet's column sum IS the page's period total, and a
+         * total row inside the data would be summed into it. The integration suite holds
+         * the column sums to the displayed totals.
+         */
+        const statement = await this.statementOf(scope, r);
+        const side = r.period.current;
+        const out: Record<string, ExportCell>[] = [];
+        for (const bucket of side.buckets) {
+          if (!begun(bucket, side)) continue;
+          for (const lines of statement.buckets.get(bucket.index) ?? []) {
+            const m = (amount: bigint): ExportCell => ({
+              amountMinor: amount,
+              currency: lines.currency,
+            });
+            out.push({
+              bucket: bucket.label,
+              bucketStartUtc: bucket.start.toISOString(),
+              bucketEndUtc: bucket.end.toISOString(),
+              currency: lines.currency,
+              salesCount: lines.salesCount,
+              grossSales: m(lines.grossSales),
+              discounts: m(lines.discounts),
+              sales: m(lines.sales),
+              refundCount: lines.refundCount,
+              refunds: m(lines.refunds),
+              refundsToWallet: m(lines.refundsToWallet),
+              refundsPaidOut: m(lines.refundsPaidOut),
+              netSales: m(lines.netSales),
+              externalPayments: lines.externalPayments,
+              principalReceived: m(lines.principalReceived),
+              customerFees: m(lines.customerFees),
+              customerPaid: m(lines.customerPaid),
+              receiptCredits: m(lines.receiptCredits),
+              walletTopups: m(lines.walletTopups),
+              walletSpending: m(lines.walletSpending),
+              cashbackNet: m(lines.cashbackNet),
+              commissionNet: m(lines.commissionNet),
+              gifts: m(lines.gifts),
+            });
+          }
+        }
+        return table(
+          sheetName,
+          [
+            ['bucket', 'text'],
+            ['bucketStartUtc', 'text'],
+            ['bucketEndUtc', 'text'],
+            ['currency', 'text'],
+            ['salesCount', 'number'],
+            ['grossSales', 'money'],
+            ['discounts', 'money'],
+            ['sales', 'money'],
+            ['refundCount', 'number'],
+            ['refunds', 'money'],
+            ['refundsToWallet', 'money'],
+            ['refundsPaidOut', 'money'],
+            ['netSales', 'money'],
+            ['externalPayments', 'number'],
+            ['principalReceived', 'money'],
+            ['customerFees', 'money'],
+            ['customerPaid', 'money'],
+            ['receiptCredits', 'money'],
+            ['walletTopups', 'money'],
+            ['walletSpending', 'money'],
+            ['cashbackNet', 'money'],
+            ['commissionNet', 'money'],
+            ['gifts', 'money'],
+          ],
+          out,
+        );
+      }
       default: {
         const unreachable: never = report;
         throw new Error(`unknown report ${String(unreachable)}`);
@@ -1021,6 +1183,55 @@ export class ReportingService {
   }
 
   // --- Shared -------------------------------------------------------------------
+
+  /**
+   * The period for the financial statement: the caller's DAY/WEEK/MONTH, or the length rule
+   * with an hour read as a day. Authorizes FIRST, through `prepare`.
+   */
+  private async prepareFinancial(
+    scope: TenantContext,
+    actor: ActorContext,
+    request: ReportRangeRequest,
+    permission: typeof REPORTS_VIEW_PERMISSION,
+    granularity: FinancialGranularity | undefined,
+  ): Promise<Resolved> {
+    const r = await this.prepare(scope, actor, request, permission);
+    const wanted = granularity ?? financialGranularityFor(r.period.current.localDays);
+    if (wanted === r.period.granularity) return r;
+    const presentation = { timezone: r.period.timezone, calendar: r.period.calendar };
+    return this.resolvedOf(
+      this.deps.periods.resolve(
+        {
+          range: request.range,
+          ...(request.from === undefined ? {} : { from: request.from }),
+          ...(request.to === undefined ? {} : { to: request.to }),
+          granularity: wanted,
+        },
+        // The SAME instant: re-resolving must not move "now" between the two reads.
+        r.period.now,
+        presentation,
+      ),
+    );
+  }
+
+  /**
+   * The statement over the current period's begun buckets (`docs/financial-reports.md`).
+   * Four bucketed statements, one per kind of fact, and the opening balance; the filing is
+   * `financialStatement`, pure.
+   */
+  private async statementOf(scope: TenantContext, r: Resolved): Promise<Statement> {
+    const repo = this.deps.repository;
+    const side = r.period.current;
+    const bounds = boundariesOf(side.buckets, side.effectiveEnd);
+    return financialStatement({
+      begunBuckets: side.buckets.filter((b) => begun(b, side)).map((b) => b.index),
+      sales: await repo.financialSales(scope, bounds),
+      refunds: await repo.financialRefunds(scope, bounds),
+      cash: await repo.financialCash(scope, bounds),
+      ledger: await repo.financialLedger(scope, bounds),
+      opening: await repo.walletBalancesBefore(scope, side.start),
+    });
+  }
 
   private async prepare(
     scope: TenantContext,
