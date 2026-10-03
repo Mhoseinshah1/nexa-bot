@@ -45,10 +45,7 @@ export const MIGRATION_OPENING_BALANCE_PERMISSION: PermissionKey = 'maintenance.
 const AUDIT_ACTION = 'wallet.migration_opening_balance';
 
 export interface MigrationOpeningBalanceDeps {
-  readonly repository: Pick<
-    WalletRepository,
-    'append' | 'lockCustomer' | 'balanceOf' | 'findByReference'
-  >;
+  readonly repository: Pick<WalletRepository, 'append' | 'lockCustomer' | 'findByReference'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -83,7 +80,14 @@ export interface MigrationOpeningBalanceCommand {
 /**
  * What happened, never a bare success.
  *
- * - `POSTED` — this call wrote the opening entry.
+ * - `POSTED` — this call wrote the opening entry. `signedAmountMinor` is what the opening
+ *   moved the wallet by (negative for a legacy debt) — a fact of this entry alone.
+ *
+ *   Deliberately NO after-balance. Ordinary credits do not take the customer lock (only
+ *   debits do), so a credit committing while this transaction runs is invisible to any
+ *   balance read here and present in the real wallet a moment later. A balance this
+ *   service reported, or audited as "after", would be a snapshot presented as the truth.
+ *   The ledger is the balance; read it when one is needed.
  * - `ALREADY_POSTED` — an identical opening was already in the ledger (a rerun, a resume,
  *   a racing importer). Nothing written, no event, no audit row.
  * - `ZERO_NO_ENTRY` — the legacy balance is zero, and a zero entry cannot exist
@@ -94,7 +98,7 @@ export type MigrationOpeningBalanceOutcome =
   | {
       readonly kind: 'POSTED';
       readonly entry: WalletEntryRecord;
-      readonly balanceAfterMinor: bigint;
+      readonly signedAmountMinor: bigint;
     }
   | { readonly kind: 'ALREADY_POSTED'; readonly entry: WalletEntryRecord }
   | { readonly kind: 'ZERO_NO_ENTRY' };
@@ -212,12 +216,6 @@ export class MigrationOpeningBalanceService {
         }
         if (magnitude === 0n) return { kind: 'ZERO_NO_ENTRY' };
 
-        const before = await this.deps.repository.balanceOf(
-          scope,
-          customerId,
-          command.currency,
-          tx,
-        );
         const { entry, inserted } = await this.deps.repository.append(
           scope,
           {
@@ -239,8 +237,7 @@ export class MigrationOpeningBalanceService {
             entry: this.sameOpening(entry, customerId, direction, magnitude, command.currency),
           };
         }
-        const balanceAfterMinor =
-          before.amountMinor + (direction === 'CREDIT' ? magnitude : -magnitude);
+        const signedAmountMinor = direction === 'CREDIT' ? magnitude : -magnitude;
 
         await this.deps.audit.record(
           scope,
@@ -249,14 +246,15 @@ export class MigrationOpeningBalanceService {
             action: AUDIT_ACTION,
             entityType: 'Wallet',
             entityId: entry.customerId,
-            before: { balanceMinor: before.amountMinor.toString(), currency: command.currency },
+            // No balance, before or after: see `MigrationOpeningBalanceOutcome`.
+            before: null,
             after: {
               entryId: entry.id,
               direction: entry.direction,
               reason: entry.reason,
               amountMinor: entry.amount.amountMinor.toString(),
               currency: entry.amount.currency,
-              balanceMinor: balanceAfterMinor.toString(),
+              signedAmountMinor: signedAmountMinor.toString(),
             },
             result: 'SUCCESS',
           },
@@ -275,7 +273,7 @@ export class MigrationOpeningBalanceService {
             currency: entry.amount.currency,
           },
         });
-        return { kind: 'POSTED', entry, balanceAfterMinor };
+        return { kind: 'POSTED', entry, signedAmountMinor };
       },
     );
   }
