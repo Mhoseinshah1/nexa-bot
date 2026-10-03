@@ -827,9 +827,9 @@ describe('panel capacity and sales eligibility', () => {
      * is what the first version of `evaluateMany` replaced, and what a later edit
      * could quietly reintroduce.
      *
-     * Counted rather than reasoned about: three statements for the whole request —
-     * the fleet's capacity, the panels, the products — and the SAME three whether
-     * the catalogue holds one product or a hundred.
+     * Counted rather than reasoned about: four statements for the whole request —
+     * the fleet's capacity, the panels, the balancing flag (C3), the products — and the
+     * SAME four whether the catalogue holds one product or a hundred.
      */
     const pool = ctx.container.database.pool as unknown as {
       query: (...args: unknown[]) => unknown;
@@ -853,7 +853,10 @@ describe('panel capacity and sales eligibility', () => {
     const forAHundred = await counted();
     pool.query = real;
 
-    expect(forOne, 'the fleet capacity, the panels, the products').toBe(3);
+    // Phase C3 adds ONE constant read: the `panel_auto_balancing` flag, which decides
+    // whether the catalogue's reach is widened over balancing groups. Constant per request
+    // — it is not per product — so the N+1 guard below is unchanged.
+    expect(forOne, 'the fleet capacity, the panels, the balancing flag, the products').toBe(4);
     expect(forAHundred).toBe(forOne);
   }, 60_000);
 
