@@ -618,6 +618,25 @@ describe('an order that cannot be delivered is refunded', () => {
     await assertRefunded(order.id, { services: 0 });
   });
 
+  it('refunds on a drained panel when the hold has EXPIRED but not yet been swept', async () => {
+    // Codex P1 on #158. The reservation row is still there, but past `expires_at`: it
+    // stopped counting the moment it expired, so the order no longer holds a slot and
+    // settling it would be a new allocation on a drained panel.
+    const order = await awaitingPayment(panelA);
+    const paymentId = await pendingTransfer(order);
+    await setDrained(panelA);
+    await ctx.container.database.db.execute(
+      sql`UPDATE panel_capacity_reservations
+             SET expires_at = ${new Date(ctx.container.clock.now().getTime() - 60_000)}
+           WHERE order_id = ${order.id}`,
+    );
+
+    const { payment } = await confirmTransfer(paymentId);
+
+    expect(payment.state).toBe('CONFIRMED');
+    await assertRefunded(order.id, { services: 0 });
+  });
+
   it('applies a RENEW on a drained panel: existing services keep every operation', async () => {
     const serviceId = await ownService(panelRenew);
     await setDrained(panelRenew);
