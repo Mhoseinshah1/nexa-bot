@@ -897,13 +897,19 @@ export class DrizzleServiceRepository implements ServiceRepository {
            */
           eq(services.state, 'ACTIVE'),
           /*
-           * Only an account that exists can be read.
+           * ACTIVE + the stored provider reference is enough to read usage.
            *
-           * `provider_user_id` is written by the create and by the adopt path. A row
-           * without one has nothing on a panel to ask about, and asking would spend a
-           * request to be told so.
+           * `provider_user_id` is OPTIONAL by provider contract. RickPanel and Marzban
+           * key accounts by the canonical stored username and deliberately return null
+           * for providerUserId; `providerRefFor` reads that username (plus the stored
+           * subscription/client references) and their `readUsage` implementations use
+           * it. Requiring a provider id here therefore excluded every live account on
+           * those providers from background sync.
+           *
+           * Do not replace this with a provider-type branch: eligibility follows the
+           * provider reference contract, and the executor still re-checks operability
+           * and READ_USAGE capability before any outbound call.
            */
-          isNotNull(services.providerUserId),
           /*
            * A service that has never been synced is measured from when it was CREATED.
            *
