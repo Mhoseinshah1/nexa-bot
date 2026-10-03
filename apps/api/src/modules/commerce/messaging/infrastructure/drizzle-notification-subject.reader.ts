@@ -1,4 +1,4 @@
-import { and, eq, gt, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 import type { CustomerNotificationKind, ServiceReminderKind, TenantContext } from '@nexa/contracts';
 import {
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
@@ -14,6 +14,7 @@ import type { Database } from '../../../../infrastructure/persistence/database.j
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   customerDirectMessages,
+  customerNotifications,
   serviceOwnershipTransfers,
   services,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -32,6 +33,14 @@ const REMINDER_KIND_OF: ReadonlyMap<CustomerNotificationKind, ServiceReminderKin
     ][]
   ).map(([reminder, notification]) => [notification, reminder]),
 );
+
+/**
+ * The instant a direct message written at or before is stale: `stillHolds` keeps a message
+ * created AFTER it, and `lapsedSubjects` names one created AT or BEFORE it — one boundary.
+ */
+function directMessageStaleBefore(now: Date): Date {
+  return new Date(now.getTime() - DIRECT_MESSAGE_STALE_AFTER_MS);
+}
 
 /** The kinds this reader has a branch for. Naming them is the second guard below. */
 const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
@@ -280,6 +289,45 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
   }
 
   /**
+   * See the port. The direct-message kinds only — their precondition is the one that lapses
+   * by the clock — read against the SAME instant `directMessageFresh` compares with, so
+   * the two can only agree: a row named here is one `stillHolds` would answer `false`.
+   * Whatever the customer's status; that is the point.
+   */
+  async lapsedSubjects(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+  ): Promise<readonly { readonly kind: CustomerNotificationKind; readonly subjectId: string }[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select({ kind: customerNotifications.kind, subjectId: customerNotifications.subjectId })
+      .from(customerNotifications)
+      .innerJoin(
+        customerDirectMessages,
+        and(
+          eq(customerDirectMessages.tenantId, customerNotifications.tenantId),
+          eq(customerDirectMessages.id, customerNotifications.subjectId),
+        ),
+      )
+      .where(
+        and(
+          eq(customerNotifications.tenantId, tenantId),
+          inArray(customerNotifications.kind, ['DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA']),
+          eq(customerNotifications.state, 'PENDING'),
+          isNull(customerNotifications.sendStartedAt),
+          lte(customerDirectMessages.createdAt, directMessageStaleBefore(now)),
+        ),
+      )
+      .orderBy(asc(customerDirectMessages.createdAt), asc(customerDirectMessages.id))
+      .limit(limit);
+    return rows.map((row) => ({
+      kind: row.kind as CustomerNotificationKind,
+      subjectId: row.subjectId,
+    }));
+  }
+
+  /**
    * Phase A2: what an operator wrote holds while it is younger than
    * `DIRECT_MESSAGE_STALE_AFTER_MS` — by the dispatcher's clock, half-open — and is the
    * kind its row says it is. Read by the MESSAGE's id from its own table, never another
@@ -291,7 +339,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     subjectId: string,
     now: Date,
   ): Promise<boolean> {
-    const since = new Date(now.getTime() - DIRECT_MESSAGE_STALE_AFTER_MS);
+    const since = directMessageStaleBefore(now);
     const [row] = await this.db
       .select({ id: customerDirectMessages.id })
       .from(customerDirectMessages)

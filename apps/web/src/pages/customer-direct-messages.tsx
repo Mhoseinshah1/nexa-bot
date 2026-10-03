@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DIRECT_MESSAGE_CAPTION_MAX_LENGTH,
@@ -27,6 +27,7 @@ import {
   StateSwitch,
   Textarea,
   Timeline,
+  useConfirmedClose,
   useToast,
   useUnsavedChanges,
   type Tone,
@@ -110,6 +111,15 @@ export function DirectMessageComposeModal({
   const [text, setText] = useState('');
   const [picked, setPicked] = useState<PickedReplyFile>({ kind: 'NONE' });
   const [step, setStep] = useState<'COMPOSE' | 'PREVIEW'>('COMPOSE');
+  /*
+   * The latest file selection (Codex review of #153, the `tickets.tsx` rule). Every pick,
+   * clear and reset advances it, and a read that completes for an older one is discarded —
+   * so what is previewed and sent is always the file the input shows, never an earlier
+   * pick's bytes landing after the operator removed or replaced it.
+   */
+  const selection = useRef(0);
+  // Re-keys the file input, so a cleared or discarded file is not still shown as chosen.
+  const [fileInput, setFileInput] = useState(0);
 
   const hasFile = picked.kind === 'READY';
   const max = hasFile ? DIRECT_MESSAGE_CAPTION_MAX_LENGTH : DIRECT_MESSAGE_TEXT_MAX_LENGTH;
@@ -120,9 +130,15 @@ export function DirectMessageComposeModal({
   const dirty = text.trim() !== '' || picked.kind !== 'NONE';
   useUnsavedChanges(open && dirty, t('web.dm_discard'));
 
+  const clearFile = () => {
+    selection.current += 1;
+    setPicked({ kind: 'NONE' });
+    setFileInput((value) => value + 1);
+  };
+
   const reset = () => {
     setText('');
-    setPicked({ kind: 'NONE' });
+    clearFile();
     setStep('COMPOSE');
   };
 
@@ -149,20 +165,36 @@ export function DirectMessageComposeModal({
     onError: (error) => submission.settleOn(error),
   });
 
-  const close = () => {
-    if (send.isPending) return;
+  /*
+   * Every way out — Cancel, Escape, the backdrop, the ✕ — goes through `requestClose`.
+   * A draft is asked about first, and a close that is ACCEPTED discards it (Codex review
+   * of #153). The modal stays mounted while closed, so a draft it kept would greet the next
+   * «ارسال پیام» with words and a file the operator chose to abandon — one click from being
+   * sent. Nothing closes while a send is in flight.
+   */
+  const discardAndClose = () => {
     send.reset();
-    setStep('COMPOSE');
+    reset();
     onClose();
   };
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(dirty, discardAndClose);
+  const close = () => {
+    if (send.isPending) return;
+    requestClose();
+  };
 
-  const choose = async (file: File | undefined) => {
+  const choose = (file: File | undefined) => {
+    selection.current += 1;
+    const pick = selection.current;
+    // The previous pick is gone the moment a new one is made, ready or not.
     if (file === undefined) {
       setPicked({ kind: 'NONE' });
       return;
     }
     setPicked({ kind: 'READING' });
-    setPicked(await readReplyFile(file));
+    void readReplyFile(file).then((result) => {
+      if (selection.current === pick) setPicked(result);
+    });
   };
 
   const textError = tooLong
@@ -172,116 +204,120 @@ export function DirectMessageComposeModal({
       : undefined;
 
   return (
-    <Modal
-      open={open}
-      onClose={close}
-      size="lg"
-      title={step === 'COMPOSE' ? t('web.dm_compose_title') : t('web.dm_preview_title')}
-      foot={
-        step === 'COMPOSE' ? (
-          <>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={blocked || empty || tooLong || fileBusy}
-              onClick={() => setStep('PREVIEW')}
+    <>
+      <Modal
+        open={open}
+        onClose={close}
+        size="lg"
+        title={step === 'COMPOSE' ? t('web.dm_compose_title') : t('web.dm_preview_title')}
+        foot={
+          step === 'COMPOSE' ? (
+            <>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={blocked || empty || tooLong || fileBusy}
+                onClick={() => setStep('PREVIEW')}
+              >
+                {t('web.dm_preview')}
+              </Button>
+              <Button size="sm" onClick={close}>
+                {t('web.user_action_cancel')}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="primary"
+                size="sm"
+                icon="check"
+                disabled={send.isPending || blocked}
+                onClick={() => send.mutate()}
+              >
+                {t('web.dm_confirm')}
+              </Button>
+              <Button
+                size="sm"
+                disabled={send.isPending}
+                onClick={() => {
+                  send.reset();
+                  setStep('COMPOSE');
+                }}
+              >
+                {t('web.dm_back')}
+              </Button>
+            </>
+          )
+        }
+      >
+        {blocked && <Banner tone="warn">{t('web.dm_blocked_note')}</Banner>}
+        {step === 'COMPOSE' ? (
+          <div className="stack">
+            <Field
+              label={hasFile ? t('web.dm_caption_label') : t('web.dm_text_label')}
+              hint={`${t('web.dm_text_hint')} (${String(length)}/${String(max)} ${t('web.dm_counter')})`}
+              htmlFor="dm-text"
+              {...(textError === undefined ? {} : { error: textError })}
             >
-              {t('web.dm_preview')}
-            </Button>
-            <Button size="sm" onClick={close}>
-              {t('web.user_action_cancel')}
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button
-              variant="primary"
-              size="sm"
-              icon="check"
-              disabled={send.isPending || blocked}
-              onClick={() => send.mutate()}
+              <Textarea
+                id="dm-text"
+                rows={6}
+                dir="auto"
+                value={text}
+                aria-invalid={textError !== undefined}
+                onChange={(event) => setText(event.target.value)}
+              />
+            </Field>
+            <Field
+              label={t('web.dm_file_label')}
+              hint={t('web.ticket_reply_file_hint')}
+              htmlFor="dm-file"
+              {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
             >
-              {t('web.dm_confirm')}
-            </Button>
-            <Button
-              size="sm"
-              disabled={send.isPending}
-              onClick={() => {
-                send.reset();
-                setStep('COMPOSE');
-              }}
-            >
-              {t('web.dm_back')}
-            </Button>
-          </>
-        )
-      }
-    >
-      {blocked && <Banner tone="warn">{t('web.dm_blocked_note')}</Banner>}
-      {step === 'COMPOSE' ? (
-        <div className="stack">
-          <Field
-            label={hasFile ? t('web.dm_caption_label') : t('web.dm_text_label')}
-            hint={`${t('web.dm_text_hint')} (${String(length)}/${String(max)} ${t('web.dm_counter')})`}
-            htmlFor="dm-text"
-            {...(textError === undefined ? {} : { error: textError })}
-          >
-            <Textarea
-              id="dm-text"
-              rows={6}
-              dir="auto"
-              value={text}
-              aria-invalid={textError !== undefined}
-              onChange={(event) => setText(event.target.value)}
-            />
-          </Field>
-          <Field
-            label={t('web.dm_file_label')}
-            hint={t('web.ticket_reply_file_hint')}
-            htmlFor="dm-file"
-            {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
-          >
-            <input
-              id="dm-file"
-              type="file"
-              accept="image/jpeg,image/png,application/pdf,text/plain,.jpg,.jpeg,.png,.pdf,.txt"
-              onChange={(event) => void choose(event.target.files?.[0])}
-            />
-          </Field>
-          {picked.kind === 'READING' && (
-            <span className="muted small">{t('web.dm_file_reading')}</span>
-          )}
-          {picked.kind !== 'NONE' && (
-            <Button size="sm" variant="ghost" onClick={() => setPicked({ kind: 'NONE' })}>
-              {t('web.ticket_reply_file_clear')}
-            </Button>
-          )}
-        </div>
-      ) : (
-        <div className="stack">
-          <Banner tone="info">{t('web.dm_preview_note')}</Banner>
-          {/* What the customer sees: the heading the default template draws, then the words. */}
-          <div className="card tight dm-preview" aria-label={t('web.dm_preview')}>
-            {picked.kind === 'READY' &&
-              (picked.attachment.mimeType.startsWith('image/') ? (
-                <img
-                  className="dm-preview-image"
-                  alt={picked.attachment.fileName}
-                  src={`data:${picked.attachment.mimeType};base64,${picked.attachment.contentBase64}`}
-                />
-              ) : (
-                <p>
-                  <Badge tone="neutral">{t('web.dm_kind_document')}</Badge>{' '}
-                  <Ltr mono={false}>{picked.attachment.fileName}</Ltr>
-                </p>
-              ))}
-            <p className="strong">{t('web.dm_preview_heading')}</p>
-            {text.trim() !== '' && <p className="dm-text">{text.trim()}</p>}
+              <input
+                key={fileInput}
+                id="dm-file"
+                type="file"
+                accept="image/jpeg,image/png,application/pdf,text/plain,.jpg,.jpeg,.png,.pdf,.txt"
+                onChange={(event) => choose(event.target.files?.[0])}
+              />
+            </Field>
+            {picked.kind === 'READING' && (
+              <span className="muted small">{t('web.dm_file_reading')}</span>
+            )}
+            {picked.kind !== 'NONE' && (
+              <Button size="sm" variant="ghost" onClick={clearFile}>
+                {t('web.ticket_reply_file_clear')}
+              </Button>
+            )}
           </div>
-          {send.error !== null && <Banner tone="danger">{directMessageFault(send.error)}</Banner>}
-        </div>
-      )}
-    </Modal>
+        ) : (
+          <div className="stack">
+            <Banner tone="info">{t('web.dm_preview_note')}</Banner>
+            {/* What the customer sees: the heading the default template draws, then the words. */}
+            <div className="card tight dm-preview" aria-label={t('web.dm_preview')}>
+              {picked.kind === 'READY' &&
+                (picked.attachment.mimeType.startsWith('image/') ? (
+                  <img
+                    className="dm-preview-image"
+                    alt={picked.attachment.fileName}
+                    src={`data:${picked.attachment.mimeType};base64,${picked.attachment.contentBase64}`}
+                  />
+                ) : (
+                  <p>
+                    <Badge tone="neutral">{t('web.dm_kind_document')}</Badge>{' '}
+                    <Ltr mono={false}>{picked.attachment.fileName}</Ltr>
+                  </p>
+                ))}
+              <p className="strong">{t('web.dm_preview_heading')}</p>
+              {text.trim() !== '' && <p className="dm-text">{text.trim()}</p>}
+            </div>
+            {send.error !== null && <Banner tone="danger">{directMessageFault(send.error)}</Banner>}
+          </div>
+        )}
+      </Modal>
+      {discardQuestion}
+    </>
   );
 }
 

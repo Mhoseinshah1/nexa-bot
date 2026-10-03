@@ -421,4 +421,29 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
       .returning({ id: customerNotifications.id });
     return rows.length;
   }
+
+  /** See the port. One conditional UPDATE; `false` when the row was already sent or moved. */
+  async supersedeUnsent(
+    scope: TenantContext,
+    kind: CustomerNotificationKind,
+    subjectId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customerNotifications)
+      .set({ state: 'SUPERSEDED', resolvedAt: now, nextAttemptAt: null, updatedAt: now })
+      .where(
+        and(
+          eq(customerNotifications.tenantId, tenantId),
+          eq(customerNotifications.kind, kind),
+          eq(customerNotifications.subjectId, subjectId),
+          eq(customerNotifications.state, 'PENDING'),
+          isNull(customerNotifications.sendStartedAt),
+        ),
+      )
+      .returning({ id: customerNotifications.id });
+    return rows.length > 0;
+  }
 }

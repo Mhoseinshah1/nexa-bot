@@ -401,6 +401,51 @@ describe('Phase A2 — direct message from Customer 360', () => {
     expect((await history())[0]?.delivery).toBe('EXPIRED');
   });
 
+  it('a customer who STAYS blocked does not hold a message QUEUED for ever: once stale it EXPIRES, unsent', async () => {
+    const queued = await send();
+    const other = await resolve('961051');
+    const fresh = await send({ customerId: other });
+    await ctx.container.customers.block(tenantA, adminActorFor(owner), {
+      idempotencyKey: 'block-stays',
+      customerId: customer,
+      reason: 'spam',
+    });
+    await ctx.container.customers.block(tenantA, adminActorFor(owner), {
+      idempotencyKey: 'block-stays-other',
+      customerId: other,
+      reason: 'spam',
+    });
+    await tick();
+    expect(sends()).toHaveLength(0);
+    expect((await history())[0]?.delivery).toBe('QUEUED');
+
+    // Only the first message is a day old; both customers are still blocked.
+    await ctx.container.database.db.execute(
+      sql`UPDATE customer_direct_messages SET created_at = created_at - interval '25 hours'
+          WHERE id = ${queued.row.message.id}`,
+    );
+    await tick();
+    expect(sends()).toHaveLength(0);
+    const [expired] = await history();
+    expect(expired).toMatchObject({ id: queued.row.message.id, delivery: 'EXPIRED', attempts: 0 });
+    expect(expired?.resolvedAt).not.toBeNull();
+    // A message that is not stale is left for the claim, blocked or not.
+    expect((await history(other))[0]).toMatchObject({
+      id: fresh.row.message.id,
+      delivery: 'QUEUED',
+    });
+
+    // Lifting the block afterwards sends nothing: the message is resolved.
+    await ctx.container.customers.unblock(tenantA, adminActorFor(owner), {
+      idempotencyKey: 'unblock-stays',
+      customerId: customer,
+      reason: null,
+    });
+    await tick();
+    expect(sends()).toHaveLength(0);
+    expect((await history())[0]?.delivery).toBe('EXPIRED');
+  });
+
   // --- tenant isolation ----------------------------------------------------------------------
 
   it('cannot reach another tenant’s customer: not found for the send and for the history', async () => {
@@ -704,5 +749,21 @@ describe('Phase A2 — direct message over HTTP', () => {
       payload: { idempotencyKey: 'http-dm-2', text: 'x' },
     });
     expect(foreignOrigin.statusCode).toBe(403);
+  });
+
+  it('answers 400, not 500, for a history cursor whose id is not a UUID', async () => {
+    const at = encodeURIComponent('2026-10-03T10:00:00.000Z');
+    const list = (query: string) =>
+      inject({
+        method: 'GET',
+        url: `${API_PREFIX}${DIRECT_MESSAGE_ROUTES.list(customerId)}?${query}`,
+        headers: { cookie },
+      });
+    const garbage = await list(`beforeAt=${at}&beforeId=x`);
+    expect(garbage.statusCode, garbage.body.slice(0, 300)).toBe(400);
+    const half = await list(`beforeAt=${at}`);
+    expect(half.statusCode, half.body.slice(0, 300)).toBe(400);
+    const whole = await list(`beforeAt=${at}&beforeId=01928c3e-7b4a-7c1d-8e2f-3a4b5c6d7e8f`);
+    expect(whole.statusCode, whole.body.slice(0, 300)).toBe(200);
   });
 });

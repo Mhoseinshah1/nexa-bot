@@ -40,7 +40,14 @@ no second outcome taxonomy.
   per customer in a sliding 10-minute window; `RATE_LIMITED` with `details.scope`.
 - **Staleness**: both kinds declare a precondition; the subject reader holds a message only
   while it is younger than `DIRECT_MESSAGE_STALE_AFTER_MS` (24 h). Older → `SUPERSEDED`,
-  shown as `EXPIRED`, never sent. Quiet hours never hold them.
+  shown as `EXPIRED`, never sent. Quiet hours never hold them. Because `claimDue` never hands
+  out a blocked customer's rows, the precondition is ALSO swept without the claim: each lane
+  pass asks `NotificationSubjectReader.lapsedSubjects` for unsent direct messages past the
+  same boundary, whatever the customer's status, and resolves them with
+  `supersedeUnsent` (conditional on `PENDING` and no `send_started_at`, no attempt spent).
+  A customer who stays blocked therefore sees the message `EXPIRED`, not `QUEUED` for ever.
+- **History cursor**: `beforeAt` and `beforeId` together or not at all; `beforeId` is a
+  UUIDv7 at the boundary, so a malformed one is a 400, never a 500 from PostgreSQL.
 - **Delivery states** shown to the operator are a projection of the lane row
   (`directMessageDeliveryState`): `QUEUED`, `SENDING`, `SENT` (accepted by Telegram),
   `FAILED`, `UNKNOWN` (never re-sent), `EXPIRED`. Nothing says delivered or read.
@@ -54,7 +61,7 @@ no second outcome taxonomy.
 
 ## 3. Tests and mutation evidence
 
-`tests/integration/customer-direct-messages.test.ts` (18 cases, real PostgreSQL and the real
+`tests/integration/customer-direct-messages.test.ts` (20 cases, real PostgreSQL and the real
 lane against a Telegram stand-in), `tests/unit/direct-messages.test.ts`,
 `tests/web/customer-direct-messages.test.tsx`. Each mutation below was applied alone and
 turned at least one named case red:
@@ -71,6 +78,10 @@ turned at least one named case red:
 | drop the file handle stamp                  | sends a photo … clears the bytes                   |
 | web: preview enabled for a blocked customer | cannot write to a blocked customer                 |
 | web: preview button sends directly          | three compose cases                                |
+| skip the lapsed-precondition sweep          | … STAYS blocked … once stale it EXPIRES, unsent    |
+| contract: `beforeId` back to any string     | answers 400, not 500, for a history cursor …       |
+| web: apply a read for an older selection    | ignores a file read … removed; keeps the … last    |
+| web: accepted close keeps the draft         | asks before a close…; discards … when Escape …     |
 
 ## 4. Manual acceptance (real Telegram)
 

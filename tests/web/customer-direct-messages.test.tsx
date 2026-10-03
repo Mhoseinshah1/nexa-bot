@@ -1,7 +1,38 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import type * as TicketsModule from '../../apps/web/src/pages/tickets';
+import type { PickedReplyFile } from '../../apps/web/src/pages/tickets';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { customer, renderPage, stubApi } from './harness';
+
+/*
+ * The file read, held open by the test: each pick's `readReplyFile` resolves only when the
+ * test says so, so a read can be made to complete AFTER the file was cleared or replaced —
+ * the order a large file and a quick operator produce. Off (`held === null`), the real read.
+ */
+const reads = vi.hoisted(() => ({
+  held: null as null | Map<string, (result: unknown) => void>,
+}));
+vi.mock('../../apps/web/src/pages/tickets', async (importOriginal) => {
+  const original = await importOriginal<typeof TicketsModule>();
+  return {
+    ...original,
+    readReplyFile: (file: File) => {
+      const held = reads.held;
+      if (held === null) return original.readReplyFile(file);
+      return new Promise((resolve) => held.set(file.name, resolve));
+    },
+  };
+});
+afterEach(() => {
+  reads.held = null;
+});
+
+const readyFile = (fileName: string): PickedReplyFile => ({
+  kind: 'READY',
+  attachment: { fileName, mimeType: 'application/pdf', contentBase64: 'JVBERi0xLjcK' },
+  byteLength: 9,
+});
 
 /**
  * Phase A2 — «ارسال پیام» on Customer 360, rendered against the shapes the server returns
@@ -224,5 +255,121 @@ describe('Phase A2 — direct message on Customer 360', () => {
     await waitFor(() =>
       expect(within(dialog).getByRole('button', { name: 'پیش‌نمایش' })).toBeDisabled(),
     );
+  });
+
+  async function openComposer() {
+    fireEvent.click(
+      (await screen.findAllByRole('button', { name: 'ارسال پیام' }))[0] as HTMLElement,
+    );
+    return screen.findByRole('dialog');
+  }
+  const pick = (dialog: HTMLElement, name: string) =>
+    fireEvent.change(within(dialog).getByLabelText('عکس یا فایل (اختیاری)'), {
+      target: { files: [new File(['%PDF-1.7'], name, { type: 'application/pdf' })] },
+    });
+  const finishRead = async (name: string, result: PickedReplyFile) => {
+    const resolve = reads.held?.get(name);
+    if (resolve === undefined) throw new Error(`no read in flight for ${name}`);
+    await act(async () => {
+      resolve(result);
+      await Promise.resolve();
+    });
+  };
+
+  it('ignores a file read that completes after the file was removed', async () => {
+    reads.held = new Map();
+    const api = stubApi(
+      routes([
+        {
+          url: `/users/${ID}/direct-messages`,
+          body: { message: message({ delivery: 'QUEUED', resolvedAt: null }), replayed: false },
+        },
+      ]),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayMessage denied={false} />);
+    const dialog = await openComposer();
+    fireEvent.change(within(dialog).getByLabelText('متن پیام'), { target: { value: 'سلام' } });
+    pick(dialog, 'old-invoice.pdf');
+    await within(dialog).findByText('در حال خواندن فایل…');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'حذف پیوست' }));
+    // The removed file's read lands now; it must not bring the file back.
+    await finishRead('old-invoice.pdf', readyFile('old-invoice.pdf'));
+    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'پیش‌نمایش' }));
+    expect(within(dialog).queryByText('old-invoice.pdf')).toBeNull();
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'تأیید و ارسال' }));
+    await screen.findByText('پیام در صف ارسال قرار گرفت.');
+    const posts = api.calls.filter((call) => call.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.body).toMatchObject({ text: 'سلام', file: null });
+  });
+
+  it('keeps the file the operator picked last when an earlier pick’s read completes after it', async () => {
+    reads.held = new Map();
+    const api = stubApi(
+      routes([
+        {
+          url: `/users/${ID}/direct-messages`,
+          body: { message: message({ delivery: 'QUEUED', resolvedAt: null }), replayed: false },
+        },
+      ]),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayMessage denied={false} />);
+    const dialog = await openComposer();
+    pick(dialog, 'first.pdf');
+    pick(dialog, 'second.pdf');
+    await finishRead('second.pdf', readyFile('second.pdf'));
+    await finishRead('first.pdf', readyFile('first.pdf'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'پیش‌نمایش' }));
+    expect(await within(dialog).findByText('second.pdf')).toBeTruthy();
+    expect(within(dialog).queryByText('first.pdf')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'تأیید و ارسال' }));
+    await screen.findByText('پیام در صف ارسال قرار گرفت.');
+    const posts = api.calls.filter((call) => call.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.body).toMatchObject({ file: { fileName: 'second.pdf' } });
+  });
+
+  it('asks before a close drops the draft, and a close that is accepted discards it', async () => {
+    stubApi(routes());
+    renderPage(<UserDetailPage id={ID} {...OFF} mayMessage denied={false} />);
+    let dialog = await openComposer();
+    fireEvent.change(within(dialog).getByLabelText('متن پیام'), {
+      target: { value: 'متن پیام قبلی' },
+    });
+
+    // «انصراف» asks; staying keeps every word.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'انصراف' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ماندن و ادامهٔ ویرایش' }));
+    expect((within(dialog).getByLabelText('متن پیام') as HTMLTextAreaElement).value).toBe(
+      'متن پیام قبلی',
+    );
+
+    // The ✕ asks too; discarding closes, and the next compose starts empty.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'بستن' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'دورانداختن تغییرات' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'ارسال پیام به مشتری' })).toBeNull(),
+    );
+    dialog = await openComposer();
+    expect((within(dialog).getByLabelText('متن پیام') as HTMLTextAreaElement).value).toBe('');
+    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
+  });
+
+  it('discards a draft with a file when Escape closes the composer and the discard is confirmed', async () => {
+    stubApi(routes());
+    renderPage(<UserDetailPage id={ID} {...OFF} mayMessage denied={false} />);
+    let dialog = await openComposer();
+    fireEvent.change(within(dialog).getByLabelText('متن پیام'), { target: { value: 'پیوست' } });
+    pick(dialog, 'receipt.pdf');
+    await within(dialog).findByRole('button', { name: 'حذف پیوست' });
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent.click(await screen.findByRole('button', { name: 'دورانداختن تغییرات' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'ارسال پیام به مشتری' })).toBeNull(),
+    );
+    dialog = await openComposer();
+    expect((within(dialog).getByLabelText('متن پیام') as HTMLTextAreaElement).value).toBe('');
+    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
   });
 });

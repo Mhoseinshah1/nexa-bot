@@ -7,6 +7,7 @@ import {
   DIRECT_MESSAGE_DELIVERY_STATES,
   PERMISSION_REQUIRES,
   directMessageDeliveryState,
+  directMessageListQuerySchema,
   sendDirectMessageRequestSchema,
   templateDefinition,
 } from '@nexa/contracts';
@@ -92,5 +93,31 @@ describe('the request', () => {
     expect(
       sendDirectMessageRequestSchema.parse({ idempotencyKey: 'k'.repeat(10), text: 'سلام' }),
     ).toEqual({ idempotencyKey: 'k'.repeat(10), text: 'سلام', file: null });
+  });
+});
+
+describe('the history cursor', () => {
+  const at = '2026-10-03T10:00:00.000Z';
+  const id = '01928c3e-7b4a-7c1d-8e2f-3a4b5c6d7e8f';
+
+  it('takes a whole cursor whose id is a UUIDv7, lower-cased', () => {
+    expect(
+      directMessageListQuerySchema.parse({ beforeAt: at, beforeId: id.toUpperCase() }),
+    ).toEqual({ limit: 20, beforeAt: at, beforeId: id });
+    expect(directMessageListQuerySchema.parse({})).toEqual({ limit: 20 });
+  });
+
+  it('refuses an id that is not a UUID before it can reach a uuid column', () => {
+    expect(directMessageListQuerySchema.safeParse({ beforeAt: at, beforeId: 'x' }).success).toBe(
+      false,
+    );
+    expect(
+      directMessageListQuerySchema.safeParse({ beforeAt: at, beforeId: "1' OR '1'='1" }).success,
+    ).toBe(false);
+  });
+
+  it('refuses half a cursor', () => {
+    expect(directMessageListQuerySchema.safeParse({ beforeAt: at }).success).toBe(false);
+    expect(directMessageListQuerySchema.safeParse({ beforeId: id }).success).toBe(false);
   });
 });
