@@ -1,8 +1,11 @@
-import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  GATEWAY_HEALTH_ROUTES,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  gatewayHealthQuerySchema,
+  type GatewayHealthResponse,
   checkPaymentGatewayCredentialRequestSchema,
   setPaymentGatewayVerifyKeyRequestSchema,
   setPaymentGatewayWebhookSecretRequestSchema,
@@ -25,6 +28,8 @@ import { adminActor, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { PaymentGatewayRecord } from '../../modules/commerce/payments/application/gateway-ports.js';
 import type { GatewayOperatorFacts } from '../../modules/commerce/payments/application/payment-gateway.service.js';
+import type { GatewayHealthEntry } from '../../modules/commerce/payments/application/gateway-health.service.js';
+import { singleValued } from './query.js';
 
 /**
  * Payment routes over HTTP, at `/payment-gateways`.
@@ -62,6 +67,36 @@ export class PaymentGatewaysController {
       gateways: gateways.map((gateway) =>
         toView(gateway, currency, facts.get(gateway.provider) ?? NO_FACTS),
       ),
+    };
+  }
+
+  /**
+   * Gateway Health (program §11): every route's recorded health. Read-only, under
+   * `payments.gateways.view` (charged by the service); the queue counts and the last
+   * reconciliation need `payments.view` and are named withheld otherwise. Never a value of a
+   * credential, a secret or a key — only whether one is set.
+   */
+  @Get(GATEWAY_HEALTH_ROUTES.list)
+  async health(
+    @Req() request: FastifyRequest,
+    @Query() raw: Record<string, unknown>,
+  ): Promise<GatewayHealthResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const query = singleValued(raw);
+    const input = gatewayHealthQuerySchema.parse({
+      ...(query.range === undefined ? {} : { range: query.range }),
+      ...(query.from === undefined ? {} : { from: query.from }),
+      ...(query.to === undefined ? {} : { to: query.to }),
+    });
+    const report = await this.container.gatewayHealth.report(scope, actor, input);
+    return {
+      window:
+        report.window === null
+          ? null
+          : { start: report.window.start.toISOString(), end: report.window.end.toISOString() },
+      gateways: report.gateways.map(toHealthView),
+      withheld: [...report.withheld],
+      generatedAt: this.container.clock.now().toISOString(),
     };
   }
 
@@ -313,5 +348,56 @@ function toView(
     },
     createdAt: gateway.createdAt.toISOString(),
     updatedAt: gateway.updatedAt.toISOString(),
+  };
+}
+
+/** One route's health on the wire: times as ISO strings, codes as recorded, never a value. */
+export function toHealthView(entry: GatewayHealthEntry): GatewayHealthResponse['gateways'][number] {
+  const iso = (value: Date | null) => (value === null ? null : value.toISOString());
+  const r = entry.recorded;
+  return {
+    provider: entry.provider,
+    status: entry.status,
+    state: entry.state,
+    configuration: { complete: entry.gaps.length === 0, gaps: [...entry.gaps] },
+    check: {
+      supported: entry.check.supported,
+      lastAt: iso(entry.check.last?.at ?? null),
+      lastResult: entry.check.last?.result ?? null,
+    },
+    answers: {
+      lastInvoiceCreatedAt: iso(r.lastInvoiceCreatedAt),
+      lastInquiryAnsweredAt: iso(r.lastInquiryAnsweredAt),
+      lastInquiryFailure:
+        r.lastInquiryFailure === null
+          ? null
+          : { at: r.lastInquiryFailure.at.toISOString(), code: r.lastInquiryFailure.code },
+      lastCreateFailure:
+        r.lastCreateFailure === null
+          ? null
+          : {
+              at: r.lastCreateFailure.at.toISOString(),
+              state: r.lastCreateFailure.state,
+              code: r.lastCreateFailure.code,
+            },
+      attemptsInWindow: r.attemptsInWindow,
+      attemptsWithProviderError: r.attemptsWithProviderError,
+    },
+    callBudget:
+      r.callBudget === null
+        ? null
+        : { windowStartedAt: r.callBudget.windowStartedAt.toISOString(), used: r.callBudget.used },
+    openConditions: r.openConditions.map((condition) => ({
+      code: condition.code,
+      severity: condition.severity,
+      count: condition.count,
+      since: condition.since.toISOString(),
+    })),
+    queues: entry.queues === null ? null : { ...entry.queues },
+    lastReconciliation:
+      r.lastReconciliation === null
+        ? null
+        : { at: r.lastReconciliation.at.toISOString(), action: r.lastReconciliation.action },
+    signals: [...entry.signals],
   };
 }

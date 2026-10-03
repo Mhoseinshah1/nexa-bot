@@ -24,6 +24,7 @@ import {
   isSettingKey,
   parseUnitRatio,
   takesFixedRate,
+  type GatewayConfigurationGap,
   type GatewayConversionSpec,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -129,6 +130,38 @@ export interface PaymentGatewayServiceDeps {
  */
 export function pricedOnlyByCentralFx(spec: GatewayConversionSpec): boolean {
   return spec.policies.length > 0 && spec.policies.every((policy) => policy === 'CENTRAL_FX');
+}
+
+/**
+ * What enabling a route depends on, as booleans (Gateway Health, program §11). A requirement
+ * the route does not have reads as satisfied. Never a value.
+ */
+export interface GatewayReadinessFacts {
+  readonly provider: PaymentGatewayProvider;
+  readonly credentialSet: boolean;
+  readonly webhookSecretSet: boolean;
+  readonly verifyKeySet: boolean;
+  readonly rateSet: boolean;
+  readonly centralFxOn: boolean;
+  readonly unitRatioSet: boolean;
+  /** A manual-transfer route is payable only while a receiving account is enabled. */
+  readonly receivingAccountEnabled: boolean;
+}
+
+/**
+ * The gaps, in the order `setStatus` refuses them — so the first gap IS the reason an enable
+ * would be refused now — plus the receiving account a manual transfer needs to be payable.
+ */
+export function configurationGaps(facts: GatewayReadinessFacts): GatewayConfigurationGap[] {
+  const gaps: GatewayConfigurationGap[] = [];
+  if (!facts.credentialSet) gaps.push('CREDENTIAL_MISSING');
+  if (!facts.webhookSecretSet) gaps.push('WEBHOOK_SECRET_MISSING');
+  if (!facts.verifyKeySet) gaps.push('VERIFY_KEY_MISSING');
+  if (!facts.rateSet) gaps.push('RATE_MISSING');
+  if (!facts.centralFxOn) gaps.push('CENTRAL_FX_DISABLED');
+  if (!facts.unitRatioSet) gaps.push('UNIT_RATIO_MISSING');
+  if (!facts.receivingAccountEnabled) gaps.push('NO_RECEIVING_ACCOUNT');
+  return gaps;
 }
 
 /** A route's credential and callback, as the operator's list shows them. Never a value. */
@@ -263,6 +296,61 @@ export class PaymentGatewayService {
           : Promise.resolve(null),
       ]);
     return { credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck, verifyKeySetAt };
+  }
+
+  /**
+   * Gateway Health (program §11): the facts `setStatus` decides an enable on, read the same
+   * way, outside a transaction and without the route's lock — a view, never a decision. Each
+   * is whether something is SET, never its value. `configurationGaps` turns them into the
+   * enable refusals' own reasons, and an integration test holds the two to the same answer.
+   * Charges nothing itself: its caller (`GatewayHealthService`) charges the view.
+   */
+  async readinessFacts(
+    scope: TenantContext,
+    gateway: PaymentGatewayRecord,
+  ): Promise<GatewayReadinessFacts> {
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider];
+    const spec = descriptor.conversion;
+    const centralOnly = pricedOnlyByCentralFx(spec);
+    const [credentialSet, webhookSecretSet, verifyKeySet, centralFxOn, unitRatioSet, accounts] =
+      await Promise.all([
+        descriptor.requiresCredentials
+          ? this.deps.credentials.setAt(scope, gateway.provider).then((at) => at !== null)
+          : Promise.resolve(true),
+        descriptor.webhookSecret
+          ? this.deps.credentials
+              .webhookSecretSetAt(scope, gateway.provider)
+              .then((at) => at !== null)
+          : Promise.resolve(true),
+        descriptor.verifyKey
+          ? this.deps.credentials.verifyKeySetAt(scope, gateway.provider).then((at) => at !== null)
+          : Promise.resolve(true),
+        centralOnly && this.deps.features !== undefined
+          ? this.deps.features.isEnabled(scope, 'central_fx')
+          : Promise.resolve(!centralOnly),
+        centralOnly
+          ? this.centralUnitRatio(scope, spec).then((ratio) => ratio !== null)
+          : Promise.resolve(true),
+        descriptor.settlesVia === 'MANUAL_TRANSFER'
+          ? this.deps.accounts.hasEnabled(scope)
+          : Promise.resolve(true),
+      ]);
+    return {
+      provider: gateway.provider,
+      credentialSet,
+      webhookSecretSet,
+      verifyKeySet,
+      rateSet: !takesFixedRate(spec) || gateway.providerUnitRateMinor !== null,
+      centralFxOn,
+      unitRatioSet,
+      receivingAccountEnabled: accounts,
+    };
+  }
+
+  /** Whether this route's adapter offers the safe, read-only credential check. */
+  checkSupported(provider: PaymentGatewayProvider): boolean {
+    const adapter = this.deps.adapters(provider);
+    return adapter !== null && adapter.checkCredential !== undefined;
   }
 
   /**

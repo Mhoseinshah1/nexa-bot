@@ -117,6 +117,8 @@ export * from './http.js';
 export * from './reporting.js';
 // Program §10: the Payment Operations Center's queues and the shared attention read model.
 export * from './payment-operations.js';
+// Program §11: gateway health, and the typed signal the Notification Center consumes.
+export * from './gateway-health.js';
 /** Round W: the Web Admin dashboard and sidebar counters, over the reports above. */
 export * from './dashboard.js';
 /** Round N: the shared audience, broadcast, and safe mass actions. */
