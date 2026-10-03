@@ -1,9 +1,12 @@
 import { z } from 'zod';
 import { adminChangeReasonSchema, OWNER_ROLE_KEY } from './identity.js';
 import {
+  isPermissionKey,
+  PERMISSION_DEPENDENCIES,
   PERMISSION_REQUIRES,
   PERMISSIONS,
   permissionDefinition,
+  type PermissionDomain,
   type PermissionKey,
 } from './permissions.js';
 
@@ -159,14 +162,15 @@ export function holdsCriticalPermission(keys: readonly string[]): boolean {
 
 /** The read a permission needs, or null. One level deep, by `PERMISSION_REQUIRES`. */
 export function prerequisiteOf(key: string): PermissionKey | null {
+  // A string the catalogue does not name has no prerequisite: it is not a permission.
+  if (!isPermissionKey(key)) return null;
   return PERMISSION_REQUIRES[key] ?? null;
 }
 
 /** The actions that need `key` as their read. */
 export function dependentsOf(key: string): PermissionKey[] {
-  return Object.entries(PERMISSION_REQUIRES)
-    .filter(([, prerequisite]) => prerequisite === key)
-    .map(([dependent]) => dependent as PermissionKey)
+  return PERMISSION_DEPENDENCIES.filter(([, prerequisite]) => prerequisite === key)
+    .map(([dependent]) => dependent)
     .sort();
 }
 
@@ -181,7 +185,7 @@ export function withPrerequisites(keys: readonly PermissionKey[]): PermissionKey
 }
 
 /** The catalogue's domains, in catalogue order: a permission's `resource`. */
-export const PERMISSION_DOMAINS: readonly string[] = [
+export const PERMISSION_DOMAINS: readonly PermissionDomain[] = [
   ...new Set(PERMISSIONS.map((definition) => definition.resource)),
 ];
 
