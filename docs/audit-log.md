@@ -27,7 +27,7 @@ Both charge their permission in `AuditLogService` before anything is read; the p
 export link protects nothing. The tenant comes from the session, never from a parameter.
 
 `audit.export` is a new permission (HIGH, requires `audit.view`, owner-seeded; migration
-`0165_audit_log_export_permission` backfills it to existing owner roles). Reading the trail on
+`0169_audit_log_export_permission` backfills it to existing owner roles). Reading the trail on
 screen and taking it off the installation as a file are different acts — the file outlives the
 session — so `finance` and `observer`, who hold `audit.view`, cannot export.
 

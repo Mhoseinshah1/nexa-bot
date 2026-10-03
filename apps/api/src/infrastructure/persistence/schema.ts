@@ -28,6 +28,9 @@ import {
   BOT_INSTANCE_STATUSES,
   CALENDARS,
   CURRENCY_CODES,
+  CUSTOMER_NOTE_MAX_LENGTH,
+  CUSTOMER_TAG_COLORS,
+  CUSTOMER_TAG_LABEL_MAX_LENGTH,
   GATEWAY_PROVIDER_UNITS,
   FX_BASE_ASSETS,
   FX_SOURCES,
@@ -175,6 +178,10 @@ import {
   SERVICE_LAST_SEEN_STATES,
   SERVICE_NOTE_MAX_LENGTH,
   SUPPORT_FAQ_STATUSES,
+  TERMS_ACCEPTANCE_SOURCES,
+  TERMS_BODY_MAX_LENGTH,
+  TERMS_TITLE_MAX_LENGTH,
+  TERMS_VERSION_STATUSES,
   SUPPORT_FAQ_QUESTION_MAX_LENGTH,
   SUPPORT_FAQ_ANSWER_MAX_LENGTH,
   TENANT_MEDIA_PURPOSES,
@@ -2591,7 +2598,12 @@ export const panelMonitorTenants = pgTable(
       .references(() => tenants.id),
     /** A lower bound on this tenant's earliest eligible panel. Never later than the truth. */
     nextEligibleAt: timestamptz('next_eligible_at').notNull(),
-    /** When this tenant last had a turn. The rotation order. */
+    /**
+     * When this tenant last had a turn. The rotation order, and the claim's
+     * turn token: every claim moves it STRICTLY forward, so a turn spent under
+     * a concurrent claim never compares equal to the snapshot that claim
+     * ordered by (`claimTenantsQuery`).
+     */
     lastServedAt: timestamptz('last_served_at').notNull(),
   },
   (table) => [
@@ -11636,5 +11648,227 @@ export const bulkOperationItems = pgTable(
       'bulk_operation_items_processed_check',
       sql`(state IN ('PENDING', 'CANCELLED')) = (processed_at IS NULL)`,
     ),
+  ],
+);
+
+/**
+ * Program §6 — one version of a tenant's terms and rules (`docs/terms-audit.md`).
+ *
+ * At most one DRAFT per tenant (the partial unique index), edited in place with a revision
+ * counter every edit names. Publishing is a conditional UPDATE from DRAFT at that revision
+ * which gives the row the next `version_number`; from then on the row is IMMUTABLE — the
+ * hand-written guard migration refuses any UPDATE or DELETE of a PUBLISHED row — so an
+ * acceptance always points at the exact text the customer was shown.
+ *
+ * The CURRENT version is the PUBLISHED row with the greatest `version_number`. It is not
+ * stored: a stored "current" flag would be a second fact that could disagree with the
+ * numbers. `title` and `body` are the operator's raw text, never a rendered string.
+ */
+export const termsVersions = pgTable(
+  'terms_versions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    status: text('status').notNull(),
+    versionNumber: integer('version_number'),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    revision: integer('revision').notNull().default(1),
+    createdByAdminId: uuid('created_by_admin_id').references(() => admins.id),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    publishedByAdminId: uuid('published_by_admin_id').references(() => admins.id),
+    publishedAt: timestamptz('published_at'),
+  },
+  (table) => [
+    unique('terms_versions_tenant_id_key').on(table.tenantId, table.id),
+    unique('terms_versions_tenant_number_key').on(table.tenantId, table.versionNumber),
+    uniqueIndex('terms_versions_one_draft_key')
+      .on(table.tenantId)
+      .where(sql`status = 'DRAFT'`),
+    check('terms_versions_status_check', enumCheck('status', TERMS_VERSION_STATUSES)),
+    check(
+      'terms_versions_published_check',
+      sql`(status = 'PUBLISHED') = (version_number IS NOT NULL AND published_at IS NOT NULL)`,
+    ),
+    check('terms_versions_number_check', sql`version_number IS NULL OR version_number >= 1`),
+    check('terms_versions_revision_check', sql`revision >= 1`),
+    check(
+      'terms_versions_title_check',
+      sql`length(btrim(title)) BETWEEN 1 AND ${sql.raw(String(TERMS_TITLE_MAX_LENGTH))}`,
+    ),
+    check(
+      'terms_versions_body_check',
+      sql`length(btrim(body)) BETWEEN 1 AND ${sql.raw(String(TERMS_BODY_MAX_LENGTH))}`,
+    ),
+  ],
+);
+
+/**
+ * Program §6 — a customer's acceptance of one published version.
+ *
+ * Append-only (the hand-written guard migration): written once, by the customer's own tap,
+ * and never changed or removed. One row per (customer, version) by the unique key, so a
+ * repeated or concurrent tap inserts nothing the second time. Both references carry the
+ * tenant, so an acceptance cannot name another tenant's customer or version.
+ */
+export const termsAcceptances = pgTable(
+  'terms_acceptances',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    termsVersionId: uuid('terms_version_id').notNull(),
+    acceptedAt: timestamptz('accepted_at').notNull(),
+    source: text('source').notNull(),
+    /** The bot the tap arrived on, when there was one. */
+    botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
+    correlationId: text('correlation_id').notNull(),
+  },
+  (table) => [
+    unique('terms_acceptances_once_key').on(table.tenantId, table.customerId, table.termsVersionId),
+    index('terms_acceptances_version_idx').on(table.tenantId, table.termsVersionId),
+    index('terms_acceptances_customer_idx').on(table.tenantId, table.customerId, table.acceptedAt),
+    foreignKey({
+      name: 'terms_acceptances_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'terms_acceptances_version_fk',
+      columns: [table.tenantId, table.termsVersionId],
+      foreignColumns: [termsVersions.tenantId, termsVersions.id],
+    }),
+    check('terms_acceptances_source_check', enumCheck('source', TERMS_ACCEPTANCE_SOURCES)),
+  ],
+);
+
+// --- Customer notes and tags (program §8, `docs/customer-notes-tags.md`) ---------------
+
+/**
+ * The tenant's own customer tags. The `id` is the identity: an assignment, a list filter and
+ * an event all name the id, so renaming a tag renames it everywhere at once and changes no
+ * reference.
+ *
+ * UNIQUENESS is `customer_tags_active_label_key`: `lower(label)` among the tenant's ACTIVE
+ * tags. The label is stored already normalised (`normaliseCustomerTagLabel`: NFC, one space
+ * between words, none around) and the CHECK below refuses one that is not, so «VIP» and
+ * « vip » collide here, in one place, for every writer. An archived tag leaves the index, so
+ * its name can be reused; restoring it then collides, and is refused rather than merged.
+ *
+ * Nothing deletes a tag. An archived one stays on the customers that carry it (and in the
+ * audit history that names it) and cannot be newly assigned — the CRM service's assignment
+ * reads it `FOR SHARE`, so an archive and an assignment racing are decided one after the
+ * other.
+ */
+export const customerTags = pgTable(
+  'customer_tags',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    label: text('label').notNull(),
+    /** One of the design system's semantic tones; null is neutral. */
+    color: text('color'),
+    archivedAt: timestamptz('archived_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('customer_tags_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('customer_tags_active_label_key')
+      .on(table.tenantId, sql`lower(${table.label})`)
+      .where(sql`archived_at IS NULL`),
+    check('customer_tags_color_check', nullableEnumCheck('color', CUSTOMER_TAG_COLORS)),
+    check(
+      'customer_tags_label_check',
+      sql`length(label) BETWEEN 1 AND ${sql.raw(String(CUSTOMER_TAG_LABEL_MAX_LENGTH))} AND label = btrim(regexp_replace(label, '\\s+', ' ', 'g'))`,
+    ),
+  ],
+);
+
+/**
+ * Which customer carries which tag. One row per pair, so assigning twice is a no-op
+ * (`ON CONFLICT DO NOTHING`) and removing deletes the row; the audit log is the history of
+ * both. Both halves are composite foreign keys INSIDE the tenant, so a row cannot pair one
+ * tenant's customer with another tenant's tag.
+ *
+ * The primary key leads `(tenant_id, customer_id)`, which serves the customer page and the
+ * list filter's per-row EXISTS; `customer_tag_assignments_tag_idx` leads `(tenant_id,
+ * tag_id)`, which serves the filter when the planner drives from the tag instead.
+ */
+export const customerTagAssignments = pgTable(
+  'customer_tag_assignments',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    tagId: uuid('tag_id').notNull(),
+    assignedByAdminId: uuid('assigned_by_admin_id').references(() => admins.id),
+    assignedAt: timestamptz('assigned_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'customer_tag_assignments_pkey',
+      columns: [table.tenantId, table.customerId, table.tagId],
+    }),
+    index('customer_tag_assignments_tag_idx').on(table.tenantId, table.tagId, table.customerId),
+    foreignKey({
+      name: 'customer_tag_assignments_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'customer_tag_assignments_tag_fk',
+      columns: [table.tenantId, table.tagId],
+      foreignColumns: [customerTags.tenantId, customerTags.id],
+    }),
+  ],
+);
+
+/**
+ * Operators' internal notes on a customer. APPEND-ONLY (`nexa_reject_mutation`, hand-written
+ * in the guards migration): a correction is a second note, so what a customer was said to
+ * have done can never be quietly rewritten. Operator-only — no customer surface reads this
+ * table (`tests/unit/customer-crm-privacy.test.ts`).
+ *
+ * `author_label` is the operator's name as it was at the time, like `audit_logs.actor_label`.
+ */
+export const customerNotes = pgTable(
+  'customer_notes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    body: text('body').notNull(),
+    authorAdminId: uuid('author_admin_id').references(() => admins.id),
+    authorLabel: text('author_label').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('customer_notes_customer_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.createdAt,
+      table.id,
+    ),
+    foreignKey({
+      name: 'customer_notes_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    check(
+      'customer_notes_body_check',
+      sql`length(body) BETWEEN 1 AND ${sql.raw(String(CUSTOMER_NOTE_MAX_LENGTH))}`,
+    ),
+    check('customer_notes_author_check', sql`length(author_label) BETWEEN 1 AND 200`),
   ],
 );

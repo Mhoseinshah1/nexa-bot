@@ -176,6 +176,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'هنوز عضویت شما در همهٔ کانال‌های لازم تأیید نشده است. پس از عضویت دوباره «✅ بررسی عضویت» را بزنید.',
   'bot.channels.check_button': '✅ بررسی عضویت',
   'bot.channels.join_private_button': 'عضویت در کانال {number}',
+  // Program §6: the terms and rules, shown at the one gate in front of every customer action.
+  'bot.terms.required':
+    '{icon:info} قوانین و مقررات\n\n{title}\n\n{body}\n\nبرای ادامهٔ استفاده از ربات، قوانین بالا را بخوانید و دکمهٔ «پذیرش قوانین» را بزنید.',
+  'bot.terms.updated':
+    '{icon:warning} قوانین ربات به‌روزرسانی شده است و نسخه‌ای که پذیرفتید دیگر نسخهٔ فعلی نیست. لطفاً نسخهٔ جدید را بخوانید و بپذیرید.\n\n{title}\n\n{body}',
+  'bot.terms.accepted':
+    '{icon:success} قوانین و مقررات را پذیرفتید. اکنون می‌توانید از ربات استفاده کنید.',
+  'bot.terms.accept_button': '✅ پذیرش قوانین',
   // WP20, brief §3.5: the owner's sentence, word for word.
   'bot.blocked_spam':
     'کاربر گرامی، شما به دلیل ارسال پیام‌های سریع و مکرر (اسپم) از ربات مسدود شده‌اید. برای پیگیری با پشتیبانی در ارتباط باشید.',

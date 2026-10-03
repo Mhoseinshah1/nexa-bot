@@ -1975,6 +1975,12 @@ export const customerListQuerySchema = z.object({
    * matches on this list is documented in `docs/web-admin-search.md`.
    */
   q: listSearchQuerySchema.optional(),
+  /**
+   * Program §8: only customers carrying this tag (by its id, never its editable label). A
+   * FILTER beside `status`, not a second search: charged `users.view` like `status`, and
+   * an EXISTS over `customer_tag_assignments`' tenant-led index.
+   */
+  tag: uuidV7Schema.optional(),
 });
 export type CustomerListQuery = z.infer<typeof customerListQuerySchema>;
 

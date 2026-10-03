@@ -374,3 +374,90 @@
     flex: 1 1 auto;
   }
 }
+
+/* --- Customer 360: notes and tags (program §8) ----------------------------------- */
+
+/* A customer's tags: badges that wrap, each with its own remove button. */
+.crm-tags,
+.crm-catalogue,
+.crm-notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.crm-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.crm-tags li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The picker and its button on one line that wraps on a phone. */
+.crm-assign,
+.crm-tag-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-block-start: 10px;
+}
+.crm-assign > .field,
+.crm-tag-form > .field {
+  flex: 1 1 160px;
+  min-inline-size: 0;
+}
+
+.crm-catalogue {
+  margin-block-start: 12px;
+}
+.crm-catalogue li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  padding-block: 8px;
+  border-block-end: 1px solid var(--line);
+}
+.crm-catalogue-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.crm-note-form {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin-block-end: 12px;
+}
+.crm-note-form > .field {
+  justify-self: stretch;
+}
+.crm-notes li {
+  padding-block: 8px;
+  border-block-end: 1px solid var(--line);
+}
+.crm-note-body {
+  margin: 0 0 4px;
+  /* A note is prose: its line breaks are kept, and a long unbroken run wraps. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The customer list's tag filter: a labelled select beside the status chips. */
+.filter-row .filter-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  min-inline-size: 0;
+}
+.filter-row .filter-select select {
+  max-inline-size: 220px;
+}

@@ -1064,6 +1064,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.support.tickets_button',
       'bot.support.unconfigured',
+      // Program §6: the terms gate's screen, its stale-button answer, the acceptance and
+      // the accept button — all drawn by `termsGatedAct`.
+      'bot.terms.accept_button',
+      'bot.terms.accepted',
+      'bot.terms.required',
+      'bot.terms.updated',
       'bot.ticket.already_closed',
       'bot.ticket.attachment_too_large',
       'bot.ticket.attachment_type_refused',

@@ -60,6 +60,7 @@ import {
   useCustomerOverview,
   useFinancialSummary,
 } from './customer-360-sections';
+import { CustomerCrmSection } from './customer-360-crm';
 import {
   Badge,
   Banner,
@@ -121,6 +122,10 @@ export function UserDetailPage({
   mayManualOrder = false,
   mayEditServices = false,
   mayViewAudit = false,
+  mayViewNotes = false,
+  mayWriteNotes = false,
+  mayAssignTags = false,
+  mayManageTags = false,
   denied,
 }: {
   id: string;
@@ -167,6 +172,17 @@ export function UserDetailPage({
   mayEditServices?: boolean;
   /** `audit.view` — the management timeline. */
   mayViewAudit?: boolean;
+  /*
+   * Program §8, notes and tags. Reading a customer's tags is `users.view` and needs no flag.
+   */
+  /** `users.notes.view` */
+  mayViewNotes?: boolean;
+  /** `users.notes.write` */
+  mayWriteNotes?: boolean;
+  /** `users.tags.assign` */
+  mayAssignTags?: boolean;
+  /** `users.tags.manage` */
+  mayManageTags?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -339,6 +355,7 @@ export function UserDetailPage({
               <a href="#c360-financial">{t('web.c360_nav_financial')}</a>
               <a href="#c360-controls">{t('web.c360_nav_controls')}</a>
               <a href="#c360-relations">{t('web.c360_nav_relations')}</a>
+              <a href="#c360-crm">{t('web.crm_nav')}</a>
               <a href="#c360-timeline">{t('web.c360_nav_timeline')}</a>
               {(mayTransfer || mayEditServices) && (
                 <a href="#c360-danger">{t('web.c360_nav_danger')}</a>
@@ -443,6 +460,13 @@ export function UserDetailPage({
                       mayDebit={mayDebit}
                     />
                   </div>
+                  <CustomerCrmSection
+                    customerId={id}
+                    mayViewNotes={mayViewNotes}
+                    mayWriteNotes={mayWriteNotes}
+                    mayAssignTags={mayAssignTags}
+                    mayManageTags={mayManageTags}
+                  />
                   <TimelineCard customerId={id} mayView={mayViewAudit} />
                 </>
               }

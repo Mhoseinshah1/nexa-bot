@@ -918,6 +918,41 @@ function tenantList(tenantIds: readonly string[]): SQL {
 }
 
 /**
+ * The tenant claim, as a statement rather than a call — the reasoning is on
+ * `DrizzlePanelMonitorRepository.claimTenants`. Exported for the same reason as
+ * `dueForTenantsQuery`: a test asserting the plan's shape (`LIMIT` above
+ * `LockRows`, which is what lets a loser move on rather than come back short)
+ * must run exactly what production runs.
+ */
+export function claimTenantsQuery(now: Date, limit: number): SQL {
+  return sql`
+      WITH candidates AS MATERIALIZED (
+           SELECT r.tenant_id, r.last_served_at
+             FROM ${panelMonitorTenants} AS r
+             JOIN ${tenants} AS n ON n.id = r.tenant_id
+            WHERE r.next_eligible_at <= ${now}
+              AND n.status = 'ACTIVE'
+      ),
+      taken AS MATERIALIZED (
+           SELECT r.tenant_id
+             FROM ${panelMonitorTenants} AS r
+             JOIN candidates AS c ON c.tenant_id = r.tenant_id
+            WHERE r.next_eligible_at <= ${now}
+              AND r.last_served_at = c.last_served_at
+            ORDER BY c.last_served_at ASC, c.tenant_id ASC
+            LIMIT ${limit}
+              FOR UPDATE OF r SKIP LOCKED
+      )
+      UPDATE ${panelMonitorTenants} AS t
+         SET last_served_at = GREATEST(${now}::timestamptz,
+                                       t.last_served_at + interval '1 microsecond')
+        FROM taken
+       WHERE t.tenant_id = taken.tenant_id
+      RETURNING t.tenant_id
+    `;
+}
+
+/**
  * The due-panel scan, as a statement rather than a call.
  *
  * Exported so the plan regression test can run `EXPLAIN (ANALYZE, BUFFERS)`
@@ -968,36 +1003,74 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
   async claimTenants(now: Date, limit: number): Promise<string[]> {
     if (limit <= 0) return [];
     /**
-     * One statement: choose the turn and take it.
+     * One statement, three steps: read the queue, take the turns, spend them.
      *
-     * `FOR UPDATE SKIP LOCKED` on the inner select is what stops two monitor
-     * replicas contending for the tenant at the front of the queue. The
-     * `UPDATE` moving `last_served_at` is the turn being spent, and it commits
-     * with the claim — so a replica that dies mid-tick has still spent the
-     * turn, which is the safe direction: a tenant waits one extra round rather
-     * than being served twice while another waits for ever.
+     * `candidates` is the queue as this statement's SNAPSHOT sees it — every
+     * due tenant of an ACTIVE tenant, with the `last_served_at` the ordering is
+     * decided on. `taken` locks the front of it `FOR UPDATE SKIP LOCKED`, and
+     * the UPDATE spends what it locked. The turn moving commits with the claim,
+     * so a replica that dies mid-tick has still spent the turn, which is the
+     * safe direction: a tenant waits one extra round rather than being served
+     * twice while another waits for ever. Nothing here is a lease, so nothing
+     * can be stranded: the statement holds its row locks for its own duration
+     * only, a crash mid-statement rolls the turn back unspent, and a crash
+     * after it leaves the tenant at the back of the queue, claimable again on
+     * the next round by any replica.
      *
-     * `AND t.last_served_at = due.last_served_at` is the rest of it, and
-     * SKIP LOCKED alone is not a substitute — measured, not reasoned about.
-     * Two claims racing on a real database handed the SAME tenant to both
-     * about five times in a thousand, and the mechanism is that the ordering
-     * decision is made against a snapshot rather than against a lock. Under
-     * READ COMMITTED the second claim takes its snapshot before the first one
-     * commits, so it sees the front tenant's turn as unspent; by the time it
-     * reaches that row the first claim has committed and released the lock, so
-     * there is nothing left for SKIP LOCKED to skip. It then re-checks the row
-     * against the LATEST version — and `next_eligible_at <= now()` is still
-     * true, because spending a turn does not change it.
+     * SKIP LOCKED alone does not make two replicas disjoint, and neither did
+     * the re-check that used to sit beside it. Both measured, not reasoned
+     * about. Under READ COMMITTED the second claim's snapshot predates the
+     * first one's commit, so it orders by a turn that has already been spent;
+     * by the time it reaches the row the first claim has committed and released
+     * the lock, so SKIP LOCKED has nothing to skip. PostgreSQL then re-checks
+     * the row (EvalPlanQual) against its LATEST version, and a predicate is
+     * only a guard if the spent turn fails it there. `next_eligible_at <= now`
+     * does not — spending a turn does not move it.
      *
-     * So the re-check has to test the thing the ordering assumed. A turn that
-     * was spent between the snapshot and the lock fails this predicate, the
-     * row drops out, and that claim comes back with one tenant fewer. Which is
-     * the same safe direction as above: a tenant waits a tick. The same 4 000
-     * races produce zero double-claims with it and twenty without.
+     * The previous guard, `t.last_served_at = due.last_served_at`, had two
+     * holes. Its snapshot side came OUT of the locked subquery, whose row the
+     * re-check replaces with the latest version, so which side of the equality
+     * was stale depended on which plan node noticed the conflict — one doubled
+     * claim in six hundred races, seen in CI. And it compared a value that is
+     * not monotonic: a claim whose clock reads what is already stored writes
+     * that same value back, the spent turn equals the unspent one, and the
+     * guard passes — between one round in five and one in forty doubled,
+     * measured, with two replicas on a frozen clock. Its `LIMIT` also sat
+     * before the comparison, so a loser it did catch came back with nothing
+     * rather than with the next tenant: about one round in a hundred starved.
      *
-     * Bounded by the number of tenants, which on this deployment model is tens.
-     * It is emphatically NOT bounded by the number of due panels, and that is
-     * the property the whole two-phase shape exists to buy.
+     * So the comparison is between two things a re-check cannot both refresh.
+     * `c` is a MATERIALIZED CTE, not the locked table: on a re-check
+     * PostgreSQL carries a non-locked relation's row as the copy it originally
+     * joined, so `c.last_served_at` stays the snapshot value the ordering
+     * assumed while `r.last_served_at` is the row as it stands under the lock.
+     * A turn spent in between fails the equality, the row drops out of
+     * `LockRows`, and — because `LIMIT` sits ABOVE the lock — the claim moves
+     * on to the next candidate instead of coming back short. Both CTEs are
+     * evaluated exactly once, so no plan can rescan the locking step per
+     * outer row (the bound `purgeWizards` once lost that way).
+     *
+     * And the write is strictly monotonic, `GREATEST(now, previous + 1 µs)`,
+     * so a spent turn can never write back the value it replaced. An ordinary
+     * claim writes the clock's reading exactly as before; only a claim whose
+     * clock has not moved past the stored turn lands a microsecond after it,
+     * which changes no ordering anyone relies on.
+     *
+     * The established pattern elsewhere (`expireDue`, the outbox relay) is the
+     * same idea in its usual form: lock with SKIP LOCKED, then re-check a
+     * predicate the claim itself falsifies. A state column is that predicate
+     * there; the monotonic turn, compared against its snapshot, is that
+     * predicate here, because spending a turn moves no state. An advisory lock
+     * would serialise the replicas instead of letting them take disjoint
+     * tenants, and a SELECT ... FOR UPDATE then UPDATE in one transaction has
+     * exactly the same problem, since the locked SELECT also returns the
+     * latest version. Dropping SKIP LOCKED would make a loser wait for the
+     * winner's commit instead of moving past it.
+     *
+     * Bounded by the number of tenants, which on this deployment model is tens
+     * — the same rows the previous statement sorted before its `LIMIT`. It is
+     * emphatically NOT bounded by the number of due panels, and that is the
+     * property the whole two-phase shape exists to buy.
      *
      * A tenant that is not ACTIVE takes no turn. Its panels may be perfectly
      * ACTIVE — `status` on a panel says what the OPERATOR wants monitored,
@@ -1015,23 +1088,7 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
      * regression caught reading five hundred rows to return five. Same reason
      * the panel status filter lives in the schedule rather than in a join.
      */
-    const claimed = await this.db.execute<{ tenant_id: string }>(sql`
-      UPDATE ${panelMonitorTenants} AS t
-         SET last_served_at = ${now}
-        FROM (
-             SELECT r.tenant_id, r.last_served_at
-               FROM ${panelMonitorTenants} AS r
-               JOIN ${tenants} AS n ON n.id = r.tenant_id
-              WHERE r.next_eligible_at <= ${now}
-                AND n.status = 'ACTIVE'
-              ORDER BY r.last_served_at ASC, r.tenant_id ASC
-              LIMIT ${limit}
-                FOR UPDATE OF r SKIP LOCKED
-           ) AS due
-       WHERE t.tenant_id = due.tenant_id
-         AND t.last_served_at = due.last_served_at
-      RETURNING t.tenant_id
-    `);
+    const claimed = await this.db.execute<{ tenant_id: string }>(claimTenantsQuery(now, limit));
     return claimed.rows.map((row) => row.tenant_id);
   }
 
