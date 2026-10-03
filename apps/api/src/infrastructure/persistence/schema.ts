@@ -2591,7 +2591,12 @@ export const panelMonitorTenants = pgTable(
       .references(() => tenants.id),
     /** A lower bound on this tenant's earliest eligible panel. Never later than the truth. */
     nextEligibleAt: timestamptz('next_eligible_at').notNull(),
-    /** When this tenant last had a turn. The rotation order. */
+    /**
+     * When this tenant last had a turn. The rotation order, and the claim's
+     * turn token: every claim moves it STRICTLY forward, so a turn spent under
+     * a concurrent claim never compares equal to the snapshot that claim
+     * ordered by (`claimTenantsQuery`).
+     */
     lastServedAt: timestamptz('last_served_at').notNull(),
   },
   (table) => [
