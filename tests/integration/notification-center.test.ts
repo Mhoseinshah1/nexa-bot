@@ -13,10 +13,14 @@ import {
   type OperationalEventInput,
   type TenantContext,
 } from '@nexa/contracts';
+import { sql } from 'drizzle-orm';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { createContainer } from '../../apps/api/src/container';
-import { NotificationCenterService } from '../../apps/api/src/modules/platform/opslog/application/notification-center.service';
+import {
+  NotificationCenterService,
+  type NotificationCenterDeps,
+} from '../../apps/api/src/modules/platform/opslog/application/notification-center.service';
 import { DrizzleNotificationInboxRepository } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-notification-inbox.repository';
 import {
   adminActorFor,
@@ -339,6 +343,7 @@ describe('Phase B3 — notification center', () => {
         NOTIFICATION_RULES,
       ),
       guard: ctx.container.guard,
+      opsLog: ctx.container.opsLog,
       scopeActivity: ctx.container.tenants,
       uow: ctx.container.uow,
       clock: { now: () => new Date(Date.now() + (NOTIFICATION_WINDOW_DAYS + 10) * 86_400_000) },
@@ -384,6 +389,106 @@ describe('Phase B3 — notification center', () => {
     } finally {
       await fresh.shutdown();
     }
+  });
+
+  it('tones the bell by the highest unread severity, even when it lies beyond the count cap', async () => {
+    // Five WARNs first, then the only CRITICAL, newest and last in the table's natural
+    // order: an unordered LIMIT of 3 reads the WARNs and stops before it.
+    for (let index = 0; index < 5; index += 1) await record(paymentReview(randomUUID()));
+    await record({
+      code: 'payments.gateway_review_unresolved',
+      severity: 'CRITICAL',
+      message: 'Reconcile this payment against the gateway.',
+      dedupeKey: `payments.gateway_review_unresolved:${randomUUID()}`,
+      context: { paymentId: randomUUID() },
+    });
+    const repository = new DrizzleNotificationInboxRepository(
+      ctx.container.database.db,
+      NOTIFICATION_RULES,
+    );
+    const answer = await repository.unread(
+      tenantA,
+      {
+        adminId: owner.id,
+        rules: NOTIFICATION_RULES,
+        windowStart: new Date(Date.now() - NOTIFICATION_WINDOW_DAYS * 86_400_000),
+        unreadOnly: true,
+      },
+      3,
+    );
+    expect(answer).toEqual({ count: 3, highest: 'CRITICAL' });
+  });
+
+  describe('a permission revoked after the early check and before the write', () => {
+    const reads = async () =>
+      Number(
+        (
+          (
+            await ctx.container.database.db.execute(
+              sql`SELECT count(*)::int AS n FROM admin_notification_reads`,
+            )
+          ).rows[0] as { n: number }
+        ).n,
+      );
+    /** The real unit of work, with the revocation committed just before it opens. */
+    const racing = (admin: SeededAdmin) =>
+      new NotificationCenterService({
+        repository: new DrizzleNotificationInboxRepository(
+          ctx.container.database.db,
+          NOTIFICATION_RULES,
+        ),
+        guard: ctx.container.guard,
+        opsLog: ctx.container.opsLog,
+        scopeActivity: ctx.container.tenants,
+        clock: ctx.container.clock,
+        uow: {
+          run: async (scope, fn) => {
+            await ctx.container.roles.setAdminRoles(tenantA, admin.id, [], null);
+            return ctx.container.uow.run(scope, fn);
+          },
+          runSnapshot: (scope, fn) => ctx.container.uow.runSnapshot(scope, fn),
+          runNested: (scope, tx, fn) => ctx.container.uow.runNested(scope, tx, fn),
+        } satisfies NotificationCenterDeps['uow'],
+      });
+
+    // Another owner, so that revoking this one's roles leaves the tenant an active owner.
+    const racer = (username: string) =>
+      createAdmin(ctx.container, tenantA, { username, roleKeys: ['owner'] });
+
+    it('refuses a mark, writes nothing, and records the denial', async () => {
+      await record(panelDown(randomUUID()));
+      const [item] = await list(owner);
+      const admin = await racer('owner-nc-racer');
+      const refused = await refusal(
+        racing(admin).mark(tenantA, adminActorFor(admin), { id: item?.id as string, read: true }),
+      );
+      expect(refused.kind).toBe('PERMISSION_DENIED');
+      expect(await reads()).toBe(0);
+      const events = await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM operational_events WHERE code = 'access.permission_denied'`,
+      );
+      expect((events.rows[0] as { n: number }).n).toBe(1);
+    });
+
+    it('refuses a category mark-all, and marks nothing in an unfiltered one', async () => {
+      await record(panelDown(randomUUID()));
+      await record(paymentReview(randomUUID()));
+      const first = await racer('owner-nc-racer-1');
+      expect(
+        (
+          await refusal(
+            racing(first).markAll(tenantA, adminActorFor(first), { category: 'PANELS' }),
+          )
+        ).kind,
+      ).toBe('PERMISSION_DENIED');
+      expect(await reads()).toBe(0);
+
+      // A mark-all over every category: the filter is decided again on the transaction,
+      // so an administrator revoked in between marks nothing.
+      const second = await racer('owner-nc-racer-2');
+      expect(await racing(second).markAll(tenantA, adminActorFor(second), {})).toBe(0);
+      expect(await reads()).toBe(0);
+    });
   });
 
   it('refuses a system job: only an administrator has an inbox', async () => {
@@ -489,5 +594,22 @@ describe('Phase B3 — notification center over HTTP', () => {
       payload: {},
     });
     expect(foreign.statusCode).toBe(403);
+  });
+
+  it('refuses half a page cursor rather than answering page 1', async () => {
+    for (const query of ['beforeAt=2026-01-01T00:00:00.000Z', `beforeId=${randomUUID()}`]) {
+      const response = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${NOTIFICATION_CENTER_ROUTES.list}?${query}`,
+        headers: { cookie },
+      });
+      expect(response.statusCode, query).toBe(400);
+    }
+    const whole = await inject({
+      method: 'GET',
+      url: `${API_PREFIX}${NOTIFICATION_CENTER_ROUTES.list}?beforeAt=2026-01-01T00:00:00.000Z&beforeId=${randomUUID()}`,
+      headers: { cookie },
+    });
+    expect(whole.statusCode).toBe(200);
   });
 });

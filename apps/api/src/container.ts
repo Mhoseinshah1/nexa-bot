@@ -5027,6 +5027,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const notificationCenter = new NotificationCenterService({
     repository: new DrizzleNotificationInboxRepository(database.db, NOTIFICATION_RULES),
     guard,
+    opsLog,
     scopeActivity: tenants,
     uow,
     clock,
