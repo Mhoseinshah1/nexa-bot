@@ -1483,7 +1483,17 @@ export class ProvisioningService {
     if (type === 'ROTATE_SUBSCRIPTION')
       await this.deps.services.lockLifecycle(scope, service.id, tx);
     const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
-    if (open !== null) return open;
+    /*
+     * Migration P1: an open SCHEDULED read is not an answer to a person's request.
+     *
+     * Returning it, as every other open row is returned, put a customer's «refresh» —
+     * and an operator's sync — at the back of the background backlog, behind every
+     * scheduled read of a migration-sized fleet, at the sweep's budget floor. Such a row
+     * is instead PROMOTED below, once every refusal a new request faces has passed: one
+     * read, at the asker's priority, announced to the customer who asked.
+     */
+    const scheduled = open !== null && open.background && open.state === 'PLANNED' ? open : null;
+    if (open !== null && scheduled === null) return open;
     const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);
     if (origin.admission !== undefined) {
       /*
@@ -1523,6 +1533,20 @@ export class ProvisioningService {
         'This service is being moved to another location; try again once it has moved.',
       );
     }
+    const requestedByCustomerId = origin.requestedBy === 'OPERATOR' ? null : origin.requestedBy;
+    if (scheduled !== null) {
+      const promoted = await this.deps.operations.promoteBackground(
+        scope,
+        scheduled.id,
+        requestedByCustomerId,
+        now,
+        tx,
+      );
+      // Claimed between the read and the update: it is being read right now, which is
+      // the answer the open-row return has always given.
+      if (promoted === null) return scheduled;
+      return this.recordRequest(scope, actor, service, type, origin, promoted, now, tx);
+    }
     const operation = await this.deps.operations.plan(
       scope,
       {
@@ -1539,13 +1563,27 @@ export class ProvisioningService {
          * operator's suspend is the same type as a customer's — so the customer was
          * told that the request they made had been applied, having made none.
          */
-        requestedByCustomerId: origin.requestedBy === 'OPERATOR' ? null : origin.requestedBy,
+        requestedByCustomerId,
         panelId: service.panelId,
         type,
       },
       now,
       tx,
     );
+    return this.recordRequest(scope, actor, service, type, origin, operation, now, tx);
+  }
+
+  /** The card and the audit row a request leaves, whether it planned or promoted. */
+  private async recordRequest(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+    type: OperationType,
+    origin: { readonly requestedBy: 'OPERATOR' | UserId; readonly card?: CardMessageRef },
+    operation: OperationRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
     /*
      * R3: the card, beside the operation it answers, in the same transaction — so the
      * provisioner can never see the operation without it. Only reached for a NEWLY

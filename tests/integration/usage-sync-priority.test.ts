@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { ActorContext, UserId } from '@nexa/contracts';
+import { USAGE_SYNC_PLAN_LIMIT, type ActorContext, type UserId } from '@nexa/contracts';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import { AudienceFixtures } from './audience-fixtures';
@@ -170,6 +170,38 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     }
   });
 
+  it('a service read within the cadence is not listed again, whatever became of the read', async () => {
+    // Fifty stalest services whose scheduled read FAILED terminally a minute ago, and ten
+    // healthy ones behind them. Listing the fifty again would hand the sweep fifty ids
+    // that conflict with this window's, plan nothing, and keep the ten waiting all window.
+    const failed = await seedFleet(ctx, tenantA.tenantId, panelId, {
+      count: 50,
+      prefix: 'dead',
+      createdBefore: new Date(FIVE_YEARS_AGO.getTime() - 86_400_000),
+    });
+    const healthy = await fleet(10, 'next');
+    const now = new Date();
+    await ctx.container.database.withClient((client) =>
+      client.query(
+        `INSERT INTO provisioning_operations
+           (id, tenant_id, operation_id, service_id, order_id, panel_id, type, state, attempts,
+            failure_kind, completed_at, background, created_at, updated_at)
+         SELECT gen_random_uuid(), s.tenant_id, substr(md5(s.id::text || ':dead'), 1, 16), s.id,
+                s.order_id, s.panel_id, 'SYNC_USAGE', 'FAILED', 5, 'PROVIDER_ERROR', $2::timestamptz,
+                true, $2::timestamptz, $2::timestamptz
+           FROM services s WHERE s.tenant_id = $1::uuid AND s.provider_username LIKE 'dead%'`,
+        [tenantA.tenantId, new Date(now.getTime() - 60_000).toISOString()],
+      ),
+    );
+    const due = await services.listUsageSyncDue(
+      tenantA,
+      new Date(now.getTime() - 240 * 60_000),
+      USAGE_SYNC_PLAN_LIMIT,
+    );
+    expect(due.map((one) => one.providerUsername).sort()).toEqual([...healthy].sort());
+    expect(due.some((one) => failed.includes(one.providerUsername))).toBe(false);
+  });
+
   // -------------------------------------------------------------------------
   // 2. Claim order
   // -------------------------------------------------------------------------
@@ -183,7 +215,11 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     );
     expect(backlog.length).toBe(20);
 
-    const orderId = await paidOrder(ctx, tenantA, owner, { panelId, customerId: buyer, key: 'p1-paid' });
+    const orderId = await paidOrder(ctx, tenantA, owner, {
+      panelId,
+      customerId: buyer,
+      key: 'p1-paid',
+    });
     const later = new Date(Date.now() + 60_000);
     h.clock.set(later);
     await setBucket(ctx, tenantA.tenantId, 100, later);
@@ -193,7 +229,9 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     const claimed = (await operationsOf(ctx, tenantA.tenantId)).find(
       (one) => first.kind !== 'IDLE' && one.id === first.operationId,
     );
-    expect(claimed?.type, 'the paid create is claimed before the scheduled backlog').toBe('PROVISION');
+    expect(claimed?.type, 'the paid create is claimed before the scheduled backlog').toBe(
+      'PROVISION',
+    );
     expect(panel.createCalls()).toBe(1);
     expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
   });
@@ -217,7 +255,9 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     const claimed = (await operationsOf(ctx, tenantA.tenantId)).find(
       (one) => first.kind !== 'IDLE' && one.id === first.operationId,
     );
-    expect(claimed?.type, 'a due retry of housekeeping does not jump a paid create').toBe('PROVISION');
+    expect(claimed?.type, 'a due retry of housekeeping does not jump a paid create').toBe(
+      'PROVISION',
+    );
     // And the read still happens afterwards: housekeeping waits, it is not dropped.
     await h.executor.runOnce(tenantA);
     const service = await services.findById(tenantA, (await serviceIdOf(name ?? '')).id);
@@ -244,7 +284,11 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     expect(held.length, 'the next read was held, not failed').toBeGreaterThan(0);
     expect(held.every((one) => one.kind === 'REFUSED' && one.terminal === false)).toBe(true);
 
-    const orderId = await paidOrder(ctx, tenantA, owner, { panelId, customerId: buyer, key: 'p1-floor-paid' });
+    const orderId = await paidOrder(ctx, tenantA, owner, {
+      panelId,
+      customerId: buyer,
+      key: 'p1-floor-paid',
+    });
     // The create is planned at the REAL time; move the clock there and pin the bucket
     // where the sweep left it, so no refill is mistaken for headroom.
     const paidAt = new Date(Date.now() + 1_000);
@@ -254,6 +298,13 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     expect(panel.createCalls(), 'the paid create found capacity').toBe(1);
     expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
     expect(await bucketTokens(ctx, tenantA.tenantId)).toBe(SWEEP_FLOOR - 1);
+
+    // And the scheduled queue stayed bounded: topped up to the plan limit, never grown by
+    // it every tick while the budget held reads back.
+    const untried = (await operationsOf(ctx, tenantA.tenantId)).filter(
+      (one) => one.background && one.state === 'PLANNED' && one.attempts === 0,
+    );
+    expect(untried.length).toBeLessThanOrEqual(USAGE_SYNC_PLAN_LIMIT);
   });
 
   // -------------------------------------------------------------------------
@@ -338,7 +389,10 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     const b = await operationsOf(ctx, tenantB.tenantId);
     expect(b).toHaveLength(300);
     expect(b.every((one) => one.state === 'PLANNED' && one.attempts === 0)).toBe(true);
-    expect(await bucketTokens(ctx, tenantB.tenantId), "tenant B's bucket was never touched").toBeNull();
+    expect(
+      await bucketTokens(ctx, tenantB.tenantId),
+      "tenant B's bucket was never touched",
+    ).toBeNull();
   });
 
   it('a create whose answer is lost is still UNKNOWN, and its reconcile outranks the backlog', async () => {
@@ -346,12 +400,18 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
     const h = harnessFor(ctx, tenantA, new Date());
     await planBacklogAt(h, new Date(Date.now() - 10 * 60_000));
     panel.behaviour = 'server-error';
-    const orderId = await paidOrder(ctx, tenantA, owner, { panelId, customerId: buyer, key: 'p1-unknown' });
+    const orderId = await paidOrder(ctx, tenantA, owner, {
+      panelId,
+      customerId: buyer,
+      key: 'p1-unknown',
+    });
     const later = new Date(Date.now() + 60_000);
     h.clock.set(later);
     await setBucket(ctx, tenantA.tenantId, 100, later);
     const first = await h.executor.runOnce(tenantA);
-    expect(first.kind === 'ATTEMPTED' && first.outcome, 'a 500 on a create is UNKNOWN').toBe('UNKNOWN');
+    expect(first.kind === 'ATTEMPTED' && first.outcome, 'a 500 on a create is UNKNOWN').toBe(
+      'UNKNOWN',
+    );
     expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('UNRECONCILED');
 
     panel.behaviour = 'healthy';
@@ -388,8 +448,12 @@ describe('Migration P1: usage sync eligibility and queue protection', () => {
           [tenantA.tenantId, id, panelId, type, requestedBy],
         ),
       );
-    await expect(insert('PROVISION', null)).rejects.toThrow(/provisioning_operations_background_check/);
-    await expect(insert('SYNC_USAGE', buyer)).rejects.toThrow(/provisioning_operations_background_check/);
+    await expect(insert('PROVISION', null)).rejects.toThrow(
+      /provisioning_operations_background_check/,
+    );
+    await expect(insert('SYNC_USAGE', buyer)).rejects.toThrow(
+      /provisioning_operations_background_check/,
+    );
     await insert('SYNC_USAGE', null);
     await expect(insert('SYNC_USAGE', null), 'one open scheduled read per service').rejects.toThrow(
       /provisioning_operations_open_background_sync_key/,

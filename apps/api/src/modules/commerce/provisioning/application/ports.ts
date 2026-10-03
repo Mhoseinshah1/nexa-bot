@@ -785,6 +785,13 @@ export interface OperationRecord {
    * for a lost create, or verification READS of a lost commercial write. Never writes.
    */
   readonly verificationAttempts: number;
+  /**
+   * Migration P1: scheduled housekeeping — a usage read nobody asked for. Claimed after
+   * every other due row, and allowed to spend the tenant budget only above
+   * `ProvisionerDeps.backgroundBudgetReserve`. Only `planUsageSyncs` writes `true`, and
+   * the database refuses it on any other type or on a row a customer asked for.
+   */
+  readonly background: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -830,6 +837,11 @@ export interface OperationDraft {
    * the instant it is planned — the first read waits one backoff.
    */
   readonly notBefore?: Date;
+  /**
+   * Migration P1: true ONLY for the provisioner's own scheduled usage read. Absent means
+   * false — full priority — which is the safe default for every other writer.
+   */
+  readonly background?: boolean;
 }
 
 export interface OperationRepository {
@@ -854,6 +866,38 @@ export interface OperationRepository {
     scope: TenantContext,
     operationId: OperationId,
     tx?: unknown,
+  ): Promise<OperationRecord | null>;
+
+  /**
+   * Migration P1: how many scheduled usage reads this tenant has queued and never yet
+   * tried — PLANNED with no attempt spent. The sweep tops that queue up to
+   * `USAGE_SYNC_PLAN_LIMIT` and no further, so a migration-sized fleet of stale services
+   * is a bounded queue the claim reads past, never tens of thousands of rows planned in
+   * a few minutes.
+   *
+   * UNTRIED, not open: a read that failed and is backing off for a retry is not counted,
+   * or fifty accounts deleted on the panel would hold the whole queue for their seven
+   * minutes of retries in every window while the healthy fleet waited. A read the budget
+   * held off is still untried — `holdOff` gives its attempt back — so under budget
+   * pressure the queue stays exactly at the bound.
+   */
+  countUntriedBackground(scope: TenantContext, tx?: unknown): Promise<number>;
+
+  /**
+   * Migration P1: a customer or an operator asked for the read a SCHEDULED row was
+   * already waiting to make, so that row becomes theirs — `background` false, and the
+   * customer recorded when it was one — instead of a second read being planned beside it
+   * or their request waiting behind the whole backlog.
+   *
+   * Conditional on the row still being a PLANNED background row; returns null when it is
+   * not (claimed in between), and the caller answers with the open row as it always has.
+   */
+  promoteBackground(
+    scope: TenantContext,
+    id: string,
+    requestedByCustomerId: UserId | null,
+    now: Date,
+    tx: TransactionScope,
   ): Promise<OperationRecord | null>;
 
   /**

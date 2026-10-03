@@ -118,6 +118,7 @@ function toRecord(row: Row): OperationRecord {
     createAcceptedAt: row.createAcceptedAt,
     absenceObservedAt: row.absenceObservedAt,
     verificationAttempts: row.verificationAttempts,
+    background: row.background,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -195,6 +196,12 @@ export class DrizzleOperationRepository implements OperationRepository {
          * to be in the column is the kind of claim that rots quietly.
          */
         nextAttemptAt: draft.notBefore ?? now,
+        /*
+         * Migration P1: housekeeping only when the caller says so. The CHECK refuses it on
+         * any other type and on a row a customer asked for, so a mistaken `true` fails
+         * loudly instead of demoting somebody's work.
+         */
+        background: draft.background === true,
         createdAt: now,
         updatedAt: now,
       })
@@ -427,7 +434,54 @@ export class DrizzleOperationRepository implements OperationRepository {
           inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),
         ),
       )
+      /*
+       * Migration P1: somebody's own open operation before a scheduled one. A customer's
+       * or an operator's read may sit beside the sweep's (the open-background index admits
+       * that), and the request path must find ITS kind first or it would plan a second
+       * interactive read beside the first.
+       */
+      .orderBy(asc(provisioningOperations.background), asc(provisioningOperations.createdAt))
       .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async countUntriedBackground(scope: TenantContext, tx?: unknown): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ open: sql<number>`count(*)::int` })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.background, true),
+          eq(provisioningOperations.state, 'PLANNED'),
+          eq(provisioningOperations.attempts, 0),
+        ),
+      );
+    return row?.open ?? 0;
+  }
+
+  async promoteBackground(
+    scope: TenantContext,
+    id: string,
+    requestedByCustomerId: UserId | null,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<OperationRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({ background: false, requestedByCustomerId, updatedAt: now })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.id, id),
+          eq(provisioningOperations.background, true),
+          eq(provisioningOperations.state, 'PLANNED'),
+        ),
+      )
+      .returning();
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
   }
@@ -698,6 +752,26 @@ export class DrizzleOperationRepository implements OperationRepository {
        * delayed every new order by a tick per ten of them.
        */
       .orderBy(
+        /*
+         * Migration P1 (H5): housekeeping LAST, before anything else is compared.
+         *
+         * Without this key the claim was oldest-first across every type, and `plan`
+         * stamps `next_attempt_at` with the time it was planned — so a scheduled usage
+         * read planned an hour ago outranked a create a customer paid for a second ago,
+         * and a migration-sized backlog of reads put every new order a tick per ten reads
+         * behind them. A strict class order, decided in the statement, so every replica
+         * sees the same order and there is no process-local queue to disagree.
+         *
+         * `background` and nothing inferred: an operator's sync has no customer either,
+         * and only the sweep's own reads are housekeeping. Within each class the order
+         * is what it was — due time, then age — so a retry that has come due keeps its
+         * place among its peers and never jumps a class.
+         *
+         * The reverse starvation is bounded by demand rather than by a quota: a
+         * background row waits only while interactive work is DUE, and every interactive
+         * row is either finished, backed off (not due) or retired at `MAX_ATTEMPTS`.
+         */
+        asc(provisioningOperations.background),
         sql`${provisioningOperations.nextAttemptAt} ASC NULLS FIRST`,
         asc(provisioningOperations.createdAt),
       )
