@@ -200,7 +200,6 @@ export const CUSTOMER_CRM_ROUTES = {
   tag: (id: string) => `/customer-tags/${encodeURIComponent(id)}`,
   tagArchive: (id: string) => `/customer-tags/${encodeURIComponent(id)}/archive`,
   customerTags: (customerId: string) => `/users/${encodeURIComponent(customerId)}/tags`,
-  customerTagRemove: (customerId: string) =>
-    `/users/${encodeURIComponent(customerId)}/tags/remove`,
+  customerTagRemove: (customerId: string) => `/users/${encodeURIComponent(customerId)}/tags/remove`,
   customerNotes: (customerId: string) => `/users/${encodeURIComponent(customerId)}/notes`,
 } as const;
