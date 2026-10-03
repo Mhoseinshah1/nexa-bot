@@ -166,6 +166,7 @@ describe('the panel detail, redesigned', () => {
           status: 401,
           providerVersion: '0.8.4',
           lastHealthyAt: null,
+          unusableStreak: 3,
           stale: true,
         },
       }),

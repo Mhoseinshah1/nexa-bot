@@ -412,6 +412,26 @@ describe('operator service actions over HTTP', () => {
       path: SERVICE_ROUTES.rotateLink(serviceId),
       payload: { idempotencyKey: 'k-rota-0001' },
     },
+    // Program §13: the operator's free grant (the owner holds `services.grant`) and move.
+    {
+      action: 'ADD_TRAFFIC',
+      path: SERVICE_ROUTES.grant(serviceId),
+      payload: { idempotencyKey: 'k-gtra-0001', kind: 'ADD_TRAFFIC', trafficGb: '2', reason: 'r' },
+    },
+    {
+      action: 'ADD_TIME',
+      path: SERVICE_ROUTES.grant(serviceId),
+      payload: { idempotencyKey: 'k-gtim-0001', kind: 'ADD_TIME', durationDays: 3, reason: 'r' },
+    },
+    {
+      action: 'CHANGE_LOCATION',
+      path: SERVICE_ROUTES.changeLocation(serviceId),
+      payload: {
+        idempotencyKey: 'k-move-0001',
+        locationId: '01900000-0000-7000-8000-0000000000aa',
+        reason: 'r',
+      },
+    },
   ];
 
   // -------------------------------------------------------------------------
@@ -468,6 +488,10 @@ describe('operator service actions over HTTP', () => {
        * accepted, is `rickpanel-rotate-link.test.ts`.
        */
       ROTATE_LINK: 'CAPABILITY',
+      // Program §13: a Marzban grants traffic and time and declares no location change.
+      ADD_TRAFFIC: 'AVAILABLE',
+      ADD_TIME: 'AVAILABLE',
+      CHANGE_LOCATION: 'CAPABILITY',
     });
 
     for (const attempt of everyAction('placeholder')) {

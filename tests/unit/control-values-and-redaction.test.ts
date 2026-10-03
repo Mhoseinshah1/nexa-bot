@@ -330,6 +330,37 @@ describe('redacting a transport error message', () => {
     }
   });
 
+  it('redacts a labelled subscription capability in free text, as the key rule does', () => {
+    // A subscription URL is a bearer capability; `subscription_ref` is the panel's half of
+    // it. The structured redactor drops both by key — free text must not keep them either.
+    for (const [text, secret] of [
+      ['rotated subscriptionUrl=https://sub.example/abc123 for customer', 'sub.example/abc123'],
+      ['old subscription_ref=deadbeefcafe0011 dropped', 'deadbeefcafe0011'],
+      ['{"subscription_url":"https://x.example/sub/zzz","status":"ok"}', 'x.example/sub/zzz'],
+      ['subscription-link: vless://abc@host.example:443', 'abc@host.example'],
+      ['subscription: https://panel.example:2096/sub/QWERTY', 'panel.example:2096/sub/QWERTY'],
+      ["subscription='https://panel.example/sub/QWERTY' kept", 'panel.example/sub/QWERTY'],
+      ['customerSubscription = https://p.example/sub/x9', 'p.example/sub/x9'],
+      ['sub_url: https://q.example/s/1', 'q.example/s/1'],
+    ] as const) {
+      const redacted = redactSecretText(text);
+      expect(redacted, text).not.toContain(secret);
+      expect(redacted, text).toContain(REDACTED);
+    }
+    expect(
+      redactSecretText('rotated subscriptionUrl=https://sub.example/abc123 for customer'),
+    ).toBe(`rotated subscriptionUrl=${REDACTED} for customer`);
+    expect(
+      JSON.parse(
+        redactSecretText('{"subscription_url":"https://x.example/sub/zzz","status":"ok"}'),
+      ),
+    ).toEqual({ subscription_url: REDACTED, status: 'ok' });
+    // The bare word labels a sentence as often as a secret: only a URL value is taken.
+    expect(redactSecretText('subscription: renewed by alice')).toBe(
+      'subscription: renewed by alice',
+    );
+  });
+
   it('leaves ordinary operational text alone', () => {
     // A redactor that eats the message is as useless as one that does nothing:
     // the point of keeping this text is that somebody can act on it.

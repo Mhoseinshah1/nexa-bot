@@ -79,6 +79,31 @@ export const adminDisplayNameSchema = z.string().trim().min(1).max(120);
  */
 export const adminChangeReasonSchema = z.string().trim().min(1).max(500);
 
+/**
+ * A step-up: the ACTING administrator proving, for one sensitive act, that they are
+ * the account holder and not merely somebody holding their session (Phase D2 review).
+ *
+ * The password always; and, when the actor has two-step sign-in ON, a current code or
+ * an unused backup code as well — a step-up weaker than the factor the account signs in
+ * with would make the factor decorative for exactly the acts that matter most. Checked
+ * by the server: the optional fields are REQUIRED there whenever the actor's factor is
+ * active. Never stored, logged or audited.
+ */
+export const stepUpSchema = z
+  .object({
+    password: z.string().min(1).max(1024),
+    code: z
+      .string()
+      .transform((value) => value.replace(/\s+/g, ''))
+      .pipe(z.string().regex(/^[0-9]{6}$/))
+      .optional(),
+    backupCode: z.string().trim().min(8).max(64).optional(),
+  })
+  .refine((value) => value.code === undefined || value.backupCode === undefined, {
+    message: 'Provide at most one of code or backupCode.',
+  });
+export type StepUp = z.infer<typeof stepUpSchema>;
+
 export interface Admin {
   readonly id: AdminId;
   readonly tenantId: TenantId;
@@ -162,5 +187,9 @@ export const LOGIN_FAILURE_REASONS = [
   'ADMIN_DISABLED',
   'TENANT_INACTIVE',
   'THROTTLED',
+  /** Phase D2: the password was right and the second factor was not. */
+  'BAD_SECOND_FACTOR',
+  /** Phase D2: the challenge was unknown, expired, spent or out of guesses. */
+  'CHALLENGE_INVALID',
 ] as const;
 export type LoginFailureReason = (typeof LOGIN_FAILURE_REASONS)[number];

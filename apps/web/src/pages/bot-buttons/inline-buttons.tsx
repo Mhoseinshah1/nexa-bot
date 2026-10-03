@@ -56,6 +56,7 @@ const GROUP_TITLE: Readonly<Record<InlineButtonGroup, WebKey>> = {
   REFERRAL: 'web.ib_group_referral',
   APPS: 'web.ib_group_apps',
   CHANNELS: 'web.ib_group_channels',
+  TERMS: 'web.ib_group_terms',
 };
 
 /** The four styles Telegram accepts, by their builder names. */
@@ -170,6 +171,7 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'channels.join_public': 'web.ib_button_channels_join_public',
   'channels.join_private': 'web.ib_button_channels_join_private',
   'channels.check': 'web.ib_button_channels_check',
+  'terms.accept': 'web.ib_button_terms_accept',
 };
 
 /** The stored value, canonical: only the buttons whose style is not their default. */

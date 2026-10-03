@@ -90,6 +90,13 @@ export const GATEWAY_CARD_CHANGE_UNKNOWN_CODE = 'payments.gateway_card_change_un
 export const GATEWAY_REVIEW_UNRESOLVED_CODE = 'payments.gateway_review_unresolved';
 export const GATEWAY_REVIEW_RECONCILED_CODE = 'payments.gateway_review_reconciled';
 /**
+ * The audit action of every `PENDING -> UNKNOWN` this lane writes. A mismatch hold records a
+ * machine `reason` in `after`; a lapsed review does not. The Payment Operations Center's
+ * `MISMATCH` queue and the timeline's `PAYMENT_OUTCOME_UNKNOWN` read exactly that, so the
+ * name is a constant both sides import rather than a string each one spells.
+ */
+export const PAYMENT_LOSE_TRACK_ACTION = 'payment.lose_track';
+/**
  * NOWPayments (`docs/nowpayments-gateway-audit.md` §5.6), declared beside their producer and
  * part of the schema once shipped:
  *
@@ -1291,7 +1298,7 @@ export class GatewayPaymentService {
         scope,
         actor,
         {
-          action: 'payment.lose_track',
+          action: PAYMENT_LOSE_TRACK_ACTION,
           entityType: 'Payment',
           entityId: payment.id,
           before: { state: 'PENDING' },
@@ -1367,7 +1374,7 @@ export class GatewayPaymentService {
           scope,
           actor,
           {
-            action: 'payment.lose_track',
+            action: PAYMENT_LOSE_TRACK_ACTION,
             entityType: 'Payment',
             entityId: payment.id,
             before: { state: 'PENDING' },

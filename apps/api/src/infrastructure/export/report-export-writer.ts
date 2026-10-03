@@ -47,6 +47,23 @@ export class DefaultReportExportWriter implements ReportExportWriter {
 const BOM = String.fromCharCode(0xfeff);
 
 /**
+ * A CSV of TEXT cells only, by the same rules as the report CSV above: a BOM so the Persian
+ * headers survive a spreadsheet, CRLF per RFC 4180, RFC quoting, and every cell held to the
+ * formula guard — the audit export's cells are operator-entered reasons and stored JSON,
+ * both of which can begin with `=`. One writer of the format, so the two files cannot drift.
+ */
+export function textCsv(
+  headers: readonly string[],
+  rows: readonly (readonly string[])[],
+): Uint8Array {
+  const lines = [
+    headers.map((header) => csvField(header)).join(','),
+    ...rows.map((row) => row.map((cell) => csvField(guardFormula(cell))).join(',')),
+  ];
+  return Buffer.from(`${BOM}${lines.join('\r\n')}\r\n`, 'utf8');
+}
+
+/**
  * The Persian header of a column. Every key in `REPORT_EXPORT_COLUMN_KEYS` has one — a test
  * holds the catalogue to the list — so the fallback to the key is unreachable in practice
  * and exists only so a gap would show as an English key rather than an empty heading.

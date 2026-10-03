@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
+  AUDIENCE_ACTIVE_SERVICE_FILTERS,
   AUDIENCE_CUSTOMER_STATUSES,
   AUDIENCE_PURCHASE_FILTERS,
   AUDIENCE_REFERRAL_FILTERS,
   AUDIENCE_TRIAL_FILTERS,
   SERVICE_STATES,
+  type AudienceActiveServiceFilter,
   type AudienceCustomerStatus,
   type AudienceOptionsResponse,
   type AudiencePurchaseFilter,
@@ -54,6 +56,10 @@ export interface AudienceDraft {
     expiringWithinHours: number | null;
     expired: boolean;
   } | null;
+  /** Broadcast V2 (program §19): the customer's tags, by id (program §8). */
+  tags: { anyOf: string[]; noneOf: string[] } | null;
+  /** Broadcast V2: has / has no service active now. */
+  activeService: AudienceActiveServiceFilter;
 }
 
 export const EMPTY_AUDIENCE: AudienceDraft = {
@@ -73,6 +79,8 @@ export const EMPTY_AUDIENCE: AudienceDraft = {
   trial: 'ANY',
   referral: 'ANY',
   service: null,
+  tags: null,
+  activeService: 'ANY',
 };
 
 /** A stored canonical definition, back into the builder's shape (every key is present). */
@@ -102,6 +110,43 @@ const REFERRAL_LABELS: Readonly<Record<AudienceReferralFilter, WebKey>> = {
   REFERRER: 'web.aud_referral_referrer',
   REFERRED: 'web.aud_referral_referred',
 };
+const ACTIVE_SERVICE_LABELS: Readonly<Record<AudienceActiveServiceFilter, WebKey>> = {
+  ANY: 'web.aud_any',
+  HAS: 'web.aud_active_service_has',
+  NONE: 'web.aud_active_service_none',
+};
+
+/** One tag's part in the audience: not used, required (any of) or excluded (none of). */
+type TagRole = 'IGNORE' | 'ANY_OF' | 'NONE_OF';
+const TAG_ROLE_LABELS: Readonly<Record<TagRole, WebKey>> = {
+  IGNORE: 'web.aud_tag_ignore',
+  ANY_OF: 'web.aud_tag_any_of',
+  NONE_OF: 'web.aud_tag_none_of',
+};
+const TAG_ROLES: readonly TagRole[] = ['IGNORE', 'ANY_OF', 'NONE_OF'];
+
+/**
+ * The draft's tags with one tag moved to `role`. A tag sits in at most one list — the
+ * contract refuses a tag both required and excluded — and an empty criterion is `null`.
+ */
+export function withTagRole(
+  tags: AudienceDraft['tags'],
+  id: string,
+  role: TagRole,
+): AudienceDraft['tags'] {
+  const anyOf = (tags?.anyOf ?? []).filter((one) => one !== id);
+  const noneOf = (tags?.noneOf ?? []).filter((one) => one !== id);
+  if (role === 'ANY_OF') anyOf.push(id);
+  if (role === 'NONE_OF') noneOf.push(id);
+  return anyOf.length === 0 && noneOf.length === 0 ? null : { anyOf, noneOf };
+}
+
+function tagRoleOf(tags: AudienceDraft['tags'], id: string): TagRole {
+  if (tags?.anyOf.includes(id) === true) return 'ANY_OF';
+  if (tags?.noneOf.includes(id) === true) return 'NONE_OF';
+  return 'IGNORE';
+}
+
 export const SERVICE_STATE_LABELS: Readonly<Record<ServiceState, WebKey>> = {
   PENDING_PROVISION: 'web.aud_service_pending',
   ACTIVE: 'web.aud_service_active',
@@ -219,6 +264,37 @@ export function AudienceBuilder({
         </Field>
       </div>
 
+      {(opts?.tags.length ?? 0) > 0 && (
+        <div className="aud-section">
+          <h4 className="field-group-head">{t('web.aud_tags')}</h4>
+          <p className="muted small">{t('web.aud_tags_hint')}</p>
+          <div className="form-grid c3 aud-grid">
+            {(opts?.tags ?? []).map((tag) => (
+              <Field
+                key={tag.id}
+                label={tag.archived ? `${tag.label} (${t('web.aud_tag_archived')})` : tag.label}
+                htmlFor={`aud-tag-${tag.id}`}
+              >
+                <select
+                  id={`aud-tag-${tag.id}`}
+                  disabled={disabled}
+                  value={tagRoleOf(value.tags, tag.id)}
+                  onChange={(event) =>
+                    set({ tags: withTagRole(value.tags, tag.id, event.target.value as TagRole) })
+                  }
+                >
+                  {TAG_ROLES.map((role) => (
+                    <option key={role} value={role}>
+                      {t(TAG_ROLE_LABELS[role])}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="aud-section">
         <h4 className="field-group-head">{t('web.cb_aud_profile')}</h4>
         <div className="form-grid c3 aud-grid">
@@ -276,6 +352,22 @@ export function AudienceBuilder({
               {AUDIENCE_REFERRAL_FILTERS.map((option) => (
                 <option key={option} value={option}>
                   {t(REFERRAL_LABELS[option])}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t('web.aud_active_service')} htmlFor="aud-active-service">
+            <select
+              id="aud-active-service"
+              disabled={disabled}
+              value={value.activeService}
+              onChange={(event) =>
+                set({ activeService: event.target.value as AudienceActiveServiceFilter })
+              }
+            >
+              {AUDIENCE_ACTIVE_SERVICE_FILTERS.map((option) => (
+                <option key={option} value={option}>
+                  {t(ACTIVE_SERVICE_LABELS[option])}
                 </option>
               ))}
             </select>
@@ -546,6 +638,20 @@ export function describeAudience(definition: unknown): string[] {
   if (d.trial !== 'ANY') lines.push(`${t('web.aud_trial')}: ${t(TRIAL_LABELS[d.trial])}`);
   if (d.referral !== 'ANY')
     lines.push(`${t('web.aud_referral')}: ${t(REFERRAL_LABELS[d.referral])}`);
+  if (d.activeService !== 'ANY') {
+    lines.push(`${t('web.aud_active_service')}: ${t(ACTIVE_SERVICE_LABELS[d.activeService])}`);
+  }
+  if (d.tags !== null) {
+    const bits = [
+      ...(d.tags.anyOf.length > 0
+        ? [`${t('web.aud_tag_any_of')} (${formatNumber(d.tags.anyOf.length)})`]
+        : []),
+      ...(d.tags.noneOf.length > 0
+        ? [`${t('web.aud_tag_none_of')} (${formatNumber(d.tags.noneOf.length)})`]
+        : []),
+    ];
+    lines.push(`${t('web.aud_tags')}: ${bits.join(' · ')}`);
+  }
   if (d.registeredFrom !== null)
     lines.push(`${t('web.aud_registered_from')}: ${instantToDay(d.registeredFrom)}`);
   if (d.registeredBefore !== null) {

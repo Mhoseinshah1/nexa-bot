@@ -1,5 +1,5 @@
 {
-  "id": "bce113f1-1f0b-4bfc-8a07-70a228a8aa6f",
+  "id": "6a0f407e-de27-4e23-84c1-c4773cb3e55b",
   "prevId": "0933052c-32d7-454c-ad41-85a6f1a06dad",
   "version": "7",
   "dialect": "postgresql",
@@ -409,100 +409,6 @@
           "value": "failed_count >= 0"
         }
       },
-      "isRLSEnabled": false
-    },
-    "public.admin_notification_reads": {
-      "name": "admin_notification_reads",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "admin_id": {
-          "name": "admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "event_id": {
-          "name": "event_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "read_through": {
-          "name": "read_through",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "admin_notification_reads_tenant_id_tenants_id_fk": {
-          "name": "admin_notification_reads_tenant_id_tenants_id_fk",
-          "tableFrom": "admin_notification_reads",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "admin_notification_reads_event_id_operational_events_id_fk": {
-          "name": "admin_notification_reads_event_id_operational_events_id_fk",
-          "tableFrom": "admin_notification_reads",
-          "tableTo": "operational_events",
-          "columnsFrom": [
-            "event_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "admin_notification_reads_admin_fk": {
-          "name": "admin_notification_reads_admin_fk",
-          "tableFrom": "admin_notification_reads",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "admin_notification_reads_pk": {
-          "name": "admin_notification_reads_pk",
-          "columns": [
-            "tenant_id",
-            "admin_id",
-            "event_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.admin_permission_overrides": {
@@ -6153,6 +6059,147 @@
       },
       "isRLSEnabled": false
     },
+    "public.customer_notes": {
+      "name": "customer_notes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author_admin_id": {
+          "name": "author_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "author_label": {
+          "name": "author_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "customer_notes_customer_idx": {
+          "name": "customer_notes_customer_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "customer_notes_tenant_id_tenants_id_fk": {
+          "name": "customer_notes_tenant_id_tenants_id_fk",
+          "tableFrom": "customer_notes",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "customer_notes_author_admin_id_admins_id_fk": {
+          "name": "customer_notes_author_admin_id_admins_id_fk",
+          "tableFrom": "customer_notes",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "author_admin_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "customer_notes_customer_fk": {
+          "name": "customer_notes_customer_fk",
+          "tableFrom": "customer_notes",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "customer_notes_body_check": {
+          "name": "customer_notes_body_check",
+          "value": "length(body) BETWEEN 1 AND 2000"
+        },
+        "customer_notes_author_check": {
+          "name": "customer_notes_author_check",
+          "value": "length(author_label) BETWEEN 1 AND 200"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.customer_notifications": {
       "name": "customer_notifications",
       "schema": "",
@@ -6313,6 +6360,256 @@
         "customer_notifications_resolved_check": {
           "name": "customer_notifications_resolved_check",
           "value": "(state <> 'PENDING') = (resolved_at IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.customer_tag_assignments": {
+      "name": "customer_tag_assignments",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tag_id": {
+          "name": "tag_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "assigned_by_admin_id": {
+          "name": "assigned_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "assigned_at": {
+          "name": "assigned_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "customer_tag_assignments_tag_idx": {
+          "name": "customer_tag_assignments_tag_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "tag_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "customer_tag_assignments_tenant_id_tenants_id_fk": {
+          "name": "customer_tag_assignments_tenant_id_tenants_id_fk",
+          "tableFrom": "customer_tag_assignments",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "customer_tag_assignments_assigned_by_admin_id_admins_id_fk": {
+          "name": "customer_tag_assignments_assigned_by_admin_id_admins_id_fk",
+          "tableFrom": "customer_tag_assignments",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "assigned_by_admin_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "customer_tag_assignments_customer_fk": {
+          "name": "customer_tag_assignments_customer_fk",
+          "tableFrom": "customer_tag_assignments",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "customer_tag_assignments_tag_fk": {
+          "name": "customer_tag_assignments_tag_fk",
+          "tableFrom": "customer_tag_assignments",
+          "tableTo": "customer_tags",
+          "columnsFrom": [
+            "tenant_id",
+            "tag_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "customer_tag_assignments_pkey": {
+          "name": "customer_tag_assignments_pkey",
+          "columns": [
+            "tenant_id",
+            "customer_id",
+            "tag_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.customer_tags": {
+      "name": "customer_tags",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "color": {
+          "name": "color",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "customer_tags_active_label_key": {
+          "name": "customer_tags_active_label_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(\"label\")",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "archived_at IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "customer_tags_tenant_id_tenants_id_fk": {
+          "name": "customer_tags_tenant_id_tenants_id_fk",
+          "tableFrom": "customer_tags",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "customer_tags_tenant_id_key": {
+          "name": "customer_tags_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "customer_tags_color_check": {
+          "name": "customer_tags_color_check",
+          "value": "color IS NULL OR color IN ('neutral', 'info', 'ok', 'warn', 'danger', 'violet', 'teal')"
+        },
+        "customer_tags_label_check": {
+          "name": "customer_tags_label_check",
+          "value": "length(label) BETWEEN 1 AND 40 AND label = btrim(regexp_replace(label, '\\s+', ' ', 'g'))"
         }
       },
       "isRLSEnabled": false

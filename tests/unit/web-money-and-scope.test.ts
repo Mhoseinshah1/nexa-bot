@@ -154,6 +154,23 @@ const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = 
     file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
     needle: "'admin.sessions_revoked'",
   },
+  // Phase D2: the second factor's four acts.
+  'admin.second_factor_enabled': {
+    file: 'apps/api/src/modules/platform/identity/application/account-security.service.ts',
+    needle: "'admin.second_factor_enabled'",
+  },
+  'admin.second_factor_disabled': {
+    file: 'apps/api/src/modules/platform/identity/application/account-security.service.ts',
+    needle: "'admin.second_factor_disabled'",
+  },
+  'admin.second_factor_reset': {
+    file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
+    needle: "'admin.second_factor_reset'",
+  },
+  'admin.backup_codes_regenerated': {
+    file: 'apps/api/src/modules/platform/identity/application/account-security.service.ts',
+    needle: "'admin.backup_codes_regenerated'",
+  },
   'backup.run_failed': {
     file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
     needle: "code: 'backup.run_failed'",

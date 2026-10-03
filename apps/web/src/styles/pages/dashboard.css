@@ -189,3 +189,32 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --- Phase E2: the financial statement ------------------------------------------ */
+
+.finance-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+/* The definitions are part of the figures: short, readable, and wrapping at 390px. */
+.finance-definitions {
+  margin: 0 0 12px;
+  padding-inline-start: 18px;
+  color: var(--fg-2);
+  display: grid;
+  gap: 4px;
+}
+/* The three section tables stack; each is a vertical list, so none needs to scroll. */
+.finance-sections {
+  display: grid;
+  gap: 12px;
+}
+.finance-balance-row td {
+  font-weight: 600;
+}
+.finance-subtitle {
+  margin: 16px 0 8px;
+  font-size: var(--fs-ui);
+}

@@ -4,11 +4,14 @@ import { CONTAINER, type Container } from './container.js';
 import { ReadinessProbe } from './surfaces/web/readiness.probe.js';
 import { HealthController } from './surfaces/web/health.controller.js';
 import { AuthController } from './surfaces/web/auth.controller.js';
+import { AccountSecurityController } from './surfaces/web/account-security.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { CustomersController } from './surfaces/web/customers.controller.js';
 import { Customer360Controller } from './surfaces/web/customer-360.controller.js';
 import { NotificationCenterController } from './surfaces/web/notification-center.controller.js';
+import { CustomerDirectMessagesController } from './surfaces/web/customer-direct-messages.controller.js';
+import { CustomerCrmController } from './surfaces/web/customer-crm.controller.js';
 import { TrialsController } from './surfaces/web/trials.controller.js';
 import { ProductsController } from './surfaces/web/products.controller.js';
 import { ProductCategoriesController } from './surfaces/web/product-categories.controller.js';
@@ -36,8 +39,10 @@ import { AppearanceController } from './surfaces/web/appearance.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
 import { FxController } from './surfaces/web/fx.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
+import { TermsController } from './surfaces/web/terms.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
 import { TicketsController } from './surfaces/web/tickets.controller.js';
+import { AuditLogController } from './surfaces/web/audit-log.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServiceRefundRequestsController } from './surfaces/web/service-refund-requests.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
@@ -86,12 +91,18 @@ export class AppModule implements NestModule {
     if (container.config.AUTH_MODE === 'password') {
       controllers.push(
         AuthController as never,
+        // Phase D2: the signed-in administrator's own second factor, sessions and history.
+        AccountSecurityController as never,
         AdminsController as never,
         ControlController as never,
         CustomersController as never,
         Customer360Controller as never,
         // Phase B3: the administrator's notification inbox.
         NotificationCenterController as never,
+        // Phase A2: «ارسال پیام» from Customer 360.
+        CustomerDirectMessagesController as never,
+        // Program §8: operator-only notes and tags.
+        CustomerCrmController as never,
         TrialsController as never,
         ProductsController as never,
         ProductCategoriesController as never,
@@ -120,6 +131,7 @@ export class AppModule implements NestModule {
         // Package FX: the central exchange rate's status and manual refresh.
         FxController as never,
         SupportFaqController as never,
+        TermsController as never,
         ClientAppController as never,
         // WP-A7: support tickets.
         TicketsController as never,
@@ -133,6 +145,8 @@ export class AppModule implements NestModule {
         AudienceController as never,
         BroadcastsController as never,
         BulkOperationsController as never,
+        // Phase D1: the audit log browser and its export.
+        AuditLogController as never,
       );
     }
 

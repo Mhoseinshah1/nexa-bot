@@ -112,6 +112,31 @@ export class LocationChangePolicy {
   }
 
   /**
+   * Program §13: where an OPERATOR may move this service — every enabled target of its
+   * panel for its product, other than where it is. The customer's cooldown and rolling
+   * limit are not applied: they ration what a customer may ask for, not what the
+   * installation may do. A read; `decide` re-decides the chosen one under the lock.
+   */
+  async operatorTargets(
+    scope: TenantContext,
+    service: ServiceRecord,
+    tx?: unknown,
+  ): Promise<{
+    readonly current: LocationPosition | null;
+    readonly targets: readonly LocationTarget[];
+  }> {
+    if (service.productId === null) return { current: null, targets: [] };
+    const rows = await this.deps.locations.forPanel(scope, service.panelId, tx);
+    const current = currentLocation(service, rows);
+    if (current === null) return { current: null, targets: [] };
+    const currency = await this.salesCurrency(scope, tx);
+    const targets = resolvedTargets(rows, service.productId).filter(
+      (row): row is LocationTarget => row.locationKey !== current.key && isOffered(row, currency),
+    );
+    return { current, targets };
+  }
+
+  /**
    * One chosen target, decided for a quote, a confirmation or a free request — or refused
    * with the code the customer's sentence is chosen by.
    *

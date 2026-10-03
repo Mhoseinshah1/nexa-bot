@@ -69,6 +69,10 @@ const factsFor = (
   contact: 'PRESENT',
   openOperations: [],
   operability: operable(),
+  // Program §13: a service with limits to add to and somewhere to move to.
+  grantLimits: { trafficUnlimited: false, noExpiry: false },
+  hasLocationTarget: true,
+  openCommercial: false,
   ...over,
 });
 
@@ -299,7 +303,82 @@ describe('service action availability', () => {
       { action: 'SUSPEND', available: false, blocker: 'STATE' },
       { action: 'RESUME', available: false, blocker: 'STATE' },
       { action: 'TERMINATE', available: true, blocker: null },
+      { action: 'ADD_TRAFFIC', available: false, blocker: 'STATE' },
+      { action: 'ADD_TIME', available: false, blocker: 'STATE' },
+      { action: 'CHANGE_LOCATION', available: false, blocker: 'STATE' },
     ]);
+  });
+
+  /*
+   * Program §13: the operator's grant and move. A grant needs a limit to add to and a move
+   * somewhere to go; both facts are FAIL CLOSED when absent, like an absent operability
+   * verdict — a caller that forgot to gather them must not thereby offer the action.
+   */
+  it('refuses a grant with nothing to add to, and a move with nowhere to go', () => {
+    expect(
+      verdict('ACTIVE', 'ADD_TRAFFIC', {
+        grantLimits: { trafficUnlimited: true, noExpiry: false },
+      }),
+    ).toEqual({ available: false, blocker: 'UNLIMITED' });
+    expect(
+      verdict('ACTIVE', 'ADD_TIME', { grantLimits: { trafficUnlimited: false, noExpiry: true } }),
+    ).toEqual({ available: false, blocker: 'UNLIMITED' });
+    expect(verdict('ACTIVE', 'CHANGE_LOCATION', { hasLocationTarget: false })).toEqual({
+      available: false,
+      blocker: 'NO_TARGET',
+    });
+    // Unlimited traffic does not withhold a TIME grant, and vice versa.
+    expect(
+      verdict('ACTIVE', 'ADD_TIME', { grantLimits: { trafficUnlimited: true, noExpiry: false } })
+        .available,
+    ).toBe(true);
+  });
+
+  it('refuses a grant or a move while ANY commercial action is open, as planGrant does', () => {
+    /*
+     * Codex review of #157: `prepareCommercialAction` refuses on `findOpenCommercial` — an
+     * open RENEW blocks an ADD_TIME — so the matrix must not offer what the write refuses.
+     */
+    for (const action of ['ADD_TRAFFIC', 'ADD_TIME', 'CHANGE_LOCATION'] as const) {
+      expect(verdict('ACTIVE', action, { openCommercial: true }), action).toEqual({
+        available: false,
+        blocker: 'IN_PROGRESS',
+      });
+    }
+    // A suspend is not a commercial action and is not held back by one.
+    expect(verdict('ACTIVE', 'SUSPEND', { openCommercial: true }).available).toBe(true);
+  });
+
+  it('fails closed when the grant and move facts were not gathered', () => {
+    const facts: ServiceActionFacts = {
+      state: 'ACTIVE',
+      hasConfiguration: true,
+      contact: 'PRESENT',
+      openOperations: [],
+      operability: operable(),
+    };
+    const byAction = new Map(evaluateServiceActions(facts).map((entry) => [entry.action, entry]));
+    expect(byAction.get('ADD_TRAFFIC')?.blocker).toBe('UNLIMITED');
+    expect(byAction.get('ADD_TIME')?.blocker).toBe('UNLIMITED');
+    expect(byAction.get('CHANGE_LOCATION')?.blocker).toBe('NO_TARGET');
+    // With limits and a target but no word on open commercial actions: still refused.
+    const unknownOpen = new Map(
+      evaluateServiceActions({
+        ...facts,
+        grantLimits: { trafficUnlimited: false, noExpiry: false },
+        hasLocationTarget: true,
+      }).map((entry) => [entry.action, entry]),
+    );
+    expect(unknownOpen.get('ADD_TIME')?.blocker).toBe('IN_PROGRESS');
+  });
+
+  it('says the panel cannot, before saying there is nothing to add — 3X-UI cannot ADD_TRAFFIC', () => {
+    expect(
+      verdict('ACTIVE', 'ADD_TRAFFIC', {
+        operability: refusing('ADD_TRAFFIC', 'CAPABILITY_UNSUPPORTED'),
+        grantLimits: { trafficUnlimited: true, noExpiry: true },
+      }),
+    ).toEqual({ available: false, blocker: 'CAPABILITY' });
   });
 
   it('offers a TERMINATED service nothing at all', () => {

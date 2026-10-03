@@ -1,4 +1,25 @@
 import {
+  // Program §8: operator-only customer notes and tags.
+  CUSTOMER_CRM_ROUTES,
+  customerNoteCreateResponseSchema,
+  customerNoteListResponseSchema,
+  customerTagAssignmentResponseSchema,
+  customerTagListResponseSchema,
+  customerTagWriteResponseSchema,
+  customerTagsResponseSchema,
+  type CustomerNoteCreateRequest,
+  type CustomerNoteCreateResponse,
+  type CustomerNoteListResponse,
+  type CustomerTagArchiveRequest,
+  type CustomerTagAssignmentRequest,
+  type CustomerTagAssignmentResponse,
+  type CustomerTagCreateRequest,
+  type CustomerTagListResponse,
+  type CustomerTagUpdateRequest,
+  type CustomerTagWriteResponse,
+  type CustomerTagsResponse,
+} from '@nexa/contracts';
+import {
   // Round N: the shared audience, broadcast and mass operations.
   AUDIENCE_ROUTES,
   BROADCAST_ROUTES,
@@ -7,12 +28,19 @@ import {
   audiencePreviewResponseSchema,
   broadcastListResponseSchema,
   broadcastRecipientListResponseSchema,
+  broadcastFailureReasonsResponseSchema,
+  type BroadcastFailureReasonsResponse,
   broadcastResponseSchema,
   broadcastTestResponseSchema,
   bulkItemListResponseSchema,
   bulkOperationListResponseSchema,
   bulkOperationResponseSchema,
   bulkPreviewResponseSchema,
+  bulkRetryPreviewResponseSchema,
+  serviceLocationTargetsResponseSchema,
+  type BulkRetryPreview,
+  type ServiceGrantRequest,
+  type ServiceLocationTargetsResponse,
   type AudienceOptionsResponse,
   type AudiencePreviewResponse,
   type BroadcastContentKind,
@@ -46,6 +74,7 @@ import {
   reportSummaryResponseSchema,
   reportTrendResponseSchema,
   reportWalletResponseSchema,
+  reportFinancialResponseSchema,
   type OrderPurpose as ReportOrderPurpose,
   type ReportExportFormat,
   type ReportExportKind,
@@ -64,6 +93,8 @@ import {
   type ReportTrendMetric,
   type ReportTrendResponse,
   type ReportWalletResponse,
+  type FinancialGranularity,
+  type ReportFinancialResponse,
   COMMERCE_ERROR_CODES,
   RESELLER_MINIMUM_ROUTES,
   RESELLER_ROUTES,
@@ -155,6 +186,11 @@ import {
   type TrialResetResponse,
   IDENTITY_ERROR_CODES,
   PAYMENT_ROUTES,
+  PAYMENT_OPS_ROUTES,
+  paymentAttentionResponseSchema,
+  type PaymentAttentionResponse,
+  type PaymentGatewayProvider,
+  type PaymentOpsQueue,
   COMPENSATION_ROUTES,
   compensationListResponseSchema,
   type CompensationListResponse,
@@ -200,6 +236,24 @@ import {
   revokeAdminSessionsResponseSchema,
   API_PREFIX,
   AUTH_ROUTES,
+  ACCOUNT_SECURITY_ROUTES,
+  accountSecurityResponseSchema,
+  backupCodesResponseSchema,
+  loginOutcomeResponseSchema,
+  okResponseSchema,
+  resetAdminSecondFactorResponseSchema,
+  revokeOtherSessionsResponseSchema,
+  revokeOwnSessionResponseSchema,
+  securityEventListResponseSchema,
+  totpEnrolResponseSchema,
+  type AccountSecurityResponse,
+  type BackupCodesResponse,
+  type LoginOutcomeResponse,
+  type ResetAdminSecondFactorResponse,
+  type RevokeOtherSessionsResponse,
+  type RevokeOwnSessionResponse,
+  type SecurityEventListResponse,
+  type TotpEnrolResponse,
   errorResponseSchema,
   healthInfoResponseSchema,
   loginResponseSchema,
@@ -255,6 +309,7 @@ import {
   type PanelPolicy,
   type PanelTechnicalResponse,
   type UpdatePanelPolicyResponse,
+  panelHealthDashboardResponseSchema,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -262,6 +317,7 @@ import {
   type PanelCredentialsInput,
   type PanelUsernamePolicyInput,
   type PanelListArchivedMode,
+  type PanelHealthDashboardResponse,
   type PanelListResponse,
   type PanelResponse,
   type PanelStatus,
@@ -400,6 +456,12 @@ import {
   type SupportFaqListResponse,
   type SupportFaqResponse,
   type SupportFaqStatus,
+  // Program §6: the terms and rules.
+  TERMS_ROUTES,
+  termsOverviewSchema,
+  termsVersionWriteResponseSchema,
+  type TermsOverviewResponse,
+  type TermsVersionWriteResponse,
   // WP-A10: client apps and connection guides.
   CLIENT_APP_ROUTES,
   clientAppDeletedSchema,
@@ -425,6 +487,10 @@ import {
   type ServiceRefundRequestState,
   type RefundListResponse,
   type RefundResponse,
+  // Phase D1: the audit log browser.
+  AUDIT_LOG_ROUTES,
+  auditLogListResponseSchema,
+  type AuditLogListResponse,
   // WP-A7: support tickets.
   TICKET_ROUTES,
   ticketAssigneesResponseSchema,
@@ -505,6 +571,15 @@ import {
   type MarkAllInboxResponse,
   type MarkInboxResponse,
   type NotificationCategory,
+} from '@nexa/contracts';
+// Phase A2: a direct message from Customer 360.
+import {
+  DIRECT_MESSAGE_ROUTES,
+  directMessageListResponseSchema,
+  directMessageResponseSchema,
+  type DirectMessageFile,
+  type DirectMessageListResponse,
+  type DirectMessageResponse,
 } from '@nexa/contracts';
 
 /**
@@ -659,8 +734,87 @@ function toApiError(status: number, payload: unknown): ApiError {
   return new ApiError(status, 'unknown', `Request failed with ${status}`);
 }
 
-export function signIn(username: string, password: string): Promise<LoginResponse> {
-  return post(AUTH_ROUTES.login, { username, password }, loginResponseSchema);
+/**
+ * The password step. For an account with two-step sign-in it answers with a challenge
+ * (`secondFactorRequired`) and the server has set an httpOnly challenge cookie; the
+ * code goes to `completeSecondFactor`.
+ */
+export function signIn(username: string, password: string): Promise<LoginOutcomeResponse> {
+  return post(AUTH_ROUTES.login, { username, password }, loginOutcomeResponseSchema);
+}
+
+/** The second step: a current code or one backup code, never both. */
+export function completeSecondFactor(
+  proof: { code: string } | { backupCode: string },
+): Promise<LoginResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.loginSecondFactor, proof, loginResponseSchema);
+}
+
+// --- Phase D2: the signed-in administrator's own security -------------------
+
+export function fetchAccountSecurity(): Promise<AccountSecurityResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.overview, accountSecurityResponseSchema);
+}
+
+export function enrolTotp(password: string): Promise<TotpEnrolResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpEnrol, { password }, totpEnrolResponseSchema);
+}
+
+export function activateTotp(code: string): Promise<BackupCodesResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpActivate, { code }, backupCodesResponseSchema);
+}
+
+export type SecondFactorProofInput = { code: string } | { backupCode: string };
+
+export function disableTotp(
+  input: { password: string } & SecondFactorProofInput,
+): Promise<{ ok: true }> {
+  return post(ACCOUNT_SECURITY_ROUTES.totpDisable, input, okResponseSchema);
+}
+
+export function regenerateBackupCodes(
+  input: { password: string } & SecondFactorProofInput,
+): Promise<BackupCodesResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.backupCodesRegenerate, input, backupCodesResponseSchema);
+}
+
+export function fetchOwnSessions(): Promise<AdminSessionListResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.sessions, adminSessionListResponseSchema);
+}
+
+export function revokeOwnSession(id: string): Promise<RevokeOwnSessionResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.revokeSession(id), {}, revokeOwnSessionResponseSchema);
+}
+
+export function revokeOtherSessions(): Promise<RevokeOtherSessionsResponse> {
+  return post(ACCOUNT_SECURITY_ROUTES.revokeOtherSessions, {}, revokeOtherSessionsResponseSchema);
+}
+
+export function fetchSecurityEvents(): Promise<SecurityEventListResponse> {
+  return authedGet(ACCOUNT_SECURITY_ROUTES.events, securityEventListResponseSchema);
+}
+
+/** The holder's own password. Every session ends, this one included. */
+export function changeOwnPassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<{ ok: true }> {
+  return post(AUTH_ROUTES.password, input, okResponseSchema);
+}
+
+/** An operator removing ANOTHER administrator's two-step sign-in. */
+export function resetAdminSecondFactor(input: {
+  id: string;
+  reason: string;
+  stepUp: StepUpInput;
+  idempotencyKey: string;
+}): Promise<ResetAdminSecondFactorResponse> {
+  const { id, ...body } = input;
+  return post(
+    ACCOUNT_SECURITY_ROUTES.adminSecondFactorReset(id),
+    body,
+    resetAdminSecondFactorResponseSchema,
+  );
 }
 
 export function signOut(): Promise<LogoutResponse> {
@@ -752,10 +906,18 @@ export function setAdminRoles(input: {
  * The response carries no credential — the administrator as anybody may see
  * them, and how many sessions the reset ended.
  */
+/** The acting operator's own step-up: their password, and a code when their 2FA is on. */
+export interface StepUpInput {
+  password: string;
+  code?: string;
+  backupCode?: string;
+}
+
 export function resetAdminPassword(input: {
   id: string;
   newPassword: string;
   reason: string;
+  stepUp: StepUpInput;
 }): Promise<ResetAdminPasswordResponse> {
   const { id, ...body } = input;
   return post(ADMIN_ROUTES.password(id), body, resetAdminPasswordResponseSchema);
@@ -1049,6 +1211,8 @@ export function fetchCustomers(
     username?: string;
     status?: CustomerStatus;
     q?: string;
+    /** Program §8: a tag's id. A filter beside `status`, charged `users.view` alone. */
+    tag?: string;
   } = {},
 ): Promise<CustomerListResponse> {
   const params = new URLSearchParams();
@@ -1061,6 +1225,7 @@ export function fetchCustomers(
   if (query.status !== undefined) params.set('status', query.status);
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.tag !== undefined && query.tag !== '') params.set('tag', query.tag);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CUSTOMER_ROUTES.list}?${suffix}` : CUSTOMER_ROUTES.list,
@@ -1373,6 +1538,23 @@ export function adjustWallet(input: {
   return post(WALLET_ROUTES.adjust(customerId), body, walletEntryResponseSchema);
 }
 
+/**
+ * The payment list's and the attention counts' window. `from` and `to` exist only for a
+ * CUSTOM range — the server refuses them with any other, and refuses a CUSTOM range
+ * without them — so they are sent with CUSTOM and never otherwise.
+ */
+function setPaymentWindow(
+  params: URLSearchParams,
+  query: { readonly range?: ReportRange; readonly from?: string; readonly to?: string },
+): void {
+  if (query.range === undefined) return;
+  params.set('range', query.range);
+  if (query.range === 'CUSTOM') {
+    if (query.from !== undefined) params.set('from', query.from);
+    if (query.to !== undefined) params.set('to', query.to);
+  }
+}
+
 export function fetchPayments(
   query: {
     limit?: number;
@@ -1384,6 +1566,13 @@ export function fetchPayments(
     reference?: string;
     disposition?: ReceiptDisposition;
     q?: string;
+    /** The Payment Operations Center's facets (program §10). */
+    queue?: PaymentOpsQueue;
+    gateway?: PaymentGatewayProvider;
+    range?: ReportRange;
+    /** Tenant-calendar dates; sent only with `range: 'CUSTOM'`, as `reportParams` does. */
+    from?: string;
+    to?: string;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1401,6 +1590,9 @@ export function fetchPayments(
   }
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.queue !== undefined) params.set('queue', query.queue);
+  if (query.gateway !== undefined) params.set('gateway', query.gateway);
+  setPaymentWindow(params, query);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
@@ -1427,6 +1619,10 @@ export function fetchServices(
     panelId?: string;
     providerUsername?: string;
     q?: string;
+    /** Program §13: the workspace's product, location and expiry filters. */
+    productId?: string;
+    locationKey?: string;
+    expiringWithinHours?: number;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
@@ -1456,6 +1652,15 @@ export function fetchServices(
   }
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.productId !== undefined && query.productId !== '') {
+    params.set('productId', query.productId);
+  }
+  if (query.locationKey !== undefined && query.locationKey !== '') {
+    params.set('locationKey', query.locationKey);
+  }
+  if (query.expiringWithinHours !== undefined) {
+    params.set('expiringWithinHours', String(query.expiringWithinHours));
+  }
   const suffix = params.toString();
   return authedGet(
     suffix ? `${SERVICE_ROUTES.list}?${suffix}` : SERVICE_ROUTES.list,
@@ -1480,7 +1685,16 @@ export function fetchServiceOperations(id: string): Promise<ServiceOperationsRes
  * separately would be seven chances to point a label at the wrong URL. The server
  * charges a different permission for terminate; that is its business, not the client's.
  */
-const SERVICE_ACTION_PATHS: Readonly<Record<ServiceOperatorAction, (id: string) => string>> = {
+/**
+ * The actions that take nothing but a key (and terminate's phrase). Program §13's grant and
+ * move carry input of their own and have their own functions below.
+ */
+export type ServiceSimpleAction = Exclude<
+  ServiceOperatorAction,
+  'ADD_TRAFFIC' | 'ADD_TIME' | 'CHANGE_LOCATION'
+>;
+
+const SERVICE_ACTION_PATHS: Readonly<Record<ServiceSimpleAction, (id: string) => string>> = {
   SYNC_USAGE: SERVICE_ROUTES.syncUsage,
   RESEND_CONFIG: SERVICE_ROUTES.resend,
   RETRY_PROVISION: SERVICE_ROUTES.retryProvision,
@@ -1504,7 +1718,7 @@ const SERVICE_ACTION_PATHS: Readonly<Record<ServiceOperatorAction, (id: string) 
  */
 export function actOnService(input: {
   id: string;
-  action: ServiceOperatorAction;
+  action: ServiceSimpleAction;
   idempotencyKey: string;
   confirm?: string;
 }): Promise<ServiceActionResponse> {
@@ -1513,6 +1727,27 @@ export function actOnService(input: {
       ? { idempotencyKey: input.idempotencyKey, confirm: input.confirm ?? '' }
       : { idempotencyKey: input.idempotencyKey };
   return post(SERVICE_ACTION_PATHS[input.action](input.id), body, serviceActionResponseSchema);
+}
+
+/** Program §13: an operator's free traffic or time grant to one service. */
+export function grantService(
+  id: string,
+  body: ServiceGrantRequest,
+): Promise<ServiceActionResponse> {
+  return post(SERVICE_ROUTES.grant(id), body, serviceActionResponseSchema);
+}
+
+/** Program §13: where an operator may move this service. */
+export function fetchServiceLocationTargets(id: string): Promise<ServiceLocationTargetsResponse> {
+  return authedGet(SERVICE_ROUTES.locationTargets(id), serviceLocationTargetsResponseSchema);
+}
+
+/** Program §13: an operator's move of one service to another configured location. */
+export function changeServiceLocation(
+  id: string,
+  body: { idempotencyKey: string; locationId: string; reason: string },
+): Promise<ServiceActionResponse> {
+  return post(SERVICE_ROUTES.changeLocation(id), body, serviceActionResponseSchema);
 }
 
 /**
@@ -1541,6 +1776,22 @@ export function fetchPayment(id: string): Promise<PaymentResponse> {
  * One payment's history (WP17). Behind `payments.view` on the server, which also withholds —
  * and names — the receipt, refund and wallet sections the viewer may not see.
  */
+/**
+ * The Payment Operations Center's queue counts per gateway (program §10), over the same
+ * created-at range the list is filtered by. Absent range: every payment.
+ */
+export function fetchPaymentAttention(
+  query: { range?: ReportRange; from?: string; to?: string } = {},
+): Promise<PaymentAttentionResponse> {
+  const params = new URLSearchParams();
+  setPaymentWindow(params, query);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PAYMENT_OPS_ROUTES.attention}?${suffix}` : PAYMENT_OPS_ROUTES.attention,
+    paymentAttentionResponseSchema,
+  );
+}
+
 export function fetchPaymentTimeline(id: string): Promise<PaymentTimelineResponse> {
   return authedGet(PAYMENT_ROUTES.timeline(id), paymentTimelineResponseSchema);
 }
@@ -1953,6 +2204,45 @@ export function setSupportFaqStatus(input: {
   return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
 }
 
+// --- Program §6: the terms and rules ------------------------------------------------
+
+export function fetchTerms(): Promise<TermsOverviewResponse> {
+  return authedGet(TERMS_ROUTES.overview, termsOverviewSchema);
+}
+
+export function createTermsDraft(input: {
+  idempotencyKey: string;
+  title: string;
+  body: string;
+}): Promise<TermsVersionWriteResponse> {
+  return post(TERMS_ROUTES.createDraft, input, termsVersionWriteResponseSchema);
+}
+
+/**
+ * `expectedRevision` is the revision the editor was opened from. A draft that moved since
+ * comes back as `terms.draft_conflict` with the current revision, never overwritten.
+ */
+export function updateTermsDraft(input: {
+  id: string;
+  idempotencyKey: string;
+  title: string;
+  body: string;
+  expectedRevision: number;
+}): Promise<TermsVersionWriteResponse> {
+  const { id, ...body } = input;
+  return post(TERMS_ROUTES.updateDraft(id), body, termsVersionWriteResponseSchema);
+}
+
+/** Publishes exactly the revision the operator previewed. */
+export function publishTermsDraft(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedRevision: number;
+}): Promise<TermsVersionWriteResponse> {
+  const { id, ...body } = input;
+  return post(TERMS_ROUTES.publish(id), body, termsVersionWriteResponseSchema);
+}
+
 // --- WP-A10: client apps and connection guides ------------------------------------
 
 export function fetchClientApps(): Promise<ClientAppListResponse> {
@@ -2160,6 +2450,36 @@ export function testPanel(input: {
   return post(PANEL_ROUTES.test(id), body, testPanelResponseSchema);
 }
 
+/**
+ * Phase C2: the panel health dashboard, one keyset page of the live fleet.
+ * `panels.view`; the server computes every figure, this only carries them.
+ */
+export function fetchPanelHealth(
+  query: { cursor?: string } = {},
+): Promise<PanelHealthDashboardResponse> {
+  const params = new URLSearchParams();
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PANEL_ROUTES.health}?${suffix}` : PANEL_ROUTES.health,
+    panelHealthDashboardResponseSchema,
+  );
+}
+
+/**
+ * Phase C2: drain a panel (no new allocations) or let it sell again. `panels.drain`.
+ * A reason is required both ways; the key is the submission's own, never a clock.
+ */
+export function setPanelDrain(input: {
+  id: string;
+  draining: boolean;
+  reason: string;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.drain(id), body, panelResponseSchema);
+}
+
 // ---------------------------------------------------------------------------
 // Backup and disaster recovery
 // ---------------------------------------------------------------------------
@@ -2275,6 +2595,8 @@ export function fetchInstallationKeys(): Promise<InstallationKeysResponse> {
  */
 export async function exportRecoveryKit(input: {
   accountPassword: string;
+  /** Required by the server when the administrator's two-step sign-in is on. */
+  code?: string;
   passphrase: string;
   passphraseConfirmation: string;
 }): Promise<{ blob: Blob; filename: string }> {
@@ -2299,6 +2621,7 @@ export async function importRecoveryKit(input: {
   file: File;
   passphrase: string;
   accountPassword: string;
+  code?: string;
   idempotencyKey: string;
 }): Promise<ImportRecoveryKitResponse> {
   // FileReader's data URL, the way the other file pickers here read a file: one
@@ -2318,6 +2641,7 @@ export async function importRecoveryKit(input: {
       kit,
       passphrase: input.passphrase,
       accountPassword: input.accountPassword,
+      ...(input.code === undefined || input.code === '' ? {} : { code: input.code }),
       idempotencyKey: input.idempotencyKey,
     },
     importRecoveryKitResponseSchema,
@@ -3178,6 +3502,18 @@ export function fetchReportWallet(s: ReportRangeSelection): Promise<ReportWallet
   return reportGet(REPORT_ROUTES.wallet, reportWalletResponseSchema, reportParams(s));
 }
 
+/** Phase E2: the financial statement, bucketed by the granularity the page shows. */
+export function fetchReportFinancial(
+  s: ReportRangeSelection,
+  granularity: FinancialGranularity | undefined,
+): Promise<ReportFinancialResponse> {
+  return reportGet(
+    REPORT_ROUTES.financial,
+    reportFinancialResponseSchema,
+    reportParams(s, { granularity }),
+  );
+}
+
 export function fetchReportReferrals(
   s: ReportRangeSelection,
   query: { by: ReportReferrerRanking; limit?: number; page?: number },
@@ -3217,8 +3553,10 @@ export function reportExportUrl(
   s: ReportRangeSelection,
   report: ReportExportKind,
   format: ReportExportFormat,
+  /** FINANCIAL only: the bucket size the page shows, so the file is the page. */
+  granularity?: FinancialGranularity,
 ): string {
-  return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format }).toString()}`;
+  return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format, granularity }).toString()}`;
 }
 
 // --- Dashboard and sidebar counters (round W) ----------------------------------
@@ -3634,6 +3972,11 @@ export function fetchBroadcastRecipients(
   );
 }
 
+/** Broadcast V2 (program §19): failures grouped by state and transport code. */
+export function fetchBroadcastFailures(id: string): Promise<BroadcastFailureReasonsResponse> {
+  return authedGet(BROADCAST_ROUTES.failures(id), broadcastFailureReasonsResponseSchema);
+}
+
 export interface BroadcastContentWire {
   title: string;
   contentKind: BroadcastContentKind;
@@ -3747,6 +4090,29 @@ export function createBulkOperation(input: {
 
 export function cancelBulkOperation(id: string): Promise<BulkOperationResponse> {
   return post(BULK_OPERATION_ROUTES.cancel(id), {}, bulkOperationResponseSchema);
+}
+
+/** Program §13: the FAILED service items a retry would copy, counted. */
+export function previewBulkRetry(id: string): Promise<{ preview: BulkRetryPreview }> {
+  return post(BULK_OPERATION_ROUTES.retryPreview(id), {}, bulkRetryPreviewResponseSchema);
+}
+
+/** Program §13: a NEW operation over exactly those FAILED items. */
+export function retryBulkOperation(
+  id: string,
+  input: {
+    idempotencyKey: string;
+    note: string;
+    expectedCount: number;
+    expectedFingerprint: string;
+    typedCount: number | null;
+  },
+): Promise<BulkOperationResponse> {
+  return post(
+    BULK_OPERATION_ROUTES.retry(id),
+    { ...input, confirmed: true },
+    bulkOperationResponseSchema,
+  );
 }
 
 /** Round N close (§B): pause or resume a mass operation. */
@@ -3878,5 +4244,160 @@ export function markAllInbox(input: {
     NOTIFICATION_CENTER_ROUTES.markAll,
     input.category === undefined ? {} : { category: input.category },
     markAllInboxResponseSchema,
+  );
+}
+
+// --- Phase A2: «ارسال پیام» -------------------------------------------------------------
+
+/** The customer's direct messages, newest first; `cursor` is the previous page's last row. */
+export function fetchDirectMessages(
+  customerId: string,
+  cursor?: { readonly at: string; readonly id: string },
+): Promise<DirectMessageListResponse> {
+  const params = new URLSearchParams();
+  if (cursor !== undefined) {
+    params.set('beforeAt', cursor.at);
+    params.set('beforeId', cursor.id);
+  }
+  const suffix = params.toString();
+  const path = DIRECT_MESSAGE_ROUTES.list(customerId);
+  return authedGet(suffix ? `${path}?${suffix}` : path, directMessageListResponseSchema);
+}
+
+/** Queues one message; the same key answers with the same message (`replayed`). */
+export function sendDirectMessage(input: {
+  customerId: string;
+  idempotencyKey: string;
+  text: string;
+  file: DirectMessageFile | null;
+}): Promise<DirectMessageResponse> {
+  return post(
+    DIRECT_MESSAGE_ROUTES.send(input.customerId),
+    { idempotencyKey: input.idempotencyKey, text: input.text, file: input.file },
+    directMessageResponseSchema,
+  );
+}
+
+// --- Audit log (Phase D1) ------------------------------------------------------
+
+/** The audit log's filters as the page holds them; every one is ANDed on the server. */
+export interface AuditLogFilters {
+  readonly actor?: string;
+  readonly actorType?: string;
+  readonly customerId?: string;
+  readonly action?: string;
+  readonly entityType?: string;
+  readonly entityId?: string;
+  readonly result?: string;
+  readonly security?: string;
+  /** Half-open `[from, to)`, as ISO instants. */
+  readonly from?: string;
+  readonly to?: string;
+}
+
+function auditLogParams(filters: AuditLogFilters): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (typeof value === 'string' && value !== '') params.set(key, value);
+  }
+  return params;
+}
+
+/** One page of the audit log, newest first. `audit.view`. */
+export function fetchAuditLog(
+  filters: AuditLogFilters,
+  page: { readonly limit: number; readonly cursor?: string },
+): Promise<AuditLogListResponse> {
+  const params = auditLogParams(filters);
+  params.set('limit', String(page.limit));
+  if (page.cursor !== undefined) params.set('cursor', page.cursor);
+  return authedGet(`${AUDIT_LOG_ROUTES.list}?${params.toString()}`, auditLogListResponseSchema);
+}
+
+/**
+ * The CSV download of exactly these filters. A URL rather than a fetch, for the reason
+ * `reportExportUrl` gives. `audit.export`; the server records every export.
+ */
+export function auditLogExportUrl(filters: AuditLogFilters): string {
+  const params = auditLogParams(filters);
+  params.set('format', 'csv');
+  return `${API_PREFIX}${AUDIT_LOG_ROUTES.export}?${params.toString()}`;
+}
+
+// --- Customer notes and tags (program §8) ---------------------------------------------
+//
+// Operator-only. Reading tags is `users.view`; the catalogue is `users.tags.manage`, a
+// customer's tags `users.tags.assign`, notes `users.notes.view` / `users.notes.write` — all
+// charged on the server.
+
+export function fetchCustomerTagCatalogue(): Promise<CustomerTagListResponse> {
+  return authedGet(CUSTOMER_CRM_ROUTES.tags, customerTagListResponseSchema);
+}
+
+export function createCustomerTag(
+  body: CustomerTagCreateRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tags, body, customerTagWriteResponseSchema);
+}
+
+export function updateCustomerTag(
+  tagId: string,
+  body: CustomerTagUpdateRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tag(tagId), body, customerTagWriteResponseSchema);
+}
+
+export function archiveCustomerTag(
+  tagId: string,
+  body: CustomerTagArchiveRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tagArchive(tagId), body, customerTagWriteResponseSchema);
+}
+
+export function fetchCustomerTags(customerId: string): Promise<CustomerTagsResponse> {
+  return authedGet(CUSTOMER_CRM_ROUTES.customerTags(customerId), customerTagsResponseSchema);
+}
+
+export function assignCustomerTag(
+  customerId: string,
+  body: CustomerTagAssignmentRequest,
+): Promise<CustomerTagAssignmentResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerTags(customerId),
+    body,
+    customerTagAssignmentResponseSchema,
+  );
+}
+
+export function removeCustomerTag(
+  customerId: string,
+  body: CustomerTagAssignmentRequest,
+): Promise<CustomerTagAssignmentResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerTagRemove(customerId),
+    body,
+    customerTagAssignmentResponseSchema,
+  );
+}
+
+export function fetchCustomerNotes(
+  customerId: string,
+  cursor?: string,
+): Promise<CustomerNoteListResponse> {
+  const path = CUSTOMER_CRM_ROUTES.customerNotes(customerId);
+  return authedGet(
+    cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
+    customerNoteListResponseSchema,
+  );
+}
+
+export function addCustomerNote(
+  customerId: string,
+  body: CustomerNoteCreateRequest,
+): Promise<CustomerNoteCreateResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerNotes(customerId),
+    body,
+    customerNoteCreateResponseSchema,
   );
 }

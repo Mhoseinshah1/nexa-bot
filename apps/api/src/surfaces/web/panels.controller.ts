@@ -9,6 +9,7 @@ import {
   type PanelAdvancedResponse,
   type PanelTechnicalResponse,
   type UpdatePanelPolicyResponse,
+  type PanelHealthDashboardResponse,
   type PanelHealthResponse,
   type PanelListResponse,
   type PanelResponse,
@@ -117,6 +118,49 @@ export class PanelsController {
     };
   }
 
+  /**
+   * Phase C2: the live fleet's health dashboard. `panels.view`, charged by the
+   * panel list the service reads through; paginated by the same keyset.
+   */
+  @Get(PANEL_ROUTES.health)
+  async health(
+    @Req() request: FastifyRequest,
+    @Query() raw: Record<string, unknown>,
+  ): Promise<PanelHealthDashboardResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const query = singleValued(raw);
+    const page = panelListQuerySchema.parse({
+      ...(query.limit === undefined ? {} : { limit: query.limit }),
+      ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    });
+    const result = await this.container.panelHealth.page(scope, actor, {
+      ...(page.limit === undefined ? {} : { limit: page.limit }),
+      ...(page.cursor === undefined ? {} : { cursor: decodeKeysetCursor(page.cursor) }),
+    });
+    return {
+      rows: result.rows.map((row) => ({
+        panel: this.toSummary(row.panel),
+        services: { ...row.stats.services },
+        provisioning: {
+          failedInWindow: row.stats.provisioning.failedInWindow,
+          unknownOpen: row.stats.provisioning.unknownOpen,
+          lastFailureAt: row.stats.provisioning.lastFailureAt?.toISOString() ?? null,
+          lastFailureKind: row.stats.provisioning.lastFailureKind,
+        },
+        conditions: row.conditions.map((condition) => ({
+          code: condition.code,
+          severity: condition.severity,
+          firstSeenAt: condition.firstSeenAt.toISOString(),
+          lastSeenAt: condition.lastSeenAt.toISOString(),
+          occurrences: condition.occurrences,
+        })),
+      })),
+      nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
+      generatedAt: result.generatedAt.toISOString(),
+      failureWindowMs: result.failureWindowMs,
+    };
+  }
+
   @Get('panels/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<PanelResponse> {
     const { scope, actor } = await this.authenticate(request);
@@ -200,6 +244,18 @@ export class PanelsController {
     return { panel: this.toSummary(view) };
   }
 
+  /** Phase C2: drain, or undrain. `panels.drain`, charged by the service. */
+  @Post('panels/:id/drain')
+  async drain(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PanelResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const view = await this.container.panels.setDrain(scope, actor, id, body);
+    return { panel: this.toSummary(view) };
+  }
+
   @Post('panels/:id/test')
   async test(
     @Req() request: FastifyRequest,
@@ -271,6 +327,11 @@ export class PanelsController {
        * second answer to "may we take money for this".
        */
       sellability: view.sellability,
+      drain: {
+        draining: view.panel.drain !== null,
+        since: view.panel.drain?.since.toISOString() ?? null,
+        reason: view.panel.drain?.reason ?? null,
+      },
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
     };
@@ -305,6 +366,7 @@ export class PanelsController {
       status: view.health?.statusCode ?? null,
       providerVersion: view.health?.providerVersion ?? null,
       lastHealthyAt: view.health?.lastHealthyAt?.toISOString() ?? null,
+      unusableStreak: view.health?.unusableStreak ?? null,
       stale: reading.stale,
     };
   }

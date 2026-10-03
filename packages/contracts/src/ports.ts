@@ -353,6 +353,17 @@ export const MANAGEMENT_ADMIN_EVENT_CODES = [
    */
   'admin.password_reset',
   'admin.sessions_revoked',
+  /*
+   * Phase D2. Four acts on an administrator's second factor, each a different one:
+   * the holder turning it on, the holder turning it off (with password AND a factor),
+   * somebody ELSE removing it (an operator, or the owner-recovery CLI), and the holder
+   * replacing their backup codes. Kept apart for the reason the password pair is: an
+   * investigator reading "2FA changed" could not tell a lost phone from a takeover.
+   */
+  'admin.second_factor_enabled',
+  'admin.second_factor_disabled',
+  'admin.second_factor_reset',
+  'admin.backup_codes_regenerated',
 ] as const;
 export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[number];
 

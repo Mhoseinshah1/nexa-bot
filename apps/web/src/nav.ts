@@ -336,6 +336,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_infra',
   },
   {
+    // Phase C2: the live fleet's health, load, failures and drain. `panels.view` is
+    // what the page's one query charges; probe and drain are gated on the page.
+    id: 'panel-health',
+    path: '/panel-health',
+    label: 'web.nav_panel_health',
+    icon: 'activity',
+    permission: 'panels.view',
+    group: 'web.navgroup_infra',
+  },
+  {
     id: 'providers',
     path: '/providers',
     label: 'web.nav_providers',
@@ -441,6 +451,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_comms',
   },
   {
+    // Program §6: the terms and rules. `terms.view`, the key `GET /terms` charges; the
+    // draft, publication and enforcement switch are each drawn under their own key.
+    id: 'terms',
+    path: '/terms',
+    label: 'web.nav_terms',
+    icon: 'shield',
+    permission: 'terms.view',
+    group: 'web.navgroup_comms',
+  },
+  {
     // WP-A10: the client apps and connection guides the bot recommends. Its own pair,
     // `client_apps.*`: the list charges the view and every write the edit.
     id: 'client-apps',
@@ -493,6 +513,16 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_inbox',
     icon: 'bell',
     permission: null,
+    group: 'web.navgroup_system',
+  },
+  {
+    // Phase D1: who changed what. Read with `audit.view`; the export is `audit.export`,
+    // which the page draws for itself.
+    id: 'audit-log',
+    path: '/audit-log',
+    label: 'web.nav_audit_log',
+    icon: 'clock',
+    permission: 'audit.view',
     group: 'web.navgroup_system',
   },
   {

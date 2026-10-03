@@ -137,8 +137,8 @@ Three new CRITICAL permissions, owner-only (backfilled in 0160):
 | Operation | Permission            | Also requires                                                                                                   |
 | --------- | --------------------- | --------------------------------------------------------------------------------------------------------------- |
 | List      | `backup.view`         | — (ids, origin, dependency counts; never bytes; a configured key's fingerprint only with `recovery.kit.export`) |
-| Export    | `recovery.kit.export` | the admin's own account password (throttled like login), passphrase typed twice                                 |
-| Import    | `recovery.kit.import` | the admin's own account password (same throttle); idempotency key; refused during a destructive recovery        |
+| Export    | `recovery.kit.export` | the admin's step-up (password, plus a code when their 2FA is on), passphrase typed twice                        |
+| Import    | `recovery.kit.import` | the admin's step-up (same); idempotency key; refused during a destructive recovery                              |
 | Remove    | `recovery.key.remove` | the key's label typed; only an imported key; refused while anything retained needs it                           |
 
 Export needs the account password because, with `backup.download` beside it, a
@@ -147,6 +147,18 @@ enough. `AdminManagementService.verifyOwnPassword` uses the same throttle counte
 as login and `changeOwnPassword`, so it is not a second guessing door. A failed
 step-up is a 400 (`recovery_kit.reauthentication_failed`), not a 401, so the
 operator is not signed out of the page.
+
+**Amended by Phase D2 (two-step sign-in, security review of PR #151).** The
+step-up is `AdminManagementService.verifyStepUp`, not the password alone: when the
+exporting or importing administrator has two-step sign-in ON, a current TOTP code or
+an unused backup code is required as well (`code` / `backupCode` on the request,
+required by the server then, ignored otherwise; `auth.step_up_factor_required` when
+it is missing). Exporting every KEK must never be easier than turning the factor off,
+which already takes the password AND a code. The code goes through the one
+second-factor checker — replay rule included — reserved on the same throttle, and a
+failed step-up is still the 400 `recovery_kit.reauthentication_failed`. A
+Telegram-bound administrator acting without a factor is outside this (the Recovery
+Kit is a Web Admin action); see `OQ-D2-02`.
 
 Import needs the account password too (PR #144 security review). Without it a
 stolen owner session could import a key of its own choosing, seal a forged
