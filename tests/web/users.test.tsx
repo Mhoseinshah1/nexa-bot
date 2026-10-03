@@ -14,7 +14,8 @@ import { customer, order, renderPage, stubApi } from './harness';
  *
  * Two of the assertions in this file moved here from `planned-and-absent.test.tsx`
  * when Phase 4A turned `/users` from a planned page into a real one: NO USER TAGS
- * and NO RECENT-ACTIVITY FEED. They were recorded as copy on a page no route
+ * and NO RECENT-ACTIVITY FEED. The first was REVERSED by the owner in program §8 (Phase A3,
+ * customer notes and tags), and its case below now asserts the ordered shape instead. They were recorded as copy on a page no route
  * renders any more, and an absence asserted against an unreachable screen is a
  * green test for nothing. They are asserted here, where the concepts could
  * actually come back.
@@ -184,18 +185,23 @@ describe('the customer list', () => {
   });
 
   /**
-   * Owner revision 15 — no user-tag concept, anywhere.
+   * Tags — owner revision 15 REVERSED by program §8 (Phase A3, customer notes and tags).
    *
-   * Moved here from the planned page. Asserted as a true absence now: no tag
-   * column, no tag filter, no tag word at all. On the planned page this was
-   * asserted as the PRESENCE of a sentence saying tags were removed, which is
-   * the opposite shape and stops meaning anything once the page is real.
+   * This case used to assert "no user-tag concept anywhere": no tag column, no tag filter,
+   * no tag word at all. The owner has since explicitly ordered tenant-defined tags with a
+   * list filter, so the absence is replaced, deliberately, by the shape §8 asks for: a tag
+   * FILTER beside the status filter (never a column, and never a second search box), drawn
+   * only when the tenant has defined a tag — a select with nothing in it would be a control
+   * that does nothing — and the catalogue editor only for `users.tags.manage`.
    */
-  it('carries no user-tag concept anywhere', async () => {
-    stubApi(list([customer()]));
+  it('draws no tag control while the tenant has defined no tag (program §8)', async () => {
+    stubApi([...list([customer()]), { url: '/customer-tags', body: { tags: [] } }]);
     const { container } = renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5551234567');
     expect(container.textContent ?? '').not.toContain('برچسب');
+    // No tag COLUMN either way: a tag is read on the customer's own page.
+    const headers = screen.getAllByRole('columnheader').map((cell) => cell.textContent ?? '');
+    expect(headers.join(' ')).not.toContain('برچسب');
   });
 
   it('shows a blocked customer as blocked rather than hiding them', async () => {
@@ -479,7 +485,12 @@ describe('the customer detail', () => {
     await screen.findAllByText('ali_tehran', { exact: false });
     const text = container.textContent ?? '';
     expect(text).not.toContain('فعالیت اخیر');
-    expect(text).not.toContain('برچسب');
+    /*
+     * «برچسب» was in this list and is not any more: program §8 (Phase A3) ordered customer
+     * tags, shown on this page in their own card. Replaced rather than deleted — the tags
+     * card's own tests (`customer-crm.test.tsx`) assert what it now says, and that it draws
+     * no write without `users.tags.assign`.
+     */
     /*
      * «موجودی» was in this list and is not any more.
      *

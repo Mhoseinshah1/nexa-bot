@@ -261,6 +261,7 @@ export function resolve(
           // narrows by Telegram id or username, `users.block` changes a status.
           // Collapsing them would hide a capability the server permits.
           maySearch={may('users.search')}
+          mayManageTags={may('users.tags.manage')}
           denied={!may('users.view')}
         />
       ),
@@ -299,6 +300,10 @@ export function resolve(
           mayManualOrder={may('orders.manual.create')}
           mayEditServices={may('services.edit')}
           mayViewAudit={may('audit.view')}
+          mayViewNotes={may('users.notes.view')}
+          mayWriteNotes={may('users.notes.write')}
+          mayAssignTags={may('users.tags.assign')}
+          mayManageTags={may('users.tags.manage')}
           denied={!may('users.view')}
         />
       ),

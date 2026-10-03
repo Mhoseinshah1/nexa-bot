@@ -28,6 +28,9 @@ import {
   BOT_INSTANCE_STATUSES,
   CALENDARS,
   CURRENCY_CODES,
+  CUSTOMER_NOTE_MAX_LENGTH,
+  CUSTOMER_TAG_COLORS,
+  CUSTOMER_TAG_LABEL_MAX_LENGTH,
   GATEWAY_PROVIDER_UNITS,
   FX_BASE_ASSETS,
   FX_SOURCES,
@@ -11636,5 +11639,131 @@ export const bulkOperationItems = pgTable(
       'bulk_operation_items_processed_check',
       sql`(state IN ('PENDING', 'CANCELLED')) = (processed_at IS NULL)`,
     ),
+  ],
+);
+
+// --- Customer notes and tags (program §8, `docs/customer-notes-tags.md`) ---------------
+
+/**
+ * The tenant's own customer tags. The `id` is the identity: an assignment, a list filter and
+ * an event all name the id, so renaming a tag renames it everywhere at once and changes no
+ * reference.
+ *
+ * UNIQUENESS is `customer_tags_active_label_key`: `lower(label)` among the tenant's ACTIVE
+ * tags. The label is stored already normalised (`normaliseCustomerTagLabel`: NFC, one space
+ * between words, none around) and the CHECK below refuses one that is not, so «VIP» and
+ * « vip » collide here, in one place, for every writer. An archived tag leaves the index, so
+ * its name can be reused; restoring it then collides, and is refused rather than merged.
+ *
+ * Nothing deletes a tag. An archived one stays on the customers that carry it (and in the
+ * audit history that names it) and cannot be newly assigned — the CRM service's assignment
+ * reads it `FOR SHARE`, so an archive and an assignment racing are decided one after the
+ * other.
+ */
+export const customerTags = pgTable(
+  'customer_tags',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    label: text('label').notNull(),
+    /** One of the design system's semantic tones; null is neutral. */
+    color: text('color'),
+    archivedAt: timestamptz('archived_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('customer_tags_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('customer_tags_active_label_key')
+      .on(table.tenantId, sql`lower(${table.label})`)
+      .where(sql`archived_at IS NULL`),
+    check('customer_tags_color_check', nullableEnumCheck('color', CUSTOMER_TAG_COLORS)),
+    check(
+      'customer_tags_label_check',
+      sql`length(label) BETWEEN 1 AND ${sql.raw(String(CUSTOMER_TAG_LABEL_MAX_LENGTH))} AND label = btrim(regexp_replace(label, '\\s+', ' ', 'g'))`,
+    ),
+  ],
+);
+
+/**
+ * Which customer carries which tag. One row per pair, so assigning twice is a no-op
+ * (`ON CONFLICT DO NOTHING`) and removing deletes the row; the audit log is the history of
+ * both. Both halves are composite foreign keys INSIDE the tenant, so a row cannot pair one
+ * tenant's customer with another tenant's tag.
+ *
+ * The primary key leads `(tenant_id, customer_id)`, which serves the customer page and the
+ * list filter's per-row EXISTS; `customer_tag_assignments_tag_idx` leads `(tenant_id,
+ * tag_id)`, which serves the filter when the planner drives from the tag instead.
+ */
+export const customerTagAssignments = pgTable(
+  'customer_tag_assignments',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    tagId: uuid('tag_id').notNull(),
+    assignedByAdminId: uuid('assigned_by_admin_id').references(() => admins.id),
+    assignedAt: timestamptz('assigned_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'customer_tag_assignments_pkey',
+      columns: [table.tenantId, table.customerId, table.tagId],
+    }),
+    index('customer_tag_assignments_tag_idx').on(table.tenantId, table.tagId, table.customerId),
+    foreignKey({
+      name: 'customer_tag_assignments_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'customer_tag_assignments_tag_fk',
+      columns: [table.tenantId, table.tagId],
+      foreignColumns: [customerTags.tenantId, customerTags.id],
+    }),
+  ],
+);
+
+/**
+ * Operators' internal notes on a customer. APPEND-ONLY (`nexa_reject_mutation`, hand-written
+ * in the guards migration): a correction is a second note, so what a customer was said to
+ * have done can never be quietly rewritten. Operator-only — no customer surface reads this
+ * table (`tests/unit/customer-crm-privacy.test.ts`).
+ *
+ * `author_label` is the operator's name as it was at the time, like `audit_logs.actor_label`.
+ */
+export const customerNotes = pgTable(
+  'customer_notes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    body: text('body').notNull(),
+    authorAdminId: uuid('author_admin_id').references(() => admins.id),
+    authorLabel: text('author_label').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('customer_notes_customer_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.createdAt,
+      table.id,
+    ),
+    foreignKey({
+      name: 'customer_notes_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    check(
+      'customer_notes_body_check',
+      sql`length(body) BETWEEN 1 AND ${sql.raw(String(CUSTOMER_NOTE_MAX_LENGTH))}`,
+    ),
+    check('customer_notes_author_check', sql`length(author_label) BETWEEN 1 AND 200`),
   ],
 );
