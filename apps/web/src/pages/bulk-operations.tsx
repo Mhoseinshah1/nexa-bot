@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BULK_ITEM_STATES,
+  BULK_LARGE_OPERATION,
   BULK_NOTE_MAX_LENGTH,
   TRAFFIC_GB_PATTERN,
   type BulkGrant,
@@ -24,6 +25,8 @@ import {
   fetchBulkOperation,
   fetchBulkOperations,
   previewBulkOperation,
+  previewBulkRetry,
+  retryBulkOperation,
 } from '../api/client';
 import { formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -75,7 +78,15 @@ const KIND_LABELS: Readonly<Record<BulkOperationKind, WebKey>> = {
   WALLET_CREDIT: 'web.bulk_kind_wallet',
   SERVICE_TRAFFIC: 'web.bulk_kind_traffic',
   SERVICE_TIME: 'web.bulk_kind_time',
+  // Program §13: a mass status change, reversible by the other.
+  SERVICE_SUSPEND: 'web.bulk_kind_suspend',
+  SERVICE_RESUME: 'web.bulk_kind_resume',
 };
+
+/** Program §13: the kinds that change a service's status rather than give it something. */
+function isStatusKind(kind: BulkOperationKind): boolean {
+  return kind === 'SERVICE_SUSPEND' || kind === 'SERVICE_RESUME';
+}
 const STATE_LABELS: Readonly<Record<BulkOperationState, WebKey>> = {
   RUNNING: 'web.bulk_state_running',
   PAUSED: 'web.bulk_state_paused',
@@ -140,6 +151,8 @@ export function bulkMessage(error: unknown): string {
       'bulk.currency_unsupported': 'web.bulk_error_currency',
       'bulk.amount_invalid': 'web.bulk_error_amount',
       'bulk.state_conflict': 'web.bulk_error_state',
+      'bulk.retry_nothing': 'web.bulk_error_retry_nothing',
+      'bulk.notify_unsupported': 'web.bulk_error_notify_unsupported',
     };
     const key = known[error.code];
     if (key !== undefined) return t(key);
@@ -148,6 +161,7 @@ export function bulkMessage(error: unknown): string {
 }
 
 function grantText(row: BulkOperationResponseItem) {
+  if (isStatusKind(row.kind)) return t(KIND_LABELS[row.kind]);
   if (row.amount !== null) return <Money value={row.amount} />;
   if (row.trafficBytes !== null) return formatTrafficGbText(BigInt(row.trafficBytes));
   return row.durationDays === null
@@ -264,16 +278,19 @@ export function BulkOperationsPage({
 export function BulkOperationNewPage({
   mayWallet,
   mayGrant,
+  mayStatus = false,
 }: {
   mayWallet: boolean;
   mayGrant: boolean;
+  /** Program §13: `services.mass.status` AND `services.edit`. */
+  mayStatus?: boolean;
 }) {
   const options = useQuery({ queryKey: ['audience-options'], queryFn: fetchAudienceOptions });
   const client = useQueryClient();
   const toast = useToast();
   const submission = useSubmissionKey();
   const [kind, setKind] = useState<BulkOperationKind>(
-    mayWallet ? 'WALLET_CREDIT' : 'SERVICE_TRAFFIC',
+    mayWallet ? 'WALLET_CREDIT' : mayGrant ? 'SERVICE_TRAFFIC' : 'SERVICE_SUSPEND',
   );
   const [amount, setAmount] = useState('');
   const [traffic, setTraffic] = useState('');
@@ -296,6 +313,7 @@ export function BulkOperationNewPage({
 
   const currency = options.data?.currency ?? 'IRT';
   const grant = (): BulkGrant | null => {
+    if (kind === 'SERVICE_SUSPEND' || kind === 'SERVICE_RESUME') return { kind };
     if (kind === 'WALLET_CREDIT') {
       return /^[1-9]\d{0,17}$/u.test(amount)
         ? { kind, amountMinor: amount, currency: currency as never }
@@ -331,7 +349,8 @@ export function BulkOperationNewPage({
       const input = {
         grant: g,
         definition: audience,
-        notify,
+        // Program §13: a status change has no notice to send.
+        notify: isStatusKind(kind) ? false : notify,
         note,
         expectedDefinitionHash: preview.definitionHash,
         expectedCount: preview.count,
@@ -361,7 +380,7 @@ export function BulkOperationNewPage({
     typed.trim() === String(preview.count) &&
     note.trim() !== '';
 
-  if (!mayWallet && !mayGrant) {
+  if (!mayWallet && !mayGrant && !mayStatus) {
     return <PermissionDeniedState />;
   }
 
@@ -382,6 +401,8 @@ export function BulkOperationNewPage({
               {mayWallet && <option value="WALLET_CREDIT">{t('web.bulk_kind_wallet')}</option>}
               {mayGrant && <option value="SERVICE_TRAFFIC">{t('web.bulk_kind_traffic')}</option>}
               {mayGrant && <option value="SERVICE_TIME">{t('web.bulk_kind_time')}</option>}
+              {mayStatus && <option value="SERVICE_SUSPEND">{t('web.bulk_kind_suspend')}</option>}
+              {mayStatus && <option value="SERVICE_RESUME">{t('web.bulk_kind_resume')}</option>}
             </select>
           </Field>
           {kind === 'WALLET_CREDIT' && (
@@ -432,13 +453,19 @@ export function BulkOperationNewPage({
             </Field>
           )}
         </div>
-        {kind !== 'WALLET_CREDIT' && <p className="muted small">{t('web.bulk_grant_hint')}</p>}
-        <CheckField
-          id="bulk-notify"
-          label={t('web.bulk_notify')}
-          checked={notify}
-          onChange={setNotify}
-        />
+        {kind !== 'WALLET_CREDIT' && !isStatusKind(kind) && (
+          <p className="muted small">{t('web.bulk_grant_hint')}</p>
+        )}
+        {isStatusKind(kind) ? (
+          <p className="muted small">{t('web.bulk_status_hint')}</p>
+        ) : (
+          <CheckField
+            id="bulk-notify"
+            label={t('web.bulk_notify')}
+            checked={notify}
+            onChange={setNotify}
+          />
+        )}
       </Card>
       <Card title={t('web.bulk_audience')}>
         <AudienceBuilder
@@ -578,11 +605,14 @@ export function BulkOperationDetailPage({
   denied,
   mayWallet,
   mayGrant,
+  mayStatus = false,
 }: {
   id: string;
   denied: boolean;
   mayWallet: boolean;
   mayGrant: boolean;
+  /** Program §13: `services.mass.status` AND `services.edit`. */
+  mayStatus?: boolean;
 }) {
   const client = useQueryClient();
   const detail = useQuery({
@@ -626,7 +656,10 @@ export function BulkOperationDetailPage({
     seenState.current = operationState;
   }, [operationState, client, id]);
   const op = detail.data?.operation;
-  const mayCancel = op !== undefined && (op.kind === 'WALLET_CREDIT' ? mayWallet : mayGrant);
+  const onLink = useLinkHandler();
+  const mayCancel =
+    op !== undefined &&
+    (op.kind === 'WALLET_CREDIT' ? mayWallet : isStatusKind(op.kind) ? mayStatus : mayGrant);
   return (
     <StateSwitch query={detail} denied={denied}>
       {op === undefined ? null : (
@@ -725,6 +758,20 @@ export function BulkOperationDetailPage({
                         op.notBefore === null ? '—' : formatTimestamp(op.notBefore),
                       ],
                       [t('web.bc_as_of'), formatTimestamp(op.audienceAsOf)],
+                      ...(op.retryOfId === null
+                        ? []
+                        : ([
+                            [
+                              t('web.bulk_retry_of'),
+                              <a
+                                key="r"
+                                href={`/bulk-operations/${encodeURIComponent(op.retryOfId)}`}
+                                onClick={onLink}
+                              >
+                                {t('web.bulk_retry_of_link')}
+                              </a>,
+                            ],
+                          ] as [string, ReactNode][])),
                     ]}
                   />
                   <h3>{t('web.bc_filters')}</h3>
@@ -737,6 +784,9 @@ export function BulkOperationDetailPage({
                     ))}
                   </ul>
                 </Card>
+                {mayCancel && op.kind !== 'WALLET_CREDIT' && op.counts.failed > 0 && (
+                  <BulkRetryCard operation={op} />
+                )}
                 <Card title={t('web.cb_steering')} tone="danger">
                   <p className="muted small">{t('web.bulk_cancel_note')}</p>
                   <p className="muted small">{t('web.bulk_pause_note')}</p>
@@ -879,5 +929,122 @@ export function BulkOperationDetailPage({
         </>
       )}
     </StateSwitch>
+  );
+}
+
+/**
+ * Program §13: retrying the FAILED items of a service operation — the provider refused
+ * them, so asking again cannot apply anything twice. UNKNOWN outcomes are not offered: they
+ * are still PLANNED and wait on the reconciliation read. Counted first, then confirmed
+ * against that count (typed back from `BULK_LARGE_OPERATION`), then a NEW operation, whose
+ * own page shows its progress.
+ */
+function BulkRetryCard({ operation }: { operation: BulkOperationResponseItem }) {
+  const client = useQueryClient();
+  const toast = useToast();
+  const submission = useSubmissionKey();
+  const [note, setNote] = useState('');
+  const [typed, setTyped] = useState('');
+  const [asking, setAsking] = useState(false);
+  const preview = useMutation({ mutationFn: () => previewBulkRetry(operation.id) });
+  const counted = preview.data?.preview;
+  const retry = useMutation({
+    mutationFn: () => {
+      if (counted === undefined) throw new Error('preview');
+      const input = {
+        note: note.trim(),
+        expectedCount: counted.count,
+        expectedFingerprint: counted.fingerprint,
+        typedCount: counted.count >= BULK_LARGE_OPERATION ? Number(typed) : null,
+      };
+      return retryBulkOperation(operation.id, {
+        ...input,
+        idempotencyKey: submission.current({ retry: operation.id, ...input }),
+      });
+    },
+    onSuccess: (response) => {
+      submission.settle();
+      toast({ tone: 'ok', message: t('web.bulk_started') });
+      void client.invalidateQueries({ queryKey: ['bulk-operations'] });
+      navigate(`/bulk-operations/${encodeURIComponent(response.operation.id)}`);
+    },
+    onError: (error) => submission.settleOn(error),
+  });
+  const typedOk =
+    counted === undefined ||
+    counted.count < BULK_LARGE_OPERATION ||
+    typed.trim() === String(counted.count);
+  return (
+    <Card title={t('web.bulk_retry_title')}>
+      <p className="muted small">{t('web.bulk_retry_hint')}</p>
+      {counted === undefined ? (
+        <div className="form-actions">
+          <Button
+            size="sm"
+            icon="refresh"
+            disabled={preview.isPending}
+            onClick={() => preview.mutate()}
+          >
+            {t('web.bulk_retry_preview')}
+          </Button>
+        </div>
+      ) : counted.count === 0 ? (
+        <Banner tone="info">{t('web.bulk_error_retry_nothing')}</Banner>
+      ) : (
+        <div className="stack-sm">
+          <p>
+            {t('web.bulk_retry_count')} <strong>{formatNumber(counted.count)}</strong>
+          </p>
+          <Field label={t('web.bulk_reason')} htmlFor="bulk-retry-note">
+            <input
+              id="bulk-retry-note"
+              value={note}
+              maxLength={BULK_NOTE_MAX_LENGTH}
+              onChange={(event) => setNote(event.target.value)}
+            />
+          </Field>
+          {counted.count >= BULK_LARGE_OPERATION && (
+            <Field label={t('web.bulk_typed')} htmlFor="bulk-retry-typed">
+              <input
+                id="bulk-retry-typed"
+                inputMode="numeric"
+                value={typed}
+                onChange={(event) => setTyped(event.target.value)}
+              />
+            </Field>
+          )}
+          <div className="form-actions">
+            <Button
+              size="sm"
+              variant="danger-solid"
+              icon="refresh"
+              disabled={note.trim() === '' || !typedOk || retry.isPending}
+              onClick={() => setAsking(true)}
+            >
+              {t('web.bulk_retry_button')}
+            </Button>
+          </div>
+          {asking && (
+            <ConfirmDialog
+              title={t('web.bulk_retry_title')}
+              question={t('web.cb_bulk_run_question').replace(
+                '{count}',
+                formatNumber(counted.count),
+              )}
+              detail={t('web.bulk_retry_hint')}
+              confirmLabel={t('web.bulk_retry_button')}
+              cancelLabel={t('web.cb_cancel')}
+              onConfirm={() => {
+                setAsking(false);
+                retry.mutate();
+              }}
+              onCancel={() => setAsking(false)}
+            />
+          )}
+        </div>
+      )}
+      {preview.error !== null && <Banner tone="danger">{bulkMessage(preview.error)}</Banner>}
+      {retry.error !== null && <Banner tone="danger">{bulkMessage(retry.error)}</Banner>}
+    </Card>
   );
 }

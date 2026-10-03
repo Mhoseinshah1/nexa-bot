@@ -13,6 +13,11 @@ import {
   bulkOperationListResponseSchema,
   bulkOperationResponseSchema,
   bulkPreviewResponseSchema,
+  bulkRetryPreviewResponseSchema,
+  serviceLocationTargetsResponseSchema,
+  type BulkRetryPreview,
+  type ServiceGrantRequest,
+  type ServiceLocationTargetsResponse,
   type AudienceOptionsResponse,
   type AudiencePreviewResponse,
   type BroadcastContentKind,
@@ -1414,6 +1419,10 @@ export function fetchServices(
     panelId?: string;
     providerUsername?: string;
     q?: string;
+    /** Program §13: the workspace's product, location and expiry filters. */
+    productId?: string;
+    locationKey?: string;
+    expiringWithinHours?: number;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
@@ -1443,6 +1452,15 @@ export function fetchServices(
   }
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.productId !== undefined && query.productId !== '') {
+    params.set('productId', query.productId);
+  }
+  if (query.locationKey !== undefined && query.locationKey !== '') {
+    params.set('locationKey', query.locationKey);
+  }
+  if (query.expiringWithinHours !== undefined) {
+    params.set('expiringWithinHours', String(query.expiringWithinHours));
+  }
   const suffix = params.toString();
   return authedGet(
     suffix ? `${SERVICE_ROUTES.list}?${suffix}` : SERVICE_ROUTES.list,
@@ -1467,7 +1485,16 @@ export function fetchServiceOperations(id: string): Promise<ServiceOperationsRes
  * separately would be seven chances to point a label at the wrong URL. The server
  * charges a different permission for terminate; that is its business, not the client's.
  */
-const SERVICE_ACTION_PATHS: Readonly<Record<ServiceOperatorAction, (id: string) => string>> = {
+/**
+ * The actions that take nothing but a key (and terminate's phrase). Program §13's grant and
+ * move carry input of their own and have their own functions below.
+ */
+export type ServiceSimpleAction = Exclude<
+  ServiceOperatorAction,
+  'ADD_TRAFFIC' | 'ADD_TIME' | 'CHANGE_LOCATION'
+>;
+
+const SERVICE_ACTION_PATHS: Readonly<Record<ServiceSimpleAction, (id: string) => string>> = {
   SYNC_USAGE: SERVICE_ROUTES.syncUsage,
   RESEND_CONFIG: SERVICE_ROUTES.resend,
   RETRY_PROVISION: SERVICE_ROUTES.retryProvision,
@@ -1491,7 +1518,7 @@ const SERVICE_ACTION_PATHS: Readonly<Record<ServiceOperatorAction, (id: string) 
  */
 export function actOnService(input: {
   id: string;
-  action: ServiceOperatorAction;
+  action: ServiceSimpleAction;
   idempotencyKey: string;
   confirm?: string;
 }): Promise<ServiceActionResponse> {
@@ -1500,6 +1527,27 @@ export function actOnService(input: {
       ? { idempotencyKey: input.idempotencyKey, confirm: input.confirm ?? '' }
       : { idempotencyKey: input.idempotencyKey };
   return post(SERVICE_ACTION_PATHS[input.action](input.id), body, serviceActionResponseSchema);
+}
+
+/** Program §13: an operator's free traffic or time grant to one service. */
+export function grantService(
+  id: string,
+  body: ServiceGrantRequest,
+): Promise<ServiceActionResponse> {
+  return post(SERVICE_ROUTES.grant(id), body, serviceActionResponseSchema);
+}
+
+/** Program §13: where an operator may move this service. */
+export function fetchServiceLocationTargets(id: string): Promise<ServiceLocationTargetsResponse> {
+  return authedGet(SERVICE_ROUTES.locationTargets(id), serviceLocationTargetsResponseSchema);
+}
+
+/** Program §13: an operator's move of one service to another configured location. */
+export function changeServiceLocation(
+  id: string,
+  body: { idempotencyKey: string; locationId: string; reason: string },
+): Promise<ServiceActionResponse> {
+  return post(SERVICE_ROUTES.changeLocation(id), body, serviceActionResponseSchema);
 }
 
 /**
@@ -3734,6 +3782,29 @@ export function createBulkOperation(input: {
 
 export function cancelBulkOperation(id: string): Promise<BulkOperationResponse> {
   return post(BULK_OPERATION_ROUTES.cancel(id), {}, bulkOperationResponseSchema);
+}
+
+/** Program §13: the FAILED service items a retry would copy, counted. */
+export function previewBulkRetry(id: string): Promise<{ preview: BulkRetryPreview }> {
+  return post(BULK_OPERATION_ROUTES.retryPreview(id), {}, bulkRetryPreviewResponseSchema);
+}
+
+/** Program §13: a NEW operation over exactly those FAILED items. */
+export function retryBulkOperation(
+  id: string,
+  input: {
+    idempotencyKey: string;
+    note: string;
+    expectedCount: number;
+    expectedFingerprint: string;
+    typedCount: number | null;
+  },
+): Promise<BulkOperationResponse> {
+  return post(
+    BULK_OPERATION_ROUTES.retry(id),
+    { ...input, confirmed: true },
+    bulkOperationResponseSchema,
+  );
 }
 
 /** Round N close (§B): pause or resume a mass operation. */
