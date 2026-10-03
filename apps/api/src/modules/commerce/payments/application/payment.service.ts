@@ -105,6 +105,7 @@ import type {
   PaymentCursor,
   PaymentCustomerFee,
   PaymentCustomerIdentity,
+  PaymentGatewaySignalRecord,
   PaymentPage,
   PaymentRecord,
   PaymentRepository,
@@ -714,6 +715,22 @@ export class PaymentService {
     return this.deps.repository.receiptDispositions(
       scope,
       payments.map((payment) => payment.id),
+    );
+  }
+
+  /**
+   * What each gateway attempt on a page last recorded (Payment Operations Center): states,
+   * codes and times. Charged like every other read of a payment; one query for a page.
+   */
+  async gatewaySignals(
+    scope: TenantContext,
+    actor: ActorContext,
+    payments: readonly PaymentRecord[],
+  ): Promise<ReadonlyMap<PaymentId, PaymentGatewaySignalRecord>> {
+    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
+    return this.deps.repository.gatewaySignals(
+      scope,
+      payments.filter((payment) => payment.method === 'GATEWAY').map((payment) => payment.id),
     );
   }
 

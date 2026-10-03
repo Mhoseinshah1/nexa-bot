@@ -2,7 +2,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
+  PAYMENT_GATEWAY_PROVIDERS,
   PAYMENT_METHODS,
+  PAYMENT_OPS_QUEUES,
   formatBasisPointsPercent,
   PAYMENT_STATES,
   RECEIPT_DISPOSITIONS,
@@ -16,7 +18,11 @@ import {
   type PaymentState,
   type PaymentSummaryResponse,
   type PaymentDetailResponse,
+  type PaymentAttentionResponse,
+  type PaymentGatewayProvider,
+  type PaymentOpsQueue,
   type ReceiptDisposition,
+  type ReportRange,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -24,6 +30,7 @@ import {
   failRefund,
   fetchOrder,
   fetchPayment,
+  fetchPaymentAttention,
   fetchPaymentReceipts,
   fetchPaymentReceiptBytes,
   fetchPayments,
@@ -55,6 +62,8 @@ import {
   DataTable,
   Empty,
   Field,
+  FilterChip,
+  FilterChips,
   Input,
   KV,
   Ltr,
@@ -258,6 +267,19 @@ export function TelegramIdentity({
 }
 
 /** The route a payment was offered through, by name, or a dash for a wallet settlement. */
+const GATEWAY_LABELS: Readonly<Record<PaymentGatewayProvider, WebKey>> = {
+  MANUAL_TRANSFER: 'web.payment_gateway_provider_manual_transfer',
+  TONPAYS: 'web.payment_gateway_provider_tonpays',
+  TONPAYS_TELEGRAM: 'web.payment_gateway_provider_tonpays_telegram',
+  TELEGRAM_STARS: 'web.payment_gateway_provider_telegram_stars',
+  NOWPAYMENTS: 'web.payment_gateway_provider_nowpayments',
+  CENTRALPAY: 'web.payment_gateway_provider_centralpay',
+};
+
+function gatewayLabel(provider: PaymentGatewayProvider): string {
+  return t(GATEWAY_LABELS[provider]);
+}
+
 function GatewayName({ provider }: { provider: string | null }) {
   if (provider === null) return <Dash />;
   if (provider === 'MANUAL_TRANSFER')
@@ -278,22 +300,178 @@ function GatewayName({ provider }: { provider: string | null }) {
 // List
 // ---------------------------------------------------------------------------
 
-export function PaymentsPage({ route, denied }: { route: Route; denied: boolean }) {
+/** The queues, in the order the workspace shows them (program §10). */
+const QUEUE_LABELS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
+  PENDING: 'web.payment_ops_queue_pending',
+  UNKNOWN: 'web.payment_ops_queue_unknown',
+  NEEDS_RECONCILIATION: 'web.payment_ops_queue_needs_reconciliation',
+  MISMATCH: 'web.payment_ops_queue_mismatch',
+  PARTIAL: 'web.payment_ops_queue_partial',
+  LATE_COMPLETION: 'web.payment_ops_queue_late_completion',
+  PROVIDER_ERROR: 'web.payment_ops_queue_provider_error',
+  REFUND_RELATED: 'web.payment_ops_queue_refund_related',
+};
+
+const QUEUE_HINTS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
+  PENDING: 'web.payment_ops_queue_hint_pending',
+  UNKNOWN: 'web.payment_ops_queue_hint_unknown',
+  NEEDS_RECONCILIATION: 'web.payment_ops_queue_hint_needs_reconciliation',
+  MISMATCH: 'web.payment_ops_queue_hint_mismatch',
+  PARTIAL: 'web.payment_ops_queue_hint_partial',
+  LATE_COMPLETION: 'web.payment_ops_queue_hint_late_completion',
+  PROVIDER_ERROR: 'web.payment_ops_queue_hint_provider_error',
+  REFUND_RELATED: 'web.payment_ops_queue_hint_refund_related',
+};
+
+/** The created-at presets the workspace offers; the server resolves each in the tenant calendar. */
+const RANGE_LABELS: readonly (readonly [ReportRange, WebKey])[] = [
+  ['TODAY', 'web.payment_ops_range_today'],
+  ['LAST_7_DAYS', 'web.payment_ops_range_7d'],
+  ['LAST_30_DAYS', 'web.payment_ops_range_30d'],
+  ['THIS_MONTH', 'web.payment_ops_range_month'],
+];
+const RANGES: readonly ReportRange[] = RANGE_LABELS.map(([one]) => one);
+
+function oneOf<T extends string>(value: string | null, allowed: readonly T[]): T | null {
+  return value !== null && (allowed as readonly string[]).includes(value) ? (value as T) : null;
+}
+
+type QueueCounts = PaymentAttentionResponse['totals'];
+
+/**
+ * The queue counts a chip shows: the selected route's row, or the totals. A real server
+ * count (the chip's rule), from the same predicate the list filters by. A route the server
+ * returned no row for has nothing in any queue.
+ */
+export function queueCountsFor(
+  attention: PaymentAttentionResponse | undefined,
+  gateway: PaymentGatewayProvider | null,
+): QueueCounts | null {
+  if (attention === undefined) return null;
+  if (gateway === null) return attention.totals;
+  const row = attention.byGateway.find((one) => one.gatewayProvider === gateway);
+  if (row !== undefined) return row.counts;
+  return Object.fromEntries(PAYMENT_OPS_QUEUES.map((queue) => [queue, 0])) as QueueCounts;
+}
+
+/** What the gateway side last said, compactly, for a queue row. */
+function SignalCell({ row }: { row: PaymentSummaryResponse }) {
+  const signal = row.gatewaySignal;
+  if (signal === null) return <Dash />;
+  const paid = signal.providerPaid === null ? '' : ` · paid=${String(signal.providerPaid)}`;
+  return (
+    <span className="small">
+      {signal.creationState !== 'CREATED' && (
+        <>
+          <Badge tone={signal.creationState === 'CREATING' ? 'info' : 'warn'}>
+            {t('web.payment_ops_signal_create')} <Ltr>{signal.creationState}</Ltr>
+          </Badge>{' '}
+        </>
+      )}
+      <Ltr>{`${signal.providerStatus ?? '—'}${paid}`}</Ltr>
+      {signal.lastInquiryErrorCode !== null && (
+        <>
+          {' '}
+          <Badge tone="danger">
+            {t('web.payment_ops_signal_inquiry_error')} <Ltr>{signal.lastInquiryErrorCode}</Ltr>
+          </Badge>
+        </>
+      )}
+      {signal.lateCompletionObservedAt !== null && (
+        <>
+          {' '}
+          <Badge tone="warn">{t('web.payment_ops_queue_late_completion')}</Badge>
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
+ * "Ask the provider again" from a queue row: the SAME command the detail's reconcile card
+ * sends (`payments.reconcile`, a database write that brings the next inquiry forward), with
+ * an idempotency key held per submission. It decides nothing; the answer is evidence for
+ * the reconciliation on the payment's own page.
+ */
+function ReinquireButton({ paymentId }: { paymentId: string }) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const asking = useSubmissionKey();
+  const reinquire = useMutation({
+    mutationFn: () =>
+      reinquirePayment({ paymentId, idempotencyKey: asking.current({ id: paymentId }) }),
+    onSuccess: (response) => {
+      asking.settle();
+      notify({
+        tone: 'ok',
+        message: t(
+          response.requested ? 'web.payment_reinquire_done' : 'web.payment_reinquire_recent',
+        ),
+      });
+      void queries.invalidateQueries({ queryKey: ['payments'] });
+      void queries.invalidateQueries({ queryKey: ['payment-attention'] });
+      void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
+    },
+    onError: (error) => {
+      asking.settleOn(error);
+      notify({ tone: 'danger', message: messageFor(error) });
+    },
+  });
+  return (
+    <Button size="sm" disabled={reinquire.isPending} onClick={() => reinquire.mutate()}>
+      {t('web.payment_reinquire')}
+    </Button>
+  );
+}
+
+/**
+ * The Payment Operations Center (program §10): every payment, every route, with queues for
+ * what needs attention. Reached at `/payments`: this list was already the cross-provider
+ * one, and a second page would be a second list.
+ *
+ * A queue is a facet of what has been RECORDED about a payment, never a state: the state
+ * column still says where the payment is. The chip counts are the server's, over the same
+ * predicate the list filters by. The only command on this page is "ask again" on an
+ * UNKNOWN gateway payment (`payments.reconcile`); reconciling and refunding stay on the
+ * payment's own page, beside the evidence they rest on. There is no "mark as paid".
+ */
+export function PaymentsPage({
+  route,
+  denied,
+  mayReconcile = false,
+}: {
+  route: Route;
+  denied: boolean;
+  /** `payments.reconcile`: draws the queue rows' "ask again". The server charges it itself. */
+  mayReconcile?: boolean;
+}) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
   const state = route.query.get('state');
   const method = route.query.get('method');
   const disposition = route.query.get('disposition');
+  const queue = oneOf(route.query.get('queue'), PAYMENT_OPS_QUEUES);
+  const gateway = oneOf(route.query.get('gateway'), PAYMENT_GATEWAY_PROVIDERS);
+  const range = oneOf(route.query.get('range'), RANGES);
   /*
    * ONE search box (spec §10), in the URL as `q`: a Telegram id, a reference or bank
-   * reference, a payment / order / customer id, or an `@username`. It replaced three
-   * single-purpose boxes, two of which wanted an internal uuid nobody outside this admin
-   * has ever seen.
+   * reference, a gateway's own order / invoice / payment id, a payment / order / customer
+   * id, or an `@username`.
    */
   const appliedSearch = appliedListSearch(route);
 
   const payments = useQuery({
-    queryKey: ['payments', cursor, state, method, disposition, appliedSearch],
+    queryKey: [
+      'payments',
+      cursor,
+      state,
+      method,
+      disposition,
+      appliedSearch,
+      queue,
+      gateway,
+      range,
+    ],
     queryFn: () =>
       fetchPayments({
         ...(cursor === null ? {} : { cursor }),
@@ -301,9 +479,18 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
         ...(method === null ? {} : { method: method as PaymentMethod }),
         ...(disposition === null ? {} : { disposition: disposition as ReceiptDisposition }),
         ...(appliedSearch === '' ? {} : { q: appliedSearch }),
+        ...(queue === null ? {} : { queue }),
+        ...(gateway === null ? {} : { gateway }),
+        ...(range === null ? {} : { range }),
       }),
     enabled: !denied,
   });
+  const attention = useQuery({
+    queryKey: ['payment-attention', range],
+    queryFn: () => fetchPaymentAttention(range === null ? {} : { range }),
+    enabled: !denied,
+  });
+  const counts = queueCountsFor(attention.data, gateway);
 
   const columns: readonly Column<PaymentSummaryResponse>[] = [
     {
@@ -342,8 +529,7 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
     {
       /*
        * How the receipt left review, beside the state rather than instead of it: the state
-       * is the payment's, this is the receipt's. A credited receipt reads "credited to
-       * wallet" here, never a bare FAILED (WP10 follow-up §5).
+       * is the payment's, this is the receipt's (WP10 follow-up §5).
        */
       key: 'disposition',
       header: t('web.payment_disposition'),
@@ -360,17 +546,20 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
       render: (row) => <GatewayName provider={row.gatewayProvider} />,
     },
     {
+      // What the gateway last said (program §10): the provider's word, never Nexa's state.
+      key: 'signal',
+      header: t('web.payment_ops_signal'),
+      wrap: true,
+      render: (row) => <SignalCell row={row} />,
+    },
+    {
       key: 'amount',
       header: t('web.payment_amount'),
       align: 'end',
       render: (row) => <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
     },
     {
-      /*
-       * Who paid, by their Telegram numeric id (spec §10). This was two columns — an
-       * eight-character uuid prefix headed «مشتری» and the Telegram id beside it — and the
-       * one an operator could quote was the second. Now it is the link.
-       */
+      // Who paid, by their Telegram numeric id (spec §10), as the link.
       key: 'customer',
       header: t('web.payment_customer'),
       render: (row) => (
@@ -385,12 +574,7 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
     {
       key: 'order',
       header: t('web.payment_order'),
-      /*
-       * No order means a WALLET TOP-UP, and saying so is the point: a dash here read as
-       * missing data, and a payment whose purpose an operator cannot see is one they
-       * cannot review. 5B is the phase that made these exist — nothing before it could
-       * create a payment without an order.
-       */
+      // No order means a WALLET TOP-UP, and saying so is the point.
       render: (row) =>
         row.orderId === null ? (
           <span className="muted small">{t('web.payment_topup')}</span>
@@ -401,15 +585,7 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
         ),
     },
     {
-      /*
-       * The customer's own claim, on the LIST.
-       *
-       * This is the column the field exists for: without it every PENDING manual
-       * transfer looks alike, and an operator has no way to tell the one whose
-       * customer says the money is sent from the one nobody has touched. It is not a
-       * state and it is not evidence — both rows are still PENDING, and confirming
-       * either still needs somebody to look at a bank statement.
-       */
+      // The customer's own claim: not a state and not evidence.
       key: 'signalled',
       header: t('web.payment_customer_signalled'),
       render: (row) =>
@@ -435,6 +611,22 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
       header: t('web.payment_updated_at'),
       render: (row) => <span className="nowrap">{formatTimestamp(row.updatedAt)}</span>,
     },
+    {
+      key: 'actions',
+      header: t('web.payment_ops_actions'),
+      render: (row) => (
+        <span className="nowrap">
+          {mayReconcile && row.state === 'UNKNOWN' && row.method === 'GATEWAY' && (
+            <>
+              <ReinquireButton paymentId={row.id} />{' '}
+            </>
+          )}
+          <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink}>
+            {t('web.payment_ops_open')}
+          </a>
+        </span>
+      ),
+    },
   ];
 
   // Hidden while the list cannot answer: a control that mints a new query key is
@@ -443,7 +635,7 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
 
   return (
     <>
-      <PageHead title={t('web.payments_title')} subtitle={t('web.payments_intro')} />
+      <PageHead title={t('web.payment_ops_title')} subtitle={t('web.payment_ops_intro')} />
 
       <Card className="ca-list">
         <ListSearchBox
@@ -454,6 +646,71 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
           // A new search starts at the first page: this list keeps its cursor in the URL.
           resetKeys={['cursor']}
         />
+
+        <div hidden={toolbarHidden}>
+          <FilterChips label={t('web.payment_ops_queue')}>
+            <FilterChip
+              pressed={queue === null}
+              onClick={() =>
+                setQueries(route, [
+                  ['queue', null],
+                  ['cursor', null],
+                ])
+              }
+            >
+              {t('web.payment_ops_queue_all')}
+            </FilterChip>
+            {PAYMENT_OPS_QUEUES.map((one) => (
+              <FilterChip
+                key={one}
+                pressed={queue === one}
+                {...(counts === null ? {} : { count: counts[one] })}
+                onClick={() =>
+                  setQueries(route, [
+                    ['queue', one],
+                    ['cursor', null],
+                  ])
+                }
+              >
+                {t(QUEUE_LABELS[one])}
+              </FilterChip>
+            ))}
+          </FilterChips>
+          {attention.isError && <p className="muted small">{t('web.payment_ops_counts_error')}</p>}
+          {queue !== null && <p className="muted small">{t(QUEUE_HINTS[queue])}</p>}
+        </div>
+
+        <div className="filter-row" hidden={toolbarHidden}>
+          <ChipGroup
+            label={t('web.payment_gateway')}
+            value={gateway ?? 'ALL'}
+            onChange={(next) =>
+              setQueries(route, [
+                ['gateway', next === 'ALL' ? null : next],
+                ['cursor', null],
+              ])
+            }
+            items={[
+              { id: 'ALL', label: t('web.payment_ops_gateway_all') },
+              ...PAYMENT_GATEWAY_PROVIDERS.map((one) => ({ id: one, label: gatewayLabel(one) })),
+            ]}
+          />
+          <ChipDivider />
+          <ChipGroup
+            label={t('web.payment_ops_range')}
+            value={range ?? 'ALL'}
+            onChange={(next) =>
+              setQueries(route, [
+                ['range', next === 'ALL' ? null : next],
+                ['cursor', null],
+              ])
+            }
+            items={[
+              { id: 'ALL', label: t('web.payment_ops_range_all') },
+              ...RANGE_LABELS.map(([id, label]) => ({ id, label: t(label) })),
+            ]}
+          />
+        </div>
 
         <div className="filter-row" hidden={toolbarHidden}>
           <ChipGroup
@@ -504,14 +761,8 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
             ]}
           />
         </div>
-        {/*
-          Why a third method never appears in the filter above.
-          `SELF_CONTAINED_PAYMENT_METHODS` is the pair this installation can actually
-          perform, and a gateway has no adapter. Said out loud rather than left for an
-          operator to wonder about.
-        */}
         <p className="muted small ca-list-note" hidden={toolbarHidden}>
-          {t('web.planned_missing_gateway')}
+          {t('web.payment_ops_no_force_paid')}
         </p>
 
         <StateSwitch query={payments} denied={denied}>
@@ -520,15 +771,15 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
           ) : (
             <>
               <DataTable
-                caption={t('web.payments_title')}
+                caption={t('web.payment_ops_title')}
                 columns={columns}
                 rows={payments.data.payments}
                 rowKey={(row) => row.id}
                 dense
                 sticky
               />
-              {/* A descending keyset with the cursor in the URL: default labels, and
-                  Previous returns to the first page. */}
+              {/* An ascending keyset (created_at, id) with the cursor in the URL: default
+                  labels, and Previous returns to the first page. */}
               <CursorPager
                 shown={payments.data.payments.length}
                 hasPrevious={cursor !== null}
@@ -1181,6 +1432,7 @@ export function PaymentDetailPage({
   mayIssueRefunds,
   mayViewOrders = false,
   mayViewWallet = false,
+  mayViewAudit = false,
   mayReconcile = false,
   denied,
 }: {
@@ -1204,6 +1456,11 @@ export function PaymentDetailPage({
    */
   mayViewWallet?: boolean;
   /**
+   * `audit.view` (`orders.view` is `mayViewOrders`): the history's AUDIT and ORDER sections
+   * are decided by the server; these only make a change in either a new question for it.
+   */
+  mayViewAudit?: boolean;
+  /**
    * `payments.reconcile`: resolving an `UNKNOWN` gateway payment from the provider's
    * recorded answer. The server charges it itself; this only decides whether the controls
    * are drawn, and without it the card names the permission instead.
@@ -1216,6 +1473,8 @@ export function PaymentDetailPage({
     mayViewReceipts ? 'receipts' : '',
     mayViewRefunds ? 'refunds' : '',
     mayViewWallet ? 'wallet' : '',
+    mayViewOrders ? 'order' : '',
+    mayViewAudit ? 'audit' : '',
   ].join(',');
   const payment = useQuery({
     queryKey: ['payment', id],

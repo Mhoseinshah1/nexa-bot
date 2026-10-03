@@ -896,7 +896,6 @@ export const WEB_FA = {
    * The two that named real deferred decisions (payment expiry, refund state)
    * are recorded in `docs/open-questions.md`, where a deferral belongs.
    */
-  'web.planned_missing_gateway': 'هیچ درگاه پرداختی ثبت یا تعریف نشده است.',
 
   'web.planned_reports_no_logs':
     'صفحهٔ لاگ عمومی در پنل وب ساخته نمی‌شود؛ جریان عملیاتی انسانی به گروه گزارش تلگرام می‌رود.',
@@ -1904,8 +1903,6 @@ export const WEB_FA = {
    * post-payment copy is the defect this comment exists to prevent being ported:
    * a message that claims an effect which did not happen.
    */
-  'web.payments_title': 'پرداخت‌ها',
-  'web.payments_intro': 'پولی که رسیده است، و پولی که هنوز در انتظار بررسی است.',
   'web.payments_empty': 'هنوز پرداختی ثبت نشده است.',
   'web.payment_detail': 'جزئیات پرداخت',
   'web.payment_state': 'وضعیت',
@@ -1996,6 +1993,48 @@ export const WEB_FA = {
   'web.payments_search_hint':
     'شناسهٔ عددی تلگرام، کد پیگیری یا شمارهٔ مرجع بانک (دقیق)، شناسهٔ پرداخت یا سفارش، یا ‎@نام کاربری.',
   'web.payments_filter_all': 'همه',
+  'web.payment_ops_title': 'مرکز عملیات پرداخت',
+  'web.payment_ops_intro':
+    'همهٔ پرداخت‌ها در همهٔ درگاه‌ها، با صف‌هایی برای آنچه نیاز به رسیدگی دارد. هیچ صفی وضعیت پرداخت نیست و هیچ دکمه‌ای اینجا پرداخت را «پرداخت‌شده» نمی‌کند.',
+  'web.payment_ops_queue': 'صف',
+  'web.payment_ops_queue_all': 'همه',
+  'web.payment_ops_queue_pending': 'در انتظار',
+  'web.payment_ops_queue_unknown': 'نامعلوم',
+  'web.payment_ops_queue_needs_reconciliation': 'آمادهٔ تطبیق',
+  'web.payment_ops_queue_mismatch': 'ناهمخوانی',
+  'web.payment_ops_queue_partial': 'پرداخت ناقص',
+  'web.payment_ops_queue_late_completion': 'تأیید دیرهنگام',
+  'web.payment_ops_queue_provider_error': 'خطای درگاه / استعلام',
+  'web.payment_ops_queue_refund_related': 'مرتبط با بازپرداخت',
+  'web.payment_ops_queue_hint_pending': 'پرداخت‌هایی که هنوز باز هستند.',
+  'web.payment_ops_queue_hint_unknown':
+    'نتیجه نامعلوم است؛ نه موفق است و نه ناموفق، تا وقتی با پاسخ ثبت‌شدهٔ درگاه تطبیق داده شود.',
+  'web.payment_ops_queue_hint_needs_reconciliation':
+    'پرداخت‌های نامعلومی که پاسخ ثبت‌شدهٔ درگاه همین حالا برای تطبیق کافی است.',
+  'web.payment_ops_queue_hint_mismatch':
+    'درگاه پولی گزارش کرده که با فاکتور نمی‌خواند (مبلغ، مشتری یا شناسهٔ دیگر). هیچ چیزی خودکار تسویه نشده است.',
+  'web.payment_ops_queue_hint_partial':
+    'درگاه پرداخت ناقص گزارش کرده است (فقط درگاه‌هایی که چنین وضعیتی دارند).',
+  'web.payment_ops_queue_hint_late_completion':
+    'درگاه پس از پایان مهلت تأیید کرده است؛ چیزی جابه‌جا نشده و تصمیم با اپراتور است.',
+  'web.payment_ops_queue_hint_provider_error':
+    'ساخت فاکتور رد شد یا پاسخش گم شد، یا آخرین استعلام با خطا تمام شد.',
+  'web.payment_ops_queue_hint_refund_related': 'پرداخت‌هایی که دست‌کم یک بازپرداخت دارند.',
+  'web.payment_ops_gateway_all': 'همهٔ درگاه‌ها',
+  'web.payment_ops_range': 'بازهٔ ایجاد',
+  'web.payment_ops_range_all': 'همهٔ زمان‌ها',
+  'web.payment_ops_range_today': 'امروز',
+  'web.payment_ops_range_7d': '۷ روز اخیر',
+  'web.payment_ops_range_30d': '۳۰ روز اخیر',
+  'web.payment_ops_range_month': 'این ماه',
+  'web.payment_ops_counts_error': 'شمار صف‌ها خوانده نشد.',
+  'web.payment_ops_signal': 'آخرین پاسخ درگاه',
+  'web.payment_ops_signal_inquiry_error': 'خطای استعلام',
+  'web.payment_ops_signal_create': 'ساخت فاکتور',
+  'web.payment_ops_actions': 'اقدام',
+  'web.payment_ops_open': 'باز کردن',
+  'web.payment_ops_no_force_paid':
+    'تأیید یک پرداخت فقط از راه تسویه و با مدرک انجام می‌شود. برای نامعلوم‌ها «استعلام دوباره» و سپس تطبیق در صفحهٔ پرداخت؛ برای برگشت پول، کارت بازپرداخت همان صفحه.',
   'web.payment_confirm_title': 'بررسی رسید',
   /*
    * Payment File 02 §10: card-to-card review is Telegram's alone. The Web Admin says
@@ -2543,6 +2582,25 @@ export const WEB_FA = {
   'web.payment_timeline_delivery_unconfirmed': 'نتیجهٔ ارسال نامعلوم',
   'web.payment_timeline_delivery_failed': 'ارسال نشد',
   'web.payment_timeline_delivery_superseded': 'جایگزین شد',
+  'web.payment_timeline_withheld_order': 'تسویه و تحویل سفارش',
+  'web.payment_timeline_withheld_audit': 'گزارش ممیزی',
+  'web.payment_timeline_invoice_requested': 'درخواست فاکتور به درگاه فرستاده شد',
+  'web.payment_timeline_invoice_created': 'درگاه فاکتور را ساخت',
+  'web.payment_timeline_webhook': 'آخرین اعلان (وب‌هوک) درگاه',
+  'web.payment_timeline_webhook_count': 'تعداد اعلان‌ها',
+  'web.payment_timeline_inquiry': 'آخرین استعلام از درگاه',
+  'web.payment_timeline_reinquire': 'آخرین درخواست استعلام دوباره',
+  'web.payment_timeline_review_opened': 'بازهٔ بررسی درگاه باز شد',
+  'web.payment_timeline_review_until': 'تا',
+  'web.payment_timeline_outcome_unknown': 'نتیجهٔ پرداخت نامعلوم شد',
+  'web.payment_timeline_mismatch_reason': 'علت ناهمخوانی',
+  'web.payment_timeline_review_lapsed': 'بررسی درگاه بدون پاسخ قطعی تمام شد',
+  'web.payment_timeline_gateway_outcome': 'نتیجهٔ نهایی درگاه ثبت شد',
+  'web.payment_timeline_late_completion': 'تأیید دیرهنگام درگاه',
+  'web.payment_timeline_order_settled': 'سفارش تسویه شد',
+  'web.payment_timeline_order_fulfilment': 'تحویل سفارش',
+  'web.payment_timeline_order_refunded': 'سفارش بازپرداخت شد',
+  'web.payment_timeline_audit': 'رویداد ممیزی',
   'web.refund_reason': 'دلیل',
   'web.refund_requested_by': 'ثبت‌شده توسط',
   'web.refund_completed_by': 'تأیید واریز توسط',

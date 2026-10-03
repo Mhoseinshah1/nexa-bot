@@ -327,6 +327,30 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     name: 'services_tenant_panel_idx',
     definition: 'ON "services" USING btree ("tenant_id","panel_id")',
   },
+  {
+    /*
+     * A payment by the one provider id no unique key already serves (Payment Operations
+     * Center, program §10): NOWPayments' payment id a verified webhook named, which is what an
+     * operator copies out of the provider's dashboard. The order, invoice and charge ids are
+     * served by the `(tenant_id, provider, …)` unique keys. Partial: most invoices carry none.
+     */
+    name: 'gateway_invoices_tenant_hinted_payment_idx',
+    definition:
+      'ON "gateway_invoices" USING btree ("tenant_id","hinted_payment_id") ' +
+      'WHERE (hinted_payment_id IS NOT NULL)',
+  },
+  {
+    /*
+     * An order's provisioning operations (Payment Operations Center): the payment timeline
+     * reads the operation that delivers what the settling order bought. Nothing served
+     * `order_id` except the partial open-operation keys, so a timeline would have walked the
+     * tenant's operations. Concurrently: every delivery writes this table.
+     */
+    name: 'provisioning_operations_tenant_order_idx',
+    definition:
+      'ON "provisioning_operations" USING btree ("tenant_id","order_id","created_at","id") ' +
+      'WHERE (order_id IS NOT NULL)',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

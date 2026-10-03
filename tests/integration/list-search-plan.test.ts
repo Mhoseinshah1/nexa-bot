@@ -107,6 +107,20 @@ describe('the list-search query plans', () => {
                 WHERE o.tenant_id = $1::uuid`,
             [scope.tenantId],
           );
+          // A gateway invoice per payment (Payment Operations Center, program §10), so the
+          // provider-reference arm is planned against a populated table: an order id and an
+          // invoice id on each, and a NOWPayments-style payment id on one in ten.
+          await client.query(
+            `INSERT INTO gateway_invoices
+               (payment_id, tenant_id, provider, provider_order_id, provider_invoice_id,
+                creation_state, created_invoice_at, provider_unit, sent_amount, hinted_payment_id)
+               SELECT p.id, p.tenant_id, 'TONPAYS', 'po-' || p.id, 'pi-' || p.id, 'CREATED',
+                      p.created_at, 'IRT', 250000,
+                      CASE WHEN n % 10 = 0 THEN ($2::bigint + n)::text END
+                 FROM (SELECT p.*, row_number() OVER (ORDER BY p.created_at, p.id) AS n
+                         FROM payments p WHERE p.tenant_id = $1::uuid) p`,
+            [scope.tenantId, 880_000_000_000 + offset],
+          );
           await client.query(
             `INSERT INTO services
                (id, tenant_id, customer_id, order_id, panel_id, product_id, provider_username,
@@ -122,7 +136,9 @@ describe('the list-search query plans', () => {
           if (scope === tenantA) facts.panelId = panelId;
         }
         // The planner chooses on STATISTICS; without them every plan is a sequential scan.
-        await client.query('ANALYZE customers, products, orders, payments, services');
+        await client.query(
+          'ANALYZE customers, products, orders, payments, services, gateway_invoices',
+        );
 
         const { rows } = await client.query<{
           customer_id: string;
@@ -293,6 +309,26 @@ describe('the list-search query plans', () => {
         'payments_customer_created_idx',
         'payments_tenant_order_idx',
       ]);
+    }, 60_000);
+
+    it('serves a gateway’s own order or invoice id from the invoice unique keys, then the payment’s tenant key', async () => {
+      const plan = await planFor(
+        payments().listStatement(tenantA, { text: term(`po-${facts.paymentId}`) }, PAGE, null),
+      );
+      expectBounded(plan, [
+        'gateway_invoices_order_id_key',
+        'gateway_invoices_invoice_id_key',
+        'payments_tenant_id_key',
+      ]);
+      // The provider ids are resolved ONCE, never per payment row.
+      expect(plan).toContain('InitPlan');
+    }, 60_000);
+
+    it('serves a gateway’s payment id (digits) from its own index', async () => {
+      const plan = await planFor(
+        payments().listStatement(tenantA, { text: term('880000000010') }, PAGE, null),
+      );
+      expectBounded(plan, ['gateway_invoices_tenant_hinted_payment_idx', 'payments_tenant_id_key']);
     }, 60_000);
 
     it('serves a reference exactly', async () => {
