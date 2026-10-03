@@ -9835,7 +9835,10 @@ export const orderPanelPlacements = pgTable(
       foreignColumns: [panels.tenantId, panels.id],
       name: 'order_panel_placements_chosen_fk',
     }),
-    check('order_panel_placements_strategy_check', enumCheck('strategy', PANEL_BALANCING_STRATEGIES)),
+    check(
+      'order_panel_placements_strategy_check',
+      enumCheck('strategy', PANEL_BALANCING_STRATEGIES),
+    ),
     check(
       'order_panel_placements_decided_by_check',
       enumCheck('decided_by', PANEL_PLACEMENT_DECIDERS),

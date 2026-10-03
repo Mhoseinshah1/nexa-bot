@@ -69,6 +69,11 @@ export interface PanelRecord {
    * panel stays operable for every service already on it.
    */
   readonly drain: PanelDrain | null;
+  /**
+   * Phase C3: the balancing group, or null. Read by the draft's placement and the
+   * catalogue's reach; nothing that operates an existing service reads it.
+   */
+  readonly balancingGroup: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -221,6 +226,8 @@ export interface UpdatePanelInput {
   readonly maxServices?: number | null;
   /** Absent leaves the whole policy; present replaces the whole policy. */
   readonly usernamePolicy?: PanelUsernamePolicy;
+  /** Absent leaves it; `null` takes the panel out of its group; a label sets it. */
+  readonly balancingGroup?: string | null;
 }
 
 /**
@@ -390,6 +397,19 @@ export interface PanelRepository {
     at: Date,
     tx: TransactionScope,
   ): Promise<PanelRecord | null>;
+  /**
+   * Phase C3: this tenant's LIVE (not archived) panels in one balancing group, each as a
+   * view. Bounded by the group, which an operator builds by hand.
+   */
+  groupMembers(scope: TenantContext, group: string, tx?: TransactionScope): Promise<PanelView[]>;
+  /**
+   * Phase C3: every LIVE grouped panel of this tenant, as the three facts the catalogue's
+   * reach needs. Served by the partial `panels_tenant_balancing_group_idx`.
+   */
+  groupedPanels(
+    scope: TenantContext,
+    tx?: TransactionScope,
+  ): Promise<{ id: string; group: string; providerType: string }[]>;
   /** Whether a LIVE panel of this tenant already uses the name. */
   nameTaken(
     scope: TenantContext,

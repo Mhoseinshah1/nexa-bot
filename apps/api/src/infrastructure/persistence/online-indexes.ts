@@ -343,6 +343,17 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "provisioning_operations" USING btree ("tenant_id","completed_at") ' +
       "WHERE (state = 'FAILED'::text)",
   },
+  {
+    /*
+     * Phase C3: a tenant's panels in one balancing group — the draft's candidate read and
+     * the catalogue's reach. Partial on the group being set, so it holds only the panels
+     * an operator has grouped; built online like the other panel keyset indexes.
+     */
+    name: 'panels_tenant_balancing_group_idx',
+    definition:
+      'ON "panels" USING btree ("tenant_id","balancing_group") ' +
+      'WHERE (balancing_group IS NOT NULL)',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

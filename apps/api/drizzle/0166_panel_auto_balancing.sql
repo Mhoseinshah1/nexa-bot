@@ -1,3 +1,13 @@
+-- Phase C3: automatic panel balancing.
+--
+-- panels.balancing_group     an operator's label for panels interchangeable for a NEW
+--                            account. NULL on every existing panel, so every product keeps
+--                            its explicit route when this runs.
+-- order_panel_placements     why a new-service order landed where it did, written once in
+--                            the draft's transaction and never changed (trigger below).
+--
+-- Numbered 0166 on its branch, above C2's 0165; the lead renumbers at merge. The
+-- hand-written immutability trigger is the separated tail after the generated DDL.
 CREATE TABLE "order_panel_placements" (
 	"tenant_id" uuid NOT NULL,
 	"order_id" uuid NOT NULL,
@@ -19,4 +29,15 @@ ALTER TABLE "order_panel_placements" ADD CONSTRAINT "order_panel_placements_tena
 ALTER TABLE "order_panel_placements" ADD CONSTRAINT "order_panel_placements_order_fk" FOREIGN KEY ("tenant_id","order_id") REFERENCES "public"."orders"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "order_panel_placements" ADD CONSTRAINT "order_panel_placements_home_fk" FOREIGN KEY ("tenant_id","home_panel_id") REFERENCES "public"."panels"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "order_panel_placements" ADD CONSTRAINT "order_panel_placements_chosen_fk" FOREIGN KEY ("tenant_id","chosen_panel_id") REFERENCES "public"."panels"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "panels" ADD CONSTRAINT "panels_balancing_group_check" CHECK ("panels"."balancing_group" IS NULL OR "panels"."balancing_group" ~ '^[a-z0-9][a-z0-9_-]{0,39}$');
+ALTER TABLE "panels" ADD CONSTRAINT "panels_balancing_group_check" CHECK ("panels"."balancing_group" IS NULL OR "panels"."balancing_group" ~ '^[a-z0-9][a-z0-9_-]{0,39}$');--> statement-breakpoint
+-- Hand-written (drizzle-kit does not model triggers). A placement explains a decision
+-- that was made; rewriting it later would make the explanation describe something else.
+CREATE OR REPLACE FUNCTION nexa_order_panel_placements_frozen() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'order_panel_placements rows are written once and never changed.'
+    USING ERRCODE = 'restrict_violation';
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+CREATE TRIGGER nexa_order_panel_placements_frozen
+  BEFORE UPDATE ON order_panel_placements
+  FOR EACH ROW EXECUTE FUNCTION nexa_order_panel_placements_frozen();

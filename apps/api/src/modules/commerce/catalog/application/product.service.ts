@@ -32,6 +32,7 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
+import type { PanelPlacementService } from '../../../platform/panels/application/panel-placement.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -95,6 +96,8 @@ export interface ProductServiceDeps {
    * `PanelSalesGate`.
    */
   readonly panelSales: PanelSalesGate;
+  /** Phase C3: the catalogue's reach over balancing groups. */
+  readonly placement: Pick<PanelPlacementService, 'reachableHomes'>;
   /**
    * The category a product is filed under, read under a SHARE lock by the two writes
    * that name one. Only `findForShare`: this service decides whether a category EXISTS
@@ -305,7 +308,15 @@ export class ProductService {
     readonly panelIds: readonly string[];
     readonly audience: CatalogueAudience;
   } | null> {
-    const eligible = await this.deps.panelSales.eligiblePanelIds(scope);
+    /*
+     * Phase C3: with automatic balancing on, a product is offered when ANY panel of its
+     * own panel's group (same provider) may take a new account — the draft is placed
+     * there. With it off this is exactly the eligible list, as before.
+     */
+    const eligible = await this.deps.placement.reachableHomes(
+      scope,
+      await this.deps.panelSales.eligiblePanelIds(scope),
+    );
     const standing =
       customerId === undefined
         ? null

@@ -1,4 +1,4 @@
-import { and, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, ne, sql, type SQL } from 'drizzle-orm';
 import {
   errors,
   PANEL_ERROR_CODES,
@@ -297,6 +297,54 @@ export class DrizzlePanelRepository implements PanelRepository {
     return rows.map(toView);
   }
 
+  async groupMembers(
+    scope: TenantContext,
+    group: string,
+    tx?: TransactionScope,
+  ): Promise<PanelView[]> {
+    const rows = await executorOf(this.db, tx)
+      .select({
+        panel: panels,
+        // FLAT, not a nested group. See `toView` for why.
+        usernameSetAt: panelCredentials.usernameSetAt,
+        passwordSetAt: panelCredentials.passwordSetAt,
+        apiTokenSetAt: panelCredentials.apiTokenSetAt,
+        health: panelHealth,
+      })
+      .from(panels)
+      .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
+      .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
+      .where(
+        and(
+          eq(panels.tenantId, scope.tenantId),
+          eq(panels.balancingGroup, group),
+          ne(panels.status, 'ARCHIVED'),
+        ),
+      )
+      // Deterministic, so anything that walks the members walks them the same way.
+      .orderBy(asc(panels.id));
+    return rows.map(toView);
+  }
+
+  async groupedPanels(
+    scope: TenantContext,
+    tx?: TransactionScope,
+  ): Promise<{ id: string; group: string; providerType: string }[]> {
+    const rows = await executorOf(this.db, tx)
+      .select({ id: panels.id, group: panels.balancingGroup, providerType: panels.providerType })
+      .from(panels)
+      .where(
+        and(
+          eq(panels.tenantId, scope.tenantId),
+          isNotNull(panels.balancingGroup),
+          ne(panels.status, 'ARCHIVED'),
+        ),
+      );
+    return rows.flatMap((row) =>
+      row.group === null ? [] : [{ id: row.id, group: row.group, providerType: row.providerType }],
+    );
+  }
+
   async create(
     scope: TenantContext,
     input: CreatePanelInput,
@@ -364,6 +412,8 @@ export class DrizzlePanelRepository implements PanelRepository {
     // Also a VALUE: `null` removes the cap. Lowering it below current usage is
     // allowed and terminates nothing — see `panels.max_services`.
     if (input.maxServices !== undefined) changes['maxServices'] = input.maxServices;
+    // A VALUE too: `null` takes the panel out of its group.
+    if (input.balancingGroup !== undefined) changes['balancingGroup'] = input.balancingGroup;
     /*
      * All three columns, or none. `null` on the template is a VALUE — it selects the
      * derived generator — so it is written rather than skipped.
@@ -1320,6 +1370,7 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     // owns the schema that decides it. See `PanelRecord.activation`.
     activation: row.activation,
     archivedAt: row.archivedAt,
+    balancingGroup: row.balancingGroup,
     drain:
       row.drainedAt === null || row.drainReason === null
         ? null
