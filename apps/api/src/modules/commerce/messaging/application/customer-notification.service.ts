@@ -420,6 +420,17 @@ export interface CustomerNotificationDeps {
       tx: TransactionScope,
     ): Promise<boolean>;
   };
+  /**
+   * Phase E3: what `INCIDENT_NOTICE` renders — the operator's message, read at send time
+   * from the communication the notice row names. A reader, not a payload (ADR 0030 §1).
+   * Null when the row is gone, which sends nothing. Absent, the kind is not sent.
+   */
+  readonly incidents?: {
+    noticeFacts(
+      scope: TenantContext,
+      noticeId: string,
+    ): Promise<{ readonly values: TemplateValues } | null>;
+  };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -647,6 +658,11 @@ export class CustomerNotificationService {
               ) => direct.fileDelivered(scope, row.subjectId, file, at, tx),
             }),
       };
+    }
+    if (row.kind === 'INCIDENT_NOTICE') {
+      if (this.deps.incidents === undefined) return null;
+      const facts = await this.deps.incidents.noticeFacts(scope, row.subjectId);
+      return facts === null ? null : { values: facts.values, buttons: [] };
     }
     if (row.kind === 'SERVICE_TRANSFER_RECEIVED') {
       if (this.deps.serviceTransfers === undefined) return null;

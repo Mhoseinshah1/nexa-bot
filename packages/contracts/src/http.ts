@@ -151,6 +151,11 @@ import {
 } from './fx.js';
 import { PLACEHOLDER_TYPES, TEMPLATE_FORMATS, TEMPLATE_REVISION_ACTIONS } from './templates.js';
 import {
+  PANEL_BALANCING_GROUP_MAX_LENGTH,
+  PANEL_BALANCING_GROUP_PATTERN,
+  PANEL_BALANCING_STRATEGIES,
+  PANEL_PLACEMENT_DECIDERS,
+  PANEL_PLACEMENT_EXCLUSIONS,
   PANEL_BASE_URL_MAX_LENGTH,
   PANEL_DRAIN_REASON_MAX_LENGTH,
   PANEL_DRAIN_REASON_MIN_LENGTH,
@@ -1559,6 +1564,11 @@ export const panelSummarySchema = z.object({
   sellability: panelSellabilitySchema,
   /** Whether the operator has stopped new allocations here. See `panelDrainSchema`. */
   drain: panelDrainSchema,
+  /**
+   * Phase C3: the balancing group this panel belongs to, or null for none. A panel in no
+   * group is only ever sold onto through the products bound to it.
+   */
+  balancingGroup: z.string().nullable(),
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1794,6 +1804,13 @@ export type CreatePanelRequest = z.infer<typeof createPanelRequestSchema>;
  * stored credentials against a different protocol. Archive the panel and make a
  * new one.
  */
+export const panelBalancingGroupInputSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(PANEL_BALANCING_GROUP_MAX_LENGTH)
+  .regex(PANEL_BALANCING_GROUP_PATTERN);
+
 export const updatePanelRequestSchema = z.object({
   name: panelNameSchema.optional(),
   baseUrl: panelBaseUrlSchema.optional(),
@@ -1824,6 +1841,12 @@ export const updatePanelRequestSchema = z.object({
    * read back by every panel read — so it needs no more authority than renaming does.
    */
   usernamePolicy: panelUsernamePolicyInputSchema.optional(),
+  /**
+   * Phase C3: put the panel in a balancing group, or take it out with `null`. `panels.edit`:
+   * it decides which machine a new account may land on among the operator's own panels,
+   * never what anything costs. Lower case, so two spellings cannot be two groups.
+   */
+  balancingGroup: panelBalancingGroupInputSchema.nullable().optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;
@@ -3842,9 +3865,51 @@ export type OrderResponse = z.infer<typeof orderResponseSchema>;
  * every one of them belongs to a phase that has not shipped: a "mark paid" button with
  * no payment behind it is the legacy system's silent-success pattern with a nicer font.
  */
+/**
+ * Phase C3: why a new-service order landed on the panel it did.
+ *
+ * Written once, in the draft's own transaction, when balancing considered the order —
+ * the flag on and the product's panel in a group. Null for every other order, which
+ * went to its product's own panel by the explicit route. The candidates are the group
+ * as it stood at that moment, ranked; the excluded ones say why. The FIGURES are the
+ * ones the decision used, never re-read.
+ */
+export const orderPlacementCandidateSchema = z.object({
+  panelId: z.string(),
+  panelName: z.string(),
+  /** 1-based rank among the eligible; null for an excluded panel. */
+  rank: z.number().int().positive().nullable(),
+  excluded: z.enum(PANEL_PLACEMENT_EXCLUSIONS).nullable(),
+  /** The eligibility evaluator's reason, when `excluded` is `INELIGIBLE`. */
+  ineligibleReason: z.enum(PANEL_INELIGIBILITY_REASONS).nullable(),
+  healthy: z.boolean(),
+  used: z.number().int().nonnegative(),
+  maxServices: z.number().int().positive().nullable(),
+  home: z.boolean(),
+});
+export type OrderPlacementCandidate = z.infer<typeof orderPlacementCandidateSchema>;
+
+export const orderPlacementSchema = z.object({
+  homePanelId: z.string(),
+  chosenPanelId: z.string(),
+  group: z.string(),
+  strategy: z.enum(PANEL_BALANCING_STRATEGIES),
+  decidedBy: z.enum(PANEL_PLACEMENT_DECIDERS),
+  candidates: z.array(orderPlacementCandidateSchema),
+  decidedAt: isoTimestamp,
+});
+export type OrderPlacementResponse = z.infer<typeof orderPlacementSchema>;
+
+export const orderPlacementResponseSchema = z.object({
+  placement: orderPlacementSchema.nullable(),
+});
+export type OrderPlacementEnvelope = z.infer<typeof orderPlacementResponseSchema>;
+
 export const ORDER_ROUTES = {
   list: '/orders',
   detail: (id: string) => `/orders/${encodeURIComponent(id)}`,
+  /** Phase C3: the balancing decision, or `null` for an order routed explicitly. `orders.view`. */
+  placement: (id: string) => `/orders/${encodeURIComponent(id)}/placement`,
   pricing: (id: string) => `/orders/${encodeURIComponent(id)}/pricing`,
   /** Package D: the custom-service terms the order was priced by, or `null` for any other order. */
   customService: (id: string) => `/orders/${encodeURIComponent(id)}/custom-service`,

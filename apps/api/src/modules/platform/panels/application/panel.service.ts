@@ -142,6 +142,8 @@ export interface UpdatePanelCommand {
   readonly activation?: Record<string, unknown> | null | undefined;
   /** Absent leaves it; `null` removes the cap; a positive integer sets one. */
   readonly maxServices?: number | null | undefined;
+  /** Phase C3: absent leaves it; `null` leaves the group; a label sets it. */
+  readonly balancingGroup?: string | null | undefined;
   /** Absent leaves the whole policy; present replaces the whole policy. */
   readonly usernamePolicy?: PanelUsernamePolicy | undefined;
   readonly idempotencyKey: string;
@@ -1069,6 +1071,9 @@ export class PanelService {
       maxServices: command.maxServices,
       // And the policy, for the reason `create` states.
       usernamePolicy: command.usernamePolicy,
+      // Phase C3. ONLY when present, for the reason `setStatus` gives about `name`: a key
+      // minted before this release and replayed after it must hash as it did.
+      ...(command.balancingGroup === undefined ? {} : { balancingGroup: command.balancingGroup }),
     });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -1115,7 +1120,11 @@ export class PanelService {
           activation?: PanelActivation | null;
           maxServices?: number | null;
           usernamePolicy?: PanelUsernamePolicy;
+          balancingGroup?: string | null;
         } = {};
+        // Phase C3: a label, or null to leave the group. It decides which of the operator's
+        // own panels a NEW account may land on, never anything about an existing service.
+        if (command.balancingGroup !== undefined) changes.balancingGroup = command.balancingGroup;
         if (command.name !== undefined) changes.name = command.name;
         if (baseUrl !== undefined) changes.baseUrl = baseUrl;
         /*
@@ -1254,6 +1263,7 @@ export class PanelService {
                * against the username in front of them.
                */
               usernamePolicy: before.panel.usernamePolicy,
+              balancingGroup: before.panel.balancingGroup,
             },
             after: {
               name: updated.name,
@@ -1261,6 +1271,7 @@ export class PanelService {
               activation: activationKeys(updated.activation),
               maxServices: updated.maxServices,
               usernamePolicy: updated.usernamePolicy,
+              balancingGroup: updated.balancingGroup,
             },
             result: 'SUCCESS',
           },

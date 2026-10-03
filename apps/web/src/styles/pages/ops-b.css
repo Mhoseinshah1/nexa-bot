@@ -985,6 +985,59 @@ form.set-row > * + * {
   overflow-wrap: anywhere;
 }
 
+/* --- Roles and permissions (Phase D3) ------------------------------------------- */
+/*
+ * One column at 390px: a permission row wraps its key and badge under its label, and
+ * the matrix's domain groups stack.
+ */
+.rbac .row-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.rbac .rbac-roles {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rbac .rbac-role {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+.rbac-domain {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+}
+.rbac-perm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+.rbac-perm-text {
+  display: grid;
+  flex: 1 1 200px;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.rbac-perm.risk-critical .rbac-perm-text > span:first-child {
+  font-weight: 600;
+}
+.rbac-effective-domain ul {
+  margin: 4px 0 0;
+}
+
 /* --- Phase D1 audit log -------------------------------------------------------- */
 
 /* The filter row: compact fields that wrap at 390px, the two buttons kept together. */
@@ -1057,4 +1110,51 @@ form.set-row > * + * {
   color: var(--fg);
   text-align: center;
   font-weight: 600;
+}
+
+/* ------------------------------------------------------------------------------------- */
+/* Phase E3: incidents and maintenance                                                    */
+/* ------------------------------------------------------------------------------------- */
+
+/* Above every page while an ACTIVE incident asked for one; stacks, never overlaps. */
+.incident-banners {
+  display: grid;
+  gap: 8px;
+  margin-block-end: var(--gap);
+}
+.incident-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 12px;
+}
+/* One column at 390px; the scope and timeline beside the summary on a desk. */
+.incident-detail {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+}
+.incident-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.incident-targets {
+  margin: 0 0 12px;
+  padding-inline-start: 18px;
+}
+.incident-targets li {
+  margin-block: 4px;
+  overflow-wrap: anywhere;
+}
+.incident-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+}
+.incident-targets-editor {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  margin-block: 12px;
+  padding: 12px;
+  min-inline-size: 0;
 }

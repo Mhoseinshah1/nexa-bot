@@ -6,6 +6,7 @@ import {
   type AdminId,
   type AdminListResponse,
   type AdminSessionListResponse,
+  type EffectivePermissionsResponse,
   type AdminSummary,
   type ResetAdminPasswordResponse,
   type ResetAdminSecondFactorResponse,
@@ -174,6 +175,20 @@ export class AdminsController {
       hadSecondFactor: result.hadSecondFactor,
       sessionsRevoked: result.sessionsRevoked,
     };
+  }
+
+  /**
+   * One administrator's effective permissions, explained (Phase D3): computed by the
+   * same resolver the request guard uses, never by the page. A read: `admins.view`.
+   */
+  @Get('admins/:id/effective-permissions')
+  async effectivePermissions(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<EffectivePermissionsResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const targetId = uuidV7Schema.parse(id) as AdminId;
+    return this.container.adminManagement.effectivePermissions(scope, actor, targetId);
   }
 
   /** The live sessions one administrator holds. A read: `admins.view`, no origin check. */

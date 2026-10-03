@@ -6,7 +6,7 @@ import {
   type PanelHealthRow,
   type PanelSummaryResponse,
 } from '@nexa/contracts';
-import { fetchPanelHealth, setPanelDrain, testPanel } from '../api/client';
+import { fetchPanelHealth, setPanelDrain, testPanel, updatePanel } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
@@ -30,6 +30,7 @@ import {
   CursorPager,
   Empty,
   Field,
+  Input,
   KV,
   Ltr,
   Num,
@@ -111,6 +112,7 @@ export function PanelHealthPage({
     refetchInterval: pollUnlessFinal(PANEL_HEALTH_REFRESH_MS),
   });
   const [draining, setDraining] = useState<PanelSummaryResponse | null>(null);
+  const [grouping, setGrouping] = useState<PanelSummaryResponse | null>(null);
 
   const rows = health.data?.rows ?? [];
   const nextCursor = health.data?.nextCursor ?? null;
@@ -156,6 +158,7 @@ export function PanelHealthPage({
               mayDrain={mayDrain}
               mayViewServices={mayViewServices}
               onDrain={() => setDraining(row.panel)}
+              onGroup={() => setGrouping(row.panel)}
             />
           ))}
         </div>
@@ -170,6 +173,7 @@ export function PanelHealthPage({
         />
       </StateSwitch>
       {draining !== null && <DrainModal panel={draining} onClose={() => setDraining(null)} />}
+      {grouping !== null && <GroupModal panel={grouping} onClose={() => setGrouping(null)} />}
     </>
   );
 }
@@ -181,6 +185,7 @@ function PanelHealthCard({
   mayDrain,
   mayViewServices,
   onDrain,
+  onGroup,
 }: {
   row: PanelHealthRow;
   windowHours: number | null;
@@ -188,6 +193,8 @@ function PanelHealthCard({
   mayDrain: boolean;
   mayViewServices: boolean;
   onDrain: () => void;
+  /** Phase C3: edit the balancing group — `panels.edit`, the same key as the probe. */
+  onGroup: () => void;
 }) {
   const onLink = useLinkHandler();
   const panel = row.panel;
@@ -317,6 +324,24 @@ function PanelHealthCard({
             ),
           ],
           [t('web.panel_failure'), <FailureBadge key="f" failure={panel.health.failure} />],
+          [
+            t('web.bal_group'),
+            <span key="g" className="ph-group">
+              {panel.balancingGroup === null ? (
+                <span className="faint">{t('web.bal_group_none')}</span>
+              ) : (
+                <Ltr>{panel.balancingGroup}</Ltr>
+              )}
+              {mayProbe && panel.status !== 'ARCHIVED' && (
+                <>
+                  {' '}
+                  <Button size="sm" variant="ghost" onClick={onGroup}>
+                    {t('web.bal_group_edit')}
+                  </Button>
+                </>
+              )}
+            </span>,
+          ],
           [t('web.panel_capacity'), <CapacityCell key="c" capacity={panel.capacity} />],
           [
             t('web.ph_services'),
@@ -495,6 +520,74 @@ function DrainModal({ panel, onClose }: { panel: PanelSummaryResponse; onClose: 
           value={reason}
           maxLength={PANEL_DRAIN_REASON_MAX_LENGTH}
           onChange={(event) => setReason(event.target.value)}
+        />
+      </Field>
+    </Modal>
+  );
+}
+
+/**
+ * Phase C3: put a panel in a balancing group, or take it out (an empty box).
+ *
+ * Through the ordinary panel write (`panels.edit`, audited with before and after); the
+ * server lower-cases and validates the label, and this form only says what it means.
+ */
+function GroupModal({ panel, onClose }: { panel: PanelSummaryResponse; onClose: () => void }) {
+  const [group, setGroup] = useState(panel.balancingGroup ?? '');
+  const queries = useQueryClient();
+  const toast = useToast();
+  const submission = useSubmissionKey();
+  const trimmed = group.trim().toLowerCase();
+  const run = useMutation({
+    mutationFn: () => {
+      const body = { id: panel.id, balancingGroup: trimmed === '' ? null : trimmed };
+      return updatePanel({ ...body, idempotencyKey: submission.current(body) });
+    },
+    onSuccess: async () => {
+      submission.settle();
+      toast({ tone: 'ok', message: t('web.bal_group_done') });
+      await queries.invalidateQueries({ queryKey: ['panel-health'] });
+      await queries.invalidateQueries({ queryKey: ['panels'] });
+      await queries.invalidateQueries({ queryKey: ['panel', panel.id] });
+      onClose();
+    },
+    onError: (error: unknown) => submission.settleOn(error),
+  });
+  const close = () => {
+    if (!run.isPending) onClose();
+  };
+  return (
+    <Modal
+      open
+      onClose={close}
+      title={t('web.bal_group_title')}
+      foot={
+        <>
+          <Button variant="primary" size="sm" disabled={run.isPending} onClick={() => run.mutate()}>
+            {run.isPending ? t('web.working') : t('web.bal_group_save')}
+          </Button>
+          <Button size="sm" disabled={run.isPending} onClick={close}>
+            {t('web.user_action_cancel')}
+          </Button>
+        </>
+      }
+    >
+      <p>
+        <strong>{panel.name}</strong>
+      </p>
+      <Banner tone="info">{t('web.bal_group_explain')}</Banner>
+      {run.isError && (
+        <Banner tone="danger" role="alert">
+          {messageFor(run.error)}
+        </Banner>
+      )}
+      <Field label={t('web.bal_group')} hint={t('web.bal_group_hint')} htmlFor="ph-group">
+        <Input
+          id="ph-group"
+          dir="ltr"
+          value={group}
+          maxLength={40}
+          onChange={(event) => setGroup(event.target.value)}
         />
       </Field>
     </Modal>

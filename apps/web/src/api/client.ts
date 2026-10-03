@@ -1,4 +1,24 @@
 import {
+  // Phase E3: incidents and maintenance windows.
+  INCIDENT_ROUTES,
+  incidentBannerResponseSchema,
+  incidentDetailResponseSchema,
+  incidentListResponseSchema,
+  incidentNoticePreviewResponseSchema,
+  incidentNoticeResponseSchema,
+  incidentResponseSchema,
+  type CreateIncidentRequest,
+  type IncidentActionRequest,
+  type IncidentBannerResponse,
+  type IncidentDetailResponse,
+  type IncidentListResponse,
+  type IncidentNoticePreviewResponse,
+  type IncidentNoticeRequest,
+  type IncidentNoticeResponse,
+  type IncidentResponse,
+  type UpdateIncidentRequest,
+} from '@nexa/contracts';
+import {
   // Program §8: operator-only customer notes and tags.
   CUSTOMER_CRM_ROUTES,
   customerNoteCreateResponseSchema,
@@ -240,6 +260,15 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   ACCOUNT_SECURITY_ROUTES,
+  RBAC_ROUTES,
+  deleteRoleResponseSchema,
+  effectivePermissionsResponseSchema,
+  roleMutationResponseSchema,
+  roleViewListResponseSchema,
+  type DeleteRoleResponse,
+  type EffectivePermissionsResponse,
+  type RoleMutationResponse,
+  type RoleViewListResponse,
   accountSecurityResponseSchema,
   backupCodesResponseSchema,
   loginOutcomeResponseSchema,
@@ -313,6 +342,7 @@ import {
   type PanelTechnicalResponse,
   type UpdatePanelPolicyResponse,
   panelHealthDashboardResponseSchema,
+  orderPlacementResponseSchema,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -321,6 +351,7 @@ import {
   type PanelUsernamePolicyInput,
   type PanelListArchivedMode,
   type PanelHealthDashboardResponse,
+  type OrderPlacementEnvelope,
   type PanelListResponse,
   type PanelResponse,
   type PanelStatus,
@@ -803,6 +834,52 @@ export function changeOwnPassword(input: {
   newPassword: string;
 }): Promise<{ ok: true }> {
   return post(AUTH_ROUTES.password, input, okResponseSchema);
+}
+
+// --- Phase D3: roles ----------------------------------------------------------
+
+export function fetchManagedRoles(): Promise<RoleViewListResponse> {
+  return authedGet(RBAC_ROUTES.roles, roleViewListResponseSchema);
+}
+
+export function createRole(input: {
+  key: string;
+  name: string;
+  permissions: string[];
+  reason: string;
+  clonedFrom?: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<RoleMutationResponse> {
+  return post(RBAC_ROUTES.roles, input, roleMutationResponseSchema);
+}
+
+export function updateRole(input: {
+  key: string;
+  name: string;
+  permissions: string[];
+  expectedVersion: number;
+  reason: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<RoleMutationResponse> {
+  const { key, ...body } = input;
+  return post(RBAC_ROUTES.role(key), body, roleMutationResponseSchema);
+}
+
+export function deleteRole(input: {
+  key: string;
+  expectedVersion: number;
+  reason: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<DeleteRoleResponse> {
+  const { key, ...body } = input;
+  return post(RBAC_ROUTES.deleteRole(key), body, deleteRoleResponseSchema);
+}
+
+export function fetchEffectivePermissions(adminId: string): Promise<EffectivePermissionsResponse> {
+  return authedGet(RBAC_ROUTES.effective(adminId), effectivePermissionsResponseSchema);
 }
 
 /** An operator removing ANOTHER administrator's two-step sign-in. */
@@ -2385,10 +2462,17 @@ export function updatePanel(input: {
    * whatever happens to be stored.
    */
   usernamePolicy?: PanelUsernamePolicyInput;
+  /** Phase C3: absent leaves it; `null` takes the panel out of its group; a label sets it. */
+  balancingGroup?: string | null;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   const { id, ...body } = input;
   return post(PANEL_ROUTES.update(id), body, panelResponseSchema);
+}
+
+/** Phase C3: why an order landed on its panel, or `placement: null` (the explicit route). */
+export function fetchOrderPlacement(id: string): Promise<OrderPlacementEnvelope> {
+  return authedGet(ORDER_ROUTES.placement(id), orderPlacementResponseSchema);
 }
 
 /**
@@ -4416,4 +4500,65 @@ export function addCustomerNote(
     body,
     customerNoteCreateResponseSchema,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Phase E3: incidents and maintenance
+// ---------------------------------------------------------------------------
+
+/** One page, newest first; `cursor` is the previous page's `nextCursor`. */
+export function fetchIncidents(query: { cursor?: string } = {}): Promise<IncidentListResponse> {
+  const path =
+    query.cursor === undefined || query.cursor === ''
+      ? INCIDENT_ROUTES.list
+      : `${INCIDENT_ROUTES.list}?cursor=${encodeURIComponent(query.cursor)}`;
+  return authedGet(path, incidentListResponseSchema);
+}
+
+export function fetchIncident(id: string): Promise<IncidentDetailResponse> {
+  return authedGet(INCIDENT_ROUTES.one(encodeURIComponent(id)), incidentDetailResponseSchema);
+}
+
+/** The admin banner: any administrator may read it. */
+export function fetchIncidentBanner(): Promise<IncidentBannerResponse> {
+  return authedGet(INCIDENT_ROUTES.banner, incidentBannerResponseSchema);
+}
+
+export function createIncident(input: CreateIncidentRequest): Promise<IncidentResponse> {
+  return post(INCIDENT_ROUTES.create, input, incidentResponseSchema);
+}
+
+export function updateIncident(
+  input: UpdateIncidentRequest & { id: string },
+): Promise<IncidentResponse> {
+  const { id, ...body } = input;
+  return post(INCIDENT_ROUTES.update(encodeURIComponent(id)), body, incidentResponseSchema);
+}
+
+export type IncidentAction = 'start' | 'resolve' | 'cancel';
+
+export function actOnIncident(
+  input: IncidentActionRequest & { id: string; action: IncidentAction },
+): Promise<IncidentResponse> {
+  const { id, action, ...body } = input;
+  return post(INCIDENT_ROUTES[action](encodeURIComponent(id)), body, incidentResponseSchema);
+}
+
+/** Idempotent by construction on the server: each effect is claimed once per subject. */
+export function applyIncidentEffects(id: string): Promise<IncidentResponse> {
+  return post(INCIDENT_ROUTES.applyEffects(encodeURIComponent(id)), {}, incidentResponseSchema);
+}
+
+export function fetchIncidentNoticePreview(id: string): Promise<IncidentNoticePreviewResponse> {
+  return authedGet(
+    INCIDENT_ROUTES.noticePreview(encodeURIComponent(id)),
+    incidentNoticePreviewResponseSchema,
+  );
+}
+
+export function sendIncidentNotice(
+  input: IncidentNoticeRequest & { id: string },
+): Promise<IncidentNoticeResponse> {
+  const { id, ...body } = input;
+  return post(INCIDENT_ROUTES.notice(encodeURIComponent(id)), body, incidentNoticeResponseSchema);
 }

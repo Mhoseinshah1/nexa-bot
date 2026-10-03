@@ -5,12 +5,14 @@ import { ReadinessProbe } from './surfaces/web/readiness.probe.js';
 import { HealthController } from './surfaces/web/health.controller.js';
 import { AuthController } from './surfaces/web/auth.controller.js';
 import { AccountSecurityController } from './surfaces/web/account-security.controller.js';
+import { RbacController } from './surfaces/web/rbac.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { CustomersController } from './surfaces/web/customers.controller.js';
 import { Customer360Controller } from './surfaces/web/customer-360.controller.js';
 import { NotificationCenterController } from './surfaces/web/notification-center.controller.js';
 import { CustomerDirectMessagesController } from './surfaces/web/customer-direct-messages.controller.js';
+import { IncidentsController } from './surfaces/web/incidents.controller.js';
 import { CustomerCrmController } from './surfaces/web/customer-crm.controller.js';
 import { TrialsController } from './surfaces/web/trials.controller.js';
 import { ProductsController } from './surfaces/web/products.controller.js';
@@ -93,6 +95,8 @@ export class AppModule implements NestModule {
         AuthController as never,
         // Phase D2: the signed-in administrator's own second factor, sessions and history.
         AccountSecurityController as never,
+        // Phase D3: role management over the existing authorization model.
+        RbacController as never,
         AdminsController as never,
         ControlController as never,
         CustomersController as never,
@@ -101,6 +105,8 @@ export class AppModule implements NestModule {
         NotificationCenterController as never,
         // Phase A2: «ارسال پیام» from Customer 360.
         CustomerDirectMessagesController as never,
+        // Phase E3: incidents and maintenance.
+        IncidentsController as never,
         // Program §8: operator-only notes and tags.
         CustomerCrmController as never,
         TrialsController as never,

@@ -44,6 +44,8 @@ import {
   OPERATIONAL_SEVERITIES,
   PANEL_HEALTH_STATES,
   MONITOR_DEFERRAL_REASONS,
+  PANEL_BALANCING_STRATEGIES,
+  PANEL_PLACEMENT_DECIDERS,
   PANEL_STATUSES,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
@@ -213,6 +215,15 @@ import {
   TICKET_REPLY_FILE_TYPES,
   DIRECT_MESSAGE_CONTENT_KINDS,
   DIRECT_MESSAGE_TEXT_MAX_LENGTH,
+  INCIDENT_KINDS,
+  INCIDENT_SEVERITIES,
+  INCIDENT_STATUSES,
+  INCIDENT_TARGET_KINDS,
+  INCIDENT_EFFECT_KINDS,
+  INCIDENT_EFFECT_STATES,
+  INCIDENT_EVENT_KINDS,
+  INCIDENT_TITLE_MAX_LENGTH,
+  INCIDENT_CUSTOMER_MESSAGE_MAX_LENGTH,
   TICKET_CATEGORY_SORT_MAX,
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
   TICKET_MESSAGE_MAX_LENGTH,
@@ -1005,9 +1016,17 @@ export const roles = pgTable(
     name: text('name').notNull(),
     isSystem: boolean('is_system').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /**
+     * Phase D3: optimistic concurrency for the role editor. An edit names the version it
+     * was made from and the UPDATE matches on it; a zero row count is a conflict, never
+     * a merge (ADR-0021's rule for every versioned edit).
+     */
+    version: integer('version').notNull().default(1),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     unique('roles_tenant_id_key').on(table.tenantId, table.id),
+    check('roles_version_check', sql`version >= 1`),
     uniqueIndex('roles_tenant_key_key').on(table.tenantId, table.key),
     check('roles_key_shape_check', sql`key ~ '^[a-z][a-z0-9_]{1,63}$'`),
   ],
@@ -1991,12 +2010,25 @@ export const panels = pgTable(
     drainedAt: timestamptz('drained_at'),
     /** The operator's reason for the current drain. Present exactly when `drained_at` is. */
     drainReason: text('drain_reason'),
+    /**
+     * Phase C3: the balancing group, or NULL for none.
+     *
+     * An operator's statement that this panel is interchangeable with the others in the
+     * group for a NEW account. NULL — every existing panel — means the explicit route
+     * only: a product bound here sells here. Read by the draft's placement and by the
+     * catalogue's reach, never by anything that operates an existing service.
+     */
+    balancingGroup: text('balancing_group'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
     /** A drain and its reason, or neither — the same biconditional shape as the username policy. */
+    check(
+      'panels_balancing_group_check',
+      sql`${table.balancingGroup} IS NULL OR ${table.balancingGroup} ~ '^[a-z0-9][a-z0-9_-]{0,39}$'`,
+    ),
     check(
       'panels_drain_reason_check',
       sql`(${table.drainedAt} IS NULL) = (${table.drainReason} IS NULL)`,
@@ -9930,6 +9962,62 @@ export const customServicePriceRules = pgTable(
  * or deleting a rule later rewrites nothing here. The CHECKs pin the arithmetic, so a
  * stored row cannot say one price and mean another.
  */
+/**
+ * Phase C3: why a new-service order landed on the panel it did.
+ *
+ * One row per order that automatic balancing CONSIDERED — the flag on and the product's
+ * panel in a group — written in the draft's own transaction and never changed (a trigger
+ * refuses UPDATE). An order with no row went to its product's own panel by the explicit
+ * route. `candidates` is the ranked group as the decision saw it, figures included, so the
+ * explanation is what was decided and not a re-reading of today's load.
+ */
+export const orderPanelPlacements = pgTable(
+  'order_panel_placements',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    orderId: uuid('order_id').notNull(),
+    homePanelId: uuid('home_panel_id').notNull(),
+    chosenPanelId: uuid('chosen_panel_id').notNull(),
+    balancingGroup: text('balancing_group').notNull(),
+    strategy: text('strategy').notNull(),
+    decidedBy: text('decided_by').notNull(),
+    candidates: jsonb('candidates').notNull(),
+    decidedAt: timestamptz('decided_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.orderId], name: 'order_panel_placements_pk' }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'order_panel_placements_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.homePanelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'order_panel_placements_home_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.chosenPanelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'order_panel_placements_chosen_fk',
+    }),
+    check(
+      'order_panel_placements_strategy_check',
+      enumCheck('strategy', PANEL_BALANCING_STRATEGIES),
+    ),
+    check(
+      'order_panel_placements_decided_by_check',
+      enumCheck('decided_by', PANEL_PLACEMENT_DECIDERS),
+    ),
+    check(
+      'order_panel_placements_candidates_check',
+      sql`jsonb_typeof(${table.candidates}) = 'array'`,
+    ),
+  ],
+);
+
 export const orderCustomServiceTerms = pgTable(
   'order_custom_service_terms',
   {
@@ -12230,5 +12318,237 @@ export const customerNotes = pgTable(
       sql`length(body) BETWEEN 1 AND ${sql.raw(String(CUSTOMER_NOTE_MAX_LENGTH))}`,
     ),
     check('customer_notes_author_check', sql`length(author_label) BETWEEN 1 AND 200`),
+  ],
+);
+
+// --- Phase E3: incidents and maintenance ------------------------------------------------
+
+/**
+ * An incident or maintenance window (`docs/incidents.md`): the operator's record of it,
+ * its scope (`incident_targets`), the effects run on that scope through the owning
+ * modules (`incident_effects`), its append-only timeline (`incident_events`) and what
+ * customers were told (`incident_communications`, `incident_notices`).
+ *
+ * Every status change is a conditional UPDATE naming its `from` statuses and bumping
+ * `version`; there is no setter. The CHECKs pin each status to the stamps it implies.
+ */
+export const incidents = pgTable(
+  'incidents',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    kind: text('kind').notNull(),
+    severity: text('severity').notNull(),
+    status: text('status').notNull(),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    /** What customers read when an operator sends a notice; null means nothing to send. */
+    customerMessage: text('customer_message'),
+    stopSales: boolean('stop_sales').notNull().default(false),
+    adminBanner: boolean('admin_banner').notNull().default(true),
+    scheduledStartAt: timestamptz('scheduled_start_at'),
+    scheduledEndAt: timestamptz('scheduled_end_at'),
+    startedAt: timestamptz('started_at'),
+    resolvedAt: timestamptz('resolved_at'),
+    version: integer('version').notNull().default(1),
+    createdByAdminId: uuid('created_by_admin_id'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('incidents_tenant_id_key').on(table.tenantId, table.id),
+    index('incidents_tenant_status_idx').on(table.tenantId, table.status, table.createdAt),
+    /** The scheduler's walk: SCHEDULED windows by start, across tenants. */
+    index('incidents_scheduled_idx')
+      .on(table.scheduledStartAt)
+      .where(sql`status = 'SCHEDULED'`),
+    foreignKey({
+      columns: [table.tenantId, table.createdByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'incidents_created_by_fk',
+    }),
+    check('incidents_kind_check', enumCheck('kind', INCIDENT_KINDS)),
+    check('incidents_severity_check', enumCheck('severity', INCIDENT_SEVERITIES)),
+    check('incidents_status_check', enumCheck('status', INCIDENT_STATUSES)),
+    check(
+      'incidents_title_check',
+      sql`length(btrim(title)) BETWEEN 1 AND ${sql.raw(String(INCIDENT_TITLE_MAX_LENGTH))}`,
+    ),
+    check(
+      'incidents_message_check',
+      sql`customer_message IS NULL OR length(customer_message) BETWEEN 1 AND ${sql.raw(String(INCIDENT_CUSTOMER_MESSAGE_MAX_LENGTH))}`,
+    ),
+    check('incidents_version_check', sql`version >= 1`),
+    /** Each status carries exactly the stamps it implies. */
+    check(
+      'incidents_status_stamps_check',
+      sql`CASE status
+            WHEN 'SCHEDULED' THEN scheduled_start_at IS NOT NULL AND started_at IS NULL AND resolved_at IS NULL
+            WHEN 'ACTIVE' THEN started_at IS NOT NULL AND resolved_at IS NULL
+            WHEN 'RESOLVED' THEN started_at IS NOT NULL AND resolved_at IS NOT NULL
+            WHEN 'CANCELLED' THEN started_at IS NULL AND resolved_at IS NOT NULL
+          END`,
+    ),
+    check(
+      'incidents_window_check',
+      sql`scheduled_end_at IS NULL OR scheduled_start_at IS NULL OR scheduled_end_at > scheduled_start_at`,
+    ),
+  ],
+);
+
+/** The incident's scope: exactly the things it is about, and nothing else. */
+export const incidentTargets = pgTable(
+  'incident_targets',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    incidentId: uuid('incident_id').notNull(),
+    kind: text('kind').notNull(),
+    /** A panel, location or product id, or a gateway's provider code. */
+    ref: text('ref').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'incident_targets_pk',
+      columns: [table.tenantId, table.incidentId, table.kind, table.ref],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.incidentId],
+      foreignColumns: [incidents.tenantId, incidents.id],
+      name: 'incident_targets_incident_fk',
+    }),
+    check('incident_targets_kind_check', enumCheck('kind', INCIDENT_TARGET_KINDS)),
+  ],
+);
+
+/**
+ * One effect, once per incident and subject: the unique key is what makes a second
+ * "apply" — a double click, two operators, a retry — change nothing.
+ */
+export const incidentEffects = pgTable(
+  'incident_effects',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    incidentId: uuid('incident_id').notNull(),
+    kind: text('kind').notNull(),
+    targetKind: text('target_kind').notNull(),
+    targetRef: text('target_ref').notNull(),
+    /** What was actually changed: the panel for a location, else the target. */
+    subjectRef: text('subject_ref').notNull(),
+    state: text('state').notNull(),
+    errorCode: text('error_code'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'incident_effects_pk',
+      columns: [table.tenantId, table.incidentId, table.kind, table.subjectRef],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.incidentId],
+      foreignColumns: [incidents.tenantId, incidents.id],
+      name: 'incident_effects_incident_fk',
+    }),
+    check('incident_effects_kind_check', enumCheck('kind', INCIDENT_EFFECT_KINDS)),
+    check('incident_effects_target_kind_check', enumCheck('target_kind', INCIDENT_TARGET_KINDS)),
+    check('incident_effects_state_check', enumCheck('state', INCIDENT_EFFECT_STATES)),
+  ],
+);
+
+/** The timeline. Append-only: a trigger refuses UPDATE and DELETE (migration tail). */
+export const incidentEvents = pgTable(
+  'incident_events',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    incidentId: uuid('incident_id').notNull(),
+    kind: text('kind').notNull(),
+    actorType: text('actor_type').notNull(),
+    /** An administrator's id, or a system job's name — as `audit_logs.actor_id` holds it. */
+    actorId: text('actor_id'),
+    actorLabel: text('actor_label'),
+    /** Structured and non-sensitive: what changed, how many were told. Never a message. */
+    detail: jsonb('detail'),
+    occurredAt: timestamptz('occurred_at').notNull(),
+  },
+  (table) => [
+    index('incident_events_incident_idx').on(
+      table.tenantId,
+      table.incidentId,
+      table.occurredAt,
+      table.id,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.incidentId],
+      foreignColumns: [incidents.tenantId, incidents.id],
+      name: 'incident_events_incident_fk',
+    }),
+    check('incident_events_kind_check', enumCheck('kind', INCIDENT_EVENT_KINDS)),
+    check('incident_events_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
+  ],
+);
+
+/** One customer communication: the message as sent, frozen, and how many it reached. */
+export const incidentCommunications = pgTable(
+  'incident_communications',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    incidentId: uuid('incident_id').notNull(),
+    message: text('message').notNull(),
+    recipients: integer('recipients').notNull(),
+    sentByAdminId: uuid('sent_by_admin_id'),
+    createdAt: timestamptz('created_at').notNull(),
+  },
+  (table) => [
+    unique('incident_communications_tenant_id_key').on(table.tenantId, table.id),
+    foreignKey({
+      columns: [table.tenantId, table.incidentId],
+      foreignColumns: [incidents.tenantId, incidents.id],
+      name: 'incident_communications_incident_fk',
+    }),
+    check('incident_communications_recipients_check', sql`recipients >= 0`),
+  ],
+);
+
+/** One customer of one communication: the subject of its INCIDENT_NOTICE lane row. */
+export const incidentNotices = pgTable(
+  'incident_notices',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    communicationId: uuid('communication_id').notNull(),
+    incidentId: uuid('incident_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+  },
+  (table) => [
+    unique('incident_notices_customer_key').on(
+      table.tenantId,
+      table.communicationId,
+      table.customerId,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.communicationId],
+      foreignColumns: [incidentCommunications.tenantId, incidentCommunications.id],
+      name: 'incident_notices_communication_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'incident_notices_customer_fk',
+    }),
   ],
 );

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
+import { PANEL_BALANCING_STRATEGIES } from './panels.js';
 import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
 import {
   LINK_ROTATION_COOLDOWN_HOURS_MAX,
@@ -1125,6 +1126,21 @@ export const SETTINGS = [
    * change guard and the flag's own activation both refuse otherwise, so an operator
    * cannot store terms that pay out more or less than the total they typed.
    */
+  {
+    key: 'panels.balancing.strategy',
+    description:
+      'How automatic panel balancing ranks the eligible panels of a group once health has ' +
+      'been compared: LEAST_USED puts the panel with the fewest occupied slots first; ' +
+      'LOWEST_UTILISATION the smallest share of its cap (an uncapped panel after every ' +
+      'capped one). Ties go to the product\u2019s own panel, then the lowest panel id.',
+    schema: z.enum(PANEL_BALANCING_STRATEGIES),
+    defaultValue: 'LEAST_USED',
+    configures: 'panel_auto_balancing',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
   {
     key: 'referral.signup_gift.total',
     description:

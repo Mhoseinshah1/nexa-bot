@@ -135,6 +135,33 @@ export class ResellerService {
     }
   }
 
+  /**
+   * The SAME evaluator as `assertEntitled`, as a pure answer over data the caller already
+   * holds — no read, no throw. For a caller weighing several panels for one product inside
+   * its own transaction (Phase C3's placement, Codex on #163), where re-reading the product
+   * once per candidate under the draft's locks was both slow and pointless: the product and
+   * its category were read once already. `assertEntitled` stays the authoritative refusal
+   * for the panel finally chosen.
+   */
+  entitles(
+    scope: TenantContext,
+    standing: ResellerStanding,
+    subject: {
+      readonly operation: ResellerActionSubject['operation'];
+      readonly productId: string;
+      readonly categoryId: string | null;
+      readonly panelId: string;
+    },
+  ): boolean {
+    return decideEntitlement(standing.grants, {
+      operation: subject.operation,
+      productId: subject.productId,
+      categoryId: subject.categoryId,
+      panelId: subject.panelId,
+      botInstanceId: scope.botInstanceId,
+    }).allowed;
+  }
+
   /** The layer that prices this customer, or null for an ordinary customer (R3). */
   async pricingTerms(
     scope: TenantContext,

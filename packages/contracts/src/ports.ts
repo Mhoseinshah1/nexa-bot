@@ -364,6 +364,14 @@ export const MANAGEMENT_ADMIN_EVENT_CODES = [
   'admin.second_factor_disabled',
   'admin.second_factor_reset',
   'admin.backup_codes_regenerated',
+  /*
+   * Phase D3. Changing what a ROLE grants changes the authority of every holder at
+   * once, which is the privilege change owner revision 24 names. Three acts, kept apart
+   * so an investigator can tell a new role from an edited one from a removed one.
+   */
+  'admin.role_created',
+  'admin.role_updated',
+  'admin.role_deleted',
 ] as const;
 export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[number];
 

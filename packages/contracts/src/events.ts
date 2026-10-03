@@ -182,6 +182,8 @@ export const EVENT_TYPES = [
   // Phase A2: an operator queued a direct message to one customer. Ids and the content's
   // kind only — never its text, its caption or its file, which are on the message row.
   'CustomerDirectMessageQueued',
+  // Phase E3: an incident or maintenance window changed status. Ids and statuses only.
+  'IncidentStateChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -222,6 +224,8 @@ export const AGGREGATE_TYPES = [
   'TermsVersion',
   // Program §8: one tag of a tenant's customer-tag catalogue.
   'CustomerTag',
+  // Phase E3: an incident or maintenance window.
+  'Incident',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -610,6 +614,12 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     messageId: z.string(),
     customerId: z.string(),
     contentKind: z.enum(['TEXT', 'PHOTO', 'DOCUMENT']),
+  }),
+  IncidentStateChanged: z.object({
+    incidentId: z.string(),
+    kind: z.enum(['INCIDENT', 'MAINTENANCE']),
+    from: z.string().nullable(),
+    to: z.string(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 

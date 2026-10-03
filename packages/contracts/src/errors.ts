@@ -473,6 +473,20 @@ export const IDENTITY_ERROR_CODES = {
   ADMIN_PASSWORD_REUSED: 'admin.password_reused',
   ADMIN_PASSWORD_STALE: 'admin.password_stale',
   ROLE_NOT_FOUND: 'role.not_found',
+  /*
+   * Phase D3 — role management. `role.immutable` is the owner role (and a system role's
+   * key or deletion); `role.in_use` is a delete of a role somebody still holds;
+   * `role.permissions_incoherent` is an action stored without the read it needs
+   * (`PERMISSION_REQUIRES`); `role.version_conflict` is an edit made from a stale read;
+   * `role.confirmation_required` is a CRITICAL change without the typed role key.
+   */
+  ROLE_KEY_TAKEN: 'role.key_taken',
+  ROLE_IMMUTABLE: 'role.immutable',
+  ROLE_IN_USE: 'role.in_use',
+  ROLE_PERMISSIONS_INCOHERENT: 'role.permissions_incoherent',
+  ROLE_UNKNOWN_PERMISSION: 'role.unknown_permission',
+  ROLE_VERSION_CONFLICT: 'role.version_conflict',
+  ROLE_CONFIRMATION_REQUIRED: 'role.confirmation_required',
   BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',
   /*
    * Phase D2 — the second factor.

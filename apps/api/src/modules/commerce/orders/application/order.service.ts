@@ -38,6 +38,11 @@ import {
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
+import type {
+  OrderPlacementRepository,
+  PanelPlacementService,
+  PlacementRecord,
+} from '../../../platform/panels/application/panel-placement.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
@@ -244,7 +249,11 @@ export interface OrderServiceDeps {
    */
   readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
   /** A buyer's reseller standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6). */
-  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled'>;
+  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled' | 'entitles'>;
+  /** Phase C3: where a new account goes, decided at the draft. */
+  readonly placement: Pick<PanelPlacementService, 'place'>;
+  /** Phase C3: the explanation of that decision, written beside the draft. */
+  readonly placements: OrderPlacementRepository;
   /** The window in which a plain message is a discount code (WP8 P11). */
   readonly discountCodes: DiscountCodeCaptureRepository;
   /**
@@ -344,6 +353,20 @@ export class OrderService {
   }
 
   /**
+   * Phase C3: why a new-service order landed on its panel, or null when balancing was not
+   * considered (the explicit route). `orders.view`, through `get`, which also resolves the
+   * order within the tenant.
+   */
+  async placement(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+  ): Promise<PlacementRecord | null> {
+    const order = await this.get(scope, actor, orderId);
+    return this.deps.placements.find(scope, order.id);
+  }
+
+  /**
    * Creates a DRAFT for one product, priced and snapshotted.
    *
    * Nothing is owed at the end of this. The customer is looking at a summary, and the
@@ -429,11 +452,40 @@ export class OrderService {
          * decides again.
          */
         const standing = await this.deps.resellers.standing(scope, customerId, tx);
-        const { price, panelId } = this.assertOrderable(
+        const { price, panelId: homePanelId } = this.assertOrderable(
           product,
           category,
           standing === null ? 'CUSTOMER' : 'RESELLER',
         );
+        /*
+         * Phase C3: WHERE the account goes, decided here and only here — before the
+         * username step, which reserves a name in this panel's namespace and shows it in
+         * the summary the customer confirms (`PanelPlacementService` says why it cannot be
+         * confirmation). With balancing off, or the product's panel in no group, this is
+         * the product's own panel: the explicit route, unchanged. Confirmation's
+         * `acquire` still re-decides eligibility and takes the one slot under the lock.
+         */
+        const placed = await this.deps.placement.place(
+          scope,
+          {
+            homePanelId,
+            /*
+             * One pure decision per candidate over the grants `standing` already holds and
+             * the product already read — no read per member (Codex on #163). The chosen
+             * panel is still refused authoritatively by `assertEntitled` just below.
+             */
+            entitled: (candidate) =>
+              standing === null ||
+              this.deps.resellers.entitles(scope, standing, {
+                operation: 'NEW_SERVICE',
+                productId: product.id,
+                categoryId: product.categoryId,
+                panelId: candidate,
+              }),
+          },
+          tx,
+        );
+        const panelId = placed.panelId as typeof homePanelId;
         if (standing !== null) {
           await this.deps.resellers.assertEntitled(
             scope,
@@ -503,6 +555,10 @@ export class OrderService {
           tx,
         );
 
+        if (placed.placement !== null) {
+          await this.deps.placements.record(scope, created.id, placed.placement, tx);
+        }
+
         await this.deps.audit.record(
           scope,
           actor,
@@ -511,7 +567,19 @@ export class OrderService {
             entityType: 'Order',
             entityId: created.id,
             before: null,
-            after: auditView(created),
+            after: {
+              ...auditView(created),
+              // Phase C3: where balancing put it and the rule that decided, when it ran.
+              ...(placed.placement === null
+                ? {}
+                : {
+                    placement: {
+                      homePanelId: placed.placement.homePanelId,
+                      chosenPanelId: placed.placement.chosenPanelId,
+                      decidedBy: placed.placement.decidedBy,
+                    },
+                  }),
+            },
             result: 'SUCCESS',
           },
           tx,

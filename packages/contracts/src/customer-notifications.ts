@@ -339,6 +339,15 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'DIRECT_MESSAGE',
   /** A photo or a document with an optional caption. `customer_direct_messages.id`. */
   'DIRECT_MESSAGE_MEDIA',
+  /*
+   * Phase E3 (`docs/incidents.md`): an operator's notice about an incident or maintenance
+   * window, to one customer the incident affects. `incident_notices.id` is the subject —
+   * one row per customer per communication — and the words are read at send time from the
+   * communication row it names, the `TICKET_REPLY` shape: a kind and an id, no payload
+   * (ADR 0030 §1). Only `IncidentService.notify` writes them, under `incidents.notify`,
+   * after a counted preview and a confirmation of that count.
+   */
+  'INCIDENT_NOTICE',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -514,6 +523,11 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    */
   DIRECT_MESSAGE: true,
   DIRECT_MESSAGE_MEDIA: true,
+  /*
+   * Phase E3: `true`. A notice is about a window: once the incident is cancelled, or the
+   * notice is older than `INCIDENT_NOTICE_STALE_AFTER_MS`, it is superseded unsent.
+   */
+  INCIDENT_NOTICE: true,
 };
 
 /**
@@ -591,6 +605,8 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   // Phase A2: an operator chose to write now; never held until morning.
   DIRECT_MESSAGE: false,
   DIRECT_MESSAGE_MEDIA: false,
+  // Phase E3: an operator chose to tell customers now.
+  INCIDENT_NOTICE: false,
 };
 
 /**
@@ -667,6 +683,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   // Phase A2: the operator's text, or the caption, read at send time from the message row.
   DIRECT_MESSAGE: 'bot.direct_message.text',
   DIRECT_MESSAGE_MEDIA: 'bot.direct_message.media',
+  // Phase E3: the notice's words, read at send time from the communication row.
+  INCIDENT_NOTICE: 'bot.incident.notice',
 };
 
 /**

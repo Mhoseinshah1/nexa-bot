@@ -1240,6 +1240,34 @@
       "when": 1791038865379,
       "tag": "0176_admin_notification_reads",
       "breakpoints": true
+    },
+    {
+      "idx": 177,
+      "version": "7",
+      "when": 1791039471915,
+      "tag": "0177_role_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1791041468432,
+      "tag": "0178_panel_auto_balancing",
+      "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1791042499780,
+      "tag": "0179_incidents",
+      "breakpoints": true
+    },
+    {
+      "idx": 180,
+      "version": "7",
+      "when": 1791042499825,
+      "tag": "0180_incidents_guards",
+      "breakpoints": true
     }
   ]
 }

@@ -118,6 +118,8 @@ export * from './ports.js';
 export * from './http.js';
 /** Phase D2: the admin's second factor, own sessions and security history. */
 export * from './admin-security.js';
+/** Phase D3: role management over the existing authorization model. */
+export * from './rbac.js';
 export * from './reporting.js';
 // Program §10: the Payment Operations Center's queues and the shared attention read model.
 export * from './payment-operations.js';
@@ -131,3 +133,4 @@ export * from './broadcasts.js';
 export * from './bulk-operations.js';
 export * from './notification-center.js';
 export * from './direct-messages.js';
+export * from './incidents.js';
