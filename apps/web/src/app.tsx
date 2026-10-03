@@ -773,9 +773,16 @@ export function resolve(
 
   if (route.path === '/payments') {
     return {
-      element: <PaymentsPage route={route} denied={!may('payments.view')} />,
-      crumbs: [{ label: t('web.payments_title') }],
-      title: t('web.payments_title'),
+      element: (
+        <PaymentsPage
+          route={route}
+          denied={!may('payments.view')}
+          // The queue rows' "ask again" (program §10); the server charges it itself.
+          mayReconcile={may('payments.reconcile')}
+        />
+      ),
+      crumbs: [{ label: t('web.payment_ops_title') }],
+      title: t('web.payment_ops_title'),
     };
   }
 
@@ -819,6 +826,8 @@ export function resolve(
            * this it says nothing about an order the operator may not open.
            */
           mayViewOrders={may('orders.view')}
+          // The history's audit rows (Payment Operations Center): a new question when it changes.
+          mayViewAudit={may('audit.view')}
           denied={!may('payments.view')}
         />
       ),

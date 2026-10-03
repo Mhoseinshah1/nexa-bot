@@ -230,6 +230,8 @@ export const REPORT_EXPORT_KINDS = [
   'INFRASTRUCTURE',
   'REFERRALS',
   'RESELLERS',
+  // Phase E2: the financial statement, one row per bucket and currency; the columns sum to the totals.
+  'FINANCIAL',
 ] as const;
 export type ReportExportKind = (typeof REPORT_EXPORT_KINDS)[number];
 
@@ -331,10 +333,21 @@ export const reportOperationsQuerySchema = z.object({
   cursor: z.string().min(1).max(200).optional(),
 });
 
-export const reportExportQuerySchema = z.object({
-  report: z.enum(REPORT_EXPORT_KINDS),
-  format: z.enum(REPORT_EXPORT_FORMATS),
-});
+/** Phase E2: the financial statement's bucket sizes. An hour is not offered: it is a day. */
+export const FINANCIAL_GRANULARITIES = ['DAY', 'WEEK', 'MONTH'] as const;
+export type FinancialGranularity = (typeof FINANCIAL_GRANULARITIES)[number];
+
+export const reportExportQuerySchema = z
+  .object({
+    report: z.enum(REPORT_EXPORT_KINDS),
+    format: z.enum(REPORT_EXPORT_FORMATS),
+    /** FINANCIAL only: the same bucket size the page shows, so the file is the page. */
+    granularity: z.enum(FINANCIAL_GRANULARITIES).optional(),
+  })
+  .refine((query) => query.granularity === undefined || query.report === 'FINANCIAL', {
+    message: 'granularity is accepted only with report=FINANCIAL',
+    path: ['granularity'],
+  });
 
 // --- Responses ------------------------------------------------------------------
 
@@ -700,9 +713,149 @@ export const reportOperationsResponseSchema = z.object({
 });
 export type ReportOperationsResponse = z.infer<typeof reportOperationsResponseSchema>;
 
+// --- Financial statement (Phase E2) ---------------------------------------------
+
+/**
+ * Phase E2 — Financial Reports V2 (`docs/financial-reports.md`).
+ *
+ * A STATEMENT over the existing ledger, payment and order rows, in three sections that are
+ * never added to each other:
+ *
+ * - **Sales** — revenue recognised when an order's money was taken (`settled_at`), whatever
+ *   happened to it later. A refund is its own line on the day it COMPLETED. So a closed
+ *   period never changes, and a refunded sale is a sale and a refund, never neither.
+ * - **Cash from customers** — money that arrived from OUTSIDE (a confirmed non-wallet
+ *   payment, or a receipt credited to a wallet), before any provider deduction, with the
+ *   gateway fee the customer bore beside the principal.
+ * - **Wallet** — the stored value the tenant owes, and every reason it moved.
+ *
+ * A wallet top-up is cash and a wallet credit, never a sale. The wallet purchase that later
+ * spends it is a sale and a wallet debit, never cash. Neither is counted twice in any one
+ * section, and no figure adds two sections together. There is no profit: no attributable
+ * cost exists (`docs/financial-reports.md` §6), so a field for it does not exist either.
+ */
+/** `granularity` absent: by the period's length — a day or up to 31 days daily, then weekly, then monthly. */
+export const reportFinancialQuerySchema = z.object({
+  granularity: z.enum(FINANCIAL_GRANULARITIES).optional(),
+});
+
+/** The automatic financial granularity: the report one, with an hour read as a day. */
+export function financialGranularityFor(localDays: number): FinancialGranularity {
+  const auto = reportGranularityFor(localDays);
+  return auto === 'HOUR' ? 'DAY' : auto;
+}
+
+/** One currency's lines for one bucket, or for the whole period. Never across currencies. */
+export const financialLinesSchema = z.object({
+  currency: z.enum(CURRENCY_CODES),
+  /** Sales recognised at settlement (`finance.sales`). */
+  salesCount: count,
+  grossSales: minorString,
+  discounts: minorString,
+  sales: minorString,
+  /** Refunds completed in the bucket (`finance.refunds`), all channels, and the two split. */
+  refundCount: count,
+  refunds: minorString,
+  refundsToWallet: minorString,
+  refundsPaidOut: minorString,
+  /** sales − refunds (`finance.net_sales`). */
+  netSales: minorString,
+  /** External money confirmed in the bucket (`finance.customer_paid`). */
+  externalPayments: count,
+  principalReceived: minorString,
+  customerFees: minorString,
+  customerPaid: minorString,
+  /** Receipts credited to a wallet instead of confirmed (`finance.receipt_credits`). */
+  receiptCredits: minorString,
+  /** Wallet movements of the bucket (`finance.wallet_liability`), each a positive magnitude. */
+  walletTopups: minorString,
+  walletSpending: minorString,
+  /** Net of their reversals: credits − reversal debits. May be negative. */
+  cashbackNet: minorString,
+  commissionNet: minorString,
+  gifts: minorString,
+});
+export type FinancialLines = z.infer<typeof financialLinesSchema>;
+
+export const financialBucketSchema = z.object({
+  index: count,
+  start: iso,
+  end: iso,
+  label: z.string(),
+  /** Null for a bucket that has not begun; otherwise one entry per currency with activity. */
+  lines: z.array(financialLinesSchema).nullable(),
+});
+export type FinancialBucket = z.infer<typeof financialBucketSchema>;
+
+export const reportFinancialResponseSchema = z.object({
+  period: reportPeriodSchema,
+  granularity: z.enum(FINANCIAL_GRANULARITIES),
+  buckets: z.array(financialBucketSchema),
+  /** The period's lines per currency. Each is the sum of the buckets' lines, exactly. */
+  totals: z.array(financialLinesSchema),
+  /** Sales by the method and route of the order's confirmed payment; null method = none needed. */
+  salesByChannel: z.array(
+    z.object({
+      method: z.enum(PAYMENT_METHODS).nullable(),
+      provider: z.string().nullable(),
+      currency: z.enum(CURRENCY_CODES),
+      orders: count,
+      sales: minorString,
+    }),
+  ),
+  /** External money by route and by what it paid for. */
+  cashByRoute: z.array(
+    z.object({
+      method: z.enum(PAYMENT_METHODS),
+      provider: z.string().nullable(),
+      kind: z.enum(REPORT_PAYMENT_KINDS),
+      currency: z.enum(CURRENCY_CODES),
+      payments: count,
+      principal: minorString,
+      customerFees: minorString,
+      customerPaid: minorString,
+    }),
+  ),
+  /** Sales and refunds per product, by the snapshot title. Bounded by REPORT_ENTITY_ROWS_MAX. */
+  byProduct: z.array(
+    z.object({
+      productId: z.string(),
+      title: z.string(),
+      currency: z.enum(CURRENCY_CODES),
+      orders: count,
+      sales: minorString,
+      refunds: minorString,
+    }),
+  ),
+  byProductTruncated: z.boolean(),
+  /** The part of sales bought by resellers: what they were charged. */
+  resellerSales: z.array(
+    z.object({ currency: z.enum(CURRENCY_CODES), orders: count, sales: minorString }),
+  ),
+  /** The stored-value liability: opening + Σ movements = closing, per currency. */
+  wallet: z.array(
+    z.object({
+      currency: z.enum(CURRENCY_CODES),
+      opening: minorString,
+      closing: minorString,
+      movements: z.array(z.object({ group: z.enum(WALLET_REPORT_GROUPS), amount: minorString })),
+    }),
+  ),
+  /**
+   * What the provider kept is not recorded anywhere this installation can read: a provider
+   * reports its amounts as diagnostics only (WP18), and no fee it deducted is stored. So the
+   * fee the PLATFORM bore, and therefore what was net received after it, are not reported.
+   */
+  providerFeeRecorded: z.literal(false),
+  /** No cost is attributable to a sale, so no profit is computed. */
+  profitSupported: z.literal(false),
+});
+export type ReportFinancialResponse = z.infer<typeof reportFinancialResponseSchema>;
+
 // --- Routes ---------------------------------------------------------------------
 
 export const REPORT_ROUTES = {
+  financial: '/reports/financial',
   summary: '/reports/summary',
   trend: '/reports/trend',
   products: '/reports/products',

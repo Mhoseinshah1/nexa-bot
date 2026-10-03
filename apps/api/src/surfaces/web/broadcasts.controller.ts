@@ -12,6 +12,7 @@ import {
   type AudiencePreviewResponse,
   type BroadcastCounts,
   type BroadcastListResponse,
+  type BroadcastFailureReasonsResponse,
   type BroadcastRecipientListResponse,
   type BroadcastResponse,
   type BroadcastResponseItem,
@@ -258,6 +259,16 @@ export class BroadcastsController {
       })),
       nextCursor: rows.length > limit ? (page.at(-1)?.customerId ?? null) : null,
     };
+  }
+
+  /** Broadcast V2 (program §19): failures by state and reason. */
+  @Get(':id/failures')
+  async failures(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<BroadcastFailureReasonsResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return { reasons: [...(await this.container.broadcasts.failureReasons(scope, actor, id))] };
   }
 
   private async respond(

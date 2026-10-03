@@ -432,6 +432,11 @@ import { DrizzleAuditLogReader } from './modules/platform/audit/infrastructure/d
 import { AuditLogService } from './modules/platform/audit/application/audit-log.service.js';
 import { IntlReportPeriodResolver } from './infrastructure/time/report-calendar.js';
 import {
+  PaymentOperationsService,
+  type PaymentAttentionReader,
+} from './modules/commerce/payments/application/payment-operations.service.js';
+import { DrizzlePaymentAttentionReader } from './modules/commerce/payments/infrastructure/drizzle-payment-attention.reader.js';
+import {
   DrizzleReferralCommissionRepository,
   DrizzleReferralRepository,
 } from './modules/commerce/referrals/infrastructure/drizzle-referral.repository.js';
@@ -912,6 +917,14 @@ export interface Container {
    * permission that already guards them.
    */
   readonly paymentTimeline: PaymentTimelineService;
+  /** The Payment Operations Center's queue list and attention counts (program §10). */
+  readonly paymentOperations: PaymentOperationsService;
+  /**
+   * The shared "operational attention" read model (program §10–§12): per-gateway queue
+   * counts over a window, with no permission of its own — Gateway Health and the
+   * Notification Center read it under their own authority.
+   */
+  readonly paymentAttention: PaymentAttentionReader;
   /** The Telegram half of the credit-to-wallet disposition: the reviewer's amount capture (D3). */
   readonly receiptCreditCaptures: ReceiptCreditCaptureService;
   /** Block User from the receipt message (WP10 follow-up §4): confirm, reason, block. */
@@ -3530,6 +3543,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // same way and share one cache.
   const templatePresentation = new CachedTenantPresentationReader(tenants, clock);
 
+  // The Payment Operations Center (program §10): the reports' own range resolver, in the
+  // tenant's timezone and calendar, so a queue's date filter means what a report's does.
+  const paymentOpsPeriods = new IntlReportPeriodResolver();
+  const paymentAttentionReader = new DrizzlePaymentAttentionReader(database.db);
+  const paymentOperationsService = new PaymentOperationsService({
+    guard,
+    attention: paymentAttentionReader,
+    payments: paymentService,
+    windows: {
+      resolve: async (scope, input) => {
+        const resolved = paymentOpsPeriods.resolve(
+          input,
+          clock.now(),
+          await templatePresentation.presentationFor(scope),
+        );
+        return { start: resolved.current.start, end: resolved.current.end };
+      },
+    },
+  });
+
   const reportingService = new ReportingService({
     access: new ReportAccess(guard, admins, opsLog),
     repository: new DrizzleReportingRepository(database.db),
@@ -4374,6 +4407,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+    // Broadcast V2: the preview's opted-out estimate only; the stamp still decides.
+    marketingOptOut: marketingOptOutPolicy,
   });
   const broadcastDispatcher = new BroadcastDispatcher({
     repository: broadcastRepository,
@@ -5659,6 +5694,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     serviceRefundDecisions,
     receiptDispositions: receiptDispositionService,
     paymentTimeline: paymentTimelineService,
+    paymentOperations: paymentOperationsService,
+    paymentAttention: paymentAttentionReader,
     receiptCreditCaptures: receiptCreditCaptureService,
     receiptBlockCaptures: receiptBlockCaptureService,
     receiptRejectCaptures: receiptRejectCaptureService,

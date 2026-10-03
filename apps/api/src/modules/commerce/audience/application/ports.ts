@@ -21,6 +21,11 @@ export interface AudienceSummary {
   readonly reachable: number;
   /** md5 of the sorted customer ids — the set, not only its size. */
   readonly fingerprint: string;
+  /**
+   * Broadcast V2: of `customers`, those opted out of promotions at evaluation time. Only the
+   * live reader counts it; a summary of frozen rows leaves it out.
+   */
+  readonly optedOut?: number;
 }
 
 /** The names an audience builder offers. */
@@ -28,6 +33,12 @@ export interface AudienceOptions {
   readonly resellerTiers: readonly { readonly id: string; readonly name: string }[];
   readonly products: readonly { readonly id: string; readonly title: string }[];
   readonly panels: readonly { readonly id: string; readonly name: string }[];
+  /** Broadcast V2: the tenant's customer tags (program §8), archived ones marked. */
+  readonly tags: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly archived: boolean;
+  }[];
 }
 
 /**
