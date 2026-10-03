@@ -3011,3 +3011,26 @@ rule).
   backfill migrations delete owner `role_permissions` rows on purpose, so a database
   trigger refusing that would break them; the service refuses every edit and delete of
   the owner role, and the last-owner triggers of migration 0006 still guard its holders.
+
+## OQ-I14 — hidden legacy products (program Item 14): decisions left open
+
+- **OQ-I14-01 — DECISION: when does a hidden legacy product follow a public price
+  change?** Its price is a copy of the current public tariff, refreshed by
+  `resolveTariff` `MATCH` (`docs/legacy-migration/hidden-legacy-products.md` §3). Either
+  the operator re-runs it after a tariff change, a scheduled job does, or the renewal
+  path is changed to read the source product live. The renewal path was deliberately not
+  changed in a prerequisite package.
+- **OQ-I14-02 — DECISION: should a reseller holding a legacy service renew it?** Today
+  the one entitlement evaluator decides, unchanged: an all-categories tier covers it, a
+  tier naming products or categories does not.
+- **OQ-I14-03 — UNKNOWN: legacy `time_unit` spellings and a zero `Volume`.** The shape
+  key accepts NULL/`d`/`day`/`days` and a positive volume only; anything else is
+  `UNMAPPABLE` until Q1c (`docs/legacy-migration/sql-evidence.md`) shows the values and
+  the owner says what they mean.
+
+## OQ-I15 — legacy trial eligibility (program Item 15)
+
+- **OQ-I15-01 — DECISION: "allowed, no evidence of use".** A legacy customer with
+  `limit_usertest ≥ 1` and no test invoice gets no override and NEXA's current trial
+  policy (`docs/legacy-migration/trial-eligibility.md` §3). If Q2 shows that population
+  should be closed as well, the change is one branch of `decideLegacyTrial`.
