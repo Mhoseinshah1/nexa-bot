@@ -67,12 +67,19 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     const db = this.exec(tx);
 
     const resumeOrRefuse = (running: RunRow): LegacyImportStartOutcome => {
-      if (running.sourceFingerprint === input.sourceFingerprint && running.mode === input.mode) {
+      // Only an APPLY run resumes: its progress is the map, keyed by legacy row, so a
+      // re-processed row is UNCHANGED. A dry run's progress is counters, which a re-run
+      // would inflate.
+      if (
+        running.mode === 'APPLY' &&
+        running.sourceFingerprint === input.sourceFingerprint &&
+        running.mode === input.mode
+      ) {
         return { kind: 'RESUMED', run: toRun(running) };
       }
       throw errors.conflict(
         LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
-        'Another legacy import run is RUNNING for this tenant with a different source or mode.',
+        'Another legacy import run is RUNNING for this tenant (a different source or mode, or a dry run, which never resumes).',
         { runId: running.id },
       );
     };
@@ -193,7 +200,7 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     // statement, whose snapshot sees them. A subquery inside the UPDATE would use the
     // snapshot from before the wait and snapshot counters that omit the last writes.
     const locked = await db
-      .select({ id: legacyImportRuns.id })
+      .select({ id: legacyImportRuns.id, mode: legacyImportRuns.mode })
       .from(legacyImportRuns)
       .where(
         and(
@@ -203,8 +210,47 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
         ),
       )
       .for('update');
-    if (locked.length === 0) return this.refuseRun(scope, runId, tx);
+    const lockedRun = locked[0];
+    if (lockedRun === undefined) return this.refuseRun(scope, runId, tx);
 
+    // A dry run's counters were incremented decision by decision; it has no map rows, and
+    // counting them would overwrite its result with zeros.
+    const counters =
+      lockedRun.mode === 'DRY_RUN' ? {} : await this.countMapRows(db, tenantId, runId);
+
+    const rows = await db
+      .update(legacyImportRuns)
+      .set({
+        status: outcome.status,
+        failureCode: outcome.status === 'FAILED' ? outcome.failureCode : null,
+        // Never before the run's own recorded progress, whatever the caller's clock says.
+        finishedAt: sql`GREATEST(${legacyImportRuns.startedAt}, ${legacyImportRuns.lastProgressAt}, ${now})`,
+        lastProgressAt: sql`GREATEST(${legacyImportRuns.lastProgressAt}, ${now})`,
+        ...counters,
+      })
+      .where(
+        and(
+          eq(legacyImportRuns.tenantId, tenantId),
+          eq(legacyImportRuns.id, runId),
+          eq(legacyImportRuns.status, 'RUNNING'),
+        ),
+      )
+      .returning();
+    const row = rows[0];
+    if (row === undefined) return this.refuseRun(scope, runId, tx);
+    return toRun(row);
+  }
+
+  private async countMapRows(
+    db: Executor,
+    tenantId: string,
+    runId: string,
+  ): Promise<{
+    rowsImported: number;
+    rowsSkipped: number;
+    rowsManualReview: number;
+    rowsFailed: number;
+  }> {
     const counts = await db
       .select({
         imported: sql<number>`count(*) FILTER (WHERE ${legacyImportMap.status} = 'IMPORTED')::int`,
@@ -215,24 +261,48 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
       .from(legacyImportMap)
       .where(and(eq(legacyImportMap.tenantId, tenantId), eq(legacyImportMap.runId, runId)));
     const c = counts[0] ?? { imported: 0, skipped: 0, manualReview: 0, failed: 0 };
+    return {
+      rowsImported: c.imported,
+      rowsSkipped: c.skipped,
+      rowsManualReview: c.manualReview,
+      rowsFailed: c.failed,
+    };
+  }
 
-    const rows = await db
+  async recordDryRunDecision(
+    scope: TenantContext,
+    runId: string,
+    status: LegacyImportMapStatus,
+    now: Date,
+    tx: unknown,
+  ): Promise<LegacyImportRunRecord> {
+    const tenantId = requireTenantId(scope);
+    const column = {
+      IMPORTED: legacyImportRuns.rowsImported,
+      SKIPPED: legacyImportRuns.rowsSkipped,
+      MANUAL_REVIEW: legacyImportRuns.rowsManualReview,
+      FAILED: legacyImportRuns.rowsFailed,
+    }[status];
+    const key = {
+      IMPORTED: 'rowsImported',
+      SKIPPED: 'rowsSkipped',
+      MANUAL_REVIEW: 'rowsManualReview',
+      FAILED: 'rowsFailed',
+    }[status] as 'rowsImported' | 'rowsSkipped' | 'rowsManualReview' | 'rowsFailed';
+    // One conditional UPDATE: the row lock it takes serialises it with `finish`, and the
+    // predicate refuses an APPLY run or a finished one.
+    const rows = await this.exec(tx)
       .update(legacyImportRuns)
       .set({
-        status: outcome.status,
-        failureCode: outcome.status === 'FAILED' ? outcome.failureCode : null,
-        finishedAt: sql`GREATEST(${legacyImportRuns.startedAt}, ${now})`,
+        [key]: sql`${column} + 1`,
         lastProgressAt: sql`GREATEST(${legacyImportRuns.lastProgressAt}, ${now})`,
-        rowsImported: c.imported,
-        rowsSkipped: c.skipped,
-        rowsManualReview: c.manualReview,
-        rowsFailed: c.failed,
       })
       .where(
         and(
           eq(legacyImportRuns.tenantId, tenantId),
           eq(legacyImportRuns.id, runId),
           eq(legacyImportRuns.status, 'RUNNING'),
+          eq(legacyImportRuns.mode, 'DRY_RUN'),
         ),
       )
       .returning();

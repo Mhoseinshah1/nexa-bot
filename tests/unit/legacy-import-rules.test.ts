@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isNexaError, LEGACY_IMPORT_ERROR_CODES } from '@nexa/contracts';
+import {
+  isNexaError,
+  LEGACY_IMPORT_ERROR_CODES,
+  LEGACY_IMPORT_SOURCE_TABLES,
+} from '@nexa/contracts';
 import {
   assertLegacyKey,
   assertSha256,
@@ -109,6 +113,41 @@ describe('resumeDecision', () => {
   });
 });
 
+describe('legacy keys (Codex P2, #175)', () => {
+  const code = (fn: () => void): string | null => {
+    try {
+      fn();
+      return null;
+    } catch (error) {
+      return isNexaError(error) ? error.code : 'not-nexa';
+    }
+  };
+
+  it('refuses a credential-shaped id for EVERY source table', () => {
+    for (const table of LEGACY_IMPORT_SOURCE_TABLES) {
+      for (const id of ['hunter2', 'password:hunter2', 'a b', '', '0123', '-1', '1.5', '+98912']) {
+        expect({ table, id, code: code(() => assertLegacyKey(table, id)) }).toEqual({
+          table,
+          id,
+          code: LEGACY_IMPORT_ERROR_CODES.INVALID,
+        });
+      }
+    }
+  });
+
+  it('accepts the evidenced shapes: user.id is a numeric Telegram id', () => {
+    for (const id of ['1', '42', '7123456789', '9'.repeat(20)]) {
+      expect(code(() => assertLegacyKey('user', id))).toBeNull();
+    }
+  });
+
+  it('refuses a table whose key shape is not evidenced (OQ-P4-01)', () => {
+    for (const table of ['invoice', 'marzban_panel', 'product']) {
+      expect(code(() => assertLegacyKey(table, '1'))).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
+    }
+  });
+});
+
 describe('shape checks', () => {
   const code = (fn: () => void): string | null => {
     try {
@@ -123,7 +162,7 @@ describe('shape checks', () => {
     expect(code(() => assertLegacyKey('User', '1'))).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
     expect(code(() => assertLegacyKey('user; drop', '1'))).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
     expect(code(() => assertLegacyKey('user', 'a b'))).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
-    expect(code(() => assertLegacyKey('user', 'x'.repeat(129)))).toBe(
+    expect(code(() => assertLegacyKey('user', '9'.repeat(21)))).toBe(
       LEGACY_IMPORT_ERROR_CODES.INVALID,
     );
     expect(code(() => assertSha256(A, 'c'))).toBeNull();

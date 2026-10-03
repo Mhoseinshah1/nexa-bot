@@ -15,8 +15,11 @@ CREATE TABLE "legacy_import_map" (
 	CONSTRAINT "legacy_import_map_status_check" CHECK (status IN ('IMPORTED', 'SKIPPED', 'MANUAL_REVIEW', 'FAILED')),
 	CONSTRAINT "legacy_import_map_reason_check" CHECK (reason_code IS NULL OR reason_code IN ('PROVIDER_MISSING', 'AMBIGUOUS_PANEL', 'PANEL_UNMAPPED', 'USERNAME_CASE_COLLISION', 'TEST_PANEL', 'HISTORY_NOT_IMPORTED', 'EXISTING_CUSTOMER', 'NEGATIVE_BALANCE', 'INVALID_SOURCE_ROW', 'PROVIDER_READ_FAILED', 'INTERNAL_ERROR')),
 	CONSTRAINT "legacy_import_map_entity_type_check" CHECK (entity_type IS NULL OR entity_type IN ('CUSTOMER', 'WALLET_ENTRY', 'SERVICE', 'ORDER', 'PANEL')),
-	CONSTRAINT "legacy_import_map_table_check" CHECK (legacy_table ~ '^[a-z][a-z0-9_]{0,62}$'),
-	CONSTRAINT "legacy_import_map_id_check" CHECK (legacy_id ~ '^[A-Za-z0-9_.:-]{1,128}$'),
+	CONSTRAINT "legacy_import_map_table_check" CHECK (legacy_table IN ('user')),
+	CONSTRAINT "legacy_import_map_legacy_key_check" CHECK (CASE legacy_table
+            WHEN 'user' THEN legacy_id ~ '^[1-9][0-9]{0,19}$'
+            ELSE false
+          END),
 	CONSTRAINT "legacy_import_map_checksum_check" CHECK (checksum ~ '^[0-9a-f]{64}$'),
 	CONSTRAINT "legacy_import_map_attempts_check" CHECK (attempts >= 1),
 	CONSTRAINT "legacy_import_map_status_shape_check" CHECK (CASE status
@@ -53,7 +56,8 @@ CREATE TABLE "legacy_import_runs" (
             WHEN 'FAILED' THEN finished_at IS NOT NULL AND failure_code IS NOT NULL
             ELSE finished_at IS NOT NULL AND failure_code IS NULL
           END),
-	CONSTRAINT "legacy_import_runs_window_check" CHECK (finished_at IS NULL OR finished_at >= started_at)
+	CONSTRAINT "legacy_import_runs_window_check" CHECK (finished_at IS NULL OR finished_at >= started_at),
+	CONSTRAINT "legacy_import_runs_finish_after_progress_check" CHECK (finished_at IS NULL OR finished_at >= last_progress_at)
 );
 --> statement-breakpoint
 ALTER TABLE "legacy_import_map" ADD CONSTRAINT "legacy_import_map_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

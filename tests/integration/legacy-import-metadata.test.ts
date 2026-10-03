@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import {
   LEGACY_IMPORT_ERROR_CODES,
+  LEGACY_IMPORT_SOURCE_TABLES,
+  isLegacyImportKey,
   PLATFORM_ERROR_CODES,
   isNexaError,
   type TenantContext,
@@ -438,8 +440,8 @@ describe('legacy import metadata', () => {
           A,
           {
             runId: r.id,
-            legacyTable: 'invoice',
-            legacyId: `inv-${i}`,
+            legacyTable: 'user',
+            legacyId: `${String(100 + i)}`,
             checksum: SUM1,
             decision: {
               status: 'MANUAL_REVIEW',
@@ -454,8 +456,8 @@ describe('legacy import metadata', () => {
         A,
         {
           runId: r.id,
-          legacyTable: 'invoice',
-          legacyId: 'inv-x',
+          legacyTable: 'user',
+          legacyId: '199',
           checksum: SUM1,
           decision: { status: 'SKIPPED', reasonCode: 'TEST_PANEL' },
           now: at(1),
@@ -465,9 +467,9 @@ describe('legacy import metadata', () => {
     });
 
     expect(await repo.summarize(A)).toEqual([
-      { legacyTable: 'invoice', status: 'MANUAL_REVIEW', reasonCode: 'AMBIGUOUS_PANEL', count: 3 },
-      { legacyTable: 'invoice', status: 'MANUAL_REVIEW', reasonCode: 'PROVIDER_MISSING', count: 4 },
-      { legacyTable: 'invoice', status: 'SKIPPED', reasonCode: 'TEST_PANEL', count: 1 },
+      { legacyTable: 'user', status: 'MANUAL_REVIEW', reasonCode: 'AMBIGUOUS_PANEL', count: 3 },
+      { legacyTable: 'user', status: 'MANUAL_REVIEW', reasonCode: 'PROVIDER_MISSING', count: 4 },
+      { legacyTable: 'user', status: 'SKIPPED', reasonCode: 'TEST_PANEL', count: 1 },
     ]);
 
     const seen: string[] = [];
@@ -478,10 +480,10 @@ describe('legacy import metadata', () => {
       if (page.next === null) break;
       after = page.next;
     }
-    expect(seen).toEqual(['inv-0', 'inv-1', 'inv-2', 'inv-3', 'inv-4', 'inv-5', 'inv-6']);
+    expect(seen).toEqual(['100', '101', '102', '103', '104', '105', '106']);
 
     const missing = await repo.listManualReview(A, { limit: 50, reasonCode: 'PROVIDER_MISSING' });
-    expect(missing.items.map((x) => x.legacyId)).toEqual(['inv-0', 'inv-2', 'inv-4', 'inv-6']);
+    expect(missing.items.map((x) => x.legacyId)).toEqual(['100', '102', '104', '106']);
   });
 
   it('carries no column that could hold a secret, a raw row or free text', async () => {
@@ -523,6 +525,160 @@ describe('legacy import metadata', () => {
             VALUES (${A.tenantId}, 'user', '+989121234567 John', ${r.id}, ${SUM1}, 'FAILED',
                     'INTERNAL_ERROR', now(), now())`,
       ),
-    ).rejects.toSatisfy(violates('legacy_import_map_id_check'));
+    ).rejects.toSatisfy(violates('legacy_import_map_legacy_key_check'));
+  });
+
+  it('Codex P2 #175: the key CHECK refuses credential-shaped ids for every table and mirrors the contract', async () => {
+    const { run: r } = await start(A);
+    const tryInsert = async (table: string, id: string): Promise<string | null> => {
+      try {
+        await ctx.container.database.db.execute(
+          sql`INSERT INTO legacy_import_map (tenant_id, legacy_table, legacy_id, run_id, checksum,
+                status, reason_code, created_at, updated_at)
+              VALUES (${A.tenantId}, ${table}, ${id}, ${r.id}, ${SUM1}, 'SKIPPED', 'TEST_PANEL',
+                      now(), now())`,
+        );
+        await ctx.container.database.db.execute(
+          sql`DELETE FROM legacy_import_map WHERE tenant_id = ${A.tenantId}`,
+        );
+        return null;
+      } catch (error) {
+        for (let e: unknown = error; e !== null && typeof e === 'object';) {
+          const constraint = (e as { constraint?: unknown }).constraint;
+          if (typeof constraint === 'string') return constraint;
+          e = (e as { cause?: unknown }).cause;
+        }
+        throw error;
+      }
+    };
+    const samples = [
+      'hunter2',
+      'password:hunter2',
+      '1',
+      '42',
+      '7123456789',
+      '9'.repeat(20),
+      '9'.repeat(21),
+      '0123',
+      '-1',
+      '+989121234567',
+      'a b',
+    ];
+    for (const table of [...LEGACY_IMPORT_SOURCE_TABLES, 'invoice']) {
+      for (const id of samples) {
+        const refusedBy = await tryInsert(table, id);
+        // The database and the contract give the same answer for every sample.
+        expect({ table, id, accepted: refusedBy === null }).toEqual({
+          table,
+          id,
+          accepted: isLegacyImportKey(table, id),
+        });
+      }
+    }
+    expect(await tryInsert('user', 'hunter2')).toBe('legacy_import_map_legacy_key_check');
+    expect(await tryInsert('user', 'password:hunter2')).toBe('legacy_import_map_legacy_key_check');
+    // Either CHECK may report first; both refuse a table outside the evidenced set.
+    expect(await tryInsert('invoice', '1')).toMatch(/^legacy_import_map_(table|legacy_key)_check$/);
+    // And the application refuses before SQL, with a typed error.
+    expect(
+      await codeOf(
+        run(A, (tx) =>
+          repo.recordDecision(
+            A,
+            {
+              runId: r.id,
+              legacyTable: 'user',
+              legacyId: 'password:hunter2',
+              checksum: SUM1,
+              decision: customerDecision(randomUUID()),
+              now: at(1),
+            },
+            tx,
+          ),
+        ),
+      ),
+    ).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
+  });
+
+  it('Codex P1 #175: a dry run counts its decisions on the run row and writes no map rows', async () => {
+    const { run: r } = await start(A, 'DRY_RUN');
+    const plan = { IMPORTED: 3, SKIPPED: 2, MANUAL_REVIEW: 1, FAILED: 4 } as const;
+    for (const [status, n] of Object.entries(plan)) {
+      for (let i = 0; i < n; i += 1) {
+        await run(A, (tx) =>
+          repo.recordDryRunDecision(A, r.id, status as keyof typeof plan, at(1), tx),
+        );
+      }
+    }
+    const done = await run(A, (tx) => repo.finish(A, r.id, { status: 'COMPLETED' }, at(2), tx));
+    expect(done).toMatchObject({
+      mode: 'DRY_RUN',
+      status: 'COMPLETED',
+      rowsImported: 3,
+      rowsSkipped: 2,
+      rowsManualReview: 1,
+      rowsFailed: 4,
+    });
+    const rows = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM legacy_import_map WHERE tenant_id = ${A.tenantId}`,
+    );
+    expect((rows.rows[0] as { n: number }).n).toBe(0);
+    // Finished: no more counting.
+    expect(
+      await codeOf(run(A, (tx) => repo.recordDryRunDecision(A, r.id, 'IMPORTED', at(3), tx))),
+    ).toBe(LEGACY_IMPORT_ERROR_CODES.RUN_NOT_WRITABLE);
+  });
+
+  it('Codex P1 #175: an APPLY run refuses dry-run counting and keeps counting from its map', async () => {
+    const { run: r } = await start(A);
+    expect(
+      await codeOf(run(A, (tx) => repo.recordDryRunDecision(A, r.id, 'IMPORTED', at(1), tx))),
+    ).toBe(LEGACY_IMPORT_ERROR_CODES.RUN_NOT_WRITABLE);
+    await run(A, (tx) =>
+      repo.recordDecision(
+        A,
+        {
+          runId: r.id,
+          legacyTable: 'user',
+          legacyId: '5',
+          checksum: SUM1,
+          decision: customerDecision(randomUUID()),
+          now: at(1),
+        },
+        tx,
+      ),
+    );
+    const done = await run(A, (tx) => repo.finish(A, r.id, { status: 'COMPLETED' }, at(2), tx));
+    expect(done).toMatchObject({
+      rowsImported: 1,
+      rowsSkipped: 0,
+      rowsManualReview: 0,
+      rowsFailed: 0,
+    });
+  });
+
+  it('Codex P1 #175: a running dry run is never resumed (its counters would double)', async () => {
+    const first = await start(A, 'DRY_RUN');
+    expect(first.kind).toBe('STARTED');
+    expect(await codeOf(start(A, 'DRY_RUN'))).toBe(LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT);
+    await run(A, (tx) => repo.finish(A, first.run.id, { status: 'ABORTED' }, at(1), tx));
+    expect((await start(A, 'DRY_RUN')).kind).toBe('STARTED');
+  });
+
+  it('Codex P2 #175: a skewed clock cannot finish a run before its recorded progress', async () => {
+    const { run: r } = await start(A);
+    await run(A, (tx) => repo.checkpoint(A, r.id, 10, at(100), tx));
+    const done = await run(A, (tx) => repo.finish(A, r.id, { status: 'COMPLETED' }, at(50), tx));
+    expect(done.finishedAt).toEqual(at(100));
+    expect(done.lastProgressAt).toEqual(at(100));
+    // And the database refuses the inversion whoever writes it.
+    const { run: r2 } = await start(B);
+    await run(B, (tx) => repo.checkpoint(B, r2.id, 1, at(100), tx));
+    await expect(
+      ctx.container.database.db.execute(
+        sql`UPDATE legacy_import_runs SET status = 'ABORTED', finished_at = ${at(60)}
+            WHERE id = ${r2.id}`,
+      ),
+    ).rejects.toSatisfy(violates('legacy_import_runs_finish_after_progress_check'));
   });
 });

@@ -1,5 +1,5 @@
 {
-  "id": "4aa4d6e3-a1a3-4e16-8dce-b44205e3074f",
+  "id": "4e1545d9-7402-4b8c-b921-7fc18058e25d",
   "prevId": "6c431c2e-99ff-4715-bf82-d66ff098284f",
   "version": "7",
   "dialect": "postgresql",
@@ -12353,11 +12353,11 @@
         },
         "legacy_import_map_table_check": {
           "name": "legacy_import_map_table_check",
-          "value": "legacy_table ~ '^[a-z][a-z0-9_]{0,62}$'"
+          "value": "legacy_table IN ('user')"
         },
-        "legacy_import_map_id_check": {
-          "name": "legacy_import_map_id_check",
-          "value": "legacy_id ~ '^[A-Za-z0-9_.:-]{1,128}$'"
+        "legacy_import_map_legacy_key_check": {
+          "name": "legacy_import_map_legacy_key_check",
+          "value": "CASE legacy_table\n            WHEN 'user' THEN legacy_id ~ '^[1-9][0-9]{0,19}$'\n            ELSE false\n          END"
         },
         "legacy_import_map_checksum_check": {
           "name": "legacy_import_map_checksum_check",
@@ -12572,6 +12572,10 @@
         "legacy_import_runs_window_check": {
           "name": "legacy_import_runs_window_check",
           "value": "finished_at IS NULL OR finished_at >= started_at"
+        },
+        "legacy_import_runs_finish_after_progress_check": {
+          "name": "legacy_import_runs_finish_after_progress_check",
+          "value": "finished_at IS NULL OR finished_at >= last_progress_at"
         }
       },
       "isRLSEnabled": false

@@ -1,10 +1,10 @@
 import {
   LEGACY_CODE_VERSION_PATTERN,
-  LEGACY_ID_PATTERN,
   LEGACY_IMPORT_ERROR_CODES,
   LEGACY_SHA256_PATTERN,
-  LEGACY_TABLE_PATTERN,
   errors,
+  isLegacyImportKey,
+  isLegacyImportSourceTable,
   type LegacyImportEntityType,
   type LegacyImportMapStatus,
   type LegacyImportReasonCode,
@@ -127,8 +127,10 @@ export interface LegacyImportReviewPage {
 
 export interface LegacyImportRepository {
   /**
-   * Starts a run, or resumes the tenant's RUNNING one when it has the same source
-   * fingerprint and mode. A RUNNING run with a different source or mode is refused
+   * Starts a run, or resumes the tenant's RUNNING `APPLY` run when it has the same source
+   * fingerprint. A RUNNING `DRY_RUN` is never resumed — its counters would count the
+   * re-processed rows twice — and is refused (`RUN_CONFLICT`, with its id) like any other
+   * running run; the caller aborts it and starts again. A RUNNING run with a different source or mode is refused
    * (`RUN_CONFLICT`): two imports of two snapshots interleaved would make every map row's
    * checksum a coin toss.
    */
@@ -156,8 +158,24 @@ export interface LegacyImportRepository {
   ): Promise<LegacyImportRunRecord>;
 
   /**
-   * RUNNING → a terminal status, snapshotting the counters from the map rows this run
-   * wrote, in the same statement. Refuses (`RUN_NOT_WRITABLE`) from any other status.
+   * A `DRY_RUN`'s decision: increments the run's counter for `status`, by a conditional
+   * UPDATE naming `RUNNING` and `DRY_RUN`. Refused (`RUN_NOT_WRITABLE`) for an `APPLY`
+   * run, whose counters come from its map rows, and for a finished one.
+   */
+  recordDryRunDecision(
+    scope: TenantContext,
+    runId: string,
+    status: LegacyImportMapStatus,
+    now: Date,
+    tx: unknown,
+  ): Promise<LegacyImportRunRecord>;
+
+  /**
+   * RUNNING → a terminal status. An `APPLY` run's counters are snapshotted from the map
+   * rows it wrote (the authoritative record); a `DRY_RUN` keeps the counters its decisions
+   * incremented. `finished_at` is clamped to `GREATEST(started_at, last_progress_at, now)`
+   * so a skewed clock cannot finish a run before its own recorded progress. Refuses
+   * (`RUN_NOT_WRITABLE`) from any other status.
    */
   finish(
     scope: TenantContext,
@@ -262,8 +280,10 @@ function invalid(message: string): never {
 
 /** Shape checks before SQL, so a refusal is a typed error rather than a CHECK violation. */
 export function assertLegacyKey(legacyTable: string, legacyId: string): void {
-  if (!LEGACY_TABLE_PATTERN.test(legacyTable)) invalid('legacy table is not a plain identifier');
-  if (!LEGACY_ID_PATTERN.test(legacyId)) invalid('legacy id is not a bounded printable key');
+  if (!isLegacyImportSourceTable(legacyTable)) invalid('legacy table is not an importable source');
+  if (!isLegacyImportKey(legacyTable, legacyId)) {
+    invalid('legacy id is not the evidenced key shape for its table');
+  }
 }
 
 export function assertSha256(value: string, what: string): void {

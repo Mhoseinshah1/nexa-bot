@@ -237,6 +237,7 @@ import {
   LEGACY_IMPORT_RUN_FAILURE_CODES,
   LEGACY_IMPORT_RUN_MODES,
   LEGACY_IMPORT_RUN_STATUSES,
+  LEGACY_IMPORT_SOURCE_TABLES,
   TICKET_CATEGORY_SORT_MAX,
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
   TICKET_MESSAGE_MAX_LENGTH,
@@ -12898,6 +12899,11 @@ export const legacyImportRuns = pgTable(
           END`,
     ),
     check('legacy_import_runs_window_check', sql`finished_at IS NULL OR finished_at >= started_at`),
+    /** A run cannot finish before the progress it recorded (a skewed clock is clamped). */
+    check(
+      'legacy_import_runs_finish_after_progress_check',
+      sql`finished_at IS NULL OR finished_at >= last_progress_at`,
+    ),
   ],
 );
 
@@ -12961,8 +12967,19 @@ export const legacyImportMap = pgTable(
       'legacy_import_map_entity_type_check',
       sql`entity_type IS NULL OR ${enumCheck('entity_type', LEGACY_IMPORT_ENTITY_TYPES)}`,
     ),
-    check('legacy_import_map_table_check', sql`legacy_table ~ '^[a-z][a-z0-9_]{0,62}$'`),
-    check('legacy_import_map_id_check', sql`legacy_id ~ '^[A-Za-z0-9_.:-]{1,128}$'`),
+    check('legacy_import_map_table_check', enumCheck('legacy_table', LEGACY_IMPORT_SOURCE_TABLES)),
+    /**
+     * Per table, the evidenced key shape — `LEGACY_ID_PATTERNS`, mirrored here and held in
+     * step by `legacy-import-metadata.test.ts`. A table without an evidenced shape is not
+     * in the set at all (`OQ-P4-01`).
+     */
+    check(
+      'legacy_import_map_legacy_key_check',
+      sql`CASE legacy_table
+            WHEN 'user' THEN legacy_id ~ '^[1-9][0-9]{0,19}$'
+            ELSE false
+          END`,
+    ),
     check('legacy_import_map_checksum_check', sql`checksum ~ '^[0-9a-f]{64}$'`),
     check('legacy_import_map_attempts_check', sql`attempts >= 1`),
     /** IMPORTED names exactly one entity; nothing else names any, and must say why. */

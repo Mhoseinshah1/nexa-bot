@@ -3034,3 +3034,16 @@ rule).
   `limit_usertest ≥ 1` and no test invoice gets no override and NEXA's current trial
   policy (`docs/legacy-migration/trial-eligibility.md` §3). If Q2 shows that population
   should be closed as well, the change is one branch of `decideLegacyTrial`.
+
+## OQ-P4 — legacy import metadata (Migration P4)
+
+- **OQ-P4-01 — the legacy primary-key format of every table but `user`.** The repository
+  evidences only `user.id` (numeric strings, the Telegram id; program §19). The `invoice`
+  table's primary key — its column and its format — is not evidenced anywhere in this
+  repository (`docs/legacy-migration/sql-evidence.md` joins `invoice.id_user` to `user.id`
+  but never shows the invoice's own key), and neither is any other table's. So
+  `LEGACY_IMPORT_SOURCE_TABLES` is `['user']` and `legacy_import_map_legacy_key_check`
+  refuses every other table. **Settled by** a safe aggregate query on the legacy archive
+  (character classes and length range of the key, never values); then add the table and
+  its shape to the contract and the CHECK in one forward migration, with accepting and
+  refusing tests.
