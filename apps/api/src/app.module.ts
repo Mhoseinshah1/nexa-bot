@@ -4,6 +4,7 @@ import { CONTAINER, type Container } from './container.js';
 import { ReadinessProbe } from './surfaces/web/readiness.probe.js';
 import { HealthController } from './surfaces/web/health.controller.js';
 import { AuthController } from './surfaces/web/auth.controller.js';
+import { AccountSecurityController } from './surfaces/web/account-security.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { CustomersController } from './surfaces/web/customers.controller.js';
@@ -85,6 +86,8 @@ export class AppModule implements NestModule {
     if (container.config.AUTH_MODE === 'password') {
       controllers.push(
         AuthController as never,
+        // Phase D2: the signed-in administrator's own second factor, sessions and history.
+        AccountSecurityController as never,
         AdminsController as never,
         ControlController as never,
         CustomersController as never,

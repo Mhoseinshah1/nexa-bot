@@ -184,6 +184,19 @@ else
   pass "the owner bootstrap is not reachable from any surface"
 fi
 
+# --- The owner 2FA recovery is not reachable from a surface ----------------
+# Phase D2. `AccountSecurityService.resetFromServer` strips an administrator's
+# second factor without authorizing a caller, because the server operator HAS
+# no session — that is the lockout it exists to end. The same argument as the
+# bootstrap: safe only while no HTTP or Telegram route can reach it.
+RESET_2FA_LEAK=$(grep -rn "resetFromServer" apps/api/src/surfaces 2>/dev/null || true)
+if [ -n "$RESET_2FA_LEAK" ]; then
+  fail "A surface reaches the server-side 2FA reset" "$RESET_2FA_LEAK" \
+       "Owner 2FA recovery is a CLI (src/admin-2fa-reset.cli.ts), not an endpoint."
+else
+  pass "the server-side 2FA reset is not reachable from any surface"
+fi
+
 # --- The Telegram bot bootstrap is not reachable from a surface -------------
 # The same argument, for the same reason, about a different credential.
 # `BotBootstrapService` accepts a bot token and writes it encrypted without

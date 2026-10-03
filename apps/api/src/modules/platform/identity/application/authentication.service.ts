@@ -3,7 +3,12 @@ import {
   errors,
   IDENTITY_ERROR_CODES,
   isNexaError,
+  LOGIN_CHALLENGE_MAX_ATTEMPTS,
+  LOGIN_CHALLENGE_TTL_SECONDS,
   loginRequestSchema,
+  secondFactorProofSchema,
+  type SecondFactorMethod,
+  type SecretCipher,
   type ActorContext,
   type Admin,
   type AdminId,
@@ -24,10 +29,17 @@ import {
 } from '@nexa/contracts';
 import type {
   AdminRepository,
+  LoginChallengeRepository,
   LoginThrottleRepository,
   RoleRepository,
+  SecondFactorRepository,
   SessionRepository,
 } from './ports.js';
+import {
+  credentialFingerprint,
+  verifySecondFactorProof,
+  type ProofVerdict,
+} from './second-factor-proof.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { generateSessionToken, hashSessionToken } from './session-token.js';
 import type { CredentialThrottle, Reservation } from './credential-throttle.js';
@@ -73,6 +85,26 @@ export interface LoginResult extends AuthenticatedAdmin {
 }
 
 /**
+ * What a correct password produces (Phase D2): a session, or — for an account with an
+ * active second factor — a challenge that only a valid code turns into one.
+ */
+export type SignInOutcome =
+  | { readonly kind: 'SIGNED_IN'; readonly result: LoginResult }
+  | {
+      readonly kind: 'SECOND_FACTOR_REQUIRED';
+      /** Returned exactly once, for the challenge cookie. Only its hash is stored. */
+      readonly challengeToken: string;
+      readonly expiresAt: Date;
+    };
+
+/** The rows the second factor needs. One object so the constructor stays legible. */
+export interface SecondFactorDependencies {
+  readonly factors: SecondFactorRepository;
+  readonly challenges: LoginChallengeRepository;
+  readonly cipher: SecretCipher;
+}
+
+/**
  * The slice of the tenant repository authentication needs.
  *
  * Declared here rather than depending on the whole repository: this module has
@@ -111,6 +143,7 @@ export class AuthenticationService {
     private readonly credentialThrottle: CredentialThrottle,
     private readonly tenants: TenantStatusReader,
     private readonly permissions: EffectivePermissionReader,
+    private readonly secondFactor: SecondFactorDependencies,
   ) {}
 
   /**
@@ -149,12 +182,32 @@ export class AuthenticationService {
     return tenant !== null && tenant.status === 'ACTIVE';
   }
 
+  /**
+   * Password-only sign-in, for callers that cannot carry a second step (the tests' and
+   * scripts' convenience). An account with an active second factor is REFUSED here with
+   * `auth.second_factor_required` — never signed in — so this method cannot become the
+   * door that skips the factor. The HTTP surface calls `signIn`.
+   */
   async login(
     scope: TenantContext,
     actor: ActorContext,
     input: unknown,
     context: LoginContext,
   ): Promise<LoginResult> {
+    const outcome = await this.signIn(scope, actor, input, context);
+    if (outcome.kind === 'SIGNED_IN') return outcome.result;
+    throw errors.unauthenticated(
+      IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_REQUIRED,
+      'This account needs a second factor to sign in.',
+    );
+  }
+
+  async signIn(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: unknown,
+    context: LoginContext,
+  ): Promise<SignInOutcome> {
     const command = loginRequestSchema.parse(input);
     // Case-folded at the boundary, so `Owner` and `owner` are one account and
     // one throttle subject rather than two of each.
@@ -219,7 +272,7 @@ export class AuthenticationService {
     reserved: Reservation,
     now: Date,
     verdict: () => void,
-  ): Promise<LoginResult> {
+  ): Promise<SignInOutcome> {
     const shaped = adminUsernameSchema.safeParse(username);
     if (!shaped.success) {
       await this.hasher.spendDummyWork();
@@ -270,14 +323,28 @@ export class AuthenticationService {
     // the session — and anything unexpected in between still releases.
     if (!passwordMatches) {
       verdict();
-      return await this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
+      return await this.failLogin(
+        scope,
+        actor,
+        username,
+        reserved,
+        'BAD_PASSWORD',
+        credentials.admin.id,
+      );
     }
 
     // Checked AFTER the password, so a disabled account cannot be distinguished
     // from an active one without already knowing the password.
     if (credentials.admin.status !== 'ACTIVE') {
       verdict();
-      return await this.failLogin(scope, actor, username, reserved, 'ADMIN_DISABLED');
+      return await this.failLogin(
+        scope,
+        actor,
+        username,
+        reserved,
+        'ADMIN_DISABLED',
+        credentials.admin.id,
+      );
     }
 
     // Same placement, same reason: an installation that has been stopped must
@@ -358,78 +425,83 @@ export class AuthenticationService {
         await this.admins.setPasswordHash(scope, credentials.admin.id, rehashed, now, tx);
       }
 
-      await this.sessions.create(
-        scope,
-        {
-          id: sessionId,
-          adminId: credentials.admin.id,
-          tokenHash: hashSessionToken(token),
-          issuedAt: now,
-          expiresAt,
-          ip: context.ip,
-          userAgent: context.userAgent,
-        },
-        tx,
-      );
-      // The bookkeeping commits WITH the session, not after it.
-      //
-      // Done afterwards, a transient failure in any of these left a live
-      // session persisted while the caller got an error and never received the
-      // token — and the throttle half made that user-visible rather than merely
-      // untidy: at a limit of one, a failed `clear` leaves the successful
-      // login's own lock standing, discards the only copy of the token, and
-      // refuses the retry until the lockout expires.
-      //
-      // The USERNAME counter is erased — the account holder proved who they
-      // are. The IP reservation is merely GIVEN BACK: clearing it would let
-      // anyone with one valid account spray guesses across administrator names
-      // and reset the breadth limiter by periodically signing into their own.
-      await this.throttle.clear(scope, 'USERNAME', username, tx);
-      if (context.ip !== null) {
-        await this.throttle.releaseAttempt(
+      /*
+       * Phase D2: an active second factor means this password opens a CHALLENGE, not a
+       * session. Read on the locked connection, under the admin row lock taken just
+       * above — activation takes the same lock, so a login and an activation serialise:
+       * either the session exists first and activation's revocation ends it, or the
+       * factor is active first and this sees it.
+       */
+      const factor = await this.secondFactor.factors.findFactor(scope, credentials.admin.id, tx);
+      if (factor !== null && factor.state === 'ACTIVE') {
+        const challengeToken = generateSessionToken();
+        const challengeExpiresAt = new Date(now.getTime() + LOGIN_CHALLENGE_TTL_SECONDS * 1000);
+        await this.secondFactor.challenges.create(
           scope,
-          'IP',
-          context.ip,
-          this.credentialThrottle.maxAttemptsPerIp,
-          (reserved.ip ?? reserved.username).windowStartedAt,
+          {
+            id: this.ids.uuid(),
+            adminId: credentials.admin.id,
+            tokenHash: hashSessionToken(challengeToken),
+            credentialFingerprint: credentialFingerprint(rehashed ?? credentials.passwordHash),
+            issuedAt: now,
+            expiresAt: challengeExpiresAt,
+            ip: context.ip,
+            userAgent: context.userAgent,
+          },
           tx,
         );
+        /*
+         * The password reservation is GIVEN BACK, not cleared. Clearing would erase
+         * earlier second-factor failures, and somebody holding the password could then
+         * reset the guess counter for six digits by signing in again between guesses.
+         * Given back, a correct password costs nothing and every wrong CODE stays
+         * counted; the counter is cleared only when the second factor succeeds.
+         */
+        await this.throttle.releaseAttempt(
+          scope,
+          'USERNAME',
+          username,
+          this.credentialThrottle.maxAttemptsPerUsername,
+          reserved.username.windowStartedAt,
+          tx,
+        );
+        if (context.ip !== null) {
+          await this.throttle.releaseAttempt(
+            scope,
+            'IP',
+            context.ip,
+            this.credentialThrottle.maxAttemptsPerIp,
+            (reserved.ip ?? reserved.username).windowStartedAt,
+            tx,
+          );
+        }
+        await this.audit.record(
+          scope,
+          actorFor(actor, credentials.admin),
+          {
+            action: 'auth.login_challenge',
+            entityType: 'Admin',
+            entityId: credentials.admin.id,
+            before: null,
+            after: { challengeExpiresAt: challengeExpiresAt.toISOString() },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return { outcome: 'CHALLENGE' as const, challengeToken, challengeExpiresAt };
       }
-      await this.admins.recordLogin(scope, credentials.admin.id, now, tx);
 
-      // The SUCCESS audit commits with the session too.
-      //
-      // The previous round moved the throttle and `recordLogin` in and stopped
-      // there, which left the most important row of the three outside: a login
-      // whose audit insert failed committed a live session and recorded no
-      // trace of it. "The database is the log" is not a property the happy path
-      // can hold on its own.
-      const identifiedActor = actorFor(actor, credentials.admin);
-      await this.audit.record(
+      const issuedSession = await this.issueSessionInTransaction(
         scope,
-        identifiedActor,
-        {
-          action: 'auth.login',
-          entityType: 'Admin',
-          entityId: credentials.admin.id,
-          before: null,
-          // No token, no hash, no password material of any kind.
-          after: { sessionId, expiresAt: expiresAt.toISOString() },
-          result: 'SUCCESS',
-        },
+        actor,
+        credentials.admin,
+        username,
+        context,
+        reserved,
+        { sessionId, token, now, expiresAt, method: null },
         tx,
       );
-
-      // Read on the locked connection, and SEQUENTIALLY: a transaction is one
-      // connection, so issuing both at once on `Promise.all` would interleave
-      // two statements on it. Read here rather than after the commit because
-      // the response cannot be built without them — a failure out there
-      // returned an error to a caller whose session had already been created,
-      // and who therefore never received the token to a session that exists.
-      const permissions = await this.displayPermissions(credentials.admin, tx);
-      const roleKeys = await this.admins.roleKeysFor(scope, credentials.admin.id, tx);
-
-      return { outcome: 'ISSUED' as const, permissions, roleKeys };
+      return { outcome: 'ISSUED' as const, ...issuedSession };
     });
 
     if (issued === 'TENANT_STOPPED' || issued === 'CREDENTIAL_STALE') {
@@ -454,6 +526,16 @@ export class AuthenticationService {
       return await this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
 
+    if (issued.outcome === 'CHALLENGE') {
+      // The reservations went back inside the transaction that issued the challenge.
+      verdict();
+      return {
+        kind: 'SECOND_FACTOR_REQUIRED',
+        challengeToken: issued.challengeToken,
+        expiresAt: issued.challengeExpiresAt,
+      };
+    }
+
     // Issued: the transaction cleared the username counter and returned the IP
     // reservation as part of the same commit, so there is nothing left to
     // release and nothing after this point can fail.
@@ -462,20 +544,318 @@ export class AuthenticationService {
     const { permissions, roleKeys } = issued;
 
     return {
-      token,
-      admin: credentials.admin,
-      session: {
+      kind: 'SIGNED_IN',
+      result: sessionResult(token, credentials.admin, scope, sessionId, now, expiresAt, {
+        permissions,
+        roleKeys,
+      }),
+    };
+  }
+
+  /**
+   * Inside the transaction that mints a session: the row, the throttle bookkeeping, the
+   * last-login stamp, the SUCCESS audit and the display permissions — all committing
+   * together. Shared by the password-only sign-in and the second-factor completion, so
+   * there is one definition of what "signed in" writes.
+   */
+  private async issueSessionInTransaction(
+    scope: TenantContext,
+    actor: ActorContext,
+    admin: Admin,
+    username: string,
+    context: LoginContext,
+    reserved: Reservation,
+    session: {
+      readonly sessionId: AdminSessionId;
+      readonly token: string;
+      readonly now: Date;
+      readonly expiresAt: Date;
+      /** The second factor that completed this sign-in, or null for a password-only one. */
+      readonly method: SecondFactorMethod | null;
+    },
+    tx: TransactionScope,
+  ): Promise<{ permissions: readonly PermissionKey[]; roleKeys: string[] }> {
+    const { sessionId, token, now, expiresAt } = session;
+    const credentials = { admin };
+    await this.sessions.create(
+      scope,
+      {
         id: sessionId,
-        tenantId: scope.tenantId,
         adminId: credentials.admin.id,
+        tokenHash: hashSessionToken(token),
         issuedAt: now,
         expiresAt,
-        lastSeenAt: now,
-        revokedAt: null,
+        ip: context.ip,
+        userAgent: context.userAgent,
       },
-      permissions,
-      roleKeys,
+      tx,
+    );
+    // The bookkeeping commits WITH the session, not after it.
+    //
+    // Done afterwards, a transient failure in any of these left a live
+    // session persisted while the caller got an error and never received the
+    // token — and the throttle half made that user-visible rather than merely
+    // untidy: at a limit of one, a failed `clear` leaves the successful
+    // login's own lock standing, discards the only copy of the token, and
+    // refuses the retry until the lockout expires.
+    //
+    // The USERNAME counter is erased — the account holder proved who they
+    // are. The IP reservation is merely GIVEN BACK: clearing it would let
+    // anyone with one valid account spray guesses across administrator names
+    // and reset the breadth limiter by periodically signing into their own.
+    await this.throttle.clear(scope, 'USERNAME', username, tx);
+    if (context.ip !== null) {
+      await this.throttle.releaseAttempt(
+        scope,
+        'IP',
+        context.ip,
+        this.credentialThrottle.maxAttemptsPerIp,
+        (reserved.ip ?? reserved.username).windowStartedAt,
+        tx,
+      );
+    }
+    await this.admins.recordLogin(scope, credentials.admin.id, now, tx);
+
+    // The SUCCESS audit commits with the session too.
+    //
+    // The previous round moved the throttle and `recordLogin` in and stopped
+    // there, which left the most important row of the three outside: a login
+    // whose audit insert failed committed a live session and recorded no
+    // trace of it. "The database is the log" is not a property the happy path
+    // can hold on its own.
+    const identifiedActor = actorFor(actor, credentials.admin);
+    await this.audit.record(
+      scope,
+      identifiedActor,
+      {
+        action: 'auth.login',
+        entityType: 'Admin',
+        entityId: credentials.admin.id,
+        before: null,
+        // No token, no hash, no password material of any kind.
+        after: {
+          sessionId,
+          expiresAt: expiresAt.toISOString(),
+          ...(session.method === null ? {} : { method: session.method }),
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+
+    // Read on the locked connection, and SEQUENTIALLY: a transaction is one
+    // connection, so issuing both at once on `Promise.all` would interleave
+    // two statements on it. Read here rather than after the commit because
+    // the response cannot be built without them — a failure out there
+    // returned an error to a caller whose session had already been created,
+    // and who therefore never received the token to a session that exists.
+    const permissions = await this.displayPermissions(credentials.admin, tx);
+    const roleKeys = await this.admins.roleKeysFor(scope, credentials.admin.id, tx);
+
+    return { permissions, roleKeys };
+  }
+
+  /**
+   * The second step of a sign-in whose account has an active second factor (Phase D2).
+   *
+   * `challengeToken` is the value the first step set in the challenge cookie. The proof
+   * is a current TOTP code or an unused backup code. Every way this can fail is answered
+   * with one of two codes: `auth.second_factor_invalid` (try another code) and
+   * `auth.challenge_invalid` (start again from the password). Which of the many reasons
+   * it actually was is in the audit row, never the response.
+   *
+   * ## Throttling
+   *
+   * Each guess is RESERVED on the same credential throttle a password guess is — same
+   * subjects, same counters — before it is checked, exactly as `signIn` reserves before
+   * the KDF. A wrong code keeps its reservation; success clears the username counter and
+   * gives back the IP reservation, in the transaction that mints the session. On top of
+   * that, one challenge allows `LOGIN_CHALLENGE_MAX_ATTEMPTS` guesses, counted in a
+   * write that commits on its own so a failed guess cannot roll its own count back.
+   */
+  async completeSecondFactor(
+    challengeToken: string,
+    actor: ActorContext,
+    input: unknown,
+    context: LoginContext,
+  ): Promise<LoginResult> {
+    const proof = secondFactorProofSchema.parse(input);
+    const method: SecondFactorMethod = proof.code !== undefined ? 'TOTP' : 'BACKUP_CODE';
+    const now = this.clock.now();
+    const challenge = await this.secondFactor.challenges.findByTokenHash(
+      hashSessionToken(challengeToken),
+    );
+    // Unknown token: there is no tenant to audit in, and nothing to say.
+    if (challenge === null) throw challengeInvalid();
+
+    const scope: TenantContext = {
+      tenantId: challenge.tenantId as TenantId,
+      botInstanceId: null,
     };
+    const admin = await this.admins.findById(scope, challenge.adminId);
+    if (
+      admin === null ||
+      admin.status !== 'ACTIVE' ||
+      challenge.consumedAt !== null ||
+      challenge.expiresAt.getTime() <= now.getTime() ||
+      challenge.attempts >= LOGIN_CHALLENGE_MAX_ATTEMPTS
+    ) {
+      await this.recordSecondFactorDenial(
+        scope,
+        actor,
+        challenge.adminId,
+        method,
+        'CHALLENGE_INVALID',
+      );
+      throw challengeInvalid();
+    }
+    const username = admin.username;
+
+    // Counted on the credential throttle BEFORE the code is checked.
+    let reserved: Reservation;
+    try {
+      reserved = await this.credentialThrottle.reserve(scope, actor, username, context.ip);
+    } catch (error) {
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) {
+        await this.recordSecondFactorDenial(scope, actor, admin.id, method, 'THROTTLED');
+      }
+      throw error;
+    }
+
+    let judged = false;
+    try {
+      // The per-challenge bound, in its own commit. Past the bound the challenge is
+      // spent: the reservation goes back (the code was never checked) and the caller
+      // starts again from the password.
+      const attempts = await this.secondFactor.challenges.countAttempt(scope, challenge.id);
+      if (attempts > LOGIN_CHALLENGE_MAX_ATTEMPTS) {
+        await this.credentialThrottle.release(scope, username, context.ip, reserved);
+        judged = true;
+        await this.recordSecondFactorDenial(scope, actor, admin.id, method, 'CHALLENGE_INVALID');
+        throw challengeInvalid();
+      }
+
+      const token = generateSessionToken();
+      const sessionId = this.ids.uuid() as AdminSessionId;
+      const expiresAt = new Date(now.getTime() + this.sessionTtlSeconds * 1000);
+
+      const outcome = await this.uow.run(scope, async (tx) => {
+        if ((await this.admins.lockTenantForRead(scope, tx)) !== 'ACTIVE') {
+          return { kind: 'STALE' as const, reason: 'TENANT_INACTIVE' as const };
+        }
+        // The password the first step verified must still be the password. A rotation,
+        // a reset or a disable between the two steps voids the challenge, exactly as it
+        // voids a login in flight.
+        const passwordHash = await this.admins.lockActiveCredential(scope, admin.id, tx);
+        if (
+          passwordHash === null ||
+          credentialFingerprint(passwordHash) !== challenge.credentialFingerprint
+        ) {
+          return { kind: 'STALE' as const, reason: 'CHALLENGE_INVALID' as const };
+        }
+        const locked = await this.secondFactor.challenges.lock(scope, challenge.id, tx);
+        if (
+          locked === null ||
+          locked.consumedAt !== null ||
+          locked.expiresAt.getTime() <= now.getTime()
+        ) {
+          return { kind: 'STALE' as const, reason: 'CHALLENGE_INVALID' as const };
+        }
+        // The factor can have been removed between the steps (an operator reset, the
+        // recovery CLI). There is then nothing to check a code against, and the right
+        // answer is to start again — which signs in with the password alone.
+        const factor = await this.secondFactor.factors.lockFactor(scope, admin.id, tx);
+        if (factor === null || factor.state !== 'ACTIVE') {
+          return { kind: 'STALE' as const, reason: 'CHALLENGE_INVALID' as const };
+        }
+
+        const verdict = await verifySecondFactorProof(
+          this.secondFactor,
+          scope,
+          admin.id,
+          factor,
+          proof,
+          now,
+          tx,
+        );
+        if (!verdict.accepted) return { kind: 'REJECTED' as const, verdict };
+
+        if (!(await this.secondFactor.challenges.consume(scope, challenge.id, now, tx))) {
+          // Unreachable under the row lock above; kept as the single-use guarantee.
+          throw challengeInvalid();
+        }
+        const display = await this.issueSessionInTransaction(
+          scope,
+          actor,
+          admin,
+          username,
+          {
+            ip: context.ip,
+            userAgent: context.userAgent,
+          },
+          reserved,
+          { sessionId, token, now, expiresAt, method: verdict.method },
+          tx,
+        );
+        return { kind: 'ISSUED' as const, display };
+      });
+
+      if (outcome.kind === 'STALE') {
+        // Not a guess at the code: the reservation goes back.
+        await this.credentialThrottle.release(scope, username, context.ip, reserved);
+        judged = true;
+        await this.recordSecondFactorDenial(scope, actor, admin.id, method, outcome.reason);
+        throw challengeInvalid();
+      }
+      if (outcome.kind === 'REJECTED') {
+        // A judged wrong code: the reservation STAYS — that is the guess being counted.
+        judged = true;
+        await this.recordSecondFactorDenial(
+          scope,
+          actor,
+          admin.id,
+          method,
+          'BAD_SECOND_FACTOR',
+          outcome.verdict,
+          attempts,
+        );
+        throw errors.unauthenticated(
+          IDENTITY_ERROR_CODES.AUTH_SECOND_FACTOR_INVALID,
+          'The code is not valid.',
+        );
+      }
+      judged = true;
+      return sessionResult(token, admin, scope, sessionId, now, expiresAt, outcome.display);
+    } catch (error) {
+      // Anything that failed before a verdict judged nothing, so it is not counted.
+      if (!judged) await this.credentialThrottle.release(scope, username, context.ip, reserved);
+      throw error;
+    }
+  }
+
+  private async recordSecondFactorDenial(
+    scope: TenantContext,
+    actor: ActorContext,
+    adminId: AdminId,
+    method: SecondFactorMethod,
+    reason: LoginFailureReason,
+    verdict?: ProofVerdict,
+    attempts?: number,
+  ): Promise<void> {
+    await this.audit.record(scope, actor, {
+      action: 'auth.second_factor',
+      entityType: 'Admin',
+      entityId: adminId,
+      before: null,
+      // The method and WHY — never the code, and never a hint of how close it was.
+      after: {
+        reason,
+        method,
+        ...(verdict !== undefined && !verdict.accepted ? { detail: verdict.reason } : {}),
+        ...(attempts === undefined ? {} : { challengeAttempts: attempts }),
+      },
+      result: 'DENIED',
+    });
   }
 
   /**
@@ -653,12 +1033,19 @@ export class AuthenticationService {
     username: string,
     reserved: Reservation,
     reason: LoginFailureReason,
+    /**
+     * The administrator the attempt was against, when one exists — so a wrong password
+     * appears in that account's own security history (Phase D2). Never set for an
+     * unknown username: there is no account to attach it to, and the caller is told
+     * nothing either way.
+     */
+    adminId: AdminId | null = null,
   ): Promise<never> {
     const usernameState = reserved.username;
     await this.audit.record(scope, actor, {
       action: 'auth.login',
       entityType: 'Admin',
-      entityId: null,
+      entityId: adminId,
       before: null,
       // The submitted username is recorded; the submitted password never is,
       // not even hashed and not even its length.
@@ -671,6 +1058,40 @@ export class AuthenticationService {
       'The username or password is incorrect.',
     );
   }
+}
+
+function challengeInvalid() {
+  return errors.unauthenticated(
+    IDENTITY_ERROR_CODES.AUTH_CHALLENGE_INVALID,
+    'The sign-in has expired. Enter your password again.',
+  );
+}
+
+/** The `LoginResult` a freshly minted session is reported as. */
+function sessionResult(
+  token: string,
+  admin: Admin,
+  scope: TenantContext,
+  sessionId: AdminSessionId,
+  now: Date,
+  expiresAt: Date,
+  display: { permissions: readonly PermissionKey[]; roleKeys: readonly string[] },
+): LoginResult {
+  return {
+    token,
+    admin,
+    session: {
+      id: sessionId,
+      tenantId: scope.tenantId,
+      adminId: admin.id,
+      issuedAt: now,
+      expiresAt,
+      lastSeenAt: now,
+      revokedAt: null,
+    },
+    permissions: display.permissions,
+    roleKeys: display.roleKeys,
+  };
 }
 
 /** Re-labels an actor once the login has identified who they are. */

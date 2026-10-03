@@ -48,6 +48,11 @@ export class CredentialThrottle {
     private readonly uow: UnitOfWork<unknown>,
   ) {}
 
+  /** The username limit, for a release that happens inside a transaction (Phase D2). */
+  get maxAttemptsPerUsername(): number {
+    return this.policy.maxAttemptsPerUsername;
+  }
+
   /** The IP limit, for the one release that happens inside a transaction. */
   get maxAttemptsPerIp(): number {
     return this.policy.maxAttemptsPerIp;

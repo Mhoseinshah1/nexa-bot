@@ -15,6 +15,7 @@ import {
   setAdminTelegramBindingRequestSchema,
   resetAdminPasswordRequestSchema,
   revokeAdminSessionsRequestSchema,
+  resetAdminSecondFactorRequestSchema,
   type AdminSessionSummary,
   type ActorContext,
   type Admin,
@@ -45,7 +46,7 @@ import {
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { DrizzleRoleRepository } from '../infrastructure/drizzle-role.repository.js';
-import type { AdminRepository, SessionRepository } from './ports.js';
+import type { AdminRepository, SecondFactorRepository, SessionRepository } from './ports.js';
 import { assertNotSelf, assertOwnerSurvives, diffRoles } from '../domain/admin-protection.js';
 import type { CredentialThrottle, Reservation } from './credential-throttle.js';
 
@@ -118,6 +119,8 @@ export class AdminManagementService {
      * person pressing a button twice, which the locked delta already answers.
      */
     private readonly idempotency: IdempotencyStore,
+    /** Phase D2: an operator removing another administrator's second factor. */
+    private readonly factors: SecondFactorRepository,
   ) {}
 
   async list(
@@ -1075,6 +1078,93 @@ export class AdminManagementService {
         });
 
         return { admin: target, roleKeys: targetRoleKeys, sessionsRevoked };
+      },
+    );
+  }
+
+  /**
+   * Removes ANOTHER administrator's second factor (Phase D2) — the in-product answer to
+   * "they lost their phone and their backup codes".
+   *
+   * Bound exactly as `resetPassword` is, for the same reason: removing somebody's second
+   * factor is half of taking their account. `admins.edit`; never oneself (the holder
+   * turns their own factor off with password + code); no more privilege than the actor
+   * holds; and an owner target needs `admins.permissions.edit` as well. Every session of
+   * the target ends, so whoever was signed in signs in again under the new state.
+   *
+   * It does NOT touch the password. The target still needs it to sign in, which is what
+   * keeps this from being a way into an account rather than a way back.
+   */
+  async resetSecondFactor(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    input: unknown,
+  ): Promise<{
+    admin: Admin;
+    roleKeys: string[];
+    hadSecondFactor: boolean;
+    sessionsRevoked: number;
+  }> {
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.totp_reset',
+      entityId: targetId,
+    });
+    const command = resetAdminSecondFactorRequestSchema.parse(input);
+    assertNotSelf(adminIdOf(actor), targetId);
+
+    return this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.totp_reset', entityId: targetId },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        const now = this.clock.now();
+        await this.guard.check(scope, actor, 'admins.edit', tx);
+
+        const target = await this.requireAdmin(scope, targetId, tx);
+        assertNotSelf(adminIdOf(actor), target.id);
+        const targetRoleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
+        if (targetRoleKeys.includes(OWNER_ROLE_KEY)) {
+          await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        }
+        await this.assertRestoresNoMorePrivilegeThanHeld(scope, actor, target.id, tx);
+
+        const hadSecondFactor = await this.factors.deleteFactor(scope, target.id, tx);
+        const sessionsRevoked = await this.sessions.revokeAllForAdmin(
+          scope,
+          target.id,
+          now,
+          'second_factor_reset',
+          tx,
+        );
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.totp_reset',
+            entityType: 'Admin',
+            entityId: target.id,
+            // `endedSignIns`, never a key containing `session`: see `resetPassword`.
+            before: { hadSecondFactor, liveSignIns: sessionsRevoked },
+            after: { state: 'DISABLED', endedSignIns: sessionsRevoked, via: 'OPERATOR' },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.opsLog.record(
+          scope,
+          {
+            code: 'admin.second_factor_reset' satisfies ManagementAdminEventCode,
+            severity: 'WARN',
+            message: `two-step sign-in of administrator ${target.username} was reset by an operator`,
+            context: { adminId: target.id, hadSecondFactor, endedSignIns: sessionsRevoked },
+          },
+          tx,
+        );
+        return { admin: target, roleKeys: targetRoleKeys, hadSecondFactor, sessionsRevoked };
       },
     );
   }

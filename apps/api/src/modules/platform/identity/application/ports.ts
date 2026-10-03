@@ -151,6 +151,16 @@ export interface AdminRepository {
   ): Promise<void>;
   recordLogin(scope: ScopeContext, id: AdminId, now: Date, tx?: unknown): Promise<void>;
   /**
+   * Locks an ACTIVE administrator's row and returns its current password hash, or null
+   * when the administrator is gone or not active (Phase D2).
+   *
+   * The second factor's writes — completing a login challenge, enrolling, activating,
+   * disabling — take this lock so they serialise against a password rotation and a
+   * login on the same account: a challenge minted from a password that was rotated
+   * since is refused, and a factor activated while a login runs is seen by it.
+   */
+  lockActiveCredential(scope: ScopeContext, id: AdminId, tx: unknown): Promise<string | null>;
+  /**
    * Locks the tenant row for the duration of the transaction.
    *
    * Owner protection counts rows, and a count is only a decision if nothing can
@@ -254,6 +264,29 @@ export interface SessionRepository {
     }[]
   >;
   revoke(id: AdminSessionId, now: Date, reason: string, tx?: unknown): Promise<void>;
+  /**
+   * Revokes ONE live session, only if it belongs to this administrator (Phase D2).
+   * Returns 'REVOKED', 'ALREADY_ENDED' for one of theirs that is revoked or expired,
+   * or 'NOT_FOUND' — which is also the answer for another administrator's session, so
+   * an id is not an oracle for whose it is.
+   */
+  revokeOwn(
+    scope: ScopeContext,
+    adminId: AdminId,
+    id: AdminSessionId,
+    now: Date,
+    reason: string,
+    tx?: unknown,
+  ): Promise<'REVOKED' | 'ALREADY_ENDED' | 'NOT_FOUND'>;
+  /** Every live session of this administrator except `keep`. Returns how many ended. */
+  revokeOthersForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    keep: AdminSessionId,
+    now: Date,
+    reason: string,
+    tx?: unknown,
+  ): Promise<number>;
   revokeAllForAdmin(
     scope: ScopeContext,
     adminId: AdminId,
@@ -379,4 +412,154 @@ export interface BootstrapRecordReader {
    * bootstrap" for every installation. The type refuses the call instead.
    */
   wasBootstrapped(scope: TenantContext): Promise<boolean>;
+}
+
+// ---------------------------------------------------------------------------
+// Phase D2 — the second factor
+// ---------------------------------------------------------------------------
+
+export type StoredTotpState = 'PENDING' | 'ACTIVE';
+
+/** A factor row. The ciphertext leaves the repository only to be decrypted. */
+export interface StoredTotpFactor {
+  readonly id: string;
+  readonly state: StoredTotpState;
+  readonly ciphertext: string;
+  readonly keyId: string;
+  readonly lastUsedStep: number | null;
+  readonly createdAt: Date;
+  readonly activatedAt: Date | null;
+}
+
+export interface SecondFactorRepository {
+  /** The factor, unlocked. For reads that decide nothing. */
+  findFactor(scope: ScopeContext, adminId: AdminId, tx?: unknown): Promise<StoredTotpFactor | null>;
+  /** The factor, `FOR UPDATE`, for every write that depends on it. */
+  lockFactor(scope: ScopeContext, adminId: AdminId, tx: unknown): Promise<StoredTotpFactor | null>;
+  /** Deletes any factor of this administrator, then inserts this PENDING one. */
+  replaceWithPending(
+    scope: ScopeContext,
+    input: {
+      readonly id: string;
+      readonly adminId: AdminId;
+      readonly ciphertext: string;
+      readonly keyId: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<void>;
+  /** PENDING → ACTIVE, consuming `step`. False when the row was not PENDING. */
+  activate(
+    scope: ScopeContext,
+    factorId: string,
+    step: number,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  /**
+   * Records `step` as used, ONLY if it is after the last one used. The replay defence:
+   * false means another request used this step (or a later one) first.
+   */
+  consumeStep(
+    scope: ScopeContext,
+    factorId: string,
+    step: number,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  /** Deletes the factor and every backup code. Returns whether a factor existed. */
+  deleteFactor(scope: ScopeContext, adminId: AdminId, tx: unknown): Promise<boolean>;
+  /** Replaces the whole backup-code generation with these hashes. */
+  replaceBackupCodes(
+    scope: ScopeContext,
+    adminId: AdminId,
+    codes: readonly { readonly id: string; readonly codeHash: string }[],
+    now: Date,
+    tx: unknown,
+  ): Promise<void>;
+  /** Marks one unused code used. False when no unused code has that hash. */
+  consumeBackupCode(
+    scope: ScopeContext,
+    adminId: AdminId,
+    codeHash: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  backupCodeSummary(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<{ readonly remaining: number; readonly generatedAt: Date | null }>;
+}
+
+export interface StoredLoginChallenge {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly adminId: AdminId;
+  readonly credentialFingerprint: string;
+  readonly expiresAt: Date;
+  readonly attempts: number;
+  readonly consumedAt: Date | null;
+  readonly ip: string | null;
+  readonly userAgent: string | null;
+}
+
+export interface LoginChallengeRepository {
+  create(
+    scope: ScopeContext,
+    input: {
+      readonly id: string;
+      readonly adminId: AdminId;
+      readonly tokenHash: string;
+      readonly credentialFingerprint: string;
+      readonly issuedAt: Date;
+      readonly expiresAt: Date;
+      readonly ip: string | null;
+      readonly userAgent: string | null;
+    },
+    tx?: unknown,
+  ): Promise<void>;
+  /**
+   * Unscoped, for the reason `SessionRepository.findByTokenHash` is: the challenge is
+   * presented before any tenant is known, and its tenant is the result of this lookup.
+   * The key is the hash of 256 random bits.
+   */
+  findByTokenHash(tokenHash: string): Promise<StoredLoginChallenge | null>;
+  /** The challenge row, `FOR UPDATE`. */
+  lock(scope: ScopeContext, id: string, tx: unknown): Promise<StoredLoginChallenge | null>;
+  /**
+   * Counts one guess, in its OWN short transaction, so the count survives the failure it
+   * describes. Returns the count after this guess.
+   */
+  countAttempt(scope: ScopeContext, id: string): Promise<number>;
+  /** Single use: false when it was already consumed. */
+  consume(scope: ScopeContext, id: string, now: Date, tx: unknown): Promise<boolean>;
+  /** Retention. Bounded per call. */
+  purgeExpiredBefore(cutoff: Date, limit: number): Promise<number>;
+}
+
+/** One row of an administrator's own security history, as the audit log holds it. */
+export interface SecurityEventRecord {
+  readonly id: string;
+  readonly action: string;
+  readonly result: string;
+  readonly occurredAt: Date;
+  readonly actorId: string | null;
+  readonly actorLabel: string | null;
+  readonly ip: string | null;
+  readonly userAgent: string | null;
+  readonly after: Readonly<Record<string, unknown>> | null;
+}
+
+export interface SecurityEventReader {
+  /**
+   * The audit rows recorded against THIS administrator (`entity_type = 'Admin'`,
+   * `entity_id = adminId`) under the given actions, newest first, bounded.
+   */
+  forAdmin(
+    scope: TenantContext,
+    adminId: AdminId,
+    actions: readonly string[],
+    limit: number,
+  ): Promise<readonly SecurityEventRecord[]>;
 }

@@ -113,6 +113,11 @@ botctl — operate a Nexa installation
   botctl secrets shutdown-check            whether v1 can be switched off yet
   botctl secrets disable-v1                stop reading v1 ciphertext, once the check passes
 
+  botctl admin check-2fa --username NAME   whether an administrator has two-step sign-in on
+  botctl admin reset-2fa --username NAME --reason TEXT
+                                           owner recovery: remove an administrator's two-step
+                                           sign-in and end their sessions (audited)
+
 Update, rollback and `secrets rewrap` take an exclusive lock. Rollback changes the APPLICATION
 only: it never restores a database backup, because the backup predates the
 migration and restoring it would discard every write made since.
@@ -127,6 +132,10 @@ resumes from the encrypted token the install already holds and retries the
 registration with Telegram — which is the command to run after fixing DNS or
 waiting for a certificate. Changing the bot itself is a separate, deliberate act
 and is not this command.
+
+`admin reset-2fa` is the way back for an administrator who lost both their
+authenticator and their backup codes. It never sets a password and never signs
+anybody in: they still need their password, and enrol a new device afterwards.
 
 `secrets migrate-config` and `secrets disable-v1` are the only commands that
 edit /etc/nexa/nexa.env. Neither generates, changes or prints key material.
@@ -2036,6 +2045,33 @@ cmd_telegram() {
   esac
 }
 
+# Owner recovery for two-step sign-in (Phase D2, docs/deployment.md "Owner
+# recovery: two-step sign-in"). The CLI validates its own arguments strictly and
+# never echoes one back; the username and the reason are ordinary text, and
+# nothing here reads or prints a secret.
+cmd_admin() {
+  require_installed
+  local action="${1:-}"
+  shift || true
+  case "$action" in
+    check-2fa)
+      # Read-only; the one word goes to stdout.
+      nexa_compose run --rm --no-deps -T --entrypoint node api \
+        dist/admin-2fa-reset.cli.js --check "$@"
+      ;;
+    reset-2fa)
+      # A write, so it takes the lock an update takes: never interleaved with a
+      # migration.
+      nexa_acquire_lock 0
+      nexa_compose run --rm --no-deps -T --entrypoint node api \
+        dist/admin-2fa-reset.cli.js "$@"
+      ;;
+    *)
+      nexa_die "usage: botctl admin <check-2fa|reset-2fa> --username NAME [--reason TEXT] [--tenant SLUG]"
+      ;;
+  esac
+}
+
 main() {
   local command="${1:-}"
   shift || true
@@ -2047,6 +2083,7 @@ main() {
     rollback) cmd_rollback "$@" ;;
     secrets) cmd_secrets "$@" ;;
     telegram) cmd_telegram "$@" ;;
+    admin) cmd_admin "$@" ;;
     logs) cmd_logs "$@" ;;
     restart) cmd_restart "$@" ;;
     -h | --help | help | '') usage ;;

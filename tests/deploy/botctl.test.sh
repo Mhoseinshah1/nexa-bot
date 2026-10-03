@@ -2773,6 +2773,28 @@ for action in status rewrap retire-check shutdown-check migrate-config disable-v
   assert_contains "the usage does not name ${action}" "$BOTCTL_OUTPUT" "$action"
 done
 
+test_case "botctl admin reaches the 2FA recovery CLI with the operator's arguments"
+# Phase D2: owner recovery. check-2fa is read-only; reset-2fa writes and so
+# runs the same CLI without --check. Both forward the arguments unchanged.
+reset_docker_log
+run_botctl admin check-2fa --username owner
+assert_equals "botctl admin check-2fa failed" 0 "$BOTCTL_STATUS"
+assert_contains "check-2fa did not reach the CLI in read-only mode" \
+  "$(docker_log)" "dist/admin-2fa-reset.cli.js --check --username owner"
+reset_docker_log
+run_botctl admin reset-2fa --username owner --reason lost-phone
+assert_equals "botctl admin reset-2fa failed" 0 "$BOTCTL_STATUS"
+assert_contains "reset-2fa did not reach the CLI" \
+  "$(docker_log)" "dist/admin-2fa-reset.cli.js --username owner --reason lost-phone"
+assert_not_contains "reset-2fa ran in read-only mode" "$(docker_log)" "--check"
+
+test_case "an unknown admin subcommand is refused with the usage"
+run_botctl admin nonsense
+assert_fails "an unknown admin subcommand was accepted" test "$BOTCTL_STATUS" -eq 0
+for action in check-2fa reset-2fa; do
+  assert_contains "the usage does not name ${action}" "$BOTCTL_OUTPUT" "$action"
+done
+
 test_case "an update does not touch the secret configuration"
 # /etc/nexa survives an update by design — the layout table says so, and the
 # key that decrypts every stored credential is in there. This is the assertion

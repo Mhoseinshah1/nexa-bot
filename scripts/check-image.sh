@@ -32,6 +32,7 @@ ENTRYPOINTS=(
   dist/infrastructure/persistence/seed.js
   dist/bootstrap-owner.cli.js
   dist/provision-installation.cli.js
+  dist/admin-2fa-reset.cli.js
 )
 missing=""
 for entry in "${ENTRYPOINTS[@]}"; do
@@ -54,6 +55,7 @@ run node --input-type=module -e "
   const seed = await import('/app/dist/infrastructure/persistence/seed.js');
   const provision = await import('/app/dist/provision-installation.cli.js');
   await import('/app/dist/bootstrap-owner.cli.js');
+  await import('/app/dist/admin-2fa-reset.cli.js');
   const api = await import('/app/dist/bootstrap.js');
   const worker = await import('/app/dist/container.js');
 

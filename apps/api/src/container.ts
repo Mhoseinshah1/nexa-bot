@@ -145,6 +145,12 @@ import { DrizzleMainMenuBuilderRepository } from './modules/control/bot-menu-bui
 import { CommandMenu } from './modules/platform/tenancy/application/command-menu.js';
 import { DrizzleBotCommandSyncRepository } from './modules/platform/tenancy/infrastructure/drizzle-bot-command-sync.repository.js';
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
+import { AccountSecurityService } from './modules/platform/identity/application/account-security.service.js';
+import {
+  DrizzleLoginChallengeRepository,
+  DrizzleSecondFactorRepository,
+  DrizzleSecurityEventReader,
+} from './modules/platform/identity/infrastructure/drizzle-second-factor.repository.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
 import {
@@ -722,6 +728,10 @@ export interface Container {
   readonly loginThrottle: DrizzleLoginThrottleRepository;
   readonly auth: AuthenticationService;
   readonly adminManagement: AdminManagementService;
+  /** Phase D2: an administrator's own second factor, sessions and history; owner recovery. */
+  readonly accountSecurity: AccountSecurityService;
+  readonly secondFactors: DrizzleSecondFactorRepository;
+  readonly loginChallenges: DrizzleLoginChallengeRepository;
   /**
    * The Telegram admin seam (Phase 5T): a binding resolved to the SAME administrator
    * identity the Web Admin authenticates, with no second role model behind it.
@@ -1203,6 +1213,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const roles = new DrizzleRoleRepository(database.db, ids);
   const sessions = new DrizzleSessionRepository(database.db);
   const loginThrottle = new DrizzleLoginThrottleRepository(database.db);
+  const secondFactors = new DrizzleSecondFactorRepository(database.db);
+  const loginChallenges = new DrizzleLoginChallengeRepository(database.db);
 
   // The real resolver replaces Phase 0's placeholder, which granted nothing
   // because there were no admins. `SYSTEM_JOB` still holds only its explicit
@@ -1241,6 +1253,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     credentialThrottle,
     tenants,
     guard,
+    { factors: secondFactors, challenges: loginChallenges, cipher },
   );
 
   const adminManagement = new AdminManagementService(
@@ -1257,7 +1270,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     credentialThrottle,
     idempotency,
+    secondFactors,
   );
+
+  const accountSecurity = new AccountSecurityService({
+    uow,
+    admins,
+    sessions,
+    factors: secondFactors,
+    events: new DrizzleSecurityEventReader(database.db),
+    cipher,
+    // The same dependency-free encoder the subscription QR uses; no second QR path.
+    qr: new PngQrCodeEncoder(),
+    audit,
+    opsLog,
+    clock,
+    ids,
+    throttle: credentialThrottle,
+    verifyOwnPassword: (scope, actor, password, context, action) =>
+      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+  });
 
   /*
    * The Telegram admin seam (Phase 5T).
@@ -1493,11 +1525,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const sessionSweeper = new RetentionSweeper(
     {
       name: 'admin-sessions',
-      purge: (now, limit) =>
-        sessions.purgeExpiredBefore(
-          new Date(now.getTime() - config.SESSION_RETENTION_SECONDS * 1000),
-          limit,
-        ),
+      // Phase D2: the pending sign-ins share this sweep and this cutoff. Sessions first;
+      // challenges take whatever is left of the batch, so the sum never exceeds `limit`
+      // and the sweeper's "a full batch means keep going" rule still holds.
+      purge: async (now, limit) => {
+        const cutoff = new Date(now.getTime() - config.SESSION_RETENTION_SECONDS * 1000);
+        const ended = await sessions.purgeExpiredBefore(cutoff, limit);
+        if (ended >= limit) return ended;
+        return ended + (await loginChallenges.purgeExpiredBefore(cutoff, limit - ended));
+      },
     },
     clock,
     logger,
@@ -5459,6 +5495,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     loginThrottle,
     auth,
     adminManagement,
+    accountSecurity,
+    secondFactors,
+    loginChallenges,
     telegramAdmins,
     bootstrapOwner,
     bootstrapBot,

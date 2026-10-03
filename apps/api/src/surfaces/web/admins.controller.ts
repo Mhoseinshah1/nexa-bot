@@ -8,6 +8,7 @@ import {
   type AdminSessionListResponse,
   type AdminSummary,
   type ResetAdminPasswordResponse,
+  type ResetAdminSecondFactorResponse,
   type RevokeAdminSessionsResponse,
   type RoleListResponse,
   type TenantContext,
@@ -138,6 +139,31 @@ export class AdminsController {
     const result = await this.container.adminManagement.resetPassword(scope, actor, targetId, body);
     return {
       admin: toSummary(result.admin, result.roleKeys),
+      sessionsRevoked: result.sessionsRevoked,
+    };
+  }
+
+  /**
+   * Removes another administrator's second factor (Phase D2): their lost phone, answered
+   * by an operator. Same bounds as the password reset; never a credential in the reply.
+   */
+  @Post('admins/:id/second-factor/reset')
+  async resetSecondFactor(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ResetAdminSecondFactorResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const targetId = uuidV7Schema.parse(id) as AdminId;
+    const result = await this.container.adminManagement.resetSecondFactor(
+      scope,
+      actor,
+      targetId,
+      body,
+    );
+    return {
+      admin: toSummary(result.admin, result.roleKeys),
+      hadSecondFactor: result.hadSecondFactor,
       sessionsRevoked: result.sessionsRevoked,
     };
   }

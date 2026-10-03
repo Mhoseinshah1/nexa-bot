@@ -1156,6 +1156,13 @@
       "when": 1791012268199,
       "tag": "0164_centralpay_gateway",
       "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "7",
+      "when": 1791019348303,
+      "tag": "0165_admin_security_2fa",
+      "breakpoints": true
     }
   ]
 }
