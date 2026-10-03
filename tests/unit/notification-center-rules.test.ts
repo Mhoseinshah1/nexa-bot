@@ -7,6 +7,7 @@ import {
   NOTIFICATION_RULES,
   PERMISSION_KEYS,
   ROLE_SEEDS,
+  inboxListQuerySchema,
   isNotification,
   notificationRuleFor,
   visibleNotificationCategories,
@@ -104,5 +105,17 @@ describe('the deep link', () => {
     for (const [target, entity] of Object.entries(NOTIFICATION_ENTITY_LINKS)) {
       expect(NOTIFICATION_ENTITY_LINKS[entity.fallback], target).toBeUndefined();
     }
+  });
+});
+
+describe('the inbox page cursor', () => {
+  const at = '2026-01-01T00:00:00.000Z';
+  const id = '01900000-0000-7000-8000-0000000000aa';
+
+  it('is both halves or neither: half a cursor is refused, never read as page 1', () => {
+    expect(inboxListQuerySchema.safeParse({}).success).toBe(true);
+    expect(inboxListQuerySchema.safeParse({ beforeAt: at, beforeId: id }).success).toBe(true);
+    expect(inboxListQuerySchema.safeParse({ beforeAt: at }).success).toBe(false);
+    expect(inboxListQuerySchema.safeParse({ beforeId: id }).success).toBe(false);
   });
 });

@@ -9,17 +9,23 @@ import {
   PLATFORM_ERROR_CODES,
   errors,
   isLinkableId,
+  isNexaError,
   notificationRuleFor,
   visibleNotificationCategories,
   type ActorContext,
   type Clock,
   type InboxLink,
   type NotificationCategory,
+  type OperationalEventRecorder,
   type OperationalSeverity,
+  type PermissionKey,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
-import type { PermissionGuard } from '../../access/application/permission-guard.js';
+import {
+  denialEventRecorded,
+  type PermissionGuard,
+} from '../../access/application/permission-guard.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
@@ -40,6 +46,8 @@ export interface InboxNotificationView extends InboxRow {
 export interface NotificationCenterDeps {
   readonly repository: NotificationInboxRepository;
   readonly guard: PermissionGuard;
+  /** Where a denial decided INSIDE a transaction is recorded, once that has unwound. */
+  readonly opsLog: OperationalEventRecorder;
   readonly scopeActivity: ScopeActivityReader;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
@@ -75,6 +83,12 @@ export function linkFor(code: string, context: Record<string, unknown> | null): 
  * denial), scoped (tenant and administrator), checked against scope activity inside their
  * transaction, and idempotent by construction: each is a SET of state, so a repeat or a
  * double click lands in the same place.
+ *
+ * The authority that counts is decided INSIDE the write's transaction, before it writes —
+ * the rule `runAuthorizedMutation` states and ADR-0014 records. The check before the
+ * transaction is an early rejection (and what turns an invisible id into a 404); a role
+ * revoked between it and the commit must still refuse the write, so `mark` charges the
+ * guard again on `tx` and `markAll` resolves its filter again on `tx`.
  */
 export class NotificationCenterService {
   constructor(private readonly deps: NotificationCenterDeps) {}
@@ -126,8 +140,11 @@ export class NotificationCenterService {
     if (filter === null || found === null || rule === null) throw this.notFound();
     // Charged through the guard, so a revoked key is refused (and the refusal recorded)
     // even when the page that offered the button was drawn before the revocation.
-    await this.deps.guard.check(scope, actor, NOTIFICATION_CATEGORY_PERMISSIONS[rule.category]);
-    await this.deps.uow.run(scope, async (tx) => {
+    const permission = NOTIFICATION_CATEGORY_PERMISSIONS[rule.category];
+    await this.deps.guard.check(scope, actor, permission);
+    await this.inTransaction(scope, actor, permission, async (tx) => {
+      // Authoritative: a revocation that committed after the early check refuses here.
+      await this.deps.guard.check(scope, actor, permission, tx);
       await this.assertScopeActive(scope, tx);
       await this.deps.repository.mark(
         scope,
@@ -153,12 +170,16 @@ export class NotificationCenterService {
     actor: ActorContext,
     input: { readonly category?: NotificationCategory },
   ): Promise<number> {
-    if (input.category !== undefined) {
-      await this.deps.guard.check(scope, actor, NOTIFICATION_CATEGORY_PERMISSIONS[input.category]);
-    }
-    const filter = await this.filterFor(scope, actor, input.category, true);
-    if (filter === null) return 0;
-    return this.deps.uow.run(scope, async (tx) => {
+    const permission =
+      input.category === undefined ? null : NOTIFICATION_CATEGORY_PERMISSIONS[input.category];
+    if (permission !== null) await this.deps.guard.check(scope, actor, permission);
+    if ((await this.filterFor(scope, actor, input.category, true)) === null) return 0;
+    return this.inTransaction(scope, actor, permission, async (tx) => {
+      // Authoritative: the permission AND the filter are decided again on `tx`, so a
+      // category revoked after the early read is neither charged nor marked.
+      if (permission !== null) await this.deps.guard.check(scope, actor, permission, tx);
+      const filter = await this.filterFor(scope, actor, input.category, true, tx);
+      if (filter === null) return 0;
       await this.assertScopeActive(scope, tx);
       return this.deps.repository.markAll(scope, filter, this.deps.clock.now(), tx);
     });
@@ -177,9 +198,10 @@ export class NotificationCenterService {
     actor: ActorContext,
     category: NotificationCategory | undefined,
     unreadOnly: boolean,
+    tx?: TransactionScope,
   ): Promise<InboxFilter | null> {
     const adminId = this.adminIdOf(actor);
-    const held = await this.deps.guard.permissionsOf(scope, actor);
+    const held = await this.deps.guard.permissionsOf(scope, actor, tx);
     const categories = visibleNotificationCategories(held).filter(
       (one) => category === undefined || one === category,
     );
@@ -191,6 +213,34 @@ export class NotificationCenterService {
       windowStart: new Date(this.deps.clock.now().getTime() - NOTIFICATION_WINDOW_DAYS * DAY_MS),
       unreadOnly,
     };
+  }
+
+  /**
+   * A write's unit of work, recording a denial decided inside it once it has unwound. The
+   * guard writes no event from inside a transaction (it would take a second pool
+   * connection while holding one), so the caller records it — here, and only when the
+   * guard says it could not. No audit row: a read mark is personal view state.
+   */
+  private async inTransaction<T>(
+    scope: TenantContext,
+    actor: ActorContext,
+    permission: PermissionKey | null,
+    fn: (tx: TransactionScope) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await this.deps.uow.run(scope, fn);
+    } catch (error) {
+      if (
+        isNexaError(error) &&
+        error.kind === 'PERMISSION_DENIED' &&
+        permission !== null &&
+        error.details['permission'] === permission &&
+        !denialEventRecorded(error)
+      ) {
+        await this.deps.opsLog.record(scope, this.deps.guard.denialEvent(actor, permission));
+      }
+      throw error;
+    }
   }
 
   /** A row with its category and link; empty when no rule claims it (defence in depth). */

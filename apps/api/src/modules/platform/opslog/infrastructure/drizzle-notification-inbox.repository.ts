@@ -148,13 +148,19 @@ export class DrizzleNotificationInboxRepository implements NotificationInboxRepo
   ): Promise<{ readonly count: number; readonly highest: OperationalSeverity | null }> {
     const tenantId = requireTenantId(scope);
     const unreadOnly = { ...filter, unreadOnly: true };
-    // Bounded by the cap: a count beyond it is "that many or more", never a full scan.
+    // The count is bounded by the cap: beyond it is "that many or more". The capped subset
+    // is the MOST SEVERE `cap` rows, never an arbitrary `cap`: the bell's tone is the
+    // highest severity among ALL the unread, and a CRITICAL that an unordered LIMIT left
+    // out would paint the bell a lower tone than the inbox holds. The range is the
+    // `(tenant_id, last_seen_at)` index's, bounded by the window, so the ordering is a
+    // top-N sort over rows that scan reads anyway.
+    const ranks = sql.param([...OPERATIONAL_SEVERITIES]);
     const result = await this.db.execute(sql`
-      SELECT count(*)::int AS n,
-             max(array_position(${sql.param([...OPERATIONAL_SEVERITIES])}::text[], e.severity)) AS rank
-        FROM (SELECT e.severity
+      SELECT count(*)::int AS n, max(e.rank) AS rank
+        FROM (SELECT array_position(${ranks}::text[], e.severity) AS rank
                 FROM ${this.from(tenantId, filter.adminId)}
                WHERE ${this.visible(tenantId, unreadOnly)}
+               ORDER BY 1 DESC
                LIMIT ${Math.max(1, cap)}) e`);
     const [row] = result.rows as unknown as { n: number; rank: number | null }[];
     const rank = row?.rank ?? null;

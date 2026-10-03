@@ -41,12 +41,20 @@ per-administrator read marks.
   history stays on the alerts page. This bounds the list, the badge and mark-all.
 - **Ordering.** `(first_seen_at, id)` descending: the immutable keyset the operations log
   already uses (owner decision; a recurring row must not jump across a cursor). The unread
-  filter, which is the inbox's default, and the badge show what recurred.
+  filter, which is the inbox's default, and the badge show what recurred. The page cursor is
+  `beforeAt` AND `beforeId`; half of one is a 400, never a silent first page.
+- **Badge.** The unread count stops at `COUNTER_CAP` ("that many or more"). The capped subset
+  is the most severe rows, so `highestUnread` is the maximum over every unread notification,
+  not over whichever `cap` rows a scan happened to return first.
 - **Permissions.** Each category maps to an existing view key
   (`NOTIFICATION_CATEGORY_PERMISSIONS`): the key of the page the link opens. The service asks
   `PermissionGuard.permissionsOf`, the guard's own resolution, and filters in SQL, so the list,
   the count and mark-all all agree. Marking one notification, or all in a named category,
-  also goes through `guard.check`, which records a denial. An administrator with no matching
+  also goes through `guard.check`, which records a denial. That check is an early rejection;
+  the one that counts is made again INSIDE the write's transaction (`guard.check` on `tx` for
+  a mark, the filter re-resolved on `tx` for mark-all), as `runAuthorizedMutation` and
+  ADR-0014 require of every write, so a key revoked mid-request writes nothing. A denial
+  decided there is recorded after the transaction unwinds. An administrator with no matching
   key has an empty inbox, not an error.
 - **Tenancy.** Only the administrator's tenant's rows, never a SYSTEM-scoped (null-tenant)
   row, exactly as the operations log. Read marks are keyed by tenant and administrator.
