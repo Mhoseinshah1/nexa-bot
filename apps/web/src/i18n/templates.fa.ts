@@ -58,6 +58,7 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
     ],
   },
   { id: 'channels', label: 'عضویت اجباری در کانال', prefixes: ['bot.channels.'] },
+  { id: 'terms', label: 'قوانین و مقررات', prefixes: ['bot.terms.'] },
   { id: 'catalog', label: 'فروشگاه، سفارش و پیش‌فاکتور', prefixes: ['bot.catalog.', 'bot.order.'] },
   { id: 'username', label: 'انتخاب یوزرنیم سرویس', prefixes: ['bot.username.'] },
   { id: 'discount', label: 'کد تخفیف', prefixes: ['bot.discount.'] },
@@ -257,6 +258,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   automatic: 'نشانهٔ روشن بودن انتخاب خودکار',
   availableAt: 'زمان مجاز بعدی',
   balance: 'موجودی کیف پول',
+  body: 'متن',
   botInstanceId: 'شناسهٔ ربات',
   bytes: 'مقدار حجم',
   cap: 'سقف ظرفیت پنل',
@@ -473,6 +475,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
 > = {
   'ops.notification.operational_event': { code: 'کد رخداد' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
+  'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
+  'bot.terms.updated': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.order.summary': { username: 'نام کاربری سرویس' },
   'bot.order.summary_discounted': { username: 'نام کاربری سرویس' },
   'bot.order.summary_cashback': { username: 'نام کاربری سرویس' },
@@ -721,6 +725,19 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'دکمهٔ بررسی عضویت',
     'دکمه‌ای که مشتری پس از عضویت در کانال‌ها می‌زند تا عضویتش بررسی شود.',
   ],
+  'bot.terms.required': [
+    'درخواست پذیرش قوانین',
+    'وقتی پذیرش قوانین اجباری است و مشتری نسخهٔ فعلی را نپذیرفته، به جای پاسخ درخواستش نشان داده می‌شود؛ عنوان و متن قوانین و دکمهٔ پذیرش در آن می‌آید.',
+  ],
+  'bot.terms.updated': [
+    'قوانین به‌روز شده است',
+    'وقتی مشتری دکمهٔ پذیرش نسخهٔ قدیمی‌تری را می‌زند؛ چیزی ثبت نمی‌شود و نسخهٔ فعلی با دکمهٔ پذیرش خودش نشان داده می‌شود.',
+  ],
+  'bot.terms.accepted': [
+    'پذیرش قوانین ثبت شد',
+    'پاسخ دکمهٔ پذیرش قوانین؛ همراه با منوی اصلی، تا مشتری کارش را ادامه دهد.',
+  ],
+  'bot.terms.accept_button': ['دکمهٔ پذیرش قوانین', 'دکمه‌ای که زیر متن قوانین می‌آید.'],
   'bot.channels.join_private_button': [
     'دکمهٔ عضویت در کانال خصوصی',
     'دکمهٔ عضویت برای کانال اجباری بدون آیدی عمومی که با لینک دعوت باز می‌شود؛ با شمارهٔ کانال در فهرست.',

@@ -112,6 +112,25 @@ export const PERMISSIONS = [
   p('users.message.send', 'Send a direct message to one customer'),
   p('users.message.view', 'View the direct messages sent to a customer'),
   /*
+   * Customer notes and tags (program §8, `docs/customer-notes-tags.md`). Operator-only CRM
+   * metadata, read and written apart:
+   *
+   * - `users.notes.view` reads the internal notes. MEDIUM, not LOW, deliberately: a note is
+   *   what one operator tells the next about a customer — a dispute, a suspicion, a promise
+   *   made on the phone — and `observer` (every LOW key) is a role for watching the
+   *   installation, not for reading what was written about the people it serves.
+   * - `users.notes.write` appends one. Notes are append-only, so there is no edit or delete key.
+   * - `users.tags.assign` puts a tag on a customer or takes it off.
+   * - `users.tags.manage` defines the tenant's catalogue: create, rename, recolour, archive.
+   *
+   * READING a customer's tags, and filtering the customer list by one, is `users.view`: a
+   * tag is a label on the row an operator is already allowed to read, like its status.
+   */
+  p('users.notes.view', "Read the operators' internal notes on a customer"),
+  p('users.notes.write', 'Add an internal note to a customer'),
+  p('users.tags.assign', 'Assign or remove a tag on a customer'),
+  p('users.tags.manage', "Create, rename, recolour or archive the tenant's customer tags"),
+  /*
    * Phase 7, both of them, and neither is charged by anything here. There is no
    * tier column, no tier type and no tier surface; there is no mass tool at all.
    * `CLAUDE.md` forbids building either without an explicit instruction, and the
@@ -333,11 +352,29 @@ export const PERMISSIONS = [
   p('campaigns.view', 'View campaigns, their preview and their results', 'LOW'),
   p('campaigns.manage', 'Create, schedule, pause, resume or cancel a campaign', 'HIGH'),
 
+  /*
+   * Terms and rules (program §6, `docs/terms-audit.md`). VIEW reads the versions, the
+   * history and the acceptance statistics. EDIT writes the draft, which no customer sees.
+   * PUBLISH is its own HIGH key: publishing makes a new version the one every customer is
+   * asked to accept, and while enforcement is on it stops every customer who has not, at
+   * once. Turning enforcement on or off is the feature flag, under `settings.edit`.
+   */
+  p('terms.view', 'View the terms and rules, their history and acceptance statistics', 'LOW'),
+  p('terms.edit', 'Create or edit the draft of the terms and rules'),
+  p('terms.publish', 'Publish the draft as the current terms and rules', 'HIGH'),
+
   // Reporting and logs
   p('reports.view', 'View reports', 'LOW'),
   p('reports.pii.view', 'View personal data inside reports', 'HIGH'),
   p('reports.export', 'Export report data'),
   p('audit.view', 'View the audit log', 'LOW'),
+  /*
+   * Phase D1 (`docs/audit-log.md`): taking the audit trail OFF the installation as a file. HIGH,
+   * not LOW like reading it: a file outlives the session that produced it and is the shape in
+   * which an audit trail leaves the people trusted with it. Requires `audit.view`
+   * (`PERMISSION_REQUIRES`) — an export is the filtered list an operator can already see.
+   */
+  p('audit.export', 'Export the audit log as a file', 'HIGH'),
   p('opslog.view', 'View operational events', 'LOW'),
 
   // Backup and disaster recovery
@@ -450,6 +487,11 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // Phase A2: writing to one customer is the support conversation an operator holds.
       'users.message.send',
       'users.message.view',
+      // Program §8: the notes and tags an operator keeps on the customers they support.
+      'users.notes.view',
+      'users.notes.write',
+      'users.tags.assign',
+      'users.tags.manage',
       'orders.view',
       'services.view',
       'services.edit',
@@ -487,6 +529,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'tickets.assign',
       'tickets.close',
       'tickets.categories.edit',
+      // Program §6: an operator drafts the rules; PUBLISHING them stays the owner's.
+      'terms.view',
+      'terms.edit',
     ],
   },
   {
@@ -541,6 +586,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'reports.view',
       // WP-A10: "which app, and where do I get it" is the question support answers most.
       'client_apps.view',
+      // Program §6: "why is the bot asking me to accept the rules" is a support question.
+      'terms.view',
       // WP-A7: answering tickets is this role's job. The categories are configuration.
       'tickets.view',
       'tickets.reply',
@@ -722,6 +769,16 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
   'users.message.send': 'users.view' as PermissionKey,
   'users.message.view': 'users.view' as PermissionKey,
   /*
+   * Program §8. Notes and tags are read and written FROM a customer's page, which
+   * `users.view` reads. `users.notes.write` depends on `users.view` rather than on
+   * `users.notes.view` because this table is one level deep (asserted): a writer without
+   * the read appends a note and is answered with that note alone, never the others.
+   */
+  'users.notes.view': 'users.view' as PermissionKey,
+  'users.notes.write': 'users.view' as PermissionKey,
+  'users.tags.assign': 'users.view' as PermissionKey,
+  'users.tags.manage': 'users.view' as PermissionKey,
+  /*
    * WP-A7. Every ticket action is taken FROM a ticket (or, for categories, from the
    * inbox that lists them), which `tickets.view` reads. Holding the action alone would be
    * a button on a page the holder cannot open.
@@ -743,6 +800,17 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * `campaigns.view` reads, and each answers with the campaign's preview and results.
    */
   'campaigns.manage': 'campaigns.view' as PermissionKey,
+  /*
+   * Phase D1. An export is the list an operator filtered on the audit page, written to a
+   * file; without `audit.view` there is no list to have filtered.
+   */
+  'audit.export': 'audit.view' as PermissionKey,
+  /*
+   * Program §6. A draft is written, previewed and published FROM the terms page, which
+   * `terms.view` reads.
+   */
+  'terms.edit': 'terms.view' as PermissionKey,
+  'terms.publish': 'terms.view' as PermissionKey,
 };
 
 /**

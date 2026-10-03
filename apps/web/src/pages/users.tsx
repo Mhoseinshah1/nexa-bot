@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { type CustomerStatus, type CustomerSummaryResponse } from '@nexa/contracts';
+import { uuidV7Schema, type CustomerStatus, type CustomerSummaryResponse } from '@nexa/contracts';
 import { fetchCustomers } from '../api/client';
 import { formatTimestamp } from '../format';
 import { mayRequest, queryState } from '../view-state';
@@ -9,14 +9,17 @@ import { setQuery, useLinkHandler, type Route } from '../router';
 import { ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ChipGroup } from './commerce-parts';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
+import { TagCatalogueModal, useTagCatalogue } from './customer-360-crm';
 import {
   Banner,
+  Button,
   Card,
   CursorPager,
   DataTable,
   Empty,
   Ltr,
   PageHead,
+  Select,
   StateSwitch,
   type Column,
 } from '../ui/kit';
@@ -54,6 +57,7 @@ import {
 export function UsersPage({
   route,
   maySearch,
+  mayManageTags = false,
   denied,
 }: {
   route: Route;
@@ -64,9 +68,12 @@ export function UsersPage({
    * second: an operator with `users.view` alone still gets every page.
    */
   maySearch: boolean;
+  /** `users.tags.manage`: offer the tenant's tag catalogue editor (program §8). */
+  mayManageTags?: boolean;
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
+  const [managingTags, setManagingTags] = useState(false);
 
   /*
    * ONE search box (spec §10), in the URL as `q`. The server reads a Telegram id, an
@@ -74,6 +81,14 @@ export function UsersPage({
    */
   const appliedSearch = appliedListSearch(route);
   const appliedStatus = statusFromQuery(route.query.get('status'));
+  /*
+   * Program §8: the tag FILTER, by the tag's id — a label is editable text and a filter on it
+   * would change meaning on a rename. Like the status filter it is not a search: the server
+   * charges `users.view` for it, and `q` stays the list's one search box. A value that is not
+   * an id is dropped here rather than sent to be refused.
+   */
+  const appliedTag = tagFromQuery(route.query.get('tag'));
+  const catalogue = useTagCatalogue(!denied);
 
   /*
    * The cursor stack, and the SEARCH it belongs to.
@@ -89,7 +104,7 @@ export function UsersPage({
    * Joined on `|`, which a status literal cannot contain; the search text is LAST, so
    * whatever it contains, no two (status, search) pairs produce the same signature.
    */
-  const searchSignature = [appliedStatus ?? '', appliedSearch].join('|');
+  const searchSignature = [appliedStatus ?? '', appliedTag ?? '', appliedSearch].join('|');
   const [trail, setTrail] = useState<{ signature: string; cursors: readonly string[] }>({
     signature: searchSignature,
     cursors: [],
@@ -119,6 +134,7 @@ export function UsersPage({
         // search left in the URL by somebody else must not turn the list into a 403.
         ...(searching ? { q: appliedSearch } : {}),
         ...(appliedStatus === null ? {} : { status: appliedStatus }),
+        ...(appliedTag === null ? {} : { tag: appliedTag }),
       }),
     enabled: !denied,
   });
@@ -190,7 +206,23 @@ export function UsersPage({
 
   return (
     <>
-      <PageHead title={t('web.users_title')} subtitle={t('web.users_intro')} />
+      <PageHead
+        title={t('web.users_title')}
+        subtitle={t('web.users_intro')}
+        {...(mayManageTags
+          ? {
+              actions: (
+                <Button size="sm" icon="tag" onClick={() => setManagingTags(true)}>
+                  {t('web.crm_tags_manage')}
+                </Button>
+              ),
+            }
+          : {})}
+      />
+      <TagCatalogueModal
+        open={mayManageTags && managingTags}
+        onClose={() => setManagingTags(false)}
+      />
 
       <Card className="ca-list">
         {maySearch ? (
@@ -228,6 +260,28 @@ export function UsersPage({
               { id: 'BLOCKED' as const, label: t('web.user_status_blocked') },
             ]}
           />
+          {/* Drawn once the catalogue has answered, and only when there is a tag to pick. */}
+          {(catalogue.data?.tags.length ?? 0) > 0 && (
+            <label className="filter-select">
+              <span>{t('web.users_filter_tag')}</span>
+              <Select
+                size="sm"
+                value={appliedTag ?? ''}
+                onChange={(event) =>
+                  setQuery(route, 'tag', event.target.value === '' ? null : event.target.value)
+                }
+              >
+                <option value="">{t('web.users_filter_tag_all')}</option>
+                {(catalogue.data?.tags ?? []).map((tag) => (
+                  <option key={tag.id} value={tag.id}>
+                    {tag.archivedAt === null
+                      ? tag.label
+                      : t('web.users_filter_tag_archived').replace('{label}', tag.label)}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          )}
         </div>
 
         <StateSwitch
@@ -280,6 +334,10 @@ export function UsersPage({
       </Card>
     </>
   );
+}
+
+function tagFromQuery(raw: string | null): string | null {
+  return raw !== null && uuidV7Schema.safeParse(raw).success ? raw.toLowerCase() : null;
 }
 
 function statusFromQuery(raw: string | null): CustomerStatus | null {

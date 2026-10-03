@@ -111,6 +111,14 @@ export const EVENT_TYPES = [
   'CustomerPhoneVerificationChanged',
   'CustomerLocationChangeOverrideChanged',
   'CustomerAccountTransferred',
+  // Program §6: the terms and rules. Ids and numbers only, never the text.
+  'TermsVersionPublished',
+  'CustomerTermsAccepted',
+  // Program §8: operator CRM metadata. Ids only — never a label, never a note body.
+  'CustomerTagChanged',
+  'CustomerTagAssigned',
+  'CustomerTagRemoved',
+  'CustomerNoteAdded',
   'OrderConfirmed',
   'OrderSettled',
   'OrderCancelled',
@@ -210,6 +218,10 @@ export const AGGREGATE_TYPES = [
   'Ticket',
   'Broadcast',
   'BulkOperation',
+  // Program §6: one version of a tenant's terms and rules.
+  'TermsVersion',
+  // Program §8: one tag of a tenant's customer-tag catalogue.
+  'CustomerTag',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -291,6 +303,18 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   CustomerPhoneVerificationChanged: z.object({ verified: z.boolean() }),
   CustomerLocationChangeOverrideChanged: z.object({ overridden: z.boolean() }),
   /*
+   * Program §8. Aggregate `CustomerTag` for a catalogue change, `Customer` for the rest. Ids
+   * and a change kind only: a label is operator text and a note is private, so neither is
+   * carried — the rows have them.
+   */
+  CustomerTagChanged: z.object({
+    tagId: z.string(),
+    change: z.enum(['CREATED', 'UPDATED', 'ARCHIVED', 'RESTORED']),
+  }),
+  CustomerTagAssigned: z.object({ tagId: z.string() }),
+  CustomerTagRemoved: z.object({ tagId: z.string() }),
+  CustomerNoteAdded: z.object({ noteId: z.string() }),
+  /*
    * Aggregate is the SOURCE customer. `customer_account_transfers` carries the full record;
    * each moved service also has its own `ServiceOwnershipTransferred`, and each wallet
    * entry its own `WalletEntryRecorded`.
@@ -302,6 +326,15 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     servicesMoved: z.number().int().nonnegative(),
     walletMovedMinor: z.string(),
     currency: z.string(),
+  }),
+  /** Aggregate `TermsVersion`. The version is now the one customers are asked to accept. */
+  TermsVersionPublished: z.object({
+    versionNumber: z.number().int().positive(),
+  }),
+  /** Aggregate `Customer`. Written once per (customer, version): a repeated tap writes nothing. */
+  CustomerTermsAccepted: z.object({
+    termsVersionId: z.string(),
+    versionNumber: z.number().int().positive(),
   }),
   OrderConfirmed: z.object({
     customerId: z.string(),

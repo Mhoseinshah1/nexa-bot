@@ -201,6 +201,8 @@ import {
 } from './modules/control/templates/application/template-resolver.js';
 import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
 import { CustomerControlService } from './modules/commerce/customers/application/customer-control.service.js';
+import { CustomerCrmService } from './modules/commerce/customers/application/customer-crm.service.js';
+import { DrizzleCustomerCrmRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-crm.repository.js';
 import { CustomerInsightService } from './modules/commerce/customers/application/customer-insight.service.js';
 import { CustomerAccountTransferService } from './modules/commerce/customers/application/customer-account-transfer.service.js';
 import { DrizzleCustomerInsightReader } from './modules/commerce/customers/infrastructure/drizzle-customer-insight.reader.js';
@@ -278,6 +280,9 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { DrizzleTermsRepository } from './modules/control/terms/infrastructure/drizzle-terms.repository.js';
+import { TermsService } from './modules/control/terms/application/terms.service.js';
+import { TermsAcceptanceService } from './modules/control/terms/application/terms-acceptance.service.js';
 import { ClientAppVideoService } from './modules/control/client-apps/application/client-app-video.service.js';
 import { DrizzleClientAppVideoRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app-video.repository.js';
 import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
@@ -420,6 +425,9 @@ import { DrizzleReportingRepository } from './modules/commerce/reporting/infrast
 import { OperationsOverviewService } from './modules/commerce/reporting/application/operations-overview.service.js';
 import { DrizzleOperationsOverviewRepository } from './modules/commerce/reporting/infrastructure/drizzle-operations-overview.repository.js';
 import { DefaultReportExportWriter } from './infrastructure/export/report-export-writer.js';
+import { DefaultAuditLogExportWriter } from './infrastructure/export/audit-log-export-writer.js';
+import { DrizzleAuditLogReader } from './modules/platform/audit/infrastructure/drizzle-audit-log.reader.js';
+import { AuditLogService } from './modules/platform/audit/application/audit-log.service.js';
 import { IntlReportPeriodResolver } from './infrastructure/time/report-calendar.js';
 import {
   DrizzleReferralCommissionRepository,
@@ -761,6 +769,8 @@ export interface Container {
   readonly customers: CustomerService;
   /** Customer 360 (§11.4): the per-customer controls an operator sets. */
   readonly customerControls: CustomerControlService;
+  /** Program §8: operator-only customer notes and tags. Never held by a customer surface. */
+  readonly customerCrm: CustomerCrmService;
   /** Customer 360 (§11.7, §11.10): exact aggregates and the management timeline. */
   readonly customerInsights: CustomerInsightService;
   /** Customer 360 (§11.5): moving a customer's holdings to another Telegram identity. */
@@ -973,6 +983,9 @@ export interface Container {
   readonly templateResolver: TemplateResolver;
   /** The tenant's FAQ as the operator maintains it (customer UX completion §J). */
   readonly supportFaqs: SupportFaqService;
+  /** Program §6: the operator's terms and rules, and the customer's acceptance of them. */
+  readonly terms: TermsService;
+  readonly termsAcceptance: TermsAcceptanceService;
   /** The customer's support screen: active FAQ in order, and the first support account's URL. */
   readonly supportScreen: SupportScreenReader;
   /** WP-A10: the tenant's client apps as the operator maintains them. */
@@ -1000,6 +1013,8 @@ export interface Container {
   readonly opsGroups: OpsGroupService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
+  /** Phase D1: the audit log browser and its export (`docs/audit-log.md`). */
+  readonly auditLog: AuditLogService;
   /**
    * What the background monitor is configured to do, and what that
    * configuration can carry. A read of installation configuration plus two
@@ -3678,6 +3693,40 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * operator's authority, and the toggle plans each service through the operator's
    * per-service request.
    */
+  /*
+   * Program §6 — the terms and rules. Two services over one repository: the operator's
+   * (versions, publication, statistics) and the customer's (the gate's one question, the
+   * accept button, and the standing Customer 360 shows).
+   */
+  const termsRepository = new DrizzleTermsRepository(database.db);
+  const termsService = new TermsService({
+    repository: termsRepository,
+    flags: featureFlagResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    ids,
+    clock,
+  });
+  const termsAcceptanceService = new TermsAcceptanceService({
+    repository: termsRepository,
+    flags: featureFlagResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    ids,
+    clock,
+  });
   const customerControlService = new CustomerControlService({
     customers: customerRepository,
     locationOverrides: customerLocationOverrides,
@@ -3690,6 +3739,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     outbox,
     clock,
+    terms: termsAcceptanceService,
+  });
+  const customerCrmService = new CustomerCrmService({
+    crm: new DrizzleCustomerCrmRepository(database.db),
+    customers: customerRepository,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
   });
   const customerInsightService = new CustomerInsightService({
     reader: new DrizzleCustomerInsightReader(database.db),
@@ -4940,6 +5004,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
+  const auditLogService = new AuditLogService({
+    guard,
+    reader: new DrizzleAuditLogReader(database.db),
+    audit,
+    opsLog,
+    writer: new DefaultAuditLogExportWriter(),
+    clock,
+  });
   const diagnostics = new DiagnosticsService({
     guard,
     reader: new DrizzleDiagnosticsReader(database.db),
@@ -5522,6 +5594,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     customers: customerService,
     customerControls: customerControlService,
+    customerCrm: customerCrmService,
     customerInsights: customerInsightService,
     customerAccountTransfers: customerAccountTransferService,
     customerDirectMessages: customerDirectMessageService,
@@ -5603,6 +5676,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       antiSpam,
       // Package B: the REQUIRED channels, enforced before any business action; fails open.
       membership: channelMembership,
+      terms: termsAcceptanceService,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       // TonPays Telegram: «📤 ارسال فیش واریزی» and «🔄 تعویض کارت» (database writes only).
@@ -5842,6 +5916,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     templatesService,
     templateResolver,
     supportFaqs: supportFaqService,
+    terms: termsService,
+    termsAcceptance: termsAcceptanceService,
     supportScreen: supportScreenReader,
     clientApps: clientAppService,
     clientAppVideos: clientAppVideoService,
@@ -5855,6 +5931,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsGroups,
     opsGroupMaintainer,
     opsLogService,
+    auditLog: auditLogService,
     monitorProfileService,
     diagnostics,
     panelMonitor,

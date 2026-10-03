@@ -395,3 +395,4 @@ export {
   REPORT_EXPORT_SHEETS_FA,
   type ReportExportHeaderKey,
 } from './reports.fa.js';
+export { AUDIT_EXPORT_HEADERS_FA, type AuditExportHeaderKey } from './audit-log.fa.js';

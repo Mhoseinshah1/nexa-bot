@@ -1160,15 +1160,50 @@
     {
       "idx": 165,
       "version": "7",
-      "when": 1791019392920,
-      "tag": "0165_customer_direct_messages",
+      "when": 1791019235936,
+      "tag": "0165_customer_notes_tags",
       "breakpoints": true
     },
     {
       "idx": 166,
       "version": "7",
-      "when": 1791019417093,
-      "tag": "0166_direct_message_grants",
+      "when": 1791019240639,
+      "tag": "0166_customer_notes_tags_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 167,
+      "version": "7",
+      "when": 1791030038784,
+      "tag": "0167_terms",
+      "breakpoints": true
+    },
+    {
+      "idx": 168,
+      "version": "7",
+      "when": 1791030050110,
+      "tag": "0168_terms_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 169,
+      "version": "7",
+      "when": 1791032298274,
+      "tag": "0169_audit_log_export_permission",
+      "breakpoints": true
+    },
+    {
+      "idx": 170,
+      "version": "7",
+      "when": 1791034139701,
+      "tag": "0170_customer_direct_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 171,
+      "version": "7",
+      "when": 1791034146690,
+      "tag": "0171_direct_message_grants",
       "breakpoints": true
     }
   ]

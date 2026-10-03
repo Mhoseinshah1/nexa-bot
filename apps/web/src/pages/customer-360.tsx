@@ -62,6 +62,7 @@ import {
 } from './customer-360-sections';
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
+import { CustomerCrmSection } from './customer-360-crm';
 import {
   Badge,
   Banner,
@@ -125,6 +126,10 @@ export function UserDetailPage({
   mayViewAudit = false,
   mayMessage = false,
   mayViewMessages = false,
+  mayViewNotes = false,
+  mayWriteNotes = false,
+  mayAssignTags = false,
+  mayManageTags = false,
   denied,
 }: {
   id: string;
@@ -175,6 +180,17 @@ export function UserDetailPage({
   mayMessage?: boolean;
   /** `users.message.view` — the direct-message history (Phase A2). */
   mayViewMessages?: boolean;
+  /*
+   * Program §8, notes and tags. Reading a customer's tags is `users.view` and needs no flag.
+   */
+  /** `users.notes.view` */
+  mayViewNotes?: boolean;
+  /** `users.notes.write` */
+  mayWriteNotes?: boolean;
+  /** `users.tags.assign` */
+  mayAssignTags?: boolean;
+  /** `users.tags.manage` */
+  mayManageTags?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -354,6 +370,7 @@ export function UserDetailPage({
               <a href="#c360-controls">{t('web.c360_nav_controls')}</a>
               <a href="#c360-relations">{t('web.c360_nav_relations')}</a>
               {(mayViewMessages || mayMessage) && <a href="#c360-messages">{t('web.dm_nav')}</a>}
+              <a href="#c360-crm">{t('web.crm_nav')}</a>
               <a href="#c360-timeline">{t('web.c360_nav_timeline')}</a>
               {(mayTransfer || mayEditServices) && (
                 <a href="#c360-danger">{t('web.c360_nav_danger')}</a>
@@ -473,6 +490,13 @@ export function UserDetailPage({
                       onCompose={() => setMessageOpen(true)}
                     />
                   )}
+                  <CustomerCrmSection
+                    customerId={id}
+                    mayViewNotes={mayViewNotes}
+                    mayWriteNotes={mayWriteNotes}
+                    mayAssignTags={mayAssignTags}
+                    mayManageTags={mayManageTags}
+                  />
                   <TimelineCard customerId={id} mayView={mayViewAudit} />
                 </>
               }

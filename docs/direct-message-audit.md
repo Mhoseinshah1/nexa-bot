@@ -22,7 +22,7 @@ no second outcome taxonomy.
 
 - **Permission**: `users.message.send` (send) and `users.message.view` (history), both
   requiring `users.view`; independent of `broadcasts.send` and `tickets.reply`. Seeded to
-  owner, operator and support; backfilled by `0166_direct_message_grants.sql`.
+  owner, operator and support; backfilled by `0171_direct_message_grants.sql`.
 - **Write path** (one transaction): guard → scope activity → the tenant's direct-message
   advisory lock (`0x444d`, taken first, nothing else takes it) → idempotency replay →
   target revalidation → rate limit → file staging bound → row + lane row + outbox

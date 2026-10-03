@@ -1,4 +1,4 @@
--- Phase A2 (`docs/direct-message-audit.md`): what `drizzle-kit` does not model for 0165 —
+-- Phase A2 (`docs/direct-message-audit.md`): what `drizzle-kit` does not model for 0170 —
 -- the backfill of the two new `users.message.*` keys to the seeded roles that already
 -- exist. Hand-written, so no snapshot accompanies it and the drift check has nothing to
 -- compare.
