@@ -9,7 +9,7 @@ import type {
   ReportRange,
 } from '@nexa/contracts';
 import { fetchGatewayHealth } from '../api/client';
-import { formatNumber, formatTimestamp } from '../format';
+import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ChipGroup } from './commerce-parts';
@@ -21,6 +21,7 @@ import {
   Empty,
   KV,
   Ltr,
+  Num,
   PageHead,
   StateSwitch,
   TabPanel,
@@ -195,9 +196,8 @@ function HealthCard({
             t('web.gateway_health_errors'),
             // Two recorded counts, never a percentage computed from them.
             <span key="e">
-              <Ltr>{formatNumber(a.attemptsWithProviderError)}</Ltr>{' '}
-              {t('web.gateway_health_errors_of')} <Ltr>{formatNumber(a.attemptsInWindow)}</Ltr>{' '}
-              {t('web.gateway_health_errors_attempts')}
+              <Num value={a.attemptsWithProviderError} /> {t('web.gateway_health_errors_of')}{' '}
+              <Num value={a.attemptsInWindow} /> {t('web.gateway_health_errors_attempts')}
             </span>,
           ],
           [
@@ -206,8 +206,7 @@ function HealthCard({
               when(null)
             ) : (
               <span key="b">
-                <Ltr>{formatNumber(view.callBudget.used)}</Ltr>{' '}
-                {t('web.gateway_health_calls_since')}{' '}
+                <Num value={view.callBudget.used} /> {t('web.gateway_health_calls_since')}{' '}
                 {formatTimestamp(view.callBudget.windowStartedAt)}
               </span>
             ),
@@ -256,7 +255,7 @@ function HealthCard({
           <span className="muted small">{t('web.gateway_health_queues')}:</span>
           {CARD_QUEUES.map(([queue, label]) => (
             <a key={queue} href={opsLinkFor(view.provider, queue)} onClick={onLink}>
-              {t(label)} <Ltr>{formatNumber(view.queues?.[queue] ?? 0)}</Ltr>
+              {t(label)} <Num value={view.queues?.[queue] ?? 0} />
             </a>
           ))}
         </div>
