@@ -12656,3 +12656,72 @@ export const legacyProductShapes = pgTable(
     ),
   ],
 );
+
+/**
+ * What the migration decided about one legacy customer's trial entitlement (program
+ * Item 15, `docs/legacy-migration/trial-eligibility.md`).
+ *
+ * The provenance of a `trial_limit_overrides` row the migration wrote, or of its decision
+ * NOT to write one. There is no second trial subsystem: a claim still decides with
+ * `trialAllowanceFor` over the override and the grants; this table explains why the
+ * override is what it is, and makes the decision once.
+ *
+ * Written once per customer and never updated: a rerun with the same legacy facts is a
+ * replay, and a rerun with different ones is reported as a conflict and changes nothing —
+ * in particular an override an operator removed after the import is not re-imposed. The
+ * legacy facts are stored as values (`limit_usertest`, whether a test invoice existed),
+ * never the legacy row or the Telegram id.
+ */
+export const legacyTrialEligibility = pgTable(
+  'legacy_trial_eligibility',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** The legacy `user.limit_usertest`, or NULL when it was not a whole number. */
+    legacyLimitUsertest: integer('legacy_limit_usertest'),
+    /** Whether the legacy archive held a test invoice for this user, in any status. */
+    legacyHadTrial: boolean('legacy_had_trial').notNull(),
+    decision: text('decision').notNull(),
+    /** The customer's NEXA override before the decision, and after it. */
+    overrideBefore: integer('override_before'),
+    overrideAfter: integer('override_after'),
+    /** SHA-256 of the normalised legacy facts: a rerun with other facts is a conflict. */
+    inputHash: text('input_hash').notNull(),
+    recordedAt: timestamptz('recorded_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'legacy_trial_eligibility_pkey',
+      columns: [table.tenantId, table.customerId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'legacy_trial_eligibility_customer_fk',
+    }),
+    index('legacy_trial_eligibility_tenant_decision_idx').on(
+      table.tenantId,
+      table.decision,
+      table.customerId,
+    ),
+    check('legacy_trial_eligibility_decision_check', enumCheck('decision', LEGACY_TRIAL_DECISIONS)),
+    /** The decision and the override it left agree, so the row cannot misexplain it. */
+    check(
+      'legacy_trial_eligibility_effect_check',
+      sql`(decision IN ('LEGACY_NO_TRIALS', 'LEGACY_TRIAL_CONSUMED', 'LEGACY_LIMIT_UNREADABLE')
+            AND override_before IS NULL AND override_after = 0)
+       OR (decision = 'INHERIT_NEXA_POLICY' AND override_before IS NULL AND override_after IS NULL)
+       OR (decision = 'KEPT_EXISTING_OVERRIDE'
+            AND override_before IS NOT NULL AND override_after = override_before)`,
+    ),
+    /** An unreadable limit is NULL, and every decision drawn from the limit had one. */
+    check(
+      'legacy_trial_eligibility_limit_check',
+      sql`decision = 'KEPT_EXISTING_OVERRIDE'
+       OR (decision = 'LEGACY_LIMIT_UNREADABLE') = (legacy_limit_usertest IS NULL)`,
+    ),
+    check('legacy_trial_eligibility_hash_check', sql`input_hash ~ '^[0-9a-f]{64}$'`),
+  ],
+);

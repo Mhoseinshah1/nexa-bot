@@ -233,6 +233,8 @@ import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/lo
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
+import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
+import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
 import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
 import { ProductCategoryService } from './modules/commerce/catalog/application/product-category.service.js';
 import { ServiceAddonService } from './modules/commerce/catalog/application/addon.service.js';
@@ -874,6 +876,11 @@ export interface Container {
   readonly trials: TrialService;
   /** The operator's trial overrides, global reset and view (WP6-B). */
   readonly trialAdmin: TrialAdminService;
+  /**
+   * Program Item 15: a migrated customer's legacy trial entitlement, preserved as an
+   * ordinary override. Migration prerequisite only — no surface calls it yet (P7 is on hold).
+   */
+  readonly legacyTrials: LegacyTrialEligibilityService;
   /** R1: each panel's free trial, for an operator. */
   readonly panelTrials: PanelTrialService;
   /**
@@ -3448,6 +3455,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
   /**
+   * Program Item 15 (`docs/legacy-migration/trial-eligibility.md`): the same override
+   * repository and the same customer lock as `trialAdminService`, so a migrated customer's
+   * claim is decided by the one allowance evaluator like anyone's.
+   */
+  const legacyTrialEligibilityService = new LegacyTrialEligibilityService({
+    records: new DrizzleLegacyTrialEligibilityRepository(database.db),
+    overrides: trialOverrideRepository,
+    wallet: walletRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
+  /**
    * R1: each panel's trial, for an operator — and the overview that asks the SAME offer
    * evaluator the bot does (`trialPanelVerdicts`), read-only.
    */
@@ -5892,6 +5917,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     locationChanges: locationChangeService,
     trials: trialService,
     trialAdmin: trialAdminService,
+    legacyTrials: legacyTrialEligibilityService,
     panelTrials,
     audience: audienceService,
     broadcasts: broadcastService,

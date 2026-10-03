@@ -3027,3 +3027,10 @@ rule).
   key accepts NULL/`d`/`day`/`days` and a positive volume only; anything else is
   `UNMAPPABLE` until Q1c (`docs/legacy-migration/sql-evidence.md`) shows the values and
   the owner says what they mean.
+
+## OQ-I15 — legacy trial eligibility (program Item 15)
+
+- **OQ-I15-01 — DECISION: "allowed, no evidence of use".** A legacy customer with
+  `limit_usertest ≥ 1` and no test invoice gets no override and NEXA's current trial
+  policy (`docs/legacy-migration/trial-eligibility.md` §3). If Q2 shows that population
+  should be closed as well, the change is one branch of `decideLegacyTrial`.
