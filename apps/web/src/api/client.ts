@@ -201,6 +201,15 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   ACCOUNT_SECURITY_ROUTES,
+  RBAC_ROUTES,
+  deleteRoleResponseSchema,
+  effectivePermissionsResponseSchema,
+  roleMutationResponseSchema,
+  roleViewListResponseSchema,
+  type DeleteRoleResponse,
+  type EffectivePermissionsResponse,
+  type RoleMutationResponse,
+  type RoleViewListResponse,
   accountSecurityResponseSchema,
   backupCodesResponseSchema,
   loginOutcomeResponseSchema,
@@ -730,6 +739,52 @@ export function changeOwnPassword(input: {
   newPassword: string;
 }): Promise<{ ok: true }> {
   return post(AUTH_ROUTES.password, input, okResponseSchema);
+}
+
+// --- Phase D3: roles ----------------------------------------------------------
+
+export function fetchManagedRoles(): Promise<RoleViewListResponse> {
+  return authedGet(RBAC_ROUTES.roles, roleViewListResponseSchema);
+}
+
+export function createRole(input: {
+  key: string;
+  name: string;
+  permissions: string[];
+  reason: string;
+  clonedFrom?: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<RoleMutationResponse> {
+  return post(RBAC_ROUTES.roles, input, roleMutationResponseSchema);
+}
+
+export function updateRole(input: {
+  key: string;
+  name: string;
+  permissions: string[];
+  expectedVersion: number;
+  reason: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<RoleMutationResponse> {
+  const { key, ...body } = input;
+  return post(RBAC_ROUTES.role(key), body, roleMutationResponseSchema);
+}
+
+export function deleteRole(input: {
+  key: string;
+  expectedVersion: number;
+  reason: string;
+  confirmation?: string;
+  idempotencyKey: string;
+}): Promise<DeleteRoleResponse> {
+  const { key, ...body } = input;
+  return post(RBAC_ROUTES.deleteRole(key), body, deleteRoleResponseSchema);
+}
+
+export function fetchEffectivePermissions(adminId: string): Promise<EffectivePermissionsResponse> {
+  return authedGet(RBAC_ROUTES.effective(adminId), effectivePermissionsResponseSchema);
 }
 
 /** An operator removing ANOTHER administrator's two-step sign-in. */
