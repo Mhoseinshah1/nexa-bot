@@ -736,6 +736,8 @@ export function changeOwnPassword(input: {
 export function resetAdminSecondFactor(input: {
   id: string;
   reason: string;
+  stepUp: StepUpInput;
+  idempotencyKey: string;
 }): Promise<ResetAdminSecondFactorResponse> {
   const { id, ...body } = input;
   return post(
@@ -834,10 +836,18 @@ export function setAdminRoles(input: {
  * The response carries no credential — the administrator as anybody may see
  * them, and how many sessions the reset ended.
  */
+/** The acting operator's own step-up: their password, and a code when their 2FA is on. */
+export interface StepUpInput {
+  password: string;
+  code?: string;
+  backupCode?: string;
+}
+
 export function resetAdminPassword(input: {
   id: string;
   newPassword: string;
   reason: string;
+  stepUp: StepUpInput;
 }): Promise<ResetAdminPasswordResponse> {
   const { id, ...body } = input;
   return post(ADMIN_ROUTES.password(id), body, resetAdminPasswordResponseSchema);
@@ -2357,6 +2367,8 @@ export function fetchInstallationKeys(): Promise<InstallationKeysResponse> {
  */
 export async function exportRecoveryKit(input: {
   accountPassword: string;
+  /** Required by the server when the administrator's two-step sign-in is on. */
+  code?: string;
   passphrase: string;
   passphraseConfirmation: string;
 }): Promise<{ blob: Blob; filename: string }> {
@@ -2381,6 +2393,7 @@ export async function importRecoveryKit(input: {
   file: File;
   passphrase: string;
   accountPassword: string;
+  code?: string;
   idempotencyKey: string;
 }): Promise<ImportRecoveryKitResponse> {
   // FileReader's data URL, the way the other file pickers here read a file: one
@@ -2400,6 +2413,7 @@ export async function importRecoveryKit(input: {
       kit,
       passphrase: input.passphrase,
       accountPassword: input.accountPassword,
+      ...(input.code === undefined || input.code === '' ? {} : { code: input.code }),
       idempotencyKey: input.idempotencyKey,
     },
     importRecoveryKitResponseSchema,

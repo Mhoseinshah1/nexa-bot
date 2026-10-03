@@ -798,6 +798,12 @@ function HistoryRow({ event }: { event: SecurityEvent }) {
             <Ltr>{event.ip}</Ltr>
           </>
         )}
+        {event.userAgent !== null && (
+          <>
+            {' · '}
+            <Ltr>{event.userAgent}</Ltr>
+          </>
+        )}
         {event.actorLabel !== null && (
           <>
             {' · '}

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../apps/web/src/app';
 import { AccountPage } from '../../apps/web/src/pages/account';
+import { SystemPage } from '../../apps/web/src/pages/system';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 
@@ -259,5 +260,88 @@ describe('two-step sign-in', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(t('web.second_factor_invalid'));
     // And the password was not kept anywhere the page can reach.
     expect(document.body.innerHTML).not.toContain('the-owners-password');
+  });
+});
+
+describe('operator step-up and the 2FA reset key (security review, Codex 4172894360)', () => {
+  const TARGET = '019a0000-0000-7000-8000-000000000002';
+  const target = {
+    id: TARGET,
+    username: 'helper',
+    displayName: 'Helper',
+    status: 'ACTIVE',
+    telegramUserId: null,
+    roleKeys: ['support'],
+    createdAt: '2026-09-01T00:00:00.000Z',
+    lastLoginAt: null,
+  };
+  const route = {
+    path: '/system',
+    query: new URLSearchParams('section=admins'),
+  } as unknown as Parameters<typeof SystemPage>[0]['route'];
+
+  it('asks for the operator’s own password, and sends it with an idempotency key', async () => {
+    const api = stubApi([
+      { url: '/roles', body: { roles: [] } },
+      { url: '/admins', body: { admins: [target] } },
+      { url: `/admins/${TARGET}/sessions`, body: { sessions: [] } },
+      {
+        url: `/admins/${TARGET}/second-factor/reset`,
+        body: { admin: target, hadSecondFactor: true, sessionsRevoked: 1 },
+      },
+    ]);
+    renderPage(<SystemPage route={route} permissions={['admins.view', 'admins.edit']} />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.admin_manage') }));
+    fireEvent.change(await screen.findByLabelText(t('web.admin_reason_label')), {
+      target: { value: 'lost phone' },
+    });
+    const reset = screen.getByRole('button', { name: t('web.admin_second_factor_reset') });
+    // No own password: nothing to send.
+    expect(reset).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(t('web.admin_step_up_password')), {
+      target: { value: 'my-own-password' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.admin_step_up_code')), {
+      target: { value: '123 456' },
+    });
+    fireEvent.click(reset);
+    await waitFor(() => {
+      const call = api.calls.find((one) => one.url.includes('/second-factor/reset'));
+      expect(call?.body).toMatchObject({
+        reason: 'lost phone',
+        stepUp: { password: 'my-own-password', code: '123456' },
+      });
+      expect(typeof (call?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
+    });
+    // Exactly one request: never auto-retried.
+    expect(api.calls.filter((one) => one.url.includes('/second-factor/reset'))).toHaveLength(1);
+  });
+});
+
+describe('the history shows the holder their own user agent (Codex 4172894358)', () => {
+  it('renders the user agent of an own row', async () => {
+    stubApi([
+      {
+        url: '/auth/security/events',
+        body: {
+          events: [
+            {
+              id: 'e1',
+              action: 'auth.login',
+              result: 'SUCCESS',
+              occurredAt: '2026-10-03T08:00:00.000Z',
+              actorLabel: null,
+              ip: '192.0.2.10',
+              userAgent: 'Distinctive-Agent/9.9',
+              reason: null,
+              method: null,
+            },
+          ],
+        },
+      },
+      ...baseRoutes('DISABLED').slice(1),
+    ]);
+    renderPage(<AccountPage />);
+    expect(await screen.findByText('Distinctive-Agent/9.9')).toBeInTheDocument();
   });
 });

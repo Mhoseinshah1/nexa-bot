@@ -6019,6 +6019,15 @@ export const WEB_FA = {
   'web.security_event_totp_disable': 'خاموش کردن ورود دومرحله‌ای',
   'web.security_event_totp_reset': 'برداشتن ورود دومرحله‌ای توسط مدیر یا سرور',
   'web.security_event_backup_codes': 'ساخت کدهای پشتیبان تازه',
+  'web.step_up_failed': 'گذرواژه یا کد شما پذیرفته نشد؛ کاری انجام نشد.',
+  'web.step_up_factor_required':
+    'ورود دومرحله‌ای شما روشن است: کد برنامهٔ احراز هویت خودتان را هم وارد کنید.',
+  'web.admin_step_up_title': 'تأیید هویت خودتان',
+  'web.admin_step_up_hint':
+    'بازنشانی گذرواژه یا برداشتن ورود دومرحله‌ای مدیر دیگر، تأیید هویت خودتان را لازم دارد.',
+  'web.admin_step_up_password': 'گذرواژهٔ خودتان',
+  'web.admin_step_up_code': 'کد ورود دومرحله‌ای خودتان',
+  'web.admin_step_up_code_hint': 'فقط اگر ورود دومرحله‌ای خودتان روشن است.',
   'web.admin_second_factor_reset_title': 'برداشتن ورود دومرحله‌ای',
   'web.admin_second_factor_reset_hint':
     'برای مدیری که گوشی و کدهای پشتیبانش را گم کرده است. گذرواژه تغییر نمی‌کند و همهٔ نشست‌هایش بسته می‌شود.',
