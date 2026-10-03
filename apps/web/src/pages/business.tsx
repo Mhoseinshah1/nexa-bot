@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, type FormEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  FINANCIAL_GRANULARITIES,
   REPORT_PRODUCT_RANKINGS,
   REPORT_RANGES,
   REPORT_REFERRER_RANKINGS,
@@ -10,7 +11,10 @@ import {
   type MoneyComparison,
   type OrderPurpose,
   type PaymentMethod,
+  type FinancialGranularity,
+  type FinancialLines,
   type ReportExportKind,
+  type ReportFinancialResponse,
   type ReportProductRanking,
   type ReportRange,
   type ReportReferrerRanking,
@@ -19,6 +23,7 @@ import {
 } from '@nexa/contracts';
 import {
   fetchReportFailures,
+  fetchReportFinancial,
   fetchReportInfrastructure,
   fetchReportOrders,
   fetchReportPayments,
@@ -55,6 +60,7 @@ import {
   Money,
   Num,
   PageHead,
+  Pills,
   StateSwitch,
   TabPanel,
   Tabs,
@@ -582,19 +588,22 @@ const ReportExportAllowed = createContext(false);
 function ExportButtons({
   selection,
   report,
+  granularity,
 }: {
   selection: ReportRangeSelection;
   report: ReportExportKind;
+  /** The financial statement's bucket size, so the file holds the rows the page shows. */
+  granularity?: FinancialGranularity | undefined;
 }) {
   const allowed = useContext(ReportExportAllowed);
   if (!allowed || !rangeIsComplete(selection)) return null;
   return (
     <>
-      <a className="btn sm" href={reportExportUrl(selection, report, 'csv')} download>
+      <a className="btn sm" href={reportExportUrl(selection, report, 'csv', granularity)} download>
         <Icon name="download" />
         {t('web.report_export_csv')}
       </a>
-      <a className="btn sm" href={reportExportUrl(selection, report, 'xlsx')} download>
+      <a className="btn sm" href={reportExportUrl(selection, report, 'xlsx', granularity)} download>
         <Icon name="download" />
         {t('web.report_export_xlsx')}
       </a>
@@ -784,6 +793,8 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 const REPORT_TABS = [
   'sales',
+  // Phase E2: the financial statement (`docs/financial-reports.md`).
+  'finance',
   'products',
   'services',
   'payments',
@@ -796,6 +807,7 @@ type ReportTab = (typeof REPORT_TABS)[number];
 
 const TAB_LABELS: Readonly<Record<ReportTab, WebKey>> = {
   sales: 'web.report_tab_sales',
+  finance: 'web.report_tab_finance',
   products: 'web.report_tab_products',
   services: 'web.report_tab_services',
   payments: 'web.report_tab_payments',
@@ -862,6 +874,7 @@ export function ReportsPage({
               <OrdersDrilldown selection={selection} />
             </>
           )}
+          {tab === 'finance' && <FinancialReport selection={selection} route={route} />}
           {tab === 'products' && <TopProducts selection={selection} />}
           {tab === 'services' && <ServicesReport selection={selection} />}
           {tab === 'payments' && <PaymentsReport selection={selection} />}
@@ -1674,5 +1687,403 @@ export function ReferralAnalytics({
         )}
       </StateSwitch>
     </Card>
+  );
+}
+
+// --- Financial statement (Phase E2) ---------------------------------------------
+
+const GRANULARITY_LABELS: Readonly<Record<FinancialGranularity, WebKey>> = {
+  DAY: 'web.finance_daily',
+  WEEK: 'web.finance_weekly',
+  MONTH: 'web.finance_monthly',
+};
+
+/** The bucket size in the URL, or none — the server then decides by the period's length. */
+export function financialGranularityOf(route: Route): FinancialGranularity | undefined {
+  const raw = route.query.get('granularity');
+  return (FINANCIAL_GRANULARITIES as readonly string[]).includes(raw ?? '')
+    ? (raw as FinancialGranularity)
+    : undefined;
+}
+
+type MoneyLine = Exclude<
+  keyof FinancialLines,
+  'currency' | 'salesCount' | 'refundCount' | 'externalPayments'
+>;
+
+/** The three sections, in the order the statement reads. Never added to one another. */
+const SALES_LINES: readonly (readonly [MoneyLine, WebKey])[] = [
+  ['grossSales', 'web.finance_gross_sales'],
+  ['discounts', 'web.finance_discounts'],
+  ['sales', 'web.finance_sales'],
+  ['refunds', 'web.finance_refunds'],
+  ['refundsToWallet', 'web.finance_refunds_to_wallet'],
+  ['refundsPaidOut', 'web.finance_refunds_paid_out'],
+  ['netSales', 'web.finance_net_sales'],
+];
+const CASH_LINES: readonly (readonly [MoneyLine, WebKey])[] = [
+  ['principalReceived', 'web.finance_principal'],
+  ['customerFees', 'web.finance_customer_fees'],
+  ['customerPaid', 'web.finance_customer_paid'],
+  ['receiptCredits', 'web.finance_receipt_credits'],
+];
+const WALLET_LINES: readonly (readonly [MoneyLine, WebKey])[] = [
+  ['walletTopups', 'web.finance_wallet_topups'],
+  ['walletSpending', 'web.finance_wallet_spending'],
+  ['cashbackNet', 'web.finance_cashback_net'],
+  ['commissionNet', 'web.finance_commission_net'],
+  ['gifts', 'web.finance_gifts'],
+];
+
+/**
+ * One section of the totals: a row per line, a column per currency. Vertical, so the
+ * statement reads at 390px without a wide table; currencies sit side by side and are never
+ * summed.
+ */
+function SectionTable({
+  caption,
+  lines,
+  totals,
+}: {
+  caption: string;
+  lines: readonly (readonly [MoneyLine, WebKey])[];
+  totals: readonly FinancialLines[];
+}) {
+  const columns: Column<readonly [MoneyLine, WebKey]>[] = [
+    { key: 'line', header: caption, wrap: true, render: ([, label]) => t(label) },
+    ...totals.map((total) => ({
+      key: total.currency,
+      header: total.currency,
+      align: 'end' as const,
+      render: ([key]: readonly [MoneyLine, WebKey]) => (
+        <Money value={{ amountMinor: total[key], currency: total.currency }} />
+      ),
+    })),
+  ];
+  return (
+    <DataTable dense caption={caption} columns={columns} rows={lines} rowKey={([key]) => key} />
+  );
+}
+
+/**
+ * `/reports?tab=finance`: the financial statement (`docs/financial-reports.md`). Sales,
+ * cash from customers and the wallet, per bucket and for the period. The definitions are
+ * on the page because a number whose meaning has to be guessed is not a financial figure.
+ */
+function FinancialReport({ selection, route }: { selection: ReportRangeSelection; route: Route }) {
+  const granularity = financialGranularityOf(route);
+  const report = useReport(
+    ['financial', selection, granularity ?? 'AUTO'],
+    () => fetchReportFinancial(selection, granularity),
+    rangeIsComplete(selection),
+  );
+  const data: ReportFinancialResponse | undefined = report.data;
+  // What the server decided, else what the URL asked for. Unresolved (`undefined`) while an
+  // automatic report loads: the export then lets the server pick by the same rule, rather
+  // than a DAY placeholder that the page will not show once the answer arrives.
+  const resolved = data?.granularity ?? granularity;
+  const shown = resolved ?? 'DAY';
+  return (
+    <>
+      <Card
+        title={t('web.finance_title')}
+        hint={t('web.finance_hint')}
+        actions={<ExportButtons selection={selection} report="FINANCIAL" granularity={resolved} />}
+      >
+        <div className="finance-controls">
+          <Pills
+            value={shown}
+            onChange={(next) => setQueries(route, [['granularity', next]])}
+            items={FINANCIAL_GRANULARITIES.map((id) => ({
+              id,
+              label: t(GRANULARITY_LABELS[id]),
+            }))}
+          />
+        </div>
+        <ul className="finance-definitions small">
+          <li>{t('web.finance_def_sales')}</li>
+          <li>{t('web.finance_def_cash')}</li>
+          <li>{t('web.finance_def_wallet')}</li>
+          <li>{t('web.finance_def_topup')}</li>
+        </ul>
+        <StateSwitch
+          query={report}
+          isEmpty={data !== undefined && data.totals.length === 0 && data.wallet.length === 0}
+          empty={<Empty title={t('web.finance_empty')} icon="inbox" />}
+        >
+          {data !== undefined && (
+            <div className="finance-sections">
+              <SectionTable
+                caption={t('web.finance_section_sales')}
+                lines={SALES_LINES}
+                totals={data.totals}
+              />
+              <SectionTable
+                caption={t('web.finance_section_cash')}
+                lines={CASH_LINES}
+                totals={data.totals}
+              />
+              <p className="muted small" data-testid="finance-provider-fee">
+                {t('web.finance_provider_fee_not_recorded')}
+              </p>
+              <SectionTable
+                caption={t('web.finance_section_wallet_flow')}
+                lines={WALLET_LINES}
+                totals={data.totals}
+              />
+              <p className="muted small" data-testid="finance-no-profit">
+                {t('web.finance_no_profit')}
+              </p>
+            </div>
+          )}
+        </StateSwitch>
+      </Card>
+
+      {data !== undefined && (
+        <>
+          <Card title={t('web.finance_buckets_title')} hint={t('web.finance_buckets_hint')}>
+            <BucketTable data={data} />
+          </Card>
+          <Card title={t('web.finance_wallet_title')} hint={t('web.finance_wallet_hint')}>
+            <WalletLiabilityTables data={data} />
+          </Card>
+          <Card title={t('web.finance_channels_title')} hint={t('web.finance_channels_hint')}>
+            <ChannelTables data={data} />
+          </Card>
+          <Card title={t('web.finance_products_title')} hint={t('web.finance_products_hint')}>
+            <ProductTable data={data} />
+          </Card>
+        </>
+      )}
+    </>
+  );
+}
+
+interface BucketRow {
+  readonly key: string;
+  readonly label: string;
+  readonly lines: FinancialLines;
+}
+
+const BUCKET_MONEY: readonly (readonly [MoneyLine, WebKey])[] = [
+  ['sales', 'web.finance_sales'],
+  ['refunds', 'web.finance_refunds'],
+  ['netSales', 'web.finance_net_sales'],
+  ['customerPaid', 'web.finance_customer_paid'],
+  ['walletTopups', 'web.finance_wallet_topups'],
+  ['walletSpending', 'web.finance_wallet_spending'],
+];
+
+function BucketTable({ data }: { data: ReportFinancialResponse }) {
+  const rows: BucketRow[] = data.buckets.flatMap((bucket) =>
+    (bucket.lines ?? []).map((lines) => ({
+      key: `${bucket.index}|${lines.currency}`,
+      label: bucket.label,
+      lines,
+    })),
+  );
+  const columns: Column<BucketRow>[] = [
+    {
+      key: 'bucket',
+      header: t('web.finance_col_bucket'),
+      render: (r) => <span className="nowrap">{r.label}</span>,
+    },
+    { key: 'currency', header: t('web.finance_col_currency'), render: (r) => r.lines.currency },
+    {
+      key: 'count',
+      header: t('web.finance_col_sales_count'),
+      align: 'end',
+      render: (r) => <Num value={r.lines.salesCount} />,
+    },
+    ...BUCKET_MONEY.map(([key, label]) => ({
+      key,
+      header: t(label),
+      align: 'end' as const,
+      render: (r: BucketRow) => (
+        <Money value={{ amountMinor: r.lines[key], currency: r.lines.currency }} />
+      ),
+    })),
+  ];
+  if (rows.length === 0) return <Empty variant="compact" title={t('web.finance_empty')} />;
+  return (
+    <DataTable
+      dense
+      caption={t('web.finance_buckets_title')}
+      rows={rows}
+      rowKey={(r) => r.key}
+      columns={columns}
+    />
+  );
+}
+
+interface LiabilityRow {
+  readonly key: string;
+  readonly label: string;
+  readonly amount: string;
+}
+
+function WalletLiabilityTables({ data }: { data: ReportFinancialResponse }) {
+  if (data.wallet.length === 0) return <Empty variant="compact" title={t('web.finance_empty')} />;
+  return (
+    <>
+      {data.wallet.map((wallet) => {
+        const rows: LiabilityRow[] = [
+          { key: 'opening', label: t('web.finance_opening'), amount: wallet.opening },
+          ...wallet.movements.map((m) => ({
+            key: m.group,
+            label: t(WALLET_GROUP_LABELS[m.group]),
+            amount: m.amount,
+          })),
+          { key: 'closing', label: t('web.finance_closing'), amount: wallet.closing },
+        ];
+        return (
+          <DataTable
+            key={wallet.currency}
+            dense
+            caption={`${t('web.finance_wallet_title')} ${wallet.currency}`}
+            rows={rows}
+            rowKey={(r) => r.key}
+            rowClassName={(r) =>
+              r.key === 'opening' || r.key === 'closing' ? 'finance-balance-row' : undefined
+            }
+            columns={[
+              { key: 'label', header: wallet.currency, wrap: true, render: (r) => r.label },
+              {
+                key: 'amount',
+                header: t('web.report_col_net_amount'),
+                align: 'end',
+                render: (r) => (
+                  <Money value={{ amountMinor: r.amount, currency: wallet.currency }} />
+                ),
+              },
+            ]}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+type CashRow = ReportFinancialResponse['cashByRoute'][number];
+
+function ChannelTables({ data }: { data: ReportFinancialResponse }) {
+  const cashMoney: readonly (readonly ['principal' | 'customerFees' | 'customerPaid', WebKey])[] = [
+    ['principal', 'web.finance_principal'],
+    ['customerFees', 'web.finance_customer_fees'],
+    ['customerPaid', 'web.finance_customer_paid'],
+  ];
+  return (
+    <>
+      <DataTable
+        dense
+        caption={t('web.finance_channels_title')}
+        rows={data.salesByChannel}
+        rowKey={(r) => `${r.method ?? ''}|${r.provider ?? ''}|${r.currency}`}
+        columns={[
+          {
+            key: 'method',
+            header: t('web.report_col_method'),
+            render: (r) =>
+              r.method === null ? t('web.finance_no_payment') : t(METHOD_LABELS[r.method]),
+          },
+          {
+            key: 'route',
+            header: t('web.report_col_route'),
+            render: (r) => <Ltr>{r.provider ?? '—'}</Ltr>,
+          },
+          {
+            key: 'orders',
+            header: t('web.report_col_orders'),
+            align: 'end',
+            render: (r) => <Num value={r.orders} />,
+          },
+          {
+            key: 'sales',
+            header: t('web.finance_sales'),
+            align: 'end',
+            render: (r) => <Money value={{ amountMinor: r.sales, currency: r.currency }} />,
+          },
+        ]}
+      />
+      <h3 className="finance-subtitle">{t('web.finance_cash_routes_title')}</h3>
+      <DataTable
+        dense
+        caption={t('web.finance_cash_routes_title')}
+        rows={data.cashByRoute}
+        rowKey={(r) => `${r.method}|${r.provider ?? ''}|${r.kind}|${r.currency}`}
+        columns={[
+          {
+            key: 'method',
+            header: t('web.report_col_method'),
+            render: (r) => t(METHOD_LABELS[r.method]),
+          },
+          {
+            key: 'route',
+            header: t('web.report_col_route'),
+            render: (r) => <Ltr>{r.provider ?? '—'}</Ltr>,
+          },
+          {
+            key: 'kind',
+            header: t('web.report_col_kind'),
+            render: (r) =>
+              t(r.kind === 'TOPUP' ? 'web.report_kind_topup' : 'web.report_kind_order'),
+          },
+          ...cashMoney.map(([key, label]) => ({
+            key,
+            header: t(label),
+            align: 'end' as const,
+            render: (r: CashRow) => <Money value={{ amountMinor: r[key], currency: r.currency }} />,
+          })),
+        ]}
+      />
+    </>
+  );
+}
+
+function ProductTable({ data }: { data: ReportFinancialResponse }) {
+  return (
+    <>
+      <DataTable
+        dense
+        caption={t('web.finance_products_title')}
+        rows={data.byProduct}
+        rowKey={(r) => `${r.productId}|${r.title}|${r.currency}`}
+        columns={[
+          {
+            key: 'title',
+            header: t('web.report_col_product'),
+            wrap: true,
+            render: (r) => <bdi>{r.title}</bdi>,
+          },
+          {
+            key: 'orders',
+            header: t('web.report_col_orders'),
+            align: 'end',
+            render: (r) => <Num value={r.orders} />,
+          },
+          {
+            key: 'sales',
+            header: t('web.finance_sales'),
+            align: 'end',
+            render: (r) => <Money value={{ amountMinor: r.sales, currency: r.currency }} />,
+          },
+          {
+            key: 'refunds',
+            header: t('web.finance_refunds'),
+            align: 'end',
+            render: (r) => <Money value={{ amountMinor: r.refunds, currency: r.currency }} />,
+          },
+        ]}
+      />
+      {data.byProductTruncated && (
+        <p className="muted small">{t('web.finance_products_truncated')}</p>
+      )}
+      <p className="small" data-testid="finance-reseller-sales">
+        {t('web.finance_reseller_sales')}{' '}
+        <MoneyList
+          rows={data.resellerSales.map((row) => ({ currency: row.currency, amount: row.sales }))}
+        />
+      </p>
+    </>
   );
 }

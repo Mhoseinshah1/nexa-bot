@@ -92,3 +92,66 @@ export function reconciliationEvidenceAllows(
     (vocabulary.failsUnpaidApproval && approving && recorded.paid !== true)
   );
 }
+
+/** One provider's reconciliation vocabulary, as `reconciliationEvidenceAllows` reads it. */
+export interface ReconciliationVocabulary {
+  readonly provider: PaymentGatewayProvider;
+  readonly confirmed: readonly string[];
+  readonly failed: readonly string[];
+  readonly failsUnpaidApproval: boolean;
+  /** A CONFIRMED resolution also needs the provider's reference bound (CentralPay). */
+  readonly confirmRequiresReference: boolean;
+}
+
+/**
+ * The table above, as rows, for the ONE other reader: the Payment Operations Center's
+ * `NEEDS_RECONCILIATION` queue, which asks in SQL the question `reconciliationEvidenceAllows`
+ * and `reconcileGatewayPayment` ask in TypeScript ("could an operator reconcile this now?").
+ * Derived from the same constant, never restated — and `payment-operations.test.ts` holds
+ * the two to the same answers over every provider, status, `paid` and reference value.
+ */
+export function reconciliationVocabularies(): readonly ReconciliationVocabulary[] {
+  return (
+    Object.entries(RECONCILIATION_EVIDENCE) as [
+      PaymentGatewayProvider,
+      NonNullable<(typeof RECONCILIATION_EVIDENCE)[PaymentGatewayProvider]>,
+    ][]
+  ).map(([provider, vocabulary]) => ({
+    provider,
+    confirmed: vocabulary.confirmed,
+    failed: vocabulary.failed,
+    failsUnpaidApproval: vocabulary.failsUnpaidApproval,
+    confirmRequiresReference: requiresProviderReference(provider),
+  }));
+}
+
+/**
+ * Whether an operator could resolve an UNKNOWN payment holding this recorded evidence to
+ * EITHER terminal state right now — exactly the two checks `reconcileGatewayPayment` makes
+ * under the lock, minus the lock. The TypeScript twin of the queue's SQL.
+ */
+export function reconcilableNow(
+  provider: PaymentGatewayProvider,
+  recorded: {
+    readonly status: string | null;
+    readonly paid: boolean | null;
+    readonly providerChargeId: string | null;
+  },
+): boolean {
+  const confirmable =
+    reconciliationEvidenceAllows(provider, 'CONFIRMED', recorded) &&
+    (!requiresProviderReference(provider) || recorded.providerChargeId !== null);
+  return confirmable || reconciliationEvidenceAllows(provider, 'FAILED', recorded);
+}
+
+/**
+ * The provider statuses that mean "part of the money arrived" — the `PARTIAL` queue. Only
+ * a provider whose own vocabulary has one is listed: NOWPayments' `partially_paid`
+ * (`domain/nowpayments.ts`, a MISMATCH that never fulfils). No other route reports a
+ * partial payment, so none is invented for them.
+ */
+export const PARTIAL_PAYMENT_STATUSES: Readonly<
+  Partial<Record<PaymentGatewayProvider, readonly string[]>>
+> = {
+  NOWPAYMENTS: ['partially_paid'],
+};

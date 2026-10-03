@@ -30,7 +30,16 @@ import {
   customerFeeBasisPointsSchema,
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS, RECEIPT_DISPOSITIONS } from './payment-receipts.js';
-import { gatewayInvoiceViewSchema } from './gateway-invoices.js';
+import {
+  GATEWAY_INVOICE_CREATION_STATES,
+  GATEWAY_INVOICE_OUTCOMES,
+  gatewayInvoiceViewSchema,
+} from './gateway-invoices.js';
+import {
+  paymentOpsQueueSchema,
+  paymentOpsWindowShape,
+  refinePaymentOpsWindow,
+} from './payment-operations.js';
 import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
@@ -4075,6 +4084,21 @@ export const receiptCreditViewSchema = z.object({
 });
 export type ReceiptCreditView = z.infer<typeof receiptCreditViewSchema>;
 
+/** The gateway side of one payment as a queue row shows it (Payment Operations Center). */
+export const paymentGatewaySignalSchema = z.object({
+  creationState: z.enum(GATEWAY_INVOICE_CREATION_STATES),
+  creationErrorCode: z.string().nullable(),
+  providerStatus: z.string().nullable(),
+  providerPaid: z.boolean().nullable(),
+  lastInquiryAt: z.iso.datetime().nullable(),
+  lastInquiryErrorCode: z.string().nullable(),
+  outcome: z.enum(GATEWAY_INVOICE_OUTCOMES).nullable(),
+  lateCompletionObservedAt: z.iso.datetime().nullable(),
+  /** The last operator "ask again", when there was one. */
+  reconcileInquiryRequestedAt: z.iso.datetime().nullable(),
+});
+export type PaymentGatewaySignal = z.infer<typeof paymentGatewaySignalSchema>;
+
 /**
  * One payment, as the Web Admin renders it.
  *
@@ -4169,6 +4193,13 @@ export const paymentSummarySchema = z.object({
    */
   providerReviewStartedAt: z.iso.datetime().nullable().default(null),
   providerReviewUntil: z.iso.datetime().nullable().default(null),
+  /**
+   * What the gateway side last recorded, for the Payment Operations Center's queue rows
+   * (program §10): the creation state, the inquiry's last word and error, the outcome and a
+   * late completion. Never a link, an amount the provider reported or a card. Null for a
+   * payment that is not a `GATEWAY` payment. Defaulted on parse, like the D7 fields.
+   */
+  gatewaySignal: paymentGatewaySignalSchema.nullable().default(null),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
@@ -4254,24 +4285,34 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
-export const paymentListQuerySchema = z.object({
-  limit: z.coerce.number().int().positive().max(PAYMENT_PAGE_MAX).optional(),
-  cursor: z.string().min(1).max(255).optional(),
-  state: z.enum(PAYMENT_STATES).optional(),
-  /** Only payments whose receipt left review this way (WP10 follow-up §5). */
-  disposition: z.enum(RECEIPT_DISPOSITIONS).optional(),
-  method: z.enum(PAYMENT_METHODS).optional(),
-  /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
-  customerId: uuidV7Schema.optional(),
-  orderId: uuidV7Schema.optional(),
-  /** The quotable code, matched exactly. What an operator has in front of them. */
-  reference: z.string().trim().min(1).max(64).optional(),
-  /**
-   * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
-   * matches on this list is documented in `docs/web-admin-search.md`.
-   */
-  q: listSearchQuerySchema.optional(),
-});
+export const paymentListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().positive().max(PAYMENT_PAGE_MAX).optional(),
+    cursor: z.string().min(1).max(255).optional(),
+    state: z.enum(PAYMENT_STATES).optional(),
+    /** Only payments whose receipt left review this way (WP10 follow-up §5). */
+    disposition: z.enum(RECEIPT_DISPOSITIONS).optional(),
+    method: z.enum(PAYMENT_METHODS).optional(),
+    /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
+    customerId: uuidV7Schema.optional(),
+    orderId: uuidV7Schema.optional(),
+    /** The quotable code, matched exactly. What an operator has in front of them. */
+    reference: z.string().trim().min(1).max(64).optional(),
+    /**
+     * The page's ONE free-text search (spec §10), classified by `classifyListSearch`. What it
+     * matches on this list is documented in `docs/web-admin-search.md`.
+     */
+    q: listSearchQuerySchema.optional(),
+    /**
+     * The Payment Operations Center's facets (program §10, `payment-operations.ts`): a queue,
+     * the route the payment was offered through, and a created-at window. Each narrows; none
+     * is a state.
+     */
+    queue: paymentOpsQueueSchema.optional(),
+    gateway: paymentGatewayProviderSchema.optional(),
+    ...paymentOpsWindowShape,
+  })
+  .superRefine(refinePaymentOpsWindow);
 export type PaymentListQuery = z.infer<typeof paymentListQuerySchema>;
 
 export const paymentListResponseSchema = z.object({
@@ -4320,10 +4361,18 @@ export const PAYMENT_TIMELINE_MAX_ENTRIES = 200;
  * The parts of a payment's history that sit behind a permission OTHER than
  * `payments.view`, each the permission that already guards the same fact elsewhere:
  * receipts behind `receipts.view`, refunds behind `refunds.view`, and the wallet ledger
- * behind `users.view`. A section the viewer may not see is WITHHELD and named in the
- * response, so an empty history is never mistaken for a complete one.
+ * behind `users.view`, the order's settlement, fulfilment and refund behind `orders.view`,
+ * and the payment's audit rows behind `audit.view` (Payment Operations Center). A section
+ * the viewer may not see is WITHHELD and named in the response, so an empty history is
+ * never mistaken for a complete one.
  */
-export const PAYMENT_TIMELINE_SECTIONS = ['RECEIPTS', 'REFUNDS', 'WALLET'] as const;
+export const PAYMENT_TIMELINE_SECTIONS = [
+  'RECEIPTS',
+  'REFUNDS',
+  'WALLET',
+  'ORDER',
+  'AUDIT',
+] as const;
 export type PaymentTimelineSection = (typeof PAYMENT_TIMELINE_SECTIONS)[number];
 
 /**
@@ -4334,19 +4383,41 @@ export type PaymentTimelineSection = (typeof PAYMENT_TIMELINE_SECTIONS)[number];
  * truthful its timestamp is. `REFUND_CLOSED_FAILED` is timed by the refund row's
  * `updated_at`: a FAILED refund is terminal in the database (migration 0073) and only a
  * conditional write from an open state reaches it, so that is the time it failed.
+ *
+ * The gateway kinds (Payment Operations Center, program §10) are read from the one
+ * `gateway_invoices` row, which keeps the LATEST inquiry and the LATEST webhook rather than a
+ * log of each: `GATEWAY_INQUIRY` and `GATEWAY_WEBHOOK_HINT` are therefore "the last one, at
+ * this time" — the webhook entry carries how many arrived — and never a fabricated series.
+ * `PAYMENT_OUTCOME_UNKNOWN` is the lane's own `payment.lose_track` audit row, its machine
+ * reason (a mismatch) included; `AUDIT_RECORDED` is every audit row on the payment, behind
+ * `audit.view`. The order kinds are the settling order's own timestamps and the operation
+ * that delivers what it bought (`PURCHASED_AS`), behind `orders.view`.
  */
 export const PAYMENT_TIMELINE_KINDS = [
   'PAYMENT_CREATED',
+  'GATEWAY_INVOICE_REQUESTED',
+  'GATEWAY_INVOICE_CREATED',
   'CUSTOMER_SIGNALLED',
   'RECEIPT_SUBMITTED',
+  'GATEWAY_WEBHOOK_HINT',
+  'GATEWAY_INQUIRY',
+  'GATEWAY_REINQUIRE_REQUESTED',
+  'PROVIDER_REVIEW_OPENED',
+  'PAYMENT_OUTCOME_UNKNOWN',
   'PAYMENT_CONFIRMED',
   'PAYMENT_RESOLVED',
+  'GATEWAY_OUTCOME',
+  'GATEWAY_LATE_COMPLETION',
   'RECEIPT_CREDITED',
+  'ORDER_SETTLED',
+  'ORDER_FULFILMENT',
   'WALLET_ENTRY',
   'REFUND_REQUESTED',
   'REFUND_COMPLETED',
   'REFUND_CLOSED_FAILED',
+  'ORDER_REFUNDED',
   'CUSTOMER_NOTIFIED',
+  'AUDIT_RECORDED',
 ] as const;
 export type PaymentTimelineKind = (typeof PAYMENT_TIMELINE_KINDS)[number];
 
@@ -4421,6 +4492,90 @@ export const paymentTimelineEntrySchema = z.discriminatedUnion('kind', [
     ...timelineAt,
     refundId: z.string(),
     ...timelineMoney,
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_INVOICE_REQUESTED'),
+    ...timelineAt,
+    provider: paymentGatewayProviderSchema,
+    /** Where creating the invoice got to: `CREATED`, refused, lost or still waiting. */
+    creationState: z.enum(GATEWAY_INVOICE_CREATION_STATES),
+    /** The provider's documented refusal code, or Nexa's own machine note. */
+    errorCode: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_INVOICE_CREATED'),
+    ...timelineAt,
+    provider: paymentGatewayProviderSchema,
+    providerInvoiceId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_WEBHOOK_HINT'),
+    /** When the LAST webhook arrived. A hint: it schedules an inquiry and decides nothing. */
+    ...timelineAt,
+    provider: paymentGatewayProviderSchema,
+    statusHint: z.string().nullable(),
+    webhookCount: z.number().int(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_INQUIRY'),
+    /**
+     * When the LAST inquiry was answered — the only approval this installation trusts. With an
+     * `errorCode` the inquiry failed, and `providerStatus`/`providerPaid` are null: the row
+     * keeps an EARLIER answer's status, which is not this inquiry's result.
+     */
+    ...timelineAt,
+    provider: paymentGatewayProviderSchema,
+    providerStatus: z.string().nullable(),
+    providerPaid: z.boolean().nullable(),
+    errorCode: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_REINQUIRE_REQUESTED'),
+    /**
+     * One operator "ask again" that was recorded, from its audit row — one entry per request.
+     * Not the invoice's request column, which the inquiry that answers it clears.
+     */
+    ...timelineAt,
+  }),
+  z.object({
+    kind: z.literal('PROVIDER_REVIEW_OPENED'),
+    ...timelineAt,
+    /** The settlement deadline the review opened, frozen. */
+    until: z.iso.datetime(),
+  }),
+  z.object({
+    kind: z.literal('PAYMENT_OUTCOME_UNKNOWN'),
+    ...timelineAt,
+    /** The lane's machine reason when it was a mismatch hold; null for a lapsed review. */
+    reason: z.string().nullable(),
+    providerStatus: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_OUTCOME'),
+    ...timelineAt,
+    outcome: z.enum(GATEWAY_INVOICE_OUTCOMES),
+  }),
+  z.object({ kind: z.literal('GATEWAY_LATE_COMPLETION'), ...timelineAt }),
+  z.object({ kind: z.literal('ORDER_SETTLED'), ...timelineAt, orderId: z.string() }),
+  z.object({
+    kind: z.literal('ORDER_FULFILMENT'),
+    /** When the delivering operation ended; when it was planned, while it has not. */
+    ...timelineAt,
+    orderId: z.string(),
+    operationType: z.enum(OPERATION_TYPES),
+    operationState: z.enum(OPERATION_STATES),
+  }),
+  z.object({ kind: z.literal('ORDER_REFUNDED'), ...timelineAt, orderId: z.string() }),
+  z.object({
+    kind: z.literal('AUDIT_RECORDED'),
+    ...timelineAt,
+    auditId: z.string(),
+    /** The machine action code. Never `before`/`after`, never a note. */
+    action: z.string(),
+    actorType: z.enum(ACTOR_TYPES),
+    /** The administrator, when an administrator acted; null for anyone else. */
+    adminId: z.string().nullable(),
+    result: z.enum(AUDIT_RESULTS),
   }),
   z.object({
     kind: z.literal('CUSTOMER_NOTIFIED'),

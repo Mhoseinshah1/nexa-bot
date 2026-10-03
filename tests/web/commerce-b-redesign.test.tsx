@@ -134,7 +134,7 @@ describe('the broadcast send', () => {
     const api = stubApi([
       {
         url: '/audience/options',
-        body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+        body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
       },
       { url: `/broadcasts/${id}`, body: { broadcast: draft } },
       {
@@ -171,7 +171,7 @@ describe('the campaign form', () => {
     stubApi([
       {
         url: '/audience/options',
-        body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+        body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
       },
       { url: '/products', body: { products: [], nextCursor: null } },
       { url: '/product-categories', body: { categories: [] } },
