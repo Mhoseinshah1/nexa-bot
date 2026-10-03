@@ -76,6 +76,18 @@ export const AUDIENCE_REFERRAL_FILTERS = [
 ] as const;
 export type AudienceReferralFilter = (typeof AUDIENCE_REFERRAL_FILTERS)[number];
 
+/**
+ * Broadcast V2 (program §19): whether the customer has a service that is ACTIVE right now —
+ * state `ACTIVE` and an expiry that is open or still after `asOf`, the same instant every
+ * relative criterion reads. `NONE` is the negation (no such service, including a customer
+ * who never had one), which the "at least one matching service" block cannot express.
+ */
+export const AUDIENCE_ACTIVE_SERVICE_FILTERS = ['ANY', 'HAS', 'NONE'] as const;
+export type AudienceActiveServiceFilter = (typeof AUDIENCE_ACTIVE_SERVICE_FILTERS)[number];
+
+/** At most this many tag ids in either tag list. */
+export const AUDIENCE_TAGS_MAX = 20;
+
 const isoInstant = z.iso.datetime({ offset: true });
 /** A signed minor-unit amount as decimal text: JSON has no bigint. */
 const minorAmount = z.string().regex(/^-?(0|[1-9][0-9]{0,17})$/u, 'must be whole minor units');
@@ -97,6 +109,28 @@ export const audienceSegmentSchema = z
     message: 'a segment selects ordinary customers, at least one reseller tier, or both',
   });
 export type AudienceSegment = z.infer<typeof audienceSegmentSchema>;
+
+/**
+ * Broadcast V2 (program §19): the operator-defined customer TAGS (program §8,
+ * `docs/customer-notes-tags.md`), by id — never by an editable label. `anyOf`: the customer
+ * carries at least one of these tags; `noneOf`: the customer carries none of them. Both
+ * given: both hold. An archived tag still selects the customers that carry it, as it still
+ * filters the customer list. Ids from another tenant select nobody (the assignment is looked
+ * up inside the tenant).
+ */
+export const audienceTagsSchema = z
+  .object({
+    anyOf: idList(AUDIENCE_TAGS_MAX).default([]),
+    noneOf: idList(AUDIENCE_TAGS_MAX).default([]),
+  })
+  .strict()
+  .refine((tags) => tags.anyOf.length > 0 || tags.noneOf.length > 0, {
+    message: 'a tag criterion names at least one tag',
+  })
+  .refine((tags) => !tags.anyOf.some((id) => tags.noneOf.includes(id)), {
+    message: 'a tag cannot be both required and excluded',
+  });
+export type AudienceTags = z.infer<typeof audienceTagsSchema>;
 
 /**
  * A SERVICE-level criterion: the customer qualifies when at least ONE of their services
@@ -184,6 +218,10 @@ export const audienceDefinitionSchema = z
     trial: z.enum(AUDIENCE_TRIAL_FILTERS).default('ANY'),
     referral: z.enum(AUDIENCE_REFERRAL_FILTERS).default('ANY'),
     service: audienceServiceCriteriaSchema.nullable().default(null),
+    /** Broadcast V2: the customer's tags (program §8). */
+    tags: audienceTagsSchema.nullable().default(null),
+    /** Broadcast V2: has / has no service that is active now. */
+    activeService: z.enum(AUDIENCE_ACTIVE_SERVICE_FILTERS).default('ANY'),
   })
   .strict()
   .refine(
@@ -214,8 +252,17 @@ export const audienceDefinitionSchema = z
     { message: 'a customer who never purchased has no last purchase' },
   );
 
-/** The definition after parsing: every field present, with its default. */
-export type AudienceDefinition = z.output<typeof audienceDefinitionSchema>;
+type ParsedAudienceDefinition = z.output<typeof audienceDefinitionSchema>;
+
+/**
+ * The definition after parsing: every field present with its default — except the two
+ * Broadcast V2 dimensions, which the CANONICAL form carries only when they narrow anything
+ * (see `canonicalAudienceDefinition`). Absent means `null` / `'ANY'`.
+ */
+export type AudienceDefinition = Omit<ParsedAudienceDefinition, 'tags' | 'activeService'> & {
+  readonly tags?: AudienceTags | null;
+  readonly activeService?: AudienceActiveServiceFilter;
+};
 /** What a caller may submit: omitted fields take their defaults. */
 export type AudienceDefinitionInput = z.input<typeof audienceDefinitionSchema>;
 
@@ -281,6 +328,17 @@ export function canonicalAudienceDefinition(input: unknown): AudienceDefinition 
             expiringWithinHours: d.service.expiringWithinHours,
             expired: d.service.expired,
           },
+    /*
+     * Broadcast V2's two dimensions are APPENDED, and only when they narrow the audience. A
+     * definition that uses neither therefore serialises byte for byte as it did before they
+     * existed, so its sha256 is unchanged: a draft saved, or an audience frozen, by the
+     * previous release still matches the hash it was confirmed under. Pinned by a golden hash
+     * in `tests/unit/audience-definition.test.ts`.
+     */
+    ...(d.tags === null
+      ? {}
+      : { tags: { anyOf: sortedUnique(d.tags.anyOf), noneOf: sortedUnique(d.tags.noneOf) } }),
+    ...(d.activeService === 'ANY' ? {} : { activeService: d.activeService }),
   };
 }
 
@@ -343,6 +401,11 @@ export const audienceOptionsResponseSchema = z.object({
   resellerTiers: z.array(z.object({ id: z.string(), name: z.string() })),
   products: z.array(z.object({ id: z.string(), title: z.string() })),
   panels: z.array(z.object({ id: z.string(), name: z.string() })),
+  /**
+   * Broadcast V2: the tenant's customer tags (program §8), archived ones included and marked —
+   * an archived tag still selects the customers that carry it.
+   */
+  tags: z.array(z.object({ id: z.string(), label: z.string(), archived: z.boolean() })),
 });
 export type AudienceOptionsResponse = z.infer<typeof audienceOptionsResponseSchema>;
 
