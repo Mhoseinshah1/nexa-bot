@@ -1310,6 +1310,20 @@
       "when": 1791066059512,
       "tag": "0186_migration_opening_balance",
       "breakpoints": true
+    },
+    {
+      "idx": 187,
+      "version": "7",
+      "when": 1791066110731,
+      "tag": "0187_order_origin",
+      "breakpoints": true
+    },
+    {
+      "idx": 188,
+      "version": "7",
+      "when": 1791066121061,
+      "tag": "0188_order_origin_guards",
+      "breakpoints": true
     }
   ]
 }

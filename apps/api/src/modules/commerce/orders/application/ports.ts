@@ -4,6 +4,7 @@ import type {
   Money,
   OrderId,
   OrderCategorySnapshot,
+  OrderOrigin,
   OrderPurpose,
   OrderState,
   PanelId,
@@ -80,6 +81,13 @@ export interface OrderRecord {
    * column existed settlement had no way to tell the two apart.
    */
   readonly purpose: OrderPurpose;
+  /**
+   * Where the order came from (Migration P3). `STANDARD` for every order this
+   * installation's own flows write; `LEGACY_ADOPTION` for an adopted legacy service,
+   * which is never a sale and is never refunded (`orders_legacy_adoption_shape_check`).
+   * Read-only: no writer here sets it, and 0188 refuses any UPDATE of it.
+   */
+  readonly origin: OrderOrigin;
   readonly line: OrderLine;
   readonly totals: OrderTotalsRecord;
   /**

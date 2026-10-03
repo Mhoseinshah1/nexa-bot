@@ -16,6 +16,7 @@ import { priceQuoteToWire } from '../application/order-pricing.js';
 import type {
   CurrencyCode,
   OrderId,
+  OrderOrigin,
   OrderPurpose,
   OrderState,
   PanelId,
@@ -491,6 +492,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     customerId: row.customerId as UserId,
     state: row.state as OrderState,
     purpose: row.purpose as OrderPurpose,
+    origin: row.origin as OrderOrigin,
     line: {
       productId: row.productId as ProductId | null,
       panelId: row.panelId as PanelId,

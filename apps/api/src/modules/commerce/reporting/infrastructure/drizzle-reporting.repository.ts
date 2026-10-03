@@ -6,6 +6,7 @@ import {
   REPORT_COMMERCIAL_OPERATION_TYPES,
   REPORT_FAILED_OPERATION_STATES,
   REPORT_FAILED_PAYMENT_STATES,
+  SALE_ORDER_ORIGINS,
   SALE_ORDER_PURPOSES,
   SERVICE_STATES,
   TRAFFIC_SELLING_PURPOSES,
@@ -107,6 +108,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         FROM orders o
        WHERE o.tenant_id = ${tenant(scope)}
          AND o.state = 'PAID'
+         AND ${saleOrigin}
          AND ${within(sql`o.settled_at`, window)}
        GROUP BY o.currency`);
     const money = (key: 'revenue' | 'gross' | 'discount'): CurrencyAmount[] =>
@@ -139,7 +141,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
           FROM orders o
          WHERE o.tenant_id = ${tenant(scope)}
            AND o.state = 'PAID'
-           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
          GROUP BY o.customer_id
       ) f
       WHERE ${within(sql`f.first_sale`, window)}`);
@@ -156,6 +158,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         FROM services s
         JOIN orders o ON o.tenant_id = s.tenant_id AND o.id = s.order_id
        WHERE s.tenant_id = ${tenant(scope)}
+         AND ${saleOrigin}
          AND ${within(sql`s.provisioned_at`, window)}`);
     return { paid: row?.paid ?? 0, trial: row?.trial ?? 0 };
   }
@@ -195,7 +198,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         SELECT o.customer_id FROM orders o
          WHERE o.tenant_id = ${tenant(scope)}
            AND o.state = 'PAID'
-           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
            AND ${within(sql`o.settled_at`, { from: purchasedSince, to: now })}
       ) active`);
     return row?.n ?? 0;
@@ -220,21 +223,21 @@ export class DrizzleReportingRepository implements ReportingRepository {
             ts: sql`o.settled_at`,
             value: sql`sum(o.total_amount)`,
             from: sql`orders o WHERE o.tenant_id = ${tenant(scope)} AND o.state = 'PAID'
-              AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)}) AND o.currency = ${currency ?? ''}`,
+              AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)}) AND o.currency = ${currency ?? ''}`,
           };
         case 'SALES':
           return {
             ts: sql`o.settled_at`,
             value: sql`count(*)`,
             from: sql`orders o WHERE o.tenant_id = ${tenant(scope)} AND o.state = 'PAID'
-              AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})`,
+              AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})`,
           };
         case 'RENEWALS':
           return {
             ts: sql`o.settled_at`,
             value: sql`count(*)`,
             from: sql`orders o WHERE o.tenant_id = ${tenant(scope)} AND o.state = 'PAID'
-              AND o.purpose = 'RENEW'`,
+              AND ${saleOrigin} AND o.purpose = 'RENEW'`,
           };
         case 'NEW_USERS':
           return {
@@ -269,7 +272,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
     const rows = await this.rows<{ currency: CurrencyCode }>(sql`
       SELECT DISTINCT o.currency FROM orders o
        WHERE o.tenant_id = ${tenant(scope)} AND o.state = 'PAID'
-         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
          AND (${sql.join(predicates, sql` OR `)})
        ORDER BY o.currency`);
     return rows.map((row) => row.currency);
@@ -318,7 +321,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         LEFT JOIN products p ON p.tenant_id = o.tenant_id AND p.id = o.product_id
        WHERE o.tenant_id = ${tenant(scope)}
          AND o.state = 'PAID'
-         AND o.purpose = ANY(${purposes(PRODUCT_RANKING_PURPOSES)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(PRODUCT_RANKING_PURPOSES)})
          AND ${within(sql`o.settled_at`, window)}
        GROUP BY o.product_id, o.line_title, o.currency, p.status
        ORDER BY ${order}, o.line_title ASC, o.product_id ASC
@@ -346,7 +349,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
       SELECT count(*)::int AS n FROM (
         SELECT 1 FROM orders o
          WHERE o.tenant_id = ${tenant(scope)} AND o.state = 'PAID'
-           AND o.purpose = ANY(${purposes(PRODUCT_RANKING_PURPOSES)})
+           AND ${saleOrigin} AND o.purpose = ANY(${purposes(PRODUCT_RANKING_PURPOSES)})
            AND ${within(sql`o.settled_at`, window)}
          GROUP BY o.product_id, o.line_title, o.currency
       ) g`);
@@ -377,7 +380,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         FROM orders o
        WHERE o.tenant_id = ${tenant(scope)}
          AND o.state = 'PAID'
-         AND o.purpose = ANY(${purposes(list)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(list)})
          AND ${within(sql`o.settled_at`, window)}
        GROUP BY o.purpose, o.currency`);
     return list.map((purpose) => {
@@ -396,7 +399,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         FROM orders o
        WHERE o.tenant_id = ${tenant(scope)}
          AND o.state = 'PAID'
-         AND o.purpose = ANY(${purposes(TRAFFIC_SELLING_PURPOSES)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(TRAFFIC_SELLING_PURPOSES)})
          AND ${within(sql`o.settled_at`, window)}`);
     return { bytes: BigInt(row?.bytes ?? '0'), unlimitedLines: row?.unlimited ?? 0 };
   }
@@ -418,7 +421,8 @@ export class DrizzleReportingRepository implements ReportingRepository {
     const perPanel = sql`
       WITH created AS (
         SELECT s.panel_id, count(*)::int AS n FROM services s
-         WHERE s.tenant_id = ${t} AND ${within(sql`s.provisioned_at`, window)}
+          JOIN orders o ON o.tenant_id = s.tenant_id AND o.id = s.order_id
+         WHERE s.tenant_id = ${t} AND ${saleOrigin} AND ${within(sql`s.provisioned_at`, window)}
          GROUP BY s.panel_id
       ), active AS (
         SELECT s.panel_id, count(*)::int AS n FROM services s
@@ -428,7 +432,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         SELECT o.panel_id, ${meteredBytes(sql`o`)}::numeric AS bytes, ${unlimitedLines(sql`o`)} AS unlimited
           FROM orders o
          WHERE o.tenant_id = ${t} AND o.state = 'PAID'
-           AND o.purpose = ANY(${purposes(TRAFFIC_SELLING_PURPOSES)})
+           AND ${saleOrigin} AND o.purpose = ANY(${purposes(TRAFFIC_SELLING_PURPOSES)})
            AND ${within(sql`o.settled_at`, window)}
          GROUP BY o.panel_id
       ), failures AS (
@@ -610,7 +614,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
              count(*) FILTER (WHERE EXISTS (
                SELECT 1 FROM orders o
                 WHERE o.tenant_id = r.tenant_id AND o.customer_id = r.referee_id
-                  AND o.state = 'PAID' AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+                  AND o.state = 'PAID' AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
              ))::int AS converted
         FROM referrals r
        WHERE r.tenant_id = ${tenant(scope)}
@@ -630,7 +634,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         JOIN referrals r ON r.tenant_id = o.tenant_id AND r.referee_id = o.customer_id
        WHERE o.tenant_id = ${tenant(scope)}
          AND o.state = 'PAID'
-         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
          AND ${within(sql`o.settled_at`, window)}
        GROUP BY o.currency
        ORDER BY o.currency`);
@@ -678,7 +682,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
                count(*) FILTER (WHERE EXISTS (
                  SELECT 1 FROM orders o
                   WHERE o.tenant_id = r.tenant_id AND o.customer_id = r.referee_id
-                    AND o.state = 'PAID' AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+                    AND o.state = 'PAID' AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
                ))::int AS buyers
           FROM referrals r
          WHERE r.tenant_id = ${t} AND ${within(sql`r.created_at`, window)}
@@ -688,7 +692,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
           FROM orders o
           JOIN referrals r ON r.tenant_id = o.tenant_id AND r.referee_id = o.customer_id
          WHERE o.tenant_id = ${t} AND o.state = 'PAID'
-           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
            AND ${within(sql`o.settled_at`, window)}
          GROUP BY r.referrer_id, o.currency
       ), com AS (
@@ -745,7 +749,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         SELECT r.referrer_id FROM orders o
           JOIN referrals r ON r.tenant_id = o.tenant_id AND r.referee_id = o.customer_id
          WHERE o.tenant_id = ${t} AND o.state = 'PAID'
-           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
            AND ${within(sql`o.settled_at`, window)}
         UNION
         SELECT w.customer_id FROM wallet_entries w
@@ -912,7 +916,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
       SELECT width_bucket(o.settled_at, ${bounds}) - 1 AS bucket, o.purpose, count(*)::int AS n
         FROM orders o
        WHERE o.tenant_id = ${tenant(scope)} AND o.state = 'PAID'
-         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
          AND ${within(sql`o.settled_at`, window)}
        GROUP BY 1, 2`);
     const out = new Map<number, Map<OrderPurpose, number>>();
@@ -962,9 +966,10 @@ export class DrizzleReportingRepository implements ReportingRepository {
           ON p.tenant_id = o.tenant_id AND p.order_id = o.id AND p.state = 'CONFIRMED'
        WHERE o.tenant_id = ${tenant(scope)}
          AND o.state = 'PAID'
+         AND ${saleOrigin}
          AND ${within(sql`o.settled_at`, window)}
          ${filter.purpose === undefined ? sql`` : sql`AND o.purpose = ${filter.purpose}`}
-         ${filter.purposes === undefined ? sql`` : sql`AND o.purpose = ANY(${purposes(filter.purposes)})`}
+         ${filter.purposes === undefined ? sql`` : sql`AND ${saleOrigin} AND o.purpose = ANY(${purposes(filter.purposes)})`}
          ${filter.productId === undefined ? sql`` : sql`AND o.product_id = ${filter.productId}::uuid`}
          ${after === null ? sql`` : sql`AND (o.settled_at, o.id) < (${after.at}::timestamptz, ${after.id}::uuid)`}
        ORDER BY o.settled_at DESC, o.id DESC
@@ -1134,7 +1139,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         FROM orders o
        WHERE o.tenant_id = ${tenant(scope)}
          AND o.state = ANY(${text(FINANCIAL_SETTLED_ORDER_STATES)})
-         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
          AND ${within(ts, windowOf(boundaries))}
        GROUP BY 1, 2`);
     return rows.map((row) => ({
@@ -1281,7 +1286,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
           ON p.tenant_id = o.tenant_id AND p.order_id = o.id AND p.state = 'CONFIRMED'
        WHERE o.tenant_id = ${tenant(scope)}
          AND o.state = ANY(${text(FINANCIAL_SETTLED_ORDER_STATES)})
-         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
          AND ${within(sql`o.settled_at`, window)}
        GROUP BY 1, 2, 3
        ORDER BY 1 NULLS LAST, 2 NULLS FIRST, 3`);
@@ -1317,7 +1322,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
           FROM orders o
          WHERE o.tenant_id = ${tenant(scope)}
            AND o.state = ANY(${text(FINANCIAL_SETTLED_ORDER_STATES)})
-           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
            AND o.product_id IS NOT NULL
            AND ${within(sql`o.settled_at`, window)}
          GROUP BY 1, 2, 3
@@ -1366,7 +1371,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         JOIN orders o ON o.tenant_id = t.tenant_id AND o.id = t.order_id
        WHERE t.tenant_id = ${tenant(scope)}
          AND o.state = ANY(${text(FINANCIAL_SETTLED_ORDER_STATES)})
-         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
          AND ${within(sql`o.settled_at`, window)}
        GROUP BY 1
        ORDER BY 1`);
@@ -1421,10 +1426,19 @@ export function resellerSalesStatement(tenantId: string, window: Window): SQL {
           FROM order_reseller_terms t
           JOIN orders o ON o.tenant_id = t.tenant_id AND o.id = t.order_id
          WHERE t.tenant_id = ${tenantId}::uuid AND o.state = 'PAID'
-           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND ${saleOrigin} AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
            AND ${within(sql`o.settled_at`, window)}
          GROUP BY t.reseller_customer_id, o.currency`;
 }
+
+/**
+ * Migration P3: only an order of a SALE origin is a sale. A `LEGACY_ADOPTION` represents
+ * a provider account the legacy bot sold — not a sale, not revenue, not a new buyer, not
+ * a service this installation created — so every read of `orders o` that counts one of
+ * those carries this beside its purpose rule. Free by CHECK as well, so no amount of one
+ * could surface even where a count forgot it.
+ */
+const saleOrigin: SQL = sql`o.origin = ANY(${text(SALE_ORDER_ORIGINS)})`;
 
 function tenant(scope: TenantContext): SQL {
   return sql`${scope.tenantId}::uuid`;
