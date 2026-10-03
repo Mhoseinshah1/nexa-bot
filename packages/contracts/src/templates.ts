@@ -403,8 +403,9 @@ export const TEMPLATES = [
   {
     key: 'ops.group.topic_name.system',
     description:
-      'The name Nexa gives the forum topic it creates for system events and errors in the ' +
-      'operations log group. Read when the topic is created or recreated.',
+      'The name Nexa gives the forum topic it creates for system events in the operations ' +
+      'log group — and for any event no other topic claims. Read when the topic is created ' +
+      'or recreated.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -413,6 +414,56 @@ export const TEMPLATES = [
     description:
       'The name Nexa gives the forum topic it creates for the payments log in the operations ' +
       'log group. Read when the topic is created or recreated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  // Spec §12 — the topics beyond the first two, each named when created or recreated.
+  {
+    key: 'ops.group.topic_name.errors',
+    description:
+      'The name Nexa gives the operations log group topic for unanticipated failures: ' +
+      'unhandled exceptions and errors the API answered.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.services',
+    description:
+      'The name Nexa gives the operations log group topic for orders and the services ' +
+      'provisioned for them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.panels',
+    description:
+      'The name Nexa gives the operations log group topic for panel health, probes and ' +
+      'capacity.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.bot',
+    description:
+      'The name Nexa gives the operations log group topic for the bots themselves: sending ' +
+      'to customers, menus and commands, channel checks and token replacement.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.security',
+    description:
+      'The name Nexa gives the operations log group topic for refusals, sign-in lock-outs, ' +
+      'administrator changes and spam protection.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.backups',
+    description:
+      'The name Nexa gives the operations log group topic that receives the encrypted backup ' +
+      'archives, the notice for an archive too large to send, and the backup and recovery ' +
+      'events.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

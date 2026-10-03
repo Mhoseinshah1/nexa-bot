@@ -20,6 +20,11 @@ import {
   quietHoursTimeSchema,
 } from './customer-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
+import {
+  BACKUP_INTERVAL_MINUTES_MAX,
+  BACKUP_INTERVAL_MINUTES_MIN,
+  BACKUP_SCHEDULE_SETTING_KEYS,
+} from './backup.js';
 import { uuidV7Schema } from './ids.js';
 import {
   REFERRAL_COMMISSION_PERCENT_MAX,
@@ -365,6 +370,49 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * The automatic backup schedule (spec §13.2). Read on the INSTALLATION tenant by the
+   * worker's backup scheduler on every tick, so a change applies within one tick and
+   * needs no restart. Null — the default — means the installation's environment value
+   * (`BACKUP_SCHEDULE_ENABLED`, `BACKUP_INTERVAL_MS`), so an installation whose operator
+   * never opens the backup page behaves exactly as it did before these keys existed.
+   * Edited on the backup page («بکاپ و بازیابی»), not the generic settings page.
+   */
+  {
+    key: BACKUP_SCHEDULE_SETTING_KEYS.enabled,
+    description:
+      'Whether the worker takes automatic backups. Null uses the installation environment ' +
+      'value BACKUP_SCHEDULE_ENABLED. Read on the installation tenant on every scheduler tick.',
+    schema: z.boolean().nullable(),
+    defaultValue: null,
+    // Null carries a behaviour — "use the environment default" — so it is LITERAL, exactly
+    // like the ops topic ids above; `false` is an ordinary value meaning off.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
+    description:
+      'Minutes after the last VERIFIED backup until the next automatic one is due, between ' +
+      `${String(BACKUP_INTERVAL_MINUTES_MIN)} minutes and 30 days. Null uses the installation ` +
+      'environment value BACKUP_INTERVAL_MS. Measured from the last successful run, never from ' +
+      'process start, so restarts do not multiply backups.',
+    schema: z
+      .number()
+      .int()
+      .min(BACKUP_INTERVAL_MINUTES_MIN)
+      .max(BACKUP_INTERVAL_MINUTES_MAX)
+      .nullable(),
+    defaultValue: null,
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
     consumer: 'ACTIVE',
   },
   {

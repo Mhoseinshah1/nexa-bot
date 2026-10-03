@@ -387,3 +387,36 @@ length was validated BEFORE the AEAD tag, so one flipped bit in the first
 ciphertext byte reported `archive_malformed` — acting on attacker-chosen plaintext
 and answering with an oracle. It now records the complaint and drains the stream
 so `decipher.final()` authenticates first.
+
+## Amendment — delivery into the operations log group, a Web Admin schedule, scheduler health
+
+Spec sections 13 and 14 (2026-10). Three changes; none touches the stage order, the
+lock, the archive format or the three delivery outcomes.
+
+**Destination.** `DELIVER` now asks `RoutedBackupDelivery` where to send, once per run:
+the connected operations log group's «💾 بکاپ‌ها» topic first (posted by the group's own
+bot, the topic created and recreated through the ops group's ONE provisioner and its
+conditional claim), the `BACKUP_TELEGRAM_*` chat only as the explicit fallback, else
+nowhere. A fallback is taken only when nothing was sent to the group, so an
+`OUTCOME_UNKNOWN` is never followed by a second copy. The one resend is after Telegram
+DEFINITIVELY refused a send because the topic was deleted — nothing was posted — and it
+happens once. Resolving the destination, an unusable group and a channel that throws are
+each recorded on the delivery columns; none fails the run. Control 5 above now reads: the
+dedicated channel is the operations group, and its membership is the one to review. A
+separate bot token is not needed for the group (only a member can post there); it
+remains for the fallback chat.
+
+**Schedule.** Whether automatic backups run and how often are two registry settings
+(`backup.schedule_enabled`, `backup.interval_minutes`) on the installation tenant, NULL
+by default, and NULL means the environment value. The section above that kept the
+schedule out of tenant settings still holds for everything a restore needs — the CLI
+reads none of this; only the worker's scheduler does, on every tick, with the database
+up by definition. The bounds are unchanged (15 minutes to 30 days).
+
+**Health.** The scheduler's freshness is `LoopProgress`: healthy from `start()` for
+three ticks, with an immediate first check, and a run in flight counts as progress for
+as long as its lease heartbeat is alive — the reclamation rule, with no run-length
+budget. A group whose latest check found a PROBLEM is not offered the archive, and a
+route that throws before anything was sent falls back like one that answers. The `BACKUP_TICK_MS=30000` production workaround for
+a worker reported unhealthy until its first five-minute tick is no longer needed.
+Operational detail: `docs/backup.md`.

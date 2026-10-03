@@ -87,7 +87,13 @@ const PROBLEM_TEXT: Readonly<Record<OpsLogGroupProblem, WebKey>> = {
 
 const TOPIC_NAME: Readonly<Record<OpsLogTopicCategory, WebKey>> = {
   SYSTEM: 'web.opsgroup_topic_system',
+  ERRORS: 'web.opsgroup_topic_errors',
   PAYMENTS: 'web.opsgroup_topic_payments',
+  SERVICES: 'web.opsgroup_topic_services',
+  PANELS: 'web.opsgroup_topic_panels',
+  BOT: 'web.opsgroup_topic_bot',
+  SECURITY: 'web.opsgroup_topic_security',
+  BACKUPS: 'web.opsgroup_topic_backups',
 };
 const TOPIC_STATE: Readonly<Record<OpsLogTopicState, WebKey>> = {
   PENDING: 'web.opsgroup_topic_pending',

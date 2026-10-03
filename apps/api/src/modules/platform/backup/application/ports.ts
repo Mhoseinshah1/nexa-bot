@@ -1,4 +1,5 @@
 import type {
+  BackupDeliveryDestination,
   BackupDeliveryState,
   BackupManifest,
   BackupRunState,
@@ -100,10 +101,24 @@ export interface BackupWorkspaceFactory {
  */
 export type DeliveryAttempt =
   | { readonly state: 'SUCCEEDED'; readonly detail: string | null }
-  | { readonly state: 'FAILED_DEFINITIVE'; readonly detail: string }
+  | {
+      readonly state: 'FAILED_DEFINITIVE';
+      readonly detail: string;
+      /**
+       * Telegram refused the send because the forum topic it named is gone (an operator
+       * deleted it). Only ever set on a DEFINITIVE refusal — nothing was posted — which is
+       * what makes recreating the topic and sending once more safe: it cannot duplicate
+       * a document Telegram may hold.
+       */
+      readonly topicMissing?: boolean;
+    }
   | { readonly state: 'OUTCOME_UNKNOWN'; readonly detail: string };
 
-export interface BackupDelivery {
+/**
+ * ONE fixed destination: what Backup V1 shipped, and still the shape of the
+ * environment-configured dedicated chat (`TelegramBackupDelivery`).
+ */
+export interface BackupDeliveryChannel {
   /** Whether a destination is configured at all. */
   readonly configured: boolean;
   /**
@@ -125,6 +140,46 @@ export interface BackupDelivery {
    * compensating control, and is not the same thing as a failed delivery.
    */
   sendMessage(text: string): Promise<DeliveryAttempt>;
+}
+
+/** What a router decided for one run. */
+export type BackupDeliveryResolution =
+  /** No destination at all: the archive is verified and retained. `NOT_ATTEMPTED`. */
+  | { readonly kind: 'NONE' }
+  /**
+   * A destination exists and could not be used for this run — the ops group is connected
+   * and its backups topic could not be made ready, with no fallback configured. Nothing
+   * left the host, so this is recorded as `FAILED_DEFINITIVE` with `detail`, and the run
+   * itself still succeeds: the archive is verified and on disk.
+   */
+  | { readonly kind: 'UNAVAILABLE'; readonly detail: string }
+  | {
+      readonly kind: 'READY';
+      readonly destination: Exclude<BackupDeliveryDestination, 'NONE'>;
+      readonly channel: Pick<BackupDeliveryChannel, 'sendDocument' | 'sendMessage'>;
+    };
+
+/**
+ * Decides, per run, where the archive goes (spec §13.1): the connected operations log
+ * group's backups topic first, the environment's dedicated chat as the explicit fallback,
+ * else nowhere. Resolution may CREATE the topic, so it is called outside any transaction,
+ * once, just before DELIVER.
+ */
+export interface BackupDeliveryRouter {
+  resolve(): Promise<BackupDeliveryResolution>;
+  /** Where the next archive would go, from the database alone — no Telegram call. */
+  describe(): Promise<BackupDeliveryDestination>;
+}
+
+/**
+ * Either shape. The pipeline accepts a fixed channel as a degenerate router, so every
+ * caller that builds `BackupService` with one destination — the CLI's tests, the
+ * integration suite, a recovery drill — keeps working unchanged.
+ */
+export type BackupDelivery = BackupDeliveryChannel | BackupDeliveryRouter;
+
+export function isBackupDeliveryRouter(delivery: BackupDelivery): delivery is BackupDeliveryRouter {
+  return 'resolve' in delivery && typeof delivery.resolve === 'function';
 }
 
 export interface BackupRunRow {

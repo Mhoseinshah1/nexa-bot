@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   BackupDeliveryState,
   BackupManifest,
@@ -7,7 +7,10 @@ import type {
 } from '@nexa/contracts';
 import { BackupService } from '../../apps/api/src/modules/platform/backup/application/backup.service';
 import { BackupScheduler } from '../../apps/api/src/modules/platform/backup/application/backup-scheduler';
+import { BackupSchedulePolicy } from '../../apps/api/src/modules/platform/backup/application/backup-schedule';
 import type {
+  BackupDelivery,
+  BackupDeliveryResolution,
   BackupRunRepository,
   BackupRunRow,
   BackupWorkspace,
@@ -226,12 +229,19 @@ interface Harness {
     /** Null models an installation with no tenant provisioned yet. */
     scoped: boolean;
     opsLogThrows: boolean;
+    /** Called inside the DUMP stage, so a test can look at the service mid-run. */
+    onDump?: () => void;
   };
 }
 
 const CHECKSUM = 'a'.repeat(64);
+const DAY_MS = 24 * 3_600_000;
+/** The production default tick: five minutes, NOT the thirty-second workaround. */
+const TICK_MS = 5 * 60_000;
+/** `BACKUP_LEASE_STALE_AFTER_MS`: how long a run's heartbeat may be silent. */
+const RUN_STALE_MS = 15 * 60_000;
 
-function harness(): Harness {
+function harness(options: { delivery?: BackupDelivery } = {}): Harness {
   const clock = new FakeClock();
   const runs = new FakeRuns();
   const state: Harness['state'] = {
@@ -280,6 +290,7 @@ function harness(): Harness {
         return '16.13';
       },
       async dump() {
+        state.onDump?.();
         if (state.dumpFails) throw new Error('pg_dump exploded');
         return { databaseName: 'nexa', pgDumpVersion: 'pg_dump 16.13' };
       },
@@ -327,7 +338,7 @@ function harness(): Harness {
         return workspace;
       },
     },
-    delivery: {
+    delivery: options.delivery ?? {
       get configured() {
         return state.deliveryConfigured;
       },
@@ -544,7 +555,85 @@ describe('the backup pipeline', () => {
     expect(h.state.deliveredDocument).toBeNull();
     expect(h.state.deliveredMessage).toContain('RETAINED: /var/lib/nexa/backups');
     expect(h.state.deliveredMessage).toContain(CHECKSUM);
+    // Spec §13.1: a notice nobody can read as a delivered file — in Persian, first.
+    expect(h.state.deliveredMessage?.split('\n')[0]).toMatch(/فایل ارسال نشد/);
     expect(run.deliveryState).toBe('SUCCEEDED');
+    expect(run.deliveryDetail).toContain('retained on the server');
+  });
+
+  /*
+   * Spec §13.1 — "a Telegram delivery failure does not destroy the local backup, and the
+   * backup itself is not marked failed". Each case below is a way delivery can go wrong
+   * that is NEW with routing: the router that reads the group can throw, the group can be
+   * connected and unusable, and a channel can throw rather than answer.
+   */
+  describe('when routed delivery goes wrong', () => {
+    const router = (resolve: () => Promise<BackupDeliveryResolution>): BackupDelivery => ({
+      resolve,
+      describe: async () => 'OPS_GROUP_TOPIC' as const,
+    });
+
+    it('keeps the run a success when the destination cannot even be resolved', async () => {
+      const h = harness({
+        delivery: router(async () => {
+          throw new Error('the ops group table is unreachable');
+        }),
+      });
+      const run = await completed(h);
+      expect(run.state).toBe('SUCCEEDED');
+      expect(run.verifiedAt).not.toBeNull();
+      expect(run.deliveryState).toBe('FAILED_DEFINITIVE');
+      expect(run.deliveryDetail).toContain('could not be resolved');
+      // The verified archive stays on the server: only the plaintext was discarded.
+      expect(h.state.everythingRemoved).toBe(false);
+      expect(h.state.recorded.map((event) => event.code)).toContain('backup.run_ok');
+    });
+
+    it('records a connected-but-unusable group as a refusal, not a backup failure', async () => {
+      const h = harness({
+        delivery: router(async () => ({ kind: 'UNAVAILABLE', detail: 'topic unavailable' })),
+      });
+      const run = await completed(h);
+      expect(run.state).toBe('SUCCEEDED');
+      expect(run.deliveryState).toBe('FAILED_DEFINITIVE');
+      expect(run.deliveryAttemptedAt).not.toBeNull();
+      expect(h.state.everythingRemoved).toBe(false);
+    });
+
+    it('records a channel that throws as an unobserved outcome, never resent', async () => {
+      let sends = 0;
+      const h = harness({
+        delivery: router(async () => ({
+          kind: 'READY',
+          destination: 'OPS_GROUP_TOPIC',
+          channel: {
+            async sendDocument() {
+              sends += 1;
+              throw new Error('socket hang up');
+            },
+            async sendMessage() {
+              sends += 1;
+              throw new Error('socket hang up');
+            },
+          },
+        })),
+      });
+      const run = await completed(h);
+      expect(run.state).toBe('SUCCEEDED');
+      expect(run.deliveryState).toBe('OUTCOME_UNKNOWN');
+      expect(sends).toBe(1);
+      expect(await h.runs.withUnknownDelivery()).toHaveLength(1);
+    });
+
+    it('reports where the next archive would go', async () => {
+      await expect(
+        harness({ delivery: router(async () => ({ kind: 'NONE' })) }).service.deliveryDestination(),
+      ).resolves.toBe('OPS_GROUP_TOPIC');
+      const fixed = harness();
+      await expect(fixed.service.deliveryDestination()).resolves.toBe('DEDICATED_CHAT');
+      fixed.state.deliveryConfigured = false;
+      await expect(fixed.service.deliveryDestination()).resolves.toBe('NONE');
+    });
   });
 
   it('puts identity, size, checksum and the verification in the caption and nothing else', async () => {
@@ -707,12 +796,32 @@ describe('the backup pipeline', () => {
   });
 });
 
+describe('the run lease the scheduler reads', () => {
+  it('names the run in flight from its claim, and nothing once it is over', async () => {
+    const h = harness();
+    expect(h.service.leaseHeartbeatAt()).toBeNull();
+    let during: number | null = null;
+    h.state.onDump = () => {
+      during = h.service.leaseHeartbeatAt();
+    };
+    await completed(h);
+    expect(during).toBe(NOW.getTime());
+    expect(h.service.leaseHeartbeatAt()).toBeNull();
+  });
+});
+
 describe('the backup scheduler', () => {
-  function scheduled(options: { quiesced?: boolean } = {}): {
+  function scheduled(
+    options: {
+      quiesced?: boolean;
+      schedule?: () => Promise<{ enabled: boolean; intervalMs: number }>;
+      h?: Harness;
+    } = {},
+  ): {
     scheduler: BackupScheduler;
     h: Harness;
   } {
-    const h = harness();
+    const h = options.h ?? harness();
     const scheduler = new BackupScheduler({
       service: h.service,
       runs: h.runs,
@@ -720,8 +829,10 @@ describe('the backup scheduler', () => {
       // case; the case below sets it.
       quiesced: async () => options.quiesced === true,
       clock: h.clock,
-      intervalMs: 24 * 3_600_000,
-      tickIntervalMs: 60_000,
+      schedule: options.schedule ?? (async () => ({ enabled: true, intervalMs: DAY_MS })),
+      tickIntervalMs: TICK_MS,
+      runHeartbeatAt: () => null,
+      runStaleAfterMs: RUN_STALE_MS,
       logger: { info() {}, warn() {}, error() {} },
     });
     return { scheduler, h };
@@ -784,7 +895,7 @@ describe('the backup scheduler', () => {
     h.runs.lastSucceededAt = async () => {
       throw new Error('the database is unreachable');
     };
-    h.clock.advance(4 * 60_000);
+    h.clock.advance(3 * TICK_MS + 60_000);
     await scheduler.tick();
     // The tick threw, so progress did not advance and the worker's health check
     // says so rather than reporting a live timer as a working scheduler.
@@ -807,5 +918,233 @@ describe('the backup scheduler', () => {
     // One transient database error must not end scheduled backups for the life
     // of the process.
     expect(h.runs.rows.size).toBe(1);
+  });
+
+  /*
+   * Spec §14 — the startup-health defect, permanently. `lastTickAt` began null, the first
+   * tick came one whole `BACKUP_TICK_MS` (five minutes) after start, and the worker's
+   * health check answered "stalled" for all of it — longer than the container health
+   * check waits. Production ran `BACKUP_TICK_MS=30000` to hide it. These run at the
+   * DEFAULT five-minute tick, so a regression cannot hide behind a short one.
+   */
+  it('checks immediately on start, without waiting a tick interval', async () => {
+    const { scheduler, h } = scheduled();
+    scheduler.start();
+    try {
+      // No clock advance and no timer: the first check is fired by start() itself.
+      await vi.waitFor(() => expect(h.runs.rows.size).toBe(1));
+      expect(scheduler.isFresh(h.clock.now().getTime())).toBe(true);
+    } finally {
+      scheduler.stop();
+    }
+  });
+
+  it('is healthy from start() until its first tick is overdue, not only after it', async () => {
+    // A first check that never completes: the schedule read hangs.
+    const { scheduler, h } = scheduled({ schedule: () => new Promise(() => {}) });
+    expect(scheduler.isFresh(h.clock.now().getTime())).toBe(false);
+    scheduler.start();
+    try {
+      // Pre-first-tick is startup, not failure.
+      expect(scheduler.isFresh(h.clock.now().getTime())).toBe(true);
+      h.clock.advance(2 * TICK_MS);
+      expect(scheduler.isFresh(h.clock.now().getTime())).toBe(true);
+      // ...and the grace is bounded: a scheduler that never completes a tick is reported.
+      h.clock.advance(TICK_MS + 60_000);
+      expect(scheduler.isFresh(h.clock.now().getTime())).toBe(false);
+    } finally {
+      scheduler.stop();
+    }
+  });
+
+  it('never runs two backups at once from one process, however the ticks arrive', async () => {
+    const h = harness();
+    let release: () => void = () => {};
+    let calls = 0;
+    const slow = {
+      async run() {
+        calls += 1;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { kind: 'BUSY' as const, holder: [...h.runs.rows.values()][0] as BackupRunRow };
+      },
+    } as unknown as BackupService;
+    const scheduler = new BackupScheduler({
+      service: slow,
+      runs: h.runs,
+      quiesced: async () => false,
+      clock: h.clock,
+      schedule: async () => ({ enabled: true, intervalMs: DAY_MS }),
+      tickIntervalMs: TICK_MS,
+      runHeartbeatAt: () => null,
+      runStaleAfterMs: RUN_STALE_MS,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    scheduler.start();
+    try {
+      await vi.waitFor(() => expect(calls).toBe(1));
+      // A timer tick (or anything else) arriving while the immediate check's run is in
+      // flight starts nothing. The database lock is the cross-process guarantee; this is
+      // the in-process one, and it is what makes the immediate tick safe beside the timer.
+      await scheduler.tick();
+      await scheduler.tick();
+      expect(calls).toBe(1);
+    } finally {
+      release();
+      scheduler.stop();
+    }
+  });
+
+  /*
+   * Codex review of PR #142, finding 5: a fixed run budget (dump + restore + delivery)
+   * left out the checksum, encrypt and decrypt stages, which stream the whole database
+   * with no timeout, so a large legitimate run was reported stalled. In flight, health is
+   * now the run's LEASE heartbeat — the same signal that decides whether the run is
+   * abandoned — with no budget at all.
+   */
+  it('stays healthy while the run lease heartbeat is alive, however long the run', async () => {
+    const h = harness();
+    let release: () => void = () => {};
+    let started = false;
+    let heartbeatAt: number | null = null;
+    const slow = {
+      run: () =>
+        new Promise((resolve) => {
+          started = true;
+          release = () => resolve({ kind: 'BUSY', holder: null });
+        }),
+    } as unknown as BackupService;
+    const scheduler = new BackupScheduler({
+      service: slow,
+      runs: h.runs,
+      quiesced: async () => false,
+      clock: h.clock,
+      schedule: async () => ({ enabled: true, intervalMs: DAY_MS }),
+      tickIntervalMs: TICK_MS,
+      runHeartbeatAt: () => heartbeatAt,
+      runStaleAfterMs: RUN_STALE_MS,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const ticking = scheduler.tick();
+    await vi.waitFor(() => expect(started).toBe(true));
+    // Ten hours of streaming a huge database, heartbeating every minute: working.
+    for (let minute = 0; minute < 600; minute += 1) {
+      h.clock.advance(60_000);
+      heartbeatAt = h.clock.now().getTime();
+    }
+    expect(scheduler.isFresh(h.clock.now().getTime())).toBe(true);
+    // The heartbeat stops: past the lease window the run is abandoned, and health says so.
+    h.clock.advance(RUN_STALE_MS - 1_000);
+    expect(scheduler.isFresh(h.clock.now().getTime())).toBe(true);
+    h.clock.advance(2_000);
+    expect(scheduler.isFresh(h.clock.now().getTime())).toBe(false);
+    release();
+    await ticking;
+  });
+
+  it('reports a run with no heartbeat at all as stalled once its lease window passes', async () => {
+    const h = harness();
+    let started = false;
+    let release: () => void = () => {};
+    const slow = {
+      run: () =>
+        new Promise((resolve) => {
+          started = true;
+          release = () => resolve({ kind: 'BUSY', holder: null });
+        }),
+    } as unknown as BackupService;
+    const scheduler = new BackupScheduler({
+      service: slow,
+      runs: h.runs,
+      quiesced: async () => false,
+      clock: h.clock,
+      schedule: async () => ({ enabled: true, intervalMs: DAY_MS }),
+      tickIntervalMs: TICK_MS,
+      runHeartbeatAt: () => null,
+      runStaleAfterMs: RUN_STALE_MS,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const ticking = scheduler.tick();
+    await vi.waitFor(() => expect(started).toBe(true));
+    h.clock.advance(RUN_STALE_MS + 1_000);
+    expect(scheduler.isFresh(h.clock.now().getTime())).toBe(false);
+    release();
+    await ticking;
+  });
+
+  it('reads the schedule on every tick: off takes nothing, on takes a backup, no restart', async () => {
+    let schedule = { enabled: false, intervalMs: DAY_MS };
+    const { scheduler, h } = scheduled({ schedule: async () => schedule });
+    await scheduler.tick();
+    expect(h.runs.rows.size).toBe(0);
+    // Off is a decision, not a fault: the tick completed.
+    expect(scheduler.isFresh(h.clock.now().getTime())).toBe(true);
+
+    schedule = { enabled: true, intervalMs: DAY_MS };
+    await scheduler.tick();
+    expect(h.runs.rows.size).toBe(1);
+  });
+
+  it('measures the interval the schedule gives it, from the last success', async () => {
+    let schedule = { enabled: true, intervalMs: 3 * 3_600_000 };
+    const { scheduler, h } = scheduled({ schedule: async () => schedule });
+    h.runs.lastSuccess = new Date(NOW.getTime() - 2 * 3_600_000);
+    await scheduler.tick();
+    expect(h.runs.rows.size).toBe(0);
+    // An operator shortens the interval from the Web Admin: the next tick obeys it.
+    schedule = { enabled: true, intervalMs: 3_600_000 };
+    await scheduler.tick();
+    expect(h.runs.rows.size).toBe(1);
+  });
+});
+
+describe('the backup schedule policy', () => {
+  const ENV = { enabled: false, intervalMs: DAY_MS };
+  const SCOPE = { tenantId: 't1' as never, botInstanceId: null };
+
+  function policy(
+    stored: { enabled: boolean | null; intervalMinutes: number | null },
+    scoped = true,
+  ): BackupSchedulePolicy {
+    return new BackupSchedulePolicy({
+      settings: { read: async () => stored },
+      scope: () => (scoped ? SCOPE : null),
+      environment: ENV,
+    });
+  }
+
+  it('is the environment when the Web Admin has set nothing (compatible default)', async () => {
+    await expect(policy({ enabled: null, intervalMinutes: null }).effective()).resolves.toEqual({
+      enabled: false,
+      intervalMs: DAY_MS,
+      source: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT' },
+    });
+  });
+
+  it('takes each stored half over the environment, independently', async () => {
+    await expect(policy({ enabled: true, intervalMinutes: null }).effective()).resolves.toEqual({
+      enabled: true,
+      intervalMs: DAY_MS,
+      source: { enabled: 'SETTING', interval: 'ENVIRONMENT' },
+    });
+    await expect(policy({ enabled: null, intervalMinutes: 180 }).effective()).resolves.toEqual({
+      enabled: false,
+      intervalMs: 3 * 3_600_000,
+      source: { enabled: 'ENVIRONMENT', interval: 'SETTING' },
+    });
+    // A stored OFF is an answer, not an absence: it beats an environment that says on.
+    const off = new BackupSchedulePolicy({
+      settings: { read: async () => ({ enabled: false, intervalMinutes: null }) },
+      scope: () => SCOPE,
+      environment: { enabled: true, intervalMs: DAY_MS },
+    });
+    expect((await off.effective()).enabled).toBe(false);
+  });
+
+  it('is the environment before a tenant exists to hold a setting', async () => {
+    const effective = await policy({ enabled: true, intervalMinutes: 60 }, false).effective();
+    expect(effective.enabled).toBe(false);
+    expect(effective.source).toEqual({ enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT' });
   });
 });
