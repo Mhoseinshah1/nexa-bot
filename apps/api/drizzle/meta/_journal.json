@@ -1191,6 +1191,20 @@
       "when": 1791032298274,
       "tag": "0169_audit_log_export_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 170,
+      "version": "7",
+      "when": 1791034139701,
+      "tag": "0170_customer_direct_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 171,
+      "version": "7",
+      "when": 1791034146690,
+      "tag": "0171_direct_message_grants",
+      "breakpoints": true
     }
   ]
 }

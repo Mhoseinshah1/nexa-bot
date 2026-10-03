@@ -1,3 +1,5 @@
+import { CustomerDirectMessageService } from './modules/commerce/direct-messages/application/customer-direct-message.service.js';
+import { DrizzleDirectMessageRepository } from './modules/commerce/direct-messages/infrastructure/drizzle-direct-message.repository.js';
 import { fileURLToPath } from 'node:url';
 import {
   ADMIN_MENU_BUTTON,
@@ -12,6 +14,7 @@ import {
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
   TICKET_REPLY_FILE_RETENTION_DAYS,
+  DIRECT_MESSAGE_FILE_RETENTION_DAYS,
   canAdjustDeviceLimit,
   canChangeLocation,
   // Round N: the mass credit's notification renders the amount the ledger holds.
@@ -656,6 +659,8 @@ export interface Container {
   readonly recoveryRequestSweeper: RetentionSweeper;
   /** HF-A7: clears support's reply files Telegram never took, after their retention. */
   readonly ticketReplyFileSweeper: RetentionSweeper;
+  /** Phase A2: clears direct-message files Telegram never took, after their retention. */
+  readonly directMessageFileSweeper: RetentionSweeper;
   /**
    * The lane that expires unpaid payments and the orders they were against.
    *
@@ -777,6 +782,8 @@ export interface Container {
   readonly customerInsights: CustomerInsightService;
   /** Customer 360 (§11.5): moving a customer's holdings to another Telegram identity. */
   readonly customerAccountTransfers: CustomerAccountTransferService;
+  /** Phase A2: «ارسال پیام» — one operator-written message to one customer. */
+  readonly customerDirectMessages: CustomerDirectMessageService;
   /** Customer 360 (§11.6): an operator's order for a customer, through the customer's path. */
   readonly manualOrders: ManualOrderService;
   /** Customer 360 (§11.4): suspend or resume all of one customer's configurations. */
@@ -3885,6 +3892,40 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const ticketScreens = new TicketScreenComposer(templateResolver);
   /**
+   * Phase A2 (`docs/direct-message-audit.md`): a direct message from Customer 360. Its own
+   * row and permission; delivered by the customer notification lane below, as
+   * `DIRECT_MESSAGE` / `DIRECT_MESSAGE_MEDIA` — no second transport.
+   */
+  const directMessageRepository = new DrizzleDirectMessageRepository(database.db);
+  const customerDirectMessageService = new CustomerDirectMessageService({
+    repository: directMessageRepository,
+    notifier: customerNotifier,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+    ids,
+  });
+  /** Phase A2: the direct-message files Telegram never took, cleared after retention. */
+  const directMessageFileSweeper = new RetentionSweeper(
+    {
+      name: 'direct-message-files',
+      purge: (now, limit) =>
+        directMessageRepository.purgeFileContentBefore(
+          new Date(now.getTime() - DIRECT_MESSAGE_FILE_RETENTION_DAYS * 24 * 3_600_000),
+          now,
+          limit,
+        ),
+    },
+    clock,
+    logger,
+    { intervalMs: 3_600_000, initialDelayMs: 95_000, batchSize: 50, maxBatchesPerTick: 100 },
+  );
+  /**
    * HF-A7: retention for support's staged reply files. A delivered file's bytes are cleared
    * by the delivery itself; this clears what Telegram never took — a customer who blocked
    * the bot, an unconfirmed upload — once it is `TICKET_REPLY_FILE_RETENTION_DAYS` old. The
@@ -4268,6 +4309,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       serviceTransfers: serviceTransferService,
       // WP-A7: support's reply, read from the ticket message the notification names.
       tickets: ticketService,
+      // Phase A2: an operator's direct message, read from the message row it names.
+      directMessages: customerDirectMessageService,
       buttonsFor: notificationButtons,
       /*
        * The ledger reader the refund sentence renders from. The wallet repository
@@ -5555,6 +5598,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     backupRunSweeper,
     recoveryRequestSweeper,
     ticketReplyFileSweeper,
+    directMessageFileSweeper,
     paymentExpiryLoop,
     gatewayPayments,
     gatewayReceiptCaptures,
@@ -5611,6 +5655,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customerCrm: customerCrmService,
     customerInsights: customerInsightService,
     customerAccountTransfers: customerAccountTransferService,
+    customerDirectMessages: customerDirectMessageService,
     manualOrders: manualOrderService,
     customerServicesToggle: customerServicesToggleService,
     products: productService,
@@ -5977,6 +6022,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
       await ticketReplyFileSweeper.stop();
+      await directMessageFileSweeper.stop();
       await paymentExpiryLoop.stop();
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();

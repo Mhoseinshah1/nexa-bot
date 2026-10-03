@@ -301,6 +301,8 @@ export function resolve(
           mayEditLocation={may('users.location.edit')}
           mayEditNotifications={may('users.notifications.edit')}
           mayTransfer={may('users.transfer')}
+          mayMessage={may('users.message.send')}
+          mayViewMessages={may('users.message.view')}
           mayManualOrder={may('orders.manual.create')}
           mayEditServices={may('services.edit')}
           mayViewAudit={may('audit.view')}

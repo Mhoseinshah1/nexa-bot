@@ -103,6 +103,15 @@ export const PERMISSIONS = [
   p('users.notifications.edit', "Change a customer's promotional notification preference"),
   p('users.transfer', "Transfer a customer's account to another Telegram identity", 'CRITICAL'),
   /*
+   * Phase A2 (`docs/direct-message-audit.md`): one operator-written message to ONE customer,
+   * from Customer 360. Independent of `broadcasts.send` on purpose — a role that may answer a
+   * customer need not be a role that may write to thousands — and of `tickets.reply`, which
+   * answers inside a conversation the customer opened. The history is its own read: what
+   * support wrote to a customer is not implied by being able to read the customer.
+   */
+  p('users.message.send', 'Send a direct message to one customer'),
+  p('users.message.view', 'View the direct messages sent to a customer'),
+  /*
    * Customer notes and tags (program §8, `docs/customer-notes-tags.md`). Operator-only CRM
    * metadata, read and written apart:
    *
@@ -475,6 +484,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'users.phone.verify',
       'users.location.edit',
       'users.notifications.edit',
+      // Phase A2: writing to one customer is the support conversation an operator holds.
+      'users.message.send',
+      'users.message.view',
       // Program §8: the notes and tags an operator keeps on the customers they support.
       'users.notes.view',
       'users.notes.write',
@@ -581,6 +593,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'tickets.reply',
       'tickets.assign',
       'tickets.close',
+      // Phase A2: a direct message to one customer, from their page.
+      'users.message.send',
+      'users.message.view',
     ],
   },
   {
@@ -747,6 +762,12 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
   'users.location.edit': 'users.view' as PermissionKey,
   'users.notifications.edit': 'users.view' as PermissionKey,
   'users.transfer': 'users.view' as PermissionKey,
+  /*
+   * Phase A2. A direct message is composed on the customer's page and answers with that
+   * customer's history; both are customer data `users.view` reads.
+   */
+  'users.message.send': 'users.view' as PermissionKey,
+  'users.message.view': 'users.view' as PermissionKey,
   /*
    * Program §8. Notes and tags are read and written FROM a customer's page, which
    * `users.view` reads. `users.notes.write` depends on `users.view` rather than on

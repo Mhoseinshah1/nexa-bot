@@ -739,4 +739,23 @@ export interface CustomerNotificationRepository {
     limit: number,
     tx: TransactionScope,
   ): Promise<number>;
+
+  /**
+   * Resolves one queued, UNSENT notification to `SUPERSEDED` without claiming it, spending
+   * no attempt — nothing was tried. Named by `(kind, subject)`, which
+   * `customer_notifications_subject_key` makes one row.
+   *
+   * For the precondition sweep (`NotificationSubjectReader.lapsedSubjects`): a row
+   * `claimDue` will never hand out — its customer is blocked — must still stop being
+   * QUEUED once its fact has lapsed. Conditional on `PENDING` AND no `send_started_at`, so a
+   * row another pass has already handed to Telegram is never rewritten; a row merely
+   * leased is, and that pass's `markSendStarted` then moves nothing and it sends nothing.
+   */
+  supersedeUnsent(
+    scope: TenantContext,
+    kind: CustomerNotificationKind,
+    subjectId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
 }
