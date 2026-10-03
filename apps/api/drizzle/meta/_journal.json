@@ -1163,6 +1163,13 @@
       "when": 1791022988674,
       "tag": "0165_panel_drain",
       "breakpoints": true
+    },
+    {
+      "idx": 166,
+      "version": "7",
+      "when": 1791030611649,
+      "tag": "0166_panel_auto_balancing",
+      "breakpoints": true
     }
   ]
 }

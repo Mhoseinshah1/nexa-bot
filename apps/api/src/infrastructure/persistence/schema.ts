@@ -41,6 +41,8 @@ import {
   OPERATIONAL_SEVERITIES,
   PANEL_HEALTH_STATES,
   MONITOR_DEFERRAL_REASONS,
+  PANEL_BALANCING_STRATEGIES,
+  PANEL_PLACEMENT_DECIDERS,
   PANEL_STATUSES,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
@@ -1840,12 +1842,25 @@ export const panels = pgTable(
     drainedAt: timestamptz('drained_at'),
     /** The operator's reason for the current drain. Present exactly when `drained_at` is. */
     drainReason: text('drain_reason'),
+    /**
+     * Phase C3: the balancing group, or NULL for none.
+     *
+     * An operator's statement that this panel is interchangeable with the others in the
+     * group for a NEW account. NULL — every existing panel — means the explicit route
+     * only: a product bound here sells here. Read by the draft's placement and by the
+     * catalogue's reach, never by anything that operates an existing service.
+     */
+    balancingGroup: text('balancing_group'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
     /** A drain and its reason, or neither — the same biconditional shape as the username policy. */
+    check(
+      'panels_balancing_group_check',
+      sql`${table.balancingGroup} IS NULL OR ${table.balancingGroup} ~ '^[a-z0-9][a-z0-9_-]{0,39}$'`,
+    ),
     check(
       'panels_drain_reason_check',
       sql`(${table.drainedAt} IS NULL) = (${table.drainReason} IS NULL)`,
@@ -9779,6 +9794,59 @@ export const customServicePriceRules = pgTable(
  * or deleting a rule later rewrites nothing here. The CHECKs pin the arithmetic, so a
  * stored row cannot say one price and mean another.
  */
+/**
+ * Phase C3: why a new-service order landed on the panel it did.
+ *
+ * One row per order that automatic balancing CONSIDERED — the flag on and the product's
+ * panel in a group — written in the draft's own transaction and never changed (a trigger
+ * refuses UPDATE). An order with no row went to its product's own panel by the explicit
+ * route. `candidates` is the ranked group as the decision saw it, figures included, so the
+ * explanation is what was decided and not a re-reading of today's load.
+ */
+export const orderPanelPlacements = pgTable(
+  'order_panel_placements',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    orderId: uuid('order_id').notNull(),
+    homePanelId: uuid('home_panel_id').notNull(),
+    chosenPanelId: uuid('chosen_panel_id').notNull(),
+    balancingGroup: text('balancing_group').notNull(),
+    strategy: text('strategy').notNull(),
+    decidedBy: text('decided_by').notNull(),
+    candidates: jsonb('candidates').notNull(),
+    decidedAt: timestamptz('decided_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.orderId], name: 'order_panel_placements_pk' }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'order_panel_placements_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.homePanelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'order_panel_placements_home_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.chosenPanelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'order_panel_placements_chosen_fk',
+    }),
+    check('order_panel_placements_strategy_check', enumCheck('strategy', PANEL_BALANCING_STRATEGIES)),
+    check(
+      'order_panel_placements_decided_by_check',
+      enumCheck('decided_by', PANEL_PLACEMENT_DECIDERS),
+    ),
+    check(
+      'order_panel_placements_candidates_check',
+      sql`jsonb_typeof(${table.candidates}) = 'array'`,
+    ),
+  ],
+);
+
 export const orderCustomServiceTerms = pgTable(
   'order_custom_service_terms',
   {
