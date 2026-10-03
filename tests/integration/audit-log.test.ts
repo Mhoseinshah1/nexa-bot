@@ -11,6 +11,7 @@ import {
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
+import { DrizzleAuditHistoryReader } from '../../apps/api/src/modules/platform/audit/infrastructure/drizzle-audit-history.reader';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
 
 /**
@@ -244,6 +245,30 @@ describe('Phase D1: the audit log', () => {
     expect((await get(`${AUDIT_LOG_ROUTES.list}?entityId=e-1`)).statusCode).toBe(400);
   });
 
+  it('reads a uuid-shaped actor as an id AND as a username, both exact', async () => {
+    // Codex 4172811013. `adminUsernameSchema` admits `[a-z0-9._-]`, so a username can be
+    // uuid-shaped; reading such a value only as an id hid every row of that admin.
+    const shaped = uuid().toLowerCase();
+    const named = await createAdmin(api.container, tenantA, {
+      username: shaped,
+      password: 'the-uuid-shaped-password',
+      roleKeys: ['support'],
+    });
+    const byName = await row({ at: at(1), action: 'actor.uuid', actorId: named.id });
+    // A row whose actor id IS that string (a job or an old id) is still found by it.
+    const byId = await row({ at: at(2), action: 'actor.uuid', actorId: shaped });
+    await row({ at: at(3), action: 'actor.uuid', actorId: financeId });
+    const ids = async (actor: string) =>
+      (await list(`${WINDOW}&action=actor.uuid&actor=${encodeURIComponent(actor)}`)).entries.map(
+        (e) => e.id,
+      );
+    expect(await ids(shaped)).toEqual([byId, byName]);
+    expect(await ids(shaped.toUpperCase())).toEqual([byId, byName]);
+    expect(await ids(named.id)).toEqual([byName]);
+    // Exact, never a prefix: a uuid that names nobody and no row finds nothing.
+    expect(await ids(uuid())).toEqual([]);
+  });
+
   it('bounds the date range half-open: from is in, to is out', async () => {
     const before = await row({ at: at(0, -1), action: 'x.edge' });
     const onFrom = await row({ at: at(0), action: 'x.edge' });
@@ -258,6 +283,28 @@ describe('Phase D1: the audit log', () => {
       `${AUDIT_LOG_ROUTES.list}?from=${encodeURIComponent(at(10))}&to=${encodeURIComponent(at(0))}`,
     );
     expect(reversed.statusCode).toBe(400);
+  });
+
+  it('keeps a bound’s microseconds: [from, to) is exact below the millisecond', async () => {
+    // Codex 4172811018. PostgreSQL stores microseconds; a `Date` keeps milliseconds, so a
+    // bound of `.000500` read through `Date` became `.000` and moved by 500 µs.
+    const base = at(0).replace(/\.\d{3}Z$/u, '');
+    const early = await row({ at: `${base}.000400Z`, action: 'x.micro' });
+    const late = await row({ at: `${base}.000600Z`, action: 'x.micro' });
+    const bound = encodeURIComponent(`${base}.000500Z`);
+    const fromBound = await list(`action=x.micro&from=${bound}`);
+    expect(fromBound.entries.map((e) => e.id)).toEqual([late]);
+    const toBound = await list(`action=x.micro&from=${encodeURIComponent(at(-1))}&to=${bound}`);
+    expect(toBound.entries.map((e) => e.id)).toEqual([early]);
+    // The export reads the same filter: the same one row.
+    const file = await get(`${AUDIT_LOG_ROUTES.export}?action=x.micro&from=${bound}`);
+    expect(file.statusCode, file.body).toBe(200);
+    const data = file.body
+      .replace(/^\uFEFF/u, '')
+      .trimEnd()
+      .split('\r\n')
+      .slice(1);
+    expect(data.map((line) => line.split(',').at(-1))).toEqual([late]);
   });
 
   it('filters the security slices by the same rule the badge shows', async () => {
@@ -335,9 +382,30 @@ describe('Phase D1: the audit log', () => {
       entityType: 'Order',
       entityId: 'not-a-uuid',
     });
+    // Codex 4172811006: a Customer or Wallet row links only to a customer of THIS tenant.
+    const foreignBlock = await row({
+      at: at(3),
+      action: 'customer.block',
+      entityType: 'Customer',
+      entityId: foreignCustomer,
+    });
+    const ghostWallet = await row({
+      at: at(4),
+      action: 'wallet.credit',
+      entityType: 'Wallet',
+      entityId: uuid(),
+    });
+    const mine = await customer(tenantA.tenantId);
+    const real = await row({
+      at: at(5),
+      action: 'wallet.credit',
+      entityType: 'Wallet',
+      entityId: mine.toUpperCase(),
+    });
     const page = await list(WINDOW);
     const none = { customerId: null, orderId: null, paymentId: null, serviceId: null };
-    for (const id of [smuggled, odd]) {
+    expect(page.entries.find((e) => e.id === real)?.links).toEqual({ ...none, customerId: mine });
+    for (const id of [smuggled, odd, foreignBlock, ghostWallet]) {
       expect(page.entries.find((e) => e.id === id)?.links).toEqual(none);
     }
   });
@@ -442,6 +510,56 @@ describe('Phase D1: the audit log', () => {
     }
   });
 
+  it('redacts a labelled subscription capability in a reason, on the page and in the file', async () => {
+    // Codex 4172811009. The structured redactor drops `subscriptionUrl` by key; the free-text
+    // one must not hand the same capability back through `reason`.
+    const id = await row({
+      at: at(1),
+      action: 'service.subscription_rotate',
+      reason:
+        'rotated: subscriptionUrl=https://panel.example/sub/CAPABILITY1 and subscription_ref=refvalue42 by owner',
+    });
+    const response = await get(`${AUDIT_LOG_ROUTES.list}?${WINDOW}`);
+    for (const secret of ['CAPABILITY1', 'panel.example/sub', 'refvalue42']) {
+      expect(response.body, secret).not.toContain(secret);
+    }
+    const entry = auditLogListResponseSchema
+      .parse(response.json())
+      .entries.find((e) => e.id === id);
+    expect(entry?.reason).toBe(
+      'rotated: subscriptionUrl=[redacted] and subscription_ref=[redacted] by owner',
+    );
+    const file = await get(`${AUDIT_LOG_ROUTES.export}?${WINDOW}`);
+    expect(file.statusCode, file.body).toBe(200);
+    for (const secret of ['CAPABILITY1', 'panel.example/sub', 'refvalue42']) {
+      expect(file.body, secret).not.toContain(secret);
+    }
+    expect(file.body).toContain('subscriptionUrl=[redacted]');
+  });
+
+  it('redacts the Customer 360 timeline’s reason again, as it does before and after', async () => {
+    // Codex 4172810999. Customer 360 shows this reason to every `audit.view` role.
+    const mine = await customer(tenantA.tenantId);
+    await row({
+      at: at(1),
+      action: 'customer.block',
+      entityType: 'Customer',
+      entityId: mine,
+      reason:
+        'blocked; leaked token=abcdef0123456789abcdef and subscription_url=https://s.example/sub/Z9',
+      after: { subscriptionUrl: 'https://s.example/sub/Z9', status: 'BLOCKED' },
+    });
+    const timeline = await new DrizzleAuditHistoryReader(
+      api.container.database.db,
+    ).customerTimeline(tenantA, mine, 10);
+    expect(timeline).toHaveLength(1);
+    const reason = timeline[0]?.reason ?? '';
+    expect(reason).not.toContain('abcdef0123456789abcdef');
+    expect(reason).not.toContain('s.example/sub/Z9');
+    expect(reason).toBe('blocked; leaked token=[redacted] and subscription_url=[redacted]');
+    expect(timeline[0]?.after?.['subscriptionUrl']).toBe('[redacted]');
+  });
+
   it('shows a row with no before/after as none, never a reconstruction', async () => {
     const id = await row({
       at: at(1),
@@ -507,7 +625,17 @@ describe('Phase D1: the audit log', () => {
         FROM generate_series(1, ${AUDIT_LOG_EXPORT_ROW_MAX + 1}) AS g`);
     const refused = await get(`${AUDIT_LOG_ROUTES.export}?action=bulk.item`);
     expect(refused.statusCode).toBe(400);
-    expect((await list('action=audit.export')).entries).toHaveLength(0);
+    // Codex 4172811004: the refusal is on the record as a DENIED `audit.export`, with the
+    // filter that was refused — and nothing recorded it as a success.
+    const recorded = await list('action=audit.export');
+    expect(recorded.entries.map((e) => [e.actorId, e.result, e.reason])).toEqual([
+      [ownerId, 'DENIED', 'EXPORT_ROW_LIMIT_EXCEEDED'],
+    ]);
+    expect(recorded.entries[0]?.after).toMatchObject({
+      format: 'csv',
+      limit: AUDIT_LOG_EXPORT_ROW_MAX,
+      filter: { action: 'bulk.item' },
+    });
     // One row fewer is a file: `from` drops the oldest, exactly at the bound.
     const narrowed = await get(
       `${AUDIT_LOG_ROUTES.export}?action=bulk.item&from=${encodeURIComponent(at(1, -AUDIT_LOG_EXPORT_ROW_MAX))}`,

@@ -92,7 +92,7 @@ export class AuditLogController {
   }
 }
 
-/** The parsed filters, with the two instants read here — the surface may parse a timestamp. */
+/** The parsed filters. The two instants stay the schema-validated ISO text. */
 function filtersOf(query: {
   readonly actor?: string | undefined;
   readonly actorType?: AuditLogQuery['actorType'];
@@ -114,7 +114,9 @@ function filtersOf(query: {
     entityId: query.entityId,
     result: query.result,
     security: query.security,
-    from: query.from === undefined ? undefined : new Date(query.from),
-    to: query.to === undefined ? undefined : new Date(query.to),
+    // Passed on as the validated text, never through `Date`, which would drop every digit
+    // past the millisecond and move the bound.
+    from: query.from,
+    to: query.to,
   };
 }

@@ -12,6 +12,7 @@ import type { Database } from '../../../../infrastructure/persistence/database.j
 import {
   admins,
   auditLogs,
+  customers,
   orders,
   payments,
   services,
@@ -132,6 +133,7 @@ export class DrizzleAuditLogReader implements AuditLogReader {
   async ownersOf(
     scope: TenantContext,
     refs: {
+      readonly customers: readonly string[];
       readonly orders: readonly string[];
       readonly payments: readonly string[];
       readonly services: readonly string[];
@@ -139,6 +141,13 @@ export class DrizzleAuditLogReader implements AuditLogReader {
   ): Promise<ReadonlyMap<string, string>> {
     const tenantId = requireTenantId(scope);
     const owners = new Map<string, string>();
+    if (refs.customers.length > 0) {
+      const rows = await this.db
+        .select({ id: customers.id })
+        .from(customers)
+        .where(and(eq(customers.tenantId, tenantId), inArray(customers.id, [...refs.customers])));
+      for (const row of rows) owners.set(`Customer:${row.id}`, row.id);
+    }
     if (refs.orders.length > 0) {
       const rows = await this.db
         .select({ id: orders.id, customerId: orders.customerId })
@@ -194,10 +203,10 @@ export function auditLogConditions(tenantId: string, filter: AuditLogFilter): SQ
   if (filter.result !== undefined) conditions.push(eq(auditLogs.result, filter.result));
   if (filter.security !== undefined) conditions.push(securityCondition(filter.security));
   if (filter.from !== undefined) {
-    conditions.push(sql`${auditLogs.occurredAt} >= ${filter.from.toISOString()}::timestamptz`);
+    conditions.push(sql`${auditLogs.occurredAt} >= ${filter.from}::timestamptz`);
   }
   if (filter.to !== undefined) {
-    conditions.push(sql`${auditLogs.occurredAt} < ${filter.to.toISOString()}::timestamptz`);
+    conditions.push(sql`${auditLogs.occurredAt} < ${filter.to}::timestamptz`);
   }
   return conditions;
 }

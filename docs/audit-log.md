@@ -36,7 +36,8 @@ session — so `finance` and `observer`, who hold `audit.view`, cannot export.
 - `actor` — an administrator's id, or their CURRENT username (with or without `@`), resolved
   to the id inside the tenant so a renamed administrator's earlier rows are found too. Any
   other text matches the stored `actor_id` exactly, which is how a system job's rows are
-  found by clicking the job on a row.
+  found by clicking the job on a row. Every value is read BOTH ways, ORed and exact — a
+  uuid too, because `adminUsernameSchema` admits a uuid-shaped username.
 - `actorType`, `result` — the contract enums.
 - `customerId` — the rows ABOUT one customer: entity `Customer` or `Wallet` with that id, or
   entity `Order`/`Payment`/`Service` that belongs to that customer now.
@@ -46,7 +47,9 @@ session — so `finance` and `observer`, who hold `audit.view`, cannot export.
 - `entityType` + `entityId` — an id is refused without its type.
 - `security` — `DENIED`, `AUTH` or `CRITICAL` (below).
 - `from`/`to` — `occurred_at` as a half-open `[from, to)`. The page sends the operator's local
-  midnight of the first day and the midnight AFTER the last day, as `/tickets` does.
+  midnight of the first day and the midnight AFTER the last day, as `/tickets` does. The
+  validated ISO text reaches SQL as `timestamptz`, never through a `Date`, so a bound with
+  microseconds is exact rather than truncated to the millisecond.
 
 A cursor is opaque, minted by the server (`keyset-cursor.ts`), and one this server did not
 mint is a 400 — never page one. A cursor replayed in another tenant selects inside that
@@ -83,8 +86,9 @@ every listed permission to `riskLevel === 'CRITICAL'`.
 ### Deep links
 
 `links` on each entry is decided by the server from the row's own entity: `Customer`/`Wallet`
-link to the customer; `Order`/`Payment`/`Service` link to themselves AND their customer, but
-only when that entity exists in the session's tenant (one batched read per kind per page). An
+link to the customer; `Order`/`Payment`/`Service` link to themselves AND their customer — each
+only when that entity (the customer itself, for `Customer`/`Wallet`) exists in the session's
+tenant (one batched read per kind per page). An
 id that is not a uuid, or names another tenant's entity, links nowhere.
 
 ### Secrets
@@ -92,7 +96,10 @@ id that is not a uuid, or names another tenant's entity, links nowhere.
 `before`, `after` and `reason` are redacted AGAIN on the way out, by the same implementation
 the writer used (`redactRecord`, `redactSecretText`), because a row is read for years and the
 redactor has learned keys since (`subscription`, `passphrase`) that older rows were written
-without. The entity-history and Customer 360 readers now do the same. `ip` and `user_agent`
+without. The entity-history and Customer 360 readers now do the same, Customer 360's `reason`
+included. In free text, a labelled subscription capability (`subscriptionUrl=…`,
+`subscription_ref=…`, and a bare `subscription` label whose value is a URL) is redacted like
+any other credential. `ip` and `user_agent`
 are never selected by any browser statement and appear neither on screen nor in the file.
 
 ### Export
@@ -106,7 +113,9 @@ CRLF, RFC quoting, every cell formula-guarded, Persian headers from `@nexa/i18n`
 the clock alone.
 
 A successful export is itself recorded: `audit.export` on entity `AuditLog`, `after` holding
-the format, the row count and the filter. A refused one is recorded as DENIED.
+the format, the row count and the filter. A refused one is recorded as DENIED — for want of
+`audit.export`, or (`reason` `EXPORT_ROW_LIMIT_EXCEEDED`, `after` holding the bound and the
+filter) for being over the row bound, recorded before the refusal is returned.
 
 ## Indexes (`ONLINE_INDEXES`, built concurrently)
 

@@ -3,7 +3,7 @@ import type { ActorType, AuditResult, SourceSurface, TenantContext } from '@nexa
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { auditLogs } from '../../../../infrastructure/persistence/schema.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { redactRecord } from '../../../../infrastructure/redaction.js';
+import { redactRecord, redactSecretText } from '../../../../infrastructure/redaction.js';
 import type { AuditHistoryReader, AuditHistoryRecord } from '../application/ports.js';
 
 /**
@@ -99,7 +99,9 @@ export class DrizzleAuditHistoryReader implements AuditHistoryReader {
       surface: row.surface as SourceSurface,
       result: row.result as AuditResult,
       occurredAt: row.occurredAt,
-      reason: row.reason,
+      // Redacted again like `before`/`after`: Customer 360 shows it to every `audit.view`
+      // role, and the audit log browser already treats it the same way.
+      reason: row.reason === null ? null : redactSecretText(row.reason),
       before: asRecord(row.before),
       after: asRecord(row.after),
     }));

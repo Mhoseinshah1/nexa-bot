@@ -170,7 +170,10 @@ describe('the audit log query plans', () => {
 
   it('serves a date range from the time keyset', async () => {
     const now = Date.now();
-    const plan = await planOf({ from: new Date(now - 3 * 86_400_000), to: new Date(now) });
+    const plan = await planOf({
+      from: new Date(now - 3 * 86_400_000).toISOString(),
+      to: new Date(now).toISOString(),
+    });
     expectServed(plan, 'audit_logs_tenant_occurred_page_idx');
   }, 60_000);
 

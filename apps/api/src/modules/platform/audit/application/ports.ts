@@ -80,9 +80,12 @@ export interface AuditLogFilter {
   readonly entityId?: string;
   readonly result?: AuditResult;
   readonly security?: AuditSecurityFilter;
-  /** Half-open: `from <= occurred_at < to`. */
-  readonly from?: Date;
-  readonly to?: Date;
+  /**
+   * Half-open: `from <= occurred_at < to`. Validated ISO text, compared in SQL as
+   * `timestamptz` so a bound with microseconds is exact — a `Date` would truncate it.
+   */
+  readonly from?: string;
+  readonly to?: string;
 }
 
 /**
@@ -144,12 +147,14 @@ export interface AuditLogReader {
   adminIdsByUsername(scope: TenantContext, username: string): Promise<readonly string[]>;
 
   /**
-   * The customer each of these orders, payments and services belongs to, keyed
-   * `Order:<id>` and so on. Ids that name nothing in this tenant are simply absent.
+   * The customer each of these customers, orders, payments and services belongs to, keyed
+   * `Customer:<id>`, `Order:<id>` and so on — a customer belongs to itself. Ids that name
+   * nothing in this tenant are simply absent.
    */
   ownersOf(
     scope: TenantContext,
     refs: {
+      readonly customers: readonly string[];
       readonly orders: readonly string[];
       readonly payments: readonly string[];
       readonly services: readonly string[];

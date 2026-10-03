@@ -50,9 +50,14 @@ export interface AuditLogQuery {
   readonly entityId?: string | undefined;
   readonly result?: AuditResult | undefined;
   readonly security?: AuditSecurityFilter | undefined;
-  /** Half-open `[from, to)`. Parsed by the surface: this layer reads no timestamps itself. */
-  readonly from?: Date | undefined;
-  readonly to?: Date | undefined;
+  /**
+   * Half-open `[from, to)`, as the VALIDATED ISO text the surface received
+   * (`auditLogListQuerySchema`), never a `Date`: a `Date` keeps milliseconds, so
+   * `…00.000500Z` would become `…00.000Z` and the bound would move by up to 999 µs. The
+   * text goes to PostgreSQL as `timestamptz`, which keeps every microsecond.
+   */
+  readonly from?: string | undefined;
+  readonly to?: string | undefined;
 }
 
 export interface AuditLogPage {
@@ -135,6 +140,21 @@ export class AuditLogService {
       const batch = await this.deps.reader.page(scope, filter, EXPORT_BATCH, after);
       rows.push(...batch);
       if (rows.length > AUDIT_LOG_EXPORT_ROW_MAX) {
+        // A refused export is on the record too (`docs/audit-log.md`), BEFORE the refusal
+        // leaves: who tried to take the log away, with which filter, and why it was refused.
+        await this.deps.audit.record(scope, actor, {
+          action: 'audit.export',
+          entityType: 'AuditLog',
+          entityId: null,
+          before: null,
+          after: {
+            format: 'csv',
+            limit: AUDIT_LOG_EXPORT_ROW_MAX,
+            filter: filterRecord(query),
+          },
+          reason: 'EXPORT_ROW_LIMIT_EXCEEDED',
+          result: 'DENIED',
+        });
         throw errors.validation(
           CONTROL_ERROR_CODES.INVALID_VALUE,
           `This export has more than ${AUDIT_LOG_EXPORT_ROW_MAX} rows. Narrow the filter.`,
@@ -165,22 +185,21 @@ export class AuditLogService {
   }
 
   /**
-   * The parsed query as the reader's filter. `actor` is an id or a username: a uuid is the
-   * id; anything else is resolved as a CURRENT username in this tenant AND kept as a literal
-   * `actor_id`, so a system job's id typed back from a row still finds that job's rows.
+   * The parsed query as the reader's filter. `actor` is an id or a username, and is always
+   * read as BOTH: resolved as a CURRENT username in this tenant AND kept as a literal
+   * `actor_id`, so a system job's id typed back from a row still finds that job's rows and a
+   * uuid-shaped username still finds its admin's.
    */
   private async filterOf(scope: TenantContext, query: AuditLogQuery): Promise<AuditLogFilter> {
     let actorIds: readonly string[] | undefined;
     if (query.actor !== undefined) {
       const raw = query.actor.trim();
-      if (UUID.test(raw)) {
-        actorIds = [raw.toLowerCase()];
-      } else {
-        const username = raw.startsWith('@') ? raw.slice(1) : raw;
-        const ids =
-          username === '' ? [] : await this.deps.reader.adminIdsByUsername(scope, username);
-        actorIds = [...ids, raw];
-      }
+      const username = raw.startsWith('@') ? raw.slice(1) : raw;
+      const ids = username === '' ? [] : await this.deps.reader.adminIdsByUsername(scope, username);
+      // A uuid is an id — lowercased, as ids are stored — AND, because a username may be
+      // uuid-shaped (`adminUsernameSchema` admits `[a-z0-9._-]`), a username too. Both are
+      // exact matches, ORed: neither reading may hide the other's rows.
+      actorIds = [...new Set([...ids, UUID.test(raw) ? raw.toLowerCase() : raw])];
     }
     return {
       ...(actorIds === undefined ? {} : { actorIds }),
@@ -215,6 +234,9 @@ export class AuditLogService {
       ),
     ];
     const owners = await this.deps.reader.ownersOf(scope, {
+      // A Customer or Wallet row is the customer itself, and still links only when that
+      // customer exists in this tenant — a well-formed uuid is not a customer.
+      customers: [...new Set([...ids('Customer'), ...ids('Wallet')])],
       orders: ids('Order'),
       payments: ids('Payment'),
       services: ids('Service'),
@@ -242,8 +264,9 @@ export class AuditLogService {
 
 /**
  * Where a row leads. Only from the row's own entity, only to an id this installation issues,
- * and for an order, payment or service the customer only when that entity exists in this
- * tenant — a link is navigation and must not point at something that is not there.
+ * and only when that entity — the customer itself for a Customer or Wallet row, the order,
+ * payment or service otherwise — exists in this tenant: a link is navigation and must not
+ * point at something that is not there.
  */
 export function linksOf(
   row: Pick<AuditLogRecord, 'entityType' | 'entityId'>,
@@ -255,7 +278,7 @@ export function linksOf(
   switch (row.entityType) {
     case 'Customer':
     case 'Wallet':
-      return { ...links, customerId: id };
+      return owners.has(`Customer:${id}`) ? { ...links, customerId: id } : links;
     case 'Order': {
       const owner = owners.get(`Order:${id}`);
       return owner === undefined ? links : { ...links, orderId: id, customerId: owner };
@@ -299,7 +322,6 @@ function filterRecord(query: AuditLogQuery): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(query)) {
     if (typeof value === 'string') out[key] = value;
-    else if (value instanceof Date) out[key] = value.toISOString();
   }
   return out;
 }
