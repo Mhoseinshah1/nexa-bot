@@ -88,6 +88,19 @@ export const PERMISSION_LABELS: Record<PermissionKey, WebKey> = {
   'recovery.key.remove': 'web.perm_recovery_key_remove',
   'tenant.cross_read': 'web.perm_tenant_cross_read',
   'maintenance.run': 'web.perm_maintenance_run',
+  'users.message.send': 'web.perm_users_message_send',
+  'users.message.view': 'web.perm_users_message_view',
+  'users.notes.view': 'web.perm_users_notes_view',
+  'users.notes.write': 'web.perm_users_notes_write',
+  'users.tags.assign': 'web.perm_users_tags_assign',
+  'users.tags.manage': 'web.perm_users_tags_manage',
+  'terms.view': 'web.perm_terms_view',
+  'terms.edit': 'web.perm_terms_edit',
+  'terms.publish': 'web.perm_terms_publish',
+  'audit.export': 'web.perm_audit_export',
+  'panels.drain': 'web.perm_panels_drain',
+  'services.grant': 'web.perm_services_grant',
+  'services.mass.status': 'web.perm_services_mass_status',
 };
 
 /** Persian names for the catalogue's domains (a permission's `resource`). */
@@ -117,4 +130,5 @@ export const PERMISSION_DOMAIN_LABELS: Readonly<Record<string, WebKey>> = {
   recovery: 'web.perm_domain_recovery',
   tenant: 'web.perm_domain_tenant',
   maintenance: 'web.perm_domain_maintenance',
+  terms: 'web.perm_domain_terms',
 };
