@@ -329,6 +329,13 @@ export const PERMISSIONS = [
   p('reports.pii.view', 'View personal data inside reports', 'HIGH'),
   p('reports.export', 'Export report data'),
   p('audit.view', 'View the audit log', 'LOW'),
+  /*
+   * Phase D1 (`docs/audit-log.md`): taking the audit trail OFF the installation as a file. HIGH,
+   * not LOW like reading it: a file outlives the session that produced it and is the shape in
+   * which an audit trail leaves the people trusted with it. Requires `audit.view`
+   * (`PERMISSION_REQUIRES`) — an export is the filtered list an operator can already see.
+   */
+  p('audit.export', 'Export the audit log as a file', 'HIGH'),
   p('opslog.view', 'View operational events', 'LOW'),
 
   // Backup and disaster recovery
@@ -722,6 +729,11 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * `campaigns.view` reads, and each answers with the campaign's preview and results.
    */
   'campaigns.manage': 'campaigns.view' as PermissionKey,
+  /*
+   * Phase D1. An export is the list an operator filtered on the audit page, written to a
+   * file; without `audit.view` there is no list to have filtered.
+   */
+  'audit.export': 'audit.view' as PermissionKey,
 };
 
 /**
