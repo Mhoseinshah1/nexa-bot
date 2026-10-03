@@ -61,6 +61,28 @@ export const REPORT_EXPORT_HEADERS_FA = {
   sales: 'مبلغ فروش',
   services: 'سرویس‌ها',
   creditInUse: 'بدهی پیشین (مانده منفی)',
+  // Phase E2: the financial statement (`docs/financial-reports.md`).
+  bucket: 'بازه',
+  bucketStartUtc: 'شروع بازه (UTC)',
+  bucketEndUtc: 'پایان بازه (UTC، خارج از بازه)',
+  salesCount: 'تعداد فروش',
+  grossSales: 'فروش پیش از تخفیف',
+  discounts: 'تخفیف',
+  refundCount: 'تعداد بازپرداخت',
+  refunds: 'بازپرداخت',
+  refundsToWallet: 'بازپرداخت به کیف پول',
+  refundsPaidOut: 'بازپرداخت خارج از سامانه',
+  netSales: 'فروش خالص پس از بازپرداخت',
+  externalPayments: 'تعداد پرداخت بیرونی',
+  principalReceived: 'اصل مبلغ دریافتی',
+  customerFees: 'کارمزد درگاه (پرداختی مشتری)',
+  customerPaid: 'پرداخت ناخالص مشتری',
+  receiptCredits: 'رسید واریزشده به کیف پول',
+  walletTopups: 'شارژ کیف پول',
+  walletSpending: 'خرید از کیف پول',
+  cashbackNet: 'کش‌بک خالص',
+  commissionNet: 'پورسانت خالص',
+  gifts: 'هدیه',
 } as const;
 export type ReportExportHeaderKey = keyof typeof REPORT_EXPORT_HEADERS_FA;
 
@@ -72,4 +94,5 @@ export const REPORT_EXPORT_SHEETS_FA = {
   INFRASTRUCTURE: 'زیرساخت',
   REFERRALS: 'معرفی',
   RESELLERS: 'نمایندگان',
+  FINANCIAL: 'صورت مالی',
 } as const;
