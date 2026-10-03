@@ -1078,7 +1078,16 @@ describe('the customer payment flow over Telegram', () => {
     await command(CATALOGUE_FA['bot.menu.wallet']);
     const viaMenu = String(lastMessage()?.body['text']);
 
-    expect(viaMenu, 'the menu button reached a different path').toBe(viaCommand);
+    // The account view stamps the current date and minute, and the two turns can fall
+    // either side of a minute (or midnight) boundary; the clock lines are not the path.
+    const withoutClock = (text: string): string =>
+      text
+        .split('\n')
+        .filter((line) => !/^(📅|🕒)/u.test(line.trim()))
+        .join('\n');
+    expect(withoutClock(viaMenu), 'the menu button reached a different path').toBe(
+      withoutClock(viaCommand),
+    );
     expect(viaMenu).toContain(formatMoney(money(500_000n, 'IRT')));
   });
 
