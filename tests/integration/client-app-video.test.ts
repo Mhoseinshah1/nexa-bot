@@ -257,11 +257,11 @@ describe('the tutorial video wizard (spec §7)', () => {
   });
 
   it('a customer who crafts the admin callbacks reaches nothing: no prompt is opened and no video is deleted', async () => {
-    expect((await tap(f, app('s'), TG.customer)).replyKey).toBe('bot.unknown_command');
+    expect((await tap(f, app('s'), TG.customer)).replyKey).toBe('bot.callback.stale');
     expect(await prompts()).toEqual([]);
     await tap(f, app('s'), TG.owner);
     await sendVideo(TG.owner, 'uniq-1');
-    expect((await tap(f, app('X'), TG.customer)).replyKey).toBe('bot.unknown_command');
+    expect((await tap(f, app('X'), TG.customer)).replyKey).toBe('bot.callback.stale');
     expect(await stored()).toHaveLength(1);
   });
 

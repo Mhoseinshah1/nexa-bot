@@ -1086,7 +1086,8 @@ describe('the customer purchase flow over Telegram', () => {
 
   it('answers malformed callback data without pretending to understand it', async () => {
     await tap('p:not-a-uuid');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.callback.stale']));
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual(['mm:']);
     expect(await orders()).toHaveLength(0);
     // Still acknowledged: the button is still spinning whatever it said.
     expect(sent.filter((one) => one.url.includes('/answerCallbackQuery'))).toHaveLength(1);

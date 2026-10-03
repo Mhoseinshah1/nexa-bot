@@ -229,7 +229,7 @@ describe('the customers section of the Telegram management panel', () => {
         tapUpdate(data, TG.customer),
       );
       expect(result.replyKey, `${prefix} answered an administrator's reply`).toBe(
-        'bot.unknown_command',
+        'bot.callback.stale',
       );
     }
     /* And the customer is untouched by any of them. */
@@ -337,12 +337,12 @@ describe('the customers section of the Telegram management panel', () => {
 
   it('answers a forged page cursor as unreadable input rather than a query error', async () => {
     /*
-     * `bot.unknown_command` is what an UNSUPPORTED intent renders as — the same answer
+     * `bot.callback.stale` (Item 12) is what an UNSUPPORTED intent renders as — the same answer
      * any unreadable input gets. What matters is that it is an ANSWER: a token that
      * reached the `::timestamptz` cast would be a 500 on a callback anybody can craft.
      */
     const result = await open(`${PREFIX.customers}not-a-cursor`, TG.owner);
-    expect(result.replyKey).toBe('bot.unknown_command');
+    expect(result.replyKey).toBe('bot.callback.stale');
   });
 
   // =========================================================================
@@ -388,7 +388,7 @@ describe('the customers section of the Telegram management panel', () => {
      * two answers may differ here and must not differ above.
      */
     const malformed = await open(`${PREFIX.view}not-a-uuid`, TG.owner);
-    expect(malformed.replyKey).toBe('bot.unknown_command');
+    expect(malformed.replyKey).toBe('bot.callback.stale');
   });
 
   it('finds a customer by the numeric Telegram id an operator quotes', async () => {

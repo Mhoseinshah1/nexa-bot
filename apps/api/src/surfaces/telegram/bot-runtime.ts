@@ -9935,6 +9935,17 @@ export class BotRuntime {
       readonly telegramUserId: string;
     },
   ): Promise<PendingReply> {
+    /*
+     * Item 12 (C4): a TAPPED button this runtime could not read — a MirzaBot keyboard still
+     * in a chat after cutover (same token), a keyboard from an older release, or data a
+     * client truncated or made up. `intentOf` already refused to map it onto any action;
+     * this answers it truthfully: the button is no longer active, and here is the main
+     * menu. Decided first, so no handler below ever sees it, and with nothing read from the
+     * data. A typed message nobody recognises keeps `bot.unknown_command`.
+     */
+    if (command.intent === 'UNSUPPORTED' && isCallbackQueryUpdate(input.update)) {
+      return staleCallbackReply();
+    }
     if (command.intent === 'CATALOG') return this.catalogue(scope, actor, 0, customer);
     if (command.intent === 'CATALOG_PAGE') {
       return this.catalogue(scope, actor, command.page ?? 0, customer);
@@ -10524,6 +10535,16 @@ export class BotRuntime {
     }
 
     const key = replyFor(command.intent, arrival);
+    /*
+     * Item 12 (C4): a TAPPED button that reached this fallback — an admin-shaped callback
+     * from somebody who is not (or no longer) an administrator with that section, as well
+     * as the unreadable ones decided at the top of `act` — gets the same stale-button
+     * answer. One answer for every button this account cannot use, so the reply is not an
+     * oracle for which callback shapes are management routes.
+     */
+    if (key === 'bot.unknown_command' && isCallbackQueryUpdate(input.update)) {
+      return staleCallbackReply();
+    }
     /*
      * The admin row is added for a Telegram account that resolves to an administrator,
      * and the resolution is the SAME one every admin action makes. A keyboard is not
@@ -16311,6 +16332,24 @@ export function gatewayAttemptScreen(
  * stays on screen and payable once they have topped up.
  */
 const WALLET_SHORT: WizardDirective = { kind: 'ORDER', step: 'PREINVOICE', placement: 'NEW' };
+
+/**
+ * Whether this update is a tapped inline button (a `callback_query`), whatever its data.
+ * Read through the passthrough fields, as `intentOf` does.
+ */
+export function isCallbackQueryUpdate(update: unknown): boolean {
+  const callback = (update as { callback_query?: unknown } | null)?.callback_query;
+  return typeof callback === 'object' && callback !== null;
+}
+
+/**
+ * Item 12 (C4): the answer to a button whose data this installation does not recognise —
+ * one sentence and the main menu. Nothing from the data reaches it: no placeholder, no
+ * echo, so an old MirzaBot payload or a crafted one cannot shape the reply.
+ */
+export function staleCallbackReply(): PendingReply {
+  return { key: 'bot.callback.stale', values: {}, buttons: [mainMenuButton()], orderId: null };
+}
 
 /** The one trial refusal, with the way back to the main menu. */
 function trialUnavailable(): PendingReply {

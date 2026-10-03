@@ -762,6 +762,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.blocked_spam',
       'bot.blocked_with_reason',
+      // Item 12 (C4): a tapped button this installation does not recognise.
+      'bot.callback.stale',
       'bot.catalog.back_to_categories_button',
       'bot.catalog.categories_heading',
       'bot.catalog.category_empty',
