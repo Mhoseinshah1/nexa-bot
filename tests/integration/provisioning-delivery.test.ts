@@ -1526,6 +1526,133 @@ describe('a provisioned service announces itself', () => {
     expect(all.find((o) => o.type === 'SYNC_USAGE')?.state).toBe('SUCCEEDED');
   });
 
+  it('syncs an ACTIVE service whose provider uses the stored username instead of provider_user_id', async () => {
+    const orderId = await paidOrder('usage-null-provider-id');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state).toBe('ACTIVE');
+
+    /*
+     * RickPanel and Marzban deliberately return providerUserId=null: their provider
+     * identity is the stored username. Reproduce that valid shape on this real
+     * provisioner fixture. The usage planner must not confuse a nullable provider id
+     * with "there is no provider account".
+     */
+    await ctx.container.database.db.execute(sql`
+      UPDATE services
+         SET provider_user_id = NULL,
+             created_at = now() - interval '30 days',
+             usage_synced_at = NULL
+       WHERE tenant_id = ${tenantA.tenantId}
+         AND id = ${service?.id ?? ''}
+    `);
+
+    const username = service?.providerUsername ?? '';
+    panel.useTraffic(username, { up: 3_000_000, down: 7_000_000 });
+    const before = trafficCalls();
+
+    await ctx.container.provisionerLoop.tick();
+
+    expect(trafficCalls(), 'the username-keyed account was still read').toBe(before + 1);
+    const synced = await services.findByOrderId(tenantA, orderId);
+    expect(synced?.providerUserId, 'the read does not invent a provider id').toBeNull();
+    expect(synced?.trafficUsedBytes).toBe(10_000_000n);
+    expect(synced?.usageSyncedAt).not.toBeNull();
+  });
+
+  it('lets a newly paid provision outrank an older background usage sync', async () => {
+    const oldOrderId = await paidOrder('usage-priority-old');
+    await ctx.container.provisionerLoop.tick();
+    const oldService = await services.findByOrderId(tenantA, oldOrderId);
+    expect(oldService?.state).toBe('ACTIVE');
+
+    /*
+     * Put housekeeping in the queue first. The current claim order is otherwise
+     * oldest-first, so without an explicit lane priority this row wins over the paid
+     * create below and a customer waits behind migration-scale usage refresh work.
+     */
+    const oldAt = new Date(ctx.container.clock.now().getTime() - 60_000);
+    await ctx.container.uow.run(tenantA, async (tx) =>
+      operations.plan(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          operationId: operationIdFor('provider', 'p1-background-sync'),
+          serviceId: oldService?.id ?? '',
+          orderId: oldOrderId,
+          requestedByCustomerId: null,
+          panelId: panelId as PanelId,
+          type: 'SYNC_USAGE',
+        },
+        oldAt,
+        tx,
+      ),
+    );
+
+    const paidOrderId = await paidOrder('usage-priority-paid');
+    const beforeCreates = addClientCalls();
+
+    await ctx.container.provisionerLoop.tick();
+
+    expect(addClientCalls(), 'the paid create is claimed before housekeeping').toBe(
+      beforeCreates + 1,
+    );
+    expect((await services.findByOrderId(tenantA, paidOrderId))?.state).toBe('ACTIVE');
+
+    const background = (await operations.listForService(tenantA, oldService?.id ?? '', 20)).find(
+      (operation) =>
+        operation.type === 'SYNC_USAGE' && operation.requestedByCustomerId === null,
+    );
+    expect(background?.state, 'the background read remains queued').toBe('PLANNED');
+  });
+
+  it('background usage sync leaves the last tenant budget token for paid or interactive work', async () => {
+    const orderId = await paidOrder('usage-budget-floor');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state).toBe('ACTIVE');
+
+    await ctx.container.uow.run(tenantA, async (tx) =>
+      operations.plan(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          operationId: operationIdFor('provider', 'p1-budget-floor-sync'),
+          serviceId: service?.id ?? '',
+          orderId,
+          requestedByCustomerId: null,
+          panelId: panelId as PanelId,
+          type: 'SYNC_USAGE',
+        },
+        ctx.container.clock.now(),
+        tx,
+      ),
+    );
+
+    /*
+     * One token remains. A reserve of one means housekeeping must wait, while a
+     * customer-paid provision / operator action using reserve zero can still spend it.
+     * The shared bucket is kept; P1 adds no second limiter.
+     */
+    const now = ctx.container.clock.now();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO panel_probe_budgets (tenant_id, tokens, refilled_at)
+      VALUES (${tenantA.tenantId}, 1, ${now})
+      ON CONFLICT (tenant_id) DO UPDATE
+      SET tokens = 1, refilled_at = EXCLUDED.refilled_at
+    `);
+    const before = trafficCalls();
+
+    await ctx.container.provisionerLoop.tick();
+
+    expect(trafficCalls(), 'background sync does not consume the protected last token').toBe(before);
+    const sync = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
+      (operation) =>
+        operation.type === 'SYNC_USAGE' && operation.requestedByCustomerId === null,
+    );
+    expect(sync?.state, 'the read is held for a later tick, not failed').toBe('PLANNED');
+  });
+
   it('does not sync a service whose figure is still fresh', async () => {
     // The cadence is the whole point of the setting. A service provisioned moments ago
     // is not stale, and a sweep that read it anyway would spend a tenant's outbound
