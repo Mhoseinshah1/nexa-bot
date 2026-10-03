@@ -113,6 +113,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     summary: 'web.feature_customer_refund_requests_summary',
     disableEffect: null,
   },
+  // Spec §9. Off hides the button and makes /stop change nothing; stored choices are kept
+  // and become effective again when it is turned back on.
+  customer_marketing_opt_out: {
+    title: 'web.feature_customer_marketing_opt_out_title',
+    summary: 'web.feature_customer_marketing_opt_out_summary',
+    disableEffect: 'web.feature_customer_marketing_opt_out_off_effect',
+  },
   // Off: an attribution is made only at registration and never afterwards, so a
   // customer who joins through a referral link while this is off is never attributed.
   referrals: {

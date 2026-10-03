@@ -597,6 +597,31 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.customer_unblock_ask': 'مسدودی کاربر {customer} برداشته شود؟',
   'bot.admin.customer_unblock_confirm_button': '✅ رفع مسدودی شود',
   'bot.admin.customer_usage': 'دستور ناقص یا نامعتبر است.\n\n/customer <شناسهٔ عددی تلگرام>',
+  // Spec §7: the client apps section and the tutorial video wizard.
+  'bot.admin.apps_button': '📱 برنامه‌ها و ویدیوی آموزشی',
+  'bot.admin.apps_section':
+    '📱 برنامه‌ها\n\nبرنامه‌ای را انتخاب کنید تا ویدیوی آموزشی آن را تنظیم یا حذف کنید.',
+  'bot.admin.apps_empty':
+    '📱 برنامه‌ها\n\nهنوز برنامه‌ای ثبت نشده است. برنامه‌ها از پنل مدیریت وب افزوده می‌شوند.',
+  'bot.admin.app_detail_video':
+    '📱 {app}\n\n🎬 ویدیوی آموزشی برای این ربات تنظیم شده است. با «تنظیم ویدیو» می‌توانید آن را جایگزین کنید.',
+  'bot.admin.app_detail_no_video': '📱 {app}\n\nهنوز ویدیوی آموزشی برای این ربات تنظیم نشده است.',
+  'bot.admin.app_video_set_button': '🎬 تنظیم ویدیو',
+  'bot.admin.app_video_delete_button': '🗑 حذف ویدیو',
+  'bot.admin.app_video_delete_ask':
+    'ویدیوی آموزشی «{app}» حذف شود؟ مشتریان دیگر این ویدیو را نخواهند دید.',
+  'bot.admin.app_video_delete_confirm_button': '✅ بله، حذف شود',
+  'bot.admin.app_video_prompt':
+    '🎬 ویدیوی آموزشی «{app}» را همین حالا به‌صورت ویدیو در همین گفتگو بفرستید.\n\nاین درخواست تا ۱۵ دقیقه معتبر است.',
+  'bot.admin.app_video_cancel_button': '✖️ انصراف',
+  'bot.admin.app_video_saved': '✅ ویدیوی آموزشی «{app}» ذخیره شد.',
+  'bot.admin.app_video_deleted': '🗑 ویدیوی آموزشی «{app}» حذف شد.',
+  'bot.admin.app_video_cancelled': 'ارسال ویدیو لغو شد؛ چیزی ذخیره نشد.',
+  'bot.admin.app_video_stale':
+    '⌛️ درخواست ارسال ویدیو باز نیست یا منقضی شده است و چیزی ذخیره نشد. برای تنظیم ویدیو، برنامه را انتخاب و دوباره «تنظیم ویدیو» را بزنید.',
+  'bot.admin.apps_back_button': '🔙 بازگشت به برنامه‌ها',
+  'bot.admin.app_back_button': '🔙 بازگشت',
+  'bot.admin.app_not_found': 'این برنامه دیگر وجود ندارد.',
   'bot.admin.categories_button': '🗂 دسته‌بندی‌ها',
   'bot.admin.categories_section':
     'دسته‌بندی‌ها به همان ترتیبی که مشتری می‌بیند. کنار هر دسته وضعیت و نمایش آن آمده است؛ برای مدیریت روی هرکدام بزنید.\n\nبرای ساختن دستهٔ تازه:\n/category_new <نام>',
@@ -1281,6 +1306,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.marketing.opted_in': '🔔 پیام‌های تبلیغاتی دوباره برای شما فعال شد.',
   'bot.marketing.opt_out_button': '🔕 قطع پیام‌های تبلیغاتی',
   'bot.marketing.opt_in_button': '🔔 دریافت پیام‌های تبلیغاتی',
+  'bot.marketing.unavailable':
+    'ℹ️ در حال حاضر امکان قطع یا وصل پیام‌های تبلیغاتی در این ربات فعال نیست.\nاطلاع‌رسانی‌های مربوط به پرداخت، سرویس و پشتیبانی شما مثل همیشه ارسال می‌شود.',
   'bot.menu.tickets': '🎫 پشتیبانی / تیکت‌ها',
   'bot.support.tickets_button': '🎫 تیکت‌های پشتیبانی',
   'bot.ticket.list':

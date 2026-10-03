@@ -331,13 +331,29 @@ export const FEATURE_FLAGS = [
     configuredBy: [],
   },
   {
+    key: 'customer_marketing_opt_out',
+    description:
+      'Let a customer stop promotional (MARKETING) broadcasts themselves — /stop and the ' +
+      'opt-out button — and honour what they chose. On by default: what every installation ' +
+      'did before this switch existed. Turning it off hides the button, makes /stop and any ' +
+      'old opt-out or opt-in button change nothing, and sends MARKETING broadcasts to ' +
+      'customers who opted out earlier. Their stored choice is NOT erased: turning it back ' +
+      'on makes it effective again. Messages about a customer\u2019s own payments, services ' +
+      'and tickets are never affected either way (spec §9).',
+    defaultEnabled: true,
+    // TENANT_WIDE: turning it off sends promotions to every customer who asked not to get
+    // them, at once. Worth saying out loud before it happens.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
     key: 'central_fx',
     description:
       'Read the USDT rate from a public exchange (Nobitex, with Wallex as the fallback) and ' +
-      'keep it fresh for the routes priced by it (package FX). Off by default: an ' +
-      'installation that upgrades keeps every existing route exactly as it was, and the ' +
-      'Telegram Stars route stays on its operator-set fixed rate until stars.pricing_mode ' +
-      'is switched explicitly. Turning it off stops the refresh and makes the central rate ' +
+      'keep it fresh for the routes priced by it (package FX). The Telegram Stars route is ' +
+      'priced by this rate and stars.per_usdt only (spec §8): while it is off no new Stars ' +
+      'invoice can be priced, and there is no manual Stars rate to fall back to. Turning ' +
+      'it off stops the refresh and makes the central rate ' +
       'UNAVAILABLE, so a new central-rate invoice is refused with a customer message; an ' +
       'invoice already issued keeps its own snapshot whatever happens to the feed.',
     defaultEnabled: false,
@@ -348,7 +364,6 @@ export const FEATURE_FLAGS = [
       'fx.fallback_source',
       'fx.fresh_ttl_seconds',
       'fx.max_stale_seconds',
-      'stars.pricing_mode',
       'stars.per_usdt',
     ],
   },

@@ -1213,27 +1213,32 @@ export const SETTINGS = [
   {
     key: 'stars.pricing_mode',
     description:
-      'How the Telegram Stars route prices a Star. FIXED_RATE (the default, and what every ' +
-      'existing installation keeps) uses the rate set on the route. CENTRAL_FX_RATIO derives ' +
-      'the Toman per Star from the central USDT quote and stars.per_usdt, exactly: ' +
-      'stars = ceil(payable / (rate / ratio)). Switching is refused while the central_fx ' +
-      'flag is off or the ratio is zero; switching back never touches an issued invoice.',
+      'RETIRED (spec §8, Stars price from central FX only). This used to choose between the ' +
+      'operator-set Toman per Star (FIXED_RATE) and the central USDT quote (CENTRAL_FX_RATIO). ' +
+      'The Telegram Stars route is now priced by the central quote and stars.per_usdt only, ' +
+      'so nothing reads this value. It stays declared so a stored value keeps parsing, it is ' +
+      'not shown on the settings page, and a change to it is refused.',
     schema: starsPricingModeSchema,
     defaultValue: 'FIXED_RATE',
-    configures: 'central_fx',
+    // It configures nothing now; saying otherwise would draw it beside the feature.
+    configures: null,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
-    consumer: 'ACTIVE',
+    // Nothing reads it. `PLANNED` is the registry's only word for "stored and unread".
+    consumer: 'PLANNED',
   },
   {
     key: 'stars.per_usdt',
     description:
       'How many Telegram Stars one USDT buys, as a decimal with up to four fractional ' +
-      'digits. Telegram publishes no canonical Star↔USDT merchant feed (OQ-FX-01), so ' +
-      'this is the operator’s figure. Zero means not set: the CENTRAL_FX_RATIO mode cannot ' +
-      'be chosen and a new central-rate Stars invoice is refused. Snapshotted on every ' +
-      'attempt; a change affects only attempts opened afterwards.',
+      'digits: the provider-side Star↔USD ratio, NOT an exchange rate. The Toman per Star ' +
+      'is always derived from the central USDT quote divided by this ratio (spec §8); ' +
+      'there is no manual Stars rate. Telegram publishes no canonical Star↔USDT merchant ' +
+      'feed (OQ-FX-01), so this figure is entered once. Zero means not set: the Stars ' +
+      'route cannot be switched on, and a new Stars invoice is refused. Cannot be cleared ' +
+      'while the route is on. Snapshotted on every attempt; a change affects only attempts ' +
+      'opened afterwards.',
     schema: starsPerUsdtSchema,
     defaultValue: '0',
     configures: 'central_fx',

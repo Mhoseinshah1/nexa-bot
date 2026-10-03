@@ -257,6 +257,8 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { ClientAppVideoService } from './modules/control/client-apps/application/client-app-video.service.js';
+import { DrizzleClientAppVideoRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app-video.repository.js';
 import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
 import { ClientAppCatalog } from './modules/control/client-apps/application/client-app-catalog.js';
 import { ProvisionedServiceFacts } from './modules/control/client-apps/application/customer-service-facts.js';
@@ -938,6 +940,8 @@ export interface Container {
   readonly supportScreen: SupportScreenReader;
   /** WP-A10: the tenant's client apps as the operator maintains them. */
   readonly clientApps: ClientAppService;
+  /** Spec §7: the tutorial videos set from Telegram. */
+  readonly clientAppVideos: ClientAppVideoService;
   /** WP-A10: the customer's read of them, filtered by what their services are. */
   readonly clientAppCatalog: ClientAppCatalog;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
@@ -1575,6 +1579,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+    // Spec §9: whether a customer may stop promotional messages at all.
+    features: featureFlagResolver,
   });
 
   /**
@@ -2323,6 +2329,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     credentials: gatewayCredentialStore,
     adapters: gatewayAdapters,
     callbackUrlFor: gatewayCallbackUrlFor,
+    // Spec §8: a route priced only by the central rate cannot be enabled while it is off.
+    features: featureFlagResolver,
   });
 
   /**
@@ -3158,10 +3166,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      */
     [
       new SalesCurrencyChangeGuard(refundRepository),
-      // Package FX-STARS: the central pricing mode needs the feature on and a ratio set,
-      // and the ratio cannot be cleared while the mode depends on it.
-      new StarsPricingModeGuard(featureFlagResolver, settingsResolver),
-      new StarsPerUsdtGuard(settingsResolver),
+      // Spec §8: the Stars pricing mode is retired (every change refused), and the ratio
+      // cannot be cleared while the Stars route is switched on.
+      new StarsPricingModeGuard(),
+      new StarsPerUsdtGuard(paymentGatewayRepository),
       // The trial product must be a product of this tenant (WP6-A).
       new TrialProductGuard(productRepository),
       // One per reminder threshold. The five have to agree with one another, and no
@@ -4102,6 +4110,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const broadcastFacts = new DrizzleRecipientFactsReader(database.db, (scope) =>
     settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
   );
+  /*
+   * Spec §9: a customer's stored promotional opt-out is honoured exactly while the
+   * `customer_marketing_opt_out` switch is on, decided by the dispatcher's stamp alone: the
+   * preview and the launch count and materialise every member (Codex review of #143).
+   */
+  const marketingOptOutPolicy = {
+    honoured: (scope: TenantContext, tx?: unknown) =>
+      featureFlagResolver.isEnabled(scope, 'customer_marketing_opt_out', tx),
+  };
   const broadcastService = new BroadcastService({
     repository: broadcastRepository,
     audience: audienceService,
@@ -4128,6 +4145,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
     logger,
+    marketingOptOut: marketingOptOutPolicy,
   });
   const broadcastLoop = new BroadcastLoop(broadcastDispatcher, {
     scope: () =>
@@ -4479,6 +4497,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const clientAppRepository = new DrizzleClientAppRepository(database.db);
   const clientAppService = new ClientAppService({
     repository: clientAppRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  // Spec §7: the tutorial video set from Telegram («تنظیم ویدیو»), one per app and bot.
+  const clientAppVideoService = new ClientAppVideoService({
+    videos: new DrizzleClientAppVideoRepository(database.db),
+    apps: clientAppRepository,
+    captures: new DrizzleAdminAmountCaptureRepository(database.db),
     guard,
     uow,
     audit,
@@ -5478,6 +5511,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       }),
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
       clientApps: clientAppCatalog,
+      // Spec §7: the tutorial video — the admin wizard and the customer's app screen.
+      clientAppVideos: clientAppVideoService,
       serviceTransfers: serviceTransferService,
       /*
        * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
@@ -5590,6 +5625,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportFaqs: supportFaqService,
     supportScreen: supportScreenReader,
     clientApps: clientAppService,
+    clientAppVideos: clientAppVideoService,
     clientAppCatalog,
     templateRepository,
     notifications,

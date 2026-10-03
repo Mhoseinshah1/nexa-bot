@@ -440,8 +440,10 @@ describe('the feature presentation catalogue', () => {
       .sort();
     expect(asking).toEqual([
       // Package FX: off refuses every new central-rate invoice at once, and the Stars route
-      // in its central mode stops selling until the mode is switched back.
+      // (central-only since spec §8) stops selling until it is back on.
       'central_fx',
+      // Spec §9: off sends promotions to customers who had opted out (their choice is kept).
+      'customer_marketing_opt_out',
       'ops_notifications',
       // WP-A9: a reminder the customer relies on stops silently, like the families below.
       'payment_pending_reminders',
