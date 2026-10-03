@@ -5,6 +5,7 @@ import {
   errors,
   setPanelCredentialsRequestSchema,
   uuidV7Schema,
+  setPanelDrainRequestSchema,
   setPanelStatusRequestSchema,
   testPanelRequestSchema,
   updatePanelRequestSchema,
@@ -68,6 +69,7 @@ import {
   connectionIdentityOf,
   connectionValidated,
   decideEligibility,
+  drainOf,
   provisioningInputFor,
   validationAuthorisesEnable,
 } from './panel-eligibility.js';
@@ -96,6 +98,7 @@ const PROBE_LIMITED_OK_CODE = 'panel.probe.ok';
 
 const PANELS_VIEW = 'panels.view' as const;
 const PANELS_EDIT = 'panels.edit' as const;
+const PANELS_DRAIN = 'panels.drain' as const;
 const PANELS_CREDENTIALS_ROTATE = 'panels.credentials.rotate' as const;
 
 export interface CreatePanelCommand {
@@ -365,7 +368,7 @@ export class PanelService {
   private async authorize(
     scope: ScopeContext,
     actor: ActorContext,
-    permission: typeof PANELS_EDIT | typeof PANELS_CREDENTIALS_ROTATE,
+    permission: typeof PANELS_EDIT | typeof PANELS_CREDENTIALS_ROTATE | typeof PANELS_DRAIN,
     denial: { action: string; entityType: string; entityId: string | null },
   ): Promise<void> {
     try {
@@ -475,6 +478,8 @@ export class PanelService {
       used: capacity.used,
       now,
       provisioning,
+      // The operator's read answers "would a new sale go through", so nothing is held.
+      drain: drainOf(view.panel.drain),
     });
     const missing = activationIssues(view.panel.providerType, view.panel.activation);
     return {
@@ -1692,6 +1697,123 @@ export class PanelService {
           scope,
           actor.surface,
           idempotencyKey,
+          requestHash,
+          { panelId },
+          tx,
+        );
+      },
+    );
+    return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
+  }
+
+  /**
+   * Drain a panel, or let it take new business again (Phase C2).
+   *
+   * Drain is "no NEW allocations here", and that is all it is. It is enforced in
+   * exactly one place — `decideEligibility`, reason `DRAINING`, which the catalogue,
+   * confirmation and settlement already ask — so this write only records the
+   * decision. It does not touch `status`, the monitor's schedule, any service, any
+   * reservation or any credential: the panel stays ACTIVE and monitored, and every
+   * existing service on it keeps every operation, because `decideOperability`
+   * never reads drain. Nothing is migrated or deleted.
+   *
+   * The seven steps of the write path, as `setStatus`: permission, parse,
+   * idempotency, then one transaction that re-reads scope activity, locks the
+   * panel, decides against the row it holds, writes, audits and remembers the key.
+   * The lock is the one confirmation takes, so a confirmation and a drain on the
+   * same panel serialise: either the sale took its slot first (and settles), or it
+   * sees the drain and is refused.
+   *
+   * A request for the state the panel is already in changes nothing and records
+   * nothing — an audit row saying "drained" for a panel that already was would be
+   * a write reported that did not happen.
+   */
+  async setDrain(
+    scope: ScopeContext,
+    actor: ActorContext,
+    panelId: string,
+    input: unknown,
+  ): Promise<PanelWithCapacity> {
+    const tenant = this.tenant(scope);
+    const action = 'panel.drain';
+    await this.authorize(scope, actor, PANELS_DRAIN, {
+      action,
+      entityType: 'Panel',
+      entityId: panelId,
+    });
+    const parsed = parseCommand(setPanelDrainRequestSchema, input);
+    const requestHash = hashRequest({
+      panelId,
+      draining: parsed.draining,
+      reason: parsed.reason,
+    });
+    const existing = await this.deps.idempotency.find<{ panelId: string }>(
+      scope,
+      actor.surface,
+      parsed.idempotencyKey,
+      requestHash,
+    );
+    if (existing) return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
+
+    const now = this.deps.clock.now();
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PANELS_DRAIN,
+      { action, entityType: 'Panel', entityId: panelId },
+      async (tx) => {
+        await this.requireActiveScope(scope, tx);
+        await this.deps.repository.lockPanel(tenant, this.panelId(panelId), tx);
+        const before = await this.require(tenant, panelId, tx);
+        if (before.panel.status === 'ARCHIVED') {
+          // Archived is finished; a drain on it would be a decision about nothing.
+          throw errors.conflict(
+            PANEL_ERROR_CODES.PANEL_ARCHIVED,
+            'An archived panel cannot be drained or undrained.',
+          );
+        }
+        const wasDraining = before.panel.drain !== null;
+        if (wasDraining !== parsed.draining) {
+          const updated = await this.deps.repository.setDrain(
+            tenant,
+            panelId,
+            parsed.draining ? { since: now, reason: parsed.reason } : null,
+            now,
+            tx,
+          );
+          if (updated === null) {
+            throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
+          }
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action,
+              entityType: 'Panel',
+              entityId: panelId,
+              before: {
+                draining: wasDraining,
+                drainedAt: before.panel.drain?.since.toISOString() ?? null,
+                drainReason: before.panel.drain?.reason ?? null,
+              },
+              after: {
+                draining: parsed.draining,
+                drainedAt: updated.drain?.since.toISOString() ?? null,
+                // The operator's reason for THIS transition, both ways: the reason
+                // for an undrain is recorded nowhere else.
+                reason: parsed.reason,
+              },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+        }
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          actor.surface,
+          parsed.idempotencyKey,
           requestHash,
           { panelId },
           tx,

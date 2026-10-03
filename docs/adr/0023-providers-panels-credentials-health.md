@@ -641,6 +641,25 @@ ceil(batch / claimed)`. Every branch is an index range scan that stops at its
   the deepest backlog hold the front of the queue for ever; ordering in memory
   would be wrong the moment a rolling update runs two monitors.
 
+  The claim is exclusive by a re-check, not by SKIP LOCKED alone (Phase A4,
+  2026-10). A claim whose snapshot predates another's commit reaches the row
+  after its lock is gone, and PostgreSQL's READ COMMITTED re-check
+  (EvalPlanQual) sees the LATEST version — on which `next_eligible_at <= now`
+  still holds, because spending a turn does not move it. So `claimTenants`
+  carries the snapshot `last_served_at` in a `MATERIALIZED` CTE, which the
+  re-check does not refresh, and locks only rows whose current
+  `last_served_at` still equals it; the write is strictly monotonic
+  (`GREATEST(now, previous + 1 µs)`) so a spent turn can never equal an unspent
+  one. `LIMIT` sits above `LockRows`, so a loser takes the next tenant rather
+  than coming back short. The previous guard compared against the locked
+  subquery's own output and a non-monotonic value: one double claim in 600
+  races in CI, and one round in five to forty on a frozen clock. No lease, no
+  advisory lock: a crash mid-statement rolls the turn back, a crash after it
+  leaves the tenant at the back of the rotation. The per-panel claim
+  (`claimProbe`) has no such shape — one `INSERT ... ON CONFLICT DO UPDATE`
+  with a row-local predicate — and `dueForTenants` is a plain read; both are
+  covered by race tests in `tests/integration/panel-monitor.test.ts`.
+
   Each tenant row carries a lower bound on its panels' due times, and it only
   ever moves down through `LEAST`. A bound that is stale-low costs one wasted
   claim; a bound that is stale-high loses a tenant, so the asymmetry is

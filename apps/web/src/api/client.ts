@@ -1,4 +1,25 @@
 import {
+  // Program §8: operator-only customer notes and tags.
+  CUSTOMER_CRM_ROUTES,
+  customerNoteCreateResponseSchema,
+  customerNoteListResponseSchema,
+  customerTagAssignmentResponseSchema,
+  customerTagListResponseSchema,
+  customerTagWriteResponseSchema,
+  customerTagsResponseSchema,
+  type CustomerNoteCreateRequest,
+  type CustomerNoteCreateResponse,
+  type CustomerNoteListResponse,
+  type CustomerTagArchiveRequest,
+  type CustomerTagAssignmentRequest,
+  type CustomerTagAssignmentResponse,
+  type CustomerTagCreateRequest,
+  type CustomerTagListResponse,
+  type CustomerTagUpdateRequest,
+  type CustomerTagWriteResponse,
+  type CustomerTagsResponse,
+} from '@nexa/contracts';
+import {
   // Round N: the shared audience, broadcast and mass operations.
   AUDIENCE_ROUTES,
   BROADCAST_ROUTES,
@@ -273,6 +294,7 @@ import {
   type PanelPolicy,
   type PanelTechnicalResponse,
   type UpdatePanelPolicyResponse,
+  panelHealthDashboardResponseSchema,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -280,6 +302,7 @@ import {
   type PanelCredentialsInput,
   type PanelUsernamePolicyInput,
   type PanelListArchivedMode,
+  type PanelHealthDashboardResponse,
   type PanelListResponse,
   type PanelResponse,
   type PanelStatus,
@@ -418,6 +441,12 @@ import {
   type SupportFaqListResponse,
   type SupportFaqResponse,
   type SupportFaqStatus,
+  // Program §6: the terms and rules.
+  TERMS_ROUTES,
+  termsOverviewSchema,
+  termsVersionWriteResponseSchema,
+  type TermsOverviewResponse,
+  type TermsVersionWriteResponse,
   // WP-A10: client apps and connection guides.
   CLIENT_APP_ROUTES,
   clientAppDeletedSchema,
@@ -443,6 +472,10 @@ import {
   type ServiceRefundRequestState,
   type RefundListResponse,
   type RefundResponse,
+  // Phase D1: the audit log browser.
+  AUDIT_LOG_ROUTES,
+  auditLogListResponseSchema,
+  type AuditLogListResponse,
   // WP-A7: support tickets.
   TICKET_ROUTES,
   ticketAssigneesResponseSchema,
@@ -510,6 +543,15 @@ import {
   type CustomerTransferPreviewResponse,
   type CustomerTransferRequest,
   type CustomerTransferResultResponse,
+} from '@nexa/contracts';
+// Phase A2: a direct message from Customer 360.
+import {
+  DIRECT_MESSAGE_ROUTES,
+  directMessageListResponseSchema,
+  directMessageResponseSchema,
+  type DirectMessageFile,
+  type DirectMessageListResponse,
+  type DirectMessageResponse,
 } from '@nexa/contracts';
 
 /**
@@ -1141,6 +1183,8 @@ export function fetchCustomers(
     username?: string;
     status?: CustomerStatus;
     q?: string;
+    /** Program §8: a tag's id. A filter beside `status`, charged `users.view` alone. */
+    tag?: string;
   } = {},
 ): Promise<CustomerListResponse> {
   const params = new URLSearchParams();
@@ -1153,6 +1197,7 @@ export function fetchCustomers(
   if (query.status !== undefined) params.set('status', query.status);
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+  if (query.tag !== undefined && query.tag !== '') params.set('tag', query.tag);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CUSTOMER_ROUTES.list}?${suffix}` : CUSTOMER_ROUTES.list,
@@ -2045,6 +2090,45 @@ export function setSupportFaqStatus(input: {
   return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
 }
 
+// --- Program §6: the terms and rules ------------------------------------------------
+
+export function fetchTerms(): Promise<TermsOverviewResponse> {
+  return authedGet(TERMS_ROUTES.overview, termsOverviewSchema);
+}
+
+export function createTermsDraft(input: {
+  idempotencyKey: string;
+  title: string;
+  body: string;
+}): Promise<TermsVersionWriteResponse> {
+  return post(TERMS_ROUTES.createDraft, input, termsVersionWriteResponseSchema);
+}
+
+/**
+ * `expectedRevision` is the revision the editor was opened from. A draft that moved since
+ * comes back as `terms.draft_conflict` with the current revision, never overwritten.
+ */
+export function updateTermsDraft(input: {
+  id: string;
+  idempotencyKey: string;
+  title: string;
+  body: string;
+  expectedRevision: number;
+}): Promise<TermsVersionWriteResponse> {
+  const { id, ...body } = input;
+  return post(TERMS_ROUTES.updateDraft(id), body, termsVersionWriteResponseSchema);
+}
+
+/** Publishes exactly the revision the operator previewed. */
+export function publishTermsDraft(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedRevision: number;
+}): Promise<TermsVersionWriteResponse> {
+  const { id, ...body } = input;
+  return post(TERMS_ROUTES.publish(id), body, termsVersionWriteResponseSchema);
+}
+
 // --- WP-A10: client apps and connection guides ------------------------------------
 
 export function fetchClientApps(): Promise<ClientAppListResponse> {
@@ -2250,6 +2334,36 @@ export function testPanel(input: {
 }): Promise<TestPanelResponse> {
   const { id, ...body } = input;
   return post(PANEL_ROUTES.test(id), body, testPanelResponseSchema);
+}
+
+/**
+ * Phase C2: the panel health dashboard, one keyset page of the live fleet.
+ * `panels.view`; the server computes every figure, this only carries them.
+ */
+export function fetchPanelHealth(
+  query: { cursor?: string } = {},
+): Promise<PanelHealthDashboardResponse> {
+  const params = new URLSearchParams();
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PANEL_ROUTES.health}?${suffix}` : PANEL_ROUTES.health,
+    panelHealthDashboardResponseSchema,
+  );
+}
+
+/**
+ * Phase C2: drain a panel (no new allocations) or let it sell again. `panels.drain`.
+ * A reason is required both ways; the key is the submission's own, never a clock.
+ */
+export function setPanelDrain(input: {
+  id: string;
+  draining: boolean;
+  reason: string;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.drain(id), body, panelResponseSchema);
 }
 
 // ---------------------------------------------------------------------------
@@ -3933,4 +4047,159 @@ export function fetchCustomerFinancialSummary(
 
 export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
+}
+
+// --- Phase A2: «ارسال پیام» -------------------------------------------------------------
+
+/** The customer's direct messages, newest first; `cursor` is the previous page's last row. */
+export function fetchDirectMessages(
+  customerId: string,
+  cursor?: { readonly at: string; readonly id: string },
+): Promise<DirectMessageListResponse> {
+  const params = new URLSearchParams();
+  if (cursor !== undefined) {
+    params.set('beforeAt', cursor.at);
+    params.set('beforeId', cursor.id);
+  }
+  const suffix = params.toString();
+  const path = DIRECT_MESSAGE_ROUTES.list(customerId);
+  return authedGet(suffix ? `${path}?${suffix}` : path, directMessageListResponseSchema);
+}
+
+/** Queues one message; the same key answers with the same message (`replayed`). */
+export function sendDirectMessage(input: {
+  customerId: string;
+  idempotencyKey: string;
+  text: string;
+  file: DirectMessageFile | null;
+}): Promise<DirectMessageResponse> {
+  return post(
+    DIRECT_MESSAGE_ROUTES.send(input.customerId),
+    { idempotencyKey: input.idempotencyKey, text: input.text, file: input.file },
+    directMessageResponseSchema,
+  );
+}
+
+// --- Audit log (Phase D1) ------------------------------------------------------
+
+/** The audit log's filters as the page holds them; every one is ANDed on the server. */
+export interface AuditLogFilters {
+  readonly actor?: string;
+  readonly actorType?: string;
+  readonly customerId?: string;
+  readonly action?: string;
+  readonly entityType?: string;
+  readonly entityId?: string;
+  readonly result?: string;
+  readonly security?: string;
+  /** Half-open `[from, to)`, as ISO instants. */
+  readonly from?: string;
+  readonly to?: string;
+}
+
+function auditLogParams(filters: AuditLogFilters): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (typeof value === 'string' && value !== '') params.set(key, value);
+  }
+  return params;
+}
+
+/** One page of the audit log, newest first. `audit.view`. */
+export function fetchAuditLog(
+  filters: AuditLogFilters,
+  page: { readonly limit: number; readonly cursor?: string },
+): Promise<AuditLogListResponse> {
+  const params = auditLogParams(filters);
+  params.set('limit', String(page.limit));
+  if (page.cursor !== undefined) params.set('cursor', page.cursor);
+  return authedGet(`${AUDIT_LOG_ROUTES.list}?${params.toString()}`, auditLogListResponseSchema);
+}
+
+/**
+ * The CSV download of exactly these filters. A URL rather than a fetch, for the reason
+ * `reportExportUrl` gives. `audit.export`; the server records every export.
+ */
+export function auditLogExportUrl(filters: AuditLogFilters): string {
+  const params = auditLogParams(filters);
+  params.set('format', 'csv');
+  return `${API_PREFIX}${AUDIT_LOG_ROUTES.export}?${params.toString()}`;
+}
+
+// --- Customer notes and tags (program §8) ---------------------------------------------
+//
+// Operator-only. Reading tags is `users.view`; the catalogue is `users.tags.manage`, a
+// customer's tags `users.tags.assign`, notes `users.notes.view` / `users.notes.write` — all
+// charged on the server.
+
+export function fetchCustomerTagCatalogue(): Promise<CustomerTagListResponse> {
+  return authedGet(CUSTOMER_CRM_ROUTES.tags, customerTagListResponseSchema);
+}
+
+export function createCustomerTag(
+  body: CustomerTagCreateRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tags, body, customerTagWriteResponseSchema);
+}
+
+export function updateCustomerTag(
+  tagId: string,
+  body: CustomerTagUpdateRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tag(tagId), body, customerTagWriteResponseSchema);
+}
+
+export function archiveCustomerTag(
+  tagId: string,
+  body: CustomerTagArchiveRequest,
+): Promise<CustomerTagWriteResponse> {
+  return post(CUSTOMER_CRM_ROUTES.tagArchive(tagId), body, customerTagWriteResponseSchema);
+}
+
+export function fetchCustomerTags(customerId: string): Promise<CustomerTagsResponse> {
+  return authedGet(CUSTOMER_CRM_ROUTES.customerTags(customerId), customerTagsResponseSchema);
+}
+
+export function assignCustomerTag(
+  customerId: string,
+  body: CustomerTagAssignmentRequest,
+): Promise<CustomerTagAssignmentResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerTags(customerId),
+    body,
+    customerTagAssignmentResponseSchema,
+  );
+}
+
+export function removeCustomerTag(
+  customerId: string,
+  body: CustomerTagAssignmentRequest,
+): Promise<CustomerTagAssignmentResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerTagRemove(customerId),
+    body,
+    customerTagAssignmentResponseSchema,
+  );
+}
+
+export function fetchCustomerNotes(
+  customerId: string,
+  cursor?: string,
+): Promise<CustomerNoteListResponse> {
+  const path = CUSTOMER_CRM_ROUTES.customerNotes(customerId);
+  return authedGet(
+    cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
+    customerNoteListResponseSchema,
+  );
+}
+
+export function addCustomerNote(
+  customerId: string,
+  body: CustomerNoteCreateRequest,
+): Promise<CustomerNoteCreateResponse> {
+  return post(
+    CUSTOMER_CRM_ROUTES.customerNotes(customerId),
+    body,
+    customerNoteCreateResponseSchema,
+  );
 }

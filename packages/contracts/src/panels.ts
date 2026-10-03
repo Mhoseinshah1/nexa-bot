@@ -261,6 +261,20 @@ export const PANEL_INELIGIBILITY_REASONS = [
   /** The operator said stop using this for now. Their decision, not a measurement. */
   'DISABLED',
   /**
+   * The operator DRAINED the panel: no new allocation, everything else as before.
+   *
+   * A decision, like `DISABLED`, so it is reported before every measurement — and a
+   * different decision. `DISABLED` stops the monitor probing the panel and every
+   * operation that needs it; a drained panel is still `ACTIVE`, still monitored, and
+   * every existing service on it keeps renewing, suspending and syncing, because
+   * `decideOperability` does not read drain at all. What stops is the one thing this
+   * vocabulary is about: a NEW account being sold onto it. An allocation that already
+   * holds its slot — an order confirmed before the drain whose capacity hold is still
+   * there — is not new, and settles. Draining migrates, terminates and deletes
+   * nothing (Phase C2, `docs/panel-health-dashboard.md`).
+   */
+  'DRAINING',
+  /**
    * `PANEL_UNHEALTHY_AFTER_FAILURES` consecutive failing probes, measured
    * recently enough to still be believed.
    *
@@ -348,6 +362,24 @@ export const PANEL_INELIGIBILITY_REASONS = [
   'UNVALIDATED',
 ] as const;
 export type PanelIneligibilityReason = (typeof PANEL_INELIGIBILITY_REASONS)[number];
+
+/**
+ * Why an operator drained a panel, or let it take new business again.
+ *
+ * Required on both transitions: a drain is the decision an operator reads back
+ * weeks later ("why is this panel not selling"), and an undrain is the one that
+ * puts customers back on it. Free text, bounded, stored on the panel while it is
+ * drained and in the audit row for both.
+ */
+export const PANEL_DRAIN_REASON_MIN_LENGTH = 3;
+export const PANEL_DRAIN_REASON_MAX_LENGTH = 500;
+
+/**
+ * The window the panel health dashboard counts provisioning failures over,
+ * half-open `[now - window, now)`. One constant, so the number a screen shows
+ * and the sentence beside it cannot disagree.
+ */
+export const PANEL_HEALTH_FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * How long a capacity reservation is held before it expires on its own.

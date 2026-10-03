@@ -68,7 +68,8 @@ strings rather than parsing them into a double. The preview's dashboard called
 Nine of fifteen navigation entries lead to a page that does nothing. That is
 the point: an operator can see the product's shape and cannot mistake any of it
 for working software. Each of those pages also carries the owner decisions
-already fixed for the surface — no user tags, no protocol column, no
+already fixed for the surface — no user tags (since reversed by the owner in program §8,
+`docs/customer-notes-tags.md`), no protocol column, no
 least-loaded routing, no receipt storage, server-side ordering, the one-hour
 payment expiry — so the rules are recorded where whoever builds the surface
 will find them rather than being rediscovered the expensive way.

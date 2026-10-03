@@ -931,6 +931,67 @@ describe('panel capacity and sales eligibility', () => {
     });
   });
 
+  /*
+   * Phase C2: drain. The catalogue and confirmation are two of the evaluator's four
+   * callers; settlement is in `automatic-refund.test.ts`, beside the refunds it can
+   * produce.
+   */
+  const setDrained = (panelId: string, drained: boolean) =>
+    ctx.container.database.db.execute(
+      drained
+        ? sql`UPDATE panels SET drained_at = now(), drain_reason = 'نگهداری' WHERE id = ${panelId}`
+        : sql`UPDATE panels SET drained_at = NULL, drain_reason = NULL WHERE id = ${panelId}`,
+    );
+
+  it('hides a product whose panel is drained, and refuses it as DRAINING if asked anyway', async () => {
+    const product = await activeProduct(panelA);
+    await setDrained(panelA, true);
+
+    const browsed = await ctx.container.products.browse(tenantA, systemActor(key()), 20);
+    expect(browsed.items).toHaveLength(0);
+    expect(await ctx.container.panelSales.eligiblePanelIds(tenantA)).not.toContain(panelA);
+    expect(await ctx.container.panelSales.evaluate(tenantA, panelA)).toEqual({
+      eligible: false,
+      reason: 'DRAINING',
+    });
+
+    const order = await draftFor(customerA, product);
+    await expect(confirm(customerA, order)).rejects.toMatchObject({
+      code: 'commerce.panel_not_eligible',
+      details: { reason: 'DRAINING' },
+    });
+    // Nothing was taken: a refused confirmation holds no slot.
+    expect(await reservations(panelA)).toBe(0);
+
+    // And it sells again the moment the drain ends.
+    await setDrained(panelA, false);
+    const again = await draftFor(customerA, product);
+    await expect(confirm(customerA, again)).resolves.toMatchObject({ state: 'AWAITING_PAYMENT' });
+  });
+
+  it('a drain and a confirmation on one panel serialise on its lock', async () => {
+    // Either the sale took its slot first and the drain lands after it, or the
+    // drain landed first and the sale is refused — never a slot taken on a panel
+    // whose drain committed before the decision.
+    const product = await activeProduct(panelA);
+    const order = await draftFor(customerA, product);
+    const [confirmed, drained] = await Promise.allSettled([
+      confirm(customerA, order),
+      ctx.container.panels.setDrain(tenantA, owner, panelA, {
+        draining: true,
+        reason: 'نگهداری',
+        idempotencyKey: key(),
+      }),
+    ]);
+    expect(drained.status).toBe('fulfilled');
+    if (confirmed.status === 'fulfilled') {
+      expect(await reservations(panelA)).toBe(1);
+    } else {
+      expect(confirmed.reason).toMatchObject({ details: { reason: 'DRAINING' } });
+      expect(await reservations(panelA)).toBe(0);
+    }
+  });
+
   it('refuses an archived panel as ARCHIVED, never as at capacity', async () => {
     const product = await activeProduct(panelA);
     const order = await draftFor(customerA, product);

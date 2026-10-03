@@ -271,6 +271,7 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
       status: 200,
       providerVersion: '0.8.4',
       lastHealthyAt: '2026-09-06T08:00:00.000Z',
+      unusableStreak: 0,
       stale: false,
     },
     /*
@@ -321,6 +322,8 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
       prefix: 'nx',
       template: null,
     },
+    // Taking new business: a drain is a decision a case states.
+    drain: { draining: false, since: null, reason: null },
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

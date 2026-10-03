@@ -179,6 +179,9 @@ describe('the panel monitor scheduler at scale', () => {
           release: () => {
             throw new Error('the scale harness does not release');
           },
+          releaseForSettlement: () => {
+            throw new Error('the scale harness does not settle');
+          },
         },
         discovery: {
           claimTenants: async () => [tenantId],

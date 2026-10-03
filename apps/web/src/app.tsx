@@ -13,12 +13,14 @@ import { useNavCounters } from './nav-counters';
 import { CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
+import { PanelHealthPage } from './pages/panel-health';
 import { SettingsPage } from './pages/settings';
 import { BotButtonsPage } from './pages/bot-buttons';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
+import { AuditLogPage } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
@@ -31,6 +33,7 @@ import { PaymentAccountsPage } from './pages/payment-accounts';
 import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
+import { TermsPage } from './pages/terms';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
@@ -194,14 +197,17 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/panels',
   '/panels/new',
   '/panels/:id',
+  '/panel-health',
   '/providers',
   '/settings',
   '/support',
+  '/terms',
   '/client-apps',
   '/features',
   '/reminders',
   '/bot-buttons',
   '/content',
+  '/audit-log',
   '/alerts',
   '/notifications',
   '/appearance',
@@ -264,6 +270,7 @@ export function resolve(
           // narrows by Telegram id or username, `users.block` changes a status.
           // Collapsing them would hide a capability the server permits.
           maySearch={may('users.search')}
+          mayManageTags={may('users.tags.manage')}
           denied={!may('users.view')}
         />
       ),
@@ -299,9 +306,15 @@ export function resolve(
           mayEditLocation={may('users.location.edit')}
           mayEditNotifications={may('users.notifications.edit')}
           mayTransfer={may('users.transfer')}
+          mayMessage={may('users.message.send')}
+          mayViewMessages={may('users.message.view')}
           mayManualOrder={may('orders.manual.create')}
           mayEditServices={may('services.edit')}
           mayViewAudit={may('audit.view')}
+          mayViewNotes={may('users.notes.view')}
+          mayWriteNotes={may('users.notes.write')}
+          mayAssignTags={may('users.tags.assign')}
+          mayManageTags={may('users.tags.manage')}
           denied={!may('users.view')}
         />
       ),
@@ -854,6 +867,22 @@ export function resolve(
     };
   }
 
+  if (route.path === '/panel-health') {
+    return {
+      element: (
+        <PanelHealthPage
+          denied={!may('panels.view')}
+          // The connection test is charged `panels.edit` by the server.
+          mayProbe={may('panels.edit')}
+          mayDrain={may('panels.drain')}
+          mayViewServices={may('services.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_panel_health') }],
+      title: t('web.nav_panel_health'),
+    };
+  }
+
   if (route.path === '/panels/new') {
     return {
       element: (
@@ -934,6 +963,21 @@ export function resolve(
     };
   }
 
+  if (route.path === '/terms') {
+    return {
+      element: (
+        <TermsPage
+          denied={!may('terms.view')}
+          mayEdit={may('terms.edit')}
+          mayPublish={may('terms.publish')}
+          mayToggle={may('settings.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_terms') }],
+      title: t('web.nav_terms'),
+    };
+  }
+
   if (route.path === '/client-apps') {
     return {
       element: (
@@ -987,6 +1031,16 @@ export function resolve(
       element: <ContentPage mayEdit={may('templates.edit')} denied={!may('templates.view')} />,
       crumbs: [{ label: t('web.nav_templates') }],
       title: t('web.nav_templates'),
+    };
+  }
+
+  if (route.path === '/audit-log') {
+    return {
+      element: (
+        <AuditLogPage route={route} denied={!may('audit.view')} mayExport={may('audit.export')} />
+      ),
+      crumbs: [{ label: t('web.nav_audit_log') }],
+      title: t('web.audit_title'),
     };
   }
 

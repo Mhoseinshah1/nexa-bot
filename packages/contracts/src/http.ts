@@ -143,6 +143,8 @@ import {
 import { PLACEHOLDER_TYPES, TEMPLATE_FORMATS, TEMPLATE_REVISION_ACTIONS } from './templates.js';
 import {
   PANEL_BASE_URL_MAX_LENGTH,
+  PANEL_DRAIN_REASON_MAX_LENGTH,
+  PANEL_DRAIN_REASON_MIN_LENGTH,
   PANEL_HEALTH_VIEWS,
   PANEL_INELIGIBILITY_REASONS,
   PANEL_NAME_MAX_LENGTH,
@@ -1338,6 +1340,16 @@ export const panelHealthSchema = z.object({
   providerVersion: z.string().nullable(),
   lastHealthyAt: nullableIsoTimestamp,
   /**
+   * Consecutive probes that concluded an UNUSABLE state (`UNREACHABLE`,
+   * `AUTH_FAILED`), as `panel_health.unusable_streak` stores it; zero when the
+   * latest probe was usable and null when the panel has never been probed.
+   *
+   * The failure streak an operator reads, and the same number the sales gate
+   * compares with `PANEL_UNHEALTHY_AFTER_FAILURES` — never a count re-derived
+   * from a history this installation does not keep.
+   */
+  unusableStreak: z.number().int().nonnegative().nullable(),
+  /**
    * Whether the result is old enough that an operator should not act on it.
    *
    * Computed server-side against one constant rather than sent as a threshold
@@ -1457,6 +1469,23 @@ export const panelSellabilitySchema = z.object({
 });
 export type PanelSellability = z.infer<typeof panelSellabilitySchema>;
 
+/**
+ * Whether the operator has drained this panel (Phase C2).
+ *
+ * Its own field and not a `status`: a drained panel is `ACTIVE`, monitored, and
+ * operable for every service already on it. `DRAINING` in the sellability reason
+ * is what drain does to a sale; this is the fact itself, with who-and-why
+ * available from the audit row and the why repeated here while it lasts.
+ */
+export const panelDrainSchema = z.object({
+  draining: z.boolean(),
+  /** When the current drain began. Null when not draining. */
+  since: nullableIsoTimestamp,
+  /** The operator's reason for the current drain. Null when not draining. */
+  reason: z.string().nullable(),
+});
+export type PanelDrainResponse = z.infer<typeof panelDrainSchema>;
+
 export const panelSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1519,6 +1548,8 @@ export const panelSummarySchema = z.object({
   usernamePolicy: panelUsernamePolicySchema,
   /** Whether this panel may be sold onto, and if not, what to fix. */
   sellability: panelSellabilitySchema,
+  /** Whether the operator has stopped new allocations here. See `panelDrainSchema`. */
+  drain: panelDrainSchema,
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1847,8 +1878,82 @@ export const testPanelResponseSchema = z.object({
 });
 export type TestPanelResponse = z.infer<typeof testPanelResponseSchema>;
 
+/**
+ * Drain a panel, or let it take new business again (Phase C2). `panels.drain`.
+ *
+ * Idempotency-keyed like every state change. A request that asks for the state
+ * the panel is already in is answered with the panel and changes nothing — and
+ * writes no audit row claiming it did.
+ */
+export const setPanelDrainRequestSchema = z.object({
+  draining: z.boolean(),
+  reason: z.string().trim().min(PANEL_DRAIN_REASON_MIN_LENGTH).max(PANEL_DRAIN_REASON_MAX_LENGTH),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetPanelDrainRequest = z.infer<typeof setPanelDrainRequestSchema>;
+
+/**
+ * One open operational condition about a panel, as the ops log holds it.
+ *
+ * Read from `operational_events` by the exact dedupe keys the monitor and the
+ * capacity alerts write — never a second record of the same failure.
+ */
+export const panelOpenConditionSchema = z.object({
+  code: z.string(),
+  severity: z.enum(OPERATIONAL_SEVERITIES),
+  firstSeenAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+  occurrences: z.number().int().positive(),
+});
+export type PanelOpenCondition = z.infer<typeof panelOpenConditionSchema>;
+
+/**
+ * One row of the panel health dashboard (Phase C2).
+ *
+ * Every number is a measurement this installation already holds; nothing is
+ * estimated and nothing is a history it does not keep. `panel` is the same
+ * summary the panel list returns, so health, capacity, sellability and drain are
+ * computed once, by the same code, whichever screen asks.
+ */
+export const panelHealthRowSchema = z.object({
+  panel: panelSummarySchema,
+  /** Services on this panel by state, every state but TERMINATED. */
+  services: z.object({
+    active: z.number().int().nonnegative(),
+    suspended: z.number().int().nonnegative(),
+    expired: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+    unreconciled: z.number().int().nonnegative(),
+  }),
+  /** Provisioning operations against this panel that went wrong. */
+  provisioning: z.object({
+    /** FAILED operations completed in `[generatedAt - window, generatedAt)`. */
+    failedInWindow: z.number().int().nonnegative(),
+    /** Operations whose outcome is UNKNOWN right now: each waits for a read. */
+    unknownOpen: z.number().int().nonnegative(),
+    /** The newest FAILED operation in the window, or null. */
+    lastFailureAt: nullableIsoTimestamp,
+    lastFailureKind: z.enum(PROVIDER_FAILURE_KINDS).nullable(),
+  }),
+  /** The panel's open health and capacity conditions in the ops log. */
+  conditions: z.array(panelOpenConditionSchema),
+});
+export type PanelHealthRow = z.infer<typeof panelHealthRowSchema>;
+
+export const panelHealthDashboardResponseSchema = z.object({
+  rows: z.array(panelHealthRowSchema),
+  nextCursor: z.string().nullable(),
+  generatedAt: isoTimestamp,
+  /** `PANEL_HEALTH_FAILURE_WINDOW_MS`, echoed so the screen states the window it counted. */
+  failureWindowMs: z.number().int().positive(),
+});
+export type PanelHealthDashboardResponse = z.infer<typeof panelHealthDashboardResponseSchema>;
+
 export const PANEL_ROUTES = {
   list: '/panels',
+  /** Phase C2: the live fleet with health, load and failures. `panels.view`. */
+  health: '/panel-health',
+  drain: (id: string) => `/panels/${encodeURIComponent(id)}/drain`,
   create: '/panels',
   detail: (id: string) => `/panels/${encodeURIComponent(id)}`,
   update: (id: string) => `/panels/${encodeURIComponent(id)}`,
@@ -1980,6 +2085,12 @@ export const customerListQuerySchema = z.object({
    * matches on this list is documented in `docs/web-admin-search.md`.
    */
   q: listSearchQuerySchema.optional(),
+  /**
+   * Program §8: only customers carrying this tag (by its id, never its editable label). A
+   * FILTER beside `status`, not a second search: charged `users.view` like `status`, and
+   * an EXISTS over `customer_tag_assignments`' tenant-led index.
+   */
+  tag: uuidV7Schema.optional(),
 });
 export type CustomerListQuery = z.infer<typeof customerListQuerySchema>;
 

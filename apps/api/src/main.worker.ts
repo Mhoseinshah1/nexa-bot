@@ -83,6 +83,12 @@ async function main(): Promise<void> {
         // HF-A7: support's staged reply files. No flag: the bytes it clears count against the
         // tenant's staging bound, and a stalled sweep would refuse support's next file.
         ['ticket-reply-file-sweeper', true, () => container.ticketReplyFileSweeper.isFresh(now)],
+        // Phase A2: direct-message files, for the same reason as the line above.
+        [
+          'direct-message-file-sweeper',
+          true,
+          () => container.directMessageFileSweeper.isFresh(now),
+        ],
         // The lane that closes an unpaid payment and the order it was against.
         // No flag: a payment nothing expires is the defect it exists to close, and an
         // installation that could switch it off would be one whose orders say they
@@ -206,6 +212,8 @@ async function main(): Promise<void> {
   container.recoveryRequestSweeper.start();
   // HF-A7: and support's reply files Telegram never took, once they are past retention.
   container.ticketReplyFileSweeper.start();
+  // Phase A2: and the direct-message files Telegram never took.
+  container.directMessageFileSweeper.start();
   // And the payment/order expiry lane. OQ-4C-01's answer: until this release the
   // deadline a customer was shown was only ever a refusal, so a month-old order still
   // read as awaiting payment and an operator could not tell it from this morning's.

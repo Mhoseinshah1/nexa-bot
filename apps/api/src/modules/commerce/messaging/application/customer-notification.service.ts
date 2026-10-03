@@ -47,6 +47,25 @@ export interface NotificationSubjectReader {
      */
     now: Date,
   ): Promise<boolean>;
+
+  /**
+   * The queued, unsent notifications whose fact has lapsed by `now`, found WITHOUT the
+   * claim — oldest first, at most `limit`.
+   *
+   * `stillHolds` is asked only of a row `claimDue` hands out, and `claimDue` never hands out
+   * a row whose customer is not ACTIVE. A precondition that lapses by the clock alone —
+   * a direct message older than `DIRECT_MESSAGE_STALE_AFTER_MS` — would then never be
+   * evaluated for a customer who stays blocked, and the operator would see QUEUED for
+   * ever instead of EXPIRED (Codex review of PR #153). This answers the same rule for
+   * those rows; it must agree with `stillHolds` and never name a row `stillHolds` would
+   * keep. Only kinds whose lapse is a matter of time answer here. Optional: a reader
+   * without it leaves every row to the claim, as before.
+   */
+  lapsedSubjects?(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+  ): Promise<readonly { readonly kind: CustomerNotificationKind; readonly subjectId: string }[]>;
 }
 
 /**
@@ -379,6 +398,28 @@ export interface CustomerNotificationDeps {
       itemId: string,
     ): Promise<TemplateValues | null>;
   };
+  /**
+   * Phase A2: what `DIRECT_MESSAGE` and `DIRECT_MESSAGE_MEDIA` send — the operator's text,
+   * or the file and its caption — read at send time from the MESSAGE ROW the notification
+   * names, exactly as `tickets` reads a reply. A reader, not a payload (ADR 0030 §1). Null
+   * when the row is not the kind's (or a file's bytes are already cleared), which sends
+   * nothing. Absent, both kinds render nothing and are not sent.
+   */
+  readonly directMessages?: {
+    notificationFacts(
+      scope: TenantContext,
+      kind: 'DIRECT_MESSAGE' | 'DIRECT_MESSAGE_MEDIA',
+      messageId: string,
+    ): Promise<{ readonly values: TemplateValues; readonly file?: NotificationFile } | null>;
+    /** Telegram took the file: stamp its handle and clear the bytes, in the record's tx. */
+    fileDelivered(
+      scope: TenantContext,
+      messageId: string,
+      file: { readonly fileId: string; readonly fileUniqueId: string },
+      at: Date,
+      tx: TransactionScope,
+    ): Promise<boolean>;
+  };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -447,6 +488,41 @@ export class CustomerNotificationService {
     );
 
     /*
+     * Lapsed preconditions, resolved WITHOUT the claim (Codex review of PR #153).
+     *
+     * `claimDue` excludes a blocked customer at the query — rightly, a block may be lifted —
+     * so `deliverOne`'s precondition is never asked of that customer's rows. A fact that
+     * lapses by the clock alone (a direct message's 24 hours) must still lapse: the row is
+     * SUPERSEDED here, unsent and with no attempt spent, exactly as `deliverOne` would have
+     * resolved it had the customer been claimable. Bounded by the pass's own limit, and
+     * conditional on no send having started, so a row already handed to Telegram is never
+     * rewritten. Every other kind is untouched: the reader names only time-lapsed ones.
+     */
+    let lapsed = 0;
+    if (this.deps.subjects.lapsedSubjects !== undefined) {
+      const subjects = await this.deps.subjects.lapsedSubjects(scope, now, limit);
+      if (subjects.length > 0) {
+        lapsed = await this.deps.uow.run(scope, async (tx) => {
+          let moved = 0;
+          for (const subject of subjects) {
+            if (
+              await this.deps.notifications.supersedeUnsent(
+                scope,
+                subject.kind,
+                subject.subjectId,
+                now,
+                tx,
+              )
+            ) {
+              moved += 1;
+            }
+          }
+          return moved;
+        });
+      }
+    }
+
+    /*
      * The quiet window, once per pass and BEFORE the claim (HF-A9). A read that throws
      * fails the pass before any row is leased, so nothing is held behind a lease for it.
      */
@@ -486,7 +562,7 @@ export class CustomerNotificationService {
       pending: counts.pending ?? 0,
       failed: counts.failed ?? 0,
       unconfirmed: counts.unconfirmed ?? 0,
-      superseded: counts.superseded ?? 0,
+      superseded: (counts.superseded ?? 0) + lapsed,
       rateLimited: counts.rateLimited ?? 0,
       unsupported: counts.unsupported ?? 0,
       blocked: counts.blocked ?? 0,
@@ -512,6 +588,15 @@ export class CustomerNotificationService {
     readonly file?: NotificationFile;
     /** R2: the order whose payment screens are closed right before this is sent. */
     readonly closesOrder?: string;
+    /**
+     * Where a delivered file's handle is stamped and its staged bytes cleared, in the
+     * transaction that records the delivery — the subject's own owner (HF-A7, Phase A2).
+     */
+    readonly fileDelivered?: (
+      file: { readonly fileId: string; readonly fileUniqueId: string },
+      at: Date,
+      tx: TransactionScope,
+    ) => Promise<boolean>;
   } | null> {
     if (row.kind === 'SERVICE_RENEWED') {
       if (this.deps.renewals === undefined) return null;
@@ -532,7 +617,36 @@ export class CustomerNotificationService {
       if (this.deps.tickets === undefined) return null;
       const facts = await this.deps.tickets.attachmentFacts(scope, row.subjectId);
       if (facts === null) return null;
-      return { values: facts.values, buttons: [], file: facts.file };
+      const tickets = this.deps.tickets;
+      return {
+        values: facts.values,
+        buttons: [],
+        file: facts.file,
+        fileDelivered: (file, at, tx) =>
+          tickets.attachmentDelivered(scope, row.subjectId, file, at, tx),
+      };
+    }
+    if (row.kind === 'DIRECT_MESSAGE' || row.kind === 'DIRECT_MESSAGE_MEDIA') {
+      if (this.deps.directMessages === undefined) return null;
+      const direct = this.deps.directMessages;
+      const facts = await direct.notificationFacts(scope, row.kind, row.subjectId);
+      if (facts === null) return null;
+      // Exactly one of the two shapes per kind: a text never carries a file, a file always.
+      if ((row.kind === 'DIRECT_MESSAGE_MEDIA') !== (facts.file !== undefined)) return null;
+      return {
+        values: facts.values,
+        buttons: [],
+        ...(facts.file === undefined
+          ? {}
+          : {
+              file: facts.file,
+              fileDelivered: (
+                file: { readonly fileId: string; readonly fileUniqueId: string },
+                at: Date,
+                tx: TransactionScope,
+              ) => direct.fileDelivered(scope, row.subjectId, file, at, tx),
+            }),
+      };
     }
     if (row.kind === 'SERVICE_TRANSFER_RECEIVED') {
       if (this.deps.serviceTransfers === undefined) return null;
@@ -975,9 +1089,9 @@ export class CustomerNotificationService {
           to === 'DELIVERED' &&
           content.file !== undefined &&
           result.file !== undefined &&
-          this.deps.tickets !== undefined
+          content.fileDelivered !== undefined
         ) {
-          await this.deps.tickets.attachmentDelivered(scope, row.subjectId, result.file, at, tx);
+          await content.fileDelivered(result.file, at, tx);
         }
         return moved;
       });

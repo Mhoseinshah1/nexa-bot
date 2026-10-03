@@ -1524,6 +1524,16 @@ export const COMMERCE_ERROR_CODES = {
   CUSTOMER_TRANSFER_CONFIRMATION_MISMATCH: 'commerce.customer_transfer_confirmation_mismatch',
   /** Not a phone number this installation can store. */
   CUSTOMER_PHONE_INVALID: 'commerce.customer_phone_invalid',
+
+  // --- Customer notes and tags (program §8, docs/customer-notes-tags.md) ---------------
+  /** No such tag in this tenant. */
+  CUSTOMER_TAG_NOT_FOUND: 'commerce.customer_tag_not_found',
+  /** Another ACTIVE tag of this tenant already has this name, compared case-insensitively. */
+  CUSTOMER_TAG_NAME_TAKEN: 'commerce.customer_tag_name_taken',
+  /** The tag is archived: it stays where it is assigned and cannot be newly assigned. */
+  CUSTOMER_TAG_ARCHIVED: 'commerce.customer_tag_archived',
+  /** The tenant already defines `CUSTOMER_TAGS_PER_TENANT_MAX` tags. */
+  CUSTOMER_TAG_LIMIT: 'commerce.customer_tag_limit',
 } as const;
 
 /*
@@ -1614,6 +1624,23 @@ export const BOT_ERROR_CODES = {
 } as const;
 
 export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];
+
+/**
+ * Program §6 — the terms and rules. A version of another tenant and one that does not exist
+ * are both `TERMS_VERSION_NOT_FOUND`, so the answer is not an oracle for which ids exist.
+ */
+export const TERMS_ERROR_CODES = {
+  TERMS_VERSION_NOT_FOUND: 'terms.version_not_found',
+  /** A second draft was asked for while one exists: there is at most one, and it is edited. */
+  TERMS_DRAFT_EXISTS: 'terms.draft_exists',
+  /**
+   * The draft moved since it was read — another edit, or it was published. Nothing was
+   * written; the `currentRevision` detail names where it stands now (null: no longer a draft).
+   */
+  TERMS_DRAFT_CONFLICT: 'terms.draft_conflict',
+  /** The version is published, and a published version is never edited or published again. */
+  TERMS_VERSION_PUBLISHED: 'terms.version_published',
+} as const;
 
 /**
  * WP-A7 — support tickets (`docs/wp-a7-tickets-audit.md`). One remedy each; a ticket of

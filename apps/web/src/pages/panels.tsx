@@ -144,7 +144,7 @@ const WORKLOAD_PAGE = 10;
  * from being read as real telemetry.
  */
 
-const HEALTH_LABELS: Readonly<Record<string, WebKey>> = {
+export const HEALTH_LABELS: Readonly<Record<string, WebKey>> = {
   HEALTHY: 'web.health_healthy',
   DEGRADED: 'web.health_degraded',
   UNREACHABLE: 'web.health_unreachable',
@@ -165,7 +165,7 @@ const STATUS_TONES: Readonly<Record<PanelStatus, Tone>> = {
   ARCHIVED: 'neutral',
 };
 
-function HealthBadge({ panel }: { panel: PanelSummaryResponse }) {
+export function HealthBadge({ panel }: { panel: PanelSummaryResponse }) {
   const state = panel.health.state;
   return (
     <span className="nowrap panels-health">
@@ -222,7 +222,7 @@ export function hostOf(baseUrl: string): string {
   }
 }
 
-function FailureBadge({ failure }: { failure: string | null }) {
+export function FailureBadge({ failure }: { failure: string | null }) {
   if (failure === null) return <span className="faint">—</span>;
   const retryable = PROVIDER_FAILURE_RETRYABLE[failure as keyof typeof PROVIDER_FAILURE_RETRYABLE];
   return (
@@ -247,7 +247,7 @@ function FailureBadge({ failure }: { failure: string | null }) {
  * `∞` for no cap rather than a blank: blank reads as "not loaded", and an
  * uncapped panel is a deliberate state.
  */
-function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['capacity'] }) {
+export function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['capacity'] }) {
   return (
     <span className="panels-capacity">
       <Quantity>
@@ -591,9 +591,10 @@ function probeable(panel: PanelSummaryResponse): boolean {
  * rendered `PROVISION_UNSUPPORTED` to an operator, which is the legacy behaviour
  * of showing an enum to somebody who cannot act on it.
  */
-const SELLABILITY_REASON_LABELS: Readonly<Record<PanelIneligibilityReason, WebKey>> = {
+export const SELLABILITY_REASON_LABELS: Readonly<Record<PanelIneligibilityReason, WebKey>> = {
   ARCHIVED: 'web.panel_reason_archived',
   DISABLED: 'web.panel_reason_disabled',
+  DRAINING: 'web.panel_reason_draining',
   UNHEALTHY: 'web.panel_reason_unhealthy',
   AT_CAPACITY: 'web.panel_reason_at_capacity',
   ACTIVATION_INCOMPLETE: 'web.panel_reason_activation_incomplete',
@@ -603,9 +604,10 @@ const SELLABILITY_REASON_LABELS: Readonly<Record<PanelIneligibilityReason, WebKe
 };
 
 /** What to do about it. One remedy per reason, and each names a screen or a button. */
-const SELLABILITY_REASON_HELP: Readonly<Record<PanelIneligibilityReason, WebKey>> = {
+export const SELLABILITY_REASON_HELP: Readonly<Record<PanelIneligibilityReason, WebKey>> = {
   ARCHIVED: 'web.panel_reason_archived_help',
   DISABLED: 'web.panel_reason_disabled_help',
+  DRAINING: 'web.panel_reason_draining_help',
   UNHEALTHY: 'web.panel_reason_unhealthy_help',
   AT_CAPACITY: 'web.panel_reason_at_capacity_help',
   ACTIVATION_INCOMPLETE: 'web.panel_reason_activation_incomplete_help',
@@ -988,6 +990,13 @@ function PanelHeadBanners({
       {panel.health.stale && (
         <Banner tone="warn" title={t('web.panel_stale_title')} role="status">
           {t('web.health_stale_hint')}
+        </Banner>
+      )}
+      {/* Phase C2: a drained panel is ACTIVE and monitored, so nothing above says it;
+          the reason is the operator's own, and the controls live on the health page. */}
+      {panel.drain.draining && (
+        <Banner tone="info" title={t('web.ph_drain_badge')} role="status">
+          {panel.drain.reason}
         </Banner>
       )}
     </>
