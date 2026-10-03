@@ -28,6 +28,8 @@ import type { TemplateKey } from '@nexa/contracts';
 export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ping.reply': 'سلام. ربات فعال است. شناسه پیگیری: {correlationId}',
   'bot.unknown_command': 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
+  'bot.callback.stale':
+    '{icon:info} این دکمه قدیمی است یا دیگر فعال نیست. لطفاً با دکمهٔ زیر ادامه دهید.',
   'error.internal': 'خطایی رخ داد. لطفاً بعداً دوباره تلاش کنید.',
   'error.permission_denied': 'شما به این بخش دسترسی ندارید.',
 
