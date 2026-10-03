@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchSession } from '../../apps/web/src/api/client';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { PERMISSION_LABELS } from '../../apps/web/src/rbac-labels';
+import { PERMISSION_DOMAINS, PERMISSION_KEYS, PERMISSIONS } from '@nexa/contracts';
+import { PERMISSION_DOMAIN_LABELS, PERMISSION_LABELS } from '../../apps/web/src/rbac-labels';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -55,7 +56,7 @@ function routes(extra: { url: string; body: unknown; status?: number }[] = []) {
   ];
 }
 
-const label = (key: keyof typeof PERMISSION_LABELS) => t(PERMISSION_LABELS[key]!);
+const label = (key: keyof typeof PERMISSION_LABELS) => t(PERMISSION_LABELS[key]);
 
 describe('the roles section', () => {
   it('lists roles with holders, and offers no edit or delete for the owner role', async () => {
@@ -222,13 +223,51 @@ describe('the roles section', () => {
 });
 
 describe('the label table', () => {
-  it('names every permission in the catalogue', async () => {
-    const { PERMISSIONS } = await import('@nexa/contracts');
+  /*
+   * The compile-time half is `permission-catalogue.typecheck.ts`: both tables are total
+   * over the catalogue's literal unions. These are the run-time half — each label is a
+   * catalogue string that actually renders, and nothing names a key that does not exist.
+   */
+  it('names every permission in the catalogue', () => {
     for (const permission of PERMISSIONS) {
+      const key = PERMISSION_LABELS[permission.key];
+      expect(key, permission.key).toBeDefined();
+      expect(t(key), permission.key).not.toBe(key);
+      expect(t(key).length, permission.key).toBeGreaterThan(0);
+    }
+  });
+
+  it('names every domain, and nothing outside the catalogue', () => {
+    for (const domain of PERMISSION_DOMAINS) {
+      const key = PERMISSION_DOMAIN_LABELS[domain];
+      expect(key, domain).toBeDefined();
+      expect(t(key), domain).not.toBe(key);
+    }
+    expect(Object.keys(PERMISSION_LABELS).sort()).toEqual([...PERMISSION_KEYS].sort());
+    expect(Object.keys(PERMISSION_DOMAIN_LABELS).sort()).toEqual([...PERMISSION_DOMAINS].sort());
+  });
+
+  it('draws one labelled checkbox for every permission in the matrix', async () => {
+    stubApi(routes());
+    renderPage(
+      <SystemPage route={route} permissions={['admins.view', 'admins.permissions.edit']} />,
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(t('web.rbac_new_role')) }),
+    );
+    for (const permission of PERMISSIONS) {
+      const id = `rbac-perm-${permission.key.replace(/\./g, '-')}`;
+      const box = document.getElementById(id);
+      expect(box, permission.key).not.toBeNull();
+      expect(box!.closest('label')!.textContent, permission.key).toContain(
+        t(PERMISSION_LABELS[permission.key]),
+      );
+    }
+    for (const domain of PERMISSION_DOMAINS) {
       expect(
-        PERMISSION_LABELS[permission.key as keyof typeof PERMISSION_LABELS],
-        permission.key,
-      ).toBeDefined();
+        screen.getAllByText(new RegExp(t(PERMISSION_DOMAIN_LABELS[domain]))).length,
+        domain,
+      ).toBeGreaterThan(0);
     }
   });
 });

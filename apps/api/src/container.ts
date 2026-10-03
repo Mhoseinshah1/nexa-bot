@@ -232,6 +232,10 @@ import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastr
 import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/locations/infrastructure/drizzle-customer-location-override.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
+import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
+import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
+import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
+import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
 import { ProductCategoryService } from './modules/commerce/catalog/application/product-category.service.js';
 import { ServiceAddonService } from './modules/commerce/catalog/application/addon.service.js';
 import { CommercialActionService } from './modules/commerce/commercial/application/commercial-action.service.js';
@@ -813,6 +817,11 @@ export interface Container {
   /** Customer 360 (§11.4): suspend or resume all of one customer's configurations. */
   readonly customerServicesToggle: CustomerServicesToggleService;
   readonly products: ProductService;
+  /**
+   * Program Item 14: hidden legacy product shapes and their current tariff. Migration
+   * prerequisites only — no surface calls it yet (P6/P7 are on hold).
+   */
+  readonly legacyProducts: LegacyProductService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   /** Discount rules, as an operator manages them (WP8). */
@@ -867,6 +876,11 @@ export interface Container {
   readonly trials: TrialService;
   /** The operator's trial overrides, global reset and view (WP6-B). */
   readonly trialAdmin: TrialAdminService;
+  /**
+   * Program Item 15: a migrated customer's legacy trial entitlement, preserved as an
+   * ordinary override. Migration prerequisite only — no surface calls it yet (P7 is on hold).
+   */
+  readonly legacyTrials: LegacyTrialEligibilityService;
   /** R1: each panel's free trial, for an operator. */
   readonly panelTrials: PanelTrialService;
   /**
@@ -1821,6 +1835,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     uow,
     idempotency,
+    clock,
+    ids,
+  });
+
+  /**
+   * Program Item 14 (`docs/legacy-migration/hidden-legacy-products.md`): one hidden product
+   * per legacy tariff shape, on the same product repository, so a migrated service renews
+   * through the ordinary renewal path and the one pricing boundary.
+   */
+  const legacyProductService = new LegacyProductService({
+    shapes: new DrizzleLegacyProductShapeRepository(database.db),
+    products: productRepository,
+    settings: settingsResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
     clock,
     ids,
   });
@@ -3419,6 +3453,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
     ids,
+  });
+  /**
+   * Program Item 15 (`docs/legacy-migration/trial-eligibility.md`): the same override
+   * repository and the same customer lock as `trialAdminService`, so a migrated customer's
+   * claim is decided by the one allowance evaluator like anyone's.
+   */
+  const legacyTrialEligibilityService = new LegacyTrialEligibilityService({
+    records: new DrizzleLegacyTrialEligibilityRepository(database.db),
+    overrides: trialOverrideRepository,
+    wallet: walletRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
   });
   /**
    * R1: each panel's trial, for an operator — and the overview that asks the SAME offer
@@ -5834,6 +5886,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     manualOrders: manualOrderService,
     customerServicesToggle: customerServicesToggleService,
     products: productService,
+    legacyProducts: legacyProductService,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,
@@ -5864,6 +5917,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     locationChanges: locationChangeService,
     trials: trialService,
     trialAdmin: trialAdminService,
+    legacyTrials: legacyTrialEligibilityService,
     panelTrials,
     audience: audienceService,
     broadcasts: broadcastService,

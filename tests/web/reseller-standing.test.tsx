@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PermissionKey } from '@nexa/contracts';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { resolve } from '../../apps/web/src/app';
@@ -269,7 +270,7 @@ describe('changedFieldsOf', () => {
  * the wrong card fails as surely as one wired to nothing.
  */
 describe('the /resellers and /reseller-tiers routes wire each WP14 read to its own key', () => {
-  const open = (path: string, permissions: readonly string[]) =>
+  const open = (path: string, permissions: readonly PermissionKey[]) =>
     renderPage(
       resolve({ path, query: new URLSearchParams() }, permissions).element as ReactElement,
     );

@@ -69,7 +69,7 @@ const telegramAdminActor = (adminId: string, label: string): ActorContext => ({
 });
 
 const CORRELATION = 'telegram-admin-test' as CorrelationId;
-const RECEIPTS_REVIEW = 'receipts.review' as PermissionKey;
+const RECEIPTS_REVIEW: PermissionKey = 'receipts.review';
 
 describe('the Telegram management panel', () => {
   let ctx: TestContext;
@@ -273,7 +273,7 @@ describe('the Telegram management panel', () => {
     // `support` holds `receipts.view`, so the panel and the queue are legitimately
     // theirs — which is what makes the refusal below about the DECISION and not about
     // whether a button was drawn.
-    expect(identity?.permissions.has('receipts.view' as PermissionKey)).toBe(true);
+    expect(identity?.permissions.has('receipts.view')).toBe(true);
     expect(identity?.permissions.has(RECEIPTS_REVIEW)).toBe(false);
 
     const payment = await pendingWithReceipt('support');

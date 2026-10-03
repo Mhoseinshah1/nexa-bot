@@ -21,11 +21,11 @@ import type { PaymentTimelineReader } from './timeline-ports.js';
  */
 export const TIMELINE_SECTION_PERMISSIONS: Readonly<Record<PaymentTimelineSection, PermissionKey>> =
   {
-    RECEIPTS: 'receipts.view' as PermissionKey,
-    REFUNDS: 'refunds.view' as PermissionKey,
-    WALLET: 'users.view' as PermissionKey,
-    ORDER: 'orders.view' as PermissionKey,
-    AUDIT: 'audit.view' as PermissionKey,
+    RECEIPTS: 'receipts.view',
+    REFUNDS: 'refunds.view',
+    WALLET: 'users.view',
+    ORDER: 'orders.view',
+    AUDIT: 'audit.view',
   };
 
 export interface PaymentTimelineServiceDeps {

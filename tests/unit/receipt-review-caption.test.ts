@@ -212,7 +212,7 @@ describe('the reviewer’s caption (File 01 §4)', () => {
 });
 
 describe('the refund request card’s buttons each key draws (Codex review of #83, round 10)', () => {
-  const set = (...keys: string[]) => new Set(keys as PermissionKey[]);
+  const set = (...keys: PermissionKey[]) => new Set(keys);
   const request = { id: 'r', customerId: 'c', serviceId: 's' };
   const data = (permissions: ReadonlySet<PermissionKey>) =>
     refundRequestReviewButtons(request, permissions).map((b) => ('data' in b ? b.data : null));
@@ -239,7 +239,7 @@ describe('the refund request card’s buttons each key draws (Codex review of #8
 });
 
 describe('the receipt buttons each key draws', () => {
-  const set = (...keys: string[]) => new Set(keys as PermissionKey[]);
+  const set = (...keys: PermissionKey[]) => new Set(keys);
   const data = (permissions: ReadonlySet<PermissionKey>) =>
     receiptReviewButtons('p', permissions, { credit: true, block: true }).map((b) =>
       'data' in b ? b.data : null,

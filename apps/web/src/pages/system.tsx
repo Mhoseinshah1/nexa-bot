@@ -6,6 +6,7 @@ import {
   type AdminSessionSummary,
   type AdminSummary,
   type MonitorProfile,
+  type PermissionKey,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -85,7 +86,7 @@ export function SystemPage({
   permissions,
 }: {
   route: Route;
-  permissions: readonly string[];
+  permissions: readonly PermissionKey[];
 }) {
   const requested = route.query.get('section');
   // The section is in the URL so a screen can be linked to and survives a

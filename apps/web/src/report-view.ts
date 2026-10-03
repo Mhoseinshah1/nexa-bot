@@ -3,6 +3,7 @@ import {
   REPORT_RANGES,
   REPORT_REFRESH_INTERVAL_MS,
   type ReportRange,
+  type PermissionKey,
 } from '@nexa/contracts';
 import type { ReportRangeSelection } from './api/client';
 import type { Route } from './router';
@@ -23,13 +24,16 @@ export const BUSINESS_REFRESH_MS = REPORT_REFRESH_INTERVAL_MS;
  * request. This decides only what is drawn: the server refuses a non-owner regardless,
  * so a stale session that still draws a card gets a 403 on its first request, never data.
  */
-export function isSuperAdmin(roleKeys: readonly string[], permissions: readonly string[]): boolean {
+export function isSuperAdmin(
+  roleKeys: readonly string[],
+  permissions: readonly PermissionKey[],
+): boolean {
   return roleKeys.includes(OWNER_ROLE_KEY) && permissions.includes('reports.view');
 }
 
 export function mayExportReports(
   roleKeys: readonly string[],
-  permissions: readonly string[],
+  permissions: readonly PermissionKey[],
 ): boolean {
   return isSuperAdmin(roleKeys, permissions) && permissions.includes('reports.export');
 }

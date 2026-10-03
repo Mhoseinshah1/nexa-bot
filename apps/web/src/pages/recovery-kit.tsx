@@ -6,6 +6,7 @@ import {
   type ImportRecoveryKitResponse,
   type InstallationKeySummary,
   type RecoveryFailureCode,
+  type PermissionKey,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -47,7 +48,7 @@ import { Icon } from '../ui/icons';
  * length of one submit and are cleared after it, success or failure. Neither is
  * ever put in a URL, a query key or storage.
  */
-export function RecoveryKitSection({ permissions }: { permissions: readonly string[] }) {
+export function RecoveryKitSection({ permissions }: { permissions: readonly PermissionKey[] }) {
   const client = useQueryClient();
   const mayView = permissions.includes('backup.view');
   const mayExport = permissions.includes('recovery.kit.export');

@@ -40,12 +40,12 @@ const actor: ActorContext = {
 };
 
 class FixedResolver implements PermissionResolver {
-  constructor(private readonly held: readonly string[]) {}
+  constructor(private readonly held: readonly PermissionKey[]) {}
   async resolve(): Promise<ReadonlySet<PermissionKey>> {
-    return new Set(this.held as PermissionKey[]);
+    return new Set(this.held);
   }
   async permissionsIfActive(): Promise<ReadonlySet<PermissionKey>> {
-    return new Set(this.held as PermissionKey[]);
+    return new Set(this.held);
   }
 }
 
@@ -90,7 +90,7 @@ class RecordingReader implements PaymentTimelineReader {
   }
 }
 
-async function timelineFor(held: readonly string[]) {
+async function timelineFor(held: readonly PermissionKey[]) {
   const reader = new RecordingReader();
   const service = new PaymentTimelineService({
     guard: new PermissionGuard(new FixedResolver(held), noDenials),

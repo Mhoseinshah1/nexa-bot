@@ -53,29 +53,51 @@ describe('the release workflow', () => {
   });
 
   it('requires a SUCCESSFUL run of the authoritative workflow for the exact SHA', () => {
+    // The decision itself lives in scripts/release-ci-gate.mjs and is tested
+    // rule by rule in release-ci-gate.test.ts (and end to end, against a fake
+    // gh, in tests/deploy/release-ci-gate.test.sh). What THIS file pins is
+    // that the workflow actually calls it, with the resolved SHA, before any
+    // later step can run.
     const steps = workflow.jobs.gate?.steps ?? [];
-    const gate = steps.map((s) => s.run ?? '').join('\n');
-    // The workflow identity is supplied through `env:`, not spliced into the
-    // script, so it has to be read from there.
-    const env = steps.flatMap((s) => Object.values(s.env ?? {})).join('\n');
-    expect(gate).toContain('head_sha=${SHA}');
-    expect(env, 'the gate does not name the authoritative workflow').toContain(
-      '.github/workflows/ci.yml',
+    const index = steps.findIndex(
+      (s) => s.name === 'Require CI to have passed for this exact commit',
     );
-    expect(gate, 'the gate does not compare the run path').toMatch(/\[ "\$path" = "\$WORKFLOW" \]/);
-    // Anything other than `success` — cancelled, skipped, stale, neutral,
-    // timed_out — is not a pass, and a gate that accepts one is decoration.
-    //
-    // Matched exactly. `/conclusion.*=.*"success"/` also matches `!=`, which
-    // is the mutation that makes the gate accept a FAILED run and reject the
-    // passing one — the single worst edit possible to this file, and it left
-    // the suite green.
-    expect(gate).toContain('[ "$conclusion" = "success" ]');
-    expect(gate, 'the conclusion test was inverted').not.toContain('"$conclusion" !=');
-    // Fails closed when nothing was found at all.
-    expect(gate).toContain('no completed workflow run exists');
-    // The returned run's own head_sha is compared, not just the query filter.
-    expect(gate).toMatch(/\[ "\$head" = "\$SHA" \]/);
+    expect(index, 'the CI gate step is gone').toBeGreaterThan(-1);
+    const step = steps[index];
+    expect(step?.run?.trim()).toBe('bash scripts/release-ci-gate.sh "$REPO" "$SHA"');
+    expect(step?.env?.SHA, 'the gate is not asked about the resolved commit').toBe(
+      '${{ steps.source.outputs.sha }}',
+    );
+    // A step that may fail without failing the job is decoration.
+    expect(step).not.toHaveProperty('continue-on-error');
+    expect(step).not.toHaveProperty('if');
+    // It runs before the registry check and the login, so nothing downstream
+    // of a refused gate even starts.
+    const login = steps.findIndex((s) => s.uses?.startsWith('docker/login-action'));
+    expect(index).toBeLessThan(login);
+  });
+
+  it('runs the gate logic from the workflow commit, never from the tag being judged', () => {
+    // For workflow_dispatch the requested tag may point anywhere. If the gate
+    // script came from that checkout, a commit could vouch for itself.
+    const steps = workflow.jobs.gate?.steps ?? [];
+    const checkouts = steps.filter((s) => s.uses?.startsWith('actions/checkout'));
+    const own = checkouts.find((s) => s.with?.ref === '${{ github.workflow_sha }}');
+    expect(own, 'the gate does not check out its own workflow commit').toBeDefined();
+    expect(own?.with?.path, 'the workflow commit must be the working directory').toBeUndefined();
+    const tagged = checkouts.find((s) =>
+      String(s.with?.ref ?? '').startsWith('refs/tags/${{ steps.request.outputs.tag }}'),
+    );
+    expect(tagged?.with?.path, 'the tagged source must be checked out beside, not over').toBe(
+      'source',
+    );
+    const resolve = steps.find((s) => s.name === 'Resolve the tag to an immutable commit');
+    expect(resolve?.run).toContain("git -C source rev-parse 'HEAD^{commit}'");
+    // The tag is validated before anything is checked out under it.
+    const validate = steps.findIndex((s) => s.name === 'Validate the requested tag');
+    expect(validate).toBeGreaterThan(-1);
+    expect(steps[validate]?.run).toContain('release-ci-gate.mjs --validate-tag "$REQUESTED"');
+    expect(validate).toBeLessThan(steps.indexOf(tagged!));
   });
 
   it('resolves the tag to a commit ONCE and pins every later job to it', () => {
