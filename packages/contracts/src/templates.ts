@@ -11158,6 +11158,21 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.incident.notice',
+    description:
+      "Phase E3: an operator's notice about an incident or maintenance window, to a customer it affects (INCIDENT_NOTICE). The message is read at send time from the incident's communication row.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'message',
+        type: 'STRING',
+        description: 'The customer-facing message the operator wrote for this incident.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.ticket.view_button',
     description: "WP-A7: the notification's button that opens the ticket.",
     format: 'PLAIN_TEXT',

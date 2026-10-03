@@ -21,9 +21,9 @@ import { OPERATIONAL_SEVERITIES, type OperationalSeverity } from './ports.js';
  * What a notification is about. A CATEGORY is what an administrator may or may not see
  * (`NOTIFICATION_CATEGORY_PERMISSIONS`), and what the inbox filters by.
  *
- * `INCIDENTS` is the typed hook for incident / maintenance updates (program §21): its rules
- * are prefixes no code carries yet, so an incident domain plugs in by recording under
- * `incident.` or `maintenance.` with nothing changed here.
+ * `INCIDENTS` is incident / maintenance updates (program §21): its rules are prefixes, and
+ * the incident domain (Phase E3, `incidentOpsCode`) records under `incident.` or
+ * `maintenance.`, linking to the incident by `incidentId`.
  */
 export const NOTIFICATION_CATEGORIES = [
   'PAYMENTS',
@@ -52,7 +52,7 @@ export const NOTIFICATION_CATEGORY_PERMISSIONS: Readonly<
   BACKUPS: 'backup.view' as PermissionKey,
   RECOVERY: 'backup.view' as PermissionKey,
   SECURITY: 'admins.view' as PermissionKey,
-  INCIDENTS: 'opslog.view' as PermissionKey,
+  INCIDENTS: 'incidents.view' as PermissionKey,
 };
 
 /**
@@ -73,6 +73,9 @@ export const NOTIFICATION_LINK_TARGETS = [
   'RECOVERY',
   'ADMINS',
   'ALERTS',
+  // Phase E3: an incident's page, and the incident list.
+  'INCIDENT',
+  'INCIDENTS',
 ] as const;
 export type NotificationLinkTarget = (typeof NOTIFICATION_LINK_TARGETS)[number];
 
@@ -89,6 +92,7 @@ export const NOTIFICATION_ENTITY_LINKS: Readonly<
   PANEL: { contextKey: 'panelId', fallback: 'PANELS' },
   SERVICE: { contextKey: 'serviceId', fallback: 'SERVICES' },
   ORDER: { contextKey: 'orderId', fallback: 'ORDERS' },
+  INCIDENT: { contextKey: 'incidentId', fallback: 'INCIDENTS' },
 };
 
 /**
@@ -219,8 +223,8 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
   { code: 'admin.password_reset', category: 'SECURITY', link: 'ADMINS', minSeverity: 'INFO' },
   { code: 'admin.sessions_revoked', category: 'SECURITY', link: 'ADMINS', minSeverity: 'INFO' },
   // --- incidents and maintenance: the typed hook, matched by prefix ----------------------
-  { prefix: 'incident.', category: 'INCIDENTS', link: 'ALERTS', minSeverity: 'INFO' },
-  { prefix: 'maintenance.', category: 'INCIDENTS', link: 'ALERTS', minSeverity: 'INFO' },
+  { prefix: 'incident.', category: 'INCIDENTS', link: 'INCIDENT', minSeverity: 'INFO' },
+  { prefix: 'maintenance.', category: 'INCIDENTS', link: 'INCIDENT', minSeverity: 'INFO' },
 ];
 
 const SEVERITY_RANK = new Map<string, number>(

@@ -127,6 +127,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'referral', label: 'معرفی دوستان و هدیهٔ عضویت', prefixes: ['bot.referral.'] },
   { id: 'support', label: 'پشتیبانی و پرسش‌های متداول', prefixes: ['bot.faq.', 'bot.support.'] },
   { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
+  // Phase E3: the incident / maintenance notice.
+  { id: 'incidents', label: 'اطلاع‌رسانی رخداد و نگهداری', prefixes: ['bot.incident.'] },
   // Round N: the wrapper every broadcast is sent in.
   {
     id: 'broadcast',
@@ -543,6 +545,7 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.message_prompt': { category: 'موضوع تیکت' },
   'bot.ticket.support_replied': { text: 'متن پاسخ پشتیبانی', category: 'موضوع تیکت' },
   'bot.ticket.support_attachment': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
+  'bot.incident.notice': { message: 'پیام اپراتور به مشتری' },
   'ops.support.ticket_opened': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'ops.support.customer_replied': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   // Round N: the broadcast wrapper and the two mass-action notices.
@@ -2280,6 +2283,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'زیرنویس عکس یا فایلی که پشتیبانی همراه پاسخ فرستاده است؛ جدا از متن پاسخ برای مشتری ارسال می‌شود.',
   ],
   'bot.ticket.view_button': ['دکمهٔ مشاهدهٔ تیکت', 'در اعلان پاسخ پشتیبانی، تیکت را باز می‌کند.'],
+  'bot.incident.notice': [
+    'اطلاع‌رسانی رخداد یا نگهداری (به مشتری)',
+    'پیامی که اپراتور دربارهٔ یک رخداد یا نگهداری برای مشتریان آسیب‌دیده می‌فرستد؛ متن هنگام ارسال از خود رخداد خوانده می‌شود.',
+  ],
   'bot.ticket.category_default_1': [
     'دستهٔ پیش‌فرض تیکت ۱',
     'دستهٔ نمونهٔ ۱ که نخستین بار در دسته‌های تیکت هر مجموعه کپی می‌شود.',

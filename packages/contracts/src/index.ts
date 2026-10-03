@@ -120,3 +120,4 @@ export * from './audience.js';
 export * from './broadcasts.js';
 export * from './bulk-operations.js';
 export * from './notification-center.js';
+export * from './incidents.js';

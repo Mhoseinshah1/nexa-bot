@@ -176,6 +176,8 @@ export const EVENT_TYPES = [
   // the recipients are never in the payload: a state change is the fact.
   'BroadcastStateChanged',
   'BulkOperationStateChanged',
+  // Phase E3: an incident or maintenance window changed status. Ids and statuses only.
+  'IncidentStateChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -214,6 +216,8 @@ export const AGGREGATE_TYPES = [
   'BulkOperation',
   // Program §8: one tag of a tenant's customer-tag catalogue.
   'CustomerTag',
+  // Phase E3: an incident or maintenance window.
+  'Incident',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -588,6 +592,12 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     from: z.string().nullable(),
     to: z.string(),
     items: z.number().int().nonnegative(),
+  }),
+  IncidentStateChanged: z.object({
+    incidentId: z.string(),
+    kind: z.enum(['INCIDENT', 'MAINTENANCE']),
+    from: z.string().nullable(),
+    to: z.string(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 
