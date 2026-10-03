@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   REPORT_ROUTES,
   reportExportQuerySchema,
+  reportFinancialQuerySchema,
   reportOperationsQuerySchema,
   reportOrdersQuerySchema,
   reportPaymentAttemptsQuerySchema,
@@ -12,6 +13,7 @@ import {
   reportReferralsQuerySchema,
   reportTrendQuerySchema,
   type ReportFailuresResponse,
+  type ReportFinancialResponse,
   type ReportInfrastructureResponse,
   type ReportOperationsResponse,
   type ReportOrdersResponse,
@@ -63,6 +65,17 @@ export class ReportsController {
     const { scope, actor } = await this.authenticate(request);
     const query = reportTrendQuerySchema.parse(pick(raw, ['metric', 'currency']));
     return this.container.reports.trend(scope, actor, rangeOf(raw), query.metric, query.currency);
+  }
+
+  /** Phase E2: the financial statement (`docs/financial-reports.md`). */
+  @Get(REPORT_ROUTES.financial)
+  async financial(
+    @Req() request: FastifyRequest,
+    @Query() raw: Record<string, unknown>,
+  ): Promise<ReportFinancialResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const query = reportFinancialQuerySchema.parse(pick(raw, ['granularity']));
+    return this.container.reports.financial(scope, actor, rangeOf(raw), query.granularity);
   }
 
   @Get(REPORT_ROUTES.products)
@@ -214,13 +227,14 @@ export class ReportsController {
     @Query() raw: Record<string, unknown>,
   ): Promise<void> {
     const { scope, actor } = await this.authenticate(request);
-    const query = reportExportQuerySchema.parse(pick(raw, ['report', 'format']));
+    const query = reportExportQuerySchema.parse(pick(raw, ['report', 'format', 'granularity']));
     const file = await this.container.reports.export(
       scope,
       actor,
       rangeOf(raw),
       query.report,
       query.format,
+      query.granularity,
     );
     await reply
       .header('content-type', file.contentType)
