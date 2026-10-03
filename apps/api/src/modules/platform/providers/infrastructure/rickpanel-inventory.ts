@@ -123,12 +123,18 @@ export const RICKPANEL_ACCOUNT_STATES = [
 export type RickpanelAccountState = (typeof RICKPANEL_ACCOUNT_STATES)[number];
 
 /**
- * One account as the inventory keeps it: the canonical name, the provider's spelling
- * when it differs, state, and usage — and nothing a customer could use to connect.
+ * One account as the inventory keeps it: the canonical name, the provider's EXACT
+ * spelling, state, and usage — and nothing a customer could use to connect.
  */
 export interface RickpanelInventoryAccount {
   /** Lowercase. The matching key (§11: canonical username = lowercase). */
   readonly username: string;
+  /**
+   * The name exactly as the panel spells it. Every RickPanel route addresses an account
+   * by this spelling, so it is what an adoption must store (C3 constraint 3) — never the
+   * lowercase key.
+   */
+  readonly providerUsername: string;
   /** True when the panel's own spelling was not already lowercase. */
   readonly providerSpellingDiffers: boolean;
   readonly state: RickpanelAccountState;
@@ -139,8 +145,9 @@ export interface RickpanelInventoryAccount {
 export interface RickpanelInventoryEvidence {
   readonly pages: number;
   readonly rowsFetched: number;
+  /** Distinct EXACT provider spellings. Two spellings of one lowercase key are two. */
   readonly distinctUsernames: number;
-  /** Rows dropped because their canonical username was already seen. */
+  /** Rows dropped because their exact provider spelling was already seen in this walk. */
   readonly duplicateRows: number;
   /** The panel's `total` on the first page; null when the panel reports none. */
   readonly reportedTotal: number | null;
@@ -165,31 +172,73 @@ export const INVENTORY_PAGINATION_FAULTS = [
 ] as const;
 export type InventoryPaginationFault = (typeof INVENTORY_PAGINATION_FAULTS)[number];
 
-export type RickpanelInventoryOutcome =
+export interface RickpanelInventoryFailure {
+  readonly ok: false;
+  readonly failure: ProviderFailureKind;
+  readonly status: number | null;
+  readonly pagination?: InventoryPaginationFault;
+}
+
+/**
+ * ONE offset walk. `consistent: true` says only that this walk did not visibly contradict
+ * itself — the reported total held and the distinct names add up to it. It is NOT proof
+ * of coverage: a deletion before the cursor plus an append after it keeps the total and
+ * the count while shifting an unseen row behind the cursor (delete A, append K: the page
+ * at offset 5 starts at G, F is never returned, and the count is still 10). So a single
+ * walk has no `complete` field and cannot be indexed; `listAll` is what can be.
+ */
+export type RickpanelInventoryWalk =
   | {
       readonly ok: true;
-      /** Every row the panel reported was fetched, once. */
-      readonly complete: true;
+      readonly consistent: true;
       readonly accounts: readonly RickpanelInventoryAccount[];
       readonly evidence: RickpanelInventoryEvidence;
     }
   | {
       readonly ok: true;
-      /**
-       * The walk ended cleanly but does not cover the panel: the reported total moved
-       * during the walk, or the distinct names do not add up to it. Live-system drift —
-       * re-run; never decide `provider_missing` from this.
-       */
-      readonly complete: false;
+      /** The reported total moved during the walk, or the distinct names do not add up. */
+      readonly consistent: false;
       readonly reason: 'TOTAL_CHANGED' | 'COUNT_MISMATCH';
       readonly evidence: RickpanelInventoryEvidence;
     }
+  | RickpanelInventoryFailure;
+
+/** Why `listAll` refused to call an inventory complete. A closed set. */
+export const INVENTORY_INCOMPLETE_REASONS = [
+  'TOTAL_CHANGED',
+  'COUNT_MISMATCH',
+  /** Two consecutive consistent walks returned different exact username sets. */
+  'WALKS_DIFFER',
+] as const;
+export type InventoryIncompleteReason = (typeof INVENTORY_INCOMPLETE_REASONS)[number];
+
+/**
+ * A panel's inventory as the matcher may use it: `complete: true` only when TWO
+ * consecutive walks were each consistent AND returned the identical set of exact provider
+ * spellings. Anything a row could have slipped past in one walk shows up as a difference
+ * between the two, and an incomplete inventory makes every decision depending on it
+ * UNDECIDABLE rather than `provider_missing`.
+ */
+export type RickpanelInventoryOutcome =
   | {
-      readonly ok: false;
-      readonly failure: ProviderFailureKind;
-      readonly status: number | null;
-      readonly pagination?: InventoryPaginationFault;
-    };
+      readonly ok: true;
+      readonly complete: true;
+      readonly accounts: readonly RickpanelInventoryAccount[];
+      readonly evidence: {
+        readonly first: RickpanelInventoryEvidence;
+        readonly second: RickpanelInventoryEvidence;
+      };
+    }
+  | {
+      readonly ok: true;
+      readonly complete: false;
+      readonly reason: InventoryIncompleteReason;
+      readonly evidence: {
+        readonly first: RickpanelInventoryEvidence;
+        readonly second: RickpanelInventoryEvidence | null;
+      };
+    }
+  | RickpanelInventoryFailure;
 
 export type RickpanelAccountLookup =
   | { readonly ok: true; readonly found: false }
@@ -213,7 +262,14 @@ export function inventoryIndex(
   outcome: RickpanelInventoryOutcome,
 ): PanelInventoryIndex | null {
   if (!outcome.ok || !outcome.complete) return null;
-  return { panelId, usernames: new Set(outcome.accounts.map((a) => a.username)) };
+  const usernames = new Map<string, string[]>();
+  for (const account of outcome.accounts) {
+    const spellings = usernames.get(account.username) ?? [];
+    spellings.push(account.providerUsername);
+    usernames.set(account.username, spellings);
+  }
+  for (const spellings of usernames.values()) spellings.sort();
+  return { panelId, usernames };
 }
 
 function accountFrom(record: Record<string, unknown>): RickpanelInventoryAccount | null {
@@ -231,6 +287,7 @@ function accountFrom(record: Record<string, unknown>): RickpanelInventoryAccount
   const usage = readRecordUsage(record);
   return {
     username,
+    providerUsername: raw,
     providerSpellingDiffers: raw !== username,
     state,
     usage: usage.ok ? usage.usage : null,
@@ -247,7 +304,59 @@ export interface RickpanelInventoryOptions {
  */
 export class RickpanelInventoryReader {
   /**
-   * Every account on the panel, by offset pagination.
+   * The panel's inventory, as the matcher may use it: two consecutive walks, compared.
+   *
+   * `complete: true` only when both walks are consistent and their EXACT username sets
+   * are identical; otherwise `complete: false` with a closed reason (see
+   * `RickpanelInventoryWalk` for why one walk is never enough).
+   */
+  async listAll(
+    target: ProviderTarget,
+    http: RickpanelReadOnlyHttp,
+    options: RickpanelInventoryOptions = {},
+  ): Promise<RickpanelInventoryOutcome> {
+    const first = await this.walk(target, http, options);
+    if (!first.ok) return first;
+    if (!first.consistent) {
+      return {
+        ok: true,
+        complete: false,
+        reason: first.reason,
+        evidence: { first: first.evidence, second: null },
+      };
+    }
+    const second = await this.walk(target, http, options);
+    if (!second.ok) return second;
+    if (!second.consistent) {
+      return {
+        ok: true,
+        complete: false,
+        reason: second.reason,
+        evidence: { first: first.evidence, second: second.evidence },
+      };
+    }
+    const a = first.accounts.map((x) => x.providerUsername);
+    const b = new Set(second.accounts.map((x) => x.providerUsername));
+    const same = a.length === b.size && a.every((name) => b.has(name));
+    if (!same) {
+      return {
+        ok: true,
+        complete: false,
+        reason: 'WALKS_DIFFER',
+        evidence: { first: first.evidence, second: second.evidence },
+      };
+    }
+    // The SECOND walk's records: the newer reading of usage and state.
+    return {
+      ok: true,
+      complete: true,
+      accounts: second.accounts,
+      evidence: { first: first.evidence, second: second.evidence },
+    };
+  }
+
+  /**
+   * One offset walk over the panel's list. Never indexable on its own.
    *
    * The walk advances `offset` by the rows RECEIVED (not by the limit asked for), so a
    * panel that caps its page size below ours loses nothing. It ends on an EMPTY page, or
@@ -256,11 +365,11 @@ export class RickpanelInventoryReader {
    * absolute `maxPages`, a NO_PROGRESS stop for a panel that ignores `offset`, and
    * PAGE_TOO_LONG for one that ignores `limit`.
    */
-  async listAll(
+  async walk(
     target: ProviderTarget,
     http: RickpanelReadOnlyHttp,
     options: RickpanelInventoryOptions = {},
-  ): Promise<RickpanelInventoryOutcome> {
+  ): Promise<RickpanelInventoryWalk> {
     const pageSize = Math.min(
       Math.max(1, Math.trunc(options.pageSize ?? INVENTORY_DEFAULT_PAGE_SIZE)),
       INVENTORY_MAX_PAGE_SIZE,
@@ -325,10 +434,12 @@ export class RickpanelInventoryReader {
         const account = accountFrom(row as Record<string, unknown>);
         if (account === null) return fault('INVALID_ROW', answer.status);
         rowsFetched += 1;
-        if (byName.has(account.username)) {
+        // Keyed by the EXACT provider spelling: `Alice` and `alice` are two accounts on a
+        // case-sensitive panel, and folding them here would hide one of them.
+        if (byName.has(account.providerUsername)) {
           duplicateRows += 1;
         } else {
-          byName.set(account.username, account);
+          byName.set(account.providerUsername, account);
           fresh += 1;
         }
       }
@@ -347,28 +458,31 @@ export class RickpanelInventoryReader {
       firstPageRows,
       lastPageRows,
     };
-    if (totalChanged) return { ok: true, complete: false, reason: 'TOTAL_CHANGED', evidence };
+    if (totalChanged) return { ok: true, consistent: false, reason: 'TOTAL_CHANGED', evidence };
     if (evidence.reportedTotal !== null && byName.size !== evidence.reportedTotal) {
-      return { ok: true, complete: false, reason: 'COUNT_MISMATCH', evidence };
+      return { ok: true, consistent: false, reason: 'COUNT_MISMATCH', evidence };
     }
+    const key = (a: RickpanelInventoryAccount) => `${a.username}\u0000${a.providerUsername}`;
     const accounts = [...byName.values()].sort((a, b) =>
-      a.username < b.username ? -1 : a.username > b.username ? 1 : 0,
+      key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0,
     );
-    return { ok: true, complete: true, accounts, evidence };
+    return { ok: true, consistent: true, accounts, evidence };
   }
 
   /**
-   * One account by EXACT lowercase username. The name must already be canonical; the
-   * record the panel returns must name the same account (case-folded), or it is not
-   * the account asked for and the answer is MALFORMED rather than a match.
+   * One account by name, sent exactly as given — the provider spelling the inventory
+   * recorded, or a lowercase name. The record the panel returns must fold to the same
+   * canonical name, or it is not the account asked for and the answer is MALFORMED
+   * rather than a match. The result carries the panel's own spelling.
    */
   async findAccount(
     target: ProviderTarget,
     http: RickpanelReadOnlyHttp,
     username: string,
   ): Promise<RickpanelAccountLookup> {
-    if (canonicalUsername(username) !== username) {
-      throw new Error('findAccount takes a canonical (lowercase) username');
+    const canonical = canonicalUsername(username);
+    if (canonical === null) {
+      throw new Error('findAccount takes a username the matcher can compare');
     }
     const auth = await exchangeRickpanelToken(target, (form) => http.exchangeToken(form));
     if (!auth.ok) return { ok: false, failure: auth.failure, status: auth.status };
@@ -385,7 +499,7 @@ export class RickpanelInventoryReader {
     }
     const record = parseJson(read.bodyText);
     const account = record === null ? null : accountFrom(record);
-    if (account === null || account.username !== username) {
+    if (account === null || account.username !== canonical) {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: read.status };
     }
     return { ok: true, found: true, account };

@@ -8,6 +8,7 @@ import {
   inventoryIndex,
   readOnlyRickpanelHttp,
   type RickpanelInventoryOutcome,
+  type RickpanelInventoryWalk,
   type RickpanelReadOnlyHttp,
 } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel-inventory';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
@@ -44,6 +45,13 @@ function seed(n: number, prefix = 'user'): string[] {
   return names;
 }
 
+function consistent(outcome: RickpanelInventoryWalk) {
+  if (!outcome.ok || !outcome.consistent) {
+    throw new Error(`expected a consistent walk, got ${JSON.stringify(outcome)}`);
+  }
+  return outcome;
+}
+
 function complete(outcome: RickpanelInventoryOutcome) {
   if (!outcome.ok || !outcome.complete) {
     throw new Error(`expected a complete inventory, got ${JSON.stringify(outcome)}`);
@@ -66,14 +74,14 @@ afterEach(async () => {
 describe('pagination', () => {
   it('first page only: fewer accounts than one page', async () => {
     const names = seed(3);
-    const out = complete(await reader.listAll(target, http, { pageSize: 5 }));
+    const out = consistent(await reader.walk(target, http, { pageSize: 5 }));
     expect(out.accounts.map((a) => a.username)).toEqual(names);
     expect(out.evidence).toMatchObject({ pages: 1, reportedTotal: 3, rowsFetched: 3 });
   });
 
   it('multiple pages, final short page NOT omitted', async () => {
     const names = seed(12);
-    const out = complete(await reader.listAll(target, http, { pageSize: 5 }));
+    const out = consistent(await reader.walk(target, http, { pageSize: 5 }));
     expect(out.accounts.map((a) => a.username)).toEqual(names);
     expect(out.evidence).toMatchObject({
       pages: 3,
@@ -86,13 +94,13 @@ describe('pagination', () => {
 
   it('an exact multiple of the page size stops at the total, without a wasted request', async () => {
     seed(10);
-    const out = complete(await reader.listAll(target, http, { pageSize: 5 }));
+    const out = consistent(await reader.walk(target, http, { pageSize: 5 }));
     expect(out.evidence.pages).toBe(2);
     expect(out.accounts).toHaveLength(10);
   });
 
-  it('an empty panel is a complete, empty inventory', async () => {
-    const out = complete(await reader.listAll(target, http, { pageSize: 5 }));
+  it('an empty panel is a consistent, empty walk', async () => {
+    const out = consistent(await reader.walk(target, http, { pageSize: 5 }));
     expect(out.accounts).toEqual([]);
     expect(out.evidence).toMatchObject({ pages: 1, reportedTotal: 0, lastPageRows: 0 });
   });
@@ -100,7 +108,7 @@ describe('pagination', () => {
   it('with no reported total the walk ends on the EMPTY page', async () => {
     panel.listMode = 'no-total';
     seed(7);
-    const out = complete(await reader.listAll(target, http, { pageSize: 5 }));
+    const out = consistent(await reader.walk(target, http, { pageSize: 5 }));
     expect(out.accounts).toHaveLength(7);
     expect(out.evidence).toMatchObject({ pages: 3, reportedTotal: null, lastPageRows: 0 });
   });
@@ -109,7 +117,7 @@ describe('pagination', () => {
     panel.listMode = 'caps-page-size';
     panel.listPageCap = 4;
     const names = seed(10);
-    const out = complete(await reader.listAll(target, http, { pageSize: 50 }));
+    const out = consistent(await reader.walk(target, http, { pageSize: 50 }));
     expect(out.accounts.map((a) => a.username)).toEqual(names);
     expect(out.evidence.pages).toBe(3);
   });
@@ -117,7 +125,7 @@ describe('pagination', () => {
   it('a panel ignoring offset is refused as NO_PROGRESS, bounded to two requests', async () => {
     panel.listMode = 'ignores-offset';
     seed(12);
-    const out = await reader.listAll(target, http, { pageSize: 5 });
+    const out = await reader.walk(target, http, { pageSize: 5 });
     expect(out).toMatchObject({
       ok: false,
       failure: 'MALFORMED_RESPONSE',
@@ -129,20 +137,20 @@ describe('pagination', () => {
   it('a panel ignoring limit is refused as PAGE_TOO_LONG', async () => {
     panel.listMode = 'ignores-limit';
     seed(12);
-    const out = await reader.listAll(target, http, { pageSize: 5 });
+    const out = await reader.walk(target, http, { pageSize: 5 });
     expect(out).toMatchObject({ ok: false, pagination: 'PAGE_TOO_LONG' });
   });
 
   it('a bare array is NOT_A_PAGE, never an empty inventory', async () => {
     panel.listMode = 'bare-array';
     seed(2);
-    const out = await reader.listAll(target, http, { pageSize: 5 });
+    const out = await reader.walk(target, http, { pageSize: 5 });
     expect(out).toMatchObject({ ok: false, pagination: 'NOT_A_PAGE' });
   });
 
   it('the page bound stops a walk that would not end', async () => {
     seed(30);
-    const out = await reader.listAll(target, http, { pageSize: 5, maxPages: 3 });
+    const out = await reader.walk(target, http, { pageSize: 5, maxPages: 3 });
     expect(out).toMatchObject({ ok: false, pagination: 'PAGE_LIMIT_EXCEEDED' });
     expect(panel.listCalls()).toBe(3);
   });
@@ -152,9 +160,8 @@ describe('pagination', () => {
     panel.beforeListPage = (offset) => {
       if (offset === 5) (panel.users as Map<string, unknown>).delete(names[0] as string);
     };
-    const out = await reader.listAll(target, http, { pageSize: 5 });
-    expect(out).toMatchObject({ ok: true, complete: false, reason: 'TOTAL_CHANGED' });
-    expect(inventoryIndex('p', out)).toBeNull();
+    const out = await reader.walk(target, http, { pageSize: 5 });
+    expect(out).toMatchObject({ ok: true, consistent: false, reason: 'TOTAL_CHANGED' });
   });
 
   it('a reorder mid-walk yields a duplicate row: counted once, and the gap is reported', async () => {
@@ -167,13 +174,77 @@ describe('pagination', () => {
         map.set(names[0] as string, first);
       }
     };
+    const out = await reader.walk(target, http, { pageSize: 5 });
+    expect(out).toMatchObject({
+      ok: true,
+      consistent: false,
+      reason: 'COUNT_MISMATCH',
+      evidence: { duplicateRows: 1, distinctUsernames: 11, reportedTotal: 12 },
+    });
+  });
+});
+
+describe('completeness needs two identical walks (Codex P1, #169)', () => {
+  it('delete-A / append-K keeps total and count, so ONE walk looks consistent and misses F', async () => {
+    const names = seed(10, 'u'); // u000..u009: A..J
+    panel.beforeListPage = (offset) => {
+      if (offset === 5) {
+        (panel.users as Map<string, unknown>).delete(names[0] as string); // delete A
+        panel.seedUser('u010'); // append K
+        panel.beforeListPage = null;
+      }
+    };
+    const walk = consistent(await reader.walk(target, http, { pageSize: 5 }));
+    const seen = walk.accounts.map((a) => a.username);
+    // The hazard, demonstrated: F (u005) is on the panel the whole time and never returned.
+    expect(seen).not.toContain('u005');
+    expect(panel.users.has('u005')).toBe(true);
+    expect(walk.evidence).toMatchObject({ reportedTotal: 10, distinctUsernames: 10 });
+  });
+
+  it('the same change makes listAll WALKS_DIFFER, so it cannot be indexed', async () => {
+    const names = seed(10, 'u');
+    panel.beforeListPage = (offset) => {
+      if (offset === 5) {
+        (panel.users as Map<string, unknown>).delete(names[0] as string);
+        panel.seedUser('u010');
+        panel.beforeListPage = null;
+      }
+    };
+    const out = await reader.listAll(target, http, { pageSize: 5 });
+    expect(out).toMatchObject({ ok: true, complete: false, reason: 'WALKS_DIFFER' });
+    expect(inventoryIndex('p', out)).toBeNull();
+  });
+
+  it('a single walk cannot be indexed, by type', async () => {
+    seed(3);
+    const walk = await reader.walk(target, http);
+    // @ts-expect-error — `inventoryIndex` takes a two-walk `listAll` outcome, never one walk.
+    expect(() => inventoryIndex('p', walk)).not.toThrow();
+  });
+
+  it('a quiet panel: two identical walks are complete and indexable', async () => {
+    const names = seed(12);
+    const out = complete(await reader.listAll(target, http, { pageSize: 5 }));
+    expect(out.accounts.map((a) => a.username)).toEqual(names);
+    expect(out.evidence.first).toEqual(out.evidence.second);
+    expect(panel.listCalls()).toBe(6);
+    expect(inventoryIndex('p', out)?.usernames.get('user003')).toEqual(['user003']);
+  });
+
+  it('an inconsistent first walk is incomplete without a second walk', async () => {
+    const names = seed(12);
+    panel.beforeListPage = (offset) => {
+      if (offset === 5) (panel.users as Map<string, unknown>).delete(names[0] as string);
+    };
     const out = await reader.listAll(target, http, { pageSize: 5 });
     expect(out).toMatchObject({
       ok: true,
       complete: false,
-      reason: 'COUNT_MISMATCH',
-      evidence: { duplicateRows: 1, distinctUsernames: 11, reportedTotal: 12 },
+      reason: 'TOTAL_CHANGED',
+      evidence: { second: null },
     });
+    expect(inventoryIndex('p', out)).toBeNull();
   });
 });
 
@@ -190,6 +261,7 @@ describe('accounts', () => {
     expect(out.accounts).toEqual([
       {
         username: 'alice',
+        providerUsername: 'Alice',
         providerSpellingDiffers: true,
         state: 'disabled',
         usage: {
@@ -201,6 +273,7 @@ describe('accounts', () => {
       },
       {
         username: 'bob',
+        providerUsername: 'bob',
         providerSpellingDiffers: false,
         state: 'UNKNOWN',
         usage: {
@@ -223,15 +296,32 @@ describe('accounts', () => {
     expect(text).not.toMatch(/SECRET|sub_|subscription|proxies|token/i);
   });
 
-  it('exact lowercase lookup: found, not found, and only a canonical name is asked', async () => {
+  it('lookup: found, not found, the panel spelling kept, an uncomparable name refused', async () => {
     panel.seedUser('dave', { usedTraffic: 7 });
+    panel.seedUser('Frank');
     expect(await reader.findAccount(target, http, 'dave')).toMatchObject({
       ok: true,
       found: true,
-      account: { username: 'dave', usage: { usedBytes: 7n } },
+      account: { username: 'dave', providerUsername: 'dave', usage: { usedBytes: 7n } },
+    });
+    expect(await reader.findAccount(target, http, 'Frank')).toMatchObject({
+      found: true,
+      account: { username: 'frank', providerUsername: 'Frank' },
     });
     expect(await reader.findAccount(target, http, 'nobody')).toEqual({ ok: true, found: false });
-    await expect(reader.findAccount(target, http, 'Dave')).rejects.toThrow(/canonical/);
+    await expect(reader.findAccount(target, http, 'has space')).rejects.toThrow(/compare/);
+  });
+
+  it('two spellings of one name are two accounts, both kept in the index (Codex P2, #169)', async () => {
+    panel.seedUser('Alice');
+    panel.seedUser('alice');
+    panel.seedUser('bob');
+    const out = complete(await reader.listAll(target, http));
+    expect(out.accounts.map((a) => a.providerUsername)).toEqual(['Alice', 'alice', 'bob']);
+    expect(out.evidence.second).toMatchObject({ distinctUsernames: 3, duplicateRows: 0 });
+    const index = inventoryIndex('p', out);
+    expect(index?.usernames.get('alice')).toEqual(['Alice', 'alice']);
+    expect(index?.usernames.get('bob')).toEqual(['bob']);
   });
 
   it('a lookup answered with a DIFFERENT account is malformed, not a match', async () => {

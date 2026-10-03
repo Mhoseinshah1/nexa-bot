@@ -64,10 +64,12 @@ treated as a bearer capability (`infrastructure/redaction.ts` redacts it).
    transaction — so the local CHECK and the per-panel unique index hold and the value is a
    capability nobody can compute. Do not derive it from the legacy row or the panel token.
 3. **Store the username exactly as the panel spells it.** Every RickPanel route addresses
-   the account by `encodeURIComponent(username)`. The P5 inventory reports
-   `providerSpellingDiffers`; the legacy audit found zero mixed-case names, but a name the
-   panel spells differently from `lower(username)` must be stored in the panel's spelling or
-   go to manual review — not be lower-cased into a name the panel may not resolve.
+   the account by `encodeURIComponent(username)`. The P5 inventory keeps the panel's
+   exact spelling (`providerUsername`) beside the lowercase key, and an `ELIGIBLE` match
+   carries it: store THAT, never `lower(username)`, which the panel may not resolve. Where
+   two spellings fold to one key on a panel (`Alice`, `alice`) the match is
+   `USERNAME_CASE_COLLISION` manual review, never eligible. (The legacy audit found zero
+   mixed-case names, so this is expected to be empty.)
 4. **Reserve the adopted name** in `service_username_reservations` under the panel's
    namespace (provider type + host), funded, exactly as a purchase does — otherwise a new
    customer can choose the adopted name, and the create would hit the 409 refusal path.

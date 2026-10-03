@@ -28,11 +28,16 @@ const policy: LegacyPanelPolicy = {
 
 const index = (panelId: string, names: string[]): PanelInventoryIndex => ({
   panelId,
-  usernames: new Set(names),
+  // Built the way `inventoryIndex` builds it: lowercase key → exact spellings, sorted.
+  usernames: names.reduce((map, name) => {
+    const key = name.toLowerCase();
+    map.set(key, [...(map.get(key) ?? []), name].sort());
+    return map;
+  }, new Map<string, string[]>()),
 });
 
 const inventories = new Map<string, PanelInventoryIndex>([
-  [P1, index(P1, ['alice', 'shared'])],
+  [P1, index(P1, ['Alice', 'shared'])],
   [P2, index(P2, ['bob', 'shared'])],
   [P3, index(P3, ['carol'])],
 ]);
@@ -45,6 +50,8 @@ describe('panel known', () => {
       kind: 'ELIGIBLE',
       panelId: P1,
       username: 'alice',
+      // The panel's own spelling, which is what an adoption must store (C3).
+      providerUsername: 'Alice',
     });
   });
 
@@ -77,6 +84,7 @@ describe('panel missing', () => {
         kind: 'ELIGIBLE',
         panelId: P3,
         username: 'carol',
+        providerUsername: 'carol',
       });
     }
   });
@@ -114,6 +122,49 @@ describe('panel missing', () => {
       matchLegacyService({ codePanel: null, username: 'carol' }, twice, inventories),
     ).toMatchObject({
       kind: 'ELIGIBLE',
+    });
+  });
+});
+
+describe('Codex review of #169', () => {
+  it('P2: a test-panel row is skipped even when its username is invalid or empty', () => {
+    for (const username of ['', 'with space', 'ﾑ']) {
+      expect(
+        matchLegacyService({ codePanel: 'TEST_MARZBAN_RICKPANEL', username }, policy, inventories),
+      ).toEqual({ kind: 'SKIPPED', reason: 'TEST_PANEL' });
+    }
+  });
+
+  it('P2: two known holders are AMBIGUOUS even while a third panel is unavailable', () => {
+    const partial = new Map(inventories);
+    partial.delete(P3);
+    expect(matchLegacyService({ codePanel: null, username: 'shared' }, policy, partial)).toEqual({
+      kind: 'MANUAL_REVIEW',
+      reason: 'AMBIGUOUS_PANEL',
+      candidatePanels: 2,
+    });
+  });
+
+  it('P2: one known holder plus an unavailable panel is still UNDECIDABLE', () => {
+    const partial = new Map(inventories);
+    partial.delete(P2);
+    expect(matchLegacyService({ codePanel: null, username: 'carol' }, policy, partial)).toEqual({
+      kind: 'UNDECIDABLE',
+      reason: 'INVENTORY_INCOMPLETE',
+    });
+  });
+
+  it('P2: two spellings of one name on one panel are a case collision, never eligible', () => {
+    const colliding = new Map(inventories);
+    colliding.set(P1, index(P1, ['Dora', 'dora']));
+    colliding.set(P3, index(P3, ['Erin', 'erin']));
+    expect(
+      matchLegacyService({ codePanel: 'germany', username: 'dora' }, policy, colliding),
+    ).toEqual({ kind: 'MANUAL_REVIEW', reason: 'USERNAME_CASE_COLLISION', candidatePanels: 1 });
+    expect(matchLegacyService({ codePanel: null, username: 'ERIN' }, policy, colliding)).toEqual({
+      kind: 'MANUAL_REVIEW',
+      reason: 'USERNAME_CASE_COLLISION',
+      candidatePanels: 1,
     });
   });
 });

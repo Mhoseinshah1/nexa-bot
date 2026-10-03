@@ -38,7 +38,7 @@ describe('C1 procedure', () => {
     const report = await runInventoryAcceptance({
       target,
       http: http(),
-      knownUsername: 'ACCT07',
+      knownUsername: 'acct07',
       pageSize: 5,
     });
     expect(report.checks.filter((c) => !c.pass)).toEqual([]);

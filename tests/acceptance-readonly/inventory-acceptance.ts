@@ -8,7 +8,7 @@ import type {
 import {
   RickpanelInventoryReader,
   readOnlyRickpanelHttp,
-  type RickpanelInventoryOutcome,
+  type RickpanelInventoryWalk,
 } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel-inventory';
 import { TOKEN_PATH } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel-protocol';
 
@@ -42,8 +42,8 @@ export interface InventoryAcceptanceInput {
 
 export interface InventoryRunSummary {
   readonly ok: boolean;
-  readonly complete: boolean;
-  readonly incompleteReason: string | null;
+  readonly consistent: boolean;
+  readonly inconsistentReason: string | null;
   readonly failure: string | null;
   readonly pagination: string | null;
   readonly reportedTotal: number | null;
@@ -101,12 +101,12 @@ export function readGuard(http: ProviderHttpClient): {
   };
 }
 
-export function summarize(outcome: RickpanelInventoryOutcome): InventoryRunSummary {
+export function summarize(outcome: RickpanelInventoryWalk): InventoryRunSummary {
   if (!outcome.ok) {
     return {
       ok: false,
-      complete: false,
-      incompleteReason: null,
+      consistent: false,
+      inconsistentReason: null,
       failure: outcome.failure,
       pagination: outcome.pagination ?? null,
       reportedTotal: null,
@@ -124,7 +124,7 @@ export function summarize(outcome: RickpanelInventoryOutcome): InventoryRunSumma
   const states: Record<string, number> = {};
   let usageUnreadable = 0;
   let providerSpellingDiffers = 0;
-  if (outcome.complete) {
+  if (outcome.consistent) {
     for (const account of outcome.accounts) {
       states[account.state] = (states[account.state] ?? 0) + 1;
       if (account.usage === null) usageUnreadable += 1;
@@ -133,8 +133,8 @@ export function summarize(outcome: RickpanelInventoryOutcome): InventoryRunSumma
   }
   return {
     ok: true,
-    complete: outcome.complete,
-    incompleteReason: outcome.complete ? null : outcome.reason,
+    consistent: outcome.consistent,
+    inconsistentReason: outcome.consistent ? null : outcome.reason,
     failure: null,
     pagination: null,
     reportedTotal: outcome.evidence.reportedTotal,
@@ -150,9 +150,9 @@ export function summarize(outcome: RickpanelInventoryOutcome): InventoryRunSumma
   };
 }
 
-function names(outcome: RickpanelInventoryOutcome): ReadonlySet<string> {
-  return outcome.ok && outcome.complete
-    ? new Set(outcome.accounts.map((a) => a.username))
+function names(outcome: RickpanelInventoryWalk): ReadonlySet<string> {
+  return outcome.ok && outcome.consistent
+    ? new Set(outcome.accounts.map((a) => a.providerUsername))
     : new Set();
 }
 
@@ -165,8 +165,8 @@ export async function runInventoryAcceptance(
   const options = input.pageSize === undefined ? {} : { pageSize: input.pageSize };
   const tolerance = input.driftTolerance ?? 0;
 
-  const firstOutcome = await reader.listAll(input.target, http, options);
-  const secondOutcome = await reader.listAll(input.target, http, options);
+  const firstOutcome = await reader.walk(input.target, http, options);
+  const secondOutcome = await reader.walk(input.target, http, options);
   const first = summarize(firstOutcome);
   const second = summarize(secondOutcome);
   const a = names(firstOutcome);
@@ -175,8 +175,13 @@ export async function runInventoryAcceptance(
   for (const n of a) if (!b.has(n)) setDrift += 1;
   for (const n of b) if (!a.has(n)) setDrift += 1;
 
+  // Sent as the operator spelled it (the panel's spelling); compared by its lowercase key.
   const known = input.knownUsername.toLowerCase();
-  const knownResult = await reader.findAccount(input.target, http, known);
+  const knownInInventory =
+    firstOutcome.ok &&
+    firstOutcome.consistent &&
+    firstOutcome.accounts.some((account) => account.username === known);
+  const knownResult = await reader.findAccount(input.target, http, input.knownUsername);
   const knownLookup = !knownResult.ok ? 'FAILED' : knownResult.found ? 'FOUND' : 'NOT_FOUND';
   // A name no panel holds: random, canonical, and long enough never to collide.
   const absent = `nexa-c1-absent-${randomBytes(8).toString('hex')}`;
@@ -185,8 +190,8 @@ export async function runInventoryAcceptance(
 
   const countDrift = Math.abs(second.distinctUsernames - first.distinctUsernames);
   const checks = [
-    { name: 'first walk completed', pass: first.ok && first.complete },
-    { name: 'second walk completed', pass: second.ok && second.complete },
+    { name: 'first walk consistent', pass: first.ok && first.consistent },
+    { name: 'second walk consistent', pass: second.ok && second.consistent },
     {
       name: 'distinct usernames equal the reported total (when reported)',
       pass: first.reportedTotal === null || first.distinctUsernames === first.reportedTotal,
@@ -204,8 +209,13 @@ export async function runInventoryAcceptance(
     },
     { name: 'count stable within tolerance', pass: countDrift <= tolerance },
     { name: 'set stable within tolerance', pass: setDrift <= tolerance * 2 },
+    {
+      // What `listAll` requires before the matcher may use the inventory at all.
+      name: 'two consecutive walks identical (indexable)',
+      pass: first.ok && first.consistent && second.ok && second.consistent && setDrift === 0,
+    },
     { name: 'known username found by exact lookup', pass: knownLookup === 'FOUND' },
-    { name: 'known username present in the inventory', pass: a.has(known) },
+    { name: 'known username present in the inventory', pass: knownInInventory },
     { name: 'missing username is a clean not-found', pass: missingLookup === 'NOT_FOUND' },
     { name: 'no write was attempted', pass: guard.refused() === 0 },
   ];
@@ -216,7 +226,7 @@ export async function runInventoryAcceptance(
     countDrift,
     setDrift,
     knownLookup,
-    knownInInventory: a.has(known),
+    knownInInventory,
     missingLookup,
     refusedWrites: guard.refused(),
     requests: guard.sent(),
