@@ -28,6 +28,8 @@ import {
   audiencePreviewResponseSchema,
   broadcastListResponseSchema,
   broadcastRecipientListResponseSchema,
+  broadcastFailureReasonsResponseSchema,
+  type BroadcastFailureReasonsResponse,
   broadcastResponseSchema,
   broadcastTestResponseSchema,
   bulkItemListResponseSchema,
@@ -3643,6 +3645,11 @@ export function fetchBroadcastRecipients(
     paged(BROADCAST_ROUTES.recipients(id), query),
     broadcastRecipientListResponseSchema,
   );
+}
+
+/** Broadcast V2 (program §19): failures grouped by state and transport code. */
+export function fetchBroadcastFailures(id: string): Promise<BroadcastFailureReasonsResponse> {
+  return authedGet(BROADCAST_ROUTES.failures(id), broadcastFailureReasonsResponseSchema);
 }
 
 export interface BroadcastContentWire {

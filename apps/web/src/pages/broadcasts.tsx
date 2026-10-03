@@ -13,8 +13,10 @@ import {
   BROADCAST_TEXT_MAX_LENGTH,
   BROADCAST_TITLE_MAX_LENGTH,
   broadcastMediaType,
+  broadcastOutcome,
   isSourcedBroadcastKind,
   type AudiencePreview,
+  type BroadcastOutcome,
   type BroadcastContentKind,
   type BroadcastPinState,
   type BroadcastPurpose,
@@ -27,6 +29,7 @@ import {
   ApiError,
   createBroadcast,
   fetchBroadcast,
+  fetchBroadcastFailures,
   fetchBroadcastRecipients,
   fetchBroadcasts,
   launchBroadcast,
@@ -835,6 +838,14 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
               label={t('web.aud_count_reachable')}
               value={formatNumber(preview.reachable)}
             />
+            {/* Broadcast V2: an estimate only — the send's stamp decides (since #143). */}
+            {preview.optedOut !== null && preview.optedOut !== undefined && (
+              <StatCard
+                label={t('web.bc_estimate_opted_out')}
+                value={formatNumber(preview.optedOut)}
+                hint={t('web.bc_estimate_opted_out_hint')}
+              />
+            )}
             <StatCard
               label={t('web.bc_as_of')}
               value={<span className="cb-stat-note">{formatTimestamp(preview.asOf)}</span>}
@@ -932,8 +943,20 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
   });
   const [cancelAsked, setCancelAsked] = useState(false);
   const c = record.counts;
+  const outcome = broadcastOutcome(record.state, c);
   return (
-    <Card title={t('web.bc_report')}>
+    <Card
+      title={t('web.bc_report')}
+      {...(outcome === null
+        ? {}
+        : {
+            actions: (
+              <Badge tone={OUTCOME_TONES[outcome]}>
+                {t('web.bc_outcome')}: {t(OUTCOME_LABELS[outcome])}
+              </Badge>
+            ),
+          })}
+    >
       <div className="stat-grid cb-stat-row">
         <StatCard label={t('web.bc_total')} value={formatNumber(c.total)} />
         <StatCard label={t('web.bc_r_sent')} value={formatNumber(c.sent)} />
@@ -1014,6 +1037,70 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
         />
       )}
       {steer.error !== null && <Banner tone="danger">{broadcastMessage(steer.error)}</Banner>}
+    </Card>
+  );
+}
+
+/*
+ * Broadcast V2 (program §19): how a COMPLETED broadcast went, derived from its counts by the
+ * contract's one `broadcastOutcome`, and why recipients were not delivered.
+ */
+const OUTCOME_LABELS: Readonly<Record<BroadcastOutcome, WebKey>> = {
+  DELIVERED: 'web.bc_outcome_delivered',
+  PARTIAL: 'web.bc_outcome_partial',
+  FAILED: 'web.bc_outcome_failed',
+};
+const OUTCOME_TONES: Readonly<Record<BroadcastOutcome, Tone>> = {
+  DELIVERED: 'ok',
+  PARTIAL: 'warn',
+  FAILED: 'danger',
+};
+
+function FailuresCard({ id, broadcastState }: { id: string; broadcastState: BroadcastState }) {
+  const reasons = useQuery({
+    queryKey: ['broadcast-failures', id, broadcastState],
+    queryFn: () => fetchBroadcastFailures(id),
+    refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
+  });
+  const rows = reasons.data?.reasons ?? [];
+  return (
+    <Card title={t('web.bc_failures_title')} hint={t('web.bc_failures_hint')}>
+      <StateSwitch query={reasons}>
+        {rows.length === 0 ? (
+          <Empty variant="compact" title={t('web.bc_failures_empty')} />
+        ) : (
+          <DataTable
+            caption={t('web.bc_failures_title')}
+            dense
+            rows={rows}
+            rowKey={(row) => `${row.state}:${row.errorCode ?? ''}`}
+            columns={[
+              {
+                key: 'state',
+                header: t('web.bc_failures_state'),
+                render: (row) => (
+                  <Badge tone={RECIPIENT_TONES[row.state]}>{t(RECIPIENT_LABELS[row.state])}</Badge>
+                ),
+              },
+              {
+                key: 'reason',
+                header: t('web.bc_failures_reason'),
+                render: (row) =>
+                  row.errorCode === null ? (
+                    <span className="muted">{t('web.bc_failures_no_code')}</span>
+                  ) : (
+                    <Ltr>{row.errorCode}</Ltr>
+                  ),
+              },
+              {
+                key: 'count',
+                header: t('web.bc_failures_count'),
+                render: (row) => <span className="num">{formatNumber(row.count)}</span>,
+              },
+            ]}
+          />
+        )}
+      </StateSwitch>
     </Card>
   );
 }
@@ -1256,6 +1343,7 @@ export function BroadcastDetailPage({
               main={
                 <>
                   <ReportCard record={record} maySend={maySend} />
+                  <FailuresCard id={record.id} broadcastState={record.state} />
                   <RecipientsCard id={record.id} broadcastState={record.state} />
                 </>
               }

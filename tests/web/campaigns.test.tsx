@@ -193,7 +193,7 @@ describe('a new campaign', () => {
     const api = stubApi([
       {
         url: '/audience/options',
-        body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+        body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
       },
       { url: '/products', body: { products: [], nextCursor: null } },
       { url: '/product-categories', body: { categories: [] } },
@@ -231,7 +231,7 @@ describe('the new-campaign form, by permission and calendar', () => {
   const routes = [
     {
       url: '/audience/options',
-      body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+      body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
     },
     { url: '/products', body: { products: [], nextCursor: null } },
     { url: '/product-categories', body: { categories: [] } },
@@ -456,7 +456,7 @@ describe('the campaign editor', () => {
   const pickers = [
     {
       url: '/audience/options',
-      body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+      body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
     },
     { url: '/products', body: { products: [], nextCursor: null } },
     { url: '/product-categories', body: { categories: [] } },
