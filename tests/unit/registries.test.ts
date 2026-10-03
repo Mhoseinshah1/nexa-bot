@@ -306,6 +306,9 @@ describe('the feature flag registry', () => {
       // reachable, and requests already filed stay decidable when it is turned off.
       'customer_refund_requests',
       'ops_notifications',
+      // Phase C3. Off by default; draft placement over a panel's balancing group is
+      // reachable, and a panel in no group is routed exactly as before while it is on.
+      'panel_auto_balancing',
       // WP-A9. On by default; the pending payment/order reminder lane it switches on is
       // reachable, and every reminder is re-checked against the attempt at send time.
       'payment_pending_reminders',

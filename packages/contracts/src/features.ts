@@ -314,6 +314,21 @@ export const FEATURE_FLAGS = [
     ],
   },
   {
+    key: 'panel_auto_balancing',
+    description:
+      'Place each new service on the best eligible panel of its product\u2019s balancing ' +
+      'group instead of always on the product\u2019s own panel. Only panels an operator has ' +
+      'put in the same group are considered, only ones that may take a new account right ' +
+      'now (enabled, not drained, not confirmed unhealthy, with room), healthy ones first, ' +
+      'then by the configured load strategy. A panel in no group is unaffected. Off by ' +
+      'default; turning it off places every new draft on its product\u2019s own panel again ' +
+      'and moves nothing that already exists.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it changes where every new purchase of the tenant lands.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['panels.balancing.strategy'],
+  },
+  {
     key: 'custom_service',
     description:
       'Let a customer buy a custom service: they choose a location, type a ' +

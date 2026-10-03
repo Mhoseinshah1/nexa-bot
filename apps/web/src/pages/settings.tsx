@@ -233,6 +233,7 @@ const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   customer_link_rotation: 'web.flag_customer_link_rotation',
   referral_signup_gift: 'web.flag_referral_signup_gift',
   custom_service: 'web.flag_custom_service',
+  panel_auto_balancing: 'web.flag_panel_auto_balancing',
 };
 
 /**

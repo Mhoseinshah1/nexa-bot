@@ -382,6 +382,64 @@ export const PANEL_DRAIN_REASON_MAX_LENGTH = 500;
 export const PANEL_HEALTH_FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * Automatic panel balancing (Phase C3, `docs/panel-balancing.md`).
+ *
+ * A BALANCING GROUP is an operator's statement that some panels are interchangeable
+ * for a new account: same provider, same offer, any of them will do. A product stays
+ * bound to its own panel — its HOME, the explicit route every product already has —
+ * and, while the `panel_auto_balancing` flag is on and the home is in a group, a new
+ * draft is placed on the best eligible panel of that group instead. A panel in no
+ * group is routed exactly as before: the explicit route takes precedence by default.
+ *
+ * A group is a short operator-chosen label, lower case, so `eu-west` and `EU-West`
+ * cannot be two groups that look like one.
+ */
+export const PANEL_BALANCING_GROUP_MAX_LENGTH = 40;
+export const PANEL_BALANCING_GROUP_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+
+/**
+ * How a group's eligible panels are ranked, after health and before the tie-breaks.
+ *
+ *   `LEAST_USED`          fewest occupied slots (services plus live holds) first.
+ *   `LOWEST_UTILISATION`  smallest share of the cap first; a panel with NO cap has no
+ *                         share and ranks after every capped one, by slots used —
+ *                         "nobody set a cap" is not "this panel is empty".
+ */
+export const PANEL_BALANCING_STRATEGIES = ['LEAST_USED', 'LOWEST_UTILISATION'] as const;
+export type PanelBalancingStrategy = (typeof PANEL_BALANCING_STRATEGIES)[number];
+
+/**
+ * Which rule separated the chosen panel from the runner-up — the "why" an operator
+ * reads. In ranking order: health, then load, then the home panel, then the id.
+ *
+ *   `SOLE_CANDIDATE`        only one panel of the group could take the account.
+ *   `HEALTH`                the chosen one was healthy and fresh, the next was not.
+ *   `LOAD`                  the strategy's load figure decided.
+ *   `HOME_PREFERENCE`       equal on everything, and the chosen one is the product's own.
+ *   `PANEL_ID`              equal on everything; the lowest id, so the answer is stable.
+ *   `NO_ELIGIBLE_CANDIDATE` nothing in the group may take a new account; the draft keeps
+ *                           its home panel and confirmation refuses it for the home's
+ *                           own reason. Never a silent placement on an ineligible panel.
+ */
+export const PANEL_PLACEMENT_DECIDERS = [
+  'SOLE_CANDIDATE',
+  'HEALTH',
+  'LOAD',
+  'HOME_PREFERENCE',
+  'PANEL_ID',
+  'NO_ELIGIBLE_CANDIDATE',
+] as const;
+export type PanelPlacementDecider = (typeof PANEL_PLACEMENT_DECIDERS)[number];
+
+/** Why a group member was not a candidate at all. `INELIGIBLE` carries the evaluator's reason. */
+export const PANEL_PLACEMENT_EXCLUSIONS = [
+  'INELIGIBLE',
+  'PROVIDER_MISMATCH',
+  'NOT_ENTITLED',
+] as const;
+export type PanelPlacementExclusion = (typeof PANEL_PLACEMENT_EXCLUSIONS)[number];
+
+/**
  * How long a capacity reservation is held before it expires on its own.
  *
  * A reservation is taken before the customer pays and released when they do,

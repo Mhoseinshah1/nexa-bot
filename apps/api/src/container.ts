@@ -23,6 +23,7 @@ import {
   faqNumberMarker,
   isSystemContext,
   systemJobActor,
+  type PanelBalancingStrategy,
 } from '@nexa/contracts';
 import type {
   AdminId,
@@ -68,6 +69,8 @@ import {
 import type { MonitorCadence } from './modules/platform/panels/domain/monitor-cadence.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
 import { PanelService } from './modules/platform/panels/application/panel.service.js';
+import { PanelPlacementService } from './modules/platform/panels/application/panel-placement.js';
+import { DrizzleOrderPlacementRepository } from './modules/platform/panels/infrastructure/drizzle-order-placement.repository.js';
 import { PanelHealthDashboardService } from './modules/platform/panels/application/panel-health-dashboard.js';
 import { DrizzlePanelFleetStatsReader } from './modules/platform/panels/infrastructure/drizzle-panel-fleet-stats.js';
 import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
@@ -1761,6 +1764,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     serviceAdapterExists: (providerType) =>
       SERVICE_PROVIDER_TYPES.includes(providerType as (typeof SERVICE_PROVIDER_TYPES)[number]),
   });
+  /*
+   * Phase C3: automatic balancing over the SAME sales gate — its verdicts are the only
+   * "may place here" — read by the draft (where an account goes) and by the catalogue
+   * (what may be offered). The flag and the strategy are read in the caller's transaction.
+   */
+  const panelPlacement = new PanelPlacementService({
+    panels: panelRepository,
+    sales: panelSalesGate,
+    enabled: (scope, tx) => featureFlagResolver.isEnabled(scope, 'panel_auto_balancing', tx),
+    strategy: async (scope, tx) =>
+      (await settingsResolver.resolve(scope, 'panels.balancing.strategy', tx))
+        .value as PanelBalancingStrategy,
+    clock,
+  });
+  const orderPlacementRepository = new DrizzleOrderPlacementRepository(database.db);
 
   /*
    * Constructed HERE rather than beside `OrderService`, which was its only reader
@@ -1773,6 +1791,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const productService = new ProductService({
     resellers: resellerService,
     panelSales: panelSalesGate,
+    placement: panelPlacement,
     repository: productRepository,
     /*
      * Membership only, never a panel projection.
@@ -2130,6 +2149,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const orderService = new OrderService({
     customService: { pricer: customServicePricer, terms: orderCustomServiceTermsRepository },
+    placement: panelPlacement,
+    placements: orderPlacementRepository,
     pricing: pricingService,
     resellers: resellerService,
     discountCodes: discountCodeCaptureRepository,

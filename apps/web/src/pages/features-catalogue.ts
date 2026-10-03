@@ -166,6 +166,15 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // Off: new drafts go to their product's own panel again; nothing already placed moves.
+  panel_auto_balancing: {
+    title: 'web.feature_panel_auto_balancing_title',
+    summary: 'web.feature_panel_auto_balancing_summary',
+    disableEffect: null,
+    // On only changes where NEW drafts land, among panels an operator grouped; it stops
+    // nobody, so one click.
+    confirmEnable: null,
+  },
   // Off withdraws the button; orders already confirmed are still paid for and delivered.
   custom_service: {
     title: 'web.feature_custom_service_title',
