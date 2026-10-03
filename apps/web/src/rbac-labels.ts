@@ -101,6 +101,10 @@ export const PERMISSION_LABELS: Record<PermissionKey, WebKey> = {
   'panels.drain': 'web.perm_panels_drain',
   'services.grant': 'web.perm_services_grant',
   'services.mass.status': 'web.perm_services_mass_status',
+  // Phase E3: incidents and maintenance.
+  'incidents.view': 'web.perm_incidents_view',
+  'incidents.manage': 'web.perm_incidents_manage',
+  'incidents.notify': 'web.perm_incidents_notify',
 };
 
 /** Persian names for the catalogue's domains (a permission's `resource`). */
@@ -131,4 +135,5 @@ export const PERMISSION_DOMAIN_LABELS: Readonly<Record<string, WebKey>> = {
   tenant: 'web.perm_domain_tenant',
   maintenance: 'web.perm_domain_maintenance',
   terms: 'web.perm_domain_terms',
+  incidents: 'web.perm_domain_incidents',
 };
