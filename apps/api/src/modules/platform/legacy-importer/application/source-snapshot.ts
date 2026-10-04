@@ -88,6 +88,12 @@ export interface LegacySnapshot {
   /** Invoices whose `Status` is one of `LEGACY_LIVE_STATUSES`: the service candidates. */
   readonly liveInvoices: readonly LegacyInvoiceRow[];
   readonly productCodes: ReadonlySet<string>;
+  /**
+   * The source carries the SYNTHETIC marker (`nexa_synthetic_fixture`). Forces the report's
+   * evidence class to `synthetic` and is refused against a production-like target.
+   */
+  readonly synthetic: boolean;
+  readonly syntheticLabel: string | null;
   /** `user.Balance`'s DATA_TYPE (Q4's reading note asks for it): schema evidence. */
   readonly balanceColumnType: string | null;
 }
@@ -164,10 +170,14 @@ class TableDigest {
 export function legacyFingerprint(
   schemaHash: string,
   tables: Readonly<Record<LegacySourceTableName, LegacyTableEvidence>>,
+  synthetic = false,
 ): string {
   return sha256Hex(
     JSON.stringify({
       v: LEGACY_FINGERPRINT_VERSION,
+      // Only when set, so a real archive's fingerprint is unchanged by the marker's
+      // existence; a synthetic copy of the same rows never fingerprints as the real thing.
+      ...(synthetic ? { synthetic: true } : {}),
       schema: schemaHash,
       tables: {
         user: tables.user,
@@ -205,6 +215,7 @@ export async function readFromSession(
   session: LegacySourceSession,
 ): Promise<LegacySnapshot> {
   const schema = await session.columns();
+  const syntheticLabel = await session.syntheticMarker();
   const schemaHash = legacySchemaHash(schema);
   const userColumns = presentColumns(schema, 'user');
   const invoiceColumns = presentColumns(schema, 'invoice');
@@ -299,7 +310,9 @@ export async function readFromSession(
   return {
     label,
     descriptor: session.descriptor,
-    fingerprint: legacyFingerprint(schemaHash, tables),
+    fingerprint: legacyFingerprint(schemaHash, tables, syntheticLabel !== null),
+    synthetic: syntheticLabel !== null,
+    syntheticLabel,
     schemaHash,
     tables,
     users: withChecksums,

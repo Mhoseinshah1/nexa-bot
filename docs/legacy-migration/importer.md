@@ -14,7 +14,8 @@ Code: `apps/api/src/legacy-import.cli.ts` and
 ```bash
 pnpm legacy-import MODE --tenant TENANT --source SOURCE --target TARGET --panel-map FILE \
   [--format md|json] [--out DIR] [--inventory-page-size N] [--abort-running] \
-  [--source-password-env NAME] [--allow-production-target]
+  [--source-password-env NAME] [--allow-production-target] \
+  [--evidence-class synthetic|staging|production]   # required for import, resume, report
 # from source: pnpm legacy-import:dev …   (MODE may also be given as --mode MODE)
 ```
 
@@ -54,6 +55,20 @@ confirmation, so one exported for a rehearsal cannot arm a production run and on
 a shell profile cannot arm another tenant. A `fixture:` source is refused against a
 production-like target whatever is acknowledged. The guard runs before any connection
 (`production-guard.ts`, `tests/unit/legacy-importer-guard.test.ts`, mutation-checked).
+
+### Evidence class (a mislabel is impossible)
+
+`--evidence-class synthetic|staging|production` is required for `import`, `resume` and
+`report`, and decided against the SOURCE, not against how it was named: every synthetic
+dataset loads a `nexa_synthetic_fixture` table beside its rows (the fixture's own SQL, and
+the `fixture:` source), which the snapshot reads in the same READ ONLY session. A source
+carrying the marker is `synthetic` — a claim of `staging`/`production` is refused, and a
+production-like target is refused outright, in every mode; a source without it can never
+be called `synthetic`; `production` needs a production-like target. The service checks the
+label again, so no caller but the CLI can bypass it. The marker also enters the fingerprint
+(only when present), so a synthetic copy never fingerprints as the real rows.
+
+`--help` / `-h` prints the usage on stdout and exits 0; a usage error exits 64 on stderr.
 
 ## 3. The source (read-only) and the fingerprint
 
@@ -122,10 +137,40 @@ Service candidates (live invoices) fall in exactly one category, in this order:
 `CUSTOMER_NOT_IMPORTED`, the matcher's outcomes (`TEST_PANEL_SKIPPED`, `INVALID_USERNAME`,
 `INVENTORY_INCOMPLETE`, `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`, `PANEL_UNMAPPED`,
 `USERNAME_CASE_COLLISION`), `UNSUPPORTED_SHAPE`, `PRODUCT_UNRESOLVED`, `ADOPTION_ELIGIBLE`.
-The importer records its own decisions on the invoice's map row (`INVOICE_MAP_DECISIONS`);
-the four whose closed codes arrive with MAP-REVIEW's queue (`CUSTOMER_MISSING`,
-`UNSUPPORTED_SHAPE`, `PRODUCT_MAPPING_UNRESOLVED`) are counted, not misfiled, and a unit
-test fails the day those codes reach main so the rule is flipped. Eligible rows are P6's.
+Every decided category is recorded on the invoice's map row, as the Manual Review Queue
+(Item 9) expects it: the matcher's outcomes through the queue's own translation,
+`decisionForLegacyMatch` (test panel → `SKIPPED/TEST_PANEL`, invalid username →
+`INVALID_SOURCE_ROW`, incomplete inventory → `INVENTORY_INCOMPLETE`, the rest by their
+reason); the others by `INVOICE_MAP_DECISIONS` — live trial `SKIPPED/HISTORY_NOT_IMPORTED`,
+`INVALID_SOURCE_ROW`, orphan and customer-not-imported `CUSTOMER_MISSING`,
+`UNSUPPORTED_SHAPE`, `PRODUCT_MAPPING_UNRESOLVED`. Every `MANUAL_REVIEW` row carries a
+closed review reason and enters review `OPEN`. **`INVOICE_KEY_INVALID` is not a row**: the
+map's key CHECK cannot hold its id, so it stays a counted category, reported under that
+name in the manual-review total. Eligible rows are P6's, written with the adoption.
+
+**A row a person closed** (DISMISSED, or RESOLVED other than `RETRY_AFTER_FIX`) is
+`REVIEW_CLOSED` to the importer: decided BEFORE any write (`resumeDecision`), counted
+(`customers.reviewClosed`, `services.map.reviewClosed`, `services.adoption.REVIEW_CLOSED`),
+never retried and never overwritten — even when the source row changed. A user so closed
+gets no customer, opening or trial; an eligible invoice so closed is not handed to P6.
+`RETRY_AFTER_FIX` invites the next run to decide again (tested both ways).
+
+### Review subcommand (terminal only)
+
+```bash
+pnpm legacy-import review counts  --tenant T --target TARGET [--run RUN_ID]
+pnpm legacy-import review list    --tenant T --target TARGET [--table user|invoice] \
+     [--reason R] [--state OPEN|RESOLVED|DISMISSED] [--run RUN_ID] [--after TABLE:ID] [--limit 1..500]
+pnpm legacy-import review resolve --tenant T --target TARGET --table T --legacy-id ID \
+     --expected-reason R --resolution RETRY_AFTER_FIX|HANDLED_OUTSIDE_IMPORT|WILL_NOT_IMPORT|TEST_OR_INVALID_DATA|DUPLICATE_RECORD
+pnpm legacy-import review reopen  --tenant T --target TARGET --table T --legacy-id ID
+```
+
+Over `LegacyReviewQueueService` (`maintenance.run`, as `SYSTEM_JOB`). `list` prints legacy
+ids — a `user` row's id is a Telegram id — so the subcommand writes to stdout ONLY: `--out`
+and `--format` are refused, and nothing it prints reaches a report, an audit row or an event
+(the queue audits a row by its uuid). The production guard applies to its target as to
+every mode. Each `resolve`/`reopen` invocation uses a fresh idempotency key.
 
 ### Actors
 
@@ -165,7 +210,8 @@ first when the source is a fixture). `report --format json` prints the document 
 resumes counted from `legacy_import.run.resume` audit rows), source (fingerprint, digests,
 server version, `Balance` type), customers, wallet, services, products, trials,
 `provider.reads` / `provider.writes` (requests the read guard refused — 0 by construction),
-manual review by closed reason, and the C1/C3/W1/W4/W5/S3/P3 equations.
+manual review by closed reason (every `MANUAL_REVIEW` map row, user and invoice, plus
+`INVOICE_KEY_INVALID` and `ADOPTION_PENDING_P6`), and the C1/C3/W1/W4/W5/S3/P3 equations.
 `wallet.preImportTotalMinor` is the NEXA-native total (every entry but the openings), so
 `pre + imported = expected = actual` holds even with activity after the import.
 

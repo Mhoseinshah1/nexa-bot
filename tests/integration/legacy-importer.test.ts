@@ -7,10 +7,13 @@ import {
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
+  type PanelId,
   type ProductCategoryId,
   type ProductId,
 } from '@nexa/contracts';
 import { parseArgs, runMode } from '../../apps/api/src/legacy-import.cli';
+import { parseReviewArgs, runReview } from '../../apps/api/src/legacy-import-review';
+import { DrizzleLegacyImportRepository } from '../../apps/api/src/modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import {
   LegacyImportInterrupted,
@@ -127,7 +130,8 @@ describe('Migration P7: the legacy importer', () => {
         description: null,
         audience: 'EVERYONE',
         sortOrder: 1,
-        panelId: null,
+        // Bound to a panel and categorised: a tariff is a product a customer can buy today.
+        panelId: panelAId as PanelId,
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 30n * GIB, deviceLimit: null },
         price: money(200_000n, 'IRT'),
@@ -285,18 +289,33 @@ describe('Migration P7: the legacy importer', () => {
     ).toBe(2);
     expect(
       await count('legacy_import_map', "legacy_table = 'invoice' AND status = 'MANUAL_REVIEW'"),
-    ).toBe(7);
+    ).toBe(12);
+    // Every review row carries its closed review reason and enters review OPEN.
+    expect(
+      await count(
+        'legacy_import_map',
+        "legacy_table = 'invoice' AND status = 'MANUAL_REVIEW' AND review_state = 'OPEN'",
+      ),
+    ).toBe(12);
+    for (const [reason, n] of [
+      ['CUSTOMER_MISSING', 2],
+      ['UNSUPPORTED_SHAPE', 2],
+      ['PRODUCT_MAPPING_UNRESOLVED', 1],
+      ['PROVIDER_MISSING', 2],
+      ['INVALID_SOURCE_ROW', 2],
+    ] as const) {
+      expect(
+        await count('legacy_import_map', `legacy_table = 'invoice' AND reason_code = '${reason}'`),
+        reason,
+      ).toBe(n);
+    }
     expect(
       await count('legacy_import_map', "legacy_table = 'invoice' AND status = 'IMPORTED'"),
     ).toBe(0);
     expect(applied.services.map).toMatchObject({
-      INSERTED: 9,
+      INSERTED: 14,
       keyInvalid: 1,
-      pendingReasonCode: {
-        CUSTOMER_MISSING: 2,
-        UNSUPPORTED_SHAPE: 2,
-        PRODUCT_MAPPING_UNRESOLVED: 1,
-      },
+      reviewClosed: 0,
     });
     expect(await count('legacy_product_shapes')).toBe(6);
     expect(await count('legacy_product_shapes', "tariff_status = 'RESOLVED'")).toBe(5);
@@ -331,7 +350,7 @@ describe('Migration P7: the legacy importer', () => {
     expect(again.openings).toMatchObject({ POSTED: 0, ALREADY_POSTED: 6 });
     expect(again.trials).toMatchObject({ APPLIED: 0, REPLAYED: users.imported });
     expect(again.products).toMatchObject({ created: 0, existing: 6 });
-    expect(again.services.map).toMatchObject({ INSERTED: 0, UNCHANGED: 9, REFUSED: 0 });
+    expect(again.services.map).toMatchObject({ INSERTED: 0, UNCHANGED: 14, REFUSED: 0 });
     expect(await count('wallet_entries')).toBe(6);
     expect(await count('customers')).toBe(1 + users.newCustomers);
     expect(await walletTotal()).toBe(preTotal + users.legacyBalanceSumMinor);
@@ -347,7 +366,7 @@ describe('Migration P7: the legacy importer', () => {
 
     const finalReport = await importer().finalReport({
       ...input('report', snap),
-      targetClass: 'staging',
+      evidenceClass: 'synthetic',
     });
     // C3 does not hold on the synthetic set on purpose: it carries one non-Telegram id.
     expect(finalReport.verdict).toBe('COMPLETED_WITH_DISCREPANCY');
@@ -453,7 +472,7 @@ describe('Migration P7: the legacy importer', () => {
     expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(1);
     const after = await importer().finalReport({
       ...input('report', snap),
-      targetClass: 'staging',
+      evidenceClass: 'synthetic',
     });
     expect((after.final as Record<string, any>)['run']).toMatchObject({
       resumes: 1,
@@ -477,7 +496,7 @@ describe('Migration P7: the legacy importer', () => {
     const tenantId = await importer().resolveTenant('acme');
     expect(tenantId).toBe(tenantA.tenantId as unknown as string);
     expect(await importer().resolveTenant('no-such-tenant')).toBeNull();
-    const context = { tenantId: tenantId as string, targetClass: 'staging' as const };
+    const context = { tenantId: tenantId as string, productionLikeTarget: false };
     const audit = await runMode(
       importer(),
       parseArgs(['audit', ...base]),
@@ -489,7 +508,7 @@ describe('Migration P7: the legacy importer', () => {
     expect(audit?.mode).toBe('AUDIT');
     await runMode(
       importer(),
-      parseArgs(['import', ...base]),
+      parseArgs(['import', ...base, '--evidence-class', 'synthetic']),
       connector,
       mappingText,
       'corr-i',
@@ -497,7 +516,7 @@ describe('Migration P7: the legacy importer', () => {
     );
     const report = await runMode(
       importer(),
-      parseArgs(['report', ...base, '--format', 'json']),
+      parseArgs(['report', ...base, '--format', 'json', '--evidence-class', 'synthetic']),
       connector,
       mappingText,
       'corr-r',
@@ -523,8 +542,37 @@ describe('Migration P7: the legacy importer', () => {
       ].sort(),
     );
     expect(final['provider'].writes).toBe(0);
+    expect(final['evidenceClass']).toBe('synthetic');
+    // A synthetic source can never be labelled staging or production, whatever is claimed.
+    for (const claim of ['staging', 'production']) {
+      await expect(
+        runMode(
+          importer(),
+          parseArgs(['report', ...base, '--evidence-class', claim]),
+          connector,
+          mappingText,
+          'corr-x',
+          context,
+        ),
+      ).rejects.toThrow(/SYNTHETIC marker/u);
+    }
+    // And never run against a production-like target, even read-only.
+    await expect(
+      runMode(importer(), parseArgs(['audit', ...base]), connector, mappingText, 'corr-p', {
+        ...context,
+        productionLikeTarget: true,
+      }),
+    ).rejects.toThrow(/looks like production/u);
+    // The service refuses the mislabel too, for any caller that is not the CLI.
+    await expect(
+      importer().finalReport({
+        ...input('report', await snapshot()),
+        evidenceClass: 'staging',
+      }),
+    ).rejects.toThrow(/SYNTHETIC marker/u);
     expectOnlyReads();
   });
+
   it('the wallet equation holds with a pre-existing NEXA balance and activity after the import', async () => {
     const existingId = (
       await ctx.container.database.db.execute<{ id: string }>(
@@ -555,13 +603,142 @@ describe('Migration P7: the legacy importer', () => {
     });
     const report = await importer().finalReport({
       ...input('report', snap),
-      targetClass: 'staging',
+      evidenceClass: 'synthetic',
     });
     const final = report.final as Record<string, any>;
     expect(final['wallet'].preImportTotalMinor).toBe('10500');
     expect(final['reconciliation'].find((r: { id: string }) => r.id === 'W1')).toMatchObject({
       holds: true,
     });
+  });
+
+  it('a row a person closed in the review queue is counted and never retried, even when the source changes', async () => {
+    await importer().apply({ ...input('import', await snapshot()), mode: 'IMPORT' });
+    const queue = ctx.container.legacyReviewQueue;
+    const actor = importerActor('reviewer');
+    // Dismiss the user whose balance was unreadable, and every CUSTOMER_MISSING invoice.
+    await queue.resolve(tenantA, actor, {
+      legacyTable: 'user',
+      legacyId: '100000004',
+      expectedReasonCode: 'INVALID_SOURCE_ROW',
+      resolutionCode: 'WILL_NOT_IMPORT',
+      idempotencyKey: 'dismiss-user-4',
+    });
+    const missing = await ctx.container.database.db.execute<{ legacy_id: string }>(sql`
+      SELECT legacy_id FROM legacy_import_map
+       WHERE legacy_table = 'invoice' AND reason_code = 'CUSTOMER_MISSING' ORDER BY legacy_id`);
+    expect(missing.rows).toHaveLength(2);
+    for (const row of missing.rows) {
+      await queue.resolve(tenantA, actor, {
+        legacyTable: 'invoice',
+        legacyId: row.legacy_id,
+        expectedReasonCode: 'CUSTOMER_MISSING',
+        resolutionCode: 'WILL_NOT_IMPORT',
+        idempotencyKey: `dismiss-${row.legacy_id}`,
+      });
+    }
+    // The archive changes under both: the user's balance becomes readable, the orphan's
+    // username changes. A rerun must not import the user nor rewrite the invoice row.
+    const changed = buildSyntheticLegacyDataset();
+    const drifted = {
+      ...changed,
+      tables: {
+        ...changed.tables,
+        user: changed.tables.user.map((u) =>
+          u['id'] === '100000004' ? { ...u, Balance: '45' } : u,
+        ),
+        invoice: changed.tables.invoice.map((i) =>
+          i['id_user'] === '999999999' ? { ...i, username: 'svc_renamed' } : i,
+        ),
+      },
+    };
+    const report = await importer().apply({
+      ...input('rerun', await snapshot(drifted)),
+      mode: 'IMPORT',
+    });
+    const applied = (report.sections as Record<string, any>)['applied'];
+    expect(applied.customers.reviewClosed).toBe(1);
+    expect(applied.services.map.reviewClosed).toBe(1);
+    expect(await count('customers', "telegram_user_id = '100000004'")).toBe(0);
+    expect(await count('wallet_entries', "reference = 'legacy:opening:100000004'")).toBe(0);
+    expect(
+      await count('legacy_import_map', "review_state = 'DISMISSED' AND status = 'MANUAL_REVIEW'"),
+    ).toBe(3);
+    // A RETRY_AFTER_FIX resolution, by contrast, invites the next run to decide again.
+    await queue.reopen(tenantA, actor, {
+      legacyTable: 'user',
+      legacyId: '100000004',
+      idempotencyKey: 'reopen-4',
+    });
+    await queue.resolve(tenantA, actor, {
+      legacyTable: 'user',
+      legacyId: '100000004',
+      expectedReasonCode: 'INVALID_SOURCE_ROW',
+      resolutionCode: 'RETRY_AFTER_FIX',
+      idempotencyKey: 'retry-4',
+    });
+    const retried = await importer().apply({
+      ...input('retry', await snapshot(drifted)),
+      mode: 'IMPORT',
+    });
+    expect((retried.sections as Record<string, any>)['applied'].customers.reviewClosed).toBe(0);
+    expect(await count('customers', "telegram_user_id = '100000004'")).toBe(1);
+    expect(await count('wallet_entries', "reference = 'legacy:opening:100000004'")).toBe(1);
+  });
+
+  it('the review subcommand pages the real queue to the terminal and resolves and reopens a row', async () => {
+    await importer().apply({ ...input('import', await snapshot()), mode: 'IMPORT' });
+    const lines: string[] = [];
+    let n = 0;
+    const run = (argv: string[]) =>
+      runReview(
+        ctx.container.legacyReviewQueue,
+        parseReviewArgs([
+          argv[0] as string,
+          '--tenant',
+          'acme',
+          '--target',
+          'nexa_p4_import',
+          ...argv.slice(1),
+        ]),
+        tenantA,
+        importerActor('review-cli'),
+        () => `cli-review-test-${String((n += 1))}`,
+        (line) => lines.push(line),
+      );
+    await run(['counts']);
+    expect(lines[0]).toMatch(/^review rows 14 {2}open 14 /u);
+    lines.length = 0;
+    await run(['list', '--limit', '5']);
+    expect(lines[0]).toBe('table\tlegacy_id\treason\tstate\tresolution\tattempts\tupdated_at');
+    expect(lines).toHaveLength(7);
+    const next = lines[6]?.replace('next page: --after ', '') ?? '';
+    expect(next).toMatch(/^(invoice|user):/u);
+    lines.length = 0;
+    await run(['list', '--limit', '500', '--after', next]);
+    expect(lines.at(-1)).toBe('(last page)');
+    expect(lines).toHaveLength(1 + 9 + 1);
+    lines.length = 0;
+    await run([
+      'resolve',
+      '--table',
+      'user',
+      '--legacy-id',
+      '100000004',
+      '--expected-reason',
+      'INVALID_SOURCE_ROW',
+      '--resolution',
+      'WILL_NOT_IMPORT',
+    ]);
+    expect(lines).toEqual(['RESOLVED: user row is DISMISSED (WILL_NOT_IMPORT)']);
+    lines.length = 0;
+    await run(['reopen', '--table', 'user', '--legacy-id', '100000004']);
+    expect(lines).toEqual(['REOPENED: user row is OPEN']);
+    // Nothing the subcommand printed went into an audit row: the queue audits by uuid.
+    const audited = await ctx.container.database.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM audit_logs
+       WHERE coalesce(after::text, '') LIKE '%100000004%' OR coalesce(entity_id, '') = '100000004'`);
+    expect(audited.rows[0]?.n).toBe(0);
   });
 
   it('resume with nothing RUNNING is refused, and changes nothing', async () => {
@@ -621,6 +798,55 @@ describe('Migration P7: the legacy importer', () => {
     expect(failed).toEqual(
       expect.arrayContaining(['wallet.openings_sum', 'wallet.openings_count']),
     );
+  });
+
+  it('an eligible invoice whose map row a person closed is not handed to P6', async () => {
+    // P6 records eligible rows itself; stand in for an earlier run that routed the first
+    // invoice (svc_a1 on panel A) to review, and a person who dismissed it.
+    const runs = new DrizzleLegacyImportRepository(ctx.container.database.db);
+    const runId = ctx.container.ids.uuid();
+    const snap = await snapshot();
+    const first = snap.liveInvoices[0];
+    if (first === undefined) throw new Error('no invoice');
+    await ctx.container.uow.run(tenantA, async (tx) => {
+      const now = ctx.container.clock.now();
+      await runs.startOrResume(
+        tenantA,
+        { id: runId, mode: 'APPLY', sourceFingerprint: '0'.repeat(64), codeVersion: null, now },
+        tx,
+      );
+      await runs.recordDecision(
+        tenantA,
+        {
+          runId,
+          legacyTable: 'invoice',
+          legacyId: first.idInvoice,
+          checksum: first.checksum,
+          decision: { status: 'MANUAL_REVIEW', reasonCode: 'SUBSCRIPTION_REF_BLOCKED' },
+          now,
+        },
+        tx,
+      );
+      await runs.finish(tenantA, runId, { status: 'COMPLETED' }, now, tx);
+    });
+    await ctx.container.legacyReviewQueue.resolve(tenantA, importerActor('reviewer'), {
+      legacyTable: 'invoice',
+      legacyId: first.idInvoice,
+      expectedReasonCode: 'SUBSCRIPTION_REF_BLOCKED',
+      resolutionCode: 'WILL_NOT_IMPORT',
+      idempotencyKey: 'dismiss-first',
+    });
+    const seen: string[] = [];
+    const adoption: LegacyAdoptionPort = {
+      adopt: (_scope, _actor, candidate) => {
+        seen.push(candidate.legacyInvoiceId);
+        return Promise.resolve({ kind: 'ADOPTED' as const });
+      },
+    };
+    const report = await importer(adoption).apply({ ...input('adopt', snap), mode: 'IMPORT' });
+    const adopted = (report.sections as Record<string, any>)['applied'].services.adoption;
+    expect(adopted).toMatchObject({ REVIEW_CLOSED: 1, ADOPTED: 3 });
+    expect(seen).not.toContain(first.idInvoice);
   });
 
   it('with P6 wired, every eligible candidate reaches the adoption port with a resolved product', async () => {

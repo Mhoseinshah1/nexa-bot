@@ -2,11 +2,7 @@ import type {
   LegacyImportRunRecord,
   LegacyImportSummaryRow,
 } from '../../legacy-import/application/legacy-import-ports.js';
-import {
-  INVOICE_MAP_DECISIONS,
-  parseLegacyBalance,
-  type ServiceCandidateCategory,
-} from './decisions.js';
+import { parseLegacyBalance, type ServiceCandidateCategory } from './decisions.js';
 import type { PlanTallies } from './plan.js';
 import type { LegacyRunInputs } from './ports.js';
 import type { LegacySnapshot } from './source-snapshot.js';
@@ -111,9 +107,15 @@ export function buildFinalReport(input: FinalReportInput) {
     mappingMissing: cat('PANEL_UNMAPPED'),
     productUnresolved: cat('PRODUCT_UNRESOLVED'),
     unsupported: cat('UNSUPPORTED_SHAPE') + cat('INVALID_USERNAME') + cat('INVALID_SOURCE_ROW'),
+    // An incomplete inventory is held for review (INVENTORY_INCOMPLETE) and decided again by
+    // a rerun with a complete one; nothing is a failure the importer itself could not finish.
     manualReview:
-      cat('ORPHAN') + cat('CUSTOMER_NOT_IMPORTED') + cat('INVOICE_KEY_INVALID') + pendingAdoption,
-    failed: cat('INVENTORY_INCOMPLETE'),
+      cat('ORPHAN') +
+      cat('CUSTOMER_NOT_IMPORTED') +
+      cat('INVOICE_KEY_INVALID') +
+      cat('INVENTORY_INCOMPLETE') +
+      pendingAdoption,
+    failed: 0,
   };
   const serviceSum =
     services.adopted +
@@ -127,21 +129,15 @@ export function buildFinalReport(input: FinalReportInput) {
     services.manualReview +
     services.failed;
 
-  // manual review by closed reason: user rows from the map, invoice rows by category
+  // Manual review by closed reason: every MANUAL_REVIEW map row (user and invoice, the
+  // review queue's own record), plus the two kinds that are not rows — an invoice key the
+  // map cannot hold, and eligible candidates P6 has not adopted yet.
   const byReason: Record<string, number> = {};
   const add = (reason: string, n: number) => {
     if (n > 0) byReason[reason] = (byReason[reason] ?? 0) + n;
   };
-  for (const r of map)
-    if (r.legacyTable === 'user' && r.status === 'MANUAL_REVIEW')
-      add(r.reasonCode ?? 'UNKNOWN', r.count);
-  for (const [category, n] of Object.entries(c) as [ServiceCandidateCategory, number][]) {
-    const rule = INVOICE_MAP_DECISIONS[category];
-    if (rule.kind === 'RECORD' && rule.status === 'MANUAL_REVIEW') add(rule.reasonCode, n);
-    if (rule.kind === 'PENDING_REASON_CODE') add(rule.reason, n);
-    if (rule.kind === 'NOT_RECORDED_HERE' && rule.why === 'KEY_INVALID')
-      add('INVOICE_KEY_INVALID', n);
-  }
+  for (const r of map) if (r.status === 'MANUAL_REVIEW') add(r.reasonCode ?? 'UNKNOWN', r.count);
+  add('INVOICE_KEY_INVALID', cat('INVOICE_KEY_INVALID'));
   add('ADOPTION_PENDING_P6', pendingAdoption);
   const reviewTotal = Object.values(byReason).reduce((a, b) => a + b, 0);
 

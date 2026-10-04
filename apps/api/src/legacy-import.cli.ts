@@ -7,6 +7,12 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { createContainer } from './container.js';
+import {
+  REVIEW_USAGE,
+  ReviewUsageError,
+  parseReviewArgs,
+  runReview,
+} from './legacy-import-review.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import {
   runLegacyEvidence,
@@ -22,7 +28,10 @@ import {
 } from './modules/platform/legacy-importer/application/panel-mapping.js';
 import {
   ALLOW_PRODUCTION_FLAG,
+  EVIDENCE_CLASSES,
   TARGET_ACK_ENV,
+  decideEvidenceClass,
+  type EvidenceClass,
   evaluateProductionGuard,
   type TargetIdentity,
 } from './modules/platform/legacy-importer/application/production-guard.js';
@@ -67,6 +76,7 @@ export type Mode = (typeof MODES)[number];
 
 export const USAGE = [
   'usage: legacy-import MODE --tenant TENANT --source SOURCE --target TARGET --panel-map FILE',
+  '                     [--evidence-class synthetic|staging|production]',
   '                     [--format md|json] [--out DIR] [--inventory-page-size N]',
   '                     [--abort-running] [--source-password-env NAME]',
   `                     [${ALLOW_PRODUCTION_FLAG}]`,
@@ -79,6 +89,8 @@ export const USAGE = [
   '  TARGET   env:NAME                 the NEXA postgres:// URL read from the variable NAME',
   '           postgres://USER@HOST:PORT/DB  (no password here; PGPASSWORD is honoured)',
   '           DBNAME                   the database DATABASE_URL names, typed out to confirm it',
+  '',
+  '  Review queue (terminal only): legacy-import review counts|list|resolve|reopen …',
   '',
   '  Nothing defaults. A production-like target also needs',
   `  ${ALLOW_PRODUCTION_FLAG} AND ${TARGET_ACK_ENV}=<ack printed by the refusal>.`,
@@ -97,6 +109,8 @@ export interface Args {
   readonly abortRunning: boolean;
   readonly inventoryPageSize: number | null;
   readonly format: 'md' | 'json';
+  /** Required for import, resume and report; checked against the source's marker. */
+  readonly evidenceClass: EvidenceClass | null;
 }
 
 const VALUE_FLAGS = new Set([
@@ -109,6 +123,7 @@ const VALUE_FLAGS = new Set([
   '--out',
   '--inventory-page-size',
   '--format',
+  '--evidence-class',
 ]);
 const BOOLEAN_FLAGS = new Set([ALLOW_PRODUCTION_FLAG, '--abort-running']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -189,6 +204,16 @@ export function parseArgs(argv: readonly string[]): Args {
   if (!/^(env:|postgres:\/\/|postgresql:\/\/)/u.test(target) && !DATABASE_NAME.test(target)) {
     throw new UsageError('--target must be env:NAME, postgres://… or a database name.');
   }
+  const evidenceClass = values.get('--evidence-class') ?? null;
+  if (evidenceClass !== null && !(EVIDENCE_CLASSES as readonly string[]).includes(evidenceClass)) {
+    throw new UsageError(`--evidence-class must be one of ${EVIDENCE_CLASSES.join(', ')}.`);
+  }
+  if (evidenceClass === null && (mode === 'import' || mode === 'resume' || mode === 'report')) {
+    throw new UsageError(
+      `--evidence-class is required for ${mode}: synthetic, staging or production. It is checked ` +
+        'against the source (a SYNTHETIC-marked source is synthetic, nothing else).',
+    );
+  }
   const format = values.get('--format') ?? 'md';
   if (format !== 'md' && format !== 'json') throw new UsageError('--format must be md or json.');
   const sourcePasswordEnv = values.get('--source-password-env') ?? null;
@@ -223,6 +248,7 @@ export function parseArgs(argv: readonly string[]): Args {
     abortRunning,
     inventoryPageSize,
     format,
+    evidenceClass: evidenceClass as EvidenceClass | null,
   };
 }
 
@@ -270,7 +296,7 @@ export function targetIdentity(url: string): TargetIdentity {
 
 /** The guard, as the CLI applies it. Throws `UsageError` with the refusal. */
 export function guardTarget(
-  args: Args,
+  args: Pick<Args, 'tenant' | 'allowProductionTarget'> & { readonly source?: string },
   targetUrl: string,
   env: NodeJS.ProcessEnv,
 ): TargetIdentity & { readonly productionLike: boolean } {
@@ -280,7 +306,7 @@ export function guardTarget(
     tenantId: args.tenant,
     env: { NODE_ENV: env['NODE_ENV'], [TARGET_ACK_ENV]: env[TARGET_ACK_ENV] },
     allowProductionFlag: args.allowProductionTarget,
-    syntheticSource: args.source.startsWith('fixture:'),
+    syntheticSource: args.source?.startsWith('fixture:') ?? false,
   });
   if (!verdict.allowed) throw new UsageError(verdict.message);
   return { ...identity, productionLike: verdict.productionLike };
@@ -332,7 +358,7 @@ export async function runMode(
   connector: LegacySourceConnector,
   mappingText: string,
   actorCorrelation: string,
-  context: { readonly tenantId: string; readonly targetClass: 'staging' | 'production' },
+  context: { readonly tenantId: string; readonly productionLikeTarget: boolean },
 ): Promise<LegacyImportReport | null> {
   const scope: TenantContext = { tenantId: context.tenantId as never, botInstanceId: null };
   const actor = systemJobActor(`legacy-import:${args.mode}`, actorCorrelation as CorrelationId);
@@ -349,6 +375,14 @@ export async function runMode(
   } finally {
     await session.close();
   }
+  // The evidence class is decided against the source's OWN marker, read in the same
+  // snapshot: a synthetic dataset loaded into MariaDB is synthetic whatever is claimed.
+  const label = decideEvidenceClass({
+    claim: args.evidenceClass,
+    syntheticSource: snapshot.synthetic,
+    productionLikeTarget: context.productionLikeTarget,
+  });
+  if (!label.ok) throw new UsageError(label.message);
   const input = { scope, actor, snapshot, mapping };
   switch (args.mode) {
     case 'audit':
@@ -365,11 +399,47 @@ export async function runMode(
     case 'reconcile':
       return importer.reconcile(input);
     case 'report':
-      return importer.finalReport({ ...input, targetClass: context.targetClass });
+      return importer.finalReport({ ...input, evidenceClass: label.evidenceClass });
   }
 }
 
+/** `legacy-import review …`: the Manual Review Queue, on the operator's terminal only. */
+async function reviewMain(argv: readonly string[]): Promise<void> {
+  const args = parseReviewArgs(argv);
+  const env = process.env;
+  const targetUrl = resolveTarget(args.target, env);
+  guardTarget(args, targetUrl, env);
+  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  try {
+    const tenantId = await container.legacyImporter().resolveTenant(args.tenant);
+    if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
+    await runReview(
+      container.legacyReviewQueue,
+      args,
+      { tenantId: tenantId as never, botInstanceId: null },
+      systemJobActor(`legacy-import:review-${args.action}`, container.ids.uuid() as CorrelationId),
+      () => `cli-review:${container.ids.uuid()}`,
+      (line) => process.stdout.write(`${line}\n`),
+    );
+  } finally {
+    await container.shutdown();
+  }
+}
+
+/** `--help` / `-h` anywhere: the usage on stdout and exit 0 (a usage ERROR stays 64 on stderr). */
+export function wantsHelp(argv: readonly string[]): boolean {
+  return argv.includes('--help') || argv.includes('-h');
+}
+
 async function main(): Promise<void> {
+  if (wantsHelp(process.argv.slice(2))) {
+    process.stdout.write(`${process.argv[2] === 'review' ? REVIEW_USAGE : USAGE}\n`);
+    process.exit(0);
+  }
+  if (process.argv[2] === 'review') {
+    await reviewMain(process.argv.slice(3));
+    return;
+  }
   const args = parseArgs(process.argv.slice(2));
   const env = process.env;
   const targetUrl = resolveTarget(args.target, env);
@@ -405,7 +475,7 @@ async function main(): Promise<void> {
     }
     const report = await runMode(importer, args, connector, mappingText, container.ids.uuid(), {
       tenantId,
-      targetClass: target.productionLike ? 'production' : 'staging',
+      productionLikeTarget: target.productionLike,
     });
     if (report !== null) {
       await emit(report, args.out, args.format);
@@ -418,7 +488,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   main().catch((error: unknown) => {
-    if (error instanceof UsageError) {
+    if (error instanceof UsageError || error instanceof ReviewUsageError) {
       console.error(error.message);
       process.exit(64);
     }

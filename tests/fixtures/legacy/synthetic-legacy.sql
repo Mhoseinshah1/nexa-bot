@@ -73,3 +73,6 @@ CREATE TABLE `product` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 INSERT INTO `product` (`id`, `code_product`, `name_product`, `price_product`, `Volume_constraint`, `Service_time`, `agent`) VALUES ('1', 'p1', 'synthetic 30GB', '150000', '30', '30', 'f');
 INSERT INTO `product` (`id`, `code_product`, `name_product`, `price_product`, `Volume_constraint`, `Service_time`, `agent`) VALUES ('2', 'p2', 'synthetic agent plan', '120000', '50', '30', 'n');
+DROP TABLE IF EXISTS `nexa_synthetic_fixture`;
+CREATE TABLE `nexa_synthetic_fixture` (`label` varchar(200) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO `nexa_synthetic_fixture` (`label`) VALUES ('SYNTHETIC legacy fixture v1 (not evidence)');

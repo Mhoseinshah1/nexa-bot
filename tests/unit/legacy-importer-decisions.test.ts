@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { LEGACY_IMPORT_REASON_CODES, money } from '@nexa/contracts';
+import { LEGACY_IMPORT_REASON_CODES, isLegacyReviewReasonCode, money } from '@nexa/contracts';
 import {
   INVOICE_MAP_DECISIONS,
-  SERVICE_CANDIDATE_CATEGORIES,
   classifyLegacyPhone,
   decideLegacyUser,
   decideServiceCandidate,
@@ -194,7 +193,7 @@ describe('service candidates', () => {
     expect(decideServiceCandidate({ ...base }, ctx({ inventories: new Map() })).category).toBe(
       'INVENTORY_INCOMPLETE',
     );
-    expect(decideServiceCandidate({ ...base, timeUnit: 'month' }, ctx())).toEqual({
+    expect(decideServiceCandidate({ ...base, timeUnit: 'month' }, ctx())).toMatchObject({
       category: 'UNSUPPORTED_SHAPE',
       shapeReason: 'TIME_UNIT_UNKNOWN',
     });
@@ -273,6 +272,8 @@ describe('the plan over the SYNTHETIC dataset', () => {
           durationDays: 30,
           trafficBytes: 30n * 1024n ** 3n,
           price: money(200_000n, 'IRT'),
+          panelBound: true,
+          categoryStatus: 'ACTIVE',
         },
       ],
       inventories: syntheticInventories(PANEL_A, PANEL_B),
@@ -438,20 +439,62 @@ describe('the invoice key and what the map records', () => {
     }
   });
 
-  it('every category has a map rule; a recorded code exists today, a pending one does not yet', () => {
-    const codes: readonly string[] = LEGACY_IMPORT_REASON_CODES;
-    expect(Object.keys(INVOICE_MAP_DECISIONS).sort()).toEqual(
-      [...SERVICE_CANDIDATE_CATEGORIES].sort(),
+  it('every decided category is RECORDED on the map, a review row always with a review reason', () => {
+    const mapping = parsePanelMapping(syntheticMappingFile(TENANT, PANEL_A, PANEL_B), TENANT);
+    const reads = syntheticInventories(PANEL_A, PANEL_B);
+    const indexes = new Map(
+      [...reads].flatMap(([id, r]) => (r.ok && r.complete ? [[id, r.index] as const] : [])),
     );
-    for (const [category, rule] of Object.entries(INVOICE_MAP_DECISIONS)) {
-      if (rule.kind === 'RECORD') expect(codes, category).toContain(rule.reasonCode);
-      // When MAP-REVIEW's codes land on main this fails: the reminder to flip the rule to
-      // RECORD rather than leave the decision unrecorded.
-      if (rule.kind === 'PENDING_REASON_CODE') expect(codes, category).not.toContain(rule.reason);
+    const base = {
+      idInvoice: 'a0000001',
+      idUser: '1',
+      username: 'svc_a1',
+      isTest: '0',
+      codePanel: 'rp1' as string | null,
+      codeProduct: null,
+      volume: '30',
+      serviceTime: '30',
+      timeUnit: '',
+      isCustom: '0',
+    };
+    const ctx: ServiceDecisionContext = {
+      userIds: new Set(['1', '2']),
+      importedUsers: new Map([['1', '1']]),
+      policy: mapping.policy,
+      inventories: indexes,
+      productCodes: new Set(['p1']),
+      tariffOf: () => 'RESOLVED',
+    };
+    const cases: [Partial<typeof base>, Partial<ServiceDecisionContext>, string, string | null][] =
+      [
+        [{ isTest: '1' }, {}, 'SKIPPED', 'HISTORY_NOT_IMPORTED'],
+        [{ isTest: 'x' }, {}, 'MANUAL_REVIEW', 'INVALID_SOURCE_ROW'],
+        [{ idUser: '9' }, {}, 'MANUAL_REVIEW', 'CUSTOMER_MISSING'],
+        [{ idUser: '2' }, {}, 'MANUAL_REVIEW', 'CUSTOMER_MISSING'],
+        [{ codePanel: 'tst' }, {}, 'SKIPPED', 'TEST_PANEL'],
+        [{ username: '' }, {}, 'MANUAL_REVIEW', 'INVALID_SOURCE_ROW'],
+        [{}, { inventories: new Map() }, 'MANUAL_REVIEW', 'INVENTORY_INCOMPLETE'],
+        [{ username: 'nobody' }, {}, 'MANUAL_REVIEW', 'PROVIDER_MISSING'],
+        [{ codePanel: null, username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'AMBIGUOUS_PANEL'],
+        [{ codePanel: 'zzz' }, {}, 'MANUAL_REVIEW', 'PANEL_UNMAPPED'],
+        [{ username: 'case_x' }, {}, 'MANUAL_REVIEW', 'USERNAME_CASE_COLLISION'],
+        [{ timeUnit: 'month' }, {}, 'MANUAL_REVIEW', 'UNSUPPORTED_SHAPE'],
+        [{}, { tariffOf: () => 'UNRESOLVED' }, 'MANUAL_REVIEW', 'PRODUCT_MAPPING_UNRESOLVED'],
+      ];
+    for (const [row, over, status, reason] of cases) {
+      const decision = decideServiceCandidate({ ...base, ...row }, { ...ctx, ...over });
+      if (decision.category === 'ADOPTION_ELIGIBLE') throw new Error('unexpectedly eligible');
+      expect(decision.map, decision.category).toMatchObject({ status, reasonCode: reason });
+      if (decision.map?.status === 'MANUAL_REVIEW') {
+        expect(isLegacyReviewReasonCode(decision.map.reasonCode), decision.category).toBe(true);
+      }
     }
-    expect(INVOICE_MAP_DECISIONS.ADOPTION_ELIGIBLE).toEqual({
-      kind: 'NOT_RECORDED_HERE',
-      why: 'ADOPTION',
-    });
+    // The one category that is not a row: the map cannot hold the key.
+    const bad = decideServiceCandidate({ ...base, idInvoice: 'LEGACY-X1' }, ctx);
+    expect(bad).toEqual({ category: 'INVOICE_KEY_INVALID', map: null });
+    // Every review reason the importer writes exists in the closed set.
+    const codes: readonly string[] = LEGACY_IMPORT_REASON_CODES;
+    for (const rule of Object.values(INVOICE_MAP_DECISIONS))
+      expect(codes).toContain(rule.reasonCode);
   });
 });

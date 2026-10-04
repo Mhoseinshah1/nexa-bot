@@ -120,3 +120,67 @@ export function evaluateProductionGuard(input: {
       'Production import is an owner-approval step of the cutover runbook; do not arm this for a rehearsal.',
   };
 }
+
+// --- evidence class ----------------------------------------------------------------------
+
+export const EVIDENCE_CLASSES = ['synthetic', 'staging', 'production'] as const;
+export type EvidenceClass = (typeof EVIDENCE_CLASSES)[number];
+
+export type EvidenceClassVerdict =
+  | { readonly ok: true; readonly evidenceClass: EvidenceClass }
+  | { readonly ok: false; readonly message: string };
+
+/**
+ * What a run's report may call itself, decided after the source's marker has been read, so
+ * a mislabel is impossible (the label is what the owner's production gate reads):
+ *
+ * - A source carrying the SYNTHETIC marker is `synthetic`, always. An explicit claim of
+ *   `staging` or `production` is refused, and so is a production-like target outright —
+ *   the guard's fixture rule, extended to a synthetic dataset loaded into a real engine.
+ * - A source without the marker is never `synthetic`: claiming it is refused (it would let
+ *   a real run pass as a rehearsal of code).
+ * - `production` is refused on a target that does not look like production; `staging` is
+ *   allowed on one that does (a staging server runs `NODE_ENV=production`, acknowledged).
+ * - With no claim, a real source is labelled by its target: production-like → `production`.
+ *   `import`, `resume` and `report` require the claim (`--evidence-class`).
+ */
+export function decideEvidenceClass(input: {
+  readonly claim: EvidenceClass | null;
+  readonly syntheticSource: boolean;
+  readonly productionLikeTarget: boolean;
+}): EvidenceClassVerdict {
+  if (input.syntheticSource) {
+    if (input.productionLikeTarget) {
+      return {
+        ok: false,
+        message:
+          'Refused: the source carries the SYNTHETIC marker and the target looks like production. ' +
+          'A synthetic dataset is never run against a production-like database.',
+      };
+    }
+    if (input.claim !== null && input.claim !== 'synthetic') {
+      return {
+        ok: false,
+        message: `Refused: --evidence-class ${input.claim} on a source carrying the SYNTHETIC marker. Its evidence class is synthetic.`,
+      };
+    }
+    return { ok: true, evidenceClass: 'synthetic' };
+  }
+  if (input.claim === 'synthetic') {
+    return {
+      ok: false,
+      message: 'Refused: --evidence-class synthetic on a source without the SYNTHETIC marker.',
+    };
+  }
+  if (input.claim === 'production' && !input.productionLikeTarget) {
+    return {
+      ok: false,
+      message:
+        'Refused: --evidence-class production on a target that does not look like production.',
+    };
+  }
+  return {
+    ok: true,
+    evidenceClass: input.claim ?? (input.productionLikeTarget ? 'production' : 'staging'),
+  };
+}

@@ -169,6 +169,9 @@ describe('the fingerprint and the snapshot', () => {
     expect(fromEngine.schemaHash).toBe(fromFixture.schemaHash);
     expect(fromEngine.tables).toEqual(fromFixture.tables);
     expect(fromEngine.fingerprint).toBe(fromFixture.fingerprint);
+    // The SYNTHETIC marker table is read from the engine, as from the fixture.
+    expect(fromEngine.synthetic).toBe(true);
+    expect(fromEngine.syntheticLabel).toContain('SYNTHETIC');
     expect(fromEngine.users.map((u) => u.checksum)).toEqual(
       fromFixture.users.map((u) => u.checksum),
     );

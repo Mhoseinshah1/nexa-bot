@@ -109,6 +109,7 @@ export class FixtureLegacySourceConnector implements LegacySourceConnector {
         })();
       },
       aggregate: () => Promise.reject(new EvidenceUnsupported()),
+      syntheticMarker: () => Promise.resolve(dataset.label),
       close: () => {
         closed = true;
         return Promise.resolve();

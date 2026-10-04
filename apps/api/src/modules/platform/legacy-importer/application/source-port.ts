@@ -76,6 +76,9 @@ export const LEGACY_LIVE_STATUSES = [
   'end_of_volume',
 ] as const;
 
+/** The table a SYNTHETIC dataset loads to say so (`tests/fixtures/legacy/synthetic-legacy.ts`). */
+export const LEGACY_SYNTHETIC_MARKER_TABLE = 'nexa_synthetic_fixture';
+
 export type LegacySourceEngine = 'MYSQL' | 'MARIADB' | 'SYNTHETIC_FIXTURE';
 
 export interface LegacySchemaColumn {
@@ -117,6 +120,12 @@ export interface LegacySourceSession {
    * with no SQL (a fixture).
    */
   aggregate(sql: string): Promise<readonly Record<string, LegacyCell>[]>;
+  /**
+   * The SYNTHETIC marker, if the source carries one: the label stored in
+   * `nexa_synthetic_fixture`, which every synthetic dataset loads beside its tables. A real
+   * archive has no such table, so null. Read inside the same snapshot as the rows.
+   */
+  syntheticMarker(): Promise<string | null>;
   /** Rolls the READ ONLY transaction back and releases the connection. */
   close(): Promise<void>;
 }

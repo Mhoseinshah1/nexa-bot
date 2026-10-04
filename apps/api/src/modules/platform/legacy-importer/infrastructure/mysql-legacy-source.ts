@@ -6,6 +6,7 @@ import {
   LEGACY_PRIMARY_KEYS,
   LEGACY_REQUIRED_COLUMNS,
   LEGACY_SOURCE_TABLES,
+  LEGACY_SYNTHETIC_MARKER_TABLE,
   LegacySourceRefused,
   type LegacyCell,
   type LegacySchemaColumn,
@@ -264,6 +265,21 @@ class MysqlLegacySourceSession implements LegacySourceSession {
     for await (const row of stream as AsyncIterable<unknown[]>) {
       yield row.map(cellOf);
     }
+  }
+
+  async syntheticMarker(): Promise<string | null> {
+    const [tables] = await this.connection.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS n FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+      [LEGACY_SYNTHETIC_MARKER_TABLE],
+    );
+    if (Number(cellOf(tables[0]?.['n']) ?? 0) === 0) return null;
+    // The table's presence is the marker; its label is what the report prints. An empty
+    // or unlabelled marker table still marks the source synthetic: it is never real data.
+    const [rows] = await this.connection.query<mysql.RowDataPacket[]>(
+      `SELECT CAST(\`label\` AS CHAR) AS label FROM ${quoteIdentifier(LEGACY_SYNTHETIC_MARKER_TABLE)} LIMIT 1`,
+    );
+    return cellOf(rows[0]?.['label']) ?? 'SYNTHETIC (unlabelled marker)';
   }
 
   async aggregate(sql: string): Promise<readonly Record<string, LegacyCell>[]> {

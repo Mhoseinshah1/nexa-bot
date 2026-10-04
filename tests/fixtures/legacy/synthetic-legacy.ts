@@ -380,5 +380,14 @@ export function syntheticLegacySql(dataset: SyntheticLegacyDataset): string {
       );
     }
   }
+  // The marker every synthetic load carries: the importer reads it, forces the evidence
+  // class to `synthetic` and refuses a production-like target (`importer.md` §Evidence class).
+  out.push('DROP TABLE IF EXISTS `nexa_synthetic_fixture`;');
+  out.push(
+    'CREATE TABLE `nexa_synthetic_fixture` (`label` varchar(200) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;',
+  );
+  out.push(
+    `INSERT INTO \`nexa_synthetic_fixture\` (\`label\`) VALUES (${sqlLiteral(dataset.label)});`,
+  );
   return `${out.join('\n')}\n`;
 }

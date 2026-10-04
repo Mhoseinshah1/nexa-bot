@@ -113,11 +113,13 @@ describe('parseArgs: nothing defaults', () => {
     expect(() => parseArgs([...BASE, '--abort-running'])).toThrow(UsageError);
     const resume = [...BASE];
     resume[1] = 'resume';
-    expect(parseArgs([...resume, '--abort-running']).abortRunning).toBe(true);
+    expect(
+      parseArgs([...resume, '--abort-running', '--evidence-class', 'staging']).abortRunning,
+    ).toBe(true);
   });
 
   it('takes the mode positionally or as --mode, never both, and a slug or uuid tenant', () => {
-    const positional = ['import', ...without('--mode')];
+    const positional = ['import', ...without('--mode'), '--evidence-class', 'staging'];
     expect(parseArgs(positional).mode).toBe('import');
     expect(() => parseArgs(['import', ...BASE])).toThrow(/twice/u);
     expect(() => parseArgs(['apply', ...without('--mode')])).toThrow(UsageError);

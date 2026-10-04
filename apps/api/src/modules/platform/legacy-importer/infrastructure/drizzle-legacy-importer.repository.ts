@@ -3,6 +3,7 @@ import {
   money,
   type CurrencyCode,
   type ProductAudience,
+  type ProductCategoryStatus,
   type ProductStatus,
   type TenantContext,
 } from '@nexa/contracts';
@@ -192,12 +193,16 @@ export class DrizzleLegacyImporterRepository
       traffic_bytes: string;
       price_amount: string | null;
       price_currency: string | null;
+      panel_bound: boolean;
+      category_status: string | null;
     }>(sql`
-      SELECT id, status, audience, duration_days, traffic_bytes::text AS traffic_bytes,
-             price_amount::text AS price_amount, price_currency
-        FROM products
-       WHERE tenant_id = ${tenantId} AND status = 'ACTIVE' AND audience = 'EVERYONE'
-         AND price_amount IS NOT NULL
+      SELECT p.id, p.status, p.audience, p.duration_days, p.traffic_bytes::text AS traffic_bytes,
+             p.price_amount::text AS price_amount, p.price_currency,
+             (p.panel_id IS NOT NULL) AS panel_bound, c.status AS category_status
+        FROM products p
+        LEFT JOIN product_categories c ON c.id = p.category_id AND c.tenant_id = p.tenant_id
+       WHERE p.tenant_id = ${tenantId} AND p.status = 'ACTIVE' AND p.audience = 'EVERYONE'
+         AND p.price_amount IS NOT NULL
     `);
     return result.rows.map((r) => ({
       id: r.id,
@@ -209,6 +214,8 @@ export class DrizzleLegacyImporterRepository
         r.price_amount === null || r.price_currency === null
           ? null
           : money(BigInt(r.price_amount), r.price_currency as CurrencyCode),
+      panelBound: r.panel_bound,
+      categoryStatus: r.category_status as ProductCategoryStatus | null,
     }));
   }
 

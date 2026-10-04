@@ -9,6 +9,8 @@ import {
   legacyShapeKey,
   type LegacyShapeUnmappableReason,
 } from '../../../commerce/catalog/application/legacy-shape.js';
+import type { LegacyImportDecision } from '../../legacy-import/application/legacy-import-ports.js';
+import { decisionForLegacyMatch } from '../../legacy-import/application/legacy-review-routing.js';
 import {
   matchLegacyService,
   type LegacyPanelPolicy,
@@ -181,6 +183,12 @@ export type ServiceCandidateDecision =
   | {
       readonly category: Exclude<ServiceCandidateCategory, 'ADOPTION_ELIGIBLE'>;
       readonly shapeReason?: LegacyShapeUnmappableReason;
+      /**
+       * What the invoice's map row records. Null only for `INVOICE_KEY_INVALID`, whose key
+       * the map cannot hold (`legacy_import_map_legacy_key_check`): it stays a counted
+       * category and is in the report's manual-review total, never a row.
+       */
+      readonly map: LegacyImportDecision | null;
     }
   | {
       readonly category: 'ADOPTION_ELIGIBLE';
@@ -227,31 +235,35 @@ export function decideServiceCandidate(
 ): ServiceCandidateDecision {
   // The row identity first, as a user's Telegram id is: a key the import map refuses
   // (`LEGACY_ID_PATTERNS.invoice`) cannot carry a decision, so a person looks at it.
-  if (!isLegacyImportKey('invoice', invoice.idInvoice)) return { category: 'INVOICE_KEY_INVALID' };
+  if (!isLegacyImportKey('invoice', invoice.idInvoice)) {
+    return { category: 'INVOICE_KEY_INVALID', map: null };
+  }
   const isTest = invoice.isTest?.trim() ?? null;
-  if (isTest === '1') return { category: 'TEST_INVOICE_SKIPPED' };
-  if (isTest !== '0') return { category: 'INVALID_SOURCE_ROW' };
+  if (isTest === '1') return held('TEST_INVOICE_SKIPPED');
+  if (isTest !== '0') return held('INVALID_SOURCE_ROW');
 
-  if (invoice.idUser === null || !ctx.userIds.has(invoice.idUser)) return { category: 'ORPHAN' };
+  if (invoice.idUser === null || !ctx.userIds.has(invoice.idUser)) return held('ORPHAN');
   const telegramUserId = ctx.importedUsers.get(invoice.idUser);
-  if (telegramUserId === undefined) return { category: 'CUSTOMER_NOT_IMPORTED' };
+  if (telegramUserId === undefined) return held('CUSTOMER_NOT_IMPORTED');
 
   const match = matchLegacyService(
     { codePanel: legacyCodePanel(invoice.codePanel), username: invoice.username ?? '' },
     ctx.policy,
     ctx.inventories,
   );
-  switch (match.kind) {
-    case 'SKIPPED':
-      return { category: 'TEST_PANEL_SKIPPED' };
-    case 'INVALID':
-      return { category: 'INVALID_USERNAME' };
-    case 'UNDECIDABLE':
-      return { category: 'INVENTORY_INCOMPLETE' };
-    case 'MANUAL_REVIEW':
-      return { category: match.reason };
-    case 'ELIGIBLE':
-      break;
+  // The matcher's outcome is recorded exactly as the review queue's one translation says
+  // (`decisionForLegacyMatch`); the category is only its name in the report.
+  if (match.kind !== 'ELIGIBLE') {
+    const map = decisionForLegacyMatch(match);
+    const category: Exclude<ServiceCandidateCategory, 'ADOPTION_ELIGIBLE'> =
+      match.kind === 'SKIPPED'
+        ? 'TEST_PANEL_SKIPPED'
+        : match.kind === 'INVALID'
+          ? 'INVALID_USERNAME'
+          : match.kind === 'UNDECIDABLE'
+            ? 'INVENTORY_INCOMPLETE'
+            : match.reason;
+    return { category, map };
   }
 
   const codeProduct = invoice.codeProduct?.trim() ?? '';
@@ -267,8 +279,14 @@ export function decideServiceCandidate(
       timeUnit: invoice.timeUnit,
       isCustom: invoice.isCustom,
     });
-    if (!keyed.ok) return { category: 'UNSUPPORTED_SHAPE', shapeReason: keyed.reason };
-    if (ctx.tariffOf(keyed.key) !== 'RESOLVED') return { category: 'PRODUCT_UNRESOLVED' };
+    if (!keyed.ok) {
+      return {
+        category: 'UNSUPPORTED_SHAPE',
+        map: INVOICE_MAP_DECISIONS.UNSUPPORTED_SHAPE,
+        shapeReason: keyed.reason,
+      };
+    }
+    if (ctx.tariffOf(keyed.key) !== 'RESOLVED') return held('PRODUCT_UNRESOLVED');
     product = { kind: 'HIDDEN_SHAPE', shapeKey: keyed.key, custom: keyed.shape.isCustom };
   }
   return {
@@ -311,50 +329,22 @@ export function isQ1bPopulation(invoice: {
 }
 
 /**
- * What the import map records for each candidate category (`legacy_table = 'invoice'`).
- *
- * - `RECORD` — the importer decided it, with a closed reason code that exists today.
- * - `PENDING_REASON_CODE` — the importer decided it, but the closed code that says why
- *   arrives with MAP-REVIEW's review queue (Item 9). Writing it under a nearby code would
- *   misfile it, so it is counted in the report and recorded once the code exists: flip the
- *   entry to `RECORD` in the commit that integrates the queue.
- * - `NOT_RECORDED_HERE` — no row by the importer: an invalid key cannot be a row, and an
- *   eligible candidate's row is P6's, written with the adoption it records.
+ * The map decision of each category the importer decides WITHOUT the matcher
+ * (`legacy_table = 'invoice'`). The matcher's own outcomes go through the review queue's
+ * `decisionForLegacyMatch`; an eligible row's decision is P6's, written with the adoption.
  */
-export type InvoiceMapDecision =
-  | {
-      readonly kind: 'RECORD';
-      readonly status: 'SKIPPED' | 'MANUAL_REVIEW' | 'FAILED';
-      readonly reasonCode: LegacyImportReasonCode;
-    }
-  | { readonly kind: 'PENDING_REASON_CODE'; readonly reason: string }
-  | { readonly kind: 'NOT_RECORDED_HERE'; readonly why: 'KEY_INVALID' | 'ADOPTION' };
+export const INVOICE_MAP_DECISIONS = {
+  // A live legacy trial: not adopted by registered decision — history, not import.
+  TEST_INVOICE_SKIPPED: { status: 'SKIPPED', reasonCode: 'HISTORY_NOT_IMPORTED' },
+  INVALID_SOURCE_ROW: { status: 'MANUAL_REVIEW', reasonCode: 'INVALID_SOURCE_ROW' },
+  ORPHAN: { status: 'MANUAL_REVIEW', reasonCode: 'CUSTOMER_MISSING' },
+  CUSTOMER_NOT_IMPORTED: { status: 'MANUAL_REVIEW', reasonCode: 'CUSTOMER_MISSING' },
+  UNSUPPORTED_SHAPE: { status: 'MANUAL_REVIEW', reasonCode: 'UNSUPPORTED_SHAPE' },
+  PRODUCT_UNRESOLVED: { status: 'MANUAL_REVIEW', reasonCode: 'PRODUCT_MAPPING_UNRESOLVED' },
+} as const satisfies Readonly<Record<string, LegacyImportDecision>>;
 
-export const INVOICE_MAP_DECISIONS: Readonly<Record<ServiceCandidateCategory, InvoiceMapDecision>> =
-  {
-    INVOICE_KEY_INVALID: { kind: 'NOT_RECORDED_HERE', why: 'KEY_INVALID' },
-    // A live legacy trial: not adopted by registered decision — history, not import.
-    TEST_INVOICE_SKIPPED: { kind: 'RECORD', status: 'SKIPPED', reasonCode: 'HISTORY_NOT_IMPORTED' },
-    TEST_PANEL_SKIPPED: { kind: 'RECORD', status: 'SKIPPED', reasonCode: 'TEST_PANEL' },
-    INVALID_SOURCE_ROW: {
-      kind: 'RECORD',
-      status: 'MANUAL_REVIEW',
-      reasonCode: 'INVALID_SOURCE_ROW',
-    },
-    INVALID_USERNAME: { kind: 'RECORD', status: 'MANUAL_REVIEW', reasonCode: 'INVALID_SOURCE_ROW' },
-    ORPHAN: { kind: 'PENDING_REASON_CODE', reason: 'CUSTOMER_MISSING' },
-    CUSTOMER_NOT_IMPORTED: { kind: 'PENDING_REASON_CODE', reason: 'CUSTOMER_MISSING' },
-    // Not a decision: the inventory read did not complete. FAILED is "process again".
-    INVENTORY_INCOMPLETE: { kind: 'RECORD', status: 'FAILED', reasonCode: 'PROVIDER_READ_FAILED' },
-    PROVIDER_MISSING: { kind: 'RECORD', status: 'MANUAL_REVIEW', reasonCode: 'PROVIDER_MISSING' },
-    AMBIGUOUS_PANEL: { kind: 'RECORD', status: 'MANUAL_REVIEW', reasonCode: 'AMBIGUOUS_PANEL' },
-    PANEL_UNMAPPED: { kind: 'RECORD', status: 'MANUAL_REVIEW', reasonCode: 'PANEL_UNMAPPED' },
-    USERNAME_CASE_COLLISION: {
-      kind: 'RECORD',
-      status: 'MANUAL_REVIEW',
-      reasonCode: 'USERNAME_CASE_COLLISION',
-    },
-    UNSUPPORTED_SHAPE: { kind: 'PENDING_REASON_CODE', reason: 'UNSUPPORTED_SHAPE' },
-    PRODUCT_UNRESOLVED: { kind: 'PENDING_REASON_CODE', reason: 'PRODUCT_MAPPING_UNRESOLVED' },
-    ADOPTION_ELIGIBLE: { kind: 'NOT_RECORDED_HERE', why: 'ADOPTION' },
-  };
+type HeldCategory = keyof typeof INVOICE_MAP_DECISIONS;
+
+function held(category: HeldCategory): ServiceCandidateDecision {
+  return { category, map: INVOICE_MAP_DECISIONS[category] };
+}

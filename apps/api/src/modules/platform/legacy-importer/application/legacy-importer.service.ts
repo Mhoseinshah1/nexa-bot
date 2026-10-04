@@ -25,14 +25,14 @@ import type {
   LegacyImportRepository,
   LegacyImportRunRecord,
 } from '../../legacy-import/application/legacy-import-ports.js';
+import {
+  isReviewClosedToRerun,
+  resumeDecision,
+} from '../../legacy-import/application/legacy-import-ports.js';
 import type { MigrationOpeningBalanceService } from '../../../commerce/wallet/application/migration-opening-balance.service.js';
 import type { LegacyTrialEligibilityService } from '../../../commerce/trials/application/legacy-trial-eligibility.service.js';
 import type { LegacyProductService } from '../../../commerce/catalog/application/legacy-product.service.js';
-import {
-  INVOICE_MAP_DECISIONS,
-  legacyProfileUsername,
-  type ServiceCandidateCategory,
-} from './decisions.js';
+import { legacyProfileUsername, type ServiceCandidateCategory } from './decisions.js';
 import { crossCheckEvidence, type LegacyEvidence } from './evidence-runner.js';
 import { validatePanelMappingAgainstTenant, type PanelMapping } from './panel-mapping.js';
 import { decideAllServices, inventoryIndexes, planLegacyImport, type LegacyPlan } from './plan.js';
@@ -46,6 +46,7 @@ import type {
   LegacyRunInputsRepository,
 } from './ports.js';
 import { buildFinalReport } from './final-report.js';
+import { decideEvidenceClass, type EvidenceClass } from './production-guard.js';
 import { LEGACY_REPORT_FORMAT, type LegacyImportReport, type LegacyReportMode } from './report.js';
 import { sha256Hex, type LegacySnapshot } from './source-snapshot.js';
 
@@ -146,6 +147,7 @@ export interface ApplyTallies {
     manualReviewRecorded: number;
     sourceChanged: number;
     entityMismatch: number;
+    reviewClosed: number;
   };
   openings: {
     POSTED: number;
@@ -174,13 +176,14 @@ export interface ApplyTallies {
       UPDATED: number;
       UNCHANGED: number;
       REFUSED: number;
+      reviewClosed: number;
       keyInvalid: number;
-      pendingReasonCode: Record<string, number>;
     };
     adoption: {
       wired: boolean;
       ADOPTED: number;
       ALREADY_ADOPTED: number;
+      REVIEW_CLOSED: number;
       MANUAL_REVIEW: number;
       SKIPPED: number;
       PENDING: number;
@@ -307,7 +310,7 @@ export class LegacyImporterService {
     return {
       format: LEGACY_REPORT_FORMAT,
       mode,
-      synthetic: snapshot?.descriptor.engine === 'SYNTHETIC_FIXTURE',
+      synthetic: snapshot?.synthetic === true,
       generatedAt: now.toISOString(),
       durationMs: Math.max(0, now.getTime() - startedAt.getTime()),
       tenantId: scope.tenantId,
@@ -378,13 +381,11 @@ export class LegacyImporterService {
       statuses.push(u.decision.kind === 'IMPORT' ? 'IMPORTED' : 'MANUAL_REVIEW');
     }
     for (const s of prepared.plan.services) {
-      const c = s.decision.category;
+      // The status the import would record: P6's IMPORTED for an eligible row, the map
+      // decision otherwise, and MANUAL_REVIEW for a key the map cannot hold.
+      const d = s.decision;
       statuses.push(
-        c === 'ADOPTION_ELIGIBLE'
-          ? 'IMPORTED'
-          : c === 'TEST_INVOICE_SKIPPED' || c === 'TEST_PANEL_SKIPPED'
-            ? 'SKIPPED'
-            : 'MANUAL_REVIEW',
+        d.category === 'ADOPTION_ELIGIBLE' ? 'IMPORTED' : (d.map?.status ?? 'MANUAL_REVIEW'),
       );
     }
     for (let i = 0; i < statuses.length; i += DRY_RUN_BATCH) {
@@ -491,6 +492,7 @@ export class LegacyImporterService {
         manualReviewRecorded: 0,
         sourceChanged: 0,
         entityMismatch: 0,
+        reviewClosed: 0,
       },
       openings: { POSTED: 0, ALREADY_POSTED: 0, ZERO_NO_ENTRY: 0, CONFLICT: 0, postedSumMinor: 0n },
       trials: { APPLIED: 0, REPLAYED: 0, CONFLICT: 0, decisions: {} },
@@ -502,13 +504,14 @@ export class LegacyImporterService {
           UPDATED: 0,
           UNCHANGED: 0,
           REFUSED: 0,
+          reviewClosed: 0,
           keyInvalid: 0,
-          pendingReasonCode: {},
         },
         adoption: {
           wired: this.deps.adoption !== null,
           ADOPTED: 0,
           ALREADY_ADOPTED: 0,
+          REVIEW_CLOSED: 0,
           MANUAL_REVIEW: 0,
           SKIPPED: 0,
           PENDING: 0,
@@ -645,12 +648,29 @@ export class LegacyImporterService {
                 },
                 tx,
               );
-              if (outcome.kind === 'REFUSED') tallies.customers.entityMismatch += 1;
-              else tallies.customers.manualReviewRecorded += 1;
+              if (outcome.kind === 'REFUSED' && outcome.reason === 'REVIEW_CLOSED') {
+                tallies.customers.reviewClosed += 1;
+              } else if (outcome.kind === 'REFUSED') {
+                tallies.customers.entityMismatch += 1;
+              } else {
+                tallies.customers.manualReviewRecorded += 1;
+              }
               continue;
             }
             if (decision.kind !== 'IMPORT') continue;
             const prior = priors.get(row.id);
+            // Decided BEFORE any write, so a refused row leaves no customer behind: a row a
+            // person closed is counted and never retried; source drift under an imported row
+            // is a person's question.
+            const resume = resumeDecision(prior ?? null, row.checksum);
+            if (resume === 'REVIEW_CLOSED') {
+              tallies.customers.reviewClosed += 1;
+              continue;
+            }
+            if (resume === 'SOURCE_CHANGED') {
+              tallies.customers.sourceChanged += 1;
+              continue;
+            }
             const { customerId, created } = await this.deps.customers.insertIfAbsent(
               scope,
               {
@@ -687,9 +707,16 @@ export class LegacyImporterService {
               tx,
             );
             if (outcome.kind === 'REFUSED') {
-              // Provenance is never rewritten: drift under an imported row is a person's
-              // question, and nothing further is written for this user in this run.
-              if (outcome.reason === 'IMPORTED_SOURCE_CHANGED')
+              // Provenance is never rewritten. A customer this statement just created must
+              // not outlive the refusal, so the batch rolls back and the run is interrupted.
+              if (created) {
+                throw errors.conflict(
+                  LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+                  `A legacy user's map row refused its new customer (${outcome.reason}).`,
+                );
+              }
+              if (outcome.reason === 'REVIEW_CLOSED') tallies.customers.reviewClosed += 1;
+              else if (outcome.reason === 'IMPORTED_SOURCE_CHANGED')
                 tallies.customers.sourceChanged += 1;
               else tallies.customers.entityMismatch += 1;
               continue;
@@ -867,17 +894,13 @@ export class LegacyImporterService {
     // Every decision the importer itself made is recorded on the invoice's map row, in
     // batches, each batch one transaction with its checkpoint.
     const toRecord = decided.services.flatMap(({ invoice, decision }) => {
-      const rule = INVOICE_MAP_DECISIONS[decision.category];
-      if (rule.kind === 'PENDING_REASON_CODE') {
-        tallies.services.map.pendingReasonCode[rule.reason] =
-          (tallies.services.map.pendingReasonCode[rule.reason] ?? 0) + 1;
+      if (decision.category === 'ADOPTION_ELIGIBLE') return [];
+      if (decision.map === null) {
+        // INVOICE_KEY_INVALID: the map cannot hold the key, so it is counted, not a row.
+        tallies.services.map.keyInvalid += 1;
         return [];
       }
-      if (rule.kind === 'NOT_RECORDED_HERE') {
-        if (rule.why === 'KEY_INVALID') tallies.services.map.keyInvalid += 1;
-        return [];
-      }
-      return [{ invoice, rule }];
+      return [{ invoice, rule: decision.map }];
     });
     for (let i = 0; i < toRecord.length; i += CUSTOMER_BATCH) {
       const batch = toRecord.slice(i, i + CUSTOMER_BATCH);
@@ -891,18 +914,37 @@ export class LegacyImporterService {
               legacyTable: 'invoice',
               legacyId: invoice.idInvoice,
               checksum: invoice.checksum,
-              decision: { status: rule.status, reasonCode: rule.reasonCode },
+              decision: rule,
               now,
             },
             tx,
           );
-          tallies.services.map[outcome.kind] += 1;
+          // A row a person closed (DISMISSED, or RESOLVED other than RETRY_AFTER_FIX) is
+          // refused REVIEW_CLOSED: counted, never retried, never overwritten.
+          if (outcome.kind === 'REFUSED' && outcome.reason === 'REVIEW_CLOSED') {
+            tallies.services.map.reviewClosed += 1;
+          } else {
+            tallies.services.map[outcome.kind] += 1;
+          }
         }
       });
     }
 
+    // An eligible invoice whose map row a person closed is not handed to P6.
+    const eligible = decided.services.filter((s) => s.decision.category === 'ADOPTION_ELIGIBLE');
+    const closed = new Set<string>();
+    for (let i = 0; i < eligible.length; i += CUSTOMER_BATCH) {
+      const keys = eligible.slice(i, i + CUSTOMER_BATCH).map((s) => s.invoice.idInvoice);
+      for (const row of await this.deps.runs.findByLegacyKeys(scope, 'invoice', keys)) {
+        if (isReviewClosedToRerun(row)) closed.add(row.legacyId);
+      }
+    }
     for (const { invoice, decision } of decided.services) {
       if (decision.category !== 'ADOPTION_ELIGIBLE') continue;
+      if (closed.has(invoice.idInvoice)) {
+        tallies.services.adoption.REVIEW_CLOSED += 1;
+        continue;
+      }
       if (this.deps.adoption === null) {
         tallies.services.adoption.PENDING += 1;
         continue;
@@ -1065,9 +1107,17 @@ export class LegacyImporterService {
    * inputs, what NEXA holds now and a fresh plan over the same snapshot. Read only.
    */
   async finalReport(
-    input: LegacyImportInput & { readonly targetClass: 'staging' | 'production' },
+    input: LegacyImportInput & { readonly evidenceClass: EvidenceClass },
   ): Promise<LegacyImportReport> {
     const { scope, snapshot, mapping } = input;
+    // The label a caller asks for is checked against the source's own marker HERE too, so
+    // no caller of the service — the CLI or another — can call a synthetic run staging.
+    const label = decideEvidenceClass({
+      claim: input.evidenceClass,
+      syntheticSource: snapshot.synthetic,
+      productionLikeTarget: input.evidenceClass === 'production',
+    });
+    if (!label.ok) throw errors.conflict(LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT, label.message);
     const startedAt = this.deps.clock.now();
     const run = await this.latestApplyRun(scope);
     const inputs = await this.deps.runInputs.find(scope, run.id);
@@ -1087,8 +1137,7 @@ export class LegacyImporterService {
     const counts = this.deps.inventory.requestCounts();
     const final = buildFinalReport({
       generatedAt: this.deps.clock.now(),
-      evidenceClass:
-        snapshot.descriptor.engine === 'SYNTHETIC_FIXTURE' ? 'synthetic' : input.targetClass,
+      evidenceClass: input.evidenceClass,
       tenantSlug,
       run,
       inputs,
