@@ -251,6 +251,12 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
  * here and the specific one is in `PLACEHOLDER_LABEL_OVERRIDES_FA` below.
  */
 export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
+  // UX Batch 01 item 4: the connection file caption's facts.
+  remaining_volume: 'حجم باقی‌مانده',
+  service_name: 'نام سرویس خریداری‌شده',
+  subscription_url: 'لینک اشتراک مشتری',
+  total_volume: 'حجم کل',
+  used_volume: 'حجم مصرف‌شده',
   achievedSales: 'فروش نماینده در این ماه',
   addedTrafficBytes: 'حجم افزوده‌شده',
   adminId: 'شناسهٔ مدیر تصمیم‌گیرنده',
