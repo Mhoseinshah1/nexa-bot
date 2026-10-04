@@ -48,6 +48,21 @@ the list without `q` stays `users.view`. Exact-only on money and account names i
 a partial match over references opens somebody else's payment, and a prefix over provider
 usernames enumerates a panel's accounts (`ServiceSearch.providerUsername`).
 
+### The customer picker (UX batch 01, item 9)
+
+The reseller register form no longer asks for the customer's internal uuid. Its customer
+field is a picker (`apps/web/src/pages/customer-picker.tsx`) that sends exactly
+`GET /users?limit=10&q=…` — this search, not a second one — so it matches a Telegram id
+exactly, a username with or without `@` from its start (case-insensitive), and the start of
+a display name or last name, scoped to the actor's tenant and charged `users.search`.
+Every result is a button and **nothing is chosen for the operator**, not even a single
+match: a username prefix can match two customers. Only name, `@username`, Telegram id and a
+non-active status are drawn. The chosen row's id is what the register command receives; the
+command itself still takes a uuid and refuses anything else. Without `users.search` the
+picker sends nothing and names the key; the customer page's "register as reseller" link
+still hands a customer over by id. Pinned by
+`tests/integration/reseller-customer-picker.test.ts` and `tests/web/resellers.test.tsx`.
+
 ## Why prefix, not infix — and not `pg_trgm`
 
 `pg_trgm` is available in the PostgreSQL image but **no migration installs it**, and adding an

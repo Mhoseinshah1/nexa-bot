@@ -4663,8 +4663,23 @@ export const WEB_FA = {
     'تعلیق فقط امتیازهای نمایندگی را برمی‌دارد؛ مسدود کردن مشتری اهرم جداگانه‌ای است که در صفحهٔ مشتری است. تغییر سطح یا نرخ فقط بر سفارش‌هایی اثر دارد که پس از آن تأیید شوند.',
   'web.resellers_tiers_link': 'سطوح نمایندگی و مجوزهای آنها',
   'web.reseller_customer': 'نماینده',
-  'web.reseller_customer_id': 'شناسهٔ مشتری',
-  'web.reseller_customer_id_hint': 'شناسهٔ کامل مشتری؛ از صفحهٔ همان مشتری کپی کنید.',
+  'web.reseller_customer_id': 'مشتری',
+  // UX batch 01, item 9: the customer picker (`pages/customer-picker.tsx`).
+  'web.customer_picker_hint':
+    'شناسهٔ عددی تلگرام (دقیق)، نام کاربری با یا بدون ‎@، یا ابتدای نام مشتری را بنویسید و جست‌وجو کنید.',
+  'web.customer_picker_search': 'جست‌وجو',
+  'web.customer_picker_results': 'مشتریان پیدا‌شده',
+  'web.customer_picker_choose': 'انتخاب',
+  'web.customer_picker_change': 'تغییر مشتری',
+  'web.customer_picker_selected': 'مشتری انتخاب‌شده',
+  'web.customer_picker_unnamed': 'بدون نام',
+  'web.customer_picker_none': 'مشتری‌ای با این مشخصات پیدا نشد.',
+  'web.customer_picker_one': 'یک مشتری پیدا شد؛ اگر همین است، انتخابش کنید.',
+  'web.customer_picker_many': 'چند مشتری پیدا شد؛ مشتری درست را خودتان انتخاب کنید.',
+  'web.customer_picker_more': 'نتایج بیشتری هم هست؛ جست‌وجو را دقیق‌تر کنید.',
+  'web.customer_picker_handed_over': 'مشتری از صفحهٔ خودش انتخاب شده است:',
+  'web.customer_picker_denied':
+    'جست‌وجوی مشتری به دسترسی users.search نیاز دارد. از صفحهٔ همان مشتری، «ثبت این مشتری به‌عنوان نماینده» را بزنید.',
   'web.reseller_tier': 'سطح',
   'web.reseller_tier_all': 'همهٔ سطوح',
   'web.reseller_status_all': 'همه',
@@ -4693,7 +4708,7 @@ export const WEB_FA = {
   'web.reseller_edit_denied': 'برای ثبت یا ویرایش نماینده دسترسی resellers.edit لازم است.',
   'web.reseller_no_tiers':
     'هنوز سطح نمایندگی‌ای ساخته نشده است؛ هر نماینده باید دقیقاً یک سطح داشته باشد.',
-  'web.reseller_problem_customer': 'شناسهٔ مشتری کامل و معتبر نیست.',
+  'web.reseller_problem_customer': 'مشتری را با جست‌وجو پیدا و انتخاب کنید.',
   'web.reseller_problem_tier': 'یک سطح انتخاب کنید.',
   'web.reseller_problem_percent': 'درصد باید عددی صحیح از ۱ تا ۱۰۰ باشد.',
 

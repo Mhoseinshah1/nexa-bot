@@ -15,13 +15,16 @@ import {
   type ResellerSummaryResponse,
   type ResellerTierSummaryResponse,
   type ResellerUpdateRequest,
+  type CustomerSummaryResponse,
 } from '@nexa/contracts';
 import {
+  fetchCustomer,
   fetchResellerTiers,
   fetchResellers,
   registerReseller,
   updateReseller,
 } from '../api/client';
+import { CustomerIdentity, CustomerPicker } from './customer-picker';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -244,6 +247,7 @@ export function ResellersPage({
   mayViewAudit,
   mayViewCatalog = false,
   mayViewPanels = false,
+  maySearchCustomers = false,
 }: {
   route: Route;
   /** No `resellers.view`: no list, no tiers, and no edit (it opens from a row). */
@@ -259,6 +263,11 @@ export function ResellersPage({
   /** Round N: `catalog.view` and `panels.view`, for names in the effective-policy card. */
   mayViewCatalog?: boolean;
   mayViewPanels?: boolean;
+  /**
+   * UX batch 01, item 9: `users.search`, for the register form's customer picker. The
+   * server charges it on the search; without it the picker says so and sends nothing.
+   */
+  maySearchCustomers?: boolean;
 }) {
   const onLink = useLinkHandler();
   const applied = route.query.get('search') ?? '';
@@ -595,6 +604,8 @@ export function ResellersPage({
           <ResellerForm
             key={`register-${registering}`}
             initialCustomerId={registering}
+            maySearchCustomers={maySearchCustomers}
+            mayViewCustomers={mayViewWallet}
             tiers={tierRows}
             onDone={() => undefined}
             onDirtyChange={discard.onDirtyChange}
@@ -769,6 +780,8 @@ export function resellerBodyFrom(
 function ResellerForm({
   reseller,
   initialCustomerId = '',
+  maySearchCustomers = false,
+  mayViewCustomers = false,
   tiers,
   onDone,
   onDirtyChange,
@@ -776,6 +789,10 @@ function ResellerForm({
   /** Absent for a registration; the stored reseller for an edit. */
   reseller?: ResellerSummaryResponse;
   initialCustomerId?: string;
+  /** `users.search`, for the picker. */
+  maySearchCustomers?: boolean;
+  /** `users.view`, to name a customer handed over by id from their own page. */
+  mayViewCustomers?: boolean;
   /** Every tier, or null while the list has not answered. */
   tiers: readonly ResellerTierSummaryResponse[] | null;
   onDone: () => void;
@@ -807,6 +824,24 @@ function ResellerForm({
   const set = <K extends keyof ResellerFormState>(key: K, value: ResellerFormState[K]) => {
     setState((current) => ({ ...current, [key]: value }));
   };
+  /**
+   * The customer the operator CHOSE from the picker, for drawing who they are. The id in
+   * `state` is what is sent; this is only its face, and is null for a customer handed
+   * over by id, whose face is read below.
+   */
+  const [picked, setPicked] = useState<CustomerSummaryResponse | null>(null);
+  const handedOver =
+    mode === 'register' &&
+    picked === null &&
+    state.customerId !== '' &&
+    state.customerId === initialCustomerId &&
+    uuidV7Schema.safeParse(state.customerId).success;
+  const handedOverCustomer = useQuery({
+    queryKey: ['customer', state.customerId],
+    queryFn: () => fetchCustomer(state.customerId),
+    enabled: handedOver && mayViewCustomers,
+  });
+  const chosen = picked ?? (handedOver ? (handedOverCustomer.data?.customer ?? null) : null);
   const checked =
     mode === 'register' ? resellerBodyFrom(state, 'register') : resellerBodyFrom(state, 'update');
   const problem = 'problem' in checked ? checked.problem : null;
@@ -838,6 +873,7 @@ function ResellerForm({
       if (mode === 'register') {
         setState(blankState(''));
         setRegisterBaseline(blankState(''));
+        setPicked(null);
       }
       // The customer's card reads the same row, and a tier's count moves with it.
       queries.setQueryData(['customer-reseller', response.reseller.customerId], response);
@@ -870,18 +906,48 @@ function ResellerForm({
       )}
 
       {reseller === undefined ? (
-        <Field
-          label={t('web.reseller_customer_id')}
-          hint={t('web.reseller_customer_id_hint')}
-          htmlFor={`${prefix}-customer`}
-        >
-          <input
-            id={`${prefix}-customer`}
-            dir="ltr"
-            value={state.customerId}
-            onChange={(event) => set('customerId', event.target.value.trim())}
+        state.customerId === '' ? (
+          // UX batch 01, item 9: found by Telegram id, username or name, and CHOSEN —
+          // never typed as an internal id, and never chosen for the operator.
+          <CustomerPicker
+            inputId={`${prefix}-customer`}
+            maySearch={maySearchCustomers}
+            onPick={(customer) => {
+              setPicked(customer);
+              set('customerId', customer.id);
+            }}
           />
-        </Field>
+        ) : (
+          <Field label={t('web.reseller_customer_id')}>
+            <div
+              id={`${prefix}-customer`}
+              role="group"
+              className="customer-picker-chosen"
+              aria-label={t('web.customer_picker_selected')}
+            >
+              {chosen !== null ? (
+                <CustomerIdentity customer={chosen} />
+              ) : (
+                // Handed over by id and not readable here (no `users.view`, or still
+                // loading): the id is what the customer's own page sent.
+                <span className="muted small">
+                  {t('web.customer_picker_handed_over')} <Ltr>{state.customerId}</Ltr>
+                </span>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={save.isPending}
+                onClick={() => {
+                  setPicked(null);
+                  set('customerId', '');
+                }}
+              >
+                {t('web.customer_picker_change')}
+              </Button>
+            </div>
+          </Field>
+        )
       ) : (
         /* TEXT, not a disabled input: a reseller row never moves to another customer. */
         <KV items={[[t('web.reseller_customer'), <ResellerCell key="c" reseller={reseller} />]]} />

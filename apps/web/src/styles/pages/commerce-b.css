@@ -542,6 +542,42 @@
 .resellers-foot {
   align-items: start;
 }
+/* UX batch 01, item 9: the customer picker. Wraps at 390px; nothing scrolls sideways. */
+.customer-picker-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.customer-picker-bar input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.customer-picker-results {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.customer-picker-results li,
+.customer-picker-chosen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.customer-picker-who {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .resellers-standing:focus {
   outline: none;
 }
