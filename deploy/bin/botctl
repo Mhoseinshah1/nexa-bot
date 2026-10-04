@@ -1584,7 +1584,7 @@ cmd_logs() {
   require_installed
   if [ $# -gt 0 ]; then
     case "$1" in
-      api | worker | monitor | recovery | provisioner | postgres | redis | caddy | web-assets)
+      api | worker | monitor | recovery | provisioner | assistant | postgres | redis | caddy | web-assets)
         nexa_compose logs -f --tail 200 "$1"
         ;;
       # `monitor` was missing from this list for the whole of Phase 3C, which
@@ -1596,7 +1596,7 @@ cmd_logs() {
       # after it: it has no request path either, and when a paid order has not
       # become a service its log is where the reason is.
       *)
-        nexa_die "unknown service \"$1\". One of: api worker monitor recovery provisioner postgres redis caddy web-assets."
+        nexa_die "unknown service \"$1\". One of: api worker monitor recovery provisioner assistant postgres redis caddy web-assets."
         ;;
     esac
   else

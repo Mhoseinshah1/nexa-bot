@@ -6867,6 +6867,7 @@ export const WEB_FA = {
   'web.perm_support_ai_configure':
     'پیکربندی هوش مصنوعی پشتیبانی: حالت، سرویس‌دهنده‌ها، کلیدها و محدودیت‌ها؛ دیدن مصرف و هزینه',
   'web.perm_support_ai_auto_reply': 'اجازه به هوش مصنوعی برای پاسخ خودکار به مشتریان',
+  'web.perm_support_ai_assist': 'درخواست خلاصه و پیش‌نویس پاسخ از هوش مصنوعی در گفتگوهای بیزینس',
   'web.perm_tickets_reply': 'پاسخ به تیکت',
   'web.perm_tickets_assign': 'واگذاری و اولویت‌بندی تیکت',
   'web.perm_tickets_close': 'تغییر وضعیت تیکت',

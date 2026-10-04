@@ -77,6 +77,7 @@ export const PERMISSION_LABELS: Readonly<Record<PermissionKey, WebKey>> = {
   'business_chats.reply': 'web.perm_business_chats_reply',
   'support_ai.configure': 'web.perm_support_ai_configure',
   'support_ai.auto_reply': 'web.perm_support_ai_auto_reply',
+  'support_ai.assist': 'web.perm_support_ai_assist',
   'tickets.reply': 'web.perm_tickets_reply',
   'tickets.assign': 'web.perm_tickets_assign',
   'tickets.close': 'web.perm_tickets_close',

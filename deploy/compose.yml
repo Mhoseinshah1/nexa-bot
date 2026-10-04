@@ -407,6 +407,39 @@ services:
       retries: 3
       start_period: 40s
 
+  assistant:
+    <<: *app-common
+    command: ['node', 'dist/main.assistant.js']
+    # The SIXTH process role (TB5, ADR-0034 §7), from the SAME image: the only one that calls
+    # an AI provider in the background.
+    #
+    # Not the api: a provider call is outbound HTTPS with a decrypted third-party key and a
+    # latency measured in seconds, and holding a request thread for it makes the Web Admin
+    # slow. Not the worker: a provider outage must not delay payment and service
+    # notifications. Not the provisioner: a slow model must not delay the service a customer
+    # paid for. The reasons the provisioner and the monitor are their own roles, applied once
+    # more.
+    #
+    # Deliberately NOT in botctl's required-ready set (NEXA_READY_SERVICES): every tenant's
+    # support AI is OFF until an owner configures it, and a dead assistant costs drafts, never
+    # money or a delivered service. Its health is still checked, and `botctl logs assistant`
+    # follows it.
+    #
+    # The path and the derivation must agree with config.schema.ts, and it writes on the same
+    # WORKER_HEARTBEAT interval as the other roles.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const fs=require('fs');const p=process.env.ASSISTANT_HEARTBEAT_PATH||'/tmp/nexa-assistant.heartbeat';const i=Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS);const max=(Number.isFinite(i)&&i>0?i:10000)*3;try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=max?0:1)}catch{process.exit(1)}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
   # The FOURTH process role, and the only one that can replace this
   # installation's database.
   #

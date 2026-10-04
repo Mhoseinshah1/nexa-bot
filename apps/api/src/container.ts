@@ -672,7 +672,7 @@ import type { NotificationTransport } from './modules/control/notifications/appl
  * delay notification delivery, and a customer waiting for the configuration they paid
  * for must not queue behind a sweep of every panel in the installation.
  */
-export type ProcessRole = 'api' | 'worker' | 'monitor' | 'recovery' | 'provisioner';
+export type ProcessRole = 'api' | 'worker' | 'monitor' | 'recovery' | 'provisioner' | 'assistant';
 
 export interface Container {
   readonly config: AppConfig;

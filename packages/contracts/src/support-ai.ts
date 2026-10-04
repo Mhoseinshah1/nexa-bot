@@ -312,3 +312,173 @@ export const supportAiUsageResponseSchema = z.object({
   ),
 });
 export type SupportAiUsageResponse = z.infer<typeof supportAiUsageResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// TB5 — the structured decision, and Assist drafts (ADR-0034 §1, §6)
+// ---------------------------------------------------------------------------
+
+/**
+ * What the model may decide. Nothing here performs an action: `CREATE_OR_LINK_TICKET` is a
+ * SUGGESTION the deterministic layer (TB7) carries out under its own rules, and every other
+ * privileged act hands off (ADR-0034 §1).
+ */
+export const SUPPORT_AI_DECISIONS = [
+  'REPLY',
+  'ASK_CLARIFYING_QUESTION',
+  'HANDOFF',
+  'CREATE_OR_LINK_TICKET',
+  'NO_ACTION',
+] as const;
+export type SupportAiDecisionKind = (typeof SUPPORT_AI_DECISIONS)[number];
+
+/**
+ * The closed topic catalogue. The model names one; the deterministic guards (TB7) decide what
+ * a topic may lead to. The SAFE ones are the only topics an automatic reply may ever answer,
+ * and only when the tenant's allowlist names them (default: none).
+ */
+export const SUPPORT_AI_SAFE_TOPICS = [
+  'CONNECTION_TROUBLESHOOTING',
+  'APP_SETUP',
+  'SUBSCRIPTION_UPDATE',
+  'SERVICE_INFO',
+  'TRAFFIC_AND_EXPIRY',
+  'PLAN_INFO',
+  'KNOWN_ERROR',
+  'GREETING',
+] as const;
+export type SupportAiSafeTopic = (typeof SUPPORT_AI_SAFE_TOPICS)[number];
+
+/** Topics that ALWAYS hand off, whatever the model's decision or confidence (program §26). */
+export const SUPPORT_AI_HANDOFF_TOPICS = [
+  'REFUND',
+  'WALLET',
+  'PAYMENT_DISPUTE',
+  'PAYMENT_STATUS',
+  'RECEIPT_REVIEW',
+  'SERVICE_DELETE_OR_TERMINATE',
+  'OWNERSHIP_OR_ACCOUNT_TRANSFER',
+  'ACCOUNT_SECURITY',
+  'CREDENTIALS',
+  'PROVIDER_CHANGE',
+  'FRAUD_OR_CHARGEBACK',
+  'LEGAL_OR_SAFETY',
+  'HUMAN_REQUESTED',
+  'OTHER',
+] as const;
+
+export const SUPPORT_AI_TOPICS = [...SUPPORT_AI_SAFE_TOPICS, ...SUPPORT_AI_HANDOFF_TOPICS] as const;
+export type SupportAiTopic = (typeof SUPPORT_AI_TOPICS)[number];
+
+export const SUPPORT_AI_CONFIDENCES = ['LOW', 'MEDIUM', 'HIGH'] as const;
+export const SUPPORT_AI_TICKET_ACTIONS = ['NONE', 'CREATE', 'LINK'] as const;
+
+/** The longest reply text a decision may carry, whatever the tenant configures. */
+export const SUPPORT_AI_REPLY_MAX_CHARS = 4000;
+
+/**
+ * THE decision a model must return, validated by zod before anything reads it. Invalid output
+ * sends nothing (ADR-0034 §1). `factRefs` and `knowledgeRefs` name payload aliases (`S1`, `P2`,
+ * `K3`); a ref the payload did not contain is a reason to refuse the decision (TB7).
+ */
+export const supportAiDecisionSchema = z
+  .object({
+    decision: z.enum(SUPPORT_AI_DECISIONS),
+    replyText: z.string().max(SUPPORT_AI_REPLY_MAX_CHARS),
+    topic: z.enum(SUPPORT_AI_TOPICS),
+    confidence: z.enum(SUPPORT_AI_CONFIDENCES),
+    factRefs: z.array(z.string().regex(/^[A-Z][0-9]{1,3}$/u)).max(20),
+    knowledgeRefs: z.array(z.string().regex(/^[A-Z][0-9]{1,3}$/u)).max(20),
+    ticketAction: z.enum(SUPPORT_AI_TICKET_ACTIONS),
+    /** One or two sentences for the operator: what the customer wants, in Persian. */
+    summary: z.string().max(600),
+    /** A short label of the customer's intent, for the operator. */
+    intent: z.string().max(120),
+  })
+  .strict();
+export type SupportAiDecision = z.infer<typeof supportAiDecisionSchema>;
+
+/**
+ * The same decision as a JSON Schema in the intersection every provider accepts (OQ-TB-21):
+ * closed objects, every property required, no numeric or length keywords — zod above enforces
+ * the bounds the providers would strip.
+ */
+export const SUPPORT_AI_DECISION_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'decision',
+    'replyText',
+    'topic',
+    'confidence',
+    'factRefs',
+    'knowledgeRefs',
+    'ticketAction',
+    'summary',
+    'intent',
+  ],
+  properties: {
+    decision: { type: 'string', enum: [...SUPPORT_AI_DECISIONS] },
+    replyText: { type: 'string' },
+    topic: { type: 'string', enum: [...SUPPORT_AI_TOPICS] },
+    confidence: { type: 'string', enum: [...SUPPORT_AI_CONFIDENCES] },
+    factRefs: { type: 'array', items: { type: 'string' } },
+    knowledgeRefs: { type: 'array', items: { type: 'string' } },
+    ticketAction: { type: 'string', enum: [...SUPPORT_AI_TICKET_ACTIONS] },
+    summary: { type: 'string' },
+    intent: { type: 'string' },
+  },
+};
+
+/**
+ * An AI job (TB5 Assist drafts; TB7 automatic decisions). The draft is the job's result and
+ * lives on the same row, bounded and purged with the transcript's retention.
+ */
+export const SUPPORT_AI_JOB_KINDS = ['ASSIST_DRAFT'] as const;
+export type SupportAiJobKind = (typeof SUPPORT_AI_JOB_KINDS)[number];
+
+/**
+ * - `QUEUED` — waiting for the `assistant` role.
+ * - `READY` — a draft exists; nothing was sent.
+ * - `FAILED` — no draft: the chain could not answer, or the answer was invalid.
+ * - `SENT` — an operator sent it (edited or not), through the ordinary outbound lane.
+ * - `DISCARDED` — an operator threw it away, or a newer draft replaced it.
+ */
+export const SUPPORT_AI_JOB_STATES = ['QUEUED', 'READY', 'FAILED', 'SENT', 'DISCARDED'] as const;
+export type SupportAiJobState = (typeof SUPPORT_AI_JOB_STATES)[number];
+
+export const supportAiDraftViewSchema = z.object({
+  id: z.string(),
+  state: z.enum(SUPPORT_AI_JOB_STATES),
+  createdAt: z.string(),
+  readyAt: z.string().nullable(),
+  failureCode: z.string().nullable(),
+  decision: z.enum(SUPPORT_AI_DECISIONS).nullable(),
+  topic: z.enum(SUPPORT_AI_TOPICS).nullable(),
+  confidence: z.enum(SUPPORT_AI_CONFIDENCES).nullable(),
+  summary: z.string().nullable(),
+  intent: z.string().nullable(),
+  suggestedReply: z.string().nullable(),
+  ticketAction: z.enum(SUPPORT_AI_TICKET_ACTIONS).nullable(),
+  /** Payload aliases the model cited, resolved server-side to short human labels. */
+  factLabels: z.array(z.string()),
+  provider: z.enum(SUPPORT_AI_PROVIDERS).nullable(),
+  model: z.string().nullable(),
+});
+export type SupportAiDraftView = z.infer<typeof supportAiDraftViewSchema>;
+
+export const supportAiDraftRequestSchema = z.object({ idempotencyKey: idempotencyKeySchema });
+export const supportAiDraftSendRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  /** The text the operator actually sends — the draft, edited or not. */
+  text: z.string().trim().min(1).max(4096),
+});
+
+export const SUPPORT_AI_ASSIST_ROUTES = {
+  drafts: (conversationId: string) => `/business-chats/${encodeURIComponent(conversationId)}/drafts`,
+  draft: (draftId: string) => `/support-ai/drafts/${encodeURIComponent(draftId)}`,
+  send: (draftId: string) => `/support-ai/drafts/${encodeURIComponent(draftId)}/send`,
+  discard: (draftId: string) => `/support-ai/drafts/${encodeURIComponent(draftId)}/discard`,
+} as const;
+
+/** Drafts and their AI text are purged with the transcript (ADR-0033 §8). */
+export const SUPPORT_AI_DRAFT_RETENTION_DAYS = 30;
