@@ -474,7 +474,8 @@ export const supportAiDraftSendRequestSchema = z.object({
 });
 
 export const SUPPORT_AI_ASSIST_ROUTES = {
-  drafts: (conversationId: string) => `/business-chats/${encodeURIComponent(conversationId)}/drafts`,
+  drafts: (conversationId: string) =>
+    `/business-chats/${encodeURIComponent(conversationId)}/drafts`,
   draft: (draftId: string) => `/support-ai/drafts/${encodeURIComponent(draftId)}`,
   send: (draftId: string) => `/support-ai/drafts/${encodeURIComponent(draftId)}/send`,
   discard: (draftId: string) => `/support-ai/drafts/${encodeURIComponent(draftId)}/discard`,

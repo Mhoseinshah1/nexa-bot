@@ -422,7 +422,10 @@ export const PERMISSIONS = [
   ),
   p('support_ai.auto_reply', 'Allow the support AI to answer customers automatically', 'CRITICAL'),
   // TB5: asking the AI for a draft spends provider budget; sending it stays `business_chats.reply`.
-  p('support_ai.assist', 'Ask the support AI for a summary and a suggested reply in a business conversation'),
+  p(
+    'support_ai.assist',
+    'Ask the support AI for a summary and a suggested reply in a business conversation',
+  ),
 
   /*
    * Campaigns (round N, C1, `docs/round-n-campaigns-audit.md` D10). A campaign composes

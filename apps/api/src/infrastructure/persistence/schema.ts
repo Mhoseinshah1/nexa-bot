@@ -13682,8 +13682,14 @@ export const supportAiJobs = pgTable(
     summary: text('summary'),
     intent: text('intent'),
     suggestedReply: text('suggested_reply'),
-    factRefs: text('fact_refs').array().notNull().default(sql`'{}'::text[]`),
-    factLabels: text('fact_labels').array().notNull().default(sql`'{}'::text[]`),
+    factRefs: text('fact_refs')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    factLabels: text('fact_labels')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     provider: text('provider'),
     model: text('model'),
     sentOutboundId: uuid('sent_outbound_id'),
@@ -13695,8 +13701,14 @@ export const supportAiJobs = pgTable(
     unique('support_ai_jobs_tenant_id_key').on(table.tenantId, table.id),
     uniqueIndex('support_ai_jobs_idempotency_key').on(table.tenantId, table.idempotencyKey),
     /** The claim: queued jobs, oldest first. */
-    index('support_ai_jobs_due_idx').on(table.tenantId, table.createdAt).where(sql`state = 'QUEUED'`),
-    index('support_ai_jobs_conversation_idx').on(table.tenantId, table.conversationId, table.createdAt),
+    index('support_ai_jobs_due_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`state = 'QUEUED'`),
+    index('support_ai_jobs_conversation_idx').on(
+      table.tenantId,
+      table.conversationId,
+      table.createdAt,
+    ),
     foreignKey({
       columns: [table.tenantId, table.conversationId],
       foreignColumns: [businessConversations.tenantId, businessConversations.id],
@@ -13712,7 +13724,10 @@ export const supportAiJobs = pgTable(
     check('support_ai_jobs_decision_check', enumCheck('decision', SUPPORT_AI_DECISIONS)),
     check('support_ai_jobs_topic_check', enumCheck('topic', SUPPORT_AI_TOPICS)),
     check('support_ai_jobs_confidence_check', enumCheck('confidence', SUPPORT_AI_CONFIDENCES)),
-    check('support_ai_jobs_ticket_action_check', enumCheck('ticket_action', SUPPORT_AI_TICKET_ACTIONS)),
+    check(
+      'support_ai_jobs_ticket_action_check',
+      enumCheck('ticket_action', SUPPORT_AI_TICKET_ACTIONS),
+    ),
     check('support_ai_jobs_provider_check', enumCheck('provider', SUPPORT_AI_PROVIDERS)),
     // A ready or sent draft carries a decision; a queued one carries nothing yet.
     check(
@@ -13720,7 +13735,10 @@ export const supportAiJobs = pgTable(
       sql`(state IN ('READY', 'SENT')) <= (decision IS NOT NULL OR text_purged_at IS NOT NULL)`,
     ),
     check('support_ai_jobs_sent_check', sql`(state = 'SENT') = (sent_outbound_id IS NOT NULL)`),
-    check('support_ai_jobs_reply_check', sql`suggested_reply IS NULL OR length(suggested_reply) <= 4000`),
+    check(
+      'support_ai_jobs_reply_check',
+      sql`suggested_reply IS NULL OR length(suggested_reply) <= 4000`,
+    ),
     check('support_ai_jobs_summary_check', sql`summary IS NULL OR length(summary) <= 600`),
     check('support_ai_jobs_attempts_check', sql`attempts >= 0`),
   ],
