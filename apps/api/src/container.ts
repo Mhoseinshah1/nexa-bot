@@ -583,6 +583,18 @@ import { BusinessConnectionService } from './modules/commerce/business-chats/app
 import { BusinessTransport } from './modules/commerce/business-chats/application/business-transport.js';
 import { DrizzleBusinessConnectionRepository } from './modules/commerce/business-chats/infrastructure/drizzle-business-connection.repository.js';
 import { TelegramBusinessGateway } from './modules/commerce/business-chats/infrastructure/telegram-business.gateway.js';
+import { BusinessConversationService } from './modules/commerce/business-chats/application/business-conversation.service.js';
+import { BusinessOutboundService } from './modules/commerce/business-chats/application/business-outbound.service.js';
+import {
+  BUSINESS_OUTBOUND_INTERVAL_MS,
+  BusinessOutboundLoop,
+} from './modules/commerce/business-chats/application/business-outbound-loop.js';
+import {
+  DrizzleBusinessConversationRepository,
+  DrizzleBusinessCustomerLookup,
+  DrizzleBusinessMessageRepository,
+  DrizzleBusinessOutboundRepository,
+} from './modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository.js';
 // WP-A4: the Telegram operations log group.
 import {
   OpsGroupRouter,
@@ -1111,6 +1123,8 @@ export interface Container {
   /** TB1: Telegram Business connections (ADR-0033). */
   readonly businessConnections: BusinessConnectionService;
   readonly businessTransport: BusinessTransport;
+  readonly businessConversations: BusinessConversationService;
+  readonly businessOutboundLoop: BusinessOutboundLoop;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
@@ -5362,6 +5376,53 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
   });
 
+  /*
+   * TB2 (ADR-0033 §4–§8): conversations, the human takeover, and the outbound lane. The lane
+   * is BUILT in every role and STARTED only by the worker, like the customer notification lane.
+   */
+  const businessConversationRepository = new DrizzleBusinessConversationRepository(database.db);
+  const businessOutboundRepository = new DrizzleBusinessOutboundRepository(database.db);
+  const businessMessageRepository = new DrizzleBusinessMessageRepository(database.db);
+  const businessConversations = new BusinessConversationService({
+    conversations: businessConversationRepository,
+    messages: businessMessageRepository,
+    outbound: businessOutboundRepository,
+    customers: new DrizzleBusinessCustomerLookup(database.db),
+    connections: businessConnections,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const businessOutboundLoop = new BusinessOutboundLoop(
+    new BusinessOutboundService({
+      outbound: businessOutboundRepository,
+      conversations: businessConversationRepository,
+      messages: businessMessageRepository,
+      control: businessConversations,
+      transport: businessTransport,
+      uow,
+      scopeActivity: tenants,
+      clock,
+      ids,
+      logger,
+    }),
+    {
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: BUSINESS_OUTBOUND_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      logger,
+    },
+  );
+
   // WP-A4: the operations log group. Built before the notification lane, which prefers
   // the connected group over the manual chat id setting, and before the dispatcher, which
   // resolves an intent routed to the group to where the group is at send time.
@@ -6453,6 +6514,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsGroups,
     businessConnections,
     businessTransport,
+    businessConversations,
+    businessOutboundLoop,
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,
@@ -6545,6 +6608,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // Round P: a claimed command sync finishes its record or lapses with its lease.
       await botCommandSyncLoop.stop();
       await customerNotificationLoop.stop();
+      // TB2: a stamped business send is recorded before the pool closes.
+      await businessOutboundLoop.stop();
       // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
       await broadcastLoop.stop();
       await incidentSchedulerLoop.stop();

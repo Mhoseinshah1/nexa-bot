@@ -396,6 +396,19 @@ export const PERMISSIONS = [
   p('tickets.categories.edit', 'Create or edit support ticket categories'),
 
   /*
+   * TB2 — Telegram Business conversations (ADR-0033, `docs/support-agent/tb0-audit.md` §7).
+   * Two keys of the seven TB0 planned; the AI keys arrive with the packages that use them.
+   * Reading the owner's business chats, and speaking in them AS THE OWNER'S ACCOUNT — which
+   * includes taking a conversation from the AI and handing it back — are different
+   * authorities. MEDIUM: nothing here moves money, but a reply is the owner's voice.
+   */
+  p('business_chats.view', 'View Telegram Business conversations and connections', 'LOW'),
+  p(
+    'business_chats.reply',
+    'Reply as the Telegram Business account, take a conversation over or return it to the AI',
+  ),
+
+  /*
    * Campaigns (round N, C1, `docs/round-n-campaigns-audit.md` D10). A campaign composes
    * engines that already have their own permissions, and MANAGE is charged together with
    * each of those — a campaign is never a way to do what its operator could not do
@@ -598,6 +611,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'tickets.reply',
       'tickets.assign',
       'tickets.close',
+      // TB2: the Telegram Business conversations the support account holds.
+      'business_chats.view',
+      'business_chats.reply',
       'tickets.categories.edit',
       // Program §6: an operator drafts the rules; PUBLISHING them stays the owner's.
       'terms.view',
@@ -663,6 +679,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'tickets.reply',
       'tickets.assign',
       'tickets.close',
+      // TB2: the Telegram Business conversations the support account holds.
+      'business_chats.view',
+      'business_chats.reply',
       // Phase A2: a direct message to one customer, from their page.
       'users.message.send',
       'users.message.view',
@@ -864,6 +883,7 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'tickets.assign': 'tickets.view',
   'tickets.close': 'tickets.view',
   'tickets.categories.edit': 'tickets.view',
+  'business_chats.reply': 'business_chats.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass

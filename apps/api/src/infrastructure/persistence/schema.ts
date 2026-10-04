@@ -256,6 +256,13 @@ import {
   OPS_LOG_GROUP_PROBLEMS,
   OPS_LOG_GROUP_STATUSES,
   BUSINESS_BOT_RIGHTS,
+  BUSINESS_CONVERSATION_STATES,
+  BUSINESS_HANDOFF_REASONS,
+  BUSINESS_MESSAGE_KINDS,
+  BUSINESS_MESSAGE_ORIGINS,
+  BUSINESS_OUTBOUND_ORIGINS,
+  BUSINESS_OUTBOUND_STATES,
+  BUSINESS_TAKEOVER_REASONS,
   OPS_LOG_TOPIC_STATES,
   // R2: the Telegram messages edited in place.
   TELEGRAM_WIZARD_KINDS,
@@ -13237,5 +13244,231 @@ export const telegramBusinessConnections = pgTable(
       sql`length(connection_id) BETWEEN 1 AND 256`,
     ),
     check('telegram_business_connections_version_check', sql`version >= 1`),
+  ],
+);
+
+/**
+ * TB2 — one Telegram Business conversation: one customer chat of one business account on
+ * one bot (ADR-0033 §4).
+ *
+ * Keyed by the bot, the OWNER and the chat, not by the connection row: a reconnect that
+ * gets a new connection id (`OQ-TB-02`) continues the same conversation, and
+ * `connection_row_id` follows the latest connection that carried it.
+ *
+ * `control_epoch` is the takeover mechanism. Every human signal (the owner typing, another
+ * business bot, an operator taking over or sending, an operator resuming) increments it under
+ * this row's lock, and every lane row carries the epoch it was created under. The send lane
+ * compares them under the same lock immediately before stamping a send, so a human who spoke
+ * first always wins. There is no `setState`: every transition is a conditional UPDATE naming
+ * the states it may leave.
+ */
+export const businessConversations = pgTable(
+  'business_conversations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    ownerTelegramUserId: text('owner_telegram_user_id').notNull(),
+    /** The private chat's id: for a business chat, the customer's own Telegram id. */
+    chatId: text('chat_id').notNull(),
+    connectionRowId: uuid('connection_row_id').notNull(),
+    /** The person on the other side, from Telegram's `from` of their own messages. */
+    peerTelegramUserId: text('peer_telegram_user_id').notNull(),
+    /** The NEXA customer, by exact `(tenant, telegram_user_id)` only; null when unlinked. */
+    customerId: uuid('customer_id'),
+    state: text('state').notNull().default('AI_ACTIVE'),
+    controlEpoch: integer('control_epoch').notNull().default(0),
+    takeoverReason: text('takeover_reason'),
+    handoffReason: text('handoff_reason'),
+    lastMessageAt: timestamptz('last_message_at'),
+    lastInboundAt: timestamptz('last_inbound_at'),
+    lastHumanAt: timestamptz('last_human_at'),
+    lastAiAt: timestamptz('last_ai_at'),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('business_conversations_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('business_conversations_chat_key').on(
+      table.botInstanceId,
+      table.ownerTelegramUserId,
+      table.chatId,
+    ),
+    /** The inbox: newest activity first. */
+    index('business_conversations_inbox_idx').on(table.tenantId, table.lastMessageAt),
+    foreignKey({
+      columns: [table.tenantId, table.connectionRowId],
+      foreignColumns: [telegramBusinessConnections.tenantId, telegramBusinessConnections.id],
+      name: 'business_conversations_connection_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'business_conversations_customer_fk',
+    }),
+    check('business_conversations_state_check', enumCheck('state', BUSINESS_CONVERSATION_STATES)),
+    check(
+      'business_conversations_takeover_reason_check',
+      enumCheck('takeover_reason', BUSINESS_TAKEOVER_REASONS),
+    ),
+    check(
+      'business_conversations_handoff_reason_check',
+      enumCheck('handoff_reason', BUSINESS_HANDOFF_REASONS),
+    ),
+    // A handoff always says why, and only a handoff does.
+    check(
+      'business_conversations_handoff_shape_check',
+      sql`(state = 'HANDOFF_REQUIRED') = (handoff_reason IS NOT NULL)`,
+    ),
+    check('business_conversations_epoch_check', sql`control_epoch >= 0`),
+    check('business_conversations_chat_check', sql`chat_id ~ '^-?[1-9][0-9]{0,31}$'`),
+    check('business_conversations_peer_check', sql`peer_telegram_user_id ~ '^[1-9][0-9]{0,31}$'`),
+  ],
+);
+
+/**
+ * TB2 — the bounded transcript of a business conversation (ADR-0033 §8).
+ *
+ * Kept only as far as the agent and the operator need context: `text` is bounded, purged
+ * `BUSINESS_MESSAGE_TEXT_RETENTION_DAYS` after the message was sent and at once when
+ * Telegram reports it deleted. The row itself (who, when, kind) survives the purge, so a
+ * conversation's history of who spoke stays readable without keeping what was said.
+ */
+export const businessMessages = pgTable(
+  'business_messages',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    conversationId: uuid('conversation_id').notNull(),
+    telegramMessageId: bigint('telegram_message_id', { mode: 'number' }).notNull(),
+    origin: text('origin').notNull(),
+    kind: text('kind').notNull(),
+    text: text('text'),
+    contentVersion: integer('content_version').notNull().default(1),
+    sentAt: timestamptz('sent_at').notNull(),
+    editedAt: timestamptz('edited_at'),
+    deletedAt: timestamptz('deleted_at'),
+    textPurgedAt: timestamptz('text_purged_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('business_messages_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('business_messages_message_key').on(table.conversationId, table.telegramMessageId),
+    /** The detail view: one conversation's most recent messages. */
+    index('business_messages_conversation_idx').on(
+      table.tenantId,
+      table.conversationId,
+      table.sentAt,
+    ),
+    /** The retention sweep: text still held, oldest first. */
+    index('business_messages_retention_idx')
+      .on(table.tenantId, table.sentAt)
+      .where(sql`text IS NOT NULL`),
+    foreignKey({
+      columns: [table.tenantId, table.conversationId],
+      foreignColumns: [businessConversations.tenantId, businessConversations.id],
+      name: 'business_messages_conversation_fk',
+    }),
+    check('business_messages_origin_check', enumCheck('origin', BUSINESS_MESSAGE_ORIGINS)),
+    check('business_messages_kind_check', enumCheck('kind', BUSINESS_MESSAGE_KINDS)),
+    check('business_messages_text_check', sql`text IS NULL OR length(text) <= 4096`),
+    check('business_messages_message_id_check', sql`telegram_message_id > 0`),
+    check('business_messages_version_check', sql`content_version >= 1`),
+    // A deleted message holds no text.
+    check('business_messages_deleted_check', sql`deleted_at IS NULL OR text IS NULL`),
+  ],
+);
+
+/**
+ * TB2 — the outbound lane: every message NEXA sends as a Business account (ADR-0033 §4, §6).
+ *
+ * ADR-0030's discipline, unchanged: the row is enqueued inside the transaction that decided
+ * to send it, the worker claims it with a lease, stamps `send_started_at` in its own
+ * transaction BEFORE the network call, and records the outcome in a third. A stamped row
+ * nobody resolved is `UNCONFIRMED`, never resent. What is new is the final check: the stamp's
+ * transaction locks the conversation and requires `control_epoch` to equal this row's
+ * (plus `AI_ACTIVE` for an `AUTO` row) — `businessOutboundSendable` — or the row is
+ * `SUPERSEDED` and nothing is sent.
+ */
+export const businessOutboundMessages = pgTable(
+  'business_outbound_messages',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    conversationId: uuid('conversation_id').notNull(),
+    origin: text('origin').notNull(),
+    /** The text to send; purged with the transcript's retention once resolved. */
+    body: text('body'),
+    createdByAdminId: uuid('created_by_admin_id'),
+    controlEpoch: integer('control_epoch').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    state: text('state').notNull().default('PENDING'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: timestamptz('next_attempt_at'),
+    sendStartedAt: timestamptz('send_started_at'),
+    resolvedAt: timestamptz('resolved_at'),
+    telegramMessageId: bigint('telegram_message_id', { mode: 'number' }),
+    failureCode: text('failure_code'),
+    bodyPurgedAt: timestamptz('body_purged_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('business_outbound_messages_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('business_outbound_messages_idempotency_key').on(
+      table.tenantId,
+      table.idempotencyKey,
+    ),
+    /** The claim: pending rows, by when they are due. */
+    index('business_outbound_messages_due_idx')
+      .on(table.tenantId, table.nextAttemptAt)
+      .where(sql`state = 'PENDING'`),
+    /** Echo matching and the detail view. */
+    index('business_outbound_messages_conversation_idx').on(
+      table.tenantId,
+      table.conversationId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.conversationId],
+      foreignColumns: [businessConversations.tenantId, businessConversations.id],
+      name: 'business_outbound_messages_conversation_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.createdByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'business_outbound_messages_admin_fk',
+    }),
+    check(
+      'business_outbound_messages_origin_check',
+      enumCheck('origin', BUSINESS_OUTBOUND_ORIGINS),
+    ),
+    check('business_outbound_messages_state_check', enumCheck('state', BUSINESS_OUTBOUND_STATES)),
+    check(
+      'business_outbound_messages_body_check',
+      sql`body IS NULL OR length(body) BETWEEN 1 AND 4096`,
+    ),
+    // A person's send names the person; the AI's never does.
+    check(
+      'business_outbound_messages_author_check',
+      sql`(origin = 'AUTO') = (created_by_admin_id IS NULL)`,
+    ),
+    // Resolved exactly when not PENDING; a delivered row knows its Telegram message.
+    check(
+      'business_outbound_messages_resolved_check',
+      sql`(state = 'PENDING') = (resolved_at IS NULL)`,
+    ),
+    check('business_outbound_messages_attempts_check', sql`attempts >= 0`),
+    check('business_outbound_messages_epoch_check', sql`control_epoch >= 0`),
   ],
 );

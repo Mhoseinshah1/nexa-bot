@@ -178,6 +178,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- Migration P7: the run inputs, before the runs they name.
        legacy_import_run_inputs,
        -- TB1: Telegram Business connections, before the bots and tenants they name.
+       business_outbound_messages, business_messages, business_conversations,
        telegram_business_connections,
        customers
      RESTART IDENTITY CASCADE` as never,

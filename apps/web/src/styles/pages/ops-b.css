@@ -455,6 +455,120 @@ form.set-row > * + * {
   }
 }
 
+/* --- TB2 Telegram Business conversations ----------------------------------------- */
+
+/* A row's state: the badge, then why the system handed it off, then a connection problem. */
+.bchat-state-cell {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.bchat-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  max-width: 48ch;
+}
+.bchat-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+}
+.bchat-controls {
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/*
+ * The transcript, oldest first: the customer on the start side, everything said FOR the
+ * business account on the end side, each origin on its own tint. The origin is also in
+ * words on every message — side and colour only repeat it.
+ */
+.bchat-thread,
+.bchat-outbound {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.bchat-message {
+  max-width: 82%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-bubble);
+  border-start-start-radius: var(--radius-bubble-tail);
+  background: var(--bg-3);
+  padding: 10px 14px;
+  display: grid;
+  gap: 8px;
+  align-self: flex-start;
+}
+.bchat-message:not(.origin-inbound) {
+  align-self: flex-end;
+  border-start-start-radius: var(--radius-bubble);
+  border-start-end-radius: var(--radius-bubble-tail);
+}
+.bchat-message.origin-human {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+.bchat-message.origin-own-echo {
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+.bchat-message.origin-other-bot {
+  border-color: var(--violet);
+  background: var(--violet-soft);
+}
+.bchat-message.origin-offline {
+  border-style: dashed;
+  background: transparent;
+  color: var(--fg-2);
+}
+.bchat-message-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.bchat-avatar {
+  width: 22px;
+  height: 22px;
+}
+.bchat-body {
+  margin: 0;
+  /* What a person wrote keeps its own line breaks. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+.bchat-outbound-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  padding: 8px 12px;
+  display: grid;
+  gap: 6px;
+}
+.bchat-reply-actions {
+  justify-content: space-between;
+  align-items: center;
+}
+@media (max-width: 640px) {
+  .bchat-message {
+    max-width: 100%;
+  }
+  .bchat-preview {
+    max-width: none;
+  }
+}
+
 /* --- Bot texts (the template screen, WP-A3) -------------------------------------- */
 
 /*

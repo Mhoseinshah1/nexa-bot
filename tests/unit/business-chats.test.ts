@@ -156,7 +156,7 @@ describe('reading business messages and deletions', () => {
     text: 'hello',
   };
 
-  it('reads the routing facts and none of the content', () => {
+  it('reads the routing facts and the bounded text', () => {
     const parsed = parseBusinessMessage(message);
     expect(parsed).toEqual({
       connectionId: 'conn-1',
@@ -168,8 +168,9 @@ describe('reading business messages and deletions', () => {
       isFromOffline: false,
       sentAt: new Date(1_790_000_100 * 1000),
       editedAt: null,
+      kind: 'TEXT',
+      text: 'hello',
     });
-    expect(JSON.stringify(parsed)).not.toContain('hello');
   });
 
   it('refuses a message without a connection id', () => {
