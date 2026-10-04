@@ -314,10 +314,11 @@ export function UsersPage({
 
         {/*
           What the two activity columns ARE (issue 12). `first_seen_at` / `last_seen_at` are
-          written by ONE path, `CustomerService.resolveFromUpdate`, on every message and button
-          press a customer sends a customer bot — not only `/start`, and never by an operator's
-          action — and by the legacy importer, which stamps an imported row with the import's
-          time. "Contact" read as a phone call or a support request; this says which events count.
+          written by `CustomerService.resolveFromUpdate` on every message and button press a
+          customer sends a customer bot — not only `/start`, and never by an operator's action —
+          and otherwise only by the legacy importer, which stamps an imported row with the
+          import's time. "Contact" read as a phone call or a support request; this says which
+          events count.
         */}
         <p className="muted small ca-list-note" hidden={toolbarHidden}>
           {t('web.users_activity_note')}
