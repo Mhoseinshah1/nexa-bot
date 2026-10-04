@@ -41,7 +41,7 @@ count or by confidence.
 ### 3. Volume is bounded
 
 At most one candidate per conversation per 24 hours. Candidates whose normalised title
-matches a pending or approved item are merged into it as an extra source rather than
+matches a pending, approved **or rejected** item are merged into it as an extra source rather than
 duplicated. The optional daily digest is one operator notification per tenant per day,
 and only when there is at least one new candidate.
 
@@ -96,7 +96,8 @@ never applied over a manual edit.
 - The agent improves only as fast as a reviewer approves. That is the point.
 - A rejected candidate is kept, so the same lesson is not proposed again. Its body is
   redacted text and is purged by the same 30-day rule as conversation text if it was
-  never approved.
+  never approved. Its normalised title survives the purge, because the title is what
+  the duplicate check matches.
 
 ## Considered and rejected
 

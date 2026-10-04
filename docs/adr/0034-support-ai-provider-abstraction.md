@@ -73,6 +73,14 @@ business-safety check **never** fall back; they hand off. Asking another model u
 one agrees is a way of laundering an unsafe answer. Fallback happens before anything
 is enqueued for sending, so it can never cause a second customer message.
 
+**The circuit breaker** is per tenant and per provider. Its state is stored in its own
+columns on `support_ai_provider_credentials` (`tripped_until`, `next_probe_at`). A
+provider trips after consecutive `TEMPORARY`/`TIMEOUT` outcomes, and a call after
+`next_probe_at` is the half-open probe. `operational_events` only reports it
+(`support.ai_provider.unavailable`) and is never read to decide a call. Operational
+events are alerts, not control state (ADR-0007). A tripped step is skipped as if it
+had failed temporarily. A chain with every step tripped hands off.
+
 ### 4. Context is an allowlist, scoped by the server
 
 The support context (TB3) is built by a payload builder that accepts **only** a

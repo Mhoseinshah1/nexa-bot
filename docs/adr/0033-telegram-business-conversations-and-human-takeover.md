@@ -48,9 +48,9 @@ state is re-enabled.
 
 ### 3. Every outgoing business message has one classification, and doubt means "human"
 
-`tb0-audit.md` §1.4 is the rule. It splits an outgoing message into five cases: our
-own echo, an away or greeting message, another business bot, the owner, and a
-customer. **Any outgoing message we cannot positively attribute to our own bot is a
+`tb0-audit.md` §1.4 is the rule. It splits a business message into five cases: a
+customer's inbound message, our own echo, an away or greeting message, another business
+bot, and the owner. **Any outgoing message we cannot positively attribute to our own bot is a
 human**, because the costs are asymmetric. A wrongly silent AI costs a few minutes; an
 AI that answers over the owner costs the conversation.
 
@@ -58,10 +58,16 @@ AI that answers over the owner costs the conversation.
 
 Each conversation has `state` and a monotonically increasing `control_epoch`. Every
 human signal increments the epoch and sets `HUMAN_ACTIVE`, under the conversation's
-row lock, in the transaction that records it. Every job and every outbound row
-carries the epoch it was created under. The send lane locks the conversation, compares
-the epoch and the state, and stamps `send_started_at` **in one transaction**, then
-calls Telegram outside it. A mismatch marks the row `SUPERSEDED`, and nothing is sent.
+row lock, in the transaction that records it. Inserting an `OPERATOR` or `ASSIST`
+outbound row is itself a human signal. The operator's message echoes back attributed to
+our own bot, so without this an AI could answer over the operator. Every job and every outbound row
+carries the epoch it was created under. The send lane locks the conversation, reads
+`ScopeActivityReader`, compares the epoch, and stamps `send_started_at` **in one
+transaction**, then calls Telegram outside it. `AUTO` rows also require
+`state = AI_ACTIVE`. `OPERATOR` and `ASSIST` rows require an equal epoch only, because
+they are sent while a human holds the conversation. A mismatch, or a stopped scope,
+marks the row `SUPERSEDED`, and nothing is sent. The job-claim transaction and the
+webhook's business-update transaction read scope activity too.
 
 There is no `setState`. Every transition is a conditional UPDATE naming its `from`
 states, for the reason ADR-0028 gives: replays, double-clicks and two replicas are all
@@ -103,6 +109,14 @@ The transcript is kept only as far as the agent needs context. Message text is
 bounded, purged 30 days after receipt and immediately on deletion. Telegram file ids
 are never projected to the browser. Audit rows record that a takeover happened, never
 what was said.
+
+### 9. Free text is a stated exception to the template rule
+
+An operator's message and a validated AI reply are free text written for one
+conversation. They are the deliberate exception to "customer-facing text comes from a
+template key", in the same way a ticket reply or a direct message is. Every **fixed**
+reply the system sends on its own must come from a template key: the "open the NEXA
+bot" answer to an unlinked peer, a handoff notice, a refusal.
 
 ## Consequences
 
