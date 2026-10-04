@@ -3134,6 +3134,24 @@ Still open:
   that section is a MANUAL ACCEPTANCE step before an `APPLY`. Every other table stays
   refused until its key is evidenced the same way.
 
+## OQ-REH — migration rehearsal and cutover runbooks (program Items 11–17)
+
+- **OQ-REH-01 — RESOLVED: the P7 CLI's flags and report shape.** The runbooks and
+  `scripts/legacy-rehearsal.sh` were aligned with the importer as built
+  (`docs/legacy-migration/importer.md` §1): `--source env:NAME` or a password-less
+  `mysql://` with `--source-password-env`, `--target` a bare name equal to `DATABASE_URL`'s,
+  the production guard `--allow-production-target` + `NEXA_LEGACY_IMPORT_TARGET_ACK`, exit
+  codes 0/3/4/64/65/1, and `report --format json` emitting
+  `docs/legacy-migration/final-report.schema.json` v1 (validated by
+  `scripts/legacy-rehearsal-report-check.mjs`). The importer's `--evidence-class` (required
+  for import, resume and report, and forced to `synthetic` by the fixture's marker) closed
+  the last difference.
+- **OQ-REH-02 — UNKNOWN: how MirzaBot is stopped and its MySQL made read-only.** Cutover
+  step 7 and rollback step R5 name the effect (no customer action reaches it; writes are
+  refused; `CHECKSUM TABLE` proves nothing changed) but the commands belong to the legacy
+  host, which this repository has never seen. **Settled by** the owner writing them into
+  those two steps before the production gate.
+
 ## OQ-P7 — the legacy importer (Migration P7): decisions recorded, not guessed
 
 - **OQ-P7-01 — DECISION: the legacy phone is not imported.** `customers.phone_number` is
