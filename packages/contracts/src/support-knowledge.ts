@@ -105,6 +105,7 @@ export type SupportLearningJobState = (typeof SUPPORT_LEARNING_JOB_STATES)[numbe
  * - `declined` — the model said there is no general lesson here.
  * - `dropped_mode` — the support AI was OFF when the job ran.
  * - `dropped_source` — the reply is gone (purged, or not a delivered human reply).
+ * - `dropped_scope` — the tenant stopped accepting work before the result was recorded.
  * - `output_invalid` — the output failed the strict schema.
  * - `ai_unavailable` — the provider chain produced no answer.
  * - `attempts_exhausted` — claimed too many times without a result.
@@ -116,6 +117,7 @@ export const SUPPORT_LEARNING_JOB_OUTCOMES = [
   'declined',
   'dropped_mode',
   'dropped_source',
+  'dropped_scope',
   'output_invalid',
   'ai_unavailable',
   'attempts_exhausted',
