@@ -532,6 +532,19 @@ import {
   auditLogListResponseSchema,
   type AuditLogListResponse,
   // WP-A7: support tickets.
+  // TB2: Telegram Business conversations.
+  BUSINESS_CHAT_ROUTES,
+  businessChatControlResponseSchema,
+  businessChatDetailResponseSchema,
+  businessChatListResponseSchema,
+  businessChatSendResponseSchema,
+  businessConnectionListResponseSchema,
+  type BusinessChatControlResponse,
+  type BusinessChatDetailResponse,
+  type BusinessChatListResponse,
+  type BusinessChatSendResponse,
+  type BusinessConnectionListResponse,
+  type BusinessConversationState,
   TICKET_ROUTES,
   ticketAssigneesResponseSchema,
   ticketCategoryListResponseSchema,
@@ -4102,6 +4115,69 @@ export function updateTicketCategory(input: {
 }): Promise<TicketCategoryResponse> {
   const { id, ...body } = input;
   return post(TICKET_ROUTES.category(id), body, ticketCategoryResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
+// TB2 — Telegram Business conversations (ADR-0033)
+// ---------------------------------------------------------------------------
+
+/** One page of conversations, optionally of one state. `business_chats.view`. */
+export function fetchBusinessChats(
+  filters: { readonly state?: BusinessConversationState; readonly cursor?: string } = {},
+): Promise<BusinessChatListResponse> {
+  return authedGet(
+    paged(BUSINESS_CHAT_ROUTES.list, { state: filters.state, cursor: filters.cursor }),
+    businessChatListResponseSchema,
+  );
+}
+
+export function fetchBusinessChat(id: string): Promise<BusinessChatDetailResponse> {
+  return authedGet(BUSINESS_CHAT_ROUTES.detail(id), businessChatDetailResponseSchema);
+}
+
+export function fetchBusinessConnections(): Promise<BusinessConnectionListResponse> {
+  return authedGet(BUSINESS_CHAT_ROUTES.connections, businessConnectionListResponseSchema);
+}
+
+/**
+ * An operator's message on the business account's behalf. Sending is itself a takeover:
+ * the server moves the conversation to `HUMAN_ACTIVE` in the same transaction.
+ * `business_chats.reply`.
+ */
+export function sendBusinessChatMessage(input: {
+  readonly conversationId: string;
+  readonly idempotencyKey: string;
+  readonly text: string;
+}): Promise<BusinessChatSendResponse> {
+  return post(
+    BUSINESS_CHAT_ROUTES.send(input.conversationId),
+    { idempotencyKey: input.idempotencyKey, text: input.text },
+    businessChatSendResponseSchema,
+  );
+}
+
+/** Takes the conversation from the AI. `business_chats.reply`. */
+export function takeOverBusinessChat(input: {
+  readonly conversationId: string;
+  readonly idempotencyKey: string;
+}): Promise<BusinessChatControlResponse> {
+  return post(
+    BUSINESS_CHAT_ROUTES.takeover(input.conversationId),
+    { idempotencyKey: input.idempotencyKey },
+    businessChatControlResponseSchema,
+  );
+}
+
+/** Hands the conversation back to the AI. `business_chats.reply`. */
+export function resumeBusinessChat(input: {
+  readonly conversationId: string;
+  readonly idempotencyKey: string;
+}): Promise<BusinessChatControlResponse> {
+  return post(
+    BUSINESS_CHAT_ROUTES.resume(input.conversationId),
+    { idempotencyKey: input.idempotencyKey },
+    businessChatControlResponseSchema,
+  );
 }
 
 // --- Round N: the shared audience, broadcast and mass operations --------------------------

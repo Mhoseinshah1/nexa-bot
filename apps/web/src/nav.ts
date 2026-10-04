@@ -155,6 +155,18 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_ops',
   },
   {
+    /*
+     * TB2: Telegram Business conversations (ADR-0033). `business_chats.view`; the take over,
+     * hand back and reply controls are drawn on `business_chats.reply` inside the page.
+     */
+    id: 'business-chats',
+    path: '/business-chats',
+    label: 'web.nav_business_chats',
+    icon: 'send',
+    permission: 'business_chats.view',
+    group: 'web.navgroup_ops',
+  },
+  {
     // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
     id: 'bulk-operations',
     path: '/bulk-operations',

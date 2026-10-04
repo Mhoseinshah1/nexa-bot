@@ -137,6 +137,7 @@ export const PERMISSION_DOMAIN_LABELS: Readonly<Record<PermissionDomain, WebKey>
   broadcasts: 'web.perm_domain_broadcasts',
   bulk_operations: 'web.perm_domain_bulk_operations',
   tickets: 'web.perm_domain_tickets',
+  business_chats: 'web.perm_domain_business_chats',
   campaigns: 'web.perm_domain_campaigns',
   reports: 'web.perm_domain_reports',
   audit: 'web.perm_domain_audit',

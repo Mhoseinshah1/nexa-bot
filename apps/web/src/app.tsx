@@ -42,6 +42,7 @@ import { SupportPage } from './pages/support';
 import { TermsPage } from './pages/terms';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
+import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chats';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
   BulkOperationDetailPage,
@@ -184,6 +185,9 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/bulk-operations/:id',
   '/tickets',
   '/tickets/:id',
+  // TB2: Telegram Business conversations.
+  '/business-chats',
+  '/business-chats/:id',
   '/payments',
   '/payments/:id',
   '/compensations',
@@ -589,6 +593,32 @@ export function resolve(
       ),
       crumbs: [nav('tickets'), { label: t('web.ticket_detail') }],
       title: t('web.ticket_detail'),
+    };
+  }
+
+  // TB2: Telegram Business conversations and one conversation (ADR-0033).
+  if (route.path === '/business-chats') {
+    return {
+      element: <BusinessChatsPage route={route} denied={!may('business_chats.view')} />,
+      crumbs: [{ label: t('web.bchats_title') }],
+      title: t('web.bchats_title'),
+    };
+  }
+
+  const businessChat = match('/business-chats/:id', route.path);
+  if (businessChat !== null) {
+    return {
+      element: (
+        // Keyed by the conversation id, for the reason the service detail gives.
+        <BusinessChatDetailPage
+          key={businessChat['id'] ?? ''}
+          id={businessChat['id'] ?? ''}
+          denied={!may('business_chats.view')}
+          mayReply={may('business_chats.reply')}
+        />
+      ),
+      crumbs: [nav('business-chats'), { label: t('web.bchat_detail') }],
+      title: t('web.bchat_detail'),
     };
   }
 
