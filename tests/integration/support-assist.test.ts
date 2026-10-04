@@ -17,7 +17,14 @@ import {
   DrizzleBusinessConversationRepository,
   DrizzleBusinessMessageRepository,
 } from '../../apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository';
-import { SEED_IDS, adminActorFor, createAdmin, createTestContext, tenantA, type TestContext } from './harness';
+import {
+  SEED_IDS,
+  adminActorFor,
+  createAdmin,
+  createTestContext,
+  tenantA,
+  type TestContext,
+} from './harness';
 
 /**
  * TB5 — Assist Mode against a real database (program §16, §35).
@@ -58,12 +65,20 @@ describe('Assist Mode (TB5)', () => {
     ctx ??= await createTestContext();
     await ctx.reset();
     const c = ctx.container;
-    operator = adminActorFor(await createAdmin(c, tenantA, { username: 'support1', roleKeys: ['support'] }));
-    const owner = adminActorFor(await createAdmin(c, tenantA, { username: 'owner', roleKeys: ['owner'] }));
+    operator = adminActorFor(
+      await createAdmin(c, tenantA, { username: 'support1', roleKeys: ['support'] }),
+    );
+    const owner = adminActorFor(
+      await createAdmin(c, tenantA, { username: 'owner', roleKeys: ['owner'] }),
+    );
     await c.supportAiConfig.update(tenantA, owner, {
       idempotencyKey: key('cfg'),
       expectedVersion: null,
-      config: { ...SUPPORT_AI_DEFAULT_CONFIG, mode: 'ASSIST_ONLY', primary: { provider: 'OPENAI', model: 'gpt-5.5' } },
+      config: {
+        ...SUPPORT_AI_DEFAULT_CONFIG,
+        mode: 'ASSIST_ONLY',
+        primary: { provider: 'OPENAI', model: 'gpt-5.5' },
+      },
     });
     await c.businessConnections.applyReport(scopeA, system(), {
       idempotencyKey: key('conn'),
@@ -96,16 +111,30 @@ describe('Assist Mode (TB5)', () => {
       },
     });
     conversationId = recorded!.conversationId;
-    next = { outcome: 'OK', output: valid, usage: { inputTokens: 10, outputTokens: 10 }, model: 'gpt-5.5' };
+    next = {
+      outcome: 'OK',
+      output: valid,
+      usage: { inputTokens: 10, outputTokens: 10 },
+      model: 'gpt-5.5',
+    };
     jobs = new DrizzleSupportAiJobRepository(c.database.db);
     service = new SupportAssistService({
       jobs,
       configs: new DrizzleSupportAiConfigRepository(c.database.db),
       chain: {
-        generate: async () => ({ outcome: next, step: { provider: 'OPENAI', model: 'gpt-5.5' }, attempts: 1, exhausted: null }),
+        generate: async () => ({
+          outcome: next,
+          step: { provider: 'OPENAI', model: 'gpt-5.5' },
+          attempts: 1,
+          exhausted: null,
+        }),
       },
       context: {
-        build: async () => ({ json: '{"services":[{"alias":"S1"}]}', aliases: new Map([['S1', 'سرویس user123']]), linked: true }),
+        build: async () => ({
+          json: '{"services":[{"alias":"S1"}]}',
+          aliases: new Map([['S1', 'سرویس user123']]),
+          linked: true,
+        }),
       },
       conversations: new DrizzleBusinessConversationRepository(c.database.db),
       messages: new DrizzleBusinessMessageRepository(c.database.db),
@@ -132,61 +161,110 @@ describe('Assist Mode (TB5)', () => {
   });
 
   async function outboundCount() {
-    const rows = await ctx.container.database.db.execute(sql`SELECT count(*)::int AS n FROM business_outbound_messages`);
+    const rows = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM business_outbound_messages`,
+    );
     return (rows.rows[0] as { n: number }).n;
   }
 
   it('produces a draft and sends nothing by itself', async () => {
-    const job = await service.request(scopeA, operator, { conversationId, idempotencyKey: key('draft') });
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
     expect(job.state).toBe('QUEUED');
     await loop.tick();
     const ready = await jobs.findById(scopeA, job.id);
-    expect(ready).toMatchObject({ state: 'READY', suggestedReply: valid.replyText, topic: 'CONNECTION_TROUBLESHOOTING' });
+    expect(ready).toMatchObject({
+      state: 'READY',
+      suggestedReply: valid.replyText,
+      topic: 'CONNECTION_TROUBLESHOOTING',
+    });
     // The citation the facts contained is resolved; the one they did not (Z9) is dropped.
     expect(ready?.factLabels).toEqual(['سرویس user123']);
     expect(await outboundCount()).toBe(0);
   });
 
   it('records an invalid decision as FAILED, never as advice', async () => {
-    next = { outcome: 'OK', output: { ...valid, decision: 'REFUND_NOW' }, usage: { inputTokens: 1, outputTokens: 1 }, model: 'm' };
-    const job = await service.request(scopeA, operator, { conversationId, idempotencyKey: key('draft') });
+    next = {
+      outcome: 'OK',
+      output: { ...valid, decision: 'REFUND_NOW' },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
     await loop.tick();
-    expect(await jobs.findById(scopeA, job.id)).toMatchObject({ state: 'FAILED', failureCode: 'decision.invalid', suggestedReply: null });
+    expect(await jobs.findById(scopeA, job.id)).toMatchObject({
+      state: 'FAILED',
+      failureCode: 'decision.invalid',
+      suggestedReply: null,
+    });
   });
 
   it('records a chain failure as FAILED', async () => {
     next = { outcome: 'REFUSED_BY_PROVIDER', code: 'openai.refusal' };
-    const job = await service.request(scopeA, operator, { conversationId, idempotencyKey: key('draft') });
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
     await loop.tick();
     expect((await jobs.findById(scopeA, job.id))?.state).toBe('FAILED');
   });
 
   it('sends a draft only by the operator, edited, through the lane — and that takes the conversation', async () => {
-    const job = await service.request(scopeA, operator, { conversationId, idempotencyKey: key('draft') });
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
     await loop.tick();
     const sendKey = key('send');
-    const sent = await service.send(scopeA, operator, job.id, { idempotencyKey: sendKey, text: 'متن ویرایش‌شده' });
+    const sent = await service.send(scopeA, operator, job.id, {
+      idempotencyKey: sendKey,
+      text: 'متن ویرایش‌شده',
+    });
     // A retry sends once.
-    expect(await service.send(scopeA, operator, job.id, { idempotencyKey: sendKey, text: 'متن ویرایش‌شده' })).toEqual(sent);
+    expect(
+      await service.send(scopeA, operator, job.id, {
+        idempotencyKey: sendKey,
+        text: 'متن ویرایش‌شده',
+      }),
+    ).toEqual(sent);
     const row = await ctx.container.database.db.execute(
       sql`SELECT origin, body, state FROM business_outbound_messages WHERE id = ${sent.outboundId}`,
     );
-    expect(row.rows[0]).toMatchObject({ origin: 'ASSIST', body: 'متن ویرایش‌شده', state: 'PENDING' });
-    const conversation = await new DrizzleBusinessConversationRepository(ctx.container.database.db).findById(scopeA, conversationId);
+    expect(row.rows[0]).toMatchObject({
+      origin: 'ASSIST',
+      body: 'متن ویرایش‌شده',
+      state: 'PENDING',
+    });
+    const conversation = await new DrizzleBusinessConversationRepository(
+      ctx.container.database.db,
+    ).findById(scopeA, conversationId);
     expect(conversation?.state).toBe('HUMAN_ACTIVE');
     expect((await jobs.findById(scopeA, job.id))?.state).toBe('SENT');
   });
 
   it('a newer request discards the older draft, and a discarded draft cannot be sent', async () => {
-    const first = await service.request(scopeA, operator, { conversationId, idempotencyKey: key('a') });
+    const first = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('a'),
+    });
     await loop.tick();
     await service.request(scopeA, operator, { conversationId, idempotencyKey: key('b') });
     expect((await jobs.findById(scopeA, first.id))?.state).toBe('DISCARDED');
-    await expect(service.send(scopeA, operator, first.id, { idempotencyKey: key('s'), text: 'x' })).rejects.toSatisfy(isNexaError);
+    await expect(
+      service.send(scopeA, operator, first.id, { idempotencyKey: key('s'), text: 'x' }),
+    ).rejects.toSatisfy(isNexaError);
   });
 
   it('a draft discarded while it was being produced is not resurrected', async () => {
-    const job = await service.request(scopeA, operator, { conversationId, idempotencyKey: key('a') });
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('a'),
+    });
     const [claimed] = await jobs.claimDue(scopeA, new Date(), new Date(Date.now() + 60_000), 1);
     await service.discard(scopeA, operator, job.id);
     expect(await service.produce(scopeA, claimed!)).toBe('GONE');
@@ -195,11 +273,17 @@ describe('Assist Mode (TB5)', () => {
 
   it('refuses a draft while the support AI is OFF', async () => {
     await ctx.container.database.db.execute(sql`UPDATE support_ai_configs SET mode = 'OFF'`);
-    await expect(service.request(scopeA, operator, { conversationId, idempotencyKey: key('a') })).rejects.toSatisfy(isNexaError);
+    await expect(
+      service.request(scopeA, operator, { conversationId, idempotencyKey: key('a') }),
+    ).rejects.toSatisfy(isNexaError);
   });
 
   it('refuses a draft to a role without support_ai.assist', async () => {
-    const finance = adminActorFor(await createAdmin(ctx.container, tenantA, { username: 'fin', roleKeys: ['finance'] }));
-    await expect(service.request(scopeA, finance, { conversationId, idempotencyKey: key('a') })).rejects.toSatisfy(isNexaError);
+    const finance = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'fin', roleKeys: ['finance'] }),
+    );
+    await expect(
+      service.request(scopeA, finance, { conversationId, idempotencyKey: key('a') }),
+    ).rejects.toSatisfy(isNexaError);
   });
 });

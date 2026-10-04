@@ -107,7 +107,11 @@ export class DrizzleSupportAiJobRepository {
     return toRecord(inserted);
   }
 
-  async findById(scope: ScopeContext, id: string, tx?: unknown): Promise<SupportAiJobRecord | null> {
+  async findById(
+    scope: ScopeContext,
+    id: string,
+    tx?: unknown,
+  ): Promise<SupportAiJobRecord | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await exec(this.db, tx)
       .select()
@@ -117,7 +121,11 @@ export class DrizzleSupportAiJobRepository {
     return row ? toRecord(row) : null;
   }
 
-  async findByIdempotencyKey(scope: ScopeContext, key: string, tx?: unknown): Promise<SupportAiJobRecord | null> {
+  async findByIdempotencyKey(
+    scope: ScopeContext,
+    key: string,
+    tx?: unknown,
+  ): Promise<SupportAiJobRecord | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await exec(this.db, tx)
       .select()
@@ -127,19 +135,30 @@ export class DrizzleSupportAiJobRepository {
     return row ? toRecord(row) : null;
   }
 
-  async recentForConversation(scope: ScopeContext, conversationId: string, limit: number): Promise<readonly SupportAiJobRecord[]> {
+  async recentForConversation(
+    scope: ScopeContext,
+    conversationId: string,
+    limit: number,
+  ): Promise<readonly SupportAiJobRecord[]> {
     const tenantId = requireTenantId(scope);
     const rows = await this.db
       .select()
       .from(supportAiJobs)
-      .where(and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.conversationId, conversationId)))
+      .where(
+        and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.conversationId, conversationId)),
+      )
       .orderBy(desc(supportAiJobs.createdAt), desc(supportAiJobs.id))
       .limit(limit);
     return rows.map(toRecord);
   }
 
   /** Newer draft requested: every older QUEUED or READY draft of the conversation is discarded. */
-  async discardOpen(scope: ScopeContext, conversationId: string, now: Date, tx: unknown): Promise<number> {
+  async discardOpen(
+    scope: ScopeContext,
+    conversationId: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<number> {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
       .update(supportAiJobs)
@@ -156,7 +175,12 @@ export class DrizzleSupportAiJobRepository {
   }
 
   /** Leases the due QUEUED jobs (unclaimed, or whose lease ran out), oldest first. */
-  async claimDue(scope: ScopeContext, now: Date, leaseUntil: Date, limit: number): Promise<readonly SupportAiJobRecord[]> {
+  async claimDue(
+    scope: ScopeContext,
+    now: Date,
+    leaseUntil: Date,
+    limit: number,
+  ): Promise<readonly SupportAiJobRecord[]> {
     const tenantId = requireTenantId(scope);
     const free = or(isNull(supportAiJobs.claimedUntil), lte(supportAiJobs.claimedUntil, now));
     const selected = await this.db
@@ -168,7 +192,11 @@ export class DrizzleSupportAiJobRepository {
     if (selected.length === 0) return [];
     const rows = await this.db
       .update(supportAiJobs)
-      .set({ claimedUntil: leaseUntil, attempts: sql`${supportAiJobs.attempts} + 1`, updatedAt: now })
+      .set({
+        claimedUntil: leaseUntil,
+        attempts: sql`${supportAiJobs.attempts} + 1`,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(supportAiJobs.tenantId, tenantId),
@@ -215,27 +243,61 @@ export class DrizzleSupportAiJobRepository {
         model: result.model.slice(0, 128),
         updatedAt: result.now,
       })
-      .where(and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.id, id), eq(supportAiJobs.state, 'QUEUED')))
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.id, id),
+          eq(supportAiJobs.state, 'QUEUED'),
+        ),
+      )
       .returning({ id: supportAiJobs.id });
     return rows.length > 0;
   }
 
-  async markFailed(scope: ScopeContext, id: string, failureCode: string, now: Date): Promise<boolean> {
+  async markFailed(
+    scope: ScopeContext,
+    id: string,
+    failureCode: string,
+    now: Date,
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.db
       .update(supportAiJobs)
-      .set({ state: 'FAILED', failureCode: failureCode.slice(0, 200), claimedUntil: null, updatedAt: now })
-      .where(and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.id, id), eq(supportAiJobs.state, 'QUEUED')))
+      .set({
+        state: 'FAILED',
+        failureCode: failureCode.slice(0, 200),
+        claimedUntil: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.id, id),
+          eq(supportAiJobs.state, 'QUEUED'),
+        ),
+      )
       .returning({ id: supportAiJobs.id });
     return rows.length > 0;
   }
 
-  async markSent(scope: ScopeContext, id: string, outboundId: string, now: Date, tx: unknown): Promise<boolean> {
+  async markSent(
+    scope: ScopeContext,
+    id: string,
+    outboundId: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
       .update(supportAiJobs)
       .set({ state: 'SENT', sentOutboundId: outboundId, updatedAt: now })
-      .where(and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.id, id), eq(supportAiJobs.state, 'READY')))
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.id, id),
+          eq(supportAiJobs.state, 'READY'),
+        ),
+      )
       .returning({ id: supportAiJobs.id });
     return rows.length > 0;
   }
@@ -273,7 +335,14 @@ export class DrizzleSupportAiJobRepository {
       .limit(limit);
     const rows = await this.db
       .update(supportAiJobs)
-      .set({ summary: null, intent: null, suggestedReply: null, factLabels: [], textPurgedAt: now, updatedAt: now })
+      .set({
+        summary: null,
+        intent: null,
+        suggestedReply: null,
+        factLabels: [],
+        textPurgedAt: now,
+        updatedAt: now,
+      })
       .where(and(eq(supportAiJobs.tenantId, tenantId), inArray(supportAiJobs.id, due)))
       .returning({ id: supportAiJobs.id });
     return rows.length;

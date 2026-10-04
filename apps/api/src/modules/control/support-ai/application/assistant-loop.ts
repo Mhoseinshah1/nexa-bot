@@ -30,7 +30,10 @@ export class AssistantLoop {
 
   constructor(
     private readonly assist: Pick<SupportAssistService, 'produce'>,
-    private readonly jobs: Pick<DrizzleSupportAiJobRepository, 'claimDue' | 'markFailed' | 'purgeText'>,
+    private readonly jobs: Pick<
+      DrizzleSupportAiJobRepository,
+      'claimDue' | 'markFailed' | 'purgeText'
+    >,
     private readonly options: {
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
@@ -75,7 +78,12 @@ export class AssistantLoop {
         return;
       }
       const now = this.options.now();
-      const claimed = await this.jobs.claimDue(scope, now, new Date(now.getTime() + ASSISTANT_LEASE_MS), ASSISTANT_BATCH);
+      const claimed = await this.jobs.claimDue(
+        scope,
+        now,
+        new Date(now.getTime() + ASSISTANT_LEASE_MS),
+        ASSISTANT_BATCH,
+      );
       const counts: Record<string, number> = {};
       for (const job of claimed) {
         // `attempts` already counts this claim: a job that keeps dying mid-call fails instead.
@@ -92,7 +100,8 @@ export class AssistantLoop {
         counts.purged = await this.jobs.purgeText(scope, cutoff, now, 500);
         this.lastRetentionAt = now.getTime();
       }
-      if (claimed.length > 0) this.options.logger.info({ claimed: claimed.length, ...counts }, 'assistant pass');
+      if (claimed.length > 0)
+        this.options.logger.info({ claimed: claimed.length, ...counts }, 'assistant pass');
       this.progress.record(this.options.now().getTime());
     } catch (error: unknown) {
       this.options.logger.error({ err: error }, 'assistant pass failed');

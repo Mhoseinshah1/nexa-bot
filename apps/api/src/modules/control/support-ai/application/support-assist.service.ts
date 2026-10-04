@@ -52,7 +52,11 @@ export interface SupportContextSource {
   build(
     scope: ScopeContext,
     customerId: string | null,
-  ): Promise<{ readonly json: string; readonly aliases: ReadonlyMap<string, string>; readonly linked: boolean }>;
+  ): Promise<{
+    readonly json: string;
+    readonly aliases: ReadonlyMap<string, string>;
+    readonly linked: boolean;
+  }>;
 }
 
 export interface SupportAssistServiceDeps {
@@ -94,53 +98,76 @@ export class SupportAssistService {
     input: { readonly conversationId: string; readonly idempotencyKey: string },
   ): Promise<SupportAiJobRecord> {
     const adminId = this.adminIdOf(actor);
-    const denial = { action: 'support_ai.draft.request', entityType: 'BusinessConversation', entityId: input.conversationId };
+    const denial = {
+      action: 'support_ai.draft.request',
+      entityType: 'BusinessConversation',
+      entityId: input.conversationId,
+    };
     await this.authorize(scope, actor, SUPPORT_AI_ASSIST_PERMISSION, denial);
     const key = `${actor.surface}:${adminId}:${input.idempotencyKey}`;
     const existing = await this.deps.jobs.findByIdempotencyKey(scope, key);
     if (existing !== null) return existing;
     const { config } = await this.deps.configs.get(scope);
     if (config.mode === 'OFF') {
-      throw errors.conflict(SUPPORT_ASSIST_ERROR_CODES.OFF, 'The support AI is off for this installation.');
+      throw errors.conflict(
+        SUPPORT_ASSIST_ERROR_CODES.OFF,
+        'The support AI is off for this installation.',
+      );
     }
-    return runAuthorizedMutation(this.mutationDeps(), scope, actor, SUPPORT_AI_ASSIST_PERMISSION, denial, async (tx) => {
-      await this.assertScopeActive(scope, tx);
-      const raced = await this.deps.jobs.findByIdempotencyKey(scope, key, tx);
-      if (raced !== null) return raced;
-      const conversation = await this.deps.conversations.findById(scope, input.conversationId, tx);
-      if (conversation === null) throw errors.notFound('business_chats.not_found', 'No such business conversation.');
-      const now = this.deps.clock.now();
-      await this.deps.jobs.discardOpen(scope, conversation.id, now, tx);
-      const job = await this.deps.jobs.insert(
-        scope,
-        {
-          id: this.deps.ids.uuid(),
-          kind: 'ASSIST_DRAFT',
-          conversationId: conversation.id,
-          requestedByAdminId: adminId,
-          idempotencyKey: key,
-          now,
-        },
-        tx,
-      );
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action: 'support_ai.draft.request',
-          entityType: 'BusinessConversation',
-          entityId: conversation.id,
-          before: null,
-          after: { jobId: job.id },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-      return job;
-    });
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      SUPPORT_AI_ASSIST_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const raced = await this.deps.jobs.findByIdempotencyKey(scope, key, tx);
+        if (raced !== null) return raced;
+        const conversation = await this.deps.conversations.findById(
+          scope,
+          input.conversationId,
+          tx,
+        );
+        if (conversation === null)
+          throw errors.notFound('business_chats.not_found', 'No such business conversation.');
+        const now = this.deps.clock.now();
+        await this.deps.jobs.discardOpen(scope, conversation.id, now, tx);
+        const job = await this.deps.jobs.insert(
+          scope,
+          {
+            id: this.deps.ids.uuid(),
+            kind: 'ASSIST_DRAFT',
+            conversationId: conversation.id,
+            requestedByAdminId: adminId,
+            idempotencyKey: key,
+            now,
+          },
+          tx,
+        );
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'support_ai.draft.request',
+            entityType: 'BusinessConversation',
+            entityId: conversation.id,
+            before: null,
+            after: { jobId: job.id },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return job;
+      },
+    );
   }
 
-  async drafts(scope: ScopeContext, actor: ActorContext, conversationId: string): Promise<readonly SupportAiJobRecord[]> {
+  async drafts(
+    scope: ScopeContext,
+    actor: ActorContext,
+    conversationId: string,
+  ): Promise<readonly SupportAiJobRecord[]> {
     await this.deps.guard.check(scope, actor, SUPPORT_AI_ASSIST_PERMISSION);
     return this.deps.jobs.recentForConversation(scope, conversationId, 5);
   }
@@ -149,19 +176,38 @@ export class SupportAssistService {
    * Produces one draft. Called by the `assistant` role on a claimed job, OUTSIDE any
    * transaction (the provider call can take a minute). Returns the job's new state.
    */
-  async produce(scope: ScopeContext, job: SupportAiJobRecord): Promise<'READY' | 'FAILED' | 'GONE'> {
+  async produce(
+    scope: ScopeContext,
+    job: SupportAiJobRecord,
+  ): Promise<'READY' | 'FAILED' | 'GONE'> {
     const conversation = await this.deps.conversations.findById(scope, job.conversationId);
     if (conversation === null) {
-      return (await this.deps.jobs.markFailed(scope, job.id, 'conversation.missing', this.deps.clock.now())) ? 'FAILED' : 'GONE';
+      return (await this.deps.jobs.markFailed(
+        scope,
+        job.id,
+        'conversation.missing',
+        this.deps.clock.now(),
+      ))
+        ? 'FAILED'
+        : 'GONE';
     }
     const [{ config }, transcript, context] = await Promise.all([
       this.deps.configs.get(scope),
       this.deps.messages.recent(scope, conversation.id, 40),
       this.deps.context.build(scope, conversation.customerId),
     ]);
-    const turns = transcriptMessages(transcript.map((m) => ({ origin: m.origin, text: m.text, kind: m.kind })));
+    const turns = transcriptMessages(
+      transcript.map((m) => ({ origin: m.origin, text: m.text, kind: m.kind })),
+    );
     if (turns.length === 0) {
-      return (await this.deps.jobs.markFailed(scope, job.id, 'transcript.empty', this.deps.clock.now())) ? 'FAILED' : 'GONE';
+      return (await this.deps.jobs.markFailed(
+        scope,
+        job.id,
+        'transcript.empty',
+        this.deps.clock.now(),
+      ))
+        ? 'FAILED'
+        : 'GONE';
     }
     const result = await this.deps.chain.generate(scope, {
       operation: 'ASSIST_DRAFT',
@@ -182,12 +228,18 @@ export class SupportAssistService {
     });
     const now = this.deps.clock.now();
     if (result.outcome.outcome !== 'OK' || result.step === null) {
-      const code = result.exhausted ?? ('code' in result.outcome ? result.outcome.code : result.outcome.outcome);
-      return (await this.deps.jobs.markFailed(scope, job.id, `chain.${code}`, now)) ? 'FAILED' : 'GONE';
+      const code =
+        result.exhausted ??
+        ('code' in result.outcome ? result.outcome.code : result.outcome.outcome);
+      return (await this.deps.jobs.markFailed(scope, job.id, `chain.${code}`, now))
+        ? 'FAILED'
+        : 'GONE';
     }
     const parsed = supportAiDecisionSchema.safeParse(result.outcome.output);
     if (!parsed.success || parsed.data.replyText.length > config.maxOutputChars) {
-      return (await this.deps.jobs.markFailed(scope, job.id, 'decision.invalid', now)) ? 'FAILED' : 'GONE';
+      return (await this.deps.jobs.markFailed(scope, job.id, 'decision.invalid', now))
+        ? 'FAILED'
+        : 'GONE';
     }
     // A citation the payload did not contain is dropped: it is not evidence of anything.
     const factLabels = parsed.data.factRefs.flatMap((ref) => {
@@ -205,7 +257,12 @@ export class SupportAssistService {
   }
 
   /** The operator sends the draft — edited or not — as the business account. */
-  async send(scope: ScopeContext, actor: ActorContext, draftId: string, body: unknown): Promise<{ readonly outboundId: string }> {
+  async send(
+    scope: ScopeContext,
+    actor: ActorContext,
+    draftId: string,
+    body: unknown,
+  ): Promise<{ readonly outboundId: string }> {
     const command = supportAiDraftSendRequestSchema.parse(body);
     await this.authorize(scope, actor, SUPPORT_AI_ASSIST_PERMISSION, {
       action: 'support_ai.draft.send',
@@ -214,9 +271,13 @@ export class SupportAssistService {
     });
     const draft = await this.deps.jobs.findById(scope, draftId);
     if (draft === null) throw this.notFound();
-    if (draft.state === 'SENT' && draft.sentOutboundId !== null) return { outboundId: draft.sentOutboundId };
+    if (draft.state === 'SENT' && draft.sentOutboundId !== null)
+      return { outboundId: draft.sentOutboundId };
     if (draft.state !== 'READY') {
-      throw errors.conflict(SUPPORT_ASSIST_ERROR_CODES.NOT_READY, 'This draft cannot be sent (it is not ready, or was replaced).');
+      throw errors.conflict(
+        SUPPORT_ASSIST_ERROR_CODES.NOT_READY,
+        'This draft cannot be sent (it is not ready, or was replaced).',
+      );
     }
     // The ordinary operator send: `business_chats.reply`, the connection check, the human
     // signal and the lane. Idempotent on the operator's key, so a retry sends once.
@@ -236,7 +297,11 @@ export class SupportAssistService {
           entityType: 'SupportAiJob',
           entityId: draft.id,
           before: { state: draft.state },
-          after: { state: 'SENT', outboundId: row.id, edited: command.text !== draft.suggestedReply },
+          after: {
+            state: 'SENT',
+            outboundId: row.id,
+            edited: command.text !== draft.suggestedReply,
+          },
           result: 'SUCCESS',
         },
         tx,
@@ -245,14 +310,29 @@ export class SupportAssistService {
     return { outboundId: row.id };
   }
 
-  async discard(scope: ScopeContext, actor: ActorContext, draftId: string): Promise<{ readonly discarded: boolean }> {
-    const denial = { action: 'support_ai.draft.discard', entityType: 'SupportAiJob', entityId: draftId };
+  async discard(
+    scope: ScopeContext,
+    actor: ActorContext,
+    draftId: string,
+  ): Promise<{ readonly discarded: boolean }> {
+    const denial = {
+      action: 'support_ai.draft.discard',
+      entityType: 'SupportAiJob',
+      entityId: draftId,
+    };
     await this.authorize(scope, actor, SUPPORT_AI_ASSIST_PERMISSION, denial);
-    return runAuthorizedMutation(this.mutationDeps(), scope, actor, SUPPORT_AI_ASSIST_PERMISSION, denial, async (tx) => {
-      await this.assertScopeActive(scope, tx);
-      const discarded = await this.deps.jobs.discard(scope, draftId, this.deps.clock.now(), tx);
-      return { discarded };
-    });
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      SUPPORT_AI_ASSIST_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const discarded = await this.deps.jobs.discard(scope, draftId, this.deps.clock.now(), tx);
+        return { discarded };
+      },
+    );
   }
 
   private notFound() {
@@ -261,7 +341,10 @@ export class SupportAssistService {
 
   private adminIdOf(actor: ActorContext): string {
     if (actor.id === null) {
-      throw errors.permissionDenied(PLATFORM_ERROR_CODES.PERMISSION_DENIED, 'Only an administrator asks for a draft.');
+      throw errors.permissionDenied(
+        PLATFORM_ERROR_CODES.PERMISSION_DENIED,
+        'Only an administrator asks for a draft.',
+      );
     }
     return actor.id;
   }
@@ -282,7 +365,10 @@ export class SupportAssistService {
 
   private async assertScopeActive(scope: ScopeContext, tx: TransactionScope): Promise<void> {
     if (await this.deps.scopeActivity.scopeIsActive(scope, tx)) return;
-    throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'This scope is not accepting work.');
+    throw errors.notFound(
+      PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+      'This scope is not accepting work.',
+    );
   }
 
   private mutationDeps() {

@@ -587,6 +587,13 @@ import { DrizzleBusinessConnectionRepository } from './modules/commerce/business
 import { TelegramBusinessGateway } from './modules/commerce/business-chats/infrastructure/telegram-business.gateway.js';
 import type { SupportAiProvider } from '@nexa/contracts';
 import { SupportAiChain } from './modules/control/support-ai/application/support-ai-chain.js';
+import { SupportAssistService } from './modules/control/support-ai/application/support-assist.service.js';
+import {
+  AssistantLoop,
+  ASSISTANT_INTERVAL_MS,
+} from './modules/control/support-ai/application/assistant-loop.js';
+import { DrizzleSupportAiJobRepository } from './modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository.js';
+import { TbSupportContextSource } from './modules/control/support-ai/infrastructure/support-context-source.js';
 import { SupportAiConfigService } from './modules/control/support-ai/application/support-ai-config.service.js';
 import type { SupportAiAdapter } from './modules/control/support-ai/application/ports.js';
 import {
@@ -1144,6 +1151,10 @@ export interface Container {
   /** TB4: the support AI's configuration, keys and provider chain (ADR-0034). */
   readonly supportAiConfig: SupportAiConfigService;
   readonly supportAiChain: SupportAiChain;
+  /** TB5: Assist Mode — drafts an operator may edit and send (ADR-0034 §7). */
+  readonly supportAssist: SupportAssistService;
+  /** TB5: produces drafts. Built in every role, STARTED only by the `assistant` role. */
+  readonly assistantLoop: AssistantLoop;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
@@ -5477,6 +5488,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  const supportAiJobs = new DrizzleSupportAiJobRepository(database.db);
+  const supportAssist = new SupportAssistService({
+    jobs: supportAiJobs,
+    configs: supportAiConfigs,
+    chain: supportAiChain,
+    context: new TbSupportContextSource(supportContext),
+    conversations: businessConversationRepository,
+    messages: businessMessageRepository,
+    sender: businessConversations,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const assistantLoop = new AssistantLoop(supportAssist, supportAiJobs, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: ASSISTANT_INTERVAL_MS,
+    now: () => clock.now(),
+    logger,
+  });
   const businessOutboundLoop = new BusinessOutboundLoop(
     new BusinessOutboundService({
       outbound: businessOutboundRepository,
@@ -6597,6 +6635,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportContext,
     supportAiConfig,
     supportAiChain,
+    supportAssist,
+    assistantLoop,
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,
