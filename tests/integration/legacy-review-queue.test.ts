@@ -223,6 +223,12 @@ describe('legacy import manual review queue (Item 9)', () => {
       expect(await insert('MANUAL_REVIEW', reason, 'OPEN')).toBe(
         'legacy_import_map_review_reason_check',
       );
+      // And the repository refuses it before SQL, with a typed error.
+      expect(
+        await codeOf(
+          decide(A, runId, '6', { status: 'MANUAL_REVIEW', reasonCode: reason } as never),
+        ),
+      ).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
     }
     // A review state exists exactly on MANUAL_REVIEW rows.
     expect(await insert('MANUAL_REVIEW', 'PROVIDER_MISSING', null)).toBe(

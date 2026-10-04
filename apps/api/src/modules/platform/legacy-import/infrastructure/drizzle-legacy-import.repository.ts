@@ -329,6 +329,17 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     const tenantId = requireTenantId(scope);
     assertLegacyKey(write.legacyTable, write.legacyId);
     assertSha256(write.checksum, 'checksum');
+    // Item 9: a review row carries a review reason (the CHECK says so too; this makes the
+    // refusal a typed error before SQL).
+    if (
+      write.decision.status === 'MANUAL_REVIEW' &&
+      !isLegacyReviewReasonCode(write.decision.reasonCode)
+    ) {
+      throw errors.validation(
+        LEGACY_IMPORT_ERROR_CODES.INVALID,
+        'a manual-review decision carries a closed review reason',
+      );
+    }
     const db = this.exec(tx);
 
     // The run must be RUNNING, APPLY and THIS tenant's — read under FOR SHARE so a
