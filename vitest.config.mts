@@ -121,6 +121,27 @@ export default defineConfig({
         plugins: [tsExtensionResolver()],
         test: {
           ...shared,
+          /**
+           * Item C1: the READ-ONLY RickPanel inventory against a real, production-like
+           * panel (`docs/rickpanel-inventory-acceptance.md`).
+           *
+           * Deliberately NOT inside `acceptance`: that suite creates and deletes accounts
+           * and must only see a disposable panel; this one only reads and is meant for a
+           * panel carrying real customers. Separate project, separate variables, so arming
+           * one never arms the other. Like `acceptance`, it FAILS without its variables and
+           * nothing but `pnpm test:acceptance:inventory` runs it.
+           */
+          name: 'acceptance-inventory',
+          include: ['tests/acceptance-readonly/**/*.test.ts'],
+          fileParallelism: false,
+          testTimeout: 1_800_000,
+          hookTimeout: 120_000,
+        },
+      },
+      {
+        plugins: [tsExtensionResolver()],
+        test: {
+          ...shared,
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           setupFiles: ['tests/integration/setup.ts'],
