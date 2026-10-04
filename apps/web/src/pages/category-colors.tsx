@@ -209,7 +209,7 @@ export function CategoryColorsSection({
                         onChange={(event) => choose(category.id, event.target.value)}
                       >
                         <option value={INHERIT}>
-                          {fill(t('web.cc_inherit'), { style: t(STYLE_NAME[generic]) })}
+                          {fill(t('web.cc_inherit'), { fallback: t(STYLE_NAME[generic]) })}
                         </option>
                         {INLINE_BUTTON_STYLES.map((option) => (
                           <option key={option} value={option}>
