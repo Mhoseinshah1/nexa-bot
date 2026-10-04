@@ -36,20 +36,21 @@ legacy-import MODE --tenant T --source SOURCE --target TARGET --panel-map FILE
               [--source-password-env NAME] [--allow-production-target]
 ```
 
-| Flag / exit                      | Meaning here                                                                                                                                                                     |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MODE`                           | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report` (first word, or `--mode`)                                                                                          |
-| `--source env:LEGACY_SOURCE_DSN` | the `mysql://` DSN in that variable. A password on argv — in a DSN or a `--…password` flag — is **refused**                                                                      |
-| `--target nexa`                  | a bare name must equal the database `DATABASE_URL` names (the api container's own)                                                                                               |
-| `--panel-map`                    | `nexa-legacy-panel-map/v1` JSON (step 10); unknown keys refused                                                                                                                  |
-| `--evidence-class production`    | required for import, resume and report (passed to every mode by `p7`); checked against the source — a SYNTHETIC-marked source can only be `synthetic`                            |
-| `--allow-production-target`      | with `NEXA_LEGACY_IMPORT_TARGET_ACK=<16 hex>`: the hard guard. `nexa` is production-like, so **every mode** needs both here; the ack is bound to host, port, database and tenant |
-| `--abort-running`                | `resume` only: finish a stuck RUNNING run as ABORTED. An owner decision, never a reflex                                                                                          |
-| exit `0`                         | done                                                                                                                                                                             |
-| exit `3`                         | done, but a person must decide: audit `BLOCKED`, reconcile `DISCREPANCY`, report with a failed equation                                                                          |
-| exit `4`                         | import interrupted; the run stays RUNNING — use `resume`                                                                                                                         |
-| exit `64` / `65`                 | usage or guard refusal / mapping or source refused — nothing was written                                                                                                         |
-| exit `1`                         | anything else, printed as a code                                                                                                                                                 |
+| Flag / exit                                                   | Meaning here                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MODE`                                                        | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report` (first word, or `--mode`)                                                                                                                                                                                                                       |
+| `--source env:LEGACY_SOURCE_DSN`                              | the `mysql://` DSN in that variable. A password on argv — in a DSN or a `--…password` flag — is **refused**                                                                                                                                                                                                   |
+| `--target nexa`                                               | a bare name must equal the database `DATABASE_URL` names (the api container's own)                                                                                                                                                                                                                            |
+| `--panel-map`                                                 | `nexa-legacy-panel-map/v1` JSON (step 10); unknown keys refused                                                                                                                                                                                                                                               |
+| `--evidence-class production`                                 | required for import, resume and report (passed to every mode by `p7`); checked against the source — a SYNTHETIC-marked source can only be `synthetic`                                                                                                                                                         |
+| `--allow-production-target`                                   | with `NEXA_LEGACY_IMPORT_TARGET_ACK=<16 hex>`: the hard guard. `nexa` is production-like, so **every mode** needs both here; the ack is bound to host, port, database and tenant                                                                                                                              |
+| `--abort-running`                                             | `resume` only: finish a stuck RUNNING run as ABORTED. An owner decision, never a reflex                                                                                                                                                                                                                       |
+| exit `0`                                                      | done                                                                                                                                                                                                                                                                                                          |
+| exit `3`                                                      | done, but a person must decide: audit `BLOCKED`, import/resume `COMPLETED_WITH_FAILURES` (see its `attention` counts), reconcile `DISCREPANCY`, report with a failed equation                                                                                                                                 |
+| exit `4`                                                      | import interrupted; the run stays RUNNING — use `resume`                                                                                                                                                                                                                                                      |
+| `--expected-fingerprint` / `--expected-panel-map-fingerprint` | import/resume only: the source and panel-map fingerprints the owner approved (audit's `source.fingerprint`, `panelMapping.fingerprint`). A mismatch is refused before any write, exit `65`. Against a production-like target `--expected-fingerprint` is **required** (without it: exit `64`, nothing opened) |
+| exit `64` / `65`                                              | usage or guard refusal / mapping or source refused — nothing was written                                                                                                                                                                                                                                      |
+| exit `1`                                                      | anything else, printed as a code                                                                                                                                                                                                                                                                              |
 
 `scripts/legacy-rehearsal.sh` calls the same interface; its contract block names the same
 flags and exit codes.
@@ -376,17 +377,17 @@ manual-review reason that jumps — stops the cutover here.
 THIS run.** "Approved in principle" earlier is not approval of this run. The operator sends
 the owner exactly this packet, aggregates only, and waits:
 
-| The owner reviews                                                                                                                                       | Where it comes from     |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| the dry-run report: counts per customer, wallet, service, product and trial category                                                                    | step 11, `dry-run.txt`  |
-| the manual-review count, **per closed reason**, and what happens to those rows (they are NOT imported; their balances and services wait for resolution) | step 11                 |
-| the staging comparison and every explained difference                                                                                                   | step 12                 |
-| the pre-import backup id, its SHA-256, `verified`, and that the encrypted archive and Recovery Kit are off-host                                         | step 6, `backup-id.txt` |
-| the legacy freeze proof: `CHECKSUM TABLE` before and on the restored copy, dump SHA-256, source fingerprint                                             | steps 7–10              |
-| the release: version, commit, digest                                                                                                                    | step 2                  |
-| the readiness gate is green, with its evidence                                                                                                          | `production-gate.md`    |
-| the rollback plan, its trigger list and who decides                                                                                                     | `rollback-runbook.md`   |
-| the expected duration (from the staging rehearsal's `durations.tsv`) and the window remaining                                                           | Item 11                 |
+| The owner reviews                                                                                                                                                                                     | Where it comes from     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| the dry-run report: counts per customer, wallet, service, product and trial category                                                                                                                  | step 11, `dry-run.txt`  |
+| the manual-review count, **per closed reason**, and what happens to those rows (they are NOT imported; their balances and services wait for resolution)                                               | step 11                 |
+| the staging comparison and every explained difference                                                                                                                                                 | step 12                 |
+| the pre-import backup id, its SHA-256, `verified`, and that the encrypted archive and Recovery Kit are off-host                                                                                       | step 6, `backup-id.txt` |
+| the legacy freeze proof: `CHECKSUM TABLE` before and on the restored copy, dump SHA-256, the audit's source fingerprint (`source.fingerprint`) and panel-map fingerprint (`panelMapping.fingerprint`) | steps 7–10              |
+| the release: version, commit, digest                                                                                                                                                                  | step 2                  |
+| the readiness gate is green, with its evidence                                                                                                                                                        | `production-gate.md`    |
+| the rollback plan, its trigger list and who decides                                                                                                                                                   | `rollback-runbook.md`   |
+| the expected duration (from the staging rehearsal's `durations.tsv`) and the window remaining                                                                                                         | Item 11                 |
 
 The approval is recorded in the report as: who, when (UTC), and the **backup id and source
 fingerprint it names**. An approval that does not name both is not an approval of this run.
@@ -394,17 +395,19 @@ If the source fingerprint changes after approval (somebody re-dumped), approval 
 
 ## Step 14 — production import
 
-Only after step 13. The import is bound to what the owner approved: P7's
-`--expected-fingerprint` makes import and resume **refuse** a source whose fingerprint is
-not the approved one (IMPORTER is adding the flag; confirm its exact spelling in
-`docs/legacy-migration/importer.md` before the window — until it exists, the after-import
-check below is the only binding).
+Only after step 13. The import is bound to what the owner approved, technically
+(`importer.md` §2.1): with `--expected-fingerprint` and `--expected-panel-map-fingerprint`,
+import and resume compare the source snapshot and the panel map they actually read with the
+approved values **before any write**, and refuse a mismatch with exit `65`. Against `nexa`
+(production-like) P7 refuses an import without `--expected-fingerprint` (exit `64`).
 
 ```bash
 export APPROVED_FINGERPRINT=<the source fingerprint named in the owner's approval>
+export APPROVED_PANEL_MAP_FINGERPRINT=<the panel-map fingerprint named in the owner's approval>
 export APPROVED_BACKUP_ID=<the backup id named in the owner's approval>
 date -u +%FT%TZ | tee import-start.txt
-p7 import --expected-fingerprint "$APPROVED_FINGERPRINT" | tee import.txt; echo "exit ${PIPESTATUS[0]}"
+p7 import --expected-fingerprint "$APPROVED_FINGERPRINT" \
+  --expected-panel-map-fingerprint "$APPROVED_PANEL_MAP_FINGERPRINT" | tee import.txt; echo "exit ${PIPESTATUS[0]}"
 date -u +%FT%TZ | tee import-end.txt
 ```
 
@@ -422,8 +425,20 @@ sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -v ON_ERROR_STOP=1 -c "
   || echo "STOP: the rollback point is not the approved backup"
 ```
 
-Exit `0`: done. Exit `3`: done with a decision named in the report — read it. Exit `4`:
-interrupted — `resume` below.
+Exit `0`: `COMPLETED`. Exit `65`: the source or the panel map is not the approved one —
+**STOP**: nothing was written; the approval is void (cutover step 13), and nothing is
+re-run against a different source without a new approval. Exit `4`: interrupted — `resume`
+below. Exit `3`: read the verdict at the top of `import.txt`:
+
+- **`COMPLETED_WITH_FAILURES` — STOP and decide, with the owner, before step 15.** The run
+  finished but left money, a trial or a service undone; the report's `attention` section
+  counts each kind: `customerSourceChanged`, `customerEntityMismatch`, `openingConflict`,
+  `trialConflict`, `invoiceMapRefused`, `adoptionFailed` (`PROVIDER_READ_FAILED` —
+  retried by `resume`), `adoptedSourceChanged`. Record the counts in the report. The owner
+  decides between a `resume` (for retryable adoption failures), a documented follow-up for
+  each counted row, or a rollback (trigger T1). It is never treated as a finished import.
+- `COMPLETED_ADOPTION_PENDING_P6` — an importer built without P6: the wrong release; roll
+  back.
 
 **P6 adoption happens inside the import** for every `ADOPTION_ELIGIBLE` candidate: a
 zero-total `NEW_SERVICE` + `LEGACY_ADOPTION` order and a service for the existing RickPanel
@@ -447,7 +462,8 @@ sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -c "
 ```
 
 **If the import is interrupted** (process killed, host restarted, connection lost): the
-run stays `RUNNING`. Run `p7 resume --expected-fingerprint "$APPROVED_FINGERPRINT"` — it continues the same run (same run id) for the
+run stays `RUNNING`. Run `p7 resume --expected-fingerprint "$APPROVED_FINGERPRINT"
+--expected-panel-map-fingerprint "$APPROVED_PANEL_MAP_FINGERPRINT"` — it continues the same run (same run id) for the
 same source fingerprint and the same panel map and skips what was already imported (no duplicate
 customer, opening, order, service or product; the map and the unique indexes enforce it).
 Never start a second `import`; never edit run or map rows by hand. A resume that refuses
@@ -455,7 +471,10 @@ Never start a second `import`; never edit run or map rows by hand. A resume that
 a rollback trigger. `p7 resume --abort-running` ends a stuck run as ABORTED; it is an owner
 decision, normally followed by a rollback rather than a fresh import.
 
-Check: the `APPLY` run is `COMPLETED`; `rows_failed = 0`. Record the run id and duration.
+Check: the verdict is `COMPLETED` (not `COMPLETED_WITH_FAILURES`), the `APPLY` run is
+`COMPLETED`, `rows_failed = 0`. Record the run id and duration. `reconcile` (next step)
+requires a COMPLETED run and refuses a different panel map; `report` refuses a snapshot or
+mapping the run was not made from.
 
 ## Step 15 — reconcile
 

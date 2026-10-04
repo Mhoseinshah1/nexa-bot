@@ -94,6 +94,25 @@ describe('progress_stopped: the interrupt proof cannot pass on missing progress'
   });
 });
 
+describe('classify_apply_verdict: an import that left work undone never passes', () => {
+  const run = (verdict: string) =>
+    bash(`${lift('classify_apply_verdict')}\nclassify_apply_verdict "$1"`, [verdict]).stdout.trim();
+
+  it('passes only COMPLETED', () => {
+    expect(run('COMPLETED')).toBe('pass');
+  });
+
+  it('fails COMPLETED_WITH_FAILURES (money, a trial or a service left undone)', () => {
+    expect(run('COMPLETED_WITH_FAILURES')).toBe('fail');
+  });
+
+  it('marks an importer without P6 pending, and anything unknown or absent a failure', () => {
+    expect(run('COMPLETED_ADOPTION_PENDING_P6')).toBe('pending');
+    expect(run('absent')).toBe('fail');
+    expect(run('COMPLETED_SOMEHOW')).toBe('fail');
+  });
+});
+
 describe('a stage killed by INT/TERM takes its whole process tree with it', () => {
   it('kills the grandchild a stage started when the harness is terminated', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'nexa-rehearsal-kill-'));

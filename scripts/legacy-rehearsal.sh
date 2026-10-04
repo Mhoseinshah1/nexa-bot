@@ -71,10 +71,12 @@ PROVISION_CLI="$ROOT/apps/api/dist/provision-installation.cli.js"
 LEGACY_IMPORT_CLI="${LEGACY_IMPORT_CLI:-$ROOT/apps/api/dist/legacy-import.cli.js}"
 P7_MODES=(audit dry-run import resume reconcile report)
 P7_EXIT_NEEDS_DECISION=3
-# The technical half of the owner gate: import/resume refuse a source whose fingerprint is
-# not the approved one. Used only when P7's --help offers it; until then every cycle records
-# a PENDING check saying the path is unexercised.
-P7_EXPECTED_FP_FLAG="${P7_EXPECTED_FP_FLAG:---expected-fingerprint}"
+# The technical half of the owner gate (importer.md §2.1): import/resume refuse, before any
+# write and with exit 65, a source or panel map whose fingerprint is not the approved one.
+# The harness passes the fingerprints of its OWN audit, so a source that changed between
+# audit and import is refused, exactly as production's approved fingerprints would be.
+P7_EXPECTED_FP_FLAG="--expected-fingerprint"
+P7_EXPECTED_MAP_FP_FLAG="--expected-panel-map-fingerprint"
 P7_SOURCE_PASSWORD_ENV=NEXA_REHEARSAL_LEGACY_PASSWORD
 REPORT_SCHEMA="$ROOT/docs/legacy-migration/final-report.schema.json"
 REPORT_CHECK="$ROOT/scripts/legacy-rehearsal-report-check.mjs"
@@ -310,8 +312,10 @@ if [ ! -f "$LEGACY_IMPORT_CLI" ]; then
 fi
 command -v node >/dev/null 2>&1 || die "node is not on PATH."
 P7_HELP="$(node "$LEGACY_IMPORT_CLI" --help 2>&1 || true)"
-P7_HAS_EXPECTED_FP=0
-if grep -qF -- "$P7_EXPECTED_FP_FLAG" <<<"$P7_HELP"; then P7_HAS_EXPECTED_FP=1; fi
+for flag in "$P7_EXPECTED_FP_FLAG" "$P7_EXPECTED_MAP_FP_FLAG"; do
+  grep -qF -- "$flag" <<<"$P7_HELP" ||
+    die "the P7 CLI's --help does not offer $flag: the importer predates the approved-source binding (#183 @ 9942263f). Build a current one."
+done
 for mode in "${P7_MODES[@]}"; do
   grep -qw -- "$mode" <<<"$P7_HELP" ||
     die "the P7 CLI's --help does not mention mode '$mode'. Reconcile the CLI contract block at the top of this script with its --help."
@@ -441,8 +445,10 @@ run_p7() {
   t0=$SECONDS
   load0="$(loadavg)"
   log "cycle $cycle: $name"
+  # stdout and stderr apart: under --format json, stdout IS the document, and a runtime
+  # warning on stderr (node prints deprecations there) must not corrupt it.
   set -m
-  importer "$@" >"$log_file" 2>&1 &
+  importer "$@" >"$log_file" 2>"${log_file%.log}.stderr.log" &
   STAGE_PGID=$!
   set +m
   if wait "$STAGE_PGID"; then rc=0; else rc=$?; fi
@@ -451,8 +457,17 @@ run_p7() {
   case "$rc" in
     0) ;;
     "$P7_EXIT_NEEDS_DECISION") pending "$cycle" "${name}_needs_decision" "exit 0" "exit 3 (see logs/c${cycle}-${name}.log)" ;;
-    *) die "stage '$name' (cycle $cycle) failed with exit $rc; see $log_file" ;;
+    *) die "stage '$name' (cycle $cycle) failed with exit $rc; see $log_file and ${log_file%.log}.stderr.log" ;;
   esac
+}
+
+# json_get FILE PATH — one value from a P7 JSON document, or a precise stop. Never a bare
+# substitution in an assignment: under `set -e` a failed one ends the harness with no word.
+json_get() {
+  local value
+  value="$(node "$REPORT_CHECK" get "$1" "$2" 2>/dev/null)" ||
+    die "cannot read $2 from $1 (not a JSON document?)"
+  printf '%s\n' "$value"
 }
 
 FAILED_CHECKS=0
@@ -765,6 +780,17 @@ report_json() {
     >"$OUT/c$1-report.schema-verdict.txt"
 }
 
+# classify_apply_verdict VERDICT — pass | pending | fail. Only COMPLETED passes: the
+# P6-less COMPLETED_ADOPTION_PENDING_P6 waits on a person; COMPLETED_WITH_FAILURES, an
+# absent verdict and anything this harness does not know are failures.
+classify_apply_verdict() {
+  case "$1" in
+    COMPLETED) printf 'pass\n' ;;
+    COMPLETED_ADOPTION_PENDING_P6) printf 'pending\n' ;;
+    *) printf 'fail\n' ;;
+  esac
+}
+
 # progress_stopped BEFORE AFTER — two "rows_seen/last_progress_at" readings of the killed
 # run. Stopped only when both EXIST and agree: a NULL or absent reading proves nothing, and
 # two empty strings are equal, which is how the first version of this check passed on a
@@ -862,13 +888,11 @@ for cycle in $(seq 1 "$CYCLES"); do
 
   run_p7 "$cycle" p7-audit audit --format json
   cp "$OUT/logs/c${cycle}-p7-audit.log" "$OUT/c${cycle}-audit.json"
-  AUDIT_FP="$(node "$REPORT_CHECK" get "$OUT/c${cycle}-audit.json" sections.source.fingerprint)"
-  FP_ARGS=()
-  if [ "$P7_HAS_EXPECTED_FP" -eq 1 ]; then
-    FP_ARGS=("$P7_EXPECTED_FP_FLAG" "$AUDIT_FP")
-  else
-    pending "$cycle" p7_expected_fingerprint_unexercised "$P7_EXPECTED_FP_FLAG" "absent from P7 --help"
-  fi
+  AUDIT_FP="$(json_get "$OUT/c${cycle}-audit.json" sections.source.fingerprint)"
+  AUDIT_MAP_FP="$(json_get "$OUT/c${cycle}-audit.json" sections.panelMapping.fingerprint)"
+  [[ "$AUDIT_FP" =~ ^[0-9a-f]{64}$ ]] && [[ "$AUDIT_MAP_FP" =~ ^[0-9a-f]{64}$ ]] ||
+    die "cycle $cycle: the audit report carries no source or panel-map fingerprint; see $OUT/c${cycle}-audit.json"
+  FP_ARGS=("$P7_EXPECTED_FP_FLAG" "$AUDIT_FP" "$P7_EXPECTED_MAP_FP_FLAG" "$AUDIT_MAP_FP")
   run_p7 "$cycle" p7-dry-run dry-run --format json
   cp "$OUT/logs/c${cycle}-p7-dry-run.log" "$OUT/c${cycle}-dry-run.json"
   run_stage "$cycle" snapshot-after-dry-run snapshot "c${cycle}-after-dry-run"
@@ -882,7 +906,17 @@ for cycle in $(seq 1 "$CYCLES"); do
   run_stage "$cycle" snapshot-after-kill snapshot "c${cycle}-after-kill"
   check "$cycle" interrupted_run_left_running 1 "$(metric "$S-after-kill.tsv" legacy_import_runs_running)"
 
-  run_p7 "$cycle" p7-resume resume "${FP_ARGS[@]+"${FP_ARGS[@]}"}"
+  run_p7 "$cycle" p7-resume resume --format json "${FP_ARGS[@]+"${FP_ARGS[@]}"}"
+  cp "$OUT/logs/c${cycle}-p7-resume.log" "$OUT/c${cycle}-resume.json"
+  # The APPLY run's verdict: COMPLETED passes; COMPLETED_WITH_FAILURES (money, a trial or a
+  # service left undone — the report's `attention` counts say which) FAILS; the P6-less
+  # verdict is PENDING; anything else fails.
+  APPLY_VERDICT="$(json_get "$OUT/c${cycle}-resume.json" verdict)"
+  case "$(classify_apply_verdict "$APPLY_VERDICT")" in
+    pass) check "$cycle" apply_verdict COMPLETED "$APPLY_VERDICT" ;;
+    pending) pending "$cycle" apply_verdict COMPLETED "$APPLY_VERDICT" ;;
+    *) check "$cycle" apply_verdict COMPLETED "$APPLY_VERDICT attention=$(node "$REPORT_CHECK" get "$OUT/c${cycle}-resume.json" sections.attention)" ;;
+  esac
   run_p7 "$cycle" p7-reconcile reconcile
   run_stage "$cycle" p7-report report_json "$cycle"
   run_stage "$cycle" snapshot-post snapshot "c${cycle}-post-import"
@@ -967,7 +1001,7 @@ for cycle in $(seq 1 "$CYCLES"); do
 
   # P6: every eligible candidate adopted. Eligible is P7's own dry-run decision; adopted is
   # P7's report AND the services that appeared in NEXA.
-  ELIGIBLE="$(node "$REPORT_CHECK" get "$OUT/c${cycle}-dry-run.json" sections.plan.services.categories.ADOPTION_ELIGIBLE)"
+  ELIGIBLE="$(json_get "$OUT/c${cycle}-dry-run.json" sections.plan.services.categories.ADOPTION_ELIGIBLE)"
   check "$cycle" adopted_equals_eligible "$ELIGIBLE" "$(report_get "$cycle" services.adopted)"
   check "$cycle" adopted_services_appeared "$ELIGIBLE" "$(delta adopted_services)"
 

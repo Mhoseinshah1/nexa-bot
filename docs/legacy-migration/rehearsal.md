@@ -85,6 +85,11 @@ node apps/api/dist/legacy-import.cli.js MODE --tenant T \
 ```
 
 The password is set in that variable for the one child process (P7 refuses one on argv).
+Import and resume also get `--expected-fingerprint` and `--expected-panel-map-fingerprint`
+with the values of the cycle's own `audit --format json` (`source.fingerprint`,
+`panelMapping.fingerprint`), so the approved-source binding is exercised on every run; a
+P7 whose `--help` lacks either flag is refused. P7's stderr goes to
+`logs/c<N>-<stage>.stderr.log`, apart from the JSON documents on stdout.
 `--evidence-class` is the harness's own class, passed to every mode (P7 requires it for
 import, resume and report and checks it against the source). The target is the bare
 database name, equal to the `DATABASE_URL` the harness sets; its
@@ -139,10 +144,9 @@ Pinned by `tests/unit/legacy-rehearsal-guards.test.ts`.
 
 The checks, by name: `dry_run_no_business_mutation`, `interrupted_run_left_running`,
 `no_run_left_running`, `one_apply_run_resumed`, `apply_run_completed`,
-`source_fingerprint_stable`, `apply_fingerprint_equals_audit`,
-`p7_expected_fingerprint_unexercised` (PENDING until P7's `--help` offers
-`--expected-fingerprint`; then the harness passes its own audit's fingerprint to import and
-resume), `customer_closure`,
+`source_fingerprint_stable`, `apply_fingerprint_equals_audit`, `apply_verdict` (only
+`COMPLETED` passes; `COMPLETED_WITH_FAILURES` FAILS with the report's `attention` counts),
+`customer_closure`,
 `interrupted_import_stopped_writing`, `blocked_equals_invalid_ids`,
 `report_candidates_equal_source`, `service_closure_map_plus_invalid_keys`,
 `invoice_keys_outside_evidenced_shape` (PENDING), `adopted_equals_eligible`,
