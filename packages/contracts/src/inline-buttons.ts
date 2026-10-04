@@ -262,3 +262,65 @@ export function inlineButtonStyleOf(
 ): InlineButtonStyle {
   return styles[key] ?? inlineButtonDefinition(key).defaultStyle;
 }
+
+// ---------------------------------------------------------------------------
+// Per-category colours (UX Batch 01, item 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * A product category's id as a key of `bot.category_colors`: any UUID, canonical lower case.
+ *
+ * Not `uuidV7Schema`: a tenant's first category was created by migrations 0097/0099 with
+ * `gen_random_uuid()`, a version 4. Lower case only, so one category cannot be stored under
+ * two spellings — Postgres prints a uuid in lower case, and that is what the catalogue sends.
+ */
+export const CATEGORY_COLOR_KEY_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * At most this many categories carry their own colour. A Nexa domain bound, far above any
+ * catalogue a tenant browses (a reorder names at most 200), so a value stays a small row.
+ */
+export const CATEGORY_COLORS_MAX = 1000;
+
+/**
+ * The value of the `bot.category_colors` setting: one inline-button style per product
+ * category, keyed by the category's ID — never its name, which the operator renames.
+ *
+ * The palette is the inline button's own (`INLINE_BUTTON_STYLES`): Telegram draws exactly
+ * those four, so a colour outside them is refused here rather than stored and silently not
+ * drawn. A category absent from the value has no colour of its own and is drawn with the
+ * fallback (`categoryButtonStyleOf`). An id naming a category since deleted is harmless: no
+ * button is drawn for it.
+ */
+export const categoryColorsSchema = z
+  .record(
+    z.string().regex(CATEGORY_COLOR_KEY_PATTERN, { message: 'a category id in lower case' }),
+    z.enum(INLINE_BUTTON_STYLES),
+  )
+  .refine((value) => Object.keys(value).length <= CATEGORY_COLORS_MAX, {
+    message: `at most ${String(CATEGORY_COLORS_MAX)} categories carry their own colour`,
+  });
+export type CategoryColors = Readonly<Record<string, InlineButtonStyle>>;
+
+/**
+ * The style one category's button is drawn with — the ONE rule, shared by the bot and the
+ * Web Admin's preview:
+ *
+ *  1. the category's own colour (`bot.category_colors`), when it has one;
+ *  2. otherwise the style of the generic category button (`catalog.category` in
+ *     `bot.inline_buttons`), which is what every category was drawn with before item 2;
+ *  3. otherwise that button's registry default, `default` — no style on the wire.
+ */
+export function categoryButtonStyleOf(
+  categoryId: string,
+  colors: CategoryColors,
+  styles: InlineButtonStyles,
+): InlineButtonStyle {
+  const id = categoryId.toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(colors, id)) {
+    const own = colors[id];
+    if (own !== undefined) return own;
+  }
+  return inlineButtonStyleOf('catalog.category', styles);
+}

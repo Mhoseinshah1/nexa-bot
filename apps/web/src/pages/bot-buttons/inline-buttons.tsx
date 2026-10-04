@@ -241,7 +241,10 @@ export function InlineButtonsSection({
   const overridden = Object.keys(canonicalStyles(current)).length;
   const basisVersion = setting?.version ?? null;
   const edit = (styles: InlineButtonStyles) =>
-    setDraft((before) => ({ styles, basisVersion: before?.basisVersion ?? basisVersion }));
+    setDraft((before) => ({
+      styles,
+      basisVersion: before === null ? basisVersion : before.basisVersion,
+    }));
   // Codex 4170910519: a leave (sidebar, back, reload, close) asks before dropping an edit.
   useUnsavedChanges(mayEdit && unsaved);
 

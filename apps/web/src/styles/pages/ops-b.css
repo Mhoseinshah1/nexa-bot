@@ -578,6 +578,68 @@ form.set-row > * + * {
   }
 }
 
+/*
+ * UX Batch 01, item 5: the domain categories above the list. They wrap on a wide screen;
+ * on a phone they stay one row that scrolls INSIDE the bar, so the page itself never
+ * scrolls sideways and the list stays near the top.
+ */
+.tcat-bar {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.tcat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tcat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--fg);
+  font-size: var(--fs-ui);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tcat-chip:hover {
+  background: var(--bg-3);
+}
+.tcat-chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.tcat-count {
+  font-size: var(--fs-2xs);
+  color: var(--fg-3);
+}
+.tcat-chip[aria-pressed='true'] .tcat-count {
+  color: inherit;
+}
+.content-nav-elsewhere {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+@media (max-width: 720px) {
+  .tcat-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 4px;
+  }
+  .tcat-chip {
+    flex: 0 0 auto;
+  }
+}
+
 /* The editor card: the body, its tokens and notices, then the four disclosures. */
 .template-card form > * + * {
   margin-top: 10px;

@@ -413,6 +413,35 @@ describe('the customer purchase flow over Telegram', () => {
     expect(listed).toStrictEqual([`ck:${SEEDED_CATEGORY()}.0`, `ck:${early}.0`, `ck:${late}.0`]);
   });
 
+  it('draws each category button in its own colour, else the generic category style (UX B01 #2)', async () => {
+    const owner = adminActorFor(
+      await createAdmin(api.container, tenantA, {
+        username: 'owner-tg-colors',
+        roleKeys: ['owner'],
+      }),
+    );
+    await product(tenantA, 'ACTIVE');
+    // Created after the colours were decided, with no colour of its own.
+    const fresh = await category({ name: 'تازه', sortOrder: 1 });
+    await product(tenantA, 'ACTIVE', { categoryId: fresh as ProductCategoryId });
+    const set = (key: 'bot.category_colors' | 'bot.inline_buttons', value: unknown) =>
+      api.container.settingsService.set(tenantA, owner, {
+        key,
+        value,
+        expectedVersion: null,
+        idempotencyKey: `tg-colors-${key}`,
+      });
+    await set('bot.category_colors', { [SEEDED_CATEGORY()]: 'success' });
+    await set('bot.inline_buttons', { 'catalog.category': 'primary' });
+
+    await command('/catalog');
+    const cells = buttonsOf(lastMessage()) as { callback_data: string; style?: string }[];
+    expect(cells.map((cell) => [cell.callback_data, cell.style])).toStrictEqual([
+      [`ck:${SEEDED_CATEGORY()}.0`, 'success'],
+      [`ck:${fresh}.0`, 'primary'],
+    ]);
+  });
+
   it('pages a long category, drawing Next and Previous only when that page exists', async () => {
     /*
      * Nine products and a page of eight: page 0 has eight and a Next, page 1 has one

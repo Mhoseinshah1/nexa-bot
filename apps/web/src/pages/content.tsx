@@ -2,7 +2,10 @@ import { memo, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CONTROL_ERROR_CODES,
+  TEMPLATE_CATEGORIES,
   coerceTemplateValue,
+  templateCategoryOf,
+  type TemplateCategory,
   type PlaceholderDefinition,
   type TemplateViewResponse,
 } from '@nexa/contracts';
@@ -14,7 +17,7 @@ import {
   revertTemplate,
   saveTemplate,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
 import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -42,6 +45,7 @@ import {
   useUnsavedChanges,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { fill } from './bot-buttons/canvas';
 
 /**
  * What a sample value has to look like in a text field, per declared type.
@@ -62,6 +66,39 @@ const SAMPLE_HINTS: Partial<Record<TemplateViewResponse['placeholders'][number][
   };
 
 type SourceFilter = 'all' | 'custom' | 'default';
+
+/**
+ * UX Batch 01, item 5: the domain categories the screen offers, from the contract
+ * (`TEMPLATE_CATEGORIES`, `templateCategoryOf`) — never a list of its own. `other` holds only
+ * a key a newer server sends that this build's contract does not categorise; every key this
+ * build knows has a category (`tests/unit/template-categories.test.ts`).
+ */
+type CategoryFilter = 'all' | TemplateCategory | 'other';
+
+export const TEMPLATE_CATEGORY_LABEL: Readonly<Record<TemplateCategory | 'other', WebKey>> = {
+  general: 'web.tcat_general',
+  purchase: 'web.tcat_purchase',
+  payment: 'web.tcat_payment',
+  wallet: 'web.tcat_wallet',
+  services: 'web.tcat_services',
+  service_changes: 'web.tcat_service_changes',
+  errors: 'web.tcat_errors',
+  support: 'web.tcat_support',
+  notifications: 'web.tcat_notifications',
+  referral: 'web.tcat_referral',
+  terms: 'web.tcat_terms',
+  tutorials: 'web.tcat_tutorials',
+  channels: 'web.tcat_channels',
+  trial: 'web.tcat_trial',
+  admin: 'web.tcat_admin',
+  operations: 'web.tcat_operations',
+  other: 'web.tcat_other',
+};
+
+/** The category a key is shown under; a key this build cannot place goes to `other`. */
+export function templateCategoryFilterOf(key: string): TemplateCategory | 'other' {
+  return templateCategoryOf(key) ?? 'other';
+}
 
 /**
  * Whether this tenant has its own text for a template: a STORED override, applied or not.
@@ -110,6 +147,7 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
   const rows = useMemo(() => templates.data?.templates ?? [], [templates.data]);
 
   const [search, setSearch] = useState('');
+  const [category, setCategory] = useState<CategoryFilter>('all');
   const [groupId, setGroupId] = useState('');
   const [source, setSource] = useState<SourceFilter>('all');
 
@@ -125,26 +163,85 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
     }));
   }, [rows]);
 
+  /*
+   * What the search and the source filter match, in EVERY category: the category chips
+   * count from it, so an operator searching inside one category sees where else the words
+   * are, and can widen the search to all of them with one tap.
+   */
+  const matching = useMemo(() => {
+    const shown = new Set<string>();
+    for (const template of rows) {
+      if (source === 'custom' && !isCustomised(template)) continue;
+      if (source === 'default' && isCustomised(template)) continue;
+      const copy = templateCopy(template.key, template.description);
+      // The text the EDITOR shows, not `body`: with overrides switched off `body` is
+      // the default, while the textarea holds the stored override.
+      const editable = template.overrideBody ?? template.defaultBody;
+      const haystack = [copy.name, copy.description, template.key, editable];
+      if (matchesTemplateSearch(search, haystack)) shown.add(template.key);
+    }
+    return shown;
+  }, [rows, search, source]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<TemplateCategory | 'other', number>();
+    for (const key of matching) {
+      const id = templateCategoryFilterOf(key);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }, [matching]);
+  // Every category in contract order; `other` only when a key actually lands there.
+  const categories = useMemo<(TemplateCategory | 'other')[]>(
+    () => [
+      ...TEMPLATE_CATEGORIES,
+      ...(rows.some((template) => templateCategoryOf(template.key) === null)
+        ? (['other'] as const)
+        : []),
+    ],
+    [rows],
+  );
+  const inCategory = (key: string) =>
+    category === 'all' || templateCategoryFilterOf(key) === category;
+
+  // The sections that have a template in the chosen category: the section filter's choices.
+  const categorySections = useMemo(
+    () =>
+      sections.filter((section) =>
+        section.templates.some(
+          (template) => category === 'all' || templateCategoryFilterOf(template.key) === category,
+        ),
+      ),
+    [sections, category],
+  );
+  // A section chosen in another category does not silently empty this one.
+  const activeGroupId = categorySections.some((section) => section.group.id === groupId)
+    ? groupId
+    : '';
+
   const visible = useMemo(() => {
     const shown = new Set<string>();
     for (const section of sections) {
-      if (groupId !== '' && section.group.id !== groupId) continue;
+      if (activeGroupId !== '' && section.group.id !== activeGroupId) continue;
       for (const template of section.templates) {
-        if (source === 'custom' && !isCustomised(template)) continue;
-        if (source === 'default' && isCustomised(template)) continue;
-        const copy = templateCopy(template.key, template.description);
-        // The text the EDITOR shows, not `body`: with overrides switched off `body` is
-        // the default, while the textarea holds the stored override.
-        const editable = template.overrideBody ?? template.defaultBody;
-        const haystack = [copy.name, copy.description, template.key, editable];
-        if (matchesTemplateSearch(search, haystack)) shown.add(template.key);
+        if (!matching.has(template.key)) continue;
+        if (category !== 'all' && templateCategoryFilterOf(template.key) !== category) continue;
+        shown.add(template.key);
       }
     }
     return shown;
-  }, [sections, search, groupId, source]);
+  }, [sections, activeGroupId, matching, category]);
+  // Matches the search finds outside the chosen category.
+  const elsewhere = [...matching].filter((key) => !inCategory(key)).length;
+
+  const chooseCategory = (next: CategoryFilter) => {
+    setCategory(next);
+    setGroupId('');
+  };
 
   const clearFilters = () => {
     setSearch('');
+    setCategory('all');
     setGroupId('');
     setSource('all');
   };
@@ -173,6 +270,27 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
       />
       <StateSwitch query={templates} denied={denied} isEmpty={rows.length === 0}>
         <DirtyScope report={report}>
+          <nav className="card tcat-bar" aria-label={t('web.templates_categories')}>
+            <div className="tcat-chips" role="group" aria-label={t('web.templates_categories')}>
+              <CategoryChip
+                id="all"
+                label={t('web.templates_category_all')}
+                count={matching.size}
+                current={category === 'all'}
+                onSelect={chooseCategory}
+              />
+              {categories.map((id) => (
+                <CategoryChip
+                  key={id}
+                  id={id}
+                  label={t(TEMPLATE_CATEGORY_LABEL[id])}
+                  count={categoryCounts.get(id) ?? 0}
+                  current={category === id}
+                  onSelect={chooseCategory}
+                />
+              ))}
+            </div>
+          </nav>
           <div className="content-split">
             <aside className="card content-nav" aria-label={t('web.templates_list')}>
               <div className="content-nav-tools">
@@ -197,11 +315,11 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                   <select
                     id="templates-group"
                     className="input sm"
-                    value={groupId}
+                    value={activeGroupId}
                     onChange={(event) => setGroupId(event.target.value)}
                   >
                     <option value="">{t('web.templates_group_all')}</option>
-                    {sections.map((section) => (
+                    {categorySections.map((section) => (
                       <option key={section.group.id} value={section.group.id}>
                         {section.group.label}
                       </option>
@@ -222,6 +340,17 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                   {t('web.templates_count_of')} <Num value={rows.length} />
                 </span>
               </div>
+
+              {category !== 'all' && search.trim() !== '' && elsewhere > 0 && (
+                <div className="content-nav-elsewhere" data-testid="templates-elsewhere">
+                  <span className="muted small">
+                    {fill(t('web.templates_elsewhere'), { n: formatNumber(elsewhere) })}
+                  </span>
+                  <button type="button" className="btn sm" onClick={() => chooseCategory('all')}>
+                    {t('web.templates_search_all')}
+                  </button>
+                </div>
+              )}
 
               {visible.size === 0 && (
                 <div className="content-nav-empty">
@@ -270,6 +399,36 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
         </DirtyScope>
       </StateSwitch>
     </>
+  );
+}
+
+/** One category chip: its name and how many texts in it match the search. */
+function CategoryChip({
+  id,
+  label,
+  count,
+  current,
+  onSelect,
+}: {
+  id: CategoryFilter;
+  label: string;
+  count: number;
+  current: boolean;
+  onSelect: (id: CategoryFilter) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="tcat-chip"
+      data-category={id}
+      aria-pressed={current}
+      onClick={() => onSelect(id)}
+    >
+      <span>{label}</span>
+      <span className="tcat-count">
+        <Num value={count} />
+      </span>
+    </button>
   );
 }
 

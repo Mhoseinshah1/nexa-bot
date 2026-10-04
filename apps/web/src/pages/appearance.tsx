@@ -21,6 +21,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { APPEARANCE_SLOT_LABEL as SLOT_LABEL } from '../appearance-labels';
 import { messageFor } from './settings';
+import { CategoryColorsSection } from './category-colors';
 import {
   Badge,
   Banner,
@@ -92,7 +93,16 @@ function appearanceMessageFor(error: unknown): string {
   return messageFor(error);
 }
 
-export function AppearancePage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
+export function AppearancePage({
+  denied,
+  mayEdit,
+  mayViewCategories = false,
+}: {
+  denied: boolean;
+  mayEdit: boolean;
+  /** `catalog.view`: the category list the colour section draws. */
+  mayViewCategories?: boolean;
+}) {
   const appearance = useQuery({
     queryKey: ['appearance'],
     queryFn: fetchAppearance,
@@ -143,6 +153,17 @@ export function AppearancePage({ denied, mayEdit }: { denied: boolean; mayEdit: 
           </>
         )}
       </StateSwitch>
+      {/*
+       * UX Batch 01, item 2: its own reads, so an appearance failure does not hide it. Not
+       * drawn without settings.view: the page already says so once.
+       */}
+      {!denied && (
+        <CategoryColorsSection
+          denied={denied}
+          mayEdit={mayEdit}
+          mayViewCategories={mayViewCategories}
+        />
+      )}
     </>
   );
 }

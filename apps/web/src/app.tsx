@@ -1128,7 +1128,13 @@ export function resolve(
 
   if (route.path === '/appearance') {
     return {
-      element: <AppearancePage denied={!may('settings.view')} mayEdit={may('settings.edit')} />,
+      element: (
+        <AppearancePage
+          denied={!may('settings.view')}
+          mayEdit={may('settings.edit')}
+          mayViewCategories={may('catalog.view')}
+        />
+      ),
       crumbs: [{ label: t('web.nav_appearance') }],
       title: t('web.appearance_title'),
     };
