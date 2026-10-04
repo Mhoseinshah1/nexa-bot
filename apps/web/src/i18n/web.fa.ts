@@ -6864,6 +6864,9 @@ export const WEB_FA = {
   'web.perm_business_chats_view': 'دیدن گفتگوهای حساب تلگرام بیزینس',
   'web.perm_business_chats_reply':
     'پاسخ از طرف حساب بیزینس، در اختیار گرفتن گفتگو و سپردن دوباره به هوش مصنوعی',
+  'web.perm_support_ai_configure':
+    'پیکربندی هوش مصنوعی پشتیبانی: حالت، سرویس‌دهنده‌ها، کلیدها و محدودیت‌ها؛ دیدن مصرف و هزینه',
+  'web.perm_support_ai_auto_reply': 'اجازه به هوش مصنوعی برای پاسخ خودکار به مشتریان',
   'web.perm_tickets_reply': 'پاسخ به تیکت',
   'web.perm_tickets_assign': 'واگذاری و اولویت‌بندی تیکت',
   'web.perm_tickets_close': 'تغییر وضعیت تیکت',
@@ -6920,6 +6923,7 @@ export const WEB_FA = {
   'web.perm_domain_bulk_operations': 'عملیات گروهی',
   'web.perm_domain_tickets': 'پشتیبانی',
   'web.perm_domain_business_chats': 'گفتگوهای تلگرام بیزینس',
+  'web.perm_domain_support_ai': 'دستیار هوشمند پشتیبانی',
   'web.perm_domain_campaigns': 'کمپین‌ها',
   'web.perm_domain_reports': 'گزارش‌ها',
   'web.perm_domain_audit': 'ممیزی',

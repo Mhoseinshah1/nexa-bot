@@ -144,3 +144,5 @@ export * from './legacy-import.js';
 export * from './business-chats.js';
 /** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */
 export * from './support-context.js';
+/** TB4: the support AI's provider foundation (ADR-0034). */
+export * from './support-ai.js';
