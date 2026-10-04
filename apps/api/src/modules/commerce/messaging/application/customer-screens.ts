@@ -161,6 +161,11 @@ const STATE_KEYS: Readonly<Record<ServiceState, TemplateKey>> = {
   UNRECONCILED: 'bot.service.state_unreconciled',
 };
 
+/** The key the service card names a state with — also the file caption's `{status}`. */
+export function serviceStateLabelKey(state: ServiceState): TemplateKey {
+  return STATE_KEYS[state];
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** One key per route this installation can operate; grows with `PAYMENT_GATEWAY_PROVIDERS`. */

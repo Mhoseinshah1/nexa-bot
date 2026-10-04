@@ -270,6 +270,12 @@ export interface CustomerCaption {
     readonly token: string;
     readonly entities: readonly CaptionEntity[];
   };
+  /**
+   * UX Batch 01 item 4: the caption used instead when this one renders to nothing — a
+   * tenant's caption template whose every line named a fact the service does not have.
+   * One level only; a fallback's own fallback is not read.
+   */
+  readonly fallback?: Omit<CustomerCaption, 'fallback'>;
 }
 
 /**

@@ -551,7 +551,10 @@ import { PngQrCodeEncoder } from './infrastructure/qr/qr-png.js';
 import { CustomerCaptureService } from './modules/commerce/customers/application/customer-capture.service.js';
 import { DrizzleCustomerCaptureRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-capture.repository.js';
 import { DrizzleCustomerCountersReader } from './modules/commerce/customers/infrastructure/drizzle-customer-counters.reader.js';
-import { CustomerScreenComposer } from './modules/commerce/messaging/application/customer-screens.js';
+import {
+  CustomerScreenComposer,
+  serviceStateLabelKey,
+} from './modules/commerce/messaging/application/customer-screens.js';
 import { TELEGRAM_MESSAGE_MAX } from './modules/commerce/messaging/application/message-split.js';
 import { WalletTopupFlowService } from './modules/commerce/payments/application/wallet-topup-flow.service.js';
 import { parseCustomerAmount } from './modules/commerce/payments/domain/customer-amount.js';
@@ -5119,6 +5122,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     clock,
     panelPolicy: panelPolicyReader,
+    /*
+     * UX Batch 01 item 4: the caption facts the service row does not hold, read the way the
+     * service card reads them — the order line's title, the location the customer was
+     * shown, the state as the card words it. Never the panel's operator-facing name.
+     */
+    captionFacts: {
+      factsFor: async (scope, service) => {
+        const [order, product] = await Promise.all([
+          orderRepository.findById(scope, service.orderId),
+          service.productId === null
+            ? Promise.resolve(null)
+            : productRepository.findById(scope, service.productId),
+        ]);
+        return {
+          serviceName: order?.line.title ?? null,
+          location: service.locationLabel ?? product?.display?.serviceLocationLabel ?? null,
+          status: await templateResolver.render(scope, serviceStateLabelKey(service.state), {}),
+        };
+      },
+    },
   });
 
   /*
