@@ -30,3 +30,7 @@ screens/
 # Screenshots from `pnpm web:shots` (scripts/web-shots). Regenerated on demand
 # against controlled fixtures; never committed.
 .web-shots/
+
+# Results from `scripts/perf/web-nav-bench.mjs`. Evidence is summarised in
+# docs/perf/web-admin-navigation.md; the raw JSON is regenerated on demand.
+.perf/
