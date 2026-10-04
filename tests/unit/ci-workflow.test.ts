@@ -286,7 +286,7 @@ describe('the CI workflow', () => {
     ]) {
       expect(paths, `${dist} is not handed on`).toContain(dist);
     }
-    for (const name of ['unit', 'web', 'integration']) {
+    for (const name of ['unit', 'web', 'integration', 'legacy-mysql']) {
       const job = workflow.jobs[name]!;
       expect(job.needs, `${name} does not wait for the build`).toBe('build');
       const download = job.steps.find((s) => s.uses?.startsWith('actions/download-artifact'));

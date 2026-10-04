@@ -354,6 +354,7 @@ jobs:
   # that rots. The data is SYNTHETIC; the suite is not evidence about the archive.
   legacy-mysql:
     name: Legacy MySQL source
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -384,6 +385,12 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # The tests import @nexa/contracts, which resolves to its built dist: take the
+      # build job's output like every other test job, never build again.
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
 
       - name: Legacy MySQL source tests
         timeout-minutes: 10
