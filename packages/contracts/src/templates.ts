@@ -1406,7 +1406,8 @@ export const TEMPLATES = [
     key: 'bot.terms.accepted',
     description:
       'Program §6: the answer to the accept button once the acceptance is recorded (or was ' +
-      'already). The main menu keyboard comes with it, so the customer carries on.',
+      'already). Batch 01 item 1: the terms message itself is EDITED into this text — no new ' +
+      'message is sent — with the main-menu button under it, so the customer carries on.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
