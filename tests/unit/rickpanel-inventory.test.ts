@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ProviderHttpClient, ProviderTarget } from '@nexa/contracts';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
+import { RickpanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
 import {
   RickpanelInventoryReader,
   canonicalUsername,
@@ -294,6 +295,48 @@ describe('accounts', () => {
     const out = complete(await reader.listAll(target, http));
     const text = JSON.stringify(out, (_k, v: unknown) => (typeof v === 'bigint' ? String(v) : v));
     expect(text).not.toMatch(/SECRET|sub_|subscription|proxies|token/i);
+  });
+
+  it('subscription links are opt-in, beside the accounts, and equal what the adapter derives', async () => {
+    panel.seedUser('erin', { subToken: 'tok-erin-0001' });
+    panel.seedUser('Frank', { subToken: 'tok-frank-0002' });
+    // Default: no links at all, and the accounts never carry one either way.
+    const plain = complete(await reader.listAll(target, http));
+    expect(plain.subscriptionLinks).toBeUndefined();
+    const listsBefore = panel.listCalls();
+    const requestsBefore = panel.requests.length;
+
+    const out = complete(await reader.listAll(target, http, { subscriptionLinks: true }));
+    // Derived from the SAME list rows: two walks, exactly the requests a plain read makes.
+    expect(panel.listCalls() - listsBefore).toBe(listsBefore);
+    expect(panel.requests.length - requestsBefore).toBe(requestsBefore);
+    expect(
+      JSON.stringify(out.accounts, (_k, v: unknown) => (typeof v === 'bigint' ? String(v) : v)),
+    ).not.toMatch(/tok-|sub/u);
+    const links = out.subscriptionLinks;
+    if (links === undefined) throw new Error('links were asked for');
+    expect([...links.keys()].sort()).toEqual(['Frank', 'erin']);
+
+    // Each equals what the adapter's own `lookupUser` delivers for that account.
+    const adapter = new RickpanelAdapter();
+    for (const name of ['erin', 'Frank']) {
+      const found = await adapter.lookupUser({ ...target, activation: {} }, client(panel.baseUrl), {
+        username: name,
+        subscriptionRef: 'unused',
+        clientId: '019250ab-cdef-7012-8345-6789abcdef01',
+      });
+      if (!found.ok || !found.found || found.delivery.kind !== 'SUBSCRIPTION_LINK') {
+        throw new Error(`expected the adapter to deliver a link for ${name}`);
+      }
+      expect(links.get(name)).toBe(found.delivery.url);
+    }
+  });
+
+  it('a row carrying no link is null — never a link assembled from something else', async () => {
+    panel.seedUser('gina');
+    panel.omitSubscriptionLink = true;
+    const out = complete(await reader.listAll(target, http, { subscriptionLinks: true }));
+    expect(out.subscriptionLinks?.get('gina')).toBeNull();
   });
 
   it('lookup: found, not found, the panel spelling kept, an uncomparable name refused', async () => {

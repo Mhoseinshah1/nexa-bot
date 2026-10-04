@@ -1,0 +1,679 @@
+{
+  "synthetic": true,
+  "label": "SYNTHETIC legacy fixture v1 (not evidence)",
+  "schema": [
+    {
+      "table": "user",
+      "column": "id",
+      "dataType": "varchar",
+      "ordinal": 1
+    },
+    {
+      "table": "user",
+      "column": "limit_usertest",
+      "dataType": "varchar",
+      "ordinal": 2
+    },
+    {
+      "table": "user",
+      "column": "Balance",
+      "dataType": "varchar",
+      "ordinal": 3
+    },
+    {
+      "table": "user",
+      "column": "number",
+      "dataType": "varchar",
+      "ordinal": 4
+    },
+    {
+      "table": "user",
+      "column": "User_Status",
+      "dataType": "varchar",
+      "ordinal": 5
+    },
+    {
+      "table": "user",
+      "column": "agent",
+      "dataType": "varchar",
+      "ordinal": 6
+    },
+    {
+      "table": "user",
+      "column": "affiliates",
+      "dataType": "varchar",
+      "ordinal": 7
+    },
+    {
+      "table": "user",
+      "column": "username",
+      "dataType": "varchar",
+      "ordinal": 8
+    },
+    {
+      "table": "invoice",
+      "column": "id_invoice",
+      "dataType": "varchar",
+      "ordinal": 1
+    },
+    {
+      "table": "invoice",
+      "column": "id_user",
+      "dataType": "varchar",
+      "ordinal": 2
+    },
+    {
+      "table": "invoice",
+      "column": "username",
+      "dataType": "varchar",
+      "ordinal": 3
+    },
+    {
+      "table": "invoice",
+      "column": "Service_location",
+      "dataType": "varchar",
+      "ordinal": 4
+    },
+    {
+      "table": "invoice",
+      "column": "time_sell",
+      "dataType": "varchar",
+      "ordinal": 5
+    },
+    {
+      "table": "invoice",
+      "column": "name_product",
+      "dataType": "varchar",
+      "ordinal": 6
+    },
+    {
+      "table": "invoice",
+      "column": "price_product",
+      "dataType": "varchar",
+      "ordinal": 7
+    },
+    {
+      "table": "invoice",
+      "column": "Volume",
+      "dataType": "varchar",
+      "ordinal": 8
+    },
+    {
+      "table": "invoice",
+      "column": "Service_time",
+      "dataType": "varchar",
+      "ordinal": 9
+    },
+    {
+      "table": "invoice",
+      "column": "Status",
+      "dataType": "varchar",
+      "ordinal": 10
+    },
+    {
+      "table": "invoice",
+      "column": "code_panel",
+      "dataType": "varchar",
+      "ordinal": 11
+    },
+    {
+      "table": "invoice",
+      "column": "code_product",
+      "dataType": "varchar",
+      "ordinal": 12
+    },
+    {
+      "table": "invoice",
+      "column": "is_test",
+      "dataType": "varchar",
+      "ordinal": 13
+    },
+    {
+      "table": "invoice",
+      "column": "is_custom",
+      "dataType": "varchar",
+      "ordinal": 14
+    },
+    {
+      "table": "invoice",
+      "column": "time_unit",
+      "dataType": "varchar",
+      "ordinal": 15
+    },
+    {
+      "table": "product",
+      "column": "id",
+      "dataType": "int",
+      "ordinal": 1
+    },
+    {
+      "table": "product",
+      "column": "code_product",
+      "dataType": "varchar",
+      "ordinal": 2
+    },
+    {
+      "table": "product",
+      "column": "name_product",
+      "dataType": "varchar",
+      "ordinal": 3
+    },
+    {
+      "table": "product",
+      "column": "price_product",
+      "dataType": "varchar",
+      "ordinal": 4
+    },
+    {
+      "table": "product",
+      "column": "Volume_constraint",
+      "dataType": "varchar",
+      "ordinal": 5
+    },
+    {
+      "table": "product",
+      "column": "Service_time",
+      "dataType": "varchar",
+      "ordinal": 6
+    },
+    {
+      "table": "product",
+      "column": "agent",
+      "dataType": "varchar",
+      "ordinal": 7
+    }
+  ],
+  "tables": {
+    "user": [
+      {
+        "id": "100000001",
+        "limit_usertest": "1",
+        "Balance": "50000",
+        "number": "989121234567",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "alice_legacy"
+      },
+      {
+        "id": "100000002",
+        "limit_usertest": "1",
+        "Balance": "0",
+        "number": "none",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "100000003",
+        "limit_usertest": "0",
+        "Balance": "-20000",
+        "number": "none",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "100000004",
+        "limit_usertest": "1",
+        "Balance": "12.5",
+        "number": "none",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "100000005",
+        "limit_usertest": "1",
+        "Balance": "30000",
+        "number": "call me",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "not-a-telegram-id",
+        "limit_usertest": "1",
+        "Balance": "100",
+        "number": "none",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "100000007",
+        "limit_usertest": "x",
+        "Balance": "1000",
+        "number": "none",
+        "User_Status": "Active",
+        "agent": "n",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "100000008",
+        "limit_usertest": "1",
+        "Balance": "99999999999999",
+        "number": "none",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "100000009",
+        "limit_usertest": "9",
+        "Balance": "0",
+        "number": "12",
+        "User_Status": "Active",
+        "agent": "n2",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "100000010",
+        "limit_usertest": "1",
+        "Balance": "7000",
+        "number": "none",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "none"
+      },
+      {
+        "id": "100000011",
+        "limit_usertest": "1",
+        "Balance": "12345",
+        "number": "none",
+        "User_Status": "Active",
+        "agent": "f",
+        "affiliates": "0",
+        "username": "none"
+      }
+    ],
+    "invoice": [
+      {
+        "id_invoice": "a0000001",
+        "id_user": "100000001",
+        "username": "svc_a1",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "7c1f",
+        "id_user": "100000001",
+        "username": "svc_missing",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "1700001b2c3d4e5",
+        "id_user": "100000002",
+        "username": "svc_nullmatch",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": null,
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000004",
+        "id_user": "100000003",
+        "username": "svc_shared",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": null,
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000005",
+        "id_user": "100000003",
+        "username": "svc_nowhere",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000006",
+        "id_user": "100000005",
+        "username": "whatever",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "tst",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000007",
+        "id_user": "100000005",
+        "username": "svc_a1",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "zzz",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000008",
+        "id_user": "100000007",
+        "username": "case_x",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000009",
+        "id_user": "100000009",
+        "username": "svc_b1",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "15",
+        "Service_time": "45",
+        "Status": "active",
+        "code_panel": "rp2",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "1",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a000000a",
+        "id_user": "100000009",
+        "username": "svc_b2",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp2",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": "month"
+      },
+      {
+        "id_invoice": "a000000b",
+        "id_user": "999999999",
+        "username": "svc_a1",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a000000c",
+        "id_user": "100000004",
+        "username": "svc_a1",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a000000d",
+        "id_user": "100000002",
+        "username": "svc_test",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "1",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a000000e",
+        "id_user": "100000001",
+        "username": "svc_a1",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "x",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a000000f",
+        "id_user": "100000001",
+        "username": "svc_a2",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": "p1",
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000010",
+        "id_user": "100000001",
+        "username": "svc_a3",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "gone",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000011",
+        "id_user": "100000001",
+        "username": "svc_a4",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "0",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000012",
+        "id_user": "100000001",
+        "username": "",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "LEGACY-X1",
+        "id_user": "100000001",
+        "username": "svc_a1",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "active",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000014",
+        "id_user": "100000003",
+        "username": "svc_old",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "removed",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "0",
+        "is_custom": "0",
+        "time_unit": ""
+      },
+      {
+        "id_invoice": "a0000015",
+        "id_user": "100000010",
+        "username": "svc_oldtest",
+        "Service_location": "synthetic",
+        "time_sell": "1700000000",
+        "name_product": "synthetic",
+        "price_product": "150000",
+        "Volume": "30",
+        "Service_time": "30",
+        "Status": "removed",
+        "code_panel": "rp1",
+        "code_product": null,
+        "is_test": "1",
+        "is_custom": "0",
+        "time_unit": ""
+      }
+    ],
+    "product": [
+      {
+        "id": "1",
+        "code_product": "p1",
+        "name_product": "synthetic 30GB",
+        "price_product": "150000",
+        "Volume_constraint": "30",
+        "Service_time": "30",
+        "agent": "f"
+      },
+      {
+        "id": "2",
+        "code_product": "p2",
+        "name_product": "synthetic agent plan",
+        "price_product": "120000",
+        "Volume_constraint": "50",
+        "Service_time": "30",
+        "agent": "n"
+      }
+    ]
+  }
+}

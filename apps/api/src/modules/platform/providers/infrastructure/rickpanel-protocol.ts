@@ -106,3 +106,57 @@ export async function exchangeRickpanelToken(
   }
   return { ok: true, token };
 }
+
+/**
+ * The subscription, from a record whose field names the document does not give.
+ *
+ * `GET /api/user/{username}` is documented as returning "the config links, the
+ * subscription URL and the subscription token" — three facts and no keys, which
+ * `OQ-RP-01` records as open. So three shapes are tried, in the order of how
+ * much each one assumes:
+ *
+ *   1. `subscription_url`, which is what the Marzban lineage calls it.
+ *   2. `subscription_token`, joined onto `/sub/<token>` — the document's own
+ *      `/sub/{token}` route, so the shape is the panel's rather than a guess.
+ *   3. the first entry of `links`, which is what "the config links" would be.
+ *
+ * If none is present the caller gets `null` and reports `MALFORMED_RESPONSE`. It
+ * never returns a URL it assembled from something it did not recognise: a
+ * subscription link is what the customer receives, and a wrong one is a customer
+ * holding a link that serves nothing.
+ *
+ * Pure, and shared (moved here from `rickpanel.adapter.ts`, which re-exports it) so that
+ * every reader derives the link ONE way: the adapter's `lookupUser`, the read-only C3
+ * acceptance (`tests/acceptance-readonly/subscription-acceptance.ts`), and the read-only
+ * inventory when the legacy importer asks it for links (`subscriptionLinks`), none of
+ * which may hold the adapter's mutating methods.
+ */
+export function subscriptionFrom(baseUrl: string, record: Record<string, unknown>): string | null {
+  const direct = absoluteSubscription(baseUrl, record['subscription_url']);
+  if (direct !== null) return direct;
+
+  const token = record['subscription_token'];
+  if (typeof token === 'string' && /^[A-Za-z0-9._~-]{8,512}$/.test(token)) {
+    return `${baseUrl.replace(/\/+$/, '')}/sub/${token}`;
+  }
+
+  const links = record['links'];
+  if (Array.isArray(links) && links.length > 0) {
+    return absoluteSubscription(baseUrl, links[0]);
+  }
+  return null;
+}
+
+/**
+ * A subscription path made absolute against the operator's configured address.
+ *
+ * A panel answering with a PATH does not know what hostname it is reached by,
+ * and the base URL is the only source of one this installation has. An absolute
+ * URL is taken as given, since a panel behind a proxy may emit one.
+ */
+function absoluteSubscription(baseUrl: string, value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (!value.startsWith('/')) return null;
+  return `${baseUrl.replace(/\/+$/, '')}${value}`;
+}
