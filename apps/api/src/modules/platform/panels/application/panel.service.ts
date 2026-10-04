@@ -41,6 +41,7 @@ import type { ScopeActivityReader } from '../../system/application/record-ping.s
 import type { OperationalConditionReader } from '../../opslog/application/ports.js';
 import {
   announceHealthWrite,
+  closeOpenHealthConditions,
   closesPanelCondition,
   panelConditionKey,
   RESTORED_CODE,
@@ -1664,26 +1665,35 @@ export class PanelService {
           //
           // DISABLED deliberately gets none of this. That is temporary, the
           // panel is coming back, and the condition it left open is still true.
+          const retired = {
+            code: RETIRED_CODE,
+            severity: 'INFO' as const,
+            message: `Panel "${before.panel.name}" was archived and is no longer monitored.`,
+            dedupeKey: panelConditionKey(RETIRED_CODE, panelId),
+            context: {
+              panelId,
+              panelName: before.panel.name,
+              providerType: before.panel.providerType,
+            },
+          };
           await this.deps.opsLog.record(
             scope,
             {
-              code: RETIRED_CODE,
-              severity: 'INFO',
-              message: `Panel "${before.panel.name}" was archived and is no longer monitored.`,
-              dedupeKey: panelConditionKey(RETIRED_CODE, panelId),
+              ...retired,
               // Closes whichever health row this panel has open: its condition,
               // or — when it was healthy — its own recovery row, which is a row
               // about a panel that no longer exists either. A previous
               // restoration is closed by the archive that follows it, below.
               ...closesPanelCondition(panelId, before.health),
-              context: {
-                panelId,
-                panelName: before.panel.name,
-                providerType: before.panel.providerType,
-              },
             },
             tx,
           );
+          // And every OTHER health condition still open for it (UX batch 01,
+          // item 10): one the stored health no longer produces — left open by
+          // the release whose connection test announced nothing — is not what
+          // `closesPanelCondition` names, and once archived nothing probes the
+          // panel to close it. Same retirement, recorded once per stray code.
+          await closeOpenHealthConditions(this.deps, scope, panelId, retired, tx);
         }
         await this.deps.audit.record(
           scope,

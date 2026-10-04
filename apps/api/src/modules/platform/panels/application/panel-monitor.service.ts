@@ -14,6 +14,7 @@ import {
   type OperationalEventRecorder,
   type PanelHealthState,
   type ProviderFailureKind,
+  type ScopeContext,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -1438,25 +1439,51 @@ export async function announceHealthWrite(
   if (conditionOf(health.state, health.failure) !== null) {
     return { transitioned: transition !== null, reconciled: [] };
   }
-  const panelId = locked.panel.id;
-  const open = await deps.conditions.openConditions(
+  const stranded = await closeOpenHealthConditions(
+    deps,
     tenant,
+    locked.panel.id,
+    recoveryEvent(locked),
+    tx,
+  );
+  return { transitioned: transition !== null, reconciled: stranded };
+}
+
+/**
+ * Closes every panel-health condition of one panel that is still open, through the
+ * ORDINARY recorder: `event` is recorded once per open code, naming it in
+ * `recoversCode` and `recoversDedupeKey`. Nothing is rewritten.
+ *
+ * Shared by the two places a panel's health conditions must all end: a proven
+ * recovery (`announceHealthWrite`) and an archive, after which nothing probes the
+ * panel again — so a condition the stored health no longer produced (left open by
+ * the release whose connection test announced nothing) would otherwise stay open
+ * for ever. Read in the caller's transaction, so two writers close each row once.
+ */
+export async function closeOpenHealthConditions(
+  deps: {
+    readonly opsLog: OperationalEventRecorder;
+    readonly conditions: OperationalConditionReader;
+  },
+  scope: ScopeContext,
+  panelId: string,
+  event: Omit<OperationalEventInput, 'recoversCode' | 'recoversDedupeKey'>,
+  tx: TransactionScope,
+): Promise<readonly string[]> {
+  const open = await deps.conditions.openConditions(
+    scope,
     PANEL_HEALTH_CONDITION_CODES.map((code) => panelConditionKey(code, panelId)),
     tx,
   );
   const stranded = [...new Set(open)].sort();
   for (const code of stranded) {
     await deps.opsLog.record(
-      tenant,
-      {
-        ...recoveryEvent(locked),
-        recoversCode: code,
-        recoversDedupeKey: panelConditionKey(code, panelId),
-      },
+      scope,
+      { ...event, recoversCode: code, recoversDedupeKey: panelConditionKey(code, panelId) },
       tx,
     );
   }
-  return { transitioned: transition !== null, reconciled: stranded };
+  return stranded;
 }
 
 /** The recovery event a panel earns, before it names what it closes. */

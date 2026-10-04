@@ -1170,6 +1170,94 @@ describe('the panel health monitor', () => {
       expect(recovered!.resolvedAt).toBeNull();
     });
 
+    it('closes a stranded condition when the panel is archived, since nothing probes it again', async () => {
+      // Review P3-1. The archive closes the condition its STORED health produces;
+      // with the old defect that health is HEALTHY while provider_error is open,
+      // so the archive closed only the recovery row and left the failure open on
+      // a panel nothing will ever probe again.
+      const panelId = await createPanel(ownerA, tenantA, 'stranded-archived');
+      await strandOpen(panelId);
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+      const failure = await rowFor('panel.health.provider_error', panelId);
+      expect(failure!.resolvedAt, 'archived with the stranded row still open').not.toBeNull();
+      // Through the ordinary recorder: the retirement row closed it, by name.
+      const retired = await rowFor('panel.health.retired', panelId);
+      expect(failure!.resolvedByEventId).toBe(retired!.id);
+      expect(failure!.code).toBe('panel.health.provider_error');
+      expect(
+        (await openConditionCodes(tenantA)).filter(
+          (code) => code.startsWith('panel.health.') && code !== 'panel.health.retired',
+        ),
+      ).toEqual([]);
+    });
+
+    it('announces nothing for an operator test whose write was discarded as stale', async () => {
+      // Review P3-2. A slow manual test that finds PROVIDER_ERROR, overtaken by a
+      // newer HEALTHY probe of the same configuration, has its health write
+      // refused — and must announce nothing either: no condition opened for a
+      // state the database never held, and nothing resolved.
+      const panelId = await createPanel(ownerA, tenantA, 'discarded-silent');
+      await later(panelId, HEALTHY);
+      const healthRows = async () =>
+        (
+          await ctx.container.database.db
+            .select({
+              id: operationalEvents.id,
+              code: operationalEvents.code,
+              count: operationalEvents.occurrenceCount,
+              resolvedAt: operationalEvents.resolvedAt,
+            })
+            .from(operationalEvents)
+            .where(
+              and(
+                eq(operationalEvents.tenantId, tenantA.tenantId),
+                like(operationalEvents.code, 'panel.health.%'),
+              ),
+            )
+        ).sort((a, b) => a.id.localeCompare(b.id));
+
+      let release!: () => void;
+      let dialled!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const inFlight = new Promise<void>((resolve) => {
+        dialled = resolve;
+      });
+      const early = new Date(now.getTime() + 60_000);
+      const late = new Date(now.getTime() + 120_000);
+      const manual = service({
+        clock: { now: () => early },
+        adapters: (type: ProviderType) =>
+          adapterWith(type, {
+            probe: async () => {
+              dialled();
+              await held;
+              return PROVIDER_FAILED;
+            },
+          }),
+      }).testConnection(tenantA, adminActorFor(ownerA), panelId, { idempotencyKey: key() });
+      await inFlight;
+      await monitor({
+        discovery: onePanel(panelId),
+        probe: {
+          clock: { now: () => late },
+          adapters: (type: ProviderType) => adapterWith(type, { probe: async () => HEALTHY }),
+        },
+      }).tick();
+      const before = await healthRows();
+
+      release();
+      await manual;
+
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+      expect(await rowFor('panel.health.provider_error', panelId)).toBeUndefined();
+      expect(await healthRows(), 'a discarded write changed the operations log').toEqual(before);
+    });
+
     it('leaves a capacity condition alone: it is not a health condition', async () => {
       const panelId = await createPanel(ownerA, tenantA, 'busy-but-healthy');
       await later(panelId, HEALTHY);
