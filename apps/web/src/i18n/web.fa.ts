@@ -3432,7 +3432,6 @@ export const WEB_FA = {
     'بازگشت وجه به دو دسترسی «ثبت بازگشت وجه» و «پایان دادن به سرویس» نیاز دارد.',
   'web.service_delete_refund_loading': 'در حال خواندن مبلغ قابل بازگشت…',
   'web.service_delete_refund_unavailable': 'بازگشت وجه برای این سرویس ممکن نیست:',
-  'web.service_delete_reason_disabled': 'قابلیت درخواست بازگشت وجه خاموش است.',
   'web.service_delete_reason_service_state':
     'سرویس در وضعیتی نیست که بتوان آن را حذف و بازپرداخت کرد.',
   'web.service_delete_reason_already_requested':

@@ -248,7 +248,13 @@ export class ServiceRefundRequestService {
   ): Promise<'OFFERED' | 'PENDING' | 'UNAVAILABLE'> {
     if (!(await this.deps.features.isEnabled(scope, FLAG))) return 'UNAVAILABLE';
     const active = await this.deps.repository.findActiveForService(scope, service.id as ServiceId);
-    if (active !== null) return 'PENDING';
+    /*
+     * "A request is being reviewed" is said only of the customer's OWN request. An operator's
+     * delete-and-refund (item 11) holds the same slot while its deletion runs, but the
+     * customer filed nothing: telling them their request is under review would be false, so
+     * they are simply not offered one.
+     */
+    if (active !== null) return active.origin === 'CUSTOMER' ? 'PENDING' : 'UNAVAILABLE';
     const eligibility = await this.eligibilityOf(scope, service, { checkFlag: false });
     return eligibility.eligible ? 'OFFERED' : 'UNAVAILABLE';
   }

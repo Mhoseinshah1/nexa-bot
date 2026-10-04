@@ -102,6 +102,12 @@ order's settlement: the amount is a wallet credit whatever the payment method wa
   (`ALREADY_REQUESTED`) by the code and, for a writer that forgets, by the partial unique index
   (one OPEN/EXECUTING request per service). Under all of these sits the ledger's unique
   `<refundId>:refund`.
+- **The feature flag.** The operator's path deliberately ignores `customer_refund_requests`: that
+  flag governs the customer's offer in the bot, not what an administrator may do.
+- **The customer's view of the slot.** While an operator's delete-and-refund holds the service's
+  one active slot, the customer is told nothing about "a request under review" — they filed
+  none. `customerOffer` and a filing that meets the slot answer UNAVAILABLE (no button, the
+  ordinary «not available now» sentence).
 - **Delete only** is the existing terminate, unchanged. It writes no refund, no request and no
   wallet entry.
 - **Permissions.** `refunds.issue` AND `services.terminate` (WP19 T4: it moves money and deletes

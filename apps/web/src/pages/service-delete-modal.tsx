@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  COMMERCE_ERROR_CODES,
   SERVICE_TERMINATE_CONFIRMATION,
   type CurrencyCode,
   type ServiceDeleteRefundQuote,
   type ServiceRefundIneligibilityReason,
   type ServiceRefundRequestView,
 } from '@nexa/contracts';
-import { deleteServiceWithRefund, fetchDeleteRefundQuote } from '../api/client';
+import { ApiError, deleteServiceWithRefund, fetchDeleteRefundQuote } from '../api/client';
 import { currencyLabel } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
@@ -39,8 +40,13 @@ import { messageFor } from './settings';
  * decides it again under the payment's lock.
  */
 
-const REASON_LABELS: Readonly<Record<ServiceRefundIneligibilityReason, WebKey>> = {
-  DISABLED: 'web.service_delete_reason_disabled',
+/*
+ * Every reason the operator's quote can give. `DISABLED` is not one: the feature flag governs
+ * the CUSTOMER's offer, and the operator's path deliberately does not read it.
+ */
+const REASON_LABELS: Readonly<
+  Record<Exclude<ServiceRefundIneligibilityReason, 'DISABLED'>, WebKey>
+> = {
   SERVICE_STATE: 'web.service_delete_reason_service_state',
   ALREADY_REQUESTED: 'web.service_delete_reason_already_requested',
   NO_PAID_SOURCE: 'web.service_delete_reason_no_paid_source',
@@ -170,9 +176,29 @@ function DeleteBody({
       void queries.invalidateQueries({ queryKey: ['service-operations', serviceId] });
       void queries.invalidateQueries({ queryKey: ['service-refund-requests'] });
       void queries.invalidateQueries({ queryKey: ['services'] });
+      // The bound and the standing request changed: a reopened modal reads them again.
+      void queries.invalidateQueries({ queryKey: ['service-delete-refund-quote', serviceId] });
     },
-    // A 5xx may have committed: the retry keeps its key rather than refunding twice.
-    onError: (error) => submission.settleOn(error),
+    onError: (error) => {
+      // A 5xx may have committed: the retry keeps its key rather than refunding twice.
+      submission.settleOn(error);
+      /*
+       * Refused because of what the service now is — most often a request already standing
+       * (a customer's, or another operator's delete-and-refund). The page's requests and this
+       * quote are read again, and the modal goes back to the options, where the quote's own
+       * reason is shown instead of a bare error.
+       */
+      if (
+        error instanceof ApiError &&
+        error.code === COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE
+      ) {
+        void queries.invalidateQueries({ queryKey: ['service-delete-refund-quote', serviceId] });
+        void queries.invalidateQueries({ queryKey: ['service-refund-requests'] });
+        void queries.invalidateQueries({ queryKey: ['service', serviceId] });
+        setConfirmed(false);
+        setStep('CHOOSE');
+      }
+    },
   });
 
   const data: ServiceDeleteRefundQuote | undefined = quote.data;
@@ -356,7 +382,9 @@ function DeleteBody({
         data.currency === null ? (
         <Banner tone="neutral">
           {t('web.service_delete_refund_unavailable')}{' '}
-          {data.reason === null ? null : t(REASON_LABELS[data.reason])}
+          {data.reason === null || data.reason === 'DISABLED'
+            ? null
+            : t(REASON_LABELS[data.reason])}
         </Banner>
       ) : (
         <>

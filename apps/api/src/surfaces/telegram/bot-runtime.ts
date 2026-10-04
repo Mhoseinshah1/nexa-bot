@@ -12087,7 +12087,14 @@ export class BotRuntime {
         // became of the request in between.
         idempotencyKey: `${input.idempotencyKey}:refund-file`,
       });
-      if (result.outcome === 'ALREADY_OPEN') return refundOfferReply('PENDING', serviceId);
+      if (result.outcome === 'ALREADY_OPEN') {
+        // The slot held by an operator's delete-and-refund (item 11) is not a request the
+        // customer filed: no "being reviewed" sentence for it.
+        return refundOfferReply(
+          result.request.origin === 'CUSTOMER' ? 'PENDING' : 'UNAVAILABLE',
+          serviceId,
+        );
+      }
       /*
        * A redelivered reason is answered with its own request, whatever became of it
        * (round 3) — so "registered, awaiting review" is said only while that is still true

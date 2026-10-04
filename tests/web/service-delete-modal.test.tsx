@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { SERVICE_OPERATOR_ACTIONS } from '@nexa/contracts';
 import { ServiceDetailPage } from '../../apps/web/src/pages/services';
@@ -195,6 +195,79 @@ describe('the delete modal', () => {
       new Set(posts.map((post) => (post.body as { idempotencyKey: string }).idempotencyKey)).size,
     ).toBe(1);
     expect(within(dialog).getByText(REFUND_ID)).toBeInTheDocument();
+  });
+
+  it('re-reads the quote and the requests after an ALREADY_REQUESTED refusal and shows the standing request', async () => {
+    const api = stubApi([...detailRoutes, quote()]);
+    const inner = globalThis.fetch;
+    let refused = false;
+    const quoteReads: string[] = [];
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/delete-with-refund') && method === 'POST') {
+        refused = true;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: {
+                kind: 'conflict',
+                code: 'commerce.service_refund_not_eligible',
+                message: 'This service cannot carry a refund request now.',
+                correlationId: 'test',
+                details: { reason: 'ALREADY_REQUESTED' },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }
+      if (url.includes('/delete-with-refund')) {
+        quoteReads.push(refused ? 'after' : 'before');
+        if (refused) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                ...quote().body,
+                eligible: false,
+                reason: 'ALREADY_REQUESTED',
+                principalMinor: null,
+                remainingMinor: null,
+                currency: null,
+                paymentId: null,
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            ),
+          );
+        }
+      }
+      return (inner as (i: unknown, n?: RequestInit) => Promise<Response>)(input, init);
+    });
+    const dialog = await openModal();
+    fireEvent.click(within(dialog).getByRole('radio', { name: /حذف سرویس و بازگشت وجه/ }));
+    fireEvent.change(await within(dialog).findByLabelText(/مبلغ بازگشت/), {
+      target: { value: '1000' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ادامه' }));
+    fireEvent.click(await within(dialog).findByRole('checkbox'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'حذف و بازگشت وجه' }));
+
+    // Back at the options, with the quote read again and its reason shown — not a bare error.
+    expect(
+      await within(dialog).findByText(
+        new RegExp(t('web.service_delete_reason_already_requested').slice(0, 25)),
+      ),
+    ).toBeInTheDocument();
+    expect(quoteReads).toContain('after');
+    expect(within(dialog).queryByRole('button', { name: 'حذف و بازگشت وجه' })).toBeNull();
+    // The page's own reads were refreshed too.
+    await waitFor(() =>
+      expect(
+        api.calls.filter(
+          (call) => call.method === 'GET' && call.url.endsWith(`/services/${SERVICE_ID}`),
+        ).length,
+      ).toBeGreaterThan(1),
+    );
   });
 
   it('says why a refund cannot be offered, and still allows delete-only', async () => {
