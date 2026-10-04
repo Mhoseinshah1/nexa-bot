@@ -60,7 +60,14 @@ commit.
 ### 3. Fallback only where it cannot cause harm
 
 The tenant configures a chain of up to three steps (primary plus two fallbacks).
-`RATE_LIMITED`, `TEMPORARY`, `TIMEOUT` and `AUTH_FAILED` move to the next step.
+`RATE_LIMITED`, `TEMPORARY`, `TIMEOUT` and `AUTH_FAILED` move to the next step. The next
+step must be an **independently configured** provider with its own credential row.
+
+`AUTH_FAILED` also records `support.ai_provider.credential_rejected`. That is an
+operational event deduplicated per tenant and provider, so a rejected key raises one
+alert rather than one per message. It resolves through the ordinary recorder when that
+provider next authenticates, or when its credential is replaced. A fallback that
+succeeds must never hide a dead credential.
 `INVALID_OUTPUT`, `REFUSED_BY_PROVIDER`, a policy guard's refusal and a failed
 business-safety check **never** fall back; they hand off. Asking another model until
 one agrees is a way of laundering an unsafe answer. Fallback happens before anything

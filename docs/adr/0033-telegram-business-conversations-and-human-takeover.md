@@ -107,12 +107,16 @@ what was said.
 ## Consequences
 
 - **Residual race, stated.** A human message sent after our stamp commits, or not yet
-  delivered by Telegram, cannot be beaten. Auto-reply mitigates it with a configurable
-  settle delay before the final check (`OQ-TB-04`). It cannot be eliminated by any
+  delivered by Telegram, cannot be beaten. Auto-reply mitigates it with a settle delay before
+  the final check: 6 s by default, tenant-configurable within 3–30 s (`OQ-TB-04`). The
+  delay is mitigation only; the epoch and state check remains authoritative. It cannot be eliminated by any
   design on this primitive.
-- **If U3 resolves "owner messages are not delivered", `AUTO_REPLY_SAFE` does not
-  ship.** Takeover would be undetectable. Assist Mode, where a human presses send, is
-  unaffected.
+- **Outgoing delivery is documented** (Product Owner re-check, TB0 amendment). Business
+  updates include outgoing messages, and bot messages carry attribution, so
+  `AUTO_REPLY_SAFE` is not blocked for lack of evidence. Real-Telegram acceptance still
+  verifies it. If acceptance were to _observe_ hand-typed messages not arriving,
+  takeover would be undetectable and auto-reply would not ship. Assist Mode, where a
+  human presses send, is unaffected either way.
 - A business message never creates a customer (`tb0-audit.md` §3). The connection
   owner's contacts are not registered as NEXA customers by messaging them.
 

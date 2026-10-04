@@ -3175,23 +3175,29 @@ HISTORY_NOT_IMPORTED` (not adopted by registered decision; it expires on the pan
 Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.
 Each entry is resolved by observation or by the Product Owner, never by guessing.
 
-- **OQ-TB-01 — the capability map was not read from core.telegram.org.** This session's
-  egress refuses Telegram's sites. The map comes from `@grammyjs/types@5.0.0` (verbatim
-  Bot API JSDoc), and the version (10.3, 2026-08-24) comes from secondary sources. Before
-  TB1 merges, re-check `tb0-audit.md` §1.2 against the live reference.
+- **OQ-TB-01 — RESOLVED by the Product Owner's re-check (2026-10-04).** This session's
+  egress still refuses Telegram's sites, and the map was built from
+  `@grammyjs/types@5.0.0` (verbatim Bot API JSDoc). The Product Owner checked the
+  official documentation and confirmed that business bot updates include incoming and
+  outgoing messages in connected chats, and that bot-sent messages carry bot attribution
+  fields. Real-Telegram TB1 acceptance is still required. The version number (10.3) is
+  still from secondary sources and is recorded at acceptance.
 - **OQ-TB-02 — connection identity over a reconnect.** It is unknown whether
   `BusinessConnection.id` survives a disconnect and reconnect, and whether a disconnect
   is delivered as `is_enabled: false`. The design keys on `(bot, id)` and supersedes by
   owner (ADR-0033 §2). TB1 acceptance records what Telegram does.
-- **OQ-TB-03 — are the owner's hand-typed messages delivered to the bot?** Human takeover
-  depends on it. So does the five-case classification (`tb0-audit.md` §1.4, inferred from
-  field text), and with it whether the bot's own sends echo back. **If they are not
-  delivered, `AUTO_REPLY_SAFE` does not ship.** This is the first item of the TB1/TB2
-  real-Telegram acceptance.
+- **OQ-TB-03 — documented, still to be observed.** Per the Product Owner's re-check,
+  outgoing messages in connected chats are delivered and bot messages are attributed.
+  `AUTO_REPLY_SAFE` is **no longer blocked by missing documentation**. The five-case
+  classification (`tb0-audit.md` §1.4) keeps its conservative rule: anything not
+  positively attributable to our own bot is human. Verifying a hand-typed owner message
+  and our own echo is the first item of the TB1/TB2 real-Telegram acceptance. Only a
+  contrary observation there would block auto-reply.
 - **OQ-TB-04 — the residual takeover race.** A human message sent after the send stamp
   commits, or not yet delivered by Telegram, cannot be beaten (ADR-0033, Consequences).
-  The settle delay before the final check (8 s by default) is a product trade-off between
-  latency and collisions. The Product Owner confirms the default before TB7.
+  **Decided by the Product Owner (2026-10-04):** the settle delay defaults to 6 s and is
+  tenant-configurable within 3–30 s. It is mitigation only; the epoch and state re-check
+  under the conversation lock remains authoritative.
 - **OQ-TB-05 — `getFile` on business-chat media.** The reference neither allows nor
   forbids it. TB6 acceptance decides whether vision is available for business chats.
 - **OQ-TB-06 — Persian retrieval quality.** PostgreSQL has no Persian stemmer. TB3 starts
@@ -3209,3 +3215,7 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
 - **OQ-TB-10 — merge authority versus the program's §46.** The program describes merging
   after one Codex review. `CLAUDE.md` makes a merge to `main` the owner's explicit call.
   TB packages are left open and ready until the Product Owner approves each merge.
+  **Recorded for PR #195 (TB0):** the Codex review was **not performed**, because Codex
+  was unavailable under its usage limits. Per the Product Owner's instruction, one
+  read-only substitute review is run after exact-head CI is green. Its valid findings are
+  fixed, and the PR then waits for the Product Owner's merge approval.
