@@ -177,6 +177,25 @@ export interface FakeRickpanel {
   /** How many content reads of `/files` reached the panel, limited or not. */
   filesCalls(): number;
   /**
+   * C3: what the public `GET /sub/{username}/{token}` route does — serve the user's
+   * subscription (`serves`), answer 200 with nothing (`empty`), or 404 (`missing`). A
+   * served read stamps the user's `sub_updated_at`, as a Marzban-lineage panel records a
+   * client's fetch.
+   */
+  subscriptionMode: 'serves' | 'empty' | 'missing' | 'html';
+  /** C3: user records carry no `subscription_url` and no `sub_token`. */
+  omitSubscriptionLink: boolean;
+  /** C3: the `content-type` a served subscription answers with. */
+  subscriptionContentType: string;
+  /**
+   * C3: fields merged over the record `GET /api/user/{name}` answers with (and only
+   * that route) — a wrong `username`, an absolute `subscription_url`, a field the
+   * documented modify carries. Mutable between two reads.
+   */
+  readonly userReadExtras: Record<string, unknown>;
+  /** How many `GET /sub/...` reached the panel. */
+  subscriptionReads(): number;
+  /**
    * R3: forgets every `/files` read so far — the rate window and the count — as a minute
    * passing would. Since R3 the delivery lane reads the files right after provisioning,
    * so a test that exercises the customer's own tap starts from here.
@@ -233,6 +252,11 @@ export async function startFakeRickpanel(
   let unappliedPutFailures = 0;
   let stringNumbers = false;
   let filesBody: string | null = null;
+  let subscriptionMode: 'serves' | 'empty' | 'missing' | 'html' = 'serves';
+  let omitSubscriptionLink = false;
+  let subscriptionContentType = 'text/plain; charset=utf-8';
+  const userReadExtras: Record<string, unknown> = {};
+  const subUpdatedAt = new Map<string, string>();
   let filesWindowMs = 60_000;
   const filesReadAt = new Map<string, number>();
   let filesCallsForgotten = 0;
@@ -253,8 +277,10 @@ export async function startFakeRickpanel(
     proxies: user.proxies,
     // The document's own `/sub/{username}/{token}` route, as a PATH: a panel does not
     // know which hostname it is reached by.
-    subscription_url: `/sub/${user.username}/${user.subToken}`,
-    sub_token: user.subToken,
+    ...(omitSubscriptionLink
+      ? {}
+      : { subscription_url: `/sub/${user.username}/${user.subToken}`, sub_token: user.subToken }),
+    ...(subUpdatedAt.has(user.username) ? { sub_updated_at: subUpdatedAt.get(user.username) } : {}),
   });
 
   const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -281,6 +307,24 @@ export async function startFakeRickpanel(
         const minted = `fake-rick-token-${String(tokenCounter)}`;
         tokens.add(minted);
         return void json(200, { access_token: minted, token_type: 'bearer' });
+      }
+
+      // C3: the public subscription route — no bearer, the token in the path is the key.
+      const sub = /^\/sub\/([^/]+)\/([^/]+)$/.exec(path);
+      if (sub !== null && method === 'GET') {
+        const held = users.get(decodeURIComponent(sub[1] ?? ''));
+        if (subscriptionMode === 'missing' || held === undefined || held.subToken !== sub[2]) {
+          return void json(404, { detail: 'Not Found' });
+        }
+        subUpdatedAt.set(held.username, new Date().toISOString());
+        response.writeHead(200, { 'content-type': subscriptionContentType });
+        return void response.end(
+          subscriptionMode === 'empty'
+            ? ''
+            : subscriptionMode === 'html'
+              ? '<!doctype html><html><body><form action="/login">Sign in</form></body></html>'
+              : Buffer.from(fakeRickpanelFiles(held)[1]?.content ?? '', 'utf8').toString('base64'),
+        );
       }
 
       const authorization = String(request.headers['authorization'] ?? '');
@@ -417,7 +461,7 @@ export async function startFakeRickpanel(
             return void json(404, { detail: 'User not found' });
           }
           if (held === undefined) return void json(404, { detail: 'User not found' });
-          return void json(200, present(held));
+          return void json(200, { ...present(held), ...userReadExtras });
         }
         if (method === 'PUT') {
           if (held === undefined) return void json(404, { detail: 'User not found' });
@@ -545,6 +589,27 @@ export async function startFakeRickpanel(
     },
     requests,
     users,
+    get subscriptionMode() {
+      return subscriptionMode;
+    },
+    set subscriptionMode(next: 'serves' | 'empty' | 'missing' | 'html') {
+      subscriptionMode = next;
+    },
+    get subscriptionContentType() {
+      return subscriptionContentType;
+    },
+    set subscriptionContentType(next: string) {
+      subscriptionContentType = next;
+    },
+    userReadExtras,
+    get omitSubscriptionLink() {
+      return omitSubscriptionLink;
+    },
+    set omitSubscriptionLink(next: boolean) {
+      omitSubscriptionLink = next;
+    },
+    subscriptionReads: () =>
+      requests.filter((one) => one.method === 'GET' && one.path.startsWith('/sub/')).length,
     get listMode() {
       return listMode;
     },
