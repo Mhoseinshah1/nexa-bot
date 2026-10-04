@@ -401,11 +401,14 @@ describe('the customer list', () => {
     // Back pops the trail rather than asking the server to reverse: a keyset
     // cursor only goes forward, and the previous page's start is a cursor this
     // component already held.
+    const forward = api.calls.length;
     fireEvent.click(back);
-    await waitFor(() => {
-      const last = api.calls[api.calls.length - 1]?.url ?? '';
-      expect(last).not.toContain('cursor=');
-    });
+    // The first page again — from the cache when it was read within the list's
+    // freshness window (`NAV_PREFETCH_FRESH_MS`, Issue 16), otherwise re-asked —
+    // and in neither case by a request carrying a cursor.
+    await screen.findByText('5551234567');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled());
+    for (const call of api.calls.slice(forward)) expect(call.url).not.toContain('cursor=');
   });
 
   it('does not offer a pager page it cannot serve', async () => {

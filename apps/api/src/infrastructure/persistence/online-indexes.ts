@@ -449,6 +449,48 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "provisioning_operations" USING btree ("tenant_id","order_id","created_at","id") ' +
       'WHERE (order_id IS NOT NULL)',
   },
+  {
+    /*
+     * The sales a report counts: PAID orders by the instant they settled (Issue 16,
+     * `docs/perf/web-admin-navigation.md`).
+     *
+     * Every windowed sales aggregate in `DrizzleReportingRepository` — `salesTotals`,
+     * `trend`, `salesTrendByPurpose`, `revenueCurrencies`, `activeCustomers` — reads
+     * `tenant_id = $t AND state = 'PAID' AND settled_at in [from, to)`, and the only index
+     * naming `state` was `(tenant_id, state)`. So each of them, 29 statements per
+     * `GET /dashboard/summary`, read the tenant's whole order history: a sequential scan
+     * measured at 1.2–1.6 s per dashboard request on 320 000 orders, on every visit.
+     *
+     * PARTIAL on PAID, which is the one state every one of those statements names.
+     * INCLUDE carries the columns they group, filter and sum — currency, purpose, origin,
+     * the three amounts and the customer — so a window is an index-only range scan and
+     * the heap is not touched for a visible page. Measured on that dataset: `salesTotals`
+     * 435 → 97 ms over its eight calls, `trend` 257 → 33, `salesTrendByPurpose` 65 → 16.
+     * Concurrently, because every settlement writes this table.
+     */
+    name: 'orders_tenant_paid_settled_idx',
+    definition:
+      'ON "orders" USING btree ("tenant_id","settled_at") ' +
+      'INCLUDE ("currency","purpose","origin","total_amount","subtotal_amount",' +
+      '"discount_amount","customer_id") ' +
+      "WHERE (state = 'PAID'::text)",
+  },
+  {
+    /*
+     * Failed payments by the instant they were resolved: `paymentFailures`, twice per
+     * `GET /dashboard/summary` and once per `GET /reports/failures` (Issue 16).
+     *
+     * `resolved_at` is set exactly when a payment is FAILED, CANCELLED or EXPIRED
+     * (`payments_resolved_check`), so the partial predicate holds precisely the rows the
+     * statement can count, and a window on it implies the predicate. INCLUDE `state`
+     * because the statement counts by it. Measured on 320 000 payments: 114 ms → 7 ms over
+     * the three calls, which had been a sequential scan of the tenant's payments.
+     */
+    name: 'payments_tenant_resolved_idx',
+    definition:
+      'ON "payments" USING btree ("tenant_id","resolved_at") INCLUDE ("state") ' +
+      'WHERE (resolved_at IS NOT NULL)',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

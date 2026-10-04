@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nexa Bot — پنل مدیریت</title>
+    <!--
+      An explicit, empty icon. Without one the browser asks for /favicon.ico, which the
+      edge's SPA fallback answers with index.html under `Cache-Control: no-store` — so
+      the request was repeated on EVERY in-app navigation (docs/perf/web-admin-navigation.md).
+      `data:` is allowed by the production CSP's img-src.
+    -->
+    <link rel="icon" href="data:," />
   </head>
   <body>
     <div id="root"></div>
