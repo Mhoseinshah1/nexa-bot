@@ -1936,6 +1936,16 @@ export const panelOpenConditionSchema = z.object({
   firstSeenAt: isoTimestamp,
   lastSeenAt: isoTimestamp,
   occurrences: z.number().int().positive(),
+  /**
+   * Whether the condition describes the panel as it is NOW (UX batch 01, item 10).
+   *
+   * False for a health condition the stored health no longer produces — one left
+   * open by a release whose connection test did not announce its recovery. That
+   * is history awaiting its close by the next healthy probe, and the screen labels
+   * it so rather than as an active provider failure. Defaulted to true for a
+   * response from a server that does not send it, which is what that server meant.
+   */
+  current: z.boolean().default(true),
 });
 export type PanelOpenCondition = z.infer<typeof panelOpenConditionSchema>;
 
