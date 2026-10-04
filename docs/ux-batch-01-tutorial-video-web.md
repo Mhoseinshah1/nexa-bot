@@ -62,7 +62,7 @@ shows the stored video with no copying. Cancel is a button.
 cancellable only by the administrator it names, under the app it was opened for (anything else
 is `control.client_app_video_session_not_found`, also across tenants). Audit rows:
 `client_app.video_session_open`, `client_app.video_session_cancel`,
-`client_app.video_session_expired` (stamped once, when a read finds the deadline passed), and
+`client_app.video_session_expired` (written when a cancel finds the deadline already passed; a poll never writes — it reports EXPIRED from the clock, and a late video closes the row on the bot's path), and
 the existing `client_app.video_set` written by the bot as the `TELEGRAM_ADMIN` actor.
 
 Tests: `tests/integration/client-app-video-web.test.ts`, `tests/web/client-app-video.test.tsx`.

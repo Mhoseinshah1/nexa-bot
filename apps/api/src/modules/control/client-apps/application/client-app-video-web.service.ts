@@ -236,8 +236,8 @@ export class ClientAppVideoWebService {
 
   /**
    * One prompt, as the page polls it. Only the administrator it names may read it, and only
-   * under the app it was opened for; anything else is "no such prompt". An open prompt past
-   * its deadline is closed EXPIRED here, once, with its audit row — the timeout's record.
+   * under the app it was opened for; anything else is "no such prompt". A read writes
+   * nothing: an open prompt past its deadline is reported EXPIRED by the clock.
    */
   async read(
     scope: TenantContext,
@@ -246,12 +246,11 @@ export class ClientAppVideoWebService {
     sessionId: string,
   ): Promise<WebVideoSession> {
     await this.deps.guard.check(scope, actor, CLIENT_APP_VIEW_PERMISSION);
-    let capture = await this.requireOwnSession(scope, actor, appId, sessionId);
-    const now = this.deps.clock.now();
-    if (capture.closedAt === null && capture.expiresAt.getTime() <= now.getTime()) {
-      capture = await this.stampExpired(scope, actor, capture, now);
-    }
-    return this.withVideo(scope, capture, now);
+    const capture = await this.requireOwnSession(scope, actor, appId, sessionId);
+    // A read writes nothing (PR #185 review): a passed deadline is EXPIRED by the clock
+    // (`sessionStateOf`). The row is stamped by a write path — the bot's late video, or a
+    // cancel — never by a poll.
+    return this.withVideo(scope, capture, this.deps.clock.now());
   }
 
   /** Cancels the prompt. A prompt already closed is answered as it is, and nothing is audited. */
@@ -289,16 +288,22 @@ export class ClientAppVideoWebService {
         await this.assertScopeActive(scope, tx);
         const mine = await this.requireOwnSession(scope, actor, input.appId, input.sessionId, tx);
         await this.deps.captures.lockForAdmin(scope, mine.botInstanceId, mine.adminId, tx);
-        if (await this.deps.captures.close(scope, mine.id, 'CANCELLED', now, tx)) {
+        // A prompt whose deadline has passed is closed for what it is, EXPIRED, and that is
+        // the timeout's audit row — written here, on a write path, never by a read.
+        const expired = mine.expiresAt.getTime() <= now.getTime();
+        const to = expired ? 'EXPIRED' : 'CANCELLED';
+        if (await this.deps.captures.close(scope, mine.id, to, now, tx)) {
           await this.deps.audit.record(
             scope,
             actor,
             {
-              action: 'client_app.video_session_cancel',
+              action: expired
+                ? 'client_app.video_session_expired'
+                : 'client_app.video_session_cancel',
               entityType: 'ClientApp',
               entityId: mine.clientAppId,
               before: { sessionId: mine.id, state: 'OPEN' },
-              after: { sessionId: mine.id, state: 'CANCELLED' },
+              after: { sessionId: mine.id, state: to },
               result: 'SUCCESS',
             },
             tx,
@@ -320,35 +325,6 @@ export class ClientAppVideoWebService {
   }
 
   // -------------------------------------------------------------------------------------
-
-  private async stampExpired(
-    scope: TenantContext,
-    actor: ActorContext,
-    capture: AdminAmountCaptureRecord,
-    now: Date,
-  ): Promise<AdminAmountCaptureRecord> {
-    return this.deps.uow.run(scope, async (tx) => {
-      // A stopped scope writes nothing; the state is still reported as EXPIRED.
-      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return capture;
-      await this.deps.captures.lockForAdmin(scope, capture.botInstanceId, capture.adminId, tx);
-      if (await this.deps.captures.close(scope, capture.id, 'EXPIRED', now, tx)) {
-        await this.deps.audit.record(
-          scope,
-          actor,
-          {
-            action: 'client_app.video_session_expired',
-            entityType: 'ClientApp',
-            entityId: capture.clientAppId,
-            before: { sessionId: capture.id, state: 'OPEN' },
-            after: { sessionId: capture.id, state: 'EXPIRED' },
-            result: 'SUCCESS',
-          },
-          tx,
-        );
-      }
-      return (await this.deps.captures.findById(scope, capture.id, tx)) ?? capture;
-    });
-  }
 
   private async withVideo(
     scope: TenantContext,

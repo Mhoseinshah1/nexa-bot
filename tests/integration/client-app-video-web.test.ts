@@ -232,18 +232,51 @@ describe('the Web Admin’s «add video from Telegram» flow', () => {
     ]);
   });
 
-  it('timeout: past its deadline the page reads EXPIRED, stamped and audited once; a late video stores nothing', async () => {
-    const session = await open();
-    await f.ctx.container.database.db.execute(
+  /** Every audit row this app has, whatever its result, and every write a read could make. */
+  const allAudits = () =>
+    rows<{ action: string }>(
+      f,
+      sql`SELECT action FROM audit_logs WHERE entity_id = ${appId} ORDER BY occurred_at`,
+    );
+  const promptRows = () =>
+    rows<{ close_reason: string | null; closed_at: Date | null }>(
+      f,
+      sql`SELECT close_reason, closed_at FROM admin_amount_captures
+           WHERE purpose = 'CLIENT_APP_VIDEO' ORDER BY opened_at`,
+    );
+  const expire = (sessionId: string) =>
+    f.ctx.container.database.db.execute(
       sql`UPDATE admin_amount_captures
              SET opened_at = now() - interval '1 hour', expires_at = now() - interval '1 minute'
-           WHERE id = ${session.sessionId}`,
+           WHERE id = ${sessionId}`,
     );
+
+  it('timeout: polling an expired prompt reads EXPIRED and writes nothing; a late video stores nothing', async () => {
+    const session = await open();
+    await expire(session.sessionId);
+    const auditsBefore = await allAudits();
     expect((await web().read(tenantA, f.owner, appId, session.sessionId)).state).toBe('EXPIRED');
     expect((await web().read(tenantA, f.owner, appId, session.sessionId)).state).toBe('EXPIRED');
-    expect(await prompts()).toEqual([{ close_reason: 'EXPIRED' }]);
+    // PR #185 review (P3): a read is a read — no row changed, no audit written.
+    expect(await promptRows()).toEqual([{ close_reason: null, closed_at: null }]);
+    expect(await allAudits()).toEqual(auditsBefore);
+    // The bot's path stamps it, as it always has, when a late video finds it.
     expect((await sendVideo(TG.owner, 'late')).replyKey).toBe('bot.admin.app_video_stale');
     expect(await stored()).toEqual([]);
+    expect(await prompts()).toEqual([{ close_reason: 'EXPIRED' }]);
+    expect((await web().read(tenantA, f.owner, appId, session.sessionId)).state).toBe('EXPIRED');
+  });
+
+  it('timeout: cancelling an expired prompt closes it EXPIRED, audited on that write path', async () => {
+    const session = await open();
+    await expire(session.sessionId);
+    const closed = await web().cancel(tenantA, f.owner, {
+      idempotencyKey: key('cancel-expired'),
+      appId,
+      sessionId: session.sessionId,
+    });
+    expect(closed.state).toBe('EXPIRED');
+    expect(await prompts()).toEqual([{ close_reason: 'EXPIRED' }]);
     expect((await audits()).map((row) => row.action)).toEqual([
       'client_app.video_session_open',
       'client_app.video_session_expired',
