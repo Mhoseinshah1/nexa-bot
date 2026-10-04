@@ -47,7 +47,7 @@ Three sections. **No figure adds two sections together.**
 
 ### Sales — revenue recognised at settlement (`finance.sales`, `finance.refunds`, `finance.net_sales`)
 
-- **Sales** — orders of a sale purpose (never TRIAL) whose money was taken in the bucket:
+- **Sales** — orders of a sale purpose (never TRIAL) and a sale origin (never `LEGACY_ADOPTION`, `docs/migration-order-origin.md`) whose money was taken in the bucket:
   `state IN ('PAID','REFUNDED')`, by `settled_at`. Gross (`subtotal`), discount and sales
   (`total` = gross − discount, by CHECK). One row per ORDER, never per payment attempt.
 - **Refunds** — `COMPLETED` refunds by `completed_at`, split into _to the wallet_

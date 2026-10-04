@@ -79,6 +79,7 @@ import {
   SERVICE_ADDON_KINDS,
   SERVICE_ADDON_STATUSES,
   COMMERCIAL_ORDER_PURPOSES,
+  ORDER_ORIGINS,
   ORDER_PURPOSES,
   ORDER_SETTLED_STATES,
   ORDER_STATES,
@@ -3856,6 +3857,17 @@ export const orders = pgTable(
      * composite foreign key cannot be written in either direction of a cycle.
      */
     purpose: text('purpose').notNull().default('NEW_SERVICE'),
+    /**
+     * Where the order came from (Migration P3, `ORDER_ORIGINS`). Orthogonal to `purpose`.
+     *
+     * `STANDARD` by default, so every row that existed before the column, and every writer
+     * that does not name it, is an ordinary order — the backfill is the default itself.
+     * `LEGACY_ADOPTION` represents a provider account the legacy bot sold, adopted into
+     * NEXA; `orders_legacy_adoption_shape_check` pins what such an order may be, and
+     * migration 0188 makes the column immutable once written. Never a sale (see
+     * `SALE_ORDER_ORIGINS`).
+     */
+    origin: text('origin').notNull().default('STANDARD'),
 
     /**
      * Navigation only. The snapshot below is the truth about this purchase.
@@ -3956,6 +3968,24 @@ export const orders = pgTable(
     check('orders_state_check', enumCheck('state', ORDER_STATES)),
     check('orders_currency_check', enumCheck('currency', CURRENCY_CODES)),
     check('orders_purpose_check', enumCheck('purpose', ORDER_PURPOSES)),
+    check('orders_origin_check', enumCheck('origin', ORDER_ORIGINS)),
+    /**
+     * A legacy adoption (Migration P3) is a NEW_SERVICE that is already PAID, for nothing,
+     * with no code.
+     *
+     * NEW_SERVICE is the registered decision (no invented purpose). PAID and only PAID:
+     * the service exists already, so the order is settled at birth and can never become
+     * REFUNDED — there is no money of this installation's to give back. Free: the legacy
+     * bot took the money, so no amount here can surface in any total, whichever query
+     * forgets the origin. No discount code: nothing was quoted. The half of the rule that
+     * survives a direct write, as `orders_trial_is_free_check` is for a trial.
+     */
+    check(
+      'orders_legacy_adoption_shape_check',
+      sql`origin <> 'LEGACY_ADOPTION' OR (purpose = 'NEW_SERVICE' AND state = 'PAID'
+          AND subtotal_amount = 0 AND discount_amount = 0 AND total_amount = 0
+          AND discount_code IS NULL)`,
+    ),
     /**
      * What the line snapshot MEANS, per purpose, as a constraint rather than a comment.
      *

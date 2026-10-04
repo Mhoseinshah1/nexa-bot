@@ -1,5 +1,5 @@
-import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
-import { DISCOUNTABLE_PURPOSES, money } from '@nexa/contracts';
+import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { DISCOUNTABLE_PURPOSES, SALE_ORDER_ORIGINS, money } from '@nexa/contracts';
 import type { CurrencyCode, ReferralSignupGiftSide, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -268,6 +268,8 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
           eq(orders.tenantId, tenantId),
           eq(referrals.referrerId, referrerId),
           eq(orders.state, 'PAID'),
+          // Migration P3: an adopted legacy service is not a purchase a referral earned.
+          inArray(orders.origin, [...SALE_ORDER_ORIGINS]),
           eq(orders.currency, currency),
           sql`${orders.purpose} IN (${paidPurposes})`,
           delivered,

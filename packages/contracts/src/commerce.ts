@@ -253,6 +253,27 @@ export type OrderPurpose = (typeof ORDER_PURPOSES)[number];
 export const orderPurposeSchema = z.enum(ORDER_PURPOSES);
 
 /**
+ * Where an order CAME FROM — orthogonal to `purpose`, which is what it is for.
+ *
+ * `STANDARD` is every order this installation has ever written: a customer's checkout, a
+ * trial, a commercial action. It is the column default, so every existing row and every
+ * existing writer is `STANDARD` without being touched.
+ *
+ * `LEGACY_ADOPTION` (Migration P3) is the order that lets an EXISTING provider account,
+ * sold by the legacy bot, be represented in NEXA: `services.order_id` is NOT NULL and
+ * unique and `orders.panel_id` is NOT NULL, so an adopted service needs an order. It keeps
+ * `purpose = NEW_SERVICE` (the registered decision — no new purpose is invented) and is
+ * pinned by `orders_legacy_adoption_shape_check` to PAID, free and code-less: no money
+ * arrived in NEXA for it, so it is never a sale, never revenue, never refundable, and the
+ * origin itself starts nothing — no provisioning, no cashback, no commission. The write
+ * path that creates one (P6) is HOLD. `docs/migration-order-origin.md`.
+ */
+export const ORDER_ORIGINS = ['STANDARD', 'LEGACY_ADOPTION'] as const;
+export type OrderOrigin = (typeof ORDER_ORIGINS)[number];
+export const orderOriginSchema = z.enum(ORDER_ORIGINS);
+export const DEFAULT_ORDER_ORIGIN: OrderOrigin = 'STANDARD';
+
+/**
  * The purposes that act on a service that already exists.
  *
  * Derived from `ORDER_PURPOSES` through `orderPurposeTargetsExistingService`, the

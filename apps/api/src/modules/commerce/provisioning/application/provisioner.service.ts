@@ -3447,6 +3447,13 @@ export class ProvisionerService {
      */
     if (order === null || order.state !== 'PAID') return;
     if (ProvisionerService.PURCHASED_AS[order.purpose] !== purchasedAs) return;
+    /*
+     * A legacy adoption (Migration P3) paid this installation nothing, so there is nothing
+     * to give back: the legacy bot took the money. Declined here, before any service
+     * transition, rather than left to the absent payment below — and the database refuses
+     * the REFUNDED state for one anyway (`orders_legacy_adoption_shape_check`).
+     */
+    if (order.origin === 'LEGACY_ADOPTION') return;
 
     /*
      * A trial has no payment and must not be asked for one: `isFreeTrial` is the

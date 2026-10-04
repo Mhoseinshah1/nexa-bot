@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ORDER_PURPOSES, type OrderPurpose } from './commerce.js';
+import { ORDER_ORIGINS, ORDER_PURPOSES, type OrderOrigin, type OrderPurpose } from './commerce.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS, type LedgerReason } from './ledger.js';
 import { CURRENCY_CODES, moneySchema } from './money.js';
 import { PAYMENT_METHODS, PAYMENT_STATES } from './payment.js';
@@ -98,6 +98,32 @@ export function orderPurposeIsSale(purpose: OrderPurpose): boolean {
     }
   }
 }
+
+/**
+ * Whether an order of this ORIGIN can be a sale (Migration P3).
+ *
+ * Exhaustive by `switch`, like `orderPurposeIsSale`: an origin added later is classified
+ * before it compiles, never silently counted as revenue. A legacy adoption is NOT a sale
+ * — the money was taken by the legacy bot, not by this installation — so every report of
+ * sales, revenue, buyers, products, traffic sold, referred or reseller sales reads only
+ * `SALE_ORDER_ORIGINS`, beside the purpose rule.
+ */
+export function orderOriginIsSale(origin: OrderOrigin): boolean {
+  switch (origin) {
+    case 'STANDARD':
+      return true;
+    case 'LEGACY_ADOPTION':
+      return false;
+    default: {
+      const unreachable: never = origin;
+      throw new Error(`unclassified order origin ${String(unreachable)}`);
+    }
+  }
+}
+
+export const SALE_ORDER_ORIGINS: readonly OrderOrigin[] = ORDER_ORIGINS.filter((origin) =>
+  orderOriginIsSale(origin),
+);
 
 export const SALE_ORDER_PURPOSES: readonly OrderPurpose[] = ORDER_PURPOSES.filter((purpose) =>
   orderPurposeIsSale(purpose),

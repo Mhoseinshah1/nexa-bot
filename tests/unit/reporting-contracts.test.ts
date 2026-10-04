@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_ORDER_ORIGIN,
   LEDGER_REASONS,
   MIGRATION_OPENING_REFERENCE_PREFIX,
+  ORDER_ORIGINS,
+  SALE_ORDER_ORIGINS,
+  orderOriginIsSale,
+  orderOriginSchema,
   ORDER_PURPOSES,
   REPORT_FAILED_PAYMENT_STATES,
   PAYMENT_RESOLVED_STATES,
@@ -36,6 +41,14 @@ describe('reporting contracts', () => {
     expect(orderPurposeIsSale('TRIAL')).toBe(false);
     for (const purpose of ORDER_PURPOSES)
       expect(typeof orderPurposeIsSale(purpose)).toBe('boolean');
+  });
+
+  it('counts only a STANDARD order as a sale, never a legacy adoption (Migration P3)', () => {
+    expect([...ORDER_ORIGINS]).toEqual(['STANDARD', 'LEGACY_ADOPTION']);
+    expect(DEFAULT_ORDER_ORIGIN).toBe('STANDARD');
+    expect([...SALE_ORDER_ORIGINS]).toEqual(['STANDARD']);
+    expect(orderOriginIsSale('LEGACY_ADOPTION')).toBe(false);
+    expect(orderOriginSchema.safeParse('MIGRATED').success).toBe(false);
   });
 
   it('classifies every ledger reason into exactly one wallet group, top-ups apart from gifts', () => {
