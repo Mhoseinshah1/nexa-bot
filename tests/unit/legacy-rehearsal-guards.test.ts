@@ -143,6 +143,33 @@ describe('legacy-rehearsal.sh guards', () => {
     );
   });
 
+  it('stands up fake panels for a synthetic run only, and never beside a real panel map', () => {
+    const staging = run({ '--panel-map': null }, ['--check-only', '--synthetic-panels']);
+    expect(staging.status).toBe(1);
+    expect(staging.output).toContain('synthetic only');
+    const both = run({ '--evidence-class': 'synthetic', '--legacy-dump': fixtureDump }, [
+      '--check-only',
+      '--synthetic-panels',
+    ]);
+    expect(both.status).toBe(1);
+    expect(both.output).toContain('do not also pass --panel-map');
+    const ok = run(
+      { '--evidence-class': 'synthetic', '--legacy-dump': fixtureDump, '--panel-map': null },
+      ['--check-only', '--synthetic-panels'],
+    );
+    expect(ok.status).toBe(0);
+  });
+
+  it("refuses P7's own production override as an importer argument", () => {
+    const { status, output } = run({}, [
+      '--check-only',
+      '--importer-arg',
+      '--allow-production-target',
+    ]);
+    expect(status).toBe(1);
+    expect(output).toContain('never passes the P7 production guard');
+  });
+
   it('refuses an output directory that already exists', () => {
     const { status, output } = run({ '--out': dir }, ['--check-only']);
     expect(status).toBe(1);

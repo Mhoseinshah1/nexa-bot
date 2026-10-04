@@ -28,30 +28,30 @@ Companion documents: [`rollback-runbook.md`](rollback-runbook.md) (keep it open 
 - **Record as you go** in a copy of `final-report-template.md`: every id, checksum, count,
   start and end time (UTC) the steps below name.
 
-### The P7 CLI contract this runbook assumes — VERIFY AGAINST `--help` BEFORE USE
+### The P7 CLI — as built (`docs/legacy-migration/importer.md`)
 
-The importer (`apps/api/src/legacy-import.cli.ts`, Item 10, branch `wp4/p7-importer`) was
-being built when this was written. The program fixes its six modes; their flags below are
-the program's requirements (explicit tenant, source, target and mode, an extra hard
-production guard, never a production default) written as this runbook's assumption. Before
-step 9, run `--help` on the APPROVED release and correct this table — and every command
-that uses it — in a reviewed commit. Do not improvise a flag at the console.
-
-```bash
-sudo $DC run --rm --no-deps -T --entrypoint node api dist/legacy-import.cli.js --help
+```
+legacy-import MODE --tenant T --source SOURCE --target TARGET --panel-map FILE
+              [--format md|json] [--out DIR] [--inventory-page-size N] [--abort-running]
+              [--source-password-env NAME] [--allow-production-target]
 ```
 
-| Mode        | Assumed invocation (after `dist/legacy-import.cli.js`)                                                     | Writes                                                           |
-| ----------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `audit`     | `audit --tenant "$NEXA_TENANT" --source "$LEGACY_SOURCE" --target nexa --panel-map /legacy/panel-map.json` | nothing (reads source, NEXA, RickPanel)                          |
-| `dry-run`   | `dry-run` + the same four                                                                                  | one `DRY_RUN` run row and its counters                           |
-| `import`    | `import` + the same four + **the P7 production guard** (its own flag/confirmation, see `--help`)           | the import, under one `APPLY` run                                |
-| `resume`    | `resume` + the same four + the production guard                                                            | continues the RUNNING `APPLY` run (same source fingerprint only) |
-| `reconcile` | `reconcile` + the same four                                                                                | nothing (reads source, NEXA, RickPanel)                          |
-| `report`    | `report --tenant "$NEXA_TENANT" --target nexa --format json`                                               | nothing                                                          |
+| Flag / exit                      | Meaning here                                                                                                                                                                     |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MODE`                           | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report` (first word, or `--mode`)                                                                                          |
+| `--source env:LEGACY_SOURCE_DSN` | the `mysql://` DSN in that variable. A password on argv — in a DSN or a `--…password` flag — is **refused**                                                                      |
+| `--target nexa`                  | a bare name must equal the database `DATABASE_URL` names (the api container's own)                                                                                               |
+| `--panel-map`                    | `nexa-legacy-panel-map/v1` JSON (step 10); unknown keys refused                                                                                                                  |
+| `--allow-production-target`      | with `NEXA_LEGACY_IMPORT_TARGET_ACK=<16 hex>`: the hard guard. `nexa` is production-like, so **every mode** needs both here; the ack is bound to host, port, database and tenant |
+| `--abort-running`                | `resume` only: finish a stuck RUNNING run as ABORTED. An owner decision, never a reflex                                                                                          |
+| exit `0`                         | done                                                                                                                                                                             |
+| exit `3`                         | done, but a person must decide: audit `BLOCKED`, reconcile `DISCREPANCY`, import/resume with adoption pending P6, report with a failed equation                                  |
+| exit `4`                         | import interrupted; the run stays RUNNING — use `resume`                                                                                                                         |
+| exit `64` / `65`                 | usage or guard refusal / mapping or source refused — nothing was written                                                                                                         |
+| exit `1`                         | anything else, printed as a code                                                                                                                                                 |
 
-`scripts/legacy-rehearsal.sh` holds the same assumptions in one block at its top; correct
-both together.
+`scripts/legacy-rehearsal.sh` calls the same interface; its contract block names the same
+flags and exit codes.
 
 ## Step 0 — session setup (on the production host)
 
@@ -62,6 +62,18 @@ export APPROVED_VERSION=<vX.Y.Z>                    # the release the owner appr
 export DC="docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml"
 mkdir -p ~/cutover && chmod 700 ~/cutover && cd ~/cutover
 date -u +%FT%TZ | tee t0-start.txt
+
+# The one way this runbook calls the importer. The two variables travel through
+# --preserve-env (they must not appear on any command line: the DSN holds a password),
+# which needs a sudo policy that allows it — an operator with full sudo has it.
+p7() {
+  sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
+    -e LEGACY_SOURCE_DSN -e NEXA_LEGACY_IMPORT_TARGET_ACK \
+    -v /etc/nexa/legacy/panel-map.json:/legacy/panel-map.json:ro \
+    --entrypoint node api dist/legacy-import.cli.js "$1" \
+    --tenant "$NEXA_TENANT" --source env:LEGACY_SOURCE_DSN --target nexa \
+    --panel-map /legacy/panel-map.json --allow-production-target "${@:2}"
+}
 ```
 
 Have the operator's checkout of the APPROVED release's commit available for the two SQL
@@ -236,9 +248,9 @@ sudo docker exec -i -e MYSQL_PWD="$LEGACY_ROOT_PW" nexa-legacy-src mariadb -uroo
 sudo docker exec -i -e MYSQL_PWD="$LEGACY_ROOT_PW" nexa-legacy-src mariadb -uroot -e "
   CREATE USER 'oldbot_ro'@'%' IDENTIFIED BY '$LEGACY_RO_PW';
   GRANT SELECT ON oldbot.* TO 'oldbot_ro'@'%';"
-# How P7 receives the source and its credential is P7's contract (an env var or a file is
-# preferable to a URL on the command line, which `ps` shows). VERIFY AGAINST --help.
-export LEGACY_SOURCE="mysql://oldbot_ro:${LEGACY_RO_PW}@nexa-legacy-src:3306/oldbot"
+# P7 reads the DSN from this variable (--source env:LEGACY_SOURCE_DSN); it refuses a
+# password anywhere on its command line.
+export LEGACY_SOURCE_DSN="mysql://oldbot_ro:${LEGACY_RO_PW}@nexa-legacy-src:3306/oldbot"
 ```
 
 Then confirm the restored copy IS the frozen source, and record the fingerprint:
@@ -254,34 +266,60 @@ sudo docker exec -i -e MYSQL_PWD="$LEGACY_RO_PW" nexa-legacy-src mariadb -uoldbo
 Check: both `CHECKSUM TABLE` values equal step 7's (the copy is the frozen database,
 byte for byte at the row level). P7 `audit` (next step) prints the **source fingerprint**
 (SHA-256 of the snapshot's identity) — record it; every later P7 run must report the same
-one, and `resume` refuses a different one.
+one, and `resume` refuses a different one. (P7's report carries its own per-table digests
+in `source.checksumTable`; those are P7's hashes, not these `CHECKSUM TABLE` values — record
+both.)
 
 ## Step 10 — production audit
 
 Read-only: source aggregates, destination state, RickPanel inventory (two consecutive
-walks, `listAll`) and the plan. Put the explicit panel map where the container can read it:
+walks per panel), the Item 1 evidence and the plan. Audit writes nothing — not even a run
+row.
+
+The panel map is explicit and strict (`importer.md` §4; unknown keys, an inbound id above
+all, are refused; every panel named must be an ACTIVE RickPanel of this tenant):
+
+```json
+{
+  "format": "nexa-legacy-panel-map/v1",
+  "tenantId": "<tenant uuid>",
+  "panels": [{ "codePanel": "<legacy code_panel>", "panelId": "<NEXA RickPanel uuid>" }],
+  "testPanels": ["<code>"],
+  "missingPanels": ["<code searched by exact username across productionPanels>"],
+  "productionPanels": ["<every NEXA RickPanel uuid a missing code_panel is searched across>"]
+}
+```
 
 ```bash
 sudo install -d -m 0700 /etc/nexa/legacy
 sudo install -m 0600 <reviewed-panel-map.json> /etc/nexa/legacy/panel-map.json
-sudo $DC run --rm --no-deps -T -v /etc/nexa/legacy/panel-map.json:/legacy/panel-map.json:ro \
-  --entrypoint node api dist/legacy-import.cli.js audit \
-  --tenant "$NEXA_TENANT" --source "$LEGACY_SOURCE" --target nexa \
-  --panel-map /legacy/panel-map.json | tee audit.txt
 ```
 
-Check: the fingerprint is printed and recorded; every configured production RickPanel's
-inventory is `complete: true` (an incomplete inventory makes every dependent decision
-`UNDECIDABLE` — stop and fix, never proceed on a partial walk); the plan's totals equal
-`legacy-source.tsv`; provider writes 0.
+**The target acknowledgement.** `nexa` is a production-like database name, so P7 refuses
+every mode until `--allow-production-target` (in `p7`) AND `NEXA_LEGACY_IMPORT_TARGET_ACK`
+are both present. The first call is refused (exit 64) and prints the acknowledgement for
+THIS host, port, database and tenant. Read the refusal — it must name the production
+database and this tenant — then export the value it printed:
+
+```bash
+p7 audit; echo "exit $?"                                # refused, exit 64; prints the ack
+export NEXA_LEGACY_IMPORT_TARGET_ACK=<16-hex-from-the-refusal>
+p7 audit | tee audit.txt; echo "exit ${PIPESTATUS[0]}"
+```
+
+The acknowledgement arms the guard for this database and tenant. **It is not the owner's
+approval** — that is step 13, and nothing past step 12 runs without it.
+
+Check: exit `0` with verdict `READY_FOR_DRY_RUN`. Exit `3` (`BLOCKED`: an incomplete
+inventory, a currency other than IRT) stops the cutover here — never proceed on a partial
+walk. The fingerprint is printed and recorded; the plan's totals equal `legacy-source.tsv`;
+provider writes 0. The audit's Item 1 evidence and its cross-checks (Q1b, Q2b, Q6, Q7
+against the importer's own decisions) agree, or the disagreement is explained.
 
 ## Step 11 — production dry-run
 
 ```bash
-sudo $DC run --rm --no-deps -T -v /etc/nexa/legacy/panel-map.json:/legacy/panel-map.json:ro \
-  --entrypoint node api dist/legacy-import.cli.js dry-run \
-  --tenant "$NEXA_TENANT" --source "$LEGACY_SOURCE" --target nexa \
-  --panel-map /legacy/panel-map.json | tee dry-run.txt
+p7 dry-run | tee dry-run.txt; echo "exit ${PIPESTATUS[0]}"
 sudo $DC exec -T postgres psql -U nexa -d nexa -X -q -At -F "$(printf '\t')" \
   -v tenant="$NEXA_TENANT" -f - < <checkout>/scripts/legacy-rehearsal-checks.sql | tee nexa-after-dry-run.tsv
 diff <(grep -v '^legacy_import_runs' nexa-PRE.tsv) <(grep -v '^legacy_import_runs' nexa-after-dry-run.tsv) \
@@ -337,17 +375,18 @@ If the source fingerprint changes after approval (somebody re-dumped), approval 
 
 ## Step 14 — production import
 
-Only after step 13. Set the production guard exactly as P7 `--help` documents it (this
-runbook deliberately does not guess its spelling):
+Only after step 13.
 
 ```bash
 date -u +%FT%TZ | tee import-start.txt
-sudo $DC run --rm --no-deps -T -v /etc/nexa/legacy/panel-map.json:/legacy/panel-map.json:ro \
-  --entrypoint node api dist/legacy-import.cli.js import \
-  --tenant "$NEXA_TENANT" --source "$LEGACY_SOURCE" --target nexa \
-  --panel-map /legacy/panel-map.json <P7-PRODUCTION-GUARD-AS-DOCUMENTED-IN-HELP> | tee import.txt
+p7 import | tee import.txt; echo "exit ${PIPESTATUS[0]}"
 date -u +%FT%TZ | tee import-end.txt
 ```
+
+Exit `0`: done. Exit `3`: done, with eligible services reported `ADOPTION_PENDING_P6` (the
+release does not yet adopt) or another decision named in the report — read it; an
+adoption-pending import is NOT a finished migration. Exit `4`: interrupted — `resume`
+below.
 
 Progress, from a second terminal (read-only):
 
@@ -360,22 +399,20 @@ sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -c "
 ```
 
 **If the import is interrupted** (process killed, host restarted, connection lost): the
-run stays `RUNNING`. Run `resume` with the same arguments and guard — it continues the same
-run for the same source fingerprint and skips what was already imported (no duplicate
+run stays `RUNNING`. Run `p7 resume` — it continues the same run (same run id) for the
+same source fingerprint and the same panel map and skips what was already imported (no duplicate
 customer, opening, order, service or product; the map and the unique indexes enforce it).
 Never start a second `import`; never edit run or map rows by hand. A resume that refuses
-(`legacy_import.run_conflict`, fingerprint mismatch) is a stop-and-decide, usually a
-rollback trigger.
+(`legacy_import.run_conflict`, fingerprint or mapping mismatch) is a stop-and-decide, usually
+a rollback trigger. `p7 resume --abort-running` ends a stuck run as ABORTED; it is an owner
+decision, normally followed by a rollback rather than a fresh import.
 
 Check: the `APPLY` run is `COMPLETED`; `rows_failed = 0`. Record the run id and duration.
 
 ## Step 15 — reconcile
 
 ```bash
-sudo $DC run --rm --no-deps -T -v /etc/nexa/legacy/panel-map.json:/legacy/panel-map.json:ro \
-  --entrypoint node api dist/legacy-import.cli.js reconcile \
-  --tenant "$NEXA_TENANT" --source "$LEGACY_SOURCE" --target nexa \
-  --panel-map /legacy/panel-map.json | tee reconcile.txt
+p7 reconcile | tee reconcile.txt; echo "exit ${PIPESTATUS[0]}"   # 0 RECONCILED, 3 DISCREPANCY
 sudo $DC exec -T postgres psql -U nexa -d nexa -X -q -At -F "$(printf '\t')" \
   -v tenant="$NEXA_TENANT" -f - < <checkout>/scripts/legacy-rehearsal-checks.sql | tee nexa-POST.tsv
 ```
@@ -448,8 +485,11 @@ Fill [`final-report-template.md`](final-report-template.md) and attach P7's mach
 report (validated against [`final-report.schema.json`](final-report.schema.json)):
 
 ```bash
-sudo $DC run --rm --no-deps -T --entrypoint node api dist/legacy-import.cli.js report \
-  --tenant "$NEXA_TENANT" --target nexa --format json > final-report.json
+p7 report --format json > final-report.json; echo "exit ${PIPESTATUS[0]}"   # 3 = an equation failed
+node <checkout>/scripts/legacy-rehearsal-report-check.mjs validate \
+  <checkout>/docs/legacy-migration/final-report.schema.json final-report.json && echo "schema-valid"
 ```
 
-The report is aggregates only. Its `evidenceClass` is `production`.
+The report is aggregates only. Its `evidenceClass` is `production` (P7 classes a
+production-like target so); its `reconciliation` array holds P7's own C1, C3, W1, W4, W5,
+S3 and P3.

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nexa.invalid/schemas/legacy-migration/final-report/v1",
   "title": "NEXA legacy migration — final report (machine-readable)",
-  "description": "Item 16. The aggregate report of one legacy import run, as P7 `report` emits it and as docs/legacy-migration/final-report-template.md renders it. AGGREGATES ONLY: no field may carry a Telegram id, username, phone, subscription link, config, credential, token or card. Money is a decimal string of integer minor units with an explicit currency, never a JSON number. Written before the P7 CLI existed; the lead reconciles field names with P7's emitter, and any change is a new schemaVersion.",
+  "description": "Item 16. The aggregate report of one legacy import run: what P7 `legacy-import report --format json` prints (apps/api/src/modules/platform/legacy-importer/application/final-report.ts) and what docs/legacy-migration/final-report-template.md renders. AGGREGATES ONLY: no field may carry a Telegram id, username, phone, subscription link, config, credential, token or card. Money is a decimal string of integer minor units with an explicit currency, never a JSON number. Any change to a field is a new schemaVersion, made together with the emitter.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -20,12 +20,16 @@
     "manualReview"
   ],
   "properties": {
-    "schemaVersion": { "const": "1" },
+    "schemaVersion": {
+      "const": "1"
+    },
     "evidenceClass": {
-      "description": "synthetic: a fixture run, which proves code and is NEVER legacy evidence. staging: an isolated rehearsal on a real dump. production: the cutover.",
+      "description": "synthetic: a fixture run, which proves code and is NEVER legacy evidence. staging: an isolated rehearsal on a real dump. production: the cutover. P7 emits `synthetic` only for a fixture: source and otherwise the target's class (production-like or not), so a synthetic dataset loaded into SQL is reported by its target; the rehearsal harness checks this field against the run's real class.",
       "enum": ["synthetic", "staging", "production"]
     },
-    "generatedAt": { "$ref": "#/$defs/timestamp" },
+    "generatedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
     "run": {
       "type": "object",
       "additionalProperties": false,
@@ -51,25 +55,47 @@
           "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
           "description": "tenant slug"
         },
-        "mode": { "enum": ["DRY_RUN", "APPLY"] },
-        "status": { "enum": ["RUNNING", "COMPLETED", "FAILED", "ABORTED"] },
+        "mode": {
+          "enum": ["DRY_RUN", "APPLY"]
+        },
+        "status": {
+          "enum": ["RUNNING", "COMPLETED", "FAILED", "ABORTED"]
+        },
         "failureCode": {
           "type": ["string", "null"],
           "description": "LEGACY_IMPORT_RUN_FAILURE_CODES; null unless FAILED"
         },
-        "codeVersion": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,64}$" },
-        "startedAt": { "$ref": "#/$defs/timestamp" },
-        "finishedAt": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] },
-        "durationSeconds": { "$ref": "#/$defs/count" },
+        "codeVersion": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._+-]{1,64}$"
+        },
+        "startedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "finishedAt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "durationSeconds": {
+          "$ref": "#/$defs/count"
+        },
         "resumes": {
           "$ref": "#/$defs/count",
-          "description": "how many times the run was resumed after an interruption"
+          "description": "resumes of the run, counted from its legacy_import.run.resume audit rows"
         },
         "errors": {
           "$ref": "#/$defs/count",
           "description": "map rows FAILED at the end of the run; 0 on a completed run"
         },
-        "rowsSeen": { "$ref": "#/$defs/count" }
+        "rowsSeen": {
+          "$ref": "#/$defs/count"
+        }
       }
     },
     "source": {
@@ -81,7 +107,16 @@
           "$ref": "#/$defs/sha256",
           "description": "legacy_import_runs.source_fingerprint"
         },
-        "dumpSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "dumpSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "snapshotAt": {
           "$ref": "#/$defs/timestamp",
           "description": "when the final dump was taken (UTC)"
@@ -89,18 +124,31 @@
         "checksumTable": {
           "type": ["object", "null"],
           "additionalProperties": false,
-          "properties": { "user": { "type": "string" }, "invoice": { "type": "string" } },
-          "description": "CHECKSUM TABLE values recorded at the freeze and matched on the restored copy"
+          "properties": {
+            "user": {
+              "type": "string"
+            },
+            "invoice": {
+              "type": "string"
+            }
+          },
+          "description": "P7 emits here the per-table digests of its fingerprint (sha256 over the columns it reads), NOT MySQL CHECKSUM TABLE values; the cutover runbook records CHECKSUM TABLE separately."
         },
         "schemaEvidence": {
           "type": "object",
           "additionalProperties": false,
           "required": ["serverVersion", "tablesRead"],
           "properties": {
-            "serverVersion": { "type": "string", "maxLength": 64 },
+            "serverVersion": {
+              "type": "string",
+              "maxLength": 64
+            },
             "tablesRead": {
               "type": "array",
-              "items": { "type": "string", "pattern": "^[A-Za-z0-9_]{1,64}$" },
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]{1,64}$"
+              },
               "uniqueItems": true
             },
             "balanceColumnType": {
@@ -118,19 +166,30 @@
       "required": ["source", "existing", "created", "blocked", "skipped", "manualReview", "errors"],
       "description": "Closure: source = existing + created + blocked + skipped + manualReview + errors.",
       "properties": {
-        "source": { "$ref": "#/$defs/count", "description": "legacy user rows" },
+        "source": {
+          "$ref": "#/$defs/count",
+          "description": "legacy user rows"
+        },
         "existing": {
           "$ref": "#/$defs/count",
           "description": "matched an existing (tenant, telegram_user_id) customer"
         },
-        "created": { "$ref": "#/$defs/count" },
+        "created": {
+          "$ref": "#/$defs/count"
+        },
         "blocked": {
           "$ref": "#/$defs/count",
-          "description": "refused by a NEXA rule rather than routed to review, as P7 defines it"
+          "description": "legacy rows whose user.id is not a Telegram id: no customer and no map key can exist for them (equation C3), so they are refused rather than routed to review"
         },
-        "skipped": { "$ref": "#/$defs/count" },
-        "manualReview": { "$ref": "#/$defs/count" },
-        "errors": { "$ref": "#/$defs/count" }
+        "skipped": {
+          "$ref": "#/$defs/count"
+        },
+        "manualReview": {
+          "$ref": "#/$defs/count"
+        },
+        "errors": {
+          "$ref": "#/$defs/count"
+        }
       }
     },
     "wallet": {
@@ -152,21 +211,36 @@
       ],
       "description": "Equation: preImportTotalMinor + importedTotalMinor = expectedPostImportTotalMinor, which must equal actualPostImportTotalMinor. legacyTotalMinor = importedTotalMinor + notImportedTotalMinor. Opening balances are not revenue.",
       "properties": {
-        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
-        "legacyTotalMinor": { "$ref": "#/$defs/minor" },
-        "importedTotalMinor": { "$ref": "#/$defs/minor" },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "legacyTotalMinor": {
+          "$ref": "#/$defs/minor"
+        },
+        "importedTotalMinor": {
+          "$ref": "#/$defs/minor"
+        },
         "notImportedTotalMinor": {
           "$ref": "#/$defs/minor",
           "description": "balances of users skipped or in manual review; not in NEXA yet"
         },
-        "positive": { "$ref": "#/$defs/countAndSum" },
+        "positive": {
+          "$ref": "#/$defs/countAndSum"
+        },
         "zero": {
           "type": "object",
           "additionalProperties": false,
           "required": ["count"],
-          "properties": { "count": { "$ref": "#/$defs/count" } }
+          "properties": {
+            "count": {
+              "$ref": "#/$defs/count"
+            }
+          }
         },
-        "negative": { "$ref": "#/$defs/countAndSum" },
+        "negative": {
+          "$ref": "#/$defs/countAndSum"
+        },
         "openingEntries": {
           "$ref": "#/$defs/count",
           "description": "MIGRATION_OPENING_BALANCE entries written by this run"
@@ -175,9 +249,16 @@
           "$ref": "#/$defs/count",
           "description": "openings answered ALREADY_POSTED (a rerun or resume met an existing opening)"
         },
-        "preImportTotalMinor": { "$ref": "#/$defs/minor" },
-        "expectedPostImportTotalMinor": { "$ref": "#/$defs/minor" },
-        "actualPostImportTotalMinor": { "$ref": "#/$defs/minor" }
+        "preImportTotalMinor": {
+          "$ref": "#/$defs/minor",
+          "description": "the NEXA-native total at report time: every wallet entry of the selling currency except the migration openings, so pre + imported = expected holds even with activity after the import"
+        },
+        "expectedPostImportTotalMinor": {
+          "$ref": "#/$defs/minor"
+        },
+        "actualPostImportTotalMinor": {
+          "$ref": "#/$defs/minor"
+        }
       }
     },
     "services": {
@@ -198,23 +279,45 @@
       ],
       "description": "Closure: candidates (live legacy invoices) = the sum of every other count. Adoption orders are NEW_SERVICE + LEGACY_ADOPTION with zero totals and are not revenue.",
       "properties": {
-        "candidates": { "$ref": "#/$defs/count" },
-        "adopted": { "$ref": "#/$defs/count" },
-        "alreadyMapped": { "$ref": "#/$defs/count" },
-        "testSkipped": { "$ref": "#/$defs/count" },
-        "providerMissing": { "$ref": "#/$defs/count" },
+        "candidates": {
+          "$ref": "#/$defs/count"
+        },
+        "adopted": {
+          "$ref": "#/$defs/count"
+        },
+        "alreadyMapped": {
+          "$ref": "#/$defs/count",
+          "description": "always 0 from P7 today: a rerun's unchanged rows are counted in their category"
+        },
+        "testSkipped": {
+          "$ref": "#/$defs/count"
+        },
+        "providerMissing": {
+          "$ref": "#/$defs/count"
+        },
         "ambiguous": {
           "$ref": "#/$defs/count",
           "description": "AMBIGUOUS_PANEL and USERNAME_CASE_COLLISION"
         },
-        "mappingMissing": { "$ref": "#/$defs/count", "description": "PANEL_UNMAPPED" },
-        "productUnresolved": { "$ref": "#/$defs/count" },
-        "unsupported": { "$ref": "#/$defs/count" },
+        "mappingMissing": {
+          "$ref": "#/$defs/count",
+          "description": "PANEL_UNMAPPED"
+        },
+        "productUnresolved": {
+          "$ref": "#/$defs/count"
+        },
+        "unsupported": {
+          "$ref": "#/$defs/count",
+          "description": "UNSUPPORTED_SHAPE, INVALID_USERNAME and INVALID_SOURCE_ROW candidates"
+        },
         "manualReview": {
           "$ref": "#/$defs/count",
-          "description": "every other closed manual-review reason"
+          "description": "orphans, candidates whose customer was not imported, invoice keys outside the evidenced shape, and eligible candidates P6 has not adopted (reason ADOPTION_PENDING_P6)"
         },
-        "failed": { "$ref": "#/$defs/count" }
+        "failed": {
+          "$ref": "#/$defs/count",
+          "description": "candidates whose panel inventory was incomplete (INVENTORY_INCOMPLETE): nothing was decided"
+        }
       }
     },
     "products": {
@@ -222,9 +325,15 @@
       "additionalProperties": false,
       "required": ["hiddenCreated", "hiddenReused", "custom", "unresolved"],
       "properties": {
-        "hiddenCreated": { "$ref": "#/$defs/count" },
-        "hiddenReused": { "$ref": "#/$defs/count" },
-        "custom": { "$ref": "#/$defs/count" },
+        "hiddenCreated": {
+          "$ref": "#/$defs/count"
+        },
+        "hiddenReused": {
+          "$ref": "#/$defs/count"
+        },
+        "custom": {
+          "$ref": "#/$defs/count"
+        },
         "unresolved": {
           "$ref": "#/$defs/count",
           "description": "shapes UNRESOLVED (no or ambiguous current tariff)"
@@ -236,11 +345,26 @@
       "additionalProperties": false,
       "required": ["eligible", "ineligible", "used", "noTrial", "existingConflict"],
       "properties": {
-        "eligible": { "$ref": "#/$defs/count", "description": "INHERIT_NEXA_POLICY" },
-        "ineligible": { "$ref": "#/$defs/count", "description": "LEGACY_LIMIT_UNREADABLE" },
-        "used": { "$ref": "#/$defs/count", "description": "LEGACY_TRIAL_CONSUMED" },
-        "noTrial": { "$ref": "#/$defs/count", "description": "LEGACY_NO_TRIALS" },
-        "existingConflict": { "$ref": "#/$defs/count", "description": "KEPT_EXISTING_OVERRIDE" }
+        "eligible": {
+          "$ref": "#/$defs/count",
+          "description": "INHERIT_NEXA_POLICY"
+        },
+        "ineligible": {
+          "$ref": "#/$defs/count",
+          "description": "LEGACY_LIMIT_UNREADABLE"
+        },
+        "used": {
+          "$ref": "#/$defs/count",
+          "description": "LEGACY_TRIAL_CONSUMED"
+        },
+        "noTrial": {
+          "$ref": "#/$defs/count",
+          "description": "LEGACY_NO_TRIALS"
+        },
+        "existingConflict": {
+          "$ref": "#/$defs/count",
+          "description": "KEPT_EXISTING_OVERRIDE"
+        }
       }
     },
     "provider": {
@@ -248,10 +372,12 @@
       "additionalProperties": false,
       "required": ["reads", "writes", "inventoriesComplete"],
       "properties": {
-        "reads": { "$ref": "#/$defs/count" },
+        "reads": {
+          "$ref": "#/$defs/count"
+        },
         "writes": {
           "$ref": "#/$defs/count",
-          "description": "Expected 0. Any other value is a P0 incident and a rollback trigger; the rehearsal harness fails on it."
+          "description": "requests the read-only guard REFUSED — none is ever sent. Expected 0; any other value is a P0 incident and a rollback trigger, and the rehearsal harness fails on it."
         },
         "inventoriesComplete": {
           "type": "boolean",
@@ -264,12 +390,18 @@
       "additionalProperties": false,
       "required": ["total", "byReason"],
       "properties": {
-        "total": { "$ref": "#/$defs/count" },
+        "total": {
+          "$ref": "#/$defs/count"
+        },
         "byReason": {
           "type": "object",
-          "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
-          "additionalProperties": { "$ref": "#/$defs/count" },
-          "description": "closed reason code -> count, user and invoice rows together"
+          "propertyNames": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/count"
+          },
+          "description": "closed reason code -> count: user rows from the map, invoice rows by P7's category (including codes still arriving with the review queue, INVOICE_KEY_INVALID and ADOPTION_PENDING_P6)"
         }
       }
     },
@@ -281,16 +413,30 @@
         "additionalProperties": false,
         "required": ["id", "holds"],
         "properties": {
-          "id": { "type": "string", "pattern": "^[CWRSP][0-9]{1,2}$" },
-          "holds": { "type": "boolean" },
-          "expected": { "type": "string", "maxLength": 64 },
-          "actual": { "type": "string", "maxLength": 64 }
+          "id": {
+            "type": "string",
+            "pattern": "^[CWRSP][0-9]{1,2}$"
+          },
+          "holds": {
+            "type": "boolean"
+          },
+          "expected": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "actual": {
+            "type": "string",
+            "maxLength": 64
+          }
         }
       }
     }
   },
   "$defs": {
-    "count": { "type": "integer", "minimum": 0 },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
     "minor": {
       "type": "string",
       "pattern": "^-?(0|[1-9][0-9]{0,30})$",
@@ -301,15 +447,26 @@
       "additionalProperties": false,
       "required": ["count", "sumMinor"],
       "properties": {
-        "count": { "$ref": "#/$defs/count" },
-        "sumMinor": { "$ref": "#/$defs/minor" }
+        "count": {
+          "$ref": "#/$defs/count"
+        },
+        "sumMinor": {
+          "$ref": "#/$defs/minor"
+        }
       }
     },
-    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "uuid": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
     },
-    "timestamp": { "type": "string", "format": "date-time", "pattern": "Z$" }
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
   }
 }

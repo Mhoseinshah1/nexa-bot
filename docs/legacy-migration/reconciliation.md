@@ -60,15 +60,16 @@ total. The decision is the `legacy_import_map` row for `legacy_table = 'user'` (
 
 Equations:
 
-- **C1** `legacy users_total = Σ map:user:*` (every user decided once; the primary key
+- **C1** `legacy users_id_valid = Σ map:user:*` (every user with a valid key decided once; the primary key
   `(tenant, legacy_table, legacy_id)` makes "more than once" impossible, so a shortfall is
   a user the import never reached).
 - **C2** `delta(customers_total) ≤ Σ map:user:IMPORTED:*` (a customer is created only by an
   import decision).
 - **C3** `legacy users_id_valid = users_total`. A user id outside `^[1-9][0-9]{0,19}$`
-  cannot carry a map row at all (the map's key CHECK refuses it), so it can never be
-  counted by C1: a non-zero difference is a population P7 must report on its own and the
-  owner must decide, never a row widened into the map.
+  cannot carry a map row at all (the map's key CHECK refuses it). P7 counts those rows as
+  `customers.blocked` and its own C1 includes them; C1 over the MAP is therefore
+  `users_id_valid = Σ map:user:*`. A non-zero `blocked` is a population the owner must decide,
+  never a row widened into the map.
 
 The existing-customer split is derived from deltas, not from the `EXISTING_CUSTOMER`
 reason code, because an `IMPORTED` row carries at most one warning and a matched customer
@@ -215,24 +216,27 @@ shape `^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$`, MAP-REVIEW's contract chang
 - **S2** `legacy live_invoices_key_unmappable = 0`. A live invoice whose key falls outside
   the evidenced shape cannot carry a map row, so S1 cannot close; the remedy is a forward
   migration decided from the archive's aggregate, never a widened guess.
-- **S3** the categories, each a `map:invoice:<STATUS>:<REASON>` line:
+- **S3** the categories. P7 decides each candidate into exactly one category
+  (`importer.md` §5) and its report folds them into the program's (`final-report.ts`); P7's
+  own `S3` equation is that closure:
 
-| Program category (§16) | Map status / reason (`LEGACY_IMPORT_REASON_CODES` at merge time)                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| adopted                | `IMPORTED` (entity `SERVICE`); `delta(adopted_services)` must equal it                                                                |
-| already mapped         | `IMPORTED`, unchanged by this run (a rerun's `UNCHANGED` outcome; same entity, same checksum)                                         |
-| test skipped           | `SKIPPED:TEST_PANEL` (test panel) and the `is_test = 1` rows' skip reason                                                             |
-| provider missing       | `MANUAL_REVIEW:PROVIDER_MISSING`                                                                                                      |
-| ambiguous              | `MANUAL_REVIEW:AMBIGUOUS_PANEL`, `MANUAL_REVIEW:USERNAME_CASE_COLLISION`                                                              |
-| missing mapping        | `MANUAL_REVIEW:PANEL_UNMAPPED`                                                                                                        |
-| unsupported            | `MANUAL_REVIEW` / `SKIPPED` with the unsupported-shape reason                                                                         |
-| manual review (other)  | every other `MANUAL_REVIEW:<reason>` (product unresolved, inventory incomplete, orphan, conflicting entity, subscription_ref blocked) |
-| closed reason          | `SKIPPED:HISTORY_NOT_IMPORTED` and the other closed `SKIPPED` reasons                                                                 |
-| failed                 | `FAILED:*` — must be **0** on a completed run                                                                                         |
+| Program category (§16) | P7 category                                                                                                  | On the map                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| adopted                | `ADOPTION_ELIGIBLE`, adopted by P6                                                                           | `IMPORTED` (entity `SERVICE`); `delta(adopted_services)` equals it |
+| already mapped         | — (P7 reports 0; a rerun's unchanged rows stay in their category)                                            | `IMPORTED`, unchanged                                              |
+| test skipped           | `TEST_INVOICE_SKIPPED`, `TEST_PANEL_SKIPPED`                                                                 | `SKIPPED`                                                          |
+| provider missing       | `PROVIDER_MISSING`                                                                                           | `MANUAL_REVIEW:PROVIDER_MISSING`                                   |
+| ambiguous              | `AMBIGUOUS_PANEL`, `USERNAME_CASE_COLLISION`                                                                 | `MANUAL_REVIEW:<same>`                                             |
+| missing mapping        | `PANEL_UNMAPPED`                                                                                             | `MANUAL_REVIEW:PANEL_UNMAPPED`                                     |
+| product unresolved     | `PRODUCT_UNRESOLVED`                                                                                         | counted; recorded once MAP-REVIEW's code is on main                |
+| unsupported            | `UNSUPPORTED_SHAPE`, `INVALID_USERNAME`, `INVALID_SOURCE_ROW`                                                | partly counted only, as above                                      |
+| manual review (other)  | `ORPHAN`, `CUSTOMER_NOT_IMPORTED`, `INVOICE_KEY_INVALID`, and `ADOPTION_PENDING_P6` (eligible, P6 not wired) | key-invalid rows can never be recorded; pending ones wait for P6   |
+| failed                 | `INVENTORY_INCOMPLETE` (nothing decided)                                                                     | none                                                               |
 
-MAP-REVIEW (Item 9) extends the reason set; the left column is fixed by the program, the
-right column is whatever the contract holds when the import runs. A reason that maps to no
-category is a reconciliation failure, not an "other" bucket.
+So **S1 is not yet an equation over map rows**: until P6 adopts and MAP-REVIEW's codes reach
+main, `Σ map:invoice:*` is below the candidate count by exactly the counted-not-recorded
+categories. The rehearsal harness records that gap as PENDING (`service_map_rows`), never as
+a pass, and checks P7's `S3` closure and `services.candidates = live_invoices_total` exactly.
 
 - **S4** `legacy live_real_orphan` ⊆ the orphan / customer-missing manual-review reason —
   an invoice with no owning user can never be adopted.

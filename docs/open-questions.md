@@ -3136,15 +3136,16 @@ Still open:
 
 ## OQ-REH — migration rehearsal and cutover runbooks (program Items 11–17)
 
-- **OQ-REH-01 — UNKNOWN: the P7 CLI's exact flags and report shape.** The runbooks and
-  `scripts/legacy-rehearsal.sh` were written before `apps/api/src/legacy-import.cli.ts`
-  existed. They use the program's six mode names and ASSUME `--tenant`, `--source`,
-  `--target`, `--panel-map`, `report --format json`, and a production guard whose spelling
-  they deliberately do not guess (`docs/legacy-migration/cutover-runbook.md` § The P7 CLI
-  contract). `docs/legacy-migration/final-report.schema.json` is the proposed report shape.
-  **Settled by** comparing with the merged importer's `--help` and `report` output, and
-  correcting the script's contract block, the runbook table and the schema in one reviewed
-  commit.
+- **OQ-REH-01 — RESOLVED: the P7 CLI's flags and report shape.** The runbooks and
+  `scripts/legacy-rehearsal.sh` were aligned with the importer as built
+  (`docs/legacy-migration/importer.md` §1): `--source env:NAME` or a password-less
+  `mysql://` with `--source-password-env`, `--target` a bare name equal to `DATABASE_URL`'s,
+  the production guard `--allow-production-target` + `NEXA_LEGACY_IMPORT_TARGET_ACK`, exit
+  codes 0/3/4/64/65/1, and `report --format json` emitting
+  `docs/legacy-migration/final-report.schema.json` v1 (validated by
+  `scripts/legacy-rehearsal-report-check.mjs`). One behaviour stays open with the importer:
+  its `evidenceClass` is `synthetic` only for a `fixture:` source, so the synthetic SQL
+  fixture loaded into MariaDB is reported by the target's class.
 - **OQ-REH-02 — UNKNOWN: how MirzaBot is stopped and its MySQL made read-only.** Cutover
   step 7 and rollback step R5 name the effect (no customer action reaches it; writes are
   refused; `CHECKSUM TABLE` proves nothing changed) but the commands belong to the legacy
