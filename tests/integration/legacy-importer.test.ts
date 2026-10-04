@@ -11,7 +11,7 @@ import {
   type ProductCategoryId,
   type ProductId,
 } from '@nexa/contracts';
-import { parseArgs, runMode } from '../../apps/api/src/legacy-import.cli';
+import { exitCodeFor, parseArgs, runMode } from '../../apps/api/src/legacy-import.cli';
 import { parseReviewArgs, runReview } from '../../apps/api/src/legacy-import-review';
 import { DrizzleLegacyImportRepository } from '../../apps/api/src/modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -787,6 +787,171 @@ describe('Migration P7: the legacy importer', () => {
     const opening = await ctx.container.database.db.execute<{ amount: string }>(sql`
       SELECT amount::text FROM wallet_entries WHERE reference = 'legacy:opening:100000001'`);
     expect(opening.rows).toEqual([{ amount: '50000' }]);
+  });
+
+  // Review round (Codex, PR #183) — findings 1 and 2.
+  it('reconcile and report refuse a source or a panel mapping the run was not made from', async () => {
+    const snap = await snapshot();
+    await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
+    const otherMapping = parsePanelMapping(
+      JSON.stringify({ ...JSON.parse(mappingText), testPanels: ['tst', 'tst2'] }),
+      tenantA.tenantId as unknown as string,
+    );
+    await expect(importer().reconcile(input('reconcile', snap, otherMapping))).rejects.toThrow(
+      /different panel mapping/u,
+    );
+    await expect(
+      importer().finalReport({
+        ...input('report', snap, otherMapping),
+        evidenceClass: 'synthetic',
+      }),
+    ).rejects.toThrow(/different panel mapping/u);
+    const changed = buildSyntheticLegacyDataset();
+    const drifted = {
+      ...changed,
+      tables: {
+        ...changed.tables,
+        user: changed.tables.user.map((u) =>
+          u['id'] === '100000001' ? { ...u, Balance: '99' } : u,
+        ),
+      },
+    };
+    await expect(
+      importer().finalReport({
+        ...input('report', await snapshot(drifted)),
+        evidenceClass: 'synthetic',
+      }),
+    ).rejects.toThrow(/source changed/u);
+    // The run's own source and mapping still reconcile and report.
+    expect((await importer().reconcile(input('reconcile', snap))).verdict).toBe('RECONCILED');
+    await importer().finalReport({ ...input('report', snap), evidenceClass: 'synthetic' });
+  });
+
+  // Finding 3.
+  it('reconcile refuses a run that is not COMPLETED: resume or abort it first', async () => {
+    const snap = await snapshot();
+    await expect(
+      importer().apply({
+        ...input('crash', snap),
+        mode: 'IMPORT',
+        afterPhase: (phase) => {
+          if (phase === 'openings') throw new Error('simulated crash after the openings phase');
+        },
+      }),
+    ).rejects.toBeInstanceOf(LegacyImportInterrupted);
+    await expect(importer().reconcile(input('reconcile', snap))).rejects.toThrow(
+      /is RUNNING, not COMPLETED.*resume.*abort/u,
+    );
+    const running = await importer().runningRun(tenantA);
+    await importer().abortRunning(tenantA, importerActor('abort'), running as string);
+    await expect(importer().reconcile(input('reconcile', snap))).rejects.toThrow(
+      /is ABORTED, not COMPLETED/u,
+    );
+  });
+
+  // Finding 4.
+  it('failed adoptions and unapplied rows are never reported as success', async () => {
+    const failing: LegacyAdoptionPort = {
+      adopt: () =>
+        Promise.resolve({
+          kind: 'FAILED',
+          reason: 'PROVIDER_READ_FAILED',
+        } as LegacyAdoptionOutcome),
+    };
+    const report = await importer(failing).apply({
+      ...input('fail', await snapshot()),
+      mode: 'IMPORT',
+    });
+    expect(report.verdict).toBe('COMPLETED_WITH_FAILURES');
+    expect(exitCodeFor(report)).toBe(3);
+    expect((report.sections as Record<string, any>)['attention']).toMatchObject({
+      adoptionFailed: SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE,
+      total: SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE,
+    });
+
+    // A rerun of a source whose balance changed after import leaves that user unapplied.
+    const changed = buildSyntheticLegacyDataset();
+    const drifted = {
+      ...changed,
+      tables: {
+        ...changed.tables,
+        user: changed.tables.user.map((u) =>
+          u['id'] === '100000001' ? { ...u, Balance: '99' } : u,
+        ),
+      },
+    };
+    const rerun = await importer().apply({
+      ...input('drift', await snapshot(drifted)),
+      mode: 'IMPORT',
+    });
+    expect(rerun.verdict).toBe('COMPLETED_WITH_FAILURES');
+    expect((rerun.sections as Record<string, any>)['attention']).toMatchObject({
+      customerSourceChanged: 1,
+    });
+  });
+
+  // Finding 6.
+  it('a rerun re-resolves a MATCHED shape, so a changed public tariff refreshes the hidden product', async () => {
+    const snap = await snapshot();
+    await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
+    const hiddenPrices = async () =>
+      (
+        await ctx.container.database.db.execute<{ price: string }>(sql`
+          SELECT DISTINCT p.price_amount::text AS price
+            FROM legacy_product_shapes s JOIN products p ON p.id = s.product_id
+           WHERE s.tenant_id = ${tenantA.tenantId as unknown as string}
+             AND s.tariff_status = 'RESOLVED'`)
+      ).rows.map((r) => r.price);
+    expect(await hiddenPrices()).toEqual(['200000']);
+    await ctx.container.database.db.execute(sql`
+      UPDATE products SET price_amount = 250000
+       WHERE tenant_id = ${tenantA.tenantId as unknown as string} AND audience = 'EVERYONE'`);
+    const rerun = await importer().apply({ ...input('rerun', snap), mode: 'IMPORT' });
+    expect((rerun.sections as Record<string, any>)['applied'].products.tariff).toMatchObject({
+      MATCHED: expect.any(Number),
+    });
+    expect(await hiddenPrices()).toEqual(['250000']);
+  });
+
+  // Finding 7.
+  it('the wallet equation holds when an entry commits between the pre-import total and the run start', async () => {
+    const existingId = (
+      await ctx.container.database.db.execute<{ id: string }>(
+        sql`SELECT id FROM customers WHERE telegram_user_id = ${SYNTHETIC_EXISTING_CUSTOMER}`,
+      )
+    ).rows[0]?.id as string;
+    const svc = importer();
+    const destination = (
+      svc as unknown as {
+        deps: { destination: { walletTotals: (...args: unknown[]) => Promise<unknown> } };
+      }
+    ).deps.destination;
+    const original = destination.walletTotals.bind(destination);
+    let injected = false;
+    destination.walletTotals = async (...args: unknown[]) => {
+      const result = await original(...args);
+      if (!injected) {
+        injected = true;
+        // Commits after the pre-import measurement and before the run row exists.
+        await ctx.container.wallet.adjust(tenantA, owner, existingId as never, {
+          idempotencyKey: 'between',
+          direction: 'CREDIT',
+          amountMinor: 700n,
+          currency: 'IRT',
+          note: 'fixture',
+        });
+      }
+      return result;
+    };
+    const snap = await snapshot();
+    await svc.apply({ ...input('import', snap), mode: 'IMPORT' });
+    expect(injected).toBe(true);
+    const reconcile = await importer().reconcile(input('reconcile', snap));
+    expect(reconcile.verdict).toBe('RECONCILED');
+    expect((reconcile.sections as Record<string, any>)['wallet']).toMatchObject({
+      preImportTotalMinor: 0n,
+      nonOpeningMovementSinceRunMinor: 700n,
+    });
   });
 
   it('reconcile reports a discrepancy instead of passing over one', async () => {

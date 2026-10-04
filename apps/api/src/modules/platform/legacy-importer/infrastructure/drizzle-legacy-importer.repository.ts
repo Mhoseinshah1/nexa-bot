@@ -252,21 +252,6 @@ export class DrizzleLegacyImporterRepository
     return { totalMinor: BigInt(row?.total ?? '0'), customers: row?.customers ?? 0 };
   }
 
-  async nonOpeningMovementSince(
-    scope: TenantContext,
-    currency: string,
-    since: Date,
-  ): Promise<bigint> {
-    const tenantId = requireTenantId(scope);
-    const result = await this.db.execute<{ total: string }>(sql`
-      SELECT COALESCE(sum(CASE direction WHEN 'CREDIT' THEN amount ELSE -amount END), 0)::text AS total
-        FROM wallet_entries
-       WHERE tenant_id = ${tenantId} AND currency = ${currency}
-         AND reason <> ${OPENING_REASON} AND created_at >= ${since.toISOString()}::timestamptz
-    `);
-    return BigInt(result.rows[0]?.total ?? '0');
-  }
-
   async openingAggregates(scope: TenantContext) {
     const tenantId = requireTenantId(scope);
     const result = await this.db.execute<{

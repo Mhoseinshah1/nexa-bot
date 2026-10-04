@@ -191,10 +191,32 @@ export interface ApplyTallies {
       MANUAL_REVIEW: number;
       SKIPPED: number;
       FAILED: number;
+      /** ALREADY_ADOPTED whose source row changed since adoption: a person's question. */
+      alreadyAdoptedSourceChanged: number;
       reviewReasons: Record<string, number>;
       PENDING: number;
     };
   };
+}
+
+/**
+ * What an APPLY run left unapplied, failed or in conflict. Any of it makes the verdict
+ * `COMPLETED_WITH_FAILURES` (exit 3): a run that leaves money, a trial or a service undone
+ * is never reported as success. A row a person closed (REVIEW_CLOSED) and a row recorded
+ * for review are decisions, not failures, and are not counted here.
+ */
+export function applyAttention(tallies: ApplyTallies) {
+  const counts = {
+    customerSourceChanged: tallies.customers.sourceChanged,
+    customerEntityMismatch: tallies.customers.entityMismatch,
+    openingConflict: tallies.openings.CONFLICT,
+    trialConflict: tallies.trials.CONFLICT,
+    invoiceMapRefused: tallies.services.map.REFUSED,
+    adoptionFailed: tallies.services.adoption.FAILED,
+    adoptedSourceChanged: tallies.services.adoption.alreadyAdoptedSourceChanged,
+  };
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  return { ...counts, total };
 }
 
 export class LegacyImporterService {
@@ -525,6 +547,7 @@ export class LegacyImporterService {
           MANUAL_REVIEW: 0,
           SKIPPED: 0,
           FAILED: 0,
+          alreadyAdoptedSourceChanged: 0,
           reviewReasons: {},
           PENDING: 0,
         },
@@ -564,6 +587,7 @@ export class LegacyImporterService {
     }
     const finished = await this.finish(scope, actor, run.id, mapping, { status: 'COMPLETED' });
     const adoptionPending = tallies.services.adoption.PENDING > 0;
+    const attention = applyAttention(tallies);
     return this.report(
       input.mode,
       scope,
@@ -576,8 +600,13 @@ export class LegacyImporterService {
         provider: this.providerSection(prepared),
         plan: prepared.plan.tallies,
         applied: tallies,
+        attention,
       },
-      adoptionPending ? 'COMPLETED_ADOPTION_PENDING_P6' : 'COMPLETED',
+      attention.total > 0
+        ? 'COMPLETED_WITH_FAILURES'
+        : adoptionPending
+          ? 'COMPLETED_ADOPTION_PENDING_P6'
+          : 'COMPLETED',
     );
   }
 
@@ -863,8 +892,16 @@ export class LegacyImporterService {
       }
       if (ensured.outcome === 'CREATED') tallies.products.created += 1;
       else tallies.products.existing += 1;
+      // Every run resolves again (once per run: the key carries it), so a public tariff
+      // that changed since the last run refreshes the hidden product's price. The #177
+      // rules are the shape service's: MATCH only, purchasable tariffs only, and no tariff
+      // or several leave a RESOLVED shape as it is (reported, never withdrawn here). A
+      // tariff an OPERATOR stated is a decision, never overwritten by a match.
       let resolved = ensured.shape.tariffStatus === 'RESOLVED';
-      if (!resolved) {
+      if (ensured.shape.resolution === 'OPERATOR_STATED') {
+        tallies.products.tariff['OPERATOR_STATED_KEPT'] =
+          (tallies.products.tariff['OPERATOR_STATED_KEPT'] ?? 0) + 1;
+      } else {
         const result = await this.deps.products.resolveTariffMatchForImport(scope, actor, {
           idempotencyKey: `legacy-import:tariff:${ensured.shape.id}:${runId}`,
           shapeId: ensured.shape.id,
@@ -872,9 +909,6 @@ export class LegacyImporterService {
         tallies.products.tariff[result.finding] =
           (tallies.products.tariff[result.finding] ?? 0) + 1;
         resolved = result.shape.tariffStatus === 'RESOLVED';
-      } else {
-        tallies.products.tariff['ALREADY_RESOLVED'] =
-          (tallies.products.tariff['ALREADY_RESOLVED'] ?? 0) + 1;
       }
       shapes.set(planned.key, { id: ensured.shape.id, resolved });
     }
@@ -995,6 +1029,9 @@ export class LegacyImporterService {
       });
       // P6 wrote the invoice's map row for every one of these; P7 records nothing here.
       tallies.services.adoption[outcome.kind] += 1;
+      if (outcome.kind === 'ALREADY_ADOPTED' && outcome.sourceChanged) {
+        tallies.services.adoption.alreadyAdoptedSourceChanged += 1;
+      }
       if (outcome.kind === 'MANUAL_REVIEW') {
         tallies.services.adoption.reviewReasons[outcome.reason] =
           (tallies.services.adoption.reviewReasons[outcome.reason] ?? 0) + 1;
@@ -1007,29 +1044,22 @@ export class LegacyImporterService {
   async reconcile(input: LegacyImportInput): Promise<LegacyImportReport> {
     const { scope, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
-    const run = await this.latestApplyRun(scope);
-    if (run.sourceFingerprint !== snapshot.fingerprint) {
-      throw errors.conflict(
-        LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
-        `The source changed since run ${run.id} (fingerprint differs); reconcile compares one snapshot with what it produced.`,
-      );
-    }
-    const inputs = await this.deps.runInputs.find(scope, run.id);
-    if (inputs === null)
-      throw errors.notFound(
-        LEGACY_IMPORT_ERROR_CODES.RUN_NOT_FOUND,
-        `Run ${run.id} has no recorded inputs.`,
-      );
+    const { run, inputs } = await this.runMadeFrom(scope, snapshot, mapping, 'reconcile');
     const prepared = await this.prepare(scope, snapshot, mapping);
     const { destination } = this.deps;
     const tallies = prepared.plan.tallies;
-    const [wallet, openings, movement, trials, shapes] = await Promise.all([
+    const [wallet, openings, native, trials, shapes] = await Promise.all([
       destination.walletTotals(scope, inputs.walletCurrency),
       destination.openingAggregates(scope),
-      destination.nonOpeningMovementSince(scope, inputs.walletCurrency, run.startedAt),
+      destination.walletTotals(scope, inputs.walletCurrency, { excludeOpenings: true }),
       destination.trialDecisionCounts(scope),
       destination.shapeStatusCounts(scope),
     ]);
+    // Movement is measured against the SAME boundary as the pre-import total: both are the
+    // non-opening total (`excludeOpenings`), so an entry is either in the pre-import figure
+    // or in the movement, never in neither, whenever it committed (before the run row, or
+    // concurrently with that measurement). There is no timestamp boundary to fall between.
+    const movement = native.totalMinor - inputs.preImportWalletTotalMinor;
     const importable = prepared.plan.users.filter((u) => u.decision.kind === 'IMPORT');
     const present = await destination.customersByTelegramIds(
       scope,
@@ -1152,11 +1182,10 @@ export class LegacyImporterService {
     });
     if (!label.ok) throw errors.conflict(LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT, label.message);
     const startedAt = this.deps.clock.now();
-    const run = await this.latestApplyRun(scope);
-    const inputs = await this.deps.runInputs.find(scope, run.id);
+    const { run, inputs } = await this.runMadeFrom(scope, snapshot, mapping, 'report');
     const { destination } = this.deps;
     const prepared = await this.prepare(scope, snapshot, mapping);
-    const currency = inputs?.walletCurrency ?? prepared.salesCurrency;
+    const currency = inputs.walletCurrency;
     const [openings, trials, shapes, map, native, actual, resumes, tenantSlug] = await Promise.all([
       destination.openingAggregates(scope),
       destination.trialDecisionCounts(scope),
@@ -1210,6 +1239,50 @@ export class LegacyImporterService {
   }
 
   // --- helpers -------------------------------------------------------------------------
+
+  /**
+   * The tenant's latest APPLY run, as reconcile and report may read it: made from THIS
+   * snapshot (source fingerprint) and THIS mapping (the fingerprint recorded in its inputs).
+   * Either differing would compare one input with what another produced. Reconcile also
+   * needs the run COMPLETED: a RUNNING run's phases are half done, and an ABORTED one is not
+   * the import. The report may describe either, and says which in its verdict.
+   */
+  private async runMadeFrom(
+    scope: TenantContext,
+    snapshot: LegacySnapshot,
+    mapping: PanelMapping,
+    purpose: 'reconcile' | 'report',
+  ): Promise<{ readonly run: LegacyImportRunRecord; readonly inputs: LegacyRunInputs }> {
+    const run = await this.latestApplyRun(scope);
+    if (purpose === 'reconcile' && run.status !== 'COMPLETED') {
+      throw errors.conflict(
+        LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+        run.status === 'RUNNING'
+          ? `Run ${run.id} is RUNNING, not COMPLETED: resume it (--mode resume) or abort it (--abort-running) first.`
+          : `Run ${run.id} is ${run.status}, not COMPLETED: there is no finished import to reconcile; run an import first.`,
+      );
+    }
+    if (run.sourceFingerprint !== snapshot.fingerprint) {
+      throw errors.conflict(
+        LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+        `The source changed since run ${run.id} (fingerprint differs); ${purpose} compares one snapshot with what it produced.`,
+      );
+    }
+    const inputs = await this.deps.runInputs.find(scope, run.id);
+    if (inputs === null) {
+      throw errors.notFound(
+        LEGACY_IMPORT_ERROR_CODES.RUN_NOT_FOUND,
+        `Run ${run.id} has no recorded inputs.`,
+      );
+    }
+    if (inputs.panelMappingFingerprint !== mapping.fingerprint) {
+      throw errors.conflict(
+        LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+        `Run ${run.id} was made under a different panel mapping; ${purpose} needs the same mapping file.`,
+      );
+    }
+    return { run, inputs };
+  }
 
   private async latestApplyRun(scope: TenantContext): Promise<LegacyImportRunRecord> {
     const latest = await this.deps.destination.latestRun(scope, 'APPLY');

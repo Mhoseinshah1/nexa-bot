@@ -348,6 +348,8 @@ async function emit(
 export function exitCodeFor(report: LegacyImportReport): number {
   if (report.verdict === 'BLOCKED' || report.verdict === 'DISCREPANCY') return 3;
   if (report.verdict === 'COMPLETED_ADOPTION_PENDING_P6') return 3;
+  // Unapplied, failed or conflicting rows (`applyAttention`): never a success.
+  if (report.verdict === 'COMPLETED_WITH_FAILURES') return 3;
   if (report.verdict?.endsWith('_WITH_DISCREPANCY') === true) return 3;
   return 0;
 }

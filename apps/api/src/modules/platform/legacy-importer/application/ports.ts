@@ -54,8 +54,6 @@ export interface LegacyImporterDestination {
     currency: string,
     options?: { readonly excludeOpenings?: boolean },
   ): Promise<{ readonly totalMinor: bigint; readonly customers: number }>;
-  /** Σ signed entries since `since` whose reason is NOT the migration opening. */
-  nonOpeningMovementSince(scope: TenantContext, currency: string, since: Date): Promise<bigint>;
   /** Count and Σ of migration openings, by sign. */
   openingAggregates(scope: TenantContext): Promise<{
     readonly count: number;
