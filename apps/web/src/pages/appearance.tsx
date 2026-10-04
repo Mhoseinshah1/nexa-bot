@@ -100,7 +100,7 @@ export function AppearancePage({
 }: {
   denied: boolean;
   mayEdit: boolean;
-  /** `catalog.view`: the category list «رنگ دسته‌بندی‌ها» colours. */
+  /** `catalog.view`: the category list the colour section draws. */
   mayViewCategories?: boolean;
 }) {
   const appearance = useQuery({
