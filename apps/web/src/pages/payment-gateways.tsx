@@ -24,6 +24,8 @@ import { formatMoneyText, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
+import { paymentMethodPath } from '../payment-method-routes';
+import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
 import { FxSection } from './fx-section';
 import {
@@ -35,6 +37,7 @@ import {
   DataTable,
   Empty,
   Field,
+  KV,
   Ltr,
   PageHead,
   RowActions,
@@ -289,9 +292,23 @@ export function PaymentGatewaysPage({
   mayEdit,
   tabs,
   panel,
+  provider,
+  extraActions,
 }: {
   denied: boolean;
   mayEdit: boolean;
+  /**
+   * UX Batch 01, item 8: set, this is ONE payment method's view — its settings, its
+   * actions and the forms they open, directly beneath, on a page of its own. Unset, this is
+   * the list, where each route links to its own view and nothing is edited in place.
+   *
+   * The list used to carry every route's actions and open every form at the foot of one
+   * long page, so pressing «ویرایش» on the first row jumped the operator past the whole
+   * table to a form for a route they could no longer see.
+   */
+  provider?: PaymentGatewayProvider;
+  /** Extra controls drawn beside the route's own actions (card-to-card: add a card). */
+  extraActions?: ReactNode;
   /** The Configuration / Health tab strip (program §11), drawn under the page head. */
   tabs?: ReactNode;
   /**
@@ -303,6 +320,7 @@ export function PaymentGatewaysPage({
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
+  const onLink = useLinkHandler();
 
   const gateways = useQuery({
     queryKey: ['payment-gateways'],
@@ -532,6 +550,68 @@ export function PaymentGatewaysPage({
         (keying !== null && (apiKey !== '' || webhookSecret !== '' || verifyKey !== ''))),
   );
 
+  /*
+   * A route's write controls. Nothing at all for a view-only role: a drawn control nobody
+   * may press is `UNK-ADM-001` from the other end.
+   */
+  const actionsFor = (row: PaymentGatewayView): ReactNode =>
+    !mayEdit ? null : (
+      <>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={busy}
+          onClick={() => {
+            setEditing(row.provider);
+            setForm(formOf(row));
+          }}
+        >
+          {t('web.payment_gateway_edit')}
+        </button>
+        {row.credential.required && (
+          <button
+            type="button"
+            className="btn sm"
+            disabled={busy}
+            onClick={() => {
+              setKeying(row.provider);
+              setApiKey('');
+              setWebhookSecret('');
+              setVerifyKey('');
+              setVerifyKey('');
+            }}
+          >
+            {t('web.payment_gateway_credential_edit')}
+          </button>
+        )}
+        {CHECKABLE_PROVIDERS.has(row.provider) && row.credential.setAt !== null && (
+          <button
+            type="button"
+            className="btn sm"
+            disabled={busy}
+            onClick={() => check.mutate(row.provider)}
+          >
+            {t('web.payment_gateway_check')}
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn sm"
+          disabled={busy}
+          onClick={() =>
+            toggle.mutate({
+              provider: row.provider,
+              status: row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE',
+            })
+          }
+        >
+          {t(
+            row.status === 'ACTIVE' ? 'web.payment_gateway_disable' : 'web.payment_gateway_enable',
+          )}
+        </button>
+      </>
+    );
+
   const columns: readonly Column<PaymentGatewayView>[] = [
     {
       key: 'name',
@@ -541,7 +621,13 @@ export function PaymentGatewaysPage({
         <CellMain
           primary={
             <span className="gateways-name">
-              <span className="strong">{nameOf(row)}</span>
+              {provider === undefined ? (
+                <a className="strong" href={paymentMethodPath(row.provider)} onClick={onLink}>
+                  {nameOf(row)}
+                </a>
+              ) : (
+                <span className="strong">{nameOf(row)}</span>
+              )}
               {row.displayName === null && (
                 <Badge tone="neutral" outline>
                   {t('web.payment_gateway_name_default')}
@@ -746,99 +832,81 @@ export function PaymentGatewaysPage({
       key: 'actions',
       header: t('web.payment_gateway_actions'),
       align: 'end',
-      // Nothing at all for a view-only role. The column header stays, because a table
-      // whose columns depend on the reader is a table two operators describe differently.
-      render: (row) =>
-        !mayEdit ? null : (
-          // Wrapping, so three actions never push the table wider than its card.
-          <RowActions wrap>
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy}
-              onClick={() => {
-                setEditing(row.provider);
-                setForm(formOf(row));
-              }}
-            >
-              {t('web.payment_gateway_edit')}
-            </button>
-            {row.credential.required && (
-              <button
-                type="button"
-                className="btn sm"
-                disabled={busy}
-                onClick={() => {
-                  setKeying(row.provider);
-                  setApiKey('');
-                  setWebhookSecret('');
-                  setVerifyKey('');
-                  setVerifyKey('');
-                }}
-              >
-                {t('web.payment_gateway_credential_edit')}
-              </button>
-            )}
-            {CHECKABLE_PROVIDERS.has(row.provider) && row.credential.setAt !== null && (
-              <button
-                type="button"
-                className="btn sm"
-                disabled={busy}
-                onClick={() => check.mutate(row.provider)}
-              >
-                {t('web.payment_gateway_check')}
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy}
-              onClick={() =>
-                toggle.mutate({
-                  provider: row.provider,
-                  status: row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE',
-                })
-              }
-            >
-              {t(
-                row.status === 'ACTIVE'
-                  ? 'web.payment_gateway_disable'
-                  : 'web.payment_gateway_enable',
-              )}
-            </button>
-          </RowActions>
-        ),
+      /*
+       * The list opens a route's own view, for every reader — a view-only role reads the
+       * route there too. The writes live on that view, beside the route they change.
+       */
+      render: (row) => (
+        <a className="btn sm" href={paymentMethodPath(row.provider)} onClick={onLink}>
+          {t('web.payment_method_open')}
+        </a>
+      ),
     },
   ];
 
+  /** The one route this view is about, when it is a provider's own view. */
+  const only = provider === undefined ? undefined : rows.find((row) => row.provider === provider);
+  const ready = queryState(gateways) === 'ready';
+  const onlyActions = only === undefined ? null : actionsFor(only);
+
   return (
     <>
-      <PageHead
-        title={t('web.payment_gateways_title')}
-        subtitle={t('web.payment_gateways_subtitle')}
-      />
+      {/* A provider's view has its own head, drawn by the page that holds it. */}
+      {provider === undefined && (
+        <PageHead
+          title={t('web.payment_gateways_title')}
+          subtitle={t('web.payment_gateways_subtitle')}
+        />
+      )}
       {tabs}
       <PanelFrame panel={panel}>
         <StateSwitch
           query={gateways}
           denied={denied}
-          isEmpty={queryState(gateways) === 'ready' && rows.length === 0}
+          isEmpty={ready && (provider === undefined ? rows.length === 0 : only === undefined)}
           empty={
-            <Empty
-              title={t('web.payment_gateways_empty')}
-              hint={t('web.payment_gateways_empty_hint')}
-            />
+            provider === undefined ? (
+              <Empty
+                title={t('web.payment_gateways_empty')}
+                hint={t('web.payment_gateways_empty_hint')}
+              />
+            ) : (
+              <Empty title={t('web.payment_method_missing')} />
+            )
           }
         >
-          <Card title={t('web.payment_gateways_title')} hint={t('web.payment_gateways_hint')}>
-            <DataTable
-              columns={columns}
-              rows={rows}
-              rowKey={(row) => row.provider}
-              caption={t('web.payment_gateways_title')}
-              dense
-            />
-          </Card>
+          {provider === undefined ? (
+            <Card title={t('web.payment_gateways_title')} hint={t('web.payment_gateways_hint')}>
+              <DataTable
+                columns={columns}
+                rows={rows}
+                rowKey={(row) => row.provider}
+                caption={t('web.payment_gateways_title')}
+                dense
+              />
+            </Card>
+          ) : only === undefined ? null : (
+            /*
+             * The route's own summary: every column the list shows, as label and value, and
+             * its actions beneath — so the form an action opens appears right under the
+             * route it belongs to, never at the foot of a page of other routes.
+             */
+            <Card title={t('web.payment_method_settings')}>
+              <KV
+                items={columns
+                  .filter((column) => column.key !== 'actions')
+                  .map((column) => [column.header, column.render(only)])}
+              />
+              {(onlyActions !== null || extraActions !== undefined) && (
+                <div className="form-actions">
+                  <RowActions wrap>
+                    {onlyActions}
+                    {extraActions}
+                  </RowActions>
+                </div>
+              )}
+            </Card>
+          )}
         </StateSwitch>
 
         {/*
@@ -1258,31 +1326,32 @@ export function PaymentGatewaysPage({
         Package FX: the central exchange rate beside the routes it prices. Its own query
         and its own card, so a rate source being down never blanks the routes table.
       */}
-        <FxSection denied={denied} mayEdit={mayEdit} />
+        {provider === undefined && <FxSection denied={denied} mayEdit={mayEdit} />}
 
         {/*
-        The generated callback URLs, for diagnostics (WP11A §14). Read-only: the server
-        builds them from the installation's registered public origin.
+        The generated callback URL, for diagnostics (WP11A §14), on the route's own view.
+        Read-only: the server builds it from the installation's registered public origin.
       */}
-        {rows.some((row) => row.credential.required) && (
+        {only !== undefined && only.credential.required && (
           <Card
             title={t('web.payment_gateway_callback_url')}
             hint={t('web.payment_gateway_callback_url_hint')}
           >
-            {rows
-              .filter((row) => row.credential.required)
-              .map((row) => (
-                <p key={row.provider}>
-                  <span className="strong">{nameOf(row)}</span>{' '}
-                  {row.callbackUrl === null ? (
-                    <span className="muted small">
+            {/* A label/value row, whose value wraps: a URL never widens the page at 390px. */}
+            <KV
+              items={[
+                [
+                  nameOf(only),
+                  only.callbackUrl === null ? (
+                    <span key="u" className="muted small">
                       {t('web.payment_gateway_callback_url_none')}
                     </span>
                   ) : (
-                    <Ltr>{row.callbackUrl}</Ltr>
-                  )}
-                </p>
-              ))}
+                    <Ltr key="u">{only.callbackUrl}</Ltr>
+                  ),
+                ],
+              ]}
+            />
           </Card>
         )}
       </PanelFrame>

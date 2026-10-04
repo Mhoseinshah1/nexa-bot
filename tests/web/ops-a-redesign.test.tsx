@@ -6,7 +6,7 @@ import { PanelDetailPage, PanelsPage } from '../../apps/web/src/pages/panels';
 import { BotsPage } from '../../apps/web/src/pages/bots';
 import { BotButtonsPage } from '../../apps/web/src/pages/bot-buttons';
 import { PaymentGatewaysPage } from '../../apps/web/src/pages/payment-gateways';
-import { PaymentAccountsPage } from '../../apps/web/src/pages/payment-accounts';
+import { CardAccountsSection } from '../../apps/web/src/pages/payment-accounts';
 import { ClientAppsPage } from '../../apps/web/src/pages/client-apps';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
@@ -353,9 +353,10 @@ describe('dirty-state protection on the OPS-A forms', () => {
       { url: '/payment-gateways', body: body('/payment-gateways') },
       { url: '/fx/status', body: body('/fx/status') },
     ]);
+    // On the route's own view (UX Batch 01, item 8), where its form opens.
     renderPage(
       <>
-        <PaymentGatewaysPage denied={false} mayEdit />
+        <PaymentGatewaysPage provider="MANUAL_TRANSFER" denied={false} mayEdit />
         <LeaveGuardHost />
       </>,
     );
@@ -363,7 +364,7 @@ describe('dirty-state protection on the OPS-A forms', () => {
     fireEvent.click(edit[0] as HTMLElement);
     // Opened and untouched: nothing to lose.
     expect(leave()).toBeNull();
-    go('/payment-gateways');
+    go('/payment-gateways/card-to-card');
 
     fireEvent.change(screen.getByLabelText(t('web.payment_gateway_name')), {
       target: { value: 'کارت' },
@@ -382,7 +383,7 @@ describe('dirty-state protection on the OPS-A forms', () => {
     ]);
     renderPage(
       <>
-        <PaymentGatewaysPage denied={false} mayEdit />
+        <PaymentGatewaysPage provider="TONPAYS" denied={false} mayEdit />
         <LeaveGuardHost />
       </>,
     );
@@ -399,13 +400,13 @@ describe('dirty-state protection on the OPS-A forms', () => {
     stubApi([{ url: '/payment-accounts', body: body('/payment-accounts') }]);
     renderPage(
       <>
-        <PaymentAccountsPage denied={false} mayEdit />
+        <CardAccountsSection denied={false} mayEdit adding onAddingChange={() => undefined} />
         <LeaveGuardHost />
       </>,
     );
     await screen.findByText('حساب اصلی');
     expect(leave()).toBeNull();
-    go('/payment-accounts');
+    go('/payment-gateways/card-to-card');
 
     fireEvent.change(screen.getByLabelText(t('web.payment_account_bank')), {
       target: { value: 'ملت' },

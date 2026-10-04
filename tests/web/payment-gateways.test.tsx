@@ -64,14 +64,24 @@ describe('payment navigation permissions', () => {
     return found;
   };
 
-  it.each<[string, PermissionKey, PermissionKey]>([
-    ['payment-accounts', 'payments.accounts.view', 'payments.accounts.edit'],
-    ['payment-gateways', 'payments.gateways.view', 'payments.gateways.edit'],
-  ])('%s is shown for view and hidden for edit alone', (id, view, edit) => {
-    expect(navPermitted(entry(id), [view])).toBe(true);
-    expect(navPermitted(entry(id), [view, edit])).toBe(true);
-    expect(navPermitted(entry(id), [edit])).toBe(false);
-    expect(navPermitted(entry(id), [])).toBe(false);
+  /*
+   * UX Batch 01, item 7: one entry, «روش‌های پرداخت», for both. The cards are managed on
+   * the card-to-card method's own view, so a role that reads only the cards needs this
+   * entry to reach them — and an edit key alone still draws nothing.
+   */
+  it.each<[PermissionKey, PermissionKey]>([
+    ['payments.accounts.view', 'payments.accounts.edit'],
+    ['payments.gateways.view', 'payments.gateways.edit'],
+  ])('payment-gateways is shown for %s and hidden for edit alone', (view, edit) => {
+    expect(navPermitted(entry('payment-gateways'), [view])).toBe(true);
+    expect(navPermitted(entry('payment-gateways'), [view, edit])).toBe(true);
+    expect(navPermitted(entry('payment-gateways'), [edit])).toBe(false);
+    expect(navPermitted(entry('payment-gateways'), [])).toBe(false);
+  });
+
+  it('has no separate «حساب‌های دریافت» entry any more', () => {
+    expect(NAV.some((candidate) => candidate.path === '/payment-accounts')).toBe(false);
+    expect(NAV.some((candidate) => candidate.id === 'payment-accounts')).toBe(false);
   });
 });
 
@@ -124,7 +134,9 @@ describe('the gateway form’s top-up gift', () => {
       { url: '/payment-gateways', body: { gateways: [GATEWAY] } },
       { url: '/payment-gateways/MANUAL_TRANSFER', body: { gateway: GATEWAY } },
     ]);
-    const view = renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    const view = renderPage(
+      <PaymentGatewaysPage provider="MANUAL_TRANSFER" denied={false} mayEdit />,
+    );
     // The table shows the route's gift before anything is opened.
     expect(await screen.findByText('5%')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
@@ -194,7 +206,7 @@ describe('the gateway form’s purpose switches', () => {
       { url: '/payment-gateways', body: { gateways: [GATEWAY] } },
       { url: '/payment-gateways/MANUAL_TRANSFER', body: { gateway: GATEWAY } },
     ]);
-    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    renderPage(<PaymentGatewaysPage provider="MANUAL_TRANSFER" denied={false} mayEdit />);
     // The table names the one purpose the route is on for, and not the other.
     const cell = await screen.findByText('خرید سرویس');
     expect(cell.textContent).not.toContain('شارژ کیف پول');
@@ -279,7 +291,7 @@ describe('the TonPays API key', () => {
 
   it('shows a missing key, the generated callback URL, and no field holding any key', async () => {
     stubApi([{ url: '/payment-gateways', body: { gateways: [TONPAYS] } }]);
-    const view = renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    const view = renderPage(<PaymentGatewaysPage provider="TONPAYS" denied={false} mayEdit />);
     expect(await screen.findByText('تنظیم نشده')).toBeInTheDocument();
     expect(view.container.textContent).toContain(TONPAYS.callbackUrl);
     // Nothing on the page is an input until the operator asks to replace the key.
@@ -295,7 +307,7 @@ describe('the TonPays API key', () => {
       { url: '/payment-gateways', body: { gateways: [configured] } },
       { url: '/payment-gateways/TONPAYS/credential', body: { gateway: configured } },
     ]);
-    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    renderPage(<PaymentGatewaysPage provider="TONPAYS" denied={false} mayEdit />);
     expect(await screen.findByText('تنظیم شده ••••••••')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'تنظیم کلید API' }));
@@ -321,8 +333,18 @@ describe('the TonPays API key', () => {
       credential: { required: false, setAt: null },
     };
     stubApi([{ url: '/payment-gateways', body: { gateways: [TONPAYS, manual] } }]);
-    renderPage(<PaymentGatewaysPage denied={false} mayEdit={false} />);
+    // TonPays' own view, for a role that may only view it: the state, and no control.
+    const viewOnly = renderPage(
+      <PaymentGatewaysPage provider="TONPAYS" denied={false} mayEdit={false} />,
+    );
+    expect(await screen.findByText('تنظیم نشده')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'تنظیم کلید API' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ویرایش' })).toBeNull();
+    viewOnly.unmount();
+    // Card-to-card's own view, for an editor: its own controls, and no key control.
+    renderPage(<PaymentGatewaysPage provider="MANUAL_TRANSFER" denied={false} mayEdit />);
     expect(await screen.findByText('لازم نیست')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ویرایش' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'تنظیم کلید API' })).toBeNull();
   });
 });
@@ -365,7 +387,7 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
 
   it('shows the missing IPN secret and the failed last check as states', async () => {
     stubApi([{ url: '/payment-gateways', body: { gateways: [NOWPAYMENTS] } }]);
-    const view = renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    const view = renderPage(<PaymentGatewaysPage provider="NOWPAYMENTS" denied={false} mayEdit />);
     expect(await screen.findByText('کلید IPN تنظیم نشده')).toBeInTheDocument();
     expect(screen.getByText('اتصال ناموفق')).toBeInTheDocument();
     expect(view.container.textContent).toContain('refused:INVALID_API_KEY');
@@ -377,7 +399,7 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
       { url: '/payment-gateways', body: { gateways: [NOWPAYMENTS] } },
       { url: '/payment-gateways/NOWPAYMENTS/webhook-secret', body: { gateway: NOWPAYMENTS } },
     ]);
-    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    renderPage(<PaymentGatewaysPage provider="NOWPAYMENTS" denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
     const input = (await screen.findByLabelText('کلید IPN جدید (IPN Secret)')) as HTMLInputElement;
     expect(input.value).toBe('');
@@ -409,7 +431,7 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
         },
       },
     ]);
-    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    renderPage(<PaymentGatewaysPage provider="NOWPAYMENTS" denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: 'بررسی اتصال' }));
     expect(await screen.findByText('the check could not be completed')).toBeInTheDocument();
     await waitFor(() => {
@@ -432,7 +454,13 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
       { url: '/payment-gateways', body: { gateways: [NOWPAYMENTS, tonpays] } },
       { url: '/payment-gateways/NOWPAYMENTS/check', body: { gateway: NOWPAYMENTS } },
     ]);
-    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    // On TonPays' own view, with a stored key, no check is drawn…
+    const other = renderPage(<PaymentGatewaysPage provider="TONPAYS" denied={false} mayEdit />);
+    expect(await screen.findByRole('button', { name: 'تنظیم کلید API' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'بررسی اتصال' })).toBeNull();
+    other.unmount();
+    // …and on NOWPayments' own, it is.
+    renderPage(<PaymentGatewaysPage provider="NOWPAYMENTS" denied={false} mayEdit />);
     const checks = await screen.findAllByRole('button', { name: 'بررسی اتصال' });
     expect(checks).toHaveLength(1);
     fireEvent.click(checks[0]!);
@@ -485,7 +513,7 @@ describe('the CentralPay API key and verify key', () => {
 
   it('shows the missing verify key as a state, offers no check and no IPN secret', async () => {
     stubApi([{ url: '/payment-gateways', body: { gateways: [CENTRALPAY] } }]);
-    const view = renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    const view = renderPage(<PaymentGatewaysPage provider="CENTRALPAY" denied={false} mayEdit />);
     expect(await screen.findByText('کلید تأیید (verify) تنظیم نشده')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'بررسی اتصال' })).toBeNull();
     expect(view.container.querySelectorAll('input[type="password"]')).toHaveLength(0);
@@ -496,7 +524,7 @@ describe('the CentralPay API key and verify key', () => {
       { url: '/payment-gateways', body: { gateways: [CENTRALPAY] } },
       { url: '/payment-gateways/CENTRALPAY/verify-key', body: { gateway: CENTRALPAY } },
     ]);
-    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    renderPage(<PaymentGatewaysPage provider="CENTRALPAY" denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
     expect(screen.queryByLabelText('کلید IPN جدید (IPN Secret)')).toBeNull();
     const input = (await screen.findByLabelText('کلید تأیید جدید (verify)')) as HTMLInputElement;
@@ -548,7 +576,7 @@ describe('the customer gateway fee', () => {
       { url: '/payment-gateways', body: { gateways: [gateway] } },
       { url: `/payment-gateways/${gateway.provider}`, body: { gateway } },
     ]);
-    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    renderPage(<PaymentGatewaysPage provider={gateway.provider} denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: 'ویرایش' }));
     return api;
   };

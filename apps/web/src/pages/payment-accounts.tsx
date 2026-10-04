@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PAYMENT_ACCOUNT_MAX_PER_TENANT, type PaymentAccountView } from '@nexa/contracts';
 import {
@@ -24,16 +24,23 @@ import {
   Field,
   Ltr,
   Checkbox,
-  PageHead,
+  Num,
   RowActions,
   StateSwitch,
   useToast,
   useUnsavedChanges,
   type Column,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
 
 /**
  * Payment accounts — where an out-of-band transfer is told to go.
+ *
+ * UX Batch 01, item 7: these are the CARDS of the card-to-card payment method, and they
+ * are managed on that method's own view (`/payment-gateways/card-to-card`), beside the
+ * route's switch and settings, instead of on a separate «حساب‌های دریافت» screen. Only
+ * the screen moved: the API, the two permissions and every write below are the ones the
+ * standalone page used, and `/payment-accounts` redirects here.
  *
  * The screen that replaces editing a message template to change a card number.
  * `docs/phase5-audit.md` §1 measures what that cost: one template body is one
@@ -45,9 +52,9 @@ import {
  * name is not moving where money arrives, and a single form that did both would make
  * "who moved the destination" answerable only by diffing two payloads.
  *
- * **No delete.** An account is disabled. `payment_destinations` names the row each
- * payment was issued against, and a deleted account is a payment whose provenance is a
- * dangling id.
+ * **No delete.** An account is disabled — that IS its archive, and the form hint says so.
+ * `payment_destinations` names the row each payment was issued against, and a deleted
+ * account is a payment whose provenance is a dangling id.
  *
  * **The list is complete, not paged.** Every other list in this admin is a keyset page;
  * this one cannot be, because a configuration screen that silently omits the row an
@@ -105,7 +112,22 @@ function mask(cardNumber: string): string {
  * the menu was the only enforcement; here the menu disagreed with it. Found by the
  * Codex review of PR #34.
  */
-export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
+export function CardAccountsSection({
+  denied,
+  mayEdit,
+  adding,
+  onAddingChange,
+}: {
+  denied: boolean;
+  mayEdit: boolean;
+  /**
+   * Whether the new-card form is open. Held by the page, because «افزودن کارت» is drawn
+   * twice — on this card and beside the card-to-card route's own actions — and both open
+   * the one form.
+   */
+  adding: boolean;
+  onAddingChange: (next: boolean) => void;
+}) {
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -128,7 +150,19 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
     setEditing(null);
     setForm(EMPTY_FORM);
     setMakeDefault(false);
+    onAddingChange(false);
   };
+
+  /** The form is drawn only while it is being used: adding a card, or correcting one. */
+  const formOpen = mayEdit && (adding || editing !== null);
+  /*
+   * Opening the form moves focus into it, so the operator lands on the first field of the
+   * form they asked for — the keyboard and screen-reader half of "no scroll-jump".
+   */
+  const firstField = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (formOpen) firstField.current?.focus();
+  }, [formOpen, editing]);
 
   const refresh = () => {
     void queries.invalidateQueries({ queryKey: ['payment-accounts'] });
@@ -202,7 +236,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
   const editedRow = editing === null ? undefined : rows.find((row) => row.id === editing);
   const basisForm = editedRow === undefined ? EMPTY_FORM : formOf(editedRow);
   const formDirty = JSON.stringify(form) !== JSON.stringify(basisForm) || makeDefault;
-  useUnsavedChanges(mayEdit && formDirty);
+  useUnsavedChanges(formOpen && formDirty);
 
   const columns: readonly Column<PaymentAccountView>[] = [
     {
@@ -236,6 +270,12 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
       ),
     },
     {
+      // The order the bot offers the cards in (`sortOrder`, ascending); set in the form.
+      key: 'sort',
+      header: t('web.payment_account_sort'),
+      render: (row) => <Num value={row.sortOrder} />,
+    },
+    {
       key: 'updated',
       header: t('web.payment_account_updated'),
       render: (row) => formatTimestamp(row.updatedAt),
@@ -254,6 +294,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
               className="btn sm"
               disabled={busy}
               onClick={() => {
+                onAddingChange(false);
                 setEditing(row.id);
                 setForm(formOf(row));
                 setMakeDefault(false);
@@ -292,25 +333,41 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
     },
   ];
 
+  const addButton = (
+    <button
+      type="button"
+      className="btn sm primary"
+      disabled={busy}
+      onClick={() => {
+        setEditing(null);
+        setForm(EMPTY_FORM);
+        setMakeDefault(false);
+        onAddingChange(true);
+      }}
+    >
+      <Icon name="plus" />
+      {t('web.payment_account_add')}
+    </button>
+  );
+
   return (
     <>
-      <PageHead
+      <Card
         title={t('web.payment_accounts_title')}
-        subtitle={t('web.payment_accounts_subtitle')}
-      />
-
-      <StateSwitch
-        query={accounts}
-        denied={denied}
-        isEmpty={queryState(accounts) === 'ready' && rows.length === 0}
-        empty={
-          <Empty
-            title={t('web.payment_accounts_empty')}
-            hint={t('web.payment_accounts_empty_hint')}
-          />
-        }
+        hint={t('web.payment_accounts_subtitle')}
+        {...(mayEdit ? { actions: addButton } : {})}
       >
-        <Card title={t('web.payment_accounts_title')}>
+        <StateSwitch
+          query={accounts}
+          denied={denied}
+          isEmpty={queryState(accounts) === 'ready' && rows.length === 0}
+          empty={
+            <Empty
+              title={t('web.payment_accounts_empty')}
+              hint={t('web.payment_accounts_empty_hint')}
+            />
+          }
+        >
           <DataTable
             columns={columns}
             rows={rows}
@@ -318,14 +375,15 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
             caption={t('web.payment_accounts_title')}
             dense
           />
-        </Card>
-      </StateSwitch>
+        </StateSwitch>
+      </Card>
       {/*
-        Outside the StateSwitch on purpose: a tenant with NO account still needs the
-        form, and that is exactly the installation whose manual-transfer button is not
-        being drawn to customers.
+        Directly beneath the cards it changes, and only while it is in use. Outside the
+        list's StateSwitch on purpose: a tenant with NO card still needs the form, and that
+        is exactly the installation whose card-to-card button is not drawn to customers —
+        and an edit-only role, whose list read is refused, can still add one.
       */}
-      {mayEdit && (
+      {formOpen && (
         <Card
           title={t(editing === null ? 'web.payment_account_new' : 'web.payment_account_editing')}
           hint={t('web.payment_account_form_hint')}
@@ -334,6 +392,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
           <div className="form-grid">
             <Field label={t('web.payment_account_label')} htmlFor="pa-label">
               <input
+                ref={firstField}
                 id="pa-label"
                 className="input"
                 value={form.label}
@@ -433,11 +492,9 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
             >
               {t('web.payment_account_save')}
             </button>
-            {editing !== null && (
-              <button type="button" className="btn" disabled={busy} onClick={reset}>
-                {t('web.payment_account_cancel_edit')}
-              </button>
-            )}
+            <button type="button" className="btn" disabled={busy} onClick={reset}>
+              {t('web.payment_account_cancel_edit')}
+            </button>
           </div>
 
           {editing !== null && (

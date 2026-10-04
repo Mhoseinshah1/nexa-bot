@@ -2047,10 +2047,12 @@ export const WEB_FA = {
     'این کارت‌به‌کارت در انتظار بررسی است. تأیید، رد یا واریز به کیف پول فقط از پنل مدیریت تلگرام انجام می‌شود و این صفحه تنها نتیجه را نمایش می‌دهد.',
   // Payment accounts — the destination an out-of-band transfer is told to go to.
   // The screen that replaces editing a message template to change a card number.
-  'web.nav_payment_accounts': 'حساب‌های دریافت',
-  'web.payment_accounts_title': 'حساب‌های دریافت کارت به کارت',
-  'web.payment_accounts_subtitle': 'مقصدی که به مشتری برای واریز نشان داده می‌شود.',
-  'web.payment_accounts_empty': 'هنوز حسابی ثبت نشده است.',
+  // UX Batch 01, item 7: the cards of the card-to-card method, managed on its own view
+  // (`/payment-gateways/card-to-card`); the separate «حساب‌های دریافت» entry is gone.
+  'web.payment_accounts_title': 'کارت‌های مقصد',
+  'web.payment_accounts_subtitle':
+    'کارتی که به مشتری برای واریز کارت به کارت نشان داده می‌شود. ترتیب نمایش را در بخش «پیشرفته» فرم کارت تنظیم کنید.',
+  'web.payment_accounts_empty': 'هنوز کارتی ثبت نشده است.',
   'web.payment_accounts_empty_hint':
     'تا زمانی که حساب فعالی ثبت نشود، دکمهٔ پرداخت کارت به کارت به مشتری نشان داده نمی‌شود.',
   'web.payment_account_label': 'نام حساب',
@@ -2071,22 +2073,33 @@ export const WEB_FA = {
   'web.payment_account_enable': 'فعال کردن',
   'web.payment_account_disable': 'غیرفعال کردن',
   'web.payment_account_make_default': 'پیش‌فرض کردن',
-  'web.payment_account_new': 'حساب جدید',
-  'web.payment_account_editing': 'ویرایش حساب',
+  'web.payment_account_new': 'کارت جدید',
+  'web.payment_account_add': 'افزودن کارت',
+  'web.payment_account_editing': 'ویرایش کارت',
   // Says the two things an operator cannot see from the form: an edit does not
   // reach an instruction already sent, and there is no delete.
   'web.payment_account_form_hint':
-    'ویرایش یک حساب، پرداخت‌هایی که پیش‌تر صادر شده‌اند را تغییر نمی‌دهد. حساب حذف نمی‌شود؛ غیرفعال می‌شود.',
+    'ویرایش یک کارت، پرداخت‌هایی که پیش‌تر صادر شده‌اند را تغییر نمی‌دهد. کارت حذف نمی‌شود؛ برای بایگانی، آن را غیرفعال کنید تا سابقهٔ پرداخت‌های قبلی حفظ شود.',
   'web.payment_account_save': 'ذخیره',
   'web.payment_account_cancel_edit': 'انصراف',
-  'web.payment_account_saved': 'حساب ذخیره شد.',
+  'web.payment_account_saved': 'کارت ذخیره شد.',
   'web.payment_account_default_done': 'مقصد پرداخت‌های جدید تغییر کرد.',
-  'web.payment_account_limit': 'سقف تعداد حساب‌ها پر شده است. یکی را غیرفعال کنید.',
+  'web.payment_account_limit': 'سقف تعداد کارت‌ها پر شده است. یکی را غیرفعال کنید.',
   // Payment routes (Phase 5C) — which ways a customer may pay, and under what
   // conditions. The route is not the destination: `web.payment_accounts_*` above is
   // where the money goes, this is whether the route is offered at all.
   'web.nav_payment_gateways': 'روش‌های پرداخت',
   'web.payment_gateways_title': 'روش‌های پرداخت',
+  // UX Batch 01, item 8: each payment method's own view, at its own URL.
+  'web.payment_method_open': 'مدیریت',
+  'web.payment_method_back': 'بازگشت به روش‌های پرداخت',
+  'web.payment_method_settings': 'تنظیمات این روش پرداخت',
+  'web.payment_method_health': 'سلامت این روش پرداخت',
+  'web.payment_method_unknown': 'روش پرداخت یافت نشد',
+  'web.payment_method_missing': 'این روش پرداخت در این نصب وجود ندارد.',
+  'web.payment_method_cards_only_hint':
+    'کارت‌های مقصد کارت به کارت در صفحهٔ همین روش پرداخت مدیریت می‌شوند.',
+  'web.redirect_moved': 'این صفحه جابه‌جا شده است؛ در حال انتقال…',
   'web.gateway_tab_config': 'تنظیمات',
   'web.gateway_tab_health': 'سلامت درگاه‌ها',
   'web.gateway_health_intro':

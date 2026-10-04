@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, within } from '@testing-library/react';
-import { PERMISSION_KEYS, type PermissionKey } from '@nexa/contracts';
+import { PAYMENT_GATEWAY_PROVIDERS, PERMISSION_KEYS, type PermissionKey } from '@nexa/contracts';
 import {
   App,
   GROUP_ORDER,
@@ -14,6 +14,7 @@ import {
   type NavEntry,
 } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { paymentMethodPath } from '../../apps/web/src/payment-method-routes';
 import { navigate } from '../../apps/web/src/router';
 import { renderPage, stubApi } from './harness';
 
@@ -223,5 +224,27 @@ describe('the navigation groups', () => {
       expect(screen.queryByText(t('web.not_found_title')), entry.path).toBeNull();
     }
     act(() => navigate('/', { replace: true, force: true }));
+  });
+});
+
+/*
+ * UX Batch 01, items 7 and 8: each payment method's own view is a real route — not an anchor
+ * on one long page — and the retired «حساب‌های دریافت» path is still served, as a redirect.
+ */
+describe('the payment-method routes', () => {
+  it('serves every provider’s own view, under the payment-methods entry', () => {
+    expect(ROUTE_PATTERNS).toContain('/payment-gateways/:provider');
+    for (const provider of PAYMENT_GATEWAY_PROVIDERS) {
+      const resolved = at(paymentMethodPath(provider));
+      expect(componentName(resolved.element as ReactElement), provider).toBe('PaymentMethodPage');
+      expect(resolved.title, provider).not.toBe(t('web.not_found_title'));
+      expect(resolved.crumbs[0]?.href, provider).toBe('/payment-gateways');
+    }
+  });
+
+  it('keeps the old payment-accounts path as a redirect, and no longer as a nav entry', () => {
+    expect(ROUTE_PATTERNS).toContain('/payment-accounts');
+    expect(componentName(at('/payment-accounts').element as ReactElement)).toBe('RedirectPage');
+    expect(NAV.some((entry) => entry.path === '/payment-accounts')).toBe(false);
   });
 });
