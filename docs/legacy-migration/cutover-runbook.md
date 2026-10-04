@@ -240,15 +240,19 @@ sudo docker run -d --name nexa-legacy-src --network nexa_data --restart no \
 sudo docker logs nexa-legacy-src 2>&1 | grep -m1 'GENERATED ROOT PASSWORD'   # read it; never paste it
 read -rs LEGACY_ROOT_PW                      # type the generated root password
 read -rs LEGACY_RO_PW                        # choose the SELECT-only account's password
-# The passwords travel as MYSQL_PWD in the exec environment, not as -p: a -p prompt inside
-# `docker exec -i` would read the password from the same stdin that carries the dump.
-sudo docker exec -i -e MYSQL_PWD="$LEGACY_ROOT_PW" nexa-legacy-src mariadb -uroot \
-  -e "CREATE DATABASE oldbot CHARACTER SET utf8mb4"
-sudo docker exec -i -e MYSQL_PWD="$LEGACY_ROOT_PW" nexa-legacy-src mariadb -uroot oldbot \
-  < "oldbot-final-<STAMP>.sql"
-sudo docker exec -i -e MYSQL_PWD="$LEGACY_ROOT_PW" nexa-legacy-src mariadb -uroot -e "
-  CREATE USER 'oldbot_ro'@'%' IDENTIFIED BY '$LEGACY_RO_PW';
-  GRANT SELECT ON oldbot.* TO 'oldbot_ro'@'%';"
+# No password ever reaches a command line (argv is readable by every local user): MYSQL_PWD
+# is set for the one sudo invocation, passed through --preserve-env, and handed to the
+# container by NAME (`-e MYSQL_PWD`, no value). Not `-p` either: a prompt inside
+# `docker exec -i` would read the password from the stdin that carries the dump.
+legacy_root() { MYSQL_PWD="$LEGACY_ROOT_PW" sudo --preserve-env=MYSQL_PWD docker exec -i -e MYSQL_PWD nexa-legacy-src mariadb -uroot "$@"; }
+legacy_ro() { MYSQL_PWD="$LEGACY_RO_PW" sudo --preserve-env=MYSQL_PWD docker exec -i -e MYSQL_PWD nexa-legacy-src mariadb -uoldbot_ro "$@"; }
+legacy_root -e "CREATE DATABASE oldbot CHARACTER SET utf8mb4"
+legacy_root oldbot < "oldbot-final-<STAMP>.sql"
+# The reader's password is in this statement, so the statement goes on stdin, not -e.
+legacy_root <<SQL
+CREATE USER 'oldbot_ro'@'%' IDENTIFIED BY '$LEGACY_RO_PW';
+GRANT SELECT ON oldbot.* TO 'oldbot_ro'@'%';
+SQL
 # P7 reads the DSN from this variable (--source env:LEGACY_SOURCE_DSN); it refuses a
 # password anywhere on its command line.
 export LEGACY_SOURCE_DSN="mysql://oldbot_ro:${LEGACY_RO_PW}@nexa-legacy-src:3306/oldbot"
@@ -257,11 +261,9 @@ export LEGACY_SOURCE_DSN="mysql://oldbot_ro:${LEGACY_RO_PW}@nexa-legacy-src:3306
 Then confirm the restored copy IS the frozen source, and record the fingerprint:
 
 ```bash
-sudo docker exec -i -e MYSQL_PWD="$LEGACY_RO_PW" nexa-legacy-src mariadb -uoldbot_ro oldbot \
-  -e "CHECKSUM TABLE user, invoice"
-sudo docker exec -i -e MYSQL_PWD="$LEGACY_RO_PW" nexa-legacy-src mariadb -uoldbot_ro oldbot \
-  --batch --skip-column-names --safe-updates < <checkout>/scripts/legacy-rehearsal-source.sql \
-  | tee legacy-source.tsv
+legacy_ro oldbot -e "CHECKSUM TABLE user, invoice"
+legacy_ro oldbot --batch --skip-column-names --safe-updates \
+  < <checkout>/scripts/legacy-rehearsal-source.sql | tee legacy-source.tsv
 ```
 
 Check: both `CHECKSUM TABLE` values equal step 7's (the copy is the frozen database,
@@ -301,7 +303,9 @@ unknown-product invoices need no entry — they adopt as their shape's hidden le
 
 ```bash
 sudo install -d -m 0700 /etc/nexa/legacy
-sudo install -m 0600 <reviewed-panel-map.json> /etc/nexa/legacy/panel-map.json
+# The api image runs as `node` (uid 1000, Dockerfile `USER node`): a root-owned 0600 file
+# would be unreadable inside the container. Owned by 1000, mode 0600, directory root 0700.
+sudo install -o 1000 -g 1000 -m 0600 <reviewed-panel-map.json> /etc/nexa/legacy/panel-map.json
 ```
 
 **The target acknowledgement.** `nexa` is a production-like database name, so P7 refuses
@@ -331,11 +335,17 @@ against the importer's own decisions) agree, or the disagreement is explained.
 p7 dry-run | tee dry-run.txt; echo "exit ${PIPESTATUS[0]}"
 sudo $DC exec -T postgres psql -U nexa -d nexa -X -q -At -F "$(printf '\t')" \
   -v tenant="$NEXA_TENANT" -f - < <checkout>/scripts/legacy-rehearsal-checks.sql | tee nexa-after-dry-run.tsv
-diff <(grep -v '^legacy_import_runs' nexa-PRE.tsv) <(grep -v '^legacy_import_runs' nexa-after-dry-run.tsv) \
+# Excluded: the dry run's own run row, and two figures the WORKER may move during any
+# window (a reminder sweep, a notification) — expected noise, compared separately below.
+NOISE='^(legacy_import_runs|customer_notifications|service_reminders)'
+diff <(grep -Ev "$NOISE" nexa-PRE.tsv) <(grep -Ev "$NOISE" nexa-after-dry-run.tsv) \
   && echo "dry-run wrote no business row"
+grep -E '^(customer_notifications|service_reminders)' nexa-PRE.tsv nexa-after-dry-run.tsv   # record the drift
 ```
 
-Check: the diff is empty (a dry run decides and counts; only its own run row differs); the
+Check: the diff is empty (a dry run decides and counts; only its own run row differs, and
+the two worker-driven figures are recorded, not diffed — a dry run writes neither, so any
+drift there is the worker's ordinary work); the
 dry-run's counts by category and by manual-review reason are recorded for step 12–13.
 
 ## Step 12 — compare with staging
@@ -384,12 +394,32 @@ If the source fingerprint changes after approval (somebody re-dumped), approval 
 
 ## Step 14 — production import
 
-Only after step 13.
+Only after step 13. The import is bound to what the owner approved: P7's
+`--expected-fingerprint` makes import and resume **refuse** a source whose fingerprint is
+not the approved one (IMPORTER is adding the flag; confirm its exact spelling in
+`docs/legacy-migration/importer.md` before the window — until it exists, the after-import
+check below is the only binding).
 
 ```bash
+export APPROVED_FINGERPRINT=<the source fingerprint named in the owner's approval>
+export APPROVED_BACKUP_ID=<the backup id named in the owner's approval>
 date -u +%FT%TZ | tee import-start.txt
-p7 import | tee import.txt; echo "exit ${PIPESTATUS[0]}"
+p7 import --expected-fingerprint "$APPROVED_FINGERPRINT" | tee import.txt; echo "exit ${PIPESTATUS[0]}"
 date -u +%FT%TZ | tee import-end.txt
+```
+
+**After the import, before anything else — the approval check.** What ran must be what was
+approved; a mismatch is a rollback trigger (T3), whatever the import's exit code:
+
+```bash
+sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -v ON_ERROR_STOP=1 -c "
+  SELECT r.source_fingerprint FROM legacy_import_runs r JOIN tenants t ON t.id = r.tenant_id
+   WHERE t.slug = '$NEXA_TENANT' AND r.mode = 'APPLY' ORDER BY r.started_at DESC LIMIT 1" \
+  | tee applied-fingerprint.txt
+[ "$(cat applied-fingerprint.txt)" = "$APPROVED_FINGERPRINT" ] && echo "fingerprint = approved" \
+  || echo "STOP: the imported source is not the approved one"
+[ "$(awk '$1 == "backup" { print $2 }' backup-id.txt)" = "$APPROVED_BACKUP_ID" ] && echo "backup = approved" \
+  || echo "STOP: the rollback point is not the approved backup"
 ```
 
 Exit `0`: done. Exit `3`: done with a decision named in the report — read it. Exit `4`:
@@ -417,7 +447,7 @@ sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -c "
 ```
 
 **If the import is interrupted** (process killed, host restarted, connection lost): the
-run stays `RUNNING`. Run `p7 resume` — it continues the same run (same run id) for the
+run stays `RUNNING`. Run `p7 resume --expected-fingerprint "$APPROVED_FINGERPRINT"` — it continues the same run (same run id) for the
 same source fingerprint and the same panel map and skips what was already imported (no duplicate
 customer, opening, order, service or product; the map and the unique indexes enforce it).
 Never start a second `import`; never edit run or map rows by hand. A resume that refuses

@@ -35,7 +35,7 @@ scripts/legacy-rehearsal.sh \
   --tenant rehearsal \
   --synthetic-panels \
   --nexa-env <a shell-sourceable env file: SECRETS_KEYS, REDIS_URL, …> \
-  --pg-url postgres://nexa:nexa@127.0.0.1:5432 \
+  --pg-url postgres://nexa@127.0.0.1:5432 \
   --fresh-migrate \
   --out /tmp/rehearsal-$(date -u +%Y%m%dT%H%M%SZ)
 ```
@@ -58,11 +58,19 @@ scripts/legacy-rehearsal.sh \
   --tenant <tenant-slug> \
   --panel-map <the reviewed panel-map.json> \
   --nexa-env <staging config with the production keyring able to open the archive> \
-  --pg-url postgres://<user>:<pass>@127.0.0.1:5432 \
+  --pg-url postgres://<user>@127.0.0.1:5432 \
   --nexa-archive <fresh production-like .nxb> \
   --installed-host-is-not-production \
   --out <results dir>
 ```
+
+`--pg-url` carries no password — one is refused, because argv is readable by every local
+user. Put it in `PGPASSWORD` or a `PGPASSFILE`; psql, pg_dump, pg_restore and the NEXA CLIs
+(node-postgres) all read them. The throwaway MariaDB's passwords are generated, kept in 0600
+files and fed to `mariadb` on stdin, never as `-e` arguments.
+
+On INT/TERM the harness stops the running stage's whole process group (each stage runs in
+its own) before its cleanup, so no importer or helper is left running.
 
 `--check-only` runs every guard and prints the plan without touching anything. `--help`
 lists the rest (`--cycles`, `--kill-after-rows`, `--importer-arg`, `--keep-legacy-copy`).
@@ -131,7 +139,10 @@ Pinned by `tests/unit/legacy-rehearsal-guards.test.ts`.
 
 The checks, by name: `dry_run_no_business_mutation`, `interrupted_run_left_running`,
 `no_run_left_running`, `one_apply_run_resumed`, `apply_run_completed`,
-`source_fingerprint_stable`, `customer_closure`, `service_candidate_closure`,
+`source_fingerprint_stable`, `apply_fingerprint_equals_audit`,
+`p7_expected_fingerprint_unexercised` (PENDING until P7's `--help` offers
+`--expected-fingerprint`; then the harness passes its own audit's fingerprint to import and
+resume), `customer_closure`,
 `interrupted_import_stopped_writing`, `blocked_equals_invalid_ids`,
 `report_candidates_equal_source`, `service_closure_map_plus_invalid_keys`,
 `invoice_keys_outside_evidenced_shape` (PENDING), `adopted_equals_eligible`,

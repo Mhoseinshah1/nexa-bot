@@ -139,7 +139,8 @@ mariadb -e "DROP DATABASE nexa_reconcile"
 ```
 
 With the cutover's throwaway container (cutover step 9), every bare `mariadb` above is
-`sudo docker exec -i -e MYSQL_PWD="$LEGACY_ROOT_PW" nexa-legacy-src mariadb -uroot`, and
+`legacy_root` from cutover step 9 (`MYSQL_PWD` set for one `sudo --preserve-env=MYSQL_PWD
+docker exec -e MYSQL_PWD …` and passed by name — never a password on a command line), and
 `<restored-schema>` is `oldbot`.
 
 (`"0"` is a sentinel that keeps the statement valid when nothing was imported; it never

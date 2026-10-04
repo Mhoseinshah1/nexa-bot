@@ -41,7 +41,8 @@ export SEED=<a-word-recorded-in-the-report>
 export IMPORT_START=<UTC-time-from-import-start.txt>
 export DC="docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml"
 nexa() { sudo $DC exec -T postgres psql -U nexa -d nexa -X -q -At -v tenant="$NEXA_TENANT" -v seed="$SEED" -v since="$IMPORT_START" "$@"; }
-legacy() { sudo docker exec -i -e MYSQL_PWD="$LEGACY_RO_PW" nexa-legacy-src mariadb -uoldbot_ro oldbot --batch --skip-column-names "$@"; }
+# The password reaches the container by variable NAME only (never on a command line).
+legacy() { MYSQL_PWD="$LEGACY_RO_PW" sudo --preserve-env=MYSQL_PWD docker exec -i -e MYSQL_PWD nexa-legacy-src mariadb -uoldbot_ro oldbot --batch --skip-column-names "$@"; }
 ```
 
 `nexa` reads its SQL from standard input (`nexa <<<"…"`) because psql substitutes

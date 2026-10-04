@@ -134,19 +134,52 @@ With the owner's explicit decision, the same shape by hand — restore into a NE
 validate, then two renames with the stack stopped. Never `pg_restore` into the live
 database, and never drop the displaced one.
 
+Paste it in **two blocks**. Each is a function that stops at the first failed check
+(`return 1`), and every `psql` runs with `ON_ERROR_STOP=1`. Do not paste block 2 until
+block 1 printed `CANDIDATE OK`.
+
+Block 1 — build and validate the candidate (nothing in production changes):
+
 ```bash
 STAMP="$(date -u +%Y%m%d%H%M%S)"
-sudo $DC exec -T postgres createdb -U nexa "nexa_candidate_$STAMP"
-sudo $DC run --rm --no-deps -T --entrypoint node api dist/backup.cli.js restore \
-  --archive "/var/lib/nexa/backups/<PRE_IMPORT_BACKUP_ID>/archive.nxb" --target "nexa_candidate_$STAMP"
-sudo $DC exec -T postgres psql -U nexa -d "nexa_candidate_$STAMP" -X -q -At -F "$(printf '\t')" \
-  -v tenant="$NEXA_TENANT" -f - < <checkout>/scripts/legacy-rehearsal-checks.sql > candidate.tsv
-diff ~/cutover/nexa-PRE.tsv candidate.tsv && echo "candidate is the pre-import state"
-sudo $DC stop api worker monitor provisioner recovery
-sudo $DC exec -T postgres psql -U nexa -d postgres -X -c "ALTER DATABASE nexa RENAME TO nexa_pre_restore_manual_$STAMP"
-sudo $DC exec -T postgres psql -U nexa -d postgres -X -c "ALTER DATABASE nexa_candidate_$STAMP RENAME TO nexa"
-sudo botctl restart
+rb_candidate() {
+  sudo $DC exec -T postgres createdb -U nexa "nexa_candidate_$STAMP" || return 1
+  sudo $DC run --rm --no-deps -T --entrypoint node api dist/backup.cli.js restore \
+    --archive "/var/lib/nexa/backups/<PRE_IMPORT_BACKUP_ID>/archive.nxb" --target "nexa_candidate_$STAMP" || return 1
+  sudo $DC exec -T postgres psql -U nexa -d "nexa_candidate_$STAMP" -X -q -At -v ON_ERROR_STOP=1 \
+    -F "$(printf '\t')" -v tenant="$NEXA_TENANT" -f - < <checkout>/scripts/legacy-rehearsal-checks.sql > candidate.tsv || return 1
+  # The two worker-driven figures are recorded, not diffed (see R4).
+  local noise='^(customer_notifications|service_reminders)'
+  diff <(grep -Ev "$noise" ~/cutover/nexa-PRE.tsv) <(grep -Ev "$noise" candidate.tsv) \
+    || { echo "STOP: the candidate is not the pre-import state"; return 1; }
+  echo "CANDIDATE OK — block 2 may be pasted"
+}
+rb_candidate
 ```
+
+Block 2 — only after `CANDIDATE OK`: stop the roles, move production aside, PROVE the first
+rename happened, and only then give the candidate production's name:
+
+```bash
+rb_cutover() {
+  local q="SELECT string_agg(datname, ',' ORDER BY datname) FROM pg_database WHERE datname IN ('nexa', 'nexa_pre_restore_manual_$STAMP', 'nexa_candidate_$STAMP')"
+  sudo $DC stop api worker monitor provisioner recovery || return 1
+  sudo $DC exec -T postgres psql -U nexa -d postgres -X -v ON_ERROR_STOP=1 \
+    -c "ALTER DATABASE nexa RENAME TO nexa_pre_restore_manual_$STAMP" \
+    || { echo "STOP: rename 1 failed; production is untouched (restart the roles)"; return 1; }
+  [ "$(sudo $DC exec -T postgres psql -U nexa -d postgres -X -At -v ON_ERROR_STOP=1 -c "$q")" \
+    = "nexa_candidate_$STAMP,nexa_pre_restore_manual_$STAMP" ] \
+    || { echo "STOP: after rename 1 the databases are not as expected; do not continue"; return 1; }
+  sudo $DC exec -T postgres psql -U nexa -d postgres -X -v ON_ERROR_STOP=1 \
+    -c "ALTER DATABASE nexa_candidate_$STAMP RENAME TO nexa" \
+    || { echo "STOP: rename 2 failed; no database is named nexa — rename nexa_pre_restore_manual_$STAMP back"; return 1; }
+  sudo botctl restart
+}
+rb_cutover
+```
+
+If rename 2 fails, production has no database named `nexa`: put the original back with
+`ALTER DATABASE nexa_pre_restore_manual_$STAMP RENAME TO nexa` and restart, then decide.
 
 (`ALTER DATABASE … RENAME` refuses while sessions are connected to the database being
 renamed; that is why the application roles are stopped first.)
@@ -180,7 +213,12 @@ sudo botctl status
 curl -fsS "https://<nexa-domain>/health/ready" && echo READY
 sudo $DC exec -T postgres psql -U nexa -d nexa -X -q -At -F "$(printf '\t')" \
   -v tenant="$NEXA_TENANT" -f - < <checkout>/scripts/legacy-rehearsal-checks.sql > nexa-RESTORED.tsv
-diff ~/cutover/nexa-PRE.tsv nexa-RESTORED.tsv && echo "restored = pre-import, exactly"
+# The worker starts again with the stack and may raise a reminder or a notification at
+# once: those two figures are recorded, not diffed.
+NOISE='^(customer_notifications|service_reminders)'
+diff <(grep -Ev "$NOISE" ~/cutover/nexa-PRE.tsv) <(grep -Ev "$NOISE" nexa-RESTORED.tsv) \
+  && echo "restored = pre-import, exactly" || echo "STOP: the restored database is not the pre-import state"
+grep -E "$NOISE" ~/cutover/nexa-PRE.tsv nexa-RESTORED.tsv
 sudo $DC exec -T postgres psql -U nexa -d postgres -X -At -c \
   "SELECT datname FROM pg_database WHERE datname LIKE 'nexa_pre_restore_%' ORDER BY 1"
 sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -c "
