@@ -50,8 +50,9 @@ describe('the answer to the accept button (Batch 01 item 1)', () => {
     expect(reply.media).toBeUndefined();
     expect(reply.lead).toBeUndefined();
     expect(reply.followUpKey).toBeUndefined();
-    expect(reply.buttons.map((button) => button.data)).toEqual([MAIN_MENU_CALLBACK_DATA]);
-    expect(reply.buttons.some((b) => b.data.startsWith(TERMS_ACCEPT_CALLBACK_PREFIX))).toBe(false);
+    const data = reply.buttons.map((button) => ('data' in button ? button.data : null));
+    expect(data).toEqual([MAIN_MENU_CALLBACK_DATA]);
+    expect(data.some((one) => one?.startsWith(TERMS_ACCEPT_CALLBACK_PREFIX) === true)).toBe(false);
   });
 
   it('says exactly the owner’s two sentences, from an Appearance marker', () => {
@@ -63,7 +64,7 @@ describe('the answer to the accept button (Batch 01 item 1)', () => {
   it('edits a stale button’s message into the version that replaced it', () => {
     const reply = termsStaleReply({ id: VERSION, title: 't', body: 'b' });
     expect(reply).toMatchObject({ key: 'bot.terms.updated', edit: true });
-    expect(reply.buttons.map((button) => button.data)).toEqual([
+    expect(reply.buttons.map((button) => ('data' in button ? button.data : null))).toEqual([
       `${TERMS_ACCEPT_CALLBACK_PREFIX}${VERSION}`,
     ]);
   });

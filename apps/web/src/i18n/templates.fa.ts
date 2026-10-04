@@ -335,6 +335,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   locationsBlock: 'بخش لوکیشن‌ها',
   max: 'حداکثر تعداد نویسه',
   maxBytes: 'حداکثر حجم فایل',
+  marker: 'نشانگر وضعیت سرویس (خودکار)',
   maximum: 'حداکثر مبلغ',
   message: 'متن رخداد',
   method: 'روش پرداخت',
