@@ -1303,6 +1303,13 @@
       "when": 1791064646948,
       "tag": "0185_legacy_product_shapes_guard_dimensions",
       "breakpoints": true
+    },
+    {
+      "idx": 186,
+      "version": "7",
+      "when": 1791066059512,
+      "tag": "0186_migration_opening_balance",
+      "breakpoints": true
     }
   ]
 }

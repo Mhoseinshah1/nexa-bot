@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { telegramUserIdSchema } from './customer.js';
 
 /**
  * Wallet ledger vocabulary.
@@ -71,6 +72,14 @@ export const LEDGER_REASONS = [
   // Reseller
   'RESELLER_SETTLEMENT',
   'RESELLER_MEMBERSHIP_FEE',
+  // Legacy migration (Migration P2, `docs/migration-opening-balance.md`): the ONE entry that
+  // carries a customer's legacy wallet balance into this ledger, at import time. Its own
+  // reason because it is none of the others: not a top-up (no money arrived), not an
+  // administrative grant (no operator decided it), not a sale. A CREDIT for a positive
+  // legacy balance and a DEBIT for a negative one — the only writer allowed to take a
+  // wallet below zero, because the debt already exists and is being recorded, not
+  // created. At most one per customer, under `legacy:opening:<telegram_user_id>`.
+  'MIGRATION_OPENING_BALANCE',
   // Exceptional
   'CHARGEBACK',
   'CORRECTION',
@@ -105,4 +114,23 @@ export const REVERSAL_REASONS: readonly LedgerReason[] = [
 
 export function isLedgerReason(value: string): value is LedgerReason {
   return (LEDGER_REASONS as readonly string[]).includes(value);
+}
+
+/**
+ * Migration P2: the reference an opening balance is written under.
+ *
+ * DERIVED from the legacy identity — the customer's Telegram user id, which is the
+ * legacy `user.id` and NEXA's `customers.telegram_user_id` — so a rerun, a resume and two
+ * importers racing compute the same reference without talking to each other, and
+ * `wallet_entries_tenant_reference_key` makes the second one a no-op. The prefix is
+ * reserved for this reason by a CHECK in both directions.
+ */
+export const MIGRATION_OPENING_REFERENCE_PREFIX = 'legacy:opening:' as const;
+
+/** Throws for anything `telegramUserIdSchema` refuses: the reference names a real id. */
+export function migrationOpeningReference(telegramUserId: string): string {
+  if (!telegramUserIdSchema.safeParse(telegramUserId).success) {
+    throw new Error('A migration opening reference needs a Telegram user id.');
+  }
+  return `${MIGRATION_OPENING_REFERENCE_PREFIX}${telegramUserId}`;
 }

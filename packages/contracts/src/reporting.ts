@@ -143,6 +143,14 @@ export const WALLET_REPORT_GROUPS = [
    * zero — and counting it as ADMINISTRATIVE would read as an operator granting money.
    */
   'TRANSFER',
+  /*
+   * Migration P2: a legacy balance carried in at import (`MIGRATION_OPENING_BALANCE`). Its
+   * own group because it is a liability the installation INHERITED, not one it incurred:
+   * no money arrived (not TOPUP, not cash), nothing was sold (not SPENDING, not a sale),
+   * and no operator granted it (not ADMINISTRATIVE). It is a wallet movement only, so the
+   * wallet identity opening + Σ movements = closing still holds.
+   */
+  'OPENING_BALANCE',
   'OTHER',
 ] as const;
 export type WalletReportGroup = (typeof WALLET_REPORT_GROUPS)[number];
@@ -174,6 +182,7 @@ export const WALLET_REPORT_GROUP_OF: Readonly<Record<LedgerReason, WalletReportG
   CORRECTION: 'ADMINISTRATIVE',
   ACCOUNT_TRANSFER_OUT: 'TRANSFER',
   ACCOUNT_TRANSFER_IN: 'TRANSFER',
+  MIGRATION_OPENING_BALANCE: 'OPENING_BALANCE',
   RESELLER_SETTLEMENT: 'OTHER',
   RESELLER_MEMBERSHIP_FEE: 'OTHER',
   CHARGEBACK: 'OTHER',

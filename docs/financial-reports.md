@@ -85,17 +85,18 @@ installation funds — liabilities, not revenue and not a reduction of it.
 
 ## 3. Wallet movements vs revenue — never double counted
 
-| Event                               | Sales          | Cash                               | Wallet               |
-| ----------------------------------- | -------------- | ---------------------------------- | -------------------- |
-| Top-up 500 000 by card              | —              | +500 000                           | TOPUP +500 000       |
-| Wallet purchase 300 000             | +300 000       | —                                  | SPENDING −300 000    |
-| Card purchase 400 000               | +400 000       | +400 000                           | —                    |
-| Gateway purchase 200 000, 2 % fee   | +200 000       | principal +200 000, fee +4 000     | —                    |
-| Full refund of it to the wallet     | refund 200 000 | —                                  | REFUND +200 000      |
-| Re-purchase 150 000 from the wallet | +150 000       | —                                  | SPENDING −150 000    |
-| Partial refund 100 000 paid out     | refund 100 000 | — (money out; shown as _paid out_) | —                    |
-| Cashback 20 000, reversed 7 500     | —              | —                                  | CASHBACK +12 500 net |
-| Account transfer 100 000 (pair)     | —              | —                                  | TRANSFER 0           |
+| Event                               | Sales          | Cash                               | Wallet                   |
+| ----------------------------------- | -------------- | ---------------------------------- | ------------------------ |
+| Top-up 500 000 by card              | —              | +500 000                           | TOPUP +500 000           |
+| Wallet purchase 300 000             | +300 000       | —                                  | SPENDING −300 000        |
+| Card purchase 400 000               | +400 000       | +400 000                           | —                        |
+| Gateway purchase 200 000, 2 % fee   | +200 000       | principal +200 000, fee +4 000     | —                        |
+| Full refund of it to the wallet     | refund 200 000 | —                                  | REFUND +200 000          |
+| Re-purchase 150 000 from the wallet | +150 000       | —                                  | SPENDING −150 000        |
+| Partial refund 100 000 paid out     | refund 100 000 | — (money out; shown as _paid out_) | —                        |
+| Cashback 20 000, reversed 7 500     | —              | —                                  | CASHBACK +12 500 net     |
+| Account transfer 100 000 (pair)     | —              | —                                  | TRANSFER 0               |
+| Legacy opening balance 250 000      | —              | —                                  | OPENING_BALANCE +250 000 |
 
 - A **top-up is a liability movement**: cash in, wallet up. It is not an order, so the sales
   statement cannot see it.
@@ -106,6 +107,10 @@ installation funds — liabilities, not revenue and not a reduction of it.
   new sale and a wallet debit. The ledger's REFUND entry is deliberately in no income line
   (`financial-statement.ts` files it on the wallet only).
 - An **account transfer** is a DEBIT and a CREDIT of the same amount: zero.
+- A **legacy opening balance** (`MIGRATION_OPENING_BALANCE`, Migration P2) is a liability the
+  installation inherited: no money arrived and nothing was sold, so it is on the wallet
+  section only, as its own `OPENING_BALANCE` movement (negative for a legacy debt).
+  `docs/migration-opening-balance.md`.
 
 Each row of this table is an assertion in `tests/integration/financial-reports.test.ts`
 (and, as pure filing rules, in `tests/unit/financial-statement.test.ts`).
