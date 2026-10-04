@@ -4679,7 +4679,7 @@ export const WEB_FA = {
   'web.customer_picker_more': 'نتایج بیشتری هم هست؛ جست‌وجو را دقیق‌تر کنید.',
   'web.customer_picker_handed_over': 'مشتری از صفحهٔ خودش انتخاب شده است:',
   'web.customer_picker_denied':
-    'جست‌وجوی مشتری به دسترسی users.search نیاز دارد. از صفحهٔ همان مشتری، «ثبت این مشتری به‌عنوان نماینده» را بزنید.',
+    'جست‌وجوی مشتری به دسترسی‌های users.view و users.search نیاز دارد. از صفحهٔ همان مشتری، «ثبت این مشتری به‌عنوان نماینده» را بزنید.',
   'web.reseller_tier': 'سطح',
   'web.reseller_tier_all': 'همهٔ سطوح',
   'web.reseller_status_all': 'همه',

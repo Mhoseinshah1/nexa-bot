@@ -264,7 +264,8 @@ export function ResellersPage({
   mayViewCatalog?: boolean;
   mayViewPanels?: boolean;
   /**
-   * UX batch 01, item 9: `users.search`, for the register form's customer picker. The
+   * UX batch 01, item 9: `users.view` AND `users.search`, for the register form's
+   * customer picker — the list charges both for a search. The
    * server charges it on the search; without it the picker says so and sends nothing.
    */
   maySearchCustomers?: boolean;
@@ -789,7 +790,7 @@ function ResellerForm({
   /** Absent for a registration; the stored reseller for an edit. */
   reseller?: ResellerSummaryResponse;
   initialCustomerId?: string;
-  /** `users.search`, for the picker. */
+  /** `users.view` and `users.search`, for the picker. */
   maySearchCustomers?: boolean;
   /** `users.view`, to name a customer handed over by id from their own page. */
   mayViewCustomers?: boolean;

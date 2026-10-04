@@ -500,6 +500,30 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     expect(gets(api, '/users')).toHaveLength(0);
   });
 
+  it('draws the picker only for users.view AND users.search, derived at the route', async () => {
+    // Review P3-3: `CustomerService.list` charges both for a `q`, and a GRANT override
+    // can give search without view — every search would then be refused.
+    for (const [permissions, searches] of [
+      [['resellers.view', 'resellers.edit', 'users.search'], false],
+      [['resellers.view', 'resellers.edit', 'users.view'], false],
+      [['resellers.view', 'resellers.edit', 'users.view', 'users.search'], true],
+    ] as const) {
+      const api = stubApi(listRoutes());
+      const resolved = resolve({ path: '/resellers', query: new URLSearchParams() }, [
+        ...permissions,
+      ]);
+      const view = renderPage(resolved.element as ReactElement);
+      await within(view.container).findByText('Reza Reseller');
+      const box = view.container.querySelector('#reseller-register-customer');
+      expect(box?.getAttribute('type') === 'search', permissions.join(',')).toBe(searches);
+      expect(within(view.container).queryByText(t('web.customer_picker_denied')) !== null).toBe(
+        !searches,
+      );
+      expect(gets(api, '/users')).toHaveLength(0);
+      view.unmount();
+    }
+  });
+
   it('surfaces a refused search rather than an empty result', async () => {
     stubApi([
       ...listRoutes(),

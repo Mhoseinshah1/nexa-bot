@@ -16,7 +16,7 @@ import { displayName, StatusBadge } from './customer-parts';
  * `GET /users?q=`, the customer list's one search box, so what it matches and what it
  * charges are the list's (`docs/web-admin-search.md`): a Telegram id EXACTLY, a username
  * with or without `@` from its start, case-insensitively, or the start of a display name
- * or last name; scoped to the actor's tenant and charged `users.search` by the server.
+ * or last name; scoped to the actor's tenant and charged `users.view` and `users.search`.
  *
  * Two rules this component exists to keep:
  *
@@ -38,7 +38,10 @@ export function CustomerPicker({
 }: {
   /** The search box's id, so a page can scroll to and focus it. */
   inputId: string;
-  /** `users.search`: without it the server refuses the search, so none is sent. */
+  /**
+   * `users.view` AND `users.search`: `CustomerService.list` charges both for a `q`, and a
+   * GRANT override can give search without view. Without both none is sent.
+   */
   maySearch: boolean;
   onPick: (customer: CustomerSummaryResponse) => void;
 }) {
