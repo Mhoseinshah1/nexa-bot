@@ -3133,3 +3133,20 @@ Still open:
   unproven; a non-conforming key is refused (fail closed) and the confirming aggregate in
   that section is a MANUAL ACCEPTANCE step before an `APPLY`. Every other table stays
   refused until its key is evidenced the same way.
+
+## OQ-REH — migration rehearsal and cutover runbooks (program Items 11–17)
+
+- **OQ-REH-01 — UNKNOWN: the P7 CLI's exact flags and report shape.** The runbooks and
+  `scripts/legacy-rehearsal.sh` were written before `apps/api/src/legacy-import.cli.ts`
+  existed. They use the program's six mode names and ASSUME `--tenant`, `--source`,
+  `--target`, `--panel-map`, `report --format json`, and a production guard whose spelling
+  they deliberately do not guess (`docs/legacy-migration/cutover-runbook.md` § The P7 CLI
+  contract). `docs/legacy-migration/final-report.schema.json` is the proposed report shape.
+  **Settled by** comparing with the merged importer's `--help` and `report` output, and
+  correcting the script's contract block, the runbook table and the schema in one reviewed
+  commit.
+- **OQ-REH-02 — UNKNOWN: how MirzaBot is stopped and its MySQL made read-only.** Cutover
+  step 7 and rollback step R5 name the effect (no customer action reaches it; writes are
+  refused; `CHECKSUM TABLE` proves nothing changed) but the commands belong to the legacy
+  host, which this repository has never seen. **Settled by** the owner writing them into
+  those two steps before the production gate.

@@ -1,0 +1,315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.invalid/schemas/legacy-migration/final-report/v1",
+  "title": "NEXA legacy migration — final report (machine-readable)",
+  "description": "Item 16. The aggregate report of one legacy import run, as P7 `report` emits it and as docs/legacy-migration/final-report-template.md renders it. AGGREGATES ONLY: no field may carry a Telegram id, username, phone, subscription link, config, credential, token or card. Money is a decimal string of integer minor units with an explicit currency, never a JSON number. Written before the P7 CLI existed; the lead reconciles field names with P7's emitter, and any change is a new schemaVersion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "evidenceClass",
+    "generatedAt",
+    "run",
+    "source",
+    "customers",
+    "wallet",
+    "services",
+    "products",
+    "trials",
+    "provider",
+    "manualReview"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "evidenceClass": {
+      "description": "synthetic: a fixture run, which proves code and is NEVER legacy evidence. staging: an isolated rehearsal on a real dump. production: the cutover.",
+      "enum": ["synthetic", "staging", "production"]
+    },
+    "generatedAt": { "$ref": "#/$defs/timestamp" },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "tenant",
+        "mode",
+        "status",
+        "codeVersion",
+        "startedAt",
+        "finishedAt",
+        "durationSeconds",
+        "resumes",
+        "errors"
+      ],
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/uuid",
+          "description": "legacy_import_runs.id of the APPLY run"
+        },
+        "tenant": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "description": "tenant slug"
+        },
+        "mode": { "enum": ["DRY_RUN", "APPLY"] },
+        "status": { "enum": ["RUNNING", "COMPLETED", "FAILED", "ABORTED"] },
+        "failureCode": {
+          "type": ["string", "null"],
+          "description": "LEGACY_IMPORT_RUN_FAILURE_CODES; null unless FAILED"
+        },
+        "codeVersion": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,64}$" },
+        "startedAt": { "$ref": "#/$defs/timestamp" },
+        "finishedAt": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] },
+        "durationSeconds": { "$ref": "#/$defs/count" },
+        "resumes": {
+          "$ref": "#/$defs/count",
+          "description": "how many times the run was resumed after an interruption"
+        },
+        "errors": {
+          "$ref": "#/$defs/count",
+          "description": "map rows FAILED at the end of the run; 0 on a completed run"
+        },
+        "rowsSeen": { "$ref": "#/$defs/count" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "snapshotAt", "schemaEvidence"],
+      "properties": {
+        "fingerprint": {
+          "$ref": "#/$defs/sha256",
+          "description": "legacy_import_runs.source_fingerprint"
+        },
+        "dumpSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "snapshotAt": {
+          "$ref": "#/$defs/timestamp",
+          "description": "when the final dump was taken (UTC)"
+        },
+        "checksumTable": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": { "user": { "type": "string" }, "invoice": { "type": "string" } },
+          "description": "CHECKSUM TABLE values recorded at the freeze and matched on the restored copy"
+        },
+        "schemaEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["serverVersion", "tablesRead"],
+          "properties": {
+            "serverVersion": { "type": "string", "maxLength": 64 },
+            "tablesRead": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[A-Za-z0-9_]{1,64}$" },
+              "uniqueItems": true
+            },
+            "balanceColumnType": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "SHOW COLUMNS FROM user LIKE 'Balance' — integer or decimal"
+            }
+          }
+        }
+      }
+    },
+    "customers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "existing", "created", "blocked", "skipped", "manualReview", "errors"],
+      "description": "Closure: source = existing + created + blocked + skipped + manualReview + errors.",
+      "properties": {
+        "source": { "$ref": "#/$defs/count", "description": "legacy user rows" },
+        "existing": {
+          "$ref": "#/$defs/count",
+          "description": "matched an existing (tenant, telegram_user_id) customer"
+        },
+        "created": { "$ref": "#/$defs/count" },
+        "blocked": {
+          "$ref": "#/$defs/count",
+          "description": "refused by a NEXA rule rather than routed to review, as P7 defines it"
+        },
+        "skipped": { "$ref": "#/$defs/count" },
+        "manualReview": { "$ref": "#/$defs/count" },
+        "errors": { "$ref": "#/$defs/count" }
+      }
+    },
+    "wallet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "currency",
+        "legacyTotalMinor",
+        "importedTotalMinor",
+        "notImportedTotalMinor",
+        "positive",
+        "zero",
+        "negative",
+        "openingEntries",
+        "duplicatesPrevented",
+        "preImportTotalMinor",
+        "expectedPostImportTotalMinor",
+        "actualPostImportTotalMinor"
+      ],
+      "description": "Equation: preImportTotalMinor + importedTotalMinor = expectedPostImportTotalMinor, which must equal actualPostImportTotalMinor. legacyTotalMinor = importedTotalMinor + notImportedTotalMinor. Opening balances are not revenue.",
+      "properties": {
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "legacyTotalMinor": { "$ref": "#/$defs/minor" },
+        "importedTotalMinor": { "$ref": "#/$defs/minor" },
+        "notImportedTotalMinor": {
+          "$ref": "#/$defs/minor",
+          "description": "balances of users skipped or in manual review; not in NEXA yet"
+        },
+        "positive": { "$ref": "#/$defs/countAndSum" },
+        "zero": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count"],
+          "properties": { "count": { "$ref": "#/$defs/count" } }
+        },
+        "negative": { "$ref": "#/$defs/countAndSum" },
+        "openingEntries": {
+          "$ref": "#/$defs/count",
+          "description": "MIGRATION_OPENING_BALANCE entries written by this run"
+        },
+        "duplicatesPrevented": {
+          "$ref": "#/$defs/count",
+          "description": "openings answered ALREADY_POSTED (a rerun or resume met an existing opening)"
+        },
+        "preImportTotalMinor": { "$ref": "#/$defs/minor" },
+        "expectedPostImportTotalMinor": { "$ref": "#/$defs/minor" },
+        "actualPostImportTotalMinor": { "$ref": "#/$defs/minor" }
+      }
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidates",
+        "adopted",
+        "alreadyMapped",
+        "testSkipped",
+        "providerMissing",
+        "ambiguous",
+        "mappingMissing",
+        "productUnresolved",
+        "unsupported",
+        "manualReview",
+        "failed"
+      ],
+      "description": "Closure: candidates (live legacy invoices) = the sum of every other count. Adoption orders are NEW_SERVICE + LEGACY_ADOPTION with zero totals and are not revenue.",
+      "properties": {
+        "candidates": { "$ref": "#/$defs/count" },
+        "adopted": { "$ref": "#/$defs/count" },
+        "alreadyMapped": { "$ref": "#/$defs/count" },
+        "testSkipped": { "$ref": "#/$defs/count" },
+        "providerMissing": { "$ref": "#/$defs/count" },
+        "ambiguous": {
+          "$ref": "#/$defs/count",
+          "description": "AMBIGUOUS_PANEL and USERNAME_CASE_COLLISION"
+        },
+        "mappingMissing": { "$ref": "#/$defs/count", "description": "PANEL_UNMAPPED" },
+        "productUnresolved": { "$ref": "#/$defs/count" },
+        "unsupported": { "$ref": "#/$defs/count" },
+        "manualReview": {
+          "$ref": "#/$defs/count",
+          "description": "every other closed manual-review reason"
+        },
+        "failed": { "$ref": "#/$defs/count" }
+      }
+    },
+    "products": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hiddenCreated", "hiddenReused", "custom", "unresolved"],
+      "properties": {
+        "hiddenCreated": { "$ref": "#/$defs/count" },
+        "hiddenReused": { "$ref": "#/$defs/count" },
+        "custom": { "$ref": "#/$defs/count" },
+        "unresolved": {
+          "$ref": "#/$defs/count",
+          "description": "shapes UNRESOLVED (no or ambiguous current tariff)"
+        }
+      }
+    },
+    "trials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible", "ineligible", "used", "noTrial", "existingConflict"],
+      "properties": {
+        "eligible": { "$ref": "#/$defs/count", "description": "INHERIT_NEXA_POLICY" },
+        "ineligible": { "$ref": "#/$defs/count", "description": "LEGACY_LIMIT_UNREADABLE" },
+        "used": { "$ref": "#/$defs/count", "description": "LEGACY_TRIAL_CONSUMED" },
+        "noTrial": { "$ref": "#/$defs/count", "description": "LEGACY_NO_TRIALS" },
+        "existingConflict": { "$ref": "#/$defs/count", "description": "KEPT_EXISTING_OVERRIDE" }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reads", "writes", "inventoriesComplete"],
+      "properties": {
+        "reads": { "$ref": "#/$defs/count" },
+        "writes": {
+          "$ref": "#/$defs/count",
+          "description": "Expected 0. Any other value is a P0 incident and a rollback trigger; the rehearsal harness fails on it."
+        },
+        "inventoriesComplete": {
+          "type": "boolean",
+          "description": "every production RickPanel inventory was complete (two identical walks)"
+        }
+      }
+    },
+    "manualReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "byReason"],
+      "properties": {
+        "total": { "$ref": "#/$defs/count" },
+        "byReason": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+          "additionalProperties": { "$ref": "#/$defs/count" },
+          "description": "closed reason code -> count, user and invoice rows together"
+        }
+      }
+    },
+    "reconciliation": {
+      "type": "array",
+      "description": "The equations of docs/legacy-migration/reconciliation.md, each evaluated.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "holds"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[CWRSP][0-9]{1,2}$" },
+          "holds": { "type": "boolean" },
+          "expected": { "type": "string", "maxLength": 64 },
+          "actual": { "type": "string", "maxLength": 64 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "minor": {
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]{0,30})$",
+      "description": "integer minor units as a decimal string"
+    },
+    "countAndSum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "sumMinor"],
+      "properties": {
+        "count": { "$ref": "#/$defs/count" },
+        "sumMinor": { "$ref": "#/$defs/minor" }
+      }
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "timestamp": { "type": "string", "format": "date-time", "pattern": "Z$" }
+  }
+}
