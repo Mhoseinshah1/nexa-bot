@@ -19,6 +19,7 @@ describe('the Telegram webhook and Business updates', () => {
     business: Partial<{
       applyReport: () => Promise<unknown>;
       recordMessage: () => Promise<unknown>;
+      recordDeletion: () => Promise<unknown>;
     }> = {},
   ) {
     const container = {
@@ -35,7 +36,7 @@ describe('the Telegram webhook and Business updates', () => {
       },
       businessConversations: {
         recordMessage: vi.fn(business.recordMessage ?? (async () => null)),
-        recordDeletion: vi.fn(async () => 0),
+        recordDeletion: vi.fn(business.recordDeletion ?? (async () => 0)),
       },
       starsPayments: { preCheckout: vi.fn(), recordSuccessfulPayment: vi.fn() },
       opsGroups: { bindFromTelegram: vi.fn(), membershipChanged: vi.fn() },
@@ -150,7 +151,7 @@ describe('the Telegram webhook and Business updates', () => {
   // TB1 review S3: a failed report must not turn a swallowed failure into a redelivery loop.
   it('still answers 2xx when the message failure cannot even be recorded', async () => {
     const { container, receive } = controllerWith({
-      routeMessage: async () => {
+      recordMessage: async () => {
         throw new Error('database unavailable');
       },
     });
@@ -158,6 +159,26 @@ describe('the Telegram webhook and Business updates', () => {
     expect(await receive({ business_message: customerMessage })).toEqual({ ok: true });
     const { business_connection_id: _omitted, ...broken } = customerMessage;
     expect(await receive({ business_message: broken })).toEqual({ ok: true });
+    expectNoCustomerTurn(container);
+  });
+
+  // TB1 review S3, on the deletion path TB2 added: the same guard.
+  it('still answers 2xx when a deletion failure cannot even be recorded', async () => {
+    const { container, receive } = controllerWith({
+      recordDeletion: async () => {
+        throw new Error('database unavailable');
+      },
+    });
+    container.opsLog.record.mockRejectedValue(new Error('database unavailable'));
+    const deletion = {
+      business_connection_id: 'conn-1',
+      chat: { id: 7000001, type: 'private' },
+      message_ids: [41],
+    };
+    expect(await receive({ deleted_business_messages: deletion })).toEqual({ ok: true });
+    expect(await receive({ deleted_business_messages: { ...deletion, message_ids: 'x' } })).toEqual(
+      { ok: true },
+    );
     expectNoCustomerTurn(container);
   });
 

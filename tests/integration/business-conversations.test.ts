@@ -225,8 +225,8 @@ describe('Telegram Business conversations (TB2)', () => {
 
   it('our own echo, an away message and a later customer message do not take the conversation', async () => {
     const first = await record(message());
-    expect((await record(fromOwner({ senderBusinessBotId: OUR_BOT }))).origin).toBe('OWN_ECHO');
-    expect((await record(fromOwner({ isFromOffline: true }))).origin).toBe('OFFLINE');
+    expect((await record(fromOwner({ senderBusinessBotId: OUR_BOT })))!.origin).toBe('OWN_ECHO');
+    expect((await record(fromOwner({ isFromOffline: true })))!.origin).toBe('OFFLINE');
     await record(message());
     expect(await conversation(first!.conversationId)).toMatchObject({
       state: 'AI_ACTIVE',
@@ -236,7 +236,7 @@ describe('Telegram Business conversations (TB2)', () => {
 
   it('another business bot speaking for the owner takes the conversation like a human', async () => {
     const first = await record(message());
-    expect((await record(fromOwner({ senderBusinessBotId: '9000002' }))).tookOver).toBe(true);
+    expect((await record(fromOwner({ senderBusinessBotId: '9000002' })))!.tookOver).toBe(true);
     expect(await conversation(first!.conversationId)).toMatchObject({
       state: 'HUMAN_ACTIVE',
       takeoverReason: 'OTHER_BOT',
