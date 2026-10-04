@@ -15,6 +15,8 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { unorderableReason } from '../../apps/api/src/modules/commerce/catalog/application/catalog-visibility';
+import { legacyShapeAdoption } from '../../apps/api/src/modules/commerce/catalog/application/legacy-product.service';
 import {
   legacyShapeKey,
   type LegacyShapeInput,
@@ -131,6 +133,7 @@ describe('hidden legacy products', () => {
     price: bigint,
     spec: { trafficGb: bigint; days: number } = { trafficGb: 10n, days: 30 },
     scope: TenantContext = tenantA,
+    placement: { categoryId?: string; panelId?: string | null } = {},
   ): Promise<ProductId> {
     const created = await products.create(scope, {
       id: ctx.container.ids.uuid() as ProductId,
@@ -139,10 +142,13 @@ describe('hidden legacy products', () => {
         description: null,
         audience: 'EVERYONE',
         sortOrder: 10,
-        panelId: scope === tenantA ? (panelRenew as PanelId) : null,
-        categoryId: (scope === tenantA
-          ? SEED_IDS.categoryA
-          : SEED_IDS.categoryB) as ProductCategoryId,
+        panelId: (placement.panelId !== undefined
+          ? placement.panelId
+          : scope === tenantA
+            ? panelRenew
+            : null) as PanelId | null,
+        categoryId: (placement.categoryId ??
+          (scope === tenantA ? SEED_IDS.categoryA : SEED_IDS.categoryB)) as ProductCategoryId,
         specification: {
           durationDays: spec.days,
           trafficBytes: spec.trafficGb * BYTES_PER_GB,
@@ -365,6 +371,35 @@ describe('hidden legacy products', () => {
     expect(result.product.price).toBeNull();
   });
 
+  it('takes no tariff from a product nobody can buy now: a withdrawn category or no panel', async () => {
+    /*
+     * "The current NEXA tariff" is the price a customer can buy this shape at TODAY. A
+     * product the operator withdrew by deactivating its category, or one with no panel to
+     * deliver on, is refused by `unorderableReason` for every new purchase — its price is
+     * history, not a tariff, and adopting a legacy service at it is a guessed tariff.
+     */
+    const withdrawn = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO product_categories (id, tenant_id, name, status)
+          VALUES (${withdrawn}, ${tenantA.tenantId}, 'پلن‌های قدیمی', 'INACTIVE')`,
+    );
+    await publicProduct(35_000n, { trafficGb: 10n, days: 30 }, tenantA, { categoryId: withdrawn });
+    await publicProduct(36_000n, { trafficGb: 10n, days: 30 }, tenantA, { panelId: null });
+    const shape = await ensured(BAC6_10GB);
+    const none = await resolveMatch(shape.id);
+    expect(none.finding).toBe('NO_CURRENT_TARIFF');
+    expect(none.product).toMatchObject({ status: 'INACTIVE', price: null });
+
+    // Beside a product that IS on sale, the withdrawn ones are not a second price.
+    const onSale = await publicProduct(40_000n);
+    const matched = await resolveMatch(shape.id);
+    expect(matched).toMatchObject({
+      finding: 'MATCHED',
+      shape: { tariffSourceProductId: onSale },
+      product: { price: money(40_000n, 'IRT') },
+    });
+  });
+
   it('renews at the CURRENT tariff, never the historical price, and follows it on re-resolution', async () => {
     const tariff = await publicProduct(35_000n);
     const shape = await ensured(BAC6_10GB);
@@ -481,6 +516,134 @@ describe('hidden legacy products', () => {
     ).rejects.toThrow();
   });
 
+  it('stays out of every catalogue audience, customer and reseller, even once bound to a panel', async () => {
+    /*
+     * The worst case an operator can reach: the shape resolved (ACTIVE, priced) and a
+     * panel bound to the hidden product through an ordinary product edit. A category
+     * cannot be given (the database guard), so `audience = HIDDEN` is then the ONLY thing
+     * between it and a listing — and it must hold for every audience the catalogue knows,
+     * including a reseller whose tier names the product's own id.
+     */
+    await publicProduct(35_000n);
+    const shape = await ensured(BAC6_10GB);
+    await resolveMatch(shape.id);
+    await ctx.container.database.db.execute(
+      sql`UPDATE products SET panel_id = ${panelRenew} WHERE id = ${shape.productId}`,
+    );
+    const audiences = [
+      { kind: 'CUSTOMER' },
+      { kind: 'RESELLER', productIds: 'ALL', categoryIds: 'ALL' },
+      { kind: 'RESELLER', productIds: [shape.productId], categoryIds: [] },
+    ] as const;
+    for (const audience of audiences) {
+      const catalogue = await products.listCatalog(tenantA, 100, [panelRenew], audience);
+      expect(
+        catalogue.items.map((p) => p.id),
+        JSON.stringify(audience),
+      ).not.toContain(shape.productId);
+      if (audience.kind === 'CUSTOMER' || audience.productIds === 'ALL') {
+        // The control: the public product beside it IS listed, so the query is live.
+        expect(catalogue.items.length).toBeGreaterThan(0);
+      }
+      const page = await products.listCustomerProductsInCategory(
+        tenantA,
+        SEED_IDS.categoryA,
+        100,
+        0,
+        [panelRenew],
+        audience,
+      );
+      expect(page.items.map((p) => p.id)).not.toContain(shape.productId);
+    }
+    // And a direct reference still cannot buy it new, whoever buys.
+    const stored = await products.findById(tenantA, shape.productId);
+    if (stored === null) throw new Error('expected the hidden product');
+    expect(stored).toMatchObject({ status: 'ACTIVE', audience: 'HIDDEN' });
+    expect(unorderableReason(stored, null, 'CUSTOMER')).toBe('NOT_CATEGORISED');
+    expect(unorderableReason(stored, null, 'RESELLER')).toBe('NOT_CATEGORISED');
+  });
+
+  it('gives P6 a closed manual-review reason for every shape it may not adopt', async () => {
+    const shape = await ensured(BAC6_10GB);
+    const product = await products.findById(tenantA, shape.productId);
+    expect(legacyShapeAdoption(null, null)).toEqual({ adoptable: false, reason: 'NO_SHAPE' });
+    expect(legacyShapeAdoption(shape, product)).toEqual({
+      adoptable: false,
+      reason: 'NOT_YET_RESOLVED',
+    });
+    const none = await resolveMatch(shape.id);
+    expect(legacyShapeAdoption(none.shape, none.product)).toEqual({
+      adoptable: false,
+      reason: 'NO_CURRENT_TARIFF',
+    });
+    await publicProduct(35_000n);
+    await publicProduct(40_000n);
+    const ambiguous = await resolveMatch(shape.id);
+    expect(legacyShapeAdoption(ambiguous.shape, ambiguous.product)).toEqual({
+      adoptable: false,
+      reason: 'AMBIGUOUS_TARIFF',
+    });
+    // Never a price invented for it: still unpriced and inactive.
+    expect(ambiguous.product).toMatchObject({ status: 'INACTIVE', price: null });
+
+    const stated = await ctx.container.legacyProducts.resolveTariff(tenantA, owner, {
+      idempotencyKey: key(),
+      shapeId: shape.id,
+      request: { kind: 'STATED', price: money(38_000n, 'IRT'), reason: 'دو قیمت فعلی؛ بررسی شد' },
+    });
+    expect(legacyShapeAdoption(stated.shape, stated.product)).toEqual({ adoptable: true });
+    // An operator withdrawing the hidden product takes it out of adoption again.
+    await products.setStatus(
+      tenantA,
+      shape.productId,
+      'ACTIVE',
+      'INACTIVE',
+      ctx.container.clock.now(),
+    );
+    const withdrawn = await products.findById(tenantA, shape.productId);
+    expect(legacyShapeAdoption(stated.shape, withdrawn)).toEqual({
+      adoptable: false,
+      reason: 'PRODUCT_NOT_ADOPTABLE',
+    });
+  });
+
+  it('a stated tariff yields to a current public one once it exists (renewal follows the CURRENT tariff)', async () => {
+    /*
+     * STATED is the exit for a shape NEXA does not sell. Once NEXA does sell it, the
+     * owner's rule — renew at the current NEXA tariff — names that price, and a MATCH
+     * moves the shape onto it. Pinned so the behaviour is a decision, not an accident.
+     */
+    const shape = await ensured(BAC6_10GB);
+    await ctx.container.legacyProducts.resolveTariff(tenantA, owner, {
+      idempotencyKey: key(),
+      shapeId: shape.id,
+      request: { kind: 'STATED', price: money(30_000n, 'IRT'), reason: 'هنوز فروخته نمی‌شود' },
+    });
+    const tariff = await publicProduct(35_000n);
+    const moved = await resolveMatch(shape.id);
+    expect(moved).toMatchObject({
+      finding: 'MATCHED',
+      changed: true,
+      shape: { resolution: 'MATCHED_PUBLIC_PRODUCT', tariffSourceProductId: tariff },
+      product: { price: money(35_000n, 'IRT') },
+    });
+  });
+
+  it('refuses both writes once the tenant has stopped accepting work, and writes nothing', async () => {
+    const shape = await ensured(BAC6_10GB);
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+    expect(await refusal(ensure({ ...BAC6_10GB, volume: '20' }))).toBe('commerce.request_invalid');
+    expect(await refusal(resolveMatch(shape.id))).toBe('commerce.request_invalid');
+    expect(await count(sql`SELECT count(*)::int AS n FROM legacy_product_shapes`)).toBe(1);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM legacy_product_shapes WHERE tariff_status = 'RESOLVED' OR unresolved_reason <> 'NOT_YET_RESOLVED'`,
+      ),
+    ).toBe(0);
+  });
+
   it('refuses, at the database, an edit that would list or categorise it', async () => {
     const shape = await ensured(BAC6_10GB);
     const db = ctx.container.database.db;
@@ -543,7 +706,18 @@ describe('hidden legacy products', () => {
   });
 
   it('keeps tenants apart: one shape is two products, and no tenant reads the other', async () => {
-    await publicProduct(35_000n, { trafficGb: 10n, days: 30 }, tenantB);
+    // Tenant B sells the shape on its own panel: a tariff needs somewhere to deliver.
+    const panelB = await ctx.container.panels.create(tenantB, ownerB, {
+      name: 'Panel B',
+      providerType: 'marzban',
+      baseUrl: 'https://renew-b.example.test',
+      credentials: { username: 'nexa', password: 'not-a-real-password' },
+      activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS TCP'] } },
+      idempotencyKey: 'panel-legacy-create-b',
+    });
+    await publicProduct(35_000n, { trafficGb: 10n, days: 30 }, tenantB, {
+      panelId: panelB.view.panel.id,
+    });
     const a = await ensured(BAC6_10GB);
     const b = await ensured(BAC6_10GB, tenantB, ownerB);
     expect(a.productId).not.toBe(b.productId);

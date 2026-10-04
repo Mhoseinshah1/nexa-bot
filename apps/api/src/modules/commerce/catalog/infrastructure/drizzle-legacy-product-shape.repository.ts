@@ -7,6 +7,7 @@ import {
   type LegacyShapeUnresolvedReason,
   type Money,
   type ProductAudience,
+  type ProductCategoryStatus,
   type ProductId,
   type ProductStatus,
   type TenantContext,
@@ -16,7 +17,11 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { legacyProductShapes, products } from '../../../../infrastructure/persistence/schema.js';
+import {
+  legacyProductShapes,
+  productCategories,
+  products,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   LegacyProductShapeRepository,
   LegacyShapeRecord,
@@ -167,8 +172,17 @@ export class DrizzleLegacyProductShapeRepository implements LegacyProductShapeRe
         trafficBytes: products.trafficBytes,
         priceAmount: products.priceAmount,
         priceCurrency: products.priceCurrency,
+        panelId: products.panelId,
+        categoryStatus: productCategories.status,
       })
       .from(products)
+      .leftJoin(
+        productCategories,
+        and(
+          eq(productCategories.id, products.categoryId),
+          eq(productCategories.tenantId, products.tenantId),
+        ),
+      )
       .where(
         and(
           eq(products.tenantId, tenantId),
@@ -187,6 +201,8 @@ export class DrizzleLegacyProductShapeRepository implements LegacyProductShapeRe
         row.priceAmount === null || row.priceCurrency === null
           ? null
           : money(row.priceAmount, row.priceCurrency as CurrencyCode),
+      panelBound: row.panelId !== null,
+      categoryStatus: row.categoryStatus as ProductCategoryStatus | null,
     }));
   }
 
