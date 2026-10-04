@@ -3169,3 +3169,43 @@ HISTORY_NOT_IMPORTED` (not adopted by registered decision; it expires on the pan
 - **OQ-P7-04 — inventory reads do not take the tenant probe budget.** The importer is an
   operator-run CLI bounded by page size and `maxPages`; two full walks per production panel
   per mode. Whether a cutover-day run should share the monitor's budget is open.
+
+## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
+
+Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.
+Each entry is resolved by observation or by the Product Owner, never by guessing.
+
+- **OQ-TB-01 — the capability map was not read from core.telegram.org.** This session's
+  egress refuses Telegram's sites. The map comes from `@grammyjs/types@5.0.0` (verbatim
+  Bot API JSDoc), and the version (10.3, 2026-08-24) comes from secondary sources. Before
+  TB1 merges, re-check `tb0-audit.md` §1.2 against the live reference.
+- **OQ-TB-02 — connection identity over a reconnect.** It is unknown whether
+  `BusinessConnection.id` survives a disconnect and reconnect, and whether a disconnect
+  is delivered as `is_enabled: false`. The design keys on `(bot, id)` and supersedes by
+  owner (ADR-0033 §2). TB1 acceptance records what Telegram does.
+- **OQ-TB-03 — are the owner's hand-typed messages delivered to the bot?** Human takeover
+  depends on it. So does the five-case classification (`tb0-audit.md` §1.4, inferred from
+  field text), and with it whether the bot's own sends echo back. **If they are not
+  delivered, `AUTO_REPLY_SAFE` does not ship.** This is the first item of the TB1/TB2
+  real-Telegram acceptance.
+- **OQ-TB-04 — the residual takeover race.** A human message sent after the send stamp
+  commits, or not yet delivered by Telegram, cannot be beaten (ADR-0033, Consequences).
+  The settle delay before the final check (8 s by default) is a product trade-off between
+  latency and collisions. The Product Owner confirms the default before TB7.
+- **OQ-TB-05 — `getFile` on business-chat media.** The reference neither allows nor
+  forbids it. TB6 acceptance decides whether vision is available for business chats.
+- **OQ-TB-06 — Persian retrieval quality.** PostgreSQL has no Persian stemmer. TB3 starts
+  with the `simple` configuration plus category and tags (ADR-0035 §4). Embeddings are
+  added only on a recorded miss.
+- **OQ-TB-07 — the cost basis.** Provider prices change and are not exposed by every API.
+  Cost is calculated only from a tenant-entered per-model price, with a currency, and is
+  null otherwise. Hard-coding a price table is refused, because it would go stale
+  silently.
+- **OQ-TB-08 — no provider SDKs.** The adapters use `fetch` with handwritten schemas
+  (ADR-0034 §2). Revisit only if a provider's wire contract cannot reasonably be modelled.
+- **OQ-TB-09 — what "AI resolved" means.** No defensible definition exists yet. The
+  dashboards report replies and handoffs, never resolutions, until the Product Owner
+  defines the signal.
+- **OQ-TB-10 — merge authority versus the program's §46.** The program describes merging
+  after one Codex review. `CLAUDE.md` makes a merge to `main` the owner's explicit call.
+  TB packages are left open and ready until the Product Owner approves each merge.
