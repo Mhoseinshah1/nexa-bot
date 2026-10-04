@@ -125,7 +125,17 @@ describe('legacy keys (Codex P2, #175)', () => {
 
   it('refuses a credential-shaped id for EVERY source table', () => {
     for (const table of LEGACY_IMPORT_SOURCE_TABLES) {
-      for (const id of ['hunter2', 'password:hunter2', 'a b', '', '0123', '-1', '1.5', '+98912']) {
+      for (const id of [
+        'hunter2',
+        'password:hunter2',
+        'a b',
+        '',
+        '-1',
+        '1.5',
+        '+98912',
+        'token=abcd',
+        'abcd:ef12',
+      ]) {
         expect({ table, id, code: code(() => assertLegacyKey(table, id)) }).toEqual({
           table,
           id,
@@ -139,11 +149,59 @@ describe('legacy keys (Codex P2, #175)', () => {
     for (const id of ['1', '42', '7123456789', '9'.repeat(20)]) {
       expect(code(() => assertLegacyKey('user', id))).toBeNull();
     }
+    // A leading zero is never a Telegram id (it is a valid 4-hex invoice id, below).
+    expect(code(() => assertLegacyKey('user', '0123'))).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
   });
 
-  it('refuses a table whose key shape is not evidenced (OQ-P4-01)', () => {
-    for (const table of ['invoice', 'marzban_panel', 'product']) {
+  it('refuses a table whose key shape is not evidenced', () => {
+    for (const table of ['Invoice', 'marzban_panel', 'product', 'Payment_report']) {
       expect(code(() => assertLegacyKey(table, '1'))).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
+    }
+  });
+
+  /**
+   * OQ-P4-01: `invoice.id_invoice` is `bin2hex(random_bytes(2|4))`, optionally prefixed by a
+   * 7-digit `rand(1000000, 9999999)` collision fallback, in every public MirzaBot revision.
+   */
+  it('accepts exactly the evidenced invoice shapes', () => {
+    for (const id of [
+      'a3f9', // bin2hex(random_bytes(2))
+      '0000',
+      '9c1e04ab', // bin2hex(random_bytes(4))
+      '12345678', // 8 hex that happen to be digits
+      '1000000a3f9', // prefix + 4 hex
+      '99999999c1e04ab', // prefix + 8 hex
+      '4821733' + 'deadbeef',
+    ]) {
+      expect({ id, code: code(() => assertLegacyKey('invoice', id)) }).toEqual({ id, code: null });
+    }
+  });
+
+  it('refuses every invoice id outside the evidenced shapes', () => {
+    for (const id of [
+      'A3F9', // uppercase: bin2hex is lowercase
+      'a3f', // 3 hex
+      'a3f9b', // 5 hex
+      'a3f9b2', // 6 hex (random_bytes(3) never reached id_invoice)
+      'a3f9b2c1d0', // 10 hex
+      '0123456a3f9', // prefix with a leading zero
+      '123456a3f9', // 6-digit prefix + 4 = 10 chars (also not hex-8)
+      '12345678a3f9b', // 8-digit prefix + 5
+      '1234567a3f9b2', // prefix + 6 hex
+      'a3f9-b2c1',
+      'a3f9 ',
+      ' a3f9',
+      'beefcafe\n',
+      'g3f9',
+      'hunter2',
+      'password:hunter2',
+      'https://sub.example/abc',
+      '',
+    ]) {
+      expect({ id, code: code(() => assertLegacyKey('invoice', id)) }).toEqual({
+        id,
+        code: LEGACY_IMPORT_ERROR_CODES.INVALID,
+      });
     }
   });
 });

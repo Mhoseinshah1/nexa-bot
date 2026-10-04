@@ -563,6 +563,19 @@ describe('legacy import metadata', () => {
       '-1',
       '+989121234567',
       'a b',
+      // OQ-P4-01: the invoice shapes, accepted and refused, through both answers.
+      'a3f9',
+      '9c1e04ab',
+      '12345678',
+      '1000000a3f9',
+      '99999999c1e04ab',
+      'A3F9',
+      'a3f9b2',
+      'a3f9b2c1d0',
+      '0123456a3f9',
+      '1234567a3f9b2',
+      'beefcafe\n',
+      'https://sub.example/abc',
     ];
     for (const table of [...LEGACY_IMPORT_SOURCE_TABLES, 'invoice']) {
       for (const id of samples) {
@@ -577,8 +590,15 @@ describe('legacy import metadata', () => {
     }
     expect(await tryInsert('user', 'hunter2')).toBe('legacy_import_map_legacy_key_check');
     expect(await tryInsert('user', 'password:hunter2')).toBe('legacy_import_map_legacy_key_check');
+    // The invoice key refuses a credential the same way, and the user shape is not borrowed.
+    expect(await tryInsert('invoice', 'hunter2')).toBe('legacy_import_map_legacy_key_check');
+    expect(await tryInsert('invoice', 'password:hunter2')).toBe(
+      'legacy_import_map_legacy_key_check',
+    );
+    expect(await tryInsert('invoice', '1')).toBe('legacy_import_map_legacy_key_check');
+    expect(await tryInsert('invoice', '9c1e04ab')).toBeNull();
     // Either CHECK may report first; both refuse a table outside the evidenced set.
-    expect(await tryInsert('invoice', '1')).toMatch(/^legacy_import_map_(table|legacy_key)_check$/);
+    expect(await tryInsert('product', '1')).toMatch(/^legacy_import_map_(table|legacy_key)_check$/);
     // And the application refuses before SQL, with a typed error.
     expect(
       await codeOf(
@@ -598,6 +618,41 @@ describe('legacy import metadata', () => {
         ),
       ),
     ).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
+  });
+
+  it('OQ-P4-01: an invoice decision is recorded, replayed idempotently and kept apart from user keys', async () => {
+    const { run: r } = await start(A);
+    const service = randomUUID();
+    const write = (legacyTable: string, legacyId: string, entityId: string) =>
+      run(A, (tx) =>
+        repo.recordDecision(
+          A,
+          {
+            runId: r.id,
+            legacyTable,
+            legacyId,
+            checksum: SUM1,
+            decision: { status: 'IMPORTED', entityType: 'SERVICE', entityId, reasonCode: null },
+            now: at(1),
+          },
+          tx,
+        ),
+      );
+    expect((await write('invoice', '12345678', service)).kind).toBe('INSERTED');
+    expect((await write('invoice', '12345678', service)).kind).toBe('UNCHANGED');
+    // The same characters under `user` are a different legacy record.
+    expect((await write('user', '12345678', randomUUID())).kind).toBe('INSERTED');
+    // An invoice is never re-pointed to another service.
+    expect(await write('invoice', '12345678', randomUUID())).toMatchObject({
+      kind: 'REFUSED',
+      reason: 'IMPORTED_ENTITY_MISMATCH',
+    });
+    const [row] = await repo.findByLegacyKeys(A, 'invoice', ['12345678']);
+    expect(row).toMatchObject({ legacyTable: 'invoice', entityType: 'SERVICE', entityId: service });
+    // A non-evidenced invoice id is a typed refusal before SQL.
+    expect(await codeOf(write('invoice', 'a3f9b2', randomUUID()))).toBe(
+      LEGACY_IMPORT_ERROR_CODES.INVALID,
+    );
   });
 
   it('Codex P1 #175: a dry run counts its decisions on the run row and writes no map rows', async () => {
