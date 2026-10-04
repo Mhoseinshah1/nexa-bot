@@ -109,6 +109,36 @@ describe('parseArgs: nothing defaults', () => {
     ).toMatch(/^fixture:/u);
   });
 
+  it('--expected-fingerprint and --expected-panel-map-fingerprint: import and resume only, a sha-256 in hex', () => {
+    const hex = 'ab'.repeat(32);
+    const importing = ['import', ...without('--mode'), '--evidence-class', 'staging'];
+    expect(
+      parseArgs([
+        ...importing,
+        '--expected-fingerprint',
+        hex,
+        '--expected-panel-map-fingerprint',
+        hex,
+      ]),
+    ).toMatchObject({ expectedFingerprint: hex, expectedPanelMapFingerprint: hex });
+    expect(parseArgs(importing)).toMatchObject({
+      expectedFingerprint: null,
+      expectedPanelMapFingerprint: null,
+    });
+    for (const bad of ['AB'.repeat(32), 'ab'.repeat(31), 'zz'.repeat(32), `${hex}0`]) {
+      expect(() => parseArgs([...importing, '--expected-fingerprint', bad])).toThrow(
+        /64 lowercase hex/u,
+      );
+      expect(() => parseArgs([...importing, '--expected-panel-map-fingerprint', bad])).toThrow(
+        /64 lowercase hex/u,
+      );
+    }
+    // Only where it binds something: an import or a resume.
+    expect(() => parseArgs([...BASE, '--expected-fingerprint', hex])).toThrow(
+      /import and resume only/u,
+    );
+  });
+
   it('--abort-running applies to resume only', () => {
     expect(() => parseArgs([...BASE, '--abort-running'])).toThrow(UsageError);
     const resume = [...BASE];

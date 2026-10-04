@@ -85,6 +85,7 @@ export const USAGE = [
   '                     [--evidence-class synthetic|staging|production]',
   '                     [--format md|json] [--out DIR] [--inventory-page-size N]',
   '                     [--abort-running] [--source-password-env NAME]',
+  '                     [--expected-fingerprint HEX] [--expected-panel-map-fingerprint HEX]',
   `                     [${ALLOW_PRODUCTION_FLAG}]`,
   '',
   '  MODE     audit | dry-run | import | resume | reconcile | report  (or --mode MODE)',
@@ -97,6 +98,11 @@ export const USAGE = [
   '           DBNAME                   the database DATABASE_URL names, typed out to confirm it',
   '',
   '  Review queue (terminal only): legacy-import review counts|list|resolve|reopen …',
+  '',
+  '  --expected-fingerprint HEX          import/resume: the source fingerprint the owner',
+  '                                      approved (from audit); anything else is refused, exit 65.',
+  '                                      REQUIRED against a production-like target.',
+  '  --expected-panel-map-fingerprint HEX  import/resume: the same for the panel mapping file.',
   '',
   '  Nothing defaults. A production-like target also needs',
   `  ${ALLOW_PRODUCTION_FLAG} AND ${TARGET_ACK_ENV}=<ack printed by the refusal>.`,
@@ -117,10 +123,23 @@ export interface Args {
   readonly format: 'md' | 'json';
   /** Required for import, resume and report; checked against the source's marker. */
   readonly evidenceClass: EvidenceClass | null;
+  /**
+   * import/resume: the source fingerprint the owner approved. The snapshot must equal it or
+   * nothing is written (exit 65). Required against a production-like target.
+   */
+  readonly expectedFingerprint: string | null;
+  /** import/resume: the same, for the panel mapping file's fingerprint. Optional. */
+  readonly expectedPanelMapFingerprint: string | null;
 }
+
+export const EXPECTED_FINGERPRINT_FLAG = '--expected-fingerprint';
+export const EXPECTED_PANEL_MAP_FINGERPRINT_FLAG = '--expected-panel-map-fingerprint';
+const SHA256_HEX = /^[0-9a-f]{64}$/u;
 
 const VALUE_FLAGS = new Set([
   '--mode',
+  '--expected-fingerprint',
+  '--expected-panel-map-fingerprint',
   '--tenant',
   '--source',
   '--source-password-env',
@@ -227,9 +246,26 @@ export function parseArgs(argv: readonly string[]): Args {
   ) {
     throw new UsageError('--inventory-page-size must be between 1 and 200.');
   }
+  const expected = (flag: string): string | null => {
+    const value = values.get(flag) ?? null;
+    if (value === null) return null;
+    if (mode !== 'import' && mode !== 'resume') {
+      throw new UsageError(`${flag} applies to import and resume only.`);
+    }
+    if (!SHA256_HEX.test(value)) {
+      throw new UsageError(
+        `${flag} is a SHA-256 as 64 lowercase hex characters, as audit prints it.`,
+      );
+    }
+    return value;
+  };
+  const expectedFingerprint = expected(EXPECTED_FINGERPRINT_FLAG);
+  const expectedPanelMapFingerprint = expected(EXPECTED_PANEL_MAP_FINGERPRINT_FLAG);
   return {
     mode: mode as Mode,
     tenant,
+    expectedFingerprint,
+    expectedPanelMapFingerprint,
     source,
     sourcePasswordEnv,
     target,
@@ -356,6 +392,25 @@ export async function runMode(
   const scope: TenantContext = { tenantId: context.tenantId as never, botInstanceId: null };
   const actor = systemJobActor(`legacy-import:${args.mode}`, actorCorrelation as CorrelationId);
   const mapping = parsePanelMapping(mappingText, context.tenantId);
+  const writes = args.mode === 'import' || args.mode === 'resume';
+  // The owner's approval is bound to ONE source: against a production-like target an
+  // import or resume without it is refused before the source is even opened.
+  if (writes && context.productionLikeTarget && args.expectedFingerprint === null) {
+    throw new UsageError(
+      `${EXPECTED_FINGERPRINT_FLAG} is required for ${args.mode} against a production-like ` +
+        'target: pass the source fingerprint the owner approved (audit prints it).',
+    );
+  }
+  if (
+    args.expectedPanelMapFingerprint !== null &&
+    args.expectedPanelMapFingerprint !== mapping.fingerprint
+  ) {
+    throw new PanelMappingRefused([
+      `the panel mapping fingerprint is ${mapping.fingerprint}, but ` +
+        `${EXPECTED_PANEL_MAP_FINGERPRINT_FLAG} is ${args.expectedPanelMapFingerprint}: this is ` +
+        'not the mapping file that was approved. Nothing was written.',
+    ]);
+  }
 
   const session = await connector.open();
   let evidence: LegacyEvidence | null = null;
@@ -376,6 +431,14 @@ export async function runMode(
     productionLikeTarget: context.productionLikeTarget,
   });
   if (!label.ok) throw new UsageError(label.message);
+  // Compared with the snapshot that is about to be imported, before any write.
+  if (args.expectedFingerprint !== null && args.expectedFingerprint !== snapshot.fingerprint) {
+    throw new LegacySourceRefused(
+      'SOURCE_FINGERPRINT_MISMATCH',
+      `the source fingerprint is ${snapshot.fingerprint}, but ${EXPECTED_FINGERPRINT_FLAG} is ` +
+        `${args.expectedFingerprint}: this is not the source that was approved. Nothing was written.`,
+    );
+  }
   const input = { scope, actor, snapshot, mapping };
   switch (args.mode) {
     case 'audit':
@@ -447,7 +510,7 @@ export async function exitAfterDrain(code: number): Promise<never> {
 }
 
 /** The exit code for an error that escaped `main`, after printing what may be printed. */
-function exitCodeForError(error: unknown): number {
+export function exitCodeForError(error: unknown): number {
   if (error instanceof UsageError || error instanceof ReviewUsageError) {
     console.error(error.message);
     return 64;

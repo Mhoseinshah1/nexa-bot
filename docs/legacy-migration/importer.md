@@ -17,30 +17,40 @@ Code: `apps/api/src/legacy-import.cli.ts` and
 pnpm legacy-import MODE --tenant TENANT --source SOURCE --target TARGET --panel-map FILE \
   [--format md|json] [--out DIR] [--inventory-page-size N] [--abort-running] \
   [--source-password-env NAME] [--allow-production-target] \
-  [--evidence-class synthetic|staging|production]   # required for import, resume, report
+  [--evidence-class synthetic|staging|production] \
+  [--expected-fingerprint HEX] [--expected-panel-map-fingerprint HEX]
+# --evidence-class: required for import, resume, report
+# --expected-*-fingerprint: import and resume; --expected-fingerprint is required on a production-like target
 # from source: pnpm legacy-import:dev …   (MODE may also be given as --mode MODE)
 ```
 
-| argument                | meaning                                                                                                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MODE`                  | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report`. Required.                                                                                         |
-| `--tenant`              | tenant uuid or slug. Required; resolved in the target, refused when it matches nothing.                                                                          |
-| `--source`              | `env:NAME` (a `mysql://` DSN in that variable), `mysql://USER@HOST:PORT/DB[?socket=…]` (no password), or `fixture:PATH` (a SYNTHETIC dataset). Required.         |
-| `--source-password-env` | the variable holding the password for a literal `mysql://` source.                                                                                               |
-| `--target`              | `env:NAME`, `postgres://USER@HOST:PORT/DB` (no password; `PGPASSWORD` honoured), or a bare database NAME that must equal the one `DATABASE_URL` names. Required. |
-| `--panel-map`           | the explicit panel mapping file (§4). Required.                                                                                                                  |
-| `--format`              | `md` (default) or `json`. `report --format json` prints exactly the Item 16 document (§7) on stdout.                                                             |
-| `--out`                 | also write `<mode>-<time>.{json,md}` there (mode 0600).                                                                                                          |
-| `--abort-running`       | with `resume`: finish the tenant's RUNNING run as ABORTED instead (the exit from a stuck run).                                                                   |
+| argument                           | meaning                                                                                                                                                          |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MODE`                             | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report`. Required.                                                                                         |
+| `--tenant`                         | tenant uuid or slug. Required; resolved in the target, refused when it matches nothing.                                                                          |
+| `--source`                         | `env:NAME` (a `mysql://` DSN in that variable), `mysql://USER@HOST:PORT/DB[?socket=…]` (no password), or `fixture:PATH` (a SYNTHETIC dataset). Required.         |
+| `--source-password-env`            | the variable holding the password for a literal `mysql://` source.                                                                                               |
+| `--target`                         | `env:NAME`, `postgres://USER@HOST:PORT/DB` (no password; `PGPASSWORD` honoured), or a bare database NAME that must equal the one `DATABASE_URL` names. Required. |
+| `--panel-map`                      | the explicit panel mapping file (§4). Required.                                                                                                                  |
+| `--format`                         | `md` (default) or `json`. `report --format json` prints exactly the Item 16 document (§7) on stdout.                                                             |
+| `--out`                            | also write `<mode>-<time>.{json,md}` there (mode 0600).                                                                                                          |
+| `--abort-running`                  | with `resume`: finish the tenant's RUNNING run as ABORTED instead (the exit from a stuck run).                                                                   |
+| `--expected-fingerprint`           | `import`/`resume`: the source fingerprint the owner approved (64 lowercase hex, as `audit` prints it). **Required against a production-like target** (§2.1).     |
+| `--expected-panel-map-fingerprint` | `import`/`resume`: the same, for the panel mapping file's fingerprint (as `audit` prints it). Optional.                                                          |
 
 Nothing defaults. **No password is accepted on the command line** — argv is world-readable
 in `/proc` and lands in shell history; a DSN with a password is refused, and so is any
-`--…password` flag. Exit codes: 0 done; 3 done but a person must decide (audit BLOCKED,
-reconcile DISCREPANCY, import with adoption pending — only an importer built without P6 —,
-report with a failed equation); 4 an
+`--…password` flag — in the `review` subcommand too (`legacy-import-argv.ts`, one rule).
+Exit codes: 0 done; 3 done but a person must decide (audit BLOCKED, reconcile DISCREPANCY,
+import/resume `COMPLETED_WITH_FAILURES` — anything unapplied, failed or in conflict, §6 —,
+import with adoption pending — only an importer built without P6 —, report with a failed
+equation); 4 an
 import interrupted (the run stays RUNNING: use `resume`); 64 usage/guard refusal; 65 the
 mapping or the source refused; 1 anything else (printed as a code, never a driver message
-that could quote a row).
+that could quote a row). The process exits in ONE place, after stdout and stderr have
+drained (`exitAfterDrain`): `main` returns its code, so the container is always shut down,
+and a large report piped to a slow reader arrives whole (tested; a bare `process.exit()`
+cut it at 64 KiB).
 
 ## 2. The hard production guard
 
@@ -72,6 +82,22 @@ label again, so no caller but the CLI can bypass it. The marker also enters the 
 (only when present), so a synthetic copy never fingerprints as the real rows.
 
 `--help` / `-h` prints the usage on stdout and exits 0; a usage error exits 64 on stderr.
+
+### 2.1 The approved source (`--expected-fingerprint`)
+
+The owner approves ONE source: the fingerprint `audit` prints (`source.fingerprint`, and
+`panelMapping.fingerprint` for the mapping). `import` and `resume` take it back as
+`--expected-fingerprint HEX` (and optionally `--expected-panel-map-fingerprint HEX`), and
+compare it with the snapshot actually read — in the same READ ONLY session the import uses —
+before any write. A mismatch is refused with **exit 65** and a message naming both values,
+and nothing is written (tested: zero runs, map rows, customers, wallet entries or shapes;
+mutation-checked). The mapping comparison happens before the source is even opened.
+
+Against a **production-like target** the flag is **required**: an import without it is a
+usage error (64) before the source is opened, so the owner's approval is enforced
+technically, not by the runbook alone. On staging and synthetic runs it is optional but
+**strongly encouraged**: pass the fingerprint from the audit you reviewed, so a source
+that changed between audit and import is refused rather than imported.
 
 ## 3. The source (read-only) and the fingerprint
 
@@ -125,7 +151,9 @@ control characters; a code is in at most one list; every mapped panel is a produ
 panel. Before any run every named panel must exist **in this tenant**, be `rickpanel`,
 `ACTIVE` and not archived. The fingerprint is over the canonical (sorted) content, recorded
 in `legacy_import_run_inputs`; a resume under a different mapping is refused. A `code_panel`
-in none of the lists is `PANEL_UNMAPPED` and listed with its count in the report. Missing
+in none of the lists is `PANEL_UNMAPPED` and listed with its count in the report — as a
+key only if a mapping file could name it (the file's own code rule); any other source value
+is counted under `(invalid code_panel)` and never echoed. Missing
 `code_panel` goes through P5's matcher (exact lowercase username, complete inventories
 only, case collision → review). Example: `tests/fixtures/legacy/synthetic-support.ts`.
 
@@ -145,12 +173,20 @@ Openings: `MigrationOpeningBalanceService.post` — positive, zero (no entry), n
 legacy product of each distinct shape among live real invoices that are productless, name
 a product the legacy table lacks, or are custom — `ensureShapeForImport` then
 `resolveTariffMatchForImport` (MATCH only; stating a tariff is an operator's decision).
+Every run resolves every shape again (the key is per run), so a public tariff that changed
+since the last run refreshes the hidden product's price. The #177 rules are the shape
+service's: purchasable tariffs only, and no tariff or several leave a RESOLVED shape as it
+is (reported in `products.tariff`, never withdrawn here). A tariff an operator STATED is
+never overwritten by a match (`OPERATOR_STATED_KEPT`).
 
 Service candidates (live invoices) fall in exactly one category, in this order:
 `INVOICE_KEY_INVALID`, `TEST_INVOICE_SKIPPED`, `INVALID_SOURCE_ROW`, `ORPHAN`,
 `CUSTOMER_NOT_IMPORTED`, the matcher's outcomes (`TEST_PANEL_SKIPPED`, `INVALID_USERNAME`,
 `INVENTORY_INCOMPLETE`, `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`, `PANEL_UNMAPPED`,
 `USERNAME_CASE_COLLISION`), `UNSUPPORTED_SHAPE`, `PRODUCT_UNRESOLVED`, `ADOPTION_ELIGIBLE`.
+`is_custom` is read before the product, by the shape key's own parser (`legacyCustomFlag`):
+a value outside 0/1 is `UNSUPPORTED_SHAPE / IS_CUSTOM_INVALID` on every path, never a named
+product decided on a flag nobody read.
 Every decided category is recorded on the invoice's map row, as the Manual Review Queue
 (Item 9) expects it: the matcher's outcomes through the queue's own translation,
 `decisionForLegacyMatch` (test panel → `SKIPPED/TEST_PANEL`, invalid username →
@@ -228,15 +264,27 @@ activity read inside the transaction and an audit row.
   run metadata (+ inputs: schema hash, mapping fingerprint, NEXA-native wallet total) →
   customers (customer + map row in one transaction per batch, checkpointed) → openings →
   trials → products → invoice map rows → P6 adoption → finish. Every phase is idempotent
-  by keys derived from the legacy identity, so…
+  by keys derived from the legacy identity, so… The verdict is `COMPLETED` only when
+  nothing was left undone: the report's `attention` section counts customer source changes
+  and entity mismatches, opening and trial conflicts, refused invoice map rows, FAILED
+  adoptions and adopted services whose source changed, and any of them makes the verdict
+  `COMPLETED_WITH_FAILURES` (exit 3). A row a person closed, or recorded for review, is a
+  decision, not a failure.
 - **resume** — continues the RUNNING run (same id: one APPLY run per cycle), requires the
   same fingerprint and mapping, and re-walks every phase; nothing is duplicated (tested:
   a crash after the openings phase, then resume: 6 openings, not 12). An error inside a
   phase leaves the run RUNNING, as a killed process does — one recovery for both.
-- **reconcile** — the latest APPLY run against a fresh snapshot of the SAME fingerprint:
+- **reconcile** — the latest APPLY run, which must be **COMPLETED** (RUNNING: resume or
+  abort it first; ABORTED: there is no finished import), against a fresh snapshot of the
+  SAME source fingerprint and the SAME mapping fingerprint (both refused otherwise):
   wallet equation, openings sum/count/no duplicate, customers present, trial decisions,
   category closure, provider writes = 0, inventories complete. `RECONCILED`/`DISCREPANCY`.
-- **report** — Item 16 (§7).
+  Wallet movement is the non-opening total now minus the recorded pre-import non-opening
+  total — one predicate, one boundary, so an entry committed between that measurement and
+  the run start is movement, never in neither figure.
+- **report** — Item 16 (§7), for the latest APPLY run, refused unless the snapshot and the
+  mapping are the ones that run was made from (it may describe a RUNNING or ABORTED run,
+  and its verdict says which).
 
 ## 7. The report
 
@@ -249,7 +297,9 @@ server version, `Balance` type), customers, wallet, services, products, trials,
 manual review by closed reason (every `MANUAL_REVIEW` map row, user and invoice, plus
 `INVOICE_KEY_INVALID` and `ADOPTION_PENDING_P6`), and the C1/C3/W1/W4/W5/S3/P3 equations.
 `wallet.preImportTotalMinor` is the NEXA-native total (every entry but the openings), so
-`pre + imported = expected = actual` holds even with activity after the import.
+`pre + imported = expected = actual` holds even with activity after the import. Every
+key, value, column header and heading in the markdown is made inert (`markdownText`): a
+source value cannot add a line, a row, a heading, a link, code or HTML.
 
 ## 8. SQL evidence runner (Item 1)
 

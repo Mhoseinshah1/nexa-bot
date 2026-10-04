@@ -11,7 +11,12 @@ import {
   type ProductCategoryId,
   type ProductId,
 } from '@nexa/contracts';
-import { exitCodeFor, parseArgs, runMode } from '../../apps/api/src/legacy-import.cli';
+import {
+  exitCodeFor,
+  exitCodeForError,
+  parseArgs,
+  runMode,
+} from '../../apps/api/src/legacy-import.cli';
 import { parseReviewArgs, runReview } from '../../apps/api/src/legacy-import-review';
 import { DrizzleLegacyImportRepository } from '../../apps/api/src/modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -20,9 +25,11 @@ import {
   type LegacyImporterService,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/legacy-importer.service';
 import {
+  PanelMappingRefused,
   parsePanelMapping,
   type PanelMapping,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
+import { LegacySourceRefused } from '../../apps/api/src/modules/platform/legacy-importer/application/source-port';
 import type {
   LegacyAdoptionCandidate,
   LegacyAdoptionOutcome,
@@ -496,6 +503,93 @@ describe('Migration P7: the legacy importer', () => {
       status: 'COMPLETED',
     });
     expect((await importer().reconcile(input('reconcile', snap))).verdict).toBe('RECONCILED');
+  });
+
+  // Runbooks review, item 11: the owner's approval is bound to the exact source and mapping.
+  it('--expected-fingerprint binds import and resume to the approved source, refusing a mismatch with zero writes', async () => {
+    const connector = new FixtureLegacySourceConnector(buildSyntheticLegacyDataset() as never);
+    const base = [
+      '--tenant',
+      'acme',
+      '--source',
+      'fixture:tests/fixtures/legacy/synthetic-legacy.json',
+      '--target',
+      'nexa_p4_import',
+      '--panel-map',
+      'unused.json',
+      '--evidence-class',
+      'synthetic',
+    ];
+    const tenantId = await importer().resolveTenant('acme');
+    const context = { tenantId: tenantId as string, productionLikeTarget: false };
+    const snap = await snapshot();
+    const wrong = 'f'.repeat(64);
+    const writes = () =>
+      Promise.all([
+        count('legacy_import_runs'),
+        count('legacy_import_map'),
+        count('customers'),
+        count('wallet_entries'),
+        count('legacy_product_shapes'),
+      ]);
+    const before = await writes();
+
+    for (const mode of ['import', 'resume']) {
+      const source = runMode(
+        importer(),
+        parseArgs([mode, ...base, '--expected-fingerprint', wrong]),
+        connector,
+        mappingText,
+        'corr-fp',
+        context,
+      );
+      await expect(source).rejects.toBeInstanceOf(LegacySourceRefused);
+      // The message names both values, so the operator sees which source they approved.
+      await expect(source).rejects.toThrow(wrong);
+      await expect(source).rejects.toThrow(snap.fingerprint);
+      expect(exitCodeForError(await source.catch((e: unknown) => e))).toBe(65);
+
+      const map = runMode(
+        importer(),
+        parseArgs([mode, ...base, '--expected-panel-map-fingerprint', wrong]),
+        connector,
+        mappingText,
+        'corr-fp',
+        context,
+      );
+      await expect(map).rejects.toBeInstanceOf(PanelMappingRefused);
+      await expect(map).rejects.toThrow(mapping.fingerprint);
+      expect(exitCodeForError(await map.catch((e: unknown) => e))).toBe(65);
+    }
+    // Refused before any write.
+    expect(await writes()).toEqual(before);
+
+    // A production-like target requires it: no approval bound to a source, no import.
+    await expect(
+      runMode(importer(), parseArgs(['import', ...base]), connector, mappingText, 'corr-fp', {
+        ...context,
+        productionLikeTarget: true,
+      }),
+    ).rejects.toThrow(/--expected-fingerprint is required/u);
+    expect(await writes()).toEqual(before);
+
+    // The approved values import.
+    const ok = await runMode(
+      importer(),
+      parseArgs([
+        'import',
+        ...base,
+        '--expected-fingerprint',
+        snap.fingerprint,
+        '--expected-panel-map-fingerprint',
+        mapping.fingerprint,
+      ]),
+      connector,
+      mappingText,
+      'corr-fp',
+      context,
+    );
+    expect(ok?.verdict).toMatch(/^COMPLETED/u);
   });
 
   it('the CLI glue: one snapshot per mode, the tenant by slug, report JSON in the schema shape', async () => {

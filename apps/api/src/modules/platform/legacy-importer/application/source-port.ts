@@ -149,7 +149,9 @@ export class LegacySourceRefused extends Error {
       | 'SOURCE_NOT_READ_ONLY'
       | 'SOURCE_SCHEMA_MISSING_TABLE'
       | 'SOURCE_SCHEMA_MISSING_COLUMN'
-      | 'SOURCE_UNREADABLE',
+      | 'SOURCE_UNREADABLE'
+      /** The snapshot is not the source the operator approved (`--expected-fingerprint`). */
+      | 'SOURCE_FINGERPRINT_MISMATCH',
     readonly detail: string,
   ) {
     super(`${code}: ${detail}`);
