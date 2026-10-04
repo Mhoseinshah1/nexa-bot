@@ -144,6 +144,71 @@ describe('customer search applies itself (issue 13)', () => {
     expect(searches(api.calls.slice(before))).toEqual(['5551234567']);
   });
 
+  it('cancels the pending apply on Enter, so a Clear right after it stays cleared', async () => {
+    /*
+     * Enter applies the term; the debounce scheduled by the same typing must die with it.
+     * A timer that outlived Enter would fire after the operator pressed Clear and put the
+     * search they had just removed back into the URL.
+     */
+    stubApi(list([customer()]));
+    renderPage(<LiveUsers />);
+    await screen.findByText('5551234567');
+
+    type('5551234567');
+    fireEvent.submit(box());
+    await waitFor(() =>
+      expect(new URLSearchParams(window.location.search).get('q')).toBe('5551234567'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.users_search_clear') }));
+    await waitFor(() => expect(window.location.search).toBe(''));
+
+    await advance(PAST);
+    expect(window.location.search, 'a timer that outlived Enter re-applied the search').toBe('');
+  });
+
+  it('does not carry a half-typed term into a list the operator navigated to', async () => {
+    /*
+     * The sidebar «کاربران» link from a filtered list, pressed inside the debounce: the
+     * link resets the list, and the term typed under the old URL must not be applied to the
+     * new one 400 ms later. The text stays, unapplied; the next keystroke applies it here.
+     */
+    navigate('/users?status=BLOCKED', { replace: true, force: true });
+    const api = stubApi(list([customer()]));
+    renderPage(<LiveUsers />);
+    await screen.findByText('5551234567');
+
+    type('ali');
+    await advance(SHORT);
+    act(() => navigate('/users'));
+    const before = api.calls.length;
+    await advance(PAST);
+    await advance(PAST);
+    expect(window.location.search, 'the half-typed term defeated the reset link').toBe('');
+    expect(searches(api.calls.slice(before)).every((q) => q === null)).toBe(true);
+    expect(box().value).toBe('ali');
+
+    type('alir');
+    await advance(PAST);
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('q')).toBe('alir'));
+  });
+
+  it('waits for an input method to finish composing before it searches', async () => {
+    const api = stubApi(list([customer()]));
+    renderPage(<LiveUsers />);
+    await screen.findByText('5551234567');
+    const before = api.calls.length;
+
+    fireEvent.compositionStart(box());
+    type('سل');
+    await advance(PAST);
+    expect(searches(api.calls.slice(before)), 'a half-composed word was searched').toEqual([]);
+
+    type('سلام');
+    fireEvent.compositionEnd(box());
+    await advance(PAST);
+    await waitFor(() => expect(searches(api.calls.slice(before))).toEqual(['سلام']));
+  });
+
   it('never draws an older, slower answer over a newer one', async () => {
     /*
      * `ali` is asked first and answered LAST. Its response must not replace the rows the
@@ -230,5 +295,8 @@ describe('the activity columns (issue 12)', () => {
     // "Contact" read as a call or a support request; it is gone from the list.
     expect(headers.join(' ')).not.toContain('تماس');
     expect(screen.getByText(t('web.users_activity_note'))).toBeVisible();
+    // An imported customer: BOTH columns are the import time until they first use the bot.
+    expect(t('web.users_activity_note')).toContain('«اولین فعالیت» و، تا نخستین پیام او');
+    expect(t('web.users_activity_note')).toContain('«آخرین فعالیت» هم زمان انتقال است');
   });
 });

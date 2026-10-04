@@ -316,8 +316,8 @@ export function UsersPage({
           What the two activity columns ARE (issue 12). `first_seen_at` / `last_seen_at` are
           written by `CustomerService.resolveFromUpdate` on every message and button press a
           customer sends a customer bot — not only `/start`, and never by an operator's action —
-          and otherwise only by the legacy importer, which stamps an imported row with the
-          import's time. "Contact" read as a phone call or a support request; this says which
+          and otherwise only by the legacy importer, which stamps BOTH columns of an imported
+          row with the import's time (the last one moves at their first bot activity). "Contact" read as a phone call or a support request; this says which
           events count.
         */}
         <p className="muted small ca-list-note" hidden={toolbarHidden}>

@@ -73,7 +73,27 @@ export function ListSearchBox({
   autoApply?: boolean;
 }) {
   const applied = appliedListSearch(route);
-  const [draft, setDraft] = useState<{ applied: string; text: string }>({ applied, text: applied });
+  /** The whole URL the box sits under, so the draft knows which one it was typed against. */
+  const routeKey = `${route.path}?${route.query.toString()}`;
+  /*
+   * `at` is the route the draft was last edited under. The automatic apply runs only while
+   * the route is still that one: a navigation the box did not make — the sidebar «کاربران»
+   * link, a status chip — cancels a pending apply instead of carrying the half-typed text
+   * into the new list a moment later (which would defeat the link meant to reset it). The
+   * text stays in the box, unapplied, exactly as before auto-search existed; the next
+   * keystroke or Enter applies it under the new route.
+   */
+  const [draft, setDraft] = useState<{ applied: string; text: string; at: string }>({
+    applied,
+    text: applied,
+    at: routeKey,
+  });
+  /*
+   * An input method (Persian, among others) fires `change` with a half-composed word; a
+   * pause mid-composition must not search for it. Nothing is scheduled while composing, and
+   * the end of the composition schedules the finished word.
+   */
+  const [composing, setComposing] = useState(false);
   const text = draft.applied === applied ? draft.text : applied;
   const term = classifyListSearch(text);
   /** What applying the draft would put in the URL: trimmed, and `''` for "no search". */
@@ -98,25 +118,27 @@ export function ListSearchBox({
    * as it always has: the operator has finished typing.)
    */
   const commit = (value: string) => {
-    setDraft((current) => ({ applied: value, text: current.text }));
+    setDraft((current) => ({ ...current, applied: value }));
     navigate(value === '' ? null : value);
   };
 
   /*
-   * The debounce: every change of the draft (or of the route it would be applied to — a
-   * status chip pressed mid-pause) restarts the wait, and nothing is scheduled while the
-   * draft already reads as the applied search. Emptying the box applies "no search", which
-   * sends no `q` at all.
+   * The debounce: every change of the draft restarts the wait; nothing is scheduled while
+   * the draft already reads as the applied search, while composing, or once the route has
+   * moved away from the one the draft was typed under (see `at`). Any of those changing
+   * clears the pending timer — which is also why Enter, by changing `applied`, cancels it.
+   * Emptying the box applies "no search", which sends no `q` at all.
    */
+  const typedHere = draft.at === routeKey;
   useEffect(() => {
-    if (!autoApply || hidden || wanted === applied) return undefined;
+    if (!autoApply || hidden || composing || !typedHere || wanted === applied) return undefined;
     const timer = setTimeout(() => commit(wanted), LIST_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-    // `commit` is rebuilt every render from `route`, which is why `route` is in the list.
-  }, [autoApply, hidden, wanted, applied, route]);
+    // `commit` closes over this render's `route`, which `routeKey` stands for in the list.
+  }, [autoApply, hidden, composing, typedHere, wanted, applied, routeKey]);
 
   const clear = () => {
-    setDraft({ applied, text: '' });
+    setDraft({ applied, text: '', at: routeKey });
     navigate(null);
   };
 
@@ -131,7 +153,9 @@ export function ListSearchBox({
           type="search"
           maxLength={LIST_SEARCH_MAX_LENGTH}
           value={text}
-          onChange={(event) => setDraft({ applied, text: event.target.value })}
+          onChange={(event) => setDraft({ applied, text: event.target.value, at: routeKey })}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
         />
       </Field>
       {term !== null && (

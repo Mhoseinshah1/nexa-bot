@@ -81,12 +81,19 @@ still hands a customer over by id. Pinned by
 - **No stale answer.** The applied text is in the URL and in the page's query key
   (`['customers', signature, cursor]`), so an older, slower response lands in its own cache
   entry and is never drawn under a newer search.
+- **Only under the route it was typed in.** A navigation the box did not make — the sidebar
+  «کاربران» link, a status chip — cancels a pending apply; the text stays in the box
+  unapplied (as before auto-search), and the next keystroke or Enter applies it. Without this
+  the sidebar link, meant to reset the list, was undone 400 ms later by the half-typed term.
+- **Not mid-composition.** Nothing is scheduled between `compositionstart` and
+  `compositionend` (an input method's half-composed word); the end schedules the finished one.
 - **Permissions unchanged.** Without `users.search` there is no box to apply; while the list
   is refused (`users.view`) the box is hidden and applies nothing.
 - `/orders`, `/payments` and `/services` keep the explicit apply; `autoApply` is opt-in per page.
 
 Pinned by `tests/web/customer-search.test.tsx` (burst, paste, Telegram id, `@username`, empty,
-Enter, a slow older response, both permissions).
+Enter and the timer it cancels, a slow older response, a navigation mid-pause, an input-method
+composition, both permissions).
 
 ### First and last activity (UX batch 02, issue 12)
 
@@ -109,16 +116,17 @@ usage writes either column (a service's own `last_seen_at` is a different column
 
 So they ARE the customer's activity in the bot, and are now labelled «اولین فعالیت» /
 «آخرین فعالیت», with a note under the list naming what counts. One precise mismatch is
-stated rather than hidden: for a customer brought over by the legacy importer, «اولین فعالیت»
-is the import time — the previous system's first contact is not recorded anywhere, and
-inventing one would be a fabricated fact. No new tracking was added. The Telegram admin
+stated rather than hidden: for a customer brought over by the legacy importer, BOTH columns
+are the import time — «اولین فعالیت» for good, «آخرین فعالیت» until their first message or
+button press in this installation's bot. The previous system's activity is not recorded
+anywhere, and inventing it would be a fabricated fact. No new tracking was added. The Telegram admin
 bot's customer detail (`bot.admin.customer_detail`) shows the same two columns, so its DEFAULT
 catalogue text now reads «اولین فعالیت» / «آخرین فعالیت» too, as do its placeholder labels
 in the template editor; a tenant's own override of that template is untouched
 (`tests/integration/telegram-admin-customers.test.ts` pins the default).
 
 Every rule of both sections is mutation-checked by `scripts/mutate-customer-search.py`
-(CS-01…CS-08; CS-08 needs `TEST_DATABASE_URL`).
+(CS-01…CS-12; CS-08 needs `TEST_DATABASE_URL`).
 
 Pinned by `tests/integration/telegram-customer-turn.test.ts` ("moves last_seen_at on an
 ordinary message and on a button press, never first_seen_at") and the label case in

@@ -1,4 +1,5 @@
 """Customer Search mutation driver (UX batch 02, issues 12 and 13; docs/web-admin-search.md).
+CS-01..CS-12; CS-08 is the one integration mutation.
 
 Reverts one rule at a time, runs the named test, and restores the file with `git checkout`.
 Refuses a dirty apps/ or packages/ tree, because the restore would discard it. CS-08 runs an
@@ -22,11 +23,15 @@ T_TURN=('integration','tests/integration/telegram-customer-turn.test.ts')
 M=[
  ('CS-01',[(US,"            autoApply\n","            autoApply={false}\n")],T_WEB,'sends ONE request for a burst'),
  ('CS-02',[(LS,"setTimeout(() => commit(wanted), LIST_SEARCH_DEBOUNCE_MS)","setTimeout(() => commit(wanted), 0)")],T_WEB,'sends ONE request for a burst'),
- ('CS-03',[(LS,"if (!autoApply || hidden || wanted === applied)","if (!autoApply || wanted === applied)")],T_WEB,'applies nothing by itself while the list is refused'),
+ ('CS-03',[(LS,"if (!autoApply || hidden || composing || !typedHere || wanted === applied)","if (!autoApply || composing || !typedHere || wanted === applied)")],T_WEB,'applies nothing by itself while the list is refused'),
  ('CS-04',[(LS,"const wanted = term === null ? '' : text.trim();","const wanted = term === null ? '' : text;")],T_WEB,'treats a paste exactly as typing'),
  ('CS-05',[(US,"queryKey: ['customers', searchSignature, cursor ?? null],","queryKey: ['customers', cursor ?? null],")],T_WEB,'never draws an older, slower answer'),
- ('CS-06',[(LS,"    setDraft((current) => ({ applied: value, text: current.text }));\n","")],T_WEB,'sends ONE request for a burst'),
+ ('CS-06',[(LS,"    setDraft((current) => ({ ...current, applied: value }));\n","")],T_WEB,'sends ONE request for a burst'),
  ('CS-07',[(FA,"'web.user_first_seen': 'اولین فعالیت',","'web.user_first_seen': 'نخستین تماس',")],T_WEB,'names first and last ACTIVITY'),
+ ('CS-09',[(LS,"if (!autoApply || hidden || composing || !typedHere || wanted === applied)","if (!autoApply || hidden || composing || wanted === applied)")],T_WEB,'does not carry a half-typed term'),
+ ('CS-10',[(LS,"if (!autoApply || hidden || composing || !typedHere || wanted === applied)","if (!autoApply || hidden || !typedHere || wanted === applied)")],T_WEB,'waits for an input method'),
+ ('CS-11',[(LS,"    return () => clearTimeout(timer);\n","")],T_WEB,'cancels the pending apply on Enter'),
+ ('CS-12',[(FA,"«اولین فعالیت» و، تا نخستین پیام او در ربات، «آخرین فعالیت» هم زمان انتقال است","«اولین فعالیت» زمان انتقال است")],T_WEB,'names first and last ACTIVITY'),
  ('CS-08',[(REPO,"          lastSeenAt: sql`greatest(${customers.lastSeenAt}, excluded.last_seen_at)`,\n","")],T_TURN,'moves last_seen_at on an ordinary message'),
 ]
 
