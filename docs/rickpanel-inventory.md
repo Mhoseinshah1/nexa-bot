@@ -34,8 +34,13 @@ No caller-supplied method, path or body can make any of them a write.
 exchange), and on the wire (every request the fake panel received is a `GET` or the token
 exchange; zero creates, modifies, revokes).
 
-The inventory also never carries a subscription link, a subscription token or a generated
-proxy credential — it has no use for them (tested).
+An account never carries a subscription link, a subscription token or a generated proxy
+credential — discovery has no use for them (tested). One opt-in exists, for the legacy
+importer only: `listAll(…, { subscriptionLinks: true })` returns, BESIDE the accounts, a
+map of exact provider spelling → the link `subscriptionFrom` derives from the same list row
+(or null). `subscriptionFrom` lives in `rickpanel-protocol.ts`, shared with the adapter
+(which re-exports it), so the inventory derives a link exactly as `lookupUser` does without
+importing the adapter, and with no request of its own (tested against `lookupUser`).
 
 ## Pagination
 

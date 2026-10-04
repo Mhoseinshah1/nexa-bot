@@ -275,29 +275,44 @@ export class ServiceReminderService {
     scope: TenantContext,
     tx: TransactionScope,
   ): Promise<ServiceReminderThresholds> {
-    const [
-      expiryEnabled,
-      expiredNoticeEnabled,
-      expiryDayEnabled,
-      usageEnabled,
-      expiryEarlyDays,
-      expiryFirstDays,
-      expirySecondDays,
-      usageFirstPercent,
-      usageSecondPercent,
-      usageFinalPercent,
-    ] = await Promise.all([
-      this.deps.features.isEnabled(scope, 'service_expiry_reminders', tx),
-      this.deps.features.isEnabled(scope, 'service_expired_notice', tx),
-      this.deps.features.isEnabled(scope, 'service_expiry_day_reminder', tx),
-      this.deps.features.isEnabled(scope, 'service_usage_reminders', tx),
-      this.deps.settings.valueOf<number>(scope, 'reminders.expiry_early_days', tx),
-      this.deps.settings.valueOf<number>(scope, 'reminders.expiry_first_days', tx),
-      this.deps.settings.valueOf<number>(scope, 'reminders.expiry_second_days', tx),
-      this.deps.settings.valueOf<number>(scope, 'reminders.usage_first_percent', tx),
-      this.deps.settings.valueOf<number>(scope, 'reminders.usage_second_percent', tx),
-      this.deps.settings.valueOf<number>(scope, 'reminders.usage_final_percent', tx),
-    ]);
+    // One after another, never `Promise.all`: every read shares ONE transaction's client,
+    // and concurrent queries on one pg client are queued in an order nobody chose
+    // (deprecated in pg 8, an error in pg 9). The flags first, then the settings.
+    const { features, settings } = this.deps;
+    const expiryEnabled = await features.isEnabled(scope, 'service_expiry_reminders', tx);
+    const expiredNoticeEnabled = await features.isEnabled(scope, 'service_expired_notice', tx);
+    const expiryDayEnabled = await features.isEnabled(scope, 'service_expiry_day_reminder', tx);
+    const usageEnabled = await features.isEnabled(scope, 'service_usage_reminders', tx);
+    const expiryEarlyDays = await settings.valueOf<number>(
+      scope,
+      'reminders.expiry_early_days',
+      tx,
+    );
+    const expiryFirstDays = await settings.valueOf<number>(
+      scope,
+      'reminders.expiry_first_days',
+      tx,
+    );
+    const expirySecondDays = await settings.valueOf<number>(
+      scope,
+      'reminders.expiry_second_days',
+      tx,
+    );
+    const usageFirstPercent = await settings.valueOf<number>(
+      scope,
+      'reminders.usage_first_percent',
+      tx,
+    );
+    const usageSecondPercent = await settings.valueOf<number>(
+      scope,
+      'reminders.usage_second_percent',
+      tx,
+    );
+    const usageFinalPercent = await settings.valueOf<number>(
+      scope,
+      'reminders.usage_final_percent',
+      tx,
+    );
     return {
       expiryEnabled,
       expiredNoticeEnabled,

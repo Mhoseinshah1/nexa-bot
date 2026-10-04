@@ -175,6 +175,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        product_categories,
        -- Migration P4: the import map before the runs it names.
        legacy_import_map, legacy_import_runs,
+       -- Migration P7: the run inputs, before the runs they name.
+       legacy_import_run_inputs,
        customers
      RESTART IDENTITY CASCADE` as never,
   );

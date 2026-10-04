@@ -344,6 +344,58 @@ jobs:
           --reporter=./tests/support/ci-progress-reporter.ts
           --reporter=hanging-process
 
+  # Migration P7: the legacy importer's MySQL source on a real MySQL-family engine — the
+  # READ ONLY transaction and the write it refuses, the consistent snapshot, fingerprint
+  # parity with the synthetic fixture, and the Item 1 evidence queries
+  # (docs/legacy-migration/importer.md §Tests). Its own job rather than a fails-not-skips
+  # opt-in like the panel acceptance: those need a real third-party panel CI cannot have,
+  # while this needs only a database server, which a service container provides on every
+  # pull request. A rule about the source that only an operator's laptop checks is a rule
+  # that rots. The data is SYNTHETIC; the suite is not evidence about the archive.
+  legacy-mysql:
+    name: Legacy MySQL source
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      NEXA_LEGACY_MYSQL_ADMIN_DSN: mysql://root:root@127.0.0.1:3306/mysql
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # No `version:` input: the pnpm the root package.json pins (see `unit`).
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The tests import @nexa/contracts, which resolves to its built dist: take the
+      # build job's output like every other test job, never build again.
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+
+      - name: Legacy MySQL source tests
+        timeout-minutes: 10
+        run: pnpm test:legacy-mysql
+
   # The name the single unit-and-integration job used to have, kept as one
   # result: it is green only when the unit suite, the web suite and EVERY
   # integration shard succeeded. `always()` so it reports a failure rather than
@@ -351,7 +403,7 @@ jobs:
   test:
     name: Unit and integration tests
     if: always()
-    needs: [unit, web, integration]
+    needs: [unit, web, integration, legacy-mysql]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -360,10 +412,11 @@ jobs:
           UNIT: ${{ needs.unit.result }}
           WEB: ${{ needs.web.result }}
           INTEGRATION: ${{ needs.integration.result }}
+          LEGACY_MYSQL: ${{ needs.legacy-mysql.result }}
         run: |
           set -euo pipefail
-          printf 'unit: %s\nweb: %s\nintegration (every shard): %s\n' "$UNIT" "$WEB" "$INTEGRATION"
-          [ "$UNIT" = "success" ] && [ "$WEB" = "success" ] && [ "$INTEGRATION" = "success" ]
+          printf 'unit: %s\nweb: %s\nintegration (every shard): %s\nlegacy mysql: %s\n' "$UNIT" "$WEB" "$INTEGRATION" "$LEGACY_MYSQL"
+          [ "$UNIT" = "success" ] && [ "$WEB" = "success" ] && [ "$INTEGRATION" = "success" ] && [ "$LEGACY_MYSQL" = "success" ]
 
   # The deployment logic, against fakes. Split from the live smoke below so the
   # two run side by side: together they were a 20-minute serial job, the

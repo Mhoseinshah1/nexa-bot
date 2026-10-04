@@ -142,6 +142,26 @@ export default defineConfig({
         plugins: [tsExtensionResolver()],
         test: {
           ...shared,
+          /**
+           * Migration P7: the legacy MySQL source on a real MySQL-family engine
+           * (`docs/legacy-migration/importer.md` §Tests) — the read-only transaction, the
+           * refused write, the consistent snapshot, fingerprint parity with the fixture
+           * and the Item 1 evidence queries. Needs a disposable MariaDB/MySQL server, so
+           * it is its own project: CI's `legacy-mysql` job runs it beside a MariaDB
+           * service container, and without NEXA_LEGACY_MYSQL_ADMIN_DSN it FAILS rather
+           * than skips.
+           */
+          name: 'legacy-mysql',
+          include: ['tests/legacy-mysql/**/*.test.ts'],
+          fileParallelism: false,
+          testTimeout: 120_000,
+          hookTimeout: 120_000,
+        },
+      },
+      {
+        plugins: [tsExtensionResolver()],
+        test: {
+          ...shared,
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           setupFiles: ['tests/integration/setup.ts'],

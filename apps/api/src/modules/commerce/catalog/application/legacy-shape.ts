@@ -192,6 +192,16 @@ function scalarText(value: string | number | null): string | null {
   return value.trim();
 }
 
+/**
+ * The legacy `is_custom` flag, read the one way both the shape key and the importer read
+ * it: exactly 1 or 0 (as a number, a boolean or that one character), anything else null
+ * (`IS_CUSTOM_INVALID`). Exported so the importer cannot decide a named product on a
+ * flag this module would refuse.
+ */
+export function legacyCustomFlag(value: string | number | boolean | null): boolean | null {
+  return flag(value);
+}
+
 function flag(value: string | number | boolean | null): boolean | null {
   if (value === true || value === 1 || value === '1') return true;
   if (value === false || value === 0 || value === '0') return false;
