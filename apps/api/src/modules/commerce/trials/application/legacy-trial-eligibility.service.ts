@@ -7,6 +7,7 @@ import {
   type Clock,
   type IdempotencyStore,
   type OperationalEventRecorder,
+  type PermissionKey,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -31,6 +32,9 @@ import {
   type LegacyTrialRecord,
 } from './legacy-trial-eligibility.js';
 import { TRIAL_OVERRIDE_PERMISSION } from './trial-admin.service.js';
+
+/** The P7 importer's permission: what `SYSTEM_JOB` holds (`SYSTEM_JOB_PERMISSIONS`). */
+export const LEGACY_TRIAL_IMPORT_PERMISSION: PermissionKey = 'maintenance.run';
 
 /**
  * - `APPLIED` — decided now, the override (if any) written in the same transaction.
@@ -73,13 +77,48 @@ export interface LegacyTrialEligibilityServiceDeps {
  * decision is written once, beside it, and is what explains the override afterwards.
  *
  * Charged against `users.trial.edit`, the permission an operator's override write takes:
- * this writes the same row for the same reason. Deny by default — the P7 importer, on
- * hold, will act as an actor that holds it.
+ * this writes the same row for the same reason. Deny by default. The P7 importer, a
+ * `SYSTEM_JOB` CLI, calls `preserveForImport`, charged to `maintenance.run` instead.
  */
 export class LegacyTrialEligibilityService {
   constructor(private readonly deps: LegacyTrialEligibilityServiceDeps) {}
 
   async preserve(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly legacy: LegacyTrialFacts;
+    },
+  ): Promise<LegacyTrialResult> {
+    return this.preserveUnder(TRIAL_OVERRIDE_PERMISSION, scope, actor, input);
+  }
+
+  /**
+   * The same decision, charged to `maintenance.run` — the P7 importer's entry point
+   * (`docs/legacy-migration/importer.md` §Actors). The importer is a CLI acting as
+   * `SYSTEM_JOB`, which holds `SYSTEM_JOB_PERMISSIONS` (`maintenance.run`) and nothing
+   * else; widening that set, or acting as an administrator the CLI never authenticated,
+   * would each be worse than one named entry point. Like `RESOLVE_CUSTOMER_PERMISSION`,
+   * the permission is chosen by the METHOD, never by inspecting the actor's type; an
+   * operator who holds `maintenance.run` may call it too, and one who does not is denied
+   * and audited exactly as `preserve` denies.
+   */
+  async preserveForImport(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly legacy: LegacyTrialFacts;
+    },
+  ): Promise<LegacyTrialResult> {
+    return this.preserveUnder(LEGACY_TRIAL_IMPORT_PERMISSION, scope, actor, input);
+  }
+
+  private async preserveUnder(
+    permission: PermissionKey,
     scope: TenantContext,
     actor: ActorContext,
     input: {
@@ -94,7 +133,7 @@ export class LegacyTrialEligibilityService {
       entityType: 'Customer',
       entityId: customerId,
     };
-    await this.authorize(scope, actor, denial);
+    await this.authorize(scope, actor, permission, denial);
 
     const inputHash = legacyTrialInputHash(input.legacy);
     const requestHash = hashRequest({ customerId, inputHash });
@@ -114,7 +153,7 @@ export class LegacyTrialEligibilityService {
       this.mutationDeps(),
       scope,
       actor,
-      TRIAL_OVERRIDE_PERMISSION,
+      permission,
       denial,
       async (tx) => {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
@@ -222,19 +261,13 @@ export class LegacyTrialEligibilityService {
   private async authorize(
     scope: TenantContext,
     actor: ActorContext,
+    permission: PermissionKey,
     denial: { action: string; entityType: string; entityId: string | null },
   ): Promise<void> {
     try {
-      await this.deps.guard.check(scope, actor, TRIAL_OVERRIDE_PERMISSION);
+      await this.deps.guard.check(scope, actor, permission);
     } catch (error) {
-      await recordMutationDenial(
-        this.mutationDeps(),
-        scope,
-        actor,
-        TRIAL_OVERRIDE_PERMISSION,
-        denial,
-        error,
-      );
+      await recordMutationDenial(this.mutationDeps(), scope, actor, permission, denial, error);
       throw error;
     }
   }

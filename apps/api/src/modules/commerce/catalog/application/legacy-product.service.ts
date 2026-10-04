@@ -56,6 +56,8 @@ import { PRODUCT_EDIT_PERMISSION, PRODUCT_VIEW_PERMISSION } from './product.serv
  */
 export const LEGACY_PRODUCT_EDIT_PERMISSION: PermissionKey = PRODUCT_EDIT_PERMISSION;
 export const LEGACY_PRODUCT_VIEW_PERMISSION: PermissionKey = PRODUCT_VIEW_PERMISSION;
+/** The P7 importer's permission: what `SYSTEM_JOB` holds (`SYSTEM_JOB_PERMISSIONS`). */
+export const LEGACY_PRODUCT_IMPORT_PERMISSION: PermissionKey = 'maintenance.run';
 
 export type EnsureLegacyShapeResult =
   | { readonly outcome: 'UNMAPPABLE'; readonly reason: LegacyShapeUnmappableReason }
@@ -117,8 +119,48 @@ export class LegacyProductService {
     actor: ActorContext,
     input: { readonly idempotencyKey: string; readonly legacy: LegacyShapeInput },
   ): Promise<EnsureLegacyShapeResult> {
+    return this.ensureShapeUnder(LEGACY_PRODUCT_EDIT_PERMISSION, scope, actor, input);
+  }
+
+  /**
+   * `ensureShape`, charged to `maintenance.run` — the P7 importer's entry point
+   * (`docs/legacy-migration/importer.md` §Actors). The importer acts as `SYSTEM_JOB`,
+   * which holds that key and nothing else; the permission is chosen by the method, never
+   * by the actor's type. Everything else — the key, the advisory lock, the hidden
+   * uncategorised unpriced product, the audit — is the same code path.
+   */
+  async ensureShapeForImport(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly idempotencyKey: string; readonly legacy: LegacyShapeInput },
+  ): Promise<EnsureLegacyShapeResult> {
+    return this.ensureShapeUnder(LEGACY_PRODUCT_IMPORT_PERMISSION, scope, actor, input);
+  }
+
+  /**
+   * `resolveTariff` with `MATCH`, charged to `maintenance.run`, for the importer. Only
+   * MATCH: stating a tariff is an operator's decision with a reason, and an import never
+   * makes one.
+   */
+  async resolveTariffMatchForImport(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly idempotencyKey: string; readonly shapeId: string },
+  ): Promise<ResolveLegacyTariffResult> {
+    return this.resolveTariffUnder(LEGACY_PRODUCT_IMPORT_PERMISSION, scope, actor, {
+      ...input,
+      request: { kind: 'MATCH' },
+    });
+  }
+
+  private async ensureShapeUnder(
+    permission: PermissionKey,
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly idempotencyKey: string; readonly legacy: LegacyShapeInput },
+  ): Promise<EnsureLegacyShapeResult> {
     const denial = { action: 'legacy.product_shape.ensure', entityType: 'Product', entityId: null };
-    await this.authorize(scope, actor, LEGACY_PRODUCT_EDIT_PERMISSION, denial);
+    await this.authorize(scope, actor, permission, denial);
 
     const keyed = legacyShapeKey(input.legacy);
     if (!keyed.ok) return { outcome: 'UNMAPPABLE', reason: keyed.reason };
@@ -140,7 +182,7 @@ export class LegacyProductService {
       this.mutationDeps(),
       scope,
       actor,
-      LEGACY_PRODUCT_EDIT_PERMISSION,
+      permission,
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
@@ -247,13 +289,26 @@ export class LegacyProductService {
       readonly request: LegacyTariffRequest;
     },
   ): Promise<ResolveLegacyTariffResult> {
+    return this.resolveTariffUnder(LEGACY_PRODUCT_EDIT_PERMISSION, scope, actor, input);
+  }
+
+  private async resolveTariffUnder(
+    permission: PermissionKey,
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly shapeId: string;
+      readonly request: LegacyTariffRequest;
+    },
+  ): Promise<ResolveLegacyTariffResult> {
     const shapeId = this.shapeId(input.shapeId);
     const denial = {
       action: 'legacy.product_shape.resolve',
       entityType: 'LegacyProductShape',
       entityId: shapeId,
     };
-    await this.authorize(scope, actor, LEGACY_PRODUCT_EDIT_PERMISSION, denial);
+    await this.authorize(scope, actor, permission, denial);
     const request = this.request(input.request);
     const requestHash = hashRequest({
       shapeId,
@@ -287,7 +342,7 @@ export class LegacyProductService {
       this.mutationDeps(),
       scope,
       actor,
-      LEGACY_PRODUCT_EDIT_PERMISSION,
+      permission,
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
