@@ -52,6 +52,16 @@ import {
 } from './ops-b-layout';
 
 /**
+ * The settings registry's values, built in ONE place for this page and for the sidebar's
+ * prefetch (`nav-prefetch.ts`). Every save invalidates `['settings']`, which refetches
+ * whatever `staleTime` says, and a save carries the version it was read at, so a value
+ * read a few seconds earlier can produce a conflict, never an overwrite.
+ */
+export function settingsQuery(): PageQuery<Awaited<ReturnType<typeof fetchSettings>>> {
+  return { queryKey: ['settings'], queryFn: fetchSettings, staleTime: NAV_PREFETCH_FRESH_MS };
+}
+
+/**
  * The settings screen (WP-A1: an operator's page, not a developer's).
  *
  * Every row shows a Persian title, a short Persian description, the value in force, a
@@ -71,16 +81,6 @@ import {
  * effect is the legacy defect the registry exists to end. That is why `consumer` is a
  * declared field on the frozen registry rather than a list held in this file.
  */
-/**
- * The settings registry's values, built in ONE place for this page and for the sidebar's
- * prefetch (`nav-prefetch.ts`). Every save invalidates `['settings']`, which refetches
- * whatever `staleTime` says, and a save carries the version it was read at, so a value
- * read a few seconds earlier can produce a conflict, never an overwrite.
- */
-export function settingsQuery(): PageQuery<Awaited<ReturnType<typeof fetchSettings>>> {
-  return { queryKey: ['settings'], queryFn: fetchSettings, staleTime: NAV_PREFETCH_FRESH_MS };
-}
-
 export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const settings = useQuery({ ...settingsQuery(), enabled: !denied });
   const all = settings.data?.settings ?? [];

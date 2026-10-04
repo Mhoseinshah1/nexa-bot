@@ -90,7 +90,6 @@ export function TagBadge({ tag }: { tag: CustomerTagResponse }) {
   );
 }
 
-/** The tenant's catalogue, one cache entry for the list filter, the picker and the editor. */
 /** The tenant's tag catalogue, built in one place for the list, the 360 and the prefetch. */
 export function tagCatalogueQuery(): PageQuery<
   Awaited<ReturnType<typeof fetchCustomerTagCatalogue>>
@@ -102,6 +101,7 @@ export function tagCatalogueQuery(): PageQuery<
   };
 }
 
+/** The tenant's catalogue, one cache entry for the list filter, the picker and the editor. */
 export function useTagCatalogue(enabled: boolean) {
   return useQuery({ ...tagCatalogueQuery(), enabled });
 }
