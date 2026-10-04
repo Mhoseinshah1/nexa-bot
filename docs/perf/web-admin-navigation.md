@@ -33,7 +33,7 @@ reproducible with the committed scripts.
 
 ```bash
 node scripts/perf/seed-volume.mjs --database-url postgres://nexa:nexa@127.0.0.1:5432/nexa_b2_perf --scale 8
-NEXA_BENCH_PASSWORD=… node scripts/perf/web-nav-bench.mjs --api http://127.0.0.1:3917 --username perfowner --rtt 200
+NEXA_BENCH_PASSWORD=… node scripts/perf/web-nav-bench.mjs --api http://127.0.0.1:3917 --username perfowner --rtt 200 [--hover 150]
 ```
 
 Columns: **shell** — click to the first frame in which the URL, the sidebar's current
@@ -158,3 +158,118 @@ What the measurement ruled OUT, so it was not changed:
   any of them is one round trip plus that.
 - **Repeat visits** already draw from the query cache in 8–37 ms and refetch in the
   background; nothing blocks on the refetch.
+
+## What was changed, and why each is supported by the evidence
+
+1. **`orders_tenant_paid_settled_idx`** — `(tenant_id, settled_at)` partial on
+   `state = 'PAID'`, INCLUDE-ing the columns the sales aggregates group, filter and sum,
+   so a window is an index-only range scan (root cause 1). An ONLINE index
+   (`online-indexes.ts`, built `CONCURRENTLY` after migrating), so it needs no numbered
+   migration and takes no write lock on a live `orders` table.
+2. **`payments_tenant_resolved_idx`** — `(tenant_id, resolved_at)` INCLUDE `state`,
+   partial on `resolved_at IS NOT NULL` (exactly the FAILED/CANCELLED/EXPIRED rows per
+   `payments_resolved_check`): `paymentFailures`, the largest dashboard statement left
+   after (1). Also online.
+3. **An explicit empty icon** (`<link rel="icon" href="data:,">`) — removes the
+   uncacheable `/favicon.ico` round trip from every navigation (root cause 3).
+4. **Sidebar prefetch on pointing or focus** for Customers, Audit Log and Settings
+   (`apps/web/src/nav-prefetch.ts`). The measurement showed a cold visit to them is one
+   round trip and nothing else, which only asking earlier can hide. Limits, each a
+   safety rule: non-financial reference pages only; only with the permission the page's
+   own query is gated on (a refused request records a denial event); the SAME query the
+   page asks, from builders the page modules export; tenant-independent keys as before,
+   because the cache is emptied at every session change and sign-out cancels in-flight
+   queries first. Those builders carry a 5-second `staleTime` so the page arriving after
+   its prefetch does not ask again; it is the only staleness introduced, and every
+   mutation of those lists invalidates them regardless.
+
+Considered and NOT done, because the measurement did not support it: route-level code
+splitting (no chunk loads on navigation; it would add one per first visit), memoisation
+or render work (no long tasks), shell restructuring (no remounts), a `staleTime` on the
+Dashboard's queries (financial and provider figures, refreshed on every visit by design),
+aborting the Dashboard's abandoned requests on unmount (the server keeps executing them
+either way; under HTTP/2 the browser does not queue behind them).
+
+## After
+
+Same database, same build options, same container. The payments and orders indexes
+were built by `db:migrate` (`ensureOnlineIndexes`) and the tables vacuumed, as before.
+
+### Server: the same five Dashboard endpoints
+
+|                             |   before |    after |
+| --------------------------- | -------: | -------: |
+| SQL total, 82–83 statements | 2 020 ms | 1 044 ms |
+| `GET /dashboard/summary`    |   899 ms |   270 ms |
+| `GET /reports/summary`      |   928 ms |   634 ms |
+| `GET /reports/failures`     |    95 ms |    51 ms |
+| `GET /reports/products`     |   140 ms |   146 ms |
+| `salesTotals` (8 calls)     |   435 ms |    88 ms |
+| `trend` REVENUE (4 calls)   |   257 ms |    30 ms |
+| `paymentFailures` (3 calls) |   146 ms |  ≤ 16 ms |
+| `salesTrendByPurpose`       |    65 ms |  ≤ 16 ms |
+
+### Browser, 0 ms added latency (ms, medians)
+
+| Navigation                            | content before | content after | ready before | ready after | api before → after                |
+| ------------------------------------- | -------------: | ------------: | -----------: | ----------: | --------------------------------- |
+| Dashboard → Customers, cold           |             66 |            64 |           96 |          64 | 2 → 2                             |
+| Customers → Audit Log, cold           |             79 |            54 |           79 |          54 | 1 → 1                             |
+| Audit Log → Settings, cold            |             63 |            50 |           63 |          50 | 1 → 1                             |
+| Settings → Dashboard, cold            |             30 |            28 |    **1 597** |     **831** | 7 → 7                             |
+| Settings → Dashboard, repeat          |             19 |            18 |    **1 381** |     **884** | 7 → 7                             |
+| Dashboard (still loading) → Customers |              7 |            11 |          141 |          69 | 2 → 2                             |
+| Initial load of `/`                   |                |               |    **1 841** |   **1 384** | 12 → 12 (17 → 16 requests in all) |
+
+### Browser, 200 ms added latency (ms, medians)
+
+| Navigation                            | content before | content after, click only | content after, pointer 150 ms before the click | ready before | ready after |
+| ------------------------------------- | -------------: | ------------------------: | ---------------------------------------------: | -----------: | ----------: |
+| Dashboard → Customers, cold           |            251 |                       246 |                                         **55** |          251 |         246 |
+| Customers → Audit Log, cold           |            248 |                       276 |                                         **70** |          248 |         276 |
+| Audit Log → Settings, cold            |            238 |                       236 |                                         **78** |          238 |         236 |
+| Settings → Dashboard, cold            |             16 |                        36 |                                             19 |    **1 180** |     **848** |
+| Settings → Dashboard, repeat          |             21 |                        17 |                                             14 |    **1 196** |     **847** |
+| Dashboard (still loading) → Customers |              8 |                        17 |                                             34 |          356 |         252 |
+| Initial load of `/`                   |                |                           |                                                |    **2 283** |   **1 749** |
+
+"Pointer 150 ms before the click" is `--hover 150`: the mouse arrives on the link,
+then clicks, which is what a mouse does and what the bare `click()` of the other columns
+does not. Before the change the sidebar had no pointer handler, so the "before" column
+is the same with or without it. The "click only" column shows the prefetch costs a
+keyboard-less, pointer-less click nothing.
+
+Two caveats on the "repeat" rows, so they are not over-read. A bench cycle revisits a
+page within about four seconds, inside the five-second freshness window, so in the
+click-only runs the three prefetched pages' repeat visits made **no** request (they drew
+from the cache, as they did before, and did not refetch); an operator who stays on a page
+longer than five seconds gets the background refetch exactly as before. And the spread
+between runs on this shared 4-CPU container is ±15–25 %; the Dashboard's halving is well
+outside it, the single-digit differences in the other rows are not.
+
+Shell persistence is unchanged: the sidebar and top bar survived every navigation of
+every run (`kept`), the shell answered a click in 7–43 ms, and no navigation loaded a
+JavaScript chunk.
+
+## Remaining bottlenecks
+
+- **`GET /reports/summary` is still ~630 ms at this volume**, and the Dashboard is as
+  slow as it. What is left in it is not a windowed range: `newBuyers` reads every
+  customer's FIRST paid order over all time (212 ms; now index-only, but still the whole
+  history), `newServices` joins the window's services to their orders (208 ms, a hash
+  join over the tenant's orders), `productRanking` (126 ms) and `activeCustomers`
+  (97 ms). Each needs a different shape — a stored first-purchase fact, or a services
+  index carrying what the join reads — and is a schema decision beyond this package.
+- **The Dashboard refetches its seven requests on every visit.** That is a freshness
+  decision about financial and provider figures, not an accident, and it was kept; with
+  the indexes it costs ~0.85 s instead of ~1.4 s at this volume.
+- **The statements inside one dashboard request run one after another** (29 for
+  `dashboard/summary`). Running them concurrently would cut latency further at the cost
+  of more simultaneous connections per request; not done without a measurement of the
+  pool under load.
+- **Initial load:** one 2.77 MB bundle (643 kB gzip), parsed once per tab. It does not
+  affect navigation; a vendor split would shorten a cold first load on a slow link and
+  is worth measuring on the owner's connection.
+- **Pages not measured here** (Orders, Payments, Services, Panels) read financial or
+  provider truth and were deliberately left out of the prefetch; their cold visits are
+  still one round trip plus their endpoint.

@@ -15,6 +15,8 @@
  *                      (default 0). A real operator is not on the API's loopback;
  *                      this is what makes a request waterfall visible.
  *   --cpu N            CPU slowdown factor (default 1)
+ *   --hover MS         move the pointer onto the link MS milliseconds before clicking it
+ *                      (default 0: a bare click, which no sidebar prefetch can precede)
  *   --out FILE         JSON results (default .perf/web-nav-<rtt>ms.json)
  *   --no-build         serve apps/web/dist as it is
  *
@@ -76,7 +78,16 @@ const STEPS = [
 ];
 
 function parseArgs(argv) {
-  const o = { api: null, username: null, rounds: 3, rtt: 0, cpu: 1, out: null, build: true };
+  const o = {
+    api: null,
+    username: null,
+    rounds: 3,
+    rtt: 0,
+    cpu: 1,
+    hover: 0,
+    out: null,
+    build: true,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const v = () => {
@@ -90,6 +101,7 @@ function parseArgs(argv) {
     else if (a === '--rtt') o.rtt = Number(v());
     else if (a === '--cpu') o.cpu = Number(v());
     else if (a === '--out') o.out = resolve(v());
+    else if (a === '--hover') o.hover = Number(v());
     else if (a === '--no-build') o.build = false;
     else throw new Error(`Unknown argument: ${a}`);
   }
@@ -442,6 +454,19 @@ async function main() {
       for (const step of STEPS) {
         await delay(300);
         requests.clear();
+        if (o.hover > 0) {
+          // The pointer arrives on the link first, as a mouse does, then the click.
+          const box = await send('Runtime.evaluate', {
+            expression: `(() => { const a = document.querySelector('aside.sidebar a[href=${JSON.stringify(step.href)}]'); a.scrollIntoView({ block: 'center' }); const r = a.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+            returnByValue: true,
+          });
+          await send('Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            x: box.result.value.x,
+            y: box.result.value.y,
+          });
+          await delay(o.hover);
+        }
         const { result } = await send('Runtime.evaluate', {
           expression: clickAndMeasure(step.href),
           awaitPromise: true,
