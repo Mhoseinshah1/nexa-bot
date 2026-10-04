@@ -112,9 +112,10 @@ So they ARE the customer's activity in the bot, and are now labelled «اولی�
 stated rather than hidden: for a customer brought over by the legacy importer, «اولین فعالیت»
 is the import time — the previous system's first contact is not recorded anywhere, and
 inventing one would be a fabricated fact. No new tracking was added. The Telegram admin
-bot's `bot.admin.customer_detail` default text still says «اولین تماس» / «آخرین تماس» (a
-shared catalogue template, tenant-overridable); only its placeholder labels in the template
-editor were renamed.
+bot's customer detail (`bot.admin.customer_detail`) shows the same two columns, so its DEFAULT
+catalogue text now reads «اولین فعالیت» / «آخرین فعالیت» too, as do its placeholder labels
+in the template editor; a tenant's own override of that template is untouched
+(`tests/integration/telegram-admin-customers.test.ts` pins the default).
 
 Pinned by `tests/integration/telegram-customer-turn.test.ts` ("moves last_seen_at on an
 ordinary message and on a button press, never first_seen_at") and the label case in

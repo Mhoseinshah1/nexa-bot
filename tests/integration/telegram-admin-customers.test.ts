@@ -356,6 +356,11 @@ describe('the customers section of the Telegram management panel', () => {
     const message = lastMessage();
     expect(message).toContain(SUBJECT);
     expect(message).toContain('ali_tehran');
+    // UX batch 02, issue 12: the same two columns the Web Admin labels as activity — every
+    // message and button press — so the default wording is «فعالیت», never «تماس».
+    expect(message).toContain('اولین فعالیت:');
+    expect(message).toContain('آخرین فعالیت:');
+    expect(message).not.toContain('تماس');
     /*
      * The four things a customer detail could plausibly grow and must not: a wallet
      * balance, an order, a service and a subscription. Each is a different permission,
