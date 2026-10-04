@@ -1,8 +1,26 @@
 # C3 — `subscription_ref` compatibility for adopted RickPanel accounts
 
-**Conclusion: SAFE WITH CONSTRAINT** (code-side). The provider-dependent points below are
-**MANUAL ACCEPTANCE**, not run: there are no RickPanel credentials in this environment,
-and no experiment here touched a panel. P6 stays HOLD.
+**Conclusion: `SAFE_WITH_CONSTRAINTS`** — decided from code evidence (program 4, Item 3,
+finalised 2026-10-04). The real-panel confirmation is **MANUAL ACCEPTANCE, NOT RUN**:
+there are no RickPanel credentials in this environment, no experiment here touched a
+panel, and nothing in this file is a result from a real panel. The one command that
+confirms it is in "Manual acceptance" below; it is read-only by construction.
+
+## The program's five questions, answered (program 4, Item 3)
+
+| #   | Program question                                                                                | Answer (code evidence)                                                                                                                                                                                                                                            | Real-panel confirmation                    |
+| --- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| 1   | Can an existing provider account use a local NEXA `subscription_ref` without provider mutation? | **Yes.** No RickPanel request carries the ref (Evidence 1, pinned by `tests/unit/rickpanel-subscription-ref.test.ts`, mutation-checked). A freshly minted 32-hex ref is consistent with any account by construction; nothing on the panel is told about it.       | not needed — a property of NEXA's own code |
+| 2   | Does config/subscription retrieval need a mutation?                                             | **No.** The link comes from `GET api/user/{username}` (`subscriptionFrom`), the files from `GET api/user/{username}/files`, and the customer's client fetches the link with a `GET` (Evidence 2, 3).                                                              | MANUAL: C3 step, checks 1–4                |
+| 3   | Rotation?                                                                                       | **No ref rotation exists for RickPanel, and adoption must not rotate.** "New link" is `revoke_sub`, a provider WRITE that changes the panel's token and `services.subscription_url`, never `subscription_ref` (Evidence 4). `OQ-RP-07` is irrelevant to adoption. | not part of migration acceptance           |
+| 4   | Uniqueness scope?                                                                               | **Per NEXA panel row** — `services_panel_subscription_ref_key (panel_id, subscription_ref)` (migration 0045), 128 random bits. RickPanel has no ref, so no provider-side scope applies.                                                                           | not needed                                 |
+| 5   | Can an adopted account remain usable with zero provider mutation?                               | **Yes, under the six constraints below**: store the panel's own link read at adoption, mint the ref normally, store the exact provider spelling, reserve the name, never a CREATE path, no write during adoption.                                                 | MANUAL: C3 step, checks 5–7                |
+
+Why `SAFE_WITH_CONSTRAINTS` and not `SAFE`: the answer to 5 holds only if P6 honours the
+constraints (each is a way an adoption could break a working account or mint a broken
+link), and whether a real RickPanel serves a pre-existing account's link exactly as the
+code expects (`subscription_url` on the record, `OQ-RP-01`) is confirmed only by the
+manual step. Not `BLOCKED`: nothing in the code requires a provider write to adopt.
 
 ## Background
 
@@ -44,16 +62,6 @@ treated as a bearer capability (`infrastructure/redaction.ts` redacts it).
    rotation changes `subscription_url` and `sub_token` and nothing else; whether the OLD
    link is then refused is unproven (`OQ-RP-07`).
 
-## The five questions
-
-| #   | question                                                                                            | answer                                                                                                                                                                                                                                           | basis              |
-| --- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
-| 1   | Can NEXA store a random local ref for an existing provider account without changing provider state? | **Yes.** For RickPanel the ref never leaves NEXA, so any random 32-hex value is consistent with the panel by construction.                                                                                                                       | Evidence 1, test   |
-| 2   | Does config/subscription fetch need a provider mutation?                                            | **No.** The link is read from `GET /api/user/{username}`; `/files` is a GET.                                                                                                                                                                     | Evidence 2, 3      |
-| 3   | Effect of ref rotation?                                                                             | **None on the provider.** NEXA has no ref-rotation for RickPanel; the product's "new link" is `revoke_sub` (a provider WRITE) which changes the panel token and `services.subscription_url`, never `subscription_ref`. Adoption must not rotate. | Evidence 4         |
-| 4   | Uniqueness scope?                                                                                   | **Per NEXA panel row**, `(panel_id, subscription_ref)`, enforced locally; 128 random bits. No provider-side uniqueness is involved for RickPanel. (For 3X-UI, where the ref IS the `subId`, the scope would matter — not this provider.)         | Evidence 1, schema |
-| 5   | Is any provider write required to make an adopted service usable?                                   | **No, under the constraints below.**                                                                                                                                                                                                             | all                |
-
 ## Constraints P6 must honour (the "WITH CONSTRAINT")
 
 1. **Store the provider's own link, read at adoption time** — `services.subscription_url`
@@ -84,17 +92,77 @@ treated as a bearer capability (`infrastructure/redaction.ts` redacts it).
 
 ## Manual acceptance (provider-dependent, NOT RUN)
 
-Read-only, on a production-like RickPanel, for a few known legacy accounts:
+**Status: MANUAL ACCEPTANCE, NOT RUN.** The read-only step is code
+(`tests/acceptance-readonly/subscription-acceptance.ts`, driven by
+`tests/acceptance-readonly/real-rickpanel-subscription.test.ts`) and runs in the same
+command as C1, with the same variables:
 
-- `GET /api/user/{username}` returns `subscription_url` (or `subscription_token`) for
-  accounts NEXA did not create — i.e. OQ-RP-01's answer holds for pre-existing accounts, not
-  only NEXA-created ones. (`pnpm test:acceptance:inventory` reads these records but
-  deliberately does not output links; check presence by hand, print nothing.)
-- The link read that way serves a non-empty subscription from the panel's subscription
-  host — a GET by the customer's client, which is a read; record only status and byte
-  count, never the URL.
-- Reading the account (GET) changes nothing visible on the panel: compare `sub_updated_at`,
-  `sub_token` presence and status before/after, aggregate only.
+```bash
+pnpm install --frozen-lockfile
+NEXA_INVENTORY_RICKPANEL_URL='https://<panel-address>' \
+NEXA_INVENTORY_RICKPANEL_USERNAME='<admin>' \
+NEXA_INVENTORY_RICKPANEL_PASSWORD='<password>' \
+NEXA_INVENTORY_KNOWN_USERNAME='<a LEGACY account NEXA did not create, spelled exactly as the panel spells it>' \
+NEXA_INVENTORY_PAGE_SIZE=50 \
+NEXA_INVENTORY_DRIFT_TOLERANCE=0 \
+pnpm test:acceptance:inventory
+```
+
+C3 alone: `pnpm test:acceptance:inventory real-rickpanel-subscription` (C1 alone:
+`pnpm test:acceptance:inventory real-rickpanel-inventory`). Without the variables the
+suite FAILS; it never skips. Put the password in the environment from a secret store,
+not shell history.
+
+What the step does, for the one known account:
+
+1. login exchange + `GET api/user/{name}` through `readOnlyRickpanelHttp` — the inventory's
+   three fixed reads, never the adapter;
+2. the link from that record by the adapter's own `subscriptionFrom` (what `lookupUser`
+   delivers and P6 stores) — never built from `subscription_ref`;
+3. ONE `GET` of that link, on its own origin, through a guard that refuses — without
+   sending — anything but a `GET`;
+4. login exchange + `GET api/user/{name}` again, and a comparison of every field a write
+   would change (`username`, `status`, `expire`, `data_limit`,
+   `data_limit_reset_strategy`, `sub_token`, `subscription_url`, `subscription_token`,
+   `links`, `proxies`, `inbounds`, `note`, `on_hold_*`) — by digest, never printed.
+
+Checks (all must pass): known account read by GET; the panel's record carries a
+subscription link; the link answers 2xx to a GET; the served body is non-empty; the
+account reads the same afterwards; no write-relevant field changed; no write was
+attempted.
+
+Printed (`C3 evidence {...}`, safe to paste): whether a link was present, whether it is
+on the panel's origin, the fetch's status, content type and **byte count**, the NAMES of
+changed fields, request and refusal counts. Never the username, the link, a token or any
+byte of the body.
+
+**The one thing a GET does change.** A Marzban-lineage panel records a client's fetch in
+`sub_updated_at` / `sub_last_user_agent` (and traffic/`online_at` move with use). That is
+the panel's own telemetry of a read, exactly what the customer's client produces daily;
+it is reported by name (`changedTelemetryFields`) and is not a failure. It is not a
+request NEXA made to change the account: provider mutation count stays 0. The step fetches
+the link once, on purpose.
+
+**Reading the result.** All checks pass → record the printed JSON and the panel version
+under "Results", and C3 becomes `ACCEPTED` (`SAFE_WITH_CONSTRAINTS` confirmed). "record
+carries a subscription link" failing → the record shape differs from `OQ-RP-01`'s answer
+for pre-existing accounts: capture the top-level KEYS of the record by hand (not values),
+correct `subscriptionFrom` and the fake in one commit, re-run; until then P6 adopts
+without a link (constraint 1) and the operator decides. "2xx" or "non-empty" failing →
+the panel does not serve the stored link from where the record says: C3 is `BLOCKED` for
+link delivery until resolved. A write-relevant field changing → someone changed the
+account during the run, or the panel mutates on read: re-run at a quiet hour; if it
+persists, C3 is `BLOCKED`.
+
+The same step runs against the fake panel in
+`tests/unit/rickpanel-subscription-acceptance.test.ts`, which proves the mechanics (each
+check can fail; nothing but reads is sent; the report carries no username, link, token
+or body) and is **not** evidence about RickPanel.
+
 - `OQ-RP-07` (old link refused after `revoke_sub`) is a WRITE experiment and is **not part
   of migration acceptance**; it stays open and is irrelevant to adoption as long as
   adoption never rotates.
+
+## Results
+
+_None yet. MANUAL ACCEPTANCE, NOT RUN._

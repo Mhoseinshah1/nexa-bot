@@ -182,8 +182,12 @@ function usageFromUser(record: Record<string, unknown>): ProviderUsage | null {
  * never returns a URL it assembled from something it did not recognise: a
  * subscription link is what the customer receives, and a wrong one is a customer
  * holding a link that serves nothing.
+ *
+ * Exported, pure, for one reader outside this class: the read-only C3 acceptance
+ * (`tests/acceptance-readonly/subscription-acceptance.ts`) derives the link exactly as
+ * `lookupUser` delivers it, while holding only the inventory's read surface.
  */
-function subscriptionFrom(baseUrl: string, record: Record<string, unknown>): string | null {
+export function subscriptionFrom(baseUrl: string, record: Record<string, unknown>): string | null {
   const direct = absoluteSubscription(baseUrl, record['subscription_url']);
   if (direct !== null) return direct;
 
