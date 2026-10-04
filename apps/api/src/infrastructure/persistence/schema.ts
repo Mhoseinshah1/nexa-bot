@@ -12971,12 +12971,14 @@ export const legacyImportMap = pgTable(
     /**
      * Per table, the evidenced key shape — `LEGACY_ID_PATTERNS`, mirrored here and held in
      * step by `legacy-import-metadata.test.ts`. A table without an evidenced shape is not
-     * in the set at all (`OQ-P4-01`).
+     * in the set at all. `invoice` joined in 0191 from MirzaBot's public source
+     * (`OQ-P4-01`, `docs/legacy-import-metadata.md`).
      */
     check(
       'legacy_import_map_legacy_key_check',
       sql`CASE legacy_table
             WHEN 'user' THEN legacy_id ~ '^[1-9][0-9]{0,19}$'
+            WHEN 'invoice' THEN legacy_id ~ '^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$'
             ELSE false
           END`,
     ),

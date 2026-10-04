@@ -6,8 +6,8 @@ number, a subscription link or free text. The P7 importer that writes them is on
 this is the metadata it needs to resume, reconcile and rerun safely.
 
 Code: `apps/api/src/modules/platform/legacy-import/` (port + Drizzle repository),
-contracts in `packages/contracts/src/legacy-import.ts`, migration
-`0190_legacy_import_metadata.sql`.
+contracts in `packages/contracts/src/legacy-import.ts`, migrations
+`0190_legacy_import_metadata.sql` and `0191_legacy_import_map_invoice_key.sql`.
 
 ## `legacy_import_runs`
 
@@ -64,12 +64,71 @@ with one evidenced key shape per table** (`LEGACY_IMPORT_SOURCE_TABLES`,
 `LEGACY_ID_PATTERNS`, mirrored by `legacy_import_map_legacy_key_check`; an integration test
 runs the same samples through the contract and the database and requires the same answer):
 
-| `legacy_table` | `legacy_id` shape    | evidence                                                                                                                               |
-| -------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `user`         | `^[1-9][0-9]{0,19}$` | `user.id` is the customer's Telegram id; all 197,461 values are numeric strings (program §19, `docs/legacy-migration/sql-evidence.md`) |
+| `legacy_table` | `legacy_id` shape                              | evidence                                                                                                                               |
+| -------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `user`         | `^[1-9][0-9]{0,19}$`                           | `user.id` is the customer's Telegram id; all 197,461 values are numeric strings (program §19, `docs/legacy-migration/sql-evidence.md`) |
+| `invoice`      | `^([1-9][0-9]{6})?([0-9a-f]{4}\|[0-9a-f]{8})$` | `invoice.id_invoice`; MirzaBot's public source, every revision (below). Added by `0191_legacy_import_map_invoice_key.sql`              |
 
-Any other table (`invoice` among them) is refused until its primary-key format is evidenced
-(`OQ-P4-01`) and added by a forward migration — never a guessed shape.
+Any other table is refused until its primary-key format is evidenced and added by a
+forward migration — never a guessed shape.
+
+### The `invoice` key (`OQ-P4-01`, resolved from public source)
+
+The repository itself never evidenced it: `docs/legacy-migration/sql-evidence.md` joins
+`invoice.id_user` to `user.id` but never shows the invoice's own key. The evidence is
+MirzaBot's **public** source, read-only, full history, on 2026-10-04:
+
+| repository                | revisions read                                                             | what it shows                                                                |
+| ------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `mahdiMGF2/botmirzapanel` | all 535, `f52a84c` … `92c0ed06` (2023-08-18 … 2026-06-30)                  | `table.php`: `CREATE TABLE invoice (id_invoice varchar(200) PRIMARY KEY, …)` |
+| `mahdiMGF2/mirza_pro`     | all 508, `f002b99` … `8e551ecf` (2025-10-15 … 2026-10-02, `version` 0.6.0) | `db/tables/invoice.php`: `id_invoice varchar(200) PRIMARY KEY`               |
+
+At every `INSERT INTO invoice` in every revision (646 site-revisions in `botmirzapanel`'s
+`index.php`/`admin.php`/`functions.php`, 1,630 site-revisions in `mirza_pro`'s `index.php`, `admin.php`,
+`api/invoice.php`, `api/miniapp.php`, `vpnbot/*/index.php`), the value bound to
+`id_invoice` is `$randomString`, and the only assignments reaching it are:
+
+- `bin2hex(random_bytes(2))` — 4 lowercase hex (`botmirzapanel` from `652b9a8`; its
+  `admin.php` manual add, e.g. `92c0ed06:admin.php:2439`);
+- `bin2hex(random_bytes(4))` — 8 lowercase hex (`botmirzapanel` from `abdd5e7`,
+  `92c0ed06:index.php:1441,1752`; every `mirza_pro` site, e.g. `8e551ecf:index.php:3888`);
+- `$random_number . $randomString`, the collision fallback, where `$random_number` is
+  `rand(1000000, 9999999)` or `random_int(1000000, 9999999)` — seven digits, no leading
+  zero (`92c0ed06:index.php:1774-1776`, `8e551ecf:index.php:3889-3891`).
+
+`bin2hex(random_bytes(3|5|6))` appear in the same files and never reach `id_invoice` (they
+are usernames, payment ids and the web-admin password). So the shape is exactly the union,
+no wider: `^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$` (4, 8, 11 or 15 characters). The
+contract (`LEGACY_ID_PATTERNS.invoice`) and the CHECK carry the same pattern; the unit test
+pins the accepted and refused samples, the integration test runs them through both and
+requires the same answer, and both were mutation-checked (widening the hex run, allowing a
+leading-zero prefix, allowing uppercase, dropping the anchor, widening the SQL — each fails a
+test).
+
+**Caveat — the deployed revision is not one of these.** The archive's `invoice` carries
+columns (`code_panel`, `is_test`, `is_custom`, `code_product`, `time_unit`; see the queries in
+`sql-evidence.md`) that no public revision's `invoice` table declares, so the deployed code
+is a revision or fork that was not read. Its key generator may differ. The importer
+therefore **fails closed**: a key outside the shape is refused with a typed
+`legacy_import.invalid` before SQL, and that row cannot be recorded at all — not as
+`MANUAL_REVIEW`, not as anything. The importer's audit mode must count such keys (aggregate
+only) before an `APPLY`; if any exist, the shape is widened in a forward migration from the
+archive's own aggregate, never by guess. The confirming aggregate, for the runbook — it
+returns counts, never a value:
+
+```sql
+SELECT
+  SUM(BINARY id_invoice REGEXP '^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$') AS conforming,
+  SUM(NOT (BINARY id_invoice REGEXP '^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$')) AS other,
+  MIN(CHAR_LENGTH(id_invoice)) AS min_len,
+  MAX(CHAR_LENGTH(id_invoice)) AS max_len
+FROM invoice;
+```
+
+As with `user`, the shape cannot tell one short hex string from another. It does
+guarantee that nothing with a letter beyond `f`, an uppercase letter, a separator, a
+scheme or whitespace — `hunter2`, `password:hunter2`, a name, a subscription link — fits
+(tested).
 
 ### The upsert (`recordDecision`)
 

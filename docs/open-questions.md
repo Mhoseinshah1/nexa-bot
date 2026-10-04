@@ -3119,13 +3119,17 @@ Still open:
 
 ## OQ-P4 — legacy import metadata (Migration P4)
 
-- **OQ-P4-01 — the legacy primary-key format of every table but `user`.** The repository
-  evidences only `user.id` (numeric strings, the Telegram id; program §19). The `invoice`
-  table's primary key — its column and its format — is not evidenced anywhere in this
-  repository (`docs/legacy-migration/sql-evidence.md` joins `invoice.id_user` to `user.id`
-  but never shows the invoice's own key), and neither is any other table's. So
-  `LEGACY_IMPORT_SOURCE_TABLES` is `['user']` and `legacy_import_map_legacy_key_check`
-  refuses every other table. **Settled by** a safe aggregate query on the legacy archive
-  (character classes and length range of the key, never values); then add the table and
-  its shape to the contract and the CHECK in one forward migration, with accepting and
-  refusing tests.
+- **OQ-P4-01 — the legacy primary-key format of every table but `user`.** **RESOLVED for
+  `invoice` (2026-10-04), from public source, with a caveat.** The repository evidenced only
+  `user.id`. Every revision of MirzaBot's public source — `mahdiMGF2/botmirzapanel` (535
+  commits, through `92c0ed06`) and `mahdiMGF2/mirza_pro` (508 commits, through `8e551ecf`) —
+  declares `id_invoice varchar(200) PRIMARY KEY` and binds it only to
+  `bin2hex(random_bytes(2|4))`, optionally prefixed by a 7-digit `rand(1000000, 9999999)`.
+  `invoice` joined `LEGACY_IMPORT_SOURCE_TABLES` with
+  `^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$`, in the contract and the CHECK
+  (`0191_legacy_import_map_invoice_key.sql`; citations in
+  `docs/legacy-import-metadata.md` § "The `invoice` key"). **Caveat:** the deployed
+  archive's `invoice` has columns no public revision declares, so the deployed generator is
+  unproven; a non-conforming key is refused (fail closed) and the confirming aggregate in
+  that section is a MANUAL ACCEPTANCE step before an `APPLY`. Every other table stays
+  refused until its key is evidenced the same way.

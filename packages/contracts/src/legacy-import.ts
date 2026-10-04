@@ -119,16 +119,34 @@ export type LegacyImportReasonCode = (typeof LEGACY_IMPORT_REASON_CODES)[number]
  *   cannot and does not claim otherwise. What it does guarantee is that nothing with a
  *   letter, a separator or whitespace — `hunter2`, `password:hunter2`, a name — fits.
  *
- * Not here, deliberately: `invoice` and any other table whose primary-key format the
- * evidence does not establish (`OQ-P4-01`). A table joins this set, and the CHECK, in a
- * forward migration once its key shape is evidenced — never by a guess.
+ * - `invoice` — `invoice.id_invoice` (`OQ-P4-01`, resolved from MirzaBot's PUBLIC source;
+ *   `docs/legacy-import-metadata.md` § "The `invoice` key"). Every revision of
+ *   `mahdiMGF2/botmirzapanel` (535 commits, to `92c0ed06`) and `mahdiMGF2/mirza_pro` (508
+ *   commits, to `8e551ecf`) declares `id_invoice varchar(200) PRIMARY KEY` and binds it, at
+ *   every `INSERT INTO invoice`, to `bin2hex(random_bytes(2|4))` — 4 or 8 lowercase hex — which a
+ *   collision fallback may prefix with `rand|random_int(1000000, 9999999)`, seven digits with
+ *   no leading zero. Nothing else ever reaches that column. The shape is exactly that union,
+ *   and no wider: `^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$`.
+ *   CAVEAT: the deployed archive's `invoice` carries columns (`code_panel`, `is_test`, …)
+ *   that no public revision declares, so the deployed code is NOT one of the revisions read.
+ *   A key outside this shape is therefore refused (a typed `INVALID`, before SQL) — the
+ *   importer fails closed rather than widening it; widening is a forward migration made from
+ *   the archive's own aggregate (character classes and lengths, never values).
+ *   Like `user`, the shape cannot tell one short hex string from another; it does guarantee
+ *   that nothing with a letter beyond `f`, an uppercase letter, a separator or whitespace —
+ *   `hunter2`, `password:hunter2`, a name, a subscription link — fits.
+ *
+ * Not here, deliberately: any other table whose primary-key format the evidence does not
+ * establish. A table joins this set, and the CHECK, in a forward migration once its key
+ * shape is evidenced — never by a guess.
  */
-export const LEGACY_IMPORT_SOURCE_TABLES = ['user'] as const;
+export const LEGACY_IMPORT_SOURCE_TABLES = ['user', 'invoice'] as const;
 export type LegacyImportSourceTable = (typeof LEGACY_IMPORT_SOURCE_TABLES)[number];
 
 /** Per table, the key shape. Kept in step with the SQL CHECK by an integration test. */
 export const LEGACY_ID_PATTERNS: Readonly<Record<LegacyImportSourceTable, RegExp>> = {
   user: /^[1-9][0-9]{0,19}$/,
+  invoice: /^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$/,
 };
 
 export function isLegacyImportSourceTable(value: string): value is LegacyImportSourceTable {
