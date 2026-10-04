@@ -7469,6 +7469,22 @@ export const provisioningOperations = pgTable(
      * was lost is never sent again by this path, only looked at.
      */
     verificationAttempts: integer('verification_attempts').notNull().default(0),
+    /**
+     * Migration P1 (H5): this row is SCHEDULED housekeeping — a usage read nobody asked
+     * for, planned by the provisioner's own sweep — and nothing else.
+     *
+     * The claim orders every non-background row ahead of every background one, and the
+     * executor spends the tenant budget for a background row only above a floor. Both
+     * read THIS column, never `type` plus `requested_by_customer_id`: an operator's sync
+     * has no customer either, and inferring "background" from the absence of one demoted
+     * an operator's explicit request behind a migration-sized backlog.
+     *
+     * FALSE by default, which is the safe direction: a writer that forgets the column
+     * plans work at full priority, never paid work at housekeeping priority. And the
+     * CHECK below makes "a background PROVISION" unrepresentable, so no future writer can
+     * demote money-bearing work by setting it.
+     */
+    background: boolean('background').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -7501,9 +7517,27 @@ export const provisioningOperations = pgTable(
      * backoff has not elapsed is not due, and ordering by creation date alone would put
      * the oldest permanently-failing operation at the front of every tick.
      */
+    /*
+     * Migration P1: led by `background`, the claim's FIRST ordering key, so the scan
+     * reads interactive work first and reaches the background backlog only when none is
+     * due — a backlog of thousands of scheduled reads is never sorted to find one paid
+     * create. `next_attempt_at` is NULLS FIRST here because the claim orders it so.
+     */
     index('provisioning_operations_due_idx')
-      .on(table.nextAttemptAt, table.createdAt)
+      .on(table.tenantId, table.background, table.nextAttemptAt.asc().nullsFirst(), table.createdAt)
       .where(sql`state = 'PLANNED'`),
+    /**
+     * Migration P1: at most ONE open scheduled usage read per service.
+     *
+     * The sweep already skips a service with an open read; this is the same rule for two
+     * provisioner replicas planning in the same instant, where a read-then-write loses.
+     * Only background rows: a customer's or an operator's own read may sit beside a
+     * scheduled one, and the executor abandons the scheduled one, unspent, once the
+     * figure is fresher than it.
+     */
+    uniqueIndex('provisioning_operations_open_background_sync_key')
+      .on(table.tenantId, table.serviceId)
+      .where(sql`background AND state IN ('PLANNED', 'IN_FLIGHT')`),
     /** Expired leases, for the release sweep. */
     index('provisioning_operations_lease_idx')
       .on(table.leaseUntil)
@@ -7567,6 +7601,15 @@ export const provisioningOperations = pgTable(
       .where(sql`state = 'UNKNOWN'`),
     check('provisioning_operations_state_check', enumCheck('state', OPERATION_STATES)),
     check('provisioning_operations_type_check', enumCheck('type', OPERATION_TYPES)),
+    /*
+     * Migration P1: only a scheduled usage READ can be background. Paid, commercial,
+     * management and reconcile work can never be demoted by this column, and a row a
+     * customer asked for can never be treated as nobody's.
+     */
+    check(
+      'provisioning_operations_background_check',
+      sql`NOT background OR (type = 'SYNC_USAGE' AND requested_by_customer_id IS NULL)`,
+    ),
     check(
       'provisioning_operations_failure_kind_check',
       nullableEnumCheck('failure_kind', PROVIDER_FAILURE_KINDS),

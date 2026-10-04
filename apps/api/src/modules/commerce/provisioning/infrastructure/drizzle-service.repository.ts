@@ -37,6 +37,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   customers,
+  provisioningOperations,
   serviceRefundRequests,
   services,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -897,13 +898,49 @@ export class DrizzleServiceRepository implements ServiceRepository {
            */
           eq(services.state, 'ACTIVE'),
           /*
-           * Only an account that exists can be read.
+           * NOT `provider_user_id IS NOT NULL` — Migration P1 (H5) removed that predicate.
            *
-           * `provider_user_id` is written by the create and by the adopt path. A row
-           * without one has nothing on a panel to ask about, and asking would spend a
-           * request to be told so.
+           * It read "only an account that exists can be read", and confused an OPTIONAL
+           * provider id with the account's existence. RickPanel and Marzban key an account
+           * by its username and answer `providerUserId: null` by contract, and every
+           * adapter's `readUsage` is addressed by `providerRefFor` — the stored username,
+           * subscription reference and client id, all NOT NULL — never by this column. So
+           * the predicate silently excluded every live RickPanel and Marzban service (and
+           * every reconciled 3X-UI one) from background refresh, which is the fleet a
+           * legacy migration brings. ACTIVE is what says an account exists: a service is
+           * ACTIVE only after a create or a reconcile found it. No fake provider id is
+           * needed or written.
            */
-          isNotNull(services.providerUserId),
+          /*
+           * Not a service that already has a usage read open, or one attempted within the
+           * cadence (Migration P1).
+           *
+           * Open: a second scheduled read of a figure still waiting to be read is a
+           * request spent for nothing, and so is one queued beside a customer's own.
+           *
+           * Attempted within the cadence, whatever became of it: a read that FAILED terminally — an account deleted on the panel, a panel
+           * now refusing — leaves the figure stale, so without this the same services sat
+           * at the top of this stalest-first page every tick, their window-derived ids
+           * conflicted, nothing was planned, and every other service of the tenant waited
+           * behind fifty broken ones for good. Skipping them for one cadence lets the page
+           * move on, and they are asked again in the next window.
+           *
+           * "Within the cadence" is measured from the read's LAST activity — its completion
+           * or its last transition — not from when it was planned. Measured from
+           * `created_at`, a read that spent a whole cadence queued and retrying (15-minute
+           * cadence, five attempts with back-off) was already "old" the moment it failed
+           * for good, so the same broken services were planned again at once, every time,
+           * and kept the healthy fleet behind them (Codex review of #172).
+           */
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${provisioningOperations} AS sync
+             WHERE sync.tenant_id = ${services.tenantId}
+               AND sync.service_id = ${services.id}
+               AND sync.type = 'SYNC_USAGE'
+               AND (sync.state IN ('PLANNED', 'IN_FLIGHT')
+                    OR GREATEST(sync.created_at, sync.updated_at,
+                                COALESCE(sync.completed_at, sync.created_at)) > ${staleBefore})
+          )`,
           /*
            * A service that has never been synced is measured from when it was CREATED.
            *
