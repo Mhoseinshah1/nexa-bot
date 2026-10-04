@@ -53,7 +53,7 @@ narrower existing key is held by a job. **No HTTP, Telegram or web surface const
 calls it** (a boundary test pins that only the container and the CLI may import it).
 
 Outcomes: `ADOPTED` | `ALREADY_ADOPTED` (same mapping, same ids) | `MANUAL_REVIEW` (closed
-reason; `recorded` says whether a map row was written — false only for an invoice key outside the evidenced shape, which the map refuses). The exact types are in `legacy-adoption-ports.ts`.
+reason; `recorded` says whether a map row was written — false only for an invoice key outside the evidenced shape, which the map refuses). Also `SKIPPED` (test panel), `FAILED` (unreadable provider record) and `REVIEW_CLOSED` (a person closed the review to reruns) — §9. The exact types are in `legacy-adoption-ports.ts`.
 
 ## 3. Capacity decision (6B)
 
@@ -119,7 +119,7 @@ RickPanel's `status` folded by the inventory (`RICKPANEL_ACCOUNT_STATES`):
 | `expired`  | `EXPIRED`             | renewable                                                                                                                                            |
 | `on_hold`  | MANUAL_REVIEW         | `UNSUPPORTED_SHAPE`: a not-yet-started window has no NEXA representation; guessing a start would invent an expiry                                    |
 | `UNKNOWN`  | MANUAL_REVIEW         | `UNSUPPORTED_SHAPE`                                                                                                                                  |
-| usage null | MANUAL_REVIEW         | `PROVIDER_READ_FAILED`: the record's usage fields were absent/malformed — never a fake zero                                                          |
+| usage null | FAILED                | `PROVIDER_READ_FAILED` (a map FAILED row, retried by a rerun): the record's usage fields were absent/malformed — never a fake zero                   |
 
 Figures: `expires_at` = the panel's expiry (null = unlimited); `traffic_limit_bytes` = the
 panel's `data_limit` (null → 0 = unlimited); `traffic_used_bytes` = the panel's used figure
@@ -174,26 +174,28 @@ provisioning operation. Proven through the real write path: the reports exclude 
 provisioner tick (earn sweep included) creates no cashback, referral commission or reseller
 record; a refund request finds no paid source.
 
-## 9. Manual-review reasons (closed)
+## 9. Decisions and their map rows (closed)
 
-Passthrough from the verified match: `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`,
-`PANEL_UNMAPPED`, `USERNAME_CASE_COLLISION`, `INVENTORY_INCOMPLETE`, `INVALID_SOURCE_ROW`
-(a `SKIPPED/TEST_PANEL` match is recorded `SKIPPED`). Decided here: `CUSTOMER_MISSING`,
-`PRODUCT_MAPPING_UNRESOLVED`, `SUBSCRIPTION_REF_BLOCKED`, `CONFLICTING_EXISTING_ENTITY`,
-`UNSUPPORTED_SHAPE`, `PROVIDER_READ_FAILED`. Each is a map row (`MANUAL_REVIEW` with the
-code); nothing else is written for it. The codes are `LEGACY_IMPORT_REASON_CODES` members
-(MAP-REVIEW's extension).
+| Outcome           | Map row                           | Reasons                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ADOPTED`         | `IMPORTED` / `SERVICE`            | —                                                                                                                                                                                                                                                                                                                                         |
+| `ALREADY_ADOPTED` | unchanged                         | —                                                                                                                                                                                                                                                                                                                                         |
+| `SKIPPED`         | `SKIPPED` / `TEST_PANEL`          | a test-panel match                                                                                                                                                                                                                                                                                                                        |
+| `MANUAL_REVIEW`   | `MANUAL_REVIEW` / reason          | passthrough (Item 9's `decisionForLegacyMatch` mapping): `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`, `PANEL_UNMAPPED`, `USERNAME_CASE_COLLISION`, `INVENTORY_INCOMPLETE`, `INVALID_SOURCE_ROW`; decided here: `CUSTOMER_MISSING`, `PRODUCT_MAPPING_UNRESOLVED`, `SUBSCRIPTION_REF_BLOCKED`, `CONFLICTING_EXISTING_ENTITY`, `UNSUPPORTED_SHAPE` |
+| `FAILED`          | `FAILED` / `PROVIDER_READ_FAILED` | the provider record had no readable usage, or an unusable link: not a question for a person (it is not a review reason); a rerun with a fresh read processes it again                                                                                                                                                                     |
+| `REVIEW_CLOSED`   | none                              | a person closed this invoice's review to reruns (Item 9: DISMISSED, or RESOLVED other than `RETRY_AFTER_FIX`); nothing is decided until they reopen it                                                                                                                                                                                    |
+
+Every review reason is a `LEGACY_REVIEW_REASON_CODES` member (Item 9), checked at compile
+time (`satisfies`). An invoice key outside the map's evidenced shape is answered
+`MANUAL_REVIEW / INVALID_SOURCE_ROW` with `recorded: false` and nothing written: the map
+refuses such a key by design, and the importer reports it from its own run.
 
 ## 10. Contracts and migrations
 
-- `LEGACY_IMPORT_REASON_CODES` gains six codes (own commit): `CUSTOMER_MISSING`,
-  `PRODUCT_MAPPING_UNRESOLVED`, `SUBSCRIPTION_REF_BLOCKED`, `CONFLICTING_EXISTING_ENTITY`,
-  `UNSUPPORTED_SHAPE`, `INVENTORY_INCOMPLETE`. Migration **0193** (generated) widens
-  `legacy_import_map_reason_check`. The manual-review queue owns the vocabulary and may land
-  the same names; then this is the same set and merges away.
 - `ServiceAdopted` domain event (own commit): ids and state only.
-- Nothing else: orders.origin (0187/0188), the import map (0190) and its `invoice` key (0191)
-  already exist.
+- No migration. orders.origin (0187/0188), the import map (0190), its `invoice` key (0191)
+  and the review reasons/state (0192, Item 9 — cherry-picked locally beneath this branch
+  until it merges) already hold everything the adoption writes.
 
 ## 11. Tests and mutation
 

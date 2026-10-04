@@ -5,6 +5,8 @@ import {
   SUBSCRIPTION_REF_BYTES,
   errors,
   isLegacyImportKey,
+  isLegacyReviewReasonCode,
+  type LegacyReviewReasonCode,
   telegramUserIdSchema,
   type ActorContext,
   type AuditWriter,
@@ -28,9 +30,10 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
-import type {
-  LegacyImportDecision,
-  LegacyImportRepository,
+import {
+  isReviewClosedToRerun,
+  type LegacyImportDecision,
+  type LegacyImportRepository,
 } from '../../../platform/legacy-import/application/legacy-import-ports.js';
 import type { PanelCapacityRepository } from '../../../platform/panels/application/capacity-ports.js';
 import type { ProductRepository } from '../../catalog/application/ports.js';
@@ -61,6 +64,7 @@ const AUDIT_ADOPT = 'legacy.service.adopt';
 const AUDIT_DECIDE = 'legacy.invoice.decide';
 const LEGACY_TABLE = 'invoice';
 const SUBSCRIPTION_URL_MAX = 2048;
+const READ_FAILED = { kind: 'READ_FAILED' } as const;
 
 export interface LegacyAdoptionDeps {
   readonly store: LegacyAdoptionStore;
@@ -101,6 +105,10 @@ export function adoptedServiceState(
     case 'UNKNOWN':
       return null;
   }
+}
+
+function reviewReasonOf(code: string | null): LegacyReviewReasonCode | null {
+  return code !== null && isLegacyReviewReasonCode(code) ? code : null;
 }
 
 /** A link a provider served: absolute http(s), bounded. Anything else is not stored. */
@@ -145,6 +153,7 @@ export function adoptionRequestHash(command: LegacyAdoptionCommand): string {
 
 type Decision =
   | { readonly kind: 'REVIEW'; readonly reason: LegacyAdoptionReviewReason }
+  | { readonly kind: 'READ_FAILED' }
   | { readonly kind: 'SKIP' };
 
 /**
@@ -269,8 +278,27 @@ export class LegacyAdoptionService {
       };
     }
 
+    /*
+     * Item 9: a person closed this invoice's review to reruns. Nothing is decided or written
+     * — not an adoption, not a new review — until they reopen it. (The map would refuse the
+     * write too; answering here keeps the adoption from being built and rolled back.)
+     */
+    if (existing !== undefined && isReviewClosedToRerun(existing)) {
+      return { kind: 'REVIEW_CLOSED', reason: reviewReasonOf(existing.reasonCode) };
+    }
+
     const decided = await this.decide(scope, command, tx);
     if ('kind' in decided) {
+      if (decided.kind === 'READ_FAILED') {
+        await this.record(
+          scope,
+          command,
+          { status: 'FAILED', reasonCode: 'PROVIDER_READ_FAILED' },
+          tx,
+        );
+        await this.auditDecision(scope, actor, command, 'FAILED', 'PROVIDER_READ_FAILED', tx);
+        return { kind: 'FAILED', reason: 'PROVIDER_READ_FAILED' };
+      }
       if (decided.kind === 'SKIP') {
         await this.record(scope, command, { status: 'SKIPPED', reasonCode: 'TEST_PANEL' }, tx);
         await this.auditDecision(scope, actor, command, 'SKIPPED', 'TEST_PANEL', tx);
@@ -327,7 +355,7 @@ export class LegacyAdoptionService {
     }
 
     const runtime = command.runtime;
-    if (runtime === null) return review('PROVIDER_READ_FAILED');
+    if (runtime === null) return READ_FAILED;
     const state = adoptedServiceState(runtime.state);
     if (state === null) return review('UNSUPPORTED_SHAPE');
     const usage = runtime.usage;
@@ -336,10 +364,10 @@ export class LegacyAdoptionService {
       usage.usedBytes < 0n ||
       (usage.totalBytes !== null && usage.totalBytes <= 0n)
     ) {
-      return review('PROVIDER_READ_FAILED');
+      return READ_FAILED;
     }
     if (runtime.subscriptionUrl !== null && !acceptableLink(runtime.subscriptionUrl)) {
-      return review('PROVIDER_READ_FAILED');
+      return READ_FAILED;
     }
 
     const customerId = await this.deps.store.findCustomerByTelegramId(
@@ -556,7 +584,7 @@ export class LegacyAdoptionService {
     scope: TenantContext,
     actor: ActorContext,
     command: LegacyAdoptionCommand,
-    status: 'SKIPPED' | 'MANUAL_REVIEW',
+    status: 'SKIPPED' | 'MANUAL_REVIEW' | 'FAILED',
     reason: string,
     tx: TransactionScope,
   ): Promise<void> {

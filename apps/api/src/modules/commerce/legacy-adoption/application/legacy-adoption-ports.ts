@@ -1,4 +1,9 @@
-import type { CurrencyCode, ProviderType, TenantContext } from '@nexa/contracts';
+import type {
+  CurrencyCode,
+  LegacyReviewReasonCode,
+  ProviderType,
+  TenantContext,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
@@ -89,7 +94,12 @@ export interface LegacyAdoptionCommand {
   readonly idempotencyKey: string;
 }
 
-/** Why an invoice went to manual review. A closed set; each is a map reason code. */
+/**
+ * Why an invoice went to manual review. A closed set, and every member is a
+ * `LEGACY_REVIEW_REASON_CODES` member (Item 9's queue vocabulary) — the type below fails the
+ * build otherwise. `PROVIDER_READ_FAILED` is deliberately NOT here: an unreadable provider
+ * record is a FAILED attempt a rerun processes again, not a question for a person.
+ */
 export const LEGACY_ADOPTION_REVIEW_REASONS = [
   'PROVIDER_MISSING',
   'AMBIGUOUS_PANEL',
@@ -102,8 +112,7 @@ export const LEGACY_ADOPTION_REVIEW_REASONS = [
   'SUBSCRIPTION_REF_BLOCKED',
   'CONFLICTING_EXISTING_ENTITY',
   'UNSUPPORTED_SHAPE',
-  'PROVIDER_READ_FAILED',
-] as const;
+] as const satisfies readonly LegacyReviewReasonCode[];
 export type LegacyAdoptionReviewReason = (typeof LEGACY_ADOPTION_REVIEW_REASONS)[number];
 
 export interface AdoptionCapacity {
@@ -136,6 +145,16 @@ export type LegacyAdoptionOutcome =
       readonly sourceChanged: boolean;
     }
   | { readonly kind: 'SKIPPED'; readonly reason: 'TEST_PANEL' }
+  /**
+   * The provider record could not be read (no usage figures, an unusable link): a map row
+   * `FAILED / PROVIDER_READ_FAILED`, which a rerun with a fresh read processes again.
+   */
+  | { readonly kind: 'FAILED'; readonly reason: 'PROVIDER_READ_FAILED' }
+  /**
+   * A person closed this invoice's review in a way a rerun must not act on (Item 9:
+   * DISMISSED, or RESOLVED other than RETRY_AFTER_FIX). Nothing is written; reopen it first.
+   */
+  | { readonly kind: 'REVIEW_CLOSED'; readonly reason: LegacyReviewReasonCode | null }
   | {
       readonly kind: 'MANUAL_REVIEW';
       readonly reason: LegacyAdoptionReviewReason;

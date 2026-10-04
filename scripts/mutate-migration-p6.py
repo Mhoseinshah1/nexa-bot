@@ -166,6 +166,18 @@ M = {
         'void shape;',
         ADOPT_IT,
     ),
+    'A16-closed-review-not-respected': (
+        AS,
+        '    if (existing !== undefined && isReviewClosedToRerun(existing)) {',
+        '    if (false && existing !== undefined && isReviewClosedToRerun(existing)) {',
+        ADOPT_IT,
+    ),
+    'A17-read-failure-as-review': (
+        AS,
+        "          { status: 'FAILED', reasonCode: 'PROVIDER_READ_FAILED' },",
+        "          { status: 'MANUAL_REVIEW', reasonCode: 'PROVIDER_READ_FAILED' },",
+        ADOPT_IT,
+    ),
 }
 
 selected = sys.argv[1:] or list(M)

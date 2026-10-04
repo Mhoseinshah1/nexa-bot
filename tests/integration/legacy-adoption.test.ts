@@ -512,7 +512,7 @@ describe('Migration P6: legacy service adoption', () => {
       const c = command({ telegramUserId, match, runtime: null });
       expect(await adopt(c)).toEqual(expected);
       const row = await mapRow(c.legacyInvoiceKey);
-      expect(row?.reason_code).toBe(match.reason);
+      expect(row?.reason_code).toBe((match as { reason: string }).reason);
       expect(row?.status).toBe(match.kind === 'SKIPPED' ? 'SKIPPED' : 'MANUAL_REVIEW');
     }
     expect(await businessRows()).toMatchObject({ orders: 0, services: 0, reservations: 0 });
@@ -629,17 +629,61 @@ describe('Migration P6: legacy service adoption', () => {
         reason: 'UNSUPPORTED_SHAPE',
       });
     }
-    expect(await adopt(command({ telegramUserId, runtime: facts({ usage: null }) }))).toMatchObject(
-      {
-        kind: 'MANUAL_REVIEW',
-        reason: 'PROVIDER_READ_FAILED',
-      },
-    );
+    // An unreadable record is a FAILED attempt a rerun with a fresh read retries — not a
+    // question for a person (PROVIDER_READ_FAILED is not a review reason).
+    const unreadable = command({ telegramUserId, runtime: facts({ usage: null }) });
+    expect(await adopt(unreadable)).toEqual({ kind: 'FAILED', reason: 'PROVIDER_READ_FAILED' });
+    expect(await mapRow(unreadable.legacyInvoiceKey)).toMatchObject({
+      status: 'FAILED',
+      reason_code: 'PROVIDER_READ_FAILED',
+    });
     expect(
       await adopt(
         command({ telegramUserId, runtime: facts({ subscriptionUrl: 'javascript:alert(1)' }) }),
       ),
-    ).toMatchObject({ kind: 'MANUAL_REVIEW', reason: 'PROVIDER_READ_FAILED' });
+    ).toEqual({ kind: 'FAILED', reason: 'PROVIDER_READ_FAILED' });
+    // A rerun with a good read adopts the same invoice.
+    const retried = await adopt({
+      ...unreadable,
+      runtime: facts(),
+      idempotencyKey: `${unreadable.idempotencyKey}:reread`,
+    });
+    expect(retried.kind).toBe('ADOPTED');
+  });
+
+  it('a review a person closed to reruns is left alone: nothing adopted, nothing rewritten', async () => {
+    const c = command({ telegramUserId: tg() });
+    expect(await adopt(c)).toMatchObject({ kind: 'MANUAL_REVIEW', reason: 'CUSTOMER_MISSING' });
+    await ctx.container.legacyReviewQueue.resolve(tenantA, owner, {
+      legacyTable: 'invoice',
+      legacyId: c.legacyInvoiceKey,
+      expectedReasonCode: 'CUSTOMER_MISSING',
+      resolutionCode: 'HANDLED_OUTSIDE_IMPORT',
+      idempotencyKey: `resolve-${c.legacyInvoiceKey}`,
+    });
+    await fx.customer({ telegramUserId: c.telegramUserId });
+    const again = await adopt({ ...c, idempotencyKey: `${c.idempotencyKey}:after-close` });
+    expect(again).toEqual({ kind: 'REVIEW_CLOSED', reason: 'CUSTOMER_MISSING' });
+    expect(await businessRows()).toMatchObject({ orders: 0, services: 0, reservations: 0 });
+    expect(await mapRow(c.legacyInvoiceKey)).toMatchObject({
+      status: 'MANUAL_REVIEW',
+      reason_code: 'CUSTOMER_MISSING',
+    });
+    // RETRY_AFTER_FIX invites the rerun: the same invoice then adopts.
+    await ctx.container.legacyReviewQueue.reopen(tenantA, owner, {
+      legacyTable: 'invoice',
+      legacyId: c.legacyInvoiceKey,
+      idempotencyKey: `reopen-${c.legacyInvoiceKey}`,
+    });
+    await ctx.container.legacyReviewQueue.resolve(tenantA, owner, {
+      legacyTable: 'invoice',
+      legacyId: c.legacyInvoiceKey,
+      expectedReasonCode: 'CUSTOMER_MISSING',
+      resolutionCode: 'RETRY_AFTER_FIX',
+      idempotencyKey: `retry-${c.legacyInvoiceKey}`,
+    });
+    const retried = await adopt({ ...c, idempotencyKey: `${c.idempotencyKey}:retry` });
+    expect(retried.kind).toBe('ADOPTED');
   });
 
   it('stores unlimited traffic and time as the panel reports them, and no link when none was read', async () => {
