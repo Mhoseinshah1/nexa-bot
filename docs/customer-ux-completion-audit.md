@@ -207,3 +207,47 @@ Decisions the code forced after the audit above was written, recorded here rathe
 - **The top-up route buttons carry the capture id and the provider**, never the amount; `WalletTopupFlowService.choose` re-reads the capture the customer owns and re-decides the route before `requestWalletTopupTyped` issues the payment under `topup-capture:<captureId>`.
 - **The membership gift does not wait for a purchase.** An earlier summary of this package said the gift is claimable "only after the referred customer's first purchase is fulfilled"; that was never what the code did and is not the owner's rule. Eligibility is the accepted attribution alone; the purchase commission is the reward that waits for delivery. The two are independent in both directions and are now pinned by `tests/integration/referral-signup-gift.test.ts` › the membership gift, independent of any purchase.
 - **`ok:` («وصل شدم») writes nothing** — no audit row, no operation, no ledger entry — because the customer's statement about their own device is not a fact this installation can check.
+
+## Batch 01 item 3 — the status colour in «سرویس‌های من» is derived
+
+The colour of a service on its list button and on its card is never stored and never chosen
+by hand. `serviceDisplayStatus` (`apps/api/src/modules/commerce/provisioning/domain/service-display-status.ts`)
+derives it at draw time from the state, the deadline and the READ usage, and
+`SERVICE_STATUS_PRESENTATION` is the one table the card, the list and the search results
+read. The state alone was not enough: the expiry sweep and the usage sync that flip a row to
+`EXPIRED` run on a schedule, and until then a lapsed or used-up service read «🟢 فعال».
+
+| Shown        | When                                                        | Marker            | Button style |
+| ------------ | ----------------------------------------------------------- | ----------------- | ------------ |
+| ACTIVE       | ACTIVE, in its window, allowance left (or unread/unlimited) | `{icon:active}`   | `success`    |
+| EXPIRED      | EXPIRED; or ACTIVE/SUSPENDED with `expiresAt <= now`        | `{icon:inactive}` | `danger`     |
+| EXHAUSTED    | ACTIVE/SUSPENDED/EXPIRED in window, read usage ≥ finite cap | `{icon:inactive}` | `danger`     |
+| SUSPENDED    | SUSPENDED, in window, allowance left                        | `{icon:inactive}` | `danger`     |
+| PENDING      | PENDING_PROVISION                                           | `{icon:time}`     | tenant's     |
+| UNRECONCILED | UNRECONCILED                                                | `{icon:warning}`  | tenant's     |
+| TERMINATED   | TERMINATED                                                  | `{icon:error}`    | tenant's     |
+
+- Time beats volume when both hold; an unread usage (`usage_synced_at` null) is unknown and
+  never counts as used up; `0n` is the unlimited sentinel.
+- SUSPENDED is red because it does not connect (the customer's own switch-off, an operator or
+  policy) — it already used the `inactive` slot.
+- The marker is an Appearance marker in the label (`bot.service.list_item_button` =
+  `{marker} {username}`, rendered to its fallback emoji on a button), and the colour is the
+  button's Bot API style (`derivedStyle`), which wins over the tenant's `bot.inline_buttons`
+  style for `services.item`; where the table derives none, the tenant's style applies.
+- An operator's EXISTING override of `bot.service.list_item_button` (say `✨ {username} ✨`)
+  keeps validating — `{marker}` is optional — but shows no marker until the operator adds
+  `{marker}`. The button colour is derived either way. Release note for the owner.
+- A SUSPENDED service past its deadline reads «منقضی شده», and one in its window with traffic
+  used up reads «حجم تمام شده», rather than «خاموش»: the table states the fact that blocks the
+  service first. Red in every case; owner to confirm.
+- The card's status line uses the same table (`bot.service.state_*`, plus the new
+  `bot.service.state_exhausted`); «working» still wins while a change is applied.
+- No customer-facing web view exists; the Web Admin's service pages show the stored state.
+
+Tests: `tests/unit/service-display-status.test.ts` (every state × deadline × usage, the
+presentation table, the wire keyboard under a tenant style, the card line) and
+`tests/integration/customer-ux-services.test.ts` › colours each service … and follows a
+refresh. Mutation-checked: deadline not half-open, ACTIVE ignoring the deadline, an unread
+usage counted, the tenant style winning, the card or the list reading the state alone, and
+the list dropping the derived style — each failed a test.

@@ -335,6 +335,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   locationsBlock: 'بخش لوکیشن‌ها',
   max: 'حداکثر تعداد نویسه',
   maxBytes: 'حداکثر حجم فایل',
+  marker: 'نشانگر وضعیت سرویس (خودکار)',
   maximum: 'حداکثر مبلغ',
   message: 'متن رخداد',
   method: 'روش پرداخت',
@@ -532,7 +533,10 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   },
   'bot.reseller.minimum_achieved': { minimum: 'حداقل فروش ماهانه' },
   'bot.service.list': { total: 'تعداد کل سرویس‌ها' },
-  'bot.service.list_item_button': { username: 'نام کاربری سرویس' },
+  'bot.service.list_item_button': {
+    username: 'نام کاربری سرویس',
+    marker: 'نشانگر وضعیت سرویس (خودکار)',
+  },
   'bot.service.card': { lastSeen: 'آخرین اتصال', status: 'وضعیت سرویس' },
   'bot.service.remaining_value': { percent: 'درصد باقی‌مانده' },
   'bot.wallet.topup_method_button': { name: 'نام روش پرداخت' },
@@ -743,7 +747,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.terms.accepted': [
     'پذیرش قوانین ثبت شد',
-    'پاسخ دکمهٔ پذیرش قوانین؛ همراه با منوی اصلی، تا مشتری کارش را ادامه دهد.',
+    'پاسخ دکمهٔ پذیرش قوانین؛ همان پیام قوانین به این متن ویرایش می‌شود (پیام تازه‌ای فرستاده نمی‌شود) و دکمهٔ منوی اصلی زیر آن می‌آید.',
   ],
   'bot.terms.accept_button': ['دکمهٔ پذیرش قوانین', 'دکمه‌ای که زیر متن قوانین می‌آید.'],
   'bot.channels.join_private_button': [
@@ -1453,7 +1457,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.service.list_item_button': [
     'دکمهٔ هر سرویس در فهرست',
-    'دکمهٔ هر سرویس در فهرست سرویس‌ها با نام کاربری آن روی پنل.',
+    'دکمهٔ هر سرویس در فهرست سرویس‌ها با نام کاربری آن روی پنل. نشانگر و رنگ دکمه خودکار از وضعیت، تاریخ انقضا و مصرف سرویس به دست می‌آید: سبز برای سرویس فعال، قرمز برای سرویس منقضی، تمام‌شده یا خاموش.',
   ],
   'bot.service.search_label_button': [
     'دکمهٔ برچسب جست‌وجو',
@@ -1509,7 +1513,11 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.service.state_expired': [
     'وضعیت سرویس: منقضی',
-    'متن وضعیت در کارت سرویسی که اعتبارش تمام شده است.',
+    'متن وضعیت در کارت سرویسی که زمانش تمام شده است — حتی اگر وضعیتش هنوز «فعال» ثبت شده باشد.',
+  ],
+  'bot.service.state_exhausted': [
+    'وضعیت سرویس: حجم تمام‌شده',
+    'متن وضعیت در کارت سرویسی که حجم مصرفی‌اش به سقف رسیده و زمانش هنوز باقی است.',
   ],
   'bot.service.state_terminated': [
     'وضعیت سرویس: حذف‌شده',

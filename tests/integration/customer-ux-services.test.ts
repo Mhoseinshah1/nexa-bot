@@ -302,12 +302,67 @@ describe('a customer looks after the services they bought', () => {
         ].join('\n'),
       );
       const markup = lastMarkup();
-      expect(markup).toContain(`✨ ${service.username} ✨`);
+      // Batch 01 item 3: the marker and the colour of the service's derived status.
+      expect(markup).toContain(`"text":"🟢 ${service.username}"`);
+      expect(markup).toContain('"style":"success"');
       expect(buttonsOf(markup)).toEqual([`sv:${service.id}`, 'ss:', 'ss:', 'sl:1', 'mm:']);
       expect(markup).toContain('جستجو نام کاربری');
       expect(markup).toContain('🔎 جستجو');
       expect(markup).toContain('1/1');
       expect(markup).toContain('🔙 بازگشت به منوی اصلی');
+    });
+
+    /*
+     * Batch 01 item 3: the colour is DERIVED from the row's facts — never stored, never
+     * chosen by hand — so a service past its deadline or out of traffic is red while its
+     * state still reads ACTIVE, and the list and the card follow a refresh that reads usage.
+     */
+    it('colours each service from its state, deadline and read usage, and follows a refresh', async () => {
+      const productId = await product('colour');
+      const fresh = await activeService('colour-fresh', maryam, productId);
+      const lapsed = await activeService('colour-lapsed', maryam, productId);
+      const used = await activeService('colour-used', maryam, productId);
+      // The deadline has passed but no sweep has run: the row still says ACTIVE.
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET expires_at = now() - interval '1 hour' WHERE id = ${lapsed.id}`,
+      );
+      const cellOf = (markup: string, id: string) => {
+        const rows = (JSON.parse(markup) as { inline_keyboard: Record<string, unknown>[][] })
+          .inline_keyboard;
+        return rows.flat().find((cell) => cell.callback_data === `sv:${id}`);
+      };
+
+      await handle(text('/services'));
+      expect(cellOf(lastMarkup(), fresh.id)).toMatchObject({
+        text: `🟢 ${fresh.username}`,
+        style: 'success',
+      });
+      expect(cellOf(lastMarkup(), lapsed.id)).toMatchObject({
+        text: `🔴 ${lapsed.username}`,
+        style: 'danger',
+      });
+      expect(cellOf(lastMarkup(), used.id)).toMatchObject({ style: 'success' });
+      expect((await services.findById(tenantA, lapsed.id))?.state).toBe('ACTIVE');
+
+      // The lapsed card says so in red too, from the same table.
+      await handle(tap(`sv:${lapsed.id}`));
+      expect(lastDrawnText()).toContain('📊وضعیت سرویس: 🔴 منقضی شده');
+
+      // A refresh reads the panel: the allowance is used up. Card and list turn red.
+      const user = panel.users.get(used.username);
+      if (user === undefined) throw new Error('no panel user');
+      user.usedTraffic = 53_687_091_200;
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET usage_synced_at = now() - interval '10 minutes' WHERE id = ${used.id}`,
+      );
+      await handle(tap(`rs:${used.id}`));
+      expect(lastDrawnText()).toContain('📊وضعیت سرویس: 🔴 حجم تمام شده');
+      await handle(text('/services'));
+      expect(cellOf(lastMarkup(), used.id)).toMatchObject({
+        text: `🔴 ${used.username}`,
+        style: 'danger',
+      });
+      expect((await services.findById(tenantA, used.id))?.state).toBe('ACTIVE');
     });
 
     it('lists the customer’s OWN services and nobody else’s', async () => {

@@ -46,8 +46,34 @@ message, a crafted id, or another tenant's id writes nothing and answers
 `bot.terms.updated` with the current version and its own button. A duplicate or
 concurrent tap inserts nothing the second time (`ON CONFLICT DO NOTHING` on the once
 key), and only the row actually written is audited (`customer.terms_accept`) and
-announced (`CustomerTermsAccepted`). After acceptance the customer gets the main menu;
-what they first asked for is never replayed. A replayed acceptance (the same key) is
+announced (`CustomerTermsAccepted`). What they first asked for is never replayed.
+
+### The answer is an edit, not a message (Batch 01 item 1)
+
+The accept tap EDITS the terms message it sits on (`termsAcceptedReply`, `edit: true`) into
+`bot.terms.accepted` — «✅ قوانین و مقررات با موفقیت پذیرفته شد.» / «اکنون می‌توانید از ربات
+استفاده کنید.» — and replaces the accept button with the main-menu button. No message is
+sent. The persistent reply keyboard cannot ride on an `editMessageText`; a customer stopped at
+their very first `/start` gets it from that main-menu button, at their own request.
+
+- A double tap, a later tap and a redelivered update each edit the message into the same
+  text again; Telegram answers `message is not modified`, which the messenger counts as
+  delivered, so none of them sends anything. The row is still written once (above).
+- When Telegram cannot edit the message at all (deleted, a photo), `editOrSend` sends the
+  SAME reply once as a new message — its one fallback; nothing retries, so nothing loops.
+- A stale button (`termsStaleReply`) edits the same message into the newer version with its
+  own button, so the customer never has two prompts on screen, one of them dead.
+- An over-long version cut into parts carries the button on the last part; that part is the
+  one edited.
+- A newer version longer than one message cannot be edited in (`NOT_EDITABLE`), so the stale
+  reply goes out once as new, split messages. The old message keeps its dead button, and each
+  further tap on it sends one more copy — bounded by the customer's taps, and each copy carries
+  the current accept button, so it is visible rather than silent.
+
+The 2026-10 report of "a new message, and/or the prompt again" was this answer: it was the
+main menu reply sent as a NEW message with the accepted text, under a terms message whose
+accept button was still live. Persistence was already per (customer, version) and survives a
+restart; the integration suite now pins that too. A replayed acceptance (the same key) is
 answered from the replay alone: ACCEPTED while its version is still current, otherwise
 STALE with the current version — it never falls through to a second write under the
 occupied key, which `rememberOnce` would refuse as in-flight.
@@ -84,9 +110,15 @@ same decision the gate makes.
 
 `tests/integration/terms.test.ts` (end to end through the webhook): no terms,
 enforcement off, enforcement on, accepted current, accepted old version, new publication
-requires re-acceptance, stale callback, duplicate and concurrent accept, cross-tenant
+requires re-acceptance, stale callback, duplicate and concurrent accept (exactly one edit
+of the tapped message, zero sends, across concurrent taps and a redelivered update), no
+re-prompt on later requests or after an application restart, the edit fallback, cross-tenant
 isolation, the gate not bypassable by any customer intent or crafted callback, admin
 permissions with DENIED audit, audit and outbox rows, immutability in the database,
 the HTTP surface and Customer 360. Each key rule was mutation-checked (gate removed,
 stale check removed, any-version acceptance, audit on duplicate, publish under the edit
 key, flag ignored) and a test failed for each.
+
+Batch 01 item 1 was mutation-checked the same way: the accepted reply without `edit`, the
+old main-menu-as-a-new-message answer, "not modified" treated as a refusal, and the stale
+answer sent rather than edited — each failed at least one test.
