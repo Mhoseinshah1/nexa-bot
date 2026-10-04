@@ -3252,13 +3252,13 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
   payload carries, so an UNRECONCILED service older than those ten does not raise it.
   Widening it means a second, customer-scoped read that must repeat the refunded-away rule,
   and that should reuse `pageForCustomer`'s predicate rather than copy it.
--- **OQ-TB-19 — `sender_business_bot` on an edit.** Whether Telegram sets `sender_business_bot`
+- **OQ-TB-18 — which six client apps.** TB3 keeps the first six relevant ENABLED apps in
+  the operator's order, which is platform first. A tenant with many Android entries will
+  therefore show no iOS app. A per-platform quota, or a choice by the customer's last-used
+  platform (which is not known), is open.
+
+- **OQ-TB-19 — `sender_business_bot` on an edit.** Whether Telegram sets `sender_business_bot`
   on an `edited_business_message` that edits a message the bot sent is undocumented. NEXA
   never edits, so TB2 treats an edit as ours only when that field names our bot; the send
   record proves the message id, not the edit (TB2 review F3). Real-Telegram acceptance should
   confirm it. Until then, an owner's edit of our message is a human act, which fails safe.
-
- **OQ-TB-18 — which six client apps.** TB3 keeps the first six relevant ENABLED apps in
-  the operator's order, which is platform first. A tenant with many Android entries will
-  therefore show no iOS app. A per-platform quota, or a choice by the customer's last-used
-  platform (which is not known), is open.

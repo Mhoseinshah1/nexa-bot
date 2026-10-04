@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { type z } from 'zod';
+/** A zod schema seen structurally: the root test project does not resolve `zod` itself. */
+type ZodLike = object;
 import {
   SUPPORT_CONTEXT_GUIDE_MAX_CHARS,
   SUPPORT_CONTEXT_LIMITS,
@@ -112,16 +113,16 @@ function payload(overrides: Partial<SupportContextPayload> = {}): SupportContext
 }
 
 /** Every key path the schema admits, objects walked through arrays and nullables. */
-function keyPaths(schema: z.ZodType, prefix = ''): string[] {
+function keyPaths(schema: ZodLike, prefix = ''): string[] {
   const def = (schema as unknown as { def: { type: string } }).def;
   if (def.type === 'nullable' || def.type === 'optional') {
-    return keyPaths((schema as unknown as { unwrap(): z.ZodType }).unwrap(), prefix);
+    return keyPaths((schema as unknown as { unwrap(): ZodLike }).unwrap(), prefix);
   }
   if (def.type === 'array') {
-    return keyPaths((schema as unknown as { element: z.ZodType }).element, `${prefix}[]`);
+    return keyPaths((schema as unknown as { element: ZodLike }).element, `${prefix}[]`);
   }
   if (def.type === 'object') {
-    const shape = (schema as unknown as { shape: Record<string, z.ZodType> }).shape;
+    const shape = (schema as unknown as { shape: Record<string, ZodLike> }).shape;
     return Object.entries(shape).flatMap(([key, child]) => {
       const path = prefix === '' ? key : `${prefix}.${key}`;
       return [path, ...keyPaths(child, path)];
