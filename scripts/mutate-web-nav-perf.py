@@ -27,6 +27,7 @@ APP = 'apps/web/src/app.tsx'
 USERS = 'apps/web/src/pages/users.tsx'
 AUDIT = 'apps/web/src/pages/audit-log.tsx'
 HTML = 'apps/web/index.html'
+QC = 'apps/web/src/query-client.ts'
 
 T_NAV = ('web', 'tests/web/nav-prefetch.test.tsx')
 T_PLAN = ('integration', 'tests/integration/reporting-plan.test.ts')
@@ -56,6 +57,10 @@ M = [
   T_NAV, 'bare customer list answer a searched one', None),
  ('NP-07', [(HTML, '    <link rel="icon" href="data:," />\n', '')],
   T_ICON, 'declares an icon that needs no request', None),
+ ('NP-10', [(SHELL, "                    onFocus={() => onIntent?.(entry.path)}\n", "")],
+  T_NAV, 'prefetches on keyboard focus', None),
+ ('NP-11', [(QC, "void client.invalidateQueries({ queryKey: ['audit-log'] });", "")],
+  T_NAV, 'reads the audit log again after a write', None),
  ('NP-08', [(OI, ORDERS_BLOCK, '')],
   T_PLAN, 'orders_tenant_paid_settled_idx', 'orders_tenant_paid_settled_idx'),
  ('NP-09', [(OI, PAYMENTS_BLOCK, '')],

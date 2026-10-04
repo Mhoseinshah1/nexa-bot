@@ -257,17 +257,19 @@ JavaScript chunk.
 at a time, runs the test that names it, and restores the file. Every mutation must be
 KILLED:
 
-| Id    | Rule reverted                                    | Test that fails                    |
-| ----- | ------------------------------------------------ | ---------------------------------- |
-| NP-01 | the 5-second `staleTime` on the customer list    | page after its prefetch asks again |
-| NP-02 | the sidebar's pointer handler                    | no prefetch happens                |
-| NP-03 | the permission check before a prefetch           | a refused page is asked for        |
-| NP-04 | the shell keyed by route (a remount)             | sidebar and top bar replaced       |
-| NP-05 | the audit log key without its filters            | bare page answers a filtered one   |
-| NP-06 | the customer key without the search              | bare list answers a searched one   |
-| NP-07 | the empty icon                                   | `web-index-icon.test.ts`           |
-| NP-08 | the `orders_tenant_paid_settled_idx` declaration | four `reporting-plan` plans        |
-| NP-09 | the `payments_tenant_resolved_idx` declaration   | the `paymentFailures` plan         |
+| Id    | Rule reverted                                    | Test that fails                       |
+| ----- | ------------------------------------------------ | ------------------------------------- |
+| NP-01 | the 5-second `staleTime` on the customer list    | page after its prefetch asks again    |
+| NP-02 | the sidebar's pointer handler                    | no prefetch happens                   |
+| NP-03 | the permission check before a prefetch           | a refused page is asked for           |
+| NP-04 | the shell keyed by route (a remount)             | sidebar and top bar replaced          |
+| NP-05 | the audit log key without its filters            | bare page answers a filtered one      |
+| NP-06 | the customer key without the search              | bare list answers a searched one      |
+| NP-07 | the empty icon                                   | `web-index-icon.test.ts`              |
+| NP-08 | the `orders_tenant_paid_settled_idx` declaration | four `reporting-plan` plans           |
+| NP-09 | the `payments_tenant_resolved_idx` declaration   | the `paymentFailures` plan            |
+| NP-10 | the sidebar's keyboard-focus handler             | focusing a link prefetches nothing    |
+| NP-11 | the audit-log invalidation after every mutation  | a write inside the window is not seen |
 
 NP-08 and NP-09 also drop the index from the test database (online indexes are built
 outside the migrator) and rebuild it afterwards with the compiled migrator, so they need
@@ -277,7 +279,7 @@ outside the migrator) and rebuild it afterwards with the compiled migrator, so t
 TEST_DATABASE_URL=postgres://nexa:nexa@127.0.0.1:5432/<your db> python3 scripts/mutate-web-nav-perf.py
 ```
 
-Last run (on `nexa_b2_perf_it`): all nine KILLED, tree clean afterwards.
+Last run (on `nexa_b2_perf_it`): all eleven KILLED, tree clean afterwards.
 
 ## Remaining bottlenecks
 

@@ -26,9 +26,11 @@ import type { PermissionKey } from '@nexa/contracts';
  * - **The SAME query the page asks**, built by the page module's own exported builder,
  *   so the key and the function cannot drift apart into a prefetch nobody reads.
  * - **No new identity in the key.** The keys stay tenant-independent; the cache is
- *   emptied at every session change (`app.tsx`, sign-in and sign-out), and sign-out
- *   cancels in-flight queries first — a prefetch is a query like any other, so one
- *   still in flight cannot write the previous operator's rows back.
+ *   emptied at every session change (`app.tsx`, sign-in and sign-out). A prefetch is a
+ *   query like any other, so one still in flight at sign-out cannot write the previous
+ *   operator's rows back: `removeQueries` takes its entry out of the cache, and the
+ *   answer lands on a query object the cache no longer holds. (Sign-out cancels first
+ *   as well; the test pins the outcome, which `removeQueries` alone already secures.)
  */
 
 /**
@@ -38,9 +40,13 @@ import type { PermissionKey } from '@nexa/contracts';
  * mounting a moment after its prefetch answered would ask again at once. Five seconds
  * covers the gap between pointing and clicking with room to spare, and is the only
  * staleness it introduces: returning to one of these pages within five seconds of its
- * last read shows that read without asking again. A write still refreshes it at once —
- * every mutation that changes these lists invalidates their key, and invalidation
- * ignores `staleTime`.
+ * last read shows that read without asking again. A write made from this tab still
+ * refreshes it at once, because invalidation ignores `staleTime`: the customer, tag and
+ * settings mutations invalidate their own keys, and the audit log — which EVERY write
+ * appends to and no page's mutation names — is invalidated after every settled mutation
+ * by the query client itself (`query-client.ts`). A change made elsewhere (the bot,
+ * another operator) is seen up to five seconds late on a revisit, as it is on any page
+ * until it is next read.
  */
 export const NAV_PREFETCH_FRESH_MS = 5_000;
 

@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, NAV_PREFETCH } from '../../apps/web/src/app';
 import { NAV_PREFETCH_FRESH_MS, prefetchNav } from '../../apps/web/src/nav-prefetch';
+import { createQueryClient } from '../../apps/web/src/query-client';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, stubApi } from './harness';
@@ -128,6 +129,45 @@ describe('the sidebar prefetch', () => {
     });
     expect(getsOf(api.calls, '/users')).toBe(1);
     expect(getsOf(api.calls, '/customer-tags')).toBe(1);
+  });
+
+  it('prefetches on keyboard focus, as it does on pointing', async () => {
+    const api = stubApi(ROUTES);
+    renderShell();
+    await screen.findByText('مدیر اصلی');
+    expect(getsOf(api.calls, '/settings')).toBe(0);
+    fireEvent.focus(link('web.nav_settings'));
+    await waitFor(() => expect(getsOf(api.calls, '/settings')).toBe(1));
+  });
+
+  it('reads the audit log again after a write, even inside its freshness window', async () => {
+    /*
+     * Every write appends an audit row and no page's mutation names the log, so the
+     * production client invalidates it after every settled mutation. Without that, an
+     * operator who pointed at Audit Log, saved something and opened Audit Log within
+     * five seconds was shown the read from before the save.
+     */
+    const api = stubApi(ROUTES);
+    const client = createQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <App />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('مدیر اصلی');
+    fireEvent.pointerEnter(link('web.nav_audit_log'));
+    await waitFor(() => expect(getsOf(api.calls, '/audit-log')).toBe(1));
+
+    // Any mutation through the client's mutation cache, as every page's `useMutation` is.
+    await act(async () => {
+      await client
+        .getMutationCache()
+        .build(client, { mutationFn: () => Promise.resolve(null) })
+        .execute(undefined);
+    });
+
+    fireEvent.click(link('web.nav_audit_log'));
+    await waitFor(() => expect(getsOf(api.calls, '/audit-log')).toBe(2));
   });
 
   it('joins a prefetch still in flight instead of sending a second request', async () => {
