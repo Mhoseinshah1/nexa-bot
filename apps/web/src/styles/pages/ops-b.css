@@ -1138,6 +1138,15 @@ form.set-row > * + * {
   width: fit-content;
   max-width: 18rem;
 }
+/*
+ * The filter link in the actor and action cells starts its cell. A button in the
+ * cell's flex column is otherwise stretched to the column and CENTRES its text,
+ * so a short `owner` beside a long job id floated ~80px from the start.
+ */
+.audit-cell > .link {
+  align-self: flex-start;
+  text-align: start;
+}
 .audit-actor {
   display: flex;
   align-items: flex-start;

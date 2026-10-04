@@ -202,6 +202,10 @@ describe('spacing and wrapping the kit leaves to its containers', () => {
     expect(action).toMatch(/max-width:\s*18rem/);
     expect(action).toMatch(/width:\s*fit-content/);
     expect(action, 'a floor pushes a short action off the cell start').not.toMatch(/min-width/);
+    // A stretched button centres its text: `owner` floated ~80px from its cell start.
+    const link = block('.audit-cell > .link');
+    expect(link).toMatch(/align-self:\s*flex-start/);
+    expect(link).toMatch(/text-align:\s*start/);
     const prose = ruleListing('.audit-reason');
     expect(prose).toMatch(/overflow-wrap:\s*anywhere/);
     expect(ruleListing('.audit-correlation')).toBe(prose);

@@ -262,7 +262,7 @@ export function AuditLogPage({
       header: t('web.audit_col_action'),
       wrap: true,
       render: (row) => (
-        <span className="cell-main">
+        <span className="cell-main audit-cell">
           <button
             type="button"
             className="link audit-code"
@@ -576,25 +576,32 @@ function ActorCell({ row, route }: { row: AuditLogEntry; route: Route }) {
         {shown}
       </bdi>
     );
+  const control =
+    row.actorId === null ? (
+      (value ?? <span>{t(ACTOR_LABELS[row.actorType])}</span>)
+    ) : (
+      <button
+        type="button"
+        className="link"
+        title={t('web.audit_filter_by_actor')}
+        onClick={() => setQuery(route, 'actor', row.actorId)}
+      >
+        {value}
+      </button>
+    );
+  // Only a copyable label gets the row beside its copy button: the wrapper's own line box
+  // made every short row 2px taller in Chromium, so a short label keeps the old structure.
+  const copyable = shown !== null && (style?.technical === true || style?.long === true);
   return (
-    <span className="cell-main">
-      <span className="audit-actor">
-        {row.actorId === null ? (
-          (value ?? <span>{t(ACTOR_LABELS[row.actorType])}</span>)
-        ) : (
-          <button
-            type="button"
-            className="link"
-            title={t('web.audit_filter_by_actor')}
-            onClick={() => setQuery(route, 'actor', row.actorId)}
-          >
-            {value}
-          </button>
-        )}
-        {shown !== null && (style?.technical === true || style?.long === true) && (
+    <span className="cell-main audit-cell">
+      {copyable && shown !== null ? (
+        <span className="audit-actor">
+          {control}
           <CopyButton value={shown} label={t('web.audit_copy_actor')} />
-        )}
-      </span>
+        </span>
+      ) : (
+        control
+      )}
       <span className="muted small">{t(ACTOR_LABELS[row.actorType])}</span>
     </span>
   );

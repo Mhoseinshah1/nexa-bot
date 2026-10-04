@@ -317,6 +317,14 @@ describe('a long actor identifier in the audit log', () => {
     expect(value.hasAttribute('title')).toBe(false);
     const row = value.closest('tr') as HTMLElement;
     expect(within(row).queryByRole('button', { name: t('web.audit_copy_actor') })).toBeNull();
+    // Nor the copy row's wrapper: its line box made each short row 2px taller in Chromium.
+    expect(row.querySelector('.audit-actor')).toBeNull();
+    // Its filter link starts the cell rather than centring in it (the rule is asserted in
+    // the stylesheet contract).
+    expect(value.closest('button')?.parentElement?.className.split(' ')).toEqual([
+      'cell-main',
+      'audit-cell',
+    ]);
   });
 
   it('keeps a Persian admin name in the UI font, clamped once it is long', async () => {
