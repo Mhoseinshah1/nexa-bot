@@ -113,6 +113,18 @@ describe('legacy-rehearsal-report-check', () => {
     expect(validate(schema, doc)[0]).toContain('property name "free text"');
   });
 
+  it('requires the reconciliation array and a full ISO-8601 UTC timestamp', () => {
+    const doc = report();
+    delete doc.reconciliation;
+    doc.generatedAt = 'yesterday Z';
+    const errors = validate(schema, doc);
+    expect(errors).toContain('<root>: missing required "reconciliation"');
+    expect(errors.some((e: string) => e.startsWith('generatedAt: does not match'))).toBe(true);
+    const ok = report();
+    ok.generatedAt = '2026-10-04T05:00:00Z';
+    expect(validate(schema, ok)).toEqual([]);
+  });
+
   it('refuses a schema keyword it does not implement instead of ignoring it', () => {
     expect(() => validate({ type: 'object', minProperties: 1 }, {})).toThrow(/not supported/u);
   });

@@ -45,7 +45,7 @@ function run(
     '--tenant': 'nexa',
     '--panel-map': panelMap,
     '--nexa-env': nexaEnv,
-    '--pg-url': 'postgres://nexa:nexa@127.0.0.1:5432',
+    '--pg-url': 'postgres://nexa@127.0.0.1:5432',
     '--out': join(dir, `out-${Math.random().toString(16).slice(2)}`),
     '--fresh-migrate': '',
     ...overrides,
@@ -92,13 +92,13 @@ describe('legacy-rehearsal.sh guards', () => {
   });
 
   it("refuses a deployment's own database service name", () => {
-    const { status, output } = run({ '--pg-url': 'postgres://nexa:x@postgres:5432' }, [
+    const { status, output } = run({ '--pg-url': 'postgres://nexa@postgres:5432' }, [
       '--check-only',
     ]);
     expect(status).toBe(1);
     expect(output).toContain("deployment's own service name");
     // Not merely "not loopback": allowing the host by name must not open it either.
-    const allowed = run({ '--pg-url': 'postgres://nexa:x@postgres:5432' }, [
+    const allowed = run({ '--pg-url': 'postgres://nexa@postgres:5432' }, [
       '--check-only',
       '--allow-pg-host',
       'postgres',
@@ -108,7 +108,7 @@ describe('legacy-rehearsal.sh guards', () => {
   });
 
   it('refuses a non-loopback server unless that exact host is allowed', () => {
-    const remote = { '--pg-url': 'postgres://nexa:x@10.0.0.7:5432' };
+    const remote = { '--pg-url': 'postgres://nexa@10.0.0.7:5432' };
     const refused = run(remote, ['--check-only']);
     expect(refused.status).toBe(1);
     expect(refused.output).toContain('not loopback');
@@ -116,8 +116,17 @@ describe('legacy-rehearsal.sh guards', () => {
     expect(run(remote, ['--check-only', '--allow-pg-host', '10.0.0.7']).status).toBe(0);
   });
 
+  it('refuses a password inside --pg-url: argv is world-readable; PGPASSWORD/PGPASSFILE carry it', () => {
+    const { status, output } = run({ '--pg-url': 'postgres://nexa:secret@127.0.0.1:5432' }, [
+      '--check-only',
+    ]);
+    expect(status).toBe(1);
+    expect(output).toContain('PGPASSWORD');
+    expect(output).not.toContain('secret');
+  });
+
   it('refuses a server URL that names a database', () => {
-    const { status, output } = run({ '--pg-url': 'postgres://nexa:x@127.0.0.1:5432/nexa' }, [
+    const { status, output } = run({ '--pg-url': 'postgres://nexa@127.0.0.1:5432/nexa' }, [
       '--check-only',
     ]);
     expect(status).toBe(1);

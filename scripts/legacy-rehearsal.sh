@@ -71,6 +71,10 @@ PROVISION_CLI="$ROOT/apps/api/dist/provision-installation.cli.js"
 LEGACY_IMPORT_CLI="${LEGACY_IMPORT_CLI:-$ROOT/apps/api/dist/legacy-import.cli.js}"
 P7_MODES=(audit dry-run import resume reconcile report)
 P7_EXIT_NEEDS_DECISION=3
+# The technical half of the owner gate: import/resume refuse a source whose fingerprint is
+# not the approved one. Used only when P7's --help offers it; until then every cycle records
+# a PENDING check saying the path is unexercised.
+P7_EXPECTED_FP_FLAG="${P7_EXPECTED_FP_FLAG:---expected-fingerprint}"
 P7_SOURCE_PASSWORD_ENV=NEXA_REHEARSAL_LEGACY_PASSWORD
 REPORT_SCHEMA="$ROOT/docs/legacy-migration/final-report.schema.json"
 REPORT_CHECK="$ROOT/scripts/legacy-rehearsal-report-check.mjs"
@@ -100,7 +104,9 @@ Required:
   --nexa-env FILE        shell-sourceable KEY=VALUE config for the NEXA CLIs
                          (SECRETS_KEYS, REDIS_URL, ...). DATABASE_URL in it is IGNORED:
                          the harness always points the CLIs at its own database.
-  --pg-url URL           postgres://USER:PASS@HOST:PORT — a server, no database path
+  --pg-url URL           postgres://USER@HOST:PORT — a server, no database path and NO
+                         password (refused: argv is world-readable); the password comes
+                         from PGPASSWORD or a PGPASSFILE
   --out DIR              results directory; must not exist
   and exactly one of:
   --nexa-archive PATH    restore this NEXA backup (.nxb) with `backup restore`
@@ -246,7 +252,11 @@ done
 # database it touches, so a path could only be a way to aim it at one it did not create.
 PG_RE='^postgres(ql)?://([^:@/]+)(:[^@/]*)?@([^:/?#]+)(:([0-9]{1,5}))?/?$'
 [[ "$PG_URL" =~ $PG_RE ]] ||
-  die "--pg-url must be postgres://USER:PASS@HOST[:PORT] with no database path."
+  die "--pg-url must be postgres://USER@HOST[:PORT] with no database path."
+# No password on argv: /proc/<pid>/cmdline is world-readable. psql, pg_dump, pg_restore and
+# the NEXA CLIs (node-postgres) all read PGPASSWORD or a PGPASSFILE from the environment.
+[ -z "${BASH_REMATCH[3]}" ] ||
+  die "--pg-url carries a password, and argv is world-readable. Pass postgres://USER@HOST[:PORT] and put the password in PGPASSWORD or a PGPASSFILE."
 PG_HOST="${BASH_REMATCH[4]}"
 PG_URL="${PG_URL%/}"
 case "$PG_HOST" in
@@ -300,6 +310,8 @@ if [ ! -f "$LEGACY_IMPORT_CLI" ]; then
 fi
 command -v node >/dev/null 2>&1 || die "node is not on PATH."
 P7_HELP="$(node "$LEGACY_IMPORT_CLI" --help 2>&1 || true)"
+P7_HAS_EXPECTED_FP=0
+if grep -qF -- "$P7_EXPECTED_FP_FLAG" <<<"$P7_HELP"; then P7_HAS_EXPECTED_FP=1; fi
 for mode in "${P7_MODES[@]}"; do
   grep -qw -- "$mode" <<<"$P7_HELP" ||
     die "the P7 CLI's --help does not mention mode '$mode'. Reconcile the CLI contract block at the top of this script with its --help."
@@ -336,9 +348,30 @@ MDB_SOCK="$MDB_RUN/mysqld.sock"
 MDB_ROOT_CNF="$MDB_RUN/root.cnf"
 MDB_PID=""
 
+# The process group of the stage running now. Every stage starts in its own group (job
+# control on for that one launch), so stopping it reaches the node process at the end of
+# the subshell chain, not just the first subshell.
+STAGE_PGID=""
+
+kill_stage_group() {
+  [ -n "${STAGE_PGID:-}" ] || return 0
+  kill -TERM -- "-$STAGE_PGID" 2>/dev/null || true
+  sleep 1
+  kill -KILL -- "-$STAGE_PGID" 2>/dev/null || true
+  STAGE_PGID=""
+}
+
+# INT/TERM: stop the running stage's whole tree, then exit through the EXIT trap (cleanup).
+on_signal() {
+  log "interrupted: stopping the running stage and everything it started"
+  kill_stage_group
+  exit 130
+}
+
 cleanup() {
   local rc=$?
-  if [ -n "${PANELS_PID:-}" ]; then kill -TERM "$PANELS_PID" 2>/dev/null || true; fi
+  kill_stage_group
+  if [ -n "${PANELS_PID:-}" ]; then kill -TERM -- "-$PANELS_PID" 2>/dev/null || kill -TERM "$PANELS_PID" 2>/dev/null || true; fi
   if [ -n "$MDB_PID" ] && kill -0 "$MDB_PID" 2>/dev/null; then
     mariadb-admin --defaults-extra-file="$MDB_ROOT_CNF" --socket="$MDB_SOCK" shutdown >/dev/null 2>&1 ||
       kill "$MDB_PID" 2>/dev/null || true
@@ -357,6 +390,7 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
+trap on_signal INT TERM
 
 loadavg() { cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || printf 'n/a'; }
 
@@ -387,8 +421,12 @@ run_stage() {
   t0=$SECONDS
   load0="$(loadavg)"
   log "cycle $cycle: $name"
+  set -m
   "$@" >"$log_file" 2>&1 &
-  if wait "$!"; then rc=0; else rc=$?; fi
+  STAGE_PGID=$!
+  set +m
+  if wait "$STAGE_PGID"; then rc=0; else rc=$?; fi
+  STAGE_PGID=""
   record_duration "$cycle" "$name" "$((SECONDS - t0))" "$rc" "$load0"
   [ "$rc" -eq 0 ] || die "stage '$name' (cycle $cycle) failed with exit $rc; see $log_file"
 }
@@ -403,8 +441,12 @@ run_p7() {
   t0=$SECONDS
   load0="$(loadavg)"
   log "cycle $cycle: $name"
+  set -m
   importer "$@" >"$log_file" 2>&1 &
-  if wait "$!"; then rc=0; else rc=$?; fi
+  STAGE_PGID=$!
+  set +m
+  if wait "$STAGE_PGID"; then rc=0; else rc=$?; fi
+  STAGE_PGID=""
   record_duration "$cycle" "$name" "$((SECONDS - t0))" "$rc" "$load0"
   case "$rc" in
     0) ;;
@@ -531,9 +573,11 @@ start_legacy() {
   # the instance is local and temporary, but it holds a copy of customer data.
   local root_pw
   root_pw="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
-  mariadb --no-defaults --socket="$MDB_SOCK" --user=root -e "
-    ALTER USER 'root'@'localhost' IDENTIFIED BY '$root_pw';
-    DROP USER IF EXISTS 'root'@'127.0.0.1', 'root'@'::1';"
+  # On stdin, never -e: a password in argv is readable by every local user.
+  mariadb --no-defaults --socket="$MDB_SOCK" --user=root <<SQL
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$root_pw';
+DROP USER IF EXISTS 'root'@'127.0.0.1', 'root'@'::1';
+SQL
   printf '[client]\nuser=root\npassword=%s\n' "$root_pw" >"$MDB_ROOT_CNF"
 }
 
@@ -549,11 +593,12 @@ load_legacy() {
     die "the dump did not create \`user\` and \`invoice\` in schema '$LEGACY_SCHEMA'. If it carries its own USE statement, pass --legacy-schema <that name>."
   # The SELECT-only account P7 reads through: the same wall sql-evidence.md requires.
   LEGACY_RO_PW="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
-  mdb_root -e "
-    CREATE USER 'legacy_ro'@'127.0.0.1' IDENTIFIED BY '$LEGACY_RO_PW';
-    CREATE USER 'legacy_ro'@'localhost' IDENTIFIED BY '$LEGACY_RO_PW';
-    GRANT SELECT ON \`$LEGACY_SCHEMA\`.* TO 'legacy_ro'@'127.0.0.1';
-    GRANT SELECT ON \`$LEGACY_SCHEMA\`.* TO 'legacy_ro'@'localhost';"
+  mdb_root <<SQL
+CREATE USER 'legacy_ro'@'127.0.0.1' IDENTIFIED BY '$LEGACY_RO_PW';
+CREATE USER 'legacy_ro'@'localhost' IDENTIFIED BY '$LEGACY_RO_PW';
+GRANT SELECT ON \`$LEGACY_SCHEMA\`.* TO 'legacy_ro'@'127.0.0.1';
+GRANT SELECT ON \`$LEGACY_SCHEMA\`.* TO 'legacy_ro'@'localhost';
+SQL
   printf '%s' "$LEGACY_RO_PW" >"$MDB_RUN/legacy_ro.pw"
   printf '[client]\nuser=legacy_ro\npassword=%s\n' "$LEGACY_RO_PW" >"$MDB_RUN/legacy_ro.cnf"
 }
@@ -632,12 +677,14 @@ importer() { # importer MODE [args...]
 PANELS_PID=""
 start_synthetic_panels() {
   PANEL_MAP="$OUT/panel-map.json"
+  set -m
   CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env "$TSX_BIN" \
     "$SYNTHETIC_PANELS_HELPER" --tenant "$TENANT" --mapping-out "$PANEL_MAP" \
     --ready-file "$OUT/synthetic-panels.ready" --requests-out "$OUT/synthetic-panel-requests.json" \
     --stop-file "$OUT/synthetic-panels.stop" \
     >"$OUT/logs/c0-synthetic-panels.log" 2>&1 &
   PANELS_PID=$!
+  set +m
   local i
   for i in $(seq 1 120); do
     [ ! -f "$OUT/synthetic-panels.ready" ] || return 0
@@ -677,28 +724,34 @@ interrupted_import() {
   # node process: `importer` is a chain of subshells, and a kill -9 of the first one alone
   # leaves node running to completion — an "interrupt" that interrupted nothing.
   set -m
-  importer import >"$log_file" 2>&1 &
+  importer import "${FP_ARGS[@]+"${FP_ARGS[@]}"}" >"$log_file" 2>&1 &
   pid=$!
+  STAGE_PGID=$pid
   set +m
   while kill -0 "$pid" 2>/dev/null; do
     seen="$(running_rows_seen 2>/dev/null || printf -- '-1')"
     if [ "$seen" -ge "$KILL_AFTER_ROWS" ]; then
       kill -9 -- "-$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
+      STAGE_PGID=""
       record_duration "$cycle" import-interrupted "$((SECONDS - t0))" killed -
       log "cycle $cycle: import killed after its run saw $seen rows"
       # Prove it is dead: the run's progress must not move afterwards.
-      local before after
-      before="$(pg_nexa -c "SELECT r.rows_seen || '/' || r.last_progress_at FROM legacy_import_runs r JOIN tenants t ON t.id = r.tenant_id WHERE t.slug = '$TENANT' AND r.mode = 'APPLY'")"
+      local before after progress_sql
+      progress_sql="SELECT COALESCE(r.rows_seen::text, 'NULL') || '/' || COALESCE(r.last_progress_at::text, 'NULL')
+                      FROM legacy_import_runs r JOIN tenants t ON t.id = r.tenant_id
+                     WHERE t.slug = '$TENANT' AND r.mode = 'APPLY'"
+      before="$(pg_nexa -c "$progress_sql" || true)"
       sleep 3
-      after="$(pg_nexa -c "SELECT r.rows_seen || '/' || r.last_progress_at FROM legacy_import_runs r JOIN tenants t ON t.id = r.tenant_id WHERE t.slug = '$TENANT' AND r.mode = 'APPLY'")"
-      check "$cycle" interrupted_import_stopped_writing "$before" "$after"
+      after="$(pg_nexa -c "$progress_sql" || true)"
+      check "$cycle" interrupted_import_stopped_writing stopped "$(progress_stopped "$before" "$after")"
       return 0
     fi
     sleep 0.05
   done
   local rc=0
   wait "$pid" 2>/dev/null || rc=$?
+  STAGE_PGID=""
   die "cycle $cycle: the import exited (code $rc) before its run reached $KILL_AFTER_ROWS rows, so the interrupt was NOT exercised; see $log_file. If it simply finished, lower --kill-after-rows or give P7 a smaller batch size with --importer-arg."
 }
 
@@ -708,7 +761,42 @@ report_json() {
   # 3 is "an equation failed" — the per-equation checks below record which; the document
   # itself must still be there and valid.
   [ "$rc" -eq 0 ] || [ "$rc" -eq "$P7_EXIT_NEEDS_DECISION" ] || exit "$rc"
-  node "$REPORT_CHECK" validate "$REPORT_SCHEMA" "$OUT/c$1-report.json" >"$OUT/c$1-report.schema-violations.txt" || true
+  report_schema_verdict "$REPORT_SCHEMA" "$OUT/c$1-report.json" "$OUT/c$1-report.schema-violations.txt" \
+    >"$OUT/c$1-report.schema-verdict.txt"
+}
+
+# progress_stopped BEFORE AFTER — two "rows_seen/last_progress_at" readings of the killed
+# run. Stopped only when both EXIST and agree: a NULL or absent reading proves nothing, and
+# two empty strings are equal, which is how the first version of this check passed on a
+# run that recorded no progress at all.
+progress_stopped() {
+  case "$1$2" in
+    *NULL*)
+      printf 'no-progress-recorded\n'
+      return 0
+      ;;
+  esac
+  if [ -z "$1" ] || [ -z "$2" ]; then
+    printf 'no-progress-recorded\n'
+  elif [ "$1" = "$2" ]; then
+    printf 'stopped\n'
+  else
+    printf 'still-writing\n'
+  fi
+}
+
+# report_schema_verdict SCHEMA REPORT OUTFILE — "valid" only when the checker EXITS 0 and
+# prints nothing; its stdout AND stderr go to OUTFILE. A checker that crashed (an
+# unsupported schema keyword, a report that is not JSON) used to leave an empty file,
+# which read as "no violations".
+report_schema_verdict() {
+  local rc=0
+  node "$REPORT_CHECK" validate "$1" "$2" >"$3" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -s "$3" ]; then
+    printf 'valid\n'
+  else
+    printf 'invalid (exit %s)\n' "$rc"
+  fi
 }
 
 report_get() { node "$REPORT_CHECK" get "$OUT/c$1-report.json" "$2"; }
@@ -772,7 +860,15 @@ for cycle in $(seq 1 "$CYCLES"); do
   run_stage "$cycle" snapshot-pre snapshot "c${cycle}-pre-import"
   run_stage "$cycle" pg-dump-pre pg_dump_snapshot "$cycle"
 
-  run_p7 "$cycle" p7-audit audit
+  run_p7 "$cycle" p7-audit audit --format json
+  cp "$OUT/logs/c${cycle}-p7-audit.log" "$OUT/c${cycle}-audit.json"
+  AUDIT_FP="$(node "$REPORT_CHECK" get "$OUT/c${cycle}-audit.json" sections.source.fingerprint)"
+  FP_ARGS=()
+  if [ "$P7_HAS_EXPECTED_FP" -eq 1 ]; then
+    FP_ARGS=("$P7_EXPECTED_FP_FLAG" "$AUDIT_FP")
+  else
+    pending "$cycle" p7_expected_fingerprint_unexercised "$P7_EXPECTED_FP_FLAG" "absent from P7 --help"
+  fi
   run_p7 "$cycle" p7-dry-run dry-run --format json
   cp "$OUT/logs/c${cycle}-p7-dry-run.log" "$OUT/c${cycle}-dry-run.json"
   run_stage "$cycle" snapshot-after-dry-run snapshot "c${cycle}-after-dry-run"
@@ -786,7 +882,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   run_stage "$cycle" snapshot-after-kill snapshot "c${cycle}-after-kill"
   check "$cycle" interrupted_run_left_running 1 "$(metric "$S-after-kill.tsv" legacy_import_runs_running)"
 
-  run_p7 "$cycle" p7-resume resume
+  run_p7 "$cycle" p7-resume resume "${FP_ARGS[@]+"${FP_ARGS[@]}"}"
   run_p7 "$cycle" p7-reconcile reconcile
   run_stage "$cycle" p7-report report_json "$cycle"
   run_stage "$cycle" snapshot-post snapshot "c${cycle}-post-import"
@@ -803,6 +899,8 @@ for cycle in $(seq 1 "$CYCLES"); do
   printf '%s\n' "$FINGERPRINT" >"$S-source-fingerprint.txt"
   [ -n "$FINGERPRINT_FIRST" ] || FINGERPRINT_FIRST="$FINGERPRINT"
   check "$cycle" source_fingerprint_stable "$FINGERPRINT_FIRST" "$FINGERPRINT"
+  # What was imported is what the audit (the stand-in for the owner's approval) saw.
+  check "$cycle" apply_fingerprint_equals_audit "$AUDIT_FP" "$FINGERPRINT"
 
   # Customers: every legacy user with a valid key has exactly one map decision. A user id
   # that is not a Telegram id can carry no map row at all (P7 counts it as `blocked`).
@@ -826,7 +924,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   fi
 
   # P7's report: valid against the schema, the right evidence class, and its equations.
-  check "$cycle" report_schema_valid "" "$(tr '\n' ';' <"$OUT/c$cycle-report.schema-violations.txt")"
+  check "$cycle" report_schema_valid valid "$(cat "$OUT/c$cycle-report.schema-verdict.txt")"
   check "$cycle" report_evidence_class "$EVIDENCE_CLASS" "$(report_get "$cycle" evidenceClass)"
   check "$cycle" report_provider_writes_zero 0 "$(report_get "$cycle" provider.writes)"
   check "$cycle" report_run_is_this_run "$(pg_nexa -c "SELECT r.id FROM legacy_import_runs r JOIN tenants t ON t.id = r.tenant_id WHERE t.slug = '$TENANT' AND r.mode = 'APPLY'")" "$(report_get "$cycle" run.runId)"
