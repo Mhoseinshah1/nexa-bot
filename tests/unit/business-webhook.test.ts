@@ -18,7 +18,7 @@ describe('the Telegram webhook and Business updates', () => {
   function controllerWith(
     business: Partial<{
       applyReport: () => Promise<unknown>;
-      routeMessage: () => Promise<unknown>;
+      recordMessage: () => Promise<unknown>;
     }> = {},
   ) {
     const container = {
@@ -32,7 +32,10 @@ describe('the Telegram webhook and Business updates', () => {
       ids: { uuid: () => '01900000-0000-7000-8000-000000000999' },
       businessConnections: {
         applyReport: vi.fn(business.applyReport ?? (async () => ({ change: 'INSERTED' }))),
-        routeMessage: vi.fn(business.routeMessage ?? (async () => null)),
+      },
+      businessConversations: {
+        recordMessage: vi.fn(business.recordMessage ?? (async () => null)),
+        recordDeletion: vi.fn(async () => 0),
       },
       starsPayments: { preCheckout: vi.fn(), recordSuccessfulPayment: vi.fn() },
       opsGroups: { bindFromTelegram: vi.fn(), membershipChanged: vi.fn() },
@@ -108,12 +111,12 @@ describe('the Telegram webhook and Business updates', () => {
   it('routes a customer’s business message to the business module, never the customer turn', async () => {
     const { container, receive } = controllerWith();
     expect(await receive({ business_message: customerMessage })).toEqual({ ok: true });
-    expect(container.businessConnections.routeMessage).toHaveBeenCalledWith(
+    expect(container.businessConversations.recordMessage).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       expect.objectContaining({
-        // Its own key, never the update key the message itself will be recorded under.
-        idempotencyKey: `telegram:${BOT}:update:7:connection`,
+        idempotencyKey: `telegram:${BOT}:update:7`,
+        edited: false,
         message: expect.objectContaining({ fromUserId: '7000001', chatId: '7000001' }),
       }),
     );
@@ -123,13 +126,13 @@ describe('the Telegram webhook and Business updates', () => {
   it('routes an edited business message the same way', async () => {
     const { container, receive } = controllerWith();
     await receive({ edited_business_message: { ...customerMessage, edit_date: 1_790_000_200 } });
-    expect(container.businessConnections.routeMessage).toHaveBeenCalledOnce();
+    expect(container.businessConversations.recordMessage).toHaveBeenCalledOnce();
     expectNoCustomerTurn(container);
   });
 
   it('answers 2xx and records it when a message could not be routed, so it cannot loop', async () => {
     const { container, receive } = controllerWith({
-      routeMessage: async () => {
+      recordMessage: async () => {
         throw new Error('database unavailable');
       },
     });
@@ -162,7 +165,7 @@ describe('the Telegram webhook and Business updates', () => {
     const { container, receive } = controllerWith();
     const { business_connection_id: _omitted, ...broken } = customerMessage;
     expect(await receive({ business_message: broken })).toEqual({ ok: true });
-    expect(container.businessConnections.routeMessage).not.toHaveBeenCalled();
+    expect(container.businessConversations.recordMessage).not.toHaveBeenCalled();
     expect(container.opsLog.record).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ code: BUSINESS_UPDATE_FAILED_CODE }),
@@ -170,7 +173,7 @@ describe('the Telegram webhook and Business updates', () => {
     expectNoCustomerTurn(container);
   });
 
-  it('accepts a deletion without touching anything', async () => {
+  it('applies a deletion through the conversation module, never the customer turn', async () => {
     const { container, receive } = controllerWith();
     await receive({
       deleted_business_messages: {
@@ -179,7 +182,13 @@ describe('the Telegram webhook and Business updates', () => {
         message_ids: [41],
       },
     });
-    expect(container.businessConnections.routeMessage).not.toHaveBeenCalled();
+    expect(container.businessConversations.recordDeletion).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        deletion: { connectionId: 'conn-1', chatId: '7000001', messageIds: [41] },
+      }),
+    );
     expect(container.opsLog.record).not.toHaveBeenCalled();
     expectNoCustomerTurn(container);
   });
@@ -195,6 +204,6 @@ describe('the Telegram webhook and Business updates', () => {
       },
     });
     expect(container.botRuntime.handle).toHaveBeenCalledOnce();
-    expect(container.businessConnections.routeMessage).not.toHaveBeenCalled();
+    expect(container.businessConversations.recordMessage).not.toHaveBeenCalled();
   });
 });
