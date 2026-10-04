@@ -249,6 +249,15 @@ transaction, `ScopeActivityReader` inside it, idempotency key (`rememberOnce`), 
 outbox in the same transaction. The `legacy_id` of a `user` row is a Telegram id: the CLI
 must page it to the operator, never dump the queue into a shared log (§23).
 
+**Codex P2 on #179.** (1) A replayed idempotency key returns the ORIGINAL response
+snapshot stored with the key (`storeDecision` / `reviveDecision`), never the row as it
+stands now — a row a later run imported or a person moved again no longer changes or breaks
+the replay. (2) Every IN-list CHECK in 0192 is guarded by an explicit `IS NOT NULL`
+(`NULL IN (…)` is NULL, and a CHECK passes on NULL): a closed review without a resolution
+code, or a review row without a reason, is refused by direct SQL (tested). (3) `list` /
+`counts` validate the run filter as a uuid and every other filter and the cursor against
+their closed shapes, so a bad value is `legacy_import.invalid`, never a PostgreSQL 22P02.
+
 **Backfill (hand-written block in 0192):** existing `MANUAL_REVIEW` rows become `OPEN`;
 one whose reason is not a review reason (no conforming writer produced one) becomes
 `FAILED` with its reason kept, which a rerun processes again.

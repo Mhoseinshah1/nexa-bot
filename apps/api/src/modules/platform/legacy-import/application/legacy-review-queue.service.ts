@@ -171,6 +171,7 @@ export class LegacyReviewQueueService {
     query: { readonly runId?: string } = {},
   ): Promise<LegacyReviewCounts> {
     await this.deps.guard.check(scope, actor, LEGACY_REVIEW_QUEUE_PERMISSION);
+    assertRunIdFilter(query.runId);
     const rows = await this.deps.repository.countReview(
       scope,
       query.runId === undefined ? {} : { runId: query.runId },
@@ -234,6 +235,7 @@ export class LegacyReviewQueueService {
     ) {
       throw errors.validation(LEGACY_IMPORT_ERROR_CODES.INVALID, 'not a review state');
     }
+    assertRunIdFilter(query.runId);
     if (query.after !== undefined) assertLegacyKey(query.after.legacyTable, query.after.legacyId);
     const page = await this.deps.repository.listManualReview(scope, {
       ...(query.legacyTable === undefined ? {} : { legacyTable: query.legacyTable }),
@@ -269,16 +271,15 @@ export class LegacyReviewQueueService {
       expectedReasonCode: command.expectedReasonCode,
       resolutionCode: command.resolutionCode,
     });
-    const replay = await this.deps.idempotency.find<{ kind: 'RESOLVED' | 'ALREADY' }>(
+    const replay = await this.deps.idempotency.find<StoredDecision>(
       scope,
       actor.surface,
       command.idempotencyKey,
       requestHash,
     );
-    if (replay !== null) {
-      // The stored answer, with the row as it stands now.
-      return { kind: replay.result.kind, item: await this.current(scope, command) };
-    }
+    // The ORIGINAL answer, exactly as first returned — never the row as it stands now, which
+    // a later run or person may have moved anywhere (Codex P2 on #179).
+    if (replay !== null) return reviveDecision(replay.result);
 
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -308,7 +309,7 @@ export class LegacyReviewQueueService {
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          { kind: result.kind },
+          storeDecision(result),
           tx,
         );
         return result;
@@ -330,15 +331,13 @@ export class LegacyReviewQueueService {
       legacyTable: command.legacyTable,
       legacyId: command.legacyId,
     });
-    const replay = await this.deps.idempotency.find<{ kind: 'REOPENED' | 'ALREADY' }>(
+    const replay = await this.deps.idempotency.find<StoredDecision>(
       scope,
       actor.surface,
       command.idempotencyKey,
       requestHash,
     );
-    if (replay !== null) {
-      return { kind: replay.result.kind, item: await this.current(scope, command) };
-    }
+    if (replay !== null) return reviveDecision(replay.result);
 
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -364,7 +363,7 @@ export class LegacyReviewQueueService {
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          { kind: result.kind },
+          storeDecision(result),
           tx,
         );
         return result;
@@ -446,30 +445,6 @@ export class LegacyReviewQueueService {
     }
   }
 
-  /** The row as it stands now, for a replayed key. */
-  private async current(
-    scope: TenantContext,
-    key: { readonly legacyTable: string; readonly legacyId: string },
-  ): Promise<LegacyReviewItem> {
-    const [row] = await this.deps.repository.findByLegacyKeys(scope, key.legacyTable, [
-      key.legacyId,
-    ]);
-    if (row === undefined) {
-      throw errors.notFound(
-        LEGACY_IMPORT_ERROR_CODES.REVIEW_NOT_FOUND,
-        'No legacy import decision for this key.',
-      );
-    }
-    if (row.status !== 'MANUAL_REVIEW') {
-      throw errors.conflict(
-        LEGACY_IMPORT_ERROR_CODES.REVIEW_NOT_IN_REVIEW,
-        'This legacy record is not in manual review.',
-        { status: row.status },
-      );
-    }
-    return toItem(row);
-  }
-
   /** The closing actor as the row records it: a type and a stable identifier. */
   private reviewerOf(actor: ActorContext): { type: ActorType; id: string } {
     if (actor.id === null || !/^[A-Za-z0-9._:-]{1,128}$/.test(actor.id)) {
@@ -520,6 +495,53 @@ export class LegacyReviewQueueService {
       clock: this.deps.clock,
     };
   }
+}
+
+/**
+ * A run filter names a `uuid` column: anything else is refused as `legacy_import.invalid`
+ * here, rather than reaching PostgreSQL as a 22P02 (Codex P2 on #179).
+ */
+const UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function assertRunIdFilter(runId: string | undefined): void {
+  if (runId !== undefined && !UUID_PATTERN.test(runId)) {
+    throw errors.validation(LEGACY_IMPORT_ERROR_CODES.INVALID, 'run id is not a uuid');
+  }
+}
+
+/** The response as stored with its idempotency key: JSON, so dates travel as ISO strings. */
+interface StoredDecision {
+  readonly kind: LegacyReviewDecisionOutcome['kind'];
+  readonly item: Omit<LegacyReviewItem, 'reviewedAt' | 'createdAt' | 'updatedAt'> & {
+    readonly reviewedAt: string | null;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  };
+}
+
+function storeDecision(outcome: LegacyReviewDecisionOutcome): StoredDecision {
+  return {
+    kind: outcome.kind,
+    item: {
+      ...outcome.item,
+      reviewedAt: outcome.item.reviewedAt?.toISOString() ?? null,
+      createdAt: outcome.item.createdAt.toISOString(),
+      updatedAt: outcome.item.updatedAt.toISOString(),
+    },
+  };
+}
+
+function reviveDecision(stored: StoredDecision): LegacyReviewDecisionOutcome {
+  return {
+    kind: stored.kind,
+    item: {
+      ...stored.item,
+      reviewedAt: stored.item.reviewedAt === null ? null : new Date(stored.item.reviewedAt),
+      createdAt: new Date(stored.item.createdAt),
+      updatedAt: new Date(stored.item.updatedAt),
+    },
+  } as LegacyReviewDecisionOutcome;
 }
 
 function toItem(record: LegacyImportMapRecord): LegacyReviewItem {

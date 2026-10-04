@@ -1,5 +1,5 @@
 {
-  "id": "3cfbb523-f40b-4bf6-82ba-2ec0895f8a47",
+  "id": "9476a4af-e318-40d5-8bed-35c5a3a4c0c6",
   "prevId": "463f8d53-2307-49aa-8bd5-7e5d5b0d3148",
   "version": "7",
   "dialect": "postgresql",
@@ -12460,7 +12460,7 @@
         },
         "legacy_import_map_review_reason_check": {
           "name": "legacy_import_map_review_reason_check",
-          "value": "status <> 'MANUAL_REVIEW' OR reason_code IN ('PROVIDER_MISSING', 'AMBIGUOUS_PANEL', 'USERNAME_CASE_COLLISION', 'PANEL_UNMAPPED', 'INVENTORY_INCOMPLETE', 'CUSTOMER_MISSING', 'PRODUCT_MAPPING_UNRESOLVED', 'SUBSCRIPTION_REF_BLOCKED', 'INVALID_PHONE', 'CONFLICTING_EXISTING_ENTITY', 'UNSUPPORTED_SHAPE', 'INVALID_SOURCE_ROW')"
+          "value": "status <> 'MANUAL_REVIEW' OR (reason_code IS NOT NULL AND reason_code IN ('PROVIDER_MISSING', 'AMBIGUOUS_PANEL', 'USERNAME_CASE_COLLISION', 'PANEL_UNMAPPED', 'INVENTORY_INCOMPLETE', 'CUSTOMER_MISSING', 'PRODUCT_MAPPING_UNRESOLVED', 'SUBSCRIPTION_REF_BLOCKED', 'INVALID_PHONE', 'CONFLICTING_EXISTING_ENTITY', 'UNSUPPORTED_SHAPE', 'INVALID_SOURCE_ROW'))"
         },
         "legacy_import_map_review_state_check": {
           "name": "legacy_import_map_review_state_check",
@@ -12468,7 +12468,7 @@
         },
         "legacy_import_map_review_resolution_check": {
           "name": "legacy_import_map_review_resolution_check",
-          "value": "CASE\n            WHEN review_state IN ('RESOLVED', 'DISMISSED') THEN\n              reviewed_at IS NOT NULL AND reviewed_by_actor_type IS NOT NULL\n              AND reviewed_by_actor_id IS NOT NULL\n              AND CASE review_state\n                    WHEN 'RESOLVED' THEN review_resolution_code IN ('RETRY_AFTER_FIX', 'HANDLED_OUTSIDE_IMPORT')\n                    ELSE review_resolution_code IN ('WILL_NOT_IMPORT', 'TEST_OR_INVALID_DATA', 'DUPLICATE_RECORD')\n                  END\n            ELSE review_resolution_code IS NULL AND reviewed_at IS NULL\n              AND reviewed_by_actor_type IS NULL AND reviewed_by_actor_id IS NULL\n          END"
+          "value": "CASE\n            WHEN review_state IN ('RESOLVED', 'DISMISSED') THEN\n              reviewed_at IS NOT NULL AND reviewed_by_actor_type IS NOT NULL\n              AND reviewed_by_actor_id IS NOT NULL AND review_resolution_code IS NOT NULL\n              AND CASE review_state\n                    WHEN 'RESOLVED' THEN review_resolution_code IN ('RETRY_AFTER_FIX', 'HANDLED_OUTSIDE_IMPORT')\n                    ELSE review_resolution_code IN ('WILL_NOT_IMPORT', 'TEST_OR_INVALID_DATA', 'DUPLICATE_RECORD')\n                  END\n            ELSE review_resolution_code IS NULL AND reviewed_at IS NULL\n              AND reviewed_by_actor_type IS NULL AND reviewed_by_actor_id IS NULL\n          END"
         },
         "legacy_import_map_reviewed_by_actor_type_check": {
           "name": "legacy_import_map_reviewed_by_actor_type_check",

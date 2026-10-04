@@ -492,6 +492,141 @@ describe('legacy import manual review queue (Item 9)', () => {
     ).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
   });
 
+  it('Codex P2 #179: a replayed key returns the ORIGINAL response, whatever the row became since', async () => {
+    const run1 = await startRun(A);
+    await decide(A, run1, '71', review('PANEL_UNMAPPED'));
+    await decide(A, run1, '72', review('PANEL_UNMAPPED'));
+    await finishRun(A, run1);
+
+    // Resolve with a retry; then a rerun imports the row, so it is no longer in review.
+    const kResolve = idem();
+    const first = await resolve('71', 'RETRY_AFTER_FIX', 'PANEL_UNMAPPED', kResolve);
+    const run2 = await startRun(A, FP2);
+    expect(
+      (
+        await decide(A, run2, '71', {
+          status: 'IMPORTED',
+          entityType: 'SERVICE',
+          entityId: randomUUID(),
+          reasonCode: null,
+        })
+      ).kind,
+    ).toBe('UPDATED');
+    const replayed = await resolve('71', 'RETRY_AFTER_FIX', 'PANEL_UNMAPPED', kResolve);
+    expect(replayed).toEqual(first);
+    expect(replayed.item.reviewedAt).toBeInstanceOf(Date);
+
+    // Reopen; then the row moves on (resolved again). The reopen's replay is still the reopen.
+    await resolve('72', 'WILL_NOT_IMPORT', 'PANEL_UNMAPPED');
+    const kReopen = idem();
+    const opened = await reopen('72', kReopen);
+    expect(opened.kind).toBe('REOPENED');
+    await resolve('72', 'DUPLICATE_RECORD', 'PANEL_UNMAPPED');
+    const replayedReopen = await reopen('72', kReopen);
+    expect(replayedReopen).toEqual(opened);
+    expect(replayedReopen.item).toMatchObject({ reviewState: 'OPEN', resolutionCode: null });
+    // And the row itself is what the later resolve made it.
+    expect((await row(A, '72'))?.reviewResolutionCode).toBe('DUPLICATE_RECORD');
+  });
+
+  it('Codex P2 #179: a non-uuid run filter or a malformed cursor is a typed refusal, not a 22P02', async () => {
+    const runId = await startRun(A);
+    await decide(A, runId, '81', review('PROVIDER_MISSING'));
+    for (const bad of ['not-a-uuid', "'; DROP TABLE x; --", '', '1234']) {
+      expect(await codeOf(queue().list(A, IMPORTER, { limit: 5, runId: bad }))).toBe(
+        LEGACY_IMPORT_ERROR_CODES.INVALID,
+      );
+      expect(await codeOf(queue().counts(A, IMPORTER, { runId: bad }))).toBe(
+        LEGACY_IMPORT_ERROR_CODES.INVALID,
+      );
+    }
+    for (const after of [
+      { legacyTable: 'user', legacyId: 'x y' },
+      { legacyTable: 'product', legacyId: '1' },
+    ]) {
+      expect(await codeOf(queue().list(A, IMPORTER, { limit: 5, after }))).toBe(
+        LEGACY_IMPORT_ERROR_CODES.INVALID,
+      );
+    }
+    for (const legacyTable of ['User', 'product']) {
+      expect(await codeOf(queue().list(A, IMPORTER, { limit: 5, legacyTable }))).toBe(
+        LEGACY_IMPORT_ERROR_CODES.INVALID,
+      );
+    }
+    expect(
+      await codeOf(queue().list(A, IMPORTER, { limit: 5, reviewState: 'CLOSED' as never })),
+    ).toBe(LEGACY_IMPORT_ERROR_CODES.INVALID);
+    // A well-formed uuid, upper case included, is accepted.
+    expect(
+      (await queue().list(A, IMPORTER, { limit: 5, runId: runId.toUpperCase() })).items,
+    ).toHaveLength(1);
+    expect((await queue().counts(A, IMPORTER, { runId })).rowCount).toBe(1);
+  });
+
+  it('Codex P2 #179: no review CHECK passes on a NULL — a closed review without a resolution code is refused', async () => {
+    const runId = await startRun(A);
+    const refusedBy = async (query: ReturnType<typeof sql>): Promise<string | null> => {
+      try {
+        await db().execute(query);
+        return null;
+      } catch (error) {
+        const c = constraintOf(error);
+        if (c === null) throw error;
+        return c;
+      }
+    };
+    // Direct INSERT of a closed review with every field but the code.
+    for (const state of ['RESOLVED', 'DISMISSED']) {
+      expect(
+        await refusedBy(sql`INSERT INTO legacy_import_map (tenant_id, legacy_table, legacy_id,
+            run_id, checksum, status, reason_code, review_state, review_resolution_code,
+            reviewed_at, reviewed_by_actor_type, reviewed_by_actor_id, created_at, updated_at)
+          VALUES (${A.tenantId}, 'user', '91', ${runId}, ${SUM1}, 'MANUAL_REVIEW',
+            'PROVIDER_MISSING', ${state}, NULL, now(), 'SYSTEM_JOB', 'legacy-import:x',
+            now(), now())`),
+      ).toBe('legacy_import_map_review_resolution_check');
+    }
+    // Direct UPDATE that blanks the code of a closed review.
+    await decide(A, runId, '92', review('PROVIDER_MISSING'));
+    await resolve('92', 'WILL_NOT_IMPORT');
+    expect(
+      await refusedBy(sql`UPDATE legacy_import_map SET review_resolution_code = NULL
+          WHERE tenant_id = ${A.tenantId} AND legacy_table = 'user' AND legacy_id = '92'`),
+    ).toBe('legacy_import_map_review_resolution_check');
+    // A review row with no reason at all (the NULL hole of an IN list).
+    expect(
+      await refusedBy(sql`UPDATE legacy_import_map SET reason_code = NULL
+          WHERE tenant_id = ${A.tenantId} AND legacy_table = 'user' AND legacy_id = '92'`),
+    ).toMatch(/^legacy_import_map_(review_reason|status_shape)_check$/);
+    // The review-reason CHECK refuses it on its own, too: with status_shape out of the way.
+    await db().execute(sql`ALTER TABLE legacy_import_map
+        DROP CONSTRAINT legacy_import_map_status_shape_check`);
+    try {
+      expect(
+        await refusedBy(sql`UPDATE legacy_import_map SET reason_code = NULL
+            WHERE tenant_id = ${A.tenantId} AND legacy_table = 'user' AND legacy_id = '92'`),
+      ).toBe('legacy_import_map_review_reason_check');
+      // And a state without its review is refused by its own CHECK.
+      expect(
+        await refusedBy(sql`UPDATE legacy_import_map SET review_state = NULL,
+              review_resolution_code = NULL, reviewed_at = NULL, reviewed_by_actor_type = NULL,
+              reviewed_by_actor_id = NULL
+            WHERE tenant_id = ${A.tenantId} AND legacy_table = 'user' AND legacy_id = '92'`),
+      ).toBe('legacy_import_map_review_state_check');
+    } finally {
+      await db().execute(sql`ALTER TABLE legacy_import_map
+          ADD CONSTRAINT legacy_import_map_status_shape_check CHECK (CASE status
+            WHEN 'IMPORTED' THEN entity_type IS NOT NULL AND entity_id IS NOT NULL
+            ELSE entity_type IS NULL AND entity_id IS NULL AND reason_code IS NOT NULL
+          END)`);
+    }
+    expect(await row(A, '92')).toMatchObject({
+      reviewState: 'DISMISSED',
+      reviewResolutionCode: 'WILL_NOT_IMPORT',
+      reasonCode: 'PROVIDER_MISSING',
+    });
+  });
+
   it('reopens a closed review: resolution cleared, reopen counted, audited; OPEN is ALREADY', async () => {
     const runId = await startRun(A);
     await decide(A, runId, '21', review('SUBSCRIPTION_REF_BLOCKED'));

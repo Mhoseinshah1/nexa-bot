@@ -13025,7 +13025,8 @@ export const legacyImportMap = pgTable(
     /** Item 9: a review row carries a review reason — never a warning, skip or failure. */
     check(
       'legacy_import_map_review_reason_check',
-      sql`status <> 'MANUAL_REVIEW' OR ${enumCheck('reason_code', LEGACY_REVIEW_REASON_CODES)}`,
+      // `IS NOT NULL` explicitly: `NULL IN (…)` is NULL, and a CHECK passes on NULL.
+      sql`status <> 'MANUAL_REVIEW' OR (reason_code IS NOT NULL AND ${enumCheck('reason_code', LEGACY_REVIEW_REASON_CODES)})`,
     ),
     /** Item 9: a review state exists exactly on MANUAL_REVIEW rows. */
     check(
@@ -13037,14 +13038,16 @@ export const legacyImportMap = pgTable(
     ),
     /**
      * Item 9: a closed review names its resolution, when and by whom, and the resolution
-     * belongs to that closed state; an open (or absent) review names none of them.
+     * belongs to that closed state; an open (or absent) review names none of them. Every
+     * IN list is guarded by an explicit `IS NOT NULL` (Codex P2 on #179): a NULL makes the
+     * IN expression NULL, and a CHECK that evaluates to NULL passes.
      */
     check(
       'legacy_import_map_review_resolution_check',
       sql`CASE
             WHEN review_state IN ('RESOLVED', 'DISMISSED') THEN
               reviewed_at IS NOT NULL AND reviewed_by_actor_type IS NOT NULL
-              AND reviewed_by_actor_id IS NOT NULL
+              AND reviewed_by_actor_id IS NOT NULL AND review_resolution_code IS NOT NULL
               AND CASE review_state
                     WHEN 'RESOLVED' THEN ${enumCheck('review_resolution_code', reviewCodesFor('RESOLVED'))}
                     ELSE ${enumCheck('review_resolution_code', reviewCodesFor('DISMISSED'))}
