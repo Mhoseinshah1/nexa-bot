@@ -206,8 +206,9 @@ refuses such a key by design, and the importer reports it from its own run.
   `mapRef`, `legacy.invoice.decide` uses it as the entity id) — never the invoice key, the
   legacy user key or a Telegram id.
 - No migration. orders.origin (0187/0188), the import map (0190), its `invoice` key (0191)
-  and the review reasons/state (0192, Item 9 — cherry-picked locally beneath this branch
-  until it merges) already hold everything the adoption writes.
+  and the review reasons/state (0192, Item 9, #179) already hold everything the adoption
+  writes. The product gate is `legacyShapeAdoptable` (#177 makes it delegate to
+  `legacyShapeAdoption`); every shape reason maps to `PRODUCT_MAPPING_UNRESOLVED`.
 
 ## 11. Tests and mutation
 
