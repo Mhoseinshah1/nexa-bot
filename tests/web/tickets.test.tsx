@@ -69,7 +69,8 @@ const message = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const detail = (ticket: Record<string, unknown> = {}, messages?: unknown[]) => ({
-  ticket: summary(ticket),
+  ticket: { origin: 'BOT', ...summary(ticket) },
+  escalations: [],
   messages: messages ?? [
     message(),
     message({
