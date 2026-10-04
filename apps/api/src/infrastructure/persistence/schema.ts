@@ -255,6 +255,7 @@ import {
   OPS_LOG_GROUP_HEALTH,
   OPS_LOG_GROUP_PROBLEMS,
   OPS_LOG_GROUP_STATUSES,
+  BUSINESS_BOT_RIGHTS,
   OPS_LOG_TOPIC_STATES,
   // R2: the Telegram messages edited in place.
   TELEGRAM_WIZARD_KINDS,
@@ -13155,5 +13156,86 @@ export const legacyImportRunInputs = pgTable(
     ),
     check('legacy_import_run_inputs_currency_check', sql`wallet_currency ~ '^[A-Z]{3}$'`),
     check('legacy_import_run_inputs_customers_check', sql`pre_import_customers >= 0`),
+  ],
+);
+
+/**
+ * TB1 — one Telegram Business connection of one of this tenant's bots (ADR-0033 §2).
+ *
+ * Telegram creates the connection when a Business account owner connects the bot, and
+ * reports every change as a `business_connection` update. This row is the latest of those
+ * reports, keyed by the bot AND Telegram's connection id: a connection id arriving on a
+ * different bot's authenticated route is a different row, never this one.
+ *
+ * The STATUS is projected (`businessConnectionStatus`) from `is_enabled`, `rights` and
+ * `superseded_at`, and never stored: a stored status is a second answer to "may this
+ * connection send" that can disagree with the facts it summarises.
+ *
+ * `superseded_at` answers `OQ-TB-02`, which the reference leaves open: whether a reconnect
+ * keeps its id. A new id for the same owner on the same bot supersedes every older row of
+ * that owner, so a stale connection id fails closed instead of sending as an account that
+ * has moved on. No secret is held here; the bot's token stays on `bot_instances`.
+ */
+export const telegramBusinessConnections = pgTable(
+  'telegram_business_connections',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /** `BusinessConnection.id` — opaque text, Telegram's. */
+    connectionId: text('connection_id').notNull(),
+    /** `BusinessConnection.user.id`: the Business account owner, as decimal text. */
+    ownerTelegramUserId: text('owner_telegram_user_id').notNull(),
+    /** `BusinessConnection.user_chat_id`: the bot's private chat with the owner. */
+    ownerUserChatId: text('owner_user_chat_id').notNull(),
+    isEnabled: boolean('is_enabled').notNull(),
+    /** The granted `BusinessBotRights`, by field name; unknown rights are dropped at parse. */
+    rights: text('rights')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /** `BusinessConnection.date`: when Telegram says the connection was established. */
+    connectedAt: timestamptz('connected_at').notNull(),
+    /** When NEXA last applied a report of this connection (an update or a `getBusinessConnection`). */
+    lastConfirmedAt: timestamptz('last_confirmed_at').notNull(),
+    supersededAt: timestamptz('superseded_at'),
+    /** Optimistic version (ADR-0021); advanced by every applied change. */
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('telegram_business_connections_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('telegram_business_connections_bot_connection_key').on(
+      table.botInstanceId,
+      table.connectionId,
+    ),
+    /** Supersession and the Web Admin's list: one owner's connections on one bot. */
+    index('telegram_business_connections_owner_idx').on(
+      table.tenantId,
+      table.botInstanceId,
+      table.ownerTelegramUserId,
+    ),
+    check(
+      'telegram_business_connections_rights_check',
+      enumArrayCheck('rights', BUSINESS_BOT_RIGHTS),
+    ),
+    check(
+      'telegram_business_connections_owner_check',
+      sql`owner_telegram_user_id ~ '^[1-9][0-9]{0,31}$'`,
+    ),
+    check(
+      'telegram_business_connections_owner_chat_check',
+      sql`owner_user_chat_id ~ '^-?[1-9][0-9]{0,31}$'`,
+    ),
+    check(
+      'telegram_business_connections_connection_id_check',
+      sql`length(connection_id) BETWEEN 1 AND 256`,
+    ),
+    check('telegram_business_connections_version_check', sql`version >= 1`),
   ],
 );

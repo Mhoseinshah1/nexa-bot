@@ -1,0 +1,22 @@
+# Intelligent Support Agent — execution board
+
+Maintained by the Lead/Integrator. One row per package, updated whenever a package's
+state changes. Shared files (`schema.ts`, the migration journal, `permissions.ts`,
+`packages/contracts/src/index.ts`, `container.ts`, web nav and routes, `deploy/`) are
+serialised: only the package marked **owner** may edit them at a time.
+
+| Package                            | Depends on    | Branch                                    | Shared-file owner          | Status                           | CI                 | Review                                                                        | Merge   | Next action                          |
+| ---------------------------------- | ------------- | ----------------------------------------- | -------------------------- | -------------------------------- | ------------------ | ----------------------------------------------------------------------------- | ------- | ------------------------------------ |
+| TB0 audit + ADRs 0033–0035         | —             | `claude/elegant-noether-g9v8x9` (PR #195) | —                          | review findings fixed            | exact head running | Codex unavailable (usage limits); 1 substitute review, 11 findings, all fixed | pending | merge once exact-head CI is green    |
+| TB1 connection + transport         | TB0           | worktree `tb1-work`, then the task branch | **yes** (migration `0196`) | implemented, tests green locally | —                  | —                                                                             | —       | open PR after the TB0 merge          |
+| TB2 conversation + takeover        | TB1           | —                                         | after TB1                  | design in ADR-0033               | —                  | —                                                                             | —       | starts from main after the TB1 merge |
+| TB3 support context                | TB0           | —                                         | after TB2                  | read-only audit allowed now      | —                  | —                                                                             | —       | —                                    |
+| TB4 provider foundation            | TB0           | —                                         | after TB3                  | read-only audit allowed now      | —                  | —                                                                             | —       | —                                    |
+| TB5 assist                         | TB2, TB3, TB4 | —                                         | —                          | —                                | —                  | —                                                                             | —       | —                                    |
+| TB6 vision                         | TB5           | —                                         | —                          | —                                | —                  | —                                                                             | —       | —                                    |
+| TB7 auto reply + handoff + tickets | TB5, TB6      | —                                         | —                          | —                                | —                  | —                                                                             | —       | —                                    |
+| TB8 controlled learning            | TB7           | —                                         | —                          | —                                | —                  | —                                                                             | —       | —                                    |
+| TB9 NEXA knowledge build           | TB3, TB8      | —                                         | —                          | —                                | —                  | —                                                                             | —       | —                                    |
+| TB10 polish + analytics + QA       | all           | —                                         | —                          | —                                | —                  | —                                                                             | —       | —                                    |
+
+Migration numbers are allocated serially by the integrator from live `main`, never assumed.
