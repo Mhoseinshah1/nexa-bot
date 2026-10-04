@@ -309,6 +309,9 @@ const draft = (overrides: Record<string, unknown> = {}) => ({
   factLabels: ['سرویس فعال', 'حجم باقی‌مانده'],
   provider: 'OPENAI',
   model: 'gpt-test-1',
+  imagesSeen: 0,
+  imagesUnseen: 0,
+  unseenImageHandoff: null,
   ...overrides,
 });
 
