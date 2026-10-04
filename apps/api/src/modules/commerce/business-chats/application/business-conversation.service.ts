@@ -136,21 +136,10 @@ export class BusinessConversationService {
     });
     if (connection === null) return null;
 
-    // The send record is the second, independent proof that a message is ours (ADR-0033 §3).
-    const knownOwnMessage = await this.deps.outbound.isOwnMessage(scope, {
-      botInstanceId: input.botInstanceId,
-      ownerTelegramUserId: connection.ownerTelegramUserId,
-      chatId: message.chatId,
-      telegramMessageId: message.messageId,
-    });
-    const origin = await this.deps.connections.classify(
-      scope,
-      connection,
-      message,
-      knownOwnMessage,
-    );
-
     await this.authorizeSystem(scope, actor, 'business_chat.message');
+    // The update's own facts only. The ORIGIN is derived, and can legitimately change between
+    // a delivery and its redelivery (the echo proof below resolves), so it is not hashed (TB2
+    // review N5): a redelivery replays rather than failing as a payload mismatch.
     const requestHash = hashRequest({
       command: 'business_chat.message',
       connectionId: message.connectionId,
@@ -158,7 +147,6 @@ export class BusinessConversationService {
       messageId: message.messageId,
       edited: input.edited,
       editedAt: message.editedAt?.toISOString() ?? null,
-      origin,
     });
     const replay = await this.deps.idempotency.find<RecordedBusinessMessage>(
       scope,
@@ -190,6 +178,30 @@ export class BusinessConversationService {
             now,
           },
           tx,
+        );
+
+        // Classified UNDER the conversation lock, which the lane also takes before it records
+        // a delivery: the send-record proof (ADR-0033 §3) reads a committed state, never one
+        // the lane is about to write (TB2 review F2). An EDIT is never proved ours by the send
+        // record: that proves the message id, not the edit, and NEXA never edits, so an edit
+        // without `sender_business_bot` is the owner's act (TB2 review F3).
+        const knownOwnMessage = input.edited
+          ? false
+          : await this.deps.outbound.isOwnMessage(
+              scope,
+              {
+                botInstanceId: input.botInstanceId,
+                ownerTelegramUserId: connection.ownerTelegramUserId,
+                chatId: message.chatId,
+                telegramMessageId: message.messageId,
+              },
+              tx,
+            );
+        const origin = await this.deps.connections.classify(
+          scope,
+          connection,
+          message,
+          knownOwnMessage,
         );
 
         let inserted = false;

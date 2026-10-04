@@ -44,8 +44,13 @@ class ScriptedTransport {
   sent: { chatId: string; text: string }[] = [];
   next: BusinessSendOutcome[] = [];
   nextMessageId = 500;
+  /** Runs while the send is in flight: outside every lane transaction, as Telegram would. */
+  during: (() => Promise<void>) | null = null;
   async sendText(_scope: unknown, _actor: unknown, input: { chatId: string; text: string }) {
     this.sent.push({ chatId: input.chatId, text: input.text });
+    const during = this.during;
+    this.during = null;
+    if (during !== null) await during();
     const scripted = this.next.shift();
     if (scripted !== undefined) return scripted;
     this.nextMessageId += 1;
@@ -563,5 +568,202 @@ describe('Telegram Business conversations (TB2)', () => {
     expect(a).toEqual({ state: 'HUMAN_ACTIVE', controlEpoch: 1 });
     expect(b).toEqual(a);
     expect(c).toEqual(a);
+  });
+
+  // ---- Substitute review of PR #197 (TB2): each finding's regression ----
+
+  it('F1: a late update on a superseded connection never points the conversation back at it', async () => {
+    const first = await record(message());
+    await ctx.container.businessConnections.applyReport(scopeA, system(), {
+      idempotencyKey: key('reconnect'),
+      botInstanceId: BOT,
+      report: {
+        connectionId: 'conn-2',
+        ownerTelegramUserId: OWNER,
+        ownerUserChatId: OWNER,
+        isEnabled: true,
+        rights: ['can_reply'] as BusinessBotRight[],
+        connectedAt: new Date('2026-10-02T00:00:00Z'),
+      },
+    });
+    await record(message({ connectionId: 'conn-2' }));
+    const live = (await conversation(first!.conversationId)).connectionRowId;
+    // A message that was in flight on the old connection arrives late.
+    await record(message({ connectionId: 'conn-1' }));
+    expect((await conversation(first!.conversationId)).connectionRowId).toBe(live);
+    const row = await ctx.container.businessConversations.send(scopeA, operator, {
+      conversationId: first!.conversationId,
+      idempotencyKey: key('send'),
+      text: 'پاسخ پشتیبان',
+    });
+    expect(row.state).toBe('PENDING');
+  });
+
+  it('F2: an echo recorded before the lane writes the message id is relabelled ours, and its redelivery replays', async () => {
+    const first = await record(message());
+    await ctx.container.businessConversations.send(scopeA, operator, {
+      conversationId: first!.conversationId,
+      idempotencyKey: key('send'),
+      text: 'سلام، بررسی می‌کنم',
+    });
+    transport.nextMessageId = 900;
+    const echoKey = key('echo');
+    const echo = fromOwner({ messageId: 901, text: 'سلام، بررسی می‌کنم' });
+    transport.during = async () => {
+      expect((await record(echo, false, echoKey))?.origin).toBe('HUMAN');
+    };
+    expect((await lane.deliverDue(scopeA)).delivered).toBe(1);
+    const stored = await ctx.container.database.db.execute(
+      sql`SELECT origin FROM business_messages WHERE telegram_message_id = 901`,
+    );
+    expect(stored.rows).toEqual([{ origin: 'OWN_ECHO' }]);
+    // The same update redelivered under its key replays; its origin moved, its facts did not.
+    await expect(record(echo, false, echoKey)).resolves.not.toBeNull();
+  });
+
+  it('F3: the owner editing a message NEXA sent is a human act, not our echo', async () => {
+    const first = await record(message());
+    const found = await conversation(first!.conversationId);
+    await queueAuto(found.id, found.controlEpoch);
+    transport.nextMessageId = 700;
+    await lane.deliverDue(scopeA);
+    const sentByUs = fromOwner({ messageId: 701, text: 'پاسخ پیشنهادی هوش مصنوعی' });
+    expect((await record(sentByUs))?.origin).toBe('OWN_ECHO');
+    expect((await conversation(found.id)).state).toBe('AI_ACTIVE');
+    const edited = await record(
+      { ...sentByUs, text: 'پاسخ اصلاح‌شده توسط صاحب حساب', editedAt: new Date(Date.now() + 1000) },
+      true,
+    );
+    expect(edited).toMatchObject({ origin: 'HUMAN', tookOver: true });
+    expect((await conversation(found.id)).state).toBe('HUMAN_ACTIVE');
+  });
+
+  it('M1: an owner message redelivered after a resume does not take the conversation again', async () => {
+    const first = await record(message());
+    const owner = fromOwner();
+    await record(owner);
+    await ctx.container.businessConversations.resume(scopeA, operator, {
+      conversationId: first!.conversationId,
+      idempotencyKey: key('resume'),
+    });
+    await record(owner, false, key('late-redelivery'));
+    expect(await conversation(first!.conversationId)).toMatchObject({
+      state: 'AI_ACTIVE',
+      controlEpoch: 2,
+    });
+  });
+
+  it('M3: two passes holding the same claim send once', async () => {
+    const first = await record(message());
+    const found = await conversation(first!.conversationId);
+    const row = await queueAuto(found.id, found.controlEpoch);
+    const now = new Date();
+    const [claimed] = await outbound.claimDue(scopeA, now, new Date(now.getTime() + 60_000), 10);
+    let second: string | null = null;
+    transport.during = async () => {
+      second = await lane.deliverOne(scopeA, claimed!);
+    };
+    expect(await lane.deliverOne(scopeA, claimed!)).toBe('delivered');
+    expect(second).toBe('lost');
+    expect(transport.sent).toHaveLength(1);
+    expect(await laneState(row.id)).toBe('DELIVERED');
+  });
+
+  it('N6: a pass whose lease another pass took over neither stamps nor sends', async () => {
+    const first = await record(message());
+    const found = await conversation(first!.conversationId);
+    const row = await queueAuto(found.id, found.controlEpoch);
+    const now = new Date();
+    const [stale] = await outbound.claimDue(scopeA, now, new Date(now.getTime() + 60_000), 10);
+    // Another pass claimed it after this lease expired, was told to wait, and requeued it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE business_outbound_messages SET next_attempt_at = now() + interval '30 seconds' WHERE id = ${row.id}`,
+    );
+    expect(await lane.deliverOne(scopeA, stale!)).toBe('lost');
+    expect(transport.sent).toEqual([]);
+    expect(await outbound.findById(scopeA, row.id)).toMatchObject({
+      state: 'PENDING',
+      sendStartedAt: null,
+    });
+  });
+
+  it('N8: an outcome for a row the reaper already resolved is not counted as delivered', async () => {
+    const first = await record(message());
+    const found = await conversation(first!.conversationId);
+    const row = await queueAuto(found.id, found.controlEpoch);
+    transport.during = async () => {
+      await ctx.container.database.db.execute(
+        sql`UPDATE business_outbound_messages SET state = 'UNCONFIRMED', resolved_at = now() WHERE id = ${row.id}`,
+      );
+    };
+    const report = await lane.deliverDue(scopeA);
+    expect(report.delivered).toBe(0);
+    expect(await laneState(row.id)).toBe('UNCONFIRMED');
+  });
+
+  it('M4: an edit delivered out of order never rewinds a newer one', async () => {
+    const original = message({ text: 'متن اول' });
+    const recorded = await record(original);
+    const t = Date.now();
+    await record({ ...original, text: 'ویرایش دوم', editedAt: new Date(t + 2000) }, true);
+    await record({ ...original, text: 'ویرایش اول', editedAt: new Date(t + 1000) }, true);
+    const [stored] = await new DrizzleBusinessMessageRepository(ctx.container.database.db).recent(
+      scopeA,
+      recorded!.conversationId,
+      10,
+    );
+    expect(stored).toMatchObject({ text: 'ویرایش دوم', contentVersion: 2 });
+  });
+
+  it('N7: an edit does not restore text that retention already purged', async () => {
+    const original = message({ text: 'متن قدیمی' });
+    const recorded = await record(original);
+    await ctx.container.database.db.execute(
+      sql`UPDATE business_messages SET text = NULL, text_purged_at = now() WHERE telegram_message_id = ${original.messageId}`,
+    );
+    await record(
+      { ...original, text: 'متن ویرایش‌شده', editedAt: new Date(Date.now() + 1000) },
+      true,
+    );
+    const [stored] = await new DrizzleBusinessMessageRepository(ctx.container.database.db).recent(
+      scopeA,
+      recorded!.conversationId,
+      10,
+    );
+    expect(stored?.text).toBeNull();
+  });
+
+  it('M5: a stopped tenant takes no send, no takeover, and its lane sends nothing', async () => {
+    const first = await record(message());
+    const found = await conversation(first!.conversationId);
+    const row = await queueAuto(found.id, found.controlEpoch);
+    // A pass that claimed the row before the stop committed.
+    const now = new Date();
+    const [claimed] = await outbound.claimDue(scopeA, now, new Date(now.getTime() + 60_000), 10);
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'DISABLED' WHERE id = ${SEED_IDS.tenantA}`,
+    );
+    await expect(
+      ctx.container.businessConversations.send(scopeA, operator, {
+        conversationId: found.id,
+        idempotencyKey: key('send'),
+        text: 'x',
+      }),
+    ).rejects.toSatisfy(isNexaError);
+    await expect(
+      ctx.container.businessConversations.takeOver(scopeA, operator, {
+        conversationId: found.id,
+        idempotencyKey: key('take'),
+      }),
+    ).rejects.toSatisfy(isNexaError);
+    // A pass that starts after the stop does nothing; one already holding the row loses it
+    // at the final check, inside the transaction that would have stamped the send.
+    expect((await lane.deliverDue(scopeA)).claimed).toBe(0);
+    expect(await lane.deliverOne(scopeA, claimed!)).toBe('superseded');
+    expect(transport.sent).toEqual([]);
+    expect(await outbound.findById(scopeA, row.id)).toMatchObject({
+      state: 'SUPERSEDED',
+      failureCode: 'scope.inactive',
+    });
   });
 });

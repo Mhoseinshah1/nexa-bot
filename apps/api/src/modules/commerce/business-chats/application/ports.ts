@@ -333,6 +333,16 @@ export interface BusinessMessageRepository {
     tx: unknown,
   ): Promise<number | null>;
 
+  /**
+   * Our own message, stored as HUMAN because its echo was recorded before the lane wrote the
+   * message id (TB2 review F2): relabelled OWN_ECHO once the id is known. Returns the count.
+   */
+  relabelOwnEcho(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly telegramMessageId: number },
+    tx: unknown,
+  ): Promise<number>;
+
   /** Marks deleted and purges text. Returns how many rows changed. */
   markDeleted(
     scope: ScopeContext,
@@ -417,6 +427,7 @@ export interface BusinessOutboundRepository {
       readonly chatId: string;
       readonly telegramMessageId: number;
     },
+    tx?: unknown,
   ): Promise<boolean>;
 
   /** Leases the due rows (no send started), oldest first. */
@@ -428,7 +439,18 @@ export interface BusinessOutboundRepository {
   ): Promise<readonly BusinessOutboundRecord[]>;
 
   /** PENDING and unstamped → stamped. False when somebody moved it first. */
-  markSendStarted(scope: ScopeContext, id: string, now: Date, tx: unknown): Promise<boolean>;
+  /**
+   * Stamps the send. `lease` is the `next_attempt_at` this pass claimed the row with: a pass
+   * whose lease was taken over by another (which may have sent and been told to wait) must
+   * not stamp and send immediately (TB2 review N6).
+   */
+  markSendStarted(
+    scope: ScopeContext,
+    id: string,
+    lease: Date | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 
   /**
    * Resolves a PENDING row to a terminal state. `fromStamped` says whether the row must have

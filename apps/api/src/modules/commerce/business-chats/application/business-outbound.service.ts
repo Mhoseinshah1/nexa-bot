@@ -171,7 +171,13 @@ export class BusinessOutboundService {
         );
         return null;
       }
-      const stamped = await this.deps.outbound.markSendStarted(scope, row.id, now, tx);
+      const stamped = await this.deps.outbound.markSendStarted(
+        scope,
+        row.id,
+        row.nextAttemptAt,
+        now,
+        tx,
+      );
       return stamped ? conversation : null;
     });
     if (decision === null) {
@@ -188,9 +194,13 @@ export class BusinessOutboundService {
 
     return this.deps.uow.run(scope, async (tx): Promise<Outcome> => {
       const now = this.deps.clock.now();
+      // The conversation lock first: `recordMessage` classifies under the same lock, so an echo
+      // is classified either after this delivery's message id commits, or before it — and is
+      // then relabelled below (TB2 review F2).
+      await this.deps.conversations.lockById(scope, row.conversationId, tx);
       switch (sent.outcome) {
         case 'DELIVERED': {
-          await this.deps.outbound.resolve(
+          const resolved = await this.deps.outbound.resolve(
             scope,
             row.id,
             {
@@ -202,6 +212,14 @@ export class BusinessOutboundService {
             },
             tx,
           );
+          if (!resolved) return this.lost(row, 'DELIVERED');
+          if (sent.messageId !== null) {
+            await this.deps.messages.relabelOwnEcho(
+              scope,
+              { conversationId: row.conversationId, telegramMessageId: sent.messageId },
+              tx,
+            );
+          }
           await this.deps.conversations.touch(
             scope,
             row.conversationId,
@@ -214,11 +232,17 @@ export class BusinessOutboundService {
         }
         case 'RATE_LIMITED': {
           const wait = deliveryRetryDelayMs(row.attempts, sent.retryAfterMs ?? undefined);
-          await this.deps.outbound.requeue(scope, row.id, new Date(now.getTime() + wait), now, tx);
-          return 'rateLimited';
+          const requeued = await this.deps.outbound.requeue(
+            scope,
+            row.id,
+            new Date(now.getTime() + wait),
+            now,
+            tx,
+          );
+          return requeued ? 'rateLimited' : this.lost(row, 'RATE_LIMITED');
         }
         case 'UNKNOWN': {
-          await this.deps.outbound.resolve(
+          const resolved = await this.deps.outbound.resolve(
             scope,
             row.id,
             {
@@ -230,6 +254,7 @@ export class BusinessOutboundService {
             },
             tx,
           );
+          if (!resolved) return this.lost(row, 'UNKNOWN');
           if (row.origin === 'AUTO') {
             await this.deps.control.handOff(
               scope,
@@ -242,7 +267,7 @@ export class BusinessOutboundService {
           return 'unconfirmed';
         }
         case 'REFUSED': {
-          await this.deps.outbound.resolve(
+          const resolved = await this.deps.outbound.resolve(
             scope,
             row.id,
             {
@@ -254,6 +279,7 @@ export class BusinessOutboundService {
             },
             tx,
           );
+          if (!resolved) return this.lost(row, 'REFUSED');
           if (row.origin === 'AUTO') {
             await this.deps.control.handOff(
               scope,
@@ -267,6 +293,19 @@ export class BusinessOutboundService {
         }
       }
     });
+  }
+
+  /**
+   * The row had already left PENDING when the answer came back — the stranded-stamp reaper
+   * resolved it meanwhile. Its outcome stands; this one is logged, never counted as delivered
+   * (TB2 review N8).
+   */
+  private lost(row: BusinessOutboundRecord, outcome: string): Outcome {
+    this.deps.logger.warn(
+      { outboundId: row.id, conversationId: row.conversationId, outcome },
+      'business outbound: an outcome arrived for a row no longer pending',
+    );
+    return 'lost';
   }
 
   /** The 30-day text retention (ADR-0033 §8), at most every ten minutes. */

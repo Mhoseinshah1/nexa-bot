@@ -23,10 +23,22 @@ M=[
  ('TB2-03',[(SVC,"            bumpEpoch: true,\n            takeoverReason: null,","            bumpEpoch: false,\n            takeoverReason: null,")],T_I,'R5'),
  ('TB2-04',[(SVC,"{ from: NOT_HUMAN, to: 'HUMAN_ACTIVE', bumpEpoch: true, takeoverReason: reason, now }","{ from: NOT_HUMAN, to: 'HUMAN_ACTIVE', bumpEpoch: false, takeoverReason: reason, now }")],T_I,'types by hand takes the conversation'),
  ('TB2-05',[(SVC,"const NOT_HUMAN: readonly BusinessConversationState[] = ['AI_ACTIVE', 'HANDOFF_REQUIRED', 'PAUSED'];","const NOT_HUMAN: readonly BusinessConversationState[] = ['AI_ACTIVE', 'HANDOFF_REQUIRED', 'PAUSED', 'HUMAN_ACTIVE'];"),(SVC,"    if (conversation.state === 'HUMAN_ACTIVE') return null;\n","")],T_I,'does not supersede the first'),
- ('TB2-06',[(SVC,"    const knownOwnMessage = await this.deps.outbound.isOwnMessage(scope, {","    const knownOwnMessage = false && await this.deps.outbound.isOwnMessage(scope, {")],T_I,'echo is recognised as ours'),
+ ('TB2-06',[(SVC,"        const knownOwnMessage = input.edited\n          ? false\n          : await","        const knownOwnMessage = true\n          ? false\n          : await")],T_I,'echo is recognised as ours'),
  ('TB2-07',[(LANE,"          if (row.origin === 'AUTO') {\n            await this.deps.control.handOff(\n              scope,\n              row.conversationId,\n              'SEND_OUTCOME_UNKNOWN',","          if (row.origin === 'NEVER') {\n            await this.deps.control.handOff(\n              scope,\n              row.conversationId,\n              'SEND_OUTCOME_UNKNOWN',")],T_I,'never resent, and hands'),
  ('TB2-08',[(REPO,"and(eq(customers.tenantId, tenantId), eq(customers.telegramUserId, telegramUserId))","eq(customers.telegramUserId, telegramUserId)")],T_I,'links the customer only by exact id'),
  ('TB2-09',[(SVC,"        const held = (await this.humanSignal(scope, conversation, reason, now, tx)) ?? conversation;","        const held = conversation;")],T_I,'operator’s send takes the conversation over'),
+ # Substitute review of PR #197: each fix, reverted.
+ ('TB2-10',[(REPO,"          sql`EXISTS (SELECT 1 FROM ${telegramBusinessConnections} WHERE ${telegramBusinessConnections.tenantId} = ${tenantId} AND ${telegramBusinessConnections.id} = ${input.connectionRowId} AND ${telegramBusinessConnections.supersededAt} IS NULL)`,\n","")],T_I,'F1'),
+ ('TB2-11',[(LANE,"            await this.deps.messages.relabelOwnEcho(","            void this.deps.messages.relabelOwnEcho;\n            if (false) await this.deps.messages.relabelOwnEcho(")],T_I,'F2'),
+ ('TB2-12',[(SVC,"        const knownOwnMessage = input.edited\n          ? false\n          : await","        const knownOwnMessage = false\n          ? false\n          : await")],T_I,'F3'),
+ ('TB2-13',[(SVC,"        if (inserted || input.edited) {","        if (true) {")],T_I,'M1'),
+ ('TB2-14',[(REPO,"          isNull(businessOutboundMessages.sendStartedAt),\n          lease === null","          lease === null")],T_I,'M3'),
+ ('TB2-15',[(REPO,"          or(isNull(businessMessages.editedAt), lt(businessMessages.editedAt, input.editedAt)),\n","")],T_I,'M4'),
+ ('TB2-16',[(SVC,"      async (tx) => {\n        await this.assertScopeActive(scope, tx);\n        const now = this.deps.clock.now();\n        const raced = await this.deps.outbound.findByIdempotencyKey(scope, key, tx);","      async (tx) => {\n        const now = this.deps.clock.now();\n        const raced = await this.deps.outbound.findByIdempotencyKey(scope, key, tx);")],T_I,'M5'),
+ ('TB2-17',[(LANE,"      const active = await this.deps.scopeActivity.scopeIsActive(scope, tx);","      const active = true;")],T_I,'M5'),
+ ('TB2-18',[(REPO,"          lease === null\n            ? isNull(businessOutboundMessages.nextAttemptAt)\n            : eq(businessOutboundMessages.nextAttemptAt, lease),\n","")],T_I,'N6'),
+ ('TB2-19',[(REPO,"        text: sql`CASE WHEN ${businessMessages.textPurgedAt} IS NULL THEN ${input.text}::text ELSE NULL END`,","        text: input.text,")],T_I,'N7'),
+ ('TB2-20',[(LANE,"          if (!resolved) return this.lost(row, 'DELIVERED');\n","")],T_I,'N8'),
 ]
 
 def build(pkg):

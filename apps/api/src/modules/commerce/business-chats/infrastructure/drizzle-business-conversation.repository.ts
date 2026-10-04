@@ -159,11 +159,18 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
       throw new Error('business_conversations: the upserted row is not readable in scope.');
     }
     if (row.connectionRowId === input.connectionRowId) return toConversation(row);
+    // Follows the LATEST connection only: a late update on a connection that has since been
+    // superseded must not point the conversation back at it (TB2 review F1). Decided here,
+    // against the connection row as it is now, not as the caller read it.
     const [moved] = await executor
       .update(businessConversations)
       .set({ connectionRowId: input.connectionRowId, updatedAt: input.now })
       .where(
-        and(eq(businessConversations.tenantId, tenantId), eq(businessConversations.id, row.id)),
+        and(
+          eq(businessConversations.tenantId, tenantId),
+          eq(businessConversations.id, row.id),
+          sql`EXISTS (SELECT 1 FROM ${telegramBusinessConnections} WHERE ${telegramBusinessConnections.tenantId} = ${tenantId} AND ${telegramBusinessConnections.id} = ${input.connectionRowId} AND ${telegramBusinessConnections.supersededAt} IS NULL)`,
+        ),
       )
       .returning();
     return toConversation(moved ?? row);
@@ -416,7 +423,8 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
     const [row] = await executorOf(this.db, tx)
       .update(businessMessages)
       .set({
-        text: input.text,
+        // Retention already purged this row: an edit does not bring text back (TB2 review N7).
+        text: sql`CASE WHEN ${businessMessages.textPurgedAt} IS NULL THEN ${input.text}::text ELSE NULL END`,
         contentVersion: sql`${businessMessages.contentVersion} + 1`,
         editedAt: input.editedAt,
       })
@@ -432,6 +440,27 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
       )
       .returning({ contentVersion: businessMessages.contentVersion });
     return row?.contentVersion ?? null;
+  }
+
+  async relabelOwnEcho(
+    scope: ScopeContext,
+    input: Parameters<BusinessMessageRepository['relabelOwnEcho']>[1],
+    tx: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .update(businessMessages)
+      .set({ origin: 'OWN_ECHO' })
+      .where(
+        and(
+          eq(businessMessages.tenantId, tenantId),
+          eq(businessMessages.conversationId, input.conversationId),
+          eq(businessMessages.telegramMessageId, input.telegramMessageId),
+          eq(businessMessages.origin, 'HUMAN'),
+        ),
+      )
+      .returning({ id: businessMessages.id });
+    return rows.length;
   }
 
   async markDeleted(
@@ -593,9 +622,10 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
   async isOwnMessage(
     scope: ScopeContext,
     input: Parameters<BusinessOutboundRepository['isOwnMessage']>[1],
+    tx?: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.db
+    const rows = await executorOf(this.db, tx)
       .select({ id: businessOutboundMessages.id })
       .from(businessOutboundMessages)
       .innerJoin(
@@ -670,7 +700,13 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
       .map(toOutbound);
   }
 
-  async markSendStarted(scope: ScopeContext, id: string, now: Date, tx: unknown): Promise<boolean> {
+  async markSendStarted(
+    scope: ScopeContext,
+    id: string,
+    lease: Date | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await executorOf(this.db, tx)
       .update(businessOutboundMessages)
@@ -681,6 +717,9 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
           eq(businessOutboundMessages.id, id),
           eq(businessOutboundMessages.state, 'PENDING'),
           isNull(businessOutboundMessages.sendStartedAt),
+          lease === null
+            ? isNull(businessOutboundMessages.nextAttemptAt)
+            : eq(businessOutboundMessages.nextAttemptAt, lease),
         ),
       )
       .returning({ id: businessOutboundMessages.id });
