@@ -129,7 +129,7 @@ order's settlement: the amount is a wallet credit whatever the payment method wa
   view gains `origin`, and `reason` is nullable; `serviceDeleteRefundQuoteSchema`,
   `serviceDeleteWithRefundRequestSchema`, and route `deleteWithRefund`
   (`GET`/`POST /services/:serviceId/delete-with-refund`).
-- Migration `0200_service_refund_request_origin`: `origin text NOT NULL DEFAULT 'CUSTOMER'` with an
+- Migration `0194_service_refund_request_origin`: `origin text NOT NULL DEFAULT 'CUSTOMER'` with an
   enum CHECK; `reason` and `bot_instance_id` become nullable, held by
   `service_refund_requests_origin_shape_check` — a customer's row has both, an operator's has
   neither and can never be `REJECTED`. Existing rows are all `CUSTOMER` and already satisfy it.
