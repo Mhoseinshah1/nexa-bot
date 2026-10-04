@@ -15,8 +15,10 @@ import {
   templateDefinition,
   APPEARANCE_SLOTS,
   appearanceMarker,
+  categoryButtonStyleOf,
   inlineButtonStyleOf,
   type AppearanceTestErrorCode,
+  type CategoryColors,
   type InlineButtonStyles,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
@@ -1053,18 +1055,31 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       this.inlineStyles !== undefined && buttons.some((button) => button.inline !== undefined)
         ? await this.inlineStyles.stylesFor(scope)
         : {};
+    // UX Batch 01, item 2: read once, and only for a keyboard that lists categories.
+    const categoryOf = (button: CustomerButton): string | undefined =>
+      'data' in button && button.inline === 'catalog.category' ? button.category : undefined;
+    const colors: CategoryColors =
+      this.inlineStyles?.categoryColorsFor !== undefined &&
+      buttons.some((button) => categoryOf(button) !== undefined)
+        ? await this.inlineStyles.categoryColorsFor(scope)
+        : {};
     for (const button of buttons) {
       const text = await this.labelText(scope, button.label);
       /*
        * Owner spec §6: the registry button's style, `default` omitted. The route below is
-       * the caller's and the style never touches it.
+       * the caller's and the style never touches it. A category button takes its own
+       * category's colour first (item 2), through the one fallback rule.
        */
+      const category = categoryOf(button);
       const style =
         button.inline === undefined
           ? 'default'
-          : // Batch 01 item 3: a colour derived from domain facts is never the tenant's to set.
+          : // Batch 01 item 3: a colour derived from domain facts is never the tenant's to set;
+            // item 2: otherwise a category button takes its own category's colour.
             (('derivedStyle' in button ? button.derivedStyle : undefined) ??
-            inlineButtonStyleOf(button.inline, styles));
+            (category !== undefined
+              ? categoryButtonStyleOf(category, colors, styles)
+              : inlineButtonStyleOf(button.inline, styles)));
       const styled = style === 'default' ? {} : { style };
       /*
        * The union is discriminated by the field that IS the difference, not by a `kind`

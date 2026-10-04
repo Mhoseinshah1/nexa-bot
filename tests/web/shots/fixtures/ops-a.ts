@@ -12,6 +12,7 @@ import {
   botMenuConfigResponseSchema,
   clientAppListSchema,
   fxStatusResponseSchema,
+  gatewayHealthResponseSchema,
   panelAdvancedResponseSchema,
   paymentAccountListResponseSchema,
   paymentGatewayListResponseSchema,
@@ -568,6 +569,38 @@ export const OPS_A: readonly ShotFixture[] = [
         conversion: { rateRequired: true, rateMinor: '2150' },
       }),
     ],
+  }),
+  /*
+   * UX Batch 01, item 8: each payment method's own view shows that route's recorded health,
+   * from the same report the list's health tab reads.
+   */
+  fixture('/payment-gateways-health', gatewayHealthResponseSchema, {
+    window: { start: ago(60 * 24 * 7), end: ago(0) },
+    gateways: (['MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS'] as const).map((provider) => ({
+      provider,
+      status: provider === 'TONPAYS' ? ('DISABLED' as const) : ('ACTIVE' as const),
+      state: provider === 'TONPAYS' ? ('INCOMPLETE' as const) : ('NO_ISSUES_RECORDED' as const),
+      configuration:
+        provider === 'TONPAYS'
+          ? { complete: false, gaps: ['CREDENTIAL_MISSING' as const] }
+          : { complete: true, gaps: [] },
+      check: { supported: false, lastAt: null, lastResult: null },
+      answers: {
+        lastInvoiceCreatedAt: provider === 'TONPAYS' ? null : ago(90),
+        lastInquiryAnsweredAt: null,
+        lastInquiryFailure: null,
+        lastCreateFailure: null,
+        attemptsInWindow: provider === 'TONPAYS' ? 0 : 14,
+        attemptsWithProviderError: 0,
+      },
+      callBudget: null,
+      openConditions: [],
+      queues: { PENDING: 2, UNKNOWN: 0, NEEDS_RECONCILIATION: 0, MISMATCH: 0, PROVIDER_ERROR: 0 },
+      lastReconciliation: null,
+      signals: [],
+    })),
+    withheld: [],
+    generatedAt: ago(0),
   }),
   fixture('/fx/status', fxStatusResponseSchema, {
     enabled: true,

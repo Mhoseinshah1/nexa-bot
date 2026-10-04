@@ -2,6 +2,7 @@ import {
   inlineButtonDefinition,
   type InlineButtonKey,
   type ScopeContext,
+  type CategoryColors,
   type InlineButtonStyles,
   type TemplateValues,
 } from '@nexa/contracts';
@@ -59,4 +60,10 @@ export function inlineDataLabel(
  */
 export interface InlineButtonStyleReader {
   stylesFor(scope: ScopeContext): Promise<InlineButtonStyles>;
+  /**
+   * UX Batch 01, item 2: each product category's own colour (`bot.category_colors`), read
+   * only for a keyboard that carries a category button. Absent in a stand-in, which draws
+   * every category with the generic category button's style.
+   */
+  categoryColorsFor?(scope: ScopeContext): Promise<CategoryColors>;
 }

@@ -464,6 +464,15 @@ table.
 
 ## 9. `/payment-accounts` — card-to-card destinations (`PaymentAccountsPage`)
 
+> **UX Batch 01 (items 7 and 8).** This screen is now `CardAccountsSection`, drawn on the
+> card-to-card method's own view at `/payment-gateways/card-to-card`; `/payment-accounts`
+> redirects there (history replace) and has no nav entry. Each payment method has its own
+> view at `/payment-gateways/<slug>` (`apps/web/src/payment-method-routes.ts`), with its
+> settings, actions, forms, callback URL and health; the list links to them and edits
+> nothing in place. API, permissions and write semantics are unchanged: the form now opens
+> from «افزودن کارت» or a row's «ویرایش» instead of standing open. What follows is the
+> original OPS-A record.
+
 **Permissions.** Nav `payments.accounts.view` only; route `denied =
 !payments.accounts.view`, `mayEdit = payments.accounts.edit`. The form is outside the
 StateSwitch on purpose: an edit-only role (list denied) still gets the form.
