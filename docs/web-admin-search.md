@@ -64,6 +64,74 @@ picker sends nothing and names the key; the customer page's "register as reselle
 still hands a customer over by id. Pinned by
 `tests/integration/reseller-customer-picker.test.ts` and `tests/web/resellers.test.tsx`.
 
+### Searching as you type (UX batch 02, issue 13)
+
+`/users` applies its box by itself: `ListSearchBox` with `autoApply`
+(`apps/web/src/ui/list-search.tsx`). The draft is applied once it has been still for
+`LIST_SEARCH_DEBOUNCE_MS` (400 ms — the app had no debounce convention; the owner asked for
+300–500 ms). A paste is the same single change and takes the same path.
+
+- **One request per burst.** Each keystroke restarts the wait; nothing is scheduled while the
+  draft already reads as the applied search, so Enter (or the button, which stays) applies at
+  once and the pending wait does not send it again.
+- **Trimmed, never empty.** The applied value is `classifyListSearch`'s reading: surrounding
+  whitespace is dropped, and an empty or whitespace-only box applies "no search" — no `q` at
+  all, never `q=` (a 400). The box keeps what was typed, trailing space included, so a pause
+  mid-name does not eat the space under the caret.
+- **No stale answer.** The applied text is in the URL and in the page's query key
+  (`['customers', signature, cursor]`), so an older, slower response lands in its own cache
+  entry and is never drawn under a newer search.
+- **Only under the route it was typed in.** A navigation the box did not make — the sidebar
+  «کاربران» link, a status chip — cancels a pending apply; the text stays in the box
+  unapplied (as before auto-search), and the next keystroke or Enter applies it. Without this
+  the sidebar link, meant to reset the list, was undone 400 ms later by the half-typed term.
+- **Not mid-composition.** Nothing is scheduled between `compositionstart` and
+  `compositionend` (an input method's half-composed word); the end schedules the finished one.
+- **Permissions unchanged.** Without `users.search` there is no box to apply; while the list
+  is refused (`users.view`) the box is hidden and applies nothing.
+- `/orders`, `/payments` and `/services` keep the explicit apply; `autoApply` is opt-in per page.
+
+Pinned by `tests/web/customer-search.test.tsx` (burst, paste, Telegram id, `@username`, empty,
+Enter and the timer it cancels, a slow older response, a navigation mid-pause, an input-method
+composition, both permissions).
+
+### First and last activity (UX batch 02, issue 12)
+
+The two timestamp columns on `/users` (and on the customer page) were labelled «نخستین
+تماس» / «آخرین تماس» — "contact", which reads as a call or a support request. They render
+`firstSeenAt` / `lastSeenAt` from `customerSummarySchema`, which are `customers.first_seen_at`
+and `customers.last_seen_at`. Their writers, all of them:
+
+| writer                                                                                                 | `first_seen_at` | `last_seen_at`                        |
+| ------------------------------------------------------------------------------------------------------ | --------------- | ------------------------------------- |
+| `DrizzleCustomerRepository.resolve`, via `CustomerService.resolveFromUpdate`, from `BotRuntime.handle` | set on creation | `greatest(stored, now)` on every turn |
+| `DrizzleLegacyImporterRepository.insertIfAbsent`                                                       | the import time | the import time; never touches a row  |
+
+`BotRuntime.handle` runs for every update the webhook hands it: a `message` or a
+`callback_query` from a non-bot user (`telegramFromOf`) — every text, command and button
+press, not only `/start`. A replayed update does not bump it (idempotency), and `/ping` is the
+one stated exclusion (`webhook.controller.ts`). No operator action, payment callback or panel
+usage writes either column (a service's own `last_seen_at` is a different column on
+`services`).
+
+So they ARE the customer's activity in the bot, and are now labelled «اولین فعالیت» /
+«آخرین فعالیت», with a note under the list naming what counts. One precise mismatch is
+stated rather than hidden: for a customer brought over by the legacy importer, BOTH columns
+are the import time — «اولین فعالیت» for good, «آخرین فعالیت» until their first message or
+button press in this installation's bot. The previous system's activity is not recorded
+anywhere, and inventing it would be a fabricated fact. No new tracking was added. The Telegram admin
+bot's customer detail (`bot.admin.customer_detail`) shows the same two columns, so its DEFAULT
+catalogue text now reads «اولین فعالیت» / «آخرین فعالیت» too, as do its placeholder labels
+in the template editor; a tenant's own override of that template is untouched
+(`tests/integration/telegram-admin-customers.test.ts` pins the default).
+
+Every rule of both sections is mutation-checked by `scripts/mutate-customer-search.py`
+(CS-01…CS-12; CS-08 needs `TEST_DATABASE_URL`).
+
+Pinned by `tests/integration/telegram-customer-turn.test.ts` ("moves last_seen_at on an
+ordinary message and on a button press, never first_seen_at") and the label case in
+`tests/web/customer-search.test.tsx`.
+
 ## Why prefix, not infix — and not `pg_trgm`
 
 `pg_trgm` is available in the PostgreSQL image but **no migration installs it**, and adding an

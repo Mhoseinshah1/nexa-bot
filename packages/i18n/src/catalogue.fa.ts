@@ -588,7 +588,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.customers_more_button': '▶️ صفحهٔ بعد',
   'bot.admin.customers_back_button': 'بازگشت به فهرست مشتری‌ها',
   'bot.admin.customer_detail':
-    'شناسهٔ تلگرام: {telegramId}\nنام کاربری: {username}\nنام: {name}\nوضعیت: {status}\nدلیل مسدودی: {reason}\n\nاولین تماس: {firstSeen}\nآخرین تماس: {lastSeen}',
+    'شناسهٔ تلگرام: {telegramId}\nنام کاربری: {username}\nنام: {name}\nوضعیت: {status}\nدلیل مسدودی: {reason}\n\nاولین فعالیت: {firstSeen}\nآخرین فعالیت: {lastSeen}',
   'bot.admin.customer_gone': 'چنین مشتری‌ای یافت نشد.',
   'bot.admin.customer_block_button': '⛔️ مسدود کردن',
   'bot.admin.customer_unblock_button': '✅ رفع مسدودی',

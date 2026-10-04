@@ -1607,8 +1607,14 @@ export const WEB_FA = {
   'web.user_username': 'نام کاربری',
   'web.user_name': 'نام',
   'web.user_language': 'زبان',
-  'web.user_first_seen': 'نخستین تماس',
-  'web.user_last_seen': 'آخرین تماس',
+  /*
+   * Issue 12: the customer's first and last ACTIVITY in the bot — every message and button
+   * press, not a "contact" (`docs/web-admin-search.md`, "First and last activity").
+   */
+  'web.user_first_seen': 'اولین فعالیت',
+  'web.user_last_seen': 'آخرین فعالیت',
+  'web.users_activity_note':
+    '«اولین فعالیت» و «آخرین فعالیت» زمان نخستین و آخرین پیام یا فشردن دکمه‌ای است که مشتری در ربات فرستاده است؛ کارهای مدیر روی حساب مشتری آنها را تغییر نمی‌دهد. برای مشتری منتقل‌شده از سامانهٔ قبلی، «اولین فعالیت» و، تا نخستین پیام او در ربات، «آخرین فعالیت» هم زمان انتقال است، نه فعالیت او در آن سامانه.',
   'web.user_status_active': 'فعال',
   'web.user_status_blocked': 'مسدود',
   'web.user_detail': 'مشتری',

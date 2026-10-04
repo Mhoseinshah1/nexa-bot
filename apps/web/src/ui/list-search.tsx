@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { LIST_SEARCH_MAX_LENGTH, classifyListSearch, type ListSearchKind } from '@nexa/contracts';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, type Route } from '../router';
@@ -18,11 +18,25 @@ import { Button, Field, Input } from './kit';
  * Non-text filters (status, method, gateway…) stay as their own controls on each page.
  *
  * The search lives in the URL as `q`, so a found row can be reloaded and linked; the
- * draft lives in state, so typing issues no request. The draft FOLLOWS the applied value —
- * derived, not initialised — because the sidebar link re-renders a page with an empty
- * query instead of remounting it (`users.tsx` records that defect).
+ * draft lives in state, so a keystroke on its own issues no request. The draft FOLLOWS the
+ * applied value — derived, not initialised — because the sidebar link re-renders a page with
+ * an empty query instead of remounting it (`users.tsx` records that defect).
+ *
+ * With `autoApply` (UX batch 02, issue 13; `/users` today) the draft is applied by itself
+ * once it has been still for `LIST_SEARCH_DEBOUNCE_MS`: typing or pasting searches, and a
+ * burst of keystrokes is ONE navigation and so one request. Enter and the button still apply
+ * at once. What keeps an older answer from replacing a newer one is not here: the applied
+ * text is part of the page's query key, so a slow response for a superseded term lands in
+ * that term's cache entry and is never drawn under the current one.
  */
 export const LIST_SEARCH_PARAM = 'q';
+
+/**
+ * How long the box waits after the last keystroke before applying it. The app had no
+ * convention; 400 ms sits in the middle of the 300–500 ms the owner asked for — long enough
+ * that a Telegram id typed at speed is one request, short enough to read as immediate.
+ */
+export const LIST_SEARCH_DEBOUNCE_MS = 400;
 
 const KIND_LABELS: Readonly<Record<ListSearchKind, WebKey>> = {
   TELEGRAM_ID: 'web.list_search_reads_telegram',
@@ -42,6 +56,7 @@ export function ListSearchBox({
   hint,
   hidden = false,
   resetKeys = [],
+  autoApply = false,
 }: {
   route: Route;
   /** The input's DOM id; one box per page, so a page-specific id. */
@@ -54,11 +69,35 @@ export function ListSearchBox({
    * under one search strands every row before it under another.
    */
   resetKeys?: readonly string[];
+  /** Apply the draft by itself after `LIST_SEARCH_DEBOUNCE_MS` of stillness (see above). */
+  autoApply?: boolean;
 }) {
   const applied = appliedListSearch(route);
-  const [draft, setDraft] = useState<{ applied: string; text: string }>({ applied, text: applied });
+  /** The whole URL the box sits under, so the draft knows which one it was typed against. */
+  const routeKey = `${route.path}?${route.query.toString()}`;
+  /*
+   * `at` is the route the draft was last edited under. The automatic apply runs only while
+   * the route is still that one: a navigation the box did not make — the sidebar «کاربران»
+   * link, a status chip — cancels a pending apply instead of carrying the half-typed text
+   * into the new list a moment later (which would defeat the link meant to reset it). The
+   * text stays in the box, unapplied, exactly as before auto-search existed; the next
+   * keystroke or Enter applies it under the new route.
+   */
+  const [draft, setDraft] = useState<{ applied: string; text: string; at: string }>({
+    applied,
+    text: applied,
+    at: routeKey,
+  });
+  /*
+   * An input method (Persian, among others) fires `change` with a half-composed word; a
+   * pause mid-composition must not search for it. Nothing is scheduled while composing, and
+   * the end of the composition schedules the finished word.
+   */
+  const [composing, setComposing] = useState(false);
   const text = draft.applied === applied ? draft.text : applied;
   const term = classifyListSearch(text);
+  /** What applying the draft would put in the URL: trimmed, and `''` for "no search". */
+  const wanted = term === null ? '' : text.trim();
 
   const navigate = (value: string | null) =>
     setQueries(route, [
@@ -68,11 +107,38 @@ export function ListSearchBox({
 
   const apply = (event: FormEvent) => {
     event.preventDefault();
-    navigate(term === null ? null : text.trim());
+    navigate(wanted === '' ? null : wanted);
   };
 
+  /*
+   * The automatic apply records the value it applies AS the draft's own `applied`, so the URL
+   * catching up does not reset the box to the trimmed value: an operator who paused after
+   * `ali ` and typed on would otherwise watch the space vanish under the caret and get
+   * `alir`. (An explicit Enter or button press keeps showing the trimmed search it applied,
+   * as it always has: the operator has finished typing.)
+   */
+  const commit = (value: string) => {
+    setDraft((current) => ({ ...current, applied: value }));
+    navigate(value === '' ? null : value);
+  };
+
+  /*
+   * The debounce: every change of the draft restarts the wait; nothing is scheduled while
+   * the draft already reads as the applied search, while composing, or once the route has
+   * moved away from the one the draft was typed under (see `at`). Any of those changing
+   * clears the pending timer — which is also why Enter, by changing `applied`, cancels it.
+   * Emptying the box applies "no search", which sends no `q` at all.
+   */
+  const typedHere = draft.at === routeKey;
+  useEffect(() => {
+    if (!autoApply || hidden || composing || !typedHere || wanted === applied) return undefined;
+    const timer = setTimeout(() => commit(wanted), LIST_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // `commit` closes over this render's `route`, which `routeKey` stands for in the list.
+  }, [autoApply, hidden, composing, typedHere, wanted, applied, routeKey]);
+
   const clear = () => {
-    setDraft({ applied, text: '' });
+    setDraft({ applied, text: '', at: routeKey });
     navigate(null);
   };
 
@@ -87,7 +153,9 @@ export function ListSearchBox({
           type="search"
           maxLength={LIST_SEARCH_MAX_LENGTH}
           value={text}
-          onChange={(event) => setDraft({ applied, text: event.target.value })}
+          onChange={(event) => setDraft({ applied, text: event.target.value, at: routeKey })}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
         />
       </Field>
       {term !== null && (

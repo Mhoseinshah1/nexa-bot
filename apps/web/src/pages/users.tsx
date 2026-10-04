@@ -231,6 +231,8 @@ export function UsersPage({
             id="users-search"
             hint={t('web.users_search_hint')}
             hidden={toolbarHidden}
+            // Issue 13: typing or pasting searches by itself, debounced; the button stays.
+            autoApply
           />
         ) : (
           /*
@@ -309,6 +311,18 @@ export function UsersPage({
             sticky
           />
         </StateSwitch>
+
+        {/*
+          What the two activity columns ARE (issue 12). `first_seen_at` / `last_seen_at` are
+          written by `CustomerService.resolveFromUpdate` on every message and button press a
+          customer sends a customer bot — not only `/start`, and never by an operator's action —
+          and otherwise only by the legacy importer, which stamps BOTH columns of an imported
+          row with the import's time (the last one moves at their first bot activity). "Contact" read as a phone call or a support request; this says which
+          events count.
+        */}
+        <p className="muted small ca-list-note" hidden={toolbarHidden}>
+          {t('web.users_activity_note')}
+        </p>
 
         {/* A sibling of `StateSwitch`, so it must not claim rows the error card
             replaced — see the panels pager for the defect this shape fixes. */}
