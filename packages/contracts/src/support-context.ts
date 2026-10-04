@@ -169,7 +169,12 @@ export const supportContextIncidentSchema = z
   })
   .strict();
 
-export const SUPPORT_CONTEXT_KNOWLEDGE_SOURCES = ['FAQ'] as const;
+/**
+ * `FAQ` — an ACTIVE entry of the customer's FAQ screen, read live. `KNOWLEDGE` (TB8) — an
+ * APPROVED and enabled support knowledge article (ADR-0035 §1): reviewed text, never a draft,
+ * a candidate or a retired article.
+ */
+export const SUPPORT_CONTEXT_KNOWLEDGE_SOURCES = ['FAQ', 'KNOWLEDGE'] as const;
 export const supportContextKnowledgeSchema = z
   .object({
     source: z.enum(SUPPORT_CONTEXT_KNOWLEDGE_SOURCES),

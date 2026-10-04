@@ -6898,6 +6898,10 @@ export const WEB_FA = {
     'پیکربندی هوش مصنوعی پشتیبانی: حالت، سرویس‌دهنده‌ها، کلیدها و محدودیت‌ها؛ دیدن مصرف و هزینه',
   'web.perm_support_ai_auto_reply': 'اجازه به هوش مصنوعی برای پاسخ خودکار به مشتریان',
   'web.perm_support_ai_assist': 'درخواست خلاصه و پیش‌نویس پاسخ از هوش مصنوعی در گفتگوهای بیزینس',
+  'web.perm_support_knowledge_view': 'دیدن دانش پشتیبان و صف پیشنهادهای یادگیری',
+  'web.perm_support_knowledge_propose': 'پیشنهاد یک پاسخ گفتگو به‌عنوان دانش پشتیبان',
+  'web.perm_support_knowledge_review':
+    'تأیید، ویرایش یا رد پیشنهادهای یادگیری و ویرایش، انتشار یا بازنشسته‌کردن دانش پشتیبان',
   'web.perm_tickets_reply': 'پاسخ به تیکت',
   'web.perm_tickets_assign': 'واگذاری و اولویت‌بندی تیکت',
   'web.perm_tickets_close': 'تغییر وضعیت تیکت',
@@ -6955,6 +6959,7 @@ export const WEB_FA = {
   'web.perm_domain_tickets': 'پشتیبانی',
   'web.perm_domain_business_chats': 'گفتگوهای تلگرام بیزینس',
   'web.perm_domain_support_ai': 'دستیار هوشمند پشتیبانی',
+  'web.perm_domain_support_knowledge': 'دانش پشتیبان',
   'web.perm_domain_campaigns': 'کمپین‌ها',
   'web.perm_domain_reports': 'گزارش‌ها',
   'web.perm_domain_audit': 'ممیزی',
