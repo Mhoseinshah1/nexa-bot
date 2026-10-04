@@ -22,6 +22,8 @@ import {
   starsSuccessfulPaymentOf,
 } from './stars-updates.js';
 import { opsConnectAttemptOf, opsMembershipChangeOf } from './ops-group-updates.js';
+import { handleBusinessUpdate } from './business-updates.js';
+import { businessUpdateOf } from '../../modules/commerce/business-chats/domain/telegram-business.js';
 
 /**
  * The Telegram webhook receiver.
@@ -195,6 +197,25 @@ export class TelegramWebhookController {
     };
 
     const idempotencyKey = telegramUpdateKey(botInstance.id, updateId);
+
+    /*
+     * TB1 (ADR-0033): the Telegram Business connection and its chats, answered HERE, before
+     * every other route. A business message belongs to a chat of the connected ACCOUNT, not
+     * to the bot's own chat with that person, even when the two share an id — so it must
+     * never reach the customer turn, never resolve a customer and never create one. The
+     * kind is decided by key presence (`businessUpdateOf`), so a malformed business payload
+     * is reported, not dropped through to the ordinary routes.
+     */
+    const business = businessUpdateOf(update);
+    if (business !== null) {
+      await handleBusinessUpdate(this.container, scope, actor, {
+        idempotencyKey,
+        botInstanceId: botInstance.id,
+        updateId,
+        update: business,
+      });
+      return { ok: true };
+    }
 
     /*
      * Telegram Stars (Package A). Both payment updates are answered HERE, before the

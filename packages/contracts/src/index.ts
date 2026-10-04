@@ -140,3 +140,5 @@ export * from './incidents.js';
 export * from './legacy-migration.js';
 /** Migration P4: legacy import run and map metadata (codes only, never source rows). */
 export * from './legacy-import.js';
+/** TB1: Telegram Business connections and business-message classification (ADR-0033). */
+export * from './business-chats.js';

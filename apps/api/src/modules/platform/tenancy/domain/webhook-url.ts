@@ -55,6 +55,11 @@ export const TELEGRAM_HANDLED_UPDATE_TYPES = [
   'callback_query',
   'pre_checkout_query',
   'my_chat_member',
+  // TB1 (ADR-0033): the Telegram Business connection and its chats.
+  'business_connection',
+  'business_message',
+  'edited_business_message',
+  'deleted_business_messages',
 ] as const;
 
 /**

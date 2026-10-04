@@ -579,6 +579,10 @@ import { NotificationService } from './modules/control/notifications/application
 import { UndeliverableOrderRefunder } from './modules/commerce/orders/application/undeliverable-order-refunder.js';
 import { NotificationDispatcher } from './modules/control/notifications/application/notification-dispatcher.js';
 import { NotifyingOperationalEventRecorder } from './modules/control/notifications/application/operational-event-projector.js';
+import { BusinessConnectionService } from './modules/commerce/business-chats/application/business-connection.service.js';
+import { BusinessTransport } from './modules/commerce/business-chats/application/business-transport.js';
+import { DrizzleBusinessConnectionRepository } from './modules/commerce/business-chats/infrastructure/drizzle-business-connection.repository.js';
+import { TelegramBusinessGateway } from './modules/commerce/business-chats/infrastructure/telegram-business.gateway.js';
 // WP-A4: the Telegram operations log group.
 import {
   OpsGroupRouter,
@@ -1104,6 +1108,9 @@ export interface Container {
   readonly appearance: AppearanceService;
   /** WP-A4: the Nexa-managed operations log group, and the worker pass that keeps it. */
   readonly opsGroups: OpsGroupService;
+  /** TB1: Telegram Business connections (ADR-0033). */
+  readonly businessConnections: BusinessConnectionService;
+  readonly businessTransport: BusinessTransport;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
@@ -5323,6 +5330,38 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const notificationRepository = new DrizzleNotificationRepository(database.db, ids);
 
+  /*
+   * TB1 (ADR-0033): Telegram Business connections and the send-on-behalf transport. The
+   * notifying recorder, so a connection that stops being able to send reaches an operator.
+   */
+  const businessConnectionRepository = new DrizzleBusinessConnectionRepository(database.db);
+  const businessTelegram = new TelegramBusinessGateway({
+    apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+    timeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+  });
+  const businessConnections = new BusinessConnectionService({
+    repository: businessConnectionRepository,
+    telegram: businessTelegram,
+    tokens: botInstances,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const businessTransport = new BusinessTransport({
+    repository: businessConnectionRepository,
+    connections: businessConnections,
+    telegram: businessTelegram,
+    tokens: botInstances,
+    opsLog,
+    clock,
+  });
+
   // WP-A4: the operations log group. Built before the notification lane, which prefers
   // the connected group over the manual chat id setting, and before the dispatcher, which
   // resolves an intent routed to the group to where the group is at send time.
@@ -6412,6 +6451,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     notificationTransport,
     appearance,
     opsGroups,
+    businessConnections,
+    businessTransport,
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,

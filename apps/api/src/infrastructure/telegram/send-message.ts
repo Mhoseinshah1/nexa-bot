@@ -1392,3 +1392,64 @@ export async function telegramAnswerPreCheckoutQuery(
   // Answers `result: true`. No id to carry.
   return { outcome: 'SUCCEEDED', messageId: null };
 }
+
+// ---------------------------------------------------------------------------
+// Telegram Business (TB1, ADR-0033)
+// ---------------------------------------------------------------------------
+
+export type TelegramBusinessConnectionOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly connection: unknown }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+/**
+ * Read one Business connection (`getBusinessConnection`). A READ: it changes nothing.
+ *
+ * The result is returned RAW, for the business module's strict parser
+ * (`parseBusinessConnection`) — the one place a `BusinessConnection` is read, so the
+ * webhook and this call can never disagree about what a connection says.
+ */
+export async function telegramGetBusinessConnection(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & { readonly businessConnectionId: string },
+): Promise<TelegramBusinessConnectionOutcome> {
+  assertOutsideTransaction('A Telegram getBusinessConnection');
+
+  const { businessConnectionId, ...rest } = request;
+  const call = await telegramCall({
+    ...rest,
+    method: 'getBusinessConnection',
+    body: { business_connection_id: businessConnectionId },
+  });
+  if (call.outcome !== 'SUCCEEDED') return call;
+  return { outcome: 'SUCCEEDED', connection: call.result };
+}
+
+/**
+ * A plain-text `sendMessage` ON BEHALF OF a connected Business account.
+ *
+ * Plain text, never `parse_mode`: the text is an operator's or a validated AI reply, and
+ * markup in it would be a way to make the business account say something it did not
+ * appear to. `reply_parameters` carries no `chat_id` — "Not supported for messages sent on
+ * behalf of a business account" — and `allow_sending_without_reply`, which Telegram forces
+ * to true for these anyway.
+ */
+export function businessTextMessageBody(input: {
+  readonly businessConnectionId: string;
+  readonly chatId: string;
+  readonly text: string;
+  readonly replyToMessageId?: number;
+}): Record<string, unknown> {
+  return {
+    business_connection_id: input.businessConnectionId,
+    chat_id: input.chatId,
+    text: input.text,
+    link_preview_options: { is_disabled: true },
+    ...(input.replyToMessageId === undefined
+      ? {}
+      : {
+          reply_parameters: {
+            message_id: input.replyToMessageId,
+            allow_sending_without_reply: true,
+          },
+        }),
+  };
+}
