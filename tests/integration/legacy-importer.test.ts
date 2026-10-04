@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { Client as PgClient } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
@@ -1123,6 +1124,55 @@ describe('Migration P7: the legacy importer', () => {
     const adopted = (report.sections as Record<string, any>)['applied'].services.adoption;
     expect(adopted).toMatchObject({ REVIEW_CLOSED: 1, ADOPTED: 3 });
     expect(seen).not.toContain(first.idInvoice);
+  });
+
+  // REHEARSE against 9942263f: `resume` printed pg's "client is already executing a query"
+  // DeprecationWarning — two queries issued concurrently on ONE transaction's client.
+  it('import and resume with real adoption issue no concurrent query on one pg client', async () => {
+    const warnings: Error[] = [];
+    const onWarning = (warning: Error) => warnings.push(warning);
+    process.on('warning', onWarning);
+    // pg warns once per process, so a warning an earlier test already caused would hide a
+    // regression here. Count the exact condition pg warns on as well: a query issued while
+    // that client's queue still holds another.
+    const proto = PgClient.prototype as unknown as {
+      query: (...args: unknown[]) => unknown;
+      _queryQueue: unknown[];
+    };
+    const original = proto.query;
+    let overlaps = 0;
+    proto.query = function (this: typeof proto, ...args: unknown[]) {
+      if (this._queryQueue.length > 0) overlaps += 1;
+      return original.apply(this, args);
+    };
+    try {
+      const real = ctx.container.legacyImporter({ inventoryPageSize: 3 });
+      const snap = await snapshot();
+      await expect(
+        real.apply({
+          ...input('crash', snap),
+          mode: 'IMPORT',
+          afterPhase: (phase) => {
+            if (phase === 'trials') throw new Error('simulated crash after the trials phase');
+          },
+        }),
+      ).rejects.toBeInstanceOf(LegacyImportInterrupted);
+      const resumed = await real.apply({ ...input('resume', snap), mode: 'RESUME' });
+      expect((resumed.sections as Record<string, any>)['applied'].services.adoption.ADOPTED).toBe(
+        SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE,
+      );
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      proto.query = original;
+      process.off('warning', onWarning);
+    }
+    expect(overlaps).toBe(0);
+    expect(
+      warnings.filter(
+        (w) => w.name === 'DeprecationWarning' && /client\.query\(\)/u.test(w.message),
+      ),
+    ).toEqual([]);
+    expectOnlyReads();
   });
 
   it('with the real P6 wired (the container default), eligible services are adopted with zero provider writes', async () => {

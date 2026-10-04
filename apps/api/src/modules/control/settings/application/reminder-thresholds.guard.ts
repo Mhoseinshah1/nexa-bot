@@ -97,19 +97,14 @@ export class ReminderThresholdsGuard implements SettingChangeGuard {
     usageSecondPercent: number;
     usageFinalPercent: number;
   }> {
-    const [
-      expiryFirstDays,
-      expirySecondDays,
-      usageFirstPercent,
-      usageSecondPercent,
-      usageFinalPercent,
-    ] = await Promise.all([
-      this.resolver.valueOf<number>(scope, 'reminders.expiry_first_days', tx),
-      this.resolver.valueOf<number>(scope, 'reminders.expiry_second_days', tx),
-      this.resolver.valueOf<number>(scope, 'reminders.usage_first_percent', tx),
-      this.resolver.valueOf<number>(scope, 'reminders.usage_second_percent', tx),
-      this.resolver.valueOf<number>(scope, 'reminders.usage_final_percent', tx),
-    ]);
+    // Sequential: these share one transaction's pg client (see ServiceReminderService
+    // `thresholds` — concurrent queries on one client are deprecated in pg 8).
+    const read = (key: SettingKey) => this.resolver.valueOf<number>(scope, key, tx);
+    const expiryFirstDays = await read('reminders.expiry_first_days');
+    const expirySecondDays = await read('reminders.expiry_second_days');
+    const usageFirstPercent = await read('reminders.usage_first_percent');
+    const usageSecondPercent = await read('reminders.usage_second_percent');
+    const usageFinalPercent = await read('reminders.usage_final_percent');
     return {
       expiryFirstDays,
       expirySecondDays,
