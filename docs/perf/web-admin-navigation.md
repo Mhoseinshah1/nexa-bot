@@ -251,6 +251,34 @@ Shell persistence is unchanged: the sidebar and top bar survived every navigatio
 every run (`kept`), the shell answered a click in 7–43 ms, and no navigation loaded a
 JavaScript chunk.
 
+## The rules, and the probe that proves each has a test
+
+[`scripts/mutate-web-nav-perf.py`](../../scripts/mutate-web-nav-perf.py) reverts one rule
+at a time, runs the test that names it, and restores the file. Every mutation must be
+KILLED:
+
+| Id    | Rule reverted                                    | Test that fails                    |
+| ----- | ------------------------------------------------ | ---------------------------------- |
+| NP-01 | the 5-second `staleTime` on the customer list    | page after its prefetch asks again |
+| NP-02 | the sidebar's pointer handler                    | no prefetch happens                |
+| NP-03 | the permission check before a prefetch           | a refused page is asked for        |
+| NP-04 | the shell keyed by route (a remount)             | sidebar and top bar replaced       |
+| NP-05 | the audit log key without its filters            | bare page answers a filtered one   |
+| NP-06 | the customer key without the search              | bare list answers a searched one   |
+| NP-07 | the empty icon                                   | `web-index-icon.test.ts`           |
+| NP-08 | the `orders_tenant_paid_settled_idx` declaration | four `reporting-plan` plans        |
+| NP-09 | the `payments_tenant_resolved_idx` declaration   | the `paymentFailures` plan         |
+
+NP-08 and NP-09 also drop the index from the test database (online indexes are built
+outside the migrator) and rebuild it afterwards with the compiled migrator, so they need
+`TEST_DATABASE_URL` and `pnpm build`, and are SKIPPED without the database:
+
+```bash
+TEST_DATABASE_URL=postgres://nexa:nexa@127.0.0.1:5432/<your db> python3 scripts/mutate-web-nav-perf.py
+```
+
+Last run (on `nexa_b2_perf_it`): all nine KILLED, tree clean afterwards.
+
 ## Remaining bottlenecks
 
 - **`GET /reports/summary` is still ~630 ms at this volume**, and the Dashboard is as
