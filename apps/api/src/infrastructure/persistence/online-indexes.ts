@@ -475,6 +475,22 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       '"discount_amount","customer_id") ' +
       "WHERE (state = 'PAID'::text)",
   },
+  {
+    /*
+     * Failed payments by the instant they were resolved: `paymentFailures`, twice per
+     * `GET /dashboard/summary` and once per `GET /reports/failures` (Issue 16).
+     *
+     * `resolved_at` is set exactly when a payment is FAILED, CANCELLED or EXPIRED
+     * (`payments_resolved_check`), so the partial predicate holds precisely the rows the
+     * statement can count, and a window on it implies the predicate. INCLUDE `state`
+     * because the statement counts by it. Measured on 320 000 payments: 114 ms → 7 ms over
+     * the three calls, which had been a sequential scan of the tenant's payments.
+     */
+    name: 'payments_tenant_resolved_idx',
+    definition:
+      'ON "payments" USING btree ("tenant_id","resolved_at") INCLUDE ("state") ' +
+      'WHERE (resolved_at IS NOT NULL)',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

@@ -95,10 +95,25 @@ describe('the reporting query plans', () => {
                          FROM products WHERE tenant_id = $1::uuid) p ON p.k = 1 + g % 10`,
             [scope.tenantId, panelId, ROWS],
           );
+          // One payment per order: the sale's confirmation, or the cancelled attempt's
+          // resolution — the only payments that carry a `resolved_at`.
+          await client.query(
+            `INSERT INTO payments
+               (id, tenant_id, customer_id, order_id, state, method, amount, currency, reference,
+                evidence_kind, confirmed_at, resolved_at, created_at, updated_at)
+               SELECT gen_random_uuid(), o.tenant_id, o.customer_id, o.id,
+                      CASE WHEN o.state = 'PAID' THEN 'CONFIRMED' ELSE 'CANCELLED' END,
+                      'MANUAL_TRANSFER', o.total_amount, o.currency, 'plan-' || o.id,
+                      CASE WHEN o.state = 'PAID' THEN 'OPERATOR_REVIEW' END,
+                      o.settled_at, o.cancelled_at, o.created_at, o.created_at
+                 FROM orders o WHERE o.tenant_id = $1::uuid`,
+            [scope.tenantId],
+          );
         }
         // What autovacuum leaves a live table in: statistics, and a visibility map that
         // lets an index-only scan skip the heap.
         await client.query('VACUUM ANALYZE orders');
+        await client.query('VACUUM ANALYZE payments');
       } finally {
         await client.query('RESET statement_timeout');
       }
@@ -132,13 +147,20 @@ describe('the reporting query plans', () => {
     return captured[0]!;
   };
 
+  const PAID_SETTLED = {
+    index: 'orders_tenant_paid_settled_idx',
+    column: 'settled_at',
+    table: 'orders',
+  };
   const shapes: readonly {
     readonly what: string;
     readonly call: () => Promise<unknown>;
+    readonly index: { index: string; column: string; table: string };
   }[] = [
     {
       what: 'salesTotals (the KPI pairs, eight per dashboard request)',
       call: () => repository.salesTotals(tenantA, window),
+      index: PAID_SETTLED,
     },
     {
       what: 'trend REVENUE (the revenue series)',
@@ -148,6 +170,7 @@ describe('the reporting query plans', () => {
           new Date(window.from.getTime() + 15 * DAY_MS),
           window.to,
         ]),
+      index: PAID_SETTLED,
     },
     {
       what: 'salesTrendByPurpose (sales by kind)',
@@ -157,25 +180,34 @@ describe('the reporting query plans', () => {
           new Date(window.from.getTime() + 15 * DAY_MS),
           window.to,
         ]),
+      index: PAID_SETTLED,
     },
     {
       what: 'revenueCurrencies',
       call: () => repository.revenueCurrencies(tenantA, [window]),
+      index: PAID_SETTLED,
+    },
+    {
+      what: 'paymentFailures (failed payments, twice per dashboard request)',
+      call: () => repository.paymentFailures(tenantA, window),
+      index: { index: 'payments_tenant_resolved_idx', column: 'resolved_at', table: 'payments' },
     },
   ];
 
   for (const shape of shapes) {
-    it(`serves ${shape.what} from orders_tenant_paid_settled_idx`, async () => {
+    it(`serves ${shape.what} from ${shape.index.index}`, async () => {
       const plan = await explain(await statementOf(shape.call));
-      expect(plan, `the paid-settlement index is not in the plan:\n${plan}`).toContain(
-        'orders_tenant_paid_settled_idx',
+      expect(plan, `${shape.index.index} is not in the plan:\n${plan}`).toContain(
+        shape.index.index,
       );
-      // The window BOUNDS the scan: `settled_at` is in the Index Cond, not a Filter over
+      // The window BOUNDS the scan: its column is in the Index Cond, not a Filter over
       // the tenant's history.
       expect(plan, `the window did not bound the scan:\n${plan}`).toMatch(
-        /Index Cond:.*settled_at/s,
+        new RegExp(`Index Cond:.*${shape.index.column}`, 's'),
       );
-      expect(plan, `the orders heap was walked:\n${plan}`).not.toContain('Seq Scan on orders');
+      expect(plan, `the ${shape.index.table} heap was walked:\n${plan}`).not.toContain(
+        `Seq Scan on ${shape.index.table}`,
+      );
       /*
        * Measured on this fixture: 38 buffers for `salesTotals` with the index (an
        * index-only range of 1 233 entries, no heap fetch), and 620 with the declaration
