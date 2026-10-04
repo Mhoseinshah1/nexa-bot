@@ -106,6 +106,8 @@ export * from './audit-log.js';
 export * from './terms.js';
 export * from './customer-crm.js';
 export * from './templates.js';
+// UX Batch 01, item 5: the domain each template key belongs to.
+export * from './template-categories.js';
 export * from './settings.js';
 export * from './features.js';
 export * from './notifications.js';
