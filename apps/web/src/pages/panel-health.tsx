@@ -412,33 +412,77 @@ function PanelHealthCard({
           ],
         ]}
       />
-      <div className="ph-conditions">
-        <h3 className="small">{t('web.ph_conditions')}</h3>
-        {row.conditions.length === 0 ? (
-          <p className="faint small">{t('web.ph_no_conditions')}</p>
-        ) : (
-          <ul>
-            {row.conditions.map((condition) => (
+      <PanelConditions conditions={row.conditions} />
+    </Card>
+  );
+}
+
+/**
+ * The panel's open conditions, CURRENT apart from HISTORY (UX batch 01, item 10).
+ *
+ * The server says which is which (`current`): a health condition the stored
+ * health no longer produces is history — left open by a release whose
+ * connection test did not announce its recovery — and is closed by the next
+ * healthy probe. Listing it under "open warnings" beside a healthy panel read as
+ * an active provider failure, which it is not. Resolved conditions are not on
+ * this card at all; the notification center keeps them, and the card says so.
+ */
+function PanelConditions({ conditions }: { conditions: PanelHealthRow['conditions'] }) {
+  const onLink = useLinkHandler();
+  const current = conditions.filter((condition) => condition.current);
+  const history = conditions.filter((condition) => !condition.current);
+  return (
+    <div className="ph-conditions">
+      <h3 className="small">{t('web.ph_conditions')}</h3>
+      {current.length === 0 ? (
+        <p className="faint small">{t('web.ph_no_conditions')}</p>
+      ) : (
+        <ul aria-label={t('web.ph_conditions')}>
+          {current.map((condition) => (
+            <li key={condition.code}>
+              <Badge tone={SEVERITY_TONES[condition.severity] ?? 'neutral'}>
+                {t(SEVERITY_LABELS[condition.severity])}
+              </Badge>{' '}
+              <Ltr>{condition.code}</Ltr> <ConditionTimes condition={condition} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {history.length > 0 && (
+        <>
+          <h3 className="small">{t('web.ph_conditions_history')}</h3>
+          <p className="faint small">{t('web.ph_conditions_history_hint')}</p>
+          <ul className="ph-conditions-history" aria-label={t('web.ph_conditions_history')}>
+            {history.map((condition) => (
               <li key={condition.code}>
-                <Badge tone={SEVERITY_TONES[condition.severity] ?? 'neutral'}>
-                  {t(SEVERITY_LABELS[condition.severity])}
-                </Badge>{' '}
-                <Ltr>{condition.code}</Ltr>{' '}
-                <span className="faint small">
-                  {t('web.ph_since')} {formatTimestamp(condition.firstSeenAt)}
-                  {condition.occurrences > 1 && (
-                    <>
-                      {' · '}
-                      <Num value={condition.occurrences} /> {t('web.ph_times')}
-                    </>
-                  )}
-                </span>
+                <Badge tone="neutral">{t('web.ph_condition_historical')}</Badge>{' '}
+                <Ltr>{condition.code}</Ltr> <ConditionTimes condition={condition} />
               </li>
             ))}
           </ul>
-        )}
-      </div>
-    </Card>
+        </>
+      )}
+      <p className="faint small">
+        {t('web.ph_conditions_resolved_hint')}{' '}
+        <a href="/notification-center" onClick={onLink}>
+          {t('web.nav_inbox')}
+        </a>
+      </p>
+    </div>
+  );
+}
+
+function ConditionTimes({ condition }: { condition: PanelHealthRow['conditions'][number] }) {
+  return (
+    <span className="faint small">
+      {t('web.ph_since')} {formatTimestamp(condition.firstSeenAt)}
+      {condition.occurrences > 1 && (
+        <>
+          {' · '}
+          <Num value={condition.occurrences} /> {t('web.ph_times')}
+        </>
+      )}
+    </span>
   );
 }
 

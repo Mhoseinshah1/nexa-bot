@@ -69,6 +69,53 @@ which is `PanelService.testConnection`. That goes through `attemptProbe` in
 `probe-core.ts`, the single probe implementation. It shares the cooldown and the
 tenant budget with the monitor.
 
+A manual test whose result the database accepts is **announced exactly as a
+monitor probe is**: both lanes call `announceHealthWrite`
+(`panel-monitor.service.ts`) in the transaction that stored the row, under the
+panel's row lock. A discarded (stale) write announces nothing.
+
+## Current alerts and history (UX batch 01, item 10)
+
+**The defect.** An install showed a panel as healthy — "Test connection"
+succeeded, the streak was zero, the last success was fresh — with
+`panel.health.provider_error` still listed under open warnings. It was an
+auto-resolve bug, not a manual-acknowledgement design: nothing in this
+installation acknowledges a panel condition by hand. The operator's connection
+test stored its result through the shared probe core but recorded no
+operational event. So the operator's successful test after a failure wrote
+`PROVIDER_ERROR -> HEALTHY` silently, the monitor's next probe read
+`HEALTHY -> HEALTHY` (no transition), and the condition was never closed. The
+mirror case existed too: a failure found by the operator's test was never
+announced, and the monitor then saw no change either.
+`tests/integration/panel-monitor.test.ts` › "a recovery closes the warning
+whichever lane proves it" reproduces both, and failed before the fix.
+
+**The fix.** The transition is a fact about the stored row, not about who
+measured it, so the announcement is one function both lanes call. No code was
+renamed or split; codes are schema (`operational_events` can never rewrite one).
+
+**Rows already stranded on existing installs** are closed by a reconciliation
+in the same function: on every HEALTHY write (from either lane), any of the
+panel's health conditions (`PANEL_HEALTH_CONDITION_CODES`, capacity excluded)
+still open is resolved through the ordinary recorder — a `panel.health.recovered`
+event naming it in `recoversCode` and `recoversDedupeKey`. The stranded row keeps
+its code, its counter and its first-seen time; it gains `resolved_at` and
+`resolved_by_event_id`. The open set is read in the writing transaction under
+the panel lock, so two monitor replicas reconcile once. It runs only on a
+HEALTHY result: a panel failing for another reason has not proven recovery. No
+migration and no operator action are needed — the next healthy probe (at most
+the healthy interval, or an immediate "Test connection") closes it.
+
+**The screen** separates the two. Each open condition carries `current`:
+false for a health condition the stored health no longer produces. The card
+lists current conditions under "current alerts" with their severity, and the
+rest under "history — awaiting close", labelled as history and not with the
+severity of an active failure, with a sentence saying the next healthy check
+closes them. A capacity condition is always current here (this row does not
+measure occupancy), and so is a condition on a panel with no stored health.
+Resolved conditions are not on the card; the notification center keeps them,
+and the card links there.
+
 ## Hook for the Notification Center (B3)
 
 This page reads failures; it does not record them. Panel failures are already

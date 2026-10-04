@@ -2,6 +2,8 @@ import {
   systemJobActor,
   systemContext,
   isNexaError,
+  PANEL_HEALTH_STATES,
+  PROVIDER_FAILURE_KINDS,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -1074,8 +1076,20 @@ export class PanelMonitorService {
         // overtaken by one storing AUTH_FAILED, and then lands its own newer
         // HEALTHY used to compute HEALTHY -> HEALTHY, announce nothing, and
         // leave the authentication condition open with the panel working.
-        const event = transitionOf(previous ?? null, health);
-        if (event === null) return;
+        // `locked`, not `before`: the panel's identity is read under the lock
+        // too, so a rename that commits during a probe is announced under the
+        // name the operator now sees rather than the one it had when the probe
+        // started. Shared with the operator's connection test — see
+        // `announceHealthWrite` for why it must be.
+        const announced = await announceHealthWrite(
+          this.deps,
+          tenant,
+          locked,
+          previous ?? null,
+          health,
+          tx,
+        );
+        if (!announced.transitioned) return;
 
         await this.deps.audit.record(
           tenant,
@@ -1095,11 +1109,6 @@ export class PanelMonitorService {
           },
           tx,
         );
-        // `locked`, not `before`: the panel's identity is read under the lock
-        // too, so a rename that commits during a probe is announced under the
-        // name the operator now sees rather than the one it had when the probe
-        // started.
-        await this.deps.opsLog.record(tenant, buildEvent(locked, event), tx);
       },
     );
   }
@@ -1367,6 +1376,102 @@ export function conditionOf(
   }
 }
 
+/**
+ * Every code a panel's HEALTH condition can be open under — capacity excluded.
+ *
+ * Derived from `conditionOf` over every state and failure kind, never typed out,
+ * for the reason `PANEL_CONDITION_CODES` gives: a code this function learns to
+ * produce is on the list the moment it exists.
+ */
+export const PANEL_HEALTH_CONDITION_CODES: readonly string[] = (() => {
+  const codes = new Set<string>();
+  for (const state of PANEL_HEALTH_STATES) {
+    for (const failure of [null, ...PROVIDER_FAILURE_KINDS]) {
+      const condition = conditionOf(state, failure);
+      if (condition !== null) codes.add(condition.code);
+    }
+  }
+  return [...codes].sort();
+})();
+
+/**
+ * Announces an APPLIED health write, whichever lane wrote it.
+ *
+ * UX batch 01, item 10. The operator's connection test stored its result
+ * through the same probe core as the monitor and then announced nothing. So a
+ * panel the operator fixed and tested went `PROVIDER_ERROR -> HEALTHY` in
+ * `panel_health` with no event, the monitor's next probe read
+ * `HEALTHY -> HEALTHY` — no transition — and `panel.health.provider_error`
+ * stayed open for ever on a panel whose page said it was healthy. The
+ * transition is a fact about the STORED row, not about who measured it, so both
+ * lanes call this, in the transaction that wrote the row and under the panel's
+ * row lock `persistProbeResult` took.
+ *
+ * Then, on a HEALTHY result, the reconciliation for the rows that defect left
+ * behind on existing installs: any panel-health condition of this panel still
+ * open while the panel has just proven healthy is closed through the ORDINARY
+ * recorder — a `panel.health.recovered` event naming it in `recoversCode` —
+ * never by rewriting its code, which the append-only guard forbids anyway.
+ * Read in the writing transaction, so two monitor replicas reconcile once: the
+ * second finds nothing open.
+ *
+ * Only on HEALTHY. A panel that is failing for a different reason is not a
+ * proven recovery, and closing the old row then would tell the operator less
+ * than the truth.
+ *
+ * Returns whether a transition was announced, so the monitor can keep auditing
+ * exactly the probes it always audited.
+ */
+export async function announceHealthWrite(
+  deps: {
+    readonly opsLog: OperationalEventRecorder;
+    readonly conditions: OperationalConditionReader;
+  },
+  tenant: TenantContext,
+  locked: PanelView,
+  previous: { state: PanelHealthState; failure: ProviderFailureKind | null } | null,
+  health: { state: PanelHealthState; failure: ProviderFailureKind | null },
+  tx: TransactionScope,
+): Promise<{ readonly transitioned: boolean; readonly reconciled: readonly string[] }> {
+  const transition = transitionOf(previous, health);
+  if (transition !== null) await deps.opsLog.record(tenant, buildEvent(locked, transition), tx);
+  if (conditionOf(health.state, health.failure) !== null) {
+    return { transitioned: transition !== null, reconciled: [] };
+  }
+  const panelId = locked.panel.id;
+  const open = await deps.conditions.openConditions(
+    tenant,
+    PANEL_HEALTH_CONDITION_CODES.map((code) => panelConditionKey(code, panelId)),
+    tx,
+  );
+  const stranded = [...new Set(open)].sort();
+  for (const code of stranded) {
+    await deps.opsLog.record(
+      tenant,
+      {
+        ...recoveryEvent(locked),
+        recoversCode: code,
+        recoversDedupeKey: panelConditionKey(code, panelId),
+      },
+      tx,
+    );
+  }
+  return { transitioned: transition !== null, reconciled: stranded };
+}
+
+/** The recovery event a panel earns, before it names what it closes. */
+function recoveryEvent(view: PanelView): Omit<OperationalEventInput, 'recoversCode'> {
+  const name = view.panel.name;
+  const panelId = view.panel.id;
+  return {
+    code: RECOVERED_CODE,
+    severity: 'INFO',
+    message: `Panel "${name}" is answering health checks again.`,
+    dedupeKey: panelConditionKey(RECOVERED_CODE, panelId),
+    context: { panelId, panelName: name, providerType: view.panel.providerType },
+  };
+}
+
 interface Transition {
   readonly to: Condition | null;
   readonly from: Condition | null;
@@ -1437,16 +1542,7 @@ function buildEvent(before: PanelView, transition: Transition): OperationalEvent
         }
       : { recoversCode: transition.from.code, recoversDedupeKey: keyFor(transition.from.code) };
 
-  if (transition.to === null) {
-    return {
-      code: RECOVERED_CODE,
-      severity: 'INFO',
-      message: `Panel "${name}" is answering health checks again.`,
-      dedupeKey: keyFor(RECOVERED_CODE),
-      ...closing,
-      context,
-    };
-  }
+  if (transition.to === null) return { ...recoveryEvent(before), ...closing };
   return {
     code: transition.to.code,
     severity: transition.to.severity,

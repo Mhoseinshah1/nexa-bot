@@ -1009,6 +1009,181 @@ describe('the panel health monitor', () => {
     });
   });
 
+  // ===========================================================================
+  // UX batch 01, item 10: a recovery closes the warning WHICHEVER lane proves it
+  // ===========================================================================
+  //
+  // Observed on a real install: the panel was healthy, "Test connection"
+  // succeeded, the failure streak was zero and the last success was fresh — and
+  // `panel.health.provider_error` stayed OPEN on the panel health page.
+  //
+  // Root cause: the operator's connection test stored the HEALTHY row through
+  // the shared probe core but never announced the transition. The monitor's
+  // next probe then read HEALTHY -> HEALTHY, which is no transition, so nothing
+  // ever closed the condition. The announcement is now one function both lanes
+  // call, and a healthy probe reconciles a condition an older release stranded.
+  describe('a recovery closes the warning whichever lane proves it', () => {
+    const PROVIDER_FAILED: ProviderProbeOutcome = {
+      ok: false,
+      failure: 'PROVIDER_ERROR',
+      status: 500,
+    };
+
+    const rowFor = async (code: string, panelId: string) =>
+      (
+        await ctx.container.database.db
+          .select()
+          .from(operationalEvents)
+          .where(
+            and(
+              eq(operationalEvents.code, code),
+              eq(operationalEvents.dedupeKey, `${code}:${panelId}`),
+            ),
+          )
+      )[0];
+
+    /** A monitor tick some time later, against exactly this panel. */
+    const later = async (panelId: string, result: ProviderProbeOutcome) => {
+      outcome = result;
+      now = new Date(now.getTime() + 20 * 60 * 1000);
+      await tick(monitor({ discovery: onePanel(panelId) }));
+    };
+
+    /** The operator's "Test connection", some time later. */
+    const operatorTest = async (panelId: string, result: ProviderProbeOutcome) => {
+      outcome = result;
+      now = new Date(now.getTime() + 20 * 60 * 1000);
+      const answer = await service().testConnection(tenantA, adminActorFor(ownerA), panelId, {
+        idempotencyKey: key(),
+      });
+      expect(answer.probed).toBe(true);
+    };
+
+    /**
+     * What an install upgraded from the previous release holds: the condition
+     * open, and a HEALTHY row stored by the old operator test that announced
+     * nothing. Written as the old release wrote it — the health row only.
+     */
+    const strandOpen = async (panelId: string) => {
+      await later(panelId, HEALTHY);
+      await later(panelId, PROVIDER_FAILED);
+      expect(await openConditionCodes(tenantA)).toContain('panel.health.provider_error');
+      await ctx.container.database.db
+        .update(panelHealth)
+        .set({ state: 'HEALTHY', failure: null, statusCode: null, lastHealthyAt: now })
+        .where(eq(panelHealth.panelId, panelId));
+    };
+
+    it("closes provider_error when the operator's connection test proves recovery", async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'fixed-by-operator');
+      await later(panelId, HEALTHY);
+      await later(panelId, PROVIDER_FAILED);
+      expect(await openConditionCodes(tenantA)).toContain('panel.health.provider_error');
+
+      await operatorTest(panelId, HEALTHY);
+      const failure = await rowFor('panel.health.provider_error', panelId);
+      expect(failure!.resolvedAt, 'the operator test proved recovery').not.toBeNull();
+      const recovered = await rowFor('panel.health.recovered', panelId);
+      expect(recovered).toBeDefined();
+      expect(failure!.resolvedByEventId).toBe(recovered!.id);
+
+      // And the monitor's next healthy probe — HEALTHY -> HEALTHY — leaves it
+      // so, announcing nothing more.
+      await later(panelId, HEALTHY);
+      expect(await openConditionCodes(tenantA)).not.toContain('panel.health.provider_error');
+      expect((await rowFor('panel.health.recovered', panelId))!.occurrenceCount).toBe(1);
+    });
+
+    it('closes provider_error when the monitor proves recovery', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'fixed-by-itself');
+      await later(panelId, HEALTHY);
+      await later(panelId, PROVIDER_FAILED);
+      await later(panelId, HEALTHY);
+      expect((await rowFor('panel.health.provider_error', panelId))!.resolvedAt).not.toBeNull();
+      expect(await openConditionCodes(tenantA)).not.toContain('panel.health.provider_error');
+    });
+
+    it("opens the condition when the operator's test is the one that finds the failure", async () => {
+      // The other direction of the same omission: a failure found by the
+      // operator was stored and never announced, and the monitor then read
+      // PROVIDER_ERROR -> PROVIDER_ERROR and announced nothing either.
+      const panelId = await createPanel(ownerA, tenantA, 'broken-on-test');
+      await later(panelId, HEALTHY);
+      await operatorTest(panelId, PROVIDER_FAILED);
+      expect(await openConditionCodes(tenantA)).toContain('panel.health.provider_error');
+      await later(panelId, PROVIDER_FAILED);
+      expect((await rowFor('panel.health.provider_error', panelId))!.occurrenceCount).toBe(1);
+    });
+
+    it('reconciles a condition an older release stranded, on the next healthy monitor probe', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'stranded-monitor');
+      await strandOpen(panelId);
+
+      await later(panelId, HEALTHY);
+      const failure = await rowFor('panel.health.provider_error', panelId);
+      expect(failure!.resolvedAt, 'the stranded row was reconciled').not.toBeNull();
+      // Through the ordinary recorder: a recovery row closed it, by name, and
+      // the stranded row kept its own code — resolved, never rewritten.
+      const recovered = await rowFor('panel.health.recovered', panelId);
+      expect(failure!.resolvedByEventId).toBe(recovered!.id);
+      expect(failure!.code).toBe('panel.health.provider_error');
+    });
+
+    it('reconciles a stranded condition on the next healthy operator test', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'stranded-operator');
+      await strandOpen(panelId);
+
+      await operatorTest(panelId, HEALTHY);
+      expect((await rowFor('panel.health.provider_error', panelId))!.resolvedAt).not.toBeNull();
+    });
+
+    it('does not reconcile while the panel is still failing', async () => {
+      // Reconciliation is for a PROVEN recovery only. A panel failing for a
+      // different reason keeps the old row until a healthy probe.
+      const panelId = await createPanel(ownerA, tenantA, 'still-failing');
+      await strandOpen(panelId);
+      await ctx.container.database.db
+        .update(panelHealth)
+        .set({ state: 'UNREACHABLE', failure: 'TIMEOUT', statusCode: null })
+        .where(eq(panelHealth.panelId, panelId));
+      await later(panelId, TIMED_OUT);
+      expect((await rowFor('panel.health.provider_error', panelId))!.resolvedAt).toBeNull();
+    });
+
+    it('reconciles once when two monitor replicas probe the same stranded panel', async () => {
+      // Two replicas is what a rolling update is. Both probe (no cooldown here),
+      // both persist under the panel's row lock, and only the first finds the
+      // condition open: the open set is read in the transaction that writes,
+      // so the second records nothing.
+      const panelId = await createPanel(ownerA, tenantA, 'stranded-twice');
+      await strandOpen(panelId);
+      outcome = HEALTHY;
+      now = new Date(now.getTime() + 20 * 60 * 1000);
+      const a = monitor({ discovery: onePanel(panelId) });
+      const b = monitor({ discovery: onePanel(panelId) });
+      await Promise.all([a.tick(), b.tick()]);
+      expect(probes.length).toBeGreaterThanOrEqual(2);
+
+      expect((await rowFor('panel.health.provider_error', panelId))!.resolvedAt).not.toBeNull();
+      const recovered = await rowFor('panel.health.recovered', panelId);
+      expect(recovered!.occurrenceCount, 'reconciled once, not once per replica').toBe(1);
+      expect(recovered!.resolvedAt).toBeNull();
+    });
+
+    it('leaves a capacity condition alone: it is not a health condition', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'busy-but-healthy');
+      await later(panelId, HEALTHY);
+      await ctx.container.opsLog.record(tenantA, {
+        code: 'panel.capacity.warning',
+        severity: 'WARN',
+        message: 'test fixture',
+        dedupeKey: `panel.capacity.warning:${panelId}`,
+      });
+      await operatorTest(panelId, HEALTHY);
+      expect(await openConditionCodes(tenantA)).toContain('panel.capacity.warning');
+    });
+  });
+
   describe('capacity is re-assessed while the process runs', () => {
     const opsFor = async (code: string) =>
       ctx.container.database.db

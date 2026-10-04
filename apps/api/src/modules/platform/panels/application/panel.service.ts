@@ -40,6 +40,7 @@ import type { SessionRepository } from '../../identity/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { OperationalConditionReader } from '../../opslog/application/ports.js';
 import {
+  announceHealthWrite,
   closesPanelCondition,
   panelConditionKey,
   RESTORED_CODE,
@@ -2041,14 +2042,22 @@ export class PanelService {
         // failure between the two left BOTH rows of a mutually exclusive pair
         // open — the state this pair exists to make impossible.
         await this.resolveProbeLimit(scope, tenant, tx);
-        const { outcome, previous } = await persistProbeResult(
-          this.deps,
-          tenant,
-          panelId,
-          attempt.configuration,
-          health,
-          tx,
-        );
+        const {
+          outcome,
+          previous,
+          view: locked,
+        } = await persistProbeResult(this.deps, tenant, panelId, attempt.configuration, health, tx);
+
+        // A result the database ACCEPTED is announced exactly as the monitor
+        // announces one: the transition is a fact about the stored row, not
+        // about who measured it. Before this, an operator's successful test
+        // after a failure stored HEALTHY silently, the monitor then read
+        // HEALTHY -> HEALTHY, and the failure condition stayed open for ever on
+        // a healthy panel (UX batch 01, item 10). A discarded write announces
+        // nothing, for the reason ADR-0023 gives.
+        if (outcome === 'APPLIED') {
+          await announceHealthWrite(this.deps, tenant, locked, previous ?? null, health, tx);
+        }
 
         // What the row holds now that the write has been decided, read in the
         // same transaction. Only needed on the discarded path, where `before`

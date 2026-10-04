@@ -1,18 +1,21 @@
 import {
   isSystemContext,
   PANEL_HEALTH_FAILURE_WINDOW_MS,
-  PANEL_HEALTH_STATES,
-  PROVIDER_FAILURE_KINDS,
   type ActorContext,
   type Clock,
   type OperationalSeverity,
+  type PanelHealthState,
   type ProviderFailureKind,
   type ScopeContext,
   type TenantContext,
 } from '@nexa/contracts';
 import { CAPACITY_CODES } from './panel-capacity-alerts.js';
 import type { PanelWithCapacity } from './capacity-ports.js';
-import { conditionOf, panelConditionKey } from './panel-monitor.service.js';
+import {
+  conditionOf,
+  PANEL_HEALTH_CONDITION_CODES,
+  panelConditionKey,
+} from './panel-monitor.service.js';
 import type { PanelArchiveScope, PanelCursor } from './ports.js';
 
 /**
@@ -103,22 +106,37 @@ export interface OpenConditionDetailReader {
  * list kept by hand beside it is the second opinion that would silently stop
  * showing a new failure. Capacity codes are the alerts' own exported list.
  */
-export const PANEL_CONDITION_CODES: readonly string[] = (() => {
-  const codes = new Set<string>();
-  for (const state of PANEL_HEALTH_STATES) {
-    for (const failure of [null, ...PROVIDER_FAILURE_KINDS]) {
-      const condition = conditionOf(state, failure);
-      if (condition !== null) codes.add(condition.code);
-    }
-  }
-  for (const code of CAPACITY_CODES) codes.add(code);
-  return [...codes].sort();
-})();
+export const PANEL_CONDITION_CODES: readonly string[] = [
+  ...new Set([...PANEL_HEALTH_CONDITION_CODES, ...CAPACITY_CODES]),
+].sort();
+
+/**
+ * Whether an open condition describes the panel AS IT IS NOW (UX batch 01, item 10).
+ *
+ * A health condition is current only while the stored health still produces its
+ * code: one left open after the panel recovered — by a release whose operator test
+ * announced nothing — is HISTORY awaiting its close, and the screen must not
+ * present it as an active provider failure. The next healthy probe closes it
+ * (`announceHealthWrite`); until then it is labelled as what it is.
+ *
+ * A capacity condition is about occupancy, which this row does not measure, so it
+ * is taken as current: the monitor's capacity observer is what closes it.
+ */
+export function isCurrentCondition(
+  code: string,
+  health: { state: PanelHealthState; failure: ProviderFailureKind | null } | null,
+): boolean {
+  if (!PANEL_HEALTH_CONDITION_CODES.includes(code)) return true;
+  // No stored health proves nothing either way, and a condition this screen
+  // cannot disprove is not demoted to history.
+  if (health === null) return true;
+  return conditionOf(health.state, health.failure)?.code === code;
+}
 
 export interface PanelHealthDashboardRow {
   readonly panel: PanelWithCapacity;
   readonly stats: PanelFleetStats;
-  readonly conditions: readonly OpenConditionDetail[];
+  readonly conditions: readonly (OpenConditionDetail & { readonly current: boolean })[];
 }
 
 export interface PanelHealthDashboardDeps {
@@ -184,9 +202,15 @@ export class PanelHealthDashboardService {
       rows: listed.panels.map((view) => ({
         panel: view,
         stats: stats.get(view.panel.id) ?? EMPTY_FLEET_STATS,
-        conditions: (byPanel.get(view.panel.id) ?? []).sort(
-          (a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime() || a.code.localeCompare(b.code),
-        ),
+        conditions: (byPanel.get(view.panel.id) ?? [])
+          .sort(
+            (a, b) =>
+              b.lastSeenAt.getTime() - a.lastSeenAt.getTime() || a.code.localeCompare(b.code),
+          )
+          .map((condition) => ({
+            ...condition,
+            current: isCurrentCondition(condition.code, view.health),
+          })),
       })),
       nextCursor: listed.nextCursor,
       generatedAt,

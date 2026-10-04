@@ -334,6 +334,36 @@ describe('panel drain and the health dashboard', () => {
       expect(page.failureWindowMs).toBe(PANEL_HEALTH_FAILURE_WINDOW_MS);
     });
 
+    it('labels a health condition the stored health no longer produces as history', async () => {
+      // UX batch 01, item 10: a healthy panel with `provider_error` still open (the
+      // row an older release's connection test left behind) is history awaiting its
+      // close, not an active provider failure.
+      const panelId = await panel();
+      await ctx.container.opsLogWriter.record(tenantA, {
+        code: 'panel.health.provider_error',
+        severity: 'ERROR',
+        message: 'Panel "Frankfurt" answered with a failure of its own.',
+        dedupeKey: panelConditionKey('panel.health.provider_error', panelId),
+        context: { panelId },
+      });
+      const now = ctx.container.clock.now();
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO panel_health (panel_id, tenant_id, state, checked_at, latency_ms, last_healthy_at)
+        VALUES (${panelId}, ${tenantA.tenantId}, 'HEALTHY', ${now.toISOString()}::timestamptz, 40,
+                ${now.toISOString()}::timestamptz)
+        ON CONFLICT (panel_id) DO UPDATE
+          SET state = 'HEALTHY', failure = NULL, status_code = NULL,
+              last_healthy_at = EXCLUDED.last_healthy_at`);
+      expect((await ctx.container.panels.get(tenantA, operator, panelId)).health?.state).toBe(
+        'HEALTHY',
+      );
+      const page = await ctx.container.panelHealth.page(tenantA, operator, {});
+      const row = page.rows.find((one) => one.panel.panel.id === panelId);
+      expect(row?.conditions.map((c) => [c.code, c.current])).toEqual([
+        ['panel.health.provider_error', false],
+      ]);
+    });
+
     it("never shows another tenant's panels or counts their rows", async () => {
       const mine = await panel();
       const foreign = await panel(tenantB, ownerB, 'Foreign');
