@@ -94,6 +94,19 @@ export class ProvisionedServiceFacts implements CustomerServiceFactsSource {
       if (live.length >= SERVICE_FACTS_LIMIT || page.nextCursor === null) break;
       cursor = page.nextCursor;
     }
+    return this.factsOf(scope, live);
+  }
+
+  /**
+   * The facts of services the caller has ALREADY read for this customer — the TB3 support
+   * context reads the customer's page once and asks this for the same answer the client-app
+   * screen gets, rather than a second read or a copy of the rule. Only the live ones count.
+   */
+  async factsOf(
+    scope: TenantContext,
+    services: readonly ServiceRecord[],
+  ): Promise<readonly CustomerServiceFact[]> {
+    const live = services.filter((service) => LIVE_STATES.includes(service.state));
     if (live.length === 0) return [];
 
     const panelIds = [...new Set(live.map((service) => service.panelId as string))];

@@ -169,7 +169,7 @@ export function serviceStateLabelKey(facts: ServiceStatusFacts): TemplateKey {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** One key per route this installation can operate; grows with `PAYMENT_GATEWAY_PROVIDERS`. */
-const ROUTE_NAME_KEYS: Readonly<Record<PaymentGatewayProvider, TemplateKey>> = {
+export const ROUTE_NAME_KEYS: Readonly<Record<PaymentGatewayProvider, TemplateKey>> = {
   MANUAL_TRANSFER: 'bot.payment.route_name_manual_transfer',
   TONPAYS: 'bot.payment.route_name_tonpays',
   TELEGRAM_STARS: 'bot.payment.route_name_telegram_stars',
