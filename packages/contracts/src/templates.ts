@@ -174,6 +174,95 @@ export const TERMS_TEMPLATE_MAX_LENGTH =
   TEMPLATE_BODY_MAX_LENGTH - TERMS_TITLE_MAX_LENGTH - TERMS_BODY_MAX_LENGTH;
 
 /**
+ * Telegram's bound on a media caption, in UTF-16 code units after entity parsing. A
+ * caption template's body may not exceed it (`maxLength`); the rendered caption is cut to
+ * it at send time.
+ */
+export const TELEGRAM_CAPTION_MAX_LENGTH = 1024;
+
+/**
+ * UX Batch 01 item 4: the closed set of facts a connection file's caption
+ * (`bot.service.file_caption`) may name. Every one is optional: a fact the service does not
+ * have is absent, and the renderer drops a line made only of absent facts — the defined
+ * fallback. Deliberately NOT here: the panel-side client UUID, `subId`, provider user id,
+ * internal row ids and the panel's operator-facing name — credentials or internals the
+ * customer is never shown. `subscription_url` IS here, because every delivery mode
+ * (`PANEL_DELIVERY_MODES`) already hands the same link to the same customer.
+ */
+export const FILE_CAPTION_PLACEHOLDERS: readonly PlaceholderDefinition[] = [
+  {
+    token: 'caption',
+    type: 'STRING',
+    description: "The panel's own caption for this file, when it gave one.",
+    required: false,
+    repeatable: false,
+  },
+  {
+    token: 'username',
+    type: 'STRING',
+    description: 'The service username on the panel.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'service_name',
+    type: 'STRING',
+    description: 'The name of what the customer bought (the order line title).',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'total_volume',
+    type: 'TRAFFIC_LIMIT',
+    description: 'The traffic allowance; unlimited reads as unlimited.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'used_volume',
+    type: 'BYTES',
+    description: 'Traffic used, when usage has been read from the panel at least once.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'remaining_volume',
+    type: 'BYTES',
+    description: 'Traffic left, for a limited allowance whose usage is known.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'expiry',
+    type: 'DATETIME',
+    description: "The expiry instant, in the tenant's zone and calendar, when there is one.",
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'location',
+    type: 'STRING',
+    description: 'The location the customer was shown for this service, when there is one.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'status',
+    type: 'STRING',
+    description: "The service's state, as the service card names it.",
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'subscription_url',
+    type: 'STRING',
+    description: 'The subscription link the customer was already delivered.',
+    required: false,
+    repeatable: false,
+  },
+];
+
+/**
  * The registered keys.
  *
  * Deliberately few, and they stay that way: a key is added when something in
@@ -5862,21 +5951,18 @@ export const TEMPLATES = [
   {
     key: 'bot.service.file_caption',
     description:
-      "The caption on one connection file: the panel's own ready-made caption, cleaned and " +
-      'bounded — the source of truth again since round N (F2), after R3 had replaced it. ' +
-      "PLAIN_TEXT: the panel's markup is read into Telegram formatting entities by this " +
-      'installation and never parsed as HTML, so `<code>` shows as code and a stray tag ' +
-      'cannot refuse the send.',
+      "The caption on one connection file. By default the panel's own ready-made caption, " +
+      'cleaned and bounded — the source of truth since round N (F2). UX Batch 01 item 4: a ' +
+      "tenant may rewrite it from the service's own facts (`FILE_CAPTION_PLACEHOLDERS`), every " +
+      'one OPTIONAL — a line whose facts are all absent is dropped — and when nothing renders ' +
+      'the file falls back to `bot.service.connection_file_caption`. No placeholder carries a ' +
+      'credential: the panel-side client id, sub id and user id are not declared, so they ' +
+      "cannot be named. PLAIN_TEXT: the panel's markup is read into Telegram formatting " +
+      "entities by this installation and never parsed as HTML. Bounded by Telegram's caption " +
+      'limit; a render past it is cut with an ellipsis.',
     format: 'PLAIN_TEXT',
-    placeholders: [
-      {
-        token: 'caption',
-        type: 'STRING',
-        description: "The panel's caption for this file.",
-        required: true,
-        repeatable: false,
-      },
-    ],
+    maxLength: TELEGRAM_CAPTION_MAX_LENGTH,
+    placeholders: FILE_CAPTION_PLACEHOLDERS,
   },
   /*
    * R3 (v0.3.5 real-test fixes, items 7–9): the connection file's own caption, the

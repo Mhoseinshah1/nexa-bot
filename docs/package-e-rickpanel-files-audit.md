@@ -94,6 +94,19 @@ Inside the response, after decoding:
   **Superseded again by round N (F2, `docs/n-service-ux-audit.md`):** the panel's caption is
   the source of truth, shown through `bot.service.file_caption` with its markup read into
   Telegram entities, and the files go as albums.
+  **Extended by UX Batch 01 item 4:** the same template is the tenant's caption. It may name
+  a closed set of the service's own facts (`FILE_CAPTION_PLACEHOLDERS`): `{caption}` (the
+  panel's, still the default body), `{username}`, `{service_name}`, `{total_volume}`,
+  `{used_volume}`, `{remaining_volume}`, `{expiry}` (tenant zone and calendar),
+  `{location}` (the location the customer was shown — never the panel's operator-facing
+  name), `{status}` (worded as the service card words it) and `{subscription_url}` (the link
+  every delivery mode already gives the same customer). Every one is optional: an absent
+  fact drops its line, and a caption that renders to nothing falls back to
+  `bot.service.connection_file_caption`. No placeholder names the client UUID, `subId`,
+  provider user id or any row id, so an override cannot reach them, and the validator
+  refuses an unknown token (shown in Persian on the template screen). The body is bounded
+  by Telegram's caption limit (1024); a longer render is cut with an ellipsis. Editing it is
+  the template screen's ordinary `templates.edit` write, with its revision and audit row.
 
 ## 4. Security (E3)
 
