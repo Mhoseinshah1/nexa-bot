@@ -182,9 +182,17 @@ export interface FakeRickpanel {
    * served read stamps the user's `sub_updated_at`, as a Marzban-lineage panel records a
    * client's fetch.
    */
-  subscriptionMode: 'serves' | 'empty' | 'missing';
+  subscriptionMode: 'serves' | 'empty' | 'missing' | 'html';
   /** C3: user records carry no `subscription_url` and no `sub_token`. */
   omitSubscriptionLink: boolean;
+  /** C3: the `content-type` a served subscription answers with. */
+  subscriptionContentType: string;
+  /**
+   * C3: fields merged over the record `GET /api/user/{name}` answers with (and only
+   * that route) — a wrong `username`, an absolute `subscription_url`, a field the
+   * documented modify carries. Mutable between two reads.
+   */
+  readonly userReadExtras: Record<string, unknown>;
   /** How many `GET /sub/...` reached the panel. */
   subscriptionReads(): number;
   /**
@@ -244,8 +252,10 @@ export async function startFakeRickpanel(
   let unappliedPutFailures = 0;
   let stringNumbers = false;
   let filesBody: string | null = null;
-  let subscriptionMode: 'serves' | 'empty' | 'missing' = 'serves';
+  let subscriptionMode: 'serves' | 'empty' | 'missing' | 'html' = 'serves';
   let omitSubscriptionLink = false;
+  let subscriptionContentType = 'text/plain; charset=utf-8';
+  const userReadExtras: Record<string, unknown> = {};
   const subUpdatedAt = new Map<string, string>();
   let filesWindowMs = 60_000;
   const filesReadAt = new Map<string, number>();
@@ -307,11 +317,13 @@ export async function startFakeRickpanel(
           return void json(404, { detail: 'Not Found' });
         }
         subUpdatedAt.set(held.username, new Date().toISOString());
-        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        response.writeHead(200, { 'content-type': subscriptionContentType });
         return void response.end(
           subscriptionMode === 'empty'
             ? ''
-            : Buffer.from(fakeRickpanelFiles(held)[1]?.content ?? '', 'utf8').toString('base64'),
+            : subscriptionMode === 'html'
+              ? '<!doctype html><html><body><form action="/login">Sign in</form></body></html>'
+              : Buffer.from(fakeRickpanelFiles(held)[1]?.content ?? '', 'utf8').toString('base64'),
         );
       }
 
@@ -449,7 +461,7 @@ export async function startFakeRickpanel(
             return void json(404, { detail: 'User not found' });
           }
           if (held === undefined) return void json(404, { detail: 'User not found' });
-          return void json(200, present(held));
+          return void json(200, { ...present(held), ...userReadExtras });
         }
         if (method === 'PUT') {
           if (held === undefined) return void json(404, { detail: 'User not found' });
@@ -580,9 +592,16 @@ export async function startFakeRickpanel(
     get subscriptionMode() {
       return subscriptionMode;
     },
-    set subscriptionMode(next: 'serves' | 'empty' | 'missing') {
+    set subscriptionMode(next: 'serves' | 'empty' | 'missing' | 'html') {
       subscriptionMode = next;
     },
+    get subscriptionContentType() {
+      return subscriptionContentType;
+    },
+    set subscriptionContentType(next: string) {
+      subscriptionContentType = next;
+    },
+    userReadExtras,
     get omitSubscriptionLink() {
       return omitSubscriptionLink;
     },

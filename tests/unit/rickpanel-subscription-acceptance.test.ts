@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ProviderTarget } from '@nexa/contracts';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
-import { runSubscriptionAcceptance } from '../acceptance-readonly/subscription-acceptance';
+import {
+  RICKPANEL_DOCUMENTED_MODIFY_FIELDS,
+  TELEMETRY_FIELDS,
+  WRITE_FIELDS,
+  classifySubscription,
+  reportableMediaType,
+  runSubscriptionAcceptance,
+} from '../acceptance-readonly/subscription-acceptance';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 
 /**
@@ -22,12 +29,13 @@ const client = (base: string) =>
     maxRetries: 0,
   }).forBase(base);
 
-const run = (knownUsername = 'LegacyUser7') =>
+const run = (knownUsername = 'LegacyUser7', allowedOrigins: readonly string[] = []) =>
   runSubscriptionAcceptance({
     target,
     http: client(panel.baseUrl),
     subscriptionHttp: (origin) => client(origin),
     knownUsername,
+    allowedOrigins,
   });
 
 const failed = (report: Awaited<ReturnType<typeof run>>) =>
@@ -56,7 +64,13 @@ describe('C3 read-only subscription step', () => {
       recordAfter: 'FOUND',
       linkPresent: true,
       linkOnPanelOrigin: true,
-      fetch: { status: 200, contentType: 'text/plain; charset=utf-8', failure: null },
+      fetch: {
+        status: 200,
+        contentType: 'text/plain',
+        format: 'BASE64_SHARE_LINKS',
+        entries: 1,
+        failure: null,
+      },
       changedWriteFields: [],
       refusedWrites: 0,
     });
@@ -103,6 +117,7 @@ describe('C3 read-only subscription step', () => {
       "the panel's record carries a subscription link",
       'the subscription link answers 2xx to a GET',
       'the subscription body is non-empty',
+      'the served body is a recognised subscription format',
     ]);
   });
 
@@ -111,9 +126,13 @@ describe('C3 read-only subscription step', () => {
     expect(failed(await run())).toEqual([
       'the subscription link answers 2xx to a GET',
       'the subscription body is non-empty',
+      'the served body is a recognised subscription format',
     ]);
     panel.subscriptionMode = 'empty';
-    expect(failed(await run())).toEqual(['the subscription body is non-empty']);
+    expect(failed(await run())).toEqual([
+      'the subscription body is non-empty',
+      'the served body is a recognised subscription format',
+    ]);
   });
 
   it('fails when a write-relevant field moved between the two reads', async () => {
@@ -134,10 +153,135 @@ describe('C3 read-only subscription step', () => {
     expect(failed(report)).toEqual(['no write-relevant field changed']);
   });
 
+  // ---- Codex review of PR #178 -------------------------------------------------------
+
+  it('R1: a 2xx page that is not a subscription (a login or WAF page) is not "served"', async () => {
+    panel.subscriptionMode = 'html';
+    panel.subscriptionContentType = 'text/html; charset=utf-8';
+    const report = await run();
+    expect(report.fetch).toMatchObject({ status: 200, format: 'UNRECOGNISED', entries: 0 });
+    expect(report.fetch.bytes).toBeGreaterThan(0);
+    expect(failed(report)).toEqual(['the served body is a recognised subscription format']);
+    expect(JSON.stringify(report)).not.toMatch(/Sign in|login|<form/iu);
+  });
+
+  it('R2: a 2xx record for a DIFFERENT account is not the known account', async () => {
+    for (const other of ['someone-else', 'legacyuser7']) {
+      panel.userReadExtras['username'] = other;
+      const report = await run();
+      expect(report.recordBefore, other).toBe('WRONG_ACCOUNT');
+      expect(failed(report), other).toContain('known account read by GET');
+      expect(report.linkPresent).toBe(false);
+    }
+    expect(panel.subscriptionReads()).toBe(0);
+  });
+
+  it('R3: a change to auto_delete_in_days (a documented modify field) is a write-field change', async () => {
+    panel.userReadExtras['auto_delete_in_days'] = null;
+    const report = await runSubscriptionAcceptance({
+      target,
+      http: client(panel.baseUrl),
+      subscriptionHttp: (origin) => {
+        panel.userReadExtras['auto_delete_in_days'] = 7;
+        return client(origin);
+      },
+      knownUsername: 'LegacyUser7',
+    });
+    expect(report.changedWriteFields).toEqual(['auto_delete_in_days']);
+    expect(failed(report)).toEqual(['no write-relevant field changed']);
+  });
+
+  it('R4: the content type is reported as an allowlisted media type, never verbatim', async () => {
+    panel.subscriptionContentType = 'text/plain; charset=utf-8; token=leaked-secret-value';
+    const plain = await run();
+    expect(plain.fetch.contentType).toBe('text/plain');
+    expect(JSON.stringify(plain)).not.toContain('leaked-secret-value');
+    panel.subscriptionContentType = 'application/x-leaked-secret-value';
+    const other = await run();
+    expect(other.fetch.contentType).toBe('OTHER');
+    expect(JSON.stringify(other)).not.toContain('leaked-secret-value');
+  });
+
+  it("R6: a link off the panel's origin is refused without sending, unless that origin is allowed", async () => {
+    const elsewhere = 'http://127.0.0.9:9';
+    panel.userReadExtras['subscription_url'] = `${elsewhere}/sub/LegacyUser7/legacy-sub-token-0001`;
+    const dialled: string[] = [];
+    const report = await runSubscriptionAcceptance({
+      target,
+      http: client(panel.baseUrl),
+      subscriptionHttp: (origin) => {
+        dialled.push(origin);
+        return client(origin);
+      },
+      knownUsername: 'LegacyUser7',
+    });
+    expect(dialled).toEqual([]);
+    expect(report.linkOnPanelOrigin).toBe(false);
+    expect(report.fetch).toMatchObject({ status: null, failure: 'ORIGIN_NOT_ALLOWED' });
+    expect(failed(report)).toContain('the subscription link answers 2xx to a GET');
+    expect(JSON.stringify(report)).not.toContain('127.0.0.9');
+
+    // The operator's explicit allowance is the only way to another origin: the fake's
+    // own origin, named explicitly, is fetched.
+    panel.userReadExtras['subscription_url'] =
+      `${panel.baseUrl}/sub/LegacyUser7/legacy-sub-token-0001`;
+    const allowed = await run('LegacyUser7', [new URL(panel.baseUrl).origin]);
+    expect(failed(allowed)).toEqual([]);
+  });
+
   it('fails for an account the panel does not hold, sent exactly as spelled', async () => {
     const report = await run('legacyuser7');
     expect(report.recordBefore).toBe('NOT_FOUND');
     expect(failed(report)).toContain('known account read by GET');
     expect(panel.subscriptionReads()).toBe(0);
+  });
+});
+
+describe('C3 pure pieces', () => {
+  const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
+
+  it('classifies the subscription formats clients import, and nothing else', () => {
+    const links =
+      'vless://a@h:443?x=1#one\nvmess://eyJ2IjoyfQ==\ntrojan://p@h:443\nss://YWVz@h:8388';
+    expect(classifySubscription(b64(links))).toEqual({ format: 'BASE64_SHARE_LINKS', entries: 4 });
+    expect(classifySubscription(links)).toEqual({ format: 'PLAIN_SHARE_LINKS', entries: 4 });
+    expect(classifySubscription(JSON.stringify({ outbounds: [{}, {}] }))).toEqual({
+      format: 'JSON_CONFIG',
+      entries: 2,
+    });
+    expect(
+      classifySubscription(JSON.stringify([{ outbounds: [{}] }, { outbounds: [{}] }])),
+    ).toEqual({ format: 'JSON_CONFIG', entries: 2 });
+    expect(
+      classifySubscription('port: 7890\nproxies:\n  - name: a\n    type: vless\n  - { name: b }\n'),
+    ).toEqual({ format: 'CLASH_YAML', entries: 2 });
+    for (const page of [
+      '',
+      '   ',
+      '<!doctype html><title>Login</title>',
+      b64('<html>Access denied</html>'),
+      'Forbidden',
+      JSON.stringify({ detail: 'Not Found' }),
+      JSON.stringify([]),
+      'https://example.test/a\nhttps://example.test/b',
+      `${links}\n<p>trailing page</p>`,
+      'proxies:\n',
+    ]) {
+      expect(classifySubscription(page), page).toEqual({ format: 'UNRECOGNISED', entries: 0 });
+    }
+  });
+
+  it('reduces the content type to an allowlisted media type', () => {
+    expect(reportableMediaType('Text/Plain; charset=utf-8; token=abc')).toBe('text/plain');
+    expect(reportableMediaType('application/json')).toBe('application/json');
+    expect(reportableMediaType('application/x-abc-token')).toBe('OTHER');
+    expect(reportableMediaType(undefined)).toBeNull();
+  });
+
+  it('covers every documented RickPanel modify field: a write field or reported telemetry', () => {
+    const covered = new Set<string>([...WRITE_FIELDS, ...TELEMETRY_FIELDS]);
+    for (const field of RICKPANEL_DOCUMENTED_MODIFY_FIELDS) expect(covered, field).toContain(field);
+    expect(WRITE_FIELDS).toContain('auto_delete_in_days');
+    expect(RICKPANEL_DOCUMENTED_MODIFY_FIELDS).toHaveLength(12);
   });
 });

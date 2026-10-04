@@ -166,6 +166,17 @@ describe('C1 procedure', () => {
     expect(panel.putCalls() + panel.createCalls() + panel.revokeCalls()).toBe(0);
   });
 
+  it('R5: a panel that reports no total fails the provider-total evidence', async () => {
+    panel.listMode = 'no-total';
+    const report = await runInventoryAcceptance({ target, http: http(), knownUsername: 'acct01' });
+    expect(report.first.reportedTotal).toBeNull();
+    const failedNames = report.checks.filter((c) => !c.pass).map((c) => c.name);
+    expect(failedNames).toEqual([
+      'distinct usernames equal the reported total',
+      'provider total reported and identical on both walks',
+    ]);
+  });
+
   it('fails the lookup check for a name the panel does not hold', async () => {
     const report = await runInventoryAcceptance({ target, http: http(), knownUsername: 'nobody' });
     expect(report.knownLookup).toBe('NOT_FOUND');

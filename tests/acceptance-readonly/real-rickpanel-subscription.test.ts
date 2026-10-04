@@ -25,6 +25,31 @@ function required(name: string): string {
   return value.trim();
 }
 
+/**
+ * The ONE origin besides the panel's own that the link may be fetched from, when the
+ * panel serves subscriptions from a separate host. Unset (the default), only the panel's
+ * own origin is fetched: a record pointing anywhere else — a private address, a metadata
+ * endpoint — is refused without a request. It must be a bare origin, exactly.
+ */
+function subscriptionOrigin(): readonly string[] {
+  const raw = process.env['NEXA_INVENTORY_SUBSCRIPTION_ORIGIN'];
+  if (raw === undefined || raw.trim() === '') return [];
+  const value = raw.trim();
+  let origin: string | null;
+  try {
+    const url = new URL(value);
+    origin = ['http:', 'https:'].includes(url.protocol) ? url.origin : null;
+  } catch {
+    origin = null;
+  }
+  if (origin === null || origin !== value) {
+    throw new Error(
+      'NEXA_INVENTORY_SUBSCRIPTION_ORIGIN must be a bare http(s) origin, e.g. https://sub.example.com',
+    );
+  }
+  return [origin];
+}
+
 const client = (base: string) =>
   new SafeHttpClient({
     ...DEFAULT_SAFE_HTTP,
@@ -47,6 +72,7 @@ describe('C3: an existing account is usable with zero provider mutation', () => 
       http: client(baseUrl),
       subscriptionHttp: client,
       knownUsername: required('NEXA_INVENTORY_KNOWN_USERNAME'),
+      allowedOrigins: subscriptionOrigin(),
     });
 
     // AGGREGATE ONLY: status, content type, byte count and field NAMES. No username,

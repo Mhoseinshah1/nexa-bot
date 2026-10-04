@@ -108,6 +108,16 @@ NEXA_INVENTORY_DRIFT_TOLERANCE=0 \
 pnpm test:acceptance:inventory
 ```
 
+Only if the panel serves subscriptions from a SEPARATE host, also set
+`NEXA_INVENTORY_SUBSCRIPTION_ORIGIN='https://<subscription-host>'` — a bare origin,
+exactly, or the run refuses to start. Unset (the default), the link is fetched only when
+it is on the panel's own origin (`NEXA_INVENTORY_RICKPANEL_URL`'s). A link anywhere else
+— a private address, a metadata endpoint, a host nobody named — is refused WITHOUT a
+request (`fetch.failure: ORIGIN_NOT_ALLOWED`) and the run fails. This allowlist was
+chosen over re-deriving the installation's `PANEL_HTTP_DENIED_SUBNETS` policy because it
+is strictly narrower: an operator names the one host they expect, and a malformed record
+cannot aim the step at anything else.
+
 C3 alone: `pnpm test:acceptance:inventory real-rickpanel-subscription` (C1 alone:
 `pnpm test:acceptance:inventory real-rickpanel-inventory`). Without the variables the
 suite FAILS; it never skips. Put the password in the environment from a secret store,
@@ -116,23 +126,37 @@ not shell history.
 What the step does, for the one known account:
 
 1. login exchange + `GET api/user/{name}` through `readOnlyRickpanelHttp` — the inventory's
-   three fixed reads, never the adapter;
+   three fixed reads, never the adapter. The record must name the account asked for, in
+   its exact provider spelling (`username === NEXA_INVENTORY_KNOWN_USERNAME`); any other
+   2xx record is `WRONG_ACCOUNT` and fails;
 2. the link from that record by the adapter's own `subscriptionFrom` (what `lookupUser`
    delivers and P6 stores) — never built from `subscription_ref`;
-3. ONE `GET` of that link, on its own origin, through a guard that refuses — without
-   sending — anything but a `GET`;
+3. ONE `GET` of that link — only on the panel's origin or the one allowed above —
+   through a guard that refuses, without sending, anything but a `GET`. The body is
+   CLASSIFIED and dropped: base64 or plain share links (every non-empty line a
+   `vless://`, `vmess://`, `trojan://`, `ss://`, `ssr://`, `hysteria(2)://`, `hy2://`,
+   `tuic://`, `wireguard://`/`wg://`, `socks://` or `anytls://` link), a JSON client
+   config (`outbounds`), or a Clash config (`proxies:` with named entries). A login,
+   WAF or error page is `UNRECOGNISED` and fails, however many bytes it has;
 4. login exchange + `GET api/user/{name}` again, and a comparison of every field a write
    would change (`username`, `status`, `expire`, `data_limit`,
    `data_limit_reset_strategy`, `sub_token`, `subscription_url`, `subscription_token`,
-   `links`, `proxies`, `inbounds`, `note`, `on_hold_*`) — by digest, never printed.
+   `links`, `proxies`, `inbounds`, `note`, `on_hold_*`, `auto_delete_in_days` — every
+   documented `PUT /api/user/{username}` property, `docs/provider-capability-audit.md`)
+   — by digest, never printed. The documented modify set's three telemetry properties
+   (`sub_updated_at`, `sub_last_user_agent`, `online_at`) are reported by name instead,
+   because a client's own GET moves them.
 
 Checks (all must pass): known account read by GET; the panel's record carries a
 subscription link; the link answers 2xx to a GET; the served body is non-empty; the
-account reads the same afterwards; no write-relevant field changed; no write was
+served body is a recognised subscription format; the account reads the same afterwards; no write-relevant field changed; no write was
 attempted.
 
 Printed (`C3 evidence {...}`, safe to paste): whether a link was present, whether it is
-on the panel's origin, the fetch's status, content type and **byte count**, the NAMES of
+on the panel's origin, the fetch's status, its media type (from an allowlist —
+`text/plain`, `text/html`, `application/json`, `application/octet-stream`, the YAML types —
+else `OTHER`; never the header as sent, which could carry a token in a parameter), the
+body's **format classification and entry count**, its **byte count**, the NAMES of
 changed fields, request and refusal counts. Never the username, the link, a token or any
 byte of the body.
 
@@ -148,7 +172,12 @@ under "Results", and C3 becomes `ACCEPTED` (`SAFE_WITH_CONSTRAINTS` confirmed). 
 carries a subscription link" failing → the record shape differs from `OQ-RP-01`'s answer
 for pre-existing accounts: capture the top-level KEYS of the record by hand (not values),
 correct `subscriptionFrom` and the fake in one commit, re-run; until then P6 adopts
-without a link (constraint 1) and the operator decides. "2xx" or "non-empty" failing →
+without a link (constraint 1) and the operator decides. `WRONG_ACCOUNT` → the panel
+answered for a different account than the exact name given: check the spelling, never
+fold it. `ORIGIN_NOT_ALLOWED` → the record points off the panel's origin: if that host
+is the panel's real subscription host, set `NEXA_INVENTORY_SUBSCRIPTION_ORIGIN` to it and
+re-run; otherwise the record is wrong and C3 is `BLOCKED` for link delivery. "2xx",
+"non-empty" or "recognised subscription format" failing →
 the panel does not serve the stored link from where the record says: C3 is `BLOCKED` for
 link delivery until resolved. A write-relevant field changing → someone changed the
 account during the run, or the panel mutates on read: re-run at a quiet hour; if it

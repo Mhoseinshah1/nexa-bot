@@ -268,8 +268,14 @@ export async function runInventoryAcceptance(
     { name: 'first walk consistent', pass: first.ok && first.consistent },
     { name: 'second walk consistent', pass: second.ok && second.consistent },
     {
-      name: 'distinct usernames equal the reported total (when reported)',
-      pass: first.reportedTotal === null || first.distinctUsernames === first.reportedTotal,
+      // The program requires the PROVIDER total: a panel that reports none has not given
+      // the evidence, and a walk that merely ran out of rows is not proof against it.
+      name: 'distinct usernames equal the reported total',
+      pass:
+        first.reportedTotal !== null &&
+        first.distinctUsernames === first.reportedTotal &&
+        second.reportedTotal !== null &&
+        second.distinctUsernames === second.reportedTotal,
     },
     { name: 'no duplicate rows', pass: first.duplicateRows === 0 && second.duplicateRows === 0 },
     {
@@ -290,8 +296,14 @@ export async function runInventoryAcceptance(
       pass: first.ok && first.consistent && second.ok && second.consistent && setDrift === 0,
     },
     {
-      name: 'provider total identical on both walks',
-      pass: first.ok && second.ok && first.reportedTotal === second.reportedTotal,
+      // Both non-null: `null === null` would pass a panel that never reported one.
+      name: 'provider total reported and identical on both walks',
+      pass:
+        first.ok &&
+        second.ok &&
+        first.reportedTotal !== null &&
+        second.reportedTotal !== null &&
+        first.reportedTotal === second.reportedTotal,
     },
     {
       name: "the matcher's listAll reports a complete inventory",
