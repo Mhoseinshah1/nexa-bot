@@ -240,7 +240,7 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_discounts',
     icon: 'discounts',
     /*
-     * `catalog.view`, and only that — the rule the payment-accounts entry states.
+     * `catalog.view`, and only that — the rule the payment-gateways entry states.
      *
      * WP8 made this a real page. Both rule lists, the edit forms (which open from a
      * row), activate and deactivate (buttons on a row) and the price preview all need
@@ -294,7 +294,7 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_resellers',
     icon: 'resellers',
     /*
-     * `resellers.view`, and only that — the rule the payment-accounts entry states. The
+     * `resellers.view`, and only that — the rule the payment-gateways entry states. The
      * list, the tier filter and the edit form (which opens from a row) all need it, and
      * `ResellerAdminService.list` charges it; an actor holding only `resellers.edit`
      * would reach a register form with no tier to choose.
@@ -369,43 +369,24 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_infra',
   },
   {
-    id: 'payment-accounts',
-    path: '/payment-accounts',
-    label: 'web.nav_payment_accounts',
-    icon: 'bank',
-    /*
-     * `payments.accounts.view`, and ONLY that — which is a correction.
-     *
-     * This used to admit either key, on the stated ground that the page "serves a
-     * custom-role editor correctly" without the view key. It does not, and never did:
-     * the route in `app.tsx` passes `denied={!may('payments.accounts.view')}`, which disables
-     * the only query that supplies rows, and the edit form opens from a row. The server
-     * agrees — `PaymentAccountService.list` charges the view key. So an edit-only custom
-     * role saw a navigation entry, followed it, and arrived at a page with nothing on it
-     * and no way to reach the form.
-     *
-     * A link is a promise that a page will work. The honest fix is the narrower
-     * permission rather than a page that apologises after the click.
-     *
-     * `/panels` and `/products` carry the same shape and the same dead end. They are
-     * older than this batch and are not changed here; `OQ-5H-01` records them so the
-     * inconsistency is a known item rather than a comment that contradicts its code.
-     */
-    permission: 'payments.accounts.view',
-    group: 'web.navgroup_infra',
-  },
-  {
     id: 'payment-gateways',
     path: '/payment-gateways',
     label: 'web.nav_payment_gateways',
     icon: 'wallet',
     /*
-     * `payments.gateways.view`, and only that, for the reason the accounts link above
-     * now states: the route passes `denied={!may('payments.gateways.view')}` and
-     * `PaymentGatewayService.list` charges the same key, so an edit-only role reached a
+     * The VIEW keys, and no edit key — a link is a promise that a page will work.
+     *
+     * `payments.gateways.view` is the list: the route passes `denied={!may(…view)}` and
+     * `PaymentGatewayService.list` charges the same key, so an edit-only role would reach a
      * page it could not load and therefore could not edit from.
+     *
+     * `payments.accounts.view` since UX Batch 01, item 7: the separate «حساب‌های دریافت»
+     * entry is gone and the cards are managed on the card-to-card method's own view, so a
+     * role that reads the cards alone needs this entry to reach them. The list sends that
+     * role straight on to the card-to-card view (`PaymentGatewaysTabbedPage`
+     * `mayViewCards`), and `PaymentAccountService.list` still charges the accounts key.
      */
-    permission: 'payments.gateways.view',
+    permission: ['payments.gateways.view', 'payments.accounts.view'],
     group: 'web.navgroup_infra',
   },
   {
@@ -443,7 +424,7 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_support',
     icon: 'help',
     /*
-     * `settings.view`, and only that — the payment-accounts rule. The FAQ is
+     * `settings.view`, and only that — the payment-gateways rule. The FAQ is
      * configuration: the server's list charges `settings.view` and its writes
      * `settings.edit`, the same pair the settings page beside it uses, because the
      * support DESTINATION is a setting on that page.

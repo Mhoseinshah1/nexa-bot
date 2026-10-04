@@ -847,13 +847,16 @@
 .tbl th.num {
   text-align: end;
 }
-.tbl .cell-main {
+/* A table cell's two lines, and the same in a label/value list (a payment method's view). */
+.tbl .cell-main,
+.kv .cell-main {
   display: flex;
   flex-direction: column;
   line-height: 1.3;
   min-width: 0;
 }
-.tbl .cell-main > span + span {
+.tbl .cell-main > span + span,
+.kv .cell-main > span + span {
   font-size: var(--fs-xs);
   color: var(--fg-3);
   unicode-bidi: plaintext;

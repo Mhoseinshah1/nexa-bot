@@ -89,7 +89,8 @@ describe('gateway health', () => {
       (a) => a.getAttribute('href') === opsLinkFor('NOWPAYMENTS', 'LAST_7_DAYS', 'UNKNOWN'),
     );
     expect(ops?.textContent).toContain('2');
-    expect(container.querySelector('a[href="/payment-gateways"]')).not.toBeNull();
+    // The route's own view (UX Batch 01, item 8), not the top of the list.
+    expect(container.querySelector('a[href="/payment-gateways/nowpayments"]')).not.toBeNull();
   });
 
   it('says "not recorded" for a route with no history, and that a route has no safe check', async () => {
@@ -184,7 +185,7 @@ describe('gateway health', () => {
     await screen.findByText(t('web.gateway_health_queues_withheld'));
     const hrefs = [...container.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
     expect(hrefs.some((href) => href.startsWith('/payments'))).toBe(false);
-    expect(hrefs).toContain('/payment-gateways');
+    expect(hrefs).toContain('/payment-gateways/nowpayments');
   });
 
   // Codex review of #160: the status row's label is neutral; the value says on or off.

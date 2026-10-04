@@ -142,8 +142,7 @@ surface the product has now: عملیات · فروش · نمایندگی · ز�
 | زیرساخت  | `/panels`             | پنل‌ها                  | `panels`       | `['panels.view', 'panels.edit']`                                         |
 | زیرساخت  | `/providers`          | ارائه‌دهندگان           | `plug`         | `null`                                                                   |
 | زیرساخت  | `/bots`               | ربات‌ها                 | `bots`         | `'settings.view'`                                                        |
-| زیرساخت  | `/payment-accounts`   | حساب‌های دریافت         | `bank`         | `'payments.accounts.view'`                                               |
-| زیرساخت  | `/payment-gateways`   | روش‌های پرداخت          | `wallet`       | `'payments.gateways.view'`                                               |
+| زیرساخت  | `/payment-gateways`   | روش‌های پرداخت          | `wallet`       | `['payments.gateways.view', 'payments.accounts.view']` (UX Batch 01)     |
 | ارتباط   | `/broadcasts`         | ارسال همگانی            | `send`         | `'broadcasts.view'`                                                      |
 | ارتباط   | `/content`            | متن‌ها                  | `content`      | `'templates.view'`                                                       |
 | ارتباط   | `/reminders`          | یادآورها                | `clock`        | `'settings.view'`                                                        |
