@@ -3012,6 +3012,29 @@ rule).
   trigger refusing that would break them; the service refuses every edit and delete of
   the owner role, and the last-owner triggers of migration 0006 still guard its holders.
 
+## OQ-P5 — RickPanel read-only inventory (Migration P5): what the repository does not evidence
+
+- **OQ-P5-01 — the list route, its pagination parameters and its page shape.** Nothing in
+  this repository names a RickPanel list endpoint: the owner's `rickpanel-openapi.json` is
+  not checked in, and `docs/rickpanel-adapter-audit.md` compares only the create, read,
+  modify, delete and token routes. The inventory implements Marzban v0.8.4's documented
+  `GET /api/users?offset=&limit=` answering `{"users": [...], "total": N}`, inferred because
+  every RickPanel route the audit compared carries Marzban v0.8.4's names. The parser fails
+  CLOSED on any other shape (`NOT_A_PAGE`, never an empty inventory), and the fake
+  implements the same inference. **Settled by** the C1 run
+  (`docs/rickpanel-inventory-acceptance.md`) against a real RickPanel; if the route or shape
+  differs, correct the inventory AND `tests/support/fake-rickpanel.ts` in one commit.
+- **OQ-P5-02 — whether the list has a stable order.** Marzban orders only when `sort` is
+  given; whether RickPanel's unsorted list is stable across pages is unknown. The inventory
+  does not depend on it for SAFETY — a shifted walk ends `complete: false`
+  (`TOTAL_CHANGED` / `COUNT_MISMATCH`) and nothing decides `provider_missing` from it — but
+  a panel that reorders between requests would never yield a complete walk. **Settled by**
+  C1's stability re-run; if needed, add `sort=` once a real panel has shown which values it
+  accepts.
+- **OQ-P5-03 — whether a panel caps `limit`.** Survived either way (offset advances by
+  rows received; the walk ends on an empty page or at the total), but the default page size
+  (50) is chosen against `PANEL_HTTP_MAX_RESPONSE_BYTES`, not a measured panel limit.
+
 ## OQ-I14 — hidden legacy products (program Item 14): decisions left open
 
 - **OQ-I14-01 — DECISION: when does a hidden legacy product follow a public price

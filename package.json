@@ -23,6 +23,7 @@
     "test:web": "vitest run --project web",
     "test:integration": "vitest run --project integration",
     "test:acceptance": "vitest run --project acceptance",
+    "test:acceptance:inventory": "vitest run --project acceptance-inventory",
     "test:watch": "vitest",
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @nexa/api db:migrate",
