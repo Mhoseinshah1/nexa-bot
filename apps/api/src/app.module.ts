@@ -45,6 +45,7 @@ import { TermsController } from './surfaces/web/terms.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
 import { TicketsController } from './surfaces/web/tickets.controller.js';
 import { BusinessChatsController } from './surfaces/web/business-chats.controller.js';
+import { SupportAiController } from './surfaces/web/support-ai.controller.js';
 import { AuditLogController } from './surfaces/web/audit-log.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServiceRefundRequestsController } from './surfaces/web/service-refund-requests.controller.js';
@@ -143,6 +144,7 @@ export class AppModule implements NestModule {
         // WP-A7: support tickets.
         TicketsController as never,
         BusinessChatsController as never,
+        SupportAiController as never,
         RefundsController as never,
         ServiceRefundRequestsController as never,
         ServicesController as never,
