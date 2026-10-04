@@ -6,6 +6,7 @@ import type {
   PaymentId,
   RefundId,
   ServiceId,
+  ServiceRefundRequestOrigin,
   ServiceRefundRequestState,
   ServiceState,
   TenantContext,
@@ -19,9 +20,13 @@ export interface ServiceRefundRequestRecord {
   readonly customerId: UserId;
   readonly orderId: OrderId;
   readonly paymentId: PaymentId;
-  readonly botInstanceId: string;
+  /** The bot a customer filed through; `null` for an operator's delete-and-refund. */
+  readonly botInstanceId: string | null;
   readonly state: ServiceRefundRequestState;
-  readonly reason: string;
+  /** Item 11: the customer's filing, or an operator's own delete-and-refund. */
+  readonly origin: ServiceRefundRequestOrigin;
+  /** The customer's reason; `null` for an operator's delete-and-refund. */
+  readonly reason: string | null;
   /** The source payment's principal, snapshotted when the request was filed. */
   readonly principal: Money;
   readonly approvedAmount: Money | null;
@@ -42,8 +47,10 @@ export interface ServiceRefundRequestDraft {
   readonly customerId: UserId;
   readonly orderId: OrderId;
   readonly paymentId: PaymentId;
-  readonly botInstanceId: string;
-  readonly reason: string;
+  /** A customer's filing: its bot and reason. An operator's (item 11): neither. */
+  readonly origin: ServiceRefundRequestOrigin;
+  readonly botInstanceId: string | null;
+  readonly reason: string | null;
   /** The filing's idempotency key: unique for ever, so a replay files nothing new. */
   readonly filingKey: string;
   readonly principalMinor: bigint;

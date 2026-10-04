@@ -107,7 +107,8 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
       key: 'reason',
       header: t('web.service_refund_reason'),
       wrap: true,
-      render: (row) => row.reason,
+      // An operator's delete-and-refund (item 11) has no customer reason: it says whose it is.
+      render: (row) => row.reason ?? t('web.service_refund_origin_operator'),
     },
     {
       key: 'principal',

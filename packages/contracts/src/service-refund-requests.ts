@@ -79,6 +79,20 @@ export function serviceRefundRequestMayTransition(
   return SERVICE_REFUND_REQUEST_TRANSITIONS[from].includes(to);
 }
 
+/**
+ * Who started a request (UX/Admin Fix Batch 01, item 11; `docs/ux1-delete-service-refund.md`).
+ *
+ * - `CUSTOMER` — filed from the bot with a reason, OPEN until an administrator decides it.
+ * - `OPERATOR` — an administrator's own «حذف سرویس و بازگشت وجه» from the Web Admin. It is
+ *   created and approved in ONE transaction, so it is never OPEN to anybody: it carries no
+ *   customer reason and no bot, and from EXECUTING on it is the same machine — the credit
+ *   waits for the confirmed deletion, an ambiguous one credits nothing, a failed one
+ *   releases the reservation.
+ */
+export const SERVICE_REFUND_REQUEST_ORIGINS = ['CUSTOMER', 'OPERATOR'] as const;
+export type ServiceRefundRequestOrigin = (typeof SERVICE_REFUND_REQUEST_ORIGINS)[number];
+export const serviceRefundRequestOriginSchema = z.enum(SERVICE_REFUND_REQUEST_ORIGINS);
+
 /** The customer's reason, in code points after trimming (brief §2.2). */
 export const SERVICE_REFUND_REASON_MIN_LENGTH = 3;
 export const SERVICE_REFUND_REASON_MAX_LENGTH = 500;

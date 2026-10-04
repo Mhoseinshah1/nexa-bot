@@ -9,15 +9,17 @@ import {
   serviceRefundRejectRequestSchema,
   SERVICE_REFUND_REQUEST_ATTENTION_STATES,
   serviceRefundRequestListQuerySchema,
+  serviceDeleteWithRefundRequestSchema,
   uuidV7Schema,
   type Money,
+  type ServiceDeleteRefundQuote,
   type ServiceRefundRequestListResponse,
   type ServiceRefundRequestResponse,
   type ServiceRefundRequestView,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   ServiceRefundRequestListItem,
@@ -114,6 +116,63 @@ export class ServiceRefundRequestsController {
   }
 
   /**
+   * Item 11: what the «حذف سرویس و بازگشت وجه» summary shows — the customer whose wallet is
+   * credited and the bound, read now. Both decision keys, like the command.
+   */
+  @Get(routePattern(SERVICE_REFUND_REQUEST_ROUTES.deleteWithRefund, 'serviceId'))
+  async deleteWithRefundQuote(
+    @Req() request: FastifyRequest,
+    @Param('serviceId') serviceId: string,
+  ): Promise<ServiceDeleteRefundQuote> {
+    const { scope, actor } = await this.authenticate(request);
+    const quote = await this.container.serviceRefundRequests.quoteDeleteWithRefund(
+      scope,
+      actor,
+      serviceId,
+    );
+    const customer = quote.customer;
+    const name = [customer?.firstName ?? null, customer?.lastName ?? null]
+      .filter((part): part is string => part !== null && part.trim() !== '')
+      .join(' ');
+    const source = quote.eligibility.eligible ? quote.eligibility.source : null;
+    return {
+      serviceId: quote.service.id,
+      serviceUsername: quote.service.providerUsername,
+      customerId: quote.service.customerId,
+      customerTelegramUserId: customer?.telegramUserId ?? null,
+      customerUsername: customer?.username ?? null,
+      customerDisplayName: name === '' ? null : name,
+      eligible: quote.eligibility.eligible,
+      reason: quote.eligibility.eligible ? null : quote.eligibility.reason,
+      principalMinor: source?.payment.amount.amountMinor.toString() ?? null,
+      remainingMinor: source?.remaining.amountMinor.toString() ?? null,
+      currency: source?.payment.amount.currency ?? null,
+      paymentId: source?.payment.id ?? null,
+    };
+  }
+
+  /**
+   * Item 11: delete the service, and credit the amount to the customer's wallet once the
+   * deletion is confirmed. The answer is the request as it stands — EXECUTING, never "done":
+   * the credit waits for the provisioner's deletion and the sweep after it.
+   */
+  @Post(routePattern(SERVICE_REFUND_REQUEST_ROUTES.deleteWithRefund, 'serviceId'))
+  async deleteWithRefund(
+    @Req() request: FastifyRequest,
+    @Param('serviceId') serviceId: string,
+    @Body() body: unknown,
+  ): Promise<ServiceRefundRequestResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const input = serviceDeleteWithRefundRequestSchema.parse(body);
+    const created = await this.container.serviceRefundRequests.deleteWithRefund(scope, actor, {
+      serviceId: uuidV7Schema.parse(serviceId),
+      amountMinor: BigInt(input.amountMinor),
+      idempotencyKey: input.idempotencyKey,
+    });
+    return { request: await this.viewOf(scope, actor, created) };
+  }
+
+  /**
    * The decided row, as the list renders it — read under the decision keys the decider
    * already holds, never `refunds.view`: the decision has committed by now.
    */
@@ -139,8 +198,11 @@ export class ServiceRefundRequestsController {
 
   private async authenticate(
     request: FastifyRequest,
+    options: { write?: boolean } = {},
   ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
     const token = requireSessionToken(request, this.isProduction);
+    // Item 11's write is cookie-authenticated and destructive: only from a configured origin.
+    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
     const { admin, session } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     return {
@@ -169,6 +231,7 @@ function toView(
     paymentId: request.paymentId,
     orderId: request.orderId,
     state: request.state,
+    origin: request.origin,
     reason: request.reason,
     principalMinor: request.principal.amountMinor.toString(),
     remainingMinor: item.remaining.amountMinor.toString(),

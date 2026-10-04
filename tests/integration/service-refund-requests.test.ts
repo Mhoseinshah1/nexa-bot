@@ -498,6 +498,42 @@ describe('WP19 — a customer asks for their money back', () => {
     ).toBe(true);
   });
 
+  it('never tells a customer their request is under review while an operator’s delete-and-refund runs (item 11)', async () => {
+    const service = await activeService('operator-slot');
+    // The customer opens the reason prompt first; the operator acts before they type.
+    await handle(tapUpdate(`fa:${service.id}`));
+    expect((await handle(tapUpdate(`fb:${service.id}`))).replyKey).toBe(
+      'bot.service.refund_request_reason_prompt',
+    );
+    await ctx.container.serviceRefundRequests.deleteWithRefund(tenantA, owner, {
+      serviceId: service.id,
+      amountMinor: 100_000n,
+      idempotencyKey: 'operator-slot-delete-refund',
+    });
+    const standing = await services.findById(tenantA, service.id);
+    if (standing === null) throw new Error('no service');
+    expect(await ctx.container.serviceRefundRequests.customerOffer(tenantA, standing)).toBe(
+      'UNAVAILABLE',
+    );
+
+    // The reason typed into the open prompt meets the operator's slot: not "under review".
+    const typed = await handle(textUpdate('دیگر لازم ندارم'));
+    expect(typed.replyKey).toBe('bot.service.refund_request_unavailable');
+
+    // The service card draws no refund button, and a tap is answered the same way.
+    await handle(tapUpdate(`s:${service.id}`));
+    expect(lastSent()).not.toContain(`fa:${service.id}`);
+    for (const data of [`fa:${service.id}`, `fb:${service.id}`]) {
+      const reply = await handle(tapUpdate(data));
+      expect(reply.replyKey, data).toBe('bot.service.refund_request_unavailable');
+      expect(reply.replyKey, data).not.toBe('bot.service.refund_request_pending');
+    }
+    expect(
+      await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`),
+      'the customer filed nothing',
+    ).toBe(1);
+  });
+
   it('keeps the reason prompt open when filing fails for a reason nobody classified (Codex review of #83, round 8)', async () => {
     const service = await activeService('tg-file-transient');
     await handle(tapUpdate(`fa:${service.id}`));

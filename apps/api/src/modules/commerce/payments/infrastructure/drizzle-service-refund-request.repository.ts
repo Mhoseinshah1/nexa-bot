@@ -10,6 +10,7 @@ import {
   type PaymentId,
   type RefundId,
   type ServiceId,
+  type ServiceRefundRequestOrigin,
   type ServiceRefundRequestState,
   type ServiceState,
   type TenantContext,
@@ -48,6 +49,7 @@ function toRecord(row: Row): ServiceRefundRequestRecord {
     botInstanceId: row.botInstanceId,
     // Cast rather than re-validated: the CHECK is built from the contract's own enum.
     state: row.state as ServiceRefundRequestState,
+    origin: row.origin as ServiceRefundRequestOrigin,
     reason: row.reason,
     principal: money(row.principalMinor, currency),
     approvedAmount:
@@ -92,6 +94,7 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
         paymentId: draft.paymentId,
         botInstanceId: draft.botInstanceId,
         state: 'OPEN',
+        origin: draft.origin,
         reason: draft.reason,
         filingKey: draft.filingKey,
         principalMinor: draft.principalMinor,

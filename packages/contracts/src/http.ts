@@ -17,6 +17,8 @@ import { paymentAccountInputSchema } from './payment-accounts.js';
 import { refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
   serviceRefundRequestStateSchema,
+  serviceRefundRequestOriginSchema,
+  serviceRefundIneligibilityReasonSchema,
   isServiceRefundRejectionReason,
 } from './service-refund-requests.js';
 import {
@@ -6047,7 +6049,10 @@ export const serviceRefundRequestSchema = z.object({
   paymentId: z.string(),
   orderId: z.string(),
   state: serviceRefundRequestStateSchema,
-  reason: z.string(),
+  /** Item 11: a customer's filing, or an operator's own delete-and-refund. */
+  origin: serviceRefundRequestOriginSchema,
+  /** The customer's reason; `null` for an operator's delete-and-refund, which has none. */
+  reason: z.string().nullable(),
   principalMinor: z.string(),
   remainingMinor: z.string(),
   currency: z.enum(CURRENCY_CODES),
@@ -6133,11 +6138,53 @@ export const serviceRefundRejectRequestSchema = z.object({
 export type ServiceRefundRejectRequest = z.infer<typeof serviceRefundRejectRequestSchema>;
 
 /**
+ * Item 11 (`docs/ux1-delete-service-refund.md`): what the delete-and-refund modal shows
+ * before the operator types an amount — the bound and the destination, the server's own
+ * figures. `eligible: false` names why a refund cannot be offered (no paid source, nothing
+ * left, a customer request already standing, a service that cannot be deleted now); the
+ * operator may still delete only.
+ */
+export const serviceDeleteRefundQuoteSchema = z.object({
+  serviceId: z.string(),
+  serviceUsername: z.string(),
+  customerId: z.string(),
+  customerTelegramUserId: z.string().nullable(),
+  customerUsername: z.string().nullable(),
+  customerDisplayName: z.string().nullable(),
+  eligible: z.boolean(),
+  reason: serviceRefundIneligibilityReasonSchema.nullable(),
+  /** The source payment's principal and what it still has to give back, or null. */
+  principalMinor: z.string().nullable(),
+  remainingMinor: z.string().nullable(),
+  currency: z.enum(CURRENCY_CODES).nullable(),
+  paymentId: z.string().nullable(),
+});
+export type ServiceDeleteRefundQuote = z.infer<typeof serviceDeleteRefundQuoteSchema>;
+
+/**
+ * Item 11: delete the service and credit `amountMinor` to the customer's wallet once the
+ * deletion is confirmed. `confirm: true` is the explicit final confirmation, required by the
+ * schema; the idempotency key makes a double click or a retry the same command.
+ */
+export const serviceDeleteWithRefundRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  amountMinor: z.string().regex(/^[0-9]{1,19}$/u),
+  confirm: z.literal(true),
+});
+export type ServiceDeleteWithRefundRequest = z.infer<typeof serviceDeleteWithRefundRequestSchema>;
+
+/**
  * Reads need `refunds.view`; the two decisions need `refunds.issue` AND
  * `services.terminate`, because an approval both moves money and deletes an account.
  */
 export const SERVICE_REFUND_REQUEST_ROUTES = {
   list: '/service-refund-requests',
+  /**
+   * Item 11: an operator's «حذف سرویس و بازگشت وجه». GET reads what the modal's summary
+   * shows; POST deletes and refunds. Both charge `refunds.issue` AND `services.terminate`.
+   */
+  deleteWithRefund: (serviceId: string) =>
+    `/services/${encodeURIComponent(serviceId)}/delete-with-refund`,
   forService: (serviceId: string) => `/services/${encodeURIComponent(serviceId)}/refund-requests`,
   approve: (id: string) => `/service-refund-requests/${encodeURIComponent(id)}/approve`,
   reject: (id: string) => `/service-refund-requests/${encodeURIComponent(id)}/reject`,
