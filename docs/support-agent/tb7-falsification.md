@@ -27,8 +27,12 @@ restores the file byte for byte. Run on 2026-10-04 against a dedicated integrati
 | TB7-19 | Link the customer's active ticket instead of opening a duplicate                | links the customer's existing active ticket instead of opening another                    | KILLED |
 | TB7-20 | Resuming a handed-off conversation resolves the operator signal                 | a handoff opens exactly one ticket, links it on the next handoff, and signals an operator | KILLED |
 | TB7-21 | Widening the allowlist charges `support_ai.auto_reply`                          | widening the allowlist is the CRITICAL permission; narrowing is not                       | KILLED |
+| TB7-22 | An unseen image the reply would be about hands off (`autoImageGuard`)           | a photo with vision off is never answered: no provider call, a handoff                    | KILLED |
+| TB7-23 | A required image the answering step was not given hands off                     | a photo the answering step was not given hands off, even with a valid REPLY               | KILLED |
 
-**21 of 21 killed.**
+**23 of 23 killed** (re-run on the TB6 restack, `nexa_test_tb7r`, where TB7-17's anchor moved
+with the photo preflight and TB7-22/23 were added for the TB6 integration; `scripts/mutate-tb6.py`
+still kills 18 of 18 on the same tree).
 
 Notes:
 

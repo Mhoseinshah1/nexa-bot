@@ -42,7 +42,10 @@ M=[
  ('TB7-14',[(GUARDS,"    reply === '' ||","    false ||")],T_I,'each guard individually'),
  ('TB7-15',[(GUARDS,"  if (decision.factRefs.some((ref) => !input.knownAliases.has(ref))) {","  if (false) {")],T_I,'each guard individually'),
  ('TB7-16',[(GUARDS,"  if (input.autoAtEpoch >= input.maxConsecutiveReplies)","  if (input.autoAtEpoch > input.maxConsecutiveReplies)")],T_I,'consecutive automatic replies'),
- ('TB7-17',[(GUARDS,"    trigger.origin !== 'INBOUND' ||","    false ||")],T_U,'preflight: only a customer message'),
+ ('TB7-17',[(GUARDS,"  if (trigger === null || trigger.origin !== 'INBOUND' || !readable) {","  if (trigger === null || !readable) {")],T_U,'preflight: only a customer message'),
+ # TB6 x TB7: an image the reply would be about must be seen.
+ ('TB7-22',[(GUARDS,"  if (input.required.some((id) => !input.loaded.has(id))) {","  if (false) {")],T_I,'vision off is never answered'),
+ ('TB7-23',[(AUTO,"    if (result.exhausted === 'NO_VISION_STEP' || (required.length > 0 && answered && !seen)) {","    if (result.exhausted === 'NO_VISION_STEP') {")],T_I,'answering step was not given'),
  # The handoff: escalation, ticket linking, the operator signal; the CRITICAL widening.
  ('TB7-18',[(CONV,"    await this.deps.escalation.escalate(scope, { conversation: moved, reason, detail, now }, tx);\n","")],T_I,'UNKNOWN send'),
  ('TB7-19',[(TICKETS,"        : await this.deps.tickets.latestActiveForCustomer(scope, customerId, scoped);","        : null;")],T_I,'existing active ticket'),
