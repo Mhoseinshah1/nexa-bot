@@ -285,6 +285,8 @@ import {
 import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet.repository.js';
 import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
 import { MigrationOpeningBalanceService } from './modules/commerce/wallet/application/migration-opening-balance.service.js';
+import { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
+import { DrizzleLegacyImportRepository } from './modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
 import {
   DrizzlePaymentAccountRepository,
@@ -906,6 +908,11 @@ export interface Container {
    * importer (P7, HOLD) is its one intended caller (`docs/migration-opening-balance.md`).
    */
   readonly migrationOpeningBalance: MigrationOpeningBalanceService;
+  /**
+   * Program 4 Item 9: the legacy-import manual review queue. Migration-only — no surface
+   * reaches it; the P7 CLI is its caller (`docs/legacy-import-metadata.md`).
+   */
+  readonly legacyReviewQueue: LegacyReviewQueueService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
   /** WP13 — the Web Admin's management of this tenant's Telegram bot instances. */
@@ -2059,6 +2066,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+  });
+  const legacyReviewQueue = new LegacyReviewQueueService({
+    repository: new DrizzleLegacyImportRepository(database.db),
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    outbox,
+    idempotency,
+    clock,
   });
 
   // ---------------------------------------------------------------------------
@@ -5989,6 +6008,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     bulkOperationLoop,
     wallet: walletService,
     migrationOpeningBalance,
+    legacyReviewQueue,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
     botManagement,

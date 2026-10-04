@@ -5,12 +5,17 @@ import {
   errors,
   isLegacyImportKey,
   isLegacyImportSourceTable,
+  LEGACY_REVIEW_RETRY_RESOLUTIONS,
+  type ActorType,
   type LegacyImportEntityType,
   type LegacyImportMapStatus,
   type LegacyImportReasonCode,
   type LegacyImportRunFailureCode,
   type LegacyImportRunMode,
   type LegacyImportRunStatus,
+  type LegacyReviewReasonCode,
+  type LegacyReviewResolutionCode,
+  type LegacyReviewState,
   type TenantContext,
 } from '@nexa/contracts';
 
@@ -63,6 +68,19 @@ export interface LegacyImportMapRecord {
   readonly attempts: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+  /** Item 9: non-null exactly when `status` is `MANUAL_REVIEW`. */
+  readonly reviewState: LegacyReviewState | null;
+  /** Item 9: set only while the review is RESOLVED or DISMISSED. */
+  readonly reviewResolutionCode: LegacyReviewResolutionCode | null;
+  readonly reviewedAt: Date | null;
+  readonly reviewedByActorType: ActorType | null;
+  readonly reviewedByActorId: string | null;
+  readonly reviewReopenedCount: number;
+  /**
+   * Item 9: the row's non-identifying uuid — what audit and outbox name, never the legacy
+   * key (a `user` key is a Telegram id).
+   */
+  readonly ref: string;
 }
 
 /** One decision about one legacy record, as the importer hands it over. */
@@ -100,7 +118,12 @@ export type LegacyImportMapWriteOutcome =
        * - `IMPORTED_SOURCE_CHANGED` — IMPORTED from a source row whose checksum differs now.
        *   The drift is surfaced, never absorbed by overwriting the checksum.
        */
-      readonly reason: 'IMPORTED_ENTITY_MISMATCH' | 'IMPORTED_SOURCE_CHANGED';
+      /**
+       * - `REVIEW_CLOSED` (Item 9) — the row is a MANUAL_REVIEW a person closed with a
+       *   resolution that does not invite a rerun (`HANDLED_OUTSIDE_IMPORT`, or DISMISSED).
+       *   A rerun never silently overwrites a person's decision; they reopen it first.
+       */
+      readonly reason: 'IMPORTED_ENTITY_MISMATCH' | 'IMPORTED_SOURCE_CHANGED' | 'REVIEW_CLOSED';
       readonly record: LegacyImportMapRecord;
     };
 
@@ -124,6 +147,43 @@ export interface LegacyImportReviewPage {
   readonly items: readonly LegacyImportMapRecord[];
   readonly next: LegacyImportReviewCursor | null;
 }
+
+/** Item 9: one bucket of the review queue's counts. */
+export interface LegacyReviewCountRow {
+  readonly legacyTable: string;
+  readonly reasonCode: LegacyReviewReasonCode;
+  readonly reviewState: LegacyReviewState;
+  readonly count: number;
+}
+
+/** Who closed a review: the actor's type and stable id, as `audit_logs` names them. */
+export interface LegacyReviewActorRef {
+  readonly type: ActorType;
+  readonly id: string;
+}
+
+/**
+ * Item 9: what a review transition did. The repository never throws for a row that is
+ * merely in another state; the service decides what that means to its caller.
+ *
+ * - `CHANGED` — this call moved the row (`from` is the state it left).
+ * - `UNCHANGED` — the row was already exactly where this call would put it (a replay, a
+ *   double-click, a racing identical request).
+ * - `NOT_FOUND` — no row for this key in this tenant.
+ * - `NOT_IN_REVIEW` — the row exists and is not `MANUAL_REVIEW`.
+ * - `CONFLICT` — the row is in review but not in a state this call may move it from (closed
+ *   with another resolution; or its reason is no longer the one the caller saw).
+ */
+export type LegacyReviewTransitionOutcome =
+  | {
+      readonly kind: 'CHANGED';
+      readonly from: LegacyReviewState;
+      readonly record: LegacyImportMapRecord;
+    }
+  | { readonly kind: 'UNCHANGED'; readonly record: LegacyImportMapRecord }
+  | { readonly kind: 'NOT_FOUND' }
+  | { readonly kind: 'NOT_IN_REVIEW'; readonly record: LegacyImportMapRecord }
+  | { readonly kind: 'CONFLICT'; readonly record: LegacyImportMapRecord };
 
 export interface LegacyImportRepository {
   /**
@@ -205,34 +265,121 @@ export interface LegacyImportRepository {
   /** Counts by table, status and reason: the reconcile view. */
   summarize(scope: TenantContext, tx?: unknown): Promise<readonly LegacyImportSummaryRow[]>;
 
-  /** MANUAL_REVIEW rows, keyset-paged by `(legacy_table, legacy_id)`. */
+  /**
+   * MANUAL_REVIEW rows, keyset-paged by `(legacy_table, legacy_id)`. Item 9 adds the review
+   * state and the run (the run that last wrote the row) as filters.
+   */
   listManualReview(
     scope: TenantContext,
     query: {
       readonly legacyTable?: string;
       readonly reasonCode?: LegacyImportReasonCode;
+      readonly reviewState?: LegacyReviewState;
+      readonly runId?: string;
       readonly after?: LegacyImportReviewCursor;
       readonly limit: number;
     },
     tx?: unknown,
   ): Promise<LegacyImportReviewPage>;
+
+  /**
+   * Item 9: MANUAL_REVIEW rows counted by `(legacy_table, reason_code, review_state)` — for
+   * the tenant, or only the rows a given run last wrote.
+   */
+  countReview(
+    scope: TenantContext,
+    query: { readonly runId?: string },
+    tx?: unknown,
+  ): Promise<readonly LegacyReviewCountRow[]>;
+
+  /**
+   * Item 9: OPEN -> the resolution's closed state, by ONE conditional UPDATE naming
+   * `status = 'MANUAL_REVIEW'`, `review_state = 'OPEN'` and the reason the caller saw.
+   */
+  resolveReview(
+    scope: TenantContext,
+    input: {
+      readonly legacyTable: string;
+      readonly legacyId: string;
+      readonly expectedReasonCode: LegacyReviewReasonCode;
+      readonly resolutionCode: LegacyReviewResolutionCode;
+      readonly actor: LegacyReviewActorRef;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<LegacyReviewTransitionOutcome>;
+
+  /**
+   * Item 9: RESOLVED | DISMISSED -> OPEN, by ONE conditional UPDATE naming those states;
+   * clears the resolution and counts the reopen.
+   */
+  reopenReview(
+    scope: TenantContext,
+    input: { readonly legacyTable: string; readonly legacyId: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<LegacyReviewTransitionOutcome>;
 }
 
 export const LEGACY_IMPORT_REVIEW_PAGE_MAX = 500;
 
 // --- pure rules ----------------------------------------------------------------------------
 
+/** The review fields a rule reads; absent means "no review" (a record without Item 9 fields). */
+interface ReviewView {
+  readonly reviewState?: LegacyReviewState | null;
+  readonly reviewResolutionCode?: LegacyReviewResolutionCode | null;
+}
+
+/**
+ * Item 9: whether a person closed this review in a way a rerun must not act on — DISMISSED,
+ * or RESOLVED with anything but a retry resolution. Such a row is refused to every rerun
+ * write (`REVIEW_CLOSED`) and skipped by a resume until a person reopens it.
+ */
+export function isReviewClosedToRerun(existing: { readonly status: string } & ReviewView): boolean {
+  if (existing.status !== 'MANUAL_REVIEW') return false;
+  const state = existing.reviewState ?? 'OPEN';
+  if (state === 'OPEN') return false;
+  if (state === 'DISMISSED') return true;
+  return !isRetryResolution(existing.reviewResolutionCode ?? null);
+}
+
+function isRetryResolution(code: LegacyReviewResolutionCode | null): boolean {
+  return code !== null && (LEGACY_REVIEW_RETRY_RESOLUTIONS as readonly string[]).includes(code);
+}
+
+/** Item 9: a RESOLVED review whose resolution invites the importer to decide again. */
+function isRetryResolved(existing: { readonly status: string } & ReviewView): boolean {
+  return (
+    existing.status === 'MANUAL_REVIEW' &&
+    existing.reviewState === 'RESOLVED' &&
+    isRetryResolution(existing.reviewResolutionCode ?? null)
+  );
+}
+
 /**
  * What a write does to an existing row. The one rule, kept pure so a unit test pins every
  * branch and the repository cannot grow a second opinion.
+ *
+ * Item 9 adds two branches for a non-IMPORTED row, both before the ordinary comparison:
+ * - a review a person closed to reruns is `REVIEW_CLOSED` for any write except an identical
+ *   one (which stays `UNCHANGED`, so a replayed run is not an error);
+ * - a review RESOLVED with `RETRY_AFTER_FIX` is always `UPDATE`, even for an identical
+ *   decision: the retry was asked for, and a decision that comes back the same puts the
+ *   row back OPEN in the queue rather than leaving it closed as if fixed.
  */
 export function decideMapWrite(
   existing: Pick<
     LegacyImportMapRecord,
     'status' | 'checksum' | 'entityType' | 'entityId' | 'reasonCode'
-  >,
+  > &
+    ReviewView,
   incoming: { readonly checksum: string; readonly decision: LegacyImportDecision },
-): 'UNCHANGED' | 'UPDATE' | 'IMPORTED_ENTITY_MISMATCH' | 'IMPORTED_SOURCE_CHANGED' {
+):
+  | 'UNCHANGED'
+  | 'UPDATE'
+  | 'IMPORTED_ENTITY_MISMATCH'
+  | 'IMPORTED_SOURCE_CHANGED'
+  | 'REVIEW_CLOSED' {
   const d = incoming.decision;
   const incomingEntityType = d.status === 'IMPORTED' ? d.entityType : null;
   const incomingEntityId = d.status === 'IMPORTED' ? d.entityId : null;
@@ -247,16 +394,32 @@ export function decideMapWrite(
     if (existing.checksum !== incoming.checksum) return 'IMPORTED_SOURCE_CHANGED';
     return existing.reasonCode === d.reasonCode ? 'UNCHANGED' : 'UPDATE';
   }
-  if (
+  const identical =
     existing.status === d.status &&
     existing.checksum === incoming.checksum &&
     existing.reasonCode === d.reasonCode &&
     existing.entityType === incomingEntityType &&
-    existing.entityId === incomingEntityId
-  ) {
-    return 'UNCHANGED';
-  }
-  return 'UPDATE';
+    existing.entityId === incomingEntityId;
+  if (isReviewClosedToRerun(existing)) return identical ? 'UNCHANGED' : 'REVIEW_CLOSED';
+  if (isRetryResolved(existing)) return 'UPDATE';
+  return identical ? 'UNCHANGED' : 'UPDATE';
+}
+
+/**
+ * Item 9: the review fields an `UPDATE` verdict writes, from the row before and the decision
+ * after. A row that leaves review has no review state (its history is in the audit log); a
+ * row that stays in or enters review is OPEN; a review that was closed and comes back OPEN
+ * (a retry whose decision is review again) counts one reopen.
+ */
+export function reviewAfterWrite(
+  existing: { readonly status: string } & ReviewView,
+  incomingStatus: LegacyImportMapStatus,
+): { readonly reviewState: 'OPEN' | null; readonly reopened: boolean } {
+  if (incomingStatus !== 'MANUAL_REVIEW') return { reviewState: null, reopened: false };
+  const wasClosed =
+    existing.status === 'MANUAL_REVIEW' &&
+    (existing.reviewState === 'RESOLVED' || existing.reviewState === 'DISMISSED');
+  return { reviewState: 'OPEN', reopened: wasClosed };
 }
 
 /**
@@ -264,13 +427,18 @@ export function decideMapWrite(
  *
  * - `SKIP` — IMPORTED from this exact source row; doing it again would duplicate it.
  * - `SOURCE_CHANGED` — IMPORTED, but the source row differs now: a human decides.
- * - `PROCESS` — never decided, or decided as something a rerun is allowed to revisit.
+ * - `REVIEW_CLOSED` (Item 9) — a person closed this review to reruns; leave it alone (its
+ *   write would be refused anyway, after the work was done).
+ * - `PROCESS` — never decided, or decided as something a rerun is allowed to revisit
+ *   (FAILED, SKIPPED, an OPEN review, a review RESOLVED with `RETRY_AFTER_FIX`).
  */
 export function resumeDecision(
-  existing: Pick<LegacyImportMapRecord, 'status' | 'checksum'> | null,
+  existing: (Pick<LegacyImportMapRecord, 'status' | 'checksum'> & ReviewView) | null,
   checksum: string,
-): 'SKIP' | 'SOURCE_CHANGED' | 'PROCESS' {
-  if (existing === null || existing.status !== 'IMPORTED') return 'PROCESS';
+): 'SKIP' | 'SOURCE_CHANGED' | 'REVIEW_CLOSED' | 'PROCESS' {
+  if (existing === null) return 'PROCESS';
+  if (isReviewClosedToRerun(existing)) return 'REVIEW_CLOSED';
+  if (existing.status !== 'IMPORTED') return 'PROCESS';
   return existing.checksum === checksum ? 'SKIP' : 'SOURCE_CHANGED';
 }
 

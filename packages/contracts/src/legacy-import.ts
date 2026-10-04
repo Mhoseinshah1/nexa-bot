@@ -103,8 +103,116 @@ export const LEGACY_IMPORT_REASON_CODES = [
   'PROVIDER_READ_FAILED',
   /** An unexpected failure inside the importer. */
   'INTERNAL_ERROR',
+  // Item 9 (Manual Review Queue): the remaining closed reasons a row is held for a human.
+  /**
+   * §10: a panel this decision depends on has no COMPLETE inventory, so zero matches is not
+   * "missing". The P5 matcher's `UNDECIDABLE`; held for review, decided again by a rerun.
+   */
+  'INVENTORY_INCOMPLETE',
+  /** §11: an invoice whose owner is not a legacy user / NEXA customer (an orphan, Q7). */
+  'CUSTOMER_MISSING',
+  /** §8: no hidden or current product can be resolved for the row; a tariff is never invented. */
+  'PRODUCT_MAPPING_UNRESOLVED',
+  /** §7 (C3): the account cannot carry a NEXA subscription reference without provider mutation. */
+  'SUBSCRIPTION_REF_BLOCKED',
+  /** A legacy phone that does not normalise to a valid number; never stored, never guessed. */
+  'INVALID_PHONE',
+  /** §11: an existing NEXA entity conflicts with the legacy identity; never silently merged. */
+  'CONFLICTING_EXISTING_ENTITY',
+  /** A legacy row shape the importer has no mapping for (a unit, a type, a status). */
+  'UNSUPPORTED_SHAPE',
 ] as const;
 export type LegacyImportReasonCode = (typeof LEGACY_IMPORT_REASON_CODES)[number];
+
+/**
+ * Item 9 — the closed set of reasons a `MANUAL_REVIEW` row may carry, pinned by
+ * `legacy_import_map_review_reason_check`. Every ambiguity the program names
+ * (§10, §11, §13) has exactly one code here; a warning (`EXISTING_CUSTOMER`), a skip reason
+ * (`TEST_PANEL`) or a retryable failure (`PROVIDER_READ_FAILED`, `INTERNAL_ERROR`) is NOT a
+ * review reason, so a review row can never be a disguised failure.
+ *
+ * Program spelling → code: provider_missing → `PROVIDER_MISSING`; ambiguous_panel →
+ * `AMBIGUOUS_PANEL`; username_case_collision → `USERNAME_CASE_COLLISION`;
+ * panel_mapping_missing → `PANEL_UNMAPPED`; inventory_incomplete → `INVENTORY_INCOMPLETE`;
+ * customer_missing / orphan → `CUSTOMER_MISSING`; product_mapping_unresolved →
+ * `PRODUCT_MAPPING_UNRESOLVED`; subscription_ref_blocked → `SUBSCRIPTION_REF_BLOCKED`;
+ * invalid_phone → `INVALID_PHONE`; conflicting existing entity →
+ * `CONFLICTING_EXISTING_ENTITY`; unsupported shape → `UNSUPPORTED_SHAPE`; and the existing
+ * `INVALID_SOURCE_ROW` (a value the matcher will not compare).
+ */
+export const LEGACY_REVIEW_REASON_CODES = [
+  'PROVIDER_MISSING',
+  'AMBIGUOUS_PANEL',
+  'USERNAME_CASE_COLLISION',
+  'PANEL_UNMAPPED',
+  'INVENTORY_INCOMPLETE',
+  'CUSTOMER_MISSING',
+  'PRODUCT_MAPPING_UNRESOLVED',
+  'SUBSCRIPTION_REF_BLOCKED',
+  'INVALID_PHONE',
+  'CONFLICTING_EXISTING_ENTITY',
+  'UNSUPPORTED_SHAPE',
+  'INVALID_SOURCE_ROW',
+] as const satisfies readonly LegacyImportReasonCode[];
+export type LegacyReviewReasonCode = (typeof LEGACY_REVIEW_REASON_CODES)[number];
+
+export function isLegacyReviewReasonCode(value: string): value is LegacyReviewReasonCode {
+  return (LEGACY_REVIEW_REASON_CODES as readonly string[]).includes(value);
+}
+
+/**
+ * Item 9 — where a `MANUAL_REVIEW` row stands with a human. Non-null exactly on
+ * `MANUAL_REVIEW` rows (`legacy_import_map_review_state_check`).
+ *
+ * - `OPEN` — waiting for a person. Every row enters review `OPEN`.
+ * - `RESOLVED` — a person acted on the cause. See `LEGACY_REVIEW_RESOLUTION_CODES` for which
+ *   resolutions invite the importer to decide again.
+ * - `DISMISSED` — a person decided the record stays out of NEXA.
+ *
+ * Every transition is a conditional UPDATE naming its from-state: OPEN → RESOLVED |
+ * DISMISSED (resolve), RESOLVED | DISMISSED → OPEN (reopen).
+ */
+export const LEGACY_REVIEW_STATES = ['OPEN', 'RESOLVED', 'DISMISSED'] as const;
+export type LegacyReviewState = (typeof LEGACY_REVIEW_STATES)[number];
+export const LEGACY_REVIEW_CLOSED_STATES = ['RESOLVED', 'DISMISSED'] as const;
+export type LegacyReviewClosedState = (typeof LEGACY_REVIEW_CLOSED_STATES)[number];
+
+/**
+ * Item 9 — why a person closed a review row; a code, never free text. Each code belongs to
+ * exactly one closed state (`legacy_import_map_review_resolution_check`).
+ *
+ * - `RETRY_AFTER_FIX` (RESOLVED) — the cause was fixed outside the row (a panel mapping
+ *   added, the inventory completed, a product mapped). The next import run DECIDES AGAIN:
+ *   the one resolution a rerun may act on.
+ * - `HANDLED_OUTSIDE_IMPORT` (RESOLVED) — a person dealt with the record by other means.
+ *   A rerun must not act on it as well; it is refused until reopened.
+ * - `WILL_NOT_IMPORT`, `TEST_OR_INVALID_DATA`, `DUPLICATE_RECORD` (DISMISSED) — the record
+ *   stays out. A rerun is refused until a person reopens the row.
+ */
+export const LEGACY_REVIEW_RESOLUTION_CODES = [
+  'RETRY_AFTER_FIX',
+  'HANDLED_OUTSIDE_IMPORT',
+  'WILL_NOT_IMPORT',
+  'TEST_OR_INVALID_DATA',
+  'DUPLICATE_RECORD',
+] as const;
+export type LegacyReviewResolutionCode = (typeof LEGACY_REVIEW_RESOLUTION_CODES)[number];
+
+/** Which closed state each resolution code closes into. */
+export const LEGACY_REVIEW_RESOLUTION_STATE: Readonly<
+  Record<LegacyReviewResolutionCode, LegacyReviewClosedState>
+> = {
+  RETRY_AFTER_FIX: 'RESOLVED',
+  HANDLED_OUTSIDE_IMPORT: 'RESOLVED',
+  WILL_NOT_IMPORT: 'DISMISSED',
+  TEST_OR_INVALID_DATA: 'DISMISSED',
+  DUPLICATE_RECORD: 'DISMISSED',
+};
+
+/** The resolutions under which an import rerun may decide the row again. */
+export const LEGACY_REVIEW_RETRY_RESOLUTIONS = [
+  'RETRY_AFTER_FIX',
+] as const satisfies readonly LegacyReviewResolutionCode[];
 
 /**
  * The legacy tables a map row may name, each with the ONE primary-key shape the repository
@@ -170,4 +278,13 @@ export const LEGACY_IMPORT_ERROR_CODES = {
   RUN_NOT_WRITABLE: 'legacy_import.run_not_writable',
   /** A value outside the declared shape (table, id, checksum, status/reason pairing). */
   INVALID: 'legacy_import.invalid',
+  /** Item 9: no map row for this legacy key in this tenant. */
+  REVIEW_NOT_FOUND: 'legacy_import.review_not_found',
+  /** Item 9: the row is not `MANUAL_REVIEW`, so it has no review to resolve or reopen. */
+  REVIEW_NOT_IN_REVIEW: 'legacy_import.review_not_in_review',
+  /**
+   * Item 9: the row is no longer what the caller saw — another person closed it differently,
+   * or a rerun changed its reason since it was listed.
+   */
+  REVIEW_CONFLICT: 'legacy_import.review_conflict',
 } as const;

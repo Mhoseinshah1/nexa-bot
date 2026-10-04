@@ -184,6 +184,9 @@ export const EVENT_TYPES = [
   'CustomerDirectMessageQueued',
   // Phase E3: an incident or maintenance window changed status. Ids and statuses only.
   'IncidentStateChanged',
+  // Program 4 Item 9: a legacy-import manual-review row was resolved, dismissed or reopened
+  // by a person. Closed codes only; the aggregate id is the row's uuid, never its legacy key.
+  'LegacyImportReviewStateChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -226,6 +229,9 @@ export const AGGREGATE_TYPES = [
   'CustomerTag',
   // Phase E3: an incident or maintenance window.
   'Incident',
+  // Program 4 Item 9: one legacy_import_map row, addressed by its `ref` uuid (a `user` row's
+  // legacy key is a Telegram id, which no audit row or event may carry).
+  'LegacyImportMapRow',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -620,6 +626,13 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     kind: z.enum(['INCIDENT', 'MAINTENANCE']),
     from: z.string().nullable(),
     to: z.string(),
+  }),
+  LegacyImportReviewStateChanged: z.object({
+    legacyTable: z.string(),
+    reasonCode: z.string(),
+    from: z.enum(['OPEN', 'RESOLVED', 'DISMISSED']),
+    to: z.enum(['OPEN', 'RESOLVED', 'DISMISSED']),
+    resolutionCode: z.string().nullable(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 

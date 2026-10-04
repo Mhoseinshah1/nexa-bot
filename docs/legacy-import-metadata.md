@@ -135,14 +135,17 @@ scheme or whitespace — `hunter2`, `password:hunter2`, a name, a subscription l
 Allowed only under a `RUNNING` `APPLY` run of the same tenant (a `DRY_RUN` writes no map
 rows). Insert-or-nothing on the key, then the pure rule `decideMapWrite`:
 
-| existing       | incoming                                   | outcome                                    |
-| -------------- | ------------------------------------------ | ------------------------------------------ |
-| none           | anything                                   | `INSERTED`                                 |
-| `IMPORTED`     | same entity, same checksum                 | `UNCHANGED` (idempotent rerun)             |
-| `IMPORTED`     | other entity, or any non-`IMPORTED` status | `REFUSED / IMPORTED_ENTITY_MISMATCH`       |
-| `IMPORTED`     | same entity, different checksum            | `REFUSED / IMPORTED_SOURCE_CHANGED`        |
-| not `IMPORTED` | identical                                  | `UNCHANGED`                                |
-| not `IMPORTED` | anything else                              | `UPDATED` (`run_id` moves, `attempts + 1`) |
+| existing                                     | incoming                                   | outcome                                    |
+| -------------------------------------------- | ------------------------------------------ | ------------------------------------------ |
+| none                                         | anything                                   | `INSERTED`                                 |
+| `IMPORTED`                                   | same entity, same checksum                 | `UNCHANGED` (idempotent rerun)             |
+| `IMPORTED`                                   | other entity, or any non-`IMPORTED` status | `REFUSED / IMPORTED_ENTITY_MISMATCH`       |
+| `IMPORTED`                                   | same entity, different checksum            | `REFUSED / IMPORTED_SOURCE_CHANGED`        |
+| review closed to reruns (Item 9)             | identical                                  | `UNCHANGED`                                |
+| review closed to reruns (Item 9)             | anything else, source drift included       | `REFUSED / REVIEW_CLOSED`                  |
+| review `RESOLVED / RETRY_AFTER_FIX` (Item 9) | anything, identical included               | `UPDATED` (back `OPEN` if still review)    |
+| not `IMPORTED`                               | identical                                  | `UNCHANGED`                                |
+| not `IMPORTED`                               | anything else                              | `UPDATED` (`run_id` moves, `attempts + 1`) |
 
 Provenance is never rewritten by a rerun, and source drift under an imported row is
 surfaced for a human, never absorbed.
@@ -150,15 +153,114 @@ surfaced for a human, never absorbed.
 ### Resume
 
 `resumeDecision(existing, checksum)`: `SKIP` an `IMPORTED` row from the same source row,
-`SOURCE_CHANGED` if the source row differs, otherwise `PROCESS`. A resumed run reads
+`SOURCE_CHANGED` if the source row differs, `REVIEW_CLOSED` for a review a person closed
+to reruns (Item 9), otherwise `PROCESS`. A resumed run reads
 `findByLegacyKeys` per batch first. A run that died leaves its map rows; the next run
 skips what was imported and revisits `FAILED` / `MANUAL_REVIEW` / `SKIPPED` rows.
 
 ### Reconcile and manual review
 
 `summarize` — counts by `(legacy_table, status, reason_code)`. `listManualReview` —
-`MANUAL_REVIEW` rows keyset-paged by `(legacy_table, legacy_id)`, filterable by table and
-reason; pages never repeat or skip a row (tested).
+`MANUAL_REVIEW` rows keyset-paged by `(legacy_table, legacy_id)`, filterable by table,
+reason, review state and run; pages never repeat or skip a row (tested).
+
+## Manual review queue (Program 4 Item 9)
+
+Migration `0192_legacy_review_queue.sql`; service
+`legacy-import/application/legacy-review-queue.service.ts` (`LegacyReviewQueueService`,
+container member `legacyReviewQueue`); routing `legacy-review-routing.ts`.
+
+**Closed reasons.** A `MANUAL_REVIEW` row carries one of `LEGACY_REVIEW_REASON_CODES`
+(`legacy_import_map_review_reason_check`) — never a warning, a skip or a retryable failure:
+
+| program §13                 | code                          |
+| --------------------------- | ----------------------------- |
+| provider_missing            | `PROVIDER_MISSING`            |
+| ambiguous_panel             | `AMBIGUOUS_PANEL`             |
+| username_case_collision     | `USERNAME_CASE_COLLISION`     |
+| panel_mapping_missing       | `PANEL_UNMAPPED`              |
+| inventory_incomplete        | `INVENTORY_INCOMPLETE`        |
+| customer_missing / orphan   | `CUSTOMER_MISSING`            |
+| product_mapping_unresolved  | `PRODUCT_MAPPING_UNRESOLVED`  |
+| subscription_ref_blocked    | `SUBSCRIPTION_REF_BLOCKED`    |
+| invalid_phone               | `INVALID_PHONE`               |
+| conflicting existing entity | `CONFLICTING_EXISTING_ENTITY` |
+| unsupported shape           | `UNSUPPORTED_SHAPE`           |
+| (existing) uncomparable row | `INVALID_SOURCE_ROW`          |
+
+`decisionForLegacyMatch` is the one translation from the P5 matcher: `ELIGIBLE` → adopt
+(caller records `IMPORTED`); `MANUAL_REVIEW` → its reason; `SKIPPED` → `TEST_PANEL`;
+`INVALID` → review `INVALID_SOURCE_ROW`; `UNDECIDABLE` → review `INVENTORY_INCOMPLETE`
+(never "missing"; the row stays `OPEN` and the next run decides it again). A new matcher
+reason that is not a review reason fails the build there.
+
+**Review state** (`review_state`, non-null exactly on `MANUAL_REVIEW` rows):
+`OPEN` → `RESOLVED` | `DISMISSED` (resolve), `RESOLVED` | `DISMISSED` → `OPEN` (reopen).
+Each transition is ONE conditional UPDATE naming its from-state; resolve also names the
+reason the operator saw (`expectedReasonCode`), so a row a rerun moved since it was listed
+is a `legacy_import.review_conflict`, never resolved blind. A closed review records
+`review_resolution_code`, `reviewed_at`, `reviewed_by_actor_type`/`_id` (CHECK: all set
+when closed, none when open, and the code belongs to the state); a reopen clears them and
+increments `review_reopened_count`. History is in `audit_logs`
+(`legacy_import.review_resolve` / `legacy_import.review_reopen`, entity
+`LegacyImportMapRow`) and the outbox (`LegacyImportReviewStateChanged`, aggregate
+`LegacyImportMapRow`). Both name the row by its **`ref`** — a uuid column added in 0192
+(`DEFAULT gen_random_uuid()`, unique per tenant), the same idiom as naming a customer by its
+uuid — and **never by its legacy key**: a `user` row's key is a Telegram id, and the audit
+log is append-only. A denial is recorded before the row is read, so it names no row
+(`entity_id` NULL). Tested: after a denial, a resolve, a replay, a reopen and a re-resolve
+of a `user` row, no audit column and no outbox id or payload contains its key
+(mutation-checked).
+
+| resolution               | state       | a later import run                                                    |
+| ------------------------ | ----------- | --------------------------------------------------------------------- |
+| `RETRY_AFTER_FIX`        | `RESOLVED`  | decides again; a decision that is review again puts the row back OPEN |
+| `HANDLED_OUTSIDE_IMPORT` | `RESOLVED`  | refused (`REVIEW_CLOSED`); resume says `REVIEW_CLOSED`                |
+| `WILL_NOT_IMPORT`        | `DISMISSED` | refused until reopened                                                |
+| `TEST_OR_INVALID_DATA`   | `DISMISSED` | refused until reopened                                                |
+| `DUPLICATE_RECORD`       | `DISMISSED` | refused until reopened                                                |
+
+So a rerun never silently overwrites a person's decision, and an `IMPORTED` row is
+untouched by every review action (resolve/reopen answer `review_not_in_review`).
+
+**Races (tested with concurrent transactions):** two different resolutions → one wins,
+one `review_conflict`; two identical → `RESOLVED` + `ALREADY`, one audit row; resolve vs
+reopen → the final state is exactly what the winners report; resolve vs a rerun changing
+the reason → exactly one takes effect (resolve first: rerun `REFUSED / REVIEW_CLOSED`;
+rerun first: resolve `review_conflict`). The rerun's UPDATE also names the status and
+review state it decided from.
+
+**Service API** (all `(scope: TenantContext, actor: ActorContext, …)`, permission
+`maintenance.run` — `SYSTEM_JOB` for the P7 CLI; no HTTP/Telegram/web surface, pinned by
+`tests/unit/legacy-review-queue-boundary.test.ts`):
+
+- `counts(scope, actor, { runId? })` → `LegacyReviewCounts` (`rowCount`, `byState`,
+  `byReason[]` with open/resolved/dismissed) — per tenant or per run.
+- `list(scope, actor, { legacyTable?, reasonCode?, reviewState?, runId?, after?, limit })`
+  → `{ items: LegacyReviewItem[], next }`, keyset by `(legacy_table, legacy_id)`, limit
+  1..500. Items carry SAFE context only: table, key, reason, run, state, resolution code,
+  reviewer, counts and timestamps — never a checksum or any source value.
+- `resolve(scope, actor, { legacyTable, legacyId, expectedReasonCode, resolutionCode,
+idempotencyKey })` → `RESOLVED` | `ALREADY`.
+- `reopen(scope, actor, { legacyTable, legacyId, idempotencyKey })` → `REOPENED` | `ALREADY`.
+
+Each write: guard check (denial audited), session + permission re-checked inside the
+transaction, `ScopeActivityReader` inside it, idempotency key (`rememberOnce`), audit and
+outbox in the same transaction. The `legacy_id` of a `user` row is a Telegram id: the CLI
+must page it to the operator, never dump the queue into a shared log (§23).
+
+**Codex P2 on #179.** (1) A replayed idempotency key returns the ORIGINAL response
+snapshot stored with the key (`storeDecision` / `reviveDecision`), never the row as it
+stands now — a row a later run imported or a person moved again no longer changes or breaks
+the replay. (2) Every IN-list CHECK in 0192 is guarded by an explicit `IS NOT NULL`
+(`NULL IN (…)` is NULL, and a CHECK passes on NULL): a closed review without a resolution
+code, or a review row without a reason, is refused by direct SQL (tested). (3) `list` /
+`counts` validate the run filter as a uuid and every other filter and the cursor against
+their closed shapes, so a bad value is `legacy_import.invalid`, never a PostgreSQL 22P02.
+
+**Backfill (hand-written block in 0192):** existing `MANUAL_REVIEW` rows become `OPEN`;
+one whose reason is not a review reason (no conforming writer produced one) becomes
+`FAILED` with its reason kept, which a rerun processes again.
 
 ## Security
 
