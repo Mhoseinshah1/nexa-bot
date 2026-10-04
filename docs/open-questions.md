@@ -3339,3 +3339,37 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
   `business_messages_retention_idx` covers `text IS NOT NULL` only, so a caption-less
   photo is found by a scan bounded by tenant and `sent_at`. Add a matching partial index
   if the purge shows up in query plans.
+
+TB7 (AUTO_REPLY_SAFE, handoff and tickets, `docs/support-agent/tb7-auto-reply.md`):
+
+- **OQ-TB-40 — a handoff for an unlinked customer opens no ticket.** `tickets.customer_id` is
+  NOT NULL and a business message never creates a customer (tb0-audit §3.4–§3.5). Such a
+  handoff is recorded (`NO_CUSTOMER`), moves the conversation to `HANDOFF_REQUIRED` and raises
+  `support.handoff_required`, so an operator still sees it in the inbox and the alert. Whether
+  a ticket without a customer (or a provisional customer) is wanted is a Product Owner call.
+- **OQ-TB-41 — `NO_ACTION` hands off.** A decision of `NO_ACTION` (for example, a customer's
+  "thanks") is not a REPLY, so it fails the decision guard and hands off, with a ticket for a
+  linked customer. That is the fail-closed reading of "all guards must pass". A quiet outcome
+  for a SAFE-topic `NO_ACTION`, with no handoff and no ticket, is a policy change to decide.
+- **OQ-TB-42 — which active ticket a handoff links.** The conversation's own ticket while it
+  is active; otherwise the customer's newest active ticket in any bot and any category. That
+  avoids duplicates as the PO asked, and it may attach an escalation to a ticket about another
+  subject. A narrower rule (same bot, or `BUSINESS_CHAT` origin only) is open.
+- **OQ-TB-43 — the escalated ticket is the customer's too.** A `BUSINESS_CHAT` ticket appears in
+  the customer's ticket list in the NEXA bot (with one system line, never the AI's note), and
+  an operator's ticket reply reaches the customer through the bot, not the business chat.
+  Hiding these tickets from the bot, or replying through the business chat, is open.
+- **OQ-TB-44 — a deleted or edited trigger.** A trigger deleted before its job runs hands off
+  as `UNSUPPORTED_CONTENT` (fail closed) rather than dropping quietly. An edit re-enqueues
+  only while the conversation still has a pending job; an edit of an already-answered message
+  starts nothing.
+- **OQ-TB-45 — the loop guard's window is a constant.** At most 10 automatic replies per
+  conversation per hour (`SUPPORT_AI_AUTO_WINDOW`), beside the configurable consecutive limit
+  (`maxConsecutiveReplies`). Whether the window should be a setting is open.
+- **OQ-TB-46 — images before TB6.** This branch is built on TB5, without TB6. An image from the
+  customer hands off as `UNSUPPORTED_CONTENT`. TB6 decides whether vision may feed an
+  automatic reply at all.
+- **OQ-TB-47 — real-Telegram acceptance of automatic replies.** The two residual windows of
+  tb0-audit §4 (a human message typed after the send stamp, or not yet delivered to the
+  webhook) are unchanged and closed by nothing; the settle delay is mitigation only. The
+  staging acceptance in `tb7-auto-reply.md` has not been run.
