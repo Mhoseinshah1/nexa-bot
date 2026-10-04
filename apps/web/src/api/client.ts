@@ -500,6 +500,10 @@ import {
   CLIENT_APP_ROUTES,
   clientAppDeletedSchema,
   clientAppListSchema,
+  clientAppVideoSessionSchema,
+  clientAppVideosSchema,
+  type ClientAppVideoSessionResponse,
+  type ClientAppVideosResponse,
   clientAppSchema,
   type ClientAppDeletedResponse,
   type ClientAppImageMimeType,
@@ -2406,6 +2410,42 @@ export function clearClientAppImage(input: {
  */
 export function clientAppImageUrl(id: string, sha256: string): string {
   return `${API_PREFIX}${CLIENT_APP_ROUTES.image(id)}?v=${encodeURIComponent(sha256)}`;
+}
+
+/** UX Batch 01 item 6: the app's tutorial video on each of the tenant's bots. */
+export function fetchClientAppVideos(id: string): Promise<ClientAppVideosResponse> {
+  return authedGet(CLIENT_APP_ROUTES.videos(id), clientAppVideosSchema);
+}
+
+/** Opens a «send it from Telegram» prompt for one bot. */
+export function openClientAppVideoSession(input: {
+  id: string;
+  botInstanceId: string;
+  idempotencyKey: string;
+}): Promise<ClientAppVideoSessionResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.videoSessions(id), body, clientAppVideoSessionSchema);
+}
+
+/** One prompt's state; the page polls it until it is no longer OPEN. */
+export function fetchClientAppVideoSession(
+  id: string,
+  sessionId: string,
+): Promise<ClientAppVideoSessionResponse> {
+  return authedGet(CLIENT_APP_ROUTES.videoSession(id, sessionId), clientAppVideoSessionSchema);
+}
+
+export function cancelClientAppVideoSession(input: {
+  id: string;
+  sessionId: string;
+  idempotencyKey: string;
+}): Promise<ClientAppVideoSessionResponse> {
+  const { id, sessionId, ...body } = input;
+  return post(
+    CLIENT_APP_ROUTES.videoSessionCancel(id, sessionId),
+    body,
+    clientAppVideoSessionSchema,
+  );
 }
 
 export function fetchPanels(

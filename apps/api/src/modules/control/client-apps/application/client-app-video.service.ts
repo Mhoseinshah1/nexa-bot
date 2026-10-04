@@ -2,6 +2,7 @@ import {
   CLIENT_APP_VIDEO_CAPTURE_TTL_MS,
   CLIENT_APP_VIDEO_FILE_ID_MAX_LENGTH,
   CLIENT_APP_VIDEO_FILE_UNIQUE_ID_MAX_LENGTH,
+  CLIENT_APP_VIDEO_WEB_CLOCK_SKEW_MS,
   COMMERCE_ERROR_CODES,
   CONTROL_ERROR_CODES,
   errors,
@@ -333,6 +334,11 @@ export class ClientAppVideoService {
       readonly botInstanceId: BotInstanceId;
       readonly adminId: string;
       readonly updateId: bigint | null;
+      /**
+       * UX Batch 01 item 6: the message's own `date`, as Telegram stamped it. Read only for a
+       * prompt opened from the Web Admin, which has no tap's `update_id` to be newer than.
+       */
+      readonly sentAt?: Date | null;
       readonly video: InboundTutorialVideo;
     },
   ): Promise<TutorialVideoReceipt> {
@@ -388,12 +394,19 @@ export class ClientAppVideoService {
           );
           return receipt;
         };
-        // A message that is not newer than the tap belongs to no prompt (WP19's rule).
+        // A message that is not newer than the tap belongs to no prompt (WP19's rule). A
+        // prompt the Web Admin opened has no tap: the message must be dated no earlier than
+        // the prompt's opening (less the clocks' allowance), so a video sent before the
+        // button was pressed, delivered late, cannot complete it.
         if (
           prompt === null ||
           prompt.clientAppId === null ||
           (prompt.openedUpdateId !== null &&
-            (input.updateId === null || input.updateId <= prompt.openedUpdateId))
+            (input.updateId === null || input.updateId <= prompt.openedUpdateId)) ||
+          (prompt.openedUpdateId === null &&
+            (input.sentAt == null ||
+              input.sentAt.getTime() <
+                prompt.openedAt.getTime() - CLIENT_APP_VIDEO_WEB_CLOCK_SKEW_MS))
         ) {
           return answer({ outcome: 'NO_PROMPT' });
         }

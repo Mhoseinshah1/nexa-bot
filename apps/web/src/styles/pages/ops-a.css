@@ -19,6 +19,29 @@
   pointer-events: none;
 }
 
+/* UX Batch 01 item 6: the app's tutorial video per bot, and the «send it now» prompt. */
+.client-app-video-bots {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.client-app-video-bot {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  overflow-wrap: anywhere;
+}
+.client-app-video-bot .btn {
+  justify-self: start;
+}
+.client-app-video-waiting a {
+  overflow-wrap: anywhere;
+}
+
 /* WP-A10: the bot's message as a customer will read it — plain text, line breaks kept. */
 .bot-preview {
   white-space: pre-wrap;
