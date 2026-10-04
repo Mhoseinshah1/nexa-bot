@@ -132,6 +132,28 @@ rebalancing if one shard is consistently longest.
 The pnpm store was already cached (`setup-node` `cache: pnpm`); installs took
 under a second of wall time in every job.
 
+## Where pnpm comes from
+
+One pin: `packageManager` in the root `package.json`. Every job that needs pnpm
+runs `pnpm/action-setup` with **no** `version:` input, right after the root
+checkout, so the action reads that field; there is no `PNPM_VERSION` in any
+workflow to drift from it. It runs **before** `actions/setup-node`, because
+`cache: pnpm` calls `pnpm store path`.
+
+setup-node v5 also caches **without being asked**: given no `cache:` input it
+reads `packageManager` from the workspace's `package.json`, sees pnpm, and does
+the same thing. A job that needs Node but not pnpm — the release `gate` — must
+say `package-manager-cache: false`. That job had none, and v0.4.4's release
+(run 37178958984) stopped at its setup-node step with "Unable to locate
+executable file: pnpm" before the CI gate ran: #168 had given the gate a root
+checkout of the workflow commit, which is what put a `package.json` there. CI
+never runs that job, so CI was green.
+
+`tests/unit/release-workflow.test.ts` ("pnpm provisioning in every workflow")
+checks every job of every workflow: a setup-node with a pnpm cache, explicit or
+automatic, or a `run:` that calls `pnpm`, needs an earlier `pnpm/action-setup`
+in the same job, and that step carries no `version:`.
+
 ## The release gate
 
 `release.yml`'s `gate` job will not let anything be built until:
@@ -198,3 +220,21 @@ goes red.
 
 The gate never falls back to "the latest green main". A release is published
 only from the bytes that passed.
+
+### When the release failed before the gate decided
+
+A tag-push run uses the workflow file **at the tagged commit**, and so does
+**Re-run** on it: re-running a release whose workflow was broken repeats the
+same failure. Once the fix is on main, the options are:
+
+- **Run workflow** on Release from `main` with the existing tag (for v0.4.4:
+  `v0.4.4`). The workflow and the gate script then come from main; the tag is
+  still checked out separately and resolved once to its SHA (`f439eee7…` for
+  v0.4.4), the gate still needs a green push run of CI for exactly that SHA,
+  and the image is built from that SHA, not from main. Nothing was published
+  for v0.4.4 — the run stopped before the build — so the immutability check
+  does not refuse it.
+- Or release a **new version** from a main commit that includes the fix, once
+  CI is green for it.
+
+Neither moves or recreates the tag.

@@ -58,9 +58,20 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
+      # The gate runs scripts/release-ci-gate.* on Node built-ins alone, so it
+      # needs Node and NOT pnpm — and setup-node v5 must be told so. With no `cache:`
+      # input it reads `packageManager` from the package.json in the workspace
+      # (the workflow commit checked out above), finds pnpm, and restores a
+      # pnpm cache by running `pnpm store path`. With no pnpm installed that
+      # fails ("Unable to locate executable file: pnpm"), which is how v0.4.4's
+      # release stopped before the CI gate ever ran. Turning the automatic
+      # cache off rather than installing pnpm here also keeps the release gate
+      # from restoring an Actions cache that other workflow runs wrote.
+      # tests/unit/release-workflow.test.ts pins this for every job.
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
+          package-manager-cache: false
 
       # Every value that reaches a `run:` block arrives through `env:` and is
       # used as a quoted shell variable. Interpolating `${{ }}` into a script
