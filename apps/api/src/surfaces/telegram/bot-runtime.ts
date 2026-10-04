@@ -13162,6 +13162,8 @@ export class BotRuntime {
           text: category.emoji === null ? category.name : `${category.emoji} ${category.name}`,
         }),
         data: `${CATEGORY_CALLBACK_PREFIX}${category.id}.0`,
+        // UX Batch 01, item 2: the category's own colour; the route above is unchanged.
+        category: category.id,
       })),
     );
     if (page > 0) {

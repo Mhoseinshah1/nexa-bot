@@ -82,7 +82,13 @@ export interface CustomerCallbackButton {
    * template (`inlineLabel`). Never part of the route: `data`, the URL or the copied text
    * are what a tap acts on, whatever this names. Absent on administrator buttons.
    */
-  readonly inline?: InlineButtonKey;
+  readonly inline?: InlineButtonKey; /**
+   * UX Batch 01, item 2: the product category a `catalog.category` button opens. The
+   * messenger draws that category's own colour (`bot.category_colors`) before the generic
+   * category button's style (`categoryButtonStyleOf`). Presentation only, exactly as
+   * `inline`: the route is `data`, whatever this names.
+   */
+  readonly category?: string;
 }
 
 /**
