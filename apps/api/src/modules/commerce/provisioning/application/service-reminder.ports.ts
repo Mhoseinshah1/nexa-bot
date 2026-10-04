@@ -139,6 +139,25 @@ export interface ServiceReminderRepository {
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
+
+  /**
+   * One service as the two candidate queries would read it, WHATEVER its state and
+   * whatever the thresholds — or null when it is not this tenant's.
+   *
+   * For the burst seed (Migration P6, `docs/migration-p6-service-adoption.md` §6): an
+   * adopted service arrives part-way through its period, and the seed must decide which
+   * thresholds are already behind it from the same columns, the same exact basis text and
+   * the same tenant-timezone day boundary the sweep will later use — a second
+   * computation of any of them is a second answer to "has this one passed".
+   *
+   * `usageMeasured` is `usage_synced_at IS NOT NULL`: the usage query refuses a service
+   * whose figure nobody has read, and the seed follows it.
+   */
+  seedCandidate(
+    scope: TenantContext,
+    serviceId: string,
+    tx: TransactionScope,
+  ): Promise<(ServiceReminderCandidate & { readonly usageMeasured: boolean }) | null>;
 }
 
 /**

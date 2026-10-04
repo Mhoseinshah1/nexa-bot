@@ -1,4 +1,6 @@
 import {
+  COMMERCE_ERROR_CODES,
+  errors,
   EXPIRY_REMINDER_KINDS,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
   SERVICE_REMINDER_SWEEP_LIMIT,
@@ -44,6 +46,53 @@ const DAY_MS = 86_400_000;
 export interface ServiceReminderReport {
   readonly expiry: number;
   readonly usage: number;
+}
+
+/**
+ * What a burst seed decided (`seedPassedThresholds`).
+ *
+ * `passed` — every kind already behind the service against its current basis, least
+ * urgent first within each family. `seeded` — the subset THIS call wrote; a rerun writes
+ * nothing and returns `[]` here with the same `passed`.
+ */
+export interface ServiceReminderSeed {
+  readonly passed: readonly ServiceReminderKind[];
+  readonly seeded: readonly ServiceReminderKind[];
+}
+
+/**
+ * The thresholds already behind a service NOW — the one decision the burst seed makes,
+ * pure so a unit test can pin every branch.
+ *
+ * Built from the sweep's own two functions and its own prefix rule, so "passed" here and
+ * "due" there cannot disagree: the expiry kinds are `EXPIRY_REMINDER_KINDS` up to and
+ * including `expiryReminderDue`; the usage kinds are `usageRemindersReached`, and only
+ * for a measured figure.
+ */
+export function passedReminderKinds(
+  candidate: Pick<
+    ServiceReminderCandidate,
+    'expiresAt' | 'expiryDayStartsAt' | 'trafficLimitBytes' | 'trafficUsedBytes'
+  > & { readonly usageMeasured: boolean },
+  now: Date,
+  thresholds: ServiceReminderThresholds,
+): {
+  readonly expiry: readonly ServiceReminderKind[];
+  readonly usage: readonly ServiceReminderKind[];
+} {
+  const due = expiryReminderDue(candidate.expiresAt, now, thresholds, candidate.expiryDayStartsAt);
+  const expiry =
+    due === null ? [] : EXPIRY_REMINDER_KINDS.slice(0, EXPIRY_REMINDER_KINDS.indexOf(due) + 1);
+  const usage = candidate.usageMeasured
+    ? [
+        ...usageRemindersReached(
+          candidate.trafficUsedBytes,
+          candidate.trafficLimitBytes,
+          thresholds,
+        ),
+      ].reverse()
+    : [];
+  return { expiry, usage };
 }
 
 export interface ServiceReminderServiceDeps {
@@ -138,6 +187,76 @@ export class ServiceReminderService {
       const usage = await this.sweepUsage(scope, now, thresholds, tx);
       return { expiry, usage };
     });
+  }
+
+  /**
+   * Migration P6, Item 8 — burst protection for a service that arrives mid-period.
+   *
+   * An adopted legacy service is born already near its expiry, past several usage
+   * thresholds, or expired. To the sweep it would look like a service whose thresholds
+   * were all crossed since its last pass, and every adopted service would be told
+   * something on the first pass after the import — thousands of "your service expired"
+   * and "95% used" messages about periods the legacy bot already handled. This records
+   * every threshold that is ALREADY behind the service as raised, against its CURRENT
+   * basis, with no notification — exactly what the sweep does for the kinds below the one
+   * it announces, so it is the existing lane's own record, not a second reminder system.
+   *
+   * - Expiry: the whole prefix of `EXPIRY_REMINDER_KINDS` up to the kind
+   *   `expiryReminderDue` returns now (the sweep's `upTo`).
+   * - Usage: every kind `usageRemindersReached` returns, when the figure was measured
+   *   (`usage_synced_at`), as the usage query requires.
+   *
+   * Thresholds are the tenant's settings, read in THIS transaction. Flags are NOT
+   * consulted: a family switched off today and on tomorrow must not then announce a
+   * crossing that happened before the service was adopted — the reason the sweep records
+   * a switched-off expiry kind instead of skipping it.
+   *
+   * What still fires: every threshold not yet behind the service, against this basis, and
+   * everything in a new period (a renewal or added traffic moves the basis, and the rows
+   * written here no longer match it).
+   *
+   * Runs inside the CALLER's transaction (the adoption's), which has already read scope
+   * activity; it reads it again, because a step that writes must not rely on its caller
+   * having remembered. Idempotent: every write is the sweep's own `ON CONFLICT DO NOTHING`
+   * on the period key, so a rerun, or two adoptions racing, write each row once.
+   * `seeded` lists the kinds THIS call wrote.
+   */
+  async seedPassedThresholds(
+    scope: TenantContext,
+    serviceId: string,
+    tx: TransactionScope,
+  ): Promise<ServiceReminderSeed> {
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This installation has stopped accepting work.',
+      );
+    }
+    const candidate = await this.deps.reminders.seedCandidate(scope, serviceId, tx);
+    if (candidate === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+    }
+    const now = this.deps.clock.now();
+    const thresholds = await this.thresholds(scope, tx);
+    const passed = passedReminderKinds(candidate, now, thresholds);
+    const snapshot = this.snapshot(candidate, now);
+    const seeded: ServiceReminderKind[] = [];
+    for (const kind of [...passed.expiry, ...passed.usage]) {
+      const written = await this.deps.reminders.raise(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          serviceId: candidate.serviceId,
+          kind,
+          basis: candidate.basis,
+          snapshot,
+        },
+        now,
+        tx,
+      );
+      if (written) seeded.push(kind);
+    }
+    return { passed: [...passed.expiry, ...passed.usage], seeded };
   }
 
   /**

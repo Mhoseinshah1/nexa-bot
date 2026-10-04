@@ -255,6 +255,40 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
     `);
     return inserted.rows.length > 0;
   }
+
+  /**
+   * One service, read exactly as `listExpiryCandidates` and `listUsageCandidates` read
+   * theirs — the same columns, the same `expires_at` TEXT for the basis, and the SAME
+   * day-start expression — with neither the state filter nor the threshold window.
+   *
+   * The day start is the expression the expiry query selects, copied rather than shared
+   * only because it lives inside a larger statement; `tests/integration/
+   * reminder-burst-seed.test.ts` pins that a seeded `EXPIRY_DAY` is exactly the rung the
+   * sweep then finds already raised.
+   */
+  async seedCandidate(
+    scope: TenantContext,
+    serviceId: string,
+    tx: TransactionScope,
+  ): Promise<(ServiceReminderCandidate & { readonly usageMeasured: boolean }) | null> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute(sql`
+      SELECT s.id, s.customer_id, s.provider_username, s.expires_at,
+             s.traffic_limit_bytes, s.traffic_used_bytes,
+             (s.usage_synced_at IS NOT NULL) AS usage_measured,
+             CASE WHEN s.expires_at IS NULL THEN NULL ELSE LEAST(
+               date_trunc('day', s.expires_at AT TIME ZONE t.display_timezone)
+                 AT TIME ZONE t.display_timezone,
+               s.expires_at - make_interval(secs => ${EXPIRY_DAY_MIN_NOTICE_MS / 1000})
+             ) END AS expiry_day_starts_at
+      FROM services s
+      JOIN tenants t ON t.id = s.tenant_id
+      WHERE s.tenant_id = ${tenantId} AND s.id = ${serviceId}
+    `);
+    const row = (result.rows as unknown as (CandidateRow & { usage_measured: boolean })[])[0];
+    if (row === undefined) return null;
+    return { ...toCandidate(row), usageMeasured: row.usage_measured };
+  }
 }
 
 /**
