@@ -286,6 +286,8 @@ import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructur
 import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
 import { MigrationOpeningBalanceService } from './modules/commerce/wallet/application/migration-opening-balance.service.js';
 import { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
+import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
+import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store.js';
 import { DrizzleLegacyImportRepository } from './modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
 import {
@@ -913,6 +915,12 @@ export interface Container {
    * reaches it; the P7 CLI is its caller (`docs/legacy-import-metadata.md`).
    */
   readonly legacyReviewQueue: LegacyReviewQueueService;
+  /**
+   * Migration P6: legacy service adoption. Migration-only — no surface reaches it; the P7
+   * importer is its one caller (`docs/migration-p6-service-adoption.md`). Holds no provider
+   * client: adoption is not provisioning.
+   */
+  readonly legacyAdoption: LegacyAdoptionService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
   /** WP13 — the Web Admin's management of this tenant's Telegram bot instances. */
@@ -3658,6 +3666,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * Migration P6. After the reminder sweep, whose burst seed it runs inside its own
+   * transaction. Deliberately handed NO provider client, adapter or transport.
+   */
+  const legacyAdoption = new LegacyAdoptionService({
+    store: new DrizzleLegacyAdoptionStore(database.db),
+    map: new DrizzleLegacyImportRepository(database.db),
+    products: productRepository,
+    shapes: new DrizzleLegacyProductShapeRepository(database.db),
+    capacity: panelCapacity,
+    reminders: serviceReminderSweep,
+    settings: settingsResolver,
+    secrets: serviceSecrets,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    outbox,
+    idempotency,
+    clock,
+    ids,
+  });
   const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
     // The same per-pass closure the payment expiry loop uses, and for the same
     // reason: the installation's tenant is a row, so it is not known while this
@@ -6009,6 +6041,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletService,
     migrationOpeningBalance,
     legacyReviewQueue,
+    legacyAdoption,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
     botManagement,

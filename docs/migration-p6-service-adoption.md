@@ -52,8 +52,17 @@ Called by the P7 CLI as `SYSTEM_JOB` with **`maintenance.run`** — the only key
 narrower existing key is held by a job. **No HTTP, Telegram or web surface constructs or
 calls it** (a boundary test pins that only the container and the CLI may import it).
 
+The P7 importer's seam is `adoptCandidate(scope, actor, candidate)`: its
+`LegacyAdoptionPort` candidate (run, invoice, checksum, Telegram id, customer id, panel,
+exact spelling, product path) plus the two facts adoption must never guess — the account's
+`runtime` facts and, for a NAMED legacy product, the explicit NEXA `productId` (a hidden shape
+names its own product through the shape row). The match is the importer's ELIGIBLE decision
+restated; a different customer for the Telegram id is `CONFLICTING_EXISTING_ENTITY`. The
+idempotency key is `p6:<run>:<invoice>:<request hash>`, so an identical retry replays and a
+resumed run with a fresh panel read reaches the map and answers `ALREADY_ADOPTED`.
+
 Outcomes: `ADOPTED` | `ALREADY_ADOPTED` (same mapping, same ids) | `MANUAL_REVIEW` (closed
-reason, map row written). The exact types are in `$S/ADOPT_API.md` and the source.
+reason; `recorded` says whether a map row was written — false only for an invoice key outside the evidenced shape, which the map refuses). Also `SKIPPED` (test panel), `FAILED` (unreadable provider record) and `REVIEW_CLOSED` (a person closed the review to reruns) — §9. The exact types are in `legacy-adoption-ports.ts`.
 
 ## 3. Capacity decision (6B)
 
@@ -74,10 +83,14 @@ usedAfter, overCap }`. A panel adopted past its cap then reads `AT_CAPACITY`: th
 - No capacity reservation row is written: a hold is for the window in which no service
   represents a claim, and here the service exists from the first statement.
 
-Lock order: the per-invoice advisory lock (class `0x4c41`, "LA", taken first and never held
-with any other advisory lock) → the panel row → the username reservation insert (a unique
-index). This matches the existing order → panel → reservation order; the adoption order is
-new, so nothing else can be waiting on it.
+Lock order: the per-invoice transaction advisory lock
+(`hashtextextended('legacy-adoption:<tenant>:invoice:<key>')`, the `legacy-shape:` form;
+taken first and never together with another advisory lock) → the panel row → the username
+reservation insert (a unique index). This matches the existing order → panel → reservation
+order; the adoption order is new, so nothing else can be waiting on it. A purchase that
+reserves the same name between the adoption's check and its insert makes the adoption's
+insert fail on the namespace index and the whole transaction roll back; the importer's
+retry then answers `CONFLICTING_EXISTING_ENTITY`.
 
 ## 4. Identity: username, subscription_ref, link (C3 SAFE_WITH_CONSTRAINT)
 
@@ -115,7 +128,7 @@ RickPanel's `status` folded by the inventory (`RICKPANEL_ACCOUNT_STATES`):
 | `expired`  | `EXPIRED`             | renewable                                                                                                                                            |
 | `on_hold`  | MANUAL_REVIEW         | `UNSUPPORTED_SHAPE`: a not-yet-started window has no NEXA representation; guessing a start would invent an expiry                                    |
 | `UNKNOWN`  | MANUAL_REVIEW         | `UNSUPPORTED_SHAPE`                                                                                                                                  |
-| usage null | MANUAL_REVIEW         | `PROVIDER_READ_FAILED`: the record's usage fields were absent/malformed — never a fake zero                                                          |
+| usage null | FAILED                | `PROVIDER_READ_FAILED` (a map FAILED row, retried by a rerun): the record's usage fields were absent/malformed — never a fake zero                   |
 
 Figures: `expires_at` = the panel's expiry (null = unlimited); `traffic_limit_bytes` = the
 panel's `data_limit` (null → 0 = unlimited); `traffic_used_bytes` = the panel's used figure
@@ -170,20 +183,32 @@ provisioning operation. Proven through the real write path: the reports exclude 
 provisioner tick (earn sweep included) creates no cashback, referral commission or reseller
 record; a refund request finds no paid source.
 
-## 9. Manual-review reasons (closed)
+## 9. Decisions and their map rows (closed)
 
-Passthrough from the verified match: `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`,
-`PANEL_UNMAPPED`, `USERNAME_CASE_COLLISION`, `INVENTORY_INCOMPLETE`, `INVALID_SOURCE_ROW`
-(a `SKIPPED/TEST_PANEL` match is recorded `SKIPPED`). Decided here: `CUSTOMER_MISSING`,
-`PRODUCT_MAPPING_UNRESOLVED`, `SUBSCRIPTION_REF_BLOCKED`, `CONFLICTING_EXISTING_ENTITY`,
-`UNSUPPORTED_SHAPE`, `PROVIDER_READ_FAILED`. Each is a map row (`MANUAL_REVIEW` with the
-code); nothing else is written for it. The codes are `LEGACY_IMPORT_REASON_CODES` members
-(MAP-REVIEW's extension).
+| Outcome           | Map row                           | Reasons                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ADOPTED`         | `IMPORTED` / `SERVICE`            | —                                                                                                                                                                                                                                                                                                                                         |
+| `ALREADY_ADOPTED` | unchanged                         | —                                                                                                                                                                                                                                                                                                                                         |
+| `SKIPPED`         | `SKIPPED` / `TEST_PANEL`          | a test-panel match                                                                                                                                                                                                                                                                                                                        |
+| `MANUAL_REVIEW`   | `MANUAL_REVIEW` / reason          | passthrough (Item 9's `decisionForLegacyMatch` mapping): `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`, `PANEL_UNMAPPED`, `USERNAME_CASE_COLLISION`, `INVENTORY_INCOMPLETE`, `INVALID_SOURCE_ROW`; decided here: `CUSTOMER_MISSING`, `PRODUCT_MAPPING_UNRESOLVED`, `SUBSCRIPTION_REF_BLOCKED`, `CONFLICTING_EXISTING_ENTITY`, `UNSUPPORTED_SHAPE` |
+| `FAILED`          | `FAILED` / `PROVIDER_READ_FAILED` | the provider record had no readable usage, or an unusable link: not a question for a person (it is not a review reason); a rerun with a fresh read processes it again                                                                                                                                                                     |
+| `REVIEW_CLOSED`   | none                              | a person closed this invoice's review to reruns (Item 9: DISMISSED, or RESOLVED other than `RETRY_AFTER_FIX`); nothing is decided until they reopen it                                                                                                                                                                                    |
 
-## 10. Migrations
+Every review reason is a `LEGACY_REVIEW_REASON_CODES` member (Item 9), checked at compile
+time (`satisfies`). An invoice key outside the map's evidenced shape is answered
+`MANUAL_REVIEW / INVALID_SOURCE_ROW` with `recorded: false` and nothing written: the map
+refuses such a key by design, and the importer reports it from its own run.
 
-None expected: every column and constraint the adoption needs exists (0187/0188 order
-origin, 0190 import map; the `invoice` legacy table is MAP-REVIEW's 0191–0192).
+## 10. Contracts and migrations
+
+- `ServiceAdopted` domain event (own commit): ids and state only.
+- Audit rows name a map row by its `ref` uuid (Item 9's rule: `legacy.service.adopt` carries
+  `mapRef`, `legacy.invoice.decide` uses it as the entity id) — never the invoice key, the
+  legacy user key or a Telegram id.
+- No migration. orders.origin (0187/0188), the import map (0190), its `invoice` key (0191)
+  and the review reasons/state (0192, Item 9, #179) already hold everything the adoption
+  writes. The product gate is `legacyShapeAdoptable` (#177 makes it delegate to
+  `legacyShapeAdoption`); every shape reason maps to `PRODUCT_MAPPING_UNRESOLVED`.
 
 ## 11. Tests and mutation
 
@@ -206,6 +231,52 @@ origin, 0190 import map; the `invoice` legacy table is MAP-REVIEW's 0191–0192)
 | S4 day start in UTC             | day-of rung in the tenant's timezone                        |
 | S5 no tenant filter in the read | another tenant's service                                    |
 | S6 no scope-activity read       | a stopped scope                                             |
+
+### Item 7
+
+- `tests/integration/legacy-adoption.test.ts` (25 cases, every adoption call made with the
+  process's `http`/`https`/`fetch` replaced by a recording fake that throws — asserted
+  never called): happy path (order shape, service row, funded hold, map row, audit and event
+  free of the link and Telegram id); rerun (same key replays, new key `ALREADY_ADOPTED`,
+  changed checksum reported and never re-pointed); reused key with another payload refused;
+  six concurrent adoptions of one invoice → one order, one service; existing customer beside
+  their own service; customer missing then created; every match passthrough; an invoice key
+  outside the evidenced shape (nothing written); a spelling that does not fold to the key;
+  resolved/unresolved hidden product (including one priced by hand); no / foreign / inactive /
+  window-mismatched product; state mapping incl. disabled → SUSPENDED and the refusals;
+  unlimited traffic/time and no link; non-RickPanel → `SUBSCRIPTION_REF_BLOCKED`; distinct
+  subscription refs; name conflicts on the panel and in another tenant's namespace; capacity
+  over cap reported; reminder seed inside the adoption; revenue exclusion and an inert
+  provisioner tick; renewal quotes the current tariff and follows a price change; permission
+  denied and audited; stopped tenant (adoption and review); tenant isolation; run counters.
+- `tests/unit/legacy-adoption-boundary.test.ts` — no surface or web page reaches it; the
+  module imports no provider client, adapter, transport or network API; its container
+  wiring has no provider dependency. `tests/unit/legacy-adoption-rules.test.ts` — the state
+  map and the request hash.
+
+| Mutation (`scripts/mutate-migration-p6.py`) | Killed by                               |
+| ------------------------------------------- | --------------------------------------- |
+| A1 the adoption makes a provider read       | every adopting case (the network fake)  |
+| A2 no per-invoice lock                      | concurrency                             |
+| A3 no ALREADY_ADOPTED lookup                | rerun; concurrency                      |
+| A4 hold keeps the exact case                | happy path                              |
+| A5 no username conflict check               | both conflict cases                     |
+| A6 any provider type                        | subscription constraint                 |
+| A7 disabled becomes ACTIVE                  | state mapping                           |
+| A8 delivery PENDING                         | happy path                              |
+| A9 no reminder seed                         | reminder seed in the adoption           |
+| A10 STANDARD origin                         | happy path; rerun; concurrency; revenue |
+| A11 no scope-activity read                  | stopped tenant (review decision)        |
+| A12 customer lookup ignores the tenant      | tenant isolation                        |
+| A13 over-cap never reported                 | capacity                                |
+| A14 no window-shape check                   | product refusals                        |
+| A15 hidden-shape gate skipped               | unresolved shape priced by hand         |
+| A16 a closed review is not respected        | closed review left alone                |
+| A17 a read failure recorded as a review     | state mapping (read failures)           |
+| A18 decision audit names the invoice key    | map row named by its uuid               |
+
+A11 and A15 survived the first run (each case was also refused by a neighbouring rule); the
+cases were narrowed until each isolates its rule, and both are now killed.
 
 ## 12. Manual acceptance (not run here)
 

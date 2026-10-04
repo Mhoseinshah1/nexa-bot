@@ -21,7 +21,12 @@ PROV = W + '/apps/api/src/modules/commerce/provisioning/'
 RS = PROV + 'application/service-reminder.service.ts'
 RR = PROV + 'infrastructure/drizzle-service-reminder.repository.ts'
 
+AD = W + '/apps/api/src/modules/commerce/legacy-adoption/'
+AS = AD + 'application/legacy-adoption.service.ts'
+AT = AD + 'infrastructure/drizzle-legacy-adoption.store.ts'
+
 SEED_IT = ('integration', 'tests/integration/reminder-burst-seed.test.ts')
+ADOPT_IT = ('integration', 'tests/integration/legacy-adoption.test.ts')
 SEED_UNIT = ('unit', 'tests/unit/reminder-burst-seed.test.ts')
 
 # name -> (file, original, mutant, (project, test file))
@@ -69,6 +74,115 @@ M = {
         '  ): Promise<ServiceReminderSeed> {\n'
         '    if (false && !(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {',
         SEED_IT,
+    ),
+    'A1-adoption-makes-a-provider-read': (
+        AS,
+        '    await this.deps.store.lockInvoice(scope, command.legacyInvoiceKey, tx);',
+        "    await fetch('https://rp.example.test/api/user/x');\n"
+        '    await this.deps.store.lockInvoice(scope, command.legacyInvoiceKey, tx);',
+        ADOPT_IT,
+    ),
+    'A2-no-invoice-lock': (
+        AS,
+        '    await this.deps.store.lockInvoice(scope, command.legacyInvoiceKey, tx);',
+        '',
+        ADOPT_IT,
+    ),
+    'A3-no-already-adopted-lookup': (
+        AS,
+        "if (existing?.status === 'IMPORTED' && existing.entityType === 'SERVICE' && existing.entityId) {",
+        "if (false && existing?.status === 'IMPORTED' && existing.entityType === 'SERVICE' && existing.entityId) {",
+        ADOPT_IT,
+    ),
+    'A4-reservation-keeps-exact-case': (
+        AS,
+        'reservation: { namespaceKey: plan.namespaceKey, username: plan.canonical },',
+        'reservation: { namespaceKey: plan.namespaceKey, username: plan.providerUsername },',
+        ADOPT_IT,
+    ),
+    'A5-no-username-conflict-check': (
+        AS,
+        '      await this.deps.store.usernameTaken(\n        scope,',
+        '      false && await this.deps.store.usernameTaken(\n        scope,',
+        ADOPT_IT,
+    ),
+    'A6-any-provider-type': (
+        AS,
+        "if (panel.providerType !== 'rickpanel') return review('SUBSCRIPTION_REF_BLOCKED');",
+        '',
+        ADOPT_IT,
+    ),
+    'A7-disabled-becomes-active': (
+        AS,
+        "    case 'disabled':\n      return 'SUSPENDED';",
+        "    case 'disabled':\n      return 'ACTIVE';",
+        ADOPT_IT,
+    ),
+    'A8-delivery-pending': (
+        AT,
+        "'DELIVERED', ${input.now}, ${input.now}, ${input.now}, ${input.now})`);",
+        "'PENDING', NULL, ${input.now}, ${input.now}, ${input.now})`);",
+        ADOPT_IT,
+    ),
+    'A9-no-reminder-seed': (
+        AS,
+        'const seed = await this.deps.reminders.seedPassedThresholds(scope, serviceId, tx);',
+        'const seed = { passed: [] as string[] };',
+        ADOPT_IT,
+    ),
+    'A10-standard-origin': (
+        AT,
+        "'LEGACY_ADOPTION', ${input.productId}, ${input.panelId}, ${input.line.title},",
+        "'STANDARD', ${input.productId}, ${input.panelId}, ${input.line.title},",
+        ADOPT_IT,
+    ),
+    'A11-no-scope-activity-read': (
+        AS,
+        '        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {',
+        '        if (false && !(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {',
+        ADOPT_IT,
+    ),
+    'A12-customer-lookup-any-tenant': (
+        AT,
+        'WHERE tenant_id = ${tenantId} AND telegram_user_id = ${telegramUserId}',
+        'WHERE telegram_user_id = ${telegramUserId} AND ${tenantId}::uuid IS NOT NULL',
+        ADOPT_IT,
+    ),
+    'A13-over-cap-never-reported': (
+        AS,
+        'counted !== null && counted.maxServices !== null && counted.used > counted.maxServices,',
+        'false,',
+        ADOPT_IT,
+    ),
+    'A14-no-window-shape-check': (
+        AS,
+        'if ((usage.expiresAt !== null) !== product.specification.durationDays > 0) {',
+        'if (false) {',
+        ADOPT_IT,
+    ),
+    'A15-hidden-shape-gate-skipped': (
+        AS,
+        "if (!legacyShapeAdoptable(shape, product)) return review('PRODUCT_MAPPING_UNRESOLVED');",
+        'void shape;',
+        ADOPT_IT,
+    ),
+    'A16-closed-review-not-respected': (
+        AS,
+        '    if (existing !== undefined && isReviewClosedToRerun(existing)) {',
+        '    if (false && existing !== undefined && isReviewClosedToRerun(existing)) {',
+        ADOPT_IT,
+    ),
+    'A17-read-failure-as-review': (
+        AS,
+        "          { status: 'FAILED', reasonCode: 'PROVIDER_READ_FAILED' },",
+        "          { status: 'MANUAL_REVIEW', reasonCode: 'PROVIDER_READ_FAILED' },",
+        ADOPT_IT,
+    ),
+    'A18-decision-audit-names-the-invoice-key': (
+        AS,
+        '        entityId: mapRef,',
+        '        entityId: command.legacyInvoiceKey,',
+        ADOPT_IT,
     ),
 }
 
