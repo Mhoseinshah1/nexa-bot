@@ -24,6 +24,7 @@ import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { c360Message } from './customer-360-sections';
+import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
 import {
   Badge,
   Banner,
@@ -90,12 +91,19 @@ export function TagBadge({ tag }: { tag: CustomerTagResponse }) {
 }
 
 /** The tenant's catalogue, one cache entry for the list filter, the picker and the editor. */
-export function useTagCatalogue(enabled: boolean) {
-  return useQuery({
+/** The tenant's tag catalogue, built in one place for the list, the 360 and the prefetch. */
+export function tagCatalogueQuery(): PageQuery<
+  Awaited<ReturnType<typeof fetchCustomerTagCatalogue>>
+> {
+  return {
     queryKey: ['customer-tag-catalogue'],
     queryFn: fetchCustomerTagCatalogue,
-    enabled,
-  });
+    staleTime: NAV_PREFETCH_FRESH_MS,
+  };
+}
+
+export function useTagCatalogue(enabled: boolean) {
+  return useQuery({ ...tagCatalogueQuery(), enabled });
 }
 
 const fill = (key: WebKey, values: Readonly<Record<string, string>>) =>

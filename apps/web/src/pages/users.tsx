@@ -9,7 +9,8 @@ import { setQuery, useLinkHandler, type Route } from '../router';
 import { ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ChipGroup } from './commerce-parts';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
-import { TagCatalogueModal, useTagCatalogue } from './customer-360-crm';
+import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
+import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
 import {
   Banner,
   Button,
@@ -53,6 +54,54 @@ import {
 // ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
+
+/**
+ * The list's query, built in ONE place for the page and for the sidebar's prefetch
+ * (`nav-prefetch.ts`), so a prefetched first page is the very entry the page reads.
+ */
+export function customersQuery(input: {
+  readonly appliedSearch: string;
+  readonly appliedStatus: CustomerStatus | null;
+  readonly appliedTag: string | null;
+  /** The search is SENT only for an actor holding `users.search`; see the page. */
+  readonly searching: boolean;
+  readonly cursor: string | undefined;
+}): PageQuery<Awaited<ReturnType<typeof fetchCustomers>>> {
+  const { appliedSearch, appliedStatus, appliedTag, searching, cursor } = input;
+  // Joined on `|`, which a status literal cannot contain; the search text is LAST, so
+  // whatever it contains, no two (status, tag, search) triples produce the same signature.
+  const searchSignature = [appliedStatus ?? '', appliedTag ?? '', appliedSearch].join('|');
+  return {
+    // The search is part of the key. Sharing one key across filters would serve
+    // the previous result under the new heading for a frame, which is the sort
+    // of thing an operator acts on before it corrects itself.
+    queryKey: ['customers', searchSignature, cursor ?? null],
+    queryFn: () =>
+      fetchCustomers({
+        ...(cursor === undefined ? {} : { cursor }),
+        // Only for an actor holding `users.search`: the server charges it for `q`, and a
+        // search left in the URL by somebody else must not turn the list into a 403.
+        ...(searching ? { q: appliedSearch } : {}),
+        ...(appliedStatus === null ? {} : { status: appliedStatus }),
+        ...(appliedTag === null ? {} : { tag: appliedTag }),
+      }),
+    staleTime: NAV_PREFETCH_FRESH_MS,
+  };
+}
+
+/** What `/users` asks on arrival from the sidebar: no filter, no search, the first page. */
+export function customersFirstScreen(): readonly PageQuery[] {
+  return [
+    customersQuery({
+      appliedSearch: '',
+      appliedStatus: null,
+      appliedTag: null,
+      searching: false,
+      cursor: undefined,
+    }),
+    tagCatalogueQuery(),
+  ];
+}
 
 export function UsersPage({
   route,
@@ -123,19 +172,7 @@ export function UsersPage({
   const searching = appliedSearch !== '' && maySearch;
 
   const customers = useQuery({
-    // The search is part of the key. Sharing one key across filters would serve
-    // the previous result under the new heading for a frame, which is the sort
-    // of thing an operator acts on before it corrects itself.
-    queryKey: ['customers', searchSignature, cursor ?? null],
-    queryFn: () =>
-      fetchCustomers({
-        ...(cursor === undefined ? {} : { cursor }),
-        // Only for an actor holding `users.search`: the server charges it for `q`, and a
-        // search left in the URL by somebody else must not turn the list into a 403.
-        ...(searching ? { q: appliedSearch } : {}),
-        ...(appliedStatus === null ? {} : { status: appliedStatus }),
-        ...(appliedTag === null ? {} : { tag: appliedTag }),
-      }),
+    ...customersQuery({ appliedSearch, appliedStatus, appliedTag, searching, cursor }),
     enabled: !denied,
   });
 

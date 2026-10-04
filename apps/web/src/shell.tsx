@@ -55,6 +55,7 @@ export function Sidebar({
   counters,
   theme,
   onTheme,
+  onIntent,
   drawer = false,
   onDismiss,
 }: {
@@ -72,6 +73,11 @@ export function Sidebar({
   counters: NavCounters;
   theme: ThemeChoice;
   onTheme: (next: ThemeChoice) => void;
+  /**
+   * The operator is pointing at, or has focused, a link: the moment a page's first
+   * screen can be asked for before the click lands (`nav-prefetch.ts`).
+   */
+  onIntent?: (path: string) => void;
 }) {
   const onLink = useLinkHandler();
   const info = useBuildInfo();
@@ -130,6 +136,8 @@ export function Sidebar({
                     key={entry.id}
                     href={entry.path}
                     onClick={onLink}
+                    onPointerEnter={() => onIntent?.(entry.path)}
+                    onFocus={() => onIntent?.(entry.path)}
                     aria-current={isCurrent(entry.path, currentPath) ? 'page' : undefined}
                     title={collapsed ? t(entry.label) : undefined}
                     {...(counter === undefined ? {} : { 'aria-describedby': countId })}

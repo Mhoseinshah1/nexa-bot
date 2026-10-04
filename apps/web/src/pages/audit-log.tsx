@@ -13,6 +13,7 @@ import { auditLogExportUrl, fetchAuditLog, type AuditLogFilters } from '../api/c
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
 import { mayRequest } from '../view-state';
 import { dayEnd, dayStart } from './tickets';
 import {
@@ -144,6 +145,31 @@ export function auditFiltersOf(query: URLSearchParams): AuditLogFilters {
   };
 }
 
+/**
+ * One page of the log under the applied filters, built in ONE place for the page and for
+ * the sidebar's prefetch (`nav-prefetch.ts`). The key carries the filters' signature, so
+ * a page read under one filter is never served under another.
+ */
+export function auditLogQuery(
+  filters: AuditLogFilters,
+  cursor: string | undefined,
+): PageQuery<Awaited<ReturnType<typeof fetchAuditLog>>> {
+  return {
+    queryKey: ['audit-log', JSON.stringify(filters), cursor ?? null],
+    queryFn: () =>
+      fetchAuditLog(filters, {
+        limit: PAGE_SIZE,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
+    staleTime: NAV_PREFETCH_FRESH_MS,
+  };
+}
+
+/** What `/audit-log` asks on arrival from the sidebar: no filter, the newest page. */
+export function auditLogFirstScreen(): readonly PageQuery[] {
+  return [auditLogQuery(auditFiltersOf(new URLSearchParams()), undefined)];
+}
+
 interface Draft {
   readonly actor: string;
   readonly action: string;
@@ -201,15 +227,7 @@ export function AuditLogPage({
   const cursors = trail.signature === signature ? trail.cursors : [];
   const cursor = cursors[cursors.length - 1];
 
-  const log = useQuery({
-    queryKey: ['audit-log', signature, cursor ?? null],
-    queryFn: () =>
-      fetchAuditLog(filters, {
-        limit: PAGE_SIZE,
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    enabled: !denied,
-  });
+  const log = useQuery({ ...auditLogQuery(filters, cursor), enabled: !denied });
   const rows = log.data?.entries ?? [];
   const nextCursor = log.data?.nextCursor ?? null;
   const filtering = signature !== '{}';

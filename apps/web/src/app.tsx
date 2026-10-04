@@ -10,11 +10,12 @@ import { Icon } from './ui/icons';
 import { Empty, LeaveGuardHost, ToastProvider } from './ui/kit';
 import { NAV, navPermitted } from './nav';
 import { useNavCounters } from './nav-counters';
+import { prefetchNav, type NavPrefetch } from './nav-prefetch';
 import { CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
 import { PanelHealthPage } from './pages/panel-health';
-import { SettingsPage } from './pages/settings';
+import { SettingsPage, settingsQuery } from './pages/settings';
 import { BotButtonsPage } from './pages/bot-buttons';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
@@ -23,7 +24,7 @@ import { AlertsPage, NotificationsPage } from './pages/alerts';
 // Phase B3: the notification center and its top-bar bell.
 import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
 import { IncidentBanner, IncidentDetailPage, IncidentsPage } from './pages/incidents';
-import { AuditLogPage } from './pages/audit-log';
+import { AuditLogPage, auditLogFirstScreen } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
@@ -53,7 +54,7 @@ import { ExtraDevicesPage } from './pages/extra-devices';
 import { ServiceLocationsPage } from './pages/service-locations';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
-import { UsersPage, UserDetailPage } from './pages/users';
+import { UsersPage, UserDetailPage, customersFirstScreen } from './pages/users';
 import { TrialsPage } from './pages/trials';
 import { DiscountsPage } from './pages/discounts';
 import { CampaignDetailPage, CampaignNewPage, CampaignsPage } from './pages/campaigns';
@@ -1264,6 +1265,20 @@ function NotFound() {
   );
 }
 
+/**
+ * The pages whose first screen the sidebar asks for while the operator points at the
+ * link (`nav-prefetch.ts`). Each permission is the one `resolve` gates that page's own
+ * query on, so a prefetch can never be a request the page itself would not send.
+ *
+ * Non-financial reference data only, by rule: no page here shows money, a payment, an
+ * order or a panel's health. Adding one is a decision about freshness, not a tuning.
+ */
+export const NAV_PREFETCH: Readonly<Record<string, NavPrefetch>> = {
+  '/users': { permission: 'users.view', queries: customersFirstScreen },
+  '/audit-log': { permission: 'audit.view', queries: auditLogFirstScreen },
+  '/settings': { permission: 'settings.view', queries: () => [settingsQuery()] },
+};
+
 // ---------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------
@@ -1767,6 +1782,9 @@ function SignedIn({
         onTheme={setChoice}
         drawer={narrow && !collapsed}
         onDismiss={() => setCollapsed(true)}
+        onIntent={(path) => {
+          if (path !== route.path) prefetchNav(client, NAV_PREFETCH, path, permissions);
+        }}
       />
       {/* The scrim behind the sidebar drawer on a narrow screen; CSS shows it only there. */}
       <div className="sidebar-scrim" aria-hidden="true" onClick={() => setCollapsed(true)} />
