@@ -54,6 +54,30 @@ describe('legacy-import review: arguments', () => {
     ).toMatchObject({ action: 'reopen' });
   });
 
+  it('never takes a password on the command line, exactly as the import modes refuse one', () => {
+    for (const target of [
+      'postgres://nexa:secret@db:5432/nexa',
+      'postgresql://u:p@127.0.0.1/nexa_staging',
+    ]) {
+      expect(() => parseReviewArgs(['counts', '--tenant', 'acme', '--target', target])).toThrow(
+        /must not carry a password/u,
+      );
+    }
+    expect(() => parseReviewArgs(['counts', ...BASE, '--password', 'x'])).toThrow(
+      /never accepted as an argument/u,
+    );
+    expect(() => parseReviewArgs(['counts', ...BASE, '--db-password', 'x'])).toThrow(
+      /never accepted as an argument/u,
+    );
+    // A DSN without one, an env: reference and a bare name are fine.
+    expect(
+      parseReviewArgs(['counts', '--tenant', 'acme', '--target', 'postgres://nexa@db:5432/nexa']),
+    ).toMatchObject({ target: 'postgres://nexa@db:5432/nexa' });
+    expect(
+      parseReviewArgs(['counts', '--tenant', 'acme', '--target', 'env:NEXA_TARGET_DATABASE_URL']),
+    ).toMatchObject({ target: 'env:NEXA_TARGET_DATABASE_URL' });
+  });
+
   it('is terminal only: --out and --format are refused', () => {
     expect(() => parseReviewArgs(['list', ...BASE, '--out', '/tmp/x'])).toThrow(/terminal only/u);
     expect(() => parseReviewArgs(['list', ...BASE, '--format', 'json'])).toThrow(/terminal only/u);

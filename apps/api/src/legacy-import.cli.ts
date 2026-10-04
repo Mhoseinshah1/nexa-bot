@@ -8,6 +8,12 @@ import {
 } from '@nexa/contracts';
 import { createContainer } from './container.js';
 import {
+  DSN_PASSWORD_REFUSAL,
+  PASSWORD_FLAG_REFUSAL,
+  hasUrlPassword,
+  isPasswordFlag,
+} from './legacy-import-argv.js';
+import {
   REVIEW_USAGE,
   ReviewUsageError,
   parseReviewArgs,
@@ -131,14 +137,6 @@ const SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const DATABASE_NAME = /^[a-z_][a-z0-9_]{0,62}$/u;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/u;
 
-function hasUrlPassword(spec: string): boolean {
-  try {
-    return new URL(spec).password !== '';
-  } catch {
-    return false;
-  }
-}
-
 export function parseArgs(argv: readonly string[]): Args {
   const values = new Map<string, string>();
   const flags = new Set<string>();
@@ -154,11 +152,7 @@ export function parseArgs(argv: readonly string[]): Args {
   }
   for (let i = start; i < argv.length; i += 1) {
     const arg = argv[i] as string;
-    if (/^--[a-z-]*password(?!-env$)/u.test(arg)) {
-      throw new UsageError(
-        'A password is never accepted as an argument; name an environment variable.',
-      );
-    }
+    if (isPasswordFlag(arg)) throw new UsageError(PASSWORD_FLAG_REFUSAL);
     if (BOOLEAN_FLAGS.has(arg)) {
       flags.add(arg);
       continue;
@@ -188,10 +182,7 @@ export function parseArgs(argv: readonly string[]): Args {
   const panelMap = required('--panel-map', 'the explicit code_panel → panel mapping file');
 
   if (hasUrlPassword(source) || hasUrlPassword(target)) {
-    throw new UsageError(
-      'A DSN on the command line must not carry a password. Put the whole DSN in an ' +
-        'environment variable and pass env:NAME, or use --source-password-env / PGPASSWORD.',
-    );
+    throw new UsageError(DSN_PASSWORD_REFUSAL);
   }
   for (const spec of [source, target]) {
     if (spec.startsWith('env:') && !ENV_NAME.test(spec.slice(4))) {

@@ -9,6 +9,12 @@ import {
   type LegacyReviewState,
   type TenantContext,
 } from '@nexa/contracts';
+import {
+  DSN_PASSWORD_REFUSAL,
+  PASSWORD_FLAG_REFUSAL,
+  hasUrlPassword,
+  isPasswordFlag,
+} from './legacy-import-argv.js';
 import type { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
 
 /**
@@ -103,6 +109,7 @@ export function parseReviewArgs(argv: readonly string[]): ReviewArgs {
   let allowProductionTarget = false;
   for (let i = 1; i < argv.length; i += 1) {
     const arg = argv[i] as string;
+    if (isPasswordFlag(arg)) throw new ReviewUsageError(PASSWORD_FLAG_REFUSAL);
     if (arg === '--out' || arg === '--format') {
       throw new ReviewUsageError(
         `${arg} is refused: review output is for the operator's terminal only (it can carry Telegram ids).`,
@@ -131,6 +138,7 @@ export function parseReviewArgs(argv: readonly string[]): ReviewArgs {
   };
   const tenant = required('--tenant');
   const target = required('--target');
+  if (hasUrlPassword(target)) throw new ReviewUsageError(DSN_PASSWORD_REFUSAL);
   const table = (flag = '--table'): string => {
     const value = required(flag);
     if (!isLegacyImportSourceTable(value))
