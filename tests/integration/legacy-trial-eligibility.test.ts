@@ -325,6 +325,122 @@ describe('legacy trial eligibility', () => {
     expect(await count(sql`SELECT count(*)::int AS n FROM legacy_trial_eligibility`)).toBe(1);
   });
 
+  it('tightens over an existing NEXA grant without forgetting it', async () => {
+    // A customer took NEXA's trial before the import, and the archive says they had one
+    // there too: the override closes further trials and the NEXA grant stays counted.
+    const who = await customer('970013');
+    expect((await claim(who)).outcome).toBe('ISSUED');
+    const result = await preserve(who, { limitUsertest: 1, hadTrial: true });
+    expect(result.record).toMatchObject({
+      decision: 'LEGACY_TRIAL_CONSUMED',
+      overrideBefore: null,
+      overrideAfter: 0,
+    });
+    expect(await allowance(who)).toMatchObject({ effectiveLimit: 0, used: 1 });
+    expect(await claim(who)).toEqual({ outcome: 'REFUSED', reason: 'LIMIT_REACHED' });
+  });
+
+  it('a kept operator override is not re-imposed by a rerun after the operator removes it', async () => {
+    const who = await customer('970014');
+    await ctx.container.trialAdmin.setOverride(tenantA, operator, {
+      idempotencyKey: randomUUID(),
+      customerId: who,
+      limit: 0,
+      reason: null,
+    });
+    expect((await preserve(who, { limitUsertest: 0, hadTrial: true })).record.decision).toBe(
+      'KEPT_EXISTING_OVERRIDE',
+    );
+    await ctx.container.trialAdmin.removeOverride(tenantA, operator, {
+      idempotencyKey: randomUUID(),
+      customerId: who,
+      reason: 'بررسی شد',
+    });
+    // The import already decided this customer; a rerun replays and writes nothing.
+    expect((await preserve(who, { limitUsertest: 0, hadTrial: true })).outcome).toBe('REPLAYED');
+    expect((await allowance(who)).override).toBeNull();
+  });
+
+  it('a NEXA claim racing the import never yields a second trial (both orders)', async () => {
+    /*
+     * The claim and the import decide under the same customer lock. Queued together
+     * behind an outside holder, whichever goes first, the customer ends with at most one
+     * trial — the import either closes the door before the claim, or tightens after it,
+     * and the claim's grant stays counted. This pins the OUTCOME. It is not the lock's
+     * falsifier: with the import's `lockCustomer` removed it still passes, because the
+     * record's foreign key to `customers` queues the import behind the claim's row lock
+     * anyway; the two-import race below is the case that removing the lock fails.
+     */
+    for (const [id, legacy] of [
+      ['970015', { limitUsertest: 0, hadTrial: false }],
+      ['970016', { limitUsertest: 1, hadTrial: true }],
+      ['970017', { limitUsertest: 1, hadTrial: false }],
+    ] as const) {
+      const who = await customer(id);
+      const { release, done } = await hold(
+        sql`SELECT 1 FROM customers WHERE id = ${who} FOR UPDATE`,
+      );
+      const racing = Promise.all([claim(who), preserve(who, legacy)]);
+      await awaitBlocked(2);
+      release();
+      await done;
+      const [claimed, preserved] = await racing;
+      expect(preserved.outcome).toBe('APPLIED');
+      expect(preserved.record.overrideBefore).toBeNull();
+      const grants = await count(
+        sql`SELECT count(*)::int AS n FROM trial_grants WHERE customer_id = ${who}`,
+      );
+      expect(grants, id).toBe(claimed.outcome === 'ISSUED' ? 1 : 0);
+      if (legacy.limitUsertest === 1 && !legacy.hadTrial) {
+        // Row 5: NEXA's policy — exactly the one trial anybody gets, never two.
+        expect(claimed.outcome).toBe('ISSUED');
+      }
+      expect(await claim(who), id).toEqual({ outcome: 'REFUSED', reason: 'LIMIT_REACHED' });
+    }
+  });
+
+  it("an operator's override racing the import is never overwritten by it", async () => {
+    // Whichever commits first, the operator's 3 is what the customer is left with, and
+    // the import's record says truthfully what it saw.
+    const who = await customer('970018');
+    const { release, done } = await hold(sql`SELECT 1 FROM customers WHERE id = ${who} FOR UPDATE`);
+    const racing = Promise.all([
+      preserve(who, { limitUsertest: 0, hadTrial: true }),
+      ctx.container.trialAdmin.setOverride(tenantA, operator, {
+        idempotencyKey: randomUUID(),
+        customerId: who,
+        limit: 3,
+        reason: null,
+      }),
+    ]);
+    await awaitBlocked(2);
+    release();
+    await done;
+    const [preserved] = await racing;
+    expect((await allowance(who)).effectiveLimit).toBe(3);
+    if (preserved.record.decision === 'KEPT_EXISTING_OVERRIDE') {
+      expect(preserved.record).toMatchObject({ overrideBefore: 3, overrideAfter: 3 });
+    } else {
+      expect(preserved.record).toMatchObject({
+        decision: 'LEGACY_NO_TRIALS',
+        overrideBefore: null,
+        overrideAfter: 0,
+      });
+    }
+  });
+
+  it('refuses once the tenant has stopped accepting work, and writes nothing', async () => {
+    const who = await customer('970019');
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+    expect(await refusal(preserve(who, { limitUsertest: 0, hadTrial: false }))).toBe(
+      'commerce.request_invalid',
+    );
+    expect(await count(sql`SELECT count(*)::int AS n FROM legacy_trial_eligibility`)).toBe(0);
+    expect(await count(sql`SELECT count(*)::int AS n FROM trial_limit_overrides`)).toBe(0);
+  });
+
   it('keeps tenants apart', async () => {
     const inA = await customer('970010');
     const inB = await customer('970010', tenantB, BOT_B);

@@ -72,6 +72,58 @@ describe('decideLegacyTrial', () => {
   });
 });
 
+describe('decideLegacyTrial — the whole table, as literal rows', () => {
+  /*
+   * The table of `docs/legacy-migration/trial-eligibility.md` §2 written out by hand, so
+   * the rule is pinned by an oracle that is not the code. Columns: the existing NEXA
+   * override, `limit_usertest`, whether an `is_test = 1` invoice existed, then the
+   * decision and the override it leaves. Row 5 (limit ≥ 1, no test invoice) is the
+   * current OQ-I15-01 default: no override, NEXA policy.
+   */
+  const rows: readonly [number | null, string | number | null, boolean, string, number | null][] = [
+    // 1. an existing NEXA override wins over every legacy fact, in either direction
+    [3, 0, true, 'KEPT_EXISTING_OVERRIDE', 3],
+    [3, null, false, 'KEPT_EXISTING_OVERRIDE', 3],
+    [0, 1, false, 'KEPT_EXISTING_OVERRIDE', 0],
+    [1, 1, true, 'KEPT_EXISTING_OVERRIDE', 1],
+    // 2. unreadable limit: no trials
+    [null, null, false, 'LEGACY_LIMIT_UNREADABLE', 0],
+    [null, 'x', true, 'LEGACY_LIMIT_UNREADABLE', 0],
+    [null, '1.0', false, 'LEGACY_LIMIT_UNREADABLE', 0],
+    // 3. limit_usertest = 0 (or below): no trials, whatever the history
+    [null, 0, false, 'LEGACY_NO_TRIALS', 0],
+    [null, '0', true, 'LEGACY_NO_TRIALS', 0],
+    [null, -1, false, 'LEGACY_NO_TRIALS', 0],
+    // 4. allowed, and is_test = 1 history: consumed
+    [null, 1, true, 'LEGACY_TRIAL_CONSUMED', 0],
+    [null, ' 1 ', true, 'LEGACY_TRIAL_CONSUMED', 0],
+    [null, 9, true, 'LEGACY_TRIAL_CONSUMED', 0],
+    // 5. limit_usertest = 1 alone is not proof of an unused trial — it only defers to
+    //    NEXA's own policy (which counts any NEXA grant), never pins a fresh allowance
+    [null, 1, false, 'INHERIT_NEXA_POLICY', null],
+    [null, 2, false, 'INHERIT_NEXA_POLICY', null],
+    [null, 9, false, 'INHERIT_NEXA_POLICY', null],
+  ];
+
+  it.each(rows)(
+    'override %o, limit_usertest %o, had trial %o → %s (override after %o)',
+    (existing, limit, hadTrial, decision, overrideAfter) => {
+      expect(decideLegacyTrial({ limitUsertest: limit, hadTrial }, existing)).toMatchObject({
+        decision,
+        overrideAfter,
+      });
+    },
+  );
+
+  it('no row of the rule grants a per-customer allowance above zero', () => {
+    for (const [existing, limit, hadTrial] of rows) {
+      if (existing !== null) continue;
+      const after = decideLegacyTrial({ limitUsertest: limit, hadTrial }, null).overrideAfter;
+      expect(after === null || after === 0).toBe(true);
+    }
+  });
+});
+
 describe('normaliseLegacyLimit and the input hash', () => {
   it('reads whole numbers only', () => {
     expect(normaliseLegacyLimit(' 9 ')).toBe(9);
