@@ -41,7 +41,12 @@ export function PaymentMethodPage({
   mayEditCards: boolean;
 }) {
   const onLink = useLinkHandler();
-  const [addingCard, setAddingCard] = useState(false);
+  /*
+   * A request counter, not an open/closed flag: each press asks the cards section to open
+   * its new-card form through its own path, which also closes a card being edited.
+   */
+  const [addCardRequest, setAddCardRequest] = useState(0);
+  const [cardsBusy, setCardsBusy] = useState(false);
   const provider = providerOfSlug(slug);
 
   const back = (
@@ -82,7 +87,8 @@ export function PaymentMethodPage({
                   <button
                     type="button"
                     className="btn sm primary"
-                    onClick={() => setAddingCard(true)}
+                    disabled={cardsBusy}
+                    onClick={() => setAddCardRequest((count) => count + 1)}
                   >
                     <Icon name="plus" />
                     {t('web.payment_account_add')}
@@ -96,8 +102,8 @@ export function PaymentMethodPage({
         <CardAccountsSection
           denied={!mayViewCards}
           mayEdit={mayEditCards}
-          adding={addingCard}
-          onAddingChange={setAddingCard}
+          addRequest={addCardRequest}
+          onBusyChange={setCardsBusy}
         />
       )}
       {mayViewGateways && <GatewayHealthPanel route={route} denied={false} provider={provider} />}

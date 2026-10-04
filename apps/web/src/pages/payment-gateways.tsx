@@ -1341,7 +1341,9 @@ export function PaymentGatewaysPage({
             <KV
               items={[
                 [
-                  nameOf(only),
+                  // A fixed label: the operator's own name for the route can run to sixty
+                  // characters, and a label cell does not wrap (review of #186).
+                  t('web.payment_gateway_callback_url'),
                   only.callbackUrl === null ? (
                     <span key="u" className="muted small">
                       {t('web.payment_gateway_callback_url_none')}

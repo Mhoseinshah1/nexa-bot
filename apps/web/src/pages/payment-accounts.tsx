@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PAYMENT_ACCOUNT_MAX_PER_TENANT, type PaymentAccountView } from '@nexa/contracts';
 import {
@@ -115,18 +115,21 @@ function mask(cardNumber: string): string {
 export function CardAccountsSection({
   denied,
   mayEdit,
-  adding,
-  onAddingChange,
+  addRequest = 0,
+  onBusyChange,
 }: {
   denied: boolean;
   mayEdit: boolean;
   /**
-   * Whether the new-card form is open. Held by the page, because «افزودن کارت» is drawn
-   * twice — on this card and beside the card-to-card route's own actions — and both open
-   * the one form.
+   * A counter the page bumps when the «افزودن کارت» beside the card-to-card route's own
+   * actions is pressed. Each new value opens the new-card form through the SAME path this
+   * section's own button takes — clearing any card being edited — so the outer button can
+   * never leave a «ویرایش کارت» form open whose save would update that card instead
+   * (review of #186).
    */
-  adding: boolean;
-  onAddingChange: (next: boolean) => void;
+  addRequest?: number;
+  /** Told whenever a write starts or ends, so the outer button is disabled while one runs. */
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const queries = useQueryClient();
   const notify = useToast();
@@ -142,6 +145,19 @@ export function CardAccountsSection({
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [makeDefault, setMakeDefault] = useState(false);
+  /** Whether the new-card form is open (as opposed to a correction, which is `editing`). */
+  const [adding, setAdding] = useState(false);
+
+  /** The one way the new-card form opens, from either add-card button. */
+  const openAdd = useCallback(() => {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    setMakeDefault(false);
+    setAdding(true);
+  }, []);
+  useEffect(() => {
+    if (addRequest > 0) openAdd();
+  }, [addRequest, openAdd]);
 
   const rows = accounts.data?.accounts ?? [];
   const atLimit = rows.length >= PAYMENT_ACCOUNT_MAX_PER_TENANT;
@@ -150,7 +166,7 @@ export function CardAccountsSection({
     setEditing(null);
     setForm(EMPTY_FORM);
     setMakeDefault(false);
-    onAddingChange(false);
+    setAdding(false);
   };
 
   /** The form is drawn only while it is being used: adding a card, or correcting one. */
@@ -226,7 +242,15 @@ export function CardAccountsSection({
   });
 
   const busy = save.isPending || toggle.isPending || promote.isPending;
-  const failure = save.error ?? toggle.error ?? promote.error;
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
+  /*
+   * A refused row action (enable/disable, make default) is reported on the cards' own card,
+   * where it was pressed — never only inside the form, which is closed by default now, so a
+   * 409 or 403 there would otherwise say nothing and read as done (review of #186).
+   */
+  const rowFailure = toggle.error ?? promote.error;
 
   /*
    * Dirty-state protection: the form differs from what it was opened with — the
@@ -294,7 +318,7 @@ export function CardAccountsSection({
               className="btn sm"
               disabled={busy}
               onClick={() => {
-                onAddingChange(false);
+                setAdding(false);
                 setEditing(row.id);
                 setForm(formOf(row));
                 setMakeDefault(false);
@@ -334,17 +358,7 @@ export function CardAccountsSection({
   ];
 
   const addButton = (
-    <button
-      type="button"
-      className="btn sm primary"
-      disabled={busy}
-      onClick={() => {
-        setEditing(null);
-        setForm(EMPTY_FORM);
-        setMakeDefault(false);
-        onAddingChange(true);
-      }}
-    >
+    <button type="button" className="btn sm primary" disabled={busy} onClick={openAdd}>
       <Icon name="plus" />
       {t('web.payment_account_add')}
     </button>
@@ -357,6 +371,11 @@ export function CardAccountsSection({
         hint={t('web.payment_accounts_subtitle')}
         {...(mayEdit ? { actions: addButton } : {})}
       >
+        {rowFailure != null && (
+          <Banner tone="danger" role="alert">
+            {messageFor(rowFailure)}
+          </Banner>
+        )}
         <StateSwitch
           query={accounts}
           denied={denied}
@@ -502,7 +521,7 @@ export function CardAccountsSection({
               <Copyable value={editing} />
             </p>
           )}
-          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+          {save.error != null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
         </Card>
       )}
     </>

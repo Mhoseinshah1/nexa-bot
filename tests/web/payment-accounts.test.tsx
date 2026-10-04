@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { useState, type ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { CardAccountsSection } from '../../apps/web/src/pages/payment-accounts';
 import { resolve } from '../../apps/web/src/app';
@@ -42,17 +42,9 @@ const accounts = (rows: unknown[] = [ACCOUNT]) => [
 /** Every write control the section can draw, by its Persian label. */
 const WRITE_CONTROLS = ['افزودن کارت', 'ویرایش', 'پیش‌فرض کردن', 'غیرفعال کردن'];
 
-/** The section as the page holds it: the «افزودن کارت» state lives one level up. */
+/** The section on its own, as the card-to-card view draws it. */
 function Section({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
-  const [adding, setAdding] = useState(false);
-  return (
-    <CardAccountsSection
-      denied={denied}
-      mayEdit={mayEdit}
-      adding={adding}
-      onAddingChange={setAdding}
-    />
-  );
+  return <CardAccountsSection denied={denied} mayEdit={mayEdit} />;
 }
 
 const posts = (api: ReturnType<typeof stubApi>) =>
@@ -231,6 +223,38 @@ describe('managing cards in their new place', () => {
     await waitFor(() => expect(posts(api)).toHaveLength(2));
     expect(posts(api)[1]!.url).toContain('/payment-accounts/off/enabled');
     expect((posts(api)[1]!.body as Record<string, unknown>)['enabled']).toBe(true);
+  });
+
+  /*
+   * Review of #186: the row actions' failures used to be drawn only inside the form, which
+   * is closed by default now — so a refused enable said nothing and read as done.
+   */
+  it('reports a refused enable on the cards’ card, with the form closed', async () => {
+    const off = { ...ACCOUNT, enabled: false };
+    stubApi([
+      ...accounts([off]),
+      {
+        url: `/payment-accounts/${ACCOUNT.id}/enabled`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'payment_account.limit',
+            message: 'too many enabled accounts',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<Section denied={false} mayEdit />);
+    await screen.findByText('Bank Melli');
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.payment_account_enable') }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).not.toBe('');
+    // Not inside a form: there is none open.
+    expect(screen.queryByLabelText(t('web.payment_account_card'))).toBeNull();
+    expect(alert.closest('section')?.textContent).toContain('Bank Melli');
   });
 
   it('makes a card the default through the same call, and never offers to disable the default', async () => {

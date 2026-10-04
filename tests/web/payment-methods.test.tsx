@@ -389,6 +389,55 @@ describe('card-to-card: the cards beside the route (item 7)', () => {
     expect(screen.getAllByLabelText(t('web.payment_account_card'))).toHaveLength(1);
   });
 
+  /*
+   * Review of #186: the outer «افزودن کارت» only flagged "adding", so with a card's edit
+   * open the form stayed «ویرایش کارت» and saving updated that card. It now opens the add
+   * form through the section's own path.
+   */
+  it('opens a NEW card from the route’s «افزودن کارت» even while a card is being edited', async () => {
+    const calls = stubApi([
+      session(ALL),
+      { url: '/payment-gateways', body: { gateways: PROVIDERS.map((p) => gateway(p)) } },
+      { url: '/payment-accounts', body: { accounts: [ACCOUNT], account: ACCOUNT } },
+    ]);
+    go(CARD_TO_CARD_PATH);
+    renderPage(<App />);
+    const settings = (
+      await screen.findByRole('heading', { name: t('web.payment_method_settings') })
+    ).closest('section') as HTMLElement;
+    await screen.findByText('Bank Melli');
+    const cards = screen
+      .getByRole('heading', { name: t('web.payment_accounts_title') })
+      .closest('section') as HTMLElement;
+    fireEvent.click(within(cards).getByRole('button', { name: t('web.payment_account_edit') }));
+    expect(await screen.findByText(t('web.payment_account_editing'))).toBeInTheDocument();
+
+    fireEvent.click(within(settings).getByRole('button', { name: t('web.payment_account_add') }));
+    expect(await screen.findByText(t('web.payment_account_new'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.payment_account_editing'))).toBeNull();
+    const card = screen.getByLabelText(t('web.payment_account_card')) as HTMLInputElement;
+    expect(card.value).toBe('');
+
+    fireEvent.change(screen.getByLabelText(t('web.payment_account_label')), {
+      target: { value: 'spare' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.payment_account_bank')), {
+      target: { value: 'Saman' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.payment_account_holder')), {
+      target: { value: 'Acme' },
+    });
+    fireEvent.change(card, { target: { value: '6219861234567890' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.payment_account_save') }));
+    await waitFor(() =>
+      expect(calls.calls.filter((call) => call.method === 'POST')).toHaveLength(1),
+    );
+    // A create, never an update of the card that was open before.
+    const [posted] = calls.calls.filter((call) => call.method === 'POST');
+    expect(posted!.url).toMatch(/\/payment-accounts$/u);
+    expect(posted!.url).not.toContain(ACCOUNT.id);
+  });
+
   it('has no cards on another provider’s view', async () => {
     const calls = api();
     go('/payment-gateways/tonpays');

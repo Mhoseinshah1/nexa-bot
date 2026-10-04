@@ -400,7 +400,7 @@ describe('dirty-state protection on the OPS-A forms', () => {
     stubApi([{ url: '/payment-accounts', body: body('/payment-accounts') }]);
     renderPage(
       <>
-        <CardAccountsSection denied={false} mayEdit adding onAddingChange={() => undefined} />
+        <CardAccountsSection denied={false} mayEdit addRequest={1} />
         <LeaveGuardHost />
       </>,
     );
