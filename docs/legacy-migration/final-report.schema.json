@@ -24,7 +24,7 @@
       "const": "1"
     },
     "evidenceClass": {
-      "description": "synthetic: a fixture run, which proves code and is NEVER legacy evidence. staging: an isolated rehearsal on a real dump. production: the cutover. P7 emits `synthetic` only for a fixture: source and otherwise the target's class (production-like or not), so a synthetic dataset loaded into SQL is reported by its target; the rehearsal harness checks this field against the run's real class.",
+      "description": "synthetic: a fixture run, which proves code and is NEVER legacy evidence. staging: an isolated rehearsal on a real dump. production: the cutover. P7 takes it from --evidence-class (required for import, resume and report) and checks it against the source: a SYNTHETIC-marked source is synthetic and nothing else.",
       "enum": ["synthetic", "staging", "production"]
     },
     "generatedAt": {
@@ -312,7 +312,7 @@
         },
         "manualReview": {
           "$ref": "#/$defs/count",
-          "description": "orphans, candidates whose customer was not imported, invoice keys outside the evidenced shape, and eligible candidates P6 has not adopted (reason ADOPTION_PENDING_P6)"
+          "description": "orphans, candidates whose customer was not imported, invoice keys outside the evidenced shape, P6 manual-review outcomes, and (only from an importer built without P6) eligible candidates with no decision (reason ADOPTION_PENDING_P6)"
         },
         "failed": {
           "$ref": "#/$defs/count",

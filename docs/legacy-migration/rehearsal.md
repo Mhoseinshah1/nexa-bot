@@ -73,11 +73,13 @@ lists the rest (`--cycles`, `--kill-after-rows`, `--importer-arg`, `--keep-legac
 node apps/api/dist/legacy-import.cli.js MODE --tenant T \
   --source mysql://legacy_ro@127.0.0.1:<port>/<schema> \
   --source-password-env NEXA_REHEARSAL_LEGACY_PASSWORD \
-  --target nexa_rehearsal_<stamp> --panel-map <file>
+  --target nexa_rehearsal_<stamp> --panel-map <file> --evidence-class <class>
 ```
 
 The password is set in that variable for the one child process (P7 refuses one on argv).
-The target is the bare database name, equal to the `DATABASE_URL` the harness sets; its
+`--evidence-class` is the harness's own class, passed to every mode (P7 requires it for
+import, resume and report and checks it against the source). The target is the bare
+database name, equal to the `DATABASE_URL` the harness sets; its
 `rehearsal` token keeps P7's production guard from refusing it, and the harness never
 passes `--allow-production-target`.
 
@@ -88,9 +90,9 @@ other. The harness accepts `0` and `3` from P7 and records every `3` as a **PEND
 check; anything else stops it.
 
 The harness itself: **`0`** every check PASSED; **`3`** nothing FAILED but some checks are
-PENDING — the import is done and waits on a person (eligible services
-`ADOPTION_PENDING_P6` until P6 is wired, user ids that are not Telegram ids, invoice
-decisions P7 counts but cannot record yet). That is reported as
+PENDING — the import is done and waits on a person (user ids that are not Telegram ids,
+live invoices whose key is outside the evidenced shape; `ADOPTION_PENDING_P6` only from an
+importer built without P6). That is reported as
 `DONE_PENDING_DECISIONS (not passed)` and is **never** a passed rehearsal; **`1`** a check
 failed or a stage broke.
 
@@ -131,8 +133,11 @@ The checks, by name: `dry_run_no_business_mutation`, `interrupted_run_left_runni
 `no_run_left_running`, `one_apply_run_resumed`, `apply_run_completed`,
 `source_fingerprint_stable`, `customer_closure`, `service_candidate_closure`,
 `interrupted_import_stopped_writing`, `blocked_equals_invalid_ids`,
-`report_candidates_equal_source`, `service_map_rows` (PENDING while P7 counts decisions it
-cannot record yet), `adoption_pending_p6` (PENDING), `report_schema_valid`,
+`report_candidates_equal_source`, `service_closure_map_plus_invalid_keys`,
+`invoice_keys_outside_evidenced_shape` (PENDING), `adopted_equals_eligible`,
+`adopted_services_appeared`, `adoption_orders_shape`, `reminder_seed_sent_no_messages`,
+`adopted_services_link_stored`, `link_never_in_artifacts`,
+`link_never_in_audit_outbox_events`, `report_schema_valid`,
 `report_evidence_class`, `report_provider_writes_zero`, `report_run_is_this_run`,
 `report_resumes_counted`, `report_equation_{C1,C3,W1,W4,W5,S3,P3}` (C3 false is PENDING: an
 owner decision about ids that are not Telegram ids), `wire_provider_writes_zero`,
@@ -152,10 +157,15 @@ revenue, payments, top-ups), `adoption_orders_zero_total`, `one_service_per_adop
 - **Telegram and RickPanel UI checks**: `manual-acceptance.md`.
 - **Real-data evidence** from a synthetic run: none, ever.
 
-## Known: the report's evidence class for a SQL-loaded synthetic dump
+## What a synthetic run proves about P6
 
-P7 classes its report `synthetic` only for a `fixture:` source; for a MariaDB source it
-reports the target's class (`staging` for a rehearsal database). Loaded from the synthetic
-SQL fixture, the harness's run is synthetic all the same, so `report_evidence_class` FAILS
-on every synthetic run until P7 can be told the class. That failure is deliberate: a
-document that calls synthetic data `staging` must not pass.
+With `--synthetic-panels`, two of the fake accounts sit past reminder thresholds (one
+expires in two days, one has used 29 of its 30 GB), so the adoption's reminder seed has
+something to seed. The P6 checks: `adopted_equals_eligible` (P7's dry-run
+`ADOPTION_ELIGIBLE` = the report's `services.adopted`), `adopted_services_appeared`,
+`adoption_orders_shape` (NEW_SERVICE, LEGACY_ADOPTION, PAID, zero totals) with the
+`unchanged_sale_*` checks proving revenue did not move, `reminder_seed_sent_no_messages`,
+`adopted_services_link_stored`, `link_never_in_artifacts` (no file this rehearsal wrote
+contains any adopted service's link — the links go from psql to grep on a pipe) and
+`link_never_in_audit_outbox_events`. All of it is code-level proof; none of it is evidence
+about RickPanel or the legacy archive.

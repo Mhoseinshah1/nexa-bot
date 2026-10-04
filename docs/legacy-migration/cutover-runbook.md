@@ -42,10 +42,11 @@ legacy-import MODE --tenant T --source SOURCE --target TARGET --panel-map FILE
 | `--source env:LEGACY_SOURCE_DSN` | the `mysql://` DSN in that variable. A password on argv — in a DSN or a `--…password` flag — is **refused**                                                                      |
 | `--target nexa`                  | a bare name must equal the database `DATABASE_URL` names (the api container's own)                                                                                               |
 | `--panel-map`                    | `nexa-legacy-panel-map/v1` JSON (step 10); unknown keys refused                                                                                                                  |
+| `--evidence-class production`    | required for import, resume and report (passed to every mode by `p7`); checked against the source — a SYNTHETIC-marked source can only be `synthetic`                            |
 | `--allow-production-target`      | with `NEXA_LEGACY_IMPORT_TARGET_ACK=<16 hex>`: the hard guard. `nexa` is production-like, so **every mode** needs both here; the ack is bound to host, port, database and tenant |
 | `--abort-running`                | `resume` only: finish a stuck RUNNING run as ABORTED. An owner decision, never a reflex                                                                                          |
 | exit `0`                         | done                                                                                                                                                                             |
-| exit `3`                         | done, but a person must decide: audit `BLOCKED`, reconcile `DISCREPANCY`, import/resume with adoption pending P6, report with a failed equation                                  |
+| exit `3`                         | done, but a person must decide: audit `BLOCKED`, reconcile `DISCREPANCY`, report with a failed equation                                                                          |
 | exit `4`                         | import interrupted; the run stays RUNNING — use `resume`                                                                                                                         |
 | exit `64` / `65`                 | usage or guard refusal / mapping or source refused — nothing was written                                                                                                         |
 | exit `1`                         | anything else, printed as a code                                                                                                                                                 |
@@ -72,7 +73,7 @@ p7() {
     -v /etc/nexa/legacy/panel-map.json:/legacy/panel-map.json:ro \
     --entrypoint node api dist/legacy-import.cli.js "$1" \
     --tenant "$NEXA_TENANT" --source env:LEGACY_SOURCE_DSN --target nexa \
-    --panel-map /legacy/panel-map.json --allow-production-target "${@:2}"
+    --panel-map /legacy/panel-map.json --evidence-class production --allow-production-target "${@:2}"
 }
 ```
 
@@ -286,9 +287,17 @@ all, are refused; every panel named must be an ACTIVE RickPanel of this tenant):
   "panels": [{ "codePanel": "<legacy code_panel>", "panelId": "<NEXA RickPanel uuid>" }],
   "testPanels": ["<code>"],
   "missingPanels": ["<code searched by exact username across productionPanels>"],
-  "productionPanels": ["<every NEXA RickPanel uuid a missing code_panel is searched across>"]
+  "productionPanels": ["<every NEXA RickPanel uuid a missing code_panel is searched across>"],
+  "products": [{ "codeProduct": "<legacy code_product>", "productId": "<NEXA product uuid>" }]
 }
 ```
+
+`products` is the owner's explicit map from a legacy `code_product` to the NEXA product an
+adopted service of that product renews as. It is never inferred: a live invoice naming a
+legacy product that is not listed is `PRODUCT_MAPPING_UNRESOLVED` manual review. Every target
+must be a product of this tenant before any run, and the map is part of the run's
+fingerprint, so a resume under a different product map is refused. Productless, custom and
+unknown-product invoices need no entry — they adopt as their shape's hidden legacy product.
 
 ```bash
 sudo install -d -m 0700 /etc/nexa/legacy
@@ -383,10 +392,19 @@ p7 import | tee import.txt; echo "exit ${PIPESTATUS[0]}"
 date -u +%FT%TZ | tee import-end.txt
 ```
 
-Exit `0`: done. Exit `3`: done, with eligible services reported `ADOPTION_PENDING_P6` (the
-release does not yet adopt) or another decision named in the report — read it; an
-adoption-pending import is NOT a finished migration. Exit `4`: interrupted — `resume`
-below.
+Exit `0`: done. Exit `3`: done with a decision named in the report — read it. Exit `4`:
+interrupted — `resume` below.
+
+**P6 adoption happens inside the import** for every `ADOPTION_ELIGIBLE` candidate: a
+zero-total `NEW_SERVICE` + `LEGACY_ADOPTION` order and a service for the existing RickPanel
+account, with its runtime state, usage and expiry from the same complete inventory walk, its
+passed reminder thresholds seeded (nothing sent), and its subscription link read from the
+panel's own list row. No provider write. Outcomes per candidate: `ADOPTED`,
+`ALREADY_ADOPTED` (a rerun), `MANUAL_REVIEW` (a closed reason), `SKIPPED`, `FAILED`
+(`PROVIDER_READ_FAILED`, retried by `resume` or a rerun) and `REVIEW_CLOSED` (a person closed
+it in the review queue). `ADOPTION_PENDING_P6` appears only from an importer built without
+P6 and is never a finished migration. **The link is a credential**: it is stored on the
+service and appears in no report, audit row, event or map row — never paste one.
 
 Progress, from a second terminal (read-only):
 
@@ -490,6 +508,31 @@ node <checkout>/scripts/legacy-rehearsal-report-check.mjs validate \
   <checkout>/docs/legacy-migration/final-report.schema.json final-report.json && echo "schema-valid"
 ```
 
-The report is aggregates only. Its `evidenceClass` is `production` (P7 classes a
-production-like target so); its `reconciliation` array holds P7's own C1, C3, W1, W4, W5,
-S3 and P3.
+The report is aggregates only. Its `evidenceClass` is `production` (the `--evidence-class`
+P7 was given and checked against the source); its `reconciliation` array holds P7's own C1,
+C3, W1, W4, W5, S3 and P3.
+
+### The review queue, after the import (terminal only)
+
+Rows the import routed to manual review are worked from the review subcommand. It prints
+legacy ids — a `user` row's id IS a Telegram id — so it writes to the terminal only (`--out`
+and `--format` are refused): **never paste its `list` output** into a ticket, chat or the
+report. Counts are aggregates and may be reported.
+
+```bash
+p7r() {   # the review subcommand: same target and guard, no source, no panel map
+  sudo --preserve-env=NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
+    -e NEXA_LEGACY_IMPORT_TARGET_ACK --entrypoint node api dist/legacy-import.cli.js review "$1" \
+    --tenant "$NEXA_TENANT" --target nexa --allow-production-target "${@:2}"
+}
+p7r counts                                       # aggregates, by table and reason
+p7r list --table invoice --reason PROVIDER_MISSING --state OPEN --limit 50   # terminal only
+p7r resolve --table invoice --legacy-id <ID> --expected-reason <REASON> \
+    --resolution <RETRY_AFTER_FIX|HANDLED_OUTSIDE_IMPORT|WILL_NOT_IMPORT|TEST_OR_INVALID_DATA|DUPLICATE_RECORD>
+p7r reopen --table invoice --legacy-id <ID>
+```
+
+`RETRY_AFTER_FIX` invites the next `import`/`resume` to decide the row again (after the
+mapping or the panel is fixed); every other resolution closes it: the importer then counts
+it `REVIEW_CLOSED` and never retries or overwrites it. Verify the subcommand's flags against
+`docs/legacy-migration/importer.md` § Review subcommand before use.

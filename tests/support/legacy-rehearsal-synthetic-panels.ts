@@ -8,7 +8,7 @@
  * 127.0.0.2 and 127.0.0.3, seeded with `SYNTHETIC_PANEL_ACCOUNTS`), registers them in the
  * rehearsal database through the ordinary panel write path and the operator's real
  * connection test, adds the one public tariff the dataset's 30 GB / 30 d shapes resolve to,
- * writes the matching panel map, and then keeps the fakes serving until it is told to stop.
+ * writes the matching panel map (with its `products` entry for the fixture's `p1`), and then keeps the fakes serving until it is told to stop.
  *
  * When the stop file appears (or on SIGTERM) it writes what the fakes RECEIVED after setup — every request after the ready
  * signal, split into reads (GET, and the token exchange) and anything else — so the harness
@@ -46,7 +46,12 @@ const GIB = 1024n ** 3n;
  */
 interface SyntheticFixture {
   readonly accounts: { readonly A: readonly string[]; readonly B: readonly string[] };
-  readonly mappingFile: (tenantId: string, panelA: string, panelB: string) => string;
+  readonly mappingFile: (
+    tenantId: string,
+    panelA: string,
+    panelB: string,
+    p1Product?: string | null,
+  ) => string;
 }
 
 async function loadFixture(): Promise<SyntheticFixture> {
@@ -129,7 +134,20 @@ async function main(): Promise<void> {
     for (const [host, names, key] of seeds) {
       const fake = await startFakeRickpanel({ host });
       fakes.push(fake);
-      for (const name of names) fake.seedUser(name);
+      // Live accounts with an expiry and a data limit, as the integration suite seeds them:
+      // P6 adopts an account only when its expiry matches a renewable (dated) product.
+      // Two of them sit past reminder thresholds, so the adoption's reminder seed has
+      // something to seed — and the harness can check it sent nothing: svc_a1 expires in two
+      // days, svc_a2 has used 29 of its 30 GB.
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      for (const name of names) {
+        fake.seedUser(name, {
+          expire:
+            name === 'svc_a1' ? nowSeconds + 2 * 86_400 : Math.floor(Date.UTC(2027, 0, 1) / 1000),
+          dataLimit: 30 * 1024 ** 3,
+          usedTraffic: name === 'svc_a2' ? 29 * 1024 ** 3 : 1024 ** 3,
+        });
+      }
       const created = await container.panels.create(scope, owner, {
         name: `Synthetic Rick ${key}`,
         providerType: 'rickpanel',
@@ -145,7 +163,9 @@ async function main(): Promise<void> {
       panelIds.push(id);
     }
 
-    // The current public tariff the dataset's 30 GB / 30 d shapes resolve to.
+    // The current public tariff the dataset's 30 GB / 30 d shapes resolve to — bound to panel
+    // A and categorised, as a product a customer can buy today — and the product the
+    // dataset's named legacy product `p1` renews as (the mapping file's `products`).
     const categoryId = container.ids.uuid();
     await container.database.db.execute(sql`
       INSERT INTO product_categories (id, tenant_id, name, sort_order)
@@ -158,7 +178,7 @@ async function main(): Promise<void> {
         description: null,
         audience: 'EVERYONE',
         sortOrder: 1,
-        panelId: null,
+        panelId: panelIds[0] as never,
         categoryId: categoryId as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 30n * GIB, deviceLimit: null },
         price: money(200_000n, 'IRT'),
@@ -169,7 +189,9 @@ async function main(): Promise<void> {
     await products.setStatus(scope, product.id, 'INACTIVE', 'ACTIVE', container.clock.now());
 
     const [panelA, panelB] = panelIds as [string, string];
-    await writeFile(mappingOut, fixture.mappingFile(tenantId, panelA, panelB), { mode: 0o600 });
+    await writeFile(mappingOut, fixture.mappingFile(tenantId, panelA, panelB, product.id), {
+      mode: 0o600,
+    });
   } finally {
     await container.shutdown();
   }

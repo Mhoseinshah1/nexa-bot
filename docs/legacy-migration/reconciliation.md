@@ -220,27 +220,34 @@ shape `^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$`, MAP-REVIEW's contract chang
   (`importer.md` §5) and its report folds them into the program's (`final-report.ts`); P7's
   own `S3` equation is that closure:
 
-| Program category (§16) | P7 category                                                                                                  | On the map                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| adopted                | `ADOPTION_ELIGIBLE`, adopted by P6                                                                           | `IMPORTED` (entity `SERVICE`); `delta(adopted_services)` equals it |
-| already mapped         | — (P7 reports 0; a rerun's unchanged rows stay in their category)                                            | `IMPORTED`, unchanged                                              |
-| test skipped           | `TEST_INVOICE_SKIPPED`, `TEST_PANEL_SKIPPED`                                                                 | `SKIPPED`                                                          |
-| provider missing       | `PROVIDER_MISSING`                                                                                           | `MANUAL_REVIEW:PROVIDER_MISSING`                                   |
-| ambiguous              | `AMBIGUOUS_PANEL`, `USERNAME_CASE_COLLISION`                                                                 | `MANUAL_REVIEW:<same>`                                             |
-| missing mapping        | `PANEL_UNMAPPED`                                                                                             | `MANUAL_REVIEW:PANEL_UNMAPPED`                                     |
-| product unresolved     | `PRODUCT_UNRESOLVED`                                                                                         | counted; recorded once MAP-REVIEW's code is on main                |
-| unsupported            | `UNSUPPORTED_SHAPE`, `INVALID_USERNAME`, `INVALID_SOURCE_ROW`                                                | partly counted only, as above                                      |
-| manual review (other)  | `ORPHAN`, `CUSTOMER_NOT_IMPORTED`, `INVOICE_KEY_INVALID`, and `ADOPTION_PENDING_P6` (eligible, P6 not wired) | key-invalid rows can never be recorded; pending ones wait for P6   |
-| failed                 | `INVENTORY_INCOMPLETE` (nothing decided)                                                                     | none                                                               |
+| Program category (§16) | P7 category                                                                  | On the map                                                              |
+| ---------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| adopted                | `ADOPTION_ELIGIBLE`, P6 `ADOPTED` / `ALREADY_ADOPTED`                        | `IMPORTED` (entity `SERVICE`); `delta(adopted_services)` equals it      |
+| already mapped         | — (P7 reports 0; a rerun's unchanged rows stay in their category)            | `IMPORTED`, unchanged                                                   |
+| test skipped           | `TEST_INVOICE_SKIPPED`, `TEST_PANEL_SKIPPED`, P6 `SKIPPED`                   | `SKIPPED`                                                               |
+| provider missing       | `PROVIDER_MISSING`                                                           | `MANUAL_REVIEW:PROVIDER_MISSING`                                        |
+| ambiguous              | `AMBIGUOUS_PANEL`, `USERNAME_CASE_COLLISION`                                 | `MANUAL_REVIEW:<same>`                                                  |
+| missing mapping        | `PANEL_UNMAPPED`                                                             | `MANUAL_REVIEW:PANEL_UNMAPPED`                                          |
+| product unresolved     | `PRODUCT_UNRESOLVED` (a `code_product` not in the products map)              | `MANUAL_REVIEW:PRODUCT_MAPPING_UNRESOLVED`                              |
+| unsupported            | `UNSUPPORTED_SHAPE`, `INVALID_USERNAME`, `INVALID_SOURCE_ROW`                | `MANUAL_REVIEW:<closed reason>`                                         |
+| manual review (other)  | `ORPHAN`, `CUSTOMER_NOT_IMPORTED`, P6 `MANUAL_REVIEW`, `INVOICE_KEY_INVALID` | `MANUAL_REVIEW:<closed reason>`; key-invalid rows can never be recorded |
+| failed                 | `INVENTORY_INCOMPLETE`, P6 `FAILED` (`PROVIDER_READ_FAILED`)                 | `FAILED` where recorded                                                 |
 
-So **S1 is not yet an equation over map rows**: until P6 adopts and MAP-REVIEW's codes reach
-main, `Σ map:invoice:*` is below the candidate count by exactly the counted-not-recorded
-categories. The rehearsal harness records that gap as PENDING (`service_map_rows`), never as
-a pass, and checks P7's `S3` closure and `services.candidates = live_invoices_total` exactly.
+A row a person closed in the review queue is `REVIEW_CLOSED` to the importer: counted,
+never retried, never overwritten. `ADOPTION_PENDING_P6` (eligible, no map row) appears only
+from an importer built without P6.
+
+So **S1 holds as `live_invoices_total = Σ map:invoice:* + live_invoices_key_unmappable`**:
+every candidate has one map row except those whose key the map's CHECK cannot hold
+(OQ-P4-01), which P7 counts as `INVOICE_KEY_INVALID` and only the owner can decide. The
+rehearsal harness checks that equation exactly (`service_closure_map_plus_invalid_keys`),
+records any key-invalid population as PENDING, and checks P7's `S3` closure and
+`services.candidates = live_invoices_total`.
 
 - **S4** `legacy live_real_orphan` ⊆ the orphan / customer-missing manual-review reason —
   an invoice with no owning user can never be adopted.
-- **S5** `delta(adoption_orders) = delta(adopted_services)` — one order per adopted service,
+- **S5** `delta(adoption_orders) = delta(adopted_services) = services.adopted = ADOPTION_ELIGIBLE`
+  (from the dry-run) — every eligible candidate adopted, one order per adopted service,
   and `POST[adopted_services_state:*]` reflects RickPanel's runtime state, not the invoice's
   status snapshot.
 

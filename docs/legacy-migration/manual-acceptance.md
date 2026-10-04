@@ -104,7 +104,9 @@ nexa <<<"SELECT e.decision, e.override_before, e.override_after
 ```
 
 Always true for an adopted service: `origin = LEGACY_ADOPTION`, `purpose = NEW_SERVICE`,
-`total_amount = 0`, `provider_ops = 0`.
+`total_amount = 0`, `provider_ops = 0`, and a stored subscription link wherever the panel's
+list row carried one — check its PRESENCE only (`s.subscription_url IS NOT NULL`), never
+select or print it: the link is a credential.
 
 **Web Admin**: open the customer by the NEXA customer **uuid** (Customer 360). Check the
 wallet shows the opening as «موجودی افتتاحیه (انتقال از ربات قبلی)», the service list shows
@@ -128,24 +130,25 @@ import window.
 
 ## The sample matrix
 
-| #   | Sample                      | Selector (below)  | What specifically must hold                                                                                                                                            |
-| --- | --------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A1  | new customer                | `A1`              | map `user` IMPORTED; the customer row was created by the import (`existed_before_import = f`); trial decision recorded; one opening iff `Balance ≠ 0`                  |
-| A2  | existing NEXA customer      | `A2`              | map `user` IMPORTED onto the EXISTING row (`existed_before_import = t`), no second customer for that Telegram id; balance = pre-import NEXA balance + legacy `Balance` |
-| B1  | positive wallet             | `B1`              | exactly one `CREDIT` opening of `Balance`; `ref_ok`, `no_money`; Web Admin + Telegram show it; not in sales/revenue                                                    |
-| B2  | zero wallet                 | `B2`              | NO opening entry (zero writes none); balance unchanged                                                                                                                 |
-| B3  | negative wallet             | `B3`              | exactly one `DEBIT` opening of the magnitude of `Balance`; balance negative; an ordinary purchase from the wallet is refused (no credit)                               |
-| C1  | normal product              | `C1`              | service's product is a normal (non-HIDDEN) catalogue product; renewal quotes its current price                                                                         |
-| C2  | hidden product              | `C2`              | product `audience = HIDDEN`, shape `is_custom = f`, `tariff_status = RESOLVED`; absent from the customer catalogue; renewal quotes the current tariff                  |
-| C3  | custom product              | `C3`              | shape `is_custom = t`, resolved (matched or operator-stated); renewable; never orderable new                                                                           |
-| D1  | disabled service            | `D1`              | legacy status `disabled*`; NEXA state reflects RickPanel's runtime state (not the invoice snapshot); NO enable/disable was sent (`provider_ops = 0`)                   |
-| D2  | near-expiry                 | `D2`              | expiry within the first reminder rung; `seeded_reminders` holds the rungs already passed; no historical reminder was sent; the NEXT genuine reminder still arrives     |
-| D3  | near-volume                 | `D3`              | usage ≥ 80 %; passed usage rungs seeded, none sent; the next rung still fires                                                                                          |
-| E1  | known panel                 | `E1`              | legacy `code_panel` is in the explicit map; the service's `panel_id` is exactly the mapped panel; account found on that panel only                                     |
-| E2  | missing panel, unique match | `E2`              | legacy `code_panel` empty; the account exists on exactly one production RickPanel (exact lowercase username); the service names that panel                             |
-| F1  | manual-review row           | `F1` (per reason) | map `MANUAL_REVIEW` with a closed reason; NO customer/service/order/opening created from that row beyond what the reason allows; listed in the Web Admin review queue  |
-| G1  | prior trial                 | `G1`              | legacy had a test invoice; decision `LEGACY_TRIAL_CONSUMED`; override 0; Telegram offers no trial                                                                      |
-| G2  | no trial                    | `G2`              | `limit_usertest ≤ 0` (or unreadable); decision `LEGACY_NO_TRIALS` / `LEGACY_LIMIT_UNREADABLE`; override 0; no trial offered                                            |
+| #   | Sample                      | Selector (below)                | What specifically must hold                                                                                                                                                             |
+| --- | --------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A1  | new customer                | `A1`                            | map `user` IMPORTED; the customer row was created by the import (`existed_before_import = f`); trial decision recorded; one opening iff `Balance ≠ 0`                                   |
+| A2  | existing NEXA customer      | `A2`                            | map `user` IMPORTED onto the EXISTING row (`existed_before_import = t`), no second customer for that Telegram id; balance = pre-import NEXA balance + legacy `Balance`                  |
+| B1  | positive wallet             | `B1`                            | exactly one `CREDIT` opening of `Balance`; `ref_ok`, `no_money`; Web Admin + Telegram show it; not in sales/revenue                                                                     |
+| B2  | zero wallet                 | `B2`                            | NO opening entry (zero writes none); balance unchanged                                                                                                                                  |
+| B3  | negative wallet             | `B3`                            | exactly one `DEBIT` opening of the magnitude of `Balance`; balance negative; an ordinary purchase from the wallet is refused (no credit)                                                |
+| C1  | normal product              | `C1`                            | service's product is a normal (non-HIDDEN) catalogue product; renewal quotes its current price                                                                                          |
+| C2  | hidden product              | `C2`                            | product `audience = HIDDEN`, shape `is_custom = f`, `tariff_status = RESOLVED`; absent from the customer catalogue; renewal quotes the current tariff                                   |
+| C3  | custom product              | `C3`                            | shape `is_custom = t`, resolved (matched or operator-stated); renewable; never orderable new                                                                                            |
+| D1  | disabled service            | `D1`                            | legacy status `disabled*`; NEXA state reflects RickPanel's runtime state (not the invoice snapshot); NO enable/disable was sent (`provider_ops = 0`)                                    |
+| D2  | near-expiry                 | `D2`                            | expiry within the first reminder rung; `seeded_reminders` holds the rungs already passed; no historical reminder was sent; the NEXT genuine reminder still arrives                      |
+| D3  | near-volume                 | `D3`                            | usage ≥ 80 %; passed usage rungs seeded, none sent; the next rung still fires                                                                                                           |
+| E1  | known panel                 | `E1`                            | legacy `code_panel` is in the explicit map; the service's `panel_id` is exactly the mapped panel; account found on that panel only                                                      |
+| E2  | missing panel, unique match | `E2`                            | legacy `code_panel` empty; the account exists on exactly one production RickPanel (exact lowercase username); the service names that panel                                              |
+| F0  | product map                 | `C1` on a mapped `code_product` | the adopted service's product is exactly the `productId` the panel map's `products` names for its `code_product`; an unlisted `code_product` is F1 `PRODUCT_MAPPING_UNRESOLVED` instead |
+| F1  | manual-review row           | `F1` (per reason)               | map `MANUAL_REVIEW` with a closed reason; NO customer/service/order/opening created from that row beyond what the reason allows; listed in the Web Admin review queue                   |
+| G1  | prior trial                 | `G1`                            | legacy had a test invoice; decision `LEGACY_TRIAL_CONSUMED`; override 0; Telegram offers no trial                                                                                       |
+| G2  | no trial                    | `G2`                            | `limit_usertest ≤ 0` (or unreadable); decision `LEGACY_NO_TRIALS` / `LEGACY_LIMIT_UNREADABLE`; override 0; no trial offered                                                             |
 
 Do at least one sample per row; F1 once per manual-review reason that has any rows (the
 dry-run's reason counts say which). Where a row's population is zero (for example no

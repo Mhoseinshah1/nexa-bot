@@ -3143,9 +3143,9 @@ Still open:
   the production guard `--allow-production-target` + `NEXA_LEGACY_IMPORT_TARGET_ACK`, exit
   codes 0/3/4/64/65/1, and `report --format json` emitting
   `docs/legacy-migration/final-report.schema.json` v1 (validated by
-  `scripts/legacy-rehearsal-report-check.mjs`). One behaviour stays open with the importer:
-  its `evidenceClass` is `synthetic` only for a `fixture:` source, so the synthetic SQL
-  fixture loaded into MariaDB is reported by the target's class.
+  `scripts/legacy-rehearsal-report-check.mjs`). The importer's `--evidence-class` (required
+  for import, resume and report, and forced to `synthetic` by the fixture's marker) closed
+  the last difference.
 - **OQ-REH-02 — UNKNOWN: how MirzaBot is stopped and its MySQL made read-only.** Cutover
   step 7 and rollback step R5 name the effect (no customer action reaches it; writes are
   refused; `CHECKSUM TABLE` proves nothing changed) but the commands belong to the legacy

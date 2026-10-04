@@ -60,6 +60,9 @@ PROVISION_CLI="$ROOT/apps/api/dist/provision-installation.cli.js"
 #   carries the token `rehearsal`, so P7's production guard does not refuse it, and the
 #   harness never passes --allow-production-target (an importer argument naming
 #   production is refused below).
+# - --evidence-class (required by P7 for import, resume and report; passed to every mode):
+#   the harness's own class. P7 checks it against the source — a SYNTHETIC-marked source
+#   is synthetic and nothing else.
 # - Exit codes: 0 done; 3 done but a person must decide (audit BLOCKED, reconcile
 #   DISCREPANCY, import/resume with adoption pending P6, report with a failed equation);
 #   4 import interrupted (run left RUNNING); 64 usage or guard refusal; 65 mapping or
@@ -619,6 +622,7 @@ importer() { # importer MODE [args...]
       --source-password-env "$P7_SOURCE_PASSWORD_ENV" \
       --target "$NEXA_DB" \
       --panel-map "$PANEL_MAP" \
+      --evidence-class "$EVIDENCE_CLASS" \
       "${IMPORTER_ARGS[@]+"${IMPORTER_ARGS[@]}"}" "$@"
   )
 }
@@ -693,8 +697,9 @@ interrupted_import() {
     fi
     sleep 0.05
   done
-  wait "$pid" 2>/dev/null || true
-  die "cycle $cycle: the import finished before its run reached $KILL_AFTER_ROWS rows, so the interrupt was NOT exercised. Lower --kill-after-rows, or give P7 a smaller batch size with --importer-arg."
+  local rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  die "cycle $cycle: the import exited (code $rc) before its run reached $KILL_AFTER_ROWS rows, so the interrupt was NOT exercised; see $log_file. If it simply finished, lower --kill-after-rows or give P7 a smaller batch size with --importer-arg."
 }
 
 report_json() {
@@ -707,6 +712,16 @@ report_json() {
 }
 
 report_get() { node "$REPORT_CHECK" get "$OUT/c$1-report.json" "$2"; }
+
+# How many files under --out (the pg_dump archives aside: they ARE the database) contain
+# any adopted service's subscription link. The links travel from psql to grep as patterns
+# on a pipe and are never printed.
+links_in_artifacts() {
+  pg_nexa -c "SELECT s.subscription_url FROM services s JOIN orders o ON o.tenant_id = s.tenant_id AND o.id = s.order_id
+               JOIN tenants t ON t.id = s.tenant_id
+              WHERE t.slug = '$TENANT' AND o.origin = 'LEGACY_ADOPTION' AND s.subscription_url IS NOT NULL" |
+    { grep -rlF --exclude='*.pgcustom' -f - "$OUT" 2>/dev/null || true; } | wc -l | tr -d ' '
+}
 
 pg_dump_snapshot() {
   pg_dump -Fc --no-owner -d "$PG_URL/$NEXA_DB" -f "$OUT/snapshots/c$1-pre-import.pgcustom"
@@ -758,7 +773,8 @@ for cycle in $(seq 1 "$CYCLES"); do
   run_stage "$cycle" pg-dump-pre pg_dump_snapshot "$cycle"
 
   run_p7 "$cycle" p7-audit audit
-  run_p7 "$cycle" p7-dry-run dry-run
+  run_p7 "$cycle" p7-dry-run dry-run --format json
+  cp "$OUT/logs/c${cycle}-p7-dry-run.log" "$OUT/c${cycle}-dry-run.json"
   run_stage "$cycle" snapshot-after-dry-run snapshot "c${cycle}-after-dry-run"
   # Audit and dry-run decide and count; they write no business row. Only run metadata
   # (the dry run's own legacy_import_runs row) may differ.
@@ -793,19 +809,16 @@ for cycle in $(seq 1 "$CYCLES"); do
   check "$cycle" customer_closure "$(metric "$LEGACY_SRC" users_id_valid)" "$(metric_sum "$POST" 'map:user:')"
   INVALID_IDS=$(($(metric "$LEGACY_SRC" users_total) - $(metric "$LEGACY_SRC" users_id_valid)))
   check "$cycle" blocked_equals_invalid_ids "$INVALID_IDS" "$(report_get "$cycle" customers.blocked)"
-  # Services: the map holds one decision per live invoice P7 RECORDS; the rest are counted
-  # by P7 but cannot be recorded yet (invalid key, reason codes still to come with the
-  # review queue, eligible rows awaiting P6). Fewer map rows than candidates is therefore
-  # PENDING, more is a failure.
+  # Services: with P6 wired, every live invoice has exactly one map row EXCEPT those whose
+  # key is outside the evidenced shape — the map's CHECK cannot hold them (OQ-P4-01), P7
+  # counts them as INVOICE_KEY_INVALID, and only an owner can decide them (PENDING).
   CANDIDATES="$(metric "$LEGACY_SRC" live_invoices_total)"
-  RECORDED="$(metric_sum "$POST" 'map:invoice:')"
+  KEY_INVALID="$(metric "$LEGACY_SRC" live_invoices_key_unmappable)"
   check "$cycle" report_candidates_equal_source "$CANDIDATES" "$(report_get "$cycle" services.candidates)"
-  if [ "$RECORDED" = "$CANDIDATES" ]; then
-    check "$cycle" service_map_rows "$CANDIDATES" "$RECORDED"
-  elif [ "$RECORDED" -lt "$CANDIDATES" ]; then
-    pending "$cycle" service_map_rows "$CANDIDATES" "$RECORDED recorded; the rest counted by P7, not yet recordable"
-  else
-    check "$cycle" service_map_rows "$CANDIDATES" "$RECORDED"
+  check "$cycle" service_closure_map_plus_invalid_keys "$CANDIDATES" \
+    "$(($(metric_sum "$POST" 'map:invoice:') + KEY_INVALID))"
+  if [ "$KEY_INVALID" != "0" ]; then
+    pending "$cycle" invoice_keys_outside_evidenced_shape 0 "$KEY_INVALID live invoice(s); owner decision (OQ-P4-01)"
   fi
   ADOPTION_PENDING="$(report_get "$cycle" manualReview.byReason.ADOPTION_PENDING_P6)"
   if [ "$ADOPTION_PENDING" != "absent" ] && [ "$ADOPTION_PENDING" != "0" ]; then
@@ -847,6 +860,36 @@ for cycle in $(seq 1 "$CYCLES"); do
   done
   check "$cycle" adoption_orders_zero_total 0 "$(metric "$POST" adoption_orders_nonzero_total)"
   check "$cycle" one_service_per_adoption "$(delta adoption_orders)" "$(delta adopted_services)"
+  # Every adoption order is NEW_SERVICE + LEGACY_ADOPTION, PAID, zero totals — the shape the
+  # reports exclude from revenue by origin (and the unchanged_sale_* checks above prove it).
+  check "$cycle" adoption_orders_shape 0 "$(pg_nexa -c "SELECT count(*) FROM orders o JOIN tenants t ON t.id = o.tenant_id
+      WHERE t.slug = '$TENANT' AND o.origin = 'LEGACY_ADOPTION'
+        AND NOT (o.purpose = 'NEW_SERVICE' AND o.state = 'PAID' AND o.total_amount = 0
+                 AND o.subtotal_amount = 0 AND o.discount_amount = 0)")"
+
+  # P6: every eligible candidate adopted. Eligible is P7's own dry-run decision; adopted is
+  # P7's report AND the services that appeared in NEXA.
+  ELIGIBLE="$(node "$REPORT_CHECK" get "$OUT/c${cycle}-dry-run.json" sections.plan.services.categories.ADOPTION_ELIGIBLE)"
+  check "$cycle" adopted_equals_eligible "$ELIGIBLE" "$(report_get "$cycle" services.adopted)"
+  check "$cycle" adopted_services_appeared "$ELIGIBLE" "$(delta adopted_services)"
+
+  # The reminder seed (Item 8) records thresholds already passed and SENDS NOTHING.
+  printf 'service_reminders seeded: %s\n' "$(delta service_reminders)" >>"$OUT/logs/c${cycle}-reminder-seed.log"
+  check "$cycle" reminder_seed_sent_no_messages 0 "$(delta customer_notifications)"
+
+  # The subscription link: stored on every adopted service whose panel row carried one,
+  # and in NO report, log or snapshot this rehearsal wrote, nor in any audit row, outbox
+  # event or operational event. The links stay in the database and this shell's pipe.
+  check "$cycle" adopted_services_link_stored 0 "$(metric "$POST" adopted_services_without_subscription_url)"
+  check "$cycle" link_never_in_artifacts 0 "$(links_in_artifacts)"
+  check "$cycle" link_never_in_audit_outbox_events 0 "$(pg_nexa -c "
+    WITH links AS (
+      SELECT s.subscription_url AS url FROM services s JOIN orders o ON o.tenant_id = s.tenant_id AND o.id = s.order_id
+        JOIN tenants t ON t.id = s.tenant_id
+       WHERE t.slug = '$TENANT' AND o.origin = 'LEGACY_ADOPTION' AND s.subscription_url IS NOT NULL)
+    SELECT (SELECT count(*) FROM audit_logs a, links l WHERE strpos(concat(a.before::text, a.after::text, a.reason), l.url) > 0)
+         + (SELECT count(*) FROM outbox_messages m, links l WHERE strpos(m.payload::text, l.url) > 0)
+         + (SELECT count(*) FROM operational_events e, links l WHERE strpos(concat(e.message, e.context::text), l.url) > 0)")"
 
   # Provider writes = 0, and nothing was sent to a customer.
   check "$cycle" provider_writes_zero 0 "$(delta provisioning_operations_total)"
