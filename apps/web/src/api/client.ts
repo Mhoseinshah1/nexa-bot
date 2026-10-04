@@ -514,6 +514,8 @@ import {
   refundListResponseSchema,
   refundResponseSchema,
   SERVICE_REFUND_REQUEST_ROUTES,
+  serviceDeleteRefundQuoteSchema,
+  type ServiceDeleteRefundQuote,
   serviceRefundRequestListResponseSchema,
   serviceRefundRequestResponseSchema,
   type ServiceRefundRequestListResponse,
@@ -2885,6 +2887,34 @@ export function approveServiceRefundRequest(input: {
 }): Promise<ServiceRefundRequestResponse> {
   return post(
     SERVICE_REFUND_REQUEST_ROUTES.approve(input.requestId),
+    { idempotencyKey: input.idempotencyKey, amountMinor: input.amountMinor, confirm: true },
+    serviceRefundRequestResponseSchema,
+  );
+}
+
+/**
+ * Item 11: what the «حذف سرویس و بازگشت وجه» summary shows — the customer whose wallet is
+ * credited and the server's own bound for the amount.
+ */
+export function fetchDeleteRefundQuote(serviceId: string): Promise<ServiceDeleteRefundQuote> {
+  return authedGet(
+    SERVICE_REFUND_REQUEST_ROUTES.deleteWithRefund(serviceId),
+    serviceDeleteRefundQuoteSchema,
+  );
+}
+
+/**
+ * Item 11: deletes the service and credits `amountMinor` to the customer's wallet once the
+ * deletion is confirmed. `confirm: true` is the explicit final confirmation the schema
+ * requires; the key makes a double click or a retry the same command.
+ */
+export function deleteServiceWithRefund(input: {
+  serviceId: string;
+  idempotencyKey: string;
+  amountMinor: string;
+}): Promise<ServiceRefundRequestResponse> {
+  return post(
+    SERVICE_REFUND_REQUEST_ROUTES.deleteWithRefund(input.serviceId),
     { idempotencyKey: input.idempotencyKey, amountMinor: input.amountMinor, confirm: true },
     serviceRefundRequestResponseSchema,
   );

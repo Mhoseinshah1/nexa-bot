@@ -3418,6 +3418,63 @@ export const WEB_FA = {
   'web.service_terminate_confirm_label': 'برای تأیید، این عبارت را دقیقاً بنویسید:',
   'web.service_terminate_confirm_wrong': 'عبارت تأیید مطابقت ندارد.',
   'web.service_terminate_button': 'پایان بده',
+  /* Item 11: «حذف سرویس» opens a modal with two options. */
+  'web.service_delete_open': 'حذف سرویس…',
+  'web.service_delete_title': 'حذف سرویس',
+  'web.service_delete_choose': 'نوع حذف را انتخاب کنید:',
+  'web.service_delete_only': 'فقط حذف سرویس',
+  'web.service_delete_only_hint':
+    'حساب روی پنل حذف می‌شود و هیچ مبلغی به کیف پول مشتری برنمی‌گردد.',
+  'web.service_delete_refund': 'حذف سرویس و بازگشت وجه',
+  'web.service_delete_refund_hint':
+    'حساب روی پنل حذف می‌شود و پس از تأیید حذف، مبلغی که تعیین می‌کنید به کیف پول مشتری واریز می‌شود.',
+  'web.service_delete_refund_denied':
+    'بازگشت وجه به دو دسترسی «ثبت بازگشت وجه» و «پایان دادن به سرویس» نیاز دارد.',
+  'web.service_delete_refund_loading': 'در حال خواندن مبلغ قابل بازگشت…',
+  'web.service_delete_refund_unavailable': 'بازگشت وجه برای این سرویس ممکن نیست:',
+  'web.service_delete_reason_disabled': 'قابلیت درخواست بازگشت وجه خاموش است.',
+  'web.service_delete_reason_service_state':
+    'سرویس در وضعیتی نیست که بتوان آن را حذف و بازپرداخت کرد.',
+  'web.service_delete_reason_already_requested':
+    'برای این سرویس یک درخواست بازگشت وجه باز یا در حال اجرا وجود دارد؛ آن را در بخش «درخواست‌های بازگشت وجه» بررسی کنید.',
+  'web.service_delete_reason_no_paid_source':
+    'این سرویس از خرید پرداخت‌شده‌ای نیامده است (آزمایشی، رایگان یا منتقل‌شده)؛ برای جبران از تنظیم دستی کیف پول استفاده کنید.',
+  'web.service_delete_reason_source_unresolved': 'پرداخت اصلی این سرویس به‌طور قطعی پیدا نشد.',
+  'web.service_delete_reason_nothing_refundable':
+    'از پرداخت این سرویس مبلغی برای بازگشت باقی نمانده است.',
+  'web.service_delete_reason_cannot_delete':
+    'اکنون نمی‌توان این سرویس را حذف کرد (پنل اجازه نمی‌دهد یا عملیات دیگری در جریان است).',
+  'web.service_delete_amount': 'مبلغ بازگشت',
+  'web.service_delete_amount_max': 'حداکثر قابل بازگشت:',
+  'web.service_delete_amount_paid': 'مبلغ پرداخت‌شده:',
+  'web.service_delete_amount_invalid': 'مبلغ باید عددی صحیح و بزرگ‌تر از صفر باشد.',
+  'web.service_delete_amount_too_large': 'مبلغ از حداکثر قابل بازگشت بیشتر است.',
+  'web.service_delete_continue': 'ادامه',
+  'web.service_delete_back': 'بازگشت',
+  'web.service_delete_cancel': 'انصراف',
+  'web.service_delete_summary': 'خلاصه پیش از تأیید',
+  'web.service_delete_summary_service': 'سرویس',
+  'web.service_delete_summary_customer': 'مشتری',
+  'web.service_delete_summary_amount': 'مبلغ بازگشت',
+  'web.service_delete_summary_destination': 'مقصد',
+  'web.service_delete_destination_wallet': 'کیف پول مشتری در ربات',
+  'web.service_delete_summary_note':
+    'مبلغ فقط پس از تأیید حذف از پنل واریز می‌شود. اگر حذف ناموفق یا نامشخص باشد، هیچ مبلغی واریز نمی‌شود.',
+  'web.service_delete_confirm_check':
+    'تأیید می‌کنم که این سرویس حذف شود و این مبلغ به کیف پول مشتری بازگردد.',
+  'web.service_delete_refund_submit': 'حذف و بازگشت وجه',
+  'web.service_delete_only_submit': 'حذف سرویس',
+  'web.service_delete_result_title': 'نتیجه',
+  'web.service_delete_result_pending':
+    'حذف سرویس ثبت شد. پس از تأیید حذف از پنل، مبلغ به کیف پول مشتری واریز می‌شود.',
+  'web.service_delete_result_blocked':
+    'نتیجه حذف از پنل نامشخص است؛ بازگشت وجه تا روشن شدن وضعیت حذف معلق است و هیچ مبلغی واریز نشده است.',
+  'web.service_delete_result_completed': 'سرویس حذف شد و مبلغ به کیف پول مشتری واریز شد.',
+  'web.service_delete_result_failed':
+    'حذف سرویس از پنل ناموفق بود؛ هیچ مبلغی واریز نشد و سرویس سر جایش است.',
+  'web.service_delete_result_reference': 'شناسه پیگیری:',
+  'web.service_delete_close': 'بستن',
+  'web.service_refund_origin_operator': 'حذف و بازگشت وجه توسط مدیر',
 
   // --- Units ---------------------------------------------------------------
   'web.unit_seconds': 'ثانیه',

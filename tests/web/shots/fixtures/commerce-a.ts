@@ -280,6 +280,7 @@ function refundRequest(index: number, over: Json = {}): Json {
     paymentId: uid('019240ab', index),
     orderId: uid('019230ab', index),
     state: 'OPEN',
+    origin: 'CUSTOMER',
     reason: 'سرعت سرویس مناسب نبود',
     principalMinor: '150000',
     remainingMinor: '120000',

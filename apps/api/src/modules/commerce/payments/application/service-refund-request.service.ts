@@ -94,6 +94,13 @@ export type ServiceRefundEligibility =
   | { readonly eligible: true; readonly source: ServiceRefundSource }
   | { readonly eligible: false; readonly reason: ServiceRefundIneligibilityReason };
 
+/** What the delete-and-refund summary is built from (item 11). */
+export interface ServiceDeleteRefundQuoteView {
+  readonly service: ServiceRecord;
+  readonly customer: CustomerRecord | null;
+  readonly eligibility: ServiceRefundEligibility;
+}
+
 export type ServiceRefundFileResult =
   | { readonly outcome: 'FILED'; readonly request: ServiceRefundRequestRecord }
   | { readonly outcome: 'ALREADY_OPEN'; readonly request: ServiceRefundRequestRecord };
@@ -375,6 +382,7 @@ export class ServiceRefundRequestService {
             customerId: input.customerId,
             orderId: service.orderId,
             paymentId: payment.id,
+            origin: 'CUSTOMER',
             botInstanceId: input.botInstanceId,
             reason,
             filingKey: input.idempotencyKey,
@@ -811,6 +819,214 @@ export class ServiceRefundRequestService {
     return rejected;
   }
 
+  // --- an operator's own delete-and-refund (item 11) --------------------------------------
+
+  /**
+   * What the Web Admin's «حذف سرویس و بازگشت وجه» summary shows before an amount is typed:
+   * the service, the customer whose wallet is credited, and the bound — the source payment's
+   * principal and what it still has to give back, read now. Charged the two decision keys,
+   * like the command it precedes. A courtesy: the command decides every one of these again
+   * under the locks.
+   */
+  async quoteDeleteWithRefund(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+  ): Promise<ServiceDeleteRefundQuoteView> {
+    await this.checkDecide(scope, actor);
+    const service = await this.deps.services.findById(scope, serviceIdOf(serviceId));
+    if (service === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+    }
+    const customer = await this.deps.customers.findById(scope, service.customerId);
+    const active = await this.deps.repository.findActiveForService(scope, service.id as ServiceId);
+    const eligibility: ServiceRefundEligibility =
+      active !== null
+        ? { eligible: false, reason: 'ALREADY_REQUESTED' }
+        : await this.eligibilityOf(scope, service, { checkFlag: false });
+    return { service, customer, eligibility };
+  }
+
+  /**
+   * An operator's «حذف سرویس و بازگشت وجه» (item 11, `docs/ux1-delete-service-refund.md`).
+   *
+   * The same machine as a customer's approved request, entered by its other door: in ONE
+   * transaction a request of origin `OPERATOR` is created and approved — a `REQUESTED` wallet
+   * refund reserves the amount against the service's source payment (the existing bound, so
+   * never more than the customer paid less what was already returned), and a `TERMINATE` is
+   * planned. Nothing is credited here. The sweep credits the reservation once the deletion is
+   * confirmed (the service `TERMINATED`), releases it when the deletion definitively fails,
+   * and waits — crediting nothing — while it is undecided or UNKNOWN.
+   *
+   * Idempotent on the command's key, stored as the request's filing key, which is unique for
+   * ever: a double click, a retry or a concurrent duplicate is answered with the request the
+   * first one created. Read under the service's row lock, so a concurrent duplicate waits and
+   * then finds it. The same key for another service or another amount is refused.
+   */
+  async deleteWithRefund(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly serviceId: string;
+      readonly amountMinor: bigint;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<ServiceRefundRequestRecord> {
+    await this.checkDecide(scope, actor);
+    const adminId = this.adminIdOf(actor);
+    const serviceId = serviceIdOf(input.serviceId);
+    if (input.amountMinor <= 0n) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.REFUND_EXCEEDS_REFUNDABLE,
+        'The amount must be positive.',
+      );
+    }
+    const filingKey = `${OPERATOR_FILING_PREFIX}${input.idempotencyKey}`;
+    const denial = {
+      action: 'service.delete_with_refund',
+      entityType: 'Service',
+      entityId: serviceId,
+    };
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      'refunds.issue',
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.deps.guard.check(scope, actor, 'services.terminate', tx);
+        /*
+         * The service's row lock FIRST — the approval's order: service, then payment, then
+         * the lifecycle lock last. A termination commits `TERMINATED` under it, and a
+         * duplicate of this very command waits on it and then reads the request below.
+         */
+        const locked = await this.deps.services.lockForUpdate(scope, serviceId, tx);
+        if (locked === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+        }
+        const replayed = await this.deps.repository.findByFilingKey(scope, filingKey, tx);
+        if (replayed !== null) {
+          if (
+            replayed.origin === 'OPERATOR' &&
+            replayed.serviceId === locked.id &&
+            replayed.approvedAmount?.amountMinor === input.amountMinor
+          ) {
+            return replayed;
+          }
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'That idempotency key already deleted and refunded something else.',
+          );
+        }
+        // A customer's request still OPEN is decided on its own card; one EXECUTING already
+        // deletes this service. Either way a second reservation is never made beside it.
+        if (
+          (await this.deps.repository.findActiveForService(scope, locked.id as ServiceId, tx)) !==
+          null
+        ) {
+          throw this.notEligible('ALREADY_REQUESTED');
+        }
+        const found = await this.eligibilityOf(scope, locked, { checkFlag: false }, tx);
+        if (!found.eligible) throw this.notEligible(found.reason);
+        if (!(await this.deps.refundLedger.lockPayment(scope, found.source.payment.id, tx))) {
+          throw this.notEligible('SOURCE_UNRESOLVED');
+        }
+        await this.deps.services.lockLifecycle(scope, locked.id, tx);
+        // Decided again under every lock the approval decides it under.
+        const eligibility = await this.eligibilityOf(scope, locked, { checkFlag: false }, tx);
+        if (!eligibility.eligible) throw this.notEligible(eligibility.reason);
+        const payment = eligibility.source.payment;
+        if (payment.id !== found.source.payment.id) throw this.notEligible('SOURCE_UNRESOLVED');
+        const now = this.deps.clock.now();
+        const created = await this.deps.repository.create(
+          scope,
+          {
+            id: this.deps.ids.uuid(),
+            serviceId: locked.id as ServiceId,
+            customerId: locked.customerId,
+            orderId: locked.orderId,
+            paymentId: payment.id,
+            origin: 'OPERATOR',
+            botInstanceId: null,
+            reason: null,
+            filingKey,
+            principalMinor: payment.amount.amountMinor,
+            currency: payment.amount.currency,
+            now,
+          },
+          tx,
+        );
+        /* istanbul ignore next -- read under the service lock above: no request stands. */
+        if (created === null) throw this.notEligible('ALREADY_REQUESTED');
+        // The bound, decided under the payment's lock inside this call.
+        const refund = await this.deps.refunds.reserveForServiceRefund(
+          scope,
+          actor,
+          { paymentId: payment.id, amountMinor: input.amountMinor },
+          tx,
+        );
+        const operation = await this.deps.termination.planTerminateWithin(
+          scope,
+          actor,
+          locked,
+          { idempotencyKey: `service-refund:${created.id}` },
+          tx,
+        );
+        const approved = await this.deps.repository.approve(
+          scope,
+          created.id,
+          {
+            amountMinor: input.amountMinor,
+            refundId: refund.id,
+            operationId: operation.id,
+            adminId,
+          },
+          now,
+          tx,
+        );
+        /* istanbul ignore next -- created OPEN in this transaction. */
+        if (approved === null) throw this.stateInvalid(created.state);
+        // The relay's push consumer reads the row, finds it EXECUTING, and sends no card.
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'ServiceRefundRequested',
+          aggregateType: 'Service',
+          aggregateId: locked.id,
+          payload: {
+            requestId: approved.id,
+            customerId: approved.customerId,
+            paymentId: approved.paymentId,
+          },
+        });
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'service.delete_with_refund',
+            entityType: 'Service',
+            entityId: locked.id,
+            before: { state: locked.state },
+            // Ids, the amount and the outcome so far — never a credential or free text.
+            after: {
+              requestId: approved.id,
+              customerId: approved.customerId,
+              paymentId: approved.paymentId,
+              amountMinor: input.amountMinor.toString(),
+              currency: approved.principal.currency,
+              destination: 'CUSTOMER_WALLET',
+              refundId: refund.id,
+              operationId: operation.id,
+              outcome: 'DELETION_PLANNED_CREDIT_PENDING',
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return approved;
+      },
+    );
+  }
+
   // --- the sweep that decides an executing request ---------------------------------------
 
   /**
@@ -918,14 +1134,31 @@ export class ServiceRefundRequestService {
         );
         /* istanbul ignore next -- locked and EXECUTING above. */
         if (completed === null) return false;
-        await this.deps.notifier.notify(
-          scope,
-          completed.customerId,
-          'SERVICE_REFUND_REQUEST_APPROVED',
-          completed.id,
-          now,
-          tx,
-        );
+        /*
+         * The customer is told once. A customer's own request: «your refund request was
+         * approved», the amount and the removal. An operator's delete-and-refund (item 11):
+         * the customer asked for nothing, so «your request was approved» would be false; the
+         * generic `REFUND_COMPLETED` — subject the refund — says only what happened.
+         */
+        if (completed.origin === 'OPERATOR') {
+          await this.deps.notifier.notify(
+            scope,
+            completed.customerId,
+            'REFUND_COMPLETED',
+            request.refundId,
+            now,
+            tx,
+          );
+        } else {
+          await this.deps.notifier.notify(
+            scope,
+            completed.customerId,
+            'SERVICE_REFUND_REQUEST_APPROVED',
+            completed.id,
+            now,
+            tx,
+          );
+        }
         await this.resolved(actor, completed, 'COMPLETED', tx);
         await this.deps.audit.record(
           scope,
@@ -1110,7 +1343,7 @@ export class ServiceRefundRequestService {
       trafficLimit: service.trafficLimitBytes,
       principal: request.principal,
       remaining,
-      reason: request.reason,
+      reason: request.reason ?? '—',
     };
   }
 
@@ -1307,6 +1540,18 @@ function requestIdOf(candidate: string): string {
     );
   }
   return parsed.data;
+}
+
+/** Where an operator's delete-and-refund key lives among filing keys: never a Telegram update's. */
+const OPERATOR_FILING_PREFIX = 'operator-delete-refund:';
+
+/** A service id, canonical, or the not-found refusal — before any query. */
+function serviceIdOf(candidate: string): ServiceId {
+  const parsed = uuidV7Schema.safeParse(candidate);
+  if (!parsed.success) {
+    throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+  }
+  return parsed.data as ServiceId;
 }
 
 /** A rejection's reason, trimmed, or the refusal: required, at most 500 characters. */

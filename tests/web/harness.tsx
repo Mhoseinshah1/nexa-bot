@@ -21,6 +21,8 @@ export interface Route {
   readonly url: string;
   readonly body: unknown;
   readonly status?: number;
+  /** When set, only a request of this method matches (one URL serving a GET and a POST). */
+  readonly method?: string;
 }
 
 export interface Api {
@@ -44,7 +46,10 @@ export function stubApi(routes: readonly Route[]): Api {
 
       // Longest match wins, so `/panels/abc` is not answered by the `/panels`
       // route that happens to be registered first.
-      const matches = routes.filter((route) => url.includes(route.url));
+      const matches = routes.filter(
+        (route) =>
+          url.includes(route.url) && (route.method === undefined || route.method === method),
+      );
       const route = matches.sort((a, b) => b.url.length - a.url.length)[0];
 
       if (route === undefined) {

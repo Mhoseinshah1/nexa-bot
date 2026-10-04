@@ -67,6 +67,9 @@ export class ServiceRefundPushConsumer implements EventConsumer {
     const request = await this.deps.requests.findById(scope, payload.requestId, tx);
     // Decided before the relay reached it: nothing is left to review.
     if (request === null || request.state !== 'OPEN') return;
+    // An operator's delete-and-refund (item 11) is never OPEN after its commit and has no bot
+    // to review it from; said again here so a card can never be built for one.
+    if (request.origin !== 'CUSTOMER' || request.botInstanceId === null) return;
 
     const reviewers = await this.deps.reviewers.reviewers(
       scope,

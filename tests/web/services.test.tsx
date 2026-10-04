@@ -624,6 +624,7 @@ describe('the service detail', () => {
     expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeEnabled();
     expect(screen.getByText(/پایان دادن به سرویس دسترسی جداگانه‌ای دارد/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'پایان بده' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'حذف سرویس…' })).toBeNull();
   });
 
   it('keeps the terminate button unpressable until the phrase matches exactly', async () => {
@@ -637,15 +638,16 @@ describe('the service detail', () => {
       ...detail({ state: 'ACTIVE', actions: actionsWith({ TERMINATE: 'AVAILABLE' }) }),
       actionRoute('terminate', { state: 'ACTIVE' }),
     ]);
-    const { container } = renderPage(
-      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
-    );
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
     await screen.findByText('nx-7f3a91');
 
+    // Item 11: «حذف سرویس…» opens the modal; «فقط حذف سرویس» is the default option.
+    fireEvent.click(screen.getByRole('button', { name: 'حذف سرویس…' }));
+    const dialog = await screen.findByRole('dialog');
     const button = screen.getByRole('button', { name: 'پایان بده' });
     expect(button).toBeDisabled();
 
-    const input = container.querySelector('input[dir="ltr"]');
+    const input = dialog.querySelector('input[dir="ltr"]');
     if (input === null) throw new Error('no confirmation input');
 
     fireEvent.change(input, { target: { value: 'terminate' } });
@@ -661,12 +663,12 @@ describe('the service detail', () => {
       ...detail({ state: 'ACTIVE', actions: actionsWith({ TERMINATE: 'AVAILABLE' }) }),
       actionRoute('terminate', { state: 'TERMINATED' }),
     ]);
-    const { container } = renderPage(
-      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
-    );
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
     await screen.findByText('nx-7f3a91');
 
-    const input = container.querySelector('input[dir="ltr"]');
+    fireEvent.click(screen.getByRole('button', { name: 'حذف سرویس…' }));
+    const dialog = await screen.findByRole('dialog');
+    const input = dialog.querySelector('input[dir="ltr"]');
     if (input === null) throw new Error('no confirmation input');
     fireEvent.change(input, { target: { value: 'TERMINATE' } });
     fireEvent.click(screen.getByRole('button', { name: 'پایان بده' }));

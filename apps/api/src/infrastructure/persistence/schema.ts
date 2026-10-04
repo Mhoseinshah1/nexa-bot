@@ -107,6 +107,7 @@ import {
   RECEIPT_REVIEW_PUSH_STATES,
   SERVICE_REFUND_REASON_MAX_LENGTH,
   SERVICE_REFUND_REASON_MIN_LENGTH,
+  SERVICE_REFUND_REQUEST_ORIGINS,
   SERVICE_REFUND_REQUEST_STATES,
   PAYMENT_STATES,
   PAYMENT_METHODS,
@@ -9766,13 +9767,19 @@ export const serviceRefundRequests = pgTable(
     /** The service's own NEW_SERVICE order, and the CONFIRMED payment that paid for it. */
     orderId: uuid('order_id').notNull(),
     paymentId: uuid('payment_id').notNull(),
-    /** The bot the customer filed through: the review cards and replies come from it. */
-    botInstanceId: uuid('bot_instance_id')
-      .notNull()
-      .references(() => botInstances.id),
+    /**
+     * The bot the customer filed through: the review cards and replies come from it. NULL
+     * only for an operator's delete-and-refund (item 11), which no bot carried.
+     */
+    botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
     state: text('state').notNull().default('OPEN'),
-    /** The customer's reason, trimmed, as they typed it. */
-    reason: text('reason').notNull(),
+    /**
+     * Item 11: who started it — the customer from the bot, or an operator's own
+     * «حذف سرویس و بازگشت وجه» from the Web Admin (`docs/ux1-delete-service-refund.md`).
+     */
+    origin: text('origin').notNull().default('CUSTOMER'),
+    /** The customer's reason, trimmed, as they typed it. NULL only for an operator's. */
+    reason: text('reason'),
     /**
      * The filing's idempotency key: the Telegram update that carried the reason. Unique for
      * ever, not just while the request is live — a redelivered update after the request was
@@ -9869,6 +9876,21 @@ export const serviceRefundRequests = pgTable(
     check(
       'service_refund_requests_reason_check',
       sql`reason = btrim(reason) AND char_length(reason) BETWEEN ${sql.raw(String(SERVICE_REFUND_REASON_MIN_LENGTH))} AND ${sql.raw(String(SERVICE_REFUND_REASON_MAX_LENGTH))}`,
+    ),
+    check(
+      'service_refund_requests_origin_check',
+      enumCheck('origin', SERVICE_REFUND_REQUEST_ORIGINS),
+    ),
+    /**
+     * What each origin carries (item 11). A customer's filing has its reason and its bot; an
+     * operator's delete-and-refund has neither, and is never OPEN — it is created and
+     * approved in one transaction, so no review card, prompt or rejection can reach it.
+     */
+    check(
+      'service_refund_requests_origin_shape_check',
+      sql`(origin = 'CUSTOMER' AND reason IS NOT NULL AND bot_instance_id IS NOT NULL)
+          OR (origin = 'OPERATOR' AND reason IS NULL AND bot_instance_id IS NULL
+              AND state <> 'REJECTED')`,
     ),
     check('service_refund_requests_principal_check', sql`principal_minor > 0`),
     /**
