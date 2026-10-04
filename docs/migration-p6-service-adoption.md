@@ -52,6 +52,15 @@ Called by the P7 CLI as `SYSTEM_JOB` with **`maintenance.run`** — the only key
 narrower existing key is held by a job. **No HTTP, Telegram or web surface constructs or
 calls it** (a boundary test pins that only the container and the CLI may import it).
 
+The P7 importer's seam is `adoptCandidate(scope, actor, candidate)`: its
+`LegacyAdoptionPort` candidate (run, invoice, checksum, Telegram id, customer id, panel,
+exact spelling, product path) plus the two facts adoption must never guess — the account's
+`runtime` facts and, for a NAMED legacy product, the explicit NEXA `productId` (a hidden shape
+names its own product through the shape row). The match is the importer's ELIGIBLE decision
+restated; a different customer for the Telegram id is `CONFLICTING_EXISTING_ENTITY`. The
+idempotency key is `p6:<run>:<invoice>:<request hash>`, so an identical retry replays and a
+resumed run with a fresh panel read reaches the map and answers `ALREADY_ADOPTED`.
+
 Outcomes: `ADOPTED` | `ALREADY_ADOPTED` (same mapping, same ids) | `MANUAL_REVIEW` (closed
 reason; `recorded` says whether a map row was written — false only for an invoice key outside the evidenced shape, which the map refuses). Also `SKIPPED` (test panel), `FAILED` (unreadable provider record) and `REVIEW_CLOSED` (a person closed the review to reruns) — §9. The exact types are in `legacy-adoption-ports.ts`.
 

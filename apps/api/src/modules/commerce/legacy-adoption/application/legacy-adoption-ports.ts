@@ -92,6 +92,44 @@ export interface LegacyAdoptionCommand {
   /** The legacy purchase time, for the order's `settled_at`; null = adoption time. */
   readonly legacyPurchasedAt: Date | null;
   readonly idempotencyKey: string;
+  /**
+   * The customer the importer created or matched for this Telegram id, when it knows one.
+   * The adoption still finds the customer itself, by `(tenant, telegram_user_id)`, inside its
+   * transaction; a different answer is `CONFLICTING_EXISTING_ENTITY`, never a silent pick.
+   */
+  readonly expectedCustomerId?: string;
+}
+
+/**
+ * The P7 importer's candidate (its `LegacyAdoptionPort`), restated structurally so neither
+ * module imports the other, plus the two facts adoption cannot do without and must never
+ * guess: the account's RUNTIME facts (from the read-only inventory record) and — for a
+ * named legacy product — the NEXA product the operator's explicit product map resolved it to.
+ * A hidden shape needs no product id: the shape row names its own product.
+ */
+export interface LegacyAdoptionCandidate {
+  readonly runId: string;
+  readonly legacyInvoiceId: string;
+  readonly checksum: string;
+  readonly telegramUserId: string;
+  readonly customerId: string;
+  readonly panelId: string;
+  readonly providerUsername: string;
+  readonly product:
+    | {
+        readonly kind: 'NAMED_PRODUCT';
+        readonly codeProduct: string;
+        readonly productId?: string | null;
+      }
+    | {
+        readonly kind: 'HIDDEN_SHAPE';
+        readonly shapeKey: string;
+        readonly custom: boolean;
+        readonly shapeId: string;
+      };
+  /** Null when the importer has no record for the account: a FAILED read, retried later. */
+  readonly runtime: AdoptionRuntimeFacts | null;
+  readonly legacyPurchasedAt?: Date | null;
 }
 
 /**

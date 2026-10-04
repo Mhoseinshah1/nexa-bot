@@ -615,6 +615,78 @@ describe('Migration P6: legacy service adoption', () => {
     expect(svc?.product_id).toBe(hidden);
   });
 
+  it('the P7 importer seam: a candidate adopts through its shape or an explicit product id', async () => {
+    const telegramUserId = tg();
+    const customerId = await fx.customer({ telegramUserId });
+    const ensured = await ctx.container.legacyProducts.ensureShape(tenantA, owner, {
+      idempotencyKey: `shape-${String(T())}`,
+      legacy: { codePanel: 'bac6', volume: '50', serviceTime: '30', timeUnit: null, isCustom: 0 },
+    });
+    if (ensured.outcome === 'UNMAPPABLE') throw new Error('unmappable');
+    await ctx.container.legacyProducts.resolveTariff(tenantA, owner, {
+      idempotencyKey: `resolve-${String(T())}`,
+      shapeId: ensured.shape.id,
+      request: { kind: 'MATCH' },
+    });
+    const candidate = (key: string, over: Record<string, unknown> = {}) => ({
+      runId,
+      legacyInvoiceId: key,
+      checksum: SUM(7),
+      telegramUserId,
+      customerId,
+      panelId: panel,
+      providerUsername: `cand_${key}`,
+      product: {
+        kind: 'HIDDEN_SHAPE' as const,
+        shapeKey: ensured.shape.shapeKey,
+        custom: false,
+        shapeId: ensured.shape.id,
+      },
+      runtime: facts(),
+      ...over,
+    });
+    const viaCandidate = (c: ReturnType<typeof candidate>) =>
+      withoutNetwork(() => ctx.container.legacyAdoption.adoptCandidate(tenantA, actor(), c));
+
+    const hiddenKey = invoiceKey();
+    const sent = candidate(hiddenKey);
+    const first = await viaCandidate(sent);
+    expect(first).toMatchObject({ kind: 'ADOPTED', customerId });
+    const adoptedId = (first as { serviceId: string }).serviceId;
+    const [svc] = await rows<{ product_id: string }>(
+      sql`SELECT product_id FROM services WHERE id = ${adoptedId}`,
+    );
+    expect(svc?.product_id).toBe(ensured.shape.productId);
+    // The identical candidate (a retried call) replays the first answer.
+    expect(await viaCandidate(sent)).toEqual(first);
+    // A resumed run re-reads the panel (new runtime facts): the same mapping, not a refusal.
+    expect(await viaCandidate(candidate(hiddenKey))).toMatchObject({
+      kind: 'ALREADY_ADOPTED',
+      serviceId: adoptedId,
+    });
+
+    // A named legacy product with no explicit NEXA product is never guessed.
+    expect(
+      await viaCandidate(
+        candidate(invoiceKey(), { product: { kind: 'NAMED_PRODUCT', codeProduct: 'p12' } }),
+      ),
+    ).toMatchObject({ kind: 'MANUAL_REVIEW', reason: 'PRODUCT_MAPPING_UNRESOLVED' });
+    expect(
+      await viaCandidate(
+        candidate(invoiceKey(), {
+          product: { kind: 'NAMED_PRODUCT', codeProduct: 'p12', productId: product },
+        }),
+      ),
+    ).toMatchObject({ kind: 'ADOPTED' });
+    // The importer's customer must be the one the adoption finds for the Telegram id.
+    const other = await fx.customer({ telegramUserId: tg() });
+    expect(await viaCandidate(candidate(invoiceKey(), { customerId: other }))).toMatchObject({
+      kind: 'MANUAL_REVIEW',
+      reason: 'CONFLICTING_EXISTING_ENTITY',
+    });
+    expect(providerCalls).toEqual([]);
+  });
+
   it('refuses no product, another tenant’s product, an inactive one, and a window mismatch', async () => {
     const telegramUserId = tg();
     await fx.customer({ telegramUserId });

@@ -43,6 +43,7 @@ import type { ServiceSecretSource } from '../../provisioning/application/ports.j
 import type { ServiceReminderService } from '../../provisioning/application/service-reminder.service.js';
 import { namespaceKeyFor } from '../../provisioning/application/username-allocator.js';
 import type {
+  LegacyAdoptionCandidate,
   AdoptionCapacity,
   AdoptionRuntimeFacts,
   LegacyAdoptionCommand,
@@ -147,6 +148,7 @@ export function adoptionRequestHash(command: LegacyAdoptionCommand): string {
         ],
     command.productId,
     command.legacyPurchasedAt?.toISOString() ?? null,
+    command.expectedCustomerId ?? null,
   ]);
   return createHash('sha256').update(canonical).digest('hex');
 }
@@ -171,6 +173,60 @@ type Decision =
  */
 export class LegacyAdoptionService {
   constructor(private readonly deps: LegacyAdoptionDeps) {}
+
+  /**
+   * The P7 importer's seam (`LegacyAdoptionPort.adopt`): its candidate becomes a command.
+   *
+   * Nothing is guessed in the translation. The match is the importer's ELIGIBLE decision
+   * restated (its exact spelling, its lowercase fold); a hidden shape names its product
+   * through the shape row; a NAMED legacy product without an explicit NEXA product id is
+   * `PRODUCT_MAPPING_UNRESOLVED`. The idempotency key is derived from the run and the
+   * invoice, so a resumed run replays and a later run decides again.
+   */
+  async adoptCandidate(
+    scope: TenantContext,
+    actor: ActorContext,
+    candidate: LegacyAdoptionCandidate,
+  ): Promise<LegacyAdoptionOutcome> {
+    let productId: string | null;
+    if (candidate.product.kind === 'HIDDEN_SHAPE') {
+      const shape =
+        candidate.product.shapeId === ''
+          ? null
+          : await this.deps.shapes.findById(scope, candidate.product.shapeId);
+      productId = shape?.productId ?? null;
+    } else {
+      productId = candidate.product.productId ?? null;
+    }
+    const command: Omit<LegacyAdoptionCommand, 'idempotencyKey'> = {
+      runId: candidate.runId,
+      legacyInvoiceKey: candidate.legacyInvoiceId,
+      sourceChecksum: candidate.checksum,
+      telegramUserId: candidate.telegramUserId,
+      match: {
+        kind: 'ELIGIBLE',
+        panelId: candidate.panelId,
+        username: candidate.providerUsername.toLowerCase(),
+        providerUsername: candidate.providerUsername,
+      },
+      runtime: candidate.runtime,
+      productId,
+      legacyPurchasedAt: candidate.legacyPurchasedAt ?? null,
+      expectedCustomerId: candidate.customerId,
+    };
+    /*
+     * The key carries the request's own hash. A resumed run re-reads the inventory, so its
+     * runtime facts (and their read time) differ from the first attempt's; a key derived from
+     * the invoice alone would then be "reused with a different payload" and refused. With the
+     * hash in it, an identical retry replays and a fresh read is a new request — which the
+     * per-invoice lock and the map answer ALREADY_ADOPTED, or decide again after a review.
+     */
+    const draft = { ...command, idempotencyKey: '' };
+    return this.adopt(scope, actor, {
+      ...command,
+      idempotencyKey: `p6:${candidate.runId}:${candidate.legacyInvoiceId}:${adoptionRequestHash(draft).slice(0, 32)}`,
+    });
+  }
 
   async adopt(
     scope: TenantContext,
@@ -381,6 +437,9 @@ export class LegacyAdoptionService {
       tx,
     );
     if (customerId === null) return review('CUSTOMER_MISSING');
+    if (command.expectedCustomerId !== undefined && command.expectedCustomerId !== customerId) {
+      return review('CONFLICTING_EXISTING_ENTITY');
+    }
 
     if (command.productId === null) return review('PRODUCT_MAPPING_UNRESOLVED');
     const product = await this.deps.products.findById(scope, command.productId as ProductId, tx);
