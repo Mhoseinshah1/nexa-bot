@@ -136,3 +136,5 @@ export * from './direct-messages.js';
 export * from './incidents.js';
 /** Legacy migration prerequisites: hidden legacy product shapes, legacy trial decisions. */
 export * from './legacy-migration.js';
+/** Migration P4: legacy import run and map metadata (codes only, never source rows). */
+export * from './legacy-import.js';

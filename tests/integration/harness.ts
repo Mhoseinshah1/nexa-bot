@@ -173,6 +173,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- (No backticks. The warning twenty lines up is there because this is a plain
        -- template literal, and the first version of THIS comment ignored it.)
        product_categories,
+       -- Migration P4: the import map before the runs it names.
+       legacy_import_map, legacy_import_runs,
        customers
      RESTART IDENTITY CASCADE` as never,
   );
