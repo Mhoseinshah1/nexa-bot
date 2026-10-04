@@ -1242,13 +1242,19 @@ export function Field({
 }) {
   return (
     <div className={cx('field', compact && 'compact', error !== undefined && 'invalid')}>
-      <label {...(htmlFor === undefined ? {} : { htmlFor })}>
+      {/*
+        The required mark is drawn by CSS (`label.required::after`) rather than
+        as a child, so the label's DOM text — what `getByLabelText` matches —
+        stays exactly the label. Generated content IS part of the accessible
+        name, so the rule gives it empty alternative text (`content: '*' / ''`)
+        to keep the mark out of what a screen reader announces; the input
+        carries `aria-required` instead.
+      */}
+      <label
+        {...(htmlFor === undefined ? {} : { htmlFor })}
+        {...(required ? { className: 'required' } : {})}
+      >
         {label}
-        {required && (
-          <span className="danger" aria-hidden="true">
-            *
-          </span>
-        )}
       </label>
       {children}
       {hint !== undefined && <span className="muted small">{hint}</span>}
