@@ -755,5 +755,6 @@ function toMap(row: MapRow): LegacyImportMapRecord {
     reviewedByActorType: row.reviewedByActorType as ActorType | null,
     reviewedByActorId: row.reviewedByActorId,
     reviewReopenedCount: row.reviewReopenedCount,
+    ref: row.ref,
   };
 }

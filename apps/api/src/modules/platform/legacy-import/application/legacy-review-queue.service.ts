@@ -259,7 +259,7 @@ export class LegacyReviewQueueService {
       throw errors.validation(LEGACY_IMPORT_ERROR_CODES.INVALID, 'not a review resolution');
     }
     const reviewer = this.reviewerOf(actor);
-    const denial = { action: AUDIT_RESOLVE, entityType: ENTITY, entityId: entityIdOf(command) };
+    const denial = { action: AUDIT_RESOLVE, entityType: ENTITY, entityId: null };
     await this.authorize(scope, actor, denial);
 
     const requestHash = hashRequest({
@@ -301,7 +301,7 @@ export class LegacyReviewQueueService {
           },
           tx,
         );
-        const result = await this.settle(scope, actor, tx, command, outcome, AUDIT_RESOLVE);
+        const result = await this.settle(scope, actor, tx, outcome, AUDIT_RESOLVE);
         await rememberOnce(
           this.deps.idempotency,
           scope,
@@ -322,7 +322,7 @@ export class LegacyReviewQueueService {
     command: LegacyReviewReopenCommand,
   ): Promise<LegacyReviewDecisionOutcome> {
     assertLegacyKey(command.legacyTable, command.legacyId);
-    const denial = { action: AUDIT_REOPEN, entityType: ENTITY, entityId: entityIdOf(command) };
+    const denial = { action: AUDIT_REOPEN, entityType: ENTITY, entityId: null };
     await this.authorize(scope, actor, denial);
 
     const requestHash = hashRequest({
@@ -357,7 +357,7 @@ export class LegacyReviewQueueService {
           },
           tx,
         );
-        const result = await this.settle(scope, actor, tx, command, outcome, AUDIT_REOPEN);
+        const result = await this.settle(scope, actor, tx, outcome, AUDIT_REOPEN);
         await rememberOnce(
           this.deps.idempotency,
           scope,
@@ -380,7 +380,6 @@ export class LegacyReviewQueueService {
     scope: TenantContext,
     actor: ActorContext,
     tx: TransactionScope,
-    key: { readonly legacyTable: string; readonly legacyId: string },
     outcome: LegacyReviewTransitionOutcome,
     action: typeof AUDIT_RESOLVE | typeof AUDIT_REOPEN,
   ): Promise<LegacyReviewDecisionOutcome> {
@@ -410,7 +409,9 @@ export class LegacyReviewQueueService {
         return { kind: 'ALREADY', item: toItem(outcome.record) };
       case 'CHANGED': {
         const item = toItem(outcome.record);
-        const entityId = entityIdOf(key);
+        // The row's uuid, never its legacy key: a `user` key is a Telegram id, and the audit
+        // log is append-only.
+        const entityId = outcome.record.ref;
         await this.deps.audit.record(
           scope,
           actor,
@@ -519,11 +520,6 @@ export class LegacyReviewQueueService {
       clock: this.deps.clock,
     };
   }
-}
-
-/** `<legacy_table>:<legacy_id>` — the row's address in audit and outbox. */
-function entityIdOf(key: { readonly legacyTable: string; readonly legacyId: string }): string {
-  return `${key.legacyTable}:${key.legacyId}`;
 }
 
 function toItem(record: LegacyImportMapRecord): LegacyReviewItem {

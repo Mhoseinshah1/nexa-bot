@@ -5,6 +5,7 @@ ALTER TABLE "legacy_import_map" ADD COLUMN "reviewed_at" timestamp with time zon
 ALTER TABLE "legacy_import_map" ADD COLUMN "reviewed_by_actor_type" text;--> statement-breakpoint
 ALTER TABLE "legacy_import_map" ADD COLUMN "reviewed_by_actor_id" text;--> statement-breakpoint
 ALTER TABLE "legacy_import_map" ADD COLUMN "review_reopened_count" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "legacy_import_map" ADD COLUMN "ref" uuid DEFAULT gen_random_uuid() NOT NULL;--> statement-breakpoint
 -- ===== HAND-WRITTEN (not generated): backfill before the review CHECKs are added. =====
 -- Rows written before 0192 have no review state. A MANUAL_REVIEW row enters the queue OPEN.
 -- A MANUAL_REVIEW row whose reason is not a review reason (only a non-conforming writer
@@ -16,6 +17,7 @@ UPDATE "legacy_import_map" SET "status" = 'FAILED'
 UPDATE "legacy_import_map" SET "review_state" = 'OPEN' WHERE "status" = 'MANUAL_REVIEW';--> statement-breakpoint
 -- ===== END HAND-WRITTEN =====
 CREATE INDEX "legacy_import_map_review_queue_idx" ON "legacy_import_map" USING btree ("tenant_id","review_state","legacy_table","legacy_id") WHERE status = 'MANUAL_REVIEW';--> statement-breakpoint
+ALTER TABLE "legacy_import_map" ADD CONSTRAINT "legacy_import_map_tenant_ref_key" UNIQUE("tenant_id","ref");--> statement-breakpoint
 ALTER TABLE "legacy_import_map" ADD CONSTRAINT "legacy_import_map_review_reason_check" CHECK (status <> 'MANUAL_REVIEW' OR reason_code IN ('PROVIDER_MISSING', 'AMBIGUOUS_PANEL', 'USERNAME_CASE_COLLISION', 'PANEL_UNMAPPED', 'INVENTORY_INCOMPLETE', 'CUSTOMER_MISSING', 'PRODUCT_MAPPING_UNRESOLVED', 'SUBSCRIPTION_REF_BLOCKED', 'INVALID_PHONE', 'CONFLICTING_EXISTING_ENTITY', 'UNSUPPORTED_SHAPE', 'INVALID_SOURCE_ROW'));--> statement-breakpoint
 ALTER TABLE "legacy_import_map" ADD CONSTRAINT "legacy_import_map_review_state_check" CHECK (CASE status
             WHEN 'MANUAL_REVIEW' THEN review_state IS NOT NULL AND review_state IN ('OPEN', 'RESOLVED', 'DISMISSED')

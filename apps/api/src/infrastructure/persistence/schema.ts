@@ -12953,6 +12953,14 @@ export const legacyImportMap = pgTable(
     reviewedByActorId: text('reviewed_by_actor_id'),
     /** How many times a closed review came back OPEN (a reopen, or a retry that failed again). */
     reviewReopenedCount: integer('review_reopened_count').notNull().default(0),
+    /**
+     * Item 9: the row's non-identifying reference — what audit rows and outbox events name,
+     * as they name a customer by its uuid. The legacy key of a `user` row IS a Telegram id,
+     * and an append-only audit log must never carry one.
+     */
+    ref: uuid('ref')
+      .notNull()
+      .default(sql`gen_random_uuid()`),
   },
   (table) => [
     primaryKey({
@@ -12975,6 +12983,7 @@ export const legacyImportMap = pgTable(
     index('legacy_import_map_tenant_entity_idx')
       .on(table.tenantId, table.entityType, table.entityId)
       .where(sql`entity_id IS NOT NULL`),
+    unique('legacy_import_map_tenant_ref_key').on(table.tenantId, table.ref),
     /** Item 9: the review queue, filtered by state and keyset-paged by legacy key. */
     index('legacy_import_map_review_queue_idx')
       .on(table.tenantId, table.reviewState, table.legacyTable, table.legacyId)

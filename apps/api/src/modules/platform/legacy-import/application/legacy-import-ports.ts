@@ -76,6 +76,11 @@ export interface LegacyImportMapRecord {
   readonly reviewedByActorType: ActorType | null;
   readonly reviewedByActorId: string | null;
   readonly reviewReopenedCount: number;
+  /**
+   * Item 9: the row's non-identifying uuid — what audit and outbox name, never the legacy
+   * key (a `user` key is a Telegram id).
+   */
+  readonly ref: string;
 }
 
 /** One decision about one legacy record, as the importer hands it over. */

@@ -203,7 +203,14 @@ is a `legacy_import.review_conflict`, never resolved blind. A closed review reco
 when closed, none when open, and the code belongs to the state); a reopen clears them and
 increments `review_reopened_count`. History is in `audit_logs`
 (`legacy_import.review_resolve` / `legacy_import.review_reopen`, entity
-`LegacyImportMapRow` `<table>:<id>`) and the outbox (`LegacyImportReviewStateChanged`).
+`LegacyImportMapRow`) and the outbox (`LegacyImportReviewStateChanged`, aggregate
+`LegacyImportMapRow`). Both name the row by its **`ref`** — a uuid column added in 0192
+(`DEFAULT gen_random_uuid()`, unique per tenant), the same idiom as naming a customer by its
+uuid — and **never by its legacy key**: a `user` row's key is a Telegram id, and the audit
+log is append-only. A denial is recorded before the row is read, so it names no row
+(`entity_id` NULL). Tested: after a denial, a resolve, a replay, a reopen and a re-resolve
+of a `user` row, no audit column and no outbox id or payload contains its key
+(mutation-checked).
 
 | resolution               | state       | a later import run                                                    |
 | ------------------------ | ----------- | --------------------------------------------------------------------- |

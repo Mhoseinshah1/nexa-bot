@@ -125,13 +125,24 @@ describe('legacy import manual review queue (Item 9)', () => {
     const [r] = (await db().execute(query)).rows as { n: number }[];
     return Number(r?.n ?? 0);
   };
-  const audits = (entityId: string, action: string, result = 'SUCCESS') =>
+  /** Audit rows and events name the row by its `ref` uuid, never its legacy key. */
+  const refOf = async (legacyId: string): Promise<string> => {
+    const r = await row(A, legacyId);
+    if (r === undefined) throw new Error(`no map row ${legacyId}`);
+    return r.ref;
+  };
+  const audits = async (legacyId: string, action: string) =>
     count(sql`SELECT count(*)::int AS n FROM audit_logs
-      WHERE entity_type = 'LegacyImportMapRow' AND entity_id = ${entityId}
-        AND action = ${action} AND result = ${result}`);
-  const events = (entityId: string) =>
+      WHERE entity_type = 'LegacyImportMapRow' AND entity_id = ${await refOf(legacyId)}
+        AND action = ${action} AND result = 'SUCCESS'`);
+  const deniedAudits = (action: string) =>
+    count(sql`SELECT count(*)::int AS n FROM audit_logs
+      WHERE entity_type = 'LegacyImportMapRow' AND entity_id IS NULL
+        AND action = ${action} AND result = 'DENIED'`);
+  const events = async (legacyId: string) =>
     count(sql`SELECT count(*)::int AS n FROM outbox_messages
-      WHERE event_type = 'LegacyImportReviewStateChanged' AND aggregate_id = ${entityId}`);
+      WHERE event_type = 'LegacyImportReviewStateChanged'
+        AND aggregate_id = ${await refOf(legacyId)}`);
 
   const resolve = (
     legacyId: string,
@@ -443,8 +454,8 @@ describe('legacy import manual review queue (Item 9)', () => {
     expect((await resolve('11', 'HANDLED_OUTSIDE_IMPORT', 'PROVIDER_MISSING')).kind).toBe(
       'ALREADY',
     );
-    expect(await audits('user:11', 'legacy_import.review_resolve')).toBe(1);
-    expect(await events('user:11')).toBe(1);
+    expect(await audits('11', 'legacy_import.review_resolve')).toBe(1);
+    expect(await events('11')).toBe(1);
     // The same key with another request is a bug, never a replay.
     expect(await codeOf(resolve('11', 'WILL_NOT_IMPORT', 'PROVIDER_MISSING', k))).toBe(
       PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
@@ -498,8 +509,8 @@ describe('legacy import manual review queue (Item 9)', () => {
       },
     });
     expect((await reopen('21')).kind).toBe('ALREADY');
-    expect(await audits('user:21', 'legacy_import.review_reopen')).toBe(1);
-    expect(await events('user:21')).toBe(2);
+    expect(await audits('21', 'legacy_import.review_reopen')).toBe(1);
+    expect(await events('21')).toBe(2);
     // And it can be resolved again.
     expect((await resolve('21', 'RETRY_AFTER_FIX', 'SUBSCRIPTION_REF_BLOCKED')).kind).toBe(
       'RESOLVED',
@@ -531,7 +542,7 @@ describe('legacy import manual review queue (Item 9)', () => {
       expect((await row(A, String(300 + i)))?.reviewResolutionCode).toBe(
         winner.item.resolutionCode,
       );
-      expect(await audits(`user:${String(300 + i)}`, 'legacy_import.review_resolve')).toBe(1);
+      expect(await audits(String(300 + i), 'legacy_import.review_resolve')).toBe(1);
     }
   });
 
@@ -542,8 +553,8 @@ describe('legacy import manual review queue (Item 9)', () => {
       await decide(A, runId, id, review('PROVIDER_MISSING'));
       const results = await Promise.all([resolve(id), resolve(id)]);
       expect(results.map((r) => r.kind).sort()).toEqual(['ALREADY', 'RESOLVED']);
-      expect(await audits(`user:${id}`, 'legacy_import.review_resolve')).toBe(1);
-      expect(await events(`user:${id}`)).toBe(1);
+      expect(await audits(id, 'legacy_import.review_resolve')).toBe(1);
+      expect(await events(id)).toBe(1);
     }
   });
 
@@ -736,6 +747,45 @@ describe('legacy import manual review queue (Item 9)', () => {
   // Isolation, authority, activity
   // ---------------------------------------------------------------------------------------
 
+  it("no audit row or outbox event carries a user row's legacy key (a Telegram id)", async () => {
+    const telegramId = '7123456789';
+    const runId = await startRun(A);
+    await decide(A, runId, telegramId, review('CONFLICTING_EXISTING_ENTITY'));
+    const support = adminActorFor(
+      await createAdmin(ctx.container, A, { username: 'support-leak', roleKeys: ['support'] }),
+    );
+    // A denial, a resolve, a replayed resolve, a reopen and a re-resolve: every audited path.
+    await codeOf(
+      resolve(telegramId, 'WILL_NOT_IMPORT', 'CONFLICTING_EXISTING_ENTITY', idem(), A, support),
+    );
+    const k = idem();
+    await resolve(telegramId, 'WILL_NOT_IMPORT', 'CONFLICTING_EXISTING_ENTITY', k);
+    await resolve(telegramId, 'WILL_NOT_IMPORT', 'CONFLICTING_EXISTING_ENTITY', k);
+    await reopen(telegramId);
+    await resolve(telegramId, 'RETRY_AFTER_FIX', 'CONFLICTING_EXISTING_ENTITY');
+
+    const ref = await refOf(telegramId);
+    expect(ref).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await audits(telegramId, 'legacy_import.review_resolve')).toBe(2);
+    expect(await audits(telegramId, 'legacy_import.review_reopen')).toBe(1);
+    expect(await events(telegramId)).toBe(3);
+
+    const auditHits = await count(sql`SELECT count(*)::int AS n FROM audit_logs
+      WHERE entity_type = 'LegacyImportMapRow'
+        AND (coalesce(entity_id, '') LIKE ${'%' + telegramId + '%'}
+          OR coalesce(before::text, '') LIKE ${'%' + telegramId + '%'}
+          OR coalesce(after::text, '') LIKE ${'%' + telegramId + '%'})`);
+    const auditRows = await count(sql`SELECT count(*)::int AS n FROM audit_logs
+      WHERE entity_type = 'LegacyImportMapRow'`);
+    expect(auditRows).toBe(4);
+    expect(auditHits).toBe(0);
+    const eventHits = await count(sql`SELECT count(*)::int AS n FROM outbox_messages
+      WHERE event_type = 'LegacyImportReviewStateChanged'
+        AND (aggregate_id LIKE ${'%' + telegramId + '%'}
+          OR payload::text LIKE ${'%' + telegramId + '%'})`);
+    expect(eventHits).toBe(0);
+  });
+
   it('tenant isolation: another tenant neither sees, counts nor closes a review row', async () => {
     const runId = await startRun(A);
     await decide(A, runId, '51', review('INVALID_PHONE'));
@@ -769,7 +819,7 @@ describe('legacy import manual review queue (Item 9)', () => {
     expect(
       await codeOf(resolve('61', 'WILL_NOT_IMPORT', 'UNSUPPORTED_SHAPE', idem(), A, support)),
     ).toBe(PLATFORM_ERROR_CODES.PERMISSION_DENIED);
-    expect(await audits('user:61', 'legacy_import.review_resolve', 'DENIED')).toBe(1);
+    expect(await deniedAudits('legacy_import.review_resolve')).toBe(1);
 
     // An owner holds maintenance.run and passes the same check: no actor type is special.
     const owner = adminActorFor(

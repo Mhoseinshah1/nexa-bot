@@ -1,5 +1,5 @@
 {
-  "id": "db186efd-7b95-4e7d-89e1-c2751b38f532",
+  "id": "3cfbb523-f40b-4bf6-82ba-2ec0895f8a47",
   "prevId": "463f8d53-2307-49aa-8bd5-7e5d5b0d3148",
   "version": "7",
   "dialect": "postgresql",
@@ -12241,6 +12241,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "ref": {
+          "name": "ref",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "gen_random_uuid()"
         }
       },
       "indexes": {
@@ -12407,7 +12414,16 @@
           ]
         }
       },
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "legacy_import_map_tenant_ref_key": {
+          "name": "legacy_import_map_tenant_ref_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "ref"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "legacy_import_map_status_check": {
