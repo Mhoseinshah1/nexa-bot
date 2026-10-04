@@ -468,11 +468,31 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(transport.sent).toHaveLength(1);
   });
 
+  it('a job replaced while its provider call is in flight writes nothing: one reply in all', async () => {
+    const first = await record(message({ text: 'سلام' }));
+    duringCall = async () => {
+      duringCall = null;
+      await record(message({ text: 'اینترنتم وصل نمی‌شود' }));
+    };
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { state: 'DISCARDED', outcome: 'dropped_coalesced' },
+      { state: 'QUEUED' },
+    ]);
+    expect(await autoRows(first.conversationId)).toEqual([]);
+    await tick();
+    await deliver();
+    expect(transport.sent).toHaveLength(1);
+  });
+
   it('a redelivered inbound message enqueues no second job', async () => {
     const m = message();
     const first = await record(m, key('update'));
     await record(m, key('update-again'));
-    expect(await autoJobs(first.conversationId)).toHaveLength(1);
+    // Still the one job, still pending: a redelivery neither duplicates nor replaces it.
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { state: 'QUEUED', outcome: null },
+    ]);
   });
 
   it('our own echo, an away message and the owner never start automatic work', async () => {
