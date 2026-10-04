@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { focusManager } from '@tanstack/react-query';
 import { CategoryColorsSection } from '../../apps/web/src/pages/category-colors';
 import { AppearancePage } from '../../apps/web/src/pages/appearance';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -244,5 +245,28 @@ describe('«رنگ دسته‌بندی‌ها»', () => {
     renderPage(<AppearancePage denied mayEdit={false} mayViewCategories />);
     expect(document.getElementById('category-colors')).toBeNull();
     expect(calls.calls.length).toBe(before);
+  });
+  it('keeps an unset (null) read version through a refetch, so a stale draft cannot overwrite', async () => {
+    // `null` is a real version — "I read this key as unset" — and the server checks it. A draft
+    // started from it must keep it when another admin's save lands, or a second edit would adopt
+    // the new version and erase their colours with no conflict.
+    api({ version: null });
+    renderPage(section());
+    await waitFor(() => expect(row(VPN)).not.toBeNull());
+    fireEvent.change(select(VPN), { target: { value: 'danger' } });
+
+    const calls = api({ colors: { [GAMING]: 'primary' }, version: 1 });
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await waitFor(() =>
+      expect(calls.calls.some((call) => call.url.endsWith('/settings'))).toBe(true),
+    );
+    await screen.findByText(t('web.ib_changed_elsewhere'));
+
+    fireEvent.change(select(OLD), { target: { value: 'success' } });
+    expect(screen.getByText(t('web.ib_changed_elsewhere'))).toBeInTheDocument();
+    act(() => focusManager.setFocused(undefined));
   });
 });

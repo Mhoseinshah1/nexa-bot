@@ -45,6 +45,7 @@ import {
   useUnsavedChanges,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { fill } from './bot-buttons/canvas';
 
 /**
  * What a sample value has to look like in a text field, per declared type.
@@ -343,7 +344,7 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
               {category !== 'all' && search.trim() !== '' && elsewhere > 0 && (
                 <div className="content-nav-elsewhere" data-testid="templates-elsewhere">
                   <span className="muted small">
-                    {t('web.templates_elsewhere').replace('{n}', formatNumber(elsewhere))}
+                    {fill(t('web.templates_elsewhere'), { n: formatNumber(elsewhere) })}
                   </span>
                   <button type="button" className="btn sm" onClick={() => chooseCategory('all')}>
                     {t('web.templates_search_all')}

@@ -117,7 +117,10 @@ export function CategoryColorsSection({
   const changedElsewhere =
     draft !== null && setting !== undefined && setting.version !== draft.basisVersion;
   const edit = (colors: CategoryColors) =>
-    setDraft((before) => ({ colors, basisVersion: before?.basisVersion ?? basisVersion }));
+    setDraft((before) => ({
+      colors,
+      basisVersion: before === null ? basisVersion : before.basisVersion,
+    }));
   useUnsavedChanges(mayEdit && unsaved);
 
   const rows = useMemo(
