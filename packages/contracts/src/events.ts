@@ -110,6 +110,14 @@ export const EVENT_TYPES = [
   'CustomerChannelMembershipExemptionChanged',
   'CustomerPhoneVerificationChanged',
   'CustomerLocationChangeOverrideChanged',
+  /**
+   * Migration P7: a customer created by the legacy importer for a legacy user who never
+   * started this installation's bot. NOT `CustomerRegistered`, whose payload names the bot
+   * the customer arrived through — an imported customer arrived through none, and naming
+   * one would be a guess. No consumer: a projection that greeted new customers must not
+   * greet ~200k imported ones, so nothing is subscribed to it by design.
+   */
+  'CustomerImported',
   'CustomerAccountTransferred',
   // Program §6: the terms and rules. Ids and numbers only, never the text.
   'TermsVersionPublished',
@@ -308,6 +316,14 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     telegramUserId: z.string(),
     /** Which bot the customer first arrived through. */
     botInstanceId: z.string(),
+  }),
+  /**
+   * Migration P7. The legacy run that created the row. The customer is the aggregate id;
+   * no Telegram id, phone or name rides on the event (program §23: aggregates only).
+   */
+  CustomerImported: z.object({
+    source: z.literal('LEGACY_MIGRATION'),
+    runId: z.string().uuid(),
   }),
   CustomerBlocked: z.object({ reason: z.string().max(500).nullable() }),
   CustomerUnblocked: z.object({ reason: z.string().max(500).nullable() }),
