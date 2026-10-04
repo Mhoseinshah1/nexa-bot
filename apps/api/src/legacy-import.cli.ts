@@ -424,14 +424,73 @@ export function wantsHelp(argv: readonly string[]): boolean {
   return argv.includes('--help') || argv.includes('-h');
 }
 
-async function main(): Promise<void> {
+/**
+ * The process's one exit. `exitCode` is set first; then stdout and stderr are drained (an
+ * empty write's callback runs once everything written before it has been taken by the
+ * pipe); only then does the process exit. A `process.exit()` while a pipe still holds
+ * output discards it — a piped report cut at 64 KiB — so nothing else calls it. The
+ * explicit exit after the drain remains so a stray handle cannot hang the operator's shell.
+ */
+export async function exitAfterDrain(code: number): Promise<never> {
+  process.exitCode = code;
+  const drain = (stream: NodeJS.WriteStream) =>
+    new Promise<void>((done) => {
+      if (stream.destroyed || !stream.writable) {
+        done();
+        return;
+      }
+      stream.write('', () => done());
+    });
+  await drain(process.stdout);
+  await drain(process.stderr);
+  process.exit(code);
+}
+
+/** The exit code for an error that escaped `main`, after printing what may be printed. */
+function exitCodeForError(error: unknown): number {
+  if (error instanceof UsageError || error instanceof ReviewUsageError) {
+    console.error(error.message);
+    return 64;
+  }
+  if (error instanceof PanelMappingRefused || error instanceof LegacySourceRefused) {
+    console.error(error.message);
+    return 65;
+  }
+  if (error instanceof LegacyImportInterrupted) {
+    console.error(error.message);
+    const cause = error.cause;
+    console.error(
+      isNexaError(cause)
+        ? `cause: ${cause.code}`
+        : `cause: ${cause instanceof Error ? cause.name : 'unknown'}`,
+    );
+    return 4;
+  }
+  if (isNexaError(error)) {
+    console.error(`${error.code}: ${error.message}`);
+    return 1;
+  }
+  // The name and an engine code only: a driver's message can quote the row it choked on.
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
+  console.error(`${error instanceof Error ? error.name : 'unknown error'} ${code}`.trim());
+  return 1;
+}
+
+/**
+ * Runs one invocation and RETURNS its exit code: it never exits itself, so every `finally`
+ * (the container's shutdown above all) runs before `exitAfterDrain`.
+ */
+async function main(): Promise<number> {
   if (wantsHelp(process.argv.slice(2))) {
     process.stdout.write(`${process.argv[2] === 'review' ? REVIEW_USAGE : USAGE}\n`);
-    process.exit(0);
+    return 0;
   }
   if (process.argv[2] === 'review') {
     await reviewMain(process.argv.slice(3));
-    return;
+    return 0;
   }
   const args = parseArgs(process.argv.slice(2));
   const env = process.env;
@@ -456,7 +515,7 @@ async function main(): Promise<void> {
       const runs = await importer.runningRun(scope);
       if (runs === null) {
         process.stdout.write('No run is RUNNING for this tenant.\n');
-        process.exit(0);
+        return 0;
       }
       await importer.abortRunning(
         scope,
@@ -464,51 +523,20 @@ async function main(): Promise<void> {
         runs,
       );
       process.stdout.write(`Run ${runs} ABORTED.\n`);
-      process.exit(0);
+      return 0;
     }
     const report = await runMode(importer, args, connector, mappingText, container.ids.uuid(), {
       tenantId,
       productionLikeTarget: target.productionLike,
     });
-    if (report !== null) {
-      await emit(report, args.out, args.format);
-      process.exit(exitCodeFor(report));
-    }
+    if (report === null) return 0;
+    await emit(report, args.out, args.format);
+    return exitCodeFor(report);
   } finally {
     await container.shutdown();
   }
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  main().catch((error: unknown) => {
-    if (error instanceof UsageError || error instanceof ReviewUsageError) {
-      console.error(error.message);
-      process.exit(64);
-    }
-    if (error instanceof PanelMappingRefused || error instanceof LegacySourceRefused) {
-      console.error(error.message);
-      process.exit(65);
-    }
-    if (error instanceof LegacyImportInterrupted) {
-      console.error(error.message);
-      const cause = error.cause;
-      console.error(
-        isNexaError(cause)
-          ? `cause: ${cause.code}`
-          : `cause: ${cause instanceof Error ? cause.name : 'unknown'}`,
-      );
-      process.exit(4);
-    }
-    if (isNexaError(error)) {
-      console.error(`${error.code}: ${error.message}`);
-      process.exit(1);
-    }
-    // The name and an engine code only: a driver's message can quote the row it choked on.
-    const code =
-      typeof error === 'object' && error !== null && 'code' in error
-        ? String((error as { code: unknown }).code)
-        : '';
-    console.error(`${error instanceof Error ? error.name : 'unknown error'} ${code}`.trim());
-    process.exit(1);
-  });
+  void main().then(exitAfterDrain, (error: unknown) => exitAfterDrain(exitCodeForError(error)));
 }
