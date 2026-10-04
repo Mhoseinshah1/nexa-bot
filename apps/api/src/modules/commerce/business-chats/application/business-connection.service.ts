@@ -104,6 +104,27 @@ export class BusinessConnectionService {
     return this.deps.repository.find(scope, botInstanceId, connectionId);
   }
 
+  /** The stored connection by row id, with its projected status. Read-only. */
+  async findById(
+    scope: ScopeContext,
+    id: string,
+  ): Promise<(BusinessConnectionRecord & { readonly status: BusinessConnectionStatus }) | null> {
+    const connection = await this.deps.repository.findById(scope, id);
+    return connection === null
+      ? null
+      : { ...connection, status: businessConnectionStatus(connection) };
+  }
+
+  /** Every connection of this tenant, with its projected status. Read-only. */
+  async list(
+    scope: ScopeContext,
+  ): Promise<
+    readonly (BusinessConnectionRecord & { readonly status: BusinessConnectionStatus })[]
+  > {
+    const rows = await this.deps.repository.list(scope);
+    return rows.map((row) => ({ ...row, status: businessConnectionStatus(row) }));
+  }
+
   /**
    * Applies one report of a connection: an insert, a change, or a confirmation.
    *
@@ -311,36 +332,6 @@ export class BusinessConnectionService {
       report: fetched.report,
     });
     return applied.connection;
-  }
-
-  /**
-   * Routes one business message: its connection (learned from Telegram when unknown) and
-   * who sent it. Null when the connection cannot be established — the caller has already
-   * been told why through the operational log.
-   *
-   * TB1 stops here: it decides origin and records nothing about the conversation. The
-   * conversation, its state and the takeover it drives are TB2's (ADR-0033 §4).
-   */
-  async routeMessage(
-    scope: ScopeContext,
-    actor: ActorContext,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: string;
-      readonly message: BusinessMessageFacts;
-    },
-  ): Promise<{
-    readonly connection: BusinessConnectionRecord;
-    readonly origin: BusinessMessageOrigin;
-  } | null> {
-    const connection = await this.ensureKnown(scope, actor, {
-      idempotencyKey: input.idempotencyKey,
-      botInstanceId: input.botInstanceId,
-      connectionId: input.message.connectionId,
-    });
-    if (connection === null) return null;
-    const origin = await this.classify(scope, connection, input.message);
-    return { connection, origin };
   }
 
   /**

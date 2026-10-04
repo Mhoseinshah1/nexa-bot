@@ -29,7 +29,7 @@ import {
  * to send a different body, so a non-2xx would only loop.
  */
 export async function handleBusinessUpdate(
-  container: Pick<Container, 'businessConnections' | 'opsLog'>,
+  container: Pick<Container, 'businessConnections' | 'businessConversations' | 'opsLog'>,
   scope: TenantContext,
   actor: ActorContext,
   input: {
@@ -82,13 +82,13 @@ export async function handleBusinessUpdate(
         return;
       }
       try {
-        // A separate key from the update's own: the update key belongs to whatever TB2
-        // records about the message, and one key presented with two request hashes is
-        // refused as a payload mismatch.
-        await container.businessConnections.routeMessage(scope, actor, {
-          idempotencyKey: `${input.idempotencyKey}:connection`,
+        // The update key is the message's own; the connection lookup derives its own key
+        // from it inside the service, so one key is never presented with two hashes.
+        await container.businessConversations.recordMessage(scope, actor, {
+          idempotencyKey: input.idempotencyKey,
           botInstanceId: input.botInstanceId,
           message: parsed,
+          edited: input.update.kind === 'EDITED_MESSAGE',
         });
       } catch (error) {
         // Guarded: a failed report must not turn a swallowed message failure into a non-2xx
@@ -98,10 +98,21 @@ export async function handleBusinessUpdate(
       return;
     }
     case 'DELETED_MESSAGES': {
-      // TB1 reads the deletion strictly and does nothing else: there is no stored message
-      // text to purge until TB2 stores some. Malformed is still reported.
-      if (parseBusinessDeletion(input.update.payload) === null)
+      const parsed = parseBusinessDeletion(input.update.payload);
+      if (parsed === null) {
         await report('MALFORMED').catch(() => undefined);
+        return;
+      }
+      try {
+        await container.businessConversations.recordDeletion(scope, actor, {
+          idempotencyKey: input.idempotencyKey,
+          botInstanceId: input.botInstanceId,
+          deletion: parsed,
+        });
+      } catch (error) {
+        // Guarded, as above (TB1 review S3).
+        await report('DELETION_NOT_APPLIED', error).catch(() => undefined);
+      }
       return;
     }
   }

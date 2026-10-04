@@ -1380,6 +1380,20 @@
       "when": 1791142259587,
       "tag": "0196_telegram_business_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 197,
+      "version": "7",
+      "when": 1791144335811,
+      "tag": "0197_business_conversations",
+      "breakpoints": true
+    },
+    {
+      "idx": 198,
+      "version": "7",
+      "when": 1791144681626,
+      "tag": "0198_business_chat_grants",
+      "breakpoints": true
     }
   ]
 }

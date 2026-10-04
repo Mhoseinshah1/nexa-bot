@@ -1,4 +1,9 @@
-import { BUSINESS_BOT_RIGHTS, type BusinessBotRight } from '@nexa/contracts';
+import {
+  BUSINESS_BOT_RIGHTS,
+  BUSINESS_MESSAGE_TEXT_MAX,
+  type BusinessBotRight,
+  type BusinessMessageKind,
+} from '@nexa/contracts';
 import { z } from 'zod';
 
 /**
@@ -78,7 +83,7 @@ const businessMessageSchema = z
   })
   .passthrough();
 
-/** The routing facts of one business message. Content is TB2's and is not read here. */
+/** One business message: its routing facts, and (TB2) its bounded text and kind. */
 export interface ParsedBusinessMessage {
   readonly connectionId: string;
   readonly chatId: string;
@@ -89,6 +94,9 @@ export interface ParsedBusinessMessage {
   readonly isFromOffline: boolean;
   readonly sentAt: Date;
   readonly editedAt: Date | null;
+  readonly kind: BusinessMessageKind;
+  /** `text`, or a photo's `caption`, cut to the stored bound; null when there is none. */
+  readonly text: string | null;
 }
 
 export function parseBusinessMessage(raw: unknown): ParsedBusinessMessage | null {
@@ -106,6 +114,8 @@ export function parseBusinessMessage(raw: unknown): ParsedBusinessMessage | null
     isFromOffline: message.is_from_offline === true,
     sentAt: new Date(message.date * 1000),
     editedAt: message.edit_date === undefined ? null : new Date(message.edit_date * 1000),
+    kind: message.photo !== undefined ? 'PHOTO' : message.text !== undefined ? 'TEXT' : 'OTHER',
+    text: boundedText(message.text ?? message.caption),
   };
 }
 
@@ -157,4 +167,11 @@ export function businessUpdateOf(update: unknown): BusinessUpdate | null {
     return { kind: 'DELETED_MESSAGES', payload: shaped.deleted_business_messages };
   }
   return null;
+}
+
+function boundedText(value: string | undefined): string | null {
+  if (value === undefined || value.length === 0) return null;
+  return value.length > BUSINESS_MESSAGE_TEXT_MAX
+    ? value.slice(0, BUSINESS_MESSAGE_TEXT_MAX)
+    : value;
 }

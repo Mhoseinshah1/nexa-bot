@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, lt, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { BusinessBotRight, ScopeContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -79,6 +79,17 @@ export class DrizzleBusinessConnectionRepository implements BusinessConnectionRe
       )
       .limit(1);
     return row ? toRecord(row) : null;
+  }
+
+  async list(scope: ScopeContext): Promise<readonly BusinessConnectionRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select()
+      .from(telegramBusinessConnections)
+      .where(eq(telegramBusinessConnections.tenantId, tenantId))
+      .orderBy(desc(telegramBusinessConnections.connectedAt))
+      .limit(100);
+    return rows.map(toRecord);
   }
 
   async lock(

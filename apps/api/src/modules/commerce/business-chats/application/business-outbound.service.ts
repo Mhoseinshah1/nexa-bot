@@ -1,0 +1,284 @@
+import {
+  BUSINESS_MESSAGE_TEXT_RETENTION_DAYS,
+  businessOutboundSendable,
+  deliveryRetryDelayMs,
+  systemJobActor,
+  type Clock,
+  type CorrelationId,
+  type IdGenerator,
+  type Logger,
+  type ScopeContext,
+  type UnitOfWork,
+} from '@nexa/contracts';
+import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { BusinessConversationService } from './business-conversation.service.js';
+import type { BusinessTransport } from './business-transport.js';
+import type {
+  BusinessConversationRepository,
+  BusinessMessageRepository,
+  BusinessOutboundRecord,
+  BusinessOutboundRepository,
+} from './ports.js';
+
+/** How long a claimed row is leased before another pass may claim it. */
+export const BUSINESS_OUTBOUND_LEASE_MS = 60_000;
+/** A stamped row older than this, never recorded, is resolved UNCONFIRMED. */
+export const BUSINESS_OUTBOUND_STRANDED_MS = 5 * 60_000;
+export const BUSINESS_OUTBOUND_BATCH = 25;
+/** The retention purge runs at most this often. */
+export const BUSINESS_RETENTION_INTERVAL_MS = 10 * 60_000;
+const RETENTION_BATCH = 500;
+
+export interface BusinessOutboundServiceDeps {
+  readonly outbound: BusinessOutboundRepository;
+  readonly conversations: BusinessConversationRepository;
+  readonly messages: BusinessMessageRepository;
+  readonly control: Pick<BusinessConversationService, 'handOff'>;
+  readonly transport: Pick<BusinessTransport, 'sendText'>;
+  readonly uow: UnitOfWork<TransactionScope>;
+  readonly scopeActivity: ScopeActivityReader;
+  readonly clock: Clock;
+  readonly ids: IdGenerator;
+  readonly logger: Pick<Logger, 'warn'>;
+}
+
+export interface BusinessOutboundReport {
+  readonly claimed: number;
+  readonly delivered: number;
+  readonly superseded: number;
+  readonly unconfirmed: number;
+  readonly failed: number;
+  readonly rateLimited: number;
+  readonly stranded: number;
+  readonly purged: number;
+}
+
+type Outcome = 'delivered' | 'superseded' | 'unconfirmed' | 'failed' | 'rateLimited' | 'lost';
+
+/**
+ * TB2 — the business outbound lane (ADR-0033 §4, §6; ADR-0030's discipline).
+ *
+ * Per row, three transactions and never a network call inside one:
+ *
+ *   1. THE FINAL CHECK + STAMP — lock the conversation, read scope activity, and apply
+ *      `businessOutboundSendable` (equal epoch; and `AI_ACTIVE` for an `AUTO` row). A row that
+ *      fails it is `SUPERSEDED` and nothing is sent. One that passes is stamped
+ *      `send_started_at` — from this commit on, its outcome is the send's, never a retry's.
+ *   2. THE SEND — `BusinessTransport.sendText`, outside any transaction.
+ *   3. THE OUTCOME — `DELIVERED` (Telegram's message id kept: it proves the echo is ours);
+ *      `RATE_LIMITED` back to due at Telegram's wait, no attempt spent; `REFUSED` → `FAILED`;
+ *      `UNKNOWN` → `UNCONFIRMED`, NEVER resent. An `AUTO` row that failed or is unconfirmed
+ *      hands the conversation to a person (`TRANSPORT_REFUSED` / `SEND_OUTCOME_UNKNOWN`); a
+ *      person's own send that failed is shown to them and changes nothing about control.
+ */
+export class BusinessOutboundService {
+  private lastRetentionAt = 0;
+
+  constructor(private readonly deps: BusinessOutboundServiceDeps) {}
+
+  async deliverDue(
+    scope: ScopeContext,
+    limit = BUSINESS_OUTBOUND_BATCH,
+  ): Promise<BusinessOutboundReport> {
+    const counts: Record<Outcome, number> = {
+      delivered: 0,
+      superseded: 0,
+      unconfirmed: 0,
+      failed: 0,
+      rateLimited: 0,
+      lost: 0,
+    };
+    const empty = { claimed: 0, ...counts, stranded: 0, purged: 0 };
+    // A stopped tenant is a healthy pass that did nothing (the notification lane's rule).
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return empty;
+    const now = this.deps.clock.now();
+
+    const stranded = await this.deps.uow.run(scope, async (tx) => {
+      const rows = await this.deps.outbound.reapStranded(
+        scope,
+        new Date(now.getTime() - BUSINESS_OUTBOUND_STRANDED_MS),
+        now,
+        limit,
+        tx,
+      );
+      for (const row of rows) {
+        if (row.origin === 'AUTO') {
+          await this.deps.control.handOff(
+            scope,
+            row.conversationId,
+            'SEND_OUTCOME_UNKNOWN',
+            now,
+            tx,
+          );
+        }
+      }
+      return rows.length;
+    });
+
+    const purged = await this.purgeIfDue(scope, now);
+
+    const claimed = await this.deps.outbound.claimDue(
+      scope,
+      now,
+      new Date(now.getTime() + BUSINESS_OUTBOUND_LEASE_MS),
+      limit,
+    );
+    for (const row of claimed) {
+      const outcome = await this.deliverOne(scope, row);
+      counts[outcome] += 1;
+    }
+    return {
+      claimed: claimed.length,
+      delivered: counts.delivered,
+      superseded: counts.superseded,
+      unconfirmed: counts.unconfirmed,
+      failed: counts.failed,
+      rateLimited: counts.rateLimited,
+      stranded,
+      purged,
+    };
+  }
+
+  /** Exposed for the race tests: one row, start to finish. */
+  async deliverOne(scope: ScopeContext, row: BusinessOutboundRecord): Promise<Outcome> {
+    const decision = await this.deps.uow.run(scope, async (tx) => {
+      const now = this.deps.clock.now();
+      const conversation = await this.deps.conversations.lockById(scope, row.conversationId, tx);
+      const active = await this.deps.scopeActivity.scopeIsActive(scope, tx);
+      const sendable =
+        conversation !== null &&
+        active &&
+        row.body !== null &&
+        businessOutboundSendable({
+          origin: row.origin,
+          rowEpoch: row.controlEpoch,
+          conversationEpoch: conversation.controlEpoch,
+          conversationState: conversation.state,
+        });
+      if (!sendable) {
+        await this.deps.outbound.resolve(
+          scope,
+          row.id,
+          {
+            state: 'SUPERSEDED',
+            fromStamped: false,
+            failureCode: active ? 'conversation.moved_on' : 'scope.inactive',
+            attempted: false,
+            now,
+          },
+          tx,
+        );
+        return null;
+      }
+      const stamped = await this.deps.outbound.markSendStarted(scope, row.id, now, tx);
+      return stamped ? conversation : null;
+    });
+    if (decision === null) {
+      const current = await this.deps.outbound.findById(scope, row.id);
+      return current?.state === 'SUPERSEDED' ? 'superseded' : 'lost';
+    }
+
+    const actor = systemJobActor(`business-outbound:${row.id}`, row.id as CorrelationId);
+    const sent = await this.deps.transport.sendText(scope, actor, {
+      connectionRowId: decision.connectionRowId,
+      chatId: decision.chatId,
+      text: row.body ?? '',
+    });
+
+    return this.deps.uow.run(scope, async (tx): Promise<Outcome> => {
+      const now = this.deps.clock.now();
+      switch (sent.outcome) {
+        case 'DELIVERED': {
+          await this.deps.outbound.resolve(
+            scope,
+            row.id,
+            {
+              state: 'DELIVERED',
+              fromStamped: true,
+              telegramMessageId: sent.messageId,
+              attempted: true,
+              now,
+            },
+            tx,
+          );
+          await this.deps.conversations.touch(
+            scope,
+            row.conversationId,
+            row.origin === 'AUTO'
+              ? { lastMessageAt: now, lastAiAt: now, now }
+              : { lastMessageAt: now, lastHumanAt: now, now },
+            tx,
+          );
+          return 'delivered';
+        }
+        case 'RATE_LIMITED': {
+          const wait = deliveryRetryDelayMs(row.attempts, sent.retryAfterMs ?? undefined);
+          await this.deps.outbound.requeue(scope, row.id, new Date(now.getTime() + wait), now, tx);
+          return 'rateLimited';
+        }
+        case 'UNKNOWN': {
+          await this.deps.outbound.resolve(
+            scope,
+            row.id,
+            {
+              state: 'UNCONFIRMED',
+              fromStamped: true,
+              failureCode: sent.errorCode,
+              attempted: true,
+              now,
+            },
+            tx,
+          );
+          if (row.origin === 'AUTO') {
+            await this.deps.control.handOff(
+              scope,
+              row.conversationId,
+              'SEND_OUTCOME_UNKNOWN',
+              now,
+              tx,
+            );
+          }
+          return 'unconfirmed';
+        }
+        case 'REFUSED': {
+          await this.deps.outbound.resolve(
+            scope,
+            row.id,
+            {
+              state: 'FAILED',
+              fromStamped: true,
+              failureCode: sent.errorCode ?? `business.${sent.reason.toLowerCase()}`,
+              attempted: true,
+              now,
+            },
+            tx,
+          );
+          if (row.origin === 'AUTO') {
+            await this.deps.control.handOff(
+              scope,
+              row.conversationId,
+              'TRANSPORT_REFUSED',
+              now,
+              tx,
+            );
+          }
+          return 'failed';
+        }
+      }
+    });
+  }
+
+  /** The 30-day text retention (ADR-0033 §8), at most every ten minutes. */
+  private async purgeIfDue(scope: ScopeContext, now: Date): Promise<number> {
+    if (now.getTime() - this.lastRetentionAt < BUSINESS_RETENTION_INTERVAL_MS) return 0;
+    const cutoff = new Date(now.getTime() - BUSINESS_MESSAGE_TEXT_RETENTION_DAYS * 86_400_000);
+    const purged = await this.deps.uow.run(scope, async (tx) => {
+      const texts = await this.deps.messages.purgeText(scope, cutoff, now, RETENTION_BATCH, tx);
+      const bodies = await this.deps.outbound.purgeBodies(scope, cutoff, now, RETENTION_BATCH, tx);
+      return texts + bodies;
+    });
+    this.lastRetentionAt = now.getTime();
+    return purged;
+  }
+}

@@ -139,6 +139,9 @@ async function main(): Promise<void> {
         // that looks exactly like nothing being wrong — so it is health-checked rather
         // than trusted.
         ['customer-notifications', true, () => container.customerNotificationLoop.isFresh(now)],
+        // TB2: the business outbound lane. A stalled one is an operator's reply that never
+        // leaves, which looks exactly like nothing being wrong.
+        ['business-outbound', true, () => container.businessOutboundLoop.isFresh(now)],
         // Round N: the broadcast lane. No flag: a confirmed broadcast nobody sends is a
         // report that says "sending" for ever, and silence is what a stalled lane looks like.
         ['broadcasts', true, () => container.broadcastLoop.isFresh(now)],
@@ -242,6 +245,8 @@ async function main(): Promise<void> {
   // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it
   // replaces: exactly one thing could be said to a customer who was not looking.
   container.customerNotificationLoop.start();
+  // TB2: and the Telegram Business outbound lane (ADR-0033).
+  container.businessOutboundLoop.start();
   // Round N: and the broadcast lane — frozen recipients, paced per bot, at most once.
   container.broadcastLoop.start();
   container.incidentSchedulerLoop.start();
