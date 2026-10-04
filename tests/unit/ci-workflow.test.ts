@@ -243,16 +243,32 @@ describe('the CI workflow', () => {
     // Without always() a failed shard SKIPS this job, and a skipped required
     // check is not a red one.
     expect(job.if).toBe('always()');
-    expect(job.needs).toEqual(expect.arrayContaining(['unit', 'web', 'integration']));
+    expect(job.needs).toEqual(
+      expect.arrayContaining(['unit', 'web', 'integration', 'legacy-mysql']),
+    );
     const run = job.steps.map((s) => s.run ?? '').join('\n');
     for (const result of [
       '"$UNIT" = "success"',
       '"$WEB" = "success"',
       '"$INTEGRATION" = "success"',
+      '"$LEGACY_MYSQL" = "success"',
     ]) {
       expect(run).toContain(result);
     }
     expect(run, 'a result test was inverted').not.toContain('!= "success"');
+  });
+
+  it('runs the legacy MySQL source suite against a real MariaDB on every run', () => {
+    const job = workflow.jobs['legacy-mysql']!;
+    expect(job, 'the legacy-mysql job is gone').toBeDefined();
+    expect(Object.keys(job.services ?? {})).toEqual(['mariadb']);
+    const service = (job.services ?? {})['mariadb'] as { image?: string };
+    expect(service.image).toMatch(/^mariadb:/u);
+    expect(job.steps.some((s) => s.run === 'pnpm test:legacy-mysql')).toBe(true);
+    // The suite FAILS without its DSN; the job must supply one.
+    const env = (job as unknown as { env?: Record<string, string> }).env ?? {};
+    expect(env['NEXA_LEGACY_MYSQL_ADMIN_DSN']).toMatch(/^mysql:\/\//u);
+    expect(job['timeout-minutes']).toBeGreaterThan(0);
   });
 
   it('builds once and hands every test job the same compiled output', () => {

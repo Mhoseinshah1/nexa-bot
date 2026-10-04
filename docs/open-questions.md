@@ -3133,3 +3133,21 @@ Still open:
   unproven; a non-conforming key is refused (fail closed) and the confirming aggregate in
   that section is a MANUAL ACCEPTANCE step before an `APPLY`. Every other table stays
   refused until its key is evidenced the same way.
+
+## OQ-P7 — the legacy importer (Migration P7): decisions recorded, not guessed
+
+- **OQ-P7-01 — DECISION: the legacy phone is not imported.** `customers.phone_number` is
+  "a phone an operator verified out of band" (`customers_phone_check` pins a verification
+  time to it); `user.number` is not that. The importer classifies it (absent / valid /
+  invalid) for the report and writes nothing. If the owner wants legacy phones kept, that
+  is a new column or an explicit verification decision, not this importer's guess.
+- **OQ-P7-02 — the map code for a live legacy trial invoice.** It is recorded `SKIPPED /
+HISTORY_NOT_IMPORTED` (not adopted by registered decision; it expires on the panel).
+  MAP-REVIEW's closed set may want a dedicated code; flipping it is one entry of
+  `INVOICE_MAP_DECISIONS`.
+- **OQ-P7-03 — MySQL 8 parity.** CI runs the source suite on MariaDB 10.11; the production
+  archive is MySQL. The first MySQL 8 run is manual acceptance step 1 of
+  `docs/legacy-migration/importer.md` §10; a `mysql:8.0` matrix entry should follow it.
+- **OQ-P7-04 — inventory reads do not take the tenant probe budget.** The importer is an
+  operator-run CLI bounded by page size and `maxPages`; two full walks per production panel
+  per mode. Whether a cutover-day run should share the monitor's budget is open.

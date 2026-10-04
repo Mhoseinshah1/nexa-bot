@@ -1,0 +1,288 @@
+import type {
+  LegacyImportRunRecord,
+  LegacyImportSummaryRow,
+} from '../../legacy-import/application/legacy-import-ports.js';
+import {
+  INVOICE_MAP_DECISIONS,
+  parseLegacyBalance,
+  type ServiceCandidateCategory,
+} from './decisions.js';
+import type { PlanTallies } from './plan.js';
+import type { LegacyRunInputs } from './ports.js';
+import type { LegacySnapshot } from './source-snapshot.js';
+
+/**
+ * Item 16 — the final migration report, machine-readable, in the shape of
+ * `docs/legacy-migration/final-report.schema.json` (schemaVersion 1, REHEARSE's schema).
+ * `legacy-import report --format json` prints exactly this object.
+ *
+ * Built from the run, its recorded inputs, what NEXA holds now and a fresh plan over the
+ * same snapshot. Aggregates only. Two definitions the schema leaves to P7:
+ *
+ * - `customers.blocked` — legacy rows whose `user.id` is not a Telegram id. No customer and
+ *   no map key can exist for them (C3), so they are refused, not routed to review.
+ * - `wallet.preImportTotalMinor` — the NEXA-native total NOW: every wallet entry of the
+ *   selling currency except the migration openings. With it, `pre + imported = expected`
+ *   holds exactly even when customers bought something after the import, which a figure
+ *   frozen at the run's start would not.
+ * - `services.manualReview` includes eligible candidates P6 has not adopted yet, under the
+ *   reason `ADOPTION_PENDING_P6`, so the closure holds before P6 is wired and says why.
+ */
+
+export const FINAL_REPORT_SCHEMA_VERSION = '1';
+
+export interface FinalReportInput {
+  readonly generatedAt: Date;
+  readonly evidenceClass: 'synthetic' | 'staging' | 'production';
+  readonly tenantSlug: string;
+  readonly run: LegacyImportRunRecord;
+  readonly inputs: LegacyRunInputs | null;
+  readonly resumes: number;
+  readonly snapshot: LegacySnapshot;
+  readonly plan: PlanTallies;
+  readonly map: readonly LegacyImportSummaryRow[];
+  readonly openings: { readonly count: number; readonly perCustomerMax: number };
+  readonly walletCurrency: string;
+  readonly nativeTotalMinor: bigint;
+  readonly actualTotalMinor: bigint;
+  readonly trials: Readonly<Record<string, number>>;
+  readonly shapes: {
+    readonly createdSinceRun: number;
+    readonly before: number;
+    readonly custom: number;
+    readonly unresolved: number;
+  };
+  readonly provider: {
+    readonly reads: number;
+    readonly refusedWrites: number;
+    readonly inventoriesComplete: boolean;
+  };
+}
+
+function mapCount(
+  rows: readonly LegacyImportSummaryRow[],
+  table: string,
+  filter: (r: LegacyImportSummaryRow) => boolean,
+): number {
+  return rows.filter((r) => r.legacyTable === table && filter(r)).reduce((a, r) => a + r.count, 0);
+}
+
+const minor = (v: bigint) => v.toString();
+
+export function buildFinalReport(input: FinalReportInput) {
+  const { plan, map, run } = input;
+  const c = plan.services.categories;
+  const cat = (k: ServiceCandidateCategory) => c[k];
+
+  // customers
+  const existing = mapCount(
+    map,
+    'user',
+    (r) => r.status === 'IMPORTED' && r.reasonCode === 'EXISTING_CUSTOMER',
+  );
+  const created = mapCount(
+    map,
+    'user',
+    (r) => r.status === 'IMPORTED' && r.reasonCode !== 'EXISTING_CUSTOMER',
+  );
+  const userReview = mapCount(map, 'user', (r) => r.status === 'MANUAL_REVIEW');
+  const userSkipped = mapCount(map, 'user', (r) => r.status === 'SKIPPED');
+  const userErrors = mapCount(map, 'user', (r) => r.status === 'FAILED');
+
+  // wallet
+  let legacyTotal = 0n;
+  for (const u of input.snapshot.users) legacyTotal += parseLegacyBalance(u.balance) ?? 0n;
+  const imported = plan.wallet.legacySumMinor;
+  const expected = input.nativeTotalMinor + imported;
+
+  // services
+  const adopted = Math.min(
+    cat('ADOPTION_ELIGIBLE'),
+    mapCount(map, 'invoice', (r) => r.status === 'IMPORTED'),
+  );
+  const pendingAdoption = cat('ADOPTION_ELIGIBLE') - adopted;
+  const services = {
+    candidates: plan.services.candidates,
+    adopted,
+    alreadyMapped: 0,
+    testSkipped: cat('TEST_INVOICE_SKIPPED') + cat('TEST_PANEL_SKIPPED'),
+    providerMissing: cat('PROVIDER_MISSING'),
+    ambiguous: cat('AMBIGUOUS_PANEL') + cat('USERNAME_CASE_COLLISION'),
+    mappingMissing: cat('PANEL_UNMAPPED'),
+    productUnresolved: cat('PRODUCT_UNRESOLVED'),
+    unsupported: cat('UNSUPPORTED_SHAPE') + cat('INVALID_USERNAME') + cat('INVALID_SOURCE_ROW'),
+    manualReview:
+      cat('ORPHAN') + cat('CUSTOMER_NOT_IMPORTED') + cat('INVOICE_KEY_INVALID') + pendingAdoption,
+    failed: cat('INVENTORY_INCOMPLETE'),
+  };
+  const serviceSum =
+    services.adopted +
+    services.alreadyMapped +
+    services.testSkipped +
+    services.providerMissing +
+    services.ambiguous +
+    services.mappingMissing +
+    services.productUnresolved +
+    services.unsupported +
+    services.manualReview +
+    services.failed;
+
+  // manual review by closed reason: user rows from the map, invoice rows by category
+  const byReason: Record<string, number> = {};
+  const add = (reason: string, n: number) => {
+    if (n > 0) byReason[reason] = (byReason[reason] ?? 0) + n;
+  };
+  for (const r of map)
+    if (r.legacyTable === 'user' && r.status === 'MANUAL_REVIEW')
+      add(r.reasonCode ?? 'UNKNOWN', r.count);
+  for (const [category, n] of Object.entries(c) as [ServiceCandidateCategory, number][]) {
+    const rule = INVOICE_MAP_DECISIONS[category];
+    if (rule.kind === 'RECORD' && rule.status === 'MANUAL_REVIEW') add(rule.reasonCode, n);
+    if (rule.kind === 'PENDING_REASON_CODE') add(rule.reason, n);
+    if (rule.kind === 'NOT_RECORDED_HERE' && rule.why === 'KEY_INVALID')
+      add('INVOICE_KEY_INVALID', n);
+  }
+  add('ADOPTION_PENDING_P6', pendingAdoption);
+  const reviewTotal = Object.values(byReason).reduce((a, b) => a + b, 0);
+
+  const startedAt = run.startedAt;
+  const finishedAt = run.finishedAt;
+  const customers = {
+    source: plan.customers.source,
+    existing,
+    created,
+    blocked: plan.customers.invalidIdentity,
+    skipped: userSkipped,
+    manualReview: userReview,
+    errors: userErrors,
+  };
+  const customerSum =
+    existing + created + customers.blocked + userSkipped + userReview + userErrors;
+  const nonZero = plan.wallet.positive.count + plan.wallet.negative.count;
+
+  return {
+    schemaVersion: FINAL_REPORT_SCHEMA_VERSION,
+    evidenceClass: input.evidenceClass,
+    generatedAt: input.generatedAt.toISOString(),
+    run: {
+      runId: run.id,
+      tenant: input.tenantSlug,
+      mode: run.mode,
+      status: run.status,
+      failureCode: run.failureCode,
+      codeVersion: run.codeVersion ?? '0.0.0-unknown',
+      startedAt: startedAt.toISOString(),
+      finishedAt: finishedAt?.toISOString() ?? null,
+      durationSeconds: Math.max(
+        0,
+        Math.round(((finishedAt ?? input.generatedAt).getTime() - startedAt.getTime()) / 1000),
+      ),
+      resumes: input.resumes,
+      errors: userErrors + mapCount(map, 'invoice', (r) => r.status === 'FAILED'),
+      rowsSeen: run.rowsSeen,
+    },
+    source: {
+      fingerprint: input.snapshot.fingerprint,
+      snapshotAt: (input.inputs?.recordedAt ?? input.generatedAt).toISOString(),
+      checksumTable: {
+        user: input.snapshot.tables.user.digest,
+        invoice: input.snapshot.tables.invoice.digest,
+      },
+      schemaEvidence: {
+        serverVersion: input.snapshot.descriptor.version,
+        tablesRead: ['user', 'invoice', 'product'],
+        ...(input.snapshot.balanceColumnType === null
+          ? {}
+          : { balanceColumnType: input.snapshot.balanceColumnType }),
+      },
+    },
+    customers,
+    wallet: {
+      currency: input.walletCurrency,
+      legacyTotalMinor: minor(legacyTotal),
+      importedTotalMinor: minor(imported),
+      notImportedTotalMinor: minor(legacyTotal - imported),
+      positive: {
+        count: plan.wallet.positive.count,
+        sumMinor: minor(plan.wallet.positive.sumMinor),
+      },
+      zero: { count: plan.wallet.zero },
+      negative: {
+        count: plan.wallet.negative.count,
+        sumMinor: minor(plan.wallet.negative.sumMinor),
+      },
+      openingEntries: input.openings.count,
+      duplicatesPrevented: plan.wallet.openings.ALREADY_POSTED,
+      preImportTotalMinor: minor(input.nativeTotalMinor),
+      expectedPostImportTotalMinor: minor(expected),
+      actualPostImportTotalMinor: minor(input.actualTotalMinor),
+    },
+    services,
+    products: {
+      hiddenCreated: input.shapes.createdSinceRun,
+      hiddenReused: input.shapes.before,
+      custom: input.shapes.custom,
+      unresolved: input.shapes.unresolved,
+    },
+    trials: {
+      eligible: input.trials['INHERIT_NEXA_POLICY'] ?? 0,
+      ineligible: input.trials['LEGACY_LIMIT_UNREADABLE'] ?? 0,
+      used: input.trials['LEGACY_TRIAL_CONSUMED'] ?? 0,
+      noTrial: input.trials['LEGACY_NO_TRIALS'] ?? 0,
+      existingConflict: input.trials['KEPT_EXISTING_OVERRIDE'] ?? 0,
+    },
+    provider: {
+      reads: input.provider.reads,
+      // Requests the read guard REFUSED. None is ever sent; any at all is a defect to see.
+      writes: input.provider.refusedWrites,
+      inventoriesComplete: input.provider.inventoriesComplete,
+    },
+    manualReview: { total: reviewTotal, byReason },
+    reconciliation: [
+      {
+        id: 'C1',
+        holds: customerSum === customers.source,
+        expected: String(customers.source),
+        actual: String(customerSum),
+      },
+      {
+        id: 'C3',
+        holds: customers.blocked === 0,
+        expected: '0',
+        actual: String(customers.blocked),
+      },
+      {
+        id: 'W1',
+        holds: expected === input.actualTotalMinor,
+        expected: minor(expected),
+        actual: minor(input.actualTotalMinor),
+      },
+      {
+        id: 'W4',
+        holds: input.openings.count === nonZero,
+        expected: String(nonZero),
+        actual: String(input.openings.count),
+      },
+      {
+        id: 'W5',
+        holds: input.openings.perCustomerMax <= 1,
+        expected: '1',
+        actual: String(input.openings.perCustomerMax),
+      },
+      {
+        id: 'S3',
+        holds: serviceSum === services.candidates,
+        expected: String(services.candidates),
+        actual: String(serviceSum),
+      },
+      {
+        id: 'P3',
+        holds: input.provider.refusedWrites === 0 && input.provider.reads > 0,
+        expected: 'writes=0 reads>0',
+        actual: `writes=${String(input.provider.refusedWrites)} reads=${String(input.provider.reads)}`,
+      },
+    ],
+  };
+}
+
+export type FinalReport = ReturnType<typeof buildFinalReport>;

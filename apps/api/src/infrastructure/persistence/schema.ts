@@ -13073,3 +13073,56 @@ export const legacyImportMap = pgTable(
 function reviewCodesFor(state: 'RESOLVED' | 'DISMISSED'): readonly string[] {
   return LEGACY_REVIEW_RESOLUTION_CODES.filter((c) => LEGACY_REVIEW_RESOLUTION_STATE[c] === state);
 }
+
+/**
+ * Migration P7 — what one import run was started FROM, recorded once
+ * (`docs/legacy-migration/importer.md` §Run inputs).
+ *
+ * The run row carries the source fingerprint; this carries the rest of the run's identity
+ * and the one figure the reconcile cannot recompute afterwards: the tenant's NEXA-native
+ * wallet total (every entry but the openings) at the run's first start. A resume compares
+ * the panel-mapping fingerprint and refuses a
+ * different mapping; the pre-import total is taken at the run's first start and never
+ * moved by a resume. Hashes, an engine name, a currency and two numbers — no source data.
+ */
+export const legacyImportRunInputs = pgTable(
+  'legacy_import_run_inputs',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    runId: uuid('run_id').notNull(),
+    sourceEngine: text('source_engine').notNull(),
+    sourceSchemaHash: text('source_schema_hash').notNull(),
+    panelMappingFingerprint: text('panel_mapping_fingerprint').notNull(),
+    walletCurrency: text('wallet_currency').notNull(),
+    /**
+     * Σ signed wallet entries of the tenant in `wallet_currency` EXCEPT migration openings,
+     * at the run's first start: the NEXA-native "pre-import" side of the wallet equation,
+     * which a rerun or a resume measures the same way whatever openings already exist.
+     */
+    preImportWalletTotalMinor: bigint('pre_import_wallet_total_minor', {
+      mode: 'bigint',
+    }).notNull(),
+    preImportCustomers: integer('pre_import_customers').notNull(),
+    recordedAt: timestamptz('recorded_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ name: 'legacy_import_run_inputs_pk', columns: [table.tenantId, table.runId] }),
+    foreignKey({
+      columns: [table.tenantId, table.runId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+      name: 'legacy_import_run_inputs_run_fk',
+    }),
+    check(
+      'legacy_import_run_inputs_engine_check',
+      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')`,
+    ),
+    check(
+      'legacy_import_run_inputs_hashes_check',
+      sql`source_schema_hash ~ '^[0-9a-f]{64}$' AND panel_mapping_fingerprint ~ '^[0-9a-f]{64}$'`,
+    ),
+    check('legacy_import_run_inputs_currency_check', sql`wallet_currency ~ '^[A-Z]{3}$'`),
+    check('legacy_import_run_inputs_customers_check', sql`pre_import_customers >= 0`),
+  ],
+);
