@@ -45,7 +45,7 @@ import {
 } from './payment.js';
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
-import { inlineButtonStylesSchema } from './inline-buttons.js';
+import { categoryColorsSchema, inlineButtonStylesSchema } from './inline-buttons.js';
 import {
   FX_FRESH_TTL_SECONDS_DEFAULT,
   FX_FRESH_TTL_SECONDS_MAX,
@@ -959,6 +959,30 @@ export const SETTINGS = [
     defaultValue: {},
     configures: null,
     // Empty is not "no buttons": every button is then drawn with its registry default.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * UX Batch 01, item 2: each product category's own colour, edited on the Web Admin's
+   * «🎨 ظاهر ربات» page, section «رنگ دسته‌بندی‌ها», and nowhere else (it is not drawn on the
+   * settings page). Keyed by category id, so a category the operator creates appears there
+   * with no change here, and a rename keeps its colour.
+   */
+  {
+    key: 'bot.category_colors',
+    description:
+      'The colour of each product category’s button in the bot’s catalogue, by ' +
+      'category id: default, primary (blue), success (green) or danger (red), the styles ' +
+      'Telegram supports on an inline button. A category this value does not name is drawn ' +
+      'with the style of the generic category button (bot.inline_buttons, catalog.category), ' +
+      'and with no style when that has none. An id naming a deleted category is ignored. ' +
+      'Only the look changes: a category button routes by its own callback data.',
+    schema: categoryColorsSchema,
+    defaultValue: {},
+    configures: null,
+    // Empty is not "no categories": every category is then drawn with the fallback.
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
