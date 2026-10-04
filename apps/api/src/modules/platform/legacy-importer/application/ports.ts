@@ -139,6 +139,13 @@ export interface LegacyCustomerWriter {
 export interface AccountRuntime {
   readonly state: AdoptionRuntimeFacts['state'];
   readonly usage: AdoptionRuntimeFacts['usage'];
+  /**
+   * The account's subscription link, derived by the shared `subscriptionFrom` from the
+   * same list row (exactly as the adapter's `lookupUser` derives it from the user's own
+   * record), or null when the row carries none. A credential: it goes to P6 and nowhere
+   * else — never into a report, log, audit row, outbox event or map row.
+   */
+  readonly subscriptionUrl: string | null;
 }
 
 export type LegacyInventoryRead =

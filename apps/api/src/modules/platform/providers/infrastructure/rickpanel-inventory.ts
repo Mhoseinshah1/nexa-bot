@@ -13,6 +13,7 @@ import {
   outcomeFromStatus,
   outcomeFromTransport,
   parseJson,
+  subscriptionFrom,
   type RickpanelTokenForm,
 } from './rickpanel-protocol.js';
 import {
@@ -25,9 +26,12 @@ import {
  *
  * What migration discovery needs from a live panel: every account on it (full
  * pagination), one account by exact lowercase username, and each account's usage,
- * expiry and state. Nothing else — in particular never a subscription link, a token or
- * a generated proxy credential: those are secrets the inventory has no use for, so it
- * does not carry them.
+ * expiry and state. Nothing else by default — in particular never a subscription link, a
+ * token or a generated proxy credential: those are secrets discovery has no use for, so
+ * the accounts never carry them. The one exception is opt-in and separate: the legacy
+ * importer (P7) asks for `subscriptionLinks`, and gets each account's link derived by the
+ * shared `subscriptionFrom` from the SAME list row, in a map beside the accounts — no
+ * extra request, and nothing an inventory report or evidence serialises.
  *
  * ## Mutation is impossible by construction
  *
@@ -193,6 +197,8 @@ export type RickpanelInventoryWalk =
       readonly consistent: true;
       readonly accounts: readonly RickpanelInventoryAccount[];
       readonly evidence: RickpanelInventoryEvidence;
+      /** Only when `subscriptionLinks` was asked for. */
+      readonly subscriptionLinks?: RickpanelSubscriptionLinks;
     }
   | {
       readonly ok: true;
@@ -228,6 +234,8 @@ export type RickpanelInventoryOutcome =
         readonly first: RickpanelInventoryEvidence;
         readonly second: RickpanelInventoryEvidence;
       };
+      /** Only when `subscriptionLinks` was asked for: the SECOND walk's, like the accounts. */
+      readonly subscriptionLinks?: RickpanelSubscriptionLinks;
     }
   | {
       readonly ok: true;
@@ -297,7 +305,16 @@ function accountFrom(record: Record<string, unknown>): RickpanelInventoryAccount
 export interface RickpanelInventoryOptions {
   readonly pageSize?: number;
   readonly maxPages?: number;
+  /**
+   * Opt-in (the legacy importer only): also return each account's subscription link,
+   * derived by `subscriptionFrom` from the same list row the account came from, keyed by
+   * the exact provider spelling. Absent by default, so discovery never holds a link.
+   */
+  readonly subscriptionLinks?: boolean;
 }
+
+/** Exact provider spelling → the link `subscriptionFrom` derives from its row, or null. */
+export type RickpanelSubscriptionLinks = ReadonlyMap<string, string | null>;
 
 /**
  * The inventory. Stateless; every call authenticates once and discards the token.
@@ -346,12 +363,15 @@ export class RickpanelInventoryReader {
         evidence: { first: first.evidence, second: second.evidence },
       };
     }
-    // The SECOND walk's records: the newer reading of usage and state.
+    // The SECOND walk's records: the newer reading of usage and state (and links).
     return {
       ok: true,
       complete: true,
       accounts: second.accounts,
       evidence: { first: first.evidence, second: second.evidence },
+      ...(second.subscriptionLinks === undefined
+        ? {}
+        : { subscriptionLinks: second.subscriptionLinks }),
     };
   }
 
@@ -380,6 +400,7 @@ export class RickpanelInventoryReader {
     if (!auth.ok) return { ok: false, failure: auth.failure, status: auth.status };
 
     const byName = new Map<string, RickpanelInventoryAccount>();
+    const links = options.subscriptionLinks === true ? new Map<string, string | null>() : null;
     let offset = 0;
     let pages = 0;
     let rowsFetched = 0;
@@ -440,6 +461,10 @@ export class RickpanelInventoryReader {
           duplicateRows += 1;
         } else {
           byName.set(account.providerUsername, account);
+          links?.set(
+            account.providerUsername,
+            subscriptionFrom(target.baseUrl, row as Record<string, unknown>),
+          );
           fresh += 1;
         }
       }
@@ -466,7 +491,13 @@ export class RickpanelInventoryReader {
     const accounts = [...byName.values()].sort((a, b) =>
       key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0,
     );
-    return { ok: true, consistent: true, accounts, evidence };
+    return {
+      ok: true,
+      consistent: true,
+      accounts,
+      evidence,
+      ...(links === null ? {} : { subscriptionLinks: links }),
+    };
   }
 
   /**

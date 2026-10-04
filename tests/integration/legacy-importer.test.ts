@@ -42,6 +42,8 @@ import {
 } from '../fixtures/legacy/synthetic-legacy';
 import { syntheticMappingFile } from '../fixtures/legacy/synthetic-support';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
+import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
+import { RickpanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
 import {
   SEED_IDS,
   adminActorFor,
@@ -885,6 +887,62 @@ describe('Migration P7: the legacy importer', () => {
     expect(await count('services')).toBe(SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE);
     expect(await count('provisioning_operations')).toBe(0);
     // Zero provider writes: every request either fake received was a read.
+    expectOnlyReads();
+
+    // Every adopted service holds the subscription link the RickPanel adapter's own
+    // read-only `lookupUser` delivers for that account (derived from the same inventory
+    // walk, with no request of its own).
+    const adopted = await ctx.container.database.db.execute<{
+      panel_id: string;
+      provider_username: string;
+      subscription_url: string | null;
+    }>(sql`
+      SELECT panel_id, provider_username, subscription_url FROM services
+       WHERE tenant_id = ${tenantA.tenantId as unknown as string}`);
+    expect(adopted.rows).toHaveLength(SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE);
+    const adapter = new RickpanelAdapter();
+    for (const row of adopted.rows) {
+      const fake = row.panel_id === panelAId ? panelA : panelB;
+      const found = await adapter.lookupUser(
+        {
+          baseUrl: fake.baseUrl,
+          credentials: {
+            shape: 'USERNAME_PASSWORD',
+            username: fake.username,
+            password: fake.password,
+          },
+          activation: {},
+        },
+        new SafeHttpClient({
+          allowLoopback: true,
+          totalTimeoutMs: 2_000,
+          maxResponseBytes: 512 * 1024,
+          maxRetries: 0,
+        }).forBase(fake.baseUrl),
+        {
+          username: row.provider_username,
+          subscriptionRef: 'unused',
+          clientId: '019250ab-cdef-7012-8345-6789abcdef01',
+        },
+      );
+      if (!found.ok || !found.found || found.delivery.kind !== 'SUBSCRIPTION_LINK') {
+        throw new Error('expected the adapter to deliver a link');
+      }
+      expect(row.subscription_url, row.provider_username).toBe(found.delivery.url);
+    }
+    // The link is a credential: in no report, audit row, domain event or map/run row.
+    // (Every seeded token reads `seeded-token-N`, and every link carries its token.)
+    expect(
+      JSON.stringify(report, (_k, v: unknown) => (typeof v === 'bigint' ? String(v) : v)),
+    ).not.toMatch(/seeded-token|\/sub\//u);
+    const linkLeaks = await ctx.container.database.db.execute<{ n: number }>(sql`
+      SELECT (SELECT count(*) FROM audit_logs a WHERE a::text LIKE '%seeded-token%')
+           + (SELECT count(*) FROM outbox_messages o WHERE o::text LIKE '%seeded-token%')
+           + (SELECT count(*) FROM legacy_import_map m WHERE m::text LIKE '%seeded-token%')
+           + (SELECT count(*) FROM legacy_import_runs r WHERE r::text LIKE '%seeded-token%')
+           + (SELECT count(*) FROM legacy_import_run_inputs i WHERE i::text LIKE '%seeded-token%')
+           AS n`);
+    expect(Number(linkLeaks.rows[0]?.n)).toBe(0);
     expectOnlyReads();
     expect((report.sections as Record<string, any>)['provider']).toMatchObject({
       writes: 0,

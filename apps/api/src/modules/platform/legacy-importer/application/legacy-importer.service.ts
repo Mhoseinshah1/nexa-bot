@@ -990,7 +990,7 @@ export class LegacyImporterService {
                 state: facts.state,
                 usage: facts.usage,
                 observedAt: read.observedAt,
-                subscriptionUrl: null,
+                subscriptionUrl: facts.subscriptionUrl,
               },
       });
       // P6 wrote the invoice's map row for every one of these; P7 records nothing here.

@@ -50,6 +50,7 @@ function index(panelId: string, names: readonly string[]): LegacyInventoryRead {
     runtime.set(name, {
       state: 'active',
       usage: { usedBytes: 0n, totalBytes: null, expiresAt: null },
+      subscriptionUrl: null,
     });
   }
   return {

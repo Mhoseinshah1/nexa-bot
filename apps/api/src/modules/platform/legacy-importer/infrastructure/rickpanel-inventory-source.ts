@@ -98,20 +98,20 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     );
     if (credentials === null) return { ok: false, failure: 'CREDENTIALS_MISSING' };
     const http = readOnlyRickpanelHttp(readOnlyGuard(this.access.http(panel.baseUrl), this.counts));
-    const outcome = await this.reader.listAll(
-      { baseUrl: panel.baseUrl, credentials },
-      http,
-      this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize },
-    );
+    const outcome = await this.reader.listAll({ baseUrl: panel.baseUrl, credentials }, http, {
+      ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
+      subscriptionLinks: true,
+    });
     if (!outcome.ok) return { ok: false, failure: outcome.failure };
     if (!outcome.complete) return { ok: true, complete: false, reason: outcome.reason };
     const index = inventoryIndex(panelId, outcome);
     if (index === null) return { ok: true, complete: false, reason: 'NOT_INDEXABLE' };
     const states: Record<string, number> = {};
     // The runtime facts P6 adopts from, from the SAME complete walk as the index — never
-    // a second read that could describe a different moment. No link: subscription links
-    // are not carried by the inventory (`docs/rickpanel-inventory.md`), and P6 adopts
-    // with a null link safely (C3); deriving one would need the adapter module.
+    // a second read that could describe a different moment. The link is the inventory's
+    // opt-in `subscriptionLinks`: `subscriptionFrom` over the same list row, no request
+    // of its own. It is held here only to be handed to P6.
+    const links = outcome.subscriptionLinks;
     const runtime = new Map<string, AccountRuntime>();
     for (const account of outcome.accounts) {
       states[account.state] = (states[account.state] ?? 0) + 1;
@@ -125,6 +125,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
                 totalBytes: account.usage.totalBytes,
                 expiresAt: account.usage.expiresAt,
               },
+        subscriptionUrl: links?.get(account.providerUsername) ?? null,
       });
     }
     return {

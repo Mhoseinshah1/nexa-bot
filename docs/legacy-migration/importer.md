@@ -168,9 +168,15 @@ Each `ADOPTION_ELIGIBLE` candidate goes to P6 with the customer, panel, exact pr
 username, the product (the shape's hidden product, or the mapped `productId`), and the
 account's **runtime facts from the same complete inventory walk** the match came from:
 state, used/total bytes, expiry, and the time of the read. Never a second read, which
-could describe a different moment. `subscriptionUrl` is always `null`: the inventory does
-not carry links, and deriving one needs `subscriptionFrom`, which lives in the
-write-capable adapter module. P6 adopts a null link safely (C3). P6 writes the invoice's
+could describe a different moment. The same walk supplies the **subscription link**: the
+inventory's opt-in `subscriptionLinks`, which is the shared `subscriptionFrom` (moved
+from the adapter to `rickpanel-protocol.ts`, re-exported unchanged) applied to the same
+list row, with no request of its own. It equals what the adapter's `lookupUser` delivers
+(tested). A row with no recognisable link gives `null`, which P6 adopts safely (C3). The link is a
+credential: it reaches P6 and nothing else, and the integration suite asserts it in no
+report, audit row, outbox event, map, run or run-input row. If RickPanel's list route
+(`OQ-P5-01`, unevidenced) turns out to carry no link fields, every link is `null`,
+never a guess. P6 writes the invoice's
 map row for every eligible candidate, so P7 records none of them. Outcomes are P6's union:
 `ADOPTED`, `ALREADY_ADOPTED`, `MANUAL_REVIEW` (by reason, in
 `services.adoption.reviewReasons`), `SKIPPED`, `FAILED` (`PROVIDER_READ_FAILED`, retried by
