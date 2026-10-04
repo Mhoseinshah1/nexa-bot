@@ -520,6 +520,12 @@ describe('TB3 — support context', () => {
       console.info(
         `TB3 measure: statements=${String(statements)} ms=${elapsed.toFixed(1)} bytes=${String(bytes)} services=${String(built.payload.services.length)}`,
       );
+      statements = 0;
+      const publicStarted = performance.now();
+      await ctx.container.supportContext.build(tenantA, null);
+      console.info(
+        `TB3 measure (public): statements=${String(statements)} ms=${(performance.now() - publicStarted).toFixed(1)}`,
+      );
       expect(built.payload.services).toHaveLength(10);
       expect(built.payload.payments).toHaveLength(5);
       expect(bytes).toBeLessThanOrEqual(16 * 1024);
