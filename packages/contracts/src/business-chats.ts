@@ -223,8 +223,70 @@ export const BUSINESS_HANDOFF_REASONS = [
   'SEND_OUTCOME_UNKNOWN',
   /** Telegram refused a send the system made (not an operator's). */
   'TRANSPORT_REFUSED',
+  // --- TB7: automatic replies (program §25–§27). Each one is a reason the AI did NOT answer.
+  /** The model itself decided a person must answer (`HANDOFF`, or a ticket suggestion). */
+  'AI_REQUESTED',
+  /** The model named a topic that always hands off (refund, wallet, payment, security…). */
+  'HANDOFF_TOPIC',
+  /** The customer explicitly asked for a person. */
+  'HUMAN_REQUESTED',
+  /** A safe topic, but not on this tenant's auto-topic allowlist (fail closed: empty = none). */
+  'TOPIC_NOT_ALLOWED',
+  /** The model's confidence is below the configured minimum. */
+  'LOW_CONFIDENCE',
+  /** A `REPLY` whose text is empty or outside the configured bound. */
+  'REPLY_OUT_OF_BOUNDS',
+  /** The model answered with a clarifying question or no action: nothing it may send alone. */
+  'DECISION_NOT_REPLY',
+  /** The provider's output was not a valid decision, or the provider refused. */
+  'AI_OUTPUT_INVALID',
+  /** No configured provider could answer (or the job was retried out). */
+  'AI_UNAVAILABLE',
+  /** A payment under review or an unreconciled service: only a person discusses those. */
+  'ACCOUNT_UNDER_REVIEW',
+  /** An unlinked customer asked about an account-specific topic. */
+  'IDENTITY_UNVERIFIED',
+  /** The linked customer is BLOCKED: never answered automatically (tb0-audit §3.6). */
+  'CUSTOMER_BLOCKED',
+  /** The decision cited a fact the NEXA payload did not contain. */
+  'INSUFFICIENT_GROUNDING',
+  /** Too many automatic replies in a row, or in the window, without a person. */
+  'LOOP_GUARD',
+  /** The customer sent something the AI cannot read (an image, a file). */
+  'UNSUPPORTED_CONTENT',
 ] as const;
 export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
+
+/**
+ * TB7 — the operator-visible signal of a handoff. A CODE IS SCHEMA (CLAUDE.md): deduped per
+ * conversation, and recovered by the recovery code when a person takes the conversation or
+ * returns it to the AI.
+ */
+export const BUSINESS_HANDOFF_REQUIRED_CODE = 'support.handoff_required';
+export const BUSINESS_HANDOFF_RESOLVED_CODE = 'support.handoff_resolved';
+
+/**
+ * TB7 — what a handoff did about a ticket (the canonical escalation, `tb0-audit.md` §2).
+ *
+ * - `CREATED` — a new ticket was opened for the conversation's customer.
+ * - `LINKED` — an active ticket of the same customer (or the conversation's own) was linked.
+ * - `NO_CUSTOMER` — the peer is not a linked NEXA customer; a ticket needs one (OQ-TB-40).
+ * - `CUSTOMER_BLOCKED` — tickets are not opened for a blocked customer.
+ * - `NO_CATEGORY` — the tenant has no active ticket category to file it under.
+ * - `SCOPE_INACTIVE` — the tenant stopped accepting work.
+ */
+export const BUSINESS_ESCALATION_TICKET_OUTCOMES = [
+  'CREATED',
+  'LINKED',
+  'NO_CUSTOMER',
+  'CUSTOMER_BLOCKED',
+  'NO_CATEGORY',
+  'SCOPE_INACTIVE',
+] as const;
+export type BusinessEscalationTicketOutcome = (typeof BUSINESS_ESCALATION_TICKET_OUTCOMES)[number];
+
+/** The AI's operator-facing summary attached to an escalation (never sent to a customer). */
+export const BUSINESS_ESCALATION_SUMMARY_MAX = 600;
 
 /** What a stored message carries. Content beyond text arrives with TB6. */
 export const BUSINESS_MESSAGE_KINDS = ['TEXT', 'PHOTO', 'OTHER'] as const;
@@ -355,13 +417,28 @@ const outboundViewSchema = z.object({
   failureCode: z.string().nullable(),
 });
 
+export const businessEscalationViewSchema = z.object({
+  id: z.string(),
+  reason: z.enum(BUSINESS_HANDOFF_REASONS),
+  /** The AI's short operator-facing note; null when none was produced, or once purged. */
+  summary: z.string().nullable(),
+  ticketId: z.string().nullable(),
+  ticketOutcome: z.enum(BUSINESS_ESCALATION_TICKET_OUTCOMES),
+  createdAt: z.string(),
+});
+export type BusinessEscalationView = z.infer<typeof businessEscalationViewSchema>;
+
 export const businessChatDetailResponseSchema = z.object({
   conversation: conversationSummarySchema.extend({
     controlEpoch: z.number().int(),
     lastHumanAt: z.string().nullable(),
+    /** TB7: the ticket this conversation escalated to, if any. */
+    ticketId: z.string().nullable(),
   }),
   messages: z.array(messageViewSchema),
   outbound: z.array(outboundViewSchema),
+  /** TB7: the conversation's handoffs, newest first. */
+  escalations: z.array(businessEscalationViewSchema),
 });
 export type BusinessChatDetailResponse = z.infer<typeof businessChatDetailResponseSchema>;
 

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { uuidV7Schema, type Branded } from './ids.js';
+import { BUSINESS_HANDOFF_REASONS } from './business-chats.js';
 import type { StateMachineDefinition } from './state-machine.js';
 import {
   CUSTOMER_NOTIFICATION_STATES,
@@ -148,6 +149,8 @@ export const TICKET_SYSTEM_EVENTS = [
   'CLOSED_BY_CUSTOMER',
   'CLOSED_BY_SUPPORT',
   'REOPENED_BY_SUPPORT',
+  /** TB7: the support AI handed a Telegram Business conversation to a person, here. */
+  'ESCALATED_FROM_BUSINESS_CHAT',
 ] as const;
 export type TicketSystemEvent = (typeof TICKET_SYSTEM_EVENTS)[number];
 
@@ -690,8 +693,26 @@ export const ticketMessageViewSchema = z.object({
 });
 export type TicketMessageView = z.infer<typeof ticketMessageViewSchema>;
 
+/**
+ * TB7 — where a ticket came from. `BOT`: the customer opened it in the NEXA bot (every ticket
+ * before TB7). `BUSINESS_CHAT`: the support agent escalated a Telegram Business conversation.
+ */
+export const TICKET_ORIGINS = ['BOT', 'BUSINESS_CHAT'] as const;
+export type TicketOrigin = (typeof TICKET_ORIGINS)[number];
+
+/** TB7 — a handoff that opened or linked this ticket, with the AI's operator-facing note. */
+export const ticketEscalationViewSchema = z.object({
+  conversationId: z.string(),
+  reason: z.enum(BUSINESS_HANDOFF_REASONS),
+  summary: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type TicketEscalationView = z.infer<typeof ticketEscalationViewSchema>;
+
 export const ticketDetailResponseSchema = z.object({
-  ticket: ticketSummarySchema,
+  ticket: ticketSummarySchema.extend({ origin: z.enum(TICKET_ORIGINS) }),
+  /** TB7: the business-chat handoffs attached to this ticket, newest first. */
+  escalations: z.array(ticketEscalationViewSchema),
   messages: z.array(ticketMessageViewSchema),
   customer: z.object({
     id: z.string(),
