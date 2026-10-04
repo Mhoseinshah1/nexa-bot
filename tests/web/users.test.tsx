@@ -180,8 +180,8 @@ describe('the customer list', () => {
     expect(headers.join(' ')).toContain('شناسهٔ تلگرام');
     expect(headers.join(' ')).toContain('نام کاربری');
     expect(headers.join(' ')).toContain('وضعیت');
-    expect(headers.join(' ')).toContain('نخستین تماس');
-    expect(headers.join(' ')).toContain('آخرین تماس');
+    expect(headers.join(' ')).toContain('اولین فعالیت');
+    expect(headers.join(' ')).toContain('آخرین فعالیت');
   });
 
   /**

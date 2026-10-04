@@ -707,6 +707,63 @@ describe('the customer Telegram turn', () => {
     expect(String(after['first_seen_at'])).toBe(String(before['first_seen_at']));
   });
 
+  /*
+   * UX batch 02, issue 12: the Web Admin labels these two columns «اولین فعالیت» and
+   * «آخرین فعالیت» and says they move on every message AND every button press — not only on
+   * `/start`. This pins that claim. The stored instants are pushed into the past first, so
+   * "moved" is a comparison with a known value rather than with a clock a millisecond away.
+   */
+  it('moves last_seen_at on an ordinary message and on a button press, never first_seen_at', async () => {
+    await start();
+    const id = await customerIdOf('5551234567');
+    const rewind = () =>
+      api.container.database.db.execute(sql`
+        UPDATE customers SET first_seen_at = '2020-01-01T00:00:00Z',
+                             last_seen_at = '2020-01-02T00:00:00Z'
+         WHERE id = ${id}`);
+    const seen = async () => {
+      const row = (await customers(sql`id = ${id}`))[0] as Record<string, unknown>;
+      return {
+        first: new Date(String(row['first_seen_at'])).toISOString(),
+        last: new Date(String(row['last_seen_at'])).toISOString(),
+      };
+    };
+
+    await rewind();
+    expect((await start({ text: 'hello' })).statusCode).toBe(201);
+    const afterMessage = await seen();
+    expect(afterMessage.first).toBe('2020-01-01T00:00:00.000Z');
+    expect(afterMessage.last > '2020-01-02T00:00:00.000Z', 'a message is activity').toBe(true);
+
+    await rewind();
+    const tapId = (updateId += 1);
+    const tapped = await inject({
+      method: 'POST',
+      url: `/telegram/webhook/${BOT_A}`,
+      headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+      payload: {
+        update_id: tapId,
+        callback_query: {
+          id: `cbq-${String(tapId)}`,
+          from: { id: 5551234567, is_bot: false, first_name: 'Ali' },
+          chat_instance: 'ci',
+          message: {
+            message_id: tapId,
+            date: 0,
+            chat: { id: 4242, type: 'private' },
+            from: { id: 999999, is_bot: true, first_name: 'Nexa' },
+            text: 'x',
+          },
+          data: 'unknown-button',
+        },
+      },
+    });
+    expect(tapped.statusCode).toBe(201);
+    const afterTap = await seen();
+    expect(afterTap.first).toBe('2020-01-01T00:00:00.000Z');
+    expect(afterTap.last > '2020-01-02T00:00:00.000Z', 'a button press is activity').toBe(true);
+  });
+
   it('replies with the blocked text when the REPLAYED update predates the block', async () => {
     /*
      * The arrival is recomputed from the row, never read back from the stored reply.

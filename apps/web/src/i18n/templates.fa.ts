@@ -321,7 +321,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   finalPercent: 'آستانهٔ پایانی مصرف (درصد)',
   firstDays: 'یادآور اول انقضا (روز)',
   firstPercent: 'آستانهٔ اول مصرف (درصد)',
-  firstSeen: 'زمان نخستین تماس',
+  firstSeen: 'زمان اولین فعالیت',
   firstSeenAt: 'زمان نخستین رخداد',
   fromLocation: 'لوکیشن مبدأ',
   gift: 'مبلغ هدیه',
@@ -517,7 +517,7 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
     name: 'نام مشتری',
     status: 'وضعیت مشتری',
     reason: 'دلیل مسدودی',
-    lastSeen: 'زمان آخرین تماس',
+    lastSeen: 'زمان آخرین فعالیت',
   },
   'bot.admin.customer_status_changed': { status: 'وضعیت مشتری' },
   'bot.admin.category_detail': { name: 'نام دسته', status: 'وضعیت دسته' },
@@ -2899,7 +2899,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.admin.customer_detail': [
     'جزئیات مشتری',
-    'شناسه و نام کاربری تلگرام، نام، وضعیت، دلیل مسدودی و زمان‌های نخستین و آخرین تماس.',
+    'شناسه و نام کاربری تلگرام، نام، وضعیت، دلیل مسدودی و زمان‌های اولین و آخرین فعالیت.',
   ],
   'bot.admin.customer_gone': [
     'مشتری پیدا نشد',
