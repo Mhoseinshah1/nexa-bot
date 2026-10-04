@@ -43,6 +43,27 @@ const mappingSchema = z
     testPanels: z.array(codePanel),
     missingPanels: z.array(codePanel),
     productionPanels: z.array(uuid).min(1),
+    /**
+     * P6 ask 2: the owner's explicit map from a legacy `code_product` to the NEXA product
+     * an adopted service of that product renews as. Optional (absent = no named product is
+     * adoptable); a code not listed is PRODUCT_MAPPING_UNRESOLVED, never a guess.
+     */
+    products: z
+      .array(
+        z
+          .object({
+            codeProduct: z
+              .string()
+              .min(1)
+              .max(200)
+              .refine((v) => v === v.trim() && !/\p{Cc}/u.test(v), {
+                message: 'a code_product is written exactly as the legacy row holds it',
+              }),
+            productId: uuid,
+          })
+          .strict(),
+      )
+      .default([]),
   })
   .strict();
 
@@ -52,6 +73,8 @@ export interface PanelMapping {
   readonly file: PanelMappingFile;
   readonly fingerprint: string;
   readonly policy: LegacyPanelPolicy;
+  /** Legacy `code_product` → NEXA product id, exactly as the owner listed it. */
+  readonly products: ReadonlyMap<string, string>;
 }
 
 export class PanelMappingRefused extends Error {
@@ -72,6 +95,9 @@ export function canonicalPanelMapping(file: PanelMappingFile): string {
     testPanels: sorted(file.testPanels),
     missingPanels: sorted(file.missingPanels),
     productionPanels: sorted(file.productionPanels),
+    products: [...file.products]
+      .map((p) => [p.codeProduct, p.productId])
+      .sort((a, b) => ((a[0] as string) < (b[0] as string) ? -1 : 1)),
   });
 }
 
@@ -121,6 +147,13 @@ export function parsePanelMapping(text: string, tenantId: string): PanelMapping 
       );
     }
   }
+  const productCodes = new Set<string>();
+  for (const p of file.products) {
+    if (productCodes.has(p.codeProduct)) {
+      problems.push(`code_product ${JSON.stringify(p.codeProduct)} appears twice in products`);
+    }
+    productCodes.add(p.codeProduct);
+  }
   if (problems.length > 0) throw new PanelMappingRefused(problems);
 
   return {
@@ -132,6 +165,7 @@ export function parsePanelMapping(text: string, tenantId: string): PanelMapping 
       missingPanels: new Set(file.missingPanels),
       productionPanelIds: [...production].sort(),
     },
+    products: new Map(file.products.map((p) => [p.codeProduct, p.productId])),
   };
 }
 
@@ -192,4 +226,23 @@ export function unmappedCodePanels(
     out.set(code, (out.get(code) ?? 0) + 1);
   }
   return out;
+}
+
+/**
+ * Every product the file maps a legacy `code_product` to must be a product of THIS tenant.
+ * Whether it is adoptable (live, priced, renewable) is P6's question, decided per service.
+ */
+export function validateProductMappingAgainstTenant(
+  mapping: PanelMapping,
+  tenantProductIds: ReadonlySet<string>,
+): void {
+  const problems: string[] = [];
+  for (const [code, productId] of mapping.products) {
+    if (!tenantProductIds.has(productId)) {
+      problems.push(
+        `code_product ${JSON.stringify(code)} maps to product ${productId}, which does not exist in this tenant`,
+      );
+    }
+  }
+  if (problems.length > 0) throw new PanelMappingRefused(problems);
 }

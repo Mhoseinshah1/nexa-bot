@@ -48,6 +48,17 @@ export interface FinalReportInput {
     readonly custom: number;
     readonly unresolved: number;
   };
+  /**
+   * What P6 recorded on the map rows of the plan's ADOPTION_ELIGIBLE invoices, by status.
+   * `undecided` = eligible invoices with no map row: P6 has not decided them (not wired).
+   */
+  readonly eligible: {
+    readonly IMPORTED: number;
+    readonly SKIPPED: number;
+    readonly MANUAL_REVIEW: number;
+    readonly FAILED: number;
+    readonly undecided: number;
+  };
   readonly provider: {
     readonly reads: number;
     readonly refusedWrites: number;
@@ -92,16 +103,16 @@ export function buildFinalReport(input: FinalReportInput) {
   const expected = input.nativeTotalMinor + imported;
 
   // services
-  const adopted = Math.min(
-    cat('ADOPTION_ELIGIBLE'),
-    mapCount(map, 'invoice', (r) => r.status === 'IMPORTED'),
-  );
-  const pendingAdoption = cat('ADOPTION_ELIGIBLE') - adopted;
+  // Eligible invoices end where P6 put them: adopted, skipped, held for review or a failed
+  // read (retried by a rerun). Their review rows are already in the map-derived reasons
+  // below; only the undecided ones (P6 not wired) are added as ADOPTION_PENDING_P6.
+  const adopted = input.eligible.IMPORTED;
+  const pendingAdoption = input.eligible.undecided;
   const services = {
     candidates: plan.services.candidates,
     adopted,
     alreadyMapped: 0,
-    testSkipped: cat('TEST_INVOICE_SKIPPED') + cat('TEST_PANEL_SKIPPED'),
+    testSkipped: cat('TEST_INVOICE_SKIPPED') + cat('TEST_PANEL_SKIPPED') + input.eligible.SKIPPED,
     providerMissing: cat('PROVIDER_MISSING'),
     ambiguous: cat('AMBIGUOUS_PANEL') + cat('USERNAME_CASE_COLLISION'),
     mappingMissing: cat('PANEL_UNMAPPED'),
@@ -114,8 +125,9 @@ export function buildFinalReport(input: FinalReportInput) {
       cat('CUSTOMER_NOT_IMPORTED') +
       cat('INVOICE_KEY_INVALID') +
       cat('INVENTORY_INCOMPLETE') +
-      pendingAdoption,
-    failed: 0,
+      pendingAdoption +
+      input.eligible.MANUAL_REVIEW,
+    failed: input.eligible.FAILED,
   };
   const serviceSum =
     services.adopted +

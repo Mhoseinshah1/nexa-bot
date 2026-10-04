@@ -11,7 +11,11 @@ import {
   readOnlyRickpanelHttp,
 } from '../../providers/infrastructure/rickpanel-inventory.js';
 import { TOKEN_PATH } from '../../providers/infrastructure/rickpanel-protocol.js';
-import type { LegacyInventoryPort, LegacyInventoryRead } from '../application/ports.js';
+import type {
+  AccountRuntime,
+  LegacyInventoryPort,
+  LegacyInventoryRead,
+} from '../application/ports.js';
 
 /**
  * Migration P7 — the importer's ONLY provider surface, READ ONLY by construction
@@ -74,6 +78,9 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
   constructor(
     private readonly access: PanelReadAccess,
     private readonly options: { readonly pageSize?: number } = {},
+    private readonly now: () => Date = () => {
+      throw new Error('RickpanelInventorySource needs the Clock to stamp a read');
+    },
   ) {}
 
   requestCounts(): { readonly reads: number; readonly refusedWrites: number } {
@@ -101,8 +108,33 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const index = inventoryIndex(panelId, outcome);
     if (index === null) return { ok: true, complete: false, reason: 'NOT_INDEXABLE' };
     const states: Record<string, number> = {};
-    for (const account of outcome.accounts)
+    // The runtime facts P6 adopts from, from the SAME complete walk as the index — never
+    // a second read that could describe a different moment. No link: subscription links
+    // are not carried by the inventory (`docs/rickpanel-inventory.md`), and P6 adopts
+    // with a null link safely (C3); deriving one would need the adapter module.
+    const runtime = new Map<string, AccountRuntime>();
+    for (const account of outcome.accounts) {
       states[account.state] = (states[account.state] ?? 0) + 1;
-    return { ok: true, complete: true, index, accounts: outcome.accounts.length, states };
+      runtime.set(account.providerUsername, {
+        state: account.state,
+        usage:
+          account.usage === null
+            ? null
+            : {
+                usedBytes: account.usage.usedBytes,
+                totalBytes: account.usage.totalBytes,
+                expiresAt: account.usage.expiresAt,
+              },
+      });
+    }
+    return {
+      ok: true,
+      complete: true,
+      index,
+      accounts: outcome.accounts.length,
+      states,
+      runtime,
+      observedAt: this.now(),
+    };
   }
 }

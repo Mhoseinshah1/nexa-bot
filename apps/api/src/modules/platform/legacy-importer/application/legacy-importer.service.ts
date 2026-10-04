@@ -34,7 +34,11 @@ import type { LegacyTrialEligibilityService } from '../../../commerce/trials/app
 import type { LegacyProductService } from '../../../commerce/catalog/application/legacy-product.service.js';
 import { legacyProfileUsername, type ServiceCandidateCategory } from './decisions.js';
 import { crossCheckEvidence, type LegacyEvidence } from './evidence-runner.js';
-import { validatePanelMappingAgainstTenant, type PanelMapping } from './panel-mapping.js';
+import {
+  validatePanelMappingAgainstTenant,
+  validateProductMappingAgainstTenant,
+  type PanelMapping,
+} from './panel-mapping.js';
 import { decideAllServices, inventoryIndexes, planLegacyImport, type LegacyPlan } from './plan.js';
 import type {
   LegacyAdoptionPort,
@@ -186,6 +190,8 @@ export interface ApplyTallies {
       REVIEW_CLOSED: number;
       MANUAL_REVIEW: number;
       SKIPPED: number;
+      FAILED: number;
+      reviewReasons: Record<string, number>;
       PENDING: number;
     };
   };
@@ -210,6 +216,10 @@ export class LegacyImporterService {
     if (!(await destination.tenantExists(scope))) {
       throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'No such tenant.');
     }
+    validateProductMappingAgainstTenant(
+      mapping,
+      await destination.productIds(scope, [...mapping.products.values()]),
+    );
     validatePanelMappingAgainstTenant(
       mapping,
       await destination.panels(scope, mapping.policy.productionPanelIds),
@@ -514,6 +524,8 @@ export class LegacyImporterService {
           REVIEW_CLOSED: 0,
           MANUAL_REVIEW: 0,
           SKIPPED: 0,
+          FAILED: 0,
+          reviewReasons: {},
           PENDING: 0,
         },
       },
@@ -955,6 +967,13 @@ export class LegacyImporterService {
         decision.product.kind === 'NAMED_PRODUCT'
           ? decision.product
           : { ...decision.product, shapeId: shapes.get(decision.product.shapeKey)?.id ?? '' };
+      // The runtime facts of the account, from the same complete walk the match came from.
+      // Absent (it cannot be, for an ELIGIBLE match) is null, which P6 answers FAILED.
+      const read = prepared.inventories.get(decision.panelId);
+      const facts =
+        read !== undefined && read.ok && read.complete
+          ? read.runtime.get(decision.providerUsername)
+          : undefined;
       const outcome = await this.deps.adoption.adopt(scope, actor, {
         runId,
         legacyInvoiceId: invoice.idInvoice,
@@ -964,8 +983,22 @@ export class LegacyImporterService {
         panelId: decision.panelId,
         providerUsername: decision.providerUsername,
         product,
+        runtime:
+          facts === undefined || read === undefined || !read.ok || !read.complete
+            ? null
+            : {
+                state: facts.state,
+                usage: facts.usage,
+                observedAt: read.observedAt,
+                subscriptionUrl: null,
+              },
       });
+      // P6 wrote the invoice's map row for every one of these; P7 records nothing here.
       tallies.services.adoption[outcome.kind] += 1;
+      if (outcome.kind === 'MANUAL_REVIEW') {
+        tallies.services.adoption.reviewReasons[outcome.reason] =
+          (tallies.services.adoption.reviewReasons[outcome.reason] ?? 0) + 1;
+      }
     }
   }
 
@@ -1134,8 +1167,19 @@ export class LegacyImporterService {
       destination.auditCount(scope, 'legacy_import.run.resume', run.id),
       destination.tenantSlug(scope),
     ]);
+    const eligible = { IMPORTED: 0, SKIPPED: 0, MANUAL_REVIEW: 0, FAILED: 0, undecided: 0 };
+    const eligibleKeys = prepared.plan.services
+      .filter((s) => s.decision.category === 'ADOPTION_ELIGIBLE')
+      .map((s) => s.invoice.idInvoice);
+    for (let i = 0; i < eligibleKeys.length; i += CUSTOMER_BATCH) {
+      const keys = eligibleKeys.slice(i, i + CUSTOMER_BATCH);
+      const rows = await this.deps.runs.findByLegacyKeys(scope, 'invoice', keys);
+      for (const row of rows) eligible[row.status] += 1;
+      eligible.undecided += keys.length - rows.length;
+    }
     const counts = this.deps.inventory.requestCounts();
     const final = buildFinalReport({
+      eligible,
       generatedAt: this.deps.clock.now(),
       evidenceClass: input.evidenceClass,
       tenantSlug,

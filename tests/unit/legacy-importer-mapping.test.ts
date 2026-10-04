@@ -5,9 +5,10 @@ import {
   parsePanelMapping,
   unmappedCodePanels,
   validatePanelMappingAgainstTenant,
+  validateProductMappingAgainstTenant,
   type PanelFacts,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
-import { syntheticMappingFile } from '../fixtures/legacy/synthetic-support';
+import { SYNTHETIC_P1_PRODUCT, syntheticMappingFile } from '../fixtures/legacy/synthetic-support';
 
 /**
  * Item 6 — the panel mapping file (`docs/legacy-migration/importer.md` §Panel mapping):
@@ -90,12 +91,29 @@ describe('parsing', () => {
         ],
         tenantId: TENANT,
         format: PANEL_MAPPING_FORMAT,
+        products: [{ productId: SYNTHETIC_P1_PRODUCT, codeProduct: 'p1' }],
       }),
       TENANT,
     ).fingerprint;
     expect(reordered).toBe(one);
     const changed = parsePanelMapping(file({ testPanels: ['tst', 'tst2'] }), TENANT).fingerprint;
     expect(changed).not.toBe(one);
+    // The product map is part of the meaning: a different target or no map at all is a
+    // different mapping, so a run cannot resume under a product map it did not start with.
+    const other = parsePanelMapping(
+      file({ products: [{ codeProduct: 'p1', productId: A }] }),
+      TENANT,
+    ).fingerprint;
+    const none = parsePanelMapping(file({ products: [] }), TENANT).fingerprint;
+    expect(new Set([one, other, none]).size).toBe(3);
+  });
+
+  it('refuses a product code twice, a non-uuid product and a code that is not exact', () => {
+    const p = (codeProduct: string, productId: string) => ({ codeProduct, productId });
+    expect(refusal(file({ products: [p('p1', A), p('p1', B)] })).join()).toMatch(/p1.*twice/u);
+    expect(refusal(file({ products: [p('p1', 'not-a-uuid')] })).length).toBeGreaterThan(0);
+    expect(refusal(file({ products: [p(' p1', A)] })).length).toBeGreaterThan(0);
+    expect(refusal(file({ products: [{ ...p('p1', A), price: 1 }] })).length).toBeGreaterThan(0);
   });
 });
 
@@ -117,6 +135,16 @@ describe('validation against the tenant', () => {
       expect(() => validatePanelMappingAgainstTenant(mapping, facts)).toThrow(message);
     });
   }
+
+  it('accepts a product map naming products of this tenant, refuses one that does not', () => {
+    expect(mapping.products).toEqual(new Map([['p1', SYNTHETIC_P1_PRODUCT]]));
+    expect(() =>
+      validateProductMappingAgainstTenant(mapping, new Set([SYNTHETIC_P1_PRODUCT])),
+    ).not.toThrow();
+    expect(() => validateProductMappingAgainstTenant(mapping, new Set())).toThrow(
+      /p1.*does not exist in this tenant/u,
+    );
+  });
 
   it('reports the legacy codes the file does not mention', () => {
     expect(

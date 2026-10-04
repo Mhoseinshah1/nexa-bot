@@ -95,6 +95,21 @@ export class DrizzleLegacyImporterRepository
     }));
   }
 
+  async productIds(
+    scope: TenantContext,
+    productIds: readonly string[],
+  ): Promise<ReadonlySet<string>> {
+    const tenantId = requireTenantId(scope);
+    const out = new Set<string>();
+    for (const part of chunks(productIds)) {
+      const result = await this.db.execute<{ id: string }>(sql`
+        SELECT id FROM products WHERE tenant_id = ${tenantId} AND id::text IN (${list(part)})
+      `);
+      for (const row of result.rows) out.add(row.id);
+    }
+    return out;
+  }
+
   async customersByTelegramIds(
     scope: TenantContext,
     telegramUserIds: readonly string[],

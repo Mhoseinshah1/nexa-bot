@@ -2,9 +2,11 @@
 
 **Status: built and tested against a SYNTHETIC source.** Nothing here has read the real
 `oldbot` archive or a real RickPanel: those runs are manual acceptance (§10). P6 adoption
-is a seam (`LegacyAdoptionPort`) that agent ADOPT's service plugs into; until it does,
-eligible service candidates are reported `ADOPTION_PENDING_P6`, never adopted and never
-dropped. Production import is an owner-approval step of the cutover runbook.
+is wired by default: the container hands every eligible candidate to
+`container.legacyAdoption.adoptCandidate` (§5, Adoption). Only an importer built without it
+(`adoption: null`, a test seam) reports eligible candidates `ADOPTION_PENDING_P6` — never
+adopted and never dropped. Production import is an owner-approval step of the cutover
+runbook.
 
 Code: `apps/api/src/legacy-import.cli.ts` and
 `apps/api/src/modules/platform/legacy-importer/{application,infrastructure}/`.
@@ -34,7 +36,8 @@ pnpm legacy-import MODE --tenant TENANT --source SOURCE --target TARGET --panel-
 Nothing defaults. **No password is accepted on the command line** — argv is world-readable
 in `/proc` and lands in shell history; a DSN with a password is refused, and so is any
 `--…password` flag. Exit codes: 0 done; 3 done but a person must decide (audit BLOCKED,
-reconcile DISCREPANCY, import with adoption pending, report with a failed equation); 4 an
+reconcile DISCREPANCY, import with adoption pending — only an importer built without P6 —,
+report with a failed equation); 4 an
 import interrupted (the run stays RUNNING: use `resume`); 64 usage/guard refusal; 65 the
 mapping or the source refused; 1 anything else (printed as a code, never a driver message
 that could quote a row).
@@ -102,9 +105,20 @@ username; `invoice:v1` over the invoice's decision columns.
   "panels": [{ "codePanel": "bac6", "panelId": "<NEXA RickPanel uuid>" }],
   "testPanels": ["<code>"],
   "missingPanels": ["<code searched by username across productionPanels>"],
-  "productionPanels": ["<every NEXA RickPanel uuid a missing code_panel is searched across>"]
+  "productionPanels": ["<every NEXA RickPanel uuid a missing code_panel is searched across>"],
+  "products": [{ "codeProduct": "<legacy code_product>", "productId": "<NEXA product uuid>" }]
 }
 ```
+
+`products` (optional, default `[]`) is the owner's explicit map from a legacy
+`code_product` to the NEXA product an adopted service of that product renews as. It is
+never inferred: a live real invoice naming a legacy product that is not listed is
+`PRODUCT_UNRESOLVED` (map `MANUAL_REVIEW / PRODUCT_MAPPING_UNRESOLVED`). Codes are exact
+and listed once; every target must be a product **of this tenant** before any run, and the
+map is part of the fingerprint, so a resume under a different product map is refused.
+Whether the target is adoptable (live, priced in the sales currency, renewal-compatible
+with the account) is P6's decision, per service. Productless, custom and
+unknown-product invoices need no entry: they adopt as their shape's hidden legacy product.
 
 Strict: unknown keys (an inbound id above all) are refused; codes are exact, trimmed, no
 control characters; a code is in at most one list; every mapped panel is a production
@@ -147,6 +161,22 @@ reason); the others by `INVOICE_MAP_DECISIONS` — live trial `SKIPPED/HISTORY_N
 closed review reason and enters review `OPEN`. **`INVOICE_KEY_INVALID` is not a row**: the
 map's key CHECK cannot hold its id, so it stays a counted category, reported under that
 name in the manual-review total. Eligible rows are P6's, written with the adoption.
+
+### Adoption (P6)
+
+Each `ADOPTION_ELIGIBLE` candidate goes to P6 with the customer, panel, exact provider
+username, the product (the shape's hidden product, or the mapped `productId`), and the
+account's **runtime facts from the same complete inventory walk** the match came from:
+state, used/total bytes, expiry, and the time of the read. Never a second read, which
+could describe a different moment. `subscriptionUrl` is always `null`: the inventory does
+not carry links, and deriving one needs `subscriptionFrom`, which lives in the
+write-capable adapter module. P6 adopts a null link safely (C3). P6 writes the invoice's
+map row for every eligible candidate, so P7 records none of them. Outcomes are P6's union:
+`ADOPTED`, `ALREADY_ADOPTED`, `MANUAL_REVIEW` (by reason, in
+`services.adoption.reviewReasons`), `SKIPPED`, `FAILED` (`PROVIDER_READ_FAILED`, retried by
+a rerun) and `REVIEW_CLOSED`. The final report reads the eligible invoices' map rows:
+`IMPORTED` is adopted, `FAILED` is failed, `SKIPPED` and `MANUAL_REVIEW` are added to
+those totals, and only an invoice with no row counts as `ADOPTION_PENDING_P6`.
 
 **A row a person closed** (DISMISSED, or RESOLVED other than `RETRY_AFTER_FIX`) is
 `REVIEW_CLOSED` to the importer: decided BEFORE any write (`resumeDecision`), counted
@@ -229,8 +259,10 @@ every user) against the importer's own decisions. A disagreement is reported, no
 - Unit: `tests/unit/legacy-importer-{decisions,guard,mapping,source}.test.ts`.
 - Integration: `tests/integration/legacy-importer.test.ts` — every mode against PostgreSQL,
   two fake RickPanels on real sockets (every request a GET or the token exchange), the
-  synthetic dataset; interrupted + resume; rerun; drift; discrepancy; P6 port; permissions;
-  stopped tenant; the CLI glue.
+  synthetic dataset; interrupted + resume; rerun; drift; discrepancy; P6 port; **real P6
+  adoption** (the container default: every eligible candidate adopted, zero-total
+  `LEGACY_ADOPTION` orders, no provisioning operation, a rerun `ALREADY_ADOPTED`, provider
+  writes 0); permissions; stopped tenant; the CLI glue.
 - **MySQL engine: `pnpm test:legacy-mysql`** (`tests/legacy-mysql/`) — read-only proof, a
   write refused even with a grant that allows it, consistent snapshot, fingerprint parity,
   every evidence query and its cross-checks, on a real MariaDB. Its own CI job
@@ -239,7 +271,7 @@ every user) against the importer's own decisions. A disagreement is reported, no
   Without `NEXA_LEGACY_MYSQL_ADMIN_DSN` it FAILS, never skips.
 - Mutation-checked: the acknowledgement requirement, the READ ONLY transaction, the
   resume's mapping check, the rerun keeping a created customer's own map reason, the
-  insert never touching an existing customer.
+  insert never touching an existing customer, an unmapped named product held for review.
 
 Fixture: `tests/fixtures/legacy/synthetic-legacy.{ts,json,sql}` — SYNTHETIC, derived from
 the public MirzaBot source (`mahdiMGF2/botmirzapanel` @ 92c0ed0676c1d0c9540bae257092104744bab1fd,

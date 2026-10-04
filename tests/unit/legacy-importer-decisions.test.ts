@@ -144,6 +144,7 @@ describe('service candidates', () => {
     policy: mapping.policy,
     inventories: indexes,
     productCodes: new Set(['p1']),
+    productMap: new Map([['p1', 'prod-p1']]),
     tariffOf: () => 'RESOLVED',
     ...overrides,
   });
@@ -214,7 +215,7 @@ describe('service candidates', () => {
     });
     expect(decideServiceCandidate({ ...base, codeProduct: 'p1' }, ctx())).toMatchObject({
       category: 'ADOPTION_ELIGIBLE',
-      product: { kind: 'NAMED_PRODUCT', codeProduct: 'p1' },
+      product: { kind: 'NAMED_PRODUCT', codeProduct: 'p1', productId: 'prod-p1' },
     });
     // A named product the legacy table does not have, and a custom service naming one,
     // are both the hidden legacy product of their shape.
@@ -226,6 +227,26 @@ describe('service candidates', () => {
     ).toMatchObject({
       product: { kind: 'HIDDEN_SHAPE', custom: true },
     });
+  });
+
+  it('a named product the owner did not map is PRODUCT_MAPPING_UNRESOLVED, never a guess', () => {
+    const unmapped = decideServiceCandidate(
+      { ...base, codeProduct: 'p1' },
+      ctx({ productMap: new Map() }),
+    );
+    if (unmapped.category === 'ADOPTION_ELIGIBLE') throw new Error('unexpectedly eligible');
+    expect(unmapped.category).toBe('PRODUCT_UNRESOLVED');
+    expect(unmapped.map).toMatchObject({
+      status: 'MANUAL_REVIEW',
+      reasonCode: 'PRODUCT_MAPPING_UNRESOLVED',
+    });
+    // The mapping is by exact code: a map for another code does not stand in for p1.
+    expect(
+      decideServiceCandidate(
+        { ...base, codeProduct: 'p1' },
+        ctx({ productMap: new Map([['P1', 'prod-p1']]) }),
+      ).category,
+    ).toBe('PRODUCT_UNRESOLVED');
   });
 
   it('never matches by inbound id, prefix or fuzzy name', () => {
@@ -425,6 +446,7 @@ describe('the invoice key and what the map records', () => {
       },
       inventories: new Map(),
       productCodes: new Set<string>(),
+      productMap: new Map<string, string>(),
       tariffOf: () => 'RESOLVED',
     };
     for (const bad of ['LEGACY-X1', 'inv0001', 'A1B2C3D4', '0123456a1b2', 'abc', '']) {
@@ -463,6 +485,7 @@ describe('the invoice key and what the map records', () => {
       policy: mapping.policy,
       inventories: indexes,
       productCodes: new Set(['p1']),
+      productMap: new Map([['p1', 'prod-p1']]),
       tariffOf: () => 'RESOLVED',
     };
     const cases: [Partial<typeof base>, Partial<ServiceDecisionContext>, string, string | null][] =

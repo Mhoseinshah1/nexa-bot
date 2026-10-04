@@ -175,7 +175,7 @@ export type ServiceCandidateCategory = (typeof SERVICE_CANDIDATE_CATEGORIES)[num
 /** How a candidate's product would be resolved. */
 export type ServiceProductPath =
   /** `code_product` names a product the legacy `product` table has: P6 resolves it. */
-  | { readonly kind: 'NAMED_PRODUCT'; readonly codeProduct: string }
+  | { readonly kind: 'NAMED_PRODUCT'; readonly codeProduct: string; readonly productId: string }
   /** No product, a missing product, or a custom service: the hidden legacy product. */
   | { readonly kind: 'HIDDEN_SHAPE'; readonly shapeKey: string; readonly custom: boolean };
 
@@ -209,6 +209,8 @@ export interface ServiceDecisionContext {
   readonly policy: LegacyPanelPolicy;
   readonly inventories: ReadonlyMap<string, PanelInventoryIndex>;
   readonly productCodes: ReadonlySet<string>;
+  /** The owner's explicit `code_product` → NEXA product map (the mapping file). */
+  readonly productMap: ReadonlyMap<string, string>;
   readonly tariffOf: (shapeKey: string) => ShapeTariffKnowledge;
 }
 
@@ -270,7 +272,11 @@ export function decideServiceCandidate(
   const custom = invoice.isCustom?.trim() === '1';
   let product: ServiceProductPath;
   if (codeProduct !== '' && !custom && ctx.productCodes.has(codeProduct)) {
-    product = { kind: 'NAMED_PRODUCT', codeProduct };
+    // A named legacy product renews as the NEXA product the owner mapped it to, and only
+    // that: no mapping is PRODUCT_MAPPING_UNRESOLVED, never a product picked by shape.
+    const productId = ctx.productMap.get(codeProduct);
+    if (productId === undefined) return held('PRODUCT_UNRESOLVED');
+    product = { kind: 'NAMED_PRODUCT', codeProduct, productId };
   } else {
     const keyed = legacyShapeKey({
       codePanel: invoice.codePanel,

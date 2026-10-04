@@ -6403,11 +6403,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
             http: (baseUrl) => panelHttp.forBase(baseUrl),
           },
           options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize },
+          () => clock.now(),
         ),
         openings: migrationOpeningBalance,
         trials: legacyTrialEligibilityService,
         products: legacyProductService,
-        adoption: options.adoption ?? null,
+        // P6 by default (`container.legacyAdoption.adoptCandidate`); only an explicit null
+        // runs without it, and its eligible candidates are then reported PENDING.
+        adoption:
+          options.adoption === undefined
+            ? {
+                adopt: (scope, actor, candidate) =>
+                  legacyAdoption.adoptCandidate(scope, actor, candidate),
+              }
+            : options.adoption,
         guard,
         uow,
         audit,

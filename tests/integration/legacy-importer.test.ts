@@ -25,6 +25,7 @@ import {
 } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
 import type {
   LegacyAdoptionCandidate,
+  LegacyAdoptionOutcome,
   LegacyAdoptionPort,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/ports';
 import {
@@ -94,7 +95,15 @@ describe('Migration P7: the legacy importer', () => {
     key: string,
   ): Promise<{ fake: FakeRickpanel; id: string }> {
     const fake = await startFakeRickpanel({ host });
-    for (const name of names) fake.seedUser(name);
+    // Live accounts with an expiry and a data limit: P6 adopts an account only when its
+    // expiry matches a renewable (dated) product, and the products below are 30-day ones.
+    for (const name of names) {
+      fake.seedUser(name, {
+        expire: Math.floor(Date.UTC(2027, 0, 1) / 1000),
+        dataLimit: 30 * 1024 ** 3,
+        usedTraffic: 1024 ** 3,
+      });
+    }
     const created = await ctx.container.panels.create(tenantA, owner, {
       name: `Rick ${key}`,
       providerType: 'rickpanel',
@@ -118,8 +127,6 @@ describe('Migration P7: the legacy importer', () => {
     panelB = b.fake;
     panelAId = a.id;
     panelBId = b.id;
-    mappingText = syntheticMappingFile(tenantA.tenantId as unknown as string, panelAId, panelBId);
-    mapping = parsePanelMapping(mappingText, tenantA.tenantId as unknown as string);
 
     // The current public tariff the 30 GB / 30 d shapes resolve to.
     const products = new DrizzleProductRepository(ctx.container.database.db);
@@ -140,6 +147,14 @@ describe('Migration P7: the legacy importer', () => {
       now: ctx.container.clock.now(),
     });
     await products.setStatus(tenantA, product.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
+    // The named legacy product p1 renews as this product: the owner's explicit map.
+    mappingText = syntheticMappingFile(
+      tenantA.tenantId as unknown as string,
+      panelAId,
+      panelBId,
+      product.id,
+    );
+    mapping = parsePanelMapping(mappingText, tenantA.tenantId as unknown as string);
 
     // A legacy user who already used NEXA: matched, never re-created, never overwritten.
     await ctx.container.customers.resolveFromUpdate(tenantA, importerActor('webhook'), {
@@ -840,7 +855,7 @@ describe('Migration P7: the legacy importer', () => {
     const adoption: LegacyAdoptionPort = {
       adopt: (_scope, _actor, candidate) => {
         seen.push(candidate.legacyInvoiceId);
-        return Promise.resolve({ kind: 'ADOPTED' as const });
+        return Promise.resolve({ kind: 'ADOPTED' } as LegacyAdoptionOutcome);
       },
     };
     const report = await importer(adoption).apply({ ...input('adopt', snap), mode: 'IMPORT' });
@@ -849,13 +864,63 @@ describe('Migration P7: the legacy importer', () => {
     expect(seen).not.toContain(first.idInvoice);
   });
 
+  it('with the real P6 wired (the container default), eligible services are adopted with zero provider writes', async () => {
+    const real = ctx.container.legacyImporter({ inventoryPageSize: 3 });
+    const snap = await snapshot();
+    const report = await real.apply({ ...input('import', snap), mode: 'IMPORT' });
+    const applied = (report.sections as Record<string, any>)['applied'];
+    expect(applied.services.adoption).toMatchObject({ wired: true, PENDING: 0 });
+    expect(applied.services.adoption.ADOPTED).toBe(
+      SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE,
+    );
+    expect(report.verdict).toBe('COMPLETED');
+    // P6 wrote the eligible invoices' map rows; P7 recorded none of them itself.
+    expect(
+      await count('legacy_import_map', "legacy_table = 'invoice' AND status = 'IMPORTED'"),
+    ).toBe(SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE);
+    // Adoption orders: NEW_SERVICE + LEGACY_ADOPTION, zero totals; one service each.
+    expect(await count('orders', "origin = 'LEGACY_ADOPTION' AND total_amount = 0")).toBe(
+      SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE,
+    );
+    expect(await count('services')).toBe(SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE);
+    expect(await count('provisioning_operations')).toBe(0);
+    // Zero provider writes: every request either fake received was a read.
+    expectOnlyReads();
+    expect((report.sections as Record<string, any>)['provider']).toMatchObject({
+      writes: 0,
+      refusedWrites: 0,
+    });
+
+    // A rerun adopts nothing twice.
+    const rerun = await real.apply({ ...input('rerun', snap), mode: 'IMPORT' });
+    expect((rerun.sections as Record<string, any>)['applied'].services.adoption).toMatchObject({
+      ADOPTED: 0,
+      ALREADY_ADOPTED: SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE,
+    });
+    expect(await count('services')).toBe(SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE);
+
+    // The final report: adopted, no pending, the closure holds, provider writes 0.
+    const final = (await real.finalReport({ ...input('report', snap), evidenceClass: 'synthetic' }))
+      .final as Record<string, any>;
+    expect(final['services']).toMatchObject({
+      adopted: SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE,
+    });
+    expect(final['manualReview'].byReason['ADOPTION_PENDING_P6']).toBeUndefined();
+    expect(final['provider'].writes).toBe(0);
+    const failed = (final['reconciliation'] as { id: string; holds: boolean }[])
+      .filter((r) => !r.holds)
+      .map((r) => r.id);
+    expect(failed).toEqual(['C3']);
+    expectOnlyReads();
+  });
+
   it('with P6 wired, every eligible candidate reaches the adoption port with a resolved product', async () => {
     const seen: LegacyAdoptionCandidate[] = [];
     const adoption: LegacyAdoptionPort = {
       adopt: (_scope, actor, candidate) => {
         expect(actor.type).toBe('SYSTEM_JOB');
         seen.push(candidate);
-        return Promise.resolve({ kind: 'ADOPTED' as const });
+        return Promise.resolve({ kind: 'ADOPTED' } as LegacyAdoptionOutcome);
       },
     };
     const report = await importer(adoption).apply({

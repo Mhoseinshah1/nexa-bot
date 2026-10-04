@@ -175,6 +175,7 @@ export function decideAllServices(
       policy: mapping.policy,
       inventories: indexes,
       productCodes: snapshot.productCodes,
+      productMap: mapping.products,
       tariffOf,
     });
     categories[decision.category] += 1;

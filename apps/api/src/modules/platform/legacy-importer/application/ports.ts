@@ -2,7 +2,11 @@ import type { ActorContext, TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
-import type { ServiceProductPath } from './decisions.js';
+import type {
+  AdoptionRuntimeFacts,
+  LegacyAdoptionCandidate,
+  LegacyAdoptionOutcome,
+} from '../../../commerce/legacy-adoption/application/legacy-adoption-ports.js';
 import type { PanelFacts } from './panel-mapping.js';
 import type { LegacySourceEngine } from './source-port.js';
 
@@ -18,6 +22,8 @@ export interface LegacyImporterDestination {
   tenantExists(scope: TenantContext): Promise<boolean>;
   salesCurrency(scope: TenantContext): Promise<string>;
   panels(scope: TenantContext, panelIds: readonly string[]): Promise<readonly PanelFacts[]>;
+  /** Which of these product ids are products of this tenant. */
+  productIds(scope: TenantContext, productIds: readonly string[]): Promise<ReadonlySet<string>>;
   /** Telegram id → customer id, for the ids that are customers of this tenant. */
   customersByTelegramIds(
     scope: TenantContext,
@@ -130,6 +136,11 @@ export interface LegacyCustomerWriter {
 
 // --- provider --------------------------------------------------------------------------------
 
+export interface AccountRuntime {
+  readonly state: AdoptionRuntimeFacts['state'];
+  readonly usage: AdoptionRuntimeFacts['usage'];
+}
+
 export type LegacyInventoryRead =
   | {
       readonly ok: true;
@@ -137,6 +148,13 @@ export type LegacyInventoryRead =
       readonly index: PanelInventoryIndex;
       readonly accounts: number;
       readonly states: Readonly<Record<string, number>>;
+      /**
+       * Per account (keyed by the panel's EXACT spelling), the runtime facts of the same
+       * complete walk the index was built from — what P6 adopts from. No link, no token.
+       */
+      readonly runtime: ReadonlyMap<string, AccountRuntime>;
+      /** When the walk that produced these facts finished. */
+      readonly observedAt: Date;
     }
   | { readonly ok: true; readonly complete: false; readonly reason: string }
   | { readonly ok: false; readonly failure: string };
@@ -153,27 +171,17 @@ export interface LegacyInventoryPort {
 
 // --- P6 adoption seam ---------------------------------------------------------------------
 
-export interface LegacyAdoptionCandidate {
-  readonly runId: string;
-  readonly legacyInvoiceId: string;
-  readonly checksum: string;
-  readonly telegramUserId: string;
-  readonly customerId: string;
-  readonly panelId: string;
-  readonly providerUsername: string;
-  readonly product:
-    | (ServiceProductPath & { readonly kind: 'NAMED_PRODUCT' })
-    | (ServiceProductPath & { readonly kind: 'HIDDEN_SHAPE'; readonly shapeId: string });
-}
-
-export type LegacyAdoptionOutcome =
-  | { readonly kind: 'ADOPTED' | 'ALREADY_ADOPTED' }
-  | { readonly kind: 'MANUAL_REVIEW' | 'SKIPPED'; readonly reason: string };
+/**
+ * P6's own types (`legacy-adoption-ports.ts`, agent ADOPT): the importer hands
+ * `container.legacyAdoption.adoptCandidate` exactly what it decided, and records nothing on
+ * an eligible invoice's map row itself — P6 writes that row with the adoption it records.
+ */
+export type { AdoptionRuntimeFacts, LegacyAdoptionCandidate, LegacyAdoptionOutcome };
 
 /**
- * P6 (agent ADOPT) implements this. Until it does, the importer runs every phase before
- * adoption and reports the eligible candidates as `ADOPTION_PENDING` — never adopted,
- * never dropped.
+ * The adoption step's port. Wired to P6 by the container; null only where a caller
+ * explicitly runs without it (the eligible candidates are then reported PENDING, never
+ * adopted and never dropped).
  */
 export interface LegacyAdoptionPort {
   adopt(
