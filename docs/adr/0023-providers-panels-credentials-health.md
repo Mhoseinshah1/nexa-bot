@@ -786,6 +786,14 @@ ceil(batch / claimed)`. Every branch is an index range scan that stops at its
   `PANEL_HEALTH_FRESH_FOR_MS`, so no accepted configuration can let a panel be
   called fresh while nothing is refreshing it.
 
+- **Announced by whichever lane stored it.** The operator's connection test
+  writes health through the same core, and until UX batch 01 it announced
+  nothing: a recovery it proved left the failure condition open for ever,
+  because the monitor then read `HEALTHY -> HEALTHY`. Both lanes now call
+  `announceHealthWrite`, and a HEALTHY write also reconciles any health
+  condition an older release stranded, through the ordinary recorder
+  (`docs/panel-health-dashboard.md`).
+
 - **A discarded write announces nothing.** `recordHealth` returns `APPLIED` or
   `STALE_IGNORED` from the conditional upsert itself, and only `APPLIED`
   produces a transition audit entry or an operational event. Two probes of one

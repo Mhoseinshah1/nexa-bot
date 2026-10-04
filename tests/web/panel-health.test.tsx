@@ -186,4 +186,69 @@ describe('the panel health dashboard', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: /Frankfurt A/u })).toBeNull());
     expect(api.calls).toHaveLength(0);
   });
+
+  it('separates a current alert from history the panel has already recovered from', async () => {
+    // UX batch 01, item 10: a healthy panel with a provider_error row still open
+    // must not read as an active provider failure.
+    stubApi(
+      dashboard([
+        row({
+          conditions: [
+            {
+              code: 'panel.capacity.warning',
+              severity: 'WARN',
+              firstSeenAt: '2026-09-06T06:00:00.000Z',
+              lastSeenAt: '2026-09-06T07:00:00.000Z',
+              occurrences: 1,
+              current: true,
+            },
+            {
+              code: 'panel.health.provider_error',
+              severity: 'ERROR',
+              firstSeenAt: '2026-09-05T06:00:00.000Z',
+              lastSeenAt: '2026-09-05T07:00:00.000Z',
+              occurrences: 3,
+              current: false,
+            },
+          ],
+        }),
+      ]),
+    );
+    renderPage(<PanelHealthPage denied={false} mayProbe mayDrain mayViewServices />);
+    const current = await screen.findByRole('list', { name: t('web.ph_conditions') });
+    const history = screen.getByRole('list', { name: t('web.ph_conditions_history') });
+    expect(within(current).getByText('panel.capacity.warning')).toBeInTheDocument();
+    expect(within(current).queryByText('panel.health.provider_error')).toBeNull();
+    expect(within(history).getByText('panel.health.provider_error')).toBeInTheDocument();
+    // Labelled as history, not with the ERROR severity of an active failure.
+    expect(within(history).getByText(t('web.ph_condition_historical'))).toBeInTheDocument();
+    expect(within(history).queryByText(t('web.setting_severity_error'))).toBeNull();
+    expect(screen.getByText(t('web.ph_conditions_history_hint'))).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: t('web.nav_inbox') }).getAttribute('href')).toBe(
+      '/notification-center',
+    );
+  });
+
+  it('says there is no active alert when only history is open', async () => {
+    stubApi(
+      dashboard([
+        row({
+          conditions: [
+            {
+              code: 'panel.health.provider_error',
+              severity: 'ERROR',
+              firstSeenAt: '2026-09-05T06:00:00.000Z',
+              lastSeenAt: '2026-09-05T07:00:00.000Z',
+              occurrences: 1,
+              current: false,
+            },
+          ],
+        }),
+      ]),
+    );
+    renderPage(<PanelHealthPage denied={false} mayProbe mayDrain mayViewServices />);
+    expect(await screen.findByText(t('web.ph_no_conditions'))).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: t('web.ph_conditions') })).toBeNull();
+    expect(screen.getByRole('list', { name: t('web.ph_conditions_history') })).toBeInTheDocument();
+  });
 });
