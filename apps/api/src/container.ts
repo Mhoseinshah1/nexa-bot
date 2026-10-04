@@ -1185,6 +1185,43 @@ export function monitorBudgetReserveFor(capacity: number, percent: number): numb
   return Math.max(1, Math.ceil((capacity * percent) / 100));
 }
 
+/**
+ * Migration P1 (H5): the share of a tenant's probe bucket the SCHEDULED usage sweep must
+ * leave behind, as a percentage. Half.
+ *
+ * A legacy migration brings a fleet (~27k services) whose figures are all stale at once,
+ * and the sweep's reads come out of the same bucket a paid create spends from. Without a
+ * floor that backlog drains the bucket to zero on every refill, and the customer who has
+ * just paid meets `BUDGET_EXHAUSTED`. With a floor of half, the sweep still gets every
+ * token above it — its throughput is whatever the refill leaves — and a paid create, a
+ * customer's own tap or an operator's "Test connection" always finds the other half.
+ *
+ * A constant rather than a new environment variable: the knob an operator already has is
+ * `PANEL_PROBE_TENANT_LIMIT`/`_WINDOW_MS`, which raises the sweep's throughput and the
+ * headroom together. `docs/migration-p1-usage-sync.md` has the arithmetic.
+ */
+export const USAGE_SYNC_BUDGET_RESERVE_PERCENT = 50;
+
+/**
+ * The scheduled sweep's floor in TOKENS: half the capacity, rounded up, and never below
+ * the monitor's own floor.
+ *
+ * The second clause is the ordering: paid and interactive work (floor 0) outrank the
+ * monitor (its floor), which outranks the sweep (this). A sweep allowed to dig below the
+ * monitor's floor would starve the health checks that decide whether a panel may be
+ * sold onto, which is a worse failure than a usage figure that is an hour old.
+ *
+ * At a capacity of 1 the floor is the whole bucket and the sweep never runs. That is the
+ * same direction the monitor's floor takes, for the same reason: housekeeping may lag;
+ * a customer who paid must not wait behind it.
+ *
+ * EXPORTED so the rule has a test (`tests/unit/usage-sync-budget.test.ts`).
+ */
+export function usageSyncBudgetReserveFor(capacity: number, monitorReserve: number): number {
+  const half = Math.max(1, Math.ceil((capacity * USAGE_SYNC_BUDGET_RESERVE_PERCENT) / 100));
+  return Math.max(monitorReserve, half);
+}
+
 export function createContainer(config: AppConfig, role: ProcessRole): Container {
   const logger = createLogger(config.LOG_LEVEL, role);
   const clock = new SystemClock();
@@ -4978,6 +5015,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     http: panelHttp,
     urlPolicy,
     probeBudget: probeCore.probeBudget,
+    backgroundBudgetReserve: usageSyncBudgetReserveFor(
+      config.PANEL_PROBE_TENANT_LIMIT,
+      monitorBudgetReserve,
+    ),
     uow,
     clock,
     ids,

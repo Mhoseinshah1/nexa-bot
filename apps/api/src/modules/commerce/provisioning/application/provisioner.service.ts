@@ -301,6 +301,18 @@ export interface ProvisionerDeps {
   readonly http: SafeHttpClient;
   readonly urlPolicy: UrlPolicyOptions;
   readonly probeBudget: ProbeBudget;
+  /**
+   * Migration P1: the tokens a SCHEDULED usage read must leave in the tenant bucket.
+   *
+   * A floor on the same bucket, never a second one (CLAUDE.md, Phase 3C): paid creates,
+   * commercial writes, reconciles, customers' and operators' own reads spend at reserve
+   * zero, the panel monitor above its own floor, and the background sweep only above
+   * this one — which the container sets at least as high as the monitor's, so a
+   * migration-sized backlog of reads can neither take the last token from a customer who
+   * paid nor starve the health checks that decide whether a panel may be sold onto.
+   * See `usageSyncBudgetReserveFor`.
+   */
+  readonly backgroundBudgetReserve: number;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -498,11 +510,10 @@ export class ProvisionerService {
     await this.reapStrandedCalls(scope, now);
     await this.planReconciles(scope, now);
     /*
-     * AFTER the reconciles, so a tick whose budget is tight spends it on a paid order
-     * that has not been delivered before it spends it refreshing a figure. `claimDue`
-     * is oldest-first across all types, so this is about which rows EXIST, not about
-     * which is claimed — but a reconcile planned in the same tick is already older than
-     * a sync planned after it.
+     * AFTER the reconciles. Which is CLAIMED first no longer depends on this order:
+     * since Migration P1 the sweep's reads are `background` rows, which `claimDue` takes
+     * only when no other row is due and which spend the tenant budget only above
+     * `backgroundBudgetReserve`.
      */
     await this.planUsageSyncs(scope, now);
     /*
@@ -745,8 +756,16 @@ export class ProvisionerService {
      * A refusal here is NOT a failure: nothing was contacted. The operation goes back
      * to PLANNED with the bound's own retry-after, so the next tick tries again.
      */
+    /*
+     * Migration P1 (H5): a SCHEDULED usage read spends only above
+     * `backgroundBudgetReserve`. Everything else — including a customer's or an
+     * operator's own read, which `background` does not mark — keeps reserve zero. The
+     * floor is enforced inside the same conditional write that takes the token, so it
+     * holds across provisioner replicas exactly as the monitor's does.
+     */
+    const reserve = operation.background ? this.deps.backgroundBudgetReserve : 0;
     const budget = await this.deps.uow.run(scope, async (tx) =>
-      this.deps.panels.takeProbeBudget(scope, this.deps.probeBudget, now, tx, 0),
+      this.deps.panels.takeProbeBudget(scope, this.deps.probeBudget, now, tx, reserve),
     );
     if (!budget.permitted) {
       await this.holdOff(
@@ -3337,12 +3356,23 @@ export class ProvisionerService {
        * is planned again rather than being suppressed for ever by its own history.
        */
       const window = Math.floor(now.getTime() / (minutes * 60_000));
-      const stale = await this.deps.services.listUsageSyncDue(
-        scope,
-        staleBefore,
-        USAGE_SYNC_PLAN_LIMIT,
-        tx,
-      );
+      /*
+       * Migration P1: the backlog is TOPPED UP to the bound, never grown by it.
+       *
+       * It used to plan up to the bound EVERY tick, and the listing excluded nothing
+       * already queued — harmless at a few hundred services, where each tick re-planned
+       * the same stalest page and the derived id collapsed it. At a legacy migration's
+       * twenty-seven thousand that page outlives its window, a fresh window derives fresh
+       * ids for the same services, and the queue gains a duplicate read of each. Now the
+       * listing skips a service with a read already open, and the sweep plans only as
+       * many as keep the UNTRIED scheduled queue at `USAGE_SYNC_PLAN_LIMIT` per tenant —
+       * so the stalest services are the ones waiting, nothing is read twice for one
+       * staleness, and a read backing off after a failure does not hold a place.
+       */
+      const room =
+        USAGE_SYNC_PLAN_LIMIT - (await this.deps.operations.countUntriedBackground(scope, tx));
+      if (room <= 0) return;
+      const stale = await this.deps.services.listUsageSyncDue(scope, staleBefore, room, tx);
       for (const candidate of stale) {
         await this.deps.operations.plan(
           scope,
@@ -3355,6 +3385,11 @@ export class ProvisionerService {
             requestedByCustomerId: null,
             panelId: candidate.panelId,
             type: 'SYNC_USAGE',
+            /*
+             * Migration P1: and marked as such, which is what the claim order and the
+             * budget floor read. The one writer of `true` in the codebase.
+             */
+            background: true,
           },
           now,
           tx,
