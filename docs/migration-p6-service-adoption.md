@@ -193,6 +193,9 @@ refuses such a key by design, and the importer reports it from its own run.
 ## 10. Contracts and migrations
 
 - `ServiceAdopted` domain event (own commit): ids and state only.
+- Audit rows name a map row by its `ref` uuid (Item 9's rule: `legacy.service.adopt` carries
+  `mapRef`, `legacy.invoice.decide` uses it as the entity id) — never the invoice key, the
+  legacy user key or a Telegram id.
 - No migration. orders.origin (0187/0188), the import map (0190), its `invoice` key (0191)
   and the review reasons/state (0192, Item 9 — cherry-picked locally beneath this branch
   until it merges) already hold everything the adoption writes.
@@ -258,6 +261,9 @@ refuses such a key by design, and the importer reports it from its own run.
 | A13 over-cap never reported                 | capacity                                |
 | A14 no window-shape check                   | product refusals                        |
 | A15 hidden-shape gate skipped               | unresolved shape priced by hand         |
+| A16 a closed review is not respected        | closed review left alone                |
+| A17 a read failure recorded as a review     | state mapping (read failures)           |
+| A18 decision audit names the invoice key    | map row named by its uuid               |
 
 A11 and A15 survived the first run (each case was also refused by a neighbouring rule); the
 cases were narrowed until each isolates its rule, and both are now killed.

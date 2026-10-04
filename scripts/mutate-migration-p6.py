@@ -178,6 +178,12 @@ M = {
         "          { status: 'MANUAL_REVIEW', reasonCode: 'PROVIDER_READ_FAILED' },",
         ADOPT_IT,
     ),
+    'A18-decision-audit-names-the-invoice-key': (
+        AS,
+        '        entityId: mapRef,',
+        '        entityId: command.legacyInvoiceKey,',
+        ADOPT_IT,
+    ),
 }
 
 selected = sys.argv[1:] or list(M)

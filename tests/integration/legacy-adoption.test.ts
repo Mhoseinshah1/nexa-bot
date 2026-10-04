@@ -518,6 +518,36 @@ describe('Migration P6: legacy service adoption', () => {
     expect(await businessRows()).toMatchObject({ orders: 0, services: 0, reservations: 0 });
   });
 
+  it('names a map row by its uuid in audit and outbox — never the invoice key or a Telegram id', async () => {
+    const telegramUserId = tg();
+    await fx.customer({ telegramUserId });
+    const adoptedCmd = command({ telegramUserId });
+    const o = await adopted(adoptedCmd);
+    const reviewCmd = command({ telegramUserId: tg() });
+    await adopt(reviewCmd);
+    const refs = await rows<{ legacy_id: string; ref: string }>(sql`
+      SELECT legacy_id, ref FROM legacy_import_map WHERE legacy_table = 'invoice'`);
+    const refOf = (key: string) => refs.find((r) => r.legacy_id === key)?.ref;
+    const audits = await rows<{ action: string; entity_id: string | null; after: unknown }>(sql`
+      SELECT action, entity_id, after FROM audit_logs
+       WHERE action IN ('legacy.service.adopt', 'legacy.invoice.decide') ORDER BY occurred_at, id`);
+    expect(audits.map((a) => a.action)).toEqual(['legacy.service.adopt', 'legacy.invoice.decide']);
+    expect(audits[0]?.after).toMatchObject({ mapRef: refOf(adoptedCmd.legacyInvoiceKey) });
+    expect(audits[1]?.entity_id).toBe(refOf(reviewCmd.legacyInvoiceKey));
+    const events = await rows<{ payload: unknown; aggregate_id: string }>(sql`
+      SELECT payload, aggregate_id FROM outbox_messages WHERE event_type = 'ServiceAdopted'`);
+    expect(events.map((e) => e.aggregate_id)).toEqual([o.serviceId]);
+    const written = JSON.stringify([audits, events]);
+    for (const secret of [
+      adoptedCmd.legacyInvoiceKey,
+      reviewCmd.legacyInvoiceKey,
+      telegramUserId,
+      reviewCmd.telegramUserId,
+    ]) {
+      expect(written).not.toContain(secret);
+    }
+  });
+
   it('an invoice key outside the evidenced shape is manual review and writes nothing at all', async () => {
     const telegramUserId = tg();
     await fx.customer({ telegramUserId });

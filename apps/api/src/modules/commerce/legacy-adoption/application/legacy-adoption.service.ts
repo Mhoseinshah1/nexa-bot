@@ -290,27 +290,32 @@ export class LegacyAdoptionService {
     const decided = await this.decide(scope, command, tx);
     if ('kind' in decided) {
       if (decided.kind === 'READ_FAILED') {
-        await this.record(
+        const ref = await this.record(
           scope,
           command,
           { status: 'FAILED', reasonCode: 'PROVIDER_READ_FAILED' },
           tx,
         );
-        await this.auditDecision(scope, actor, command, 'FAILED', 'PROVIDER_READ_FAILED', tx);
+        await this.auditDecision(scope, actor, command, ref, 'FAILED', 'PROVIDER_READ_FAILED', tx);
         return { kind: 'FAILED', reason: 'PROVIDER_READ_FAILED' };
       }
       if (decided.kind === 'SKIP') {
-        await this.record(scope, command, { status: 'SKIPPED', reasonCode: 'TEST_PANEL' }, tx);
-        await this.auditDecision(scope, actor, command, 'SKIPPED', 'TEST_PANEL', tx);
+        const ref = await this.record(
+          scope,
+          command,
+          { status: 'SKIPPED', reasonCode: 'TEST_PANEL' },
+          tx,
+        );
+        await this.auditDecision(scope, actor, command, ref, 'SKIPPED', 'TEST_PANEL', tx);
         return { kind: 'SKIPPED', reason: 'TEST_PANEL' };
       }
-      await this.record(
+      const ref = await this.record(
         scope,
         command,
         { status: 'MANUAL_REVIEW', reasonCode: decided.reason },
         tx,
       );
-      await this.auditDecision(scope, actor, command, 'MANUAL_REVIEW', decided.reason, tx);
+      await this.auditDecision(scope, actor, command, ref, 'MANUAL_REVIEW', decided.reason, tx);
       return { kind: 'MANUAL_REVIEW', reason: decided.reason, recorded: true };
     }
     return this.write(scope, actor, command, decided, tx);
@@ -485,7 +490,7 @@ export class LegacyAdoptionService {
       tx,
     );
 
-    await this.record(
+    const mapRef = await this.record(
       scope,
       command,
       { status: 'IMPORTED', entityType: 'SERVICE', entityId: serviceId, reasonCode: null },
@@ -520,6 +525,7 @@ export class LegacyAdoptionService {
           origin: 'LEGACY_ADOPTION',
           runId: command.runId,
           legacyTable: LEGACY_TABLE,
+          mapRef,
           // Whether a link was stored, never the link: it is a bearer capability.
           hasLink: plan.subscriptionUrl !== null,
           remindersSeeded: seed.passed.length,
@@ -559,7 +565,7 @@ export class LegacyAdoptionService {
     command: LegacyAdoptionCommand,
     decision: LegacyImportDecision,
     tx: TransactionScope,
-  ): Promise<void> {
+  ): Promise<string> {
     const written = await this.deps.map.recordDecision(
       scope,
       {
@@ -578,12 +584,15 @@ export class LegacyAdoptionService {
         `The legacy import map refused this decision (${written.reason}).`,
       );
     }
+    // The row's own uuid: what an audit row or event names it by — never the legacy key.
+    return written.record.ref;
   }
 
   private async auditDecision(
     scope: TenantContext,
     actor: ActorContext,
     command: LegacyAdoptionCommand,
+    mapRef: string,
     status: 'SKIPPED' | 'MANUAL_REVIEW' | 'FAILED',
     reason: string,
     tx: TransactionScope,
@@ -594,7 +603,8 @@ export class LegacyAdoptionService {
       {
         action: AUDIT_DECIDE,
         entityType: 'LegacyImportMap',
-        entityId: null,
+        // The map row's uuid (Item 9's rule): never the invoice key or a Telegram id.
+        entityId: mapRef,
         before: null,
         after: { legacyTable: LEGACY_TABLE, runId: command.runId, status, reason },
         result: 'SUCCESS',
