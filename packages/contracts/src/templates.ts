@@ -1495,7 +1495,8 @@ export const TEMPLATES = [
     key: 'bot.terms.accepted',
     description:
       'Program §6: the answer to the accept button once the acceptance is recorded (or was ' +
-      'already). The main menu keyboard comes with it, so the customer carries on.',
+      'already). Batch 01 item 1: the terms message itself is EDITED into this text — no new ' +
+      'message is sent — with the main-menu button under it, so the customer carries on.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -9416,9 +9417,21 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.service.list_item_button',
-    description: 'One service’s button: its real username on the panel.',
+    description:
+      'One service’s button: its real username on the panel, after the marker of its status. ' +
+      'Batch 01 item 3: the marker and the button’s colour are DERIVED from the service’s ' +
+      'state, deadline and read usage (`serviceDisplayStatus`), never chosen by hand.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'marker',
+        type: 'STRING',
+        description:
+          'The Appearance marker of the service’s shown status — `{icon:active}` while it ' +
+          'serves, `{icon:inactive}` once its time or traffic is over or it is switched off.',
+        required: false,
+        repeatable: false,
+      },
       {
         token: 'username',
         type: 'STRING',
@@ -9640,7 +9653,17 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.service.state_expired',
-    description: 'Status line for EXPIRED.',
+    description:
+      'Status line for a service whose time is over: EXPIRED, or ACTIVE/SUSPENDED past its ' +
+      'deadline before the expiry sweep has run (Batch 01 item 3). Red.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.state_exhausted',
+    description:
+      'Batch 01 item 3: status line for a service whose READ usage has reached its finite ' +
+      'traffic allowance while its time is not over — whatever the state still says. Red.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

@@ -100,17 +100,49 @@ const gets = (api: Api, path: string) =>
 const posts = (api: Api, path: string) =>
   api.calls.filter((call) => call.method === 'POST' && call.url.includes(path));
 
-const renderList = (options: { query?: string; denied?: boolean; mayEdit?: boolean } = {}) =>
+const renderList = (
+  options: {
+    query?: string;
+    denied?: boolean;
+    mayEdit?: boolean;
+    maySearchCustomers?: boolean;
+    mayViewWallet?: boolean;
+  } = {},
+) =>
   renderPage(
     <ResellersPage
       route={{ path: '/resellers', query: new URLSearchParams(options.query ?? '') }}
       denied={options.denied ?? false}
       mayEdit={options.mayEdit ?? true}
-      mayViewWallet={false}
+      mayViewWallet={options.mayViewWallet ?? false}
       mayViewOrders={false}
       mayViewAudit={false}
+      maySearchCustomers={options.maySearchCustomers ?? true}
     />,
   );
+
+/** The picker's search: `GET /users?q=…`, the customer list's own search. */
+const searchRoute = (
+  q: string,
+  customers: readonly Record<string, unknown>[],
+  nextCursor = null,
+) => ({
+  url: `/users?limit=10&q=${encodeURIComponent(q)}`,
+  body: { customers, nextCursor },
+});
+
+/** Types into the picker and presses its search button. */
+const searchFor = (text: string) => {
+  fireEvent.change(screen.getByLabelText('مشتری'), { target: { value: text } });
+  fireEvent.click(screen.getByRole('button', { name: t('web.customer_picker_search') }));
+};
+
+/** Picks one customer from the picker by a name only that row shows. */
+const pickRow = async (text: string) => {
+  const results = await screen.findByRole('list', { name: t('web.customer_picker_results') });
+  const row = within(results).getByText(text).closest('li') as HTMLElement;
+  fireEvent.click(within(row).getByRole('button', { name: t('web.customer_picker_choose') }));
+};
 
 // ---------------------------------------------------------------------------
 // Gating
@@ -250,8 +282,12 @@ describe('registering and editing a reseller', () => {
     const api = stubApi(listRoutes());
     renderList({ query: `register=${CUSTOMER_ID}` });
     await screen.findByText('Reza Reseller');
-    // Handed over by the customer page's link, filled in.
-    expect((screen.getByLabelText('شناسهٔ مشتری') as HTMLInputElement).value).toBe(CUSTOMER_ID);
+    // Handed over by the customer page's link, already chosen: no search box to fill.
+    expect(
+      within(screen.getByRole('group', { name: t('web.customer_picker_selected') })).getByText(
+        CUSTOMER_ID,
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('سطح', { selector: '#reseller-register-tier' }), {
       target: { value: TIER_ID },
@@ -271,10 +307,11 @@ describe('registering and editing a reseller', () => {
   });
 
   it('sends a percentage override when chosen, and no credit limit: the form has no field for one', async () => {
-    const api = stubApi(listRoutes());
+    const api = stubApi([...listRoutes(), searchRoute('5551234567', [customer()])]);
     renderList();
     await screen.findByText('Reza Reseller');
-    fireEvent.change(screen.getByLabelText('شناسهٔ مشتری'), { target: { value: CUSTOMER_ID } });
+    searchFor('5551234567');
+    await pickRow('علی محمدی');
     fireEvent.change(screen.getByLabelText('سطح', { selector: '#reseller-register-tier' }), {
       target: { value: TIER_ID },
     });
@@ -346,6 +383,180 @@ describe('registering and editing a reseller', () => {
   });
 });
 
+describe('the register form picks a customer, never takes an internal id (UX batch 01, item 9)', () => {
+  const ALI = customer();
+  const ALIREZA = customer({
+    id: '019210ab-cdef-7012-8345-6789abcdef09',
+    telegramUserId: '5559999999',
+    username: 'Alireza_Shop',
+    firstName: 'علیرضا',
+    lastName: 'کریمی',
+    // Never drawn: an operator note is not an identifying field.
+    status: 'BLOCKED',
+    blockedAt: '2026-09-01T08:00:00.000Z',
+    blockedReason: 'operator-note-must-not-render',
+  });
+
+  const registerWith = async (api: ReturnType<typeof stubApi>) => {
+    fireEvent.change(screen.getByLabelText('سطح', { selector: '#reseller-register-tier' }), {
+      target: { value: TIER_ID },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت نماینده' }));
+    await waitFor(() => expect(posts(api, '/resellers')).toHaveLength(1));
+    return posts(api, '/resellers')[0]?.body as Record<string, unknown>;
+  };
+
+  it('finds a customer by Telegram id and registers the uuid the operator never saw', async () => {
+    const api = stubApi([...listRoutes(), searchRoute('5551234567', [ALI])]);
+    renderList();
+    await screen.findByText('Reza Reseller');
+    // No uuid box: the field is a search.
+    expect(screen.getByLabelText('مشتری')).toHaveAttribute('type', 'search');
+    searchFor('5551234567');
+    // One match is still NOT chosen for the operator.
+    expect(await screen.findByText(t('web.customer_picker_one'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ثبت نماینده' })).toBeDisabled();
+    expect(screen.getByText(t('web.reseller_problem_customer'))).toBeInTheDocument();
+
+    await pickRow('علی محمدی');
+    const body = await registerWith(api);
+    expect(body['customerId']).toBe(ALI['id']);
+    // The search went to the customer list's own endpoint, with the text as typed.
+    const search = gets(api, '/users?')[0];
+    expect(search?.url).toContain('q=5551234567');
+    expect(search?.url).toContain('limit=10');
+  });
+
+  it('sends @username and a plain username to the same search, as typed', async () => {
+    const api = stubApi([
+      ...listRoutes(),
+      searchRoute('@ALI_tehran', [ALI]),
+      searchRoute('ali_tehran', [ALI]),
+    ]);
+    renderList();
+    await screen.findByText('Reza Reseller');
+    searchFor('@ALI_tehran');
+    expect(await screen.findByText('@ali_tehran')).toBeInTheDocument();
+    searchFor('ali_tehran');
+    await waitFor(() => expect(gets(api, '/users?')).toHaveLength(2));
+    await pickRow('علی محمدی');
+    expect((await registerWith(api))['customerId']).toBe(ALI['id']);
+  });
+
+  it('never chooses between several matches: the operator does', async () => {
+    const api = stubApi([...listRoutes(), searchRoute('ali', [ALI, ALIREZA])]);
+    renderList();
+    await screen.findByText('Reza Reseller');
+    searchFor('ali');
+    expect(await screen.findByText(t('web.customer_picker_many'))).toBeInTheDocument();
+    const results = screen.getByRole('list', { name: t('web.customer_picker_results') });
+    expect(
+      within(results).getAllByRole('button', { name: t('web.customer_picker_choose') }),
+    ).toHaveLength(2);
+    // Nothing is selected until a press, and registering is refused meanwhile.
+    expect(screen.queryByRole('group', { name: t('web.customer_picker_selected') })).toBeNull();
+    expect(screen.getByRole('button', { name: 'ثبت نماینده' })).toBeDisabled();
+    // Identifying fields only; the block note is never drawn.
+    expect(within(results).getByText('5559999999')).toBeInTheDocument();
+    expect(within(results).getByText(t('web.user_status_blocked'))).toBeInTheDocument();
+    expect(screen.queryByText('operator-note-must-not-render')).toBeNull();
+
+    await pickRow('علیرضا کریمی');
+    expect((await registerWith(api))['customerId']).toBe(ALIREZA['id']);
+  });
+
+  it('says so when nothing matches, and when there are more results than shown', async () => {
+    stubApi([
+      ...listRoutes(),
+      searchRoute('nobody', []),
+      { url: '/users?limit=10&q=a', body: { customers: [ALI], nextCursor: 'next-page' } },
+    ]);
+    renderList();
+    await screen.findByText('Reza Reseller');
+    searchFor('nobody');
+    expect(await screen.findByText(t('web.customer_picker_none'))).toBeInTheDocument();
+    searchFor('a');
+    expect(await screen.findByText(t('web.customer_picker_more'))).toBeInTheDocument();
+  });
+
+  it('lets the operator change the chosen customer before registering', async () => {
+    const api = stubApi([...listRoutes(), searchRoute('ali', [ALI, ALIREZA])]);
+    renderList();
+    await screen.findByText('Reza Reseller');
+    searchFor('ali');
+    await pickRow('علی محمدی');
+    fireEvent.click(screen.getByRole('button', { name: t('web.customer_picker_change') }));
+    searchFor('ali');
+    await pickRow('علیرضا کریمی');
+    expect((await registerWith(api))['customerId']).toBe(ALIREZA['id']);
+  });
+
+  it('sends no search without users.search, and names the key', async () => {
+    const api = stubApi(listRoutes());
+    renderList({ maySearchCustomers: false });
+    await screen.findByText('Reza Reseller');
+    expect(screen.getByText(t('web.customer_picker_denied'))).toBeInTheDocument();
+    expect(screen.getByText(/users\.search/u)).toBeInTheDocument();
+    expect(gets(api, '/users')).toHaveLength(0);
+  });
+
+  it('draws the picker only for users.view AND users.search, derived at the route', async () => {
+    // Review P3-3: `CustomerService.list` charges both for a `q`, and a GRANT override
+    // can give search without view — every search would then be refused.
+    for (const [permissions, searches] of [
+      [['resellers.view', 'resellers.edit', 'users.search'], false],
+      [['resellers.view', 'resellers.edit', 'users.view'], false],
+      [['resellers.view', 'resellers.edit', 'users.view', 'users.search'], true],
+    ] as const) {
+      const api = stubApi(listRoutes());
+      const resolved = resolve({ path: '/resellers', query: new URLSearchParams() }, [
+        ...permissions,
+      ]);
+      const view = renderPage(resolved.element as ReactElement);
+      await within(view.container).findByText('Reza Reseller');
+      const box = view.container.querySelector('#reseller-register-customer');
+      expect(box?.getAttribute('type') === 'search', permissions.join(',')).toBe(searches);
+      expect(within(view.container).queryByText(t('web.customer_picker_denied')) !== null).toBe(
+        !searches,
+      );
+      expect(gets(api, '/users')).toHaveLength(0);
+      view.unmount();
+    }
+  });
+
+  it('surfaces a refused search rather than an empty result', async () => {
+    stubApi([
+      ...listRoutes(),
+      {
+        url: '/users?limit=10&q=ali',
+        status: 403,
+        body: {
+          error: {
+            kind: 'forbidden',
+            code: 'access.permission_denied',
+            message: 'Forbidden.',
+            correlationId: 't',
+          },
+        },
+      },
+    ]);
+    renderList();
+    await screen.findByText('Reza Reseller');
+    searchFor('ali');
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByText(t('web.customer_picker_none'))).toBeNull();
+    expect(screen.queryByRole('list', { name: t('web.customer_picker_results') })).toBeNull();
+  });
+
+  it('names a customer handed over from their own page when users.view allows', async () => {
+    stubApi([...listRoutes(), { url: `/users/${CUSTOMER_ID}`, body: { customer: ALI } }]);
+    renderList({ query: `register=${CUSTOMER_ID}`, mayViewWallet: true });
+    const chosen = await screen.findByRole('group', { name: t('web.customer_picker_selected') });
+    expect(await within(chosen).findByText('علی محمدی')).toBeInTheDocument();
+    expect(within(chosen).getByText('5551234567')).toBeInTheDocument();
+  });
+});
+
 describe('unsaved edits on the reseller forms', () => {
   const go = (url: string) => act(() => navigate(url, { replace: true, force: true }));
 
@@ -375,6 +586,7 @@ describe('unsaved edits on the reseller forms', () => {
           mayViewWallet={false}
           mayViewOrders={false}
           mayViewAudit={false}
+          maySearchCustomers
         />
         <LeaveGuardHost />
       </>,
@@ -391,7 +603,8 @@ describe('unsaved edits on the reseller forms', () => {
     await waitFor(() => expect(posts(api, '/resellers')).toHaveLength(1));
     expect(await screen.findByText(t('web.reseller_registered'))).toBeInTheDocument();
     // Cleared for the next one, and clean — although `?register=` is still in the URL.
-    expect((screen.getByLabelText('شناسهٔ مشتری') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('مشتری') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByRole('group', { name: t('web.customer_picker_selected') })).toBeNull();
     expect(screen.queryByText(t('web.unsaved_changes'))).toBeNull();
     act(() => navigate('/orders'));
     expect(screen.queryByRole('alertdialog')).toBeNull();
@@ -421,15 +634,20 @@ describe('unsaved edits on the reseller forms', () => {
   });
 
   it('asks before an edit replaces a registration being typed', async () => {
-    stubApi(listRoutes());
+    stubApi([...listRoutes(), searchRoute('ali', [customer()])]);
     renderList();
     await screen.findByText('Reza Reseller');
-    fireEvent.change(screen.getByLabelText('شناسهٔ مشتری'), { target: { value: CUSTOMER_ID } });
+    searchFor('ali');
+    await pickRow('علی محمدی');
 
     fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
     const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
     fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
-    expect((screen.getByLabelText('شناسهٔ مشتری') as HTMLInputElement).value).toBe(CUSTOMER_ID);
+    expect(
+      within(screen.getByRole('group', { name: t('web.customer_picker_selected') })).getByText(
+        'علی محمدی',
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
     const again = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });

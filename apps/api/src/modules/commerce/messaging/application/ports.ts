@@ -5,6 +5,7 @@ import type {
   CustomerNotificationKind,
   CustomerNotificationState,
   InlineButtonKey,
+  InlineButtonStyle,
   Money,
   TemplateKey,
   TemplateValues,
@@ -76,7 +77,15 @@ export type CustomerButtonRow = number;
 export interface CustomerCallbackButton {
   readonly label: CustomerButtonLabel;
   readonly data: string;
-  readonly row?: CustomerButtonRow; /**
+  readonly row?: CustomerButtonRow;
+  /**
+   * Batch 01 item 3: a style DERIVED from domain facts — a «سرویس‌های من» button's colour
+   * from its service's shown status (`serviceDisplayStatus`). When present it is drawn
+   * instead of the tenant's `bot.inline_buttons` style for this button: the owner's rule is
+   * that this colour is never chosen by hand. Absent, the tenant's style applies as before.
+   * Presentation only, like every style: never part of the route.
+   */
+  readonly derivedStyle?: Exclude<InlineButtonStyle, 'default'>; /**
    * Owner spec §6: which registry button this is (`INLINE_BUTTONS`). The messenger draws its
    * STYLE from the tenant's `bot.inline_buttons`; the label is already the registry's
    * template (`inlineLabel`). Never part of the route: `data`, the URL or the copied text

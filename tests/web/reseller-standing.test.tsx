@@ -6,6 +6,7 @@ import { resolve } from '../../apps/web/src/app';
 import { ResellersPage } from '../../apps/web/src/pages/resellers';
 import { ResellerTiersPage } from '../../apps/web/src/pages/reseller-tiers';
 import { changedFieldsOf } from '../../apps/web/src/pages/reseller-standing';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
 
 /**
@@ -185,7 +186,8 @@ describe('the reseller standing cards', () => {
     render({ wallet: false, orders: false, audit: false });
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
-    expect(await screen.findByText(/users\.view/u)).toBeInTheDocument();
+    // The exact wallet sentence: the register form's customer picker names users.view too.
+    expect(await screen.findByText(t('web.reseller_credit_denied'))).toBeInTheDocument();
     expect(screen.getByText(/orders\.view/u)).toBeInTheDocument();
     expect(screen.getByText(/audit\.view/u)).toBeInTheDocument();
     expect(gets(api, '/credit')).toHaveLength(0);

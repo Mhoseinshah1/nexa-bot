@@ -69,12 +69,20 @@ const codeOf = async (work: Promise<unknown>): Promise<string> => {
 describe('terms and rules (program §6)', () => {
   let api: ApiApp;
   let telegram: Server;
-  let calls: { method: string; body: Record<string, unknown> }[] = [];
+  let calls: { method: string; body: Record<string, unknown>; messageId?: number }[] = [];
+  /**
+   * Batch 01 item 1: what each message in the fake chat says now, so an edit into the same
+   * text and keyboard is answered as Telegram answers it — `400 message is not modified` —
+   * and `refuseEdits` stands for a message Telegram cannot edit any more.
+   */
+  let shown = new Map<number, string>();
+  let refuseEdits = false;
   let owner: ActorContext;
   let ownerB: ActorContext;
   let operator: ActorContext;
   let observer: ActorContext;
   let panel: FakeMarzban | null = null;
+  let config: ReturnType<typeof testConfig>;
   let updateId = 120_000;
   let messageId = 1200;
   let nextUser = 820_000;
@@ -101,8 +109,29 @@ describe('terms and rules (program §6)', () => {
         } catch {
           body = {};
         }
-        calls.push({ method, body });
-        const result = method === 'answerCallbackQuery' ? true : { message_id: (messageId += 1) };
+        const content = JSON.stringify([body.text, body.reply_markup ?? null]);
+        if (method === 'editMessageText') {
+          const target = Number(body.message_id);
+          calls.push({ method, body, messageId: target });
+          const refusal = refuseEdits
+            ? 'Bad Request: message to edit not found'
+            : shown.get(target) === content
+              ? 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message'
+              : null;
+          if (refusal !== null) {
+            response.writeHead(400, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ ok: false, error_code: 400, description: refusal }));
+            return;
+          }
+          shown.set(target, content);
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ ok: true, result: true }));
+          return;
+        }
+        const id = (messageId += 1);
+        calls.push({ method, body, messageId: id });
+        if (method === 'sendMessage') shown.set(id, content);
+        const result = method === 'answerCallbackQuery' ? true : { message_id: id };
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, result }));
       });
@@ -110,7 +139,7 @@ describe('terms and rules (program §6)', () => {
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
     const address = telegram.address();
     if (address === null || typeof address === 'string') throw new Error('no address');
-    const config = testConfig({
+    config = testConfig({
       TELEGRAM_WEBHOOK_ENABLED: 'true',
       TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
       TELEGRAM_API_BASE_URL: `http://127.0.0.1:${String(address.port)}`,
@@ -134,6 +163,8 @@ describe('terms and rules (program §6)', () => {
     await seed(api.container.database.db, api.container.cipher);
     api.container.setInstallationTenant(tenantA.tenantId);
     calls = [];
+    shown = new Map();
+    refuseEdits = false;
     owner = adminActorFor(
       await createAdmin(api.container, tenantA, {
         username: 'owner-terms',
@@ -223,13 +254,13 @@ describe('terms and rules (program §6)', () => {
     return calls.filter((call) => call.method === 'sendMessage').map((call) => call.body);
   }
 
-  const tapUpdate = (from: number, data: string) => ({
+  const tapUpdate = (from: number, data: string, onMessage?: number) => ({
     callback_query: {
       id: `cbq-${String((updateId += 1))}`,
       from: { id: from, is_bot: false, first_name: 'Customer' },
       chat_instance: 'ci',
       message: {
-        message_id: (messageId += 1),
+        message_id: onMessage ?? (messageId += 1),
         date: 0,
         chat: { id: from, type: 'private' },
         from: { id: 999999, is_bot: true, first_name: 'Nexa' },
@@ -243,6 +274,33 @@ describe('terms and rules (program §6)', () => {
     calls = [];
     await webhook(bot, tapUpdate(from, data));
     return calls.filter((call) => call.method === 'sendMessage').map((call) => call.body);
+  }
+
+  /** The Telegram id of the message the last turn sent, for a tap ON that message. */
+  const lastSentId = () => {
+    const id = calls.filter((call) => call.method === 'sendMessage').at(-1)?.messageId;
+    if (id === undefined) throw new Error('nothing was sent');
+    return id;
+  };
+
+  /**
+   * Batch 01 item 1: a tap on the message `onMessage`, and every send and edit it caused —
+   * so a test can say "edited that message, sent nothing" rather than only "said this".
+   */
+  async function tapOn(from: number, data: string, onMessage: number) {
+    calls = [];
+    await webhook(BOT_A, tapUpdate(from, data, onMessage));
+    return {
+      sends: calls.filter((call) => call.method === 'sendMessage').map((call) => call.body),
+      edits: calls.filter((call) => call.method === 'editMessageText'),
+    };
+  }
+
+  /** Accept on the terms message just sent; asserts it was edited and nothing was sent. */
+  async function acceptOnScreen(from: number, versionId: string) {
+    const { sends, edits } = await tapOn(from, `ac:${versionId}`, lastSentId());
+    expect(sends).toEqual([]);
+    return textOf(edits.map((edit) => edit.body));
   }
 
   const textOf = (bodies: readonly Record<string, unknown>[]) =>
@@ -362,8 +420,19 @@ describe('terms and rules (program §6)', () => {
     const markup = first[0]?.reply_markup as { inline_keyboard: { text: string }[][] };
     expect(markup.inline_keyboard.flat()[0]?.text).toBe(CATALOGUE_FA['bot.terms.accept_button']);
 
-    const accepted = await tap(customer, `ac:${v1.id}`);
-    expect(textOf(accepted)).toEqual([ACCEPTED]);
+    // Batch 01 item 1: the tap EDITS the terms message it sits on — exactly one edit, of
+    // THAT message, into the accepted text with the way to the main menu — and sends nothing.
+    const screen = lastSentId();
+    const accepted = await tapOn(customer, `ac:${v1.id}`, screen);
+    expect(accepted.sends).toEqual([]);
+    expect(accepted.edits).toHaveLength(1);
+    expect(accepted.edits[0]?.messageId).toBe(screen);
+    expect(textOf(accepted.edits.map((edit) => edit.body))).toEqual([ACCEPTED]);
+    expect(ACCEPTED).toBe(
+      '✅ قوانین و مقررات با موفقیت پذیرفته شد.\nاکنون می‌توانید از ربات استفاده کنید.',
+    );
+    // The accept button is gone from the message; the main menu is what is left on it.
+    expect(dataOf(accepted.edits.map((edit) => edit.body))).toEqual(['mm:']);
     expect(await acceptances()).toEqual([
       { customer_id: await customerIdOf(customer), terms_version_id: v1.id, source: 'TELEGRAM' },
     ]);
@@ -381,6 +450,63 @@ describe('terms and rules (program §6)', () => {
     expect(events.map((event) => event.payload)).toEqual([
       { termsVersionId: v1.id, versionNumber: 1 },
     ]);
+  });
+
+  it('never asks again for the accepted version: not on later requests, not after a restart', async () => {
+    // Batch 01 item 1, acceptance: "the next request does not repeat the terms", and
+    // "restart / coming back must not bring the prompt back".
+    const v1 = await publish('قوانین', 'نسخهٔ یک');
+    await enforce(true);
+    const customer = user();
+    expect(isTermsScreen(await say(customer, '/start'), v1)).toBe(true);
+    expect(await acceptOnScreen(customer, v1.id)).toEqual([ACCEPTED]);
+
+    for (const turn of [
+      () => say(customer, '/start'),
+      () => say(customer, '/wallet'),
+      () => tap(customer, 'mm:'),
+      () => say(customer, '/start'),
+    ]) {
+      const replies = await turn();
+      expect(replies.length).toBeGreaterThan(0);
+      expect(dataOf(replies).some((data) => data?.startsWith('ac:') === true)).toBe(false);
+      expect(textOf(replies).some((text) => text.includes('نسخهٔ یک'))).toBe(false);
+    }
+    // The main-menu button the accepted message carries brings the persistent menu.
+    const menu = await tap(customer, 'mm:');
+    expect(textOf(menu)).toEqual([WELCOME_BACK]);
+    expect((menu[0]?.reply_markup as { keyboard?: unknown } | undefined)?.keyboard).toBeDefined();
+
+    // A restart is a new process over the same database: the acceptance is a row, not memory.
+    await api.close();
+    api = await createApiApp(config);
+    api.container.setInstallationTenant(tenantA.tenantId);
+    expect(textOf(await say(customer, '/start'))).toEqual([WELCOME_BACK]);
+    expect(await acceptances()).toHaveLength(1);
+  });
+
+  it('falls back to ONE new message when Telegram cannot edit the terms message, and never loops', async () => {
+    const v1 = await publish('قوانین', 'نسخهٔ یک');
+    await enforce(true);
+    const customer = user();
+    await say(customer, '/start');
+    const screen = lastSentId();
+    refuseEdits = true;
+
+    const { sends, edits } = await tapOn(customer, `ac:${v1.id}`, screen);
+    // The edit was tried on THAT message and refused; the same reply went out once.
+    expect(edits.length).toBeGreaterThan(0);
+    expect(edits.every((edit) => edit.messageId === screen)).toBe(true);
+    expect(textOf(sends)).toEqual([ACCEPTED]);
+    expect(dataOf(sends)).toEqual(['mm:']);
+    expect(await acceptances()).toHaveLength(1);
+
+    // A message that IS editable but already says this is success, never a fallback.
+    refuseEdits = false;
+    const again = await tapOn(customer, `ac:${v1.id}`, lastSentId());
+    expect(again.sends).toEqual([]);
+    expect(textOf(again.edits.map((edit) => edit.body))).toEqual([ACCEPTED]);
+    expect(await acceptances()).toHaveLength(1);
   });
 
   it('cannot be bypassed: every customer action meets the gate, and nothing runs behind it', async () => {
@@ -413,7 +539,8 @@ describe('terms and rules (program §6)', () => {
     expect(isTermsScreen(await say(customer, '/help'), v1)).toBe(false);
 
     // Accepting answers the main menu and never replays what was stopped; THEN it works.
-    expect(textOf(await tap(customer, `ac:${v1.id}`))).toEqual([ACCEPTED]);
+    expect(isTermsScreen(await say(customer, '/start'), v1)).toBe(true);
+    expect(await acceptOnScreen(customer, v1.id)).toEqual([ACCEPTED]);
     expect(await orderCount()).toBe(0);
     await tap(customer, `p:${productId}`);
     expect(await orderCount()).toBe(1);
@@ -449,13 +576,25 @@ describe('terms and rules (program §6)', () => {
     const v2 = await publish('قوانین', 'نسخهٔ دو');
 
     // The button under the v1 message, tapped after v2 was published.
-    const stale = await tap(customer, `ac:${v1.id}`);
+    // Batch 01 item 1: the SAME message is edited into v2 with v2's own button — the
+    // customer is never left with two terms prompts, one of them dead.
+    const screen = lastSentId();
+    const { sends, edits } = await tapOn(customer, `ac:${v1.id}`, screen);
+    expect(sends).toEqual([]);
+    const stale = edits.map((edit) => edit.body);
+    expect(edits.map((edit) => edit.messageId)).toEqual([screen]);
     expect(isTermsScreen(stale, v2)).toBe(true);
     expect(textOf(stale)[0]).toContain('به‌روزرسانی');
     expect(await acceptances()).toEqual([]);
 
     // An id that was never a version, and a malformed one: nothing recorded either.
-    expect(isTermsScreen(await tap(customer, `ac:${api.container.ids.uuid()}`), v2)).toBe(true);
+    const crafted = await tapOn(customer, `ac:${api.container.ids.uuid()}`, screen);
+    expect(
+      isTermsScreen(
+        crafted.edits.map((edit) => edit.body),
+        v2,
+      ),
+    ).toBe(true);
     await tap(customer, 'ac:not-a-uuid');
     expect(await acceptances()).toEqual([]);
     expect(await auditOf('customer.terms_accept')).toEqual([]);
@@ -508,8 +647,8 @@ describe('terms and rules (program §6)', () => {
     const whole = textOf(parts).join('');
     expect(whole).toContain(title);
     for (const paragraph of body.split('\n\n')) expect(whole).toContain(paragraph);
-    // And the button works from there.
-    expect(textOf(await tap(customer, `ac:${v1.id}`))).toEqual([ACCEPTED]);
+    // And the button works from there: the last part, which carries it, is edited.
+    expect(await acceptOnScreen(customer, v1.id)).toEqual([ACCEPTED]);
   });
 
   it('records a duplicate accept once, sequentially and concurrently', async () => {
@@ -517,16 +656,18 @@ describe('terms and rules (program §6)', () => {
     await enforce(true);
     const customer = user();
     await say(customer, '/start');
+    const screen = lastSentId();
 
-    // Two taps at once, each its own update.
+    // Two taps at once on the terms message, each its own update.
     calls = [];
     await Promise.all([
-      webhook(BOT_A, tapUpdate(customer, `ac:${v1.id}`)),
-      webhook(BOT_A, tapUpdate(customer, `ac:${v1.id}`)),
+      webhook(BOT_A, tapUpdate(customer, `ac:${v1.id}`, screen)),
+      webhook(BOT_A, tapUpdate(customer, `ac:${v1.id}`, screen)),
     ]);
     // And a third later, and Telegram redelivering one update twice.
-    expect(textOf(await tap(customer, `ac:${v1.id}`))).toEqual([ACCEPTED]);
-    const repeated = tapUpdate(customer, `ac:${v1.id}`);
+    await webhook(BOT_A, tapUpdate(customer, `ac:${v1.id}`, screen));
+    const third = calls.filter((call) => call.method === 'editMessageText').at(-1);
+    const repeated = tapUpdate(customer, `ac:${v1.id}`, screen);
     const fixedId = (updateId += 1);
     for (let i = 0; i < 2; i += 1) {
       await inject({
@@ -536,6 +677,20 @@ describe('terms and rules (program §6)', () => {
         payload: { update_id: fixedId, ...repeated },
       });
     }
+
+    /*
+     * Batch 01 item 1: every one of the five turns answered by editing THE terms message
+     * into the same accepted text — the first changed it, the rest were "not modified",
+     * which is success — and not one of them sent a message. Each tap is still answered
+     * (its spinner stopped), so the second tap is not left hanging.
+     */
+    expect(calls.filter((call) => call.method === 'sendMessage')).toEqual([]);
+    expect(textOf(third === undefined ? [] : [third.body])).toEqual([ACCEPTED]);
+    expect(
+      new Set(calls.filter((call) => call.method === 'editMessageText').map((c) => c.messageId)),
+    ).toEqual(new Set([screen]));
+    expect((JSON.parse(shown.get(screen) ?? '[]') as unknown[])[0]).toBe(ACCEPTED);
+    expect(calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(5);
 
     expect(await acceptances()).toHaveLength(1);
     expect(await auditOf('customer.terms_accept')).toHaveLength(1);
@@ -555,7 +710,13 @@ describe('terms and rules (program §6)', () => {
 
     // Tenant A's bot shows A's rules; B's version id tapped on A's bot is stale there.
     expect(isTermsScreen(await say(customer, '/start'), a1)).toBe(true);
-    expect(isTermsScreen(await tap(customer, `ac:${b1.id}`), a1)).toBe(true);
+    const crossed = await tapOn(customer, `ac:${b1.id}`, lastSentId());
+    expect(
+      isTermsScreen(
+        crossed.edits.map((edit) => edit.body),
+        a1,
+      ),
+    ).toBe(true);
     expect(await acceptances()).toEqual([]);
     expect(await acceptances(tenantB.tenantId)).toEqual([]);
 

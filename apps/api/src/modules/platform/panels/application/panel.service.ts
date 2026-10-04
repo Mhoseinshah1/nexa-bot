@@ -40,6 +40,8 @@ import type { SessionRepository } from '../../identity/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { OperationalConditionReader } from '../../opslog/application/ports.js';
 import {
+  announceHealthWrite,
+  closeOpenHealthConditions,
   closesPanelCondition,
   panelConditionKey,
   RESTORED_CODE,
@@ -1663,26 +1665,35 @@ export class PanelService {
           //
           // DISABLED deliberately gets none of this. That is temporary, the
           // panel is coming back, and the condition it left open is still true.
+          const retired = {
+            code: RETIRED_CODE,
+            severity: 'INFO' as const,
+            message: `Panel "${before.panel.name}" was archived and is no longer monitored.`,
+            dedupeKey: panelConditionKey(RETIRED_CODE, panelId),
+            context: {
+              panelId,
+              panelName: before.panel.name,
+              providerType: before.panel.providerType,
+            },
+          };
           await this.deps.opsLog.record(
             scope,
             {
-              code: RETIRED_CODE,
-              severity: 'INFO',
-              message: `Panel "${before.panel.name}" was archived and is no longer monitored.`,
-              dedupeKey: panelConditionKey(RETIRED_CODE, panelId),
+              ...retired,
               // Closes whichever health row this panel has open: its condition,
               // or — when it was healthy — its own recovery row, which is a row
               // about a panel that no longer exists either. A previous
               // restoration is closed by the archive that follows it, below.
               ...closesPanelCondition(panelId, before.health),
-              context: {
-                panelId,
-                panelName: before.panel.name,
-                providerType: before.panel.providerType,
-              },
             },
             tx,
           );
+          // And every OTHER health condition still open for it (UX batch 01,
+          // item 10): one the stored health no longer produces — left open by
+          // the release whose connection test announced nothing — is not what
+          // `closesPanelCondition` names, and once archived nothing probes the
+          // panel to close it. Same retirement, recorded once per stray code.
+          await closeOpenHealthConditions(this.deps, scope, panelId, retired, tx);
         }
         await this.deps.audit.record(
           scope,
@@ -2041,14 +2052,22 @@ export class PanelService {
         // failure between the two left BOTH rows of a mutually exclusive pair
         // open — the state this pair exists to make impossible.
         await this.resolveProbeLimit(scope, tenant, tx);
-        const { outcome, previous } = await persistProbeResult(
-          this.deps,
-          tenant,
-          panelId,
-          attempt.configuration,
-          health,
-          tx,
-        );
+        const {
+          outcome,
+          previous,
+          view: locked,
+        } = await persistProbeResult(this.deps, tenant, panelId, attempt.configuration, health, tx);
+
+        // A result the database ACCEPTED is announced exactly as the monitor
+        // announces one: the transition is a fact about the stored row, not
+        // about who measured it. Before this, an operator's successful test
+        // after a failure stored HEALTHY silently, the monitor then read
+        // HEALTHY -> HEALTHY, and the failure condition stayed open for ever on
+        // a healthy panel (UX batch 01, item 10). A discarded write announces
+        // nothing, for the reason ADR-0023 gives.
+        if (outcome === 'APPLIED') {
+          await announceHealthWrite(this.deps, tenant, locked, previous ?? null, health, tx);
+        }
 
         // What the row holds now that the write has been decided, read in the
         // same transaction. Only needed on the discarded path, where `before`

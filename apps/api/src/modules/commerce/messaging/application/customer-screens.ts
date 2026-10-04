@@ -10,6 +10,11 @@ import {
   type TemplateValues,
 } from '@nexa/contracts';
 import type { TemplateResolver } from '../../../control/templates/application/template-resolver.js';
+import {
+  SERVICE_STATUS_PRESENTATION,
+  serviceDisplayStatus,
+  type ServiceStatusFacts,
+} from '../../provisioning/domain/service-display-status.js';
 
 /**
  * The customer screens that are COMPOSED (docs/customer-ux-completion-audit.md §M).
@@ -152,18 +157,13 @@ export interface ReferralScreenFacts {
   readonly commissionReceivedTotal: Money;
 }
 
-const STATE_KEYS: Readonly<Record<ServiceState, TemplateKey>> = {
-  PENDING_PROVISION: 'bot.service.state_pending_provision',
-  ACTIVE: 'bot.service.state_active',
-  SUSPENDED: 'bot.service.state_suspended',
-  EXPIRED: 'bot.service.state_expired',
-  TERMINATED: 'bot.service.state_terminated',
-  UNRECONCILED: 'bot.service.state_unreconciled',
-};
-
-/** The key the service card names a state with — also the file caption's `{status}`. */
-export function serviceStateLabelKey(state: ServiceState): TemplateKey {
-  return STATE_KEYS[state];
+/**
+ * The key the service card names a service's status with — also the file caption's
+ * `{status}` (item 4), so the two never disagree. Derived from the facts (item 3), never
+ * the stored state alone: an ACTIVE row past its deadline reads «منقضی شده».
+ */
+export function serviceStateLabelKey(facts: ServiceStatusFacts): TemplateKey {
+  return SERVICE_STATUS_PRESENTATION[serviceDisplayStatus(facts)].label;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -323,14 +323,20 @@ export class CustomerScreenComposer {
   }
 
   /**
-   * The card's status value (round N, F4): the state, or «working» while a change is still
-   * being applied — and, when the card carries a notice, the status followed by it through
-   * `bot.service.status_with_notice`, so an override of the card keeps showing both.
+   * The card's status value (round N, F4): the shown status, or «working» while a change is
+   * still being applied — and, when the card carries a notice, the status followed by it
+   * through `bot.service.status_with_notice`, so an override of the card keeps showing both.
+   *
+   * Batch 01 item 3: the shown status is DERIVED (`serviceDisplayStatus`) from the state,
+   * the deadline and the read usage — the same facts this card prints below it — so an
+   * ACTIVE row past its deadline reads «منقضی شده» in red, never «فعال» in green.
    */
   private async statusLine(scope: ScopeContext, facts: ServiceCardFacts): Promise<string> {
     const status = await this.templates.render(
       scope,
-      facts.working === true ? 'bot.service.state_working' : STATE_KEYS[facts.state],
+      facts.working === true
+        ? 'bot.service.state_working'
+        : SERVICE_STATUS_PRESENTATION[serviceDisplayStatus(facts)].label,
       {},
     );
     if (facts.notice === undefined) return status;

@@ -5131,7 +5131,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     /*
      * UX Batch 01 item 4: the caption facts the service row does not hold, read the way the
      * service card reads them — the order line's title, the location the customer was
-     * shown, the state as the card words it. Never the panel's operator-facing name.
+     * shown, the status as the card words it (derived from the facts, item 3). Never the
+     * panel's operator-facing name.
      */
     captionFacts: {
       factsFor: async (scope, service) => {
@@ -5144,7 +5145,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         return {
           serviceName: order?.line.title ?? null,
           location: service.locationLabel ?? product?.display?.serviceLocationLabel ?? null,
-          status: await templateResolver.render(scope, serviceStateLabelKey(service.state), {}),
+          status: await templateResolver.render(
+            scope,
+            serviceStateLabelKey({ ...service, now: clock.now() }),
+            {},
+          ),
         };
       },
     },

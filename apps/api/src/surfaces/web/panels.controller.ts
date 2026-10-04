@@ -153,6 +153,7 @@ export class PanelsController {
           firstSeenAt: condition.firstSeenAt.toISOString(),
           lastSeenAt: condition.lastSeenAt.toISOString(),
           occurrences: condition.occurrences,
+          current: condition.current,
         })),
       })),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),

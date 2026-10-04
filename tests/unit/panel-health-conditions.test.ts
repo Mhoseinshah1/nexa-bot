@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { PANEL_HEALTH_STATES } from '@nexa/contracts';
 import { PANEL_FAILURE_KINDS_FOR_TEST } from './support/panel-failure-kinds';
-import { conditionOf } from '../../apps/api/src/modules/platform/panels/application/panel-monitor.service';
+import {
+  conditionOf,
+  PANEL_HEALTH_CONDITION_CODES,
+} from '../../apps/api/src/modules/platform/panels/application/panel-monitor.service';
+import {
+  isCurrentCondition,
+  PANEL_CONDITION_CODES,
+} from '../../apps/api/src/modules/platform/panels/application/panel-health-dashboard';
+import { CAPACITY_CODES } from '../../apps/api/src/modules/platform/panels/application/panel-capacity-alerts';
 
 /**
  * The operator-facing condition a health row announces.
@@ -114,5 +122,36 @@ describe('the set of condition codes is fixed deliberately', () => {
       'panel.health.unreachable',
       'panel.health.unsupported_capability',
     ]);
+  });
+});
+
+describe('the reconciliation and the dashboard read one code set (UX batch 01, item 10)', () => {
+  it('derives PANEL_HEALTH_CONDITION_CODES from conditionOf, capacity excluded', () => {
+    expect(PANEL_HEALTH_CONDITION_CODES).toHaveLength(11);
+    expect(PANEL_HEALTH_CONDITION_CODES).toContain('panel.health.provider_error');
+    expect(PANEL_HEALTH_CONDITION_CODES.some((code) => code.startsWith('panel.capacity.'))).toBe(
+      false,
+    );
+    // The recovery is not a condition: reconciling it would close itself.
+    expect(PANEL_HEALTH_CONDITION_CODES).not.toContain('panel.health.recovered');
+    expect(PANEL_HEALTH_CONDITION_CODES).not.toContain('panel.health.retired');
+    // The dashboard lists every health code and every capacity code.
+    for (const code of PANEL_HEALTH_CONDITION_CODES) expect(PANEL_CONDITION_CODES).toContain(code);
+    for (const code of CAPACITY_CODES) expect(PANEL_CONDITION_CODES).toContain(code);
+  });
+
+  it('calls a health condition current only while the stored health still produces it', () => {
+    const healthy = { state: 'HEALTHY' as const, failure: null };
+    const providerError = { state: 'UNREACHABLE' as const, failure: 'PROVIDER_ERROR' as const };
+    const timedOut = { state: 'UNREACHABLE' as const, failure: 'TIMEOUT' as const };
+    // The observed defect: a healthy panel with provider_error still open.
+    expect(isCurrentCondition('panel.health.provider_error', healthy)).toBe(false);
+    expect(isCurrentCondition('panel.health.provider_error', providerError)).toBe(true);
+    expect(isCurrentCondition('panel.health.provider_error', timedOut)).toBe(false);
+    expect(isCurrentCondition('panel.health.unreachable', timedOut)).toBe(true);
+    // No stored health cannot disprove a condition, so it is not demoted.
+    expect(isCurrentCondition('panel.health.provider_error', null)).toBe(true);
+    // Capacity is not measured by health, so it is never called history here.
+    expect(isCurrentCondition('panel.capacity.warning', healthy)).toBe(true);
   });
 });
