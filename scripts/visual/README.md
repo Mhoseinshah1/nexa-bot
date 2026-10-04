@@ -77,3 +77,11 @@ report citing these numbers must cite that file from the run it describes.
 `fixtures.mjs` shapes its responses to the schemas in `@nexa/contracts`. When a
 contract changes, this file changes with it — and the two loading/error
 counters above are what tell you it did not.
+
+## `audit-log-measure.mjs`
+
+A focused probe for the Audit Log table (UX Batch 02, issue 15). It serves the same
+build, stubs `/audit-log` with long (`job:telegram-update:…`) or short-only rows, and
+records the table's scroll width against its wrap, the column widths, row heights,
+each value's offset from its cell start and its font, at 1280/390 in light and dark:
+`node scripts/visual/audit-log-measure.mjs apps/web/dist <out-dir> <long|short>`.

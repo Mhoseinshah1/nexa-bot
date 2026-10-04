@@ -151,6 +151,22 @@ hr {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/*
+ * At most two lines, for a long technical value in a table cell. It wraps
+ * ANYWHERE, because an id like `job:telegram-update:<uuid>:<n>` has no space
+ * to break at, and it overrides the table's `nowrap`. The clamp is paint only:
+ * whoever uses it keeps the whole value in the element and in its `title`.
+ */
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
 .error {
   color: var(--danger);
   font-size: var(--fs-sm);
