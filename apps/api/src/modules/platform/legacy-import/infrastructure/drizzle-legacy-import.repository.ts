@@ -1,13 +1,19 @@
-import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import {
   LEGACY_IMPORT_ERROR_CODES,
+  LEGACY_REVIEW_RESOLUTION_STATE,
   errors,
+  isLegacyReviewReasonCode,
+  type ActorType,
   type LegacyImportEntityType,
   type LegacyImportMapStatus,
   type LegacyImportReasonCode,
   type LegacyImportRunFailureCode,
   type LegacyImportRunMode,
   type LegacyImportRunStatus,
+  type LegacyReviewReasonCode,
+  type LegacyReviewResolutionCode,
+  type LegacyReviewState,
   type TenantContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -25,6 +31,7 @@ import {
   assertLegacyKey,
   assertSha256,
   decideMapWrite,
+  reviewAfterWrite,
   type LegacyImportMapRecord,
   type LegacyImportMapWrite,
   type LegacyImportMapWriteOutcome,
@@ -33,6 +40,9 @@ import {
   type LegacyImportRunRecord,
   type LegacyImportStartOutcome,
   type LegacyImportSummaryRow,
+  type LegacyReviewActorRef,
+  type LegacyReviewCountRow,
+  type LegacyReviewTransitionOutcome,
 } from '../application/legacy-import-ports.js';
 
 type RunRow = typeof legacyImportRuns.$inferSelect;
@@ -357,6 +367,8 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
         legacyTable: write.legacyTable,
         legacyId: write.legacyId,
         ...values,
+        // Item 9: every row enters review OPEN.
+        reviewState: d.status === 'MANUAL_REVIEW' ? 'OPEN' : null,
         attempts: 1,
         createdAt: write.now,
         updatedAt: write.now,
@@ -384,14 +396,35 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     if (verdict === 'UNCHANGED') return { kind: 'UNCHANGED', record: existing };
     if (verdict !== 'UPDATE') return { kind: 'REFUSED', reason: verdict, record: existing };
 
+    // Item 9: what the row's review becomes. A rerun only reaches here for an OPEN review,
+    // a retry-resolved one, or a row not in review: `decideMapWrite` refused the rest.
+    const review = reviewAfterWrite(existing, d.status);
     const updated = await db
       .update(legacyImportMap)
       .set({
         ...values,
         attempts: sql`${legacyImportMap.attempts} + 1`,
         updatedAt: sql`GREATEST(${legacyImportMap.updatedAt}, ${write.now})`,
+        reviewState: review.reviewState,
+        reviewResolutionCode: null,
+        reviewedAt: null,
+        reviewedByActorType: null,
+        reviewedByActorId: null,
+        ...(review.reopened
+          ? { reviewReopenedCount: sql`${legacyImportMap.reviewReopenedCount} + 1` }
+          : {}),
       })
-      .where(key)
+      // From-state named as well as locked: the verdict was decided from THIS status and
+      // review state, and a write from any other is not the write that was decided.
+      .where(
+        and(
+          key,
+          eq(legacyImportMap.status, existing.status),
+          existing.reviewState === null
+            ? isNull(legacyImportMap.reviewState)
+            : eq(legacyImportMap.reviewState, existing.reviewState),
+        ),
+      )
       .returning();
     const row = updated[0];
     if (row === undefined) {
@@ -453,6 +486,8 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     query: {
       readonly legacyTable?: string;
       readonly reasonCode?: LegacyImportReasonCode;
+      readonly reviewState?: LegacyReviewState;
+      readonly runId?: string;
       readonly after?: { readonly legacyTable: string; readonly legacyId: string };
       readonly limit: number;
     },
@@ -469,6 +504,12 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     }
     if (query.reasonCode !== undefined) {
       conditions.push(eq(legacyImportMap.reasonCode, query.reasonCode));
+    }
+    if (query.reviewState !== undefined) {
+      conditions.push(eq(legacyImportMap.reviewState, query.reviewState));
+    }
+    if (query.runId !== undefined) {
+      conditions.push(eq(legacyImportMap.runId, query.runId));
     }
     if (query.after !== undefined) {
       conditions.push(
@@ -490,6 +531,164 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
           ? { legacyTable: last.legacyTable, legacyId: last.legacyId }
           : null,
     };
+  }
+
+  async countReview(
+    scope: TenantContext,
+    query: { readonly runId?: string },
+    tx?: unknown,
+  ): Promise<readonly LegacyReviewCountRow[]> {
+    const tenantId = requireTenantId(scope);
+    const conditions: SQL[] = [
+      eq(legacyImportMap.tenantId, tenantId),
+      eq(legacyImportMap.status, 'MANUAL_REVIEW'),
+    ];
+    if (query.runId !== undefined) conditions.push(eq(legacyImportMap.runId, query.runId));
+    const rows = await this.exec(tx)
+      .select({
+        legacyTable: legacyImportMap.legacyTable,
+        reasonCode: legacyImportMap.reasonCode,
+        reviewState: legacyImportMap.reviewState,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(legacyImportMap)
+      .where(and(...conditions))
+      .groupBy(legacyImportMap.legacyTable, legacyImportMap.reasonCode, legacyImportMap.reviewState)
+      .orderBy(
+        asc(legacyImportMap.legacyTable),
+        asc(legacyImportMap.reasonCode),
+        asc(legacyImportMap.reviewState),
+      );
+    return rows.map((r) => ({
+      legacyTable: r.legacyTable,
+      reasonCode: r.reasonCode as LegacyReviewReasonCode,
+      reviewState: r.reviewState as LegacyReviewState,
+      count: r.count,
+    }));
+  }
+
+  async resolveReview(
+    scope: TenantContext,
+    input: {
+      readonly legacyTable: string;
+      readonly legacyId: string;
+      readonly expectedReasonCode: LegacyReviewReasonCode;
+      readonly resolutionCode: LegacyReviewResolutionCode;
+      readonly actor: LegacyReviewActorRef;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<LegacyReviewTransitionOutcome> {
+    const tenantId = requireTenantId(scope);
+    assertLegacyKey(input.legacyTable, input.legacyId);
+    if (!isLegacyReviewReasonCode(input.expectedReasonCode)) {
+      throw errors.validation(LEGACY_IMPORT_ERROR_CODES.INVALID, 'not a review reason');
+    }
+    const to = LEGACY_REVIEW_RESOLUTION_STATE[input.resolutionCode];
+    if (to === undefined) {
+      throw errors.validation(LEGACY_IMPORT_ERROR_CODES.INVALID, 'not a review resolution');
+    }
+    const db = this.exec(tx);
+    const key = this.mapKey(tenantId, input.legacyTable, input.legacyId);
+    // ONE conditional UPDATE naming its from-state: in review, OPEN, and still held for the
+    // reason the caller saw. A second resolver, a reopen or a rerun that moved the row first
+    // makes this match nothing; it is then classified below, never applied.
+    const rows = await db
+      .update(legacyImportMap)
+      .set({
+        reviewState: to,
+        reviewResolutionCode: input.resolutionCode,
+        reviewedAt: input.now,
+        reviewedByActorType: input.actor.type,
+        reviewedByActorId: input.actor.id,
+        updatedAt: sql`GREATEST(${legacyImportMap.updatedAt}, ${input.now})`,
+      })
+      .where(
+        and(
+          key,
+          eq(legacyImportMap.status, 'MANUAL_REVIEW'),
+          eq(legacyImportMap.reviewState, 'OPEN'),
+          eq(legacyImportMap.reasonCode, input.expectedReasonCode),
+        ),
+      )
+      .returning();
+    const changed = rows[0];
+    if (changed !== undefined) return { kind: 'CHANGED', from: 'OPEN', record: toMap(changed) };
+
+    const current = await this.readKey(db, key);
+    if (current === null) return { kind: 'NOT_FOUND' };
+    if (current.status !== 'MANUAL_REVIEW') return { kind: 'NOT_IN_REVIEW', record: current };
+    if (
+      current.reviewState === to &&
+      current.reviewResolutionCode === input.resolutionCode &&
+      current.reasonCode === input.expectedReasonCode
+    ) {
+      return { kind: 'UNCHANGED', record: current };
+    }
+    return { kind: 'CONFLICT', record: current };
+  }
+
+  async reopenReview(
+    scope: TenantContext,
+    input: { readonly legacyTable: string; readonly legacyId: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<LegacyReviewTransitionOutcome> {
+    const tenantId = requireTenantId(scope);
+    assertLegacyKey(input.legacyTable, input.legacyId);
+    const db = this.exec(tx);
+    const key = this.mapKey(tenantId, input.legacyTable, input.legacyId);
+    // The from-state is read with the row lock so the outcome can name it; the UPDATE names
+    // it again, so a transition that slipped in between matches nothing.
+    const before = await this.readKey(db, key, true);
+    if (before === null) return { kind: 'NOT_FOUND' };
+    if (before.status !== 'MANUAL_REVIEW') return { kind: 'NOT_IN_REVIEW', record: before };
+    if (before.reviewState === 'OPEN') return { kind: 'UNCHANGED', record: before };
+    const from = before.reviewState;
+    if (from !== 'RESOLVED' && from !== 'DISMISSED') return { kind: 'CONFLICT', record: before };
+    const rows = await db
+      .update(legacyImportMap)
+      .set({
+        reviewState: 'OPEN',
+        reviewResolutionCode: null,
+        reviewedAt: null,
+        reviewedByActorType: null,
+        reviewedByActorId: null,
+        reviewReopenedCount: sql`${legacyImportMap.reviewReopenedCount} + 1`,
+        updatedAt: sql`GREATEST(${legacyImportMap.updatedAt}, ${input.now})`,
+      })
+      .where(
+        and(
+          key,
+          eq(legacyImportMap.status, 'MANUAL_REVIEW'),
+          eq(legacyImportMap.reviewState, from),
+        ),
+      )
+      .returning();
+    const changed = rows[0];
+    if (changed === undefined) {
+      const current = await this.readKey(db, key);
+      return current === null ? { kind: 'NOT_FOUND' } : { kind: 'CONFLICT', record: current };
+    }
+    return { kind: 'CHANGED', from, record: toMap(changed) };
+  }
+
+  private mapKey(tenantId: string, legacyTable: string, legacyId: string): SQL {
+    return and(
+      eq(legacyImportMap.tenantId, tenantId),
+      eq(legacyImportMap.legacyTable, legacyTable),
+      eq(legacyImportMap.legacyId, legacyId),
+    ) as SQL;
+  }
+
+  private async readKey(
+    db: Executor,
+    key: SQL,
+    lock = false,
+  ): Promise<LegacyImportMapRecord | null> {
+    const query = db.select().from(legacyImportMap).where(key);
+    const rows = lock ? await query.for('update') : await query;
+    const row = rows[0];
+    return row === undefined ? null : toMap(row);
   }
 
   private async refuseRun(scope: TenantContext, runId: string, tx: unknown): Promise<never> {
@@ -539,5 +738,11 @@ function toMap(row: MapRow): LegacyImportMapRecord {
     attempts: row.attempts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    reviewState: row.reviewState as LegacyReviewState | null,
+    reviewResolutionCode: row.reviewResolutionCode as LegacyReviewResolutionCode | null,
+    reviewedAt: row.reviewedAt,
+    reviewedByActorType: row.reviewedByActorType as ActorType | null,
+    reviewedByActorId: row.reviewedByActorId,
+    reviewReopenedCount: row.reviewReopenedCount,
   };
 }

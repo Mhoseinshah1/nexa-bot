@@ -238,6 +238,10 @@ import {
   LEGACY_IMPORT_RUN_MODES,
   LEGACY_IMPORT_RUN_STATUSES,
   LEGACY_IMPORT_SOURCE_TABLES,
+  LEGACY_REVIEW_REASON_CODES,
+  LEGACY_REVIEW_RESOLUTION_CODES,
+  LEGACY_REVIEW_RESOLUTION_STATE,
+  LEGACY_REVIEW_STATES,
   TICKET_CATEGORY_SORT_MAX,
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
   TICKET_MESSAGE_MAX_LENGTH,
@@ -12936,6 +12940,19 @@ export const legacyImportMap = pgTable(
     attempts: integer('attempts').notNull().default(1),
     createdAt: timestamptz('created_at').notNull(),
     updatedAt: timestamptz('updated_at').notNull(),
+    /**
+     * Item 9 — the human side of a `MANUAL_REVIEW` row (`LEGACY_REVIEW_STATES`); NULL on
+     * every other status. Changed only by conditional UPDATEs naming their from-state.
+     */
+    reviewState: text('review_state'),
+    /** Why a person closed it (`LEGACY_REVIEW_RESOLUTION_CODES`); only while closed. */
+    reviewResolutionCode: text('review_resolution_code'),
+    reviewedAt: timestamptz('reviewed_at'),
+    /** Who closed it: an actor type and its stable id (an admin uuid or a job id). */
+    reviewedByActorType: text('reviewed_by_actor_type'),
+    reviewedByActorId: text('reviewed_by_actor_id'),
+    /** How many times a closed review came back OPEN (a reopen, or a retry that failed again). */
+    reviewReopenedCount: integer('review_reopened_count').notNull().default(0),
   },
   (table) => [
     primaryKey({
@@ -12958,6 +12975,10 @@ export const legacyImportMap = pgTable(
     index('legacy_import_map_tenant_entity_idx')
       .on(table.tenantId, table.entityType, table.entityId)
       .where(sql`entity_id IS NOT NULL`),
+    /** Item 9: the review queue, filtered by state and keyset-paged by legacy key. */
+    index('legacy_import_map_review_queue_idx')
+      .on(table.tenantId, table.reviewState, table.legacyTable, table.legacyId)
+      .where(sql`status = 'MANUAL_REVIEW'`),
     check('legacy_import_map_status_check', enumCheck('status', LEGACY_IMPORT_MAP_STATUSES)),
     check(
       'legacy_import_map_reason_check',
@@ -12992,5 +13013,51 @@ export const legacyImportMap = pgTable(
             ELSE entity_type IS NULL AND entity_id IS NULL AND reason_code IS NOT NULL
           END`,
     ),
+    /** Item 9: a review row carries a review reason — never a warning, skip or failure. */
+    check(
+      'legacy_import_map_review_reason_check',
+      sql`status <> 'MANUAL_REVIEW' OR ${enumCheck('reason_code', LEGACY_REVIEW_REASON_CODES)}`,
+    ),
+    /** Item 9: a review state exists exactly on MANUAL_REVIEW rows. */
+    check(
+      'legacy_import_map_review_state_check',
+      sql`CASE status
+            WHEN 'MANUAL_REVIEW' THEN review_state IS NOT NULL AND ${enumCheck('review_state', LEGACY_REVIEW_STATES)}
+            ELSE review_state IS NULL
+          END`,
+    ),
+    /**
+     * Item 9: a closed review names its resolution, when and by whom, and the resolution
+     * belongs to that closed state; an open (or absent) review names none of them.
+     */
+    check(
+      'legacy_import_map_review_resolution_check',
+      sql`CASE
+            WHEN review_state IN ('RESOLVED', 'DISMISSED') THEN
+              reviewed_at IS NOT NULL AND reviewed_by_actor_type IS NOT NULL
+              AND reviewed_by_actor_id IS NOT NULL
+              AND CASE review_state
+                    WHEN 'RESOLVED' THEN ${enumCheck('review_resolution_code', reviewCodesFor('RESOLVED'))}
+                    ELSE ${enumCheck('review_resolution_code', reviewCodesFor('DISMISSED'))}
+                  END
+            ELSE review_resolution_code IS NULL AND reviewed_at IS NULL
+              AND reviewed_by_actor_type IS NULL AND reviewed_by_actor_id IS NULL
+          END`,
+    ),
+    check(
+      'legacy_import_map_reviewed_by_actor_type_check',
+      sql`reviewed_by_actor_type IS NULL OR ${enumCheck('reviewed_by_actor_type', ACTOR_TYPES)}`,
+    ),
+    /** An actor id is an identifier (uuid, job id), never free text. */
+    check(
+      'legacy_import_map_reviewed_by_actor_id_check',
+      sql`reviewed_by_actor_id IS NULL OR reviewed_by_actor_id ~ '^[A-Za-z0-9._:-]{1,128}$'`,
+    ),
+    check('legacy_import_map_review_reopened_check', sql`review_reopened_count >= 0`),
   ],
 );
+
+/** The resolution codes that close a review into `state` (contract-derived, for the CHECK). */
+function reviewCodesFor(state: 'RESOLVED' | 'DISMISSED'): readonly string[] {
+  return LEGACY_REVIEW_RESOLUTION_CODES.filter((c) => LEGACY_REVIEW_RESOLUTION_STATE[c] === state);
+}
