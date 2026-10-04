@@ -63,8 +63,12 @@ one hidden product for it (`(tenant, product_id)` is unique too). `LegacyProduct
   and the shape row, `UNRESOLVED / NOT_YET_RESOLVED`. Audited
   `legacy.product_shape.ensure`.
 - **`resolveTariff` `MATCH`** — the current NEXA tariff is the price of the ACTIVE,
-  `EVERYONE` product in the sales currency with exactly the same traffic and days
-  (`resolveCurrentTariff`, pure). One distinct price → `RESOLVED /
+  `EVERYONE` product in the sales currency with exactly the same traffic and days that a
+  customer can buy today — bound to a panel and in an `ACTIVE` category, the two further
+  terms `unorderableReason` refuses a purchase on (`resolveCurrentTariff`, pure). A
+  product in a withdrawn category, or with no panel, is a price from the past and is
+  neither a tariff nor a second price that makes a match ambiguous (program 4 validation,
+  defect V4-D1). One distinct price → `RESOLVED /
 MATCHED_PUBLIC_PRODUCT`, the hidden product priced with it and ACTIVE, the source
   product recorded. None → `NO_CURRENT_TARIFF`; several prices → `AMBIGUOUS_TARIFF`;
   both leave the product inactive and unpriced. `RESELLERS_ONLY` and `HIDDEN` prices
@@ -76,9 +80,16 @@ MATCHED_PUBLIC_PRODUCT`, the hidden product priced with it and ACTIVE, the sourc
 - **`resolveTariff` `STATED`** — the manual-review exit: an operator states the current
   tariff (sales currency, positive, with a reason) → `RESOLVED / OPERATOR_STATED`. This
   is how a custom shape with no public equivalent becomes renewable.
-- **`legacyShapeAdoptable(shape, product)`** — P6's gate, decided here so P6 cannot
+- **`legacyShapeAdoption(shape, product)`** — P6's gate, decided here so P6 cannot
   decide it differently: RESOLVED, and the product ACTIVE, HIDDEN, uncategorised,
-  priced, and the shape's own product.
+  priced, and the shape's own product. A refusal carries a CLOSED reason for the manual
+  review queue — `NO_SHAPE`, the shape's own `NOT_YET_RESOLVED` / `NO_CURRENT_TARIFF` /
+  `AMBIGUOUS_TARIFF`, or `PRODUCT_NOT_ADOPTABLE` — so no caller invents a tariff or
+  re-derives a reason. `legacyShapeAdoptable` is the same decision as a boolean.
+- **A stated tariff yields to a current public one.** `STATED` is the exit for a shape
+  NEXA does not sell; once NEXA sells it, a `MATCH` moves the shape onto that price
+  (`MATCHED_PUBLIC_PRODUCT`), because the owner's rule is "renew at the current NEXA
+  tariff". Pinned by a test so it is a decision, not an accident.
 
 Permissions: `catalog.edit` for both writes, `catalog.view` to read. Each write reads
 scope activity inside its transaction, is idempotent by key (namespaced by the actor's
@@ -149,3 +160,39 @@ Mutation checked: removing `lockKey` from `ensureShape` fails the race case.
   (§19), so no reseller holds a legacy service until an operator makes one;
   `OQ-I14-02` asks whether such renewals should be granted explicitly.
 - No P6 adoption, no importer, no provider call.
+
+## 7. Final validation — program 4, Item 4 (2026-10-04)
+
+Every program rule, the code that enforces it, and the test that fails when the rule is
+reverted. "M" marks a rule mutation-checked in this pass or the original one (revert the
+rule, watch the named test fail, restore).
+
+| Program rule                                                                            | Code                                                                                                                               | Test(s)                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deterministic, versioned shape key                                                      | `legacyShapeKey` / `keyOfLegacyShape` (`legacy-shape.ts`), `LEGACY_SHAPE_KEY_VERSION`                                              | unit `legacy-shape.test.ts` "is deterministic and versioned", "canonicalises spellings", "separates every tariff dimension", "keeps the panel code exactly"                                                                                                                   |
+| Historical `price_product` is not an input and never the renewal tariff                 | `LegacyShapeInput` has five fields, no price; product created `price: null`; `resolveCurrentTariff` reads only live products       | unit "has no price input at all"; unit `legacy-products-boundary.test.ts` "the shape input has exactly the five tariff facts" and "never the historical price"; integration `legacy-products.test.ts` "renews at the CURRENT tariff, never the historical price"              |
+| No second productless pricing system                                                    | the hidden product is an ordinary `products` row; renewal is `CommercialActionService` → `PricingService.price` unchanged          | unit `legacy-products-boundary.test.ts` (pricing + commercial modules never mention legacy shapes; legacy code imports nothing from pricing); integration renewal quotes go through `commercialActions.draft`                                                                 |
+| Renewal at the CURRENT NEXA tariff, following it                                        | `resolveTariff` `MATCH` re-prices from the current tariff                                                                          | integration "renews at the CURRENT tariff … follows it on re-resolution", "a stated tariff yields to a current public one"                                                                                                                                                    |
+| The current tariff is a price a customer can buy today (V4-D1)                          | `resolveCurrentTariff` requires `panelBound` and a purchasable `categoryStatus`; the repository left-joins the category            | integration "takes no tariff from a product nobody can buy now" (failed first: `AMBIGUOUS_TARIFF`); unit "takes the price a customer can buy today", "has no tariff when nothing public, active and priced sells this shape" — M (dropping either term fails both unit cases) |
+| Custom legacy services remain renewable                                                 | custom is its own shape; `STATED` with a reason → `OPERATOR_STATED`                                                                | integration "separates a custom shape", "lets an operator state the tariff of a custom shape … and it renews"                                                                                                                                                                 |
+| Hidden products never in a normal catalogue / audience path                             | `audienceClause` excludes `HIDDEN` for CUSTOMER and RESELLER; no category, no panel; `unorderableReason` → `NOT_CATEGORISED`       | integration "is never listed and never sold as a new service", "stays out of every catalogue audience, customer and reseller, even once bound to a panel" — M (making `audienceClause` list `HIDDEN` for resellers fails it)                                                  |
+| The product cannot be made listable or re-shaped                                        | `nexa_legacy_shape_product_hidden` (0182, 0185)                                                                                    | integration "refuses, at the database, an edit that would list or categorise it", "… a change to the shape's traffic or duration" — M (0182 vs 0185)                                                                                                                          |
+| Repeated import creates no duplicate hidden product, including concurrently             | idempotency by key and by shape; advisory lock on `(tenant, shapeKey)`; unique `(tenant, shape_key)`                               | integration "does not duplicate a shape", "creates one product when the same shape is ensured concurrently" — M (removing `lockKey`)                                                                                                                                          |
+| No safe current-tariff mapping ⇒ closed manual-review outcome, never an invented tariff | UNMAPPABLE writes nothing; `UNRESOLVED` with a closed reason, product inactive and unpriced; `legacyShapeAdoption` closed blockers | unit refusal table, "names a closed manual-review reason"; integration "writes nothing for a shape it cannot map", "stays UNRESOLVED …", "refuses to guess between two current prices", "gives P6 a closed manual-review reason for every shape it may not adopt"             |
+| An accepted tariff is not withdrawn by a run that finds none                            | `MATCH` leaves a RESOLVED shape as it is                                                                                           | integration "keeps an accepted tariff when a later run finds none"                                                                                                                                                                                                            |
+| Tenant isolation, deny by default, scope activity in the transaction                    | scoped repository; `catalog.edit` / `catalog.view`; `assertScopeActive(tx)`                                                        | integration "keeps tenants apart", "denies an actor without catalog.edit", "refuses both writes once the tenant has stopped accepting work"                                                                                                                                   |
+
+**Defect found and fixed — V4-D1.** `resolveCurrentTariff` took any ACTIVE, `EVERYONE`,
+priced product of the shape as "the current tariff", including one in a withdrawn
+(`INACTIVE`) category or with no panel — products `unorderableReason` refuses to sell.
+Such a price could become a legacy service's renewal price, or make a real match
+`AMBIGUOUS_TARIFF`. The integration case was written first and failed
+(`expected 'AMBIGUOUS_TARIFF' to be 'NO_CURRENT_TARIFF'`); the fix narrows the candidate
+filter only, so its effect is strictly toward fewer matches or a cleaner single match.
+No migration: the rule is in the query and the pure filter.
+
+**Owner decisions kept as documented, not re-decided here:** `OQ-I14-01` (re-resolution
+is on demand, the renewal path is not live-linked), `OQ-I14-02` (resellers decided by the
+unchanged entitlement evaluator), `OQ-I14-03` (only NULL/`d`/`day`/`days` and a positive
+volume are mappable until Q1c). Q1/Q1b/Q1c themselves remain MANUAL ACCEPTANCE
+(`sql-evidence.md`); no synthetic result here is legacy evidence.
