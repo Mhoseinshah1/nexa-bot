@@ -6758,6 +6758,9 @@ export const WEB_FA = {
   'web.perm_services_mass_grant': 'افزایش گروهی حجم یا زمان سرویس‌ها',
   'web.perm_bulk_operations_view': 'دیدن عملیات گروهی و نتایج آن',
   'web.perm_tickets_view': 'دیدن تیکت‌های پشتیبانی',
+  'web.perm_business_chats_view': 'دیدن گفتگوهای حساب تلگرام بیزینس',
+  'web.perm_business_chats_reply':
+    'پاسخ از طرف حساب بیزینس، در اختیار گرفتن گفتگو و سپردن دوباره به هوش مصنوعی',
   'web.perm_tickets_reply': 'پاسخ به تیکت',
   'web.perm_tickets_assign': 'واگذاری و اولویت‌بندی تیکت',
   'web.perm_tickets_close': 'تغییر وضعیت تیکت',

@@ -178,3 +178,215 @@ export type BusinessSendOutcomeKind = (typeof BUSINESS_SEND_OUTCOMES)[number];
 export const BUSINESS_MESSAGE_TEXT_MAX = 4096;
 
 export const businessTextSchema = z.string().trim().min(1).max(BUSINESS_MESSAGE_TEXT_MAX);
+
+// ---------------------------------------------------------------------------
+// TB2 — the conversation, its control, and the outbound lane (ADR-0033 §4–§8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Who holds a business conversation.
+ *
+ * - `AI_ACTIVE` — the AI may act, subject to the configured mode (TB4+). The default: a
+ *   conversation the support agent has never been told to leave.
+ * - `HUMAN_ACTIVE` — a person spoke for the business account. The AI stays silent until an
+ *   operator explicitly resumes it (ADR-0033 §5).
+ * - `HANDOFF_REQUIRED` — the system decided a person must act (`handoff_reason` says why).
+ *   The AI stays silent.
+ * - `PAUSED` — an operator stopped automation for this conversation without taking it.
+ *
+ * `DISABLED` is not a state: it is projected from the configuration mode and the
+ * connection's status, so switching the mode off never rewrites conversations.
+ */
+export const BUSINESS_CONVERSATION_STATES = [
+  'AI_ACTIVE',
+  'HUMAN_ACTIVE',
+  'HANDOFF_REQUIRED',
+  'PAUSED',
+] as const;
+export type BusinessConversationState = (typeof BUSINESS_CONVERSATION_STATES)[number];
+
+/** Why a conversation was last taken by a human. Stored for the operator, never decisive. */
+export const BUSINESS_TAKEOVER_REASONS = [
+  'HUMAN_MESSAGE',
+  'OTHER_BOT',
+  'OPERATOR_TAKEOVER',
+  'OPERATOR_SEND',
+] as const;
+export type BusinessTakeoverReason = (typeof BUSINESS_TAKEOVER_REASONS)[number];
+
+/**
+ * Why the system handed a conversation to a person. A closed set pinned by a CHECK; each
+ * later package that hands off for a new reason adds it here, in its own contract commit.
+ */
+export const BUSINESS_HANDOFF_REASONS = [
+  /** A send Telegram may or may not have delivered: never resent, so a person decides. */
+  'SEND_OUTCOME_UNKNOWN',
+  /** Telegram refused a send the system made (not an operator's). */
+  'TRANSPORT_REFUSED',
+] as const;
+export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
+
+/** What a stored message carries. Content beyond text arrives with TB6. */
+export const BUSINESS_MESSAGE_KINDS = ['TEXT', 'PHOTO', 'OTHER'] as const;
+export type BusinessMessageKind = (typeof BUSINESS_MESSAGE_KINDS)[number];
+
+/**
+ * Who put a row on the outbound lane.
+ *
+ * `OPERATOR` and `ASSIST` are a person pressing send: inserting one is itself a human
+ * signal (ADR-0033 §4, TB0 review F7) and it is sent on an equal epoch alone. `AUTO` is the
+ * AI (TB7) and additionally needs the conversation to be `AI_ACTIVE` at the final check.
+ */
+export const BUSINESS_OUTBOUND_ORIGINS = ['OPERATOR', 'ASSIST', 'AUTO'] as const;
+export type BusinessOutboundOrigin = (typeof BUSINESS_OUTBOUND_ORIGINS)[number];
+
+/**
+ * The lane's states — ADR-0030's, for the same reasons:
+ *
+ * - `PENDING` — not yet resolved; due when `next_attempt_at` has passed and no send started.
+ * - `DELIVERED` — Telegram accepted it.
+ * - `UNCONFIRMED` — a send whose answer was lost (or whose process died after the stamp).
+ *   NEVER resent.
+ * - `FAILED` — refused, or out of attempts.
+ * - `SUPERSEDED` — not sent, because the conversation moved on before the final check
+ *   (another epoch, a state the origin may not send in, a stopped scope).
+ */
+export const BUSINESS_OUTBOUND_STATES = [
+  'PENDING',
+  'DELIVERED',
+  'UNCONFIRMED',
+  'FAILED',
+  'SUPERSEDED',
+] as const;
+export type BusinessOutboundState = (typeof BUSINESS_OUTBOUND_STATES)[number];
+
+/** Message text is kept this long after it was sent, then purged (ADR-0033 §8). */
+export const BUSINESS_MESSAGE_TEXT_RETENTION_DAYS = 30;
+
+/**
+ * Whether a lane row may be sent, decided under the conversation's lock immediately before
+ * the send stamp (ADR-0033 §4). The one predicate; the lane and its tests read it from here.
+ */
+export function businessOutboundSendable(input: {
+  readonly origin: BusinessOutboundOrigin;
+  readonly rowEpoch: number;
+  readonly conversationEpoch: number;
+  readonly conversationState: BusinessConversationState;
+}): boolean {
+  if (input.rowEpoch !== input.conversationEpoch) return false;
+  if (input.origin === 'AUTO') return input.conversationState === 'AI_ACTIVE';
+  return true;
+}
+
+// --- the Web Admin surface ---------------------------------------------------
+
+export const BUSINESS_CHAT_ROUTES = {
+  list: '/business-chats',
+  detail: (id: string) => `/business-chats/${encodeURIComponent(id)}`,
+  send: (id: string) => `/business-chats/${encodeURIComponent(id)}/messages`,
+  takeover: (id: string) => `/business-chats/${encodeURIComponent(id)}/takeover`,
+  resume: (id: string) => `/business-chats/${encodeURIComponent(id)}/resume`,
+  connections: '/business-connections',
+} as const;
+
+export const BUSINESS_CHAT_LIST_LIMIT = 50;
+/** The detail view shows this many most recent messages; the transcript is bounded by design. */
+export const BUSINESS_CHAT_DETAIL_MESSAGES = 100;
+
+const idempotencyKeySchema = z.string().min(8).max(128);
+
+export const businessChatSendRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  text: businessTextSchema,
+});
+export type BusinessChatSendRequest = z.infer<typeof businessChatSendRequestSchema>;
+
+export const businessChatControlRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+});
+export type BusinessChatControlRequest = z.infer<typeof businessChatControlRequestSchema>;
+
+export const businessChatListQuerySchema = z.object({
+  state: z.enum(BUSINESS_CONVERSATION_STATES).optional(),
+  cursor: z.string().max(64).optional(),
+});
+
+const conversationSummarySchema = z.object({
+  id: z.string(),
+  state: z.enum(BUSINESS_CONVERSATION_STATES),
+  takeoverReason: z.enum(BUSINESS_TAKEOVER_REASONS).nullable(),
+  handoffReason: z.enum(BUSINESS_HANDOFF_REASONS).nullable(),
+  peerTelegramUserId: z.string(),
+  customer: z
+    .object({ id: z.string(), username: z.string().nullable(), firstName: z.string().nullable() })
+    .nullable(),
+  connectionStatus: z.enum(BUSINESS_CONNECTION_STATUSES),
+  lastMessageAt: z.string().nullable(),
+  lastInboundAt: z.string().nullable(),
+  /** The latest message's first characters; null once its text is purged or deleted. */
+  preview: z.string().nullable(),
+});
+export type BusinessConversationSummary = z.infer<typeof conversationSummarySchema>;
+
+export const businessChatListResponseSchema = z.object({
+  conversations: z.array(conversationSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type BusinessChatListResponse = z.infer<typeof businessChatListResponseSchema>;
+
+const messageViewSchema = z.object({
+  id: z.string(),
+  origin: z.enum(BUSINESS_MESSAGE_ORIGINS),
+  kind: z.enum(BUSINESS_MESSAGE_KINDS),
+  /** Null when deleted by Telegram, purged by retention, or not text. */
+  text: z.string().nullable(),
+  sentAt: z.string(),
+  edited: z.boolean(),
+  deleted: z.boolean(),
+});
+
+const outboundViewSchema = z.object({
+  id: z.string(),
+  origin: z.enum(BUSINESS_OUTBOUND_ORIGINS),
+  state: z.enum(BUSINESS_OUTBOUND_STATES),
+  text: z.string().nullable(),
+  createdAt: z.string(),
+  resolvedAt: z.string().nullable(),
+  failureCode: z.string().nullable(),
+});
+
+export const businessChatDetailResponseSchema = z.object({
+  conversation: conversationSummarySchema.extend({
+    controlEpoch: z.number().int(),
+    lastHumanAt: z.string().nullable(),
+  }),
+  messages: z.array(messageViewSchema),
+  outbound: z.array(outboundViewSchema),
+});
+export type BusinessChatDetailResponse = z.infer<typeof businessChatDetailResponseSchema>;
+
+export const businessChatControlResponseSchema = z.object({
+  state: z.enum(BUSINESS_CONVERSATION_STATES),
+  controlEpoch: z.number().int(),
+});
+export type BusinessChatControlResponse = z.infer<typeof businessChatControlResponseSchema>;
+
+export const businessChatSendResponseSchema = z.object({
+  outboundId: z.string(),
+  state: z.enum(BUSINESS_OUTBOUND_STATES),
+});
+export type BusinessChatSendResponse = z.infer<typeof businessChatSendResponseSchema>;
+
+export const businessConnectionViewSchema = z.object({
+  id: z.string(),
+  botInstanceId: z.string(),
+  ownerTelegramUserId: z.string(),
+  status: z.enum(BUSINESS_CONNECTION_STATUSES),
+  rights: z.array(z.enum(BUSINESS_BOT_RIGHTS)),
+  connectedAt: z.string(),
+  lastConfirmedAt: z.string(),
+});
+export const businessConnectionListResponseSchema = z.object({
+  connections: z.array(businessConnectionViewSchema),
+});
+export type BusinessConnectionListResponse = z.infer<typeof businessConnectionListResponseSchema>;

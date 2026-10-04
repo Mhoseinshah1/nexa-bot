@@ -73,6 +73,8 @@ export const PERMISSION_LABELS: Readonly<Record<PermissionKey, WebKey>> = {
   'services.mass.grant': 'web.perm_services_mass_grant',
   'bulk_operations.view': 'web.perm_bulk_operations_view',
   'tickets.view': 'web.perm_tickets_view',
+  'business_chats.view': 'web.perm_business_chats_view',
+  'business_chats.reply': 'web.perm_business_chats_reply',
   'tickets.reply': 'web.perm_tickets_reply',
   'tickets.assign': 'web.perm_tickets_assign',
   'tickets.close': 'web.perm_tickets_close',
