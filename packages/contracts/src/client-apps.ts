@@ -629,6 +629,95 @@ export const clearClientAppImageRequestSchema = z.object({
 });
 export type ClearClientAppImageRequest = z.infer<typeof clearClientAppImageRequestSchema>;
 
+// --- Tutorial video from the Web Admin (UX Batch 01 item 6) ------------------------------
+
+/**
+ * «افزودن ویدیو از تلگرام»: the Web Admin opens the SAME `CLIENT_APP_VIDEO` prompt the
+ * Telegram panel's «تنظیم ویدیو» opens — one row in `admin_amount_captures`, naming the tenant,
+ * the administrator, the bot and the app, with a deadline — and the administrator then sends
+ * the video to that bot from the Telegram account bound to them (`admins.telegram_user_id`).
+ * The bot stores it exactly as it stores a video sent after the Telegram tap, and the page
+ * polls the prompt until it is closed.
+ *
+ * A prompt opened from the web has no tap to be newer than, so it reads only a message
+ * Telegram dated no earlier than the prompt's opening, less this allowance for the two clocks.
+ */
+export const CLIENT_APP_VIDEO_WEB_CLOCK_SKEW_MS = 30 * 1000;
+
+/**
+ * What the page shows of one prompt. `OPEN` until a video lands (`CONFIRMED`), the
+ * administrator cancels (`CANCELLED`), another prompt replaces it (`SUPERSEDED`), or its
+ * deadline passes (`EXPIRED` — reported from the clock as soon as it has passed; the row is
+ * stamped only by a write: a late video, or a cancel).
+ */
+export const CLIENT_APP_VIDEO_SESSION_STATES = [
+  'OPEN',
+  'CONFIRMED',
+  'CANCELLED',
+  'SUPERSEDED',
+  'EXPIRED',
+] as const;
+export type ClientAppVideoSessionState = (typeof CLIENT_APP_VIDEO_SESSION_STATES)[number];
+
+/**
+ * A stored tutorial video, as the page shows it: metadata only. The bot-scoped `file_id` is
+ * a sending handle the page has no use for, and is not sent.
+ */
+export const clientAppVideoSchema = z.object({
+  fileUniqueId: z.string(),
+  mimeType: z.string().nullable(),
+  durationSeconds: z.number().int().nullable(),
+  /** Bytes, as a decimal string — a bigint on the server. */
+  fileSize: z.string().nullable(),
+  updatedAt: z.iso.datetime(),
+});
+export type ClientAppVideoResponse = z.infer<typeof clientAppVideoSchema>;
+
+/** One of the tenant's bots, and the video this app has on it. */
+export const clientAppVideoBotSchema = z.object({
+  botInstanceId: z.string(),
+  username: z.string(),
+  /** `https://t.me/<username>`: the chat the administrator sends the video to. */
+  chatUrl: z.string(),
+  active: z.boolean(),
+  video: clientAppVideoSchema.nullable(),
+});
+
+export const clientAppVideosSchema = z.object({
+  /** Whether the viewing administrator has a Telegram account bound — needed to send one. */
+  telegramLinked: z.boolean(),
+  bots: z.array(clientAppVideoBotSchema),
+});
+export type ClientAppVideosResponse = z.infer<typeof clientAppVideosSchema>;
+
+export const clientAppVideoSessionSchema = z.object({
+  sessionId: z.string(),
+  botInstanceId: z.string(),
+  username: z.string(),
+  chatUrl: z.string(),
+  state: z.enum(CLIENT_APP_VIDEO_SESSION_STATES),
+  openedAt: z.iso.datetime(),
+  expiresAt: z.iso.datetime(),
+  /** The video the prompt stored, once `CONFIRMED`. */
+  video: clientAppVideoSchema.nullable(),
+});
+export type ClientAppVideoSessionResponse = z.infer<typeof clientAppVideoSessionSchema>;
+
+export const openClientAppVideoSessionRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  botInstanceId: z.uuid(),
+});
+export type OpenClientAppVideoSessionRequest = z.infer<
+  typeof openClientAppVideoSessionRequestSchema
+>;
+
+export const cancelClientAppVideoSessionRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+});
+export type CancelClientAppVideoSessionRequest = z.infer<
+  typeof cancelClientAppVideoSessionRequestSchema
+>;
+
 export const CLIENT_APP_ROUTES = {
   list: '/client-apps',
   create: '/client-apps',
@@ -638,4 +727,14 @@ export const CLIENT_APP_ROUTES = {
   /** GET: the stored image's bytes, as the type they were verified to be. POST: upload. */
   image: (id: string) => `/client-apps/${encodeURIComponent(id)}/image`,
   clearImage: (id: string) => `/client-apps/${encodeURIComponent(id)}/image/clear`,
+  /** UX Batch 01 item 6. GET: this app's video on each of the tenant's bots. */
+  videos: (id: string) => `/client-apps/${encodeURIComponent(id)}/videos`,
+  /** POST: open a «send it from Telegram» prompt for one bot. */
+  videoSessions: (id: string) => `/client-apps/${encodeURIComponent(id)}/video-sessions`,
+  /** GET: one prompt's state, polled by the page. */
+  videoSession: (id: string, sessionId: string) =>
+    `/client-apps/${encodeURIComponent(id)}/video-sessions/${encodeURIComponent(sessionId)}`,
+  /** POST: cancel it. */
+  videoSessionCancel: (id: string, sessionId: string) =>
+    `/client-apps/${encodeURIComponent(id)}/video-sessions/${encodeURIComponent(sessionId)}/cancel`,
 } as const;

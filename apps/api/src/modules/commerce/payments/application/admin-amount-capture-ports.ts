@@ -64,7 +64,7 @@ export interface AdminAmountCaptureRepository {
     tx: unknown,
   ): Promise<void>;
 
-  /** Closes this administrator's open capture on this bot as SUPERSEDED, then opens one. */
+  /** Closes this administrator's open captures on this bot (see `supersede`), then opens one. */
   open(
     scope: TenantContext,
     input: {
@@ -82,6 +82,14 @@ export interface AdminAmountCaptureRepository {
       readonly openedAt: Date;
       readonly expiresAt: Date;
       readonly openedUpdateId?: bigint;
+      /**
+       * Which open prompts the new one closes. `ALL` (the default, every Telegram tap): every
+       * open prompt of this administrator on this bot. `SAME_PURPOSE`: only those of the new
+       * prompt's purpose — the Web Admin's video prompt (PR #185 review), which must not
+       * silently close an amount or reason the administrator is typing in Telegram. The
+       * database allows it only where the purposes hold separate one-open slots.
+       */
+      readonly supersede?: 'ALL' | 'SAME_PURPOSE';
     },
     tx: unknown,
   ): Promise<AdminAmountCaptureRecord>;

@@ -220,6 +220,7 @@ import {
   adminTutorialTurn,
   maySeeTutorials,
   tutorialVideoOf,
+  messageSentAt,
   tutorialsPanelButton,
 } from './admin-tutorial-video.js';
 
@@ -6403,6 +6404,7 @@ export class BotRuntime {
               botInstanceId: input.botInstanceId,
               adminId: identity.admin.id,
               updateId: numericUpdate === undefined ? null : BigInt(numericUpdate),
+              sentAt: messageSentAt((input.update as { message?: unknown } | null)?.message),
               permissions,
             },
           );

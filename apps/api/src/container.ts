@@ -316,6 +316,7 @@ import { DrizzleTermsRepository } from './modules/control/terms/infrastructure/d
 import { TermsService } from './modules/control/terms/application/terms.service.js';
 import { TermsAcceptanceService } from './modules/control/terms/application/terms-acceptance.service.js';
 import { ClientAppVideoService } from './modules/control/client-apps/application/client-app-video.service.js';
+import { ClientAppVideoWebService } from './modules/control/client-apps/application/client-app-video-web.service.js';
 import { DrizzleClientAppVideoRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app-video.repository.js';
 import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
 import { ClientAppCatalog } from './modules/control/client-apps/application/client-app-catalog.js';
@@ -551,7 +552,10 @@ import { PngQrCodeEncoder } from './infrastructure/qr/qr-png.js';
 import { CustomerCaptureService } from './modules/commerce/customers/application/customer-capture.service.js';
 import { DrizzleCustomerCaptureRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-capture.repository.js';
 import { DrizzleCustomerCountersReader } from './modules/commerce/customers/infrastructure/drizzle-customer-counters.reader.js';
-import { CustomerScreenComposer } from './modules/commerce/messaging/application/customer-screens.js';
+import {
+  CustomerScreenComposer,
+  serviceStateLabelKey,
+} from './modules/commerce/messaging/application/customer-screens.js';
 import { TELEGRAM_MESSAGE_MAX } from './modules/commerce/messaging/application/message-split.js';
 import { WalletTopupFlowService } from './modules/commerce/payments/application/wallet-topup-flow.service.js';
 import { parseCustomerAmount } from './modules/commerce/payments/domain/customer-amount.js';
@@ -1079,6 +1083,8 @@ export interface Container {
   readonly clientApps: ClientAppService;
   /** Spec §7: the tutorial videos set from Telegram. */
   readonly clientAppVideos: ClientAppVideoService;
+  /** UX Batch 01 item 6: the Web Admin's «افزودن ویدیو از تلگرام» over the same prompt. */
+  readonly clientAppVideoWeb: ClientAppVideoWebService;
   /** WP-A10: the customer's read of them, filtered by what their services are. */
   readonly clientAppCatalog: ClientAppCatalog;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
@@ -5122,6 +5128,31 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     clock,
     panelPolicy: panelPolicyReader,
+    /*
+     * UX Batch 01 item 4: the caption facts the service row does not hold, read the way the
+     * service card reads them — the order line's title, the location the customer was
+     * shown, the status as the card words it (derived from the facts, item 3). Never the
+     * panel's operator-facing name.
+     */
+    captionFacts: {
+      factsFor: async (scope, service) => {
+        const [order, product] = await Promise.all([
+          orderRepository.findById(scope, service.orderId),
+          service.productId === null
+            ? Promise.resolve(null)
+            : productRepository.findById(scope, service.productId),
+        ]);
+        return {
+          serviceName: order?.line.title ?? null,
+          location: service.locationLabel ?? product?.display?.serviceLocationLabel ?? null,
+          status: await templateResolver.render(
+            scope,
+            serviceStateLabelKey({ ...service, now: clock.now() }),
+            {},
+          ),
+        };
+      },
+    },
   });
 
   /*
@@ -5143,10 +5174,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
   });
   // Spec §7: the tutorial video set from Telegram («تنظیم ویدیو»), one per app and bot.
+  const clientAppVideoRepository = new DrizzleClientAppVideoRepository(database.db);
+  const clientAppVideoCaptures = new DrizzleAdminAmountCaptureRepository(database.db);
   const clientAppVideoService = new ClientAppVideoService({
-    videos: new DrizzleClientAppVideoRepository(database.db),
+    videos: clientAppVideoRepository,
     apps: clientAppRepository,
-    captures: new DrizzleAdminAmountCaptureRepository(database.db),
+    captures: clientAppVideoCaptures,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  const clientAppVideoWebService = new ClientAppVideoWebService({
+    videos: clientAppVideoRepository,
+    apps: clientAppRepository,
+    captures: clientAppVideoCaptures,
+    bots: botInstances,
+    admins,
     guard,
     uow,
     audit,
@@ -6354,6 +6403,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportScreen: supportScreenReader,
     clientApps: clientAppService,
     clientAppVideos: clientAppVideoService,
+    clientAppVideoWeb: clientAppVideoWebService,
     clientAppCatalog,
     templateRepository,
     notifications,

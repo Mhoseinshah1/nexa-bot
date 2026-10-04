@@ -12,6 +12,7 @@ import {
   type ProviderAdapter,
   type ProviderType,
   type ServiceState,
+  type TemplateValues,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -70,6 +71,23 @@ export interface SubscriptionFileDeps {
    * panel. Asked after the adapter check, so it can refuse and never grant.
    */
   readonly panelPolicy: PanelPolicyGate;
+  /**
+   * UX Batch 01 item 4: the facts a tenant's caption template may name that the service row
+   * does not hold — what was bought, where it is, and its state as the card words it. Absent
+   * in a composition that has none; every such fact is then simply absent from the caption.
+   */
+  readonly captionFacts?: FileCaptionFactSource;
+}
+
+/** The caption facts that live outside the service row. Each null when there is none. */
+export interface FileCaptionExtras {
+  readonly serviceName: string | null;
+  readonly location: string | null;
+  readonly status: string | null;
+}
+
+export interface FileCaptionFactSource {
+  factsFor(scope: TenantContext, service: ServiceRecord): Promise<FileCaptionExtras>;
 }
 
 /**
@@ -262,6 +280,10 @@ export class SubscriptionFileService {
      * after it is sent and nothing is retried, exactly as the one-by-one loop did.
      */
     const files = fetched.files;
+    const facts = fileCaptionValues(
+      service,
+      (await this.deps.captionFacts?.factsFor(scope, service)) ?? NO_CAPTION_EXTRAS,
+    );
     const kinds = files.map(() => 'DOCUMENT' as const);
     let sent = 0;
     for (const batch of planMediaBatches(kinds)) {
@@ -275,7 +297,7 @@ export class SubscriptionFileService {
             fileName: file.fileName,
             mimeType: file.mediaType,
           },
-          caption: connectionFileCaption(file.caption, service.providerUsername),
+          caption: connectionFileCaption(file.caption, service.providerUsername, facts),
         };
       });
       const sendMediaGroup = this.deps.messenger.sendMediaGroup;
@@ -308,36 +330,79 @@ export class SubscriptionFileService {
   }
 }
 
+const NO_CAPTION_EXTRAS: FileCaptionExtras = { serviceName: null, location: null, status: null };
+
 /**
- * Round N (F2): one connection file's caption.
+ * UX Batch 01 item 4: the values of `FILE_CAPTION_PLACEHOLDERS` this service has — and
+ * nothing else. A fact the service does not have is ABSENT, never a placeholder string, so
+ * the renderer drops a line made only of absent facts (the defined fallback). Usage is a
+ * fact only once it has been read from the panel; what is left only of a limited
+ * allowance whose usage is known, never below zero. Nothing here reads the panel-side
+ * client id, sub id or user id: they are credentials, and no placeholder could carry them.
+ */
+export function fileCaptionValues(
+  service: Pick<
+    ServiceRecord,
+    | 'providerUsername'
+    | 'trafficLimitBytes'
+    | 'trafficUsedBytes'
+    | 'usageSyncedAt'
+    | 'expiresAt'
+    | 'subscriptionUrl'
+  >,
+  extras: FileCaptionExtras,
+): TemplateValues {
+  const values: Record<string, TemplateValues[string]> = {};
+  const text = (token: string, value: string | null) => {
+    if (value !== null && value.trim() !== '') values[token] = value;
+  };
+  text('username', service.providerUsername);
+  text('service_name', extras.serviceName);
+  text('location', extras.location);
+  text('status', extras.status);
+  text('subscription_url', service.subscriptionUrl);
+  values['total_volume'] = service.trafficLimitBytes;
+  if (service.usageSyncedAt !== null) {
+    values['used_volume'] = service.trafficUsedBytes;
+    if (service.trafficLimitBytes > 0n) {
+      const left = service.trafficLimitBytes - service.trafficUsedBytes;
+      values['remaining_volume'] = left > 0n ? left : 0n;
+    }
+  }
+  if (service.expiresAt !== null) values['expiry'] = service.expiresAt;
+  return values;
+}
+
+/**
+ * Round N (F2), extended by UX Batch 01 item 4: one connection file's caption.
  *
- * The PANEL's caption is the source of truth (`bot.service.file_caption`, `{caption}`,
- * PLAIN_TEXT): RickPanel builds one per file, and the owner decided it is what the customer
- * reads — no longer replaced by this installation's username line (which R3 had done). Its
- * markup is read by `parseCaptionMarkup` into text and entities, so `<code>` shows as code
- * and never as a raw tag, and nothing the panel wrote is parsed by Telegram as HTML.
+ * `bot.service.file_caption` carries the PANEL's caption (`{caption}`, the default body and
+ * the source of truth until a tenant says otherwise) and the service's own facts, for a
+ * tenant that rewrote the template to name them. The panel's markup is read by
+ * `parseCaptionMarkup` into text and entities, so `<code>` shows as code and never as a raw
+ * tag, and nothing the panel wrote is parsed by Telegram as HTML.
  *
- * A file the panel gave NO caption (or one that was only markup) is the one case this
- * installation writes its own: `bot.service.connection_file_caption`, the service's username
- * — the identifying line R3 introduced — rather than a bare file the customer cannot tell
- * apart from another service's.
+ * When that renders to nothing — the panel gave no caption and the default body names only
+ * `{caption}`, or a tenant's body named only facts this service lacks — the file carries
+ * `bot.service.connection_file_caption`, the service's username (the identifying line R3
+ * introduced), rather than going bare.
  */
 export function connectionFileCaption(
   providerCaption: string | null,
   serviceUsername: string,
+  facts: TemplateValues = {},
 ): CustomerCaption {
   const markup = providerCaption === null ? null : parseCaptionMarkup(providerCaption);
-  if (markup === null || markup.text.length === 0) {
-    return {
-      templateKey: 'bot.service.connection_file_caption',
-      values: { serviceUsername },
-    };
-  }
+  const caption = markup === null || markup.text.length === 0 ? null : markup;
   return {
     templateKey: 'bot.service.file_caption',
-    values: { caption: markup.text },
-    ...(markup.entities.length === 0
+    values: { ...facts, ...(caption === null ? {} : { caption: caption.text }) },
+    ...(caption === null || caption.entities.length === 0
       ? {}
-      : { markup: { token: 'caption', entities: markup.entities } }),
+      : { markup: { token: 'caption', entities: caption.entities } }),
+    fallback: {
+      templateKey: 'bot.service.connection_file_caption',
+      values: { serviceUsername },
+    },
   };
 }

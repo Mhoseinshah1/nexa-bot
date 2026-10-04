@@ -251,6 +251,12 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
  * here and the specific one is in `PLACEHOLDER_LABEL_OVERRIDES_FA` below.
  */
 export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
+  // UX Batch 01 item 4: the connection file caption's facts.
+  remaining_volume: 'حجم باقی‌مانده',
+  service_name: 'نام سرویس خریداری‌شده',
+  subscription_url: 'لینک اشتراک مشتری',
+  total_volume: 'حجم کل',
+  used_volume: 'حجم مصرف‌شده',
   achievedSales: 'فروش نماینده در این ماه',
   addedTrafficBytes: 'حجم افزوده‌شده',
   adminId: 'شناسهٔ مدیر تصمیم‌گیرنده',
@@ -480,6 +486,18 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'ops.notification.operational_event': { code: 'کد رخداد' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
   'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
+  'bot.service.file_caption': {
+    caption: 'توضیح آمادهٔ پنل برای این فایل',
+    username: 'نام کاربری سرویس',
+    service_name: 'نام سرویس خریداری‌شده',
+    total_volume: 'حجم کل (نامحدود هم نوشته می‌شود)',
+    used_volume: 'حجم مصرف‌شده',
+    remaining_volume: 'حجم باقی‌مانده',
+    expiry: 'تاریخ و ساعت انقضا (به وقت مجموعه)',
+    location: 'لوکیشن سرویس',
+    status: 'وضعیت سرویس',
+    subscription_url: 'لینک اشتراک مشتری',
+  },
   'bot.terms.updated': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.order.summary': { username: 'نام کاربری سرویس' },
   'bot.order.summary_discounted': { username: 'نام کاربری سرویس' },
@@ -1632,8 +1650,8 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'فایل‌های آمادهٔ اتصال را از پنل می‌گیرد؛ فقط وقتی پنل این امکان را دارد.',
   ],
   'bot.service.file_caption': [
-    'توضیح پنل زیر فایل اتصال',
-    'توضیح آماده‌ای که خود پنل برای هر فایل اتصال می‌فرستد، همان‌طور که پنل نوشته است؛ قالب‌بندی آن (مثلاً متن کد) حفظ می‌شود.',
+    'توضیح زیر فایل اتصال',
+    'متن زیر هر فایل اتصال. پیش‌فرض همان توضیح خود پنل است ({caption})؛ می‌توانید آن را با مشخصات سرویس (نام کاربری، حجم، انقضا، لوکیشن، وضعیت) بازنویسی کنید. هر خطی که مقدارش برای سرویس موجود نباشد حذف می‌شود؛ اگر چیزی باقی نماند، فایل با نام کاربری سرویس فرستاده می‌شود. حداکثر ۱۰۲۴ نویسه.',
   ],
   'bot.service.connection_file_caption': [
     'توضیح فایل اتصال بدون توضیح پنل',

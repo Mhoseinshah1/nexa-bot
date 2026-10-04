@@ -2612,6 +2612,37 @@ export const WEB_FA = {
   'web.client_apps_image_unreadable': 'ابعاد تصویر خوانده نشد؛ فایل ناقص یا خراب است.',
   'web.client_apps_image_bad_dimensions':
     'هر ضلع تصویر باید بین ۱۶ تا ۲۰۴۸ پیکسل باشد و ضلع بلندتر بیش از ۲۰ برابر ضلع کوتاه‌تر نباشد.',
+  // UX Batch 01 item 6 — «افزودن ویدیو از تلگرام».
+  'web.client_apps_video_title': 'ویدیوی آموزشی',
+  'web.client_apps_video_hint':
+    'ویدیو در خود تلگرام نگه داشته می‌شود و برای هر ربات جداگانه است: ویدیویی که به یک ربات فرستاده شده فقط از همان ربات برای مشتری ارسال می‌شود.',
+  'web.client_apps_video_save_first': 'برای افزودن ویدیو، ابتدا برنامه را ذخیره کنید.',
+  'web.client_apps_video_bot': 'ربات',
+  'web.client_apps_video_status': 'ویدیو',
+  'web.client_apps_video_none': 'ویدیویی تنظیم نشده است',
+  'web.client_apps_video_set': 'تنظیم شده',
+  'web.client_apps_video_duration': 'مدت (ثانیه)',
+  'web.client_apps_video_updated': 'آخرین تغییر',
+  'web.client_apps_video_bot_stopped': 'ربات متوقف است',
+  'web.client_apps_video_add': 'افزودن ویدیو از تلگرام',
+  'web.client_apps_video_replace': 'جایگزینی ویدیو از تلگرام',
+  'web.client_apps_video_opening': 'در حال آماده‌سازی…',
+  'web.client_apps_video_unlinked':
+    'حساب شما به تلگرام متصل نیست؛ ربات نمی‌تواند تشخیص دهد ویدیو را شما فرستاده‌اید. از بخش «مدیران» حساب تلگرام خود را متصل کنید و دوباره امتحان کنید.',
+  'web.client_apps_video_bot_unavailable': 'این ربات فعال نیست یا متعلق به این مجموعه نیست.',
+  'web.client_apps_video_session_missing': 'این درخواست دیگر وجود ندارد. دوباره شروع کنید.',
+  'web.client_apps_video_waiting_title': 'منتظر ویدیو',
+  'web.client_apps_video_waiting':
+    'از همان حساب تلگرامی که به حساب مدیریتی شما متصل است، فایل ویدیو را (به‌صورت ویدیو، نه فایل) برای ربات زیر بفرستید. این صفحه خودش به‌روز می‌شود؛ نیازی به کپی کردن چیزی نیست.',
+  'web.client_apps_video_open_bot': 'باز کردن ربات در تلگرام',
+  'web.client_apps_video_expires': 'مهلت ارسال تا',
+  'web.client_apps_video_cancel': 'انصراف',
+  'web.client_apps_video_done': 'ویدیو دریافت و ذخیره شد.',
+  'web.client_apps_video_expired': 'مهلت ارسال ویدیو تمام شد و چیزی ذخیره نشد. دوباره شروع کنید.',
+  'web.client_apps_video_cancelled': 'درخواست لغو شد و چیزی ذخیره نشد.',
+  'web.client_apps_video_superseded':
+    'درخواست تازه‌تری (از همین صفحه یا از پنل تلگرام) جای این درخواست را گرفت.',
+  'web.client_apps_video_close': 'بستن',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',

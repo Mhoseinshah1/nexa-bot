@@ -66,10 +66,12 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
       readonly openedAt: Date;
       readonly expiresAt: Date;
       readonly openedUpdateId?: bigint;
+      readonly supersede?: 'ALL' | 'SAME_PURPOSE';
     },
     tx: unknown,
   ): Promise<AdminAmountCaptureRecord> {
     const tenantId = requireTenantId(scope);
+    const purpose = input.purpose ?? 'RECEIPT_CREDIT_AMOUNT';
     // Close first, in this transaction: the partial unique index refuses a second open row.
     // The reason is derived from the row, as `receipt_captures` derives it.
     await this.exec(tx)
@@ -84,6 +86,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
           eq(adminAmountCaptures.botInstanceId, input.botInstanceId),
           eq(adminAmountCaptures.adminId, input.adminId),
           isNull(adminAmountCaptures.closedAt),
+          ...(input.supersede === 'SAME_PURPOSE' ? [eq(adminAmountCaptures.purpose, purpose)] : []),
         ),
       );
     const [row] = await this.exec(tx)
@@ -98,7 +101,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
         customerId: input.customerId ?? null,
         serviceRefundRequestId: input.serviceRefundRequestId ?? null,
         clientAppId: input.clientAppId ?? null,
-        purpose: input.purpose ?? 'RECEIPT_CREDIT_AMOUNT',
+        purpose,
         openedAt: input.openedAt,
         expiresAt: input.expiresAt,
         openedUpdateId: input.openedUpdateId ?? null,
