@@ -1186,6 +1186,29 @@ export const WEB_FA = {
     'دست‌کم یک نقش لازم است. نمی‌توانید نقشی بدهید که اختیارات آن را خودتان ندارید.',
   'web.admin_created_done': 'مدیر ساخته شد.',
   'web.admin_username_taken': 'این نام کاربری قبلاً استفاده شده است.',
+  // Why the new-administrator form will not go yet: one sentence per field, shown beside it.
+  'web.admin_form_incomplete': 'فرم کامل نیست. موارد مشخص‌شده را اصلاح کنید.',
+  'web.admin_username_required': 'نام کاربری ورود را وارد کنید.',
+  'web.admin_username_too_short': 'نام کاربری باید دست‌کم {min} کاراکتر باشد.',
+  'web.admin_username_too_long': 'نام کاربری حداکثر {max} کاراکتر می‌تواند باشد.',
+  'web.admin_username_invalid':
+    'نام کاربری فقط حروف لاتین، رقم، نقطه (.)، زیرخط (_) و خط تیره (-) می‌پذیرد؛ بدون فاصله و بدون حروف فارسی.',
+  'web.admin_display_name_required': 'نام نمایشی را وارد کنید.',
+  'web.admin_display_name_too_long': 'نام نمایشی بیش از اندازه طولانی است؛ آن را کوتاه‌تر کنید.',
+  'web.admin_password_required': 'گذرواژهٔ اولیه را وارد کنید.',
+  'web.admin_password_too_short':
+    'گذرواژه باید دست‌کم {min} کاراکتر باشد؛ اکنون {count} کاراکتر است.',
+  'web.admin_password_too_long': 'گذرواژه حداکثر {max} کاراکتر می‌تواند باشد.',
+  'web.admin_roles_required': 'دست‌کم یک نقش انتخاب کنید.',
+  'web.admin_roles_unavailable': 'فهرست نقش‌ها خوانده نشد، پس نقشی برای انتخاب نیست.',
+  'web.admin_roles_empty':
+    'در این نصب هیچ نقشی تعریف نشده است. ابتدا از بخش «نقش‌ها» یک نقش بسازید.',
+  'web.admin_role_not_found':
+    'یکی از نقش‌های انتخاب‌شده دیگر وجود ندارد. فهرست نقش‌ها دوباره خوانده شد؛ دوباره انتخاب کنید.',
+  'web.admin_owner_grant_denied':
+    'دادن نقش مالک به اختیار «ویرایش اختیارات مدیران» نیاز دارد که شما ندارید.',
+  'web.admin_request_invalid':
+    'سرور مقدارهای این فرم را نپذیرفت. نام کاربری، نام نمایشی، گذرواژه و نقش‌ها را بازبینی کنید.',
   // Status, roles, sessions and credential reset on one administrator.
   'web.admin_manage': 'مدیریت',
   'web.admin_manage_close': 'بستن',

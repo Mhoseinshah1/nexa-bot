@@ -2,7 +2,14 @@ import { RolesSection } from './roles';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import {
+  ADMIN_PASSWORD_MAX,
+  ADMIN_PASSWORD_MIN,
+  ADMIN_USERNAME_MAX,
+  ADMIN_USERNAME_MIN,
   IDENTITY_ERROR_CODES,
+  adminDisplayNameSchema,
+  adminPasswordSchema,
+  adminUsernameSchema,
   type AdminSessionSummary,
   type AdminSummary,
   type MonitorProfile,
@@ -25,7 +32,7 @@ import {
   setAdminTelegramBinding,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { t } from '../i18n/web.fa';
+import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, type Route } from '../router';
 import {
   Badge,
@@ -55,7 +62,7 @@ import {
 import { Icon } from '../ui/icons';
 import { formatNumber } from '../format';
 import { pollUnlessFinal } from '../polling';
-import { queryState } from '../view-state';
+import { errorCopy, queryState, retryOf } from '../view-state';
 import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
 
@@ -583,6 +590,108 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
   );
 }
 
+/** The four things the new-administrator form asks for, as the request names them. */
+type CreateAdminField = 'username' | 'displayName' | 'password' | 'roleKeys';
+type CreateAdminIssues = Partial<Record<CreateAdminField, string>>;
+
+/** A message with `{name}` placeholders filled by locale-formatted numbers. */
+function withNumbers(key: WebKey, values: Readonly<Record<string, number>>): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replace(`{${name}}`, formatNumber(value)),
+    t(key),
+  );
+}
+
+/**
+ * Why the form may not be sent yet, field by field — by the server's OWN schemas.
+ *
+ * The button used to be disabled on a private `ready` predicate that said none
+ * of this, so a form that looked complete could not be submitted and nothing on
+ * the screen said why. The rule is now the contract's (`adminUsernameSchema`,
+ * `adminDisplayNameSchema`, `adminPasswordSchema`, `roleKeys.min(1)`), checked
+ * when the operator presses the button and explained beside the field. It is a
+ * courtesy: the server parses the same schemas again and stays authoritative.
+ *
+ * The username is judged as the server judges it — trimmed and lower-cased
+ * first — so `NewComer` is accepted here because it is accepted there.
+ */
+function createAdminIssues(input: {
+  username: string;
+  displayName: string;
+  password: string;
+  roleKeys: readonly string[];
+}): CreateAdminIssues {
+  const issues: CreateAdminIssues = {};
+
+  const username = input.username.trim().toLowerCase();
+  const parsedUsername = adminUsernameSchema.safeParse(username);
+  if (username === '') {
+    issues.username = t('web.admin_username_required');
+  } else if (!parsedUsername.success) {
+    const code = parsedUsername.error.issues[0]?.code;
+    issues.username =
+      code === 'too_small'
+        ? withNumbers('web.admin_username_too_short', { min: ADMIN_USERNAME_MIN })
+        : code === 'too_big'
+          ? withNumbers('web.admin_username_too_long', { max: ADMIN_USERNAME_MAX })
+          : t('web.admin_username_invalid');
+  }
+
+  if (input.displayName.trim() === '') {
+    issues.displayName = t('web.admin_display_name_required');
+  } else if (!adminDisplayNameSchema.safeParse(input.displayName).success) {
+    issues.displayName = t('web.admin_display_name_too_long');
+  }
+
+  if (input.password === '') {
+    issues.password = t('web.admin_password_required');
+  } else if (!adminPasswordSchema.safeParse(input.password).success) {
+    issues.password =
+      input.password.length < ADMIN_PASSWORD_MIN
+        ? withNumbers('web.admin_password_too_short', {
+            min: ADMIN_PASSWORD_MIN,
+            count: input.password.length,
+          })
+        : withNumbers('web.admin_password_too_long', { max: ADMIN_PASSWORD_MAX });
+  }
+
+  if (input.roleKeys.length === 0) issues.roleKeys = t('web.admin_roles_required');
+  return issues;
+}
+
+/**
+ * A refusal of a creation, put on the field it is about.
+ *
+ * Every refusal used to be drawn under the USERNAME, so "you may not grant this
+ * role" read as a fault in the name, and a schema refusal or a missing
+ * permission arrived as the server's English sentence. The server decided each
+ * of these; this only says where on the form the operator fixes it.
+ */
+function createAdminRefusal(error: unknown): { field: CreateAdminField | null; message: string } {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case IDENTITY_ERROR_CODES.ADMIN_USERNAME_TAKEN:
+        return { field: 'username', message: t('web.admin_username_taken') };
+      case IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION:
+        return { field: 'roleKeys', message: t('web.admin_privilege_escalation') };
+      case IDENTITY_ERROR_CODES.ROLE_NOT_FOUND:
+        return { field: 'roleKeys', message: t('web.admin_role_not_found') };
+      case 'request.invalid':
+        return { field: null, message: t('web.admin_request_invalid') };
+      default:
+        break;
+    }
+    if (error.status === 403) {
+      // Granting the owner role takes `admins.permissions.edit` on top of
+      // `admins.edit`; the guard names the permission it found missing.
+      return error.details?.['permission'] === 'admins.permissions.edit'
+        ? { field: 'roleKeys', message: t('web.admin_owner_grant_denied') }
+        : { field: null, message: t('web.no_permission') };
+    }
+  }
+  return { field: null, message: refusalText(error, null) };
+}
+
 /**
  * Creating an administrator, from the screen that lists them.
  *
@@ -595,6 +704,14 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
  * The role checkboxes come from `/roles`, which is the same catalogue the server
  * resolves against. Offering a hard-coded list would let this screen promise a
  * role an installation does not have.
+ *
+ * The submit button is never disabled for an incomplete form (UX Batch 02,
+ * issue 14). It was, on a predicate the screen did not explain, and the role
+ * list drew NOTHING while loading, when empty and when refused — `admins.edit`
+ * does not require `admins.view`, so an actor holding only the first met an
+ * empty picker and a button that could never be enabled. Pressing it now names
+ * every unmet requirement beside its field, and the role list says what state
+ * it is in.
  */
 function CreateAdmin() {
   const notify = useToast();
@@ -605,9 +722,16 @@ function CreateAdmin() {
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [roleKeys, setRoleKeys] = useState<string[]>([]);
-  const [problem, setProblem] = useState<string | null>(null);
+  // Whether the operator has pressed the button: from then on the reasons
+  // follow the input, so a corrected field stops complaining as it is fixed.
+  const [attempted, setAttempted] = useState(false);
+  const [refusal, setRefusal] = useState<{
+    field: CreateAdminField | null;
+    message: string;
+  } | null>(null);
 
   const roles = useQuery({ queryKey: ['roles'], queryFn: fetchRoles, enabled: open });
+  const available = roles.data?.roles ?? [];
 
   const mutate = useMutation({
     mutationFn: (input: {
@@ -640,7 +764,8 @@ function CreateAdmin() {
       }),
     onSuccess: () => {
       submission.settle();
-      setProblem(null);
+      setRefusal(null);
+      setAttempted(false);
       setOpen(false);
       setUsername('');
       setDisplayName('');
@@ -653,24 +778,41 @@ function CreateAdmin() {
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
-      setProblem(refusalText(error, t('web.admin_username_taken')));
+      const answer = createAdminRefusal(error);
+      setRefusal(answer);
+      // The picker offered a role the server no longer has: read the list again.
+      if (error instanceof ApiError && error.code === IDENTITY_ERROR_CODES.ROLE_NOT_FOUND) {
+        void queries.invalidateQueries({ queryKey: ['roles'] });
+      }
     },
   });
 
-  const ready =
-    username.trim() !== '' &&
-    displayName.trim() !== '' &&
-    password.length >= 12 &&
-    roleKeys.length > 0;
+  const issues = attempted ? createAdminIssues({ username, displayName, password, roleKeys }) : {};
+  /** The client's reason first, then a server refusal about the same field. */
+  const reasonFor = (field: CreateAdminField): string | undefined =>
+    issues[field] ?? (refusal?.field === field ? refusal.message : undefined);
+  const errorProp = (field: CreateAdminField) => {
+    const reason = reasonFor(field);
+    return reason === undefined ? {} : { error: reason };
+  };
+  /** An edit answers a refusal about that field (or about the form as a whole). */
+  const edited = (field: CreateAdminField) => {
+    if (refusal !== null && (refusal.field === field || refusal.field === null)) setRefusal(null);
+  };
 
   const cancel = () => {
     setOpen(false);
     setPassword('');
-    setProblem(null);
+    setRefusal(null);
+    setAttempted(false);
   };
   // Closing keeps the name, the display name and the roles, and clears the password — on
   // purpose, see `onSuccess`. So a close with a password typed loses it, and asks first.
   const { requestClose, dialog: discardQuestion } = useConfirmedClose(password !== '', cancel);
+
+  const unmet = Object.keys(issues).length > 0;
+  const roleCopy = errorCopy(roles);
+  const retryRoles = retryOf(roles);
 
   return (
     <>
@@ -681,8 +823,12 @@ function CreateAdmin() {
       <Drawer open={open} onClose={requestClose} title={t('web.admin_add_title')}>
         <form
           className="stack"
+          noValidate
           onSubmit={(event) => {
             event.preventDefault();
+            setAttempted(true);
+            const found = createAdminIssues({ username, displayName, password, roleKeys });
+            if (Object.keys(found).length > 0) return;
             mutate.mutate({
               username: username.trim(),
               displayName: displayName.trim(),
@@ -696,29 +842,47 @@ function CreateAdmin() {
             label={t('web.admin_username_label')}
             hint={t('web.admin_username_hint')}
             htmlFor="admin-new-username"
-            {...(problem === null ? {} : { error: problem })}
+            required
+            {...errorProp('username')}
           >
             <input
               id="admin-new-username"
               className="input"
               dir="ltr"
               autoComplete="off"
+              aria-required
+              aria-invalid={reasonFor('username') !== undefined}
               value={username}
-              onChange={(event) => setUsername(event.target.value)}
+              onChange={(event) => {
+                setUsername(event.target.value);
+                edited('username');
+              }}
             />
           </Field>
-          <Field label={t('web.admin_display_name_label')} htmlFor="admin-new-display">
+          <Field
+            label={t('web.admin_display_name_label')}
+            htmlFor="admin-new-display"
+            required
+            {...errorProp('displayName')}
+          >
             <input
               id="admin-new-display"
               className="input"
+              aria-required
+              aria-invalid={reasonFor('displayName') !== undefined}
               value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
+              onChange={(event) => {
+                setDisplayName(event.target.value);
+                edited('displayName');
+              }}
             />
           </Field>
           <Field
             label={t('web.admin_password_label')}
             hint={t('web.admin_password_hint')}
             htmlFor="admin-new-password"
+            required
+            {...errorProp('password')}
           >
             <input
               id="admin-new-password"
@@ -726,20 +890,61 @@ function CreateAdmin() {
               type="password"
               dir="ltr"
               autoComplete="new-password"
+              aria-required
+              aria-invalid={reasonFor('password') !== undefined}
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                edited('password');
+              }}
             />
           </Field>
-          <Field label={t('web.admin_roles_label')} hint={t('web.admin_roles_hint')}>
-            <RolePicker
-              idPrefix="admin-new"
-              available={roles.data?.roles ?? []}
-              selected={roleKeys}
-              onChange={setRoleKeys}
-            />
+          <Field
+            label={t('web.admin_roles_label')}
+            hint={t('web.admin_roles_hint')}
+            required
+            {...errorProp('roleKeys')}
+          >
+            {roles.isPending ? (
+              <span className="muted small">{t('web.loading')}</span>
+            ) : roles.isError ? (
+              <Banner
+                tone="warn"
+                title={t('web.admin_roles_unavailable')}
+                {...(retryRoles === undefined
+                  ? {}
+                  : {
+                      action: (
+                        <button type="button" className="btn sm" onClick={retryRoles}>
+                          {t('web.retry')}
+                        </button>
+                      ),
+                    })}
+              >
+                {t(roleCopy.title)}
+              </Banner>
+            ) : available.length === 0 ? (
+              <span className="muted small">{t('web.admin_roles_empty')}</span>
+            ) : (
+              <RolePicker
+                idPrefix="admin-new"
+                available={available}
+                selected={roleKeys}
+                onChange={(next) => {
+                  setRoleKeys(next);
+                  edited('roleKeys');
+                }}
+              />
+            )}
           </Field>
+          {(unmet || refusal?.field === null) && (
+            <span className="danger small" role="alert">
+              {unmet || refusal === null ? t('web.admin_form_incomplete') : refusal.message}
+            </span>
+          )}
           <div className="form-actions">
-            <button type="submit" className="btn primary" disabled={mutate.isPending || !ready}>
+            {/* Disabled only while a request is in flight: an incomplete form says why instead. */}
+            <button type="submit" className="btn primary" disabled={mutate.isPending}>
               {t('web.admin_add')}
             </button>
             <button

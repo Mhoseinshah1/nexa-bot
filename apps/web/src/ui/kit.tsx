@@ -1242,13 +1242,16 @@ export function Field({
 }) {
   return (
     <div className={cx('field', compact && 'compact', error !== undefined && 'invalid')}>
-      <label {...(htmlFor === undefined ? {} : { htmlFor })}>
+      {/*
+        The required mark is drawn by CSS (`label.required::after`) rather than
+        as a child, so the label's text — what a screen reader announces and
+        what `getByLabelText` matches — stays exactly the label.
+      */}
+      <label
+        {...(htmlFor === undefined ? {} : { htmlFor })}
+        {...(required ? { className: 'required' } : {})}
+      >
         {label}
-        {required && (
-          <span className="danger" aria-hidden="true">
-            *
-          </span>
-        )}
       </label>
       {children}
       {hint !== undefined && <span className="muted small">{hint}</span>}

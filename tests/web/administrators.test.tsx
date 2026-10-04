@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { formatNumber } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -338,5 +339,319 @@ describe('the administrator controls', () => {
     // The key was minted and THROWN AWAY once, which made the mechanism present
     // in appearance only while `mutations.retry` re-sent the create.
     expect((created?.body as { idempotencyKey?: string })?.idempotencyKey).toMatch(/.{8,}/);
+  });
+});
+
+/**
+ * System → Administrators → New administrator (UX Batch 02, issue 14).
+ *
+ * The submit button was gated on a hidden `ready` predicate — username, display
+ * name, a twelve-character password and at least one ticked role — and none of
+ * the four failures said anything. The display name carries no hint, and the
+ * role list rendered NOTHING while it loaded, when it came back empty, and when
+ * `/roles` was refused: `admins.edit` does not require `admins.view`
+ * (`PERMISSION_REQUIRES`), so an actor holding only the first is offered the
+ * drawer, sees an empty role picker, and a button that can never be enabled.
+ * Every reason is now named next to its field, and the server's refusals land
+ * on the field they are about.
+ */
+describe('creating an administrator', () => {
+  const SUPPORT = { key: 'support', name: 'Support', isSystem: true, permissions: ['users.view'] };
+  const OWNER_ROLE = { key: 'owner', name: 'Owner', isSystem: true, permissions: ['admins.edit'] };
+  const EDITOR = ['admins.view', 'admins.edit'] as const;
+
+  const rolesRoute = (roles: unknown[] = [SUPPORT]) => ({ url: '/roles', body: { roles } });
+  const rosterRoute = { url: '/admins', method: 'GET', body: { admins: [admin()] } };
+
+  const openDrawer = async (): Promise<HTMLFormElement> => {
+    fireEvent.click(await screen.findByRole('button', { name: t('web.admin_add') }));
+    const form = (await screen.findByLabelText(t('web.admin_username_label'))).closest('form');
+    if (form === null) throw new Error('no form');
+    return form;
+  };
+
+  const fill = (values: { username?: string; displayName?: string; password?: string }) => {
+    if (values.username !== undefined) {
+      fireEvent.change(screen.getByLabelText(t('web.admin_username_label')), {
+        target: { value: values.username },
+      });
+    }
+    if (values.displayName !== undefined) {
+      fireEvent.change(screen.getByLabelText(t('web.admin_display_name_label')), {
+        target: { value: values.displayName },
+      });
+    }
+    if (values.password !== undefined) {
+      fireEvent.change(screen.getByLabelText(t('web.admin_password_label')), {
+        target: { value: values.password },
+      });
+    }
+  };
+
+  const submitButton = (form: HTMLFormElement) =>
+    within(form).getByRole('button', { name: t('web.admin_add') });
+
+  const posts = (api: { calls: { method: string; url: string; body: unknown }[] }) =>
+    api.calls.filter((call) => call.method === 'POST' && call.url.endsWith('/admins'));
+
+  it('does not silently disable the button when the display name is left empty', async () => {
+    const api = stubApi([rolesRoute(), rosterRoute]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+
+    fill({ username: 'newcomer', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+
+    const submit = submitButton(form);
+    expect(submit, 'the button was disabled with no reason given').not.toBeDisabled();
+    fireEvent.click(submit);
+
+    expect(await within(form).findByText(t('web.admin_display_name_required'))).toBeInTheDocument();
+    expect(within(form).getByText(t('web.admin_form_incomplete'))).toBeInTheDocument();
+    expect(posts(api)).toHaveLength(0);
+  });
+
+  it('says why there is no role to choose when the role list is refused', async () => {
+    const api = stubApi([
+      {
+        url: '/roles',
+        status: 403,
+        body: {
+          error: {
+            kind: 'PERMISSION_DENIED',
+            code: 'platform.permission_denied',
+            message: 'Missing permission "admins.view".',
+            details: { permission: 'admins.view' },
+            correlationId: 'test',
+          },
+        },
+      },
+      rosterRoute,
+    ]);
+    // `admins.edit` without `admins.view` is a storable role.
+    renderPage(<SystemPage route={adminsRoute} permissions={['admins.edit']} />);
+    const form = await openDrawer();
+
+    expect(await within(form).findByText(t('web.admin_roles_unavailable'))).toBeInTheDocument();
+    fill({ username: 'newcomer', displayName: 'New Comer', password: 'a-twelve-char-password' });
+    const submit = submitButton(form);
+    expect(submit).not.toBeDisabled();
+    fireEvent.click(submit);
+    expect(await within(form).findByText(t('web.admin_roles_required'))).toBeInTheDocument();
+    expect(posts(api)).toHaveLength(0);
+  });
+
+  it('says when the installation has no role to give', async () => {
+    stubApi([rolesRoute([]), rosterRoute]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    expect(await within(form).findByText(t('web.admin_roles_empty'))).toBeInTheDocument();
+  });
+
+  it('names a short password, and every missing field, before any request', async () => {
+    const api = stubApi([rolesRoute(), rosterRoute]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    await screen.findByLabelText('Support');
+
+    fireEvent.click(submitButton(form));
+    expect(await within(form).findByText(t('web.admin_username_required'))).toBeInTheDocument();
+    expect(within(form).getByText(t('web.admin_display_name_required'))).toBeInTheDocument();
+    expect(within(form).getByText(t('web.admin_password_required'))).toBeInTheDocument();
+    expect(within(form).getByText(t('web.admin_roles_required'))).toBeInTheDocument();
+
+    fill({ username: 'newcomer', displayName: 'New Comer', password: 'short-pass' });
+    fireEvent.click(screen.getByLabelText('Support'));
+    // Once shown, the messages follow the input: the fixed fields stop complaining.
+    expect(within(form).queryByText(t('web.admin_username_required'))).toBeNull();
+    expect(within(form).queryByText(t('web.admin_roles_required'))).toBeNull();
+    expect(
+      within(form).getByText(
+        t('web.admin_password_too_short')
+          .replace('{min}', formatNumber(12))
+          .replace('{count}', formatNumber('short-pass'.length)),
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(submitButton(form));
+    expect(posts(api)).toHaveLength(0);
+  });
+
+  it('refuses a username the server would refuse, with the reason, before any request', async () => {
+    const api = stubApi([rolesRoute(), rosterRoute]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+
+    fill({ username: 'علی رضا', displayName: 'Ali', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(submitButton(form));
+    expect(await within(form).findByText(t('web.admin_username_invalid'))).toBeInTheDocument();
+
+    fill({ username: 'ab' });
+    expect(
+      await within(form).findByText(
+        t('web.admin_username_too_short').replace('{min}', formatNumber(3)),
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(submitButton(form));
+    expect(posts(api)).toHaveLength(0);
+  });
+
+  it('submits a valid form with the exact body and an idempotency key', async () => {
+    const api = stubApi([
+      rolesRoute(),
+      rosterRoute,
+      {
+        url: '/admins',
+        method: 'POST',
+        body: admin({
+          id: '019a0000-0000-7000-8000-000000000009',
+          username: 'newcomer',
+          displayName: 'New Comer',
+          roleKeys: ['support'],
+        }),
+      },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+
+    // Upper case is accepted: the server stores the name lower-cased, as the hint says.
+    fill({
+      username: '  NewComer ',
+      displayName: ' New Comer ',
+      password: 'a-twelve-char-password',
+    });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(submitButton(form));
+
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    expect(posts(api)[0]?.body).toEqual({
+      username: 'NewComer',
+      displayName: 'New Comer',
+      password: 'a-twelve-char-password',
+      roleKeys: ['support'],
+      idempotencyKey: expect.stringMatching(/.{8,}/) as unknown,
+    });
+    expect(await screen.findByText(t('web.admin_created_done'))).toBeInTheDocument();
+  });
+
+  it('shows a taken username on the username field, truthfully', async () => {
+    stubApi([
+      rolesRoute(),
+      rosterRoute,
+      {
+        url: '/admins',
+        method: 'POST',
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'admin.username_taken',
+            message: 'An administrator with that username already exists.',
+            details: { username: 'mamad' },
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fill({ username: 'mamad', displayName: 'Again', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(submitButton(form));
+
+    const message = await within(form).findByText(t('web.admin_username_taken'));
+    const field = screen.getByLabelText(t('web.admin_username_label')).closest('.field');
+    expect(field).toContainElement(message);
+  });
+
+  it('puts the owner role the actor may not grant on the role field, in Persian', async () => {
+    stubApi([
+      rolesRoute([SUPPORT, OWNER_ROLE]),
+      rosterRoute,
+      {
+        url: '/admins',
+        method: 'POST',
+        status: 403,
+        body: {
+          error: {
+            kind: 'PERMISSION_DENIED',
+            code: 'platform.permission_denied',
+            message: 'Missing permission "admins.permissions.edit".',
+            details: { permission: 'admins.permissions.edit' },
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fill({ username: 'second', displayName: 'Second', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Owner'));
+    fireEvent.click(submitButton(form));
+
+    const message = await within(form).findByText(t('web.admin_owner_grant_denied'));
+    expect(within(form).queryByText(/Missing permission/)).toBeNull();
+    // On the roles field, not the username field the old form used for everything.
+    const usernameField = screen.getByLabelText(t('web.admin_username_label')).closest('.field');
+    expect(usernameField).not.toContainElement(message);
+  });
+
+  it('puts a privilege escalation on the role field', async () => {
+    stubApi([
+      rolesRoute(),
+      rosterRoute,
+      {
+        url: '/admins',
+        method: 'POST',
+        status: 403,
+        body: {
+          error: {
+            kind: 'PERMISSION_DENIED',
+            code: 'admin.privilege_escalation_denied',
+            message: 'You cannot grant a permission you do not hold yourself.',
+            details: { permissions: ['users.view'] },
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fill({ username: 'second', displayName: 'Second', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(submitButton(form));
+
+    const message = await within(form).findByText(t('web.admin_privilege_escalation'));
+    const usernameField = screen.getByLabelText(t('web.admin_username_label')).closest('.field');
+    expect(usernameField).not.toContainElement(message);
+  });
+
+  it('answers a schema refusal from the server in Persian rather than in English', async () => {
+    stubApi([
+      rolesRoute(),
+      rosterRoute,
+      {
+        url: '/admins',
+        method: 'POST',
+        status: 400,
+        body: {
+          error: {
+            kind: 'VALIDATION',
+            code: 'request.invalid',
+            message: 'The request payload is invalid.',
+            details: { issues: [{ path: '', message: 'Invalid' }] },
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fill({ username: 'second', displayName: 'Second', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(submitButton(form));
+
+    expect(await within(form).findByText(t('web.admin_request_invalid'))).toBeInTheDocument();
+    expect(within(form).queryByText('The request payload is invalid.')).toBeNull();
   });
 });

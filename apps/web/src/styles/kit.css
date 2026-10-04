@@ -1163,6 +1163,10 @@ textarea.input,
   gap: 6px;
   align-items: center;
 }
+.field > label.required::after {
+  content: '*';
+  color: var(--danger);
+}
 .field > .muted.small,
 .field .hint {
   font-size: var(--fs-xs);
