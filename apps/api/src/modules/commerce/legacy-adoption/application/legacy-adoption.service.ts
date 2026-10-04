@@ -661,7 +661,8 @@ export class LegacyAdoptionService {
       actor,
       {
         action: AUDIT_DECIDE,
-        entityType: 'LegacyImportMap',
+        // The review queue's entity name, so one row's audit history is one filter.
+        entityType: 'LegacyImportMapRow',
         // The map row's uuid (Item 9's rule): never the invoice key or a Telegram id.
         entityId: mapRef,
         before: null,

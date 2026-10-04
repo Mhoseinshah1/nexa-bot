@@ -528,12 +528,20 @@ describe('Migration P6: legacy service adoption', () => {
     const refs = await rows<{ legacy_id: string; ref: string }>(sql`
       SELECT legacy_id, ref FROM legacy_import_map WHERE legacy_table = 'invoice'`);
     const refOf = (key: string) => refs.find((r) => r.legacy_id === key)?.ref;
-    const audits = await rows<{ action: string; entity_id: string | null; after: unknown }>(sql`
-      SELECT action, entity_id, after FROM audit_logs
+    const audits = await rows<{
+      action: string;
+      entity_type: string | null;
+      entity_id: string | null;
+      after: unknown;
+    }>(sql`
+      SELECT action, entity_type, entity_id, after FROM audit_logs
        WHERE action IN ('legacy.service.adopt', 'legacy.invoice.decide') ORDER BY occurred_at, id`);
     expect(audits.map((a) => a.action)).toEqual(['legacy.service.adopt', 'legacy.invoice.decide']);
     expect(audits[0]?.after).toMatchObject({ mapRef: refOf(adoptedCmd.legacyInvoiceKey) });
     expect(audits[1]?.entity_id).toBe(refOf(reviewCmd.legacyInvoiceKey));
+    // The same entity name the review queue audits under (LegacyImportMapRow), so an
+    // operator filtering one row's history sees adoption decisions and review actions.
+    expect(audits[1]?.entity_type).toBe('LegacyImportMapRow');
     const events = await rows<{ payload: unknown; aggregate_id: string }>(sql`
       SELECT payload, aggregate_id FROM outbox_messages WHERE event_type = 'ServiceAdopted'`);
     expect(events.map((e) => e.aggregate_id)).toEqual([o.serviceId]);
