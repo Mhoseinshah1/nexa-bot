@@ -187,6 +187,10 @@ export const EVENT_TYPES = [
   // Program 4 Item 9: a legacy-import manual-review row was resolved, dismissed or reopened
   // by a person. Closed codes only; the aggregate id is the row's uuid, never its legacy key.
   'LegacyImportReviewStateChanged',
+  // Migration P6: a provider account the legacy bot sold was adopted into NEXA as a service
+  // with a LEGACY_ADOPTION order — no provider call, no money. Ids and the state only: never
+  // the username, the subscription link or the legacy key.
+  'ServiceAdopted',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -633,6 +637,16 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     from: z.enum(['OPEN', 'RESOLVED', 'DISMISSED']),
     to: z.enum(['OPEN', 'RESOLVED', 'DISMISSED']),
     resolutionCode: z.string().nullable(),
+  }),
+  /*
+   * Migration P6 (`docs/migration-p6-service-adoption.md`). Aggregate is the SERVICE. Not a
+   * sale and not `ServiceProvisioned`: nothing was provisioned, the account already existed.
+   */
+  ServiceAdopted: z.object({
+    customerId: z.string(),
+    orderId: z.string(),
+    panelId: z.string(),
+    state: z.string(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 
