@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { CategoryColorsSection } from '../../apps/web/src/pages/category-colors';
+import { AppearancePage } from '../../apps/web/src/pages/appearance';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
@@ -218,5 +219,30 @@ describe('«رنگ دسته‌بندی‌ها»', () => {
     fireEvent.change(select(VPN), { target: { value: 'danger' } });
     act(() => navigate('/elsewhere'));
     expect(await screen.findByText(t('web.unsaved_question'))).toBeInTheDocument();
+  });
+
+  it('is a section of «🎨 ظاهر ربات», and is not drawn without settings.view', async () => {
+    const calls = stubApi([
+      { url: '/appearance', body: { slots: [], bots: [], operatorTelegramBound: false } },
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            setting({ key: 'bot.category_colors', value: {}, configures: null }),
+            setting({ key: 'bot.inline_buttons', value: {}, configures: null }),
+          ],
+        },
+      },
+      { url: '/product-categories', body: { categories: [category({})] } },
+    ]);
+    const view = renderPage(<AppearancePage denied={false} mayEdit mayViewCategories />);
+    await waitFor(() => expect(row(VPN)).not.toBeNull());
+    expect(document.getElementById('category-colors')).not.toBeNull();
+    view.unmount();
+
+    const before = calls.calls.length;
+    renderPage(<AppearancePage denied mayEdit={false} mayViewCategories />);
+    expect(document.getElementById('category-colors')).toBeNull();
+    expect(calls.calls.length).toBe(before);
   });
 });

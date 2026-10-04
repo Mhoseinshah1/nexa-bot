@@ -153,12 +153,17 @@ export function AppearancePage({
           </>
         )}
       </StateSwitch>
-      {/* UX Batch 01, item 2: its own reads, so an appearance failure does not hide it. */}
-      <CategoryColorsSection
-        denied={denied}
-        mayEdit={mayEdit}
-        mayViewCategories={mayViewCategories}
-      />
+      {/*
+       * UX Batch 01, item 2: its own reads, so an appearance failure does not hide it. Not
+       * drawn without settings.view: the page already says so once.
+       */}
+      {!denied && (
+        <CategoryColorsSection
+          denied={denied}
+          mayEdit={mayEdit}
+          mayViewCategories={mayViewCategories}
+        />
+      )}
     </>
   );
 }
