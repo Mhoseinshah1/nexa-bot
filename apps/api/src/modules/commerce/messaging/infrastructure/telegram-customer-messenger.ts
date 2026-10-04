@@ -1060,7 +1060,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
        * the caller's and the style never touches it.
        */
       const style =
-        button.inline === undefined ? 'default' : inlineButtonStyleOf(button.inline, styles);
+        button.inline === undefined
+          ? 'default'
+          : // Batch 01 item 3: a colour derived from domain facts is never the tenant's to set.
+            (('derivedStyle' in button ? button.derivedStyle : undefined) ??
+            inlineButtonStyleOf(button.inline, styles));
       const styled = style === 'default' ? {} : { style };
       /*
        * The union is discriminated by the field that IS the difference, not by a `kind`

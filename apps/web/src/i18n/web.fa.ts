@@ -3716,7 +3716,9 @@ export const WEB_FA = {
   'web.ib_button_payment_gateway_card_check': 'بررسی وضعیت (کارت‌به‌کارت درگاه)',
   'web.ib_button_payment_gateway_receipt': 'ارسال فیش واریزی (درگاه)',
   'web.ib_button_payment_gateway_change_card': 'تعویض کارت (درگاه)',
-  'web.ib_button_services_item': 'سرویس‌ها در فهرست «سرویس‌های من»',
+  // Batch 01 item 3: green/red is derived from the service; this style applies only otherwise.
+  'web.ib_button_services_item':
+    'سرویس‌ها در فهرست «سرویس‌های من» (سبز و قرمز خودکار از وضعیت سرویس است)',
   'web.ib_button_services_search_label': 'برچسب جستجوی نام کاربری',
   'web.ib_button_services_search': 'جستجو',
   'web.ib_button_services_previous_page': 'صفحهٔ قبل سرویس‌ها',

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   ANTI_SPAM_BLOCK_REASON,
+  appearanceMarker,
   ADMIN_AMOUNT_CAPTURE_TTL_MS,
   COMMERCE_ERROR_CODES,
   SERVICE_REFUND_REASON_MAX_LENGTH,
@@ -223,6 +224,10 @@ import {
 } from './admin-tutorial-video.js';
 
 import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
+import {
+  SERVICE_STATUS_PRESENTATION,
+  serviceDisplayStatus,
+} from '../../modules/commerce/provisioning/domain/service-display-status.js';
 
 /**
  * What the customer asked for.
@@ -10629,12 +10634,8 @@ export class BotRuntime {
         orderId: null,
       };
     }
-    const buttons: CustomerButton[] = page.items.map((service) => ({
-      // The REAL username on the panel, as the approved list shows it; never the title.
-      ...inlineLabel('services.item', { username: service.providerUsername }),
-      // Owner spec §2.3: the card IN PLACE of the list (`sv:`); its back (`sl:`) the list again.
-      data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
-    }));
+    const now = this.deps.clock.now();
+    const buttons: CustomerButton[] = page.items.map((service) => serviceListButton(service, now));
     buttons.push(...servicesListControls(page.page, page.pages));
     return {
       key: 'bot.service.list',
@@ -11732,11 +11733,7 @@ export class BotRuntime {
         key: 'bot.service.search_results',
         values: { query: query.toLowerCase() },
         buttons: [
-          ...found.map((service) => ({
-            ...inlineLabel('services.item', { username: service.providerUsername }),
-            // Owner spec §2.3: the card IN PLACE of the list (`sv:`); its back (`sl:`) the list again.
-            data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
-          })),
+          ...found.map((service) => serviceListButton(service, this.deps.clock.now())),
           backToListButton(),
         ],
         orderId: null,
@@ -16397,6 +16394,41 @@ export function staleCallbackReply(): PendingReply {
 /** The one trial refusal, with the way back to the main menu. */
 function trialUnavailable(): PendingReply {
   return { key: 'bot.trial.unavailable', values: {}, buttons: [mainMenuButton()], orderId: null };
+}
+
+/**
+ * One service's button in «سرویس‌های من» and in its search results (Batch 01 item 3).
+ *
+ * The label is the REAL username on the panel, as the approved list shows it (never the
+ * title), after the marker of the service's DERIVED status; the colour is that status's
+ * button style. Both come from the one table, `SERVICE_STATUS_PRESENTATION`, over
+ * `serviceDisplayStatus` — the state, the deadline and the read usage at `now` — so the
+ * list is redrawn in the right colour on every open, page turn and search, and after a
+ * refresh has read new usage, with nothing stored. Owner spec §2.3: the card opens IN
+ * PLACE of the list (`sv:`); its back (`sl:`) is the list again.
+ */
+export function serviceListButton(
+  service: Pick<
+    ServiceRecord,
+    | 'id'
+    | 'providerUsername'
+    | 'state'
+    | 'expiresAt'
+    | 'trafficLimitBytes'
+    | 'trafficUsedBytes'
+    | 'usageSyncedAt'
+  >,
+  now: Date,
+): CustomerButton {
+  const shown = SERVICE_STATUS_PRESENTATION[serviceDisplayStatus({ ...service, now })];
+  return {
+    ...inlineLabel('services.item', {
+      username: service.providerUsername,
+      marker: appearanceMarker(shown.slot),
+    }),
+    data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
+    ...(shown.buttonStyle === null ? {} : { derivedStyle: shown.buttonStyle }),
+  };
 }
 
 function mainMenuButton(): CustomerButton {

@@ -1257,7 +1257,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'مهلت این درخواست به پایان رسیده است. لطفاً دوباره از کیف پول شروع کنید.',
   'bot.service.list':
     '✨ اشتراک های خریداری شده توسط شما\n\n{icon:warning} برای مشاهده اطلاعات و مدیریت روی نام کاربری کلیک کنید\n\n🔴 همچنین برای پیدا کردن سریع سرویس خود و مدیریت آن می توانید از دکمه "🔎 جستجو سرویس" استفاده کنید\n\n📄 صفحه {page} از {pages} | 📊 کل: {total} سرویس',
-  'bot.service.list_item_button': '✨ {username} ✨',
+  // Batch 01 item 3: the marker is the service's DERIVED status (green serving, red over).
+  'bot.service.list_item_button': '{marker} {username}',
   'bot.service.search_label_button': 'جستجو نام کاربری',
   'bot.service.search_button': '🔎 جستجو',
   'bot.service.page_button': '{page}/{pages}',
@@ -1275,12 +1276,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.status_with_notice': '{status}\n{notice}',
   'bot.service.notice_action_failed':
     '{icon:warning} درخواست قبلی شما روی سرور انجام نشد؛ وضعیت سرویس تغییری نکرد.',
-  'bot.service.state_pending_provision': '🟡 در حال ساخت',
+  // Batch 01 item 3: one marker per shown status, the same on the card and the list button.
+  'bot.service.state_pending_provision': '{icon:time} در حال ساخت',
   'bot.service.state_active': '{icon:active} فعال',
   'bot.service.state_suspended': '{icon:inactive} خاموش',
-  'bot.service.state_expired': '⚫ منقضی شده',
-  'bot.service.state_terminated': '⛔ حذف شده',
-  'bot.service.state_unreconciled': '🟠 در حال بررسی',
+  'bot.service.state_expired': '{icon:inactive} منقضی شده',
+  'bot.service.state_exhausted': '{icon:inactive} حجم تمام شده',
+  'bot.service.state_terminated': '{icon:error} حذف شده',
+  'bot.service.state_unreconciled': '{icon:warning} در حال بررسی',
   'bot.service.traffic_value': '{bytes}',
   'bot.service.traffic_unknown': 'هنوز از سرور خوانده نشده',
   'bot.service.remaining_value': '{bytes} ({percent}%)',
