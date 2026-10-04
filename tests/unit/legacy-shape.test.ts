@@ -9,7 +9,10 @@ import {
   type LegacyShapeInput,
   type TariffCandidate,
 } from '../../apps/api/src/modules/commerce/catalog/application/legacy-shape';
-import { legacyShapeAdoptable } from '../../apps/api/src/modules/commerce/catalog/application/legacy-product.service';
+import {
+  legacyShapeAdoptable,
+  legacyShapeAdoption,
+} from '../../apps/api/src/modules/commerce/catalog/application/legacy-product.service';
 
 /**
  * Program Item 14: the canonical legacy shape key and the current-tariff rule
@@ -139,6 +142,8 @@ describe('resolveCurrentTariff', () => {
     durationDays: 30,
     trafficBytes: 10n * BYTES_PER_GB,
     price: money(35_000n, 'IRT'),
+    panelBound: true,
+    categoryStatus: 'ACTIVE',
     ...over,
   });
 
@@ -159,6 +164,9 @@ describe('resolveCurrentTariff', () => {
       product('e', { price: money(35n, 'USD' as never) }),
       product('f', { durationDays: 31 }),
       product('g', { trafficBytes: 11n * BYTES_PER_GB }),
+      product('h', { panelBound: false }),
+      product('i', { categoryStatus: null }),
+      product('j', { categoryStatus: 'INACTIVE' }),
     ];
     expect(resolveCurrentTariff(shape, none, 'IRT')).toEqual({ kind: 'NO_CURRENT_TARIFF' });
     expect(resolveCurrentTariff(shape, [], 'IRT')).toEqual({ kind: 'NO_CURRENT_TARIFF' });
@@ -168,6 +176,21 @@ describe('resolveCurrentTariff', () => {
     expect(
       resolveCurrentTariff(shape, [product('a', { audience: 'RESELLERS_ONLY' })], 'IRT').kind,
     ).toBe('NO_CURRENT_TARIFF');
+  });
+
+  it('takes the price a customer can buy today, ignoring withdrawn or undeliverable ones', () => {
+    // A withdrawn category's price, or an unbound product's, is not a second price either.
+    expect(
+      resolveCurrentTariff(
+        shape,
+        [
+          product('a', { categoryStatus: 'INACTIVE', price: money(29_000n, 'IRT') }),
+          product('b', { panelBound: false, price: money(30_000n, 'IRT') }),
+          product('c'),
+        ],
+        'IRT',
+      ),
+    ).toEqual({ kind: 'MATCHED', price: money(35_000n, 'IRT'), sourceProductId: 'c' });
   });
 
   it('refuses to choose between two current prices', () => {
@@ -205,6 +228,26 @@ describe('legacyShapeAdoptable', () => {
     categoryId: null,
     price: money(1n, 'IRT'),
   } as never;
+
+  it('names a closed manual-review reason for every refusal, never a tariff', () => {
+    expect(legacyShapeAdoption(shape, product)).toEqual({ adoptable: true });
+    expect(legacyShapeAdoption(null, product)).toEqual({ adoptable: false, reason: 'NO_SHAPE' });
+    expect(legacyShapeAdoption(shape, null)).toEqual({ adoptable: false, reason: 'NO_SHAPE' });
+    for (const reason of ['NOT_YET_RESOLVED', 'NO_CURRENT_TARIFF', 'AMBIGUOUS_TARIFF']) {
+      const unresolved = {
+        ...(shape as object),
+        tariffStatus: 'UNRESOLVED',
+        unresolvedReason: reason,
+        resolution: null,
+      } as never;
+      expect(legacyShapeAdoption(unresolved, product)).toEqual({ adoptable: false, reason });
+    }
+    const priceless = { ...(product as object), price: null } as never;
+    expect(legacyShapeAdoption(shape, priceless)).toEqual({
+      adoptable: false,
+      reason: 'PRODUCT_NOT_ADOPTABLE',
+    });
+  });
 
   it('admits only a resolved shape whose hidden product is live and priced', () => {
     expect(legacyShapeAdoptable(shape, product)).toBe(true);

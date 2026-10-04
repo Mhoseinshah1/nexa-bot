@@ -1,10 +1,13 @@
 import {
+  isCategoryPurchasable,
+  isPurchasable,
   MAX_DURATION_DAYS,
   MAX_TRAFFIC_BYTES,
   formatTrafficGb,
   parseTrafficGb,
   type Money,
   type ProductAudience,
+  type ProductCategoryStatus,
   type ProductStatus,
 } from '@nexa/contracts';
 
@@ -130,6 +133,10 @@ export interface TariffCandidate {
   readonly durationDays: number;
   readonly trafficBytes: bigint;
   readonly price: Money | null;
+  /** Whether a panel is bound — without one, nothing bought is delivered. */
+  readonly panelBound: boolean;
+  /** The product's category's status; null when it has none. */
+  readonly categoryStatus: ProductCategoryStatus | null;
 }
 
 export type TariffResolution =
@@ -143,7 +150,10 @@ export type TariffResolution =
  * A candidate is a product that is ACTIVE, PUBLIC (`EVERYONE` — never `RESELLERS_ONLY`,
  * whose price is a reseller's, and never `HIDDEN`, which includes the legacy products
  * themselves), priced in the tenant's sales currency, with exactly the shape's traffic and
- * duration. One distinct price among them is the tariff, taken from the lowest product id
+ * duration — and that a customer can actually buy TODAY: bound to a panel and in a
+ * purchasable category, the two further terms `unorderableReason` refuses a new purchase
+ * on. A product in a withdrawn category, or one with nothing to deliver on, is a price
+ * from the past, not a current tariff. One distinct price among them is the tariff, taken from the lowest product id
  * so the source is deterministic; none is `NO_CURRENT_TARIFF`; several prices is
  * `AMBIGUOUS_TARIFF`. Nothing is interpolated from a nearby plan and nothing reads the
  * legacy price.
@@ -156,8 +166,11 @@ export function resolveCurrentTariff(
   const matching = candidates
     .filter(
       (product) =>
-        product.status === 'ACTIVE' &&
+        isPurchasable(product.status) &&
         product.audience === 'EVERYONE' &&
+        product.panelBound &&
+        product.categoryStatus !== null &&
+        isCategoryPurchasable(product.categoryStatus) &&
         product.price !== null &&
         product.price.currency === salesCurrency &&
         product.trafficBytes === shape.trafficBytes &&

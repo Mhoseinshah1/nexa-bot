@@ -8,6 +8,7 @@ import {
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
+  type LegacyShapeUnresolvedReason,
   type Money,
   type OperationalEventRecorder,
   type PermissionKey,
@@ -497,24 +498,51 @@ export class LegacyProductService {
 }
 
 /**
+ * Why a service of this shape may not be adopted — a CLOSED set, so P6 routes the
+ * service to manual review with a reason instead of re-deriving one:
+ *
+ * - `NO_SHAPE` — no shape row (an unmappable shape writes none) or no product for it;
+ * - `NOT_YET_RESOLVED` / `NO_CURRENT_TARIFF` / `AMBIGUOUS_TARIFF` — the shape's own
+ *   UNRESOLVED reason: there is no safe current tariff, and none is invented;
+ * - `PRODUCT_NOT_ADOPTABLE` — resolved, but its hidden product is not live, hidden,
+ *   uncategorised, priced and the shape's own (an operator withdrew or edited it).
+ */
+export type LegacyShapeAdoptionBlocker =
+  'NO_SHAPE' | LegacyShapeUnresolvedReason | 'PRODUCT_NOT_ADOPTABLE';
+
+export type LegacyShapeAdoption =
+  | { readonly adoptable: true }
+  | { readonly adoptable: false; readonly reason: LegacyShapeAdoptionBlocker };
+
+/**
  * Whether a service of this shape may be adopted (P6's gate, decided here so P6 cannot
  * decide it differently): the shape is RESOLVED and its hidden product is live, hidden,
- * uncategorised and priced. Anything else blocks adoption — including no shape at all.
+ * uncategorised and priced. Anything else blocks adoption — including no shape at all —
+ * with the closed reason above.
  */
+export function legacyShapeAdoption(
+  shape: LegacyShapeRecord | null,
+  product: ProductRecord | null,
+): LegacyShapeAdoption {
+  if (shape === null || product === null) return { adoptable: false, reason: 'NO_SHAPE' };
+  if (shape.tariffStatus !== 'RESOLVED') {
+    return { adoptable: false, reason: shape.unresolvedReason ?? 'NOT_YET_RESOLVED' };
+  }
+  const live =
+    shape.productId === product.id &&
+    product.status === 'ACTIVE' &&
+    product.audience === 'HIDDEN' &&
+    product.categoryId === null &&
+    product.price !== null;
+  return live ? { adoptable: true } : { adoptable: false, reason: 'PRODUCT_NOT_ADOPTABLE' };
+}
+
+/** `legacyShapeAdoption` as a yes/no, for a caller that needs no reason. */
 export function legacyShapeAdoptable(
   shape: LegacyShapeRecord | null,
   product: ProductRecord | null,
 ): boolean {
-  return (
-    shape !== null &&
-    product !== null &&
-    shape.productId === product.id &&
-    shape.tariffStatus === 'RESOLVED' &&
-    product.status === 'ACTIVE' &&
-    product.audience === 'HIDDEN' &&
-    product.categoryId === null &&
-    product.price !== null
-  );
+  return legacyShapeAdoption(shape, product).adoptable;
 }
 
 /** Values for the audit row: the shape's dimensions and tariff, never a legacy price. */
