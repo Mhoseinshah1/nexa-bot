@@ -249,6 +249,24 @@ describe('service candidates', () => {
     ).toBe('PRODUCT_UNRESOLVED');
   });
 
+  it('an is_custom outside 0/1 is never a named product: it is held, as the shape path holds it', () => {
+    for (const bad of ['2', 'yes', '', ' 1', null]) {
+      const decision = decideServiceCandidate({ ...base, codeProduct: 'p1', isCustom: bad }, ctx());
+      expect(decision, String(bad)).toMatchObject({
+        category: 'UNSUPPORTED_SHAPE',
+        shapeReason: 'IS_CUSTOM_INVALID',
+        map: { status: 'MANUAL_REVIEW', reasonCode: 'UNSUPPORTED_SHAPE' },
+      });
+    }
+    // The accepted spellings still decide as before.
+    expect(
+      decideServiceCandidate({ ...base, codeProduct: 'p1', isCustom: '0' }, ctx()),
+    ).toMatchObject({ product: { kind: 'NAMED_PRODUCT' } });
+    expect(
+      decideServiceCandidate({ ...base, codeProduct: 'p1', isCustom: '1' }, ctx()),
+    ).toMatchObject({ product: { kind: 'HIDDEN_SHAPE', custom: true } });
+  });
+
   it('never matches by inbound id, prefix or fuzzy name', () => {
     expect(decideServiceCandidate({ ...base, username: 'svc_a' }, ctx()).category).toBe(
       'PROVIDER_MISSING',

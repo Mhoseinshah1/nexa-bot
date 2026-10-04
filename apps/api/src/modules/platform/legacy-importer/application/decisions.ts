@@ -6,6 +6,7 @@ import {
   type LegacyImportReasonCode,
 } from '@nexa/contracts';
 import {
+  legacyCustomFlag,
   legacyShapeKey,
   type LegacyShapeUnmappableReason,
 } from '../../../commerce/catalog/application/legacy-shape.js';
@@ -268,8 +269,18 @@ export function decideServiceCandidate(
     return { category, map };
   }
 
+  // The flag first, read exactly as the shape key reads it: a value outside 0/1 is the
+  // shape path's IS_CUSTOM_INVALID, never a named product decided on a flag nobody read.
+  const customFlag = legacyCustomFlag(invoice.isCustom);
+  if (customFlag === null) {
+    return {
+      category: 'UNSUPPORTED_SHAPE',
+      map: INVOICE_MAP_DECISIONS.UNSUPPORTED_SHAPE,
+      shapeReason: 'IS_CUSTOM_INVALID',
+    };
+  }
   const codeProduct = invoice.codeProduct?.trim() ?? '';
-  const custom = invoice.isCustom?.trim() === '1';
+  const custom = customFlag;
   let product: ServiceProductPath;
   if (codeProduct !== '' && !custom && ctx.productCodes.has(codeProduct)) {
     // A named legacy product renews as the NEXA product the owner mapped it to, and only
