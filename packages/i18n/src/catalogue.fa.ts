@@ -184,7 +184,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.terms.updated':
     '{icon:warning} قوانین ربات به‌روزرسانی شده است و نسخه‌ای که پذیرفتید دیگر نسخهٔ فعلی نیست. لطفاً نسخهٔ جدید را بخوانید و بپذیرید.\n\n{title}\n\n{body}',
   'bot.terms.accepted':
-    '{icon:success} قوانین و مقررات را پذیرفتید. اکنون می‌توانید از ربات استفاده کنید.',
+    '{icon:success} قوانین و مقررات با موفقیت پذیرفته شد.\nاکنون می‌توانید از ربات استفاده کنید.',
   'bot.terms.accept_button': '✅ پذیرش قوانین',
   // WP20, brief §3.5: the owner's sentence, word for word.
   'bot.blocked_spam':

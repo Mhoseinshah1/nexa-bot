@@ -743,7 +743,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.terms.accepted': [
     'پذیرش قوانین ثبت شد',
-    'پاسخ دکمهٔ پذیرش قوانین؛ همراه با منوی اصلی، تا مشتری کارش را ادامه دهد.',
+    'پاسخ دکمهٔ پذیرش قوانین؛ همان پیام قوانین به این متن ویرایش می‌شود (پیام تازه‌ای فرستاده نمی‌شود) و دکمهٔ منوی اصلی زیر آن می‌آید.',
   ],
   'bot.terms.accept_button': ['دکمهٔ پذیرش قوانین', 'دکمه‌ای که زیر متن قوانین می‌آید.'],
   'bot.channels.join_private_button': [

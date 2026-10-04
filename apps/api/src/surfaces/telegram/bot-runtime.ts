@@ -1421,6 +1421,43 @@ function termsRequired(
   };
 }
 
+/**
+ * Batch 01 item 1: the answer to an accept button once the acceptance is recorded (now or
+ * by an earlier tap). It EDITS the terms message the button sits on (`edit`), so the
+ * customer is left with one message that says the rules were accepted, and no new one.
+ *
+ * The accept button goes with the edit (the keyboard is always replaced), and the way to
+ * the main menu takes its place: a customer stopped at their very first `/start` has
+ * never been sent the persistent menu keyboard, and the tap on «منوی اصلی» is the
+ * customer's own request for it. Pure, so the shape is pinned without a database.
+ *
+ * When Telegram cannot edit the message (deleted, or a photo) the SAME reply goes out once
+ * as a new message — `editOrSend`'s one fallback; "not modified" is success, never a
+ * fallback, so a repeated tap can never become a second message.
+ */
+export function termsAcceptedReply(): PendingReply {
+  return {
+    key: 'bot.terms.accepted',
+    values: {},
+    buttons: [mainMenuButton()],
+    orderId: null,
+    edit: true,
+  };
+}
+
+/**
+ * Batch 01 item 1: an accept button whose version is no longer current. The SAME message is
+ * edited into the version that replaced it, with that version's own button — the customer
+ * never has two terms prompts on screen, one of them dead.
+ */
+export function termsStaleReply(version: {
+  readonly id: string;
+  readonly title: string;
+  readonly body: string;
+}): PendingReply {
+  return { ...termsRequired('bot.terms.updated', version), edit: true };
+}
+
 export const ADMIN_PANEL_CALLBACK_PREFIX = 'A:';
 export const ADMIN_RECEIPTS_CALLBACK_PREFIX = 'B:';
 export const ADMIN_RECEIPT_CALLBACK_PREFIX = 'C:';
@@ -9825,8 +9862,9 @@ export class BotRuntime {
    *
    * The accept button is the only way through. It names the version it was drawn under:
    * that version is recorded only while it is still the current one, and a button under an
-   * older message answers with the version that replaced it. After acceptance the customer
-   * gets the main menu — never a replay of what they first asked for.
+   * older message answers with the version that replaced it. After acceptance the terms
+   * message is edited into the accepted text with the way to the main menu (Batch 01 item
+   * 1) — never a replay of what they first asked for, and never a second message.
    */
   private async termsGatedAct(
     scope: TenantContext,
@@ -9902,10 +9940,15 @@ export class BotRuntime {
        */
       return accepted.current === null
         ? this.act(scope, actor, menu, customer, arrival, input)
-        : termsRequired('bot.terms.updated', accepted.current);
+        : termsStaleReply(accepted.current);
     }
-    const reply = await this.act(scope, actor, menu, customer, arrival, input);
-    return { ...reply, key: 'bot.terms.accepted' };
+    /*
+     * Batch 01 item 1: the terms message the customer tapped is EDITED into the accepted
+     * text — no second message. A repeated tap or a redelivered update edits it into the
+     * same text again, which Telegram answers "message is not modified" and the messenger
+     * counts as delivered, so nothing is sent then either.
+     */
+    return termsAcceptedReply();
   }
 
   /**

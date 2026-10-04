@@ -4,8 +4,11 @@ import { describe, expect, it } from 'vitest';
 import { INLINE_BUTTONS, termsDraftInputSchema, TERMS_BODY_MAX_LENGTH } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
+  MAIN_MENU_CALLBACK_DATA,
   TERMS_ACCEPT_CALLBACK_PREFIX,
   intentOf,
+  termsAcceptedReply,
+  termsStaleReply,
 } from '../../apps/api/src/surfaces/telegram/bot-runtime.js';
 
 /**
@@ -34,6 +37,35 @@ describe('the accept callback', () => {
     const entry = INLINE_BUTTONS.find((button) => button.key === 'terms.accept');
     expect(entry).toMatchObject({ label: 'bot.terms.accept_button', action: 'CALLBACK' });
     expect(CATALOGUE_FA['bot.terms.accept_button']).not.toContain(VERSION);
+  });
+});
+
+describe('the answer to the accept button (Batch 01 item 1)', () => {
+  it('EDITS the terms message into the accepted text, with the main menu in place of the button', () => {
+    const reply = termsAcceptedReply();
+    expect(reply).toMatchObject({ key: 'bot.terms.accepted', values: {}, edit: true });
+    // No persistent keyboard: a ReplyKeyboardMarkup cannot ride on an edit, and asking
+    // for one is what made the answer a second message.
+    expect(reply.keyboard).toBeUndefined();
+    expect(reply.media).toBeUndefined();
+    expect(reply.lead).toBeUndefined();
+    expect(reply.followUpKey).toBeUndefined();
+    expect(reply.buttons.map((button) => button.data)).toEqual([MAIN_MENU_CALLBACK_DATA]);
+    expect(reply.buttons.some((b) => b.data.startsWith(TERMS_ACCEPT_CALLBACK_PREFIX))).toBe(false);
+  });
+
+  it('says exactly the owner’s two sentences, from an Appearance marker', () => {
+    expect(CATALOGUE_FA['bot.terms.accepted']).toBe(
+      '{icon:success} قوانین و مقررات با موفقیت پذیرفته شد.\nاکنون می‌توانید از ربات استفاده کنید.',
+    );
+  });
+
+  it('edits a stale button’s message into the version that replaced it', () => {
+    const reply = termsStaleReply({ id: VERSION, title: 't', body: 'b' });
+    expect(reply).toMatchObject({ key: 'bot.terms.updated', edit: true });
+    expect(reply.buttons.map((button) => button.data)).toEqual([
+      `${TERMS_ACCEPT_CALLBACK_PREFIX}${VERSION}`,
+    ]);
   });
 });
 
