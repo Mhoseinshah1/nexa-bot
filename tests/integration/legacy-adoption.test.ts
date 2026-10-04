@@ -788,7 +788,7 @@ describe('Migration P6: legacy service adoption', () => {
   // Revenue exclusion and inertness
   // ---------------------------------------------------------------------------
 
-  it('is never revenue, and nothing — provisioner, earn sweep, refund request — acts on it', async () => {
+  it('is never revenue, and neither the provisioner tick nor its earn sweep acts on it', async () => {
     const telegramUserId = tg();
     const customerId = await fx.customer({ telegramUserId });
     const referrer = await fx.customer({ telegramUserId: tg() });

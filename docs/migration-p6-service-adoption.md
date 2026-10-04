@@ -53,7 +53,7 @@ narrower existing key is held by a job. **No HTTP, Telegram or web surface const
 calls it** (a boundary test pins that only the container and the CLI may import it).
 
 Outcomes: `ADOPTED` | `ALREADY_ADOPTED` (same mapping, same ids) | `MANUAL_REVIEW` (closed
-reason, map row written). The exact types are in `$S/ADOPT_API.md` and the source.
+reason; `recorded` says whether a map row was written — false only for an invoice key outside the evidenced shape, which the map refuses). The exact types are in `legacy-adoption-ports.ts`.
 
 ## 3. Capacity decision (6B)
 
@@ -74,10 +74,14 @@ usedAfter, overCap }`. A panel adopted past its cap then reads `AT_CAPACITY`: th
 - No capacity reservation row is written: a hold is for the window in which no service
   represents a claim, and here the service exists from the first statement.
 
-Lock order: the per-invoice advisory lock (class `0x4c41`, "LA", taken first and never held
-with any other advisory lock) → the panel row → the username reservation insert (a unique
-index). This matches the existing order → panel → reservation order; the adoption order is
-new, so nothing else can be waiting on it.
+Lock order: the per-invoice transaction advisory lock
+(`hashtextextended('legacy-adoption:<tenant>:invoice:<key>')`, the `legacy-shape:` form;
+taken first and never together with another advisory lock) → the panel row → the username
+reservation insert (a unique index). This matches the existing order → panel → reservation
+order; the adoption order is new, so nothing else can be waiting on it. A purchase that
+reserves the same name between the adoption's check and its insert makes the adoption's
+insert fail on the namespace index and the whole transaction roll back; the importer's
+retry then answers `CONFLICTING_EXISTING_ENTITY`.
 
 ## 4. Identity: username, subscription_ref, link (C3 SAFE_WITH_CONSTRAINT)
 
@@ -180,10 +184,16 @@ Passthrough from the verified match: `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`,
 code); nothing else is written for it. The codes are `LEGACY_IMPORT_REASON_CODES` members
 (MAP-REVIEW's extension).
 
-## 10. Migrations
+## 10. Contracts and migrations
 
-None expected: every column and constraint the adoption needs exists (0187/0188 order
-origin, 0190 import map; the `invoice` legacy table is MAP-REVIEW's 0191–0192).
+- `LEGACY_IMPORT_REASON_CODES` gains six codes (own commit): `CUSTOMER_MISSING`,
+  `PRODUCT_MAPPING_UNRESOLVED`, `SUBSCRIPTION_REF_BLOCKED`, `CONFLICTING_EXISTING_ENTITY`,
+  `UNSUPPORTED_SHAPE`, `INVENTORY_INCOMPLETE`. Migration **0193** (generated) widens
+  `legacy_import_map_reason_check`. The manual-review queue owns the vocabulary and may land
+  the same names; then this is the same set and merges away.
+- `ServiceAdopted` domain event (own commit): ids and state only.
+- Nothing else: orders.origin (0187/0188), the import map (0190) and its `invoice` key (0191)
+  already exist.
 
 ## 11. Tests and mutation
 
@@ -206,6 +216,49 @@ origin, 0190 import map; the `invoice` legacy table is MAP-REVIEW's 0191–0192)
 | S4 day start in UTC             | day-of rung in the tenant's timezone                        |
 | S5 no tenant filter in the read | another tenant's service                                    |
 | S6 no scope-activity read       | a stopped scope                                             |
+
+### Item 7
+
+- `tests/integration/legacy-adoption.test.ts` (25 cases, every adoption call made with the
+  process's `http`/`https`/`fetch` replaced by a recording fake that throws — asserted
+  never called): happy path (order shape, service row, funded hold, map row, audit and event
+  free of the link and Telegram id); rerun (same key replays, new key `ALREADY_ADOPTED`,
+  changed checksum reported and never re-pointed); reused key with another payload refused;
+  six concurrent adoptions of one invoice → one order, one service; existing customer beside
+  their own service; customer missing then created; every match passthrough; an invoice key
+  outside the evidenced shape (nothing written); a spelling that does not fold to the key;
+  resolved/unresolved hidden product (including one priced by hand); no / foreign / inactive /
+  window-mismatched product; state mapping incl. disabled → SUSPENDED and the refusals;
+  unlimited traffic/time and no link; non-RickPanel → `SUBSCRIPTION_REF_BLOCKED`; distinct
+  subscription refs; name conflicts on the panel and in another tenant's namespace; capacity
+  over cap reported; reminder seed inside the adoption; revenue exclusion and an inert
+  provisioner tick; renewal quotes the current tariff and follows a price change; permission
+  denied and audited; stopped tenant (adoption and review); tenant isolation; run counters.
+- `tests/unit/legacy-adoption-boundary.test.ts` — no surface or web page reaches it; the
+  module imports no provider client, adapter, transport or network API; its container
+  wiring has no provider dependency. `tests/unit/legacy-adoption-rules.test.ts` — the state
+  map and the request hash.
+
+| Mutation (`scripts/mutate-migration-p6.py`) | Killed by                               |
+| ------------------------------------------- | --------------------------------------- |
+| A1 the adoption makes a provider read       | every adopting case (the network fake)  |
+| A2 no per-invoice lock                      | concurrency                             |
+| A3 no ALREADY_ADOPTED lookup                | rerun; concurrency                      |
+| A4 hold keeps the exact case                | happy path                              |
+| A5 no username conflict check               | both conflict cases                     |
+| A6 any provider type                        | subscription constraint                 |
+| A7 disabled becomes ACTIVE                  | state mapping                           |
+| A8 delivery PENDING                         | happy path                              |
+| A9 no reminder seed                         | reminder seed in the adoption           |
+| A10 STANDARD origin                         | happy path; rerun; concurrency; revenue |
+| A11 no scope-activity read                  | stopped tenant (review decision)        |
+| A12 customer lookup ignores the tenant      | tenant isolation                        |
+| A13 over-cap never reported                 | capacity                                |
+| A14 no window-shape check                   | product refusals                        |
+| A15 hidden-shape gate skipped               | unresolved shape priced by hand         |
+
+A11 and A15 survived the first run (each case was also refused by a neighbouring rule); the
+cases were narrowed until each isolates its rule, and both are now killed.
 
 ## 12. Manual acceptance (not run here)
 
