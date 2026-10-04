@@ -15,7 +15,7 @@ import type {
  * Each adapter is driven by recorded wire shapes (from the TB4 audit of each provider's
  * official API reference, SDK types or OpenAPI spec). Normal CI never calls a provider. The
  * shapes are what the adapter promises to read; per the real-panel lesson in CLAUDE.md, an
- * opt-in acceptance run against the real API corrects them in the same commit (`OQ-TB-12`).
+ * opt-in acceptance run against the real API corrects them in the same commit (`OQ-TB-20`).
  */
 
 type Fixture = { status: number; body: unknown; headers?: Record<string, string> };

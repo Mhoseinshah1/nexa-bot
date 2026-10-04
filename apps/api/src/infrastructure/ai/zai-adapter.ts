@@ -24,7 +24,7 @@ export const ZAI_BASE_URLS = {
  * validates" path; `structuredOutput: false` says so. Z.AI's business codes ride inside 4xx
  * bodies: 1301 is a content refusal, 1113 an empty balance (a credential problem, never a
  * rate limit). Every Z.AI fixture is PROVISIONAL until the opt-in acceptance run against the
- * real API corrects it (`OQ-TB-12`).
+ * real API corrects it (`OQ-TB-20`).
  */
 export class ZaiAdapter implements SupportAiAdapter {
   readonly provider = 'ZAI' as const;
