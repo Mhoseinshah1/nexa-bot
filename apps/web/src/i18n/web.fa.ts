@@ -3463,8 +3463,6 @@ export const WEB_FA = {
   'web.service_delete_confirm_check':
     'تأیید می‌کنم که این سرویس حذف شود و این مبلغ به کیف پول مشتری بازگردد.',
   'web.service_delete_refund_submit': 'حذف و بازگشت وجه',
-  'web.service_delete_only_submit': 'حذف سرویس',
-  'web.service_delete_result_title': 'نتیجه',
   'web.service_delete_result_pending':
     'حذف سرویس ثبت شد. پس از تأیید حذف از پنل، مبلغ به کیف پول مشتری واریز می‌شود.',
   'web.service_delete_result_blocked':
