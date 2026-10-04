@@ -65,6 +65,10 @@ their very first `/start` gets it from that main-menu button, at their own reque
   own button, so the customer never has two prompts on screen, one of them dead.
 - An over-long version cut into parts carries the button on the last part; that part is the
   one edited.
+- A newer version longer than one message cannot be edited in (`NOT_EDITABLE`), so the stale
+  reply goes out once as new, split messages. The old message keeps its dead button, and each
+  further tap on it sends one more copy — bounded by the customer's taps, and each copy carries
+  the current accept button, so it is visible rather than silent.
 
 The 2026-10 report of "a new message, and/or the prompt again" was this answer: it was the
 main menu reply sent as a NEW message with the accepted text, under a terms message whose

@@ -11729,13 +11729,11 @@ export class BotRuntime {
           orderId: null,
         };
       }
+      const now = this.deps.clock.now();
       return {
         key: 'bot.service.search_results',
         values: { query: query.toLowerCase() },
-        buttons: [
-          ...found.map((service) => serviceListButton(service, this.deps.clock.now())),
-          backToListButton(),
-        ],
+        buttons: [...found.map((service) => serviceListButton(service, now)), backToListButton()],
         orderId: null,
       };
     }

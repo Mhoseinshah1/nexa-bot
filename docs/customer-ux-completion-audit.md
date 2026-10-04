@@ -235,6 +235,12 @@ read. The state alone was not enough: the expiry sweep and the usage sync that f
   `{marker} {username}`, rendered to its fallback emoji on a button), and the colour is the
   button's Bot API style (`derivedStyle`), which wins over the tenant's `bot.inline_buttons`
   style for `services.item`; where the table derives none, the tenant's style applies.
+- An operator's EXISTING override of `bot.service.list_item_button` (say `✨ {username} ✨`)
+  keeps validating — `{marker}` is optional — but shows no marker until the operator adds
+  `{marker}`. The button colour is derived either way. Release note for the owner.
+- A SUSPENDED service past its deadline reads «منقضی شده», and one in its window with traffic
+  used up reads «حجم تمام شده», rather than «خاموش»: the table states the fact that blocks the
+  service first. Red in every case; owner to confirm.
 - The card's status line uses the same table (`bot.service.state_*`, plus the new
   `bot.service.state_exhausted`); «working» still wins while a change is applied.
 - No customer-facing web view exists; the Web Admin's service pages show the stored state.
