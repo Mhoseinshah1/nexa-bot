@@ -35,7 +35,7 @@ const SESSION = {
     createdAt: '2026-01-01T00:00:00.000Z',
     lastLoginAt: '2026-09-06T08:00:00.000Z',
   },
-  permissions: ['users.view', 'audit.view', 'settings.view'],
+  permissions: ['users.view', 'users.search', 'audit.view', 'settings.view'],
   expiresAt: '2026-09-07T08:00:00.000Z',
 };
 
@@ -236,6 +236,33 @@ describe('the sidebar prefetch', () => {
       .findAll({ queryKey: ['audit-log'] })
       .map((query) => query.queryKey[1]);
     expect(keys).toEqual(expect.arrayContaining(['{}', JSON.stringify({ result: 'DENIED' })]));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('never lets the bare customer list answer a searched one', async () => {
+    // Issue 13 searches as the operator types; each applied term is its own question.
+    const api = stubApi(ROUTES);
+    const { client } = renderShell();
+    await screen.findByText('مدیر اصلی');
+
+    fireEvent.pointerEnter(link('web.nav_users'));
+    await waitFor(() => expect(getsOf(api.calls, '/users')).toBe(1));
+    act(() => navigate('/users?q=ali_tehran'));
+
+    await waitFor(() =>
+      expect(
+        api.calls.some(
+          (call) =>
+            call.method === 'GET' &&
+            new URL(call.url, 'http://localhost').searchParams.get('q') === 'ali_tehran',
+        ),
+      ).toBe(true),
+    );
+    const keys = client
+      .getQueryCache()
+      .findAll({ queryKey: ['customers'] })
+      .map((query) => query.queryKey[1]);
+    expect(keys).toEqual(expect.arrayContaining(['||', '||ali_tehran']));
     expect(new Set(keys).size).toBe(keys.length);
   });
 
