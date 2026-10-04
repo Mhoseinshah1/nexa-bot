@@ -1163,8 +1163,14 @@ textarea.input,
   gap: 6px;
   align-items: center;
 }
+/*
+ * Generated content is part of the accessible name, so the mark carries empty
+ * alternative text (`/ ''`) and is not read out as "star". A browser without the
+ * alt-text syntax drops that declaration and keeps the plain one above it.
+ */
 .field > label.required::after {
   content: '*';
+  content: '*' / '';
   color: var(--danger);
 }
 .field > .muted.small,

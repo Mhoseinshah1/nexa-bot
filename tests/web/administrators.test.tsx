@@ -654,4 +654,122 @@ describe('creating an administrator', () => {
     expect(await within(form).findByText(t('web.admin_request_invalid'))).toBeInTheDocument();
     expect(within(form).queryByText('The request payload is invalid.')).toBeNull();
   });
+
+  const OPS = { key: 'ops', name: 'Ops', isSystem: false, permissions: ['users.view'] };
+  const roleNotFound = (missing: string[]) => ({
+    url: '/admins',
+    method: 'POST',
+    status: 400,
+    body: {
+      error: {
+        kind: 'VALIDATION',
+        code: 'role.not_found',
+        message: 'Unknown role.',
+        details: { roleKeys: missing },
+        correlationId: 'test',
+      },
+    },
+  });
+  const roleReads = (api: { calls: { method: string; url: string }[] }) =>
+    api.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/roles')).length;
+  const checkbox = (name: string) => screen.getByLabelText(name) as HTMLInputElement;
+
+  it('drops a role the server says is gone from the selection, and reads the list again', async () => {
+    // The catalogue still lists `ops` (a replica behind the write): only the
+    // server's own `details.roleKeys` can say it is gone.
+    const api = stubApi([rolesRoute([SUPPORT, OPS]), rosterRoute, roleNotFound(['ops'])]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fill({ username: 'second', displayName: 'Second', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(screen.getByLabelText('Ops'));
+    const readsBefore = roleReads(api);
+    fireEvent.click(submitButton(form));
+
+    expect(await within(form).findByText(t('web.admin_role_not_found'))).toBeInTheDocument();
+    await waitFor(() => expect(roleReads(api)).toBeGreaterThan(readsBefore));
+    expect(checkbox('Ops').checked, 'the missing role stayed selected').toBe(false);
+    expect(checkbox('Support').checked).toBe(true);
+  });
+
+  it('never resends a role the catalogue no longer draws', async () => {
+    const roles = rolesRoute([SUPPORT, OPS]);
+    const api = stubApi([roles, rosterRoute, roleNotFound(['ops'])]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fill({ username: 'second', displayName: 'Second', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(screen.getByLabelText('Ops'));
+    // Both roles are deleted elsewhere; the server names only the first it met.
+    roles.body = { roles: [] };
+    fireEvent.click(submitButton(form));
+
+    expect(await within(form).findByText(t('web.admin_roles_empty'))).toBeInTheDocument();
+    fireEvent.click(submitButton(form));
+    expect(await within(form).findByText(t('web.admin_roles_required'))).toBeInTheDocument();
+    expect(posts(api), '`support` was undrawn, untickable and sent again').toHaveLength(1);
+  });
+
+  it('forgets the ticked roles when the drawer is cancelled', async () => {
+    stubApi([rolesRoute(), rosterRoute]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fireEvent.click(await screen.findByLabelText('Support'));
+    expect(checkbox('Support').checked).toBe(true);
+    fireEvent.click(within(form).getByRole('button', { name: t('web.admin_telegram_cancel') }));
+    await openDrawer();
+    expect(checkbox('Support').checked).toBe(false);
+  });
+
+  it('names the characters, not the length, for a name that is wrong in both', async () => {
+    stubApi([rolesRoute(), rosterRoute]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fill({ username: 'اب', displayName: 'Ali', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(submitButton(form));
+    expect(await within(form).findByText(t('web.admin_username_invalid'))).toBeInTheDocument();
+  });
+
+  it('keeps one idempotency key across case and tick order after an unanswered create', async () => {
+    const api = stubApi([
+      rolesRoute([SUPPORT, OPS]),
+      rosterRoute,
+      {
+        url: '/admins',
+        method: 'POST',
+        status: 502,
+        body: {
+          error: {
+            kind: 'INTERNAL',
+            code: 'internal.unhandled',
+            message: 'An internal error occurred.',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={EDITOR} />);
+    const form = await openDrawer();
+    fill({ username: 'NewComer', displayName: 'New Comer', password: 'a-twelve-char-password' });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    fireEvent.click(screen.getByLabelText('Ops'));
+    fireEvent.click(submitButton(form));
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    await waitFor(() => expect(submitButton(form)).not.toBeDisabled());
+
+    // The same command, re-entered: another case, the roles ticked the other way round.
+    fill({ username: 'newcomer' });
+    fireEvent.click(checkbox('Support'));
+    fireEvent.click(checkbox('Ops'));
+    fireEvent.click(checkbox('Ops'));
+    fireEvent.click(checkbox('Support'));
+    fireEvent.click(submitButton(form));
+    await waitFor(() => expect(posts(api)).toHaveLength(2));
+
+    const [first, second] = posts(api).map(
+      (call) => (call.body as { idempotencyKey: string; roleKeys: string[] }).idempotencyKey,
+    );
+    expect(second, 'a re-entered command minted a new key').toBe(first);
+  });
 });

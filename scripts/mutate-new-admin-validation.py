@@ -29,6 +29,26 @@ M=[
  ('NA-05',[(P,'const username = input.username.trim().toLowerCase();','const username = input.username.trim();')],T),
  # The owner-grant 403 is no longer put on the roles field in Persian.
  ('NA-06',[(P,"=== 'admins.permissions.edit'","=== 'never'")],T),
+ # A ticked role the catalogue no longer draws is validated and sent again.
+ ('NA-07',[(P,'const chosen = roleKeys.filter((key) => available.some((role) => role.key === key));','const chosen = roleKeys;')],T),
+ # The keys `role.not_found` names stay selected.
+ ('NA-08',[(P,'setRoleKeys((current) => current.filter((key) => !missing.includes(key)));','void missing;')],T),
+ # The catalogue is not read again after `role.not_found`.
+ ('NA-09',[(P,"""          setRoleKeys((current) => current.filter((key) => !missing.includes(key)));
+        }
+        void queries.invalidateQueries({ queryKey: ['roles'] });""","""          setRoleKeys((current) => current.filter((key) => !missing.includes(key)));
+        }""")],T),
+ # Cancelling keeps the ticked roles.
+ ('NA-10',[(P,"""    setRoleKeys([]);
+    setRefusal(null);
+    setAttempted(false);""","""    setRefusal(null);
+    setAttempted(false);""")],T),
+ # The username reason follows the first zod issue, so `اب` reads as too short.
+ ('NA-11',[(P,"codes.includes('invalid_format')","codes[0] === 'invalid_format'")],T),
+ # The idempotency fingerprint keeps the username's case.
+ ('NA-12',[(P,'username: input.username.toLowerCase(),','username: input.username,')],T),
+ # The idempotency fingerprint keeps the tick order.
+ ('NA-13',[(P,'roleKeys: [...new Set(input.roleKeys)].sort(),','roleKeys: input.roleKeys,')],T),
 ]
 
 only=sys.argv[1:]

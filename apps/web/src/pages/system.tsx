@@ -628,11 +628,15 @@ function createAdminIssues(input: {
   if (username === '') {
     issues.username = t('web.admin_username_required');
   } else if (!parsedUsername.success) {
-    const code = parsedUsername.error.issues[0]?.code;
-    issues.username =
-      code === 'too_small'
+    // Zod reports every failed check, not the first: `اب` is both too short and
+    // made of characters no username may hold. The characters are named first,
+    // since lengthening the name would not fix it.
+    const codes = parsedUsername.error.issues.map((issue) => issue.code);
+    issues.username = codes.includes('invalid_format')
+      ? t('web.admin_username_invalid')
+      : codes.includes('too_small')
         ? withNumbers('web.admin_username_too_short', { min: ADMIN_USERNAME_MIN })
-        : code === 'too_big'
+        : codes.includes('too_big')
           ? withNumbers('web.admin_username_too_long', { max: ADMIN_USERNAME_MAX })
           : t('web.admin_username_invalid');
   }
@@ -732,6 +736,14 @@ function CreateAdmin() {
 
   const roles = useQuery({ queryKey: ['roles'], queryFn: fetchRoles, enabled: open });
   const available = roles.data?.roles ?? [];
+  /*
+   * The selection as far as the CURRENT catalogue goes. A role ticked earlier
+   * and since deleted — or ticked before `/roles` began failing — is no longer
+   * drawn, so it cannot be unticked; held in `roleKeys` it would pass the
+   * one-role check and be sent again on every press, refused as `role.not_found`
+   * each time. Validation and the request both read this, never `roleKeys`.
+   */
+  const chosen = roleKeys.filter((key) => available.some((role) => role.key === key));
 
   const mutate = useMutation({
     mutationFn: (input: {
@@ -753,13 +765,20 @@ function CreateAdmin() {
        * The fingerprint deliberately excludes the password, matching what the
        * server hashes the key against: changing the credential on a held key
        * is the same command, and a different username is a new one.
+       *
+       * And it is normalised as the server's hash is — the username
+       * lower-cased, the roles de-duplicated and sorted. Otherwise, after an
+       * ambiguous 5xx, re-ticking the same roles in another order (or retyping
+       * the name in another case) minted a NEW key for the same command, and
+       * the operator was told "username taken" about the administrator their
+       * first press had created.
        */
       createAdmin({
         ...input,
         idempotencyKey: submission.current({
-          username: input.username,
+          username: input.username.toLowerCase(),
           displayName: input.displayName,
-          roleKeys: input.roleKeys,
+          roleKeys: [...new Set(input.roleKeys)].sort(),
         }),
       }),
     onSuccess: () => {
@@ -780,14 +799,21 @@ function CreateAdmin() {
       submission.settleOn(error);
       const answer = createAdminRefusal(error);
       setRefusal(answer);
-      // The picker offered a role the server no longer has: read the list again.
+      // The picker offered a role the server no longer has: drop the keys the
+      // server named from the selection, and read the list again.
       if (error instanceof ApiError && error.code === IDENTITY_ERROR_CODES.ROLE_NOT_FOUND) {
+        const missing = error.details?.['roleKeys'];
+        if (Array.isArray(missing)) {
+          setRoleKeys((current) => current.filter((key) => !missing.includes(key)));
+        }
         void queries.invalidateQueries({ queryKey: ['roles'] });
       }
     },
   });
 
-  const issues = attempted ? createAdminIssues({ username, displayName, password, roleKeys }) : {};
+  const issues = attempted
+    ? createAdminIssues({ username, displayName, password, roleKeys: chosen })
+    : {};
   /** The client's reason first, then a server refusal about the same field. */
   const reasonFor = (field: CreateAdminField): string | undefined =>
     issues[field] ?? (refusal?.field === field ? refusal.message : undefined);
@@ -803,11 +829,13 @@ function CreateAdmin() {
   const cancel = () => {
     setOpen(false);
     setPassword('');
+    setRoleKeys([]);
     setRefusal(null);
     setAttempted(false);
   };
-  // Closing keeps the name, the display name and the roles, and clears the password — on
-  // purpose, see `onSuccess`. So a close with a password typed loses it, and asks first.
+  // Closing keeps the name and the display name, and clears the password — on purpose,
+  // see `onSuccess` — and the roles, since a role ticked now may not exist when the drawer
+  // is next opened. So a close with a password typed loses it, and asks first.
   const { requestClose, dialog: discardQuestion } = useConfirmedClose(password !== '', cancel);
 
   const unmet = Object.keys(issues).length > 0;
@@ -827,13 +855,13 @@ function CreateAdmin() {
           onSubmit={(event) => {
             event.preventDefault();
             setAttempted(true);
-            const found = createAdminIssues({ username, displayName, password, roleKeys });
+            const found = createAdminIssues({ username, displayName, password, roleKeys: chosen });
             if (Object.keys(found).length > 0) return;
             mutate.mutate({
               username: username.trim(),
               displayName: displayName.trim(),
               password,
-              roleKeys,
+              roleKeys: chosen,
             });
           }}
         >
