@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { AuditLogPage, auditFiltersOf, recordedFieldsOf } from '../../apps/web/src/pages/audit-log';
 import { dayEnd, dayStart } from '../../apps/web/src/pages/tickets';
@@ -214,5 +214,86 @@ describe('the audit log page', () => {
     renderPage(<TimelineCard customerId={CUSTOMER_ID} mayView />);
     const link = await screen.findByRole('link', { name: t('web.c360_timeline_all') });
     expect(link.getAttribute('href')).toBe(`/audit-log?customerId=${CUSTOMER_ID}`);
+  });
+});
+
+/**
+ * Issue 15 — a long technical identifier must not stretch the table.
+ *
+ * A Telegram update is audited as `job:telegram-update:<bot>:<update>`: one unbroken run of
+ * sixty-odd characters that, held on one line, pushed every other column off the card. The
+ * cell now wraps it anywhere and clamps it to two lines inside a bounded column, and the full
+ * value stays reachable three ways: it is the element's text (the clamp is paint, not data),
+ * its `title`, and a keyboard-reachable copy button that copies it whole.
+ *
+ * jsdom paints nothing, so the rules those classes carry are asserted in
+ * `stylesheet-contract.test.tsx`; this file asserts the page emits them.
+ */
+describe('a long actor identifier in the audit log', () => {
+  const BOT_ID = '019370ab-cdef-7012-8345-6789abcdef09';
+  const JOB_ID = `telegram-update:${BOT_ID}:918273645501928374`;
+  const LABEL = `job:${JOB_ID}`;
+  const LONG_ACTION = 'customer.register_from_telegram_update_with_referral';
+
+  function clipboard(): { writes: string[] } {
+    const writes: string[] = [];
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn((text: string) => {
+          writes.push(text);
+          return Promise.resolve();
+        }),
+      },
+    });
+    return { writes };
+  }
+
+  function renderRow(overrides: Record<string, unknown>) {
+    stubApi([{ url: '/audit-log', body: { entries: [entry(overrides)], nextCursor: null } }]);
+    renderPage(<AuditLogPage route={route()} denied={false} mayExport={false} />);
+  }
+
+  const longActor = {
+    actorType: 'SYSTEM_JOB',
+    actorId: JOB_ID,
+    actorLabel: LABEL,
+    surface: 'WORKER',
+  };
+
+  it('wraps and clamps the id inside a bounded, isolated cell, never cutting the text', async () => {
+    renderRow(longActor);
+    const value = await screen.findByText(LABEL);
+    // The whole value is the element's text: the clamp is drawn, the data is not shortened.
+    expect(value.textContent).toBe(LABEL);
+    expect(value.className.split(' ')).toEqual(expect.arrayContaining(['clamp-2', 'audit-id']));
+    // An id inside the RTL table is isolated and resolves its own direction.
+    expect(value.tagName).toBe('BDI');
+    // ...and its full value is a hover away, whatever the clamp hides.
+    expect(value.getAttribute('title')).toBe(LABEL);
+    // It is still the filter-by-actor control it always was.
+    expect(value.closest('button')?.getAttribute('title')).toBe(t('web.audit_filter_by_actor'));
+  });
+
+  it('copies the full id from a keyboard-reachable control', async () => {
+    const board = clipboard();
+    renderRow(longActor);
+    const row = (await screen.findByText(LABEL)).closest('tr') as HTMLElement;
+    const copy = within(row).getByRole('button', { name: t('web.audit_copy_actor') });
+    expect((copy as HTMLButtonElement).disabled).toBe(false);
+    expect(copy.tabIndex).toBe(0);
+    copy.focus();
+    expect(document.activeElement).toBe(copy);
+    fireEvent.click(copy);
+    await waitFor(() => expect(board.writes).toEqual([LABEL]));
+  });
+
+  it('clamps a long action name the same way, and lets a long reason wrap', async () => {
+    renderRow({ action: LONG_ACTION, reason: 'x'.repeat(120) });
+    const action = await screen.findByText(LONG_ACTION);
+    const clamp = action.closest('.clamp-2') as HTMLElement | null;
+    expect(clamp?.className.split(' ')).toEqual(expect.arrayContaining(['clamp-2', 'audit-id']));
+    expect(clamp?.getAttribute('title')).toBe(LONG_ACTION);
+    expect(screen.getByText('x'.repeat(120)).closest('.audit-reason')).not.toBeNull();
   });
 });

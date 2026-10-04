@@ -6929,6 +6929,7 @@ export const WEB_FA = {
   'web.audit_before': 'پیش از تغییر',
   'web.audit_after': 'پس از تغییر',
   'web.audit_filter_by_actor': 'فقط کارهای این انجام‌دهنده',
+  'web.audit_copy_actor': 'کپی شناسهٔ کامل انجام‌دهنده',
   'web.audit_filter_by_action': 'فقط این عملیات',
   'web.audit_filter_by_entity': 'فقط این موجودیت',
   'web.audit_link_customer': 'مشتری',

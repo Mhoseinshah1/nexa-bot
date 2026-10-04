@@ -1119,6 +1119,28 @@ form.set-row > * + * {
 .audit-code {
   font-size: var(--fs-ui);
 }
+/*
+ * A long id (a job's `job:telegram-update:…`, a long action name) is clamped to
+ * two lines in a bounded column instead of widening the table: a floor so the
+ * table's auto layout cannot squeeze it to a character a line, a ceiling so it
+ * cannot push the other columns off the card. Its copy button sits beside it.
+ */
+.audit-id {
+  min-width: 10rem;
+  max-width: 18rem;
+  text-align: start;
+}
+.audit-actor {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+.audit-reason,
+.audit-correlation {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .audit-badges,
 .audit-links {
   display: inline-flex;

@@ -19,6 +19,7 @@ import {
   Badge,
   Card,
   ChipDivider,
+  CopyButton,
   CursorPager,
   DataTable,
   Disclosure,
@@ -254,23 +255,7 @@ export function AuditLogPage({
     {
       key: 'actor',
       header: t('web.audit_col_actor'),
-      render: (row) => (
-        <span className="cell-main">
-          {row.actorId === null ? (
-            <span>{row.actorLabel ?? t(ACTOR_LABELS[row.actorType])}</span>
-          ) : (
-            <button
-              type="button"
-              className="link"
-              title={t('web.audit_filter_by_actor')}
-              onClick={() => setQuery(route, 'actor', row.actorId)}
-            >
-              <bdi>{row.actorLabel ?? row.actorId}</bdi>
-            </button>
-          )}
-          <span className="muted small">{t(ACTOR_LABELS[row.actorType])}</span>
-        </span>
-      ),
+      render: (row) => <ActorCell row={row} route={route} />,
     },
     {
       key: 'action',
@@ -284,10 +269,12 @@ export function AuditLogPage({
             title={t('web.audit_filter_by_action')}
             onClick={() => setQuery(route, 'action', row.action)}
           >
-            <Ltr>{row.action}</Ltr>
+            <span className="clamp-2 audit-id" dir="ltr" title={row.action}>
+              <Ltr>{row.action}</Ltr>
+            </span>
           </button>
           {row.reason !== null && row.reason !== '' && (
-            <span className="muted small">
+            <span className="muted small audit-reason">
               {t('web.audit_reason')} <bdi>{row.reason}</bdi>
             </span>
           )}
@@ -544,6 +531,43 @@ export function AuditLogPage({
 }
 
 /**
+ * Who acted. A job's label is a long unbroken id (`job:telegram-update:<bot>:<update>`), so
+ * the value wraps anywhere and is CLAMPED to two lines inside a bounded column (issue 15) —
+ * drawn short, never cut: the element still holds the whole value, its `title` shows it, and
+ * the copy button beside it copies it whole. `bdi` isolates it from the Persian around it and
+ * lets it resolve its own direction, since a human admin's label may be a Persian name.
+ */
+function ActorCell({ row, route }: { row: AuditLogEntry; route: Route }) {
+  const shown = row.actorLabel ?? row.actorId;
+  const value =
+    shown === null ? null : (
+      <bdi className="clamp-2 audit-id" title={shown}>
+        {shown}
+      </bdi>
+    );
+  return (
+    <span className="cell-main">
+      <span className="audit-actor">
+        {row.actorId === null ? (
+          (value ?? <span>{t(ACTOR_LABELS[row.actorType])}</span>)
+        ) : (
+          <button
+            type="button"
+            className="link"
+            title={t('web.audit_filter_by_actor')}
+            onClick={() => setQuery(route, 'actor', row.actorId)}
+          >
+            {value}
+          </button>
+        )}
+        {shown !== null && <CopyButton value={shown} label={t('web.audit_copy_actor')} />}
+      </span>
+      <span className="muted small">{t(ACTOR_LABELS[row.actorType])}</span>
+    </span>
+  );
+}
+
+/**
  * The row's entity: its type, a link to it where the server says one exists, and a button
  * that narrows the log to it. The link targets are the server's (`links`), never built from
  * the entity type here — a link to an order the tenant does not have would be a dead end.
@@ -690,7 +714,7 @@ function ChangesCell({ row }: { row: AuditLogEntry }) {
           ))}
         </tbody>
       </table>
-      <p className="muted small">
+      <p className="muted small audit-correlation">
         {t('web.audit_correlation')} <Ltr>{row.correlationId}</Ltr>
       </p>
     </Disclosure>
