@@ -647,7 +647,8 @@ export const CLIENT_APP_VIDEO_WEB_CLOCK_SKEW_MS = 30 * 1000;
 /**
  * What the page shows of one prompt. `OPEN` until a video lands (`CONFIRMED`), the
  * administrator cancels (`CANCELLED`), another prompt replaces it (`SUPERSEDED`), or its
- * deadline passes (`EXPIRED` — reported as soon as it has passed, stamped when read).
+ * deadline passes (`EXPIRED` — reported from the clock as soon as it has passed; the row is
+ * stamped only by a write: a late video, or a cancel).
  */
 export const CLIENT_APP_VIDEO_SESSION_STATES = [
   'OPEN',
