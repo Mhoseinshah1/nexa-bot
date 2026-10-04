@@ -32,9 +32,11 @@ import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { CompensationsPage } from './pages/compensations';
-import { PaymentAccountsPage } from './pages/payment-accounts';
+import { PaymentMethodPage } from './pages/payment-method';
+import { RedirectPage } from './pages/redirect';
+import { CARD_TO_CARD_PATH, providerOfSlug } from './payment-method-routes';
 import { BotsPage } from './pages/bots';
-import { PaymentGatewaysTabbedPage } from './pages/gateway-health';
+import { PaymentGatewaysTabbedPage, PROVIDER_LABELS } from './pages/gateway-health';
 import { SupportPage } from './pages/support';
 import { TermsPage } from './pages/terms';
 import { ClientAppsPage } from './pages/client-apps';
@@ -184,8 +186,11 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/payments',
   '/payments/:id',
   '/compensations',
+  // Item 7: moved into the card-to-card view; served as a redirect so old links still land.
   '/payment-accounts',
   '/payment-gateways',
+  // Item 8: each payment method's own view (`payment-method-routes.ts` names the slugs).
+  '/payment-gateways/:provider',
   '/bots',
   '/discounts',
   '/campaigns',
@@ -586,23 +591,26 @@ export function resolve(
     };
   }
 
+  /*
+   * UX Batch 01, item 7: «حساب‌های دریافت» is the card list of the card-to-card payment
+   * method now, on that method's own view. The old path REPLACES itself with the new one,
+   * so a bookmark lands there and Back does not bounce into the redirect.
+   */
   if (route.path === '/payment-accounts') {
     return {
-      element: (
-        <PaymentAccountsPage
-          denied={!may('payments.accounts.view')}
-          mayEdit={may('payments.accounts.edit')}
-        />
-      ),
-      crumbs: [{ label: t('web.payment_accounts_title') }],
-      title: t('web.payment_accounts_title'),
+      element: <RedirectPage to={CARD_TO_CARD_PATH} />,
+      crumbs: [
+        nav('payment-gateways'),
+        { label: t('web.payment_gateway_provider_manual_transfer') },
+      ],
+      title: t('web.payment_gateway_provider_manual_transfer'),
     };
   }
 
   /*
    * WP13. `settings.view` reads, `settings.edit` stops, starts and runs the live check,
    * and `settings.destructive` replaces the token — each passed separately, never
-   * derived from `denied`, for the reason `PaymentAccountsPage` records.
+   * derived from `denied`, for the reason `CardAccountsSection` records.
    */
   if (route.path === '/bots') {
     return {
@@ -625,10 +633,41 @@ export function resolve(
           route={route}
           denied={!may('payments.gateways.view')}
           mayEdit={may('payments.gateways.edit')}
+          mayViewCards={may('payments.accounts.view') || may('payments.accounts.edit')}
         />
       ),
       crumbs: [{ label: t('web.payment_gateways_title') }],
       title: t('web.payment_gateways_title'),
+    };
+  }
+
+  /*
+   * UX Batch 01, item 8: one payment method's own view. Each capability is passed on the
+   * key the server charges for it — the route's view and edit, and (card-to-card only) the
+   * cards' view and edit — never derived from one another.
+   */
+  const paymentMethod = match('/payment-gateways/:provider', route.path);
+  if (paymentMethod !== null) {
+    const slug = paymentMethod['provider'] ?? '';
+    const provider = providerOfSlug(slug);
+    const label =
+      provider === null ? t('web.payment_method_unknown') : t(PROVIDER_LABELS[provider]);
+    return {
+      element: (
+        // Keyed by the slug, so moving between two providers never carries one's open form
+        // (and its unsaved values) onto the other.
+        <PaymentMethodPage
+          key={slug}
+          route={route}
+          slug={slug}
+          mayViewGateways={may('payments.gateways.view')}
+          mayEditGateways={may('payments.gateways.edit')}
+          mayViewCards={may('payments.accounts.view')}
+          mayEditCards={may('payments.accounts.edit')}
+        />
+      ),
+      crumbs: [nav('payment-gateways'), { label }],
+      title: label,
     };
   }
 
@@ -1128,7 +1167,13 @@ export function resolve(
 
   if (route.path === '/appearance') {
     return {
-      element: <AppearancePage denied={!may('settings.view')} mayEdit={may('settings.edit')} />,
+      element: (
+        <AppearancePage
+          denied={!may('settings.view')}
+          mayEdit={may('settings.edit')}
+          mayViewCategories={may('catalog.view')}
+        />
+      ),
       crumbs: [{ label: t('web.nav_appearance') }],
       title: t('web.appearance_title'),
     };

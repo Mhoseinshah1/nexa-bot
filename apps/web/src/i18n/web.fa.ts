@@ -395,6 +395,28 @@ export const WEB_FA = {
   'web.templates_search_placeholder': 'نام پیام، توضیح، بخشی از متن یا کلید فنی…',
   'web.templates_group': 'بخش',
   'web.templates_group_all': 'همهٔ بخش‌ها',
+  // UX Batch 01, item 5: the template categories (`TEMPLATE_CATEGORIES`).
+  'web.templates_categories': 'دسته‌های متن',
+  'web.templates_category_all': 'همه',
+  'web.tcat_general': 'عمومی ربات',
+  'web.tcat_purchase': 'خرید و سفارش',
+  'web.tcat_payment': 'پرداخت',
+  'web.tcat_wallet': 'کیف پول',
+  'web.tcat_services': 'سرویس‌ها',
+  'web.tcat_service_changes': 'تمدید / افزایش حجم / افزایش زمان',
+  'web.tcat_errors': 'خطاها',
+  'web.tcat_support': 'پشتیبانی',
+  'web.tcat_notifications': 'اعلان‌ها و یادآورها',
+  'web.tcat_referral': 'دعوت دوستان',
+  'web.tcat_terms': 'قوانین',
+  'web.tcat_tutorials': 'آموزش',
+  'web.tcat_channels': 'عضویت در کانال',
+  'web.tcat_trial': 'سرویس تست',
+  'web.tcat_admin': 'مدیریت در تلگرام',
+  'web.tcat_operations': 'گروه عملیات',
+  'web.tcat_other': 'سایر',
+  'web.templates_elsewhere': '{n} متن دیگر در دسته‌های دیگر پیدا شد.',
+  'web.templates_search_all': 'جستجو در همهٔ دسته‌ها',
   'web.templates_filter_custom': 'سفارشی‌شده',
   'web.templates_filter_default': 'پیش‌فرض',
   'web.templates_count': 'متن‌های نمایش‌داده‌شده',
@@ -2047,10 +2069,12 @@ export const WEB_FA = {
     'این کارت‌به‌کارت در انتظار بررسی است. تأیید، رد یا واریز به کیف پول فقط از پنل مدیریت تلگرام انجام می‌شود و این صفحه تنها نتیجه را نمایش می‌دهد.',
   // Payment accounts — the destination an out-of-band transfer is told to go to.
   // The screen that replaces editing a message template to change a card number.
-  'web.nav_payment_accounts': 'حساب‌های دریافت',
-  'web.payment_accounts_title': 'حساب‌های دریافت کارت به کارت',
-  'web.payment_accounts_subtitle': 'مقصدی که به مشتری برای واریز نشان داده می‌شود.',
-  'web.payment_accounts_empty': 'هنوز حسابی ثبت نشده است.',
+  // UX Batch 01, item 7: the cards of the card-to-card method, managed on its own view
+  // (`/payment-gateways/card-to-card`); the separate «حساب‌های دریافت» entry is gone.
+  'web.payment_accounts_title': 'کارت‌های مقصد',
+  'web.payment_accounts_subtitle':
+    'کارتی که به مشتری برای واریز کارت به کارت نشان داده می‌شود. ترتیب نمایش را در بخش «پیشرفته» فرم کارت تنظیم کنید.',
+  'web.payment_accounts_empty': 'هنوز کارتی ثبت نشده است.',
   'web.payment_accounts_empty_hint':
     'تا زمانی که حساب فعالی ثبت نشود، دکمهٔ پرداخت کارت به کارت به مشتری نشان داده نمی‌شود.',
   'web.payment_account_label': 'نام حساب',
@@ -2071,22 +2095,33 @@ export const WEB_FA = {
   'web.payment_account_enable': 'فعال کردن',
   'web.payment_account_disable': 'غیرفعال کردن',
   'web.payment_account_make_default': 'پیش‌فرض کردن',
-  'web.payment_account_new': 'حساب جدید',
-  'web.payment_account_editing': 'ویرایش حساب',
+  'web.payment_account_new': 'کارت جدید',
+  'web.payment_account_add': 'افزودن کارت',
+  'web.payment_account_editing': 'ویرایش کارت',
   // Says the two things an operator cannot see from the form: an edit does not
   // reach an instruction already sent, and there is no delete.
   'web.payment_account_form_hint':
-    'ویرایش یک حساب، پرداخت‌هایی که پیش‌تر صادر شده‌اند را تغییر نمی‌دهد. حساب حذف نمی‌شود؛ غیرفعال می‌شود.',
+    'ویرایش یک کارت، پرداخت‌هایی که پیش‌تر صادر شده‌اند را تغییر نمی‌دهد. کارت حذف نمی‌شود؛ برای بایگانی، آن را غیرفعال کنید تا سابقهٔ پرداخت‌های قبلی حفظ شود.',
   'web.payment_account_save': 'ذخیره',
   'web.payment_account_cancel_edit': 'انصراف',
-  'web.payment_account_saved': 'حساب ذخیره شد.',
+  'web.payment_account_saved': 'کارت ذخیره شد.',
   'web.payment_account_default_done': 'مقصد پرداخت‌های جدید تغییر کرد.',
-  'web.payment_account_limit': 'سقف تعداد حساب‌ها پر شده است. یکی را غیرفعال کنید.',
+  'web.payment_account_limit': 'سقف تعداد کارت‌ها پر شده است. یکی را غیرفعال کنید.',
   // Payment routes (Phase 5C) — which ways a customer may pay, and under what
   // conditions. The route is not the destination: `web.payment_accounts_*` above is
   // where the money goes, this is whether the route is offered at all.
   'web.nav_payment_gateways': 'روش‌های پرداخت',
   'web.payment_gateways_title': 'روش‌های پرداخت',
+  // UX Batch 01, item 8: each payment method's own view, at its own URL.
+  'web.payment_method_open': 'مدیریت',
+  'web.payment_method_back': 'بازگشت به روش‌های پرداخت',
+  'web.payment_method_settings': 'تنظیمات این روش پرداخت',
+  'web.payment_method_health': 'سلامت این روش پرداخت',
+  'web.payment_method_unknown': 'روش پرداخت یافت نشد',
+  'web.payment_method_missing': 'این روش پرداخت در این نصب وجود ندارد.',
+  'web.payment_method_cards_only_hint':
+    'کارت‌های مقصد کارت به کارت در صفحهٔ همین روش پرداخت مدیریت می‌شوند.',
+  'web.redirect_moved': 'این صفحه جابه‌جا شده است؛ در حال انتقال…',
   'web.gateway_tab_config': 'تنظیمات',
   'web.gateway_tab_health': 'سلامت درگاه‌ها',
   'web.gateway_health_intro':
@@ -3449,6 +3484,60 @@ export const WEB_FA = {
   'web.service_terminate_confirm_label': 'برای تأیید، این عبارت را دقیقاً بنویسید:',
   'web.service_terminate_confirm_wrong': 'عبارت تأیید مطابقت ندارد.',
   'web.service_terminate_button': 'پایان بده',
+  /* Item 11: «حذف سرویس» opens a modal with two options. */
+  'web.service_delete_open': 'حذف سرویس…',
+  'web.service_delete_title': 'حذف سرویس',
+  'web.service_delete_choose': 'نوع حذف را انتخاب کنید:',
+  'web.service_delete_only': 'فقط حذف سرویس',
+  'web.service_delete_only_hint':
+    'حساب روی پنل حذف می‌شود و هیچ مبلغی به کیف پول مشتری برنمی‌گردد.',
+  'web.service_delete_refund': 'حذف سرویس و بازگشت وجه',
+  'web.service_delete_refund_hint':
+    'حساب روی پنل حذف می‌شود و پس از تأیید حذف، مبلغی که تعیین می‌کنید به کیف پول مشتری واریز می‌شود.',
+  'web.service_delete_refund_denied':
+    'بازگشت وجه به دو دسترسی «ثبت بازگشت وجه» و «پایان دادن به سرویس» نیاز دارد.',
+  'web.service_delete_refund_loading': 'در حال خواندن مبلغ قابل بازگشت…',
+  'web.service_delete_refund_unavailable': 'بازگشت وجه برای این سرویس ممکن نیست:',
+  'web.service_delete_reason_service_state':
+    'سرویس در وضعیتی نیست که بتوان آن را حذف و بازپرداخت کرد.',
+  'web.service_delete_reason_already_requested':
+    'برای این سرویس یک درخواست بازگشت وجه باز یا در حال اجرا وجود دارد؛ آن را در بخش «درخواست‌های بازگشت وجه» بررسی کنید.',
+  'web.service_delete_reason_no_paid_source':
+    'این سرویس از خرید پرداخت‌شده‌ای نیامده است (آزمایشی، رایگان یا منتقل‌شده)؛ برای جبران از تنظیم دستی کیف پول استفاده کنید.',
+  'web.service_delete_reason_source_unresolved': 'پرداخت اصلی این سرویس به‌طور قطعی پیدا نشد.',
+  'web.service_delete_reason_nothing_refundable':
+    'از پرداخت این سرویس مبلغی برای بازگشت باقی نمانده است.',
+  'web.service_delete_reason_cannot_delete':
+    'اکنون نمی‌توان این سرویس را حذف کرد (پنل اجازه نمی‌دهد یا عملیات دیگری در جریان است).',
+  'web.service_delete_amount': 'مبلغ بازگشت',
+  'web.service_delete_amount_max': 'حداکثر قابل بازگشت:',
+  'web.service_delete_amount_paid': 'مبلغ پرداخت‌شده:',
+  'web.service_delete_amount_invalid': 'مبلغ باید عددی صحیح و بزرگ‌تر از صفر باشد.',
+  'web.service_delete_amount_too_large': 'مبلغ از حداکثر قابل بازگشت بیشتر است.',
+  'web.service_delete_continue': 'ادامه',
+  'web.service_delete_back': 'بازگشت',
+  'web.service_delete_cancel': 'انصراف',
+  'web.service_delete_summary': 'خلاصه پیش از تأیید',
+  'web.service_delete_summary_service': 'سرویس',
+  'web.service_delete_summary_customer': 'مشتری',
+  'web.service_delete_summary_amount': 'مبلغ بازگشت',
+  'web.service_delete_summary_destination': 'مقصد',
+  'web.service_delete_destination_wallet': 'کیف پول مشتری در ربات',
+  'web.service_delete_summary_note':
+    'مبلغ فقط پس از تأیید حذف از پنل واریز می‌شود. اگر حذف ناموفق یا نامشخص باشد، هیچ مبلغی واریز نمی‌شود.',
+  'web.service_delete_confirm_check':
+    'تأیید می‌کنم که این سرویس حذف شود و این مبلغ به کیف پول مشتری بازگردد.',
+  'web.service_delete_refund_submit': 'حذف و بازگشت وجه',
+  'web.service_delete_result_pending':
+    'حذف سرویس ثبت شد. پس از تأیید حذف از پنل، مبلغ به کیف پول مشتری واریز می‌شود.',
+  'web.service_delete_result_blocked':
+    'نتیجه حذف از پنل نامشخص است؛ بازگشت وجه تا روشن شدن وضعیت حذف معلق است و هیچ مبلغی واریز نشده است.',
+  'web.service_delete_result_completed': 'سرویس حذف شد و مبلغ به کیف پول مشتری واریز شد.',
+  'web.service_delete_result_failed':
+    'حذف سرویس از پنل ناموفق بود؛ هیچ مبلغی واریز نشد و سرویس سر جایش است.',
+  'web.service_delete_result_reference': 'شناسه پیگیری:',
+  'web.service_delete_close': 'بستن',
+  'web.service_refund_origin_operator': 'حذف و بازگشت وجه توسط مدیر',
 
   // --- Units ---------------------------------------------------------------
   'web.unit_seconds': 'ثانیه',
@@ -3671,6 +3760,31 @@ export const WEB_FA = {
   'web.setting_bot_inline_buttons': 'سبک دکمه‌های شیشه‌ای ربات',
   'web.setting_bot_inline_buttons_desc':
     'رنگ (سبک) هر دکمهٔ شیشه‌ای مشتری؛ در صفحهٔ «دکمه‌های ربات»، بخش «دکمه‌های شیشه‌ای ربات» ویرایش می‌شود.',
+  'web.setting_bot_category_colors': 'رنگ دکمهٔ دسته‌بندی‌ها',
+  'web.setting_bot_category_colors_desc':
+    'رنگ دکمهٔ هر دسته‌بندی محصول در فروشگاه ربات؛ در صفحهٔ «🎨 ظاهر ربات»، بخش «رنگ دسته‌بندی‌ها» ویرایش می‌شود.',
+  // UX Batch 01, item 2: «رنگ دسته‌بندی‌ها» on the appearance page.
+  'web.cc_title': 'رنگ دسته‌بندی‌ها',
+  'web.cc_hint':
+    'رنگ دکمهٔ هر دسته‌بندی در فروشگاه ربات. دسته‌بندی تازه خودکار اینجا می‌آید؛ تا رنگی برایش انتخاب نشود، رنگ «دکمهٔ دسته‌بندی» در صفحهٔ «دکمه‌های ربات» را می‌گیرد.',
+  'web.cc_inherit': 'پیش‌فرض دسته‌ها ({fallback})',
+  'web.cc_color': 'رنگ',
+  'web.cc_preview': 'پیش‌نمایش',
+  'web.cc_inactive': 'غیرفعال — در ربات نمایش داده نمی‌شود',
+  'web.cc_hidden': 'پنهان — در ربات نمایش داده نمی‌شود',
+  'web.cc_kept_note': 'رنگ این دسته نگه داشته می‌شود و با فعال شدن دوباره به کار می‌رود.',
+  'web.cc_empty': 'هنوز دسته‌بندی‌ای ساخته نشده است.',
+  'web.cc_categories_denied': 'برای دیدن دسته‌بندی‌ها دسترسی catalog.view لازم است.',
+  'web.cc_denied_edit': 'برای تغییر رنگ دسته‌بندی‌ها دسترسی settings.edit لازم است.',
+  'web.cc_stored_invalid':
+    'مقدار ذخیره‌شدهٔ رنگ دسته‌بندی‌ها با این نسخه خوانا نیست؛ همه با رنگ پیش‌فرض نمایش داده می‌شوند. با ذخیرهٔ دوباره اصلاح می‌شود.',
+  'web.cc_changed_count': '{n} دسته رنگ اختصاصی دارد.',
+  'web.cc_save': 'ذخیرهٔ رنگ دسته‌ها',
+  'web.cc_reset': 'همه پیش‌فرض',
+  'web.cc_unsaved': 'تغییرات رنگ دسته‌ها ذخیره نشده است.',
+  'web.cc_saved': 'رنگ دسته‌بندی‌ها ذخیره شد.',
+  'web.cc_unchanged': 'رنگ دسته‌ها تغییری نکرده بود.',
+  'web.cc_failed': 'ذخیرهٔ رنگ دسته‌بندی‌ها انجام نشد.',
   // Owner spec §6: «دکمه‌های شیشه‌ای ربات» — the inline button registry's section.
   'web.ib_title': 'دکمه‌های شیشه‌ای ربات',
   'web.ib_hint':

@@ -32,6 +32,7 @@ const request = (overrides: Record<string, unknown> = {}) => ({
   paymentId: '019270ab-cdef-7012-8345-6789abcdef01',
   orderId: '019280ab-cdef-7012-8345-6789abcdef01',
   state: 'OPEN',
+  origin: 'CUSTOMER',
   reason: 'سرعت مناسب نبود',
   principalMinor: '250000',
   remainingMinor: '250000',

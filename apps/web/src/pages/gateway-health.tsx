@@ -11,6 +11,7 @@ import type {
 import { fetchGatewayHealth } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { CARD_TO_CARD_PATH, paymentMethodPath } from '../payment-method-routes';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ChipGroup } from './commerce-parts';
 import { PaymentGatewaysPage } from './payment-gateways';
@@ -42,7 +43,7 @@ import {
 
 type GatewaysTab = 'config' | 'health';
 
-const PROVIDER_LABELS: Readonly<Record<PaymentGatewayProvider, WebKey>> = {
+export const PROVIDER_LABELS: Readonly<Record<PaymentGatewayProvider, WebKey>> = {
   MANUAL_TRANSFER: 'web.payment_gateway_provider_manual_transfer',
   TONPAYS: 'web.payment_gateway_provider_tonpays',
   TONPAYS_TELEGRAM: 'web.payment_gateway_provider_tonpays_telegram',
@@ -127,16 +128,19 @@ function HealthCard({
   view,
   range,
   onLink,
+  single,
 }: {
   view: GatewayHealthView;
   /** The range the card's counts were read over; every link carries it. */
   range: ReportRange | null;
   onLink: ReturnType<typeof useLinkHandler>;
+  /** Drawn on the route's own view, where a link back to that view would go nowhere. */
+  single: boolean;
 }) {
   const a = view.answers;
   return (
     <Card
-      title={t(PROVIDER_LABELS[view.provider])}
+      title={single ? t('web.payment_method_health') : t(PROVIDER_LABELS[view.provider])}
       actions={<Badge tone={STATE_TONES[view.state]}>{t(STATE_LABELS[view.state])}</Badge>}
     >
       <KV
@@ -275,9 +279,12 @@ function HealthCard({
       )}
       <p className="muted small">{t('web.gateway_health_answers_hint')}</p>
       <div className="form-actions">
-        <a href="/payment-gateways" onClick={onLink}>
-          {t('web.gateway_health_open_config')}
-        </a>
+        {/* The route's OWN view (item 8), not the top of a page listing every route. */}
+        {!single && (
+          <a href={paymentMethodPath(view.provider)} onClick={onLink}>
+            {t('web.gateway_health_open_config')}
+          </a>
+        )}
         {/* The route's payments only for a viewer who may read them (Codex review of #160). */}
         {view.queues !== null && (
           <a href={opsLinkFor(view.provider, range)} onClick={onLink}>
@@ -289,7 +296,16 @@ function HealthCard({
   );
 }
 
-export function GatewayHealthPanel({ route, denied }: { route: Route; denied: boolean }) {
+export function GatewayHealthPanel({
+  route,
+  denied,
+  provider,
+}: {
+  route: Route;
+  denied: boolean;
+  /** One route's health, on that route's own view; every route's when unset. */
+  provider?: PaymentGatewayProvider;
+}) {
   const onLink = useLinkHandler();
   const range = healthRangeOf(route.query.get('range'));
   const health = useQuery({
@@ -297,6 +313,13 @@ export function GatewayHealthPanel({ route, denied }: { route: Route; denied: bo
     queryFn: () => fetchGatewayHealth(range === null ? {} : { range }),
     enabled: !denied,
   });
+  // The same one report for both, filtered here: no second endpoint to disagree with it.
+  const shown =
+    health.data === undefined
+      ? []
+      : provider === undefined
+        ? health.data.gateways
+        : health.data.gateways.filter((view) => view.provider === provider);
   return (
     <>
       <p className="muted small">{t('web.gateway_health_intro')}</p>
@@ -312,15 +335,21 @@ export function GatewayHealthPanel({ route, denied }: { route: Route; denied: bo
         />
       </div>
       <StateSwitch query={health} denied={denied}>
-        {health.data === undefined ? null : health.data.gateways.length === 0 ? (
+        {health.data === undefined ? null : shown.length === 0 ? (
           <Empty title={t('web.gateway_health_empty')} />
         ) : (
           <>
             {health.data.withheld.includes('PAYMENTS') && (
               <Banner tone="info">{t('web.gateway_health_queues_withheld')}</Banner>
             )}
-            {health.data.gateways.map((view) => (
-              <HealthCard key={view.provider} view={view} range={range} onLink={onLink} />
+            {shown.map((view) => (
+              <HealthCard
+                key={view.provider}
+                view={view}
+                range={range}
+                onLink={onLink}
+                single={provider !== undefined}
+              />
             ))}
           </>
         )}
@@ -337,11 +366,38 @@ export function PaymentGatewaysTabbedPage({
   route,
   denied,
   mayEdit,
+  mayViewCards = false,
 }: {
   route: Route;
   denied: boolean;
   mayEdit: boolean;
+  /**
+   * Item 7: the card-to-card cards live on that method's own view, and an operator who may
+   * read or manage the cards but not the routes (`payments.accounts.*` without
+   * `payments.gateways.view`) is sent there from the list — never shown a refusal with no
+   * way on to the part of the page they ARE allowed.
+   */
+  mayViewCards?: boolean;
 }) {
+  const onLink = useLinkHandler();
+  if (denied && mayViewCards) {
+    return (
+      <>
+        <PageHead
+          title={t('web.payment_gateways_title')}
+          subtitle={t('web.payment_gateways_subtitle')}
+        />
+        <Card title={t('web.payment_gateway_provider_manual_transfer')}>
+          <p className="muted small">{t('web.payment_method_cards_only_hint')}</p>
+          <div className="form-actions">
+            <a className="btn primary" href={CARD_TO_CARD_PATH} onClick={onLink}>
+              {t('web.payment_method_open')}
+            </a>
+          </div>
+        </Card>
+      </>
+    );
+  }
   const tab: GatewaysTab = route.query.get('tab') === 'health' ? 'health' : 'config';
   const tabs = (
     <Tabs<GatewaysTab>

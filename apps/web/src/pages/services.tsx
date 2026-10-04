@@ -4,7 +4,6 @@ import {
   SERVICE_DELIVERY_STATES,
   SERVICE_OPERATOR_ACTIONS,
   SERVICE_STATES,
-  SERVICE_TERMINATE_CONFIRMATION,
   UNLIMITED_TRAFFIC_BYTES,
   type OperationState,
   type OperationType,
@@ -44,8 +43,6 @@ import {
   CursorPager,
   DataTable,
   Empty,
-  Field,
-  Input,
   KV,
   Ltr,
   Num,
@@ -58,6 +55,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import { ServiceDeleteModal } from './service-delete-modal';
 import {
   OpenServiceRefundRequestsCard,
   ServiceRefundRequestsCard,
@@ -697,21 +695,29 @@ function ActionNotes({
   );
 }
 
-/** Terminate, isolated: its own permission, its own blocker, its own typed phrase. */
+/**
+ * Terminate, isolated: its own permission, its own blocker — and, since item 11, a modal
+ * that offers «فقط حذف سرویس» (the typed phrase, as before) or «حذف سرویس و بازگشت وجه».
+ */
 function TerminateCard({
   entry,
+  serviceId,
+  serviceUsername,
   mayTerminate,
+  mayRefund,
   act,
-  phrase,
-  setPhrase,
+  open,
+  setOpen,
 }: {
   entry: ServiceActionAvailability;
+  serviceId: string;
+  serviceUsername: string;
   mayTerminate: boolean;
+  mayRefund: boolean;
   act: ServiceAct;
-  phrase: string;
-  setPhrase: (next: string) => void;
+  open: boolean;
+  setOpen: (next: boolean) => void;
 }) {
-  const phraseMatches = phrase.trim() === SERVICE_TERMINATE_CONFIRMATION;
   return (
     <Card tone="danger" title={t('web.service_terminate_title')}>
       <p className="muted small">{t('web.service_terminate_danger')}</p>
@@ -720,39 +726,24 @@ function TerminateCard({
       ) : !entry.available && entry.blocker !== null ? (
         <p className="muted small">{t(BLOCKER_LABELS[entry.blocker])}</p>
       ) : (
-        <div className="ca-terminate">
-          <Field
-            label={t('web.service_terminate_confirm_label')}
-            htmlFor="service-terminate-phrase"
-            {...(phrase !== '' && !phraseMatches
-              ? { error: t('web.service_terminate_confirm_wrong') }
-              : {})}
-          >
-            <span className="ca-phrase">
-              <Ltr>{SERVICE_TERMINATE_CONFIRMATION}</Ltr>
-            </span>
-            <Input
-              id="service-terminate-phrase"
-              type="text"
-              value={phrase}
-              dir="ltr"
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={phrase !== '' && !phraseMatches}
-              onChange={(event) => setPhrase(event.currentTarget.value)}
-            />
-          </Field>
+        <>
           <div className="form-actions">
-            <Button
-              variant="danger-solid"
-              icon="trash"
-              disabled={!phraseMatches || act.isPending}
-              onClick={() => act.mutate({ action: 'TERMINATE', confirm: phrase })}
-            >
-              {t('web.service_terminate_button')}
+            <Button variant="danger" icon="trash" onClick={() => setOpen(true)}>
+              {t('web.service_delete_open')}
             </Button>
           </div>
-        </div>
+          <ServiceDeleteModal
+            open={open}
+            onClose={() => setOpen(false)}
+            serviceId={serviceId}
+            serviceUsername={serviceUsername}
+            mayRefund={mayRefund}
+            deleteOnly={{
+              pending: act.isPending,
+              run: (phrase) => act.mutate({ action: 'TERMINATE', confirm: phrase }),
+            }}
+          />
+        </>
       )}
     </Card>
   );
@@ -835,8 +826,8 @@ export function ServiceDetailPage({
   // Program §13 (Codex review of #157): an operation's end re-reads the service it changed.
   useRefreshOnOperationChange(id, operations.data?.operations);
 
-  const [phrase, setPhrase] = useState('');
-  const act = useServiceAction(id, refresh, () => setPhrase(''));
+  const [deleting, setDeleting] = useState(false);
+  const act = useServiceAction(id, refresh, () => setDeleting(false));
 
   /*
    * The refund requests are drawn whatever the service query says: a finance
@@ -949,10 +940,13 @@ export function ServiceDetailPage({
               return terminate === undefined ? null : (
                 <TerminateCard
                   entry={terminate}
+                  serviceId={row.id}
+                  serviceUsername={row.providerUsername}
                   mayTerminate={mayTerminate}
+                  mayRefund={mayDecideRefundRequests}
                   act={act}
-                  phrase={phrase}
-                  setPhrase={setPhrase}
+                  open={deleting}
+                  setOpen={setDeleting}
                 />
               );
             })()}

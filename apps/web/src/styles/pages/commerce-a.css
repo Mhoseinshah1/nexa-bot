@@ -160,10 +160,28 @@
   font-weight: 600;
   color: var(--danger);
 }
-.ca-terminate {
+/* Item 11: the delete modal — two options, then the amount, the summary and the result. */
+.ca-delete-modal {
+  display: grid;
+  gap: 12px;
+}
+.ca-delete-options {
   display: grid;
   gap: 10px;
-  max-width: 420px;
+}
+.ca-delete-options .radio {
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+}
+.ca-delete-options .radio input {
+  margin-top: 3px;
+}
+.ca-delete-hint {
+  display: block;
+  margin-top: 2px;
 }
 
 /* A refund request's decision: approve (destructive) beside reject. */
