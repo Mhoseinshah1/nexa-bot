@@ -19,6 +19,7 @@ import {
   Badge,
   Card,
   ChipDivider,
+  CopyButton,
   CursorPager,
   DataTable,
   Disclosure,
@@ -254,40 +255,26 @@ export function AuditLogPage({
     {
       key: 'actor',
       header: t('web.audit_col_actor'),
-      render: (row) => (
-        <span className="cell-main">
-          {row.actorId === null ? (
-            <span>{row.actorLabel ?? t(ACTOR_LABELS[row.actorType])}</span>
-          ) : (
-            <button
-              type="button"
-              className="link"
-              title={t('web.audit_filter_by_actor')}
-              onClick={() => setQuery(route, 'actor', row.actorId)}
-            >
-              <bdi>{row.actorLabel ?? row.actorId}</bdi>
-            </button>
-          )}
-          <span className="muted small">{t(ACTOR_LABELS[row.actorType])}</span>
-        </span>
-      ),
+      render: (row) => <ActorCell row={row} route={route} />,
     },
     {
       key: 'action',
       header: t('web.audit_col_action'),
       wrap: true,
       render: (row) => (
-        <span className="cell-main">
+        <span className="cell-main audit-cell">
           <button
             type="button"
             className="link audit-code"
             title={t('web.audit_filter_by_action')}
             onClick={() => setQuery(route, 'action', row.action)}
           >
-            <Ltr>{row.action}</Ltr>
+            <span className="clamp-2 audit-action" dir="ltr" title={row.action}>
+              <Ltr>{row.action}</Ltr>
+            </span>
           </button>
           {row.reason !== null && row.reason !== '' && (
-            <span className="muted small">
+            <span className="muted small audit-reason">
               {t('web.audit_reason')} <bdi>{row.reason}</bdi>
             </span>
           )}
@@ -543,6 +530,83 @@ export function AuditLogPage({
   );
 }
 
+/** Actors whose label is a machine identifier, never a person's name. */
+const TECHNICAL_ACTORS: ReadonlySet<ActorType> = new Set(['SYSTEM_JOB', 'API', 'PROVIDER_SYNC']);
+
+/**
+ * Longer than this, a label is drawn in the bounded, two-line column. Shorter labels keep
+ * their natural width, so a page of `owner` rows is as narrow as it was (issue 15 review).
+ */
+const LONG_ACTOR_LABEL = 24;
+
+/** How an actor label is drawn: as a technical id or a name, and bounded or natural. */
+export function actorLabelStyle(
+  actorType: ActorType,
+  label: string,
+): { technical: boolean; long: boolean } {
+  return {
+    technical: TECHNICAL_ACTORS.has(actorType) || label.startsWith('job:'),
+    long: label.length > LONG_ACTOR_LABEL,
+  };
+}
+
+/**
+ * Who acted. A job's label is a long unbroken id (`job:telegram-update:<bot>:<update>`), so
+ * a LONG value wraps anywhere and is CLAMPED to two lines inside a bounded column (issue 15) —
+ * drawn short, never cut: the element still holds the whole value, its `title` shows it, and
+ * the copy button beside it copies it whole.
+ *
+ * A technical id is `ltr mono`, so its digits are the Latin ones Copy copies, not the body
+ * font's Persian shapes. A person's label stays in the UI font inside a `bdi`, which isolates
+ * it and lets a Persian name resolve its own direction. A short human label is drawn exactly
+ * as before — no floor, no copy button — so it neither widens nor heightens the row.
+ */
+function ActorCell({ row, route }: { row: AuditLogEntry; route: Route }) {
+  const shown = row.actorLabel ?? row.actorId;
+  const style = shown === null ? null : actorLabelStyle(row.actorType, shown);
+  const bounded = style?.long === true ? 'clamp-2 audit-id' : undefined;
+  const title = style?.long === true ? (shown ?? undefined) : undefined;
+  const value =
+    shown === null ? null : style?.technical === true ? (
+      <span className={bounded === undefined ? 'ltr mono' : `ltr mono ${bounded}`} title={title}>
+        {shown}
+      </span>
+    ) : (
+      <bdi className={bounded} title={title}>
+        {shown}
+      </bdi>
+    );
+  const control =
+    row.actorId === null ? (
+      (value ?? <span>{t(ACTOR_LABELS[row.actorType])}</span>)
+    ) : (
+      <button
+        type="button"
+        className="link"
+        title={t('web.audit_filter_by_actor')}
+        onClick={() => setQuery(route, 'actor', row.actorId)}
+      >
+        {value}
+      </button>
+    );
+  // Only a copyable label gets the row beside its copy button: the wrapper's own line box
+  // made every short row 2px taller in Chromium, so a short label keeps the old structure.
+  const copyable = shown !== null && (style?.technical === true || style?.long === true);
+  return (
+    <span className="cell-main audit-cell">
+      {copyable && shown !== null ? (
+        <span className="audit-actor">
+          {control}
+          <CopyButton value={shown} label={t('web.audit_copy_actor')} />
+        </span>
+      ) : (
+        control
+      )}
+      <span className="muted small">{t(ACTOR_LABELS[row.actorType])}</span>
+    </span>
+  );
+}
+
 /**
  * The row's entity: its type, a link to it where the server says one exists, and a button
  * that narrows the log to it. The link targets are the server's (`links`), never built from
@@ -690,7 +754,7 @@ function ChangesCell({ row }: { row: AuditLogEntry }) {
           ))}
         </tbody>
       </table>
-      <p className="muted small">
+      <p className="muted small audit-correlation">
         {t('web.audit_correlation')} <Ltr>{row.correlationId}</Ltr>
       </p>
     </Disclosure>

@@ -1119,6 +1119,45 @@ form.set-row > * + * {
 .audit-code {
   font-size: var(--fs-ui);
 }
+/*
+ * A LONG actor label (a job's `job:telegram-update:…`) is clamped to two lines
+ * in a bounded column instead of widening the table: a floor so the table's
+ * auto layout cannot squeeze it to a character a line, a ceiling so it cannot
+ * push the other columns off the card. The page adds this class only to a long
+ * label — a floor on a short one widened every page of `owner` rows.
+ */
+.audit-id {
+  min-width: 10rem;
+  max-width: 18rem;
+}
+/*
+ * An action name is clamped too, but sized to itself: no floor, so a short
+ * `settings.update` stays at the start of its cell, under its header.
+ */
+.audit-action {
+  width: fit-content;
+  max-width: 18rem;
+}
+/*
+ * The filter link in the actor and action cells starts its cell. A button in the
+ * cell's flex column is otherwise stretched to the column and CENTRES its text,
+ * so a short `owner` beside a long job id floated ~80px from the start.
+ */
+.audit-cell > .link {
+  align-self: flex-start;
+  text-align: start;
+}
+.audit-actor {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+.audit-reason,
+.audit-correlation {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .audit-badges,
 .audit-links {
   display: inline-flex;

@@ -167,6 +167,49 @@ describe('spacing and wrapping the kit leaves to its containers', () => {
     expect(rule).toMatch(/flex-wrap:\s*wrap/);
     expect(rule).toMatch(/max-width:\s*var\(--row-actions-wrap-w\)/);
   });
+
+  /*
+   * Issue 15: `job:telegram-update:<uuid>:<n>` held on one line widened the
+   * audit log past its card. The page emits `clamp-2 audit-id` on the value
+   * (asserted in `audit-log.test.tsx`); these are the rules that make that
+   * class wrap an unbroken id, stop at two lines, and stay in a bounded column.
+   */
+  it('wraps an unbroken id anywhere and clamps it to two lines', () => {
+    const clamp = block('.clamp-2');
+    expect(clamp).toMatch(/-webkit-line-clamp:\s*2/);
+    expect(clamp).toMatch(/-webkit-box-orient:\s*vertical/);
+    expect(clamp).toMatch(/display:\s*-webkit-box/);
+    expect(clamp).toMatch(/overflow:\s*hidden/);
+    // The table's cells are `nowrap`; the clamp has to undo that or it never wraps.
+    expect(clamp).toMatch(/white-space:\s*normal/);
+    // An id has no space to break at: `break-word` would leave it one line wide.
+    expect(clamp).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(clamp).toMatch(/line-height:\s*1\.\d+/);
+  });
+
+  /*
+   * The page puts `audit-id` only on a LONG actor label. Its floor stops auto
+   * layout squeezing the id to a character a line; on every short label it
+   * widened a page of `owner` rows past the card at 1280px (review of #191).
+   * The action clamp is sized to itself — `fit-content`, no floor — so a short
+   * `settings.update` stays at the start of its cell under its header.
+   */
+  it("bounds the audit log's id column with a floor and a ceiling", () => {
+    const id = block('.audit-id');
+    expect(id).toMatch(/max-width:\s*18rem/);
+    expect(id).toMatch(/min-width:\s*10rem/);
+    const action = block('.audit-action');
+    expect(action).toMatch(/max-width:\s*18rem/);
+    expect(action).toMatch(/width:\s*fit-content/);
+    expect(action, 'a floor pushes a short action off the cell start').not.toMatch(/min-width/);
+    // A stretched button centres its text: `owner` floated ~80px from its cell start.
+    const link = block('.audit-cell > .link');
+    expect(link).toMatch(/align-self:\s*flex-start/);
+    expect(link).toMatch(/text-align:\s*start/);
+    const prose = ruleListing('.audit-reason');
+    expect(prose).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(ruleListing('.audit-correlation')).toBe(prose);
+  });
 });
 
 /**
