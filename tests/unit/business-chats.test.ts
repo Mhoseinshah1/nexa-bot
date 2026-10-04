@@ -170,6 +170,7 @@ describe('reading business messages and deletions', () => {
       editedAt: null,
       kind: 'TEXT',
       text: 'hello',
+      photo: null,
     });
   });
 
