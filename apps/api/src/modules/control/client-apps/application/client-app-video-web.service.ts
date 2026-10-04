@@ -138,8 +138,9 @@ export class ClientAppVideoWebService {
   }
 
   /**
-   * Opens the prompt for one bot. Supersedes whatever prompt this administrator had open on
-   * that bot — from the web or from Telegram — exactly as a second «تنظیم ویدیو» tap does.
+   * Opens the prompt for one bot. Supersedes this administrator's open VIDEO prompt on that
+   * bot — from the web or from Telegram — and nothing else: an amount or reason they are
+   * typing in Telegram is left open (PR #185 review).
    */
   async open(
     scope: TenantContext,
@@ -199,6 +200,9 @@ export class ClientAppVideoWebService {
             purpose: 'CLIENT_APP_VIDEO',
             openedAt: now,
             expiresAt: new Date(now.getTime() + CLIENT_APP_VIDEO_CAPTURE_TTL_MS),
+            // Only an earlier video prompt: an amount or reason the administrator is typing
+            // in Telegram stays open (PR #185 review).
+            supersede: 'SAME_PURPOSE',
           },
           tx,
         );

@@ -17,12 +17,15 @@ the Telegram prompt already has hold for the web one, from the same code:
   the server's clock. Nothing lives in a browser or in process memory.
 - **Single use.** The first accepted video closes it `CONFIRMED`; a further video finds no
   open prompt. A redelivered update answers from the idempotency store.
-- **One at a time.** Opening a prompt supersedes this administrator's open prompt on that bot,
-  from either surface (the one-open-prompt partial index and the per-administrator lock).
+- **One at a time.** Opening from the web supersedes this administrator's open VIDEO prompt
+  on that bot, from either surface, and nothing else: an amount or reason they are typing in
+  Telegram stays open (PR #185 review). The video prompt has its own one-open partial index
+  (`admin_amount_captures_open_video_key`, migration 0195) beside the one the typed prompts
+  share; a Telegram tap still closes every open prompt, as it always has.
 - **Bound to tenant + admin + target.** The bot resolves the sender and offers the video only
   to that administrator's open prompt on that bot (`ClientAppVideoService.receiveVideo`).
 
-No migration: the table already carries everything the web needs.
+The only migration (0195) splits the one-open index so the video prompt has its own slot.
 
 ## How the bot knows the video is that administrator's
 

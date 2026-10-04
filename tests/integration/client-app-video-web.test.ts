@@ -6,13 +6,17 @@ import {
   type ClientAppInput,
 } from '@nexa/contracts';
 import { adminActorFor, createAdmin, SEED_IDS, tenantA, tenantB } from './harness';
+import { ADMIN_APP_CALLBACK_PREFIX } from '../../apps/api/src/surfaces/telegram/admin-tutorial-video';
+import { DrizzleAdminAmountCaptureRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-admin-amount-capture.repository';
 import {
   BOT_A,
   TG,
   bindNewAdmin,
   receiptFixture,
   rows,
+  signalledTransfer,
   systemActor,
+  tap,
   type ReceiptFixture,
 } from './receipt-review-fixture';
 
@@ -281,6 +285,48 @@ describe('the Web Admin’s «add video from Telegram» flow', () => {
       'client_app.video_session_open',
       'client_app.video_session_expired',
     ]);
+  });
+
+  it('opening from the web leaves an amount the administrator is typing in Telegram open; a Telegram tap still supersedes it', async () => {
+    const payment = await signalledTransfer(f, key('transfer'));
+    const repository = new DrizzleAdminAmountCaptureRepository(f.ctx.container.database.db);
+    const now = new Date();
+    const money = await f.ctx.container.database.db.transaction((tx) =>
+      repository.open(
+        tenantA,
+        {
+          id: f.ctx.container.ids.uuid(),
+          botInstanceId: BOT_A,
+          adminId: f.ownerId,
+          paymentId: payment,
+          purpose: 'RECEIPT_CREDIT_AMOUNT',
+          openedAt: now,
+          expiresAt: new Date(now.getTime() + 5 * 60_000),
+        },
+        { tx, scope: tenantA },
+      ),
+    );
+    const moneyState = () =>
+      rows<{ close_reason: string | null }>(
+        f,
+        sql`SELECT close_reason FROM admin_amount_captures WHERE id = ${money.id}`,
+      );
+
+    const session = await open();
+    expect(session.state).toBe('OPEN');
+    expect(await moneyState()).toEqual([{ close_reason: null }]);
+    // Both prompts read their own messages: the video completes the video prompt only.
+    expect((await sendVideo(TG.owner, 'uniq-1')).replyKey).toBe('bot.admin.app_video_saved');
+    expect(await moneyState()).toEqual([{ close_reason: null }]);
+    // A second web open replaces the web video prompt, and still not the amount.
+    const second = await open();
+    expect(second.state).toBe('OPEN');
+    expect(await moneyState()).toEqual([{ close_reason: null }]);
+
+    // Unchanged: a Telegram «تنظیم ویدیو» tap supersedes every open prompt, the amount too.
+    await tap(f, `${ADMIN_APP_CALLBACK_PREFIX}s:${appId}`, TG.owner);
+    expect(await moneyState()).toEqual([{ close_reason: 'SUPERSEDED' }]);
+    expect((await web().read(tenantA, f.owner, appId, second.sessionId)).state).toBe('SUPERSEDED');
   });
 
   it('refuses the wrong sender, the wrong media and a video sent before the button', async () => {
