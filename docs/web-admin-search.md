@@ -64,6 +64,62 @@ picker sends nothing and names the key; the customer page's "register as reselle
 still hands a customer over by id. Pinned by
 `tests/integration/reseller-customer-picker.test.ts` and `tests/web/resellers.test.tsx`.
 
+### Searching as you type (UX batch 02, issue 13)
+
+`/users` applies its box by itself: `ListSearchBox` with `autoApply`
+(`apps/web/src/ui/list-search.tsx`). The draft is applied once it has been still for
+`LIST_SEARCH_DEBOUNCE_MS` (400 ms — the app had no debounce convention; the owner asked for
+300–500 ms). A paste is the same single change and takes the same path.
+
+- **One request per burst.** Each keystroke restarts the wait; nothing is scheduled while the
+  draft already reads as the applied search, so Enter (or the button, which stays) applies at
+  once and the pending wait does not send it again.
+- **Trimmed, never empty.** The applied value is `classifyListSearch`'s reading: surrounding
+  whitespace is dropped, and an empty or whitespace-only box applies "no search" — no `q` at
+  all, never `q=` (a 400). The box keeps what was typed, trailing space included, so a pause
+  mid-name does not eat the space under the caret.
+- **No stale answer.** The applied text is in the URL and in the page's query key
+  (`['customers', signature, cursor]`), so an older, slower response lands in its own cache
+  entry and is never drawn under a newer search.
+- **Permissions unchanged.** Without `users.search` there is no box to apply; while the list
+  is refused (`users.view`) the box is hidden and applies nothing.
+- `/orders`, `/payments` and `/services` keep the explicit apply; `autoApply` is opt-in per page.
+
+Pinned by `tests/web/customer-search.test.tsx` (burst, paste, Telegram id, `@username`, empty,
+Enter, a slow older response, both permissions).
+
+### First and last activity (UX batch 02, issue 12)
+
+The two timestamp columns on `/users` (and on the customer page) were labelled «نخستین
+تماس» / «آخرین تماس» — "contact", which reads as a call or a support request. They render
+`firstSeenAt` / `lastSeenAt` from `customerSummarySchema`, which are `customers.first_seen_at`
+and `customers.last_seen_at`. Their writers, all of them:
+
+| writer                                                                                                 | `first_seen_at` | `last_seen_at`                        |
+| ------------------------------------------------------------------------------------------------------ | --------------- | ------------------------------------- |
+| `DrizzleCustomerRepository.resolve`, via `CustomerService.resolveFromUpdate`, from `BotRuntime.handle` | set on creation | `greatest(stored, now)` on every turn |
+| `DrizzleLegacyImporterRepository.insertIfAbsent`                                                       | the import time | the import time; never touches a row  |
+
+`BotRuntime.handle` runs for every update the webhook hands it: a `message` or a
+`callback_query` from a non-bot user (`telegramFromOf`) — every text, command and button
+press, not only `/start`. A replayed update does not bump it (idempotency), and `/ping` is the
+one stated exclusion (`webhook.controller.ts`). No operator action, payment callback or panel
+usage writes either column (a service's own `last_seen_at` is a different column on
+`services`).
+
+So they ARE the customer's activity in the bot, and are now labelled «اولین فعالیت» /
+«آخرین فعالیت», with a note under the list naming what counts. One precise mismatch is
+stated rather than hidden: for a customer brought over by the legacy importer, «اولین فعالیت»
+is the import time — the previous system's first contact is not recorded anywhere, and
+inventing one would be a fabricated fact. No new tracking was added. The Telegram admin
+bot's `bot.admin.customer_detail` default text still says «اولین تماس» / «آخرین تماس» (a
+shared catalogue template, tenant-overridable); only its placeholder labels in the template
+editor were renamed.
+
+Pinned by `tests/integration/telegram-customer-turn.test.ts` ("moves last_seen_at on an
+ordinary message and on a button press, never first_seen_at") and the label case in
+`tests/web/customer-search.test.tsx`.
+
 ## Why prefix, not infix — and not `pg_trgm`
 
 `pg_trgm` is available in the PostgreSQL image but **no migration installs it**, and adding an
