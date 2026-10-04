@@ -3312,3 +3312,30 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
   apart reliably. Both are read as `RATE_LIMITED`. The breaker opens after three, and the
   chain falls back, so this is fail-safe for customers. It may delay the operator learning
   that a cap was hit.
+
+- **OQ-TB-30 — Z.AI vision.** TB6 declares the Z.AI adapter **blind**. Its image input
+  belongs to the separate `glm-*v` models, and the following are unconfirmed from the build
+  session: whether a base64 `data:` URL is accepted in an `image_url` part, the per-image
+  size limit, and what a text model does with an image part. The adapter refuses a request
+  that carries an image without making a network call. Resolved by the opt-in acceptance
+  (`tb6-vision.md`, with `OQ-TB-20`): if a vision model is proven, its capability must
+  become per model, which means the adapter cannot keep one flag.
+- **OQ-TB-31 — vision is declared per adapter, not per model.** OpenAI's adapter declares
+  vision, but a text-only model id answers an image with a 4xx. That reads as
+  `INVALID_OUTPUT`, which stops the chain, so the draft is `FAILED`. This fails closed, but
+  the operator learns about it only from the failure code. Options: a per-model capability
+  table (which would need maintenance), or a test of the configured model's vision at
+  connection-test time.
+- **OQ-TB-32 — does `getFile` work on business-message media?** This is `tb0-audit.md` U6,
+  still open. If it does not, every customer image ends as `DOWNLOAD_FAILED`. A
+  latest-message image then hands off (the fail-closed rule), and nothing pretends. It must
+  be checked with a real business account before vision is offered to a tenant.
+- **OQ-TB-33 — images sent as documents.** Only Telegram `photo` messages carry a
+  reference. An image sent "as a file" is a `document` of kind `OTHER` and is never fetched.
+  Whether a `document` with an image MIME type and a size under the bound should be
+  accepted, still sniffed by magic bytes, is open.
+- **OQ-TB-34 — the image retention sweep has no index of its own.** The 30-day purge now
+  selects rows that still hold text **or** a photo reference. The partial index
+  `business_messages_retention_idx` covers `text IS NOT NULL` only, so a caption-less
+  photo is found by a scan bounded by tenant and `sent_at`. Add a matching partial index
+  if the purge shows up in query plans.

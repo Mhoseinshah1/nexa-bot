@@ -90,8 +90,9 @@ function recordingAdapter(provider: SupportAiProvider, vision: boolean): Recordi
       capabilities: {
         structuredOutput: true,
         vision,
-        maxImageBytes: vision ? 1_000_000 : 0,
-        imageMediaTypes: vision ? ['image/jpeg', 'image/png', 'image/webp'] : [],
+        // The blind stub lists types and a size on purpose: only the `vision` flag may decide.
+        maxImageBytes: 1_000_000,
+        imageMediaTypes: ['image/jpeg', 'image/png', 'image/webp'],
       },
       async generate(_credential, request) {
         recording.seen.push(request);
@@ -429,6 +430,35 @@ describe('Vision in Assist Mode (TB6)', () => {
       { mediaType: 'image/png', base64: PNG.toString('base64') },
     ]);
     expect(result).toMatchObject({ provider: 'ANTHROPIC', imagesSeen: 1 });
+  });
+
+  it('an image is PROCESSED only when the step that answered was given it', async () => {
+    await configure([
+      { provider: 'OPENAI', model: 'gpt' },
+      { provider: 'ZAI', model: 'glm' },
+    ]);
+    ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-ok' }));
+    await say(scopeA, BOT_A, { text: 'تصویر بالا را ببینید' });
+    // The vision primary saw the image and failed transiently; the blind fallback answered.
+    adapters.OPENAI.next = { outcome: 'TEMPORARY', code: 'openai.http_503' };
+    const result = await draft();
+    expect(allImages(adapters.OPENAI)).toHaveLength(1);
+    expect(allImages(adapters.ZAI)).toEqual([]);
+    expect(result).toMatchObject({ provider: 'ZAI', imagesSeen: 0, imagesUnseen: 1 });
+    expect(await jobs.imageOutcomes(scopeA, result.id)).toEqual([
+      expect.objectContaining({ outcome: 'SKIPPED', reason: 'NO_VISION_CAPABILITY' }),
+    ]);
+  });
+
+  it('an image ready for a chain that could not answer is NOT_ANSWERED', async () => {
+    await configure([{ provider: 'OPENAI', model: 'gpt' }]);
+    ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-ok' }));
+    adapters.OPENAI.next = { outcome: 'TIMEOUT' };
+    const result = await draft();
+    expect(result.state).toBe('FAILED');
+    expect(await jobs.imageOutcomes(scopeA, result.id)).toEqual([
+      expect.objectContaining({ outcome: 'SKIPPED', reason: 'NOT_ANSWERED' }),
+    ]);
   });
 
   it('vision off for the tenant: nothing fetched, and the latest image hands off', async () => {
