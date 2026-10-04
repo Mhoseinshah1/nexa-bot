@@ -315,6 +315,31 @@ describe('the report', () => {
     expect(md).toContain('| sumMinor | 12 |');
     expect(reportMarkdown({ ...report, synthetic: false })).not.toContain('SYNTHETIC');
   });
+
+  it('escapes every key and value that reaches Markdown, so a source value cannot add a row or markup', () => {
+    const hostile = 'a|b\n| injected | row |\n# heading `code` <script>x</script> [l](http://e)';
+    const md = reportMarkdown({
+      ...report,
+      sections: {
+        plan: { unmappedCodePanels: { [hostile]: 3, ok: 1 } },
+        list: [hostile],
+        rows: [{ [hostile]: hostile }],
+      },
+    });
+    const lines = md.split('\n');
+    // No line was injected: the hostile text stays inside its own cell or item.
+    expect(lines.some((l) => l.startsWith('| injected'))).toBe(false);
+    expect(lines.some((l) => l.startsWith('# heading'))).toBe(false);
+    expect(md).not.toContain('<script>');
+    expect(md).not.toContain('`code`');
+    expect(md).not.toContain('[l](');
+    // Every table row of the flat table has exactly two cells.
+    const cells = (l: string) => l.replace(/\\\|/gu, '').split('|').length - 2;
+    for (const l of lines.filter((x) => x.startsWith('| ') && x.includes('3 |'))) {
+      expect(cells(l), l).toBe(2);
+    }
+    expect(md).toContain('| ok | 1 |');
+  });
 });
 
 describe('the source DSN', () => {

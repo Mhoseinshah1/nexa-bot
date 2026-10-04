@@ -35,12 +35,30 @@ export function reportJson(report: LegacyImportReport): string {
   return `${JSON.stringify(report, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value), 2)}\n`;
 }
 
+/**
+ * Text made inert for a Markdown table cell, list item or heading. Report keys and values
+ * can come from the legacy source (a `code_panel`), so nothing may add a line, a row, a
+ * heading, a link, code, emphasis or HTML. One pass: a control or other invisible
+ * character becomes `\u{…}`; a backslash and every character that is syntax anywhere in a
+ * line — `` ` * [ ] < > | ~ `` — is backslash-escaped, and so is `_` where it could open or
+ * close emphasis (an intraword `_`, as in ADOPTION_ELIGIBLE, is inert in CommonMark). Every
+ * line the report writes starts with its own `| `, `- ` or `#… `, so line-start markers in
+ * a value (`#`, `-`, `1.`) cannot open a block once newlines are escaped.
+ */
+export function markdownText(text: string): string {
+  return text.replace(/\p{C}|[\\`*[\]<>|~]|(?<![\p{L}\p{N}])_|_(?![\p{L}\p{N}])/gu, (c) =>
+    /\p{C}/u.test(c) ? `\\u{${(c.codePointAt(0) ?? 0).toString(16)}}` : `\\${c}`,
+  );
+}
+
 function scalar(value: unknown): string {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'bigint') return value.toString();
-  if (typeof value === 'string') return value.replace(/\|/gu, '\\|');
+  if (typeof value === 'string') return markdownText(value);
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return JSON.stringify(value, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString() : v));
+  return markdownText(
+    JSON.stringify(value, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString() : v)),
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -49,6 +67,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function renderValue(name: string, value: unknown, depth: number, out: string[]): void {
   const heading = '#'.repeat(Math.min(6, depth + 2));
+  name = markdownText(name);
   if (Array.isArray(value)) {
     out.push(`${heading} ${name}`, '');
     if (value.length === 0) {
@@ -57,7 +76,10 @@ function renderValue(name: string, value: unknown, depth: number, out: string[])
     }
     if (value.every(isPlainObject)) {
       const columns = [...new Set(value.flatMap((row) => Object.keys(row)))];
-      out.push(`| ${columns.join(' | ')} |`, `| ${columns.map(() => '---').join(' | ')} |`);
+      out.push(
+        `| ${columns.map(markdownText).join(' | ')} |`,
+        `| ${columns.map(() => '---').join(' | ')} |`,
+      );
       for (const row of value) out.push(`| ${columns.map((c) => scalar(row[c])).join(' | ')} |`);
       out.push('');
       return;
@@ -71,7 +93,7 @@ function renderValue(name: string, value: unknown, depth: number, out: string[])
     out.push(`${heading} ${name}`, '');
     if (flat.length > 0) {
       out.push('| field | value |', '| --- | --- |');
-      for (const [k, v] of flat) out.push(`| ${k} | ${scalar(v)} |`);
+      for (const [k, v] of flat) out.push(`| ${markdownText(k)} | ${scalar(v)} |`);
       out.push('');
     }
     for (const [k, v] of nested) renderValue(k, v, depth + 1, out);

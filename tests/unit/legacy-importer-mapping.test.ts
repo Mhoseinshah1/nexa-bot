@@ -3,6 +3,7 @@ import {
   PANEL_MAPPING_FORMAT,
   PanelMappingRefused,
   parsePanelMapping,
+  INVALID_CODE_PANEL_KEY,
   unmappedCodePanels,
   validatePanelMappingAgainstTenant,
   validateProductMappingAgainstTenant,
@@ -152,5 +153,20 @@ describe('validation against the tenant', () => {
         unmappedCodePanels(['rp1', 'zzz', ' zzz ', null, '', 'tst', 'gone', 'yyy'], mapping),
       ),
     ).toEqual({ zzz: 2, yyy: 1 });
+  });
+
+  it('a source code that no mapping file could name is counted under one bounded placeholder', () => {
+    const counted = Object.fromEntries(
+      unmappedCodePanels(
+        ['zzz', 'x'.repeat(201), 'a\u0000b', 'two\nlines', 'tab\there', 'x'.repeat(200)],
+        mapping,
+      ),
+    );
+    expect(counted).toEqual({
+      zzz: 1,
+      [INVALID_CODE_PANEL_KEY]: 4,
+      ['x'.repeat(200)]: 1,
+    });
+    expect(INVALID_CODE_PANEL_KEY.length).toBeLessThanOrEqual(40);
   });
 });

@@ -223,10 +223,17 @@ export function unmappedCodePanels(
     if (code === '') continue;
     const { knownPanels, testPanels, missingPanels } = mapping.policy;
     if (knownPanels.has(code) || testPanels.has(code) || missingPanels.has(code)) continue;
-    out.set(code, (out.get(code) ?? 0) + 1);
+    // A source value becomes a report key only if a mapping file could name it (the same
+    // rule as the file's own codes: at most 200 characters, no control characters). Any
+    // other is counted under one bounded placeholder, never echoed.
+    const key = codePanel.safeParse(code).success ? code : INVALID_CODE_PANEL_KEY;
+    out.set(key, (out.get(key) ?? 0) + 1);
   }
   return out;
 }
+
+/** The report key that counts source `code_panel` values no mapping file could name. */
+export const INVALID_CODE_PANEL_KEY = '(invalid code_panel)';
 
 /**
  * Every product the file maps a legacy `code_product` to must be a product of THIS tenant.
