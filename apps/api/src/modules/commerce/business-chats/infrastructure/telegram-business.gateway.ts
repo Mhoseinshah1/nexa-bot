@@ -30,7 +30,15 @@ export class TelegramBusinessGateway implements BusinessTelegramGateway {
       return { outcome: 'UNAVAILABLE', errorCode: call.errorCode };
     }
     if (call.outcome === 'FAILED_PERMANENT') {
-      return { outcome: 'NOT_FOUND', errorCode: call.errorCode };
+      /*
+       * Only Telegram saying THIS CONNECTION is unknown or invalid is "not found" (TB1
+       * review S2). A 401 (a revoked or replaced token), a 403, or any other 400 is an
+       * answer about the request, not about the connection — and reading it as
+       * "disabled" would park a healthy connection where nothing re-reads it.
+       */
+      return isUnknownConnection(call.errorCode, call.errorMessage)
+        ? { outcome: 'NOT_FOUND', errorCode: call.errorCode }
+        : { outcome: 'UNAVAILABLE', errorCode: call.errorCode };
     }
     const report = parseBusinessConnection(call.connection);
     // A 2xx that is not a BusinessConnection is not an answer about this connection, and
@@ -65,4 +73,9 @@ export class TelegramBusinessGateway implements BusinessTelegramGateway {
     }
     return { outcome: 'FAILED_PERMANENT', errorCode: sent.errorCode };
   }
+}
+
+/** A 400 whose description names the business connection — the only "this id is gone". */
+export function isUnknownConnection(errorCode: string, errorMessage: string): boolean {
+  return errorCode === 'telegram.rejected.400' && /business[ _]?connection/iu.test(errorMessage);
 }

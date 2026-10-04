@@ -164,49 +164,76 @@ export class BusinessConnectionService {
 
         let connection: BusinessConnectionRecord;
         let change: AppliedBusinessConnection['change'];
-        if (before === null) {
-          connection = await this.deps.repository.insert(
-            scope,
-            {
-              id: this.deps.ids.uuid(),
-              botInstanceId: input.botInstanceId,
-              report: input.report,
-              now,
-            },
-            tx,
-          );
-          change = 'INSERTED';
-        } else if (sameFacts(before, input.report)) {
-          await this.deps.repository.confirm(scope, before.id, now, tx);
-          connection = { ...before, lastConfirmedAt: now };
-          change = 'CONFIRMED';
-        } else {
-          connection = await this.deps.repository.update(scope, before.id, input.report, now, tx);
-          change = 'UPDATED';
-        }
-
+        let superseded: readonly BusinessConnectionRecord[] = [];
         /*
-         * A NEW connection id for an owner replaces every older one of that owner on this
-         * bot (`OQ-TB-02`). Only an insert supersedes: a later report about an id that was
-         * already superseded leaves it superseded — it fails closed rather than handing
-         * the account back to a connection Telegram moved away from.
+         * `inserted: false` is a concurrent first report that lost the insert race (TB1
+         * review S1): the row exists, written by the winner, and THIS report's facts must
+         * still be applied to it — treating it as an insert would drop a later "disabled".
          */
-        const superseded =
-          change === 'INSERTED'
-            ? await this.deps.repository.supersedeOthers(
+        const fresh =
+          before === null
+            ? await this.deps.repository.insert(
                 scope,
                 {
+                  id: this.deps.ids.uuid(),
                   botInstanceId: input.botInstanceId,
-                  ownerTelegramUserId: input.report.ownerTelegramUserId,
-                  keepId: connection.id,
+                  report: input.report,
                   now,
                 },
                 tx,
               )
-            : [];
+            : null;
+        const prior = before ?? (fresh?.inserted === false ? fresh.record : null);
+        if (fresh?.inserted === true) {
+          connection = fresh.record;
+          change = 'INSERTED';
+          /*
+           * Supersession follows the connection's AGE, never the order reports arrive in
+           * (TB1 review B1): a late or redelivered report about an OLDER connection must not
+           * replace a newer one. A new row supersedes the owner's strictly older live rows;
+           * if the owner already has a strictly NEWER live row, the new row is itself
+           * superseded. Telegram's `date` — when the connection was established — is the one
+           * ordering it gives (`OQ-TB-02`). A later report about a superseded id leaves it
+           * superseded: it fails closed.
+           */
+          const newer = await this.deps.repository.hasNewerLive(
+            scope,
+            {
+              botInstanceId: input.botInstanceId,
+              ownerTelegramUserId: input.report.ownerTelegramUserId,
+              connectedAt: input.report.connectedAt,
+              excludeId: connection.id,
+            },
+            tx,
+          );
+          if (newer) {
+            connection = await this.deps.repository.markSuperseded(scope, connection.id, now, tx);
+          } else {
+            superseded = await this.deps.repository.supersedeOthers(
+              scope,
+              {
+                botInstanceId: input.botInstanceId,
+                ownerTelegramUserId: input.report.ownerTelegramUserId,
+                keepId: connection.id,
+                olderThan: input.report.connectedAt,
+                now,
+              },
+              tx,
+            );
+          }
+        } else if (prior !== null && sameFacts(prior, input.report)) {
+          await this.deps.repository.confirm(scope, prior.id, now, tx);
+          connection = { ...prior, lastConfirmedAt: now };
+          change = 'CONFIRMED';
+        } else if (prior !== null) {
+          connection = await this.deps.repository.update(scope, prior.id, input.report, now, tx);
+          change = 'UPDATED';
+        } else {
+          throw new Error('business connection: neither stored nor inserted.');
+        }
 
         const status = businessConnectionStatus(connection);
-        const beforeStatus = before === null ? null : businessConnectionStatus(before);
+        const beforeStatus = prior === null ? null : businessConnectionStatus(prior);
         if (change !== 'CONFIRMED') {
           await this.deps.audit.record(
             scope,
@@ -215,7 +242,7 @@ export class BusinessConnectionService {
               action: 'business_connection.report',
               entityType: 'TelegramBusinessConnection',
               entityId: connection.id,
-              before: before === null ? null : auditFacts(before),
+              before: prior === null ? null : auditFacts(prior),
               after: auditFacts(connection),
               result: 'SUCCESS',
             },

@@ -59,7 +59,7 @@ export async function handleBusinessUpdate(
     case 'CONNECTION': {
       const parsed = parseBusinessConnection(input.update.payload);
       if (parsed === null) {
-        await report('MALFORMED');
+        await report('MALFORMED').catch(() => undefined);
         return;
       }
       try {
@@ -78,7 +78,7 @@ export async function handleBusinessUpdate(
     case 'EDITED_MESSAGE': {
       const parsed = parseBusinessMessage(input.update.payload);
       if (parsed === null) {
-        await report('MALFORMED');
+        await report('MALFORMED').catch(() => undefined);
         return;
       }
       try {
@@ -91,14 +91,17 @@ export async function handleBusinessUpdate(
           message: parsed,
         });
       } catch (error) {
-        await report('MESSAGE_NOT_ROUTED', error);
+        // Guarded: a failed report must not turn a swallowed message failure into a non-2xx
+        // and an unbounded redelivery loop (TB1 review S3).
+        await report('MESSAGE_NOT_ROUTED', error).catch(() => undefined);
       }
       return;
     }
     case 'DELETED_MESSAGES': {
       // TB1 reads the deletion strictly and does nothing else: there is no stored message
       // text to purge until TB2 stores some. Malformed is still reported.
-      if (parseBusinessDeletion(input.update.payload) === null) await report('MALFORMED');
+      if (parseBusinessDeletion(input.update.payload) === null)
+        await report('MALFORMED').catch(() => undefined);
       return;
     }
   }

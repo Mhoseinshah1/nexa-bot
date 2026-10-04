@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { BusinessBotRight, ScopeContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -118,10 +118,10 @@ export class DrizzleBusinessConnectionRepository implements BusinessConnectionRe
       readonly now: Date;
     },
     tx: unknown,
-  ): Promise<BusinessConnectionRecord> {
+  ): Promise<{ readonly record: BusinessConnectionRecord; readonly inserted: boolean }> {
     const tenantId = requireTenantId(scope);
     const executor = executorOf(this.db, tx);
-    await executor
+    const created = await executor
       .insert(telegramBusinessConnections)
       .values({
         id: row.id,
@@ -142,12 +142,13 @@ export class DrizzleBusinessConnectionRepository implements BusinessConnectionRe
           telegramBusinessConnections.botInstanceId,
           telegramBusinessConnections.connectionId,
         ],
-      });
+      })
+      .returning({ id: telegramBusinessConnections.id });
     const stored = await this.lock(scope, row.botInstanceId, row.report.connectionId, tx);
     if (stored === null) {
       throw new Error('telegram_business_connections: the inserted row is not readable in scope.');
     }
-    return stored;
+    return { record: stored, inserted: created.length > 0 };
   }
 
   async update(
@@ -202,6 +203,7 @@ export class DrizzleBusinessConnectionRepository implements BusinessConnectionRe
       readonly botInstanceId: string;
       readonly ownerTelegramUserId: string;
       readonly keepId: string;
+      readonly olderThan: Date;
       readonly now: Date;
     },
     tx: unknown,
@@ -221,10 +223,66 @@ export class DrizzleBusinessConnectionRepository implements BusinessConnectionRe
           eq(telegramBusinessConnections.ownerTelegramUserId, input.ownerTelegramUserId),
           ne(telegramBusinessConnections.id, input.keepId),
           isNull(telegramBusinessConnections.supersededAt),
+          lt(telegramBusinessConnections.connectedAt, input.olderThan),
         ),
       )
       .returning();
     return rows.map(toRecord);
+  }
+
+  async hasNewerLive(
+    scope: ScopeContext,
+    input: {
+      readonly botInstanceId: string;
+      readonly ownerTelegramUserId: string;
+      readonly connectedAt: Date;
+      readonly excludeId: string;
+    },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .select({ id: telegramBusinessConnections.id })
+      .from(telegramBusinessConnections)
+      .where(
+        and(
+          eq(telegramBusinessConnections.tenantId, tenantId),
+          eq(telegramBusinessConnections.botInstanceId, input.botInstanceId),
+          eq(telegramBusinessConnections.ownerTelegramUserId, input.ownerTelegramUserId),
+          ne(telegramBusinessConnections.id, input.excludeId),
+          isNull(telegramBusinessConnections.supersededAt),
+          gt(telegramBusinessConnections.connectedAt, input.connectedAt),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async markSuperseded(
+    scope: ScopeContext,
+    id: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<BusinessConnectionRecord> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .update(telegramBusinessConnections)
+      .set({
+        supersededAt: now,
+        version: sql`${telegramBusinessConnections.version} + 1`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(telegramBusinessConnections.tenantId, tenantId),
+          eq(telegramBusinessConnections.id, id),
+        ),
+      )
+      .returning();
+    if (row === undefined) {
+      throw new Error('telegram_business_connections: the row vanished before its supersession.');
+    }
+    return toRecord(row);
   }
 
   async ownBotId(scope: ScopeContext, botInstanceId: string): Promise<string | null> {

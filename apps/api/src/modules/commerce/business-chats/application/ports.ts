@@ -53,6 +53,26 @@ export interface BusinessConnectionRepository {
       readonly now: Date;
     },
     tx: unknown,
+  ): Promise<{ readonly record: BusinessConnectionRecord; readonly inserted: boolean }>;
+
+  /** Whether the owner has a live (unsuperseded) row on this bot established after `connectedAt`. */
+  hasNewerLive(
+    scope: ScopeContext,
+    input: {
+      readonly botInstanceId: string;
+      readonly ownerTelegramUserId: string;
+      readonly connectedAt: Date;
+      readonly excludeId: string;
+    },
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /** Marks one row superseded and returns it. */
+  markSuperseded(
+    scope: ScopeContext,
+    id: string,
+    now: Date,
+    tx: unknown,
   ): Promise<BusinessConnectionRecord>;
 
   /** Rewrites the reported facts and advances `version`; returns the new row. */
@@ -68,8 +88,9 @@ export interface BusinessConnectionRepository {
   confirm(scope: ScopeContext, id: string, now: Date, tx: unknown): Promise<void>;
 
   /**
-   * Marks every OTHER live row of this owner on this bot superseded, returning them.
-   * `OQ-TB-02`: a new connection id for the same owner replaces the old one.
+   * Marks every OTHER live row of this owner on this bot established strictly before
+   * `olderThan` superseded, returning them. `OQ-TB-02`: a newer connection id for the same
+   * owner replaces the older ones — by connection age, never by arrival order.
    */
   supersedeOthers(
     scope: ScopeContext,
@@ -77,6 +98,7 @@ export interface BusinessConnectionRepository {
       readonly botInstanceId: string;
       readonly ownerTelegramUserId: string;
       readonly keepId: string;
+      readonly olderThan: Date;
       readonly now: Date;
     },
     tx: unknown,

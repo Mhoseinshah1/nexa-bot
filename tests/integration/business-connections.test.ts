@@ -201,7 +201,7 @@ describe('Telegram Business connections (TB1)', () => {
     const fresh = await service.applyReport(scopeA, actor(), {
       idempotencyKey: key('b'),
       botInstanceId: BOT,
-      report: report({ connectionId: 'conn-2' }),
+      report: report({ connectionId: 'conn-2', connectedAt: new Date('2026-10-02T00:00:00Z') }),
     });
     expect(fresh.status).toBe('ACTIVE');
     const repository = new DrizzleBusinessConnectionRepository(ctx.container.database.db);
@@ -219,6 +219,74 @@ describe('Telegram Business connections (TB1)', () => {
       report: report({ connectionId: 'conn-1', isEnabled: true }),
     });
     expect(late.status).toBe('SUPERSEDED');
+  });
+
+  // TB1 review B1: supersession follows connection AGE, never arrival order.
+  it('a late report about an OLDER connection never supersedes the newer one', async () => {
+    const newer = await service.applyReport(scopeA, actor(), {
+      idempotencyKey: key('b'),
+      botInstanceId: BOT,
+      report: report({ connectionId: 'conn-new', connectedAt: new Date('2026-10-03T00:00:00Z') }),
+    });
+    // The old connection's (redelivered, or fetched late) report arrives afterwards.
+    const older = await service.applyReport(scopeA, actor(), {
+      idempotencyKey: key('a'),
+      botInstanceId: BOT,
+      report: report({
+        connectionId: 'conn-old',
+        isEnabled: false,
+        connectedAt: new Date('2026-09-01T00:00:00Z'),
+      }),
+    });
+    expect(older.status).toBe('SUPERSEDED');
+    const repository = new DrizzleBusinessConnectionRepository(ctx.container.database.db);
+    const stillNewer = await repository.findById(scopeA, newer.connection.id);
+    expect(stillNewer?.supersededAt).toBeNull();
+    // A superseded report opens no condition: the operator has nothing to act on.
+    expect(await conditions()).toEqual([]);
+  });
+
+  // TB1 review S1: a concurrent first report that loses the insert race still applies its facts.
+  it('applies the facts of a first report that lost the insert race to the winner’s row', async () => {
+    await service.applyReport(scopeA, actor(), {
+      idempotencyKey: key('a'),
+      botInstanceId: BOT,
+      report: report(),
+    });
+    const real = new DrizzleBusinessConnectionRepository(ctx.container.database.db);
+    // The loser's `lock` ran before the winner committed, so it found nothing.
+    let raced = false;
+    const racing = Object.create(real) as DrizzleBusinessConnectionRepository;
+    racing.lock = async (...args: Parameters<DrizzleBusinessConnectionRepository['lock']>) => {
+      if (!raced) {
+        raced = true;
+        return null;
+      }
+      return real.lock(...args);
+    };
+    const c = ctx.container;
+    const loser = new BusinessConnectionService({
+      repository: racing,
+      telegram,
+      tokens: c.botInstances,
+      guard: c.guard,
+      uow: c.uow,
+      audit: c.audit,
+      opsLog: c.opsLogWriter,
+      sessions: c.sessions,
+      idempotency: c.idempotency,
+      scopeActivity: c.tenants,
+      clock: c.clock,
+      ids: c.ids,
+    });
+    const applied = await loser.applyReport(scopeA, actor(), {
+      idempotencyKey: key('b'),
+      botInstanceId: BOT,
+      report: report({ isEnabled: false }),
+    });
+    expect(raced).toBe(true);
+    expect(applied).toMatchObject({ change: 'UPDATED', status: 'DISABLED' });
+    expect((await real.find(scopeA, BOT, 'conn-1'))?.isEnabled).toBe(false);
   });
 
   it('does not supersede another owner’s connection', async () => {

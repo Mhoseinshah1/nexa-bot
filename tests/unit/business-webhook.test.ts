@@ -144,6 +144,20 @@ describe('the Telegram webhook and Business updates', () => {
     expectNoCustomerTurn(container);
   });
 
+  // TB1 review S3: a failed report must not turn a swallowed failure into a redelivery loop.
+  it('still answers 2xx when the message failure cannot even be recorded', async () => {
+    const { container, receive } = controllerWith({
+      routeMessage: async () => {
+        throw new Error('database unavailable');
+      },
+    });
+    container.opsLog.record.mockRejectedValue(new Error('database unavailable'));
+    expect(await receive({ business_message: customerMessage })).toEqual({ ok: true });
+    const { business_connection_id: _omitted, ...broken } = customerMessage;
+    expect(await receive({ business_message: broken })).toEqual({ ok: true });
+    expectNoCustomerTurn(container);
+  });
+
   it('reports a malformed business payload and still never runs the customer turn', async () => {
     const { container, receive } = controllerWith();
     const { business_connection_id: _omitted, ...broken } = customerMessage;
