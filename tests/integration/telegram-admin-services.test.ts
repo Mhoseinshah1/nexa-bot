@@ -308,7 +308,7 @@ describe('the services section of the Telegram management panel', () => {
         tapUpdate(prefix === PREFIX.services ? prefix : `${prefix}${serviceId}`, TG.customer),
       );
       expect(result.replyKey, `${prefix} answered an administrator's reply`).toBe(
-        'bot.unknown_command',
+        'bot.callback.stale',
       );
     }
     /* And nothing was planned by any of them. */
@@ -339,7 +339,7 @@ describe('the services section of the Telegram management panel', () => {
       systemActor('bot'),
       tapUpdate(`${PREFIX.service}${serviceId}`, TG.sales),
     );
-    expect(result.replyKey).toBe('bot.unknown_command');
+    expect(result.replyKey).toBe('bot.callback.stale');
   });
 
   // =========================================================================
@@ -535,7 +535,7 @@ describe('the services section of the Telegram management panel', () => {
       systemActor('bot'),
       tapUpdate(`${PREFIX.browsePage}not-a-cursor`, TG.owner),
     );
-    expect(result.replyKey).toBe('bot.unknown_command');
+    expect(result.replyKey).toBe('bot.callback.stale');
   });
 
   it("cannot browse another tenant's services", async () => {

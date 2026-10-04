@@ -3012,6 +3012,65 @@ rule).
   trigger refusing that would break them; the service refuses every edit and delete of
   the owner role, and the last-owner triggers of migration 0006 still guard its holders.
 
+## OQ-C4 — old MirzaBot buttons after cutover (Item 12, blocker C4)
+
+NEXA answers on the token MirzaBot used, so MirzaBot's inline keyboards stay in customers'
+chats and a tap on one arrives as an ordinary `callback_query`. Audited and settled in code:
+
+- **Tenant** is resolved from the webhook path's bot instance, never from callback data, so
+  a payload cannot name another tenant (`webhook.controller.ts`).
+- **No mapping onto a NEXA action.** `intentOf` matches exact data or a prefix, then
+  validates every id (UUIDv7, keyset token, closed code table); anything else is
+  `UNSUPPORTED`. Every NEXA route contains `:` and no MirzaBot `callback_data` does —
+  MirzaBot's are `word`, `word_value`, `word-value` or `word%value`. Pinned by
+  `tests/unit/legacy-mirzabot-callbacks.test.ts` over 105 shapes read from the public
+  upstream source (`mahdiMGF2/botmirzapanel`, `index.php`, `admin.php`, `keyboard.php`),
+  plus malformed and truncated payloads.
+- **The answer.** An `UNSUPPORTED` tap, or an admin-shaped tap from an account that cannot
+  use it, is acknowledged (`answerCallbackQuery`) and answered with `bot.callback.stale`
+  and the main-menu button (`mm:`). It is decided at the top of `act`, so no handler sees
+  it; it writes nothing commercial and dials no panel. A blocked customer still gets
+  `bot.blocked`; the membership and terms gates still run first. A typed unknown message
+  keeps `bot.unknown_command`. Nothing from the data is logged: the only failure record is
+  `telegram.turn_failed` with the error's name. Through the real webhook:
+  `tests/integration/legacy-callbacks.test.ts`.
+- **The old message is not edited.** A MirzaBot message may hold a config or a link the
+  customer still uses; the answer is a new message.
+
+Mutation record (each applied to `bot-runtime.ts`, the named suites run, the file restored):
+
+| Id    | Mutation                                                           | Result                                                                                  |
+| ----- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| C4-M1 | the fallback's callback → stale branch removed                     | KILLED: `telegram-admin-panels.test.ts` (an admin-shaped tap by a customer, no section) |
+| C4-M2 | the top-of-`act` check removed alone                               | LAYER: the fallback branch answers the same; C4-M3 removes both                         |
+| C4-M3 | both stale branches removed                                        | KILLED: 7 cases of `legacy-callbacks.test.ts`, 3 of `telegram-admin-panels.test.ts`     |
+| C4-M4 | the stale answer given to any UNSUPPORTED update, tapped or not    | KILLED: `legacy-callbacks.test.ts` › a sticker keeps `bot.unknown_command`              |
+| C4-M5 | an unknown callback mapped to `MAIN_MENU` instead of `UNSUPPORTED` | KILLED: the MirzaBot corpus (unit) and 6 integration cases                              |
+| C4-M6 | the stale answer without the main-menu button                      | KILLED: unit reply shape and 7 integration cases                                        |
+| C4-M7 | `callbackCommand` accepts any id instead of a UUIDv7               | KILLED: unit truncated-payload case; integration truncated confirm and malformed id     |
+
+Still open:
+
+- **OQ-C4-01 — the deployed MirzaBot revision.** The corpus is the public upstream source;
+  `docs/research/` records MirzaBot's buttons by label only, so the deployed revision's
+  data is not known to match it. Disjointness does not depend on it (no NEXA route lacks
+  a `:`), but a shape containing `:` would be the first one that could. **Manual
+  acceptance:** on the staging bot with the production token's chat history (or a chat
+  that still shows MirzaBot keyboards), tap at least one customer button of each kind
+  (buy, renew/extend, extra volume, payment confirmation, remove service, back) and one
+  admin button; each must answer «این دکمه قدیمی است یا دیگر فعال نیست…» with the main
+  menu button, the spinner must stop, and `orders`, `payments`, `wallet_entries`,
+  `services` and `provisioning_operations` must be unchanged. If any tap lands on a NEXA
+  screen instead, record its raw `callback_data` (it carries no secret) here.
+- **OQ-C4-02 — MirzaBot's persistent reply keyboard.** A reply-keyboard tap arrives as
+  TEXT with MirzaBot's label and is answered `bot.unknown_command`, which names /help —
+  unless the label is exactly one of this tenant's main-menu labels, in which case it opens
+  that NEXA screen; the main menu carries no authority and every action behind it still
+  re-decides, so that is navigation, not an action.
+  Telegram keeps that keyboard until a message replaces it; NEXA's main menu replaces it
+  on the customer's first `/start` or main-menu tap. Whether to send the NEXA keyboard
+  proactively to migrated customers is a cutover decision, not made here.
+
 ## OQ-P5 — RickPanel read-only inventory (Migration P5): what the repository does not evidence
 
 - **OQ-P5-01 — the list route, its pagination parameters and its page shape.** Nothing in

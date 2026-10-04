@@ -319,6 +319,22 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.callback.stale',
+    description:
+      'The answer to a tapped inline button whose callback data this installation does not ' +
+      'recognise: a keyboard drawn by the previous bot on the same token (MirzaBot, before ' +
+      'cutover), a keyboard from an older release of this one, data a client truncated or ' +
+      'made up, or a management button tapped by an account that cannot use it \u2014 one ' +
+      'answer for all of them, so it is not an oracle for which shapes are routes. Its ' +
+      'OWN key rather than `bot.unknown_command`: a tap on an old button is not a typed ' +
+      'command, and telling the customer to send /help is an instruction about something ' +
+      'they did not do. It says the button is no longer active and offers the main menu; ' +
+      'it never names the button, the old action, or anything read from the data. No ' +
+      'placeholders, so nothing the client sent can reach the text.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'error.internal',
     description: 'Generic failure message shown to a customer.',
     format: 'PLAIN_TEXT',

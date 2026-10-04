@@ -548,7 +548,7 @@ describe('the customer payment flow over Telegram', () => {
 
     // Not parsed as "pay 1". The id fails UUID validation at the boundary, so it is an
     // unsupported tap — and NOTHING moved.
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.callback.stale']));
     expect(await payments()).toHaveLength(0);
     expect((await entries()).filter((e) => e['reason'] === 'PURCHASE')).toHaveLength(0);
   });
@@ -644,7 +644,7 @@ describe('the customer payment flow over Telegram', () => {
 
     await tap('w:not-a-uuid');
 
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.callback.stale']));
     expect(await payments()).toHaveLength(0);
   });
 
