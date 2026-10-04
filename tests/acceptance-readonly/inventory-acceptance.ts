@@ -7,10 +7,14 @@ import type {
 } from '@nexa/contracts';
 import {
   RickpanelInventoryReader,
+  USERS_LIST_PATH,
   readOnlyRickpanelHttp,
   type RickpanelInventoryWalk,
 } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel-inventory';
-import { TOKEN_PATH } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel-protocol';
+import {
+  TOKEN_PATH,
+  USER_PATH,
+} from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel-protocol';
 
 /**
  * Item C1 — the real-RickPanel inventory verification, as one function
@@ -38,6 +42,29 @@ export interface InventoryAcceptanceInput {
   readonly pageSize?: number;
   /** How many accounts may appear or disappear between the two walks. */
   readonly driftTolerance?: number;
+  /**
+   * How many PAIRS of consecutive walks to try before giving up (default 3). A live panel
+   * may change between two walks; the procedure then walks a fresh pair rather than
+   * calling the first difference a fault — and never calls a differing pair complete.
+   * Every attempt's drift is in the report.
+   */
+  readonly maxAttempts?: number;
+}
+
+/** One pair of consecutive walks, as counts. */
+export interface InventoryAttempt {
+  readonly firstConsistent: boolean;
+  readonly secondConsistent: boolean;
+  readonly countDrift: number;
+  readonly setDrift: number;
+}
+
+/** What the guard let through, by kind. Anything but these three is refused. */
+export interface InventoryRequestCounts {
+  readonly loginExchange: number;
+  readonly listPage: number;
+  readonly readUser: number;
+  readonly otherRead: number;
 }
 
 export interface InventoryRunSummary {
@@ -59,18 +86,31 @@ export interface InventoryRunSummary {
 }
 
 export interface InventoryAcceptanceReport {
+  /** The pair the checks judge: the last one walked. */
   readonly first: InventoryRunSummary;
   readonly second: InventoryRunSummary;
+  /** Every pair walked, in order; the last is `first`/`second`. */
+  readonly attempts: readonly InventoryAttempt[];
+  /**
+   * What `RickpanelInventoryReader.listAll` — the entry point the matcher actually uses —
+   * answered on its own two walks, run after the pair above: `COMPLETE`, its closed
+   * incomplete reason, or `FAILED`.
+   */
+  readonly matcherInventory: string;
+  /** Whether `listAll`'s exact username set equals the judged pair's. */
+  readonly matcherAgreesWithWalks: boolean;
   /** |second − first| distinct accounts. */
   readonly countDrift: number;
   /** Accounts in exactly one of the two walks. */
   readonly setDrift: number;
   readonly knownLookup: 'FOUND' | 'NOT_FOUND' | 'FAILED';
+  /** The known name, by its EXACT provider spelling, is in both walks of the judged pair. */
   readonly knownInInventory: boolean;
   readonly missingLookup: 'FOUND' | 'NOT_FOUND' | 'FAILED';
   /** Requests the guard refused because they were not reads. Must be 0. */
   readonly refusedWrites: number;
   readonly requests: number;
+  readonly requestsByKind: InventoryRequestCounts;
   readonly checks: readonly { readonly name: string; readonly pass: boolean }[];
 }
 
@@ -79,25 +119,29 @@ export function readGuard(http: ProviderHttpClient): {
   readonly client: ProviderHttpClient;
   readonly refused: () => number;
   readonly sent: () => number;
+  readonly byKind: () => InventoryRequestCounts;
 } {
   let refused = 0;
-  let sent = 0;
+  const counts = { loginExchange: 0, listPage: 0, readUser: 0, otherRead: 0 };
   return {
     client: {
       send: async (request: ProviderHttpRequest): Promise<ProviderHttpResult> => {
-        const isRead =
-          request.method === 'GET' ||
-          (request.method === 'POST' && request.effect === 'READ' && request.path === TOKEN_PATH);
-        if (!isRead) {
+        const isToken =
+          request.method === 'POST' && request.effect === 'READ' && request.path === TOKEN_PATH;
+        if (request.method !== 'GET' && !isToken) {
           refused += 1;
           return { ok: false, failure: 'BLOCKED_TARGET', status: null };
         }
-        sent += 1;
+        if (isToken) counts.loginExchange += 1;
+        else if (request.path.split('?')[0] === USERS_LIST_PATH) counts.listPage += 1;
+        else if (request.path.startsWith(`${USER_PATH}/`)) counts.readUser += 1;
+        else counts.otherRead += 1;
         return http.send(request);
       },
     },
     refused: () => refused,
-    sent: () => sent,
+    sent: () => counts.loginExchange + counts.listPage + counts.readUser + counts.otherRead,
+    byKind: () => ({ ...counts }),
   };
 }
 
@@ -156,6 +200,13 @@ function names(outcome: RickpanelInventoryWalk): ReadonlySet<string> {
     : new Set();
 }
 
+function drift(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
+  let n = 0;
+  for (const name of a) if (!b.has(name)) n += 1;
+  for (const name of b) if (!a.has(name)) n += 1;
+  return n;
+}
+
 export async function runInventoryAcceptance(
   input: InventoryAcceptanceInput,
 ): Promise<InventoryAcceptanceReport> {
@@ -164,23 +215,47 @@ export async function runInventoryAcceptance(
   const reader = new RickpanelInventoryReader();
   const options = input.pageSize === undefined ? {} : { pageSize: input.pageSize };
   const tolerance = input.driftTolerance ?? 0;
+  const maxAttempts = Math.max(1, Math.trunc(input.maxAttempts ?? 3));
 
-  const firstOutcome = await reader.walk(input.target, http, options);
-  const secondOutcome = await reader.walk(input.target, http, options);
+  // Pairs of consecutive walks until one pair is identical, or the attempts run out. The
+  // checks judge the LAST pair; a pair that differs is never reported as complete.
+  const attempts: InventoryAttempt[] = [];
+  let firstOutcome!: RickpanelInventoryWalk;
+  let secondOutcome!: RickpanelInventoryWalk;
+  let setDrift = 0;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    firstOutcome = await reader.walk(input.target, http, options);
+    secondOutcome = await reader.walk(input.target, http, options);
+    const pairFirst = summarize(firstOutcome);
+    const pairSecond = summarize(secondOutcome);
+    setDrift = drift(names(firstOutcome), names(secondOutcome));
+    attempts.push({
+      firstConsistent: pairFirst.ok && pairFirst.consistent,
+      secondConsistent: pairSecond.ok && pairSecond.consistent,
+      countDrift: Math.abs(pairSecond.distinctUsernames - pairFirst.distinctUsernames),
+      setDrift,
+    });
+    // A transport or shape FAILURE is not drift: walking again would only repeat it.
+    if (!pairFirst.ok || !pairSecond.ok) break;
+    if (pairFirst.consistent && pairSecond.consistent && setDrift === 0) break;
+  }
   const first = summarize(firstOutcome);
   const second = summarize(secondOutcome);
   const a = names(firstOutcome);
   const b = names(secondOutcome);
-  let setDrift = 0;
-  for (const n of a) if (!b.has(n)) setDrift += 1;
-  for (const n of b) if (!a.has(n)) setDrift += 1;
 
-  // Sent as the operator spelled it (the panel's spelling); compared by its lowercase key.
-  const known = input.knownUsername.toLowerCase();
-  const knownInInventory =
-    firstOutcome.ok &&
-    firstOutcome.consistent &&
-    firstOutcome.accounts.some((account) => account.username === known);
+  // The matcher's own entry point, on its own two walks: what P6 will index from.
+  const listed = await reader.listAll(input.target, http, options);
+  const matcherInventory = !listed.ok ? 'FAILED' : listed.complete ? 'COMPLETE' : listed.reason;
+  const matcherNames =
+    listed.ok && listed.complete
+      ? new Set(listed.accounts.map((account) => account.providerUsername))
+      : new Set<string>();
+  const matcherAgreesWithWalks = matcherInventory === 'COMPLETE' && drift(matcherNames, b) === 0;
+
+  // Sent exactly as the operator spelled it (the panel's spelling), and looked for by
+  // that exact spelling in both walks — a lowercase match is not the account asked for.
+  const knownInInventory = a.has(input.knownUsername) && b.has(input.knownUsername);
   const knownResult = await reader.findAccount(input.target, http, input.knownUsername);
   const knownLookup = !knownResult.ok ? 'FAILED' : knownResult.found ? 'FOUND' : 'NOT_FOUND';
   // A name no panel holds: random, canonical, and long enough never to collide.
@@ -214,10 +289,23 @@ export async function runInventoryAcceptance(
       name: 'two consecutive walks identical (indexable)',
       pass: first.ok && first.consistent && second.ok && second.consistent && setDrift === 0,
     },
+    {
+      name: 'provider total identical on both walks',
+      pass: first.ok && second.ok && first.reportedTotal === second.reportedTotal,
+    },
+    {
+      name: "the matcher's listAll reports a complete inventory",
+      pass: matcherInventory === 'COMPLETE',
+    },
+    { name: 'listAll returns exactly the walked set', pass: matcherAgreesWithWalks },
     { name: 'known username found by exact lookup', pass: knownLookup === 'FOUND' },
-    { name: 'known username present in the inventory', pass: knownInInventory },
+    { name: 'known username present in both walks by its exact spelling', pass: knownInInventory },
     { name: 'missing username is a clean not-found', pass: missingLookup === 'NOT_FOUND' },
     { name: 'no write was attempted', pass: guard.refused() === 0 },
+    {
+      name: 'every request sent was the login exchange, a list page or a user read',
+      pass: guard.byKind().otherRead === 0,
+    },
   ];
 
   return {
@@ -225,11 +313,15 @@ export async function runInventoryAcceptance(
     second,
     countDrift,
     setDrift,
+    attempts,
+    matcherInventory,
+    matcherAgreesWithWalks,
     knownLookup,
     knownInInventory,
     missingLookup,
     refusedWrites: guard.refused(),
     requests: guard.sent(),
+    requestsByKind: guard.byKind(),
     checks,
   };
 }

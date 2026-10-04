@@ -64,7 +64,12 @@ describe('C1 procedure', () => {
         if (walks === 2) panel.seedUser('latecomer');
       }
     };
-    const report = await runInventoryAcceptance({ target, http: http(), knownUsername: 'acct01' });
+    const report = await runInventoryAcceptance({
+      target,
+      http: http(),
+      knownUsername: 'acct01',
+      maxAttempts: 1,
+    });
     expect(report.countDrift).toBe(1);
     expect(report.checks.find((c) => c.name === 'count stable within tolerance')?.pass).toBe(false);
     const tolerant = await runInventoryAcceptance({
@@ -74,6 +79,91 @@ describe('C1 procedure', () => {
       driftTolerance: 1,
     });
     expect(tolerant.checks.filter((c) => !c.pass)).toEqual([]);
+  });
+
+  it('walks a fresh pair after drift, reports every attempt, and judges only the last', async () => {
+    // Program Item 2: "drift => retry/document". The panel changes once, before walk 2.
+    let walks = 0;
+    panel.beforeListPage = (offset) => {
+      if (offset === 0) {
+        walks += 1;
+        if (walks === 2) panel.seedUser('latecomer');
+      }
+    };
+    const report = await runInventoryAcceptance({ target, http: http(), knownUsername: 'acct01' });
+    expect(report.attempts.map((a) => a.setDrift)).toEqual([1, 0]);
+    expect(report.attempts.map((a) => a.countDrift)).toEqual([1, 0]);
+    expect(report.checks.filter((c) => !c.pass)).toEqual([]);
+    expect(report.first.distinctUsernames).toBe(24);
+  });
+
+  it('never calls a panel complete while it keeps drifting', async () => {
+    let added = 0;
+    panel.beforeListPage = (offset) => {
+      if (offset === 0) panel.seedUser(`drifter${String((added += 1))}`);
+    };
+    const report = await runInventoryAcceptance({
+      target,
+      http: http(),
+      knownUsername: 'acct01',
+      maxAttempts: 3,
+    });
+    expect(report.attempts).toHaveLength(3);
+    expect(report.attempts.every((a) => a.setDrift === 1)).toBe(true);
+    const failed = report.checks.filter((c) => !c.pass).map((c) => c.name);
+    expect(failed).toContain('two consecutive walks identical (indexable)');
+    expect(failed).toContain("the matcher's listAll reports a complete inventory");
+    expect(report.matcherInventory).toBe('WALKS_DIFFER');
+  });
+
+  it("exercises the matcher's own listAll and requires it to agree with the walks", async () => {
+    const report = await runInventoryAcceptance({ target, http: http(), knownUsername: 'acct03' });
+    expect(report.matcherInventory).toBe('COMPLETE');
+    expect(report.matcherAgreesWithWalks).toBe(true);
+    // A panel that changes only during listAll's walks is caught by it, not by the pair.
+    let walks = 0;
+    panel.beforeListPage = (offset) => {
+      if (offset === 0 && (walks += 1) === 4) panel.seedUser('only-in-listall');
+    };
+    const late = await runInventoryAcceptance({ target, http: http(), knownUsername: 'acct03' });
+    expect(late.matcherInventory).toBe('WALKS_DIFFER');
+    expect(late.checks.find((c) => c.name === 'listAll returns exactly the walked set')?.pass).toBe(
+      false,
+    );
+  });
+
+  it('matches the known account by its EXACT provider spelling, never a lowercase fold', async () => {
+    panel.seedUser('Mixed07');
+    const exact = await runInventoryAcceptance({ target, http: http(), knownUsername: 'Mixed07' });
+    expect(exact.knownInInventory).toBe(true);
+    expect(exact.checks.filter((c) => !c.pass)).toEqual([]);
+    const folded = await runInventoryAcceptance({ target, http: http(), knownUsername: 'mixed07' });
+    expect(folded.knownInInventory).toBe(false);
+  });
+
+  it('every request the panel itself saw was a read, and the report counts them exactly', async () => {
+    const report = await runInventoryAcceptance({
+      target,
+      http: http(),
+      knownUsername: 'acct07',
+      pageSize: 5,
+    });
+    // The panel is the independent observer: no method but GET, and POST only to the
+    // token exchange.
+    const methods = panel.requests.map((r) =>
+      r.method === 'POST' && r.path === '/api/admin/token' ? 'TOKEN' : r.method,
+    );
+    expect(new Set(methods)).toEqual(new Set(['TOKEN', 'GET']));
+    expect(panel.requests).toHaveLength(report.requests);
+    expect(report.requestsByKind).toEqual({
+      loginExchange: methods.filter((m) => m === 'TOKEN').length,
+      listPage: panel.listCalls(),
+      readUser: 2,
+      otherRead: 0,
+    });
+    // Four walks of five pages each (one pair, then listAll's two).
+    expect(report.requestsByKind.listPage).toBe(20);
+    expect(panel.putCalls() + panel.createCalls() + panel.revokeCalls()).toBe(0);
   });
 
   it('fails the lookup check for a name the panel does not hold', async () => {
