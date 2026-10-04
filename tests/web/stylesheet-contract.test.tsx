@@ -187,10 +187,21 @@ describe('spacing and wrapping the kit leaves to its containers', () => {
     expect(clamp).toMatch(/line-height:\s*1\.\d+/);
   });
 
+  /*
+   * The page puts `audit-id` only on a LONG actor label. Its floor stops auto
+   * layout squeezing the id to a character a line; on every short label it
+   * widened a page of `owner` rows past the card at 1280px (review of #191).
+   * The action clamp is sized to itself — `fit-content`, no floor — so a short
+   * `settings.update` stays at the start of its cell under its header.
+   */
   it("bounds the audit log's id column with a floor and a ceiling", () => {
     const id = block('.audit-id');
     expect(id).toMatch(/max-width:\s*18rem/);
     expect(id).toMatch(/min-width:\s*10rem/);
+    const action = block('.audit-action');
+    expect(action).toMatch(/max-width:\s*18rem/);
+    expect(action).toMatch(/width:\s*fit-content/);
+    expect(action, 'a floor pushes a short action off the cell start').not.toMatch(/min-width/);
     const prose = ruleListing('.audit-reason');
     expect(prose).toMatch(/overflow-wrap:\s*anywhere/);
     expect(ruleListing('.audit-correlation')).toBe(prose);

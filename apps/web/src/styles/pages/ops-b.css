@@ -1120,15 +1120,23 @@ form.set-row > * + * {
   font-size: var(--fs-ui);
 }
 /*
- * A long id (a job's `job:telegram-update:…`, a long action name) is clamped to
- * two lines in a bounded column instead of widening the table: a floor so the
- * table's auto layout cannot squeeze it to a character a line, a ceiling so it
- * cannot push the other columns off the card. Its copy button sits beside it.
+ * A LONG actor label (a job's `job:telegram-update:…`) is clamped to two lines
+ * in a bounded column instead of widening the table: a floor so the table's
+ * auto layout cannot squeeze it to a character a line, a ceiling so it cannot
+ * push the other columns off the card. The page adds this class only to a long
+ * label — a floor on a short one widened every page of `owner` rows.
  */
 .audit-id {
   min-width: 10rem;
   max-width: 18rem;
-  text-align: start;
+}
+/*
+ * An action name is clamped too, but sized to itself: no floor, so a short
+ * `settings.update` stays at the start of its cell, under its header.
+ */
+.audit-action {
+  width: fit-content;
+  max-width: 18rem;
 }
 .audit-actor {
   display: flex;

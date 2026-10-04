@@ -269,7 +269,7 @@ export function AuditLogPage({
             title={t('web.audit_filter_by_action')}
             onClick={() => setQuery(route, 'action', row.action)}
           >
-            <span className="clamp-2 audit-id" dir="ltr" title={row.action}>
+            <span className="clamp-2 audit-action" dir="ltr" title={row.action}>
               <Ltr>{row.action}</Ltr>
             </span>
           </button>
@@ -530,18 +530,49 @@ export function AuditLogPage({
   );
 }
 
+/** Actors whose label is a machine identifier, never a person's name. */
+const TECHNICAL_ACTORS: ReadonlySet<ActorType> = new Set(['SYSTEM_JOB', 'API', 'PROVIDER_SYNC']);
+
+/**
+ * Longer than this, a label is drawn in the bounded, two-line column. Shorter labels keep
+ * their natural width, so a page of `owner` rows is as narrow as it was (issue 15 review).
+ */
+const LONG_ACTOR_LABEL = 24;
+
+/** How an actor label is drawn: as a technical id or a name, and bounded or natural. */
+export function actorLabelStyle(
+  actorType: ActorType,
+  label: string,
+): { technical: boolean; long: boolean } {
+  return {
+    technical: TECHNICAL_ACTORS.has(actorType) || label.startsWith('job:'),
+    long: label.length > LONG_ACTOR_LABEL,
+  };
+}
+
 /**
  * Who acted. A job's label is a long unbroken id (`job:telegram-update:<bot>:<update>`), so
- * the value wraps anywhere and is CLAMPED to two lines inside a bounded column (issue 15) —
+ * a LONG value wraps anywhere and is CLAMPED to two lines inside a bounded column (issue 15) —
  * drawn short, never cut: the element still holds the whole value, its `title` shows it, and
- * the copy button beside it copies it whole. `bdi` isolates it from the Persian around it and
- * lets it resolve its own direction, since a human admin's label may be a Persian name.
+ * the copy button beside it copies it whole.
+ *
+ * A technical id is `ltr mono`, so its digits are the Latin ones Copy copies, not the body
+ * font's Persian shapes. A person's label stays in the UI font inside a `bdi`, which isolates
+ * it and lets a Persian name resolve its own direction. A short human label is drawn exactly
+ * as before — no floor, no copy button — so it neither widens nor heightens the row.
  */
 function ActorCell({ row, route }: { row: AuditLogEntry; route: Route }) {
   const shown = row.actorLabel ?? row.actorId;
+  const style = shown === null ? null : actorLabelStyle(row.actorType, shown);
+  const bounded = style?.long === true ? 'clamp-2 audit-id' : undefined;
+  const title = style?.long === true ? (shown ?? undefined) : undefined;
   const value =
-    shown === null ? null : (
-      <bdi className="clamp-2 audit-id" title={shown}>
+    shown === null ? null : style?.technical === true ? (
+      <span className={bounded === undefined ? 'ltr mono' : `ltr mono ${bounded}`} title={title}>
+        {shown}
+      </span>
+    ) : (
+      <bdi className={bounded} title={title}>
         {shown}
       </bdi>
     );
@@ -560,7 +591,9 @@ function ActorCell({ row, route }: { row: AuditLogEntry; route: Route }) {
             {value}
           </button>
         )}
-        {shown !== null && <CopyButton value={shown} label={t('web.audit_copy_actor')} />}
+        {shown !== null && (style?.technical === true || style?.long === true) && (
+          <CopyButton value={shown} label={t('web.audit_copy_actor')} />
+        )}
       </span>
       <span className="muted small">{t(ACTOR_LABELS[row.actorType])}</span>
     </span>

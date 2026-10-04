@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { AuditLogPage, auditFiltersOf, recordedFieldsOf } from '../../apps/web/src/pages/audit-log';
+import {
+  AuditLogPage,
+  actorLabelStyle,
+  auditFiltersOf,
+  recordedFieldsOf,
+} from '../../apps/web/src/pages/audit-log';
 import { dayEnd, dayStart } from '../../apps/web/src/pages/tickets';
 import { TimelineCard } from '../../apps/web/src/pages/customer-360-sections';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -267,8 +272,9 @@ describe('a long actor identifier in the audit log', () => {
     // The whole value is the element's text: the clamp is drawn, the data is not shortened.
     expect(value.textContent).toBe(LABEL);
     expect(value.className.split(' ')).toEqual(expect.arrayContaining(['clamp-2', 'audit-id']));
-    // An id inside the RTL table is isolated and resolves its own direction.
-    expect(value.tagName).toBe('BDI');
+    // A technical id is isolated left to right in the mono face, whose digits are the Latin
+    // ones Copy copies — the body font would draw `update:۰۱۹۳…`.
+    expect(value.className.split(' ')).toEqual(expect.arrayContaining(['ltr', 'mono']));
     // ...and its full value is a hover away, whatever the clamp hides.
     expect(value.getAttribute('title')).toBe(LABEL);
     // It is still the filter-by-actor control it always was.
@@ -292,8 +298,56 @@ describe('a long actor identifier in the audit log', () => {
     renderRow({ action: LONG_ACTION, reason: 'x'.repeat(120) });
     const action = await screen.findByText(LONG_ACTION);
     const clamp = action.closest('.clamp-2') as HTMLElement | null;
-    expect(clamp?.className.split(' ')).toEqual(expect.arrayContaining(['clamp-2', 'audit-id']));
+    // Clamped, but sized to itself: the action's class carries no floor (see the stylesheet).
+    expect(clamp?.className.split(' ')).toEqual(['clamp-2', 'audit-action']);
     expect(clamp?.getAttribute('title')).toBe(LONG_ACTION);
     expect(screen.getByText('x'.repeat(120)).closest('.audit-reason')).not.toBeNull();
+  });
+
+  /*
+   * The review of the first fix: a floor and a copy button on EVERY actor made a page of
+   * short `owner` rows scroll sideways at 1280px and grew each row. A short human label is
+   * drawn as it was before issue 15 — its natural width, the UI font, no copy button.
+   */
+  it('draws a short human label at its natural width, without a copy button', async () => {
+    renderRow({});
+    const value = await screen.findByText('owner');
+    expect(value.tagName).toBe('BDI');
+    expect(value.className).toBe('');
+    expect(value.hasAttribute('title')).toBe(false);
+    const row = value.closest('tr') as HTMLElement;
+    expect(within(row).queryByRole('button', { name: t('web.audit_copy_actor') })).toBeNull();
+  });
+
+  it('keeps a Persian admin name in the UI font, clamped once it is long', async () => {
+    const name = 'مدیر ارشد پشتیبانی شعبهٔ مرکزی تهران';
+    renderRow({ actorType: 'WEB_ADMIN', actorLabel: name });
+    const value = await screen.findByText(name);
+    expect(value.tagName).toBe('BDI');
+    expect(value.className.split(' ')).toEqual(['clamp-2', 'audit-id']);
+    expect(value.getAttribute('title')).toBe(name);
+    const row = value.closest('tr') as HTMLElement;
+    expect(within(row).getByRole('button', { name: t('web.audit_copy_actor') })).toBeTruthy();
+  });
+
+  it('draws a short technical id in the mono face, copyable but unbounded', async () => {
+    renderRow({ actorType: 'SYSTEM_JOB', actorId: 'sweep', actorLabel: 'job:sweep' });
+    const value = await screen.findByText('job:sweep');
+    expect(value.className.split(' ')).toEqual(['ltr', 'mono']);
+    const row = value.closest('tr') as HTMLElement;
+    expect(within(row).getByRole('button', { name: t('web.audit_copy_actor') })).toBeTruthy();
+  });
+
+  it('decides technical and long by the actor, the job prefix and the length', () => {
+    expect(actorLabelStyle('WEB_ADMIN', 'owner')).toEqual({ technical: false, long: false });
+    expect(actorLabelStyle('WEB_ADMIN', 'x'.repeat(24)).long).toBe(false);
+    expect(actorLabelStyle('WEB_ADMIN', 'x'.repeat(25)).long).toBe(true);
+    expect(actorLabelStyle('CUSTOMER', 'job:x').technical).toBe(true);
+    for (const type of ['SYSTEM_JOB', 'API', 'PROVIDER_SYNC'] as const) {
+      expect(actorLabelStyle(type, 'a').technical, type).toBe(true);
+    }
+    for (const type of ['WEB_ADMIN', 'TELEGRAM_ADMIN', 'CUSTOMER'] as const) {
+      expect(actorLabelStyle(type, 'a').technical, type).toBe(false);
+    }
   });
 });
