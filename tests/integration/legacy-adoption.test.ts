@@ -568,6 +568,15 @@ describe('Migration P6: legacy service adoption', () => {
       kind: 'MANUAL_REVIEW',
       reason: 'PRODUCT_MAPPING_UNRESOLVED',
     });
+    // An UNRESOLVED shape whose hidden product somebody priced and activated by hand is
+    // still not adoptable: the shape's own tariff state is the gate, not the product row.
+    await db().execute(sql`
+      UPDATE products SET price_amount = 250000, price_currency = 'IRT', status = 'ACTIVE'
+       WHERE id = ${unresolved}`);
+    expect(await adopt(command({ telegramUserId, productId: unresolved }))).toMatchObject({
+      kind: 'MANUAL_REVIEW',
+      reason: 'PRODUCT_MAPPING_UNRESOLVED',
+    });
     const hidden = await hiddenShape(true);
     const outcome = await adopted(command({ telegramUserId, productId: hidden }));
     const [svc] = await rows<{ product_id: string }>(
@@ -871,6 +880,10 @@ describe('Migration P6: legacy service adoption', () => {
     await fx.customer({ telegramUserId });
     await db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`);
     await expect(adopt(command({ telegramUserId }))).rejects.toMatchObject({
+      code: 'commerce.request_invalid',
+    });
+    // A review decision is a write too: a stopped tenant records no map row either.
+    await expect(adopt(command({ telegramUserId: tg() }))).rejects.toMatchObject({
       code: 'commerce.request_invalid',
     });
     expect(await count(sql`SELECT count(*)::int AS n FROM legacy_import_map`)).toBe(0);
