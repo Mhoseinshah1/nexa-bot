@@ -117,6 +117,9 @@ catalogue text now reads «اولین فعالیت» / «آخرین فعالیت
 in the template editor; a tenant's own override of that template is untouched
 (`tests/integration/telegram-admin-customers.test.ts` pins the default).
 
+Every rule of both sections is mutation-checked by `scripts/mutate-customer-search.py`
+(CS-01…CS-08; CS-08 needs `TEST_DATABASE_URL`).
+
 Pinned by `tests/integration/telegram-customer-turn.test.ts` ("moves last_seen_at on an
 ordinary message and on a button press, never first_seen_at") and the label case in
 `tests/web/customer-search.test.tsx`.
