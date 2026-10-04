@@ -101,6 +101,18 @@ export function tutorialVideoOf(message: unknown): InboundTutorialVideo | null {
   };
 }
 
+/**
+ * UX Batch 01 item 6: the instant Telegram stamped a message with (`date`, Unix seconds), or
+ * null when it carries none. Read for a prompt the Web Admin opened.
+ */
+export function messageSentAt(message: unknown): Date | null {
+  if (typeof message !== 'object' || message === null) return null;
+  const date = (message as Record<string, unknown>)['date'];
+  return typeof date === 'number' && Number.isSafeInteger(date) && date > 0
+    ? new Date(date * 1000)
+    : null;
+}
+
 /** Whether the section is drawn on the panel for these permissions. */
 export function maySeeTutorials(permissions: ReadonlySet<PermissionKey>): boolean {
   return permissions.has(CLIENT_APP_VIEW_PERMISSION);
@@ -189,6 +201,8 @@ export async function adminTutorialTurn(
     readonly botInstanceId: BotInstanceId;
     readonly adminId: string;
     readonly updateId: bigint | null;
+    /** The video message's own date (`messageSentAt`), for a web-opened prompt. */
+    readonly sentAt?: Date | null;
     readonly permissions: ReadonlySet<PermissionKey>;
   },
 ): Promise<TutorialReply | null> {
@@ -309,6 +323,7 @@ export async function adminTutorialTurn(
         botInstanceId: input.botInstanceId,
         adminId: input.adminId,
         updateId: input.updateId,
+        sentAt: input.sentAt ?? null,
         video: command.video,
       });
       if (receipt.outcome !== 'STORED') {

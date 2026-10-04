@@ -5975,10 +5975,19 @@ export const adminAmountCaptures = pgTable(
           OR (purpose = 'CLIENT_APP_VIDEO' AND client_app_id IS NOT NULL AND payment_id IS NULL
             AND customer_id IS NULL AND service_refund_request_id IS NULL)`,
     ),
-    /** ONE open capture per administrator per bot, decided by the database. */
+    /**
+     * ONE open capture per administrator per bot, decided by the database — among the
+     * prompts that read a typed amount or reason. The tutorial video prompt has its own
+     * one-open slot (PR #185 review): the Web Admin opens it beside an amount the
+     * administrator may be typing in Telegram, and must not close that amount silently.
+     * A Telegram tap still closes every open prompt of the administrator on that bot.
+     */
     uniqueIndex('admin_amount_captures_open_key')
       .on(table.tenantId, table.botInstanceId, table.adminId)
-      .where(sql`closed_at IS NULL`),
+      .where(sql`closed_at IS NULL AND purpose <> 'CLIENT_APP_VIDEO'`),
+    uniqueIndex('admin_amount_captures_open_video_key')
+      .on(table.tenantId, table.botInstanceId, table.adminId)
+      .where(sql`closed_at IS NULL AND purpose = 'CLIENT_APP_VIDEO'`),
     check(
       'admin_amount_captures_close_reason_check',
       nullableEnumCheck('close_reason', ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS),

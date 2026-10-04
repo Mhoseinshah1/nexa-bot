@@ -567,6 +567,16 @@ export const CONTROL_ERROR_CODES = {
   CLIENT_APP_VERSION_CONFLICT: 'control.client_app_version_conflict',
   /** The tenant already holds `CLIENT_APP_MAX_ENTRIES`. */
   CLIENT_APP_LIMIT: 'control.client_app_limit',
+  /**
+   * UX Batch 01 item 6: a video can be sent from Telegram only by an administrator whose
+   * account is bound to a Telegram id (`admins.telegram_user_id`) — that binding is how the
+   * bot knows the video is theirs. Refused before any prompt is opened.
+   */
+  CLIENT_APP_VIDEO_TELEGRAM_UNLINKED: 'control.client_app_video_telegram_unlinked',
+  /** The bot named is not one of this tenant's ACTIVE bots. */
+  CLIENT_APP_VIDEO_BOT_UNAVAILABLE: 'control.client_app_video_bot_unavailable',
+  /** No such video prompt of this administrator for this app. */
+  CLIENT_APP_VIDEO_SESSION_NOT_FOUND: 'control.client_app_video_session_not_found',
 } as const;
 
 /**

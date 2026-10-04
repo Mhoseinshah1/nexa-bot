@@ -686,7 +686,13 @@ export class TemplateManagementService {
       description: definition.description,
       format: definition.format,
       placeholders: definition.placeholders,
-      maxLength: TEMPLATE_BODY_MAX_LENGTH,
+      // The ceiling the validator applies (`validateTemplateBody`): the key's own bound
+      // where it declares a tighter one — the file caption's 1024, the terms frame — so the
+      // editor never accepts typing the server then refuses (PR #185 review).
+      maxLength: Math.min(
+        TEMPLATE_BODY_MAX_LENGTH,
+        definition.maxLength ?? TEMPLATE_BODY_MAX_LENGTH,
+      ),
       body: applied ? override.body : fallback,
       overrideBody: override?.body ?? null,
       defaultBody: fallback,

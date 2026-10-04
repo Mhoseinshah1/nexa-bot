@@ -3,6 +3,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   CLIENT_APP_ROUTES,
+  cancelClientAppVideoSessionRequestSchema,
+  openClientAppVideoSessionRequestSchema,
   clearClientAppImageRequestSchema,
   createClientAppRequestSchema,
   deleteClientAppRequestSchema,
@@ -13,12 +15,17 @@ import {
   type ClientAppDeletedResponse,
   type ClientAppListResponse,
   type ClientAppResponse,
+  type ClientAppVideoResponse,
+  type ClientAppVideoSessionResponse,
+  type ClientAppVideosResponse,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { ClientAppRecord } from '../../modules/control/client-apps/application/ports.js';
+import type { ClientAppVideoRecord } from '../../modules/control/client-apps/application/client-app-video.service.js';
+import type { WebVideoSession } from '../../modules/control/client-apps/application/client-app-video-web.service.js';
 
 /**
  * The tenant's client apps over HTTP, at `/client-apps` (WP-A10).
@@ -130,6 +137,71 @@ export class ClientAppController {
     return toView(await this.container.clientApps.clearImage(scope, actor, { ...input, id }));
   }
 
+  /**
+   * UX Batch 01 item 6 — «افزودن ویدیو از تلگرام». The app's video on each bot; a prompt
+   * opened for one bot; its state, polled; and its cancellation. `ClientAppVideoWebService`
+   * charges the permissions and binds every prompt to the administrator who opened it.
+   */
+  @Get(routePattern(CLIENT_APP_ROUTES.videos, 'id'))
+  async videos(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<ClientAppVideosResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const overview = await this.container.clientAppVideoWeb.overview(scope, actor, id);
+    return {
+      telegramLinked: overview.telegramLinked,
+      bots: overview.bots.map(({ bot, video }) => ({
+        botInstanceId: bot.botInstanceId,
+        username: bot.username,
+        chatUrl: bot.chatUrl,
+        active: bot.active,
+        video: video === null ? null : toVideoView(video),
+      })),
+    };
+  }
+
+  @Post(routePattern(CLIENT_APP_ROUTES.videoSessions, 'id'))
+  async openVideoSession(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ClientAppVideoSessionResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const input = openClientAppVideoSessionRequestSchema.parse(body);
+    return toSessionView(
+      await this.container.clientAppVideoWeb.open(scope, actor, { ...input, appId: id }),
+    );
+  }
+
+  @Get(sessionRoute(CLIENT_APP_ROUTES.videoSession))
+  async videoSession(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+  ): Promise<ClientAppVideoSessionResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return toSessionView(await this.container.clientAppVideoWeb.read(scope, actor, id, sessionId));
+  }
+
+  @Post(sessionRoute(CLIENT_APP_ROUTES.videoSessionCancel))
+  async cancelVideoSession(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+    @Body() body: unknown,
+  ): Promise<ClientAppVideoSessionResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const input = cancelClientAppVideoSessionRequestSchema.parse(body);
+    return toSessionView(
+      await this.container.clientAppVideoWeb.cancel(scope, actor, {
+        ...input,
+        appId: id,
+        sessionId,
+      }),
+    );
+  }
+
   private async authenticate(
     request: FastifyRequest,
     options: { write?: boolean } = {},
@@ -150,6 +222,11 @@ export class ClientAppController {
   private get isProduction(): boolean {
     return this.container.config.NODE_ENV === 'production';
   }
+}
+
+/** A two-parameter contract route, `:id` and `:sessionId`, as the server declares it. */
+function sessionRoute(build: (id: string, sessionId: string) => string): string {
+  return routePattern((id) => routePattern((sessionId) => build(id, sessionId), 'sessionId'), 'id');
 }
 
 /** The wire shape, `clientAppSchema`. A write answers with the ROW, unwrapped. */
@@ -183,5 +260,29 @@ function toView(row: ClientAppRecord): ClientAppResponse {
             sha256: row.image.sha256,
             updatedAt: row.image.updatedAt.toISOString(),
           },
+  };
+}
+
+/** A stored video's metadata. The bot-scoped `file_id` is a sending handle and is not sent. */
+function toVideoView(video: ClientAppVideoRecord): ClientAppVideoResponse {
+  return {
+    fileUniqueId: video.fileUniqueId,
+    mimeType: video.mimeType,
+    durationSeconds: video.durationSeconds,
+    fileSize: video.fileSize === null ? null : video.fileSize.toString(),
+    updatedAt: video.updatedAt.toISOString(),
+  };
+}
+
+function toSessionView(session: WebVideoSession): ClientAppVideoSessionResponse {
+  return {
+    sessionId: session.sessionId,
+    botInstanceId: session.bot.botInstanceId,
+    username: session.bot.username,
+    chatUrl: session.bot.chatUrl,
+    state: session.state,
+    openedAt: session.openedAt.toISOString(),
+    expiresAt: session.expiresAt.toISOString(),
+    video: session.video === null ? null : toVideoView(session.video),
   };
 }
