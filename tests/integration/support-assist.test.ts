@@ -204,6 +204,25 @@ describe('Assist Mode (TB5)', () => {
     });
   });
 
+  // Shapes no database CHECK would refuse: only the decision schema and the reply bound do.
+  it('records an over-long reply, or a decision with an extra key, as FAILED', async () => {
+    for (const output of [
+      { ...valid, replyText: 'ب'.repeat(SUPPORT_AI_DEFAULT_CONFIG.maxOutputChars + 1) },
+      { ...valid, refund: true },
+    ]) {
+      next = { outcome: 'OK', output, usage: { inputTokens: 1, outputTokens: 1 }, model: 'm' };
+      const job = await service.request(scopeA, operator, {
+        conversationId,
+        idempotencyKey: key('draft'),
+      });
+      await loop.tick();
+      expect(await jobs.findById(scopeA, job.id)).toMatchObject({
+        state: 'FAILED',
+        failureCode: 'decision.invalid',
+      });
+    }
+  });
+
   it('records a chain failure as FAILED', async () => {
     next = { outcome: 'REFUSED_BY_PROVIDER', code: 'openai.refusal' };
     const job = await service.request(scopeA, operator, {
