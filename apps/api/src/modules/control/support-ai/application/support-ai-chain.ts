@@ -81,10 +81,17 @@ export class SupportAiChain {
   ): Promise<SupportAiChainResult> {
     const { config } = await this.deps.configs.get(scope);
     if (config.mode === 'OFF' || config.primary === null) {
-      return { outcome: { outcome: 'TEMPORARY', code: 'support_ai.off' }, step: null, attempts: 0, exhausted: 'NOT_CONFIGURED' };
+      return {
+        outcome: { outcome: 'TEMPORARY', code: 'support_ai.off' },
+        step: null,
+        attempts: 0,
+        exhausted: 'NOT_CONFIGURED',
+      };
     }
     const steps = [config.primary, ...config.fallbacks];
-    const states = new Map((await this.deps.credentials.states(scope)).map((state) => [state.provider, state]));
+    const states = new Map(
+      (await this.deps.credentials.states(scope)).map((state) => [state.provider, state]),
+    );
     const now = this.deps.clock.now();
     let attempts = 0;
     let last: SupportAiChainResult | null = null;
@@ -118,7 +125,8 @@ export class SupportAiChain {
     await this.deps.opsLog.record(scope, {
       code: SUPPORT_AI_UNAVAILABLE_CODE,
       severity: 'WARN',
-      message: 'No configured AI provider could answer. Support conversations hand off to a person until one can.',
+      message:
+        'No configured AI provider could answer. Support conversations hand off to a person until one can.',
       dedupeKey: `${SUPPORT_AI_UNAVAILABLE_CODE}:chain`,
       context: { attempts, lastOutcome: last?.outcome.outcome ?? null },
     });
@@ -134,7 +142,11 @@ export class SupportAiChain {
   }
 
   /** The breaker and the credential alert, from one attempt's outcome. */
-  private async observe(scope: ScopeContext, provider: SupportAiProvider, outcome: SupportAiOutcome): Promise<void> {
+  private async observe(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+    outcome: SupportAiOutcome,
+  ): Promise<void> {
     const now = this.deps.clock.now();
     const dedupeKey = `${SUPPORT_AI_CREDENTIAL_REJECTED_CODE}:${provider}`;
     if (outcome.outcome === 'AUTH_FAILED') {
@@ -152,7 +164,11 @@ export class SupportAiChain {
       }
       return;
     }
-    if (outcome.outcome === 'OK' || outcome.outcome === 'INVALID_OUTPUT' || outcome.outcome === 'REFUSED_BY_PROVIDER') {
+    if (
+      outcome.outcome === 'OK' ||
+      outcome.outcome === 'INVALID_OUTPUT' ||
+      outcome.outcome === 'REFUSED_BY_PROVIDER'
+    ) {
       // The provider answered with this key: the key works and the provider is up.
       await this.deps.credentials.recordResult(scope, provider, 'SUCCESS', now);
       if (await this.deps.credentials.clearRejected(scope, provider, now)) {
@@ -173,7 +189,10 @@ export class SupportAiChain {
 
   private async recoverUnavailable(scope: ScopeContext): Promise<void> {
     const tenantId = 'tenantId' in scope ? scope.tenantId : null;
-    if (tenantId === null || !(await this.deps.conditions.tenantConditionIsOpen(tenantId, SUPPORT_AI_UNAVAILABLE_CODE))) {
+    if (
+      tenantId === null ||
+      !(await this.deps.conditions.tenantConditionIsOpen(tenantId, SUPPORT_AI_UNAVAILABLE_CODE))
+    ) {
       return;
     }
     await this.deps.opsLog.record(scope, {

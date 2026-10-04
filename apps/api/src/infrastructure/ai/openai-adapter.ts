@@ -4,7 +4,13 @@ import type {
   SupportAiCredential,
   SupportAiRequest,
 } from '../../modules/control/support-ai/application/ports.js';
-import { aiHttpRequest, parseJson, retryAfterMsOf, type AiFetch, type AiHttpResult } from './ai-http.js';
+import {
+  aiHttpRequest,
+  parseJson,
+  retryAfterMsOf,
+  type AiFetch,
+  type AiHttpResult,
+} from './ai-http.js';
 
 export const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -28,7 +34,10 @@ export class OpenAiAdapter implements SupportAiAdapter {
     private readonly options: { readonly fetch?: AiFetch; readonly now?: () => number } = {},
   ) {}
 
-  async generate(credential: SupportAiCredential, request: SupportAiRequest): Promise<SupportAiOutcome> {
+  async generate(
+    credential: SupportAiCredential,
+    request: SupportAiRequest,
+  ): Promise<SupportAiOutcome> {
     const result = await aiHttpRequest(
       {
         method: 'POST',
@@ -50,7 +59,11 @@ export class OpenAiAdapter implements SupportAiAdapter {
     return readChatCompletion(result, this.options.now?.() ?? Date.now(), 'openai');
   }
 
-  async testConnection(credential: SupportAiCredential, model: string, timeoutMs: number): Promise<SupportAiOutcome> {
+  async testConnection(
+    credential: SupportAiCredential,
+    model: string,
+    timeoutMs: number,
+  ): Promise<SupportAiOutcome> {
     const result = await aiHttpRequest(
       {
         method: 'GET',
@@ -65,7 +78,10 @@ export class OpenAiAdapter implements SupportAiAdapter {
 }
 
 /** OpenAI-shaped messages: Z.AI reuses this. */
-export function openAiMessages(request: SupportAiRequest, system: string = request.system): unknown[] {
+export function openAiMessages(
+  request: SupportAiRequest,
+  system: string = request.system,
+): unknown[] {
   return [
     { role: 'system', content: system },
     ...request.messages.map((message) =>
@@ -90,13 +106,21 @@ export function openAiMessages(request: SupportAiRequest, system: string = reque
  * transport, HTTP status, refusal, truncation, then JSON — a refusal arrives as a 200 and must
  * be seen before its text is parsed as a decision.
  */
-export function readChatCompletion(result: AiHttpResult, nowMs: number, prefix: string): SupportAiOutcome {
+export function readChatCompletion(
+  result: AiHttpResult,
+  nowMs: number,
+  prefix: string,
+): SupportAiOutcome {
   if (result.kind === 'TIMEOUT') return { outcome: 'TIMEOUT' };
-  if (result.kind === 'NETWORK') return { outcome: 'TEMPORARY', code: `${prefix}.network.${result.code}` };
+  if (result.kind === 'NETWORK')
+    return { outcome: 'TEMPORARY', code: `${prefix}.network.${result.code}` };
   const body = parseJson(result.body) as Record<string, unknown> | null;
-  if (result.status < 200 || result.status >= 300) return statusOutcome(result, body, nowMs, prefix);
+  if (result.status < 200 || result.status >= 300)
+    return statusOutcome(result, body, nowMs, prefix);
 
-  const choice = Array.isArray(body?.choices) ? (body.choices[0] as Record<string, unknown> | undefined) : undefined;
+  const choice = Array.isArray(body?.choices)
+    ? (body.choices[0] as Record<string, unknown> | undefined)
+    : undefined;
   const message = choice?.message as Record<string, unknown> | undefined;
   const usage = usageOf(body?.usage);
   const finish = typeof choice?.finish_reason === 'string' ? choice.finish_reason : null;
@@ -110,7 +134,8 @@ export function readChatCompletion(result: AiHttpResult, nowMs: number, prefix: 
   if (finish === 'length' || finish === 'model_context_window_exceeded') {
     return { outcome: 'INVALID_OUTPUT', code: `${prefix}.truncated`, usage };
   }
-  if (typeof message?.content !== 'string') return { outcome: 'INVALID_OUTPUT', code: `${prefix}.no_content`, usage };
+  if (typeof message?.content !== 'string')
+    return { outcome: 'INVALID_OUTPUT', code: `${prefix}.no_content`, usage };
   const output = parseJson(stripFence(message.content));
   if (output === null || typeof output !== 'object') {
     return { outcome: 'INVALID_OUTPUT', code: `${prefix}.not_json`, usage };
@@ -124,9 +149,15 @@ export function readChatCompletion(result: AiHttpResult, nowMs: number, prefix: 
 }
 
 /** A listing or model read used as a connection test: 2xx is "the key works". */
-export function readListing(result: AiHttpResult, nowMs: number, model: string, prefix: string): SupportAiOutcome {
+export function readListing(
+  result: AiHttpResult,
+  nowMs: number,
+  model: string,
+  prefix: string,
+): SupportAiOutcome {
   if (result.kind === 'TIMEOUT') return { outcome: 'TIMEOUT' };
-  if (result.kind === 'NETWORK') return { outcome: 'TEMPORARY', code: `${prefix}.network.${result.code}` };
+  if (result.kind === 'NETWORK')
+    return { outcome: 'TEMPORARY', code: `${prefix}.network.${result.code}` };
   const body = parseJson(result.body) as Record<string, unknown> | null;
   if (result.status >= 200 && result.status < 300) {
     return { outcome: 'OK', output: {}, usage: { inputTokens: null, outputTokens: null }, model };
@@ -141,26 +172,41 @@ function statusOutcome(
   prefix: string,
 ): SupportAiOutcome {
   const error = (body?.error ?? null) as Record<string, unknown> | null;
-  const code = typeof error?.code === 'string' ? error.code : typeof error?.type === 'string' ? error.type : '';
+  const code =
+    typeof error?.code === 'string'
+      ? error.code
+      : typeof error?.type === 'string'
+        ? error.type
+        : '';
   const status = result.status;
   // Quota and billing exhaustion is the credential's problem, never a rate limit (TB4 audit).
   if (code === 'insufficient_quota' || code === 'billing_hard_limit_reached') {
     return { outcome: 'AUTH_FAILED', quota: true, code: `${prefix}.quota` };
   }
-  if (status === 401 || status === 403) return { outcome: 'AUTH_FAILED', quota: false, code: `${prefix}.http_${status}` };
+  if (status === 401 || status === 403)
+    return { outcome: 'AUTH_FAILED', quota: false, code: `${prefix}.http_${status}` };
   if (status === 429) {
-    return { outcome: 'RATE_LIMITED', retryAfterMs: retryAfterMsOf(result.headers, nowMs), code: `${prefix}.http_429` };
+    return {
+      outcome: 'RATE_LIMITED',
+      retryAfterMs: retryAfterMsOf(result.headers, nowMs),
+      code: `${prefix}.http_429`,
+    };
   }
-  if (status === 408 || status === 409 || status >= 500) return { outcome: 'TEMPORARY', code: `${prefix}.http_${status}` };
+  if (status === 408 || status === 409 || status >= 500)
+    return { outcome: 'TEMPORARY', code: `${prefix}.http_${status}` };
   // 400/404/422: a model id or request the provider will not accept. Not transient, and not
   // the model's output — it is configuration, reported as invalid output so it never falls
   // back into a second provider with the same mistake hidden.
   return { outcome: 'INVALID_OUTPUT', code: `${prefix}.http_${status}` };
 }
 
-function usageOf(raw: unknown): { readonly inputTokens: number | null; readonly outputTokens: number | null } {
+function usageOf(raw: unknown): {
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+} {
   const usage = (raw ?? {}) as Record<string, unknown>;
-  const pick = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+  const pick = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
   return {
     inputTokens: pick(usage.prompt_tokens ?? usage.input_tokens),
     outputTokens: pick(usage.completion_tokens ?? usage.output_tokens),

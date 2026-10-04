@@ -1,8 +1,4 @@
-import type {
-  SupportAiCapabilities,
-  SupportAiOutcome,
-  SupportAiProvider,
-} from '@nexa/contracts';
+import type { SupportAiCapabilities, SupportAiOutcome, SupportAiProvider } from '@nexa/contracts';
 
 /**
  * TB4 — the provider-neutral adapter port (ADR-0034 §2). Each adapter maps its provider's wire
@@ -41,12 +37,13 @@ export interface SupportAiRequest {
 export interface SupportAiAdapter {
   readonly provider: SupportAiProvider;
   readonly capabilities: SupportAiCapabilities;
-  generate(
-    credential: SupportAiCredential,
-    request: SupportAiRequest,
-  ): Promise<SupportAiOutcome>;
+  generate(credential: SupportAiCredential, request: SupportAiRequest): Promise<SupportAiOutcome>;
   /** The cheapest authenticated call the provider offers. Never a customer's data. */
-  testConnection(credential: SupportAiCredential, model: string, timeoutMs: number): Promise<SupportAiOutcome>;
+  testConnection(
+    credential: SupportAiCredential,
+    model: string,
+    timeoutMs: number,
+  ): Promise<SupportAiOutcome>;
 }
 
 /** A decrypted key and its (closed) routing choice. Lives only for the duration of a call. */

@@ -39,7 +39,10 @@ export class ZaiAdapter implements SupportAiAdapter {
     private readonly options: { readonly fetch?: AiFetch; readonly now?: () => number } = {},
   ) {}
 
-  async generate(credential: SupportAiCredential, request: SupportAiRequest): Promise<SupportAiOutcome> {
+  async generate(
+    credential: SupportAiCredential,
+    request: SupportAiRequest,
+  ): Promise<SupportAiOutcome> {
     const system =
       `${request.system}\n\nReply with ONE JSON object and nothing else. It must satisfy this JSON Schema:\n` +
       JSON.stringify(request.jsonSchema);
@@ -69,14 +72,23 @@ export class ZaiAdapter implements SupportAiAdapter {
    * No models endpoint is documented (TB4 audit), so the test is the smallest real call: one
    * token. It costs a few tokens and proves the key, the host and the model together.
    */
-  async testConnection(credential: SupportAiCredential, model: string, timeoutMs: number): Promise<SupportAiOutcome> {
+  async testConnection(
+    credential: SupportAiCredential,
+    model: string,
+    timeoutMs: number,
+  ): Promise<SupportAiOutcome> {
     const result = await aiHttpRequest(
       {
         method: 'POST',
         url: `${ZAI_BASE_URLS[credential.region ?? 'INTERNATIONAL']}/chat/completions`,
         headers: { authorization: `Bearer ${credential.apiKey}`, 'accept-language': 'en-US,en' },
         timeoutMs,
-        body: { model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1, thinking: { type: 'disabled' } },
+        body: {
+          model,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1,
+          thinking: { type: 'disabled' },
+        },
       },
       this.options.fetch,
     );

@@ -82,7 +82,10 @@ export class SupportAiConfigService {
 
   async view(scope: ScopeContext, actor: ActorContext): Promise<SupportAiConfigResponse> {
     await this.deps.guard.check(scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION);
-    const [stored, states] = await Promise.all([this.deps.configs.get(scope), this.deps.credentials.states(scope)]);
+    const [stored, states] = await Promise.all([
+      this.deps.configs.get(scope),
+      this.deps.credentials.states(scope),
+    ]);
     const byProvider = new Map(states.map((state) => [state.provider, state]));
     return {
       config: stored.config,
@@ -104,7 +107,10 @@ export class SupportAiConfigService {
           const adapter = this.deps.adapters.get(provider);
           return [
             provider,
-            { structuredOutput: adapter?.capabilities.structuredOutput ?? false, vision: adapter?.capabilities.vision ?? false },
+            {
+              structuredOutput: adapter?.capabilities.structuredOutput ?? false,
+              vision: adapter?.capabilities.vision ?? false,
+            },
           ];
         }),
       ) as SupportAiConfigResponse['capabilities'],
@@ -118,11 +124,24 @@ export class SupportAiConfigService {
   ): Promise<{ readonly version: number; readonly config: SupportAiConfigInput }> {
     const command = supportAiConfigUpdateRequestSchema.parse(body);
     const adminId = this.adminIdOf(actor);
-    const denial = { action: 'support_ai.config.update', entityType: 'SupportAiConfig', entityId: null };
+    const denial = {
+      action: 'support_ai.config.update',
+      entityType: 'SupportAiConfig',
+      entityId: null,
+    };
     await this.authorize(scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION, denial);
-    const requestHash = hashRequest({ command: 'support_ai.config.update', ...command, idempotencyKey: undefined });
+    const requestHash = hashRequest({
+      command: 'support_ai.config.update',
+      ...command,
+      idempotencyKey: undefined,
+    });
     type Result = { readonly version: number; readonly config: SupportAiConfigInput };
-    const replay = await this.deps.idempotency.find<Result>(scope, actor.surface, command.idempotencyKey, requestHash);
+    const replay = await this.deps.idempotency.find<Result>(
+      scope,
+      actor.surface,
+      command.idempotencyKey,
+      requestHash,
+    );
     if (replay) return replay.result;
 
     return runAuthorizedMutation(
@@ -142,7 +161,12 @@ export class SupportAiConfigService {
         if (expected !== before.version) throw this.versionConflict();
         const version = await this.deps.configs.save(
           scope,
-          { config: command.config, expectedVersion: expected, adminId, now: this.deps.clock.now() },
+          {
+            config: command.config,
+            expectedVersion: expected,
+            adminId,
+            now: this.deps.clock.now(),
+          },
           tx,
         );
         if (version === null) throw this.versionConflict();
@@ -160,7 +184,15 @@ export class SupportAiConfigService {
           tx,
         );
         const result: Result = { version, config: command.config };
-        await rememberOnce(this.deps.idempotency, scope, actor.surface, command.idempotencyKey, requestHash, result, tx);
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          actor.surface,
+          command.idempotencyKey,
+          requestHash,
+          result,
+          tx,
+        );
         return result;
       },
     );
@@ -175,12 +207,24 @@ export class SupportAiConfigService {
     const provider = this.providerOf(providerRaw);
     const command = supportAiCredentialSetRequestSchema.parse(body);
     if (command.region !== undefined && provider !== 'ZAI') {
-      throw errors.validation(SUPPORT_AI_ERROR_CODES.REGION_NOT_APPLICABLE, 'Only Z.AI keys have a region.');
+      throw errors.validation(
+        SUPPORT_AI_ERROR_CODES.REGION_NOT_APPLICABLE,
+        'Only Z.AI keys have a region.',
+      );
     }
-    const denial = { action: 'support_ai.credential.set', entityType: 'SupportAiCredential', entityId: provider };
+    const denial = {
+      action: 'support_ai.credential.set',
+      entityType: 'SupportAiCredential',
+      entityId: provider,
+    };
     await this.authorize(scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION, denial);
     // The key is hashed into the idempotency record only as a digest, never stored readably.
-    const requestHash = hashRequest({ command: 'support_ai.credential.set', provider, apiKey: command.apiKey, region: command.region ?? null });
+    const requestHash = hashRequest({
+      command: 'support_ai.credential.set',
+      provider,
+      apiKey: command.apiKey,
+      region: command.region ?? null,
+    });
     const replay = await this.deps.idempotency.find<{ readonly replaced: boolean }>(
       scope,
       actor.surface,
@@ -188,34 +232,57 @@ export class SupportAiConfigService {
       requestHash,
     );
     if (replay) return replay.result;
-    return runAuthorizedMutation(this.mutationDeps(), scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION, denial, async (tx) => {
-      await this.assertScopeActive(scope, tx);
-      const now = this.deps.clock.now();
-      const written = await this.deps.credentials.replace(
-        scope,
-        { provider, apiKey: command.apiKey, region: provider === 'ZAI' ? (command.region ?? 'INTERNATIONAL') : null, now },
-        tx,
-      );
-      // A replaced key is a new question: whatever rejection the old one had is closed.
-      if (written.wasRejected) await this.closeRejection(scope, provider, tx);
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action: 'support_ai.credential.set',
-          entityType: 'SupportAiCredential',
-          entityId: provider,
-          // WHICH key changed, never the value (ADR-0023).
-          before: { configured: written.replaced },
-          after: { configured: true, region: provider === 'ZAI' ? (command.region ?? 'INTERNATIONAL') : null },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-      const result = { replaced: written.replaced };
-      await rememberOnce(this.deps.idempotency, scope, actor.surface, command.idempotencyKey, requestHash, result, tx);
-      return result;
-    });
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      SUPPORT_AI_CONFIGURE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const now = this.deps.clock.now();
+        const written = await this.deps.credentials.replace(
+          scope,
+          {
+            provider,
+            apiKey: command.apiKey,
+            region: provider === 'ZAI' ? (command.region ?? 'INTERNATIONAL') : null,
+            now,
+          },
+          tx,
+        );
+        // A replaced key is a new question: whatever rejection the old one had is closed.
+        if (written.wasRejected) await this.closeRejection(scope, provider, tx);
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'support_ai.credential.set',
+            entityType: 'SupportAiCredential',
+            entityId: provider,
+            // WHICH key changed, never the value (ADR-0023).
+            before: { configured: written.replaced },
+            after: {
+              configured: true,
+              region: provider === 'ZAI' ? (command.region ?? 'INTERNATIONAL') : null,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        const result = { replaced: written.replaced };
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          actor.surface,
+          command.idempotencyKey,
+          requestHash,
+          result,
+          tx,
+        );
+        return result;
+      },
+    );
   }
 
   async deleteCredential(
@@ -225,41 +292,70 @@ export class SupportAiConfigService {
     idempotencyKey: string,
   ): Promise<{ readonly removed: boolean }> {
     const provider = this.providerOf(providerRaw);
-    const denial = { action: 'support_ai.credential.delete', entityType: 'SupportAiCredential', entityId: provider };
+    const denial = {
+      action: 'support_ai.credential.delete',
+      entityType: 'SupportAiCredential',
+      entityId: provider,
+    };
     await this.authorize(scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION, denial);
     const requestHash = hashRequest({ command: 'support_ai.credential.delete', provider });
-    const replay = await this.deps.idempotency.find<{ readonly removed: boolean }>(scope, actor.surface, idempotencyKey, requestHash);
+    const replay = await this.deps.idempotency.find<{ readonly removed: boolean }>(
+      scope,
+      actor.surface,
+      idempotencyKey,
+      requestHash,
+    );
     if (replay) return replay.result;
-    return runAuthorizedMutation(this.mutationDeps(), scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION, denial, async (tx) => {
-      await this.assertScopeActive(scope, tx);
-      const removed = await this.deps.credentials.remove(scope, provider, tx);
-      if (removed.wasRejected) await this.closeRejection(scope, provider, tx);
-      if (removed.removed) {
-        await this.deps.audit.record(
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      SUPPORT_AI_CONFIGURE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const removed = await this.deps.credentials.remove(scope, provider, tx);
+        if (removed.wasRejected) await this.closeRejection(scope, provider, tx);
+        if (removed.removed) {
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'support_ai.credential.delete',
+              entityType: 'SupportAiCredential',
+              entityId: provider,
+              before: { configured: true },
+              after: { configured: false },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+        }
+        const result = { removed: removed.removed };
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
-          actor,
-          {
-            action: 'support_ai.credential.delete',
-            entityType: 'SupportAiCredential',
-            entityId: provider,
-            before: { configured: true },
-            after: { configured: false },
-            result: 'SUCCESS',
-          },
+          actor.surface,
+          idempotencyKey,
+          requestHash,
+          result,
           tx,
         );
-      }
-      const result = { removed: removed.removed };
-      await rememberOnce(this.deps.idempotency, scope, actor.surface, idempotencyKey, requestHash, result, tx);
-      return result;
-    });
+        return result;
+      },
+    );
   }
 
   /**
    * The operator's connection test. Authorised and scope-checked first, then the provider is
    * called outside any transaction, then the outcome is recorded.
    */
-  async test(scope: ScopeContext, actor: ActorContext, providerRaw: string, model: string): Promise<SupportAiTestResponse> {
+  async test(
+    scope: ScopeContext,
+    actor: ActorContext,
+    providerRaw: string,
+    model: string,
+  ): Promise<SupportAiTestResponse> {
     const provider = this.providerOf(providerRaw);
     await this.authorize(scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION, {
       action: 'support_ai.credential.test',
@@ -271,11 +367,18 @@ export class SupportAiConfigService {
     if (adapter === undefined) throw this.unknownProvider();
     const credential = await this.deps.credentials.read(scope, provider);
     if (credential === null) {
-      throw errors.conflict(SUPPORT_AI_ERROR_CODES.CREDENTIAL_MISSING, 'Set a key for this provider first.');
+      throw errors.conflict(
+        SUPPORT_AI_ERROR_CODES.CREDENTIAL_MISSING,
+        'Set a key for this provider first.',
+      );
     }
     const { config } = await this.deps.configs.get(scope);
     const started = this.deps.clock.now().getTime();
-    const outcome: SupportAiOutcome = await adapter.testConnection(credential, model, config.timeoutMs);
+    const outcome: SupportAiOutcome = await adapter.testConnection(
+      credential,
+      model,
+      config.timeoutMs,
+    );
     const now = this.deps.clock.now();
     const latencyMs = Math.max(0, now.getTime() - started);
     await this.deps.runs.record(scope, {
@@ -293,10 +396,16 @@ export class SupportAiConfigService {
       now,
     });
     await this.deps.credentials.recordTest(scope, provider, outcome.outcome, now);
-    if (outcome.outcome === 'OK' && (await this.deps.credentials.clearRejected(scope, provider, now))) {
+    if (
+      outcome.outcome === 'OK' &&
+      (await this.deps.credentials.clearRejected(scope, provider, now))
+    ) {
       await this.closeRejection(scope, provider);
     }
-    if (outcome.outcome === 'AUTH_FAILED' && (await this.deps.credentials.markRejected(scope, provider, now))) {
+    if (
+      outcome.outcome === 'AUTH_FAILED' &&
+      (await this.deps.credentials.markRejected(scope, provider, now))
+    ) {
       await this.deps.opsLog.record(scope, {
         code: SUPPORT_AI_CREDENTIAL_REJECTED_CODE,
         severity: 'ERROR',
@@ -318,13 +427,18 @@ export class SupportAiConfigService {
     return { since: since.toISOString(), rows: await this.deps.runs.usage(scope, since) };
   }
 
-  private async closeRejection(scope: ScopeContext, provider: SupportAiProvider, tx?: unknown): Promise<void> {
+  private async closeRejection(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+    tx?: unknown,
+  ): Promise<void> {
     await this.deps.opsLog.record(
       scope,
       {
         code: SUPPORT_AI_CREDENTIAL_ACCEPTED_CODE,
         severity: 'INFO',
-        message: 'An AI provider key that had been rejected was replaced, removed or accepted again.',
+        message:
+          'An AI provider key that had been rejected was replaced, removed or accepted again.',
         recoversCode: SUPPORT_AI_CREDENTIAL_REJECTED_CODE,
         recoversDedupeKey: `${SUPPORT_AI_CREDENTIAL_REJECTED_CODE}:${provider}`,
         context: { provider },
@@ -340,7 +454,10 @@ export class SupportAiConfigService {
 
   private adminIdOf(actor: ActorContext): string {
     if (actor.id === null) {
-      throw errors.permissionDenied(PLATFORM_ERROR_CODES.PERMISSION_DENIED, 'Only an administrator configures the support AI.');
+      throw errors.permissionDenied(
+        PLATFORM_ERROR_CODES.PERMISSION_DENIED,
+        'Only an administrator configures the support AI.',
+      );
     }
     return actor.id;
   }
@@ -365,11 +482,17 @@ export class SupportAiConfigService {
   }
 
   private inactive() {
-    return errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'This scope is not accepting work.');
+    return errors.notFound(
+      PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+      'This scope is not accepting work.',
+    );
   }
 
   private versionConflict() {
-    return errors.conflict(SUPPORT_AI_ERROR_CODES.VERSION_CONFLICT, 'The configuration changed since it was loaded; reload it.');
+    return errors.conflict(
+      SUPPORT_AI_ERROR_CODES.VERSION_CONFLICT,
+      'The configuration changed since it was loaded; reload it.',
+    );
   }
 
   private unknownProvider() {

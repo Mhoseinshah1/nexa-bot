@@ -61,7 +61,9 @@ export async function aiHttpRequest(
     }
     const body = await readBounded(response, controller);
     if (body === null) {
-      return controller.signal.aborted ? { kind: 'TIMEOUT' } : { kind: 'NETWORK', code: 'body_too_large' };
+      return controller.signal.aborted
+        ? { kind: 'TIMEOUT' }
+        : { kind: 'NETWORK', code: 'body_too_large' };
     }
     return { kind: 'RESPONSE', status: response.status, headers: response.headers, body };
   } finally {
@@ -69,7 +71,10 @@ export async function aiHttpRequest(
   }
 }
 
-async function readBounded(response: Response, controller: AbortController): Promise<string | null> {
+async function readBounded(
+  response: Response,
+  controller: AbortController,
+): Promise<string | null> {
   if (response.body === null) return '';
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

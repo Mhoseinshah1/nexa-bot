@@ -78,7 +78,10 @@ export class DrizzleSupportAiCredentialStore {
   }
 
   /** The decrypted key, scoped by tenant AND provider, or null when none is set. */
-  async read(scope: ScopeContext, provider: SupportAiProvider): Promise<SupportAiCredential | null> {
+  async read(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+  ): Promise<SupportAiCredential | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.db
       .select({
@@ -121,7 +124,10 @@ export class DrizzleSupportAiCredentialStore {
     const tenantId = requireTenantId(scope);
     const executor = exec(this.db, tx);
     const [existing] = await executor
-      .select({ id: supportAiProviderCredentials.id, rejectedAt: supportAiProviderCredentials.rejectedAt })
+      .select({
+        id: supportAiProviderCredentials.id,
+        rejectedAt: supportAiProviderCredentials.rejectedAt,
+      })
       .from(supportAiProviderCredentials)
       .where(
         and(
@@ -158,7 +164,12 @@ export class DrizzleSupportAiCredentialStore {
     await executor
       .update(supportAiProviderCredentials)
       .set(fresh)
-      .where(and(eq(supportAiProviderCredentials.tenantId, tenantId), eq(supportAiProviderCredentials.id, id)));
+      .where(
+        and(
+          eq(supportAiProviderCredentials.tenantId, tenantId),
+          eq(supportAiProviderCredentials.id, id),
+        ),
+      );
     return { replaced: true, wasRejected: existing.rejectedAt !== null };
   }
 
@@ -177,7 +188,10 @@ export class DrizzleSupportAiCredentialStore {
           eq(supportAiProviderCredentials.provider, provider),
         ),
       )
-      .returning({ id: supportAiProviderCredentials.id, rejectedAt: supportAiProviderCredentials.rejectedAt });
+      .returning({
+        id: supportAiProviderCredentials.id,
+        rejectedAt: supportAiProviderCredentials.rejectedAt,
+      });
     return { removed: rows.length > 0, wasRejected: rows[0]?.rejectedAt != null };
   }
 
@@ -230,7 +244,11 @@ export class DrizzleSupportAiCredentialStore {
    * Marks the key REJECTED. True only on the transition into rejected (null → set): the one
    * moment `credential_rejected` is raised.
    */
-  async markRejected(scope: ScopeContext, provider: SupportAiProvider, now: Date): Promise<boolean> {
+  async markRejected(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+    now: Date,
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.db
       .update(supportAiProviderCredentials)
@@ -247,7 +265,11 @@ export class DrizzleSupportAiCredentialStore {
   }
 
   /** Clears a rejection. True only on the transition out of rejected: the one recovery. */
-  async clearRejected(scope: ScopeContext, provider: SupportAiProvider, now: Date): Promise<boolean> {
+  async clearRejected(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+    now: Date,
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.db
       .update(supportAiProviderCredentials)
@@ -362,7 +384,12 @@ export class DrizzleSupportAiConfigRepository {
     const updated = await executor
       .update(supportAiConfigs)
       .set({ ...values, version: sql`${supportAiConfigs.version} + 1` })
-      .where(and(eq(supportAiConfigs.tenantId, tenantId), eq(supportAiConfigs.version, input.expectedVersion)))
+      .where(
+        and(
+          eq(supportAiConfigs.tenantId, tenantId),
+          eq(supportAiConfigs.version, input.expectedVersion),
+        ),
+      )
       .returning({ version: supportAiConfigs.version });
     return updated[0]?.version ?? null;
   }
@@ -415,10 +442,14 @@ export class DrizzleSupportAiRunRecorder {
         model: supportAiRuns.model,
         operation: supportAiRuns.operation,
         calls: count(),
-        failures: sql<number>`count(*) FILTER (WHERE ${supportAiRuns.outcome} <> 'OK')`.mapWith(Number),
+        failures: sql<number>`count(*) FILTER (WHERE ${supportAiRuns.outcome} <> 'OK')`.mapWith(
+          Number,
+        ),
         inputTokens: sql<number>`COALESCE(sum(${supportAiRuns.inputTokens}), 0)`.mapWith(Number),
         outputTokens: sql<number>`COALESCE(sum(${supportAiRuns.outputTokens}), 0)`.mapWith(Number),
-        avgLatencyMs: sql<number>`COALESCE(round(avg(${supportAiRuns.latencyMs})), 0)`.mapWith(Number),
+        avgLatencyMs: sql<number>`COALESCE(round(avg(${supportAiRuns.latencyMs})), 0)`.mapWith(
+          Number,
+        ),
       })
       .from(supportAiRuns)
       .where(and(eq(supportAiRuns.tenantId, tenantId), gte(supportAiRuns.createdAt, since)))
