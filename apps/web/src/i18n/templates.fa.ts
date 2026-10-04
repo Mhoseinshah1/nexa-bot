@@ -53,6 +53,7 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
       'bot.ping.',
       'error.',
       'bot.unknown_command',
+      'bot.callback.',
       'bot.request_unavailable',
       'bot.blocked',
     ],
@@ -689,6 +690,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.unknown_command': [
     'پاسخ به دستور ناشناخته',
     'وقتی مشتری دستوری می‌فرستد که ربات آن را نمی‌شناسد.',
+  ],
+  'bot.callback.stale': [
+    'پاسخ به دکمهٔ قدیمی یا ناشناخته',
+    'وقتی مشتری دکمه‌ای شیشه‌ای را می‌زند که ربات آن را نمی‌شناسد؛ مثلاً دکمه‌های ربات قبلی (میرزا) روی همین توکن، یا دکمهٔ یک نسخهٔ قدیمی‌تر. همراه با دکمهٔ بازگشت به منوی اصلی فرستاده می‌شود.',
   ],
   'error.internal': [
     'پیام خطای عمومی',

@@ -1,14 +1,42 @@
 name: CI
 
+# What runs, and when. docs/ci.md is the long form.
+#
+# - A pull request runs CI on `pull_request`, once per head. Branch pushes do
+#   NOT also run it: the second, `push`, run of every PR head doubled the load
+#   on the runner pool and verified nothing the first did not.
+# - `main` runs CI on `push`, once per commit, and every one of those runs is
+#   left to finish. That is the evidence `release.yml` looks for: a release is
+#   published only from a SHA whose own push (or dispatched) run passed.
+# - `workflow_dispatch` runs CI for exactly the head of the chosen ref. It is how
+#   a commit that has no passing run gets one, and it is never cancelled.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
+# Cancel only what has been SUPERSEDED, and only for pull requests.
+#
+# The previous group was `<workflow>-<ref>` with cancel-in-progress for every
+# event, so two merges to main in quick succession cancelled the first merge's
+# run: that merge SHA was left with no completed CI at all, and a release tagged
+# on it was refused for want of one. A re-run of an older main SHA landed in the
+# same group and cancelled the NEWER run, or was cancelled by it.
+#
+# Now:
+#   pull_request   group per PR number, cancel-in-progress: a new head replaces
+#                  the old one's run, which nobody will merge anyway;
+#   push (main)    group per ref AND SHA, never cancelled: each commit has its
+#                  own group, so neither a later merge nor a re-run can touch it;
+#   dispatch       the same per-SHA group, never cancelled.
+#
+# Per SHA rather than one shared group with cancel-in-progress off, because a
+# shared group still CANCELS a pending run when a third arrives — GitHub keeps
+# one pending run per group — which is the same lost SHA by another route.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # CI reads the repository and nothing else. Without this the job token inherits
 # the repository default, which is frequently read/write.
@@ -23,6 +51,7 @@ jobs:
   static:
     name: Typecheck, lint and boundaries
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # Pinned to an immutable commit. A tag is a moving pointer that whoever
       # controls the action's repository can repoint at any time, and CI runs
@@ -33,6 +62,8 @@ jobs:
         with:
           version: ${{ env.PNPM_VERSION }}
 
+      # `cache: pnpm` restores the pnpm STORE keyed on the lockfile, in every
+      # job below: the install is a link step, not a download.
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -66,103 +97,15 @@ jobs:
       - name: Falsification citations
         run: pnpm check:citations
 
-  test:
-    name: Unit and integration tests
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: nexa
-          POSTGRES_PASSWORD: nexa
-          POSTGRES_DB: nexa_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U nexa -d nexa_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-      redis:
-        image: redis:7-alpine
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
-      TEST_DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
-      REDIS_URL: redis://127.0.0.1:6379
-      # A throwaway key for the test database only. Real deployments supply
-      # their own; nothing encrypted with this ever leaves CI.
-      SECRETS_KEK: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-      SECRETS_KEK_ID: ci-1
-
-    steps:
-      # Pinned to an immutable commit. A tag is a moving pointer that whoever
-      # controls the action's repository can repoint at any time, and CI runs
-      # with a token. The comment names the release so an update stays legible.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # `db:migrate` now runs COMPILED output — the production path, which is
-      # the point of exercising it here rather than the tsx one.
-      - name: Build
-        run: pnpm build
-        env:
-          BUILD_VERSION: ${{ github.sha }}
-          BUILD_COMMIT: ${{ github.sha }}
-
-      - name: Unit tests
-        run: pnpm test
-
-      # The Web Admin suite, rendered in jsdom. Its own step because it is its
-      # own vitest project — granting a DOM to the whole corpus would let a
-      # node-only test name a browser global and still pass.
-      #
-      # It runs HERE rather than only in `pnpm verify` locally, because a suite
-      # CI does not run is a suite that rots: it would keep passing on the
-      # machine of whoever last touched it and nowhere else.
-      - name: Web admin tests
-        run: pnpm test:web
-
-      # Migrations run in contexts that legitimately have no application
-      # secrets — a CI step, an installer before first boot, a restore from
-      # backup. Unsetting the key here is the regression guard: if the migration
-      # runner ever starts loading the full application configuration again,
-      # this step fails.
-      - name: Apply migrations without application secrets
-        run: env -u SECRETS_KEK -u SECRETS_KEK_ID pnpm db:migrate
-
-      # A schema change that never became a migration is a deployment that works
-      # on one machine and nowhere else.
-      - name: Migration drift check
-        run: pnpm db:check
-
-      - name: Integration tests
-        run: pnpm test:integration
-
+  # Built ONCE. Every job that needs compiled output — the unit suite runs the
+  # built CLIs, the integration shards migrate with the compiled migrator —
+  # downloads this artifact rather than building again, so every test job runs
+  # against the same bytes, stamped with this SHA.
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      # Pinned to an immutable commit. A tag is a moving pointer that whoever
-      # controls the action's repository can repoint at any time, and CI runs
-      # with a token. The comment names the release so an update stays legible.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
@@ -216,6 +159,254 @@ jobs:
       - name: Production runtime and artifact checks
         run: pnpm check:runtime
 
+      # A schema change that never became a migration is a deployment that works
+      # on one machine and nowhere else. Needs the BUILT contracts, which is why
+      # it lives here; it needs no database.
+      - name: Migration drift check
+        run: pnpm db:check
+
+      # `overwrite`, because "Re-run all jobs" runs this job again under the
+      # same run id, and the second upload must replace the first rather than
+      # fail. "Re-run failed jobs" does not re-run this one; the shards it
+      # re-runs download the artifact the first attempt uploaded.
+      - name: Keep the build for the test jobs
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: dist
+          path: |
+            apps/api/dist
+            apps/web/dist
+            packages/contracts/dist
+            packages/i18n/dist
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true
+
+  unit:
+    name: Unit tests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+
+      - name: Unit tests
+        run: pnpm test
+
+  # The Web Admin suite, rendered in jsdom. Its own job because it is its own
+  # vitest project — granting a DOM to the whole corpus would let a node-only
+  # test name a browser global and still pass.
+  #
+  # It runs HERE rather than only in `pnpm verify` locally, because a suite CI
+  # does not run is a suite that rots: it would keep passing on the machine of
+  # whoever last touched it and nowhere else.
+  web:
+    name: Web admin tests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+
+      - name: Web admin tests
+        run: pnpm test:web
+
+  # The integration project, split by file across shards. Vitest's `--shard`
+  # partitions the sorted file list: every file runs in exactly one shard, and
+  # the files inside a shard run one at a time against that shard's own
+  # database, exactly as they did in the single job this replaces. Each shard
+  # is its own runner with its own PostgreSQL and Redis, so the rule that
+  # suites sharing a database run serially still holds. The shard count is the
+  # matrix length (`strategy.job-total`), so the two cannot disagree.
+  integration:
+    name: Integration tests (${{ matrix.shard }}/${{ strategy.job-total }})
+    needs: build
+    runs-on: ubuntu-latest
+    # Bounded so a hang is reported rather than billed for six hours. A shard
+    # takes roughly ten minutes; the step limit below fires first, so the log
+    # says which step was stuck.
+    timeout-minutes: 45
+    strategy:
+      # Every shard reports, even when one fails: a failure in shard 1 says
+      # nothing about shards 2–4, and cancelling them throws that away.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexa
+          POSTGRES_PASSWORD: nexa
+          POSTGRES_DB: nexa_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nexa -d nexa_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
+      TEST_DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
+      REDIS_URL: redis://127.0.0.1:6379
+      # A throwaway key for the test database only. Real deployments supply
+      # their own; nothing encrypted with this ever leaves CI.
+      SECRETS_KEK: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      SECRETS_KEK_ID: ci-1
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+
+      # The single largest cost in this job was durability nobody needs: each
+      # test's reset TRUNCATEs ~150 tables, and with fsync on that is hundreds
+      # of synced file creations per test. The container is discarded with the
+      # job. Measured numbers and the reasoning are in the script.
+      - name: Make the throwaway database non-durable
+        run: bash scripts/ci-test-postgres.sh "$POSTGRES_CONTAINER"
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+
+      # `db:migrate` runs COMPILED output — the production path, which is the
+      # point of exercising it here rather than the tsx one.
+      #
+      # Migrations run in contexts that legitimately have no application
+      # secrets — a CI step, an installer before first boot, a restore from
+      # backup. Unsetting the key here is the regression guard: if the migration
+      # runner ever starts loading the full application configuration again,
+      # this step fails. Every shard runs it, so every shard's suites start
+      # from a database the compiled migrator built.
+      - name: Apply migrations without application secrets
+        run: env -u SECRETS_KEK -u SECRETS_KEK_ID pnpm db:migrate
+
+      # Three reporters. `default` prints each file as it finishes, with its
+      # failures. `ci-progress-reporter` prints each file and test as it STARTS
+      # and a heartbeat every 30 s, so a slow suite (lines still arriving), a
+      # stuck test (heartbeats naming one test) and a process held open after
+      # the run (silence after "run finished") look different in the log.
+      # `hanging-process` names the open handles when vitest's teardown timeout
+      # expires. Per-test (60 s) and per-hook (60 s) timeouts are unchanged in
+      # vitest.config.mts.
+      - name: Integration tests
+        timeout-minutes: 40
+        run: >-
+          pnpm test:integration
+          --shard="${{ matrix.shard }}/${{ strategy.job-total }}"
+          --reporter=default
+          --reporter=./tests/support/ci-progress-reporter.ts
+          --reporter=hanging-process
+
+  # The name the single unit-and-integration job used to have, kept as one
+  # result: it is green only when the unit suite, the web suite and EVERY
+  # integration shard succeeded. `always()` so it reports a failure rather than
+  # being skipped when one of them failed — a skipped check reads as neutral.
+  test:
+    name: Unit and integration tests
+    if: always()
+    needs: [unit, web, integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every test job succeeded
+        env:
+          UNIT: ${{ needs.unit.result }}
+          WEB: ${{ needs.web.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+        run: |
+          set -euo pipefail
+          printf 'unit: %s\nweb: %s\nintegration (every shard): %s\n' "$UNIT" "$WEB" "$INTEGRATION"
+          [ "$UNIT" = "success" ] && [ "$WEB" = "success" ] && [ "$INTEGRATION" = "success" ]
+
+  # The deployment logic, against fakes. Split from the live smoke below so the
+  # two run side by side: together they were a 20-minute serial job, the
+  # longest in the workflow once the integration suite was sharded.
+  deploy-logic:
+    name: Deployment logic
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Shell is the language the installer and updater are written in, and an
+      # unquoted expansion there is a vulnerability rather than a style
+      # problem. The runner has shellcheck preinstalled.
+      # Called directly rather than through pnpm: this job needs no Node
+      # toolchain beyond the runner's own, and installing one to run shellcheck
+      # would add a minute and a dependency to a job that is about shell.
+      - name: Shell static analysis
+        run: bash scripts/check-shell.sh
+
+      # The update and rollback state machines, against a fake docker. These
+      # reach the failure branches — a failed backup, a failed migration, a
+      # release that never becomes ready, a second writer — which the live
+      # smoke cannot all reach cheaply.
+      - name: botctl logic
+        run: bash tests/deploy/botctl.test.sh
+
+      - name: The shell check's own check
+        run: bash tests/deploy/check-shell.test.sh
+
+      # The release workflow's CI gate, against a fake `gh` serving recorded
+      # API pages: re-run success accepted; cancelled, failed, in-progress,
+      # another SHA's green and a pull_request green all refused.
+      - name: Release CI gate
+        run: bash tests/deploy/release-ci-gate.test.sh
+
   # The deployment, actually run. Everything above this proves the application;
   # this proves it can be installed, updated and rolled back.
   #
@@ -225,30 +416,9 @@ jobs:
   deploy:
     name: Deployment smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
-      # Pinned to an immutable commit. A tag is a moving pointer that whoever
-      # controls the action's repository can repoint at any time, and CI runs
-      # with a token. The comment names the release so an update stays legible.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-
-      # Shell is the language the installer and updater are written in, and an
-      # unquoted expansion there is a vulnerability rather than a style
-      # problem. The runner has shellcheck preinstalled.
-      # Called directly rather than through pnpm: this job needs no Node
-      # toolchain, and installing one to run shellcheck would add a minute and
-      # a dependency to a job that is about Docker.
-      - name: Shell static analysis
-        run: bash scripts/check-shell.sh
-
-      # The update and rollback state machines, against a fake docker. These
-      # reach the failure branches — a failed backup, a failed migration, a
-      # release that never becomes ready, a second writer — which the live
-      # smoke below cannot all reach cheaply.
-      - name: botctl logic
-        run: bash tests/deploy/botctl.test.sh
-
-      - name: The shell check's own check
-        run: bash tests/deploy/check-shell.test.sh
 
       # Build, start, migrate, serve, back up. Uses the production compose file
       # with the CI overlay, which changes only what CI cannot have.
@@ -275,10 +445,8 @@ jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      # Pinned to an immutable commit. A tag is a moving pointer that whoever
-      # controls the action's repository can repoint at any time, and CI runs
-      # with a token. The comment names the release so an update stays legible.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0

@@ -12,7 +12,6 @@ import {
   type PaymentGatewayProvider,
   type PaymentGatewayStatus,
   type PaymentOpsQueueCounts,
-  type PermissionKey,
   type TenantContext,
   type TimePeriod,
 } from '@nexa/contracts';
@@ -273,7 +272,7 @@ export class GatewayHealthService {
   ): Promise<GatewayHealthReport> {
     await this.deps.guard.check(scope, actor, PAYMENT_GATEWAY_VIEW_PERMISSION);
     const held = await this.deps.guard.permissionsOf(scope, actor);
-    const mayPayments = held.has(PAYMENT_VIEW_PERMISSION as PermissionKey);
+    const mayPayments = held.has(PAYMENT_VIEW_PERMISSION);
     const window = await this.deps.operations.windowFor(scope, input);
     const gateways = await this.assemble(scope, window, mayPayments);
     return { window, gateways, withheld: mayPayments ? [] : ['PAYMENTS'] };

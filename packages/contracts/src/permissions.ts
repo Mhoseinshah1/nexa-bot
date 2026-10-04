@@ -16,21 +16,47 @@
 export const RISK_LEVELS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
-export interface PermissionDefinition {
-  readonly key: string;
-  readonly resource: string;
+/**
+ * One catalogue entry. Generic so that the catalogue below keeps every key as a
+ * LITERAL: `PermissionKey` is the union of those literals, not `string`.
+ *
+ * It used to be `string`. The helper returned a `PermissionDefinition` whose `key`
+ * was `string`, so `as const satisfies` had nothing literal left to keep, and every
+ * `Record<PermissionKey, …>` downstream — the Web Admin's Persian labels among them —
+ * was a `Record<string, …>` that enforced nothing. Sixteen permissions reached the
+ * contract without a label and only a rendering test noticed. With the literal union a
+ * missing label, a misspelt guard key or a dependency naming a key that does not exist
+ * is a compile error (`tests/web/permission-catalogue.typecheck.ts` pins that).
+ */
+export interface PermissionDefinition<K extends string = string, R extends string = string> {
+  readonly key: K;
+  /** The key's first segment: the permission's domain, which the role matrix groups by. */
+  readonly resource: R;
   readonly action: string;
   readonly description: string;
   readonly riskLevel: RiskLevel;
 }
 
-function p(
-  key: string,
+/** The domain of a key: everything before its first dot. */
+export type PermissionResourceOf<K extends string> = K extends `${infer R}.${string}` ? R : never;
+
+/*
+ * `const K` keeps the literal; the template-literal bound refuses a key with no
+ * `resource.action` shape at compile time, which the unit test also asserts at run time.
+ */
+function p<const K extends `${string}.${string}`>(
+  key: K,
   description: string,
   riskLevel: RiskLevel = 'MEDIUM',
-): PermissionDefinition {
+): PermissionDefinition<K, PermissionResourceOf<K>> {
   const [resource = '', ...rest] = key.split('.');
-  return { key, resource, action: rest.join('.'), description, riskLevel };
+  return {
+    key,
+    resource: resource as PermissionResourceOf<K>,
+    action: rest.join('.'),
+    description,
+    riskLevel,
+  };
 }
 
 /**
@@ -451,17 +477,23 @@ export const PERMISSIONS = [
   p('maintenance.run', 'Run maintenance operations', 'CRITICAL'),
 ] as const satisfies readonly PermissionDefinition[];
 
+/** The literal union of every catalogued key. Never `string` — see `PermissionDefinition`. */
 export type PermissionKey = (typeof PERMISSIONS)[number]['key'];
 
+/** The literal union of every catalogued domain (a permission's `resource`). */
+export type PermissionDomain = (typeof PERMISSIONS)[number]['resource'];
+
 export const PERMISSION_KEYS: readonly PermissionKey[] = PERMISSIONS.map(
-  (definition) => definition.key as PermissionKey,
+  (definition) => definition.key,
 );
 
-const PERMISSION_BY_KEY = new Map<string, PermissionDefinition>(
+const PERMISSION_BY_KEY = new Map<string, PermissionDefinition<PermissionKey, PermissionDomain>>(
   PERMISSIONS.map((definition) => [definition.key, definition]),
 );
 
-export function permissionDefinition(key: PermissionKey): PermissionDefinition {
+export function permissionDefinition(
+  key: PermissionKey,
+): PermissionDefinition<PermissionKey, PermissionDomain> {
   const found = PERMISSION_BY_KEY.get(key);
   if (!found) {
     throw new Error(`Unknown permission key: ${key}. Permissions are a frozen contract.`);
@@ -469,6 +501,13 @@ export function permissionDefinition(key: PermissionKey): PermissionDefinition {
   return found;
 }
 
+/**
+ * The boundary from `string` to `PermissionKey`. A key read from the database (a role's
+ * grant, an override), from a request body or from an audit row is a `string` and stays
+ * one until this says otherwise. A stored key the catalogue no longer names — nothing
+ * has ever been removed, but a row is not a contract — is answered `false` and the
+ * caller skips it: it confers nothing, and it must not take the admin surface down.
+ */
 export function isPermissionKey(value: string): value is PermissionKey {
   return PERMISSION_BY_KEY.has(value);
 }
@@ -487,8 +526,8 @@ export interface RoleSeed {
 }
 
 const ALL: readonly PermissionKey[] = PERMISSION_KEYS;
-const READ_ONLY = PERMISSIONS.filter((d) => d.riskLevel === 'LOW').map(
-  (d) => d.key as PermissionKey,
+const READ_ONLY: readonly PermissionKey[] = PERMISSIONS.filter((d) => d.riskLevel === 'LOW').map(
+  (d) => d.key,
 );
 
 export const ROLE_SEEDS: readonly RoleSeed[] = [
@@ -768,7 +807,7 @@ export interface PermissionOverride {
  * incoherent state, so an entry belongs here only when holding the action without
  * the read is genuinely unusable rather than merely unusual.
  */
-export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
+export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, PermissionKey>>> = {
   /*
    * Approving or rejecting a receipt is a decision made ON a payment, and the
    * reviewer needs the customer, the amount, the method and the destination it
@@ -779,84 +818,96 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * be the payment detail under another name, and a second read model for one
    * concept is the failure this codebase measures.
    */
-  'receipts.review': 'payments.view' as PermissionKey,
+  'receipts.review': 'payments.view',
   /*
    * A reconciliation is decided ON a payment's detail and its recorded gateway evidence,
    * which `payments.view` reads.
    */
-  'payments.reconcile': 'payments.view' as PermissionKey,
+  'payments.reconcile': 'payments.view',
   /*
    * An override is set FROM a customer's page and answers with that customer's
    * allowance — limit, used, remaining — which is customer data `users.view` reads.
    * Holding the write without the read would be a second way to read it.
    */
-  'users.trial.edit': 'users.view' as PermissionKey,
+  'users.trial.edit': 'users.view',
   /*
    * Customer 360. Every one of these is set FROM a customer's page and answers with that
    * customer's controls, which `users.view` reads.
    */
-  'users.channel_membership.exempt': 'users.view' as PermissionKey,
-  'users.phone.verify': 'users.view' as PermissionKey,
-  'users.location.edit': 'users.view' as PermissionKey,
-  'users.notifications.edit': 'users.view' as PermissionKey,
-  'users.transfer': 'users.view' as PermissionKey,
+  'users.channel_membership.exempt': 'users.view',
+  'users.phone.verify': 'users.view',
+  'users.location.edit': 'users.view',
+  'users.notifications.edit': 'users.view',
+  'users.transfer': 'users.view',
   /*
    * Phase A2. A direct message is composed on the customer's page and answers with that
    * customer's history; both are customer data `users.view` reads.
    */
-  'users.message.send': 'users.view' as PermissionKey,
-  'users.message.view': 'users.view' as PermissionKey,
+  'users.message.send': 'users.view',
+  'users.message.view': 'users.view',
   /*
    * Program §8. Notes and tags are read and written FROM a customer's page, which
    * `users.view` reads. `users.notes.write` depends on `users.view` rather than on
    * `users.notes.view` because this table is one level deep (asserted): a writer without
    * the read appends a note and is answered with that note alone, never the others.
    */
-  'users.notes.view': 'users.view' as PermissionKey,
-  'users.notes.write': 'users.view' as PermissionKey,
-  'users.tags.assign': 'users.view' as PermissionKey,
-  'users.tags.manage': 'users.view' as PermissionKey,
+  'users.notes.view': 'users.view',
+  'users.notes.write': 'users.view',
+  'users.tags.assign': 'users.view',
+  'users.tags.manage': 'users.view',
   /*
    * WP-A7. Every ticket action is taken FROM a ticket (or, for categories, from the
    * inbox that lists them), which `tickets.view` reads. Holding the action alone would be
    * a button on a page the holder cannot open.
    */
-  'tickets.reply': 'tickets.view' as PermissionKey,
-  'tickets.assign': 'tickets.view' as PermissionKey,
-  'tickets.close': 'tickets.view' as PermissionKey,
-  'tickets.categories.edit': 'tickets.view' as PermissionKey,
+  'tickets.reply': 'tickets.view',
+  'tickets.assign': 'tickets.view',
+  'tickets.close': 'tickets.view',
+  'tickets.categories.edit': 'tickets.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass
    * operation history, which `bulk_operations.view` reads.
    */
-  'broadcasts.send': 'broadcasts.view' as PermissionKey,
-  'users.wallet.mass': 'bulk_operations.view' as PermissionKey,
-  'services.mass.grant': 'bulk_operations.view' as PermissionKey,
+  'broadcasts.send': 'broadcasts.view',
+  'users.wallet.mass': 'bulk_operations.view',
+  'services.mass.grant': 'bulk_operations.view',
   // Program §13: a mass status change is confirmed and followed from the history.
-  'services.mass.status': 'bulk_operations.view' as PermissionKey,
+  'services.mass.status': 'bulk_operations.view',
   // Program §13: a grant is given FROM a service's page, which `services.view` reads.
-  'services.grant': 'services.view' as PermissionKey,
+  'services.grant': 'services.view',
   /*
    * Round N, C1. Every campaign command is taken FROM a campaign page, which
    * `campaigns.view` reads, and each answers with the campaign's preview and results.
    */
-  'campaigns.manage': 'campaigns.view' as PermissionKey,
+  'campaigns.manage': 'campaigns.view',
   /*
    * Phase D1. An export is the list an operator filtered on the audit page, written to a
    * file; without `audit.view` there is no list to have filtered.
    */
-  'audit.export': 'audit.view' as PermissionKey,
+  'audit.export': 'audit.view',
   /*
    * Program §6. A draft is written, previewed and published FROM the terms page, which
    * `terms.view` reads.
    */
-  'terms.edit': 'terms.view' as PermissionKey,
-  'terms.publish': 'terms.view' as PermissionKey,
+  'terms.edit': 'terms.view',
+  'terms.publish': 'terms.view',
   // Phase E3: both are taken from the incident's page, which `incidents.view` reads.
-  'incidents.manage': 'incidents.view' as PermissionKey,
-  'incidents.notify': 'incidents.view' as PermissionKey,
+  'incidents.manage': 'incidents.view',
+  'incidents.notify': 'incidents.view',
 };
+
+/**
+ * `PERMISSION_REQUIRES` as typed pairs, so the resolver and the role editor iterate it
+ * without casting `Object.entries`' `string` back into a key. Derived, never maintained.
+ */
+export const PERMISSION_DEPENDENCIES: readonly (readonly [
+  dependent: PermissionKey,
+  prerequisite: PermissionKey,
+])[] = PERMISSION_KEYS.flatMap((dependent) => {
+  const prerequisite = PERMISSION_REQUIRES[dependent];
+  return prerequisite === undefined ? [] : [[dependent, prerequisite] as const];
+});
 
 /**
  * Resolution: effective = (role permissions ∪ GRANT overrides) − DENY overrides,
@@ -896,9 +947,9 @@ export function resolveEffectivePermissions(
   for (const override of active) {
     if (override.effect === 'DENY') effective.delete(override.permissionKey);
   }
-  for (const [dependent, prerequisite] of Object.entries(PERMISSION_REQUIRES)) {
-    if (effective.has(dependent as PermissionKey) && !effective.has(prerequisite)) {
-      effective.delete(dependent as PermissionKey);
+  for (const [dependent, prerequisite] of PERMISSION_DEPENDENCIES) {
+    if (effective.has(dependent) && !effective.has(prerequisite)) {
+      effective.delete(dependent);
     }
   }
   return effective;
@@ -918,8 +969,7 @@ export function incoherentPermissionGrants(
 ): readonly { readonly permission: PermissionKey; readonly requires: PermissionKey }[] {
   const held = new Set<PermissionKey>(granted);
   const found: { permission: PermissionKey; requires: PermissionKey }[] = [];
-  for (const [dependent, prerequisite] of Object.entries(PERMISSION_REQUIRES)) {
-    const permission = dependent as PermissionKey;
+  for (const [permission, prerequisite] of PERMISSION_DEPENDENCIES) {
     if (held.has(permission) && !held.has(prerequisite)) {
       found.push({ permission, requires: prerequisite });
     }

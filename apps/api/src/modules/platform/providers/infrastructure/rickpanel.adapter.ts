@@ -9,7 +9,6 @@ import {
   type ProviderDescriptor,
   type ProviderFailureResult,
   type ProviderHttpClient,
-  type ProviderHttpResult,
   type ProviderLookupOutcome,
   type ProviderProbeOutcome,
   type ProviderRemovalOutcome,
@@ -25,6 +24,15 @@ import {
 } from '@nexa/contracts';
 import { planApplied, readRecordUsage } from './provider-numbers.js';
 import { parseSubscriptionFiles, retryAfterMs } from './subscription-files.js';
+import {
+  TOKEN_PATH,
+  USER_PATH,
+  exchangeRickpanelToken,
+  outcomeFromStatus,
+  outcomeFromTransport,
+  parseJson,
+  type RickpanelAuth,
+} from './rickpanel-protocol.js';
 
 /**
  * RickPanel.
@@ -66,11 +74,8 @@ import { parseSubscriptionFiles, retryAfterMs } from './subscription-files.js';
  *      five times over seven minutes is the incident this release exists to fix.
  */
 
-/** Form-encoded, as an OAuth2 password grant. The document's prose, not its schema. */
-export const TOKEN_PATH = 'api/admin/token';
+export { TOKEN_PATH, USER_PATH } from './rickpanel-protocol.js';
 export const SYSTEM_PATH = 'api/system';
-/** Create is a POST to the collection; read, modify and delete address `/{username}`. */
-export const USER_PATH = 'api/user';
 /** `POST /api/user/{username}/revoke_sub`: the panel mints a new subscription token. */
 export const REVOKE_SUBSCRIPTION_SUFFIX = 'revoke_sub';
 /** `GET /api/user/{username}/files` — every downloadable format (Package E). */
@@ -135,49 +140,6 @@ const DESCRIPTOR: ProviderDescriptor = providerDescriptor('rickpanel') ?? {
   requiredActivationFields: [],
 };
 
-/**
- * A failed HTTP exchange, as a probe outcome.
- *
- * The same taxonomy the other two adapters use, and deliberately WITHOUT the
- * create path's `PROVIDER_REFUSED`: a probe asks the panel about itself, and a
- * 400 to `GET /api/system` is a panel behaving oddly rather than a rule being
- * applied to a request. The distinction is raised only where the document says
- * a refusal carries a reason, which is the create.
- */
-function outcomeFromStatus(status: number): ProviderFailureResult {
-  if (status === 401 || status === 403) {
-    return { ok: false, failure: 'AUTHENTICATION_FAILED', status };
-  }
-  if (status === 429) return { ok: false, failure: 'RATE_LIMITED', status };
-  return { ok: false, failure: 'PROVIDER_ERROR', status };
-}
-
-function outcomeFromTransport(
-  result: Extract<ProviderHttpResult, { ok: false }>,
-): ProviderFailureResult {
-  return result.detail === undefined
-    ? { ok: false, failure: result.failure, status: result.status }
-    : { ok: false, failure: result.failure, status: result.status, detail: result.detail };
-}
-
-/**
- * A JSON body, or null.
- *
- * Never throws and never carries the body forward: a panel behind a misconfigured
- * proxy answers with an HTML login page, and `MALFORMED_RESPONSE` is a more
- * useful thing to tell an operator than a syntax error quoting somebody's form.
- */
-function parseJson(bodyText: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(bodyText);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Bounded and character-restricted: it is persisted and shown to an operator. */
 function safeVersion(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -185,8 +147,6 @@ function safeVersion(value: unknown): string | null {
   if (trimmed.length === 0 || trimmed.length > 64) return null;
   return /^[A-Za-z0-9._+-]+$/.test(trimmed) ? trimmed : null;
 }
-
-type RickpanelAuth = { readonly ok: true; readonly token: string } | ProviderFailureResult;
 
 /**
  * The panel's user record, reduced to what Nexa keeps.
@@ -313,37 +273,15 @@ export class RickpanelAdapter implements ProviderAdapter {
     target: ProviderTarget,
     http: ProviderHttpClient,
   ): Promise<RickpanelAuth> {
-    if (target.credentials.shape !== 'USERNAME_PASSWORD') {
-      // Reported as unsupported rather than attempted: sending an empty password
-      // to find out would be one more failed login on the operator's own panel.
-      return { ok: false, failure: 'UNSUPPORTED_CAPABILITY', status: null };
-    }
-
-    const login = await http.send({
-      method: 'POST',
-      // A token exchange creates a session and changes no account: a READ (G6).
-      effect: 'READ',
-      path: TOKEN_PATH,
-      body: {
-        kind: 'form',
-        value: {
-          username: target.credentials.username,
-          password: target.credentials.password,
-          grant_type: 'password',
-        },
-      },
-    });
-    if (!login.ok) return outcomeFromTransport(login);
-    if (login.status < 200 || login.status >= 300) return outcomeFromStatus(login.status);
-
-    const body = parseJson(login.bodyText);
-    const token = body?.['access_token'];
-    if (typeof token !== 'string' || token.length === 0) {
-      // A 200 carrying no token is not a successful login, and treating it as one
-      // would report a healthy panel that nothing can actually call.
-      return { ok: false, failure: 'MALFORMED_RESPONSE', status: login.status };
-    }
-    return { ok: true, token };
+    return exchangeRickpanelToken(target, (form) =>
+      http.send({
+        method: 'POST',
+        // A token exchange creates a session and changes no account: a READ (G6).
+        effect: 'READ',
+        path: TOKEN_PATH,
+        body: { kind: 'form', value: form },
+      }),
+    );
   }
 
   async probe(target: ProviderTarget, http: ProviderHttpClient): Promise<ProviderProbeOutcome> {

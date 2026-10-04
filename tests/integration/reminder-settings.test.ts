@@ -364,16 +364,16 @@ describe('the reminder thresholds are configuration, not constants', () => {
     /*
      * All three are UNSUPPORTED at the PARSER, before any intent exists — a crafted
      * code is not a settings key assembled downstream and a crafted value is not a
-     * number passed to the guard. `bot.unknown_command` is what an UNSUPPORTED
+     * number passed to the guard. `bot.callback.stale` (Item 12) is what an UNSUPPORTED
      * callback renders, which is the same answer every unreadable callback in this
      * surface gets, and deliberately says nothing about which of them it was.
      */
     const badCode = await open(`${PREFIX.edit}zz`, TG.owner);
-    expect(badCode.replyKey).toBe('bot.unknown_command');
+    expect(badCode.replyKey).toBe('bot.callback.stale');
     const badValue = await open(`${PREFIX.set}uf:abc`, TG.owner);
-    expect(badValue.replyKey).toBe('bot.unknown_command');
+    expect(badValue.replyKey).toBe('bot.callback.stale');
     const outOfRange = await open(`${PREFIX.set}uf:999`, TG.owner);
-    expect(outOfRange.replyKey).toBe('bot.unknown_command');
+    expect(outOfRange.replyKey).toBe('bot.callback.stale');
     expect((await config()).usageFirstPercent, 'nothing reached a write').toBe(80);
   });
 
@@ -431,13 +431,13 @@ describe('the reminder thresholds are configuration, not constants', () => {
     /*
      * And the tap gets nothing, because not drawing a button is never the control.
      *
-     * `bot.unknown_command`, not a denial: an administrator with no section is not an
+     * `bot.callback.stale` (Item 12), not a denial: an administrator with no section is not an
      * administrator as far as this surface is concerned, so a management callback from
      * them is answered exactly as a stranger's would be. Saying "refused" instead would
      * confirm that the section exists, which is a fact about other administrators.
      */
     const tapped = await open(PREFIX.section, TG.stranger);
-    expect(tapped.replyKey).toBe('bot.unknown_command');
+    expect(tapped.replyKey).toBe('bot.callback.stale');
   });
 
   // -------------------------------------------------------------------------

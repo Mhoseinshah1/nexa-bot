@@ -5,12 +5,14 @@ import {
   dependentsOf,
   holdsCriticalPermission,
   IDENTITY_ERROR_CODES,
+  isPermissionKey,
   PERMISSION_DOMAINS,
   PERMISSIONS,
   prerequisiteOf,
   roleKeySchema,
   withPrerequisites,
   type EffectivePermissionsResponse,
+  type PermissionDomain,
   type PermissionKey,
   type RiskLevel,
   type RoleView,
@@ -65,14 +67,18 @@ function riskOf(key: string): RiskLevel {
   return RISK_OF.get(key) ?? 'LOW';
 }
 
+/*
+ * `string` in, because what the server sends is a string — an effective set, an
+ * override, a role read back. A catalogued key always has a label (`PERMISSION_LABELS` is
+ * total over `PermissionKey`, a compile error otherwise); anything else is shown as the
+ * raw key rather than dropped, so a stale row stays visible to the operator reading it.
+ */
 function labelOf(key: string): string {
-  const label = (PERMISSION_LABELS as Record<string, WebKey | undefined>)[key];
-  return label === undefined ? key : t(label);
+  return isPermissionKey(key) ? t(PERMISSION_LABELS[key]) : key;
 }
 
-function domainLabel(domain: string): string {
-  const label = PERMISSION_DOMAIN_LABELS[domain];
-  return label === undefined ? domain : t(label);
+function domainLabel(domain: PermissionDomain): string {
+  return t(PERMISSION_DOMAIN_LABELS[domain]);
 }
 
 /** The server's refusal, in this page's words. */
@@ -303,7 +309,7 @@ function PermissionMatrix({
       {PERMISSION_DOMAINS.map((domain) => {
         const rows = visible.filter((one) => one.resource === domain);
         if (rows.length === 0) return null;
-        const held = rows.filter((one) => selected.includes(one.key as PermissionKey)).length;
+        const held = rows.filter((one) => selected.includes(one.key)).length;
         return (
           <fieldset key={domain} className="rbac-domain">
             <legend>
@@ -313,7 +319,7 @@ function PermissionMatrix({
               </span>
             </legend>
             {rows.map((one) => {
-              const key = one.key as PermissionKey;
+              const key = one.key;
               const id = `rbac-perm-${key.replace(/\./g, '-')}`;
               const requires = prerequisiteOf(key);
               return (
@@ -378,7 +384,10 @@ function RoleEditor({
         : '',
   );
   const [permissions, setPermissions] = useState<PermissionKey[]>(
-    source === null ? [] : (source.permissions as PermissionKey[]),
+    // The wire carries strings. The server reads only catalogued keys back, and the editor
+    // can only hold keys it can draw a row for; a key it cannot name would be refused on
+    // save as `ROLE_UNKNOWN_PERMISSION` anyway.
+    source === null ? [] : source.permissions.filter(isPermissionKey),
   );
   const [reason, setReason] = useState('');
   const [confirmation, setConfirmation] = useState('');

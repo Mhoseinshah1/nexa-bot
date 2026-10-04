@@ -242,7 +242,7 @@ describe('the panels section of the Telegram management panel', () => {
         tapUpdate(data, TG.customer),
       );
       expect(result.replyKey, `${prefix} answered an administrator's reply`).toBe(
-        'bot.unknown_command',
+        'bot.callback.stale',
       );
     }
     /* And the panel is untouched by any of them. */
@@ -273,7 +273,7 @@ describe('the panels section of the Telegram management panel', () => {
       systemActor('bot'),
       tapUpdate(`${PREFIX.detail}${panelId}`, TG.sales),
     );
-    expect(result.replyKey).toBe('bot.unknown_command');
+    expect(result.replyKey).toBe('bot.callback.stale');
   });
 
   // =========================================================================
@@ -356,7 +356,7 @@ describe('the panels section of the Telegram management panel', () => {
       systemActor('bot'),
       tapUpdate(`${PREFIX.page}not-a-cursor`, TG.owner),
     );
-    expect(result.replyKey).toBe('bot.unknown_command');
+    expect(result.replyKey).toBe('bot.callback.stale');
   });
 
   // =========================================================================

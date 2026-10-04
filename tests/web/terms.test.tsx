@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PermissionKey } from '@nexa/contracts';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
@@ -82,10 +83,13 @@ describe('the terms navigation entry', () => {
     // with `settings.edit`, so gating on anything else hides the switch from the very
     // role that may use it (or offers it to one the server refuses).
     const route = { path: '/terms', query: new URLSearchParams() };
-    const props = (permissions: string[]) =>
+    const props = (permissions: PermissionKey[]) =>
       (resolve(route, permissions).element as ReactElement<{ mayToggle: boolean }>).props;
     expect(props(['terms.view', 'settings.edit']).mayToggle).toBe(true);
-    expect(props(['terms.view', 'features.edit']).mayToggle).toBe(false);
+    // Since `PermissionKey` became the catalogue's literal union, `may('features.edit')` in
+    // the route table is a compile error; this cast is the one place it is still spelt, to
+    // keep the runtime half of the rule (a session string nobody catalogued grants nothing).
+    expect(props(['terms.view', 'features.edit' as PermissionKey]).mayToggle).toBe(false);
     expect(props(['terms.view']).mayToggle).toBe(false);
   });
 });

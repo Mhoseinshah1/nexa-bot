@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PermissionKey } from '@nexa/contracts';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import {
@@ -63,7 +64,7 @@ describe('payment navigation permissions', () => {
     return found;
   };
 
-  it.each([
+  it.each<[string, PermissionKey, PermissionKey]>([
     ['payment-accounts', 'payments.accounts.view', 'payments.accounts.edit'],
     ['payment-gateways', 'payments.gateways.view', 'payments.gateways.edit'],
   ])('%s is shown for view and hidden for edit alone', (id, view, edit) => {

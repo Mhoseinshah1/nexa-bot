@@ -10,6 +10,7 @@ import {
   type MoneyComparison,
   type PaymentMethod,
   type ReportProductRanking,
+  type PermissionKey,
 } from '@nexa/contracts';
 import {
   fetchDashboardOperations,
@@ -118,7 +119,7 @@ export function DashboardPage({
   route = NO_ROUTE,
   superAdmin = false,
 }: {
-  permissions: readonly string[];
+  permissions: readonly PermissionKey[];
   route?: Route;
   /** The owner holding `reports.view`: the business figures are drawn as well. */
   superAdmin?: boolean;

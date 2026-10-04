@@ -4,8 +4,12 @@ import {
   isPermissionKey,
   PERMISSIONS,
   PERMISSION_KEYS,
+  PERMISSION_DEPENDENCIES,
+  PERMISSION_DOMAINS,
   PERMISSION_REQUIRES,
+  dependentsOf,
   permissionDefinition,
+  prerequisiteOf,
   resolveEffectivePermissions,
   ROLE_SEEDS,
   type PermissionKey,
@@ -41,7 +45,7 @@ describe('permission catalog', () => {
   });
 
   it('keeps payment, receipt and refund as separate permissions', () => {
-    for (const key of ['payments.view', 'receipts.review', 'refunds.issue'] as PermissionKey[]) {
+    for (const key of ['payments.view', 'receipts.review', 'refunds.issue'] as const) {
       expect(isPermissionKey(key)).toBe(true);
     }
   });
@@ -57,10 +61,8 @@ describe('permission catalog', () => {
   it('charges the trial override and the global reset at the blast radius each has', () => {
     // docs/wp6-audit.md B2, B3: one customer's allowance is HIGH and an operator's;
     // every customer's at once is CRITICAL and the owner's alone.
-    expect(permissionDefinition('users.trial.edit' as PermissionKey).riskLevel).toBe('HIGH');
-    expect(permissionDefinition('settings.destructive' as PermissionKey).riskLevel).toBe(
-      'CRITICAL',
-    );
+    expect(permissionDefinition('users.trial.edit').riskLevel).toBe('HIGH');
+    expect(permissionDefinition('settings.destructive').riskLevel).toBe('CRITICAL');
     const holders = (key: string) =>
       ROLE_SEEDS.filter((role) => (role.permissions as readonly string[]).includes(key))
         .map((role) => role.key)
@@ -218,6 +220,34 @@ describe('a permission that cannot be held alone', () => {
    * resolved or not depending on `Object.entries` ordering, which is the kind of rule
    * that works until somebody adds the third entry.
    */
+  it('iterates exactly the dependency table, typed (`PERMISSION_DEPENDENCIES`)', () => {
+    const fromTable = Object.entries(PERMISSION_REQUIRES)
+      .map(([dependent, prerequisite]) => `${dependent}->${prerequisite}`)
+      .sort();
+    const derived = PERMISSION_DEPENDENCIES.map(
+      ([dependent, prerequisite]) => `${dependent}->${prerequisite}`,
+    ).sort();
+    expect(derived).toEqual(fromTable);
+    expect(derived.length).toBeGreaterThan(0);
+  });
+
+  it('answers the editor helpers for a string the catalogue does not name without throwing', () => {
+    expect(prerequisiteOf('legacy.retired_power')).toBeNull();
+    expect(prerequisiteOf('receipts.review')).toBe('payments.view');
+    expect(dependentsOf('legacy.retired_power')).toEqual([]);
+    expect(dependentsOf('payments.view')).toEqual(['payments.reconcile', 'receipts.review']);
+    // A domain is a key's first segment, and every domain names at least one key.
+    for (const domain of PERMISSION_DOMAINS) {
+      expect(
+        PERMISSIONS.some((definition) => definition.resource === domain),
+        domain,
+      ).toBe(true);
+    }
+    for (const definition of PERMISSIONS) {
+      expect(definition.key.startsWith(`${definition.resource}.`), definition.key).toBe(true);
+    }
+  });
+
   it('has no dependency that is itself dependent on another', () => {
     for (const prerequisite of Object.values(PERMISSION_REQUIRES)) {
       expect(PERMISSION_REQUIRES[prerequisite]).toBeUndefined();
@@ -240,11 +270,9 @@ describe('a permission that cannot be held alone', () => {
   });
 
   it('reports the missing prerequisite to whoever is composing the grant', () => {
-    expect(incoherentPermissionGrants(['receipts.review' as PermissionKey])).toEqual([
+    expect(incoherentPermissionGrants(['receipts.review'])).toEqual([
       { permission: 'receipts.review', requires: 'payments.view' },
     ]);
-    expect(
-      incoherentPermissionGrants(['receipts.review', 'payments.view'] as PermissionKey[]),
-    ).toEqual([]);
+    expect(incoherentPermissionGrants(['receipts.review', 'payments.view'])).toEqual([]);
   });
 });

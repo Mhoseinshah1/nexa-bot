@@ -2127,17 +2127,20 @@ Publication is gated. `release.yml` will not build until:
 
 - the tag resolves to a commit, once, and every later job uses that **SHA**
   rather than re-resolving a mutable tag;
-- a run of `.github/workflows/ci.yml` for **that exact SHA** completed with
-  conclusion `success` — cancelled, skipped, stale and timed-out are not a pass;
+- a `push` or `workflow_dispatch` run of `.github/workflows/ci.yml` for **that
+  exact SHA** completed with conclusion `success` — on any attempt, so a run
+  re-run to green counts; cancelled, failed, skipped, stale, timed-out and
+  still-running runs are not a pass;
 - the version has **never been published**. A published version is immutable and
   there is no force-republish switch; the way to publish different bytes is a
   new version.
 
-What the gate does **not** check is which ref that CI run belonged to. A commit
-reachable from a pull-request branch and from the tag has one set of runs, and a
-successful run recorded against the branch satisfies the gate. That is the
-intent — the same bytes were tested — but it means the guarantee is "this SHA
-passed CI", not "this SHA passed CI as a tag".
+A `pull_request` run does **not** satisfy the gate, even a green one for the same
+SHA: it tested `refs/pull/N/merge`, the commit merged into its base, not the
+commit itself. Every main commit has its own push run, which is never cancelled,
+and a commit on any other branch gets an acceptable run from **Actions → CI →
+Run workflow** on that branch. The decision is `scripts/release-ci-gate.mjs`;
+`docs/ci.md` has the full table and what to do when the gate refuses.
 
 The image is built for `linux/amd64` and `linux/arm64` — every architecture the
 installer accepts — and the published manifest is read back by digest and
