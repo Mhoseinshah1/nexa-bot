@@ -3219,3 +3219,9 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
   was unavailable under its usage limits. Per the Product Owner's instruction, one
   read-only substitute review is run after exact-head CI is green. Its valid findings are
   fixed, and the PR then waits for the Product Owner's merge approval.
+
+- **OQ-TB-19 — `sender_business_bot` on an edit.** Whether Telegram sets `sender_business_bot`
+  on an `edited_business_message` that edits a message the bot sent is undocumented. NEXA
+  never edits, so TB2 treats an edit as ours only when that field names our bot; the send
+  record proves the message id, not the edit (TB2 review F3). Real-Telegram acceptance should
+  confirm it. Until then, an owner's edit of our message is a human act, which fails safe.
