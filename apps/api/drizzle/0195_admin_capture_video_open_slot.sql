@@ -1,0 +1,3 @@
+DROP INDEX "admin_amount_captures_open_key";--> statement-breakpoint
+CREATE UNIQUE INDEX "admin_amount_captures_open_video_key" ON "admin_amount_captures" USING btree ("tenant_id","bot_instance_id","admin_id") WHERE closed_at IS NULL AND purpose = 'CLIENT_APP_VIDEO';--> statement-breakpoint
+CREATE UNIQUE INDEX "admin_amount_captures_open_key" ON "admin_amount_captures" USING btree ("tenant_id","bot_instance_id","admin_id") WHERE closed_at IS NULL AND purpose <> 'CLIENT_APP_VIDEO';

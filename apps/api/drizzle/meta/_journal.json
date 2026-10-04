@@ -1366,6 +1366,13 @@
       "when": 1791116328681,
       "tag": "0194_service_refund_request_origin",
       "breakpoints": true
+    },
+    {
+      "idx": 195,
+      "version": "7",
+      "when": 1791123195634,
+      "tag": "0195_admin_capture_video_open_slot",
+      "breakpoints": true
     }
   ]
 }

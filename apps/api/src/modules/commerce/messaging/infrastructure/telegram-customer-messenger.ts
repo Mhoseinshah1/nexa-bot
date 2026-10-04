@@ -777,6 +777,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     botInstanceId: BotInstanceId,
   ): Promise<RenderedCaption> {
     const text = await this.templates.render(scope, caption.templateKey, caption.values);
+    // UX Batch 01 item 4: a template whose every line was dropped renders nothing, and a
+    // bare file is told apart from another service's by its fallback.
+    if (text.trim() === '' && caption.fallback !== undefined) {
+      return this.renderCaption(scope, caption.fallback, botInstanceId);
+    }
     const format = templateDefinition(caption.templateKey).format;
     const html = format === 'TELEGRAM_HTML';
     /*

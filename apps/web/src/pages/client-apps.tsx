@@ -48,6 +48,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { sortOrderOf } from './support';
 import { TelegramPhone } from './telegram-phone';
+import { TutorialVideoCard } from './client-app-video';
 import { Icon } from '../ui/icons';
 import {
   Disclosure,
@@ -1131,6 +1132,11 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                 setEditor({ kind: 'edit', basis: row });
                 refresh();
               }}
+            />
+            <TutorialVideoCard
+              key={`video-${editor.kind === 'edit' ? editor.basis.id : 'new'}`}
+              appId={editor.kind === 'edit' ? editor.basis.id : null}
+              mayEdit={mayEdit}
             />
           </div>
         </div>

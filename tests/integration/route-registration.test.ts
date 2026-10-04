@@ -173,6 +173,11 @@ describe('dynamic route registration', () => {
       ['GET', `client-apps/${id}/image`],
       ['POST', `client-apps/${id}/image`],
       ['POST', `client-apps/${id}/image/clear`],
+      // UX Batch 01 item 6: «افزودن ویدیو از تلگرام».
+      ['GET', `client-apps/${id}/videos`],
+      ['POST', `client-apps/${id}/video-sessions`],
+      ['GET', `client-apps/${id}/video-sessions/${id}`],
+      ['POST', `client-apps/${id}/video-sessions/${id}/cancel`],
       // WP9-B: reseller tiers and resellers.
       ['GET', 'reseller-tiers'],
       ['POST', 'reseller-tiers'],

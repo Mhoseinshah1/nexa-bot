@@ -13,6 +13,7 @@ import type { TemplateResolver } from '../../../control/templates/application/te
 import {
   SERVICE_STATUS_PRESENTATION,
   serviceDisplayStatus,
+  type ServiceStatusFacts,
 } from '../../provisioning/domain/service-display-status.js';
 
 /**
@@ -154,6 +155,15 @@ export interface ReferralScreenFacts {
   readonly referredPurchaseCount: number;
   readonly referredPurchaseTotal: Money;
   readonly commissionReceivedTotal: Money;
+}
+
+/**
+ * The key the service card names a service's status with — also the file caption's
+ * `{status}` (item 4), so the two never disagree. Derived from the facts (item 3), never
+ * the stored state alone: an ACTIVE row past its deadline reads «منقضی شده».
+ */
+export function serviceStateLabelKey(facts: ServiceStatusFacts): TemplateKey {
+  return SERVICE_STATUS_PRESENTATION[serviceDisplayStatus(facts)].label;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
