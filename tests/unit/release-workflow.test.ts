@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -219,4 +219,114 @@ describe('the release workflow', () => {
       }
     }
   });
+});
+
+/**
+ * pnpm is provisioned before anything needs it, in every job of every workflow.
+ *
+ * v0.4.4's release stopped in the gate job, at actions/setup-node, with
+ * "Unable to locate executable file: pnpm": #168 gave that job a checkout of
+ * the workflow commit at the workspace root, and setup-node v5 — given no
+ * `cache:` input — reads `packageManager` from that package.json, sees pnpm,
+ * and restores a pnpm cache by running `pnpm store path`. No step had
+ * installed pnpm. The publish and verify jobs were skipped and CI had been
+ * green, so nothing before the tag could have shown it; this can.
+ */
+describe('pnpm provisioning in every workflow', () => {
+  type Step = {
+    name?: string;
+    uses?: string;
+    with?: Record<string, unknown>;
+    run?: string;
+  };
+  const root = join(__dirname, '../..');
+  const directory = join(root, '.github/workflows');
+  const files = readdirSync(directory).filter((f) => /\.ya?ml$/.test(f));
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+    packageManager?: string;
+  };
+
+  const action = (step: Step): string => step.uses?.split('@')[0] ?? '';
+  const isProvisioning = (step: Step): boolean => action(step) === 'pnpm/action-setup';
+  const isRootCheckout = (step: Step): boolean =>
+    action(step) === 'actions/checkout' && step.with?.path === undefined;
+
+  /** Why this step cannot run without pnpm on PATH, or null if it can. */
+  const needsPnpm = (step: Step): string | null => {
+    if (action(step) === 'actions/setup-node') {
+      const cache = step.with?.cache;
+      if (cache === 'pnpm') return 'setup-node with `cache: pnpm`';
+      // setup-node v5: with no `cache:` input, the cache is chosen from
+      // `packageManager` — pnpm here — unless `package-manager-cache` is off.
+      const automatic = step.with?.['package-manager-cache'];
+      if ((cache === undefined || cache === '') && automatic !== false && automatic !== 'false') {
+        return 'setup-node with the automatic packageManager (pnpm) cache';
+      }
+      return null;
+    }
+    if (step.run === undefined) return null;
+    const code = step.run
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+    return /(^|[\s;&|(`])pnpm(\s|$)/m.test(code) ? 'a run step that calls pnpm' : null;
+  };
+
+  it('reads the pinned pnpm version from the root manifest', () => {
+    // The one place the version lives. pnpm/action-setup reads it from here.
+    expect(manifest.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
+  });
+
+  it('is checked against the workflows that exist', () => {
+    // A rename must not make the checks below vacuous.
+    expect(files).toEqual(expect.arrayContaining(['ci.yml', 'exhaustive.yml', 'release.yml']));
+  });
+
+  for (const file of files) {
+    const workflow = parse(readFileSync(join(directory, file), 'utf8')) as {
+      env?: Record<string, unknown>;
+      jobs: Record<string, { steps?: Step[] }>;
+    };
+
+    it(`${file}: every step that needs pnpm comes after a step that installs it`, () => {
+      for (const [job, { steps = [] }] of Object.entries(workflow.jobs)) {
+        const provisioned = steps.findIndex(isProvisioning);
+        steps.forEach((step, index) => {
+          const reason = needsPnpm(step);
+          if (reason === null) return;
+          const label = step.name ?? step.uses ?? step.run?.split('\n')[0];
+          const where = `${file} job "${job}" step ${index + 1} (${label}) is ${reason}`;
+          expect(provisioned, `${where}, but no step in the job installs pnpm`).toBeGreaterThan(-1);
+          expect(provisioned, `${where}, and runs before pnpm/action-setup`).toBeLessThan(index);
+        });
+      }
+    });
+
+    it(`${file}: pnpm/action-setup takes its version from packageManager`, () => {
+      for (const [job, { steps = [] }] of Object.entries(workflow.jobs)) {
+        steps.forEach((step, index) => {
+          if (!isProvisioning(step)) return;
+          // A `version:` input is a second copy of the pin. Equal, it is
+          // redundant; different, the action refuses to run. Either way the
+          // repository's own field is the answer.
+          expect(step.with?.version, `${file} job "${job}" pins pnpm in the workflow`).toBe(
+            undefined,
+          );
+          expect(step.with?.package_json_file ?? 'package.json').toBe('package.json');
+          // It reads package.json from the workspace root, so the root
+          // checkout has to be there first.
+          const checkout = steps.findIndex(isRootCheckout);
+          expect(
+            checkout,
+            `${file} job "${job}": nothing is checked out at the root`,
+          ).toBeGreaterThan(-1);
+          expect(checkout).toBeLessThan(index);
+        });
+      }
+      expect(
+        workflow.env ?? {},
+        `${file} keeps a second copy of the pnpm version`,
+      ).not.toHaveProperty('PNPM_VERSION');
+    });
+  }
 });

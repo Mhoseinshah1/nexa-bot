@@ -2140,7 +2140,10 @@ SHA: it tested `refs/pull/N/merge`, the commit merged into its base, not the
 commit itself. Every main commit has its own push run, which is never cancelled,
 and a commit on any other branch gets an acceptable run from **Actions → CI →
 Run workflow** on that branch. The decision is `scripts/release-ci-gate.mjs`;
-`docs/ci.md` has the full table and what to do when the gate refuses.
+`docs/ci.md` has the full table and what to do when the gate refuses — and, under
+"When the release failed before the gate decided", how to continue a version
+whose release run broke before anything was built (v0.4.4): re-running a tag
+push reuses the broken workflow, a dispatch from main does not.
 
 The image is built for `linux/amd64` and `linux/arm64` — every architecture the
 installer accepts — and the published manifest is read back by digest and
