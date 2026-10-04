@@ -83,6 +83,14 @@ SELECT 'live_real_custom', CAST(COUNT(*) AS CHAR) FROM invoice
 WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume') AND is_test = 0
   AND is_custom = 1
 UNION ALL
+-- Live invoices whose `id_invoice` falls outside the evidenced key shape (OQ-P4-01): the
+-- map cannot record a decision for them, so a non-zero figure breaks the service closure
+-- and needs a forward migration decided from the archive, never a widened guess.
+SELECT 'live_invoices_key_unmappable', CAST(COUNT(*) AS CHAR) FROM invoice
+WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume')
+  AND (id_invoice IS NULL
+       OR NOT (BINARY CAST(id_invoice AS CHAR) REGEXP '^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$'))
+UNION ALL
 SELECT 'live_real_orphan', CAST(COUNT(*) AS CHAR) FROM invoice i LEFT JOIN user u ON u.id = i.id_user
 WHERE i.Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume') AND i.is_test = 0
   AND u.id IS NULL;
