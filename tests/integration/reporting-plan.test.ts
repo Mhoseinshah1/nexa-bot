@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
+import type { PoolClient } from 'pg';
 import type { Database } from '../../apps/api/src/infrastructure/persistence/database';
 import { DrizzleReportingRepository } from '../../apps/api/src/modules/commerce/reporting/infrastructure/drizzle-reporting.repository';
 import { createTestContext, tenantA, tenantB, type TestContext } from './harness';
@@ -24,6 +25,63 @@ import { createTestContext, tenantA, tenantB, type TestContext } from './harness
  */
 const ROWS = 20_000;
 const DAY_MS = 86_400_000;
+const VISIBILITY_WAIT_MS = 60_000;
+
+/**
+ * `VACUUM` until every page of `table` is all-visible, or fail naming what prevents it.
+ *
+ * A single `VACUUM` is not enough. It marks a page all-visible only when every row on it
+ * is older than the oldest snapshot any OTHER session in this database still holds. In
+ * CI (main at 920db42e and efd7e1d7, shard 3/4) one was held across the fixture: tenant
+ * A's orders, committed before it, were all-visible and their four plans passed; tenant
+ * A's payments, committed after, were not, so the same index-only scan fetched the heap
+ * for every row (`Heap Fetches: 410`, 417 buffers against 8 with the map set) and failed
+ * a threshold meant to measure the plan. The index was not the cause: it INCLUDEs
+ * `state`, and an index-only scan evaluates that Filter from the index tuple. The same
+ * code passed at 751a85d3 earlier that day, so the holder is a race, not a constant.
+ * Reproduced by holding one REPEATABLE READ snapshot open from between tenant A's
+ * orders and payments: orders 0 heap fetches, payments 410.
+ *
+ * So the precondition is checked rather than assumed: `relallvisible`, which `VACUUM`
+ * writes, against `relpages`. A transient snapshot (an autovacuum `ANALYZE`, a straggling
+ * transaction) ends and the next `VACUUM` succeeds; one that outlives the wait is a
+ * defect somewhere else, and the error names the sessions that held the horizon back.
+ */
+async function vacuumUntilAllVisible(
+  client: PoolClient,
+  table: 'orders' | 'payments',
+  deadline: number,
+): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    await client.query(`VACUUM ANALYZE ${table}`);
+    const { rows } = await client.query<{ pages: number; visible: number }>(
+      `SELECT relpages AS pages, relallvisible AS visible FROM pg_class WHERE oid = $1::regclass`,
+      [table],
+    );
+    const { pages, visible } = rows[0]!;
+    if (visible >= pages) return;
+    const holders = await client.query<Record<string, unknown>>(
+      `SELECT pid, backend_type, state, backend_xid, backend_xmin, xact_start,
+              left(query, 200) AS query
+         FROM pg_stat_activity
+        WHERE datname = current_database() AND pid <> pg_backend_pid()
+          AND (backend_xid IS NOT NULL OR backend_xmin IS NOT NULL)
+        ORDER BY xact_start`,
+    );
+    const report =
+      `${table}: ${visible} of ${pages} pages all-visible after VACUUM attempt ${attempt}. ` +
+      `Sessions holding the xmin horizon:\n${JSON.stringify(holders.rows, null, 2)}`;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `${report}\nAn index-only scan over these pages reads the heap, so the plan's ` +
+          `buffers would not measure the plan; gave up after ${VISIBILITY_WAIT_MS} ms.`,
+      );
+    }
+    // Said once, so a CI log that recovered still names what held the horizon back.
+    if (attempt === 1) console.warn(report);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
 
 describe('the reporting query plans', () => {
   let ctx: TestContext;
@@ -112,8 +170,9 @@ describe('the reporting query plans', () => {
         }
         // What autovacuum leaves a live table in: statistics, and a visibility map that
         // lets an index-only scan skip the heap.
-        await client.query('VACUUM ANALYZE orders');
-        await client.query('VACUUM ANALYZE payments');
+        const deadline = Date.now() + VISIBILITY_WAIT_MS;
+        await vacuumUntilAllVisible(client, 'orders', deadline);
+        await vacuumUntilAllVisible(client, 'payments', deadline);
       } finally {
         await client.query('RESET statement_timeout');
       }
