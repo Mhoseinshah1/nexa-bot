@@ -57,12 +57,15 @@ function harness(
     readonly mode?: PanelDeliveryMode;
     readonly edit?: CustomerSendResult;
     readonly active?: boolean;
+    /** The claim's store failing (a lost connection, a constraint): it throws. */
+    readonly claimThrows?: boolean;
   } = {},
 ) {
   const edits: CustomerEditMessage[] = [];
   const files: CustomerFileMessage[] = [];
   const texts: CustomerMessage[] = [];
   const claimed = new Set<string>();
+  let claims = 0;
   const deps: DeliveryServiceDeps = {
     services: {
       markSendStarted: async () => true,
@@ -97,6 +100,8 @@ function harness(
     },
     linkQr: {
       claim: async (_s, key) => {
+        claims += 1;
+        if (options.claimThrows === true) throw new Error('the claim could not be written');
         if (claimed.has(key)) return false;
         claimed.add(key);
         return true;
@@ -109,7 +114,7 @@ function harness(
       card: CARD,
       linkQrKey: key,
     });
-  return { delivery, deps, tap, edits, files, texts, claimed };
+  return { delivery, deps, tap, edits, files, texts, claimed, claimsTried: () => claims };
 }
 
 describe('pre-support A9 — the QR under the link view', () => {
@@ -127,7 +132,8 @@ describe('pre-support A9 — the QR under the link view', () => {
     expect(photo.kind).toBe('PHOTO');
     expect(photo.chatId).toBe(CARD.chatId);
     expect(photo.botInstanceId).toBe(CARD.botInstanceId);
-    expect(photo.caption).toEqual({ templateKey: 'bot.service.delivered_qr_caption', values: {} });
+    // Its own caption, never the delivery card's «details in the NEXT message».
+    expect(photo.caption).toEqual({ templateKey: 'bot.service.link_qr_caption', values: {} });
     if (photo.source.kind !== 'BYTES') throw new Error('the QR is not bytes');
     expect(decodeQrPng(photo.source.bytes), 'the QR scans to the shown link').toBe(shown);
     expect(h.texts, 'nothing else is sent').toHaveLength(0);
@@ -175,5 +181,36 @@ describe('pre-support A9 — the QR under the link view', () => {
     });
     expect(h.edits).toHaveLength(1);
     expect(h.files).toHaveLength(0);
+  });
+
+  /*
+   * Review of PR #211: three branches the first round left unpinned.
+   */
+  it('sends no QR when the claim cannot be written, and the link view still resolves', async () => {
+    const h = harness({ claimThrows: true });
+    await expect(h.tap()).resolves.toMatchObject({ state: 'DELIVERED' });
+    expect(h.claimsTried()).toBe(1);
+    expect(h.edits).toHaveLength(1);
+    expect(h.files).toHaveLength(0);
+  });
+
+  it('sends exactly one QR when the edit is refused and the view goes as a new message', async () => {
+    const h = harness({ edit: { outcome: 'REFUSED' } });
+    await h.tap();
+    expect(h.edits).toHaveLength(1);
+    expect(h.texts, 'the fallback view').toHaveLength(1);
+    expect(h.texts[0]?.values['subscriptionUrl']).toBe(URL);
+    expect(h.files).toHaveLength(1);
+    const photo = h.files[0] as CustomerFileMessage;
+    if (photo.source.kind !== 'BYTES') throw new Error('the QR is not bytes');
+    expect(decodeQrPng(photo.source.bytes)).toBe(URL);
+  });
+
+  it('sends no QR and claims nothing when the edit is rate limited', async () => {
+    const h = harness({ edit: { outcome: 'RATE_LIMITED', retryAfterMs: 3000 } });
+    await h.tap();
+    expect(h.files).toHaveLength(0);
+    expect(h.claimsTried()).toBe(0);
+    expect(h.claimed.size).toBe(0);
   });
 });

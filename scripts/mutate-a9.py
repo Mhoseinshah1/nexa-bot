@@ -20,9 +20,21 @@ M=[
  # The link view is followed by a QR photo at all.
  ('A9-01',[(DELIVERY,"      await this.sendLinkQr(scope, service, options.card, sentUrl, options.linkQrKey);\n","")],T_U,'decodes to exactly'),
  # The QR encodes the EXACT link the view shows.
- ('A9-02',[(DELIVERY,"          bytes: this.deps.qr.encode(sentUrl),\n          fileName: 'subscription.png',\n          mimeType: 'image/png',\n        },\n        caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },","          bytes: this.deps.qr.encode(`${sentUrl}#`),\n          fileName: 'subscription.png',\n          mimeType: 'image/png',\n        },\n        caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },")],T_U,'decodes to exactly'),
+ ('A9-02',[(DELIVERY,"          bytes: this.deps.qr.encode(sentUrl),\n          fileName: 'subscription.png',\n          mimeType: 'image/png',\n        },\n        // Its own caption","          bytes: this.deps.qr.encode(`${sentUrl}#`),\n          fileName: 'subscription.png',\n          mimeType: 'image/png',\n        },\n        // Its own caption")],T_U,'decodes to exactly'),
  # The caption is the existing QR caption key.
- ('A9-03',[(DELIVERY,"        caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },\n      });\n    } catch {","        caption: { templateKey: 'bot.service.delivered', values: {} },\n      });\n    } catch {")],T_U,'decodes to exactly'),
+ ('A9-03',[(DELIVERY,"        caption: { templateKey: 'bot.service.link_qr_caption', values: {} },\n      });\n    } catch {","        caption: { templateKey: 'bot.service.delivered', values: {} },\n      });\n    } catch {")],T_U,'decodes to exactly'),
+ # The link view's QR has its OWN caption, never the delivery card's «details in the NEXT message».
+ ('A9-11',[(DELIVERY,"        caption: { templateKey: 'bot.service.link_qr_caption', values: {} },","        caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },")],T_U,'decodes to exactly'),
+ ('A9-12',[(DELIVERY,"        caption: { templateKey: 'bot.service.link_qr_caption', values: {} },","        caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },")],T_I,'sends the subscription again'),
+ # ...and the delivery card's split fallback keeps delivered_qr_caption.
+ ('A9-13',[(DELIVERY,"      caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },\n    });\n    if (first.outcome !== 'DELIVERED') return first;","      caption: { templateKey: 'bot.service.link_qr_caption', values: {} },\n    });\n    if (first.outcome !== 'DELIVERED') return first;")],('unit','tests/unit/delivery-card.test.ts'),'falls back to the photo'),
+ # Review of PR #211: (a) a claim that throws sends no photo and never fails the link view.
+ ('A9-14',[(DELIVERY,"    } catch {\n      // Deliberately swallowed: the link view is shown and recorded already.\n      return;\n    }","    } finally {\n      // mutant: the error escapes\n    }")],T_U,'claim cannot be written'),
+ # (b) a refused edit whose view went as a new message still gets its one QR: the QR follows
+ # the VIEW's outcome, not the edit's.
+ ('A9-15',[(DELIVERY,"      if (edited.outcome !== 'REFUSED') return edited;\n    }\n    return this.deps.messenger.send(scope, view);","      if (edited.outcome !== 'REFUSED') return edited;\n      await this.deps.messenger.send(scope, view);\n      return edited;\n    }\n    return this.deps.messenger.send(scope, view);")],T_U,'edit is refused'),
+ # (c) a rate-limited edit gets no QR and spends no claim.
+ ('A9-16',[(DELIVERY,"      return { state: from, recorded: held, ...(sentTo === undefined ? {} : { sentTo }) };\n    }","      if (options.card !== undefined && options.linkQrKey !== undefined) {\n        await this.sendLinkQr(scope, service, options.card, sentUrl, options.linkQrKey);\n      }\n      return { state: from, recorded: held, ...(sentTo === undefined ? {} : { sentTo }) };\n    }")],T_U,'rate limited'),
  # A CARD_TEXT panel gets no QR.
  ('A9-04',[(DELIVERY,"      if (mode === 'CARD_TEXT') return;\n      const claimed","      const claimed")],T_U,'CARD_TEXT'),
  # A replayed tap finds the claim and sends nothing.

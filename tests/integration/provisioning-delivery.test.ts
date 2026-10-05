@@ -2297,9 +2297,9 @@ describe('a provisioned service announces itself', () => {
       sent.filter((one) => one.url.endsWith('/sendPhoto')).slice(photosBefore),
       'a replay sends no second QR',
     ).toHaveLength(1);
-    expect(JSON.stringify(photos[0]?.body), 'captioned as the QR of the link').toContain(
-      'کد QR لینک اتصال',
-    );
+    const caption = JSON.stringify(photos[0]?.body);
+    expect(caption, 'captioned as the QR of the link above').toContain('کد QR لینک اتصال بالا');
+    expect(caption, 'never claims the details follow').not.toContain('پیام بعدی');
     // A NEW tap is a new request, and is answered with its own QR.
     await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`r:${service?.id ?? ''}`));
     expect(sent.filter((one) => one.url.endsWith('/sendPhoto')).slice(photosBefore)).toHaveLength(

@@ -247,7 +247,11 @@ export function initialLocationOf(
 /**
  * The location a customer is TOLD their service is in (pre-support A6), most specific first:
  *
- * 1. where it was MOVED to (`services.location_label`, written only by a location change);
+ * 1. the service's OWN recorded location (`services.location_label`) — written by a location
+ *    change, AND by `recordLocationForUnmoved`, which freezes the panel's initial location onto
+ *    every never-moved service before an operator edits, unmarks, moves or deletes that row.
+ *    So the column is a SNAPSHOT: once frozen, a later rename of the panel's initial label is
+ *    not shown for that service, which keeps showing the label it was frozen with;
  * 2. the operator's label for the initial location of the panel the service is ON NOW —
  *    so a service balanced onto a sibling panel names that panel's place, not the home
  *    product's;

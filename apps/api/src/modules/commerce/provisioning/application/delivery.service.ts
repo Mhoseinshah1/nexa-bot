@@ -524,7 +524,7 @@ export class DeliveryService {
 
   /**
    * Pre-support A9: the QR of the EXACT link the view shows, as one photo under it, captioned
-   * with the delivery card's short QR caption.
+   * `bot.service.link_qr_caption` — the QR of the link above it.
    *
    * The panel's delivery mode is honoured exactly as the delivery card honours it: a
    * `CARD_TEXT` panel gets no QR. The tap's key is claimed first, in its own transaction and
@@ -564,7 +564,9 @@ export class DeliveryService {
           fileName: 'subscription.png',
           mimeType: 'image/png',
         },
-        caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },
+        // Its own caption: the delivery card's says the details follow in the NEXT message,
+        // and here the link is in the message ABOVE.
+        caption: { templateKey: 'bot.service.link_qr_caption', values: {} },
       });
     } catch {
       // Deliberately swallowed: the link view is shown and recorded already.
