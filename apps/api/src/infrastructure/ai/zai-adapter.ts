@@ -1,4 +1,4 @@
-import { SUPPORT_AI_IMAGE_MEDIA_TYPES, type SupportAiOutcome } from '@nexa/contracts';
+import type { SupportAiOutcome } from '@nexa/contracts';
 import type {
   SupportAiAdapter,
   SupportAiCredential,
@@ -34,11 +34,17 @@ export const ZAI_BASE_URLS = {
  */
 export class ZaiAdapter implements SupportAiAdapter {
   readonly provider = 'ZAI' as const;
+  /**
+   * TB6: NO vision. Z.AI's image input belongs to its separate `glm-*v` models, and whether a
+   * base64 data URL is accepted, at what size, and what a text model does with an image part
+   * are unconfirmed (`OQ-TB-30`, `OQ-TB-20`). A capability is declared after acceptance proves
+   * it, never before (CLAUDE.md), so the chain never gives this adapter an image.
+   */
   readonly capabilities = {
     structuredOutput: false,
-    vision: true,
-    maxImageBytes: 5_000_000,
-    imageMediaTypes: SUPPORT_AI_IMAGE_MEDIA_TYPES,
+    vision: false,
+    maxImageBytes: 0,
+    imageMediaTypes: [] as readonly string[],
   };
 
   constructor(
@@ -49,6 +55,10 @@ export class ZaiAdapter implements SupportAiAdapter {
     credential: SupportAiCredential,
     request: SupportAiRequest,
   ): Promise<SupportAiOutcome> {
+    // Defence in depth behind the chain's capability gate: an image is never sent here.
+    if (request.messages.some((message) => (message.images?.length ?? 0) > 0)) {
+      return { outcome: 'INVALID_OUTPUT', code: 'zai.vision_unsupported' };
+    }
     const system =
       `${request.system}\n\nReply with ONE JSON object and nothing else. It must satisfy this JSON Schema:\n` +
       JSON.stringify(request.jsonSchema);

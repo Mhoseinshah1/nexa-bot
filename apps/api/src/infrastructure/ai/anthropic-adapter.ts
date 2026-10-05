@@ -31,7 +31,12 @@ export class AnthropicAdapter implements SupportAiAdapter {
   readonly capabilities = {
     structuredOutput: true,
     vision: true,
-    maxImageBytes: 5_000_000,
+    /**
+     * TB6: Anthropic refuses an image over 5 MB, measured on the base64 payload. 3,750,000
+     * raw bytes encode to exactly 5,000,000 base64 characters, so a larger image is never
+     * sent here (the chain treats this step as unable to see it).
+     */
+    maxImageBytes: 3_750_000,
     imageMediaTypes: SUPPORT_AI_IMAGE_MEDIA_TYPES,
   };
 

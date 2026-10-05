@@ -212,6 +212,7 @@ export class BusinessConversationService {
               conversationId: conversation.id,
               telegramMessageId: message.messageId,
               text: message.text,
+              photo: message.photo,
               editedAt: message.editedAt ?? message.sentAt,
             },
             tx,
@@ -674,6 +675,8 @@ export class BusinessConversationService {
         origin,
         kind: message.kind,
         text: message.text,
+        // TB6: a reference only for a PHOTO — the CHECK says so too.
+        photo: message.kind === 'PHOTO' ? message.photo : null,
         sentAt: message.sentAt,
         now,
       },

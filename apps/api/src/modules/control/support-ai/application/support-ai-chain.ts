@@ -1,7 +1,9 @@
 import {
   SUPPORT_AI_AVAILABLE_CODE,
   SUPPORT_AI_UNAVAILABLE_CODE,
+  SUPPORT_AI_VISION_MAX_IMAGES,
   supportAiOutcomeFallsBack,
+  type SupportAiConfigInput,
   type Clock,
   type IdGenerator,
   type OperationalEventRecorder,
@@ -11,8 +13,9 @@ import {
   type SupportAiProvider,
   type SupportAiProviderStep,
 } from '@nexa/contracts';
-import type { SupportAiAdapter, SupportAiRequest } from './ports.js';
+import type { SupportAiAdapter, SupportAiMessage, SupportAiRequest } from './ports.js';
 import { SupportAiCredentialAlert } from './credential-alert.js';
+import { base64ByteLength } from '../domain/vision.js';
 import type {
   DrizzleSupportAiConfigRepository,
   DrizzleSupportAiCredentialStore,
@@ -55,7 +58,47 @@ export interface SupportAiChainResult {
   readonly step: SupportAiProviderStep | null;
   readonly attempts: number;
   /** Why the chain stopped without an answer, when it did. */
-  readonly exhausted: 'NOT_CONFIGURED' | 'NO_USABLE_PROVIDER' | 'ALL_FAILED' | null;
+  readonly exhausted:
+    | 'NOT_CONFIGURED'
+    | 'NO_USABLE_PROVIDER'
+    | 'ALL_FAILED'
+    /** TB6: an image was required and no usable step could see it; no step was called. */
+    | 'NO_VISION_STEP'
+    | null;
+  /** TB6: images the step that produced `outcome` was given (0 when it was text-only). */
+  readonly imagesSent: number;
+}
+
+/**
+ * TB6 — the image variant of a request. `messages` is the same conversation with the
+ * processed images attached; it goes ONLY to a step that can see every image in it. A step
+ * that cannot gets the text-only request, where those images are marked unseen. `required`:
+ * the customer's latest message is an image, so a step that cannot see it is not called at
+ * all — answering it blind is the pretence the program forbids (§28).
+ */
+export interface SupportAiVisionVariant {
+  readonly messages: readonly SupportAiMessage[];
+  readonly required: boolean;
+}
+
+/**
+ * Whether one adapter may be given every image of a vision variant: the tenant has vision on,
+ * the adapter declares it, and each image is a type and a size the adapter declares. Core
+ * code branches on capabilities, never on a provider name (ADR-0034 §2).
+ */
+export function stepCanSee(
+  config: Pick<SupportAiConfigInput, 'visionEnabled'>,
+  adapter: Pick<SupportAiAdapter, 'capabilities'>,
+  messages: readonly SupportAiMessage[],
+): boolean {
+  if (!config.visionEnabled || !adapter.capabilities.vision) return false;
+  const images = messages.flatMap((message) => message.images ?? []);
+  if (images.length > SUPPORT_AI_VISION_MAX_IMAGES) return false;
+  return images.every(
+    (image) =>
+      adapter.capabilities.imageMediaTypes.includes(image.mediaType) &&
+      base64ByteLength(image.base64) <= adapter.capabilities.maxImageBytes,
+  );
 }
 
 /**
@@ -97,6 +140,8 @@ export class SupportAiChain {
       readonly operation: SupportAiOperation;
       readonly conversationId: string | null;
       readonly request: Omit<SupportAiRequest, 'model' | 'timeoutMs'>;
+      /** TB6: the image variant, when the conversation has processed images. */
+      readonly vision?: SupportAiVisionVariant;
     },
   ): Promise<SupportAiChainResult> {
     const { config } = await this.deps.configs.get(scope);
@@ -106,6 +151,7 @@ export class SupportAiChain {
         step: null,
         attempts: 0,
         exhausted: 'NOT_CONFIGURED',
+        imagesSent: 0,
       };
     }
     const steps = [config.primary, ...config.fallbacks];
@@ -114,6 +160,7 @@ export class SupportAiChain {
     );
     const now = this.deps.clock.now();
     let attempts = 0;
+    let skippedBlind = 0;
     let last: SupportAiChainResult | null = null;
 
     for (const [index, step] of steps.entries()) {
@@ -121,6 +168,12 @@ export class SupportAiChain {
       const state = states.get(step.provider);
       if (adapter === undefined || state === undefined) continue;
       if (state.trippedUntil !== null && state.trippedUntil.getTime() > now.getTime()) continue;
+      const sees = input.vision !== undefined && stepCanSee(config, adapter, input.vision.messages);
+      if (input.vision?.required === true && !sees) {
+        // The customer's latest message is an image this step cannot see: never call it blind.
+        skippedBlind += 1;
+        continue;
+      }
       const credential = await this.deps.credentials.read(scope, step.provider);
       if (credential === null) continue;
       // Half-open: exactly ONE caller probes a provider whose window has passed. The claim is a
@@ -133,17 +186,21 @@ export class SupportAiChain {
         continue;
       }
 
+      const messages =
+        sees && input.vision !== undefined ? input.vision.messages : input.request.messages;
+      const imagesSent = messages.reduce((sum, message) => sum + (message.images?.length ?? 0), 0);
       attempts += 1;
       const started = this.wallMs();
       const outcome = await adapter.generate(credential, {
         ...input.request,
+        messages,
         model: step.model,
         timeoutMs: config.timeoutMs,
       });
       await this.recordRun(scope, input, step, index, this.wallMs() - started, outcome);
       await this.observe(scope, step.provider, credential.keySetAt, outcome);
 
-      last = { outcome, step, attempts, exhausted: null };
+      last = { outcome, step, attempts, exhausted: null, imagesSent };
       if (outcome.outcome === 'OK') {
         await this.recoverUnavailable(scope);
         return last;
@@ -151,6 +208,17 @@ export class SupportAiChain {
       if (!supportAiOutcomeFallsBack(outcome.outcome)) return last;
     }
 
+    if (last === null && skippedBlind > 0) {
+      // Not a provider outage: nothing configured can see this image. No alert; the caller
+      // hands off.
+      return {
+        outcome: { outcome: 'TEMPORARY', code: 'support_ai.no_vision_step' },
+        step: null,
+        attempts: 0,
+        exhausted: 'NO_VISION_STEP',
+        imagesSent: 0,
+      };
+    }
     await this.deps.opsLog.record(scope, {
       code: SUPPORT_AI_UNAVAILABLE_CODE,
       severity: 'WARN',
@@ -165,9 +233,21 @@ export class SupportAiChain {
         step: null,
         attempts: 0,
         exhausted: 'NO_USABLE_PROVIDER',
+        imagesSent: 0,
       };
     }
     return { ...last, exhausted: 'ALL_FAILED' };
+  }
+
+  /**
+   * TB6: whether ANY configured step could see an image at all (vision on, and an adapter that
+   * declares it). False means no customer image is worth downloading for this tenant.
+   */
+  visionStepConfigured(config: SupportAiConfigInput): boolean {
+    if (!config.visionEnabled || config.primary === null) return false;
+    return [config.primary, ...config.fallbacks].some(
+      (step) => this.deps.adapters.get(step.provider)?.capabilities.vision === true,
+    );
   }
 
   /**

@@ -97,6 +97,56 @@ export interface ParsedBusinessMessage {
   readonly kind: BusinessMessageKind;
   /** `text`, or a photo's `caption`, cut to the stored bound; null when there is none. */
   readonly text: string | null;
+  /**
+   * TB6: the reference to a PHOTO's largest size — never bytes, never a URL. Null for any
+   * other kind, and for a photo whose sizes are not the documented shape.
+   */
+  readonly photo: BusinessPhotoReference | null;
+}
+
+/** One `PhotoSize`, as stored: what `getFile` takes, its stable id, and the declared size. */
+export interface BusinessPhotoReference {
+  readonly fileId: string;
+  readonly fileUniqueId: string;
+  readonly fileSize: number | null;
+}
+
+const photoSizeSchema = z.object({
+  file_id: z.string().min(1).max(256),
+  file_unique_id: z.string().min(1).max(128),
+  width: z.number().int().nonnegative(),
+  height: z.number().int().nonnegative(),
+  file_size: z.number().int().nonnegative().safe().optional(),
+});
+
+/**
+ * The LARGEST size of a photo (Bot API `Message.photo`: "available sizes of the photo"). By
+ * pixel area, then by declared size, then the later entry — Telegram lists them smallest
+ * first. Every entry must be the documented shape, or there is no reference at all: an array
+ * that is partly malformed is not one this code trusts to pick from.
+ */
+export function largestPhotoSize(raw: readonly unknown[]): BusinessPhotoReference | null {
+  let best: z.infer<typeof photoSizeSchema> | null = null;
+  for (const entry of raw) {
+    const parsed = photoSizeSchema.safeParse(entry);
+    if (!parsed.success) return null;
+    const size = parsed.data;
+    if (best === null) {
+      best = size;
+      continue;
+    }
+    const area = size.width * size.height;
+    const bestArea = best.width * best.height;
+    if (area > bestArea || (area === bestArea && (size.file_size ?? 0) >= (best.file_size ?? 0))) {
+      best = size;
+    }
+  }
+  if (best === null) return null;
+  return {
+    fileId: best.file_id,
+    fileUniqueId: best.file_unique_id,
+    fileSize: best.file_size ?? null,
+  };
 }
 
 export function parseBusinessMessage(raw: unknown): ParsedBusinessMessage | null {
@@ -116,6 +166,7 @@ export function parseBusinessMessage(raw: unknown): ParsedBusinessMessage | null
     editedAt: message.edit_date === undefined ? null : new Date(message.edit_date * 1000),
     kind: message.photo !== undefined ? 'PHOTO' : message.text !== undefined ? 'TEXT' : 'OTHER',
     text: boundedText(message.text ?? message.caption),
+    photo: message.photo === undefined ? null : largestPhotoSize(message.photo),
   };
 }
 

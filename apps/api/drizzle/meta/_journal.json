@@ -1429,6 +1429,13 @@
       "when": 1791166224264,
       "tag": "0203_support_ai_job_request_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 204,
+      "version": "7",
+      "when": 1791169642191,
+      "tag": "0204_support_ai_vision",
+      "breakpoints": true
     }
   ]
 }

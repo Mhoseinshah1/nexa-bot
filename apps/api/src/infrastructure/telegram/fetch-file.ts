@@ -40,7 +40,16 @@ export type TelegramFileOutcome =
    * The reviewer is told the file is not retrievable — not shown an empty frame, and
    * not told the receipt does not exist.
    */
-  | { readonly outcome: 'UNAVAILABLE'; readonly reason: string };
+  | {
+      readonly outcome: 'UNAVAILABLE';
+      readonly reason: string;
+      /**
+       * TB6: set when the refusal was the BOUND (declared size, declared length, or the
+       * running total while streaming), so a caller can tell "too large" from "not there"
+       * without matching the human-readable reason.
+       */
+      readonly tooLarge?: true;
+    };
 
 export interface TelegramFileRequest {
   readonly token: string;
@@ -83,7 +92,7 @@ type DescribeOutcome =
       readonly filePath: string;
       readonly declaredSize: number | null;
     }
-  | { readonly outcome: 'UNAVAILABLE'; readonly reason: string };
+  | { readonly outcome: 'UNAVAILABLE'; readonly reason: string; readonly tooLarge?: true };
 
 async function describe(request: TelegramFileRequest): Promise<DescribeOutcome> {
   const controller = new AbortController();
@@ -124,7 +133,11 @@ async function describe(request: TelegramFileRequest): Promise<DescribeOutcome> 
         ? declared
         : null;
     if (declaredSize !== null && declaredSize > limitOf(request)) {
-      return { outcome: 'UNAVAILABLE', reason: 'the file is larger than this API will fetch' };
+      return {
+        outcome: 'UNAVAILABLE',
+        reason: 'the file is larger than this API will fetch',
+        tooLarge: true,
+      };
     }
     return { outcome: 'SUCCEEDED', filePath, declaredSize };
   } catch (error) {
@@ -163,11 +176,19 @@ async function download(
      */
     const promised = Number(response.headers.get('content-length') ?? Number.NaN);
     if (Number.isSafeInteger(promised) && promised > limitOf(request)) {
-      return { outcome: 'UNAVAILABLE', reason: 'the file is larger than this API will fetch' };
+      return {
+        outcome: 'UNAVAILABLE',
+        reason: 'the file is larger than this API will fetch',
+        tooLarge: true,
+      };
     }
     const read = await readBounded(response, controller, limitOf(request));
     if (read === null) {
-      return { outcome: 'UNAVAILABLE', reason: 'the file is larger than this API will fetch' };
+      return {
+        outcome: 'UNAVAILABLE',
+        reason: 'the file is larger than this API will fetch',
+        tooLarge: true,
+      };
     }
     const bytes = read;
     if (declaredSize !== null && bytes.byteLength !== declaredSize) {

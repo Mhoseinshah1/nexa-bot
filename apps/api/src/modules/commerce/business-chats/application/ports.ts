@@ -9,7 +9,10 @@ import type {
   BusinessTakeoverReason,
   ScopeContext,
 } from '@nexa/contracts';
-import type { BusinessConnectionReport } from '../domain/telegram-business.js';
+import type {
+  BusinessConnectionReport,
+  BusinessPhotoReference,
+} from '../domain/telegram-business.js';
 
 export type { BusinessConnectionReport };
 
@@ -299,6 +302,8 @@ export interface BusinessMessageRecord {
   readonly sentAt: Date;
   readonly editedAt: Date | null;
   readonly deletedAt: Date | null;
+  /** TB6: the photo reference, while the message holds one. */
+  readonly photo: BusinessPhotoReference | null;
 }
 
 export interface BusinessMessageRepository {
@@ -312,6 +317,8 @@ export interface BusinessMessageRepository {
       readonly origin: BusinessMessageOrigin;
       readonly kind: BusinessMessageKind;
       readonly text: string | null;
+      /** TB6: a PHOTO's largest-size reference; never bytes, never a URL. */
+      readonly photo: BusinessPhotoReference | null;
       readonly sentAt: Date;
       readonly now: Date;
     },
@@ -328,6 +335,8 @@ export interface BusinessMessageRepository {
       readonly conversationId: string;
       readonly telegramMessageId: number;
       readonly text: string | null;
+      /** TB6: replaces the reference of a PHOTO row only (an edit can replace the media). */
+      readonly photo: BusinessPhotoReference | null;
       readonly editedAt: Date;
     },
     tx: unknown,
@@ -359,6 +368,15 @@ export interface BusinessMessageRepository {
     conversationId: string,
     limit: number,
   ): Promise<readonly BusinessMessageRecord[]>;
+
+  /**
+   * TB6: one message's photo reference, read by the tenant, the conversation AND the row id
+   * together — a message of another conversation or another tenant is null, never a file id.
+   */
+  photoReference(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly messageId: string },
+  ): Promise<BusinessPhotoReference | null>;
 
   /** Purges text sent before `cutoff`, at most `limit` rows. */
   purgeText(

@@ -13,6 +13,7 @@ import {
   type OperationalEventRecorder,
   type PermissionKey,
   type ScopeContext,
+  type SupportAiImageSkipReason,
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -29,13 +30,27 @@ import type {
   BusinessConversationRepository,
   BusinessMessageRepository,
 } from '../../../commerce/business-chats/application/ports.js';
-import { supportSystemPrompt, transcriptMessages } from '../domain/prompt.js';
+import {
+  SUPPORT_AI_TRANSCRIPT_MESSAGES,
+  supportSystemPrompt,
+  transcriptMessages,
+  type TranscriptImage,
+  type TranscriptLine,
+} from '../domain/prompt.js';
+import { planVision } from '../domain/vision.js';
 import type { DrizzleSupportAiConfigRepository } from '../infrastructure/drizzle-support-ai.repository.js';
 import type {
   DrizzleSupportAiJobRepository,
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
 import type { SupportAiChain } from './support-ai-chain.js';
+import type { SupportImageSource } from './ports.js';
+
+/** TB6: one customer image fetched for this request, and its size (telemetry). */
+interface LoadedImage {
+  readonly image: TranscriptImage;
+  readonly byteSize: number;
+}
 
 export const SUPPORT_AI_ASSIST_PERMISSION = 'support_ai.assist' satisfies PermissionKey;
 export const SUPPORT_AI_ASSIST_SEND_PERMISSION = 'business_chats.reply' satisfies PermissionKey;
@@ -65,6 +80,9 @@ export interface SupportContextSource {
 /** What `produce` did with a claimed job. `INACTIVE`: the scope stopped; nothing was written. */
 export type SupportAssistProduceResult = 'READY' | 'FAILED' | 'GONE' | 'INACTIVE';
 
+/** TB6: the per-image outcome rows of one request, written inside the result's transaction. */
+type ImageWrite = (now: Date, tx: TransactionScope) => Promise<void>;
+
 /** The instant before which a QUEUED job with no live lease counts as unclaimed. */
 export function unclaimedCutoff(now: Date): Date {
   return new Date(now.getTime() - SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS * 1_000);
@@ -73,7 +91,9 @@ export function unclaimedCutoff(now: Date): Date {
 export interface SupportAssistServiceDeps {
   readonly jobs: DrizzleSupportAiJobRepository;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
-  readonly chain: Pick<SupportAiChain, 'generate'>;
+  readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
+  /** TB6: the one way a customer's image is read (tenant-scoped, bounded, sniffed). */
+  readonly images: SupportImageSource;
   readonly context: SupportContextSource;
   readonly conversations: Pick<BusinessConversationRepository, 'findById'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent'>;
@@ -225,10 +245,60 @@ export class SupportAssistService {
       this.deps.messages.recent(scope, conversation.id, 40),
       this.deps.context.build(scope, conversation.customerId),
     ]);
-    const turns = transcriptMessages(
-      transcript.map((m) => ({ origin: m.origin, text: m.text, kind: m.kind })),
-    );
+
+    /*
+     * TB6 — vision. Which customer images may go with this request, fetched OUTSIDE any
+     * transaction through the tenant-scoped source. Every image considered ends with exactly
+     * one outcome row: PROCESSED only when the step that ANSWERED was given it.
+     */
+    const plan = planVision(transcript, {
+      visionEnabled: config.visionEnabled,
+      visionStepConfigured: this.deps.chain.visionStepConfigured(config),
+    });
+    const skipped = new Map<string, SupportAiImageSkipReason>(plan.skipped);
+    const loaded = new Map<string, LoadedImage>();
+    for (const messageId of plan.fetch) {
+      const load = await this.deps.images.load(scope, {
+        conversationId: conversation.id,
+        messageId,
+      });
+      if (load.outcome === 'LOADED') {
+        loaded.set(messageId, { image: load.image, byteSize: load.byteSize });
+      } else {
+        skipped.set(messageId, load.reason);
+      }
+    }
+    const lines: TranscriptLine[] = transcript.map((m) => ({
+      origin: m.origin,
+      text: m.text,
+      kind: m.kind,
+      image: loaded.get(m.id)?.image ?? null,
+    }));
+    const turns = transcriptMessages(lines, { attachImages: false });
     if (turns.length === 0) return this.fail(scope, job, 'transcript.empty');
+    const imagesInWindow = transcript
+      .slice(-SUPPORT_AI_TRANSCRIPT_MESSAGES)
+      .filter((m) => m.kind === 'PHOTO').length;
+
+    /*
+     * FAIL CLOSED (program §28): the customer's latest message is an image nobody could
+     * process. No model is asked — one that cannot see the image would answer its caption, or
+     * nothing, as though it had looked — and the draft is a HANDOFF that says why.
+     */
+    const latestImage = plan.latestInboundImageId;
+    if (latestImage !== null && !loaded.has(latestImage)) {
+      return this.unseenImageHandoff(
+        scope,
+        job.id,
+        skipped.get(latestImage) ?? 'DOWNLOAD_FAILED',
+        imagesInWindow,
+        skipped,
+        loaded,
+      );
+    }
+
+    const visionTurns =
+      loaded.size === 0 ? null : transcriptMessages(lines, { attachImages: true });
     const result = await this.deps.chain.generate(scope, {
       operation: 'ASSIST_DRAFT',
       conversationId: conversation.id,
@@ -245,16 +315,40 @@ export class SupportAssistService {
         // Persian is token-dense; a generous bound, and the reply's own limit is checked below.
         maxOutputTokens: Math.min(4_000, config.maxOutputChars * 3 + 600),
       },
+      ...(visionTurns === null
+        ? {}
+        : { vision: { messages: visionTurns, required: latestImage !== null } }),
     });
+    if (result.exhausted === 'NO_VISION_STEP') {
+      return this.unseenImageHandoff(
+        scope,
+        job.id,
+        'NO_VISION_CAPABILITY',
+        imagesInWindow,
+        skipped,
+        loaded,
+      );
+    }
+    const answered = result.outcome.outcome === 'OK' && result.step !== null;
+    const seen = answered && result.imagesSent > 0 ? result.imagesSent : 0;
+    // The per-image telemetry is written in the SAME transaction as the job's result, under
+    // the same activity check: a scope stopped during the call records neither.
+    const images = this.imageWriter(
+      scope,
+      job.id,
+      skipped,
+      loaded,
+      seen > 0 ? null : answered ? 'NO_VISION_CAPABILITY' : 'NOT_ANSWERED',
+    );
     if (result.outcome.outcome !== 'OK' || result.step === null) {
       const code =
         result.exhausted ??
         ('code' in result.outcome ? result.outcome.code : result.outcome.outcome);
-      return this.fail(scope, job, `chain.${code}`);
+      return this.fail(scope, job, `chain.${code}`, images);
     }
     const parsed = supportAiDecisionSchema.safeParse(result.outcome.output);
     if (!parsed.success || parsed.data.replyText.length > config.maxOutputChars) {
-      return this.fail(scope, job, 'decision.invalid');
+      return this.fail(scope, job, 'decision.invalid', images);
     }
     // A citation the payload did not contain is dropped: it is not evidence of anything.
     const factLabels = parsed.data.factRefs.flatMap((ref) => {
@@ -267,9 +361,18 @@ export class SupportAssistService {
       this.deps.jobs.markReady(
         scope,
         job.id,
-        { decision: parsed.data, factLabels, provider: step.provider, model, now },
+        {
+          decision: parsed.data,
+          factLabels,
+          provider: step.provider,
+          model,
+          imagesSeen: seen,
+          imagesUnseen: Math.max(0, imagesInWindow - seen),
+          now,
+        },
         tx,
       ),
+      images,
     );
   }
 
@@ -307,9 +410,13 @@ export class SupportAssistService {
     scope: ScopeContext,
     job: SupportAiJobRecord,
     code: string,
+    images?: ImageWrite,
   ): Promise<SupportAssistProduceResult> {
-    return this.record(scope, 'FAILED', (now, tx) =>
-      this.deps.jobs.markFailed(scope, job.id, code, now, tx),
+    return this.record(
+      scope,
+      'FAILED',
+      (now, tx) => this.deps.jobs.markFailed(scope, job.id, code, now, tx),
+      images,
     );
   }
 
@@ -318,11 +425,71 @@ export class SupportAssistService {
     scope: ScopeContext,
     to: 'READY' | 'FAILED',
     write: (now: Date, tx: TransactionScope) => Promise<boolean>,
+    images?: ImageWrite,
   ): Promise<SupportAssistProduceResult> {
     return this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'INACTIVE';
-      return (await write(this.deps.clock.now(), tx)) ? to : 'GONE';
+      const now = this.deps.clock.now();
+      if (images !== undefined) await images(now, tx);
+      return (await write(now, tx)) ? to : 'GONE';
     });
+  }
+
+  /** TB6: the fail-closed HANDOFF draft, and its telemetry, in one transaction. No model was asked. */
+  private unseenImageHandoff(
+    scope: ScopeContext,
+    jobId: string,
+    reason: SupportAiImageSkipReason,
+    imagesInWindow: number,
+    skipped: ReadonlyMap<string, SupportAiImageSkipReason>,
+    loaded: ReadonlyMap<string, LoadedImage>,
+  ): Promise<SupportAssistProduceResult> {
+    return this.record(
+      scope,
+      'READY',
+      (now, tx) =>
+        this.deps.jobs.markUnseenImageHandoff(
+          scope,
+          jobId,
+          { reason, imagesUnseen: imagesInWindow, now },
+          tx,
+        ),
+      this.imageWriter(scope, jobId, skipped, loaded, 'NOT_ANSWERED'),
+    );
+  }
+
+  /**
+   * TB6 telemetry: one row per customer image considered. A loaded image is PROCESSED only
+   * when `loadedReason` is null (the answering step was given it); otherwise it is SKIPPED with
+   * that reason. Never a byte, a file id or a URL. Returned as a write for `record`, so the
+   * rows commit with the job's result or not at all.
+   */
+  private imageWriter(
+    scope: ScopeContext,
+    jobId: string,
+    skipped: ReadonlyMap<string, SupportAiImageSkipReason>,
+    loaded: ReadonlyMap<string, LoadedImage>,
+    loadedReason: SupportAiImageSkipReason | null,
+  ): ImageWrite {
+    const rows = [
+      ...[...loaded].map(([messageId, { image, byteSize }]) => ({
+        id: this.deps.ids.uuid(),
+        messageId,
+        outcome: loadedReason === null ? ('PROCESSED' as const) : ('SKIPPED' as const),
+        reason: loadedReason,
+        mediaType: image.mediaType,
+        byteSize,
+      })),
+      ...[...skipped].map(([messageId, reason]) => ({
+        id: this.deps.ids.uuid(),
+        messageId,
+        outcome: 'SKIPPED' as const,
+        reason,
+        mediaType: null,
+        byteSize: null,
+      })),
+    ];
+    return (now, tx) => this.deps.jobs.recordImageOutcomes(scope, jobId, rows, now, tx);
   }
 
   /** The operator sends the draft — edited or not — as the business account. */

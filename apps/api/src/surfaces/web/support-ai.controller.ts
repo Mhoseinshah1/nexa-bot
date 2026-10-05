@@ -174,5 +174,8 @@ function draftView(job: SupportAiJobRecord): SupportAiDraftView {
     factLabels: [...job.factLabels],
     provider: job.provider,
     model: job.model,
+    imagesSeen: job.imagesSeen,
+    imagesUnseen: job.imagesUnseen,
+    unseenImageHandoff: job.unseenImageHandoff,
   };
 }

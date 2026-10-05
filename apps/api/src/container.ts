@@ -593,6 +593,7 @@ import {
   ASSISTANT_INTERVAL_MS,
 } from './modules/control/support-ai/application/assistant-loop.js';
 import { DrizzleSupportAiJobRepository } from './modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository.js';
+import { TelegramSupportImageSource } from './modules/control/support-ai/infrastructure/telegram-support-image-source.js';
 import { TbSupportContextSource } from './modules/control/support-ai/infrastructure/support-context-source.js';
 import { SupportAiConfigService } from './modules/control/support-ai/application/support-ai-config.service.js';
 import type { SupportAiAdapter } from './modules/control/support-ai/application/ports.js';
@@ -5494,6 +5495,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     configs: supportAiConfigs,
     chain: supportAiChain,
     context: new TbSupportContextSource(supportContext),
+    /*
+     * TB6: a customer's photo, by the token of the bot the conversation belongs to, through
+     * the one Telegram file download (bounded while streaming, no redirects, outside any
+     * transaction). Same configured origin for files as the receipt reader.
+     */
+    images: new TelegramSupportImageSource({
+      conversations: businessConversationRepository,
+      messages: businessMessageRepository,
+      bots: botInstances,
+      apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+      fileBaseUrl: config.TELEGRAM_API_BASE_URL,
+    }),
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
     sender: businessConversations,
