@@ -150,7 +150,12 @@ export interface BusinessTelegramGateway {
       readonly replyToMessageId?: number;
     },
   ): Promise<
-    | { readonly outcome: 'SUCCEEDED'; readonly messageId: number | null }
+    | {
+        readonly outcome: 'SUCCEEDED';
+        readonly messageId: number | null;
+        /** Telegram's own `date` for the sent message, or null when it gave none. */
+        readonly sentAt: Date | null;
+      }
     | {
         readonly outcome: 'FAILED_RETRYABLE';
         readonly errorCode: string;

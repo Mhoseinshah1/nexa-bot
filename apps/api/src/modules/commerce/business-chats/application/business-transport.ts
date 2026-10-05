@@ -19,7 +19,9 @@ import type {
  * What one send on the business account's behalf did — the customer messenger's four-way
  * taxonomy (ADR-0030), so the TB2 lane can apply the rule that lane already proves:
  *
- *   - `DELIVERED` — Telegram accepted it. `messageId` is what proves a later echo is ours.
+ *   - `DELIVERED` — Telegram accepted it. `messageId` is what proves a later echo is ours;
+ *     `sentAt` is Telegram's own date for the message (null when it gave none), the clock
+ *     every customer message is stamped on (PR #205 review, S1).
  *   - `REFUSED` — nothing was delivered: NEXA refused before calling (the connection is not
  *     ACTIVE, the bot is not ACTIVE, the text is not sendable) or Telegram answered 4xx.
  *     Never retried as-is.
@@ -28,7 +30,11 @@ import type {
  *     NEVER resent: Telegram has no send idempotency (ADR-0033 §6).
  */
 export type BusinessSendOutcome =
-  | { readonly outcome: 'DELIVERED'; readonly messageId: number | null }
+  | {
+      readonly outcome: 'DELIVERED';
+      readonly messageId: number | null;
+      readonly sentAt: Date | null;
+    }
   | {
       readonly outcome: 'REFUSED';
       readonly reason:
@@ -120,7 +126,9 @@ export class BusinessTransport {
       text: text.data,
       ...(input.replyToMessageId === undefined ? {} : { replyToMessageId: input.replyToMessageId }),
     });
-    if (sent.outcome === 'SUCCEEDED') return { outcome: 'DELIVERED', messageId: sent.messageId };
+    if (sent.outcome === 'SUCCEEDED') {
+      return { outcome: 'DELIVERED', messageId: sent.messageId, sentAt: sent.sentAt };
+    }
     if (sent.outcome === 'FAILED_RETRYABLE') {
       // A 429 is the one retryable answer that is not an unknown outcome: Telegram said
       // "not now", and nothing was delivered.

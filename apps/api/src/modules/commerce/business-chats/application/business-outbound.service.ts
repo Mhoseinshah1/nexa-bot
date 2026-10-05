@@ -293,12 +293,21 @@ export class BusinessOutboundService {
               tx,
             );
           }
+          /*
+           * The reply is stamped on TELEGRAM's clock — the `date` Telegram returned for this
+           * message, the same date its OWN_ECHO row carries — because the customer's messages
+           * are stamped on that clock and the inbox compares the two (PR #205 review, S1). The
+           * server's `now` would mix clocks: a VPS running ahead would mark a customer who
+           * wrote after the reply as answered. Only an answer with no date falls back to `now`,
+           * and the comparison's whole-second grain bounds that case to the skew.
+           */
+          const repliedAt = sent.sentAt ?? now;
           await this.deps.conversations.touch(
             scope,
             row.conversationId,
             row.origin === 'AUTO'
-              ? { lastMessageAt: now, lastAiAt: now, now }
-              : { lastMessageAt: now, lastHumanAt: now, now },
+              ? { lastMessageAt: repliedAt, lastAiAt: repliedAt, now }
+              : { lastMessageAt: repliedAt, lastHumanAt: repliedAt, now },
             tx,
           );
           return 'delivered';

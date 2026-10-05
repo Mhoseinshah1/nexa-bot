@@ -393,13 +393,18 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
              AND m.conversation_id = ${businessConversations.id}
            ORDER BY m.sent_at DESC, m.telegram_message_id DESC
            LIMIT 1)`,
-        // TB10: the oldest customer message since that reply (no N+1: the transcript index).
+        /*
+         * TB10: the oldest customer message from that reply's SECOND on (no N+1: the
+         * transcript index). `businessUnansweredSince` compares on Telegram's whole second and
+         * counts a message in the reply's own second as unanswered (PR #205 review, S1);
+         * `sent_at >= date_trunc('second', replied)` is that rule, kept sargable on `sent_at`.
+         */
         firstUnansweredAt: sql<Date | string | null>`(
           SELECT min(m.sent_at) FROM business_messages m
            WHERE m.tenant_id = ${businessConversations.tenantId}
              AND m.conversation_id = ${businessConversations.id}
              AND m.origin = 'INBOUND'
-             AND m.sent_at > COALESCE(${replied}, '-infinity'::timestamptz))`,
+             AND m.sent_at >= COALESCE(date_trunc('second', ${replied}), '-infinity'::timestamptz))`,
       })
       .from(businessConversations)
       .innerJoin(

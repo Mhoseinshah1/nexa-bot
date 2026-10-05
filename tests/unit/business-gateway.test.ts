@@ -71,6 +71,29 @@ describe('the Telegram Business gateway', () => {
     expect((await gateway.getConnection('token', 'conn-1')).outcome).toBe('UNAVAILABLE');
   });
 
+  /*
+   * PR #205 review, S1: a delivered reply is stamped with the date TELEGRAM gave the message,
+   * whole seconds, the clock the customer's messages carry — never the server's.
+   */
+  it('reads Telegram’s own date for a sent message, and nothing that is not one', async () => {
+    const send = () =>
+      gateway.sendText('token', {
+        businessConnectionId: 'conn-1',
+        chatId: '7000001',
+        text: 'سلام',
+      });
+    answer(200, { ok: true, result: { message_id: 77, date: 1_791_210_000 } });
+    expect(await send()).toEqual({
+      outcome: 'SUCCEEDED',
+      messageId: 77,
+      sentAt: new Date(1_791_210_000_000),
+    });
+    for (const date of [undefined, 0, -5, 1.5, '1791210000']) {
+      answer(200, { ok: true, result: { message_id: 78, date } });
+      expect(await send()).toEqual({ outcome: 'SUCCEEDED', messageId: 78, sentAt: null });
+    }
+  });
+
   it('never reads an unreadable 2xx, or an answer about another id, as an answer about this one', async () => {
     answer(200, { ok: true, result: { nonsense: true } });
     expect((await gateway.getConnection('token', 'conn-1')).outcome).toBe('UNAVAILABLE');

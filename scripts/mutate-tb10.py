@@ -27,10 +27,13 @@ AI_PAGE='apps/web/src/pages/support-ai.tsx'
 NC_PAGE='apps/web/src/pages/notification-center.tsx'
 SA_PAGE='apps/web/src/pages/support-analytics.tsx'
 CSS='apps/web/src/styles/pages/ops-b.css'
+OUTBOUND='apps/api/src/modules/commerce/business-chats/application/business-outbound.service.ts'
+SEND='apps/api/src/infrastructure/telegram/send-message.ts'
 T_U=('unit','tests/unit/support-tb10.test.ts')
 T_I=('integration','tests/integration/support-tb10.test.ts')
 T_W=('web','tests/web/support-tb10-polish.test.tsx')
 T_A=('web','tests/web/support-analytics.test.tsx')
+T_G=('unit','tests/unit/business-gateway.test.ts')
 
 M=[
  # --- the notification rules (contracts) ---------------------------------------------------
@@ -39,8 +42,8 @@ M=[
  ('TB10-03',[(NC,"  BUSINESS_CHAT: { contextKey: 'conversationId', fallback: 'BUSINESS_CHATS' },\n","")],T_U,'links a handoff to its conversation'),
  ('TB10-04',[(NC,"    code: 'support.business_connection.unusable',","    prefix: 'support.',")],T_U,'never admits a support recovery'),
  # --- the inbox rules (contracts) ----------------------------------------------------------
- ('TB10-05',[(BC,"  if (replied !== null && inbound.getTime() <= replied) return null;\n","")],T_U,'replied after the customer'),
- ('TB10-06',[(BC,"  return first !== null && (replied === null || first.getTime() > replied) ? first : inbound;","  return inbound;")],T_U,'OLDEST customer message'),
+ ('TB10-05',[(BC,"  if (replied !== null && businessUnansweredSecond(inbound) < replied) return null;\n","")],T_U,'replied after the customer'),
+ ('TB10-06',[(BC,"  return first !== null && (replied === null || businessUnansweredSecond(first) >= replied)\n    ? first\n    : inbound;","  return inbound;")],T_U,'OLDEST customer message'),
  ('TB10-07',[(SAI,"  return trippedUntil.getTime() > now.getTime() ? 'OPEN' : 'HALF_OPEN';","  return trippedUntil.getTime() >= now.getTime() ? 'OPEN' : 'HALF_OPEN';")],T_U,'HALF_OPEN from it on'),
  ('TB10-08',[(SAN,"    case 'handoff_ai_unavailable':\n    case 'handoff_stale':\n      return 'HANDED_OFF';","    case 'handoff_ai_unavailable':\n      return 'DROPPED';\n    case 'handoff_stale':\n      return 'HANDED_OFF';")],T_U,'classifies every outcome'),
  # --- the inbox query and cursor -----------------------------------------------------------
@@ -74,6 +77,12 @@ M=[
  ('TB10-33',[(INBOX_PAGE,"          <textarea\n            dir=\"auto\"\n","          <textarea\n")],T_W,'direction of what is typed'),
  # TB9's review (PR #204): a RETIRE proposal retires a built article; the snapshot counts it.
  ('TB10-34',[(READER,"       WHERE tenant_id = ${tenantId}::uuid\n       GROUP BY source, state, enabled","       WHERE tenant_id = ${tenantId}::uuid AND state <> 'RETIRED'\n       GROUP BY source, state, enabled")],T_I,'retired by a RETIRE proposal'),
+ # PR #205's substitute review (support-agent/tb10-falsification.md, "Substitute review").
+ # S1: the wait is compared on one clock (Telegram's) and one grain (the whole second).
+ ('TB10-35',[(BC,"  return Math.floor(at.getTime() / 1000);","  return at.getTime();")],T_U,'same Telegram second as a reply'),
+ ('TB10-36',[(REPO,"AND m.sent_at >= COALESCE(date_trunc('second', ${replied}), '-infinity'::timestamptz))","AND m.sent_at > COALESCE(${replied}, '-infinity'::timestamptz))")],T_I,'same Telegram second as a reply confirmed'),
+ ('TB10-37',[(OUTBOUND,"const repliedAt = sent.sentAt ?? now;","const repliedAt = now;")],T_I,'server clock running ahead'),
+ ('TB10-38',[(SEND,"      ? { sentAt: new Date(date * 1000) }","      ? {}")],T_G,'own date for a sent message'),
 ]
 
 def build_contracts():

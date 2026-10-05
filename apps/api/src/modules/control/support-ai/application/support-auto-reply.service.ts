@@ -126,6 +126,9 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
       );
     }
     const settle = input.now.getTime() + config.settleDelaySeconds * 1000;
+    // `lastAiAt` is Telegram's date for the delivered reply (PR #205 review, S1), so the
+    // cooldown runs from when Telegram stamped it: off the server's clock by the host's skew
+    // and by under a second of truncation — a bound, not a new rule.
     const cooled =
       conversation.lastAiAt === null
         ? 0

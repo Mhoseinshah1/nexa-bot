@@ -43,6 +43,12 @@ export type TelegramSendOutcome =
        * an answer that did not name one in the expected shape.
        */
       readonly file?: { readonly fileId: string; readonly fileUniqueId: string };
+      /**
+       * TB10 review (PR #205, S1): the message's `date` as TELEGRAM stamped it — whole seconds,
+       * on the same clock as every message Telegram delivers to us. Absent when the answer did
+       * not carry a positive integer `date`.
+       */
+      readonly sentAt?: Date;
     }
   | {
       readonly outcome: 'FAILED_RETRYABLE';
@@ -124,15 +130,19 @@ export async function telegramSend(request: TelegramRequest): Promise<TelegramSe
 
   const call = await telegramCall(request);
   if (call.outcome !== 'SUCCEEDED') return call;
-  // The ONE thing a send reads out of a result. `telegramCall` returns the whole
-  // `result`; this narrows it, which is why the bootstrap needed its own callers
-  // rather than a wider return type here.
-  const result = call.result as { message_id?: number } | null;
+  // What a send reads out of a result: the message id, Telegram's own date for it, and a
+  // media send's file. `telegramCall` returns the whole `result`; this narrows it, which is
+  // why the bootstrap needed its own callers rather than a wider return type here.
+  const result = call.result as { message_id?: number; date?: unknown } | null;
   const file = sentFileOf(call.result);
+  const date = result?.date;
   return {
     outcome: 'SUCCEEDED',
     messageId: result?.message_id ?? null,
     ...(file === null ? {} : { file }),
+    ...(typeof date === 'number' && Number.isSafeInteger(date) && date > 0
+      ? { sentAt: new Date(date * 1000) }
+      : {}),
   };
 }
 

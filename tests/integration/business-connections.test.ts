@@ -38,7 +38,7 @@ class FakeBusinessTelegram implements BusinessTelegramGateway {
     return this.answer;
   }
   async sendText() {
-    return { outcome: 'SUCCEEDED' as const, messageId: 1 };
+    return { outcome: 'SUCCEEDED' as const, messageId: 1, sentAt: null };
   }
 }
 

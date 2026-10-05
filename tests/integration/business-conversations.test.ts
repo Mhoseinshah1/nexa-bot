@@ -55,7 +55,7 @@ class ScriptedTransport {
     const scripted = this.next.shift();
     if (scripted !== undefined) return scripted;
     this.nextMessageId += 1;
-    return { outcome: 'DELIVERED' as const, messageId: this.nextMessageId };
+    return { outcome: 'DELIVERED' as const, messageId: this.nextMessageId, sentAt: null };
   }
 }
 

@@ -8,6 +8,7 @@ import {
   SESSION_COOKIE_NAME,
   SUPPORT_ANALYTICS_ROUTES,
   businessChatListResponseSchema,
+  businessUnansweredSince,
   isNexaError,
   supportAnalyticsResponseSchema,
   systemJobActor,
@@ -17,7 +18,13 @@ import {
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { DrizzleBusinessConversationRepository } from '../../apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository';
+import {
+  DrizzleBusinessConversationRepository,
+  DrizzleBusinessEscalationRepository,
+  DrizzleBusinessMessageRepository,
+  DrizzleBusinessOutboundRepository,
+} from '../../apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository';
+import { BusinessOutboundService } from '../../apps/api/src/modules/commerce/business-chats/application/business-outbound.service';
 import type { ParsedBusinessMessage } from '../../apps/api/src/modules/commerce/business-chats/domain/telegram-business';
 import { DrizzleSupportAnalyticsReader } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-analytics.reader';
 import { SUPPORT_AI_UNAVAILABLE_DEDUPE_KEY } from '../../apps/api/src/modules/control/support-ai/application/support-ai-chain';
@@ -309,6 +316,90 @@ describe('TB10 — support polish against the database', () => {
       [item] = await list({ limit: 50 });
       expect(item?.conversation.id).toBe(conversationId);
       expect(item?.firstUnansweredAt).toBeNull();
+    });
+
+    /*
+     * PR #205 review, S1 — one clock. A reply NEXA delivered was stamped with the server's
+     * `now`; the customer's messages carry Telegram's whole-second date. These run the REAL
+     * lane, with a server clock of their own and a transport answering as Telegram would.
+     */
+    describe('on one clock (PR #205 review, S1)', () => {
+      const second = (at: number) => new Date(Math.floor(at / 1000) * 1000);
+      /** A reply sent by an operator, delivered by the lane at `serverNow`, dated `telegramAt`. */
+      async function replyDelivered(
+        conversationId: string,
+        serverNow: Date,
+        telegramAt: Date | null,
+      ) {
+        const c = ctx.container;
+        await c.businessConversations.send(scopeA, support, {
+          conversationId,
+          idempotencyKey: key('send'),
+          text: 'بررسی می‌کنم',
+        });
+        const lane = new BusinessOutboundService({
+          outbound: new DrizzleBusinessOutboundRepository(c.database.db),
+          conversations: new DrizzleBusinessConversationRepository(c.database.db),
+          messages: new DrizzleBusinessMessageRepository(c.database.db),
+          control: c.businessConversations,
+          transport: {
+            sendText: async () => ({ outcome: 'DELIVERED', messageId: 9001, sentAt: telegramAt }),
+          },
+          autoMode: { autoReplyEnabled: async () => true },
+          escalations: new DrizzleBusinessEscalationRepository(c.database.db),
+          uow: c.uow,
+          scopeActivity: c.tenants,
+          clock: { now: () => serverNow },
+          ids: c.ids,
+          logger: c.logger,
+        });
+        expect((await lane.deliverDue(scopeA)).delivered).toBe(1);
+      }
+      /** The inbox's answer, through the SQL and the contract rule together, as the controller reads it. */
+      async function waitOf(conversationId: string) {
+        const [item] = await list({ limit: 50 });
+        expect(item?.conversation.id).toBe(conversationId);
+        return {
+          first: item!.firstUnansweredAt,
+          since: businessUnansweredSince({
+            lastInboundAt: item!.conversation.lastInboundAt,
+            lastHumanAt: item!.conversation.lastHumanAt,
+            lastAiAt: item!.conversation.lastAiAt,
+            firstUnansweredAt: item!.firstUnansweredAt,
+          }),
+        };
+      }
+
+      it('a customer message in the same Telegram second as a reply confirmed at a sub-second now is still unanswered', async () => {
+        // In the future, so the lane's clock finds the send due.
+        const t1 = second(Date.now() + 60_000);
+        const conversationId = await customerWrites('7000211', new Date(t1.getTime() - 30_000));
+        // Telegram's answer carried no date: the server's sub-second `now` is the stamp.
+        await replyDelivered(conversationId, new Date(t1.getTime() + 400), null);
+        expect((await waitOf(conversationId)).since).toBeNull();
+        // The customer writes in the reply's own second, and again five seconds later.
+        await record(message('7000211', { sentAt: t1 }));
+        await record(message('7000211', { sentAt: new Date(t1.getTime() + 5_000) }));
+        const wait = await waitOf(conversationId);
+        // The SQL and the contract agree: the wait starts at the message in the reply's second.
+        expect(wait.first?.toISOString()).toBe(t1.toISOString());
+        expect(wait.since?.toISOString()).toBe(t1.toISOString());
+      });
+
+      it('a server clock running ahead of Telegram does not mark a later customer message as answered', async () => {
+        const t1 = second(Date.now() + 60_000);
+        const conversationId = await customerWrites('7000212', new Date(t1.getTime() - 30_000));
+        // Telegram dated the reply t1; this host's clock reads five seconds ahead of it.
+        await replyDelivered(conversationId, new Date(t1.getTime() + 5_000), t1);
+        const [replied] = await list({ limit: 50 });
+        expect(replied?.conversation.lastHumanAt?.toISOString()).toBe(t1.toISOString());
+        // The customer writes two seconds after the reply, by Telegram's clock.
+        const later = new Date(t1.getTime() + 2_000);
+        await record(message('7000212', { sentAt: later }));
+        const wait = await waitOf(conversationId);
+        expect(wait.first?.toISOString()).toBe(later.toISOString());
+        expect(wait.since?.toISOString()).toBe(later.toISOString());
+      });
     });
   });
 
