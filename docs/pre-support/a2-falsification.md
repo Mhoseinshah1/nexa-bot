@@ -33,10 +33,18 @@ The «♻️» button (`rs:`) passes no options and behaves exactly as before.
 
 - `NOT_FOUND` is the only outcome that changes the reply.
 - `FAILED`, `RECENT` and `NOT_READ` draw the stored card with no toast.
-- An expected typed refusal draws the stored card too: recovery quiesced,
-  `PERMISSION_DENIED`, or a retryable error.
-- Any other error propagates. `BotRuntime` has no injected error sink, so propagating is how
-  it gets reported.
+- Anything the refresh throws draws the stored card. An opportunistic read on open must
+  never cost the customer the card; this is an owner decision taken after #211.
+  - An expected typed refusal is silent: recovery quiesced, `PERMISSION_DENIED`, or a
+    retryable error (`isExpectedRefreshRefusal`).
+  - Anything else is reported through `BotRuntime`'s optional `logger` dep, with context
+    `{ err, serviceId, tenantId }`. The dep has the same name and shape as PR #208's, and
+    the container passes the process logger.
+  - The real case is a panel whose stored credential cannot be decrypted
+    (`SECRET_VERSION_UNSUPPORTED`, INTERNAL, not retryable), as #211's
+    `presupport-a6-location-label` fixture seeds. Before the read on open, that card opened
+    fine. The second review round made it propagate, and #211's test caught the
+    regression.
 - A service with a change in progress (`changeInProgress`, the «working» card) is drawn
   without a read.
 
@@ -51,8 +59,11 @@ inside the refresh button's bounds":
 - An open during a tap's in-flight read makes no second read.
 - A panel failure draws the stored card, with no error and no notice.
 - An exhausted budget draws the stored card and makes no read.
-- An expected refusal thrown by the refresh draws the stored card.
-- An unexpected error thrown by the refresh is surfaced, not swallowed.
+- An expected refusal thrown by the refresh draws the stored card, and nothing is logged.
+- An unexpected error thrown by the refresh draws the stored card, and is logged once with
+  `{ err, serviceId, tenantId }`.
+- A panel whose stored credential cannot be decrypted opens the stored card, with no panel
+  read.
 - A panel confirmed `UNREACHABLE` (fresh, streak at the threshold): `s:` makes 0 reads and
   draws the stored card, while `rs:` makes 1.
 - A bucket exactly at the background floor: `s:` makes 0 reads, while `rs:` makes 1.
@@ -69,24 +80,30 @@ the panel.
 Driver: `python3 scripts/mutate-a2.py`. It needs a clean `apps/`; set `TEST_DATABASE_URL` to
 a database of your own. Each write and restore is wrapped in `try`/`finally`.
 
-| Id    | Reverted rule                                            | Killed by                                     |
-| ----- | -------------------------------------------------------- | --------------------------------------------- |
-| A2-01 | `SERVICE` draws the stored card without the refresh      | one panel read on `s:`                        |
-| A2-02 | `SERVICE_CARD` draws the stored card without the refresh | `sv:` reads too                               |
-| A2-03 | `FAILED` on open answers with the refresh-failed toast   | panel failure; exhausted budget (2 tests)     |
-| A2-04 | an unexpected error is swallowed                         | unexpected error is surfaced                  |
-| A2-05 | an expected refusal propagates                           | expected refusal draws the stored card        |
-| A2-06 | the open does not ask for `onOpen`                       | confirmed unreachable; at the floor (2 tests) |
-| A2-07 | the confirmed-unusable guard removed                     | confirmed unreachable                         |
-| A2-08 | the confirmed-unusable guard also applied to ♻️          | confirmed unreachable (`rs:` must read)       |
-| A2-09 | the open takes its token at reserve 0                    | at the floor                                  |
-| A2-10 | ♻️ also takes its token above the floor                  | at the floor (`rs:` must read)                |
-| A2-11 | the change-in-progress skip removed                      | SUSPEND in flight                             |
+| Id    | Reverted rule                                                 | Killed by                                      |
+| ----- | ------------------------------------------------------------- | ---------------------------------------------- |
+| A2-01 | `SERVICE` draws the stored card without the refresh           | one panel read on `s:`                         |
+| A2-02 | `SERVICE_CARD` draws the stored card without the refresh      | `sv:` reads too                                |
+| A2-03 | `FAILED` on open answers with the refresh-failed toast        | panel failure; exhausted budget (2 tests)      |
+| A2-04 | an unexpected error is not reported                           | unexpected error; undecryptable credential (2) |
+| A2-05 | an expected refusal is reported too                           | expected refusal (logs nothing)                |
+| A2-12 | an unexpected error propagates (the second round's behaviour) | unexpected error; undecryptable credential (2) |
+| A2-06 | the open does not ask for `onOpen`                            | confirmed unreachable; at the floor (2 tests)  |
+| A2-07 | the confirmed-unusable guard removed                          | confirmed unreachable                          |
+| A2-08 | the confirmed-unusable guard also applied to ♻️               | confirmed unreachable (`rs:` must read)        |
+| A2-09 | the open takes its token at reserve 0                         | at the floor                                   |
+| A2-10 | ♻️ also takes its token above the floor                       | at the floor (`rs:` must read)                 |
+| A2-11 | the change-in-progress skip removed                           | SUSPEND in flight                              |
 
-Result on 2026-10-05: 11 mutants, 11 killed, 13 failing tests in all. A2-03 and A2-06 are
-one edit each and fail two tests. An earlier version of this record listed A2-03 and A2-04
-as two mutants; they were one edit run against two tests, so that record was 4 mutants and
-5 kills.
+Result on 2026-10-05: 12 mutants, 12 killed, 16 failing tests in all. A2-03, A2-04, A2-06
+and A2-12 are one edit each and fail two tests.
+
+Earlier rounds:
+
+- The first record listed A2-03 and A2-04 as two mutants. They were one edit run against
+  two tests, so that record was 4 mutants and 5 kills.
+- The second round was 11 of 11 killed. There, A2-04 and A2-05 tested an error that
+  propagates. The current rule replaces that behaviour.
 
 Ignoring `NOT_FOUND` is an equivalent mutant: the stored card answers the same
 `bot.service.not_found` for a service that is not the customer's, so the branch only saves

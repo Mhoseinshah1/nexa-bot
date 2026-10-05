@@ -22,9 +22,13 @@ M=[
  # FAILED is not an answer on open: no toast, the stored card. ONE edit, run against the two
  # tests that reach FAILED (a panel failure, an exhausted budget): both must fail.
  ('A2-03',[(RT,"      if (outcome === 'NOT_FOUND') {\n        return { key: 'bot.service.not_found'","      if (outcome === 'FAILED') return toastReply('bot.service.refresh_failed');\n      if (outcome === 'NOT_FOUND') {\n        return { key: 'bot.service.not_found'")],T_I,FAILURE_TESTS),
- # N1: an unexpected error propagates; an expected refusal draws the stored card.
- ('A2-04',[(RT,"        if (!isExpectedRefreshRefusal(error)) throw error;\n","")],T_I,'an unexpected error thrown by the refresh'),
- ('A2-05',[(RT,"        if (!isExpectedRefreshRefusal(error)) throw error;\n","        throw error;\n")],T_I,'an expected refusal thrown by the refresh'),
+ # Anything the refresh throws draws the stored card; an unexpected error is REPORTED
+ # through the injected logger, an expected refusal is silent.
+ ('A2-04',[(RT,"        if (!isExpectedRefreshRefusal(error)) {\n          this.deps.logger?.error(","        if (false) {\n          this.deps.logger?.error(")],T_I,'an unexpected error thrown by the refresh|cannot be decrypted'),
+ ('A2-05',[(RT,"        if (!isExpectedRefreshRefusal(error)) {\n          this.deps.logger?.error(","        if (true) {\n          this.deps.logger?.error(")],T_I,'an expected refusal thrown by the refresh'),
+ # The behaviour the first review round had, and the regression it caused: an unexpected
+ # error propagates and the card does not open.
+ ('A2-12',[(RT,"        if (!isExpectedRefreshRefusal(error)) {\n          this.deps.logger?.error(","        if (!isExpectedRefreshRefusal(error)) {\n          throw error;\n          this.deps.logger?.error(")],T_I,'an unexpected error thrown by the refresh|cannot be decrypted'),
  # B1: the open's own bounds. The open asks for them...
  ('A2-06',[(RT,"              onOpen: true,","              onOpen: false,")],T_I,'confirmed unreachable is not dialled on open|at the background floor is not spent'),
  # ...a panel the monitor confirmed unusable is not dialled on open...
