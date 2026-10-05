@@ -3483,12 +3483,17 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
 - **OQ-TB-73 — what counts as an answer for «منتظر پاسخ از».** Only a delivered reply counts:
   a person's message (the owner's phone, an operator's or an Assist send once delivered) or a
   delivered automatic reply. An away message (`OFFLINE`) and a pending send do not. Whether an
-  away message should stop the clock is open.
+  away message should stop the clock is open. Decided in PR #205's review (S1): a reply is
+  dated by Telegram's own `date` for it, the clock every customer message carries, and the
+  comparison is made on whole seconds — a customer message in the reply's own second counts
+  as unanswered.
 - **OQ-TB-74 — analytics count jobs and runs by when they were created.** A job created just
   before the window and finished inside it is counted in the earlier period. Counting by
   outcome time would need an indexed resolution stamp on `support_ai_jobs`.
 - **OQ-TB-75 — the analytics page offers presets only.** The API accepts `CUSTOM` with local
-  dates, as the business reports do; the page does not draw the date fields yet.
+  dates, as the business reports do, capped at 366 days — the longest preset's span — because
+  the latency percentiles sort every run in the window (PR #205 review, N5); the page does not
+  draw the date fields yet.
 - **OQ-TB-76 — the manual acceptance has not been run.** `docs/support-agent/acceptance-pack.md`
   is written and unrun. `OQ-TB-02`, `-03`, `-05`, `-19`, `-20`, `-22`, `-32` and `-47` are
   settled only by running it.
