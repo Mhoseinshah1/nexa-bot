@@ -379,19 +379,21 @@ export class DrizzleSupportAiJobRepository {
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
     if (rows.length === 0) return;
-    await exec(this.db, tx).insert(supportAiImageOutcomes).values(
-      rows.map((row) => ({
-        id: row.id,
-        tenantId,
-        jobId,
-        messageId: row.messageId,
-        outcome: row.outcome,
-        reason: row.reason,
-        mediaType: row.mediaType,
-        byteSize: row.byteSize,
-        createdAt: now,
-      })),
-    );
+    await exec(this.db, tx)
+      .insert(supportAiImageOutcomes)
+      .values(
+        rows.map((row) => ({
+          id: row.id,
+          tenantId,
+          jobId,
+          messageId: row.messageId,
+          outcome: row.outcome,
+          reason: row.reason,
+          mediaType: row.mediaType,
+          byteSize: row.byteSize,
+          createdAt: now,
+        })),
+      );
   }
 
   async imageOutcomes(

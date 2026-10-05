@@ -305,7 +305,7 @@ describe('Vision in Assist Mode (TB6)', () => {
       clock: c.clock,
       ids: c.ids,
     });
-    loop = new AssistantLoop(service, jobs, {
+    loop = new AssistantLoop(service, {
       scope: () => scopeA,
       intervalMs: 1000,
       now: () => c.clock.now(),

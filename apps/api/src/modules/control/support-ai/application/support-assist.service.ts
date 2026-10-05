@@ -357,21 +357,24 @@ export class SupportAssistService {
     });
     const step = result.step;
     const model = result.outcome.model;
-    return this.record(scope, 'READY', (now, tx) =>
-      this.deps.jobs.markReady(
-        scope,
-        job.id,
-        {
-          decision: parsed.data,
-          factLabels,
-          provider: step.provider,
-          model,
-          imagesSeen: seen,
-          imagesUnseen: Math.max(0, imagesInWindow - seen),
-          now,
-        },
-        tx,
-      ),
+    return this.record(
+      scope,
+      'READY',
+      (now, tx) =>
+        this.deps.jobs.markReady(
+          scope,
+          job.id,
+          {
+            decision: parsed.data,
+            factLabels,
+            provider: step.provider,
+            model,
+            imagesSeen: seen,
+            imagesUnseen: Math.max(0, imagesInWindow - seen),
+            now,
+          },
+          tx,
+        ),
       images,
     );
   }
