@@ -254,6 +254,12 @@ export const BUSINESS_HANDOFF_REASONS = [
   'LOOP_GUARD',
   /** The customer sent something the AI cannot read (an image, a file). */
   'UNSUPPORTED_CONTENT',
+  /**
+   * An automatic job produced more than `SUPPORT_AI_AUTO_STALE_SECONDS` after it fell due (the
+   * assistant was down, or the tenant was stopped and later resumed): too late to answer
+   * automatically, so a person answers instead (substitute review of PR #202).
+   */
+  'REPLY_STALE',
 ] as const;
 export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
 

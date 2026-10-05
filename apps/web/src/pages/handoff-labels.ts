@@ -20,4 +20,5 @@ export const HANDOFF_LABELS: Readonly<Record<BusinessHandoffReason, WebKey>> = {
   INSUFFICIENT_GROUNDING: 'web.bchat_handoff_grounding',
   LOOP_GUARD: 'web.bchat_handoff_loop_guard',
   UNSUPPORTED_CONTENT: 'web.bchat_handoff_unsupported',
+  REPLY_STALE: 'web.bchat_handoff_stale',
 };

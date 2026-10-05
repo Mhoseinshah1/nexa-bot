@@ -5936,6 +5936,7 @@ export const WEB_FA = {
   'web.bchat_handoff_grounding': 'پاسخ به اطلاعاتی استناد کرد که در دست نبود',
   'web.bchat_handoff_loop_guard': 'پاسخ‌های خودکار پشت‌سرهم به سقف رسید',
   'web.bchat_handoff_unsupported': 'پیامی که هوش مصنوعی نمی‌تواند بخواند (عکس یا فایل)',
+  'web.bchat_handoff_stale': 'دیرتر از آن که هوش مصنوعی خودکار پاسخ دهد',
   'web.bchat_escalations': 'سپردن‌ها به پشتیبان',
   'web.bchat_escalations_hint':
     'هر بار که گفتگو به پشتیبان سپرده شد: دلیل، تیکت، و یادداشت کوتاه هوش مصنوعی برای پشتیبان. این یادداشت هرگز برای مشتری فرستاده نمی‌شود.',

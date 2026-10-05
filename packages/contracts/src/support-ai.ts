@@ -288,6 +288,21 @@ export const SUPPORT_AI_DEFAULT_CONFIG: SupportAiConfigInput = {
  */
 export const SUPPORT_AI_AUTO_WINDOW = { windowSeconds: 3_600, maxPerWindow: 10 } as const;
 
+/**
+ * TB7 — how late an automatic reply may still be (substitute review of PR #202). A job produced
+ * more than this after its `due_at`, or an AUTO lane row not yet sent this long after it was
+ * enqueued, is never sent: the conversation is handed to a person (`REPLY_STALE`).
+ *
+ * Measured from `due_at`, not from the message, because `due_at` is the message's arrival plus
+ * the settle delay (≤ 30 s) or the end of the owner's own cooldown (≤ 1 h), whichever is later;
+ * a bound on the message's age would hand off every reply the owner deliberately postponed.
+ * Ten minutes is far above the normal latency (the assistant polls every 2 s, and the worst
+ * case of one job is 7 min) and far below "the tenant was stopped and resumed later", which is
+ * what it exists for: a stopped scope takes no writes, so its jobs wait untouched, and on
+ * resume a person — not a reply about a conversation that moved on — answers them.
+ */
+export const SUPPORT_AI_AUTO_STALE_SECONDS = 600;
+
 const idempotencyKeySchema = z.string().min(8).max(128);
 
 export const supportAiConfigUpdateRequestSchema = z.object({
@@ -608,7 +623,10 @@ export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
  *   epoch or state moved (a person intervened), a newer inbound message replaced the job, the
  *   connection cannot send, or the tenant stopped.
  * - `guard_*` — a deterministic guard failed; the conversation was handed off.
- * - `handoff_*` — the model asked for a person, or produced nothing usable.
+ * - `handoff_*` — the model asked for a person, or produced nothing usable; `handoff_stale`,
+ *   the job came too late to answer automatically (`SUPPORT_AI_AUTO_STALE_SECONDS`).
+ * - `dropped_scope` is no longer written: a stopped tenant's job is left untouched (substitute
+ *   review of PR #202). It stays in the set because the CHECK pins it and older rows carry it.
  */
 export const SUPPORT_AI_AUTO_OUTCOMES = [
   'sent',
@@ -634,6 +652,7 @@ export const SUPPORT_AI_AUTO_OUTCOMES = [
   'handoff_ai_requested',
   'handoff_output_invalid',
   'handoff_ai_unavailable',
+  'handoff_stale',
 ] as const;
 export type SupportAiAutoOutcome = (typeof SUPPORT_AI_AUTO_OUTCOMES)[number];
 

@@ -1443,6 +1443,13 @@
       "when": 1791182528300,
       "tag": "0205_support_ai_auto_reply",
       "breakpoints": true
+    },
+    {
+      "idx": 206,
+      "version": "7",
+      "when": 1791191228906,
+      "tag": "0206_support_ai_reply_stale",
+      "breakpoints": true
     }
   ]
 }
