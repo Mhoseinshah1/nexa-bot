@@ -274,7 +274,11 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         generate: async (_scope, input) => {
           calls += 1;
           if (duringCall !== null) await duringCall();
-          const imagesSent = (input.vision?.messages ?? []).reduce(
+          // The step is given every image of the variant, or (modelSees = false) none of them,
+          // as TB6's `stepSight` reports it.
+          const ids = (input.vision?.images ?? []).map(({ id }) => id);
+          const seen = modelSees ? ids : [];
+          const imagesSent = (input.vision?.render(new Set(seen)) ?? []).reduce(
             (sum, m) => sum + (m.images?.length ?? 0),
             0,
           );
@@ -284,7 +288,13 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
             step: { provider: 'OPENAI', model: 'gpt-5.5' },
             attempts: 1,
             exhausted: null,
-            imagesSent: modelSees ? imagesSent : 0,
+            imagesSent,
+            sight: {
+              seen,
+              unseen: new Map(
+                modelSees ? [] : ids.map((id) => [id, 'NO_VISION_CAPABILITY' as const]),
+              ),
+            },
           };
         },
         visionStepConfigured: () => visionStep,
@@ -810,6 +820,25 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       { state: 'FAILED', outcome: 'guard_content', handoff_reason: 'UNSUPPORTED_CONTENT' },
     ]);
     expect(await autoRows(first.conversationId)).toEqual([]);
+  });
+
+  it('an AUTO job replaced during its provider call records no image outcome (TB6 review, S1)', async () => {
+    await configure({ visionEnabled: true });
+    const first = await record(photo());
+    duringCall = async () => {
+      duringCall = null;
+      await record(message({ text: 'اینترنتم وصل نمی‌شود' }));
+    };
+    await tick();
+    const [replaced, replacement] = await autoJobs(first.conversationId);
+    expect(replaced).toMatchObject({ state: 'DISCARDED', outcome: 'dropped_coalesced' });
+    expect(replacement).toMatchObject({ state: 'SENT' });
+    // Its own transition never happened, so its telemetry was never written; only the
+    // replacement, which answered with the same photo in view, recorded a row.
+    const rows = await db().execute(
+      sql`SELECT job_id, outcome FROM support_ai_image_outcomes ORDER BY created_at, id`,
+    );
+    expect(rows.rows).toEqual([{ job_id: replacement!.id, outcome: 'PROCESSED' }]);
   });
 
   // --- the handoff: one ticket, linked on repeat, and a signal -----------------------------

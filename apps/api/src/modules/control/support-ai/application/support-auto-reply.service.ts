@@ -43,7 +43,7 @@ import type {
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
 import type { SupportContextSource } from './support-assist.service.js';
-import type { SupportAiChain } from './support-ai-chain.js';
+import type { SupportAiChain, SupportAiVisionVariant } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
 
 /** The key that makes an automatic job idempotent on its message (and content version). */
@@ -157,6 +157,9 @@ export type AutoJobResult = SupportAiAutoOutcome | 'GONE';
 
 class JobGone extends Error {}
 
+/** TB6: the per-image outcome rows of one job, written inside its own transition's transaction. */
+type ImageWrite = (now: Date, tx: TransactionScope) => Promise<void>;
+
 /**
  * TB7 — `AUTO_REPLY_SAFE`, the producer's side (program §25–§27). The `assistant` role calls
  * `produce` on a claimed, due AUTO job, OUTSIDE any transaction.
@@ -252,8 +255,14 @@ export class SupportAutoReplyService {
     ];
     const unseen = autoImageGuard({ required, loaded: new Set(loaded.keys()) });
     if (!unseen.pass) {
-      await this.recordImages(scope, job.id, skipped, loaded, 'NOT_ANSWERED');
-      return this.handOff(scope, job, unseen, null, null);
+      return this.handOff(
+        scope,
+        job,
+        unseen,
+        null,
+        null,
+        this.imageWriter(scope, job.id, skipped, loaded, () => 'NOT_ANSWERED'),
+      );
     }
     const lines: TranscriptLine[] = transcript.map((m) => ({
       origin: m.origin,
@@ -262,7 +271,7 @@ export class SupportAutoReplyService {
       image: loaded.get(m.id)?.image ?? null,
     }));
 
-    // 4. The model proposes.
+    // 5. The model proposes.
     const turns = transcriptMessages(lines, { attachImages: false });
     if (turns.length === 0) {
       const unreadable = {
@@ -273,6 +282,31 @@ export class SupportAutoReplyService {
       } as const;
       return this.handOff(scope, job, unreadable, null, null);
     }
+    // Each step is given exactly the images it can see (TB6, `stepSight`): the chain picks
+    // them, and `render` attaches those and marks every other one unseen. A step that cannot
+    // see the latest image is never called (`requiredId`); every other required image (the
+    // trigger) is checked against the answering step's `sight` below.
+    const requiredId = plan.latestInboundImageId ?? required[0] ?? null;
+    const vision: SupportAiVisionVariant | null =
+      loaded.size === 0
+        ? null
+        : {
+            images: transcript.flatMap((m) => {
+              const image = loaded.get(m.id)?.image;
+              return image === undefined ? [] : [{ id: m.id, image }];
+            }),
+            requiredId: requiredId !== null && loaded.has(requiredId) ? requiredId : null,
+            render: (seen) =>
+              transcriptMessages(
+                transcript.map((m) => ({
+                  origin: m.origin,
+                  text: m.text,
+                  kind: m.kind,
+                  image: seen.has(m.id) ? (loaded.get(m.id)?.image ?? null) : null,
+                })),
+                { attachImages: true },
+              ),
+          };
     const result = await this.deps.chain.generate(scope, {
       operation: 'AUTO_DECISION',
       conversationId: conversation.id,
@@ -288,27 +322,25 @@ export class SupportAutoReplyService {
         schemaName: 'support_decision',
         maxOutputTokens: Math.min(4_000, config.maxOutputChars * 3 + 600),
       },
-      ...(loaded.size === 0
-        ? {}
-        : {
-            vision: {
-              messages: transcriptMessages(lines, { attachImages: true }),
-              required: required.length > 0,
-            },
-          }),
+      ...(vision === null ? {} : { vision }),
     });
     const answered = result.outcome.outcome === 'OK' && result.step !== null;
-    const seen = answered && result.imagesSent > 0;
-    await this.recordImages(
-      scope,
-      job.id,
-      skipped,
-      loaded,
-      seen ? null : answered ? 'NO_VISION_CAPABILITY' : 'NOT_ANSWERED',
+    const seenIds = new Set(answered ? result.sight.seen : []);
+    // A loaded image is PROCESSED only when the step that ANSWERED was given it. The rows are
+    // written only with this job's own transition, in its transaction (TB6 review, S1).
+    const images = this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
+      seenIds.has(messageId)
+        ? null
+        : answered
+          ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
+          : 'NOT_ANSWERED',
     );
     // No configured step could look at a required image: an unseen image hands off.
-    if (result.exhausted === 'NO_VISION_STEP' || (required.length > 0 && answered && !seen)) {
-      return this.handOff(scope, job, fail('content', 'UNSUPPORTED_CONTENT'), null, null);
+    if (
+      result.exhausted === 'NO_VISION_STEP' ||
+      (answered && !required.every((id) => seenIds.has(id)))
+    ) {
+      return this.handOff(scope, job, fail('content', 'UNSUPPORTED_CONTENT'), null, null, images);
     }
     if (result.outcome.outcome !== 'OK' || result.step === null) {
       // A provider that refused or produced something unparseable is not "unavailable".
@@ -323,6 +355,7 @@ export class SupportAutoReplyService {
           : verdict('handoff_ai_unavailable', 'AI_UNAVAILABLE'),
         null,
         null,
+        images,
       );
     }
     const parsed = supportAiDecisionSchema.safeParse(result.outcome.output);
@@ -334,37 +367,46 @@ export class SupportAutoReplyService {
         verdict('handoff_output_invalid', 'AI_OUTPUT_INVALID'),
         null,
         produced,
+        images,
       );
     }
 
-    // 4. NEXA decides.
+    // 6. NEXA decides.
     const guards = autoDecisionGuards({
       decision: parsed.data,
       config,
       flags: context.flags,
       knownAliases: new Set(context.aliases.keys()),
     });
-    if (!guards.pass) return this.handOff(scope, job, guards, parsed.data, produced);
-    return this.enqueue(scope, job, parsed.data, produced);
+    if (!guards.pass) return this.handOff(scope, job, guards, parsed.data, produced, images);
+    return this.enqueue(scope, job, parsed.data, produced, images);
   }
 
-  /** TB6 telemetry: one row per customer image considered; never a byte, file id or URL. */
-  private async recordImages(
+  /**
+   * TB6 telemetry: one row per customer image considered; never a byte, file id or URL.
+   * Returned as a write the job's own transition runs in its transaction, AFTER that transition
+   * succeeded (TB6 review, S1): a job replaced or dropped meanwhile records no rows, and a
+   * stopped tenant none either.
+   */
+  private imageWriter(
     scope: ScopeContext,
     jobId: string,
     skipped: ReadonlyMap<string, SupportAiImageSkipReason>,
     loaded: ReadonlyMap<string, { image: TranscriptImage; byteSize: number }>,
-    loadedReason: SupportAiImageSkipReason | null,
-  ): Promise<void> {
+    loadedReason: (messageId: string) => SupportAiImageSkipReason | null,
+  ): ImageWrite {
     const rows = [
-      ...[...loaded].map(([messageId, { image, byteSize }]) => ({
-        id: this.deps.ids.uuid(),
-        messageId,
-        outcome: loadedReason === null ? ('PROCESSED' as const) : ('SKIPPED' as const),
-        reason: loadedReason,
-        mediaType: image.mediaType,
-        byteSize,
-      })),
+      ...[...loaded].map(([messageId, { image, byteSize }]) => {
+        const reason = loadedReason(messageId);
+        return {
+          id: this.deps.ids.uuid(),
+          messageId,
+          outcome: reason === null ? ('PROCESSED' as const) : ('SKIPPED' as const),
+          reason,
+          mediaType: image.mediaType,
+          byteSize,
+        };
+      }),
       ...[...skipped].map(([messageId, reason]) => ({
         id: this.deps.ids.uuid(),
         messageId,
@@ -374,12 +416,7 @@ export class SupportAutoReplyService {
         byteSize: null,
       })),
     ];
-    // Its own transaction, under the activity check every write takes (TB5 review): a tenant
-    // stopped during the fetch or the call records no telemetry.
-    await this.deps.uow.run(scope, async (tx) => {
-      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return;
-      await this.deps.jobs.recordImageOutcomes(scope, jobId, rows, this.deps.clock.now(), tx);
-    });
+    return (now, tx) => this.deps.jobs.recordImageOutcomes(scope, jobId, rows, now, tx);
   }
 
   /** A job claimed too many times without a result: repeated failure hands off. */
@@ -398,8 +435,9 @@ export class SupportAutoReplyService {
     job: SupportAiJobRecord,
     decision: SupportAiDecision,
     produced: { readonly provider: SupportAiProvider; readonly model: string },
+    images?: ImageWrite,
   ): Promise<AutoJobResult> {
-    return this.inJobTransaction(scope, job, async (tx, now) => {
+    return this.inJobTransaction(scope, job, images, async (tx, now) => {
       const { config } = await this.deps.configs.get(scope, tx);
       if (config.mode !== 'AUTO_REPLY_SAFE')
         return this.finish(scope, job, 'dropped_mode', now, tx);
@@ -449,8 +487,9 @@ export class SupportAutoReplyService {
     failed: Extract<AutoVerdict, { pass: false }>,
     decision: SupportAiDecision | null,
     produced: { readonly provider: SupportAiProvider; readonly model: string } | null,
+    images?: ImageWrite,
   ): Promise<AutoJobResult> {
-    return this.inJobTransaction(scope, job, async (tx, now) => {
+    return this.inJobTransaction(scope, job, images, async (tx, now) => {
       const conversation = await this.deps.conversations.lockById(scope, job.conversationId, tx);
       if (conversation === null || conversation.controlEpoch !== job.controlEpoch) {
         return this.finish(scope, job, 'dropped_epoch', now, tx, { decision, produced });
@@ -489,7 +528,7 @@ export class SupportAutoReplyService {
   ): Promise<AutoJobResult> {
     // Every write checks scope activity in its own transaction (TB5 review): a drop for a
     // stopped tenant is recorded as `dropped_scope`, the same as a result that lands after a stop.
-    return this.inJobTransaction(scope, job, (tx, now) =>
+    return this.inJobTransaction(scope, job, undefined, (tx, now) =>
       this.finish(scope, job, outcome, now, tx),
     );
   }
@@ -522,10 +561,16 @@ export class SupportAutoReplyService {
     return outcome;
   }
 
-  /** One transaction that reads scope activity first; a replaced job rolls everything back. */
+  /**
+   * One transaction that reads scope activity first; a replaced job rolls everything back.
+   * `images` runs only after `work` returned, which it does only once the job's own conditional
+   * transition out of QUEUED has succeeded (a lost one throws `JobGone`): the telemetry has
+   * exactly one writer, and a stopped scope's `dropped_scope` records none.
+   */
   private async inJobTransaction(
     scope: ScopeContext,
     job: SupportAiJobRecord,
+    images: ImageWrite | undefined,
     work: (tx: TransactionScope, now: Date) => Promise<AutoJobResult>,
   ): Promise<AutoJobResult> {
     try {
@@ -534,7 +579,9 @@ export class SupportAutoReplyService {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
           return this.finish(scope, job, 'dropped_scope', now, tx);
         }
-        return work(tx, now);
+        const result = await work(tx, now);
+        if (images !== undefined) await images(now, tx);
+        return result;
       });
     } catch (error) {
       if (error instanceof JobGone) return 'GONE';

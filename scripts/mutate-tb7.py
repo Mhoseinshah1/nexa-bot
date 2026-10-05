@@ -45,7 +45,7 @@ M=[
  ('TB7-17',[(GUARDS,"  if (trigger === null || trigger.origin !== 'INBOUND' || !readable) {","  if (trigger === null || !readable) {")],T_U,'preflight: only a customer message'),
  # TB6 x TB7: an image the reply would be about must be seen.
  ('TB7-22',[(GUARDS,"  if (input.required.some((id) => !input.loaded.has(id))) {","  if (false) {")],T_I,'vision off is never answered'),
- ('TB7-23',[(AUTO,"    if (result.exhausted === 'NO_VISION_STEP' || (required.length > 0 && answered && !seen)) {","    if (result.exhausted === 'NO_VISION_STEP') {")],T_I,'answering step was not given'),
+ ('TB7-23',[(AUTO,"      (answered && !required.every((id) => seenIds.has(id)))","      false")],T_I,'answering step was not given'),
  # The handoff: escalation, ticket linking, the operator signal; the CRITICAL widening.
  ('TB7-18',[(CONV,"    await this.deps.escalation.escalate(scope, { conversation: moved, reason, detail, now }, tx);\n","")],T_I,'UNKNOWN send'),
  ('TB7-19',[(TICKETS,"        : await this.deps.tickets.latestActiveForCustomer(scope, customerId, scoped);","        : null;")],T_I,'existing active ticket'),
@@ -55,6 +55,8 @@ M=[
  ('TB7-24',[(JOBS,"          conversationId === null ? undefined : eq(supportAiJobs.conversationId, conversationId),\n          eq(supportAiJobs.kind, 'ASSIST_DRAFT'),\n","          conversationId === null ? undefined : eq(supportAiJobs.conversationId, conversationId),\n")],T_I,'never an AUTO job'),
  ('TB7-25',[(JOBS,"          inArray(supportAiJobs.kind, [...kinds]),\n","")],T_I,'without the AUTO producer'),
  ('TB7-26',[(AUTO,"    if (!active) return this.drop(scope, job, 'dropped_scope');\n","")],T_I,'produced after a stop'),
+ # On the reviewed TB6 (PR #201, S1): AUTO image outcomes follow only the job's own transition.
+ ('TB7-27',[(AUTO,"    try {\n      return await this.deps.uow.run(scope, async (tx) => {\n        const now = this.deps.clock.now();\n        if (!(await this.deps.scopeActivity","    if (images !== undefined) await this.deps.uow.run(scope, (t) => images(this.deps.clock.now(), t));\n    try {\n      return await this.deps.uow.run(scope, async (tx) => {\n        const now = this.deps.clock.now();\n        if (!(await this.deps.scopeActivity"),(AUTO,"        if (images !== undefined) await images(now, tx);\n","")],T_I,'records no image outcome'),
 ]
 
 only=sys.argv[1:]

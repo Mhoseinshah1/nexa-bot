@@ -124,6 +124,13 @@ No grants are needed (no new permission), so `0206` is not used.
    transaction (a stopped tenant's transcript goes to no provider) and ends the job
    `dropped_scope`, as it already did at the result; a drop and the image telemetry each write
    under that same check.
+7. **On the reviewed TB6 (PR #201), AUTO vision uses `stepSight`.** The variant carries the
+   loaded images and a `render(seen)`; the latest customer image is the chain's `requiredId`,
+   and every required image (the trigger too) must be in the answering step's `sight.seen`, or
+   the job hands off `UNSUPPORTED_CONTENT`. A loaded image is PROCESSED only when that step was
+   given it; otherwise SKIPPED with the reason `sight` gives. The outcome rows are written
+   inside the job's own transition's transaction and only after it succeeded (TB6 S1): a job
+   replaced or dropped meanwhile records none.
 
 ## Tests
 

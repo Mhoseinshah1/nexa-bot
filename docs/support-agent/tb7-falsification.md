@@ -32,8 +32,11 @@ restores the file byte for byte. Run on 2026-10-04 against a dedicated integrati
 | TB7-24 | The unclaimed-draft rule fails ASSIST drafts only, never an AUTO job            | the unclaimed rule fails a waiting ASSIST draft and never an AUTO job                     | KILLED |
 | TB7-25 | `claimNext` claims only the kinds the caller can produce                        | a claimer without the AUTO producer never claims an AUTO job, and its due_at holds        | KILLED |
 | TB7-26 | A stopped tenant's AUTO transcript is never sent to a provider                  | an AUTO job claimed while the tenant is active and produced after a stop asks no provider | KILLED |
+| TB7-27 | AUTO image outcomes are written only with the job's own transition (TB6 S1)     | an AUTO job replaced during its provider call records no image outcome (TB6 review, S1)   | KILLED |
 
-**26 of 26 killed** on the restack onto the reviewed TB5 (PR #200), `nexa_test_stack`, where
+**27 of 27 killed** on the restack onto the reviewed TB6 (PR #201), where TB7-23 was re-anchored
+on the `sight`-based required-image check and TB7-27 added for S1. Before that, **26 of 26
+killed** on the restack onto the reviewed TB5 (PR #200), `nexa_test_stack`, where
 TB7-24..26 were added for TB5's single-job `claimNext`, the unclaimed-draft rule and the activity
 check before the provider. Before that, **23 of 23 killed** (re-run on the TB6 restack, `nexa_test_tb7r`, where TB7-17's anchor moved
 with the photo preflight and TB7-22/23 were added for the TB6 integration; `scripts/mutate-tb6.py`
