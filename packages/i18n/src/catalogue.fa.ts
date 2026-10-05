@@ -1014,7 +1014,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.discount.rejected': 'این کد تخفیف قابل استفاده نیست.',
   'bot.discount.enter_button': '🏷 اعمال کد تخفیف',
   'bot.discount.remove_button': 'حذف کد تخفیف',
-  'bot.discount.ask': 'کد تخفیف خود را در پیام بعدی بفرستید.',
+  'bot.discount.ask': 'کد تخفیف خود را ارسال کنید',
   'bot.discount.no_longer_valid':
     'تخفیف این سفارش دیگر معتبر نیست. هیچ مبلغی کسر نشده است. لطفاً سفارش را دوباره شروع کنید.',
 
@@ -1189,11 +1189,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_preparing':
     '{icon:time} فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند لحظه صبر کنید؛ لینک پرداخت به‌محض آماده شدن در همین پیام نمایش داده می‌شود.',
   'bot.payment.gateway_invoice':
-    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ: {total}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ: {total}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
   'bot.payment.gateway_invoice_order_fee':
-    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
   'bot.payment.gateway_invoice_topup_fee':
-    '{icon:invoice} فاکتور شارژ آنلاین کیف پول\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+    '{icon:invoice} فاکتور شارژ آنلاین کیف پول\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
   'bot.payment.gateway_pay_button': '💳 پرداخت آنلاین',
   'bot.payment.gateway_check_button': '🔄 بررسی وضعیت پرداخت',
   'bot.payment.gateway_confirmed': '{icon:success} پرداخت شما توسط درگاه تأیید و ثبت شد.',
@@ -1237,7 +1237,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_receipt_too_large':
     'حجم این عکس بیش از ۵ مگابایت است. لطفاً عکس کوچک‌تری از فیش واریزی بفرستید.',
   'bot.wallet.summary':
-    '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} آی دی عددی: {telegramId}\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس های خریداری شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
+    '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: {telegramId}\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس های خریداری شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',
   'bot.wallet.group_customer': 'کاربر عادی',
   'bot.wallet.group_reseller': 'نماینده',
