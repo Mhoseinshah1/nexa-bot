@@ -372,12 +372,21 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     expect((await notifications())[0]?.nextAttemptAt?.toISOString()).toBe(oldEnd.toISOString());
 
     // The operator moves the end an hour earlier (08:00 -> 07:00, say, while it is 06:00).
-    const local = localMinute(ctx.container.clock.now(), TEHRAN);
-    expect(await setSetting('reminders.quiet_hours_end', hhmm(local + 60))).toBeNull();
+    // The new end is derived from the OLD end, the one instant this test placed the window
+    // around — never from a second read of the real clock. Re-reading it here once made
+    // the setting a minute later than `newEnd` whenever the fixtures above crossed a
+    // wall-clock minute (main CI, 2be49230: expected 20:55, stored 20:56).
+    expect(
+      await setSetting('reminders.quiet_hours_end', hhmm(localMinute(oldEnd, TEHRAN) - 60)),
+    ).toBeNull();
     const newEnd = new Date(oldEnd.getTime() - 60 * MINUTE_MS);
 
-    // The next pass re-holds it to the new end, and does not send it early.
-    expect(await deliver()).toMatchObject({ quietReleased: 1, claimed: 0 });
+    // The next pass re-holds it to the new end, and does not send it early. It runs in the
+    // wall-clock minute AFTER the one the window was placed in — pinned, so that boundary
+    // is crossed on every run rather than on the runs that happen to be slow — and 30 s
+    // into it, so a re-hold that kept the pass's seconds would still miss `newEnd`.
+    const nextMinute = new Date(oldEnd.getTime() - 119 * MINUTE_MS + 30_000);
+    expect(await deliver(at(nextMinute))).toMatchObject({ quietReleased: 1, claimed: 0 });
     expect((await notifications())[0]?.nextAttemptAt?.toISOString()).toBe(newEnd.toISOString());
     expect(await deliver(at(new Date(newEnd.getTime() - 1_000)))).toMatchObject({ claimed: 0 });
     expect(await deliver(at(newEnd))).toMatchObject({ claimed: 1, delivered: 1 });
@@ -407,7 +416,14 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     const before = await notifications();
     expect(before.every((row) => (row.nextAttemptAt?.getTime() ?? 0) > Date.now())).toBe(true);
 
-    expect(await deliver()).toMatchObject({ quietReleased: 0, claimed: 0 });
+    // Pinned just before the earliest retry is due: the REFUSED row's backoff is only
+    // CUSTOMER_NOTIFICATION_BACKOFF_MS, so a real-clock pass on a slow run could find it due
+    // and claim it, which says nothing about whether a hold was pulled forward.
+    const earliest = Math.min(...before.map((row) => row.nextAttemptAt?.getTime() ?? 0));
+    expect(await deliver(at(new Date(earliest - 1_000)))).toMatchObject({
+      quietReleased: 0,
+      claimed: 0,
+    });
     const after = await notifications();
     expect(after.map((row) => [row.id, row.nextAttemptAt?.toISOString(), row.attempts])).toEqual(
       before.map((row) => [row.id, row.nextAttemptAt?.toISOString(), row.attempts]),

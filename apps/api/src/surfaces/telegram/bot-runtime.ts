@@ -4581,18 +4581,22 @@ export type LeadMessage =
        * turn stops there, as a text lead's does.
        */
       readonly caption?: { readonly key: TemplateKey; readonly values: TemplateValues };
-    }
-  /**
-   * Spec §7: a client app's tutorial video, by the `file_id` THIS bot received. Decorative,
-   * like a bare photo: a refusal drops it and the reply goes on.
-   */
-  | { readonly kind: 'VIDEO_FILE'; readonly fileId: string };
+    };
 
 /** One file this installation already holds, and the bot that holds it. */
 interface ReplyMedia {
   readonly botInstanceId: BotInstanceId;
-  readonly kind: 'PHOTO' | 'DOCUMENT';
+  /** `VIDEO`: a client app's tutorial (spec §7), by the `file_id` THIS bot received. */
+  readonly kind: 'PHOTO' | 'DOCUMENT' | 'VIDEO';
   readonly fileId: string;
+  /**
+   * A4 (delta a): the caption goes WHOLE or not at all — the messenger's `captionWhole`, the
+   * same measurement the referral invite's photo lead uses. Over Telegram's bound the file
+   * goes out bare and the reply follows as its own text, so a tutorial guide is never cut:
+   * two messages rather than one cut one. Absent keeps the cut a receipt's caption is sized
+   * around.
+   */
+  readonly captionWhole?: true;
 }
 
 /*
@@ -5674,31 +5678,24 @@ export class BotRuntime {
               values: lead.values,
               botInstanceId: input.botInstanceId,
             })
-          : lead.kind === 'VIDEO_FILE'
-            ? await this.deps.messenger.sendFile(scope, {
-                chatId,
-                botInstanceId: input.botInstanceId,
-                kind: 'VIDEO',
-                source: { kind: 'FILE_ID', fileId: lead.fileId },
-              })
-            : await this.deps.messenger.sendFile(scope, {
-                chatId,
-                botInstanceId: input.botInstanceId,
-                kind: 'PHOTO',
-                source: {
-                  kind: 'BYTES',
-                  bytes: lead.bytes,
-                  fileName: lead.fileName,
-                  mimeType: lead.mimeType,
-                },
-                ...(lead.kind === 'PHOTO_BYTES' && lead.caption !== undefined
-                  ? {
-                      caption: { templateKey: lead.caption.key, values: lead.caption.values },
-                      // Whole or not at all: a cut invite loses the link at its end.
-                      captionWhole: true as const,
-                    }
-                  : {}),
-              });
+          : await this.deps.messenger.sendFile(scope, {
+              chatId,
+              botInstanceId: input.botInstanceId,
+              kind: 'PHOTO',
+              source: {
+                kind: 'BYTES',
+                bytes: lead.bytes,
+                fileName: lead.fileName,
+                mimeType: lead.mimeType,
+              },
+              ...(lead.caption !== undefined
+                ? {
+                    caption: { templateKey: lead.caption.key, values: lead.caption.values },
+                    // Whole or not at all: a cut invite loses the link at its end.
+                    captionWhole: true as const,
+                  }
+                : {}),
+            });
       /*
        * R1: a CAPTIONED photo is a message, not a decoration (`LeadMessage.caption`).
        * Refused — a broken image, a caption over Telegram's bound — its words go out as
@@ -5754,7 +5751,7 @@ export class BotRuntime {
          * customer asked for, so a picture that fails is dropped and the reply goes on. A TEXT lead is an earlier part of the one message, and a
          * keyboard without the text it belongs to is worse than no reply.
          */
-        if (lead.kind === 'PHOTO_BYTES' || lead.kind === 'VIDEO_FILE') continue;
+        if (lead.kind === 'PHOTO_BYTES') continue;
         await this.stopSpinner(scope, command, input.botInstanceId);
         return {
           intent,
@@ -5785,8 +5782,25 @@ export class BotRuntime {
               kind: reply.media.kind,
               source: { kind: 'FILE_ID', fileId: reply.media.fileId },
               caption: { templateKey: reply.key, values: reply.values },
+              ...(reply.media.captionWhole === true ? { captionWhole: true as const } : {}),
               ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
             });
+    /*
+     * A4: a whole-or-nothing caption over the bound — a long tutorial guide. The file goes
+     * bare, decorative again, so its own outcome is ignored; the reply then goes as text below.
+     */
+    if (
+      reply.media?.captionWhole === true &&
+      sent.outcome === 'REFUSED' &&
+      sent.reason === 'CAPTION_OVER_BOUND'
+    ) {
+      await this.deps.messenger.sendFile(scope, {
+        chatId,
+        botInstanceId: reply.media.botInstanceId,
+        kind: reply.media.kind,
+        source: { kind: 'FILE_ID', fileId: reply.media.fileId },
+      });
+    }
     if (reply.media !== undefined && sent.outcome === 'REFUSED') sent = await asText();
     /*
      * R2: a new message that IS a wizard screen or a review message is recorded against its
@@ -13188,8 +13202,12 @@ export class BotRuntime {
     /*
      * Spec §7: the app's tutorial video, when an administrator set one through THIS bot — a
      * `file_id` is valid only for the bot that received it. Sent by reference, nothing
-     * downloaded, as a decorative lead: a video Telegram refuses is dropped and the screen
-     * still goes out.
+     * downloaded.
+     *
+     * A4 (delta a): the video IS the screen's message — the guide its caption, the buttons on
+     * it — when the rendered guide fits a caption whole (`ReplyMedia.captionWhole`). Longer,
+     * the video goes bare and the guide follows as today's text. A video Telegram refuses is
+     * dropped and the guide still goes out as text, with its buttons.
      */
     const video =
       detail === null || this.deps.clientAppVideos === undefined
@@ -13198,7 +13216,7 @@ export class BotRuntime {
     if (video === null) return screen;
     return {
       ...screen,
-      lead: [...(screen.lead ?? []), { kind: 'VIDEO_FILE', fileId: video.fileId }],
+      media: { botInstanceId, kind: 'VIDEO', fileId: video.fileId, captionWhole: true },
     };
   }
 
@@ -16748,6 +16766,13 @@ export function cardMessageOf(
     return null;
   }
   if (messageId <= 0) return null;
+  /*
+   * A4: a FILE message — a client app's tutorial video with the guide as its caption — has no
+   * text for `editMessageText` to replace; Telegram answers 400 "there is no text in the
+   * message to edit". No card there: the screen goes out as a new message, without spending
+   * a request on an edit that cannot succeed.
+   */
+  if (callbackOriginOf(update)?.media === true) return null;
   return { botInstanceId, chatId, messageId };
 }
 
