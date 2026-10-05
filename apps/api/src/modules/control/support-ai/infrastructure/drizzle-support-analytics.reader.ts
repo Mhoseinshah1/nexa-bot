@@ -12,7 +12,7 @@ import type {
   SupportKnowledgeSource,
   SupportLearningCandidateState,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SupportAnalyticsFacts, SupportAnalyticsWindow } from '../domain/support-analytics.js';
 
@@ -26,17 +26,33 @@ import type { SupportAnalyticsFacts, SupportAnalyticsWindow } from '../domain/su
  * prompt, a draft, a summary or a title — so nothing a customer wrote can leave through
  * this read.
  *
- * Every statement goes through `db.execute`, so the plan test captures exactly what is sent.
+ * ONE SNAPSHOT (PR #205 review, N3). The six statements run inside one `REPEATABLE READ,
+ * READ ONLY` transaction, so the page's figures are one observation: a handoff committed
+ * between two statements cannot appear in the handoffs by reason and be missing from the
+ * conversations by state beside it. Read-only, so it takes no lock and writes nothing.
+ *
+ * Every statement goes through the transaction's `execute`, so the plan test captures exactly
+ * what is sent.
  */
+const SNAPSHOT = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;
+
 export class DrizzleSupportAnalyticsReader {
-  constructor(private readonly db: Pick<Database, 'execute'>) {}
+  constructor(private readonly db: Pick<Database, 'transaction'>) {}
 
   async read(scope: ScopeContext, window: SupportAnalyticsWindow): Promise<SupportAnalyticsFacts> {
     const tenantId = requireTenantId(scope);
+    return this.db.transaction((q) => this.readIn(q, tenantId, window), SNAPSHOT);
+  }
+
+  private async readIn(
+    q: Pick<Executor, 'execute'>,
+    tenantId: string,
+    window: SupportAnalyticsWindow,
+  ): Promise<SupportAnalyticsFacts> {
     const start = window.start.toISOString();
     const end = window.end.toISOString();
     const rows = async <T>(query: ReturnType<typeof sql>): Promise<T[]> =>
-      (await this.db.execute(query)).rows as unknown as T[];
+      (await q.execute(query)).rows as unknown as T[];
 
     const conversations = await rows<{ state: string; n: number }>(sql`
       SELECT state, count(*)::int AS n

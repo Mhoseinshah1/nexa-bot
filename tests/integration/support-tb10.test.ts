@@ -656,6 +656,54 @@ describe('TB10 — support polish against the database', () => {
      * allowlist is retired by a named apply. Knowledge by source is a snapshot of articles, so a
      * retired built article is counted under NEXA_BUILD / RETIRED, and never as approved.
      */
+    /*
+     * PR #205 review, N3: the six statements are one observation. A handoff committed from
+     * ANOTHER connection after the first statement is invisible to the rest of the read under
+     * one repeatable-read snapshot; read statement by statement, it would be counted in the
+     * handoffs while the conversations beside it were read a moment earlier.
+     */
+    it('reads every figure from one snapshot, blind to a commit made mid-read', async () => {
+      const db = ctx.container.database.db;
+      const conversationId = await conversationIn(SEED_IDS.tenantA, SEED_IDS.botA1);
+      await escalation(SEED_IDS.tenantA, conversationId, 1, inside);
+      const configs: unknown[] = [];
+      const racing = new Proxy(db, {
+        get(target, property, receiver) {
+          if (property !== 'transaction') return Reflect.get(target, property, receiver) as unknown;
+          return (fn: (tx: unknown) => Promise<unknown>, config: unknown) => {
+            configs.push(config);
+            return target.transaction(async (tx) => {
+              let first = true;
+              return fn(
+                new Proxy(tx, {
+                  get(inner, name, innerReceiver) {
+                    if (name !== 'execute') {
+                      return Reflect.get(inner, name, innerReceiver) as unknown;
+                    }
+                    return async (query: never) => {
+                      const result = await inner.execute(query);
+                      if (first) {
+                        first = false;
+                        // Committed on its own connection, after the snapshot was taken.
+                        await escalation(SEED_IDS.tenantA, conversationId, 2, inside);
+                      }
+                      return result;
+                    };
+                  },
+                }),
+              );
+            }, config as never);
+          };
+        },
+      });
+      const during = await new DrizzleSupportAnalyticsReader(racing).read(tenantA, { start, end });
+      expect(configs).toEqual([{ isolationLevel: 'repeatable read', accessMode: 'read only' }]);
+      expect(during.handoffs).toEqual([{ reason: 'LOW_CONFIDENCE', count: 1 }]);
+      // It did commit: a read that starts afterwards counts it.
+      const after = await new DrizzleSupportAnalyticsReader(db).read(tenantA, { start, end });
+      expect(after.handoffs).toEqual([{ reason: 'LOW_CONFIDENCE', count: 2 }]);
+    });
+
     it('knowledge by source counts a built article retired by a RETIRE proposal', async () => {
       const c = ctx.container;
       const faq = await c.supportFaqs.create(tenantA, owner, {

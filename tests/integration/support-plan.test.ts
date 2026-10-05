@@ -49,12 +49,20 @@ describe('the support query plans', () => {
     }) as unknown as Database;
     inbox = new DrizzleBusinessConversationRepository(logged);
     const real = ctx.container.database.db;
+    // The reader's own snapshot transaction, each statement captured on its way through it.
     analytics = new DrizzleSupportAnalyticsReader({
-      execute: (query: SQL) => {
-        const compiled = dialect.sqlToQuery(query);
-        captured.push({ sql: compiled.sql, params: [...compiled.params] });
-        return real.execute(query);
-      },
+      transaction: (fn: (tx: unknown) => Promise<unknown>, config: unknown) =>
+        real.transaction(
+          (tx) =>
+            fn({
+              execute: (query: SQL) => {
+                const compiled = dialect.sqlToQuery(query);
+                captured.push({ sql: compiled.sql, params: [...compiled.params] });
+                return tx.execute(query);
+              },
+            }),
+          config as never,
+        ),
     } as unknown as Database);
 
     await ctx.container.database.withClient(async (client) => {

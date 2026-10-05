@@ -85,6 +85,9 @@ M=[
  ('TB10-38',[(SEND,"      ? { sentAt: new Date(date * 1000) }","      ? {}")],T_G,'own date for a sent message'),
  # N2: «load more» draws a conversation the mutable keyset read twice once.
  ('TB10-39',[(INBOX_PAGE,"  const rows = inboxRows(chats.data?.pages ?? []);","  const rows = chats.data?.pages.flatMap((page) => page.conversations) ?? [];")],T_W,'draws a conversation once'),
+ # N3: the six analytics statements are one REPEATABLE READ, READ ONLY snapshot.
+ ('TB10-40',[(READER,"const SNAPSHOT = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;","const SNAPSHOT = { accessMode: 'read only' } as const;")],T_I,'one snapshot, blind to a commit'),
+ ('TB10-41',[(READER,"    return this.db.transaction((q) => this.readIn(q, tenantId, window), SNAPSHOT);","    return this.readIn(this.db as never, tenantId, window);")],T_I,'one snapshot, blind to a commit'),
 ]
 
 def build_contracts():
