@@ -10179,7 +10179,7 @@ export class BotRuntime {
       return this.serviceRefresh(scope, actor, customer, command.targetId, input.idempotencyKey);
     }
     if (command.intent === 'SERVICE_CARD' && command.targetId !== null) {
-      const card = await this.serviceDetail(scope, actor, customer, command.targetId);
+      const card = await this.openServiceCard(scope, actor, customer, command.targetId);
       /*
        * Owner spec §2.3: a stale tap — a service transferred, refunded or never theirs —
        * still edits the list's message, and keeps the way back to the list on it, so the
@@ -10453,7 +10453,7 @@ export class BotRuntime {
       return { ...(await this.services(scope, customer, command.page ?? 1)), edit: true };
     }
     if (command.intent === 'SERVICE' && command.targetId !== null) {
-      return this.serviceDetail(scope, actor, customer, command.targetId);
+      return this.openServiceCard(scope, actor, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_RESEND' && command.targetId !== null) {
       return this.serviceResend(scope, customer, command.targetId, input);
@@ -11959,6 +11959,48 @@ export class BotRuntime {
       buttons: [backToListButton()],
       orderId: null,
     };
+  }
+
+  /**
+   * Pre-support A2: opening a card (`s:` and `sv:`) makes the SAME bounded live read the
+   * «♻️» button makes, before the card is drawn — so an opened card shows what the panel
+   * says, not what the last scheduled sync wrote.
+   *
+   * It is `ServiceRefreshService.refresh` and nothing else, so every bound the button has
+   * holds here too, and none is added: the minimum interval (`RECENT` dials nothing), the
+   * one-read-in-flight reservation (a held one dials nothing), the tenant's ONE probe
+   * budget (no second bucket), and the panel client's own timeout, which is what keeps
+   * the turn inside Telegram's callback time.
+   *
+   * The open is a read of the card; the refresh is opportunistic. So only `NOT_FOUND` is
+   * an answer — the card is not theirs (or not there), told exactly as the stored card
+   * would tell it. `FAILED` (panel down, budget spent, tenant stopped), `RECENT`,
+   * `NOT_READ` and a refresh that threw all draw the stored card, with no toast: the
+   * failure notice belongs to the button the customer pressed to ask for a read.
+   *
+   * Not for the «working» card: that is drawn by an action's own turn, never by an open.
+   */
+  private async openServiceCard(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    const refresh = this.deps.serviceRefresh;
+    if (refresh !== undefined) {
+      let outcome: string | null;
+      try {
+        outcome = (await refresh.refresh(scope, actor, { customerId: customer.id, serviceId }))
+          .outcome;
+      } catch {
+        // An open never fails because a refresh did; the stored card is drawn below.
+        outcome = null;
+      }
+      if (outcome === 'NOT_FOUND') {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+    }
+    return this.serviceDetail(scope, actor, customer, serviceId);
   }
 
   private async serviceRefresh(

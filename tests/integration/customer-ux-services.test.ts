@@ -26,6 +26,7 @@ import {
   tenantA,
   type TestContext,
 } from './harness';
+import { setBucket } from './usage-sync-fixtures';
 
 /**
  * The service self-care screens (customer UX completion §G, §H, §P, §Q): the paged list,
@@ -562,6 +563,9 @@ describe('a customer looks after the services they bought', () => {
       await ctx.container.database.db.execute(
         sql`UPDATE services SET traffic_used_bytes = 0, usage_synced_at = NULL WHERE id = ${service.id}`,
       );
+      // Pre-support A2: opening the card reads the panel. A panel that cannot answer
+      // leaves the figure unread, which is the state this test draws.
+      panel.forget(service.username);
       await handle(tap(`s:${service.id}`));
       const body = lastText();
       expect(body).toContain('🟩 ترافیک: نامحدود');
@@ -840,6 +844,164 @@ describe('a customer looks after the services they bought', () => {
       expect(await operations.listForService(tenantA, theirs.id, 50)).toEqual(
         expect.not.arrayContaining([expect.objectContaining({ type: 'SYNC_USAGE' })]),
       );
+    });
+  });
+
+  // =========================================================================
+  // Pre-support A2 — opening a card makes the bounded live read
+  // =========================================================================
+  describe('opening a card refreshes it, inside the refresh button’s bounds', () => {
+    const answers = () => sent.filter((one) => one.url.includes('/answerCallbackQuery'));
+    const reads = (username: string) =>
+      panel.requests.filter((one) => one.method === 'GET' && one.path.includes(username)).length;
+    const stale = (id: string, usedBytes = 2_147_483_648) =>
+      ctx.container.database.db.execute(
+        sql`UPDATE services SET traffic_used_bytes = ${usedBytes},
+                                usage_synced_at = now() - interval '10 minutes'
+             WHERE id = ${id}`,
+      );
+    const usedOnPanel = (username: string, bytes: number) => {
+      const user = panel.users.get(username);
+      if (user === undefined) throw new Error('no panel user');
+      user.usedTraffic = bytes;
+    };
+    const noFailureNotice = () => {
+      for (const answer of answers()) {
+        expect(String(answer.body['text'] ?? '')).not.toContain('خواندن اطلاعات از سرور ممکن نشد');
+      }
+    };
+
+    it('opening a card makes one panel read and shows the fresh figure', async () => {
+      const service = await activeService('open-fresh');
+      await stale(service.id);
+      usedOnPanel(service.username, 5_368_709_120);
+      const before = reads(service.username);
+      sent = [];
+      const result = await handle(tap(`s:${service.id}`));
+      expect(result.replyKey).toBe('bot.service.card');
+      expect(reads(service.username) - before, 'one read of the panel').toBe(1);
+      expect(lastText()).toContain('📥 حجم مصرفی: 5 گیگابایت');
+      expect((await services.findById(tenantA, service.id))?.trafficUsedBytes).toBe(5_368_709_120n);
+      // The ♻️ button stays on the opened card.
+      expect(buttonsOf(lastMarkup())).toContain(`rs:${service.id}`);
+      // A read, not an operation.
+      expect(
+        (await operations.listForService(tenantA, service.id, 50)).filter(
+          (operation) => operation.type === 'SYNC_USAGE',
+        ),
+      ).toHaveLength(0);
+    });
+
+    it('opening from the list (sv:) reads too, and edits the list message with the answer', async () => {
+      const service = await activeService('open-from-list');
+      await stale(service.id);
+      usedOnPanel(service.username, 5_368_709_120);
+      const before = reads(service.username);
+      sent = [];
+      await handle(tapOn(`sv:${service.id}`, 7002));
+      expect(reads(service.username) - before).toBe(1);
+      expect(messages()).toHaveLength(0);
+      expect(lastDrawn()?.url).toContain('/editMessageText');
+      expect(lastDrawn()?.body['message_id']).toBe(7002);
+      expect(lastDrawnText()).toContain('📥 حجم مصرفی: 5 گیگابایت');
+    });
+
+    it('opening twice within 60 s makes ONE panel read', async () => {
+      const service = await activeService('open-twice');
+      await stale(service.id);
+      const before = reads(service.username);
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect((await handle(tapOn(`sv:${service.id}`, 7003))).replyKey).toBe('bot.service.card');
+      expect(reads(service.username) - before, 'the second open is inside the interval').toBe(1);
+    });
+
+    it('opening while a tap’s read is in flight makes no second read', async () => {
+      const service = await activeService('open-in-flight');
+      await stale(service.id);
+      const before = reads(service.username);
+      const release = panel.holdUserReads();
+      try {
+        const tapped = handle(tap(`rs:${service.id}`));
+        const deadline = Date.now() + 10_000;
+        while (reads(service.username) - before < 1 && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(reads(service.username) - before, 'the tap’s read is in flight').toBe(1);
+        sent = [];
+        const opened = await handle(tap(`s:${service.id}`));
+        expect(opened.replyKey).toBe('bot.service.card');
+        expect(reads(service.username) - before, 'the open dialled nothing').toBe(1);
+        // The stored figure, drawn without a notice.
+        expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+        noFailureNotice();
+        release();
+        expect((await tapped).replyKey).toBe('bot.service.card');
+      } finally {
+        release();
+      }
+    });
+
+    it('a panel failure draws the stored card, with no error and no notice', async () => {
+      const service = await activeService('open-panel-down');
+      await stale(service.id);
+      panel.forget(service.username);
+      const before = reads(service.username);
+      sent = [];
+      const result = await handle(tap(`s:${service.id}`));
+      expect(result.replyKey).toBe('bot.service.card');
+      expect(reads(service.username) - before, 'the panel was asked').toBe(1);
+      expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+      noFailureNotice();
+      const row = await services.findById(tenantA, service.id);
+      expect(row?.trafficUsedBytes).toBe(2_147_483_648n);
+      expect(row?.state).toBe('ACTIVE');
+    });
+
+    it('an exhausted probe budget draws the stored card and dials nothing', async () => {
+      const service = await activeService('open-no-budget');
+      await stale(service.id);
+      // The tenant's ONE bucket, empty, and refilled as of a moment still to come.
+      await setBucket(ctx, tenantA.tenantId, 0, new Date(Date.now() + 3_600_000));
+      const before = reads(service.username);
+      sent = [];
+      const result = await handle(tap(`s:${service.id}`));
+      expect(result.replyKey).toBe('bot.service.card');
+      expect(reads(service.username) - before, 'no budget, no read').toBe(0);
+      expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+      noFailureNotice();
+      const [marker] = (
+        await ctx.container.database.db.execute(
+          sql`SELECT usage_refresh_started_at FROM services WHERE id = ${service.id}`,
+        )
+      ).rows as { usage_refresh_started_at: Date | null }[];
+      expect(marker?.usage_refresh_started_at, 'the reservation rolled back').toBeNull();
+    });
+
+    it('a refresh that throws still opens the stored card', async () => {
+      const service = await activeService('open-refresh-throws');
+      await stale(service.id);
+      const deps = (runtime() as unknown as { deps: { serviceRefresh: { refresh: unknown } } })
+        .deps;
+      const original = deps.serviceRefresh.refresh;
+      deps.serviceRefresh.refresh = () => Promise.reject(new Error('database unreadable'));
+      try {
+        sent = [];
+        const result = await handle(tap(`s:${service.id}`));
+        expect(result.replyKey).toBe('bot.service.card');
+        expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+        noFailureNotice();
+      } finally {
+        deps.serviceRefresh.refresh = original;
+      }
+    });
+
+    it('a service that is not theirs is answered not-found, and dials nothing', async () => {
+      const theirs = await activeService('open-theirs', reza);
+      await stale(theirs.id);
+      const before = reads(theirs.username);
+      const result = await handle(tap(`s:${theirs.id}`));
+      expect(result.replyKey).toBe('bot.service.not_found');
+      expect(reads(theirs.username) - before).toBe(0);
     });
   });
 
