@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import {
+  SUPPORT_AI_AUTO_STALE_SECONDS,
   SUPPORT_AI_DEFAULT_CONFIG,
   SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS,
   isNexaError,
@@ -29,6 +30,7 @@ import {
   DrizzleBusinessMessageRepository,
   DrizzleBusinessOutboundRepository,
 } from '../../apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository';
+import { DrizzleSupportContextReader } from '../../apps/api/src/modules/commerce/support-context/infrastructure/drizzle-support-context.reader';
 import {
   SEED_IDS,
   adminActorFor,
@@ -187,6 +189,15 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     }[];
   }
 
+  /** The whole AUTO job row, to prove a stopped scope left it untouched. */
+  async function jobRow(conversationId: string) {
+    const rows = await db().execute(
+      sql`SELECT to_jsonb(j) AS row FROM support_ai_jobs j
+          WHERE kind = 'AUTO_DECISION' AND conversation_id = ${conversationId}`,
+    );
+    return rows.rows.map((r) => (r as { row: unknown }).row);
+  }
+
   async function count(table: string) {
     const rows = await db().execute(sql.raw(`SELECT count(*)::int AS n FROM ${table}`));
     return (rows.rows[0] as { n: number }).n;
@@ -314,6 +325,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       conversations,
       messages: new DrizzleBusinessMessageRepository(c.database.db),
       outbound,
+      facts: new DrizzleSupportContextReader(c.database.db),
       control: c.businessConversations,
       uow: c.uow,
       scopeActivity: c.tenants,
@@ -1074,11 +1086,607 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         BOTH,
       );
       expect(claimed).not.toBeNull();
+      const before = await jobRow(first.conversationId);
       await db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${SEED_IDS.tenantA}`);
-      expect(await auto.produce(scopeA, claimed!)).toBe('dropped_scope');
-      expect(calls).toBe(0);
+      try {
+        // A stopped scope takes no writes, ours included: the job is left exactly as it was.
+        expect(await auto.produce(scopeA, claimed!)).toBe('INACTIVE');
+        expect(calls).toBe(0);
+        expect(await autoRows(first.conversationId)).toEqual([]);
+        expect(await jobRow(first.conversationId)).toEqual(before);
+      } finally {
+        await db().execute(
+          sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${SEED_IDS.tenantA}`,
+        );
+      }
+    });
+  });
+
+  // ===========================================================================================
+  // Substitute review of PR #202 (docs/support-agent/tb7-falsification.md)
+  // ===========================================================================================
+  describe('substitute review of PR #202', () => {
+    const stop = () =>
+      db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${SEED_IDS.tenantA}`);
+    const start = () =>
+      db().execute(sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${SEED_IDS.tenantA}`);
+    const customerId = async () =>
+      (
+        (await db().execute(sql`SELECT id FROM customers WHERE telegram_user_id = ${CUSTOMER}`))
+          .rows[0] as { id: string }
+      ).id;
+    const recordEdit = (m: ParsedBusinessMessage, text: string) =>
+      ctx.container.businessConversations.recordMessage(scopeA, system(), {
+        idempotencyKey: key('edit'),
+        botInstanceId: BOT,
+        message: { ...m, text, editedAt: new Date() },
+        edited: true,
+      });
+    const recordDeletion = (messageIds: number[]) =>
+      ctx.container.businessConversations.recordDeletion(scopeA, system(), {
+        idempotencyKey: key('delete'),
+        botInstanceId: BOT,
+        deletion: { connectionId: 'conn-1', chatId: CUSTOMER, messageIds },
+      });
+    const takeOver = (conversationId: string) =>
+      ctx.container.businessConversations.takeOver(scopeA, operator, {
+        conversationId,
+        idempotencyKey: key('take'),
+      });
+    const decide = (output: Record<string, unknown>) => {
+      next = {
+        outcome: 'OK',
+        output: { ...grounded, ...output },
+        usage: { inputTokens: 1, outputTokens: 1 },
+        model: 'm',
+      };
+    };
+    const escalationRows = async () =>
+      (
+        await db().execute(
+          sql`SELECT reason, ticket_outcome, summary, text_purged_at FROM business_conversation_escalations
+              ORDER BY created_at`,
+        )
+      ).rows as {
+        reason: string;
+        ticket_outcome: string;
+        summary: string | null;
+        text_purged_at: Date | null;
+      }[];
+
+    // --- finding 1: the guards decide again, in the enqueue transaction -------------------
+
+    it('finding 1: a topic removed from the allowlist during the provider call hands off, no AUTO row', async () => {
+      const first = await record(message());
+      duringCall = async () => {
+        await configure({ autoTopics: ['GREETING'] });
+      };
+      await tick();
+      expect(calls).toBe(1);
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        { state: 'FAILED', outcome: 'guard_topic_allowlist', handoff_reason: 'TOPIC_NOT_ALLOWED' },
+      ]);
       expect(await autoRows(first.conversationId)).toEqual([]);
-      await db().execute(sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${SEED_IDS.tenantA}`);
+      expect(await conversation(first.conversationId)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'TOPIC_NOT_ALLOWED',
+      });
+    });
+
+    it('finding 1: a customer blocked during the provider call is handed off, never answered', async () => {
+      const first = await record(message());
+      duringCall = async () => {
+        await db().execute(
+          sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now() WHERE telegram_user_id = ${CUSTOMER}`,
+        );
+      };
+      await tick();
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        { state: 'FAILED', outcome: 'guard_customer_blocked', handoff_reason: 'CUSTOMER_BLOCKED' },
+      ]);
+      expect(await autoRows(first.conversationId)).toEqual([]);
+      expect((await conversation(first.conversationId)).state).toBe('HANDOFF_REQUIRED');
+    });
+
+    it('finding 1: a payment put under review during the provider call hands off, no AUTO row', async () => {
+      const first = await record(message());
+      const customer = await customerId();
+      duringCall = async () => {
+        // The Payment Operations Center's UNKNOWN queue: «under review» (TB3).
+        await db().execute(sql`
+          INSERT INTO payments (id, tenant_id, customer_id, order_id, state, method, amount, currency,
+                                reference, external_reference, gateway_provider, created_at)
+          VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, ${customer}, NULL, 'UNKNOWN',
+                  'GATEWAY', 250000, 'IRT', ${key('pay-ref')}, 'ext-1', 'TONPAYS', now())`);
+      };
+      await tick();
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        {
+          state: 'FAILED',
+          outcome: 'guard_account_review',
+          handoff_reason: 'ACCOUNT_UNDER_REVIEW',
+        },
+      ]);
+      expect(await autoRows(first.conversationId)).toEqual([]);
+      expect((await conversation(first.conversationId)).state).toBe('HANDOFF_REQUIRED');
+    });
+
+    it('nit: a trigger deleted before the job runs, or during its provider call, is never answered', async () => {
+      const first = await record(message());
+      await recordDeletion([messageSeq]);
+      await tick();
+      expect(calls).toBe(0);
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        { state: 'FAILED', outcome: 'guard_content', handoff_reason: 'UNSUPPORTED_CONTENT' },
+      ]);
+      await resume(first.conversationId);
+
+      // Deleted after the preflight passed: the enqueue transaction reads it again (fail closed).
+      const second = await record(message({ text: 'باز هم سلام' }));
+      const id = messageSeq;
+      duringCall = async () => {
+        await recordDeletion([id]);
+      };
+      await tick();
+      expect(calls).toBe(1);
+      expect((await autoJobs(second.conversationId)).at(-1)).toMatchObject({
+        state: 'FAILED',
+        outcome: 'guard_content',
+        handoff_reason: 'UNSUPPORTED_CONTENT',
+      });
+      expect(await autoRows(second.conversationId)).toEqual([]);
+    });
+
+    // --- finding 2: a stopped scope takes no writes; a resumed one gets no stale reply ------
+
+    it('finding 2: a stop during the provider call writes nothing; after resume the stale job hands off', async () => {
+      const first = await record(message());
+      const convoBefore = await conversation(first.conversationId);
+      let claimed: unknown[] = [];
+      duringCall = async () => {
+        claimed = await jobRow(first.conversationId);
+        await stop();
+      };
+      try {
+        await tick();
+        expect(calls).toBe(1);
+        // Untouched: the job exactly as the claim left it, no lane row, no handoff, no ticket.
+        expect(await jobRow(first.conversationId)).toEqual(claimed);
+        expect(await autoJobs(first.conversationId)).toMatchObject([
+          { state: 'QUEUED', outcome: null },
+        ]);
+        expect(await autoRows(first.conversationId)).toEqual([]);
+        expect(await escalationRows()).toEqual([]);
+        expect(await conversation(first.conversationId)).toMatchObject({
+          state: 'AI_ACTIVE',
+          controlEpoch: convoBefore.controlEpoch,
+        });
+      } finally {
+        await start();
+      }
+      // Resumed after more than SUPPORT_AI_AUTO_STALE_SECONDS: the job is claimed again, and a
+      // person answers rather than a reply about a conversation that moved on.
+      await db().execute(
+        sql`UPDATE support_ai_jobs
+               SET due_at = now() - make_interval(secs => ${SUPPORT_AI_AUTO_STALE_SECONDS + 60}),
+                   claimed_until = now() - interval '1 second'
+             WHERE conversation_id = ${first.conversationId}`,
+      );
+      await tick(0);
+      expect(calls).toBe(1); // no provider was asked again
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        { state: 'FAILED', outcome: 'handoff_stale', handoff_reason: 'REPLY_STALE' },
+      ]);
+      expect(await autoRows(first.conversationId)).toEqual([]);
+      expect(await conversation(first.conversationId)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'REPLY_STALE',
+      });
+      await deliver();
+      expect(transport.sent).toEqual([]);
+    });
+
+    it('finding 2: a job within the bound is answered (the staleness rule is a bound, not a block)', async () => {
+      const first = await record(message());
+      await db().execute(
+        sql`UPDATE support_ai_jobs
+               SET due_at = now() - make_interval(secs => ${SUPPORT_AI_AUTO_STALE_SECONDS - 60})
+             WHERE conversation_id = ${first.conversationId}`,
+      );
+      await tick(0);
+      expect(await autoJobs(first.conversationId)).toMatchObject([{ outcome: 'sent' }]);
+    });
+
+    it('finding 2: an AUTO lane row left unsent past the bound is never sent; a person answers', async () => {
+      const first = await record(message());
+      await tick();
+      await stop();
+      try {
+        await deliver(); // a stopped tenant's lane does nothing
+      } finally {
+        await start();
+      }
+      await db().execute(
+        sql`UPDATE business_outbound_messages
+               SET created_at = now() - make_interval(secs => ${SUPPORT_AI_AUTO_STALE_SECONDS + 60})
+             WHERE conversation_id = ${first.conversationId} AND origin = 'AUTO'`,
+      );
+      await deliver();
+      expect(transport.sent).toEqual([]);
+      expect(await autoRows(first.conversationId)).toMatchObject([
+        { state: 'SUPERSEDED', failure_code: 'support_ai.reply_stale' },
+      ]);
+      expect(await conversation(first.conversationId)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'REPLY_STALE',
+      });
+    });
+
+    // --- finding 3: a handoff never throws for a business reason, and never stalls the lane --
+
+    it('finding 3: a bad category override on an unseeded tenant: UNCONFIRMED, a handoff with no ticket, and the lane goes on', async () => {
+      await db().execute(sql`
+        INSERT INTO template_overrides (id, tenant_id, template_key, locale, body, revision, updated_by_admin_id)
+        VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, 'bot.ticket.category_default_3', 'fa',
+                ${'دو\nخط'}, 1, ${owner.id})`);
+      const first = await record(message());
+      await tick();
+      transport.next.push({ outcome: 'UNKNOWN', errorCode: 'telegram.unreachable' });
+      await deliver();
+      expect(await autoRows(first.conversationId)).toMatchObject([{ state: 'UNCONFIRMED' }]);
+      expect(await conversation(first.conversationId)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'SEND_OUTCOME_UNKNOWN',
+        ticketId: null,
+      });
+      expect(await escalationRows()).toMatchObject([
+        { reason: 'SEND_OUTCOME_UNKNOWN', ticket_outcome: 'NO_CATEGORY' },
+      ]);
+      const signal = await db().execute(
+        sql`SELECT context->>'ticketOutcome' AS outcome FROM operational_events WHERE code = 'support.handoff_required'`,
+      );
+      expect(signal.rows).toEqual([{ outcome: 'NO_CATEGORY' }]);
+      // The refused seed wrote nothing: no half-made categories, and no "seeded" mark that would
+      // stop the tenant ever being seeded once the override is fixed.
+      expect(await count('ticket_categories')).toBe(0);
+      expect(await count('ticket_category_seeds')).toBe(0);
+
+      // The next operator send still goes out.
+      await ctx.container.businessConversations.send(scopeA, operator, {
+        conversationId: first.conversationId,
+        idempotencyKey: key('op'),
+        text: 'سلام، من پشتیبان هستم',
+      });
+      await deliver();
+      expect(transport.sent.map((m) => m.text)).toEqual([
+        grounded.replyText,
+        'سلام، من پشتیبان هستم',
+      ]);
+    });
+
+    describe('finding 3: one conversation whose handoff fails does not stall the lane', () => {
+      const chat = (n: string) => message({ chatId: n, fromUserId: n });
+
+      /** A lane whose handoff throws for one conversation (an infrastructure failure). */
+      function laneFailingFor(bad: () => string) {
+        const c = ctx.container;
+        return new BusinessOutboundService({
+          outbound,
+          conversations,
+          messages: new DrizzleBusinessMessageRepository(c.database.db),
+          control: {
+            handOff: async (...args: Parameters<typeof c.businessConversations.handOff>) => {
+              if (args[1] === bad()) throw new Error('handoff failed');
+              return c.businessConversations.handOff(...args);
+            },
+          },
+          transport,
+          autoMode: new SupportAutoEnqueuer({
+            configs: new DrizzleSupportAiConfigRepository(c.database.db),
+            jobs,
+            ids: c.ids,
+          }),
+          escalations: new DrizzleBusinessEscalationRepository(c.database.db),
+          uow: c.uow,
+          scopeActivity: c.tenants,
+          clock: c.clock,
+          ids: c.ids,
+          logger: c.logger,
+        });
+      }
+
+      it('at the send: the failing row is rolled back alone, and the next row is delivered', async () => {
+        const a = await record(message());
+        await tick();
+        const b = await record(chat('7000002'));
+        await ctx.container.businessConversations.send(scopeA, operator, {
+          conversationId: b.conversationId,
+          idempotencyKey: key('op'),
+          text: 'پاسخ اپراتور',
+        });
+        transport.next.push({ outcome: 'UNKNOWN', errorCode: 'telegram.unreachable' });
+        await laneFailingFor(() => a.conversationId).deliverDue(scopeA);
+        expect(transport.sent.map((m) => m.text)).toEqual([grounded.replyText, 'پاسخ اپراتور']);
+        // Its outcome transaction rolled back: still stamped, for the reaper to resolve.
+        const [row] = await autoRows(a.conversationId);
+        expect(row).toMatchObject({ state: 'PENDING' });
+        expect((await conversation(a.conversationId)).state).toBe('AI_ACTIVE');
+      });
+
+      it('at the reaper: each stranded row in its own transaction, and the pass still delivers', async () => {
+        const a = await record(message());
+        const b = await record(chat('7000002'));
+        await tick();
+        expect(await autoRows(a.conversationId)).toHaveLength(1);
+        expect(await autoRows(b.conversationId)).toHaveLength(1);
+        // Both stamped long ago and never recorded: stranded.
+        await db().execute(
+          sql`UPDATE business_outbound_messages SET send_started_at = now() - interval '6 minutes'
+               WHERE origin = 'AUTO'`,
+        );
+        const c = await record(chat('7000003'));
+        await ctx.container.businessConversations.send(scopeA, operator, {
+          conversationId: c.conversationId,
+          idempotencyKey: key('op'),
+          text: 'پاسخ اپراتور',
+        });
+        const report = await laneFailingFor(() => a.conversationId).deliverDue(scopeA);
+        expect(report.stranded).toBe(1);
+        expect(await autoRows(a.conversationId)).toMatchObject([{ state: 'PENDING' }]);
+        expect(await autoRows(b.conversationId)).toMatchObject([{ state: 'UNCONFIRMED' }]);
+        expect(await conversation(b.conversationId)).toMatchObject({
+          state: 'HANDOFF_REQUIRED',
+          handoffReason: 'SEND_OUTCOME_UNKNOWN',
+        });
+        expect(transport.sent.map((m) => m.text)).toEqual(['پاسخ اپراتور']);
+      });
+    });
+
+    // --- finding 4: rules that had no killing test -----------------------------------------
+
+    it('R7: a person taking over a handed-off conversation recovers support.handoff_required', async () => {
+      decide({ topic: 'REFUND' });
+      const first = await record(message());
+      await tick();
+      expect((await conversation(first.conversationId)).state).toBe('HANDOFF_REQUIRED');
+      await takeOver(first.conversationId);
+      const events = await db().execute(
+        sql`SELECT code, resolved_at FROM operational_events
+             WHERE code IN ('support.handoff_required', 'support.handoff_resolved') ORDER BY code`,
+      );
+      expect(events.rows).toHaveLength(2);
+      expect((events.rows[0] as { resolved_at: Date | null }).resolved_at).not.toBeNull();
+    });
+
+    it("R6: two concurrent handoffs of one customer's two conversations open one ticket", async () => {
+      await ctx.container.businessConnections.applyReport(scopeA, system(), {
+        idempotencyKey: key('conn-2'),
+        botInstanceId: BOT,
+        report: {
+          connectionId: 'conn-2',
+          ownerTelegramUserId: '5000009',
+          ownerUserChatId: '5000009',
+          isEnabled: true,
+          rights: ['can_reply'] as BusinessBotRight[],
+          connectedAt: new Date('2026-10-01T00:00:00Z'),
+        },
+      });
+      const one = await record(message());
+      const two = await record(message({ connectionId: 'conn-2' }));
+      expect(two.conversationId).not.toBe(one.conversationId);
+      await ctx.container.ticketCategories.ensureSeeded(tenantA as never);
+      // Both handoffs reach "is there an active ticket?" before either commits, unless the
+      // customer's lock serialises them (the second then waits, and finds the first's ticket).
+      type Repo = { latestActiveForCustomer: (...args: unknown[]) => Promise<unknown> };
+      const repo = (ctx.container.tickets as unknown as { deps: { tickets: Repo } }).deps.tickets;
+      const original = repo.latestActiveForCustomer;
+      let arrived = 0;
+      let release: () => void = () => {};
+      const together = new Promise<void>((resolve) => (release = resolve));
+      repo.latestActiveForCustomer = async (...args: unknown[]) => {
+        arrived += 1;
+        if (arrived >= 2) release();
+        await Promise.race([together, new Promise((resolve) => setTimeout(resolve, 400))]);
+        return original.apply(repo, args);
+      };
+      try {
+        const handOff = (conversationId: string) =>
+          ctx.container.uow.run(scopeA, (tx) =>
+            ctx.container.businessConversations.handOff(
+              scopeA,
+              conversationId,
+              'AI_REQUESTED',
+              new Date(),
+              tx,
+            ),
+          );
+        await Promise.all([handOff(one.conversationId), handOff(two.conversationId)]);
+      } finally {
+        repo.latestActiveForCustomer = original;
+      }
+      expect(await count('tickets')).toBe(1);
+      expect((await escalationRows()).map((e) => e.ticket_outcome).sort()).toEqual([
+        'CREATED',
+        'LINKED',
+      ]);
+    });
+
+    it('R5: a connection that stopped being usable during the provider call: no AUTO row', async () => {
+      const first = await record(message());
+      duringCall = async () => {
+        await ctx.container.businessConnections.applyReport(scopeA, system(), {
+          idempotencyKey: key('conn-off'),
+          botInstanceId: BOT,
+          report: {
+            connectionId: 'conn-1',
+            ownerTelegramUserId: OWNER,
+            ownerUserChatId: OWNER,
+            isEnabled: false,
+            rights: ['can_reply'] as BusinessBotRight[],
+            connectedAt: new Date('2026-10-01T00:00:00Z'),
+          },
+        });
+      };
+      await tick();
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        { state: 'DISCARDED', outcome: 'dropped_connection' },
+      ]);
+      expect(await autoRows(first.conversationId)).toEqual([]);
+    });
+
+    it('R12: a takeover and resume during the provider call: the stale job never hands off the resumed conversation', async () => {
+      decide({ topic: 'REFUND' });
+      const first = await record(message());
+      duringCall = async () => {
+        await takeOver(first.conversationId);
+        await resume(first.conversationId);
+      };
+      await tick();
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        { state: 'DISCARDED', outcome: 'dropped_epoch' },
+      ]);
+      expect((await conversation(first.conversationId)).state).toBe('AI_ACTIVE');
+      expect(await escalationRows()).toEqual([]);
+    });
+
+    it('R4: an edit of an answered message starts nothing; an edit of the pending trigger re-enqueues', async () => {
+      const m1 = message();
+      const first = await record(m1);
+      await tick();
+      expect(await autoJobs(first.conversationId)).toMatchObject([{ outcome: 'sent' }]);
+      await recordEdit(m1, 'ویرایش شد');
+      expect(await autoJobs(first.conversationId)).toHaveLength(1);
+
+      const m2 = message({ text: 'سؤال دوم' });
+      await record(m2);
+      await recordEdit(m2, 'سؤال دوم، ویرایش شده');
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        { state: 'SENT' },
+        { state: 'DISCARDED', outcome: 'dropped_coalesced' },
+        { state: 'QUEUED' },
+      ]);
+    });
+
+    it('nit: an edit of an OLDER message while a job is pending leaves the job on its own trigger', async () => {
+      const m1 = message();
+      const first = await record(m1);
+      await tick();
+      const m2 = message({ text: 'سؤال دوم' });
+      await record(m2);
+      const [, pending] = await autoJobs(first.conversationId);
+      await recordEdit(m1, 'پیام قدیمی، ویرایش شده');
+      const after = await db().execute(
+        sql`SELECT id, state, trigger_telegram_message_id AS trigger FROM support_ai_jobs
+             WHERE kind = 'AUTO_DECISION' AND conversation_id = ${first.conversationId}
+             ORDER BY created_at, id`,
+      );
+      expect(after.rows).toHaveLength(2);
+      expect(after.rows[1]).toMatchObject({ id: pending!.id, state: 'QUEUED' });
+      expect(Number((after.rows[1] as { trigger: string }).trigger)).toBe(m2.messageId);
+    });
+
+    it('R8: the escalation summary is purged with the transcript, after 30 days', async () => {
+      decide({ topic: 'REFUND', summary: 'مشتری بازپرداخت می‌خواهد.' });
+      await record(message());
+      await tick();
+      expect(await escalationRows()).toMatchObject([{ summary: 'مشتری بازپرداخت می‌خواهد.' }]);
+      await db().execute(
+        sql`UPDATE business_conversation_escalations SET created_at = now() - interval '31 days'`,
+      );
+      await deliver();
+      const [row] = await escalationRows();
+      expect(row).toMatchObject({ summary: null });
+      expect(row!.text_purged_at).not.toBeNull();
+    });
+
+    it('R10: a SUPERSEDED automatic reply never counts toward the loop guard', async () => {
+      await configure({ maxConsecutiveReplies: 1 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await db().execute(
+        sql`INSERT INTO business_outbound_messages
+              (id, tenant_id, conversation_id, origin, body, control_epoch, idempotency_key, request_hash, state, resolved_at)
+            VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, ${convo.id}, 'AUTO', 'x',
+                    ${convo.controlEpoch}, ${key('sup')}, 'h', 'SUPERSEDED', now())`,
+      );
+      await tick();
+      expect(await autoJobs(first.conversationId)).toMatchObject([{ outcome: 'sent' }]);
+    });
+
+    it('Telegram REFUSED on an AUTO row hands off (TRANSPORT_REFUSED)', async () => {
+      const first = await record(message());
+      await tick();
+      transport.next.push({
+        outcome: 'REFUSED',
+        reason: 'TELEGRAM_REJECTED',
+        errorCode: 'telegram.400',
+        connectionStatus: null,
+      });
+      await deliver();
+      expect(await autoRows(first.conversationId)).toMatchObject([{ state: 'FAILED' }]);
+      expect(await conversation(first.conversationId)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'TRANSPORT_REFUSED',
+      });
+      expect(await escalationRows()).toMatchObject([{ reason: 'TRANSPORT_REFUSED' }]);
+    });
+
+    // --- finding 5: the AI's note is the conversation's to show -----------------------------
+
+    it("finding 5: tickets.view without business_chats.view never sees the AI's summary", async () => {
+      decide({ topic: 'REFUND', summary: 'مشتری بازپرداخت می‌خواهد.' });
+      const first = await record(message());
+      await tick();
+      const ticketId = (await conversation(first.conversationId)).ticketId!;
+      const roleId = ctx.container.ids.uuid();
+      await db().execute(
+        sql`INSERT INTO roles (id, tenant_id, key, name) VALUES (${roleId}, ${SEED_IDS.tenantA}, 'ticket_reader', 'Ticket reader')`,
+      );
+      await db().execute(
+        sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+            VALUES (${SEED_IDS.tenantA}, ${roleId}, 'tickets.view')`,
+      );
+      const reader = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'reader1',
+          roleKeys: ['ticket_reader'],
+        }),
+      );
+      const seen = await ctx.container.tickets.detail(tenantA as never, reader, ticketId);
+      expect(seen.escalations).toMatchObject([{ reason: 'HANDOFF_TOPIC', summary: null }]);
+      const full = await ctx.container.tickets.detail(tenantA as never, owner, ticketId);
+      expect(full.escalations).toMatchObject([
+        { reason: 'HANDOFF_TOPIC', summary: 'مشتری بازپرداخت می‌خواهد.' },
+      ]);
+    });
+
+    // --- nit: loosening an AUTO tenant's bounds is the CRITICAL permission ------------------
+
+    it('nit: in AUTO, raising the reply limits or shortening the delays needs support_ai.auto_reply', async () => {
+      await db().execute(
+        sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+            SELECT tenant_id, id, 'support_ai.configure' FROM roles
+            WHERE tenant_id = ${SEED_IDS.tenantA} AND key = 'operator'`,
+      );
+      const admin = adminActorFor(
+        await createAdmin(ctx.container, tenantA, { username: 'admin2', roleKeys: ['operator'] }),
+      );
+      const current = (await ctx.container.supportAiConfig.view(tenantA as never, owner)).config;
+      for (const change of [
+        { maxConsecutiveReplies: current.maxConsecutiveReplies + 1 },
+        { maxOutputChars: current.maxOutputChars + 100 },
+        { cooldownSeconds: current.cooldownSeconds - 1 },
+        { settleDelaySeconds: current.settleDelaySeconds - 1 },
+      ]) {
+        await expect(configure(change, admin), JSON.stringify(change)).rejects.toSatisfy(
+          isNexaError,
+        );
+      }
+      // Tightening is ordinary configuration.
+      await configure({ maxConsecutiveReplies: current.maxConsecutiveReplies - 1 }, admin);
+      // Outside AUTO these shape only Assist drafts: ordinary configuration too.
+      await configure({ mode: 'ASSIST_ONLY' });
+      await configure({ maxOutputChars: current.maxOutputChars + 100 }, admin);
     });
   });
 });

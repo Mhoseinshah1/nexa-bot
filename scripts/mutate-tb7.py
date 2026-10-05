@@ -17,6 +17,7 @@ CONFIG='apps/api/src/modules/control/support-ai/application/support-ai-config.se
 CONV='apps/api/src/modules/commerce/business-chats/application/business-conversation.service.ts'
 LANE='apps/api/src/modules/commerce/business-chats/application/business-outbound.service.ts'
 TICKETS='apps/api/src/modules/commerce/tickets/application/ticket.service.ts'
+CONVREPO='apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository.ts'
 T_I=('integration','tests/integration/support-auto-reply.test.ts')
 T_U=('unit','tests/unit/support-auto-reply-guards.test.ts')
 
@@ -54,15 +55,42 @@ M=[
  # TB7 on the reviewed TB5: the AUTO kind under claimNext, the lease and the unclaimed rule.
  ('TB7-24',[(JOBS,"          conversationId === null ? undefined : eq(supportAiJobs.conversationId, conversationId),\n          eq(supportAiJobs.kind, 'ASSIST_DRAFT'),\n","          conversationId === null ? undefined : eq(supportAiJobs.conversationId, conversationId),\n")],T_I,'never an AUTO job'),
  ('TB7-25',[(JOBS,"          inArray(supportAiJobs.kind, [...kinds]),\n","")],T_I,'without the AUTO producer'),
- ('TB7-26',[(AUTO,"    if (!active) return this.drop(scope, job, 'dropped_scope');\n","")],T_I,'produced after a stop'),
+ ('TB7-26',[(AUTO,"    if (!active) return 'INACTIVE';\n","")],T_I,'produced after a stop'),
  # On the reviewed TB6 (PR #201, S1): AUTO image outcomes follow only the job's own transition.
  ('TB7-27',[(AUTO,"    try {\n      return await this.deps.uow.run(scope, async (tx) => {\n        const now = this.deps.clock.now();\n        if (!(await this.deps.scopeActivity","    if (images !== undefined) await this.deps.uow.run(scope, (t) => images(this.deps.clock.now(), t));\n    try {\n      return await this.deps.uow.run(scope, async (tx) => {\n        const now = this.deps.clock.now();\n        if (!(await this.deps.scopeActivity"),(AUTO,"        if (images !== undefined) await images(now, tx);\n","")],T_I,'records no image outcome'),
+ # Substitute review of PR #202 (tb7-falsification.md, "Substitute review of PR #202").
+ # Finding 1: the guards decide again inside the enqueue transaction.
+ ('TB7-28',[(AUTO,"      if (!recheck.pass)\n        return this.handOffChecked(","      if (false)\n        return this.handOffChecked(")],T_I,'finding 1: a topic removed'),
+ ('TB7-29',[(AUTO,"      if (!recheck.pass)\n        return this.handOffChecked(","      if (false)\n        return this.handOffChecked(")],T_I,'finding 1: a payment put under review'),
+ ('TB7-30',[(AUTO,"      const recheck: AutoVerdict = !preflight.pass\n        ? preflight\n","      const recheck: AutoVerdict = false\n        ? preflight\n")],T_I,'finding 1: a customer blocked'),
+ ('TB7-31',[(AUTO,"      const recheck: AutoVerdict = !preflight.pass\n        ? preflight\n","      const recheck: AutoVerdict = false\n        ? preflight\n")],T_I,'nit: a trigger deleted'),
+ # Finding 2: a stopped scope takes no writes (R9), and a resumed one gets no stale reply.
+ ('TB7-32',[(AUTO,"        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) throw new ScopeStopped();\n","")],T_I,'finding 2: a stop during the provider call'),
+ ('TB7-33',[(AUTO,"    if (isStale(job, now)) return this.handOff(scope, job, STALE, null, null);","    if (false) return this.handOff(scope, job, STALE, null, null);")],T_I,'finding 2: a stop during the provider call'),
+ ('TB7-34',[(LANE,"      const stale =\n        sendable &&","      const stale =\n        false &&")],T_I,'finding 2: an AUTO lane row left unsent'),
+ # Finding 3: a handoff never throws for a business reason, and never stalls the lane.
+ ('TB7-35',[(TICKETS,"      if (isNexaError(error) && error.code === TICKET_ERROR_CODES.TICKET_CATEGORY_INVALID) {\n        return false;","      if (isNexaError(error) && error.code === TICKET_ERROR_CODES.TICKET_CATEGORY_INVALID) {\n        throw error;")],T_I,'finding 3: a bad category override'),
+ ('TB7-36',[(LANE,"      } catch (error: unknown) {\n        this.rowFailed(row, 'deliver', error);","      } catch (error: unknown) {\n        throw error;")],T_I,'at the send: the failing row'),
+ ('TB7-37',[(LANE,"      } catch (error: unknown) {\n        this.rowFailed({ id, conversationId: null }, 'reap', error);","      } catch (error: unknown) {\n        throw error;")],T_I,'at the reaper: each stranded row'),
+ # Finding 4: the rules that had no killing test (the review's R-numbers).
+ ('TB7-38 R7',[(CONV,"    await this.deps.outbound.supersedeStale(scope, moved.id, moved.controlEpoch, now, tx);\n    if (conversation.state === 'HANDOFF_REQUIRED') {\n      await this.deps.escalation.resolved(scope, moved.id, tx);\n    }\n    return moved;\n  }","    await this.deps.outbound.supersedeStale(scope, moved.id, moved.controlEpoch, now, tx);\n    return moved;\n  }")],T_I,'R7: a person taking over'),
+ ('TB7-39 R6',[(TICKETS,"    await this.deps.tickets.lockCustomer(scope, customerId, scoped);\n","")],T_I,'R6: two concurrent handoffs'),
+ ('TB7-40 R5',[(CONV,"    if (connection === null || connection.status !== 'ACTIVE') return { refused: 'connection' };\n","")],T_I,'R5: a connection'),
+ ('TB7-41 R12',[(AUTO,"    if (conversation === null || conversation.controlEpoch !== job.controlEpoch) {","    if (conversation === null) {")],T_I,'R12: a takeover and resume'),
+ ('TB7-42 R4',[(AUTO,"    if (input.edited && pending === null) return;\n","")],T_I,'R4: an edit of an answered message'),
+ ('TB7-43',[(AUTO,"    if (\n      input.edited &&\n      pending !== null &&\n      pending.triggerTelegramMessageId !== input.telegramMessageId\n    ) {\n      return;\n    }\n","")],T_I,'nit: an edit of an OLDER message'),
+ ('TB7-44 R8',[(LANE,"      const notes = await this.deps.escalations.purgeText(scope, cutoff, now, RETENTION_BATCH, tx);","      const notes = 0;")],T_I,'R8: the escalation summary is purged'),
+ ('TB7-45 R10',[(CONVREPO,"          ne(businessOutboundMessages.state, 'SUPERSEDED'),\n","")],T_I,'R10: a SUPERSEDED automatic reply'),
+ ('TB7-46',[(LANE,"            await this.deps.control.handOff(\n              scope,\n              row.conversationId,\n              'TRANSPORT_REFUSED',\n              now,\n              tx,\n            );\n","")],T_I,'Telegram REFUSED on an AUTO row'),
+ # Finding 5 and the widening nit.
+ ('TB7-47',[(TICKETS,"      escalations: seesChats\n","      escalations: true\n")],T_I,'finding 5'),
+ ('TB7-48',[(CONFIG,"          (next.mode === 'AUTO_REPLY_SAFE' &&","          (false &&")],T_I,'nit: in AUTO, raising the reply limits'),
 ]
 
 only=sys.argv[1:]
 killed=0; ran=0
 for mid,edits,(project,test),filt in M:
-  if only and mid not in only: continue
+  if only and mid.split()[0] not in only: continue
   originals={}; ok=True
   for f,a,b in edits:
     s=originals.get(f) or open(f).read()

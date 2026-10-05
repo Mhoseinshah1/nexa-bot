@@ -54,5 +54,49 @@ Notes:
 - **TB7-08 needed a new test.** The coalescing test alone never produced the replaced job,
   because it was not yet due. The in-flight test records the newer message from inside the
   provider call.
-- **Not mutated:** the scope-activity read in the job's transaction (`dropped_scope`). No test
-  stops a tenant mid-job, so this record claims nothing about it.
+- **Formerly not mutated:** the scope-activity read in the job's transaction. The substitute
+  review of PR #202 removed `dropped_scope` and added the test; it is TB7-32 below.
+
+## Substitute review of PR #202 — every fix, falsified
+
+One substitute review ran on PR #202. It found five should-fix findings (the fourth a list of
+eight rules with no killing test) and four nits; all were valid and all are fixed. Each fix
+has a regression test in `tests/integration/support-auto-reply.test.ts`, and reverting the fix
+fails that test. Run on 2026-10-05 against `nexa_test_tb7fix`, the whole driver at once.
+
+| ID         | Finding                                                                                  | Fix                                                                                                                                                               | Regression test                                                        | Result |
+| ---------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------ |
+| TB7-28     | 1: the enqueue re-checked only the mode; the guards decided on the facts before the call | the enqueue transaction re-reads the config, the trigger, the counts and the account facts (`autoGuardFlags`) and runs both guard sets again; a failure hands off | finding 1: a topic removed from the allowlist during the provider call | KILLED |
+| TB7-29     | 1: (the same re-check, a payment put under review)                                       | (as above)                                                                                                                                                        | finding 1: a payment put under review during the provider call         | KILLED |
+| TB7-30     | 1: (the preflight half of the re-check, a customer blocked)                              | `autoPreflight` runs again in the transaction, on the in-transaction blocked flag                                                                                 | finding 1: a customer blocked during the provider call                 | KILLED |
+| TB7-31     | nit: a trigger deleted after the preflight was still answered                            | (the same in-transaction preflight; fail closed: a handoff, like a trigger deleted before)                                                                        | nit: a trigger deleted before the job runs, or during its call         | KILLED |
+| TB7-32     | 2 (R9): a stopped scope's job was ended `dropped_scope` — a write in a stopped scope     | a stopped scope writes nothing: `INACTIVE`, the job left QUEUED under its lease, as TB5 leaves a draft                                                            | finding 2: a stop during the provider call writes nothing              | KILLED |
+| TB7-33     | 2: on resume, a job held through a stop would be answered however late                   | a job produced more than `SUPPORT_AI_AUTO_STALE_SECONDS` after its `due_at` hands off (`handoff_stale`, `REPLY_STALE`) with no provider call                      | finding 2: …after resume the stale job hands off                       | KILLED |
+| TB7-34     | 2: an AUTO lane row held through a stop would be sent however late                       | the lane's final check supersedes an AUTO row older than the bound (`support_ai.reply_stale`) and hands off                                                       | finding 2: an AUTO lane row left unsent past the bound                 | KILLED |
+| TB7-35     | 3: a bad category override on an unseeded tenant threw out of the handoff                | the seed renders every title before writing; the escalation catches `TICKET_CATEGORY_INVALID` → `NO_CATEGORY`                                                     | finding 3: a bad category override on an unseeded tenant               | KILLED |
+| TB7-36     | 3: one row's failing handoff aborted the whole delivery pass                             | each row is delivered under its own try; a failure is logged and rolls back that row alone                                                                        | at the send: the failing row is rolled back alone                      | KILLED |
+| TB7-37     | 3: the reaper reaped every stranded row in one transaction, so one failure stalled all   | one transaction per stranded row, with its handoff; a failure is logged and the pass goes on                                                                      | at the reaper: each stranded row in its own transaction                | KILLED |
+| TB7-38 R7  | 4: `support.handoff_required` recovered on takeover had no test                          | — (the rule held; a test now pins it)                                                                                                                             | R7: a person taking over a handed-off conversation recovers…           | KILLED |
+| TB7-39 R6  | 4: `lockCustomer` in the escalation had no test                                          | —                                                                                                                                                                 | R6: two concurrent handoffs … open one ticket                          | KILLED |
+| TB7-40 R5  | 4: the inactive-connection refusal in `enqueueAutoSend` had no test                      | —                                                                                                                                                                 | R5: a connection that stopped being usable during the provider call    | KILLED |
+| TB7-41 R12 | 4: the epoch check before a handoff had no test                                          | —                                                                                                                                                                 | R12: a takeover and resume during the provider call                    | KILLED |
+| TB7-42 R4  | 4: "an edit of an answered message starts nothing" had no test                           | —                                                                                                                                                                 | R4: an edit of an answered message starts nothing                      | KILLED |
+| TB7-43     | nit: an edit of an older message re-targeted the pending job to it                       | an edit re-enqueues only when it is of the pending job's own trigger                                                                                              | nit: an edit of an OLDER message while a job is pending                | KILLED |
+| TB7-44 R8  | 4: the escalation summary purge had no test                                              | —                                                                                                                                                                 | R8: the escalation summary is purged … after 30 days                   | KILLED |
+| TB7-45 R10 | 4: SUPERSEDED rows excluded from the loop guard had no test                              | —                                                                                                                                                                 | R10: a SUPERSEDED automatic reply never counts                         | KILLED |
+| TB7-46     | 4: Telegram REFUSED on an AUTO row handing off had no test                               | —                                                                                                                                                                 | Telegram REFUSED on an AUTO row hands off                              | KILLED |
+| TB7-47     | 5: the AI's summary was visible with `tickets.view` alone                                | `TicketService.detail` returns the summary only to an actor holding `business_chats.view`                                                                         | finding 5: tickets.view without business_chats.view                    | KILLED |
+| TB7-48     | nit: raising the reply limits or shortening the delays was not "widening"                | in a resulting AUTO mode, a higher `maxConsecutiveReplies`/`maxOutputChars` or a lower cooldown/settle delay needs `support_ai.auto_reply`                        | nit: in AUTO, raising the reply limits or shortening the delays        | KILLED |
+
+TB7-26 was re-anchored: the activity check before the provider call now returns `INACTIVE`
+rather than writing `dropped_scope`. The decision 3 nit was wording only: `tb7-auto-reply.md`
+now states that the mode is read when each step processes, so a mode switched OFF and back
+ON before the assistant or the lane reached a job or a row leaves it to run, under every other
+check. The former note "Not mutated: the scope-activity read in the job's transaction" is
+answered by TB7-32.
+
+Each mutant was killed by exactly one failing assertion in its named test (the driver prints
+the failing test). TB7-28/29 and TB7-30/31 are one mutation each, run against two tests on
+purpose, so each test is shown to depend on the rule.
+
+**48 of 48 killed.**

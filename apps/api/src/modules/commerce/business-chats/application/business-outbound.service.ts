@@ -1,5 +1,6 @@
 import {
   BUSINESS_MESSAGE_TEXT_RETENTION_DAYS,
+  SUPPORT_AI_AUTO_STALE_SECONDS,
   businessOutboundSendable,
   deliveryRetryDelayMs,
   systemJobActor,
@@ -49,7 +50,7 @@ export interface BusinessOutboundServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
-  readonly logger: Pick<Logger, 'warn'>;
+  readonly logger: Pick<Logger, 'warn' | 'error'>;
 }
 
 export interface BusinessOutboundReport {
@@ -103,27 +104,7 @@ export class BusinessOutboundService {
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return empty;
     const now = this.deps.clock.now();
 
-    const stranded = await this.deps.uow.run(scope, async (tx) => {
-      const rows = await this.deps.outbound.reapStranded(
-        scope,
-        new Date(now.getTime() - BUSINESS_OUTBOUND_STRANDED_MS),
-        now,
-        limit,
-        tx,
-      );
-      for (const row of rows) {
-        if (row.origin === 'AUTO') {
-          await this.deps.control.handOff(
-            scope,
-            row.conversationId,
-            'SEND_OUTCOME_UNKNOWN',
-            now,
-            tx,
-          );
-        }
-      }
-      return rows.length;
-    });
+    const stranded = await this.reapStranded(scope, now, limit);
 
     const purged = await this.purgeIfDue(scope, now);
 
@@ -134,8 +115,15 @@ export class BusinessOutboundService {
       limit,
     );
     for (const row of claimed) {
-      const outcome = await this.deliverOne(scope, row);
-      counts[outcome] += 1;
+      // One row's failure — a handoff that threw, say — is that row's alone: it is logged, its
+      // transaction rolled back (a stamped row is reaped later), and the pass goes on, so one
+      // conversation never stalls the tenant's lane (substitute review of PR #202, finding 3).
+      try {
+        const outcome = await this.deliverOne(scope, row);
+        counts[outcome] += 1;
+      } catch (error: unknown) {
+        this.rowFailed(row, 'deliver', error);
+      }
     }
     return {
       claimed: claimed.length,
@@ -147,6 +135,53 @@ export class BusinessOutboundService {
       stranded,
       purged,
     };
+  }
+
+  /**
+   * Stamped rows whose lease ran out are resolved UNCONFIRMED, each in ITS OWN transaction with
+   * its handoff (an AUTO row's). A handoff that throws rolls back only its own row, which stays
+   * stamped and is retried on the next pass; every other row is reaped, and the lane goes on to
+   * deliver (substitute review of PR #202, finding 3: one transaction for all of them let one
+   * conversation's failure stall the tenant's operator sends, every pass).
+   */
+  private async reapStranded(scope: ScopeContext, now: Date, limit: number): Promise<number> {
+    const staleBefore = new Date(now.getTime() - BUSINESS_OUTBOUND_STRANDED_MS);
+    const ids = await this.deps.outbound.strandedIds(scope, staleBefore, limit);
+    let reaped = 0;
+    for (const id of ids) {
+      try {
+        const done = await this.deps.uow.run(scope, async (tx) => {
+          if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
+          const row = await this.deps.outbound.reapStrandedRow(scope, id, staleBefore, now, tx);
+          if (row === null) return false;
+          if (row.origin === 'AUTO') {
+            await this.deps.control.handOff(
+              scope,
+              row.conversationId,
+              'SEND_OUTCOME_UNKNOWN',
+              now,
+              tx,
+            );
+          }
+          return true;
+        });
+        if (done) reaped += 1;
+      } catch (error: unknown) {
+        this.rowFailed({ id, conversationId: null }, 'reap', error);
+      }
+    }
+    return reaped;
+  }
+
+  private rowFailed(
+    row: { readonly id: string; readonly conversationId: string | null },
+    step: 'deliver' | 'reap',
+    error: unknown,
+  ): void {
+    this.deps.logger.error(
+      { outboundId: row.id, conversationId: row.conversationId, step, err: error },
+      'business outbound: one row failed; the pass continues with the others',
+    );
   }
 
   /** Exposed for the race tests: one row, start to finish. */
@@ -168,6 +203,28 @@ export class BusinessOutboundService {
           conversationEpoch: conversation.controlEpoch,
           conversationState: conversation.state,
         });
+      // TB7: an automatic reply that waited too long (the tenant was stopped and resumed, or the
+      // lane was down) is never sent late; a person answers instead (`REPLY_STALE`).
+      const stale =
+        sendable &&
+        row.origin === 'AUTO' &&
+        now.getTime() - row.createdAt.getTime() > SUPPORT_AI_AUTO_STALE_SECONDS * 1000;
+      if (stale) {
+        await this.deps.outbound.resolve(
+          scope,
+          row.id,
+          {
+            state: 'SUPERSEDED',
+            fromStamped: false,
+            failureCode: 'support_ai.reply_stale',
+            attempted: false,
+            now,
+          },
+          tx,
+        );
+        await this.deps.control.handOff(scope, row.conversationId, 'REPLY_STALE', now, tx);
+        return null;
+      }
       if (!sendable) {
         await this.deps.outbound.resolve(
           scope,

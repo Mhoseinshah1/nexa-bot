@@ -10,6 +10,7 @@ import {
   TICKET_PAGE_MAX,
   TICKET_REPLY_FILE_STAGED_MAX_BYTES,
   errors,
+  isNexaError,
   isTicketTextWithinBound,
   normalizeTicketText,
   telegramUserIdSchema,
@@ -110,6 +111,9 @@ export interface TicketChanged {
   readonly ticket: TicketRecord;
   readonly changed: boolean;
 }
+
+/** Who may read the AI's escalation note (the business-chats module's view permission). */
+const BUSINESS_CHATS_VIEW_PERMISSION = 'business_chats.view' satisfies PermissionKey;
 
 export interface TicketDetail {
   readonly item: TicketListItem;
@@ -231,7 +235,12 @@ export class TicketService {
     if (category === undefined) {
       // A tenant whose customers never opened the ticket menu has never been seeded. One that
       // was seeded and deactivated every category decided that, and is not re-seeded.
-      await this.deps.categorySeeder.seedIn(scope, scoped);
+      // Never throws for a business reason (substitute review of PR #202, finding 3): an
+      // operator override that renders an unusable default title refuses the SEED — which has
+      // then written nothing — and the handoff goes on with no ticket (`NO_CATEGORY`), recorded
+      // and signalled. A throw here would roll the handoff back with it.
+      if (!(await this.seedQuietly(scope, scoped)))
+        return { ticketId: null, outcome: 'NO_CATEGORY' };
       [category] = await this.deps.categories.list(scope, { activeOnly: true }, scoped);
     }
     if (category === undefined) return { ticketId: null, outcome: 'NO_CATEGORY' };
@@ -288,6 +297,19 @@ export class TicketService {
       scoped,
     );
     return { ticketId: ticket.id, outcome: 'CREATED' };
+  }
+
+  /** The default categories' seed, in the caller's transaction; false when it was refused. */
+  private async seedQuietly(scope: TenantContext, tx: TransactionScope): Promise<boolean> {
+    try {
+      await this.deps.categorySeeder.seedIn(scope, tx);
+      return true;
+    } catch (error: unknown) {
+      if (isNexaError(error) && error.code === TICKET_ERROR_CODES.TICKET_CATEGORY_INVALID) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   /** The SYSTEM fact of a handoff, once per handoff key; skipped when the ticket is full. */
@@ -752,12 +774,23 @@ export class TicketService {
     await this.deps.guard.check(scope, actor, TICKETS_VIEW_PERMISSION);
     const item = await this.deps.tickets.findListItem(scope, this.ticketIdOf(ticketId));
     if (item === null) throw this.notFound();
-    const [messages, customer, escalations] = await Promise.all([
+    const [messages, customer, escalations, seesChats] = await Promise.all([
       this.deps.tickets.messagesOf(scope, item.ticket.id),
       this.deps.customers.findById(scope, item.ticket.customerId),
       this.deps.escalations.forTicket(scope, item.ticket.id, 20),
+      this.deps.guard.has(scope, actor, BUSINESS_CHATS_VIEW_PERMISSION),
     ]);
-    return { item, messages, customer, escalations };
+    // TB7: the AI's note is a summary of the customer's Telegram Business conversation, so it is
+    // the conversation's to show: `tickets.view` alone sees that a handoff happened and why,
+    // never what the AI wrote about the chat (substitute review of PR #202, finding 5).
+    return {
+      item,
+      messages,
+      customer,
+      escalations: seesChats
+        ? escalations
+        : escalations.map((escalation) => ({ ...escalation, summary: null })),
+    };
   }
 
   /**

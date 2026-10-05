@@ -1,4 +1,5 @@
 import {
+  SUPPORT_AI_AUTO_STALE_SECONDS,
   SUPPORT_AI_AUTO_WINDOW,
   SUPPORT_AI_DECISION_JSON_SCHEMA,
   supportAiDecisionSchema,
@@ -20,6 +21,7 @@ import type {
   AutoReplyModeReader,
   BusinessConversationRecord,
   BusinessConversationRepository,
+  BusinessMessageRecord,
   BusinessMessageRepository,
   BusinessOutboundRepository,
   InboundAutoTrigger,
@@ -28,6 +30,7 @@ import {
   autoDecisionGuards,
   autoImageGuard,
   autoPreflight,
+  type AutoContextFlags,
   type AutoVerdict,
 } from '../domain/auto-reply-guards.js';
 import { planVision } from '../domain/vision.js';
@@ -71,8 +74,11 @@ export interface SupportAutoEnqueuerDeps {
  *   conversation (a partial unique index is the backstop).
  * - **Idempotent on the message.** The job's key names the message and its content version; a
  *   redelivered message enqueues nothing.
- * - An edit re-enqueues ONLY while the conversation still has a pending job (the edit changes
- *   what is about to be answered); an edit of an already-answered message starts nothing.
+ * - An edit re-enqueues ONLY while the conversation still has a pending job AND the edit is of
+ *   that job's own trigger (the edit changes what is about to be answered). An edit of an
+ *   already-answered message starts nothing, and an edit of an OLDER message while a job is
+ *   pending leaves the job on its newer trigger — re-targeting it would answer the older
+ *   message (substitute review of PR #202). The pending job reads the edited transcript anyway.
  * - The settle delay (TB4 config, 3–30 s, default 6 s) is MITIGATION ONLY. The authority is
  *   the captured epoch, checked again before the provider call, when the lane row is enqueued,
  *   and at TB2's final send check.
@@ -104,6 +110,13 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
     if ((await this.deps.jobs.findByIdempotencyKey(scope, key, tx)) !== null) return;
     const pending = await this.deps.jobs.queuedAuto(scope, conversation.id, tx);
     if (input.edited && pending === null) return;
+    if (
+      input.edited &&
+      pending !== null &&
+      pending.triggerTelegramMessageId !== input.telegramMessageId
+    ) {
+      return;
+    }
     if (pending !== null) {
       await this.deps.jobs.finishAuto(
         scope,
@@ -145,6 +158,12 @@ export interface SupportAutoReplyServiceDeps {
   readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findByTelegramId'>;
   readonly outbound: Pick<BusinessOutboundRepository, 'countAuto'>;
+  /**
+   * The guards' account facts, read INSIDE the enqueue transaction (substitute review of
+   * PR #202, finding 1): the decision guards run again on what is true at the enqueue, not on
+   * the snapshot the provider was given.
+   */
+  readonly facts: AutoGuardFacts;
   readonly control: Pick<BusinessConversationService, 'handOff' | 'enqueueAutoSend'>;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly scopeActivity: ScopeActivityReader;
@@ -152,10 +171,24 @@ export interface SupportAutoReplyServiceDeps {
   readonly logger?: Pick<Logger, 'info'>;
 }
 
-/** What one job came to; `GONE` when a newer message replaced it meanwhile. */
-export type AutoJobResult = SupportAiAutoOutcome | 'GONE';
+/** The guards' account facts for one customer, read in the caller's transaction. */
+export interface AutoGuardFacts {
+  autoGuardFlags(
+    scope: ScopeContext,
+    customerId: string | null,
+    tx?: unknown,
+  ): Promise<AutoContextFlags>;
+}
+
+/**
+ * What one job came to; `GONE` when a newer message replaced it meanwhile; `INACTIVE` when the
+ * tenant is stopped — the job is left exactly as it is (no write: a stopped scope takes none,
+ * ours included), and on resume it is claimed again and judged by the staleness rule.
+ */
+export type AutoJobResult = SupportAiAutoOutcome | 'GONE' | 'INACTIVE';
 
 class JobGone extends Error {}
+class ScopeStopped extends Error {}
 
 /** TB6: the per-image outcome rows of one job, written inside its own transition's transaction. */
 type ImageWrite = (now: Date, tx: TransactionScope) => Promise<void>;
@@ -182,7 +215,6 @@ export class SupportAutoReplyService {
 
   async produce(scope: ScopeContext, job: SupportAiJobRecord): Promise<AutoJobResult> {
     const epoch = job.controlEpoch ?? -1;
-    const triggerId = job.triggerTelegramMessageId ?? -1;
     const [conversation, { config }] = await Promise.all([
       this.deps.conversations.findById(scope, job.conversationId),
       this.deps.configs.get(scope),
@@ -194,42 +226,30 @@ export class SupportAutoReplyService {
     }
     if (conversation.state !== 'AI_ACTIVE') return this.drop(scope, job, 'dropped_state');
 
-    // 2. Preflight: nothing here needs the model.
+    // 1b. Too late to answer automatically (the assistant was down, or the tenant was stopped
+    // and resumed): a person answers instead, and no provider is asked.
     const now = this.deps.clock.now();
-    const [trigger, counts, context] = await Promise.all([
-      this.deps.messages.findByTelegramId(scope, conversation.id, triggerId),
-      this.deps.outbound.countAuto(scope, {
-        conversationId: conversation.id,
-        epoch,
-        since: new Date(now.getTime() - SUPPORT_AI_AUTO_WINDOW.windowSeconds * 1000),
-      }),
-      this.deps.context.build(scope, conversation.customerId),
-    ]);
-    const preflight = autoPreflight({
-      trigger:
-        trigger === null
-          ? null
-          : {
-              origin: trigger.origin,
-              kind: trigger.kind,
-              text: trigger.text,
-              deleted: trigger.deletedAt !== null,
-            },
-      customerBlocked: context.flags.customerBlocked,
-      autoAtEpoch: counts.atEpoch,
-      autoInWindow: counts.inWindow,
-      maxConsecutiveReplies: config.maxConsecutiveReplies,
-      maxPerWindow: SUPPORT_AI_AUTO_WINDOW.maxPerWindow,
-    });
+    if (isStale(job, now)) return this.handOff(scope, job, STALE, null, null);
+
+    // 2. Preflight: nothing here needs the model.
+    const context = await this.deps.context.build(scope, conversation.customerId);
+    const { verdict: preflight, trigger } = await this.preflight(
+      scope,
+      job,
+      conversation.id,
+      config,
+      context.flags.customerBlocked,
+      now,
+    );
     if (!preflight.pass) return this.handOff(scope, job, preflight, null, null);
 
-    // 3. Never for a stopped tenant: the decision to send a customer's
-    // transcript to a provider is business work and checks scope activity in a transaction
-    // first (TB5 review, docs/conventions.md). The job ends `dropped_scope`, as at the result.
+    // 3. Never for a stopped tenant: the decision to send a customer's transcript to a provider
+    // is business work and checks scope activity in a transaction first (TB5 review,
+    // docs/conventions.md). A stopped scope's job is left untouched — no write, ours included.
     const active = await this.deps.uow.run(scope, (tx) =>
       this.deps.scopeActivity.scopeIsActive(scope, tx),
     );
-    if (!active) return this.drop(scope, job, 'dropped_scope');
+    if (!active) return 'INACTIVE';
     // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
     // transaction through the tenant-scoped source.
     const transcript = await this.deps.messages.recent(scope, conversation.id, 40);
@@ -376,10 +396,61 @@ export class SupportAutoReplyService {
       decision: parsed.data,
       config,
       flags: context.flags,
-      knownAliases: new Set(context.aliases.keys()),
+      knownAliases: knownAliases(context),
     });
     if (!guards.pass) return this.handOff(scope, job, guards, parsed.data, produced, images);
-    return this.enqueue(scope, job, parsed.data, produced, images);
+    return this.enqueue(scope, job, parsed.data, produced, knownAliases(context), images);
+  }
+
+  /**
+   * The content, blocked-customer and loop guards, on the trigger and the counts as they are
+   * NOW (in `tx` when given). Run before the provider call (`customerBlocked` from the payload)
+   * and again in the enqueue transaction (from the in-transaction facts).
+   */
+  private async preflight(
+    scope: ScopeContext,
+    job: SupportAiJobRecord,
+    conversationId: string,
+    config: { readonly maxConsecutiveReplies: number },
+    customerBlocked: boolean,
+    now: Date,
+    tx?: unknown,
+  ): Promise<{ readonly verdict: AutoVerdict; readonly trigger: BusinessMessageRecord | null }> {
+    const epoch = job.controlEpoch ?? -1;
+    const [trigger, counts] = await Promise.all([
+      this.deps.messages.findByTelegramId(
+        scope,
+        conversationId,
+        job.triggerTelegramMessageId ?? -1,
+        tx,
+      ),
+      this.deps.outbound.countAuto(
+        scope,
+        {
+          conversationId,
+          epoch,
+          since: new Date(now.getTime() - SUPPORT_AI_AUTO_WINDOW.windowSeconds * 1000),
+        },
+        tx,
+      ),
+    ]);
+    const verdict = autoPreflight({
+      trigger:
+        trigger === null
+          ? null
+          : {
+              origin: trigger.origin,
+              kind: trigger.kind,
+              text: trigger.text,
+              deleted: trigger.deletedAt !== null,
+            },
+      customerBlocked,
+      autoAtEpoch: counts.atEpoch,
+      autoInWindow: counts.inWindow,
+      maxConsecutiveReplies: config.maxConsecutiveReplies,
+      maxPerWindow: SUPPORT_AI_AUTO_WINDOW.maxPerWindow,
+    });
+    return { verdict, trigger };
   }
 
   /**
@@ -430,17 +501,50 @@ export class SupportAutoReplyService {
     );
   }
 
+  /**
+   * The reply onto the lane, in ONE transaction that decides again on what is true NOW
+   * (substitute review of PR #202, finding 1). Under the conversation's lock: the epoch and the
+   * state; then the configuration (the mode, and every guard that reads it — the allowlist, the
+   * confidence, the bounds, the loop limit), the trigger (still the customer's, not deleted),
+   * the loop counts, and the customer's account facts, each read in this transaction. The
+   * deterministic guards run again on them; one that now fails HANDS OFF, in this transaction,
+   * instead of enqueueing — the provider call can take minutes, and a guard that passed on the
+   * facts of before it is not a guard.
+   */
   private async enqueue(
     scope: ScopeContext,
     job: SupportAiJobRecord,
     decision: SupportAiDecision,
     produced: { readonly provider: SupportAiProvider; readonly model: string },
+    aliases: ReadonlySet<string>,
     images?: ImageWrite,
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, async (tx, now) => {
       const { config } = await this.deps.configs.get(scope, tx);
       if (config.mode !== 'AUTO_REPLY_SAFE')
         return this.finish(scope, job, 'dropped_mode', now, tx);
+      // The conversation's lock first, so the facts below are read against a conversation no
+      // human signal can move until this commits (`enqueueAutoSend` re-takes the same lock).
+      const conversation = await this.deps.conversations.lockById(scope, job.conversationId, tx);
+      const flags = await this.deps.facts.autoGuardFlags(
+        scope,
+        conversation?.customerId ?? null,
+        tx,
+      );
+      const { verdict: preflight } = await this.preflight(
+        scope,
+        job,
+        job.conversationId,
+        config,
+        flags.customerBlocked,
+        now,
+        tx,
+      );
+      const recheck: AutoVerdict = !preflight.pass
+        ? preflight
+        : autoDecisionGuards({ decision, config, flags, knownAliases: aliases });
+      if (!recheck.pass)
+        return this.handOffChecked(scope, job, recheck, decision, produced, now, tx);
       const queued = await this.deps.control.enqueueAutoSend(
         scope,
         {
@@ -489,14 +593,33 @@ export class SupportAutoReplyService {
     produced: { readonly provider: SupportAiProvider; readonly model: string } | null,
     images?: ImageWrite,
   ): Promise<AutoJobResult> {
-    return this.inJobTransaction(scope, job, images, async (tx, now) => {
-      const conversation = await this.deps.conversations.lockById(scope, job.conversationId, tx);
-      if (conversation === null || conversation.controlEpoch !== job.controlEpoch) {
-        return this.finish(scope, job, 'dropped_epoch', now, tx, { decision, produced });
-      }
-      if (conversation.state !== 'AI_ACTIVE') {
-        return this.finish(scope, job, 'dropped_state', now, tx, { decision, produced });
-      }
+    return this.inJobTransaction(scope, job, images, (tx, now) =>
+      this.handOffChecked(scope, job, failed, decision, produced, now, tx),
+    );
+  }
+
+  /**
+   * The handoff in the caller's transaction, under the conversation's lock — for the
+   * conversation this job was about only: an epoch that moved (a person took over, even one who
+   * has since resumed the AI) or a state other than AI_ACTIVE drops the job instead.
+   */
+  private async handOffChecked(
+    scope: ScopeContext,
+    job: SupportAiJobRecord,
+    failed: Extract<AutoVerdict, { pass: false }>,
+    decision: SupportAiDecision | null,
+    produced: { readonly provider: SupportAiProvider; readonly model: string } | null,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<AutoJobResult> {
+    const conversation = await this.deps.conversations.lockById(scope, job.conversationId, tx);
+    if (conversation === null || conversation.controlEpoch !== job.controlEpoch) {
+      return this.finish(scope, job, 'dropped_epoch', now, tx, { decision, produced });
+    }
+    if (conversation.state !== 'AI_ACTIVE') {
+      return this.finish(scope, job, 'dropped_state', now, tx, { decision, produced });
+    }
+    {
       await this.deps.control.handOff(scope, conversation.id, failed.reason, now, tx, {
         summary: decision?.summary.trim() === '' ? null : (decision?.summary ?? null),
         jobId: job.id,
@@ -518,7 +641,7 @@ export class SupportAutoReplyService {
       // Replaced by a newer message meanwhile: roll the handoff back with it.
       if (!ok) throw new JobGone();
       return failed.outcome;
-    });
+    }
   }
 
   private async drop(
@@ -527,7 +650,7 @@ export class SupportAutoReplyService {
     outcome: SupportAiAutoOutcome,
   ): Promise<AutoJobResult> {
     // Every write checks scope activity in its own transaction (TB5 review): a drop for a
-    // stopped tenant is recorded as `dropped_scope`, the same as a result that lands after a stop.
+    // stopped tenant writes nothing, and the job waits, untouched, for the tenant's resume.
     return this.inJobTransaction(scope, job, undefined, (tx, now) =>
       this.finish(scope, job, outcome, now, tx),
     );
@@ -565,7 +688,12 @@ export class SupportAutoReplyService {
    * One transaction that reads scope activity first; a replaced job rolls everything back.
    * `images` runs only after `work` returned, which it does only once the job's own conditional
    * transition out of QUEUED has succeeded (a lost one throws `JobGone`): the telemetry has
-   * exactly one writer, and a stopped scope's `dropped_scope` records none.
+   * exactly one writer.
+   *
+   * A STOPPED scope writes nothing at all — not the job, not its telemetry (docs/conventions.md;
+   * the Product Owner's rule, substitute review of PR #202): `INACTIVE`, the job left QUEUED
+   * under its lease exactly as TB5 leaves an Assist draft. On resume it is claimed again, and a
+   * job that waited past `SUPPORT_AI_AUTO_STALE_SECONDS` hands off rather than answering.
    */
   private async inJobTransaction(
     scope: ScopeContext,
@@ -576,18 +704,35 @@ export class SupportAutoReplyService {
     try {
       return await this.deps.uow.run(scope, async (tx) => {
         const now = this.deps.clock.now();
-        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
-          return this.finish(scope, job, 'dropped_scope', now, tx);
-        }
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) throw new ScopeStopped();
         const result = await work(tx, now);
         if (images !== undefined) await images(now, tx);
         return result;
       });
     } catch (error) {
       if (error instanceof JobGone) return 'GONE';
+      if (error instanceof ScopeStopped) return 'INACTIVE';
       throw error;
     }
   }
+}
+
+/** A job produced this long after it fell due is too late to answer automatically. */
+export function isStale(job: Pick<SupportAiJobRecord, 'dueAt'>, now: Date): boolean {
+  return (
+    job.dueAt !== null && now.getTime() - job.dueAt.getTime() > SUPPORT_AI_AUTO_STALE_SECONDS * 1000
+  );
+}
+
+const STALE: Extract<AutoVerdict, { pass: false }> = {
+  pass: false,
+  guard: null,
+  outcome: 'handoff_stale',
+  reason: 'REPLY_STALE',
+};
+
+function knownAliases(context: { readonly aliases: ReadonlyMap<string, unknown> }) {
+  return new Set(context.aliases.keys());
 }
 
 function fail(

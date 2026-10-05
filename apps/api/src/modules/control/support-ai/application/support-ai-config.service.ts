@@ -166,12 +166,26 @@ export class SupportAiConfigService {
         if (command.config.mode === 'AUTO_REPLY_SAFE' && before.config.mode !== 'AUTO_REPLY_SAFE') {
           await this.deps.guard.check(scope, actor, SUPPORT_AI_AUTO_REPLY_PERMISSION, tx);
         }
-        // TB7: WIDENING what may be answered automatically — a topic added to the allowlist, or
-        // a lower confidence accepted — is the same CRITICAL call. Narrowing never is.
+        // TB7: WIDENING what may be answered automatically is the same CRITICAL call; narrowing
+        // never is. Two kinds of widening (substitute review of PR #202):
+        //  - what may be answered at all — a topic added to the allowlist, a lower confidence
+        //    accepted — charged in every mode, because the allowlist means nothing else;
+        //  - how much and how often — more consecutive replies, longer replies, a shorter
+        //    cooldown, a shorter settle delay — charged when the result is AUTO_REPLY_SAFE.
+        //    These also shape Assist drafts, so outside AUTO they are ordinary configuration;
+        //    and entering AUTO is itself charged above, so whoever enters it adopts every bound
+        //    on the form under the CRITICAL permission. What is left is an AUTO tenant's bounds
+        //    loosened by someone who could not have set the mode.
+        const next = command.config;
+        const prev = before.config;
         const widened =
-          command.config.autoTopics.some((topic) => !before.config.autoTopics.includes(topic)) ||
-          (command.config.autoMinConfidence === 'MEDIUM' &&
-            before.config.autoMinConfidence !== 'MEDIUM');
+          next.autoTopics.some((topic) => !prev.autoTopics.includes(topic)) ||
+          (next.autoMinConfidence === 'MEDIUM' && prev.autoMinConfidence !== 'MEDIUM') ||
+          (next.mode === 'AUTO_REPLY_SAFE' &&
+            (next.maxConsecutiveReplies > prev.maxConsecutiveReplies ||
+              next.maxOutputChars > prev.maxOutputChars ||
+              next.cooldownSeconds < prev.cooldownSeconds ||
+              next.settleDelaySeconds < prev.settleDelaySeconds));
         if (widened) {
           await this.deps.guard.check(scope, actor, SUPPORT_AI_AUTO_REPLY_PERMISSION, tx);
         }

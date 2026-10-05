@@ -154,6 +154,8 @@ export class AssistantLoop {
               : await auto.produce(scope, job);
           counts[outcome] = (counts[outcome] ?? 0) + 1;
           this.progress.record(this.options.now().getTime());
+          // A stopped tenant: the job was left untouched, and so is the rest of the pass.
+          if (outcome === 'INACTIVE') break;
           continue;
         }
         // `attempts` already counts this claim: a job that keeps dying mid-call fails instead.

@@ -529,14 +529,20 @@ export interface BusinessOutboundRepository {
     tx: unknown,
   ): Promise<number>;
 
-  /** Stamped rows whose lease ran out: resolved UNCONFIRMED, returned so the caller can act. */
-  reapStranded(
+  /** Stamped rows whose lease ran out (oldest stamp first), at most `limit`. */
+  strandedIds(scope: ScopeContext, staleBefore: Date, limit: number): Promise<readonly string[]>;
+
+  /**
+   * One stranded row resolved UNCONFIRMED, returned so the caller can act; null when it is no
+   * longer PENDING and stamped before `staleBefore`.
+   */
+  reapStrandedRow(
     scope: ScopeContext,
+    id: string,
     staleBefore: Date,
     now: Date,
-    limit: number,
     tx: unknown,
-  ): Promise<readonly BusinessOutboundRecord[]>;
+  ): Promise<BusinessOutboundRecord | null>;
 
   /** Purges the body of rows resolved before `cutoff`. */
   purgeBodies(

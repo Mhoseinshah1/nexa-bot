@@ -5284,10 +5284,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * only. Nothing here charges a permission and nothing here writes — the FAQ is read
    * straight from its repository, never through `SupportScreenReader`, which seeds.
    */
+  const supportContextReader = new DrizzleSupportContextReader(database.db);
   const supportContext = new SupportContextBuilder({
     customers: customerRepository,
     services: provisioningService,
-    reader: new DrizzleSupportContextReader(database.db),
+    reader: supportContextReader,
     clientApps: clientAppRepository,
     serviceFacts: provisionedServiceFacts,
     faqs: supportFaqRepository,
@@ -5539,6 +5540,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
     outbound: businessOutboundRepository,
+    facts: supportContextReader,
     control: businessConversations,
     uow,
     scopeActivity: tenants,

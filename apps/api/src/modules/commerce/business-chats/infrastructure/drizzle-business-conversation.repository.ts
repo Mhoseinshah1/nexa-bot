@@ -929,15 +929,13 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
     return rows.length;
   }
 
-  async reapStranded(
+  async strandedIds(
     scope: ScopeContext,
     staleBefore: Date,
-    now: Date,
     limit: number,
-    tx: unknown,
-  ): Promise<readonly BusinessOutboundRecord[]> {
+  ): Promise<readonly string[]> {
     const tenantId = requireTenantId(scope);
-    const due = executorOf(this.db, tx)
+    const rows = await this.db
       .select({ id: businessOutboundMessages.id })
       .from(businessOutboundMessages)
       .where(
@@ -948,8 +946,20 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
           lt(businessOutboundMessages.sendStartedAt, staleBefore),
         ),
       )
+      .orderBy(asc(businessOutboundMessages.sendStartedAt), asc(businessOutboundMessages.id))
       .limit(limit);
-    const rows = await executorOf(this.db, tx)
+    return rows.map((row) => row.id);
+  }
+
+  async reapStrandedRow(
+    scope: ScopeContext,
+    id: string,
+    staleBefore: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<BusinessOutboundRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
       .update(businessOutboundMessages)
       .set({
         state: 'UNCONFIRMED',
@@ -962,13 +972,14 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
       .where(
         and(
           eq(businessOutboundMessages.tenantId, tenantId),
-          inArray(businessOutboundMessages.id, due),
+          eq(businessOutboundMessages.id, id),
           eq(businessOutboundMessages.state, 'PENDING'),
           isNotNull(businessOutboundMessages.sendStartedAt),
+          lt(businessOutboundMessages.sendStartedAt, staleBefore),
         ),
       )
       .returning();
-    return rows.map(toOutbound);
+    return row === undefined ? null : toOutbound(row);
   }
 
   async purgeBodies(
