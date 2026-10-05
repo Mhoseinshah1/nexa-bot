@@ -262,6 +262,7 @@ describe('Vision in Assist Mode (TB6)', () => {
             trippedUntil: null,
             lastTestOutcome: null,
             lastTestedAt: null,
+            rejectedAt: null,
           })),
         read: async () => ({
           apiKey: 'test-key',

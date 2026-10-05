@@ -103,6 +103,7 @@ function chainWith(options: {
               : null,
           lastTestOutcome: null,
           lastTestedAt: null,
+          rejectedAt: null,
         })),
       read: async (_scope, provider) =>
         keys.has(provider) && !vanished.has(provider)

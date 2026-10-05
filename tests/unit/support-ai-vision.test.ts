@@ -488,6 +488,7 @@ function visionChain(adapters: SupportAiAdapter[], visionEnabled = true) {
           trippedUntil: null,
           lastTestOutcome: null,
           lastTestedAt: null,
+          rejectedAt: null,
         })),
       read: async () => ({
         apiKey: 'key',
