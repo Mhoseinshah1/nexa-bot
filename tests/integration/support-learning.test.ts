@@ -1155,7 +1155,8 @@ describe('controlled learning (TB8)', () => {
       '7000013',
       'برای اتصال برنامه را دوباره باز کنید.',
     );
-    const other = await conversationWithReply(scopeA, BOT, support, '7000014', 'پاسخ دیگر.');
+    // Another reply in the SAME conversation, so only the reply tells the two payloads apart.
+    const otherReply = await anotherReply(conversationId, support, 'پاسخ دیگر.');
     const shared = key('p');
     const first = await learning.propose(tenantA, support, conversationId, {
       idempotencyKey: shared,
@@ -1171,9 +1172,9 @@ describe('controlled learning (TB8)', () => {
       ).id,
     ).toBe(first.id);
     await expectCode(
-      learning.propose(tenantA, support, other.conversationId, {
+      learning.propose(tenantA, support, conversationId, {
         idempotencyKey: shared,
-        outboundId: other.outboundId,
+        outboundId: otherReply,
       }),
       'platform.idempotency_payload_mismatch',
     );

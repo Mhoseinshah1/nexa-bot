@@ -41,7 +41,7 @@ M=[
  ('TB8-08',[(REPO,"      .where(\n        and(eq(supportLearningCandidates.tenantId, tenantId), eq(supportLearningCandidates.id, id)),\n      )\n      .limit(1);\n    return row === undefined ? null : candidate(row);","      .where(eq(supportLearningCandidates.id, id))\n      .limit(1);\n    return row === undefined ? null : candidate(row);")],T_I,'tenant isolation'),
  ('TB8-09',[(REVIEW,"        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {","        if (false) {")],T_I,'a stopped tenant'),
  # What is approved is scrubbed again; an approved edit is a new revision.
- ('TB8-10',[(REVIEW,"        if (kinds.length > 0) {","        if (false) {")],T_I,'still holds personal data'),
+ ('TB8-10',[(REVIEW,"  if (kinds.length > 0) {\n    throw errors.conflict(","  if (false) {\n    throw errors.conflict(")],T_I,'still holds personal data'),
  ('TB8-11',[(REVIEW,"        const publish = before.state === 'APPROVED';","        const publish = false;")],T_I,'a draft, a disabled and a retired'),
  # Learning: scrub before and after the provider; AI OFF learns nothing.
  ('TB8-12',[(PROMPT,"    const result = scrubSensitive(value.slice(0, max));","    const result = { text: value.slice(0, max), kinds: [] as string[] };")],T_I,'never reads the customer'),

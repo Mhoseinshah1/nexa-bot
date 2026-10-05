@@ -42,7 +42,8 @@ count or by confidence.
 
 At most one candidate per conversation per 24 hours. Candidates whose normalised title
 matches a pending, approved **or rejected** item are merged into it as an extra source rather than
-duplicated. The optional daily digest is one operator notification per tenant per day,
+duplicated. A rejection by the scrubber (`SENSITIVE_CONTENT`) is not a decision about the lesson
+and absorbs nothing (amended after the substitute review of PR #203). The optional daily digest is one operator notification per tenant per day,
 and only when there is at least one new candidate.
 
 ### 4. Retrieval starts boring
@@ -96,7 +97,8 @@ never applied over a manual edit.
 - The agent improves only as fast as a reviewer approves. That is the point.
 - A rejected candidate is kept, so the same lesson is not proposed again. Its body is
   redacted text and is purged by the same 30-day rule as conversation text if it was
-  never approved. Its normalised title survives the purge, because the title is what
+  never approved — its title, rationale and tags with it (amended after the substitute
+  review of PR #203). Only its normalised title survives the purge, because that is what
   the duplicate check matches.
 
 ## Considered and rejected

@@ -49,12 +49,18 @@ of origin `OPERATOR` or `ASSIST`, `DELIVERED`, with its text still held, in that
 | Trigger             | When                                                                                                                                                               |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `HANDBACK`          | An operator returns a conversation to the AI («سپردن دوباره به هوش مصنوعی»). Inside the resume's transaction, the latest eligible reply is enqueued. Never throws. |
-| `OPERATOR_PROPOSAL` | An operator presses «پیشنهاد به‌عنوان دانش» on one delivered reply (`support_knowledge.propose`). Audited.                                                         |
+| `OPERATOR_PROPOSAL` | An operator presses «پیشنهاد به‌عنوان دانش» on one of THEIR delivered replies (`support_knowledge.propose`); another person's reply needs `support_knowledge.review`, and that refusal is audited as the review permission's denial. Audited. |
 
-Bounds, all counted in the enqueuing transaction:
+Bounds, all counted in the enqueuing transaction, under the tenant's learning-enqueue lock
+(`pg_advisory_xact_lock(0x4c4a, hashtext(tenant_id))`, taken first): two proposals racing on one
+conversation cannot both see an empty window, and the hourly cap is a cap, not a bound that N
+racers pass together (PR #203 review, finding 3).
 
 1. **One job per reply.** The key is `learning:outbound:<id>`, whatever the trigger, so a
-   handback and a proposal of the same reply coincide, and a replay returns the same job.
+   handback and a proposal of the same reply coincide. A proposal's own idempotency key is
+   bound to its payload (conversation and reply, `hashRequest`/`rememberOnce`): a replay
+   returns the job it made, and the same key for another reply is
+   `platform.idempotency_payload_mismatch` (PR #203 review, finding 5).
 2. **One job per conversation per 24 hours** (ADR-0035 §3). A proposal refused by it is
    `support_knowledge.learning_rate_limited`; a handback refused by it enqueues nothing.
 3. **At most 30 jobs per tenant per hour** (`SUPPORT_LEARNING_MAX_JOBS_PER_HOUR`).
@@ -99,25 +105,39 @@ A deterministic VALUE scrubber over free text. It is not `infrastructure/redacti
 redacts by KEY inside structured values bound for logs; neither can stand in for the other.
 
 - Persian (۰-۹) and Arabic-Indic (٠-٩) digits are folded to ASCII before matching.
-- Digit groups may be separated by spaces, dashes, dots and zero-width characters.
+- Digit groups may be separated by RUNS of up to three spaces, hyphens, en and em dashes, dots,
+  Arabic decimal and thousands separators and zero-width characters: `6037  9975  1234  5678`
+  and `6037 – 9975 – 1234 – 5678` are cards.
 - Kinds: `EMAIL`, `PHONE` (Iranian mobile and landline, international), `CARD` (16 digits),
   `IBAN`, `SUBSCRIPTION_LINK` (`vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`, …,
-  and `/sub/` URLs), `URL_TOKEN` (userinfo, token-named parameters, token-shaped segments,
-  Telegram invite links), `IP_ADDRESS`, `UUID`, `SECRET` (`password: …`, `sk-…`, long
-  base64/hex runs), `USERNAME` (`@handle`), `AMOUNT` (a figure with a currency word or sign:
-  «۲۵۰ هزار تومان», `$12`, `10 USDT`), `LONG_NUMBER` (7+ digits: Telegram ids, order and
-  transaction numbers), and `REDACTION_MARK` (the scrubber's own marker in a model's output —
-  a lesson written about a redacted value is about one customer).
+  `/sub/` URLs, and `/sub/` paths without a scheme: `panel.example.com/sub/…`), `URL_TOKEN`
+  (ANY URL with a query, a fragment, userinfo or a token-shaped path segment — a digit, or
+  mixed case — and Telegram invite links), `IP_ADDRESS`, `HOST` (a server by name: any
+  domain, with or without a port or a path, a `ws://` URL, and any URL with no token in it),
+  `UUID`, `SECRET` (`password: …`, a secret word followed by a value in prose — «password is
+  hunter2», «رمزتون abc123 هست», «کلمه عبور شما xyz789 است», «کد 4821» — `sk-…`, long
+  base64/hex runs), `USERNAME` (`@handle`, `t.me/<name>`), `AMOUNT` (a figure with a currency
+  word or sign: «۲۵۰ هزار تومان», «۲۵۰٫۰۰۰ تومان», `$12`, `10 USDT`; a figure in `k` or
+  millions: `150k`, «۲ میلیون»; an amount in words: «صد و پنجاه هزار تومان», «fifty dollars»),
+  `LONG_NUMBER` (7+ digits: Telegram ids, order and transaction numbers), and `REDACTION_MARK`
+  (the scrubber's own marker in a model's output — a lesson written about a redacted value is
+  about one customer).
+- Every URL is a hit, so a store link with a query (`play.google.com/…?id=…`) is too. A secret
+  word must be followed by a Latin, digit or symbol value, so «رمز عبور را عوض کنید» and «کد
+  تخفیف را وارد کنید» are help text and stay clean (the unit test's negative controls).
 - It over-matches on purpose. A false positive costs a candidate; a false negative teaches the
   agent a customer's data.
 
 ### Duplicates (ADR-0035 §3)
 
 1. **Exact**, by the normalised title. `normalized_title` is unique per tenant across every
-   state, so a lesson matching a pending, approved **or rejected** candidate is merged into it
-   as an extra source (`source_refs`, bounded to 20; `source_count`), never duplicated, and a
-   rejected lesson is not proposed again. The index decides, so two replicas racing produce one
-   candidate. Normalisation folds Arabic ي/ك/ة/ۀ and hamza alefs to Persian, digits to ASCII,
+   state but one, so a lesson matching a pending, approved **or reviewer-rejected** candidate is
+   merged into it as an extra source (`source_refs`, bounded to 20; `source_count`), never
+   duplicated, and a lesson a reviewer rejected is not proposed again. The index decides, so two
+   replicas racing produce one candidate. A `SENSITIVE_CONTENT` rejection is outside the index
+   (it is partial: `WHERE reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'`) and outside the
+   near-duplicate read: the scrubber's rejection is not a decision about the lesson, so the
+   same lesson proposed cleanly later is its own PENDING candidate (PR #203 review, finding 7). Normalisation folds Arabic ي/ك/ة/ۀ and hamza alefs to Persian, digits to ASCII,
    strips diacritics, tatweel and zero-width joiners, lower-cases Latin, and collapses every
    non-letter, non-digit run.
 2. **Near**, by character-trigram Jaccard similarity of normalised titles ≥ 0.8, against the
@@ -156,16 +176,22 @@ UPDATE naming its `from` states and the version read, audits and remembers.
 | retire           | `DRAFT \| APPROVED → RETIRED`                                                                 |
 | enable / disable | `enabled` flips; already so is a no-op with no audit row                                      |
 
-What is approved is scrubbed once more, edited or not: an approval whose text matches is
-refused (`support_knowledge.sensitive_content`). A candidate whose text was purged can be
-approved only with an edit.
+Whatever becomes or stays knowledge is scrubbed as it is written: an approval (edited or
+not), an article created or edited, and a draft published — whatever the article's source,
+`MANUAL` included (OQ-TB-54; PR #203 review, finding 2). Text the scrubber matches is refused
+(`support_knowledge.sensitive_content`). A candidate whose text was purged can be approved only
+with an edit. A reviewer's reject note is scrubbed before it is written to the audit row.
 
 ## Retention
 
-A candidate never approved (`PENDING` or `REJECTED`) has its body and rationale purged 30 days
-after it was created (`SUPPORT_LEARNING_TEXT_RETENTION_DAYS`), by the `assistant` role's
-retention pass. The title and the normalised title survive: the duplicate check matches them.
-Approved candidates and every article and revision are kept.
+A candidate never approved (`PENDING` or `REJECTED`) has its title, body, rationale and tags
+purged 30 days after it was created (`SUPPORT_LEARNING_TEXT_RETENTION_DAYS`), by the
+`assistant` role's retention pass (PR #203 review, finding 6). Only the normalised title
+survives, as the duplicate check's match key: it is the twice-scrubbed title folded (letters
+unified, digits ASCII, punctuation collapsed) and no view, export or audit row carries it.
+Replacing it with a keyed hash would keep the exact rule and lose the near-duplicate (trigram)
+rule, which needs the folded text; that trade was not taken. Approved candidates and every
+article and revision are kept.
 
 ## Web Admin
 
@@ -196,11 +222,20 @@ AI/operator free-text exception; no template is involved.
 
 ## Tests
 
-- `tests/unit/support-learning-scrubber.test.ts` (50): 37 PII shapes including Persian and
-  Arabic-Indic digits and zero-width separators, general text left alone, digit folding, the
-  strict output schema and its JSON twin, the prompt's scrubbing of transcript and reply, title
-  normalisation, trigram similarity and duplicate selection.
-- `tests/integration/support-learning.test.ts` (18): nothing active without approval; the
+- `tests/unit/support-learning-scrubber.test.ts` (91): 37 PII shapes including Persian and
+  Arabic-Indic digits and zero-width separators, the 37 shapes the PR #203 review found or
+  implied (separator runs, any URL, hosts, scheme-less /sub/ paths, secrets in prose, t.me
+  links, amounts in k, in words and with Arabic separators), ten negative controls of plain
+  Persian help text, digit folding, the strict output schema and its JSON twin, the prompt's
+  scrubbing of transcript and reply, title normalisation, trigram similarity and duplicate
+  selection.
+- `tests/integration/support-learning.test.ts` (31): the PR #203 review's findings — a
+  republished LEARNED or MANUAL article and a published draft scrubbed; two proposals racing on
+  one conversation make one job; thirty jobs in the hour refuse the next; approve and reject
+  racing, in both orders, and each conditional UPDATE's two predicates; the proposal key bound
+  to its reply; the purge of title and tags; a scrubber rejection never absorbs a clean
+  proposal; the reject note scrubbed; a stop during the provider call; only the author (or a
+  reviewer) proposes. And the original eighteen: nothing active without approval; the
   provider never reads the customer's phone; approve publishes one article and a replay
   publishes once; edit + approve and reject; a stale version; a sensitive approval refused; an
   output scrubber hit auto-rejected and stored redacted; AI OFF; idempotent proposal and the
