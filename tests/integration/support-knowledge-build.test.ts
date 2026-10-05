@@ -204,6 +204,16 @@ describe('the knowledge build (TB9)', () => {
       [2, 'BUILD'],
       [1, 'BUILD'],
     ]);
+    // The applied revision is the built revision: the next source change is an UPDATE again.
+    await ctx.container.supportFaqs.update(tenantA, owner, {
+      idempotencyKey: key('faq-up'),
+      id: faqId,
+      expectedVersion: 2,
+      question: 'چطور وصل شوم؟',
+      answer: 'پاسخ سوم.',
+      sortOrder: 0,
+    });
+    expect(kinds(await build())['FAQ:چطور وصل شوم؟']).toBe('UPDATE');
   });
 
   it('an article a reviewer edited is a CONFLICT: apply-all never overwrites it, only a choice does', async () => {
