@@ -582,6 +582,22 @@ describe('the knowledge build (TB9)', () => {
     });
   });
 
+  it('S4: an UPDATE whose article a reviewer retired meanwhile is SKIPPED, never a conflict', async () => {
+    const { next, update } = await pendingFaqUpdate();
+    const article = await faqArticle();
+    await ctx.container.supportKnowledge.retireArticle(tenantA, owner, article.id, {
+      idempotencyKey: key('retire'),
+      expectedVersion: article.version,
+    });
+    expect(await applyAll(next.build.id)).toEqual({ applied: 0, conflicted: 0, skipped: 1 });
+    const latest = (await ctx.container.supportKnowledgeBuild.latest(tenantA, owner))!;
+    expect(latest.proposals.find((p) => p.id === update.id)).toMatchObject({
+      kind: 'UPDATE',
+      state: 'SKIPPED',
+    });
+    expect(await faqArticle()).toMatchObject({ state: 'RETIRED', body: article.body });
+  });
+
   it('S1: … and KEEP_CURRENT works, keeping the edit', async () => {
     const { next, update } = await pendingFaqUpdate();
     await editArticle('ویرایش پس از ساخت.');
