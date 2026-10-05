@@ -148,3 +148,5 @@ export * from './support-context.js';
 export * from './support-ai.js';
 /** TB8: support knowledge and controlled learning (ADR-0035). */
 export * from './support-knowledge.js';
+/** TB10: read-only support analytics over a half-open report window. */
+export * from './support-analytics.js';

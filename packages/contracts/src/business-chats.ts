@@ -374,10 +374,52 @@ export const businessChatControlRequestSchema = z.object({
 });
 export type BusinessChatControlRequest = z.infer<typeof businessChatControlRequestSchema>;
 
+/**
+ * The inbox's query. TB10: the list is ordered HANDOFF_REQUIRED first, then by activity,
+ * newest first (`businessInboxPriority`), so a conversation waiting for a person is never
+ * below a page of conversations the AI holds. The cursor is opaque and names all three
+ * keys; one minted before TB10 named two, and is refused rather than read as page one.
+ */
 export const businessChatListQuerySchema = z.object({
   state: z.enum(BUSINESS_CONVERSATION_STATES).optional(),
-  cursor: z.string().max(64).optional(),
+  cursor: z.string().max(80).optional(),
 });
+
+/**
+ * TB10 — the inbox's first sort key: 1 for a conversation waiting for a person, 0 otherwise.
+ * The repository's ORDER BY and its index name the same expression (`state =
+ * 'HANDOFF_REQUIRED'`); this is that rule for whoever needs it outside SQL.
+ */
+export function businessInboxPriority(state: BusinessConversationState): 0 | 1 {
+  return state === 'HANDOFF_REQUIRED' ? 1 : 0;
+}
+
+/**
+ * TB10 — since when the customer has been waiting for an answer, or null when nobody owes
+ * one: their latest message is not newer than the latest reply a person or the AI
+ * delivered. The instant is the OLDEST of the customer's messages after that reply (what
+ * the repository reads), falling back to the latest inbound stamp when no such message is
+ * held (an edit of an older message counts as the customer speaking again).
+ *
+ * Activity only, never a resolution (`OQ-TB-09`): a conversation nobody owes an answer is
+ * not one the AI "resolved".
+ */
+export function businessUnansweredSince(conversation: {
+  readonly lastInboundAt: Date | null;
+  readonly lastHumanAt: Date | null;
+  readonly lastAiAt: Date | null;
+  readonly firstUnansweredAt: Date | null;
+}): Date | null {
+  const inbound = conversation.lastInboundAt;
+  if (inbound === null) return null;
+  const replies = [conversation.lastHumanAt, conversation.lastAiAt].filter(
+    (at): at is Date => at !== null,
+  );
+  const replied = replies.length === 0 ? null : Math.max(...replies.map((at) => at.getTime()));
+  if (replied !== null && inbound.getTime() <= replied) return null;
+  const first = conversation.firstUnansweredAt;
+  return first !== null && (replied === null || first.getTime() > replied) ? first : inbound;
+}
 
 const conversationSummarySchema = z.object({
   id: z.string(),
@@ -393,6 +435,10 @@ const conversationSummarySchema = z.object({
   lastInboundAt: z.string().nullable(),
   /** The latest message's first characters; null once its text is purged or deleted. */
   preview: z.string().nullable(),
+  /** TB10: the customer waits for an answer since this instant (`businessUnansweredSince`). */
+  unansweredSince: z.string().nullable(),
+  /** TB10: the ticket this conversation escalated to (TB7), for the inbox's badge. */
+  ticketId: z.string().nullable(),
 });
 export type BusinessConversationSummary = z.infer<typeof conversationSummarySchema>;
 
@@ -438,8 +484,6 @@ export const businessChatDetailResponseSchema = z.object({
   conversation: conversationSummarySchema.extend({
     controlEpoch: z.number().int(),
     lastHumanAt: z.string().nullable(),
-    /** TB7: the ticket this conversation escalated to, if any. */
-    ticketId: z.string().nullable(),
   }),
   messages: z.array(messageViewSchema),
   outbound: z.array(outboundViewSchema),
