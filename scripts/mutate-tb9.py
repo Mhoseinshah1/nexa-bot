@@ -47,6 +47,10 @@ M=[
  # Web: apply-all names no proposal; a conflict offers only the choices.
  ('TB9-16',[(PAGE,"                buildId: build.id,\n                proposalIds: null,","                buildId: build.id,\n                proposalIds: [],")],T_W,'apply all names no proposal'),
  ('TB9-17',[(PAGE,"{proposal.kind === 'CONFLICT' ? (","{false ? (")],T_W,'only the two explicit choices'),
+ # TB9 × TB8 (PR #203): built knowledge carries no link, fail closed.
+ ('TB9-18',[(BUILD,"      return kinds.length === 0;\n","      return true;\n")],T_I,'carries no link'),
+ ('TB9-19',[(SRC,"        BUILD_LABELS.appLinks,\n","        `${app.officialUrl}`,\n")],T_I,'carries no link'),
+ ('TB9-20',[(BUILD,"    if (!claimed) return 'SKIPPED';\n    // The backstop: no write path puts unclean text in an article, the build's included.\n    assertClean(target.content);\n","    if (!claimed) return 'SKIPPED';\n")],T_I,'carries no link'),
 ]
 
 only=sys.argv[1:]

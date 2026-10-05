@@ -19,7 +19,7 @@ proposal exists.
 | ------------------ | ------------------------------------------------------------------------------------------------------------------ | --------------- | -------------------------------------------------------------------------- |
 | `PRODUCT`          | `ACTIVE`, audience `EVERYONE`: title, description, duration, traffic, device limit, display features and locations | product id      | price, panel, reseller-only or hidden products                             |
 | `LOCATIONS`        | the labels of enabled service locations, as one article                                                            | `all`           | location key, panel, price                                                 |
-| `CLIENT_APP`       | `ENABLED`: name, description, rendered guide, official and help URLs                                               | app id          | icon, alternative URL, delivery kinds                                      |
+| `CLIENT_APP`       | `ENABLED`: name, description, rendered guide, and a fixed line pointing to the bot's app list                      | app id          | icon, every URL (official, help, alternative), delivery kinds              |
 | `TUTORIAL`         | `bot.tutorial.android/ios/windows/macos/linux`, the tenant override or the default, RAW                            | template key    | any template that declares a placeholder                                   |
 | `FAQ`              | `ACTIVE` entries: question and answer                                                                              | FAQ id          | inactive entries                                                           |
 | `TERMS`            | the current PUBLISHED version: title and body                                                                      | `current`       | a draft                                                                    |
@@ -113,6 +113,20 @@ the counts, each change with the current text beside the proposed one, «اعم�
 4. **The build is synchronous.** It reads at most 400 bounded items with no provider call, so
    it runs in the request; no job and no process role.
 5. **Payment instructions with placeholders are skipped**, not rendered with sample values.
+6. **Built knowledge carries no link, and nothing the scrubber matches (fail closed).** TB8's
+   review (PR #203) made every article write pass `assertClean`, and the scrubber counts every
+   URL as `HOST` or `URL_TOKEN`. The scrubber is not weakened and there is no allowlist of
+   "public" URLs: an operator-configured link is still a link the agent would repeat, and a
+   reviewed path for that belongs in a template field, not in knowledge. So:
+   - an app's official and help URLs are never copied; the article says the links are in the
+     bot's app list (the TB3 context already gives the agent the normalised links, live);
+   - any other item the scrubber matches — an FAQ answer with a link or a phone, payment
+     instructions with a card or an account, the `support.accounts` handles — is EXCLUDED from
+     the change-set. Only the count and the kinds are recorded, in the run's audit row
+     (`after.excluded`), never the text;
+   - apply and «TAKE_BUILD» call `assertClean` again as a backstop, so a proposal that is not
+     clean is refused (`support_knowledge.sensitive_content`) and publishes nothing.
+     What this loses is OQ-TB-66.
 
 ## Tests
 

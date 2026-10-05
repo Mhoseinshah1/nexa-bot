@@ -23,8 +23,12 @@ restores the file byte for byte. Run on 2026-10-05 against a dedicated integrati
 | TB9-15 | The TB3 context reads a built FAQ entry once                                             | the TB3 context carries a built FAQ entry once, as knowledge                             | KILLED |
 | TB9-16 | «Apply all» names no proposal (web)                                                      | apply all names no proposal; a single apply names exactly one                            | KILLED |
 | TB9-17 | A conflict offers only the two explicit choices (web)                                    | a conflict offers only the two explicit choices, never an apply                          | KILLED |
+| TB9-18 | A source item the scrubber matches is excluded from the change-set                       | built knowledge carries no link: app URLs are not copied, a linked FAQ is excluded       | KILLED |
+| TB9-19 | An app's URLs are never copied into its article                                          | built knowledge carries no link: app URLs are not copied, a linked FAQ is excluded       | KILLED |
+| TB9-20 | Apply refuses unclean text (`assertClean` backstop)                                      | built knowledge carries no link: … apply refuses                                         | KILLED |
 
-**17 of 17 killed.**
+**20 of 20 killed** on the restack onto TB8's substitute review (PR #203), where TB9-18..20
+were added for the fail-closed build (decision 6). Before that, **17 of 17 killed.**
 
 Notes:
 

@@ -5,7 +5,6 @@ import {
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
   neutralizeClientAppBareLinks,
-  normalizeClientAppUrl,
   renderClientAppGuide,
   templateDefinition,
   type ProductId,
@@ -48,8 +47,12 @@ export const BUILD_LABELS = {
   features: 'ویژگی‌ها',
   locationsTitle: 'سرویس در چه موقعیت‌هایی ارائه می‌شود؟',
   appTitle: (name: string) => `برنامهٔ ${name}`,
-  helpUrl: 'راهنما',
-  officialUrl: 'دانلود',
+  /**
+   * Built knowledge carries no link (TB9 × TB8 review: every article passes `assertClean`, and
+   * a URL is a HOST or URL_TOKEN hit). An app's links are in the bot's app list; the article
+   * says so instead of repeating them.
+   */
+  appLinks: 'پیوند دانلود و راهنمای این برنامه در فهرست برنامه‌های ربات آمده است.',
   tutorialTitle: (platform: string) => `راهنمای اتصال در ${platform}`,
   supportTitle: 'چطور با پشتیبانی در تماس باشم؟',
   supportBody: 'حساب‌های پشتیبانی:',
@@ -167,16 +170,17 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
     return [item('LOCATIONS', 'all', 'PLANS', BUILD_LABELS.locationsTitle, labels.join('\n'))];
   }
 
-  /** ENABLED apps: name, description, the rendered guide and the two public links. */
+  /**
+   * ENABLED apps: name, description and the rendered guide. The official and help links are
+   * NOT copied into the article (knowledge carries no URL); a fixed line points to the app list.
+   */
   private async clientApps(scope: TenantContext) {
     const rows = await this.deps.clientApps.list(scope, { status: 'ENABLED' });
     return rows.map((app) => {
-      const help = app.helpUrl === null ? null : normalizeClientAppUrl(app.helpUrl);
       const body = [
         neutralizeClientAppBareLinks(app.description),
         renderClientAppGuide(app.guide),
-        `${BUILD_LABELS.officialUrl}: ${normalizeClientAppUrl(app.officialUrl)}`,
-        help === null ? '' : `${BUILD_LABELS.helpUrl}: ${help}`,
+        BUILD_LABELS.appLinks,
       ].filter((line) => line.trim() !== '');
       return item(
         'CLIENT_APP',

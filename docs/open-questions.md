@@ -3443,3 +3443,11 @@ TB9 (the knowledge build, `docs/support-agent/tb9-knowledge-build.md`):
   they are knowledge, but they are not template keys; moving them to the catalogue is open.
 - **OQ-TB-65 — source bounds.** At most 100 items per source and 400 per build; a tenant with
   more active products than that is cut silently in this release.
+- **OQ-TB-66 — what the fail-closed build leaves out.** Built knowledge carries nothing the TB8
+  scrubber matches (TB9 decision 6). Lost from knowledge, not from the product: app download and
+  help links (the TB3 context still carries them live), the support handles of
+  `support.accounts` (USERNAME), payment instructions that name a card, an IBAN, an account or an
+  amount, and any FAQ answer or terms text with a link or a phone. They are excluded silently
+  except for the run's audit row; the build page does not yet show an "excluded" count. Whether
+  such facts should reach the agent through a reviewed template field rendered at reply time —
+  never through knowledge — is a Product Owner call.

@@ -34,9 +34,11 @@ import type {
   KnowledgeProposalRecord,
   NewProposal,
 } from '../infrastructure/drizzle-support-knowledge.repository.js';
+import { detectSensitive } from '../domain/scrubber.js';
 import {
   SUPPORT_KNOWLEDGE_REVIEW_PERMISSION,
   SUPPORT_KNOWLEDGE_VIEW_PERMISSION,
+  assertClean,
 } from './support-knowledge.service.js';
 
 /**
@@ -128,10 +130,23 @@ export class SupportKnowledgeBuildService {
       }
     }
     // Read OUTSIDE the transaction: a source read takes no lock and changes nothing.
-    const items = (await this.deps.sources.collect(scope)).slice(
+    const collected = (await this.deps.sources.collect(scope)).slice(
       0,
       SUPPORT_KNOWLEDGE_BUILD_LIMITS.proposals,
     );
+    // Fail closed (TB9 × TB8 review): every article passes `assertClean`, so a source item the
+    // scrubber matches — a link, a host, a support handle, a card or phone in payment
+    // instructions — is EXCLUDED from the change-set rather than proposed and refused at
+    // apply. Only the count and the kinds are recorded, never the text (OQ-TB-66).
+    const excludedKinds = new Set<string>();
+    const items = collected.filter((item) => {
+      const kinds = detectSensitive(
+        [item.content.title, item.content.body, item.content.tags.join(' ')].join('\n'),
+      );
+      for (const kind of kinds) excludedKinds.add(kind);
+      return kinds.length === 0;
+    });
+    const excluded = { count: collected.length - items.length, kinds: [...excludedKinds].sort() };
     const id = this.deps.ids.uuid();
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -194,7 +209,7 @@ export class SupportKnowledgeBuildService {
             entityType: 'SupportKnowledgeBuild',
             entityId: id,
             before: null,
-            after: { ...counts },
+            after: { ...counts, excluded },
             result: 'SUCCESS',
           },
           tx,
@@ -360,6 +375,7 @@ export class SupportKnowledgeBuildService {
           throw errors.internal('support_knowledge.conflict_shape', 'A conflict names no article.');
         }
         if (command.choice === 'TAKE_BUILD') {
+          assertClean(proposal.content);
           const after = await this.deps.repository.rewriteBuilt(
             scope,
             articleId,
@@ -453,6 +469,8 @@ export class SupportKnowledgeBuildService {
       tx,
     );
     if (!claimed) return 'SKIPPED';
+    // The backstop: no write path puts unclean text in an article, the build's included.
+    assertClean(target.content);
     const article = await this.deps.repository.insertArticle(
       scope,
       {
@@ -485,6 +503,7 @@ export class SupportKnowledgeBuildService {
     tx: TransactionScope,
   ): Promise<'APPLIED' | 'CONFLICT' | 'SKIPPED'> {
     if (target.articleId === null || target.baseRevision === null) return 'SKIPPED';
+    assertClean(target.content);
     const after = await this.deps.repository.rewriteBuilt(
       scope,
       target.articleId,

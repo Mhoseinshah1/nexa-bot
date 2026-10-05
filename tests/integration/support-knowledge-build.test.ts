@@ -345,6 +345,66 @@ describe('the knowledge build (TB9)', () => {
     expect(views).toContain('پلن عمومی');
   });
 
+  /*
+   * TB9 × TB8 (PR #203): every article passes `assertClean`, and a URL is a HOST or URL_TOKEN
+   * hit. Fail closed: the build never copies an app's links into knowledge (a fixed line points
+   * to the app list), a source item the scrubber still matches is EXCLUDED from the change-set
+   * (only its count and kinds are audited), and apply refuses unclean text as a backstop.
+   */
+  it('built knowledge carries no link: app URLs are not copied, a linked FAQ is excluded, apply refuses', async () => {
+    const c = ctx.container;
+    await c.clientApps.create(tenantA, owner, {
+      idempotencyKey: key('app'),
+      platform: 'ANDROID',
+      name: 'برنامهٔ نمونه',
+      icon: null,
+      description: 'سازگار با لینک اشتراک',
+      officialUrl: 'https://downloads.example.com/app.apk',
+      alternativeUrl: null,
+      helpUrl: 'https://help.example.com/guide',
+      guide: '1. برنامه را نصب کنید',
+      deliveryKinds: [],
+      protocols: [],
+      providerTypes: [],
+      sortOrder: 10,
+    });
+    await c.supportFaqs.create(tenantA, owner, {
+      idempotencyKey: key('faq'),
+      question: 'راهنمای کامل کجاست؟',
+      answer: 'راهنما در https://help.example.com/full است.',
+      sortOrder: 1,
+    });
+    const detail = await build();
+    const stored = JSON.stringify(
+      (
+        await c.database.db.execute(
+          sql`SELECT title, body, tags::text AS tags FROM support_knowledge_build_proposals`,
+        )
+      ).rows,
+    );
+    for (const leaked of ['example.com', 'https://', 'downloads.', 'help.example']) {
+      expect(stored, leaked).not.toContain(leaked);
+    }
+    const app = detail.proposals.find((p) => p.sourceType === 'CLIENT_APP');
+    expect(app?.content.body).toContain('فهرست برنامه‌های ربات');
+    expect(detail.proposals.map((p) => p.content.title)).not.toContain('راهنمای کامل کجاست؟');
+    expect(detail.proposals.map((p) => p.content.title)).toContain('چطور وصل شوم؟');
+    const [audit] = (
+      await c.database.db.execute(
+        sql`SELECT after FROM audit_logs WHERE action = 'support_knowledge.build.run' ORDER BY occurred_at DESC LIMIT 1`,
+      )
+    ).rows as { after: { excluded: { count: number; kinds: string[] } } }[];
+    expect(audit!.after.excluded).toEqual({ count: 1, kinds: ['HOST'] });
+
+    // The backstop: a proposal whose text is not clean is never published, by apply-all or a choice.
+    await c.database.db.execute(
+      sql`UPDATE support_knowledge_build_proposals SET body = body || ' https://x.example.org'
+          WHERE source_type = 'FAQ'`,
+    );
+    await expectCode(applyAll(detail.build.id), 'support_knowledge.sensitive_content');
+    expect(await builtArticles()).toEqual([]);
+  });
+
   it('permissions: support may view the build but not run or apply it; the denial is audited', async () => {
     const detail = await build();
     expect((await ctx.container.supportKnowledgeBuild.latest(tenantA, support))?.build.id).toBe(
