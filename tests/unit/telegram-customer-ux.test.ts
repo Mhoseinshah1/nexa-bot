@@ -110,10 +110,17 @@ describe('§2.4 the manual-transfer receipt', () => {
     });
   });
 
-  it('ends on the owner’s two lines', () => {
+  it('answers the first receipt with the brief’s two sentences, a blank line between them', () => {
     expect(rendered('bot.payment.receipt_received', {})).toBe(
-      '✅ رسید شما دریافت شد و در حال بررسی می‌باشد.\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+      'رسید شما دریافت شد و در حال بررسی می‌باشد.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
     );
+  });
+
+  it('asks for an image of the receipt, and no longer advertises a file', () => {
+    const prompt = rendered('bot.payment.receipt_prompt', { minutes: 30 });
+    expect(prompt).toContain('تصویر رسید');
+    expect(prompt).not.toContain('فایل');
+    expect(prompt).toContain('30');
   });
 });
 

@@ -81,6 +81,17 @@ export interface ReceiptSubmissionResult {
   readonly filed: boolean;
   /** How many the payment holds after this call. What decides whether the window closed. */
   readonly held: number;
+  /**
+   * True for exactly ONE call per payment: the one whose transaction inserted the payment's
+   * FIRST receipt row (A10). Decided under the capture lock, by the count read in the same
+   * transaction, so two files racing cannot both see an empty payment.
+   *
+   * A replayed update answers FALSE, even when the call it replays was the first: that call
+   * already had its answer, and the customer's one "your receipt arrived" message is owed to
+   * the filing, not to every delivery of it. So the surface keys the message on this and a
+   * Telegram redelivery, a second file and a fifth file all send nothing new.
+   */
+  readonly first: boolean;
 }
 
 /**
@@ -220,6 +231,7 @@ export class ReceiptService {
         paymentId: replayed.result.paymentId as PaymentId,
         filed: replayed.result.filed,
         held: replayed.result.held,
+        first: false,
       };
     }
 
@@ -400,7 +412,12 @@ export class ReceiptService {
           answer,
           tx,
         );
-        return { paymentId: open.paymentId, filed: filed !== null, held };
+        return {
+          paymentId: open.paymentId,
+          filed: filed !== null,
+          held,
+          first: filed !== null && already === 0,
+        };
       },
     );
   }

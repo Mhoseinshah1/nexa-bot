@@ -10310,6 +10310,7 @@ export class BotRuntime {
         actor,
         customer,
         input.botInstanceId,
+        privateChatIdOf(input.update),
         command.file,
         input.idempotencyKey,
       );
@@ -15158,21 +15159,32 @@ export class BotRuntime {
    * payment only if a window for that customer on that bot is genuinely open, and a
    * customer who sends a screenshot at random is told nothing was expected.
    *
-   * `filed === false` gets the SAME reply as a new row. That is Telegram redelivering an
-   * update whose file is already on the payment; the customer's situation is identical
-   * either way, and a different sentence for a retry they cannot see would be a
-   * difference they cannot act on.
+   * A10 (pre-support brief §10, superseding owner spec §2.4 "state 3"): the invoice is
+   * edited up to the receipt and no further message is sent until one arrives. On the FIRST
+   * receipt filed for the payment, two things happen, in this order:
+   *
+   * 1. the invoice (at the prompt, or already final) is edited into its final, button-less
+   *    state — `bot.payment.received_for_review`, which names the claim and not the file;
+   * 2. ONE new message goes out: `bot.payment.receipt_received`, the brief's two sentences.
+   *
+   * "First" is `ReceiptService`'s answer, decided in the transaction that inserted the
+   * payment's first row and FALSE on an idempotent replay — so a redelivered update, a
+   * second file, the same file sent again and the fifth file all send nothing new. That is
+   * durable state, not memory: two replicas, a restart between deliveries and two files
+   * racing all read the same rows. A further receipt still re-asserts the invoice's final
+   * state (an edit Telegram answers "not modified" when nothing changed), which is not a new
+   * message.
    *
    * No fallback. The notification lane's kinds are a closed set with no payload, and
    * there is no frozen kind that means "your receipt arrived" — inventing one to cover
-   * a failed interactive send is what ADR-0030 §1 refuses. A customer whose reply was
-   * lost sees their receipt on the invoice thread and may tap the button again.
+   * a failed interactive send is what ADR-0030 §1 refuses.
    */
   private async submitReceipt(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     botInstanceId: BotInstanceId,
+    chatId: string | null,
     file: InboundReceiptFile,
     idempotencyKey: string,
   ): Promise<PendingReply> {
@@ -15188,33 +15200,76 @@ export class BotRuntime {
        * push is that event's consumer and its own lane — durable with the receipt, never
        * able to cost the customer this answer, and not lost by a crash after the commit.
        */
-      return {
-        key: 'bot.payment.receipt_received',
-        values: {},
-        /*
-         * Owner spec §2.4, state 3: the ORIGINAL payment message is edited once more into
-         * the final sentence, with NO button — no status check, no resend, no cancel, no
-         * copy, no card details. Anchored on the chat's invoice of THIS payment waiting at
-         * the receipt prompt (or already final, for a further receipt of the same payment),
-         * either kind. With no such message — an invoice from before this release, or one
-         * Telegram will not edit — the same sentence goes out as its own message, as before.
-         */
-        buttons: [],
-        orderId: null,
-        wizard: {
-          kind: 'ORDER',
-          step: 'RECEIPT_REVIEW',
-          paymentId: submitted.paymentId,
-          anchor: {
-            steps: ['RECEIPT_WAIT', 'RECEIPT_REVIEW'],
-            paymentId: submitted.paymentId,
-            anyKind: true,
-          },
-        },
-      };
+      if (chatId !== null) {
+        await this.finaliseReceiptInvoice(
+          scope,
+          actor,
+          botInstanceId,
+          chatId,
+          submitted.paymentId,
+          idempotencyKey,
+        );
+      }
+      if (!submitted.first) return { key: null, values: {}, buttons: [], orderId: null };
+      return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };
     } catch (error) {
       return refusal(error);
     }
+  }
+
+  /**
+   * A10: the invoice of THIS payment in this chat, waiting at the receipt prompt (or already
+   * final), edited into its final state with NO button — no status check, no resend, no
+   * cancel, no copy, no card details. Either kind (`ORDER` or `TOPUP`).
+   *
+   * Claimed through `claimLatest`, which skips a wizard another turn holds: the
+   * «پرداخت را انجام دادم» turn lands its prompt HELD until the prompt is on the message
+   * (Codex 4170910529), and `settleReceiptPrompt` ends that message in this same state once
+   * it releases the hold. With no such message — an invoice from before R2, or one already
+   * moved on — nothing is edited, and the new message alone answers the receipt. A refused
+   * edit is not re-sent as a new message: the new message is the one the customer is owed.
+   */
+  private async finaliseReceiptInvoice(
+    scope: TenantContext,
+    actor: ActorContext,
+    botInstanceId: BotInstanceId,
+    chatId: string,
+    paymentId: PaymentId,
+    updateKey: string,
+  ): Promise<void> {
+    const state = this.deps.messageState;
+    if (state === undefined) return;
+    const target = await state.claimLatest(scope, actor, {
+      botInstanceId,
+      chatId,
+      kind: null,
+      steps: ['RECEIPT_WAIT', 'RECEIPT_REVIEW'],
+      subjectId: null,
+      paymentId,
+      updateKey,
+    });
+    if (target === null) return;
+    const landed = await state.land(scope, actor, target, {
+      kind: target.kind,
+      step: 'RECEIPT_REVIEW',
+      subjectId: target.subjectId,
+      paymentId,
+      updateKey,
+    });
+    if (!landed) return;
+    await editSent(
+      this.deps.messenger,
+      scope,
+      {
+        chatId: target.chatId,
+        messageId: target.messageId,
+        botInstanceId: target.botInstanceId,
+        templateKey: RECEIPT_INVOICE_FINAL_KEY,
+        values: {},
+        buttons: [],
+      },
+      false,
+    );
   }
 
   /**
@@ -15461,7 +15516,9 @@ export class BotRuntime {
    * THEN ask whether a receipt was filed meanwhile; if so, move the prompt on to the final
    * state (one conditional move: a receipt turn that got there first leaves nothing to move)
    * and edit it, with no button. A receipt filed before the release found the message held
-   * and went out as its own message; this is what still ends the invoice in its final state.
+   * and edited nothing (its one new message went out regardless — A10); this is what still
+   * ends the invoice in its final state. It sends no new message: that is the receipt
+   * turn's, keyed on the receipt being the payment's first.
    */
   private async settleReceiptPrompt(
     scope: TenantContext,
@@ -15489,7 +15546,7 @@ export class BotRuntime {
           chatId: wizard.chatId,
           messageId: wizard.messageId,
           botInstanceId: wizard.botInstanceId,
-          templateKey: 'bot.payment.receipt_received',
+          templateKey: RECEIPT_INVOICE_FINAL_KEY,
           values: {},
           buttons: [],
         },
@@ -16374,6 +16431,14 @@ export function gatewayAttemptScreen(
     wizard: { kind, step: 'INVOICE', paymentId: payment.id },
   };
 }
+
+/**
+ * A10: the invoice's FINAL text once a receipt is on the payment, edited in, with no button.
+ * The claim's sentence — recorded, nothing received or verified, a person will check — and
+ * NOT `bot.payment.receipt_received`, which is the one new message the first receipt sends:
+ * the same two sentences twice, one above the other, would be noise.
+ */
+const RECEIPT_INVOICE_FINAL_KEY: TemplateKey = 'bot.payment.received_for_review';
 
 /**
  * R2: a wallet refusal the customer acts on and comes back from — too little balance, a
