@@ -56,17 +56,22 @@ Changes to the fixture (`tests/integration/receipt-review-fixture.ts`):
 
 Run with `python3 scripts/mutate-a4a.py` (needs your own `TEST_DATABASE_URL`):
 
-| Mutant | Rule reverted                                                   | Result | Test that failed                     |
-| ------ | --------------------------------------------------------------- | ------ | ------------------------------------ |
-| A4A-01 | the app screen omits `captionWhole`                             | KILLED | a long guide … never a cut caption   |
-| A4A-02 | the app screen ignores its video                                | KILLED | a short guide: exactly ONE sendVideo |
-| A4A-03 | the runtime does not pass `captionWhole` on to the messenger    | KILLED | RENDERED caption is over 1024        |
-| A4A-04 | no bare video when the caption is over the bound                | KILLED | a long guide … never a cut caption   |
-| A4A-05 | a bare video is re-sent on ANY refusal, not only over the bound | KILLED | Telegram refuses the video           |
-| A4A-06 | no text fallback when the video is refused                      | KILLED | Telegram refuses the video           |
-| A4A-07 | the buttons are dropped from the captioned video                | KILLED | a short guide … buttons on it        |
+| Mutant | Rule reverted                                                   | Result | Test that failed                             |
+| ------ | --------------------------------------------------------------- | ------ | -------------------------------------------- |
+| A4A-01 | the app screen omits `captionWhole`                             | KILLED | a long guide … never a cut caption           |
+| A4A-02 | the app screen ignores its video                                | KILLED | a short guide: exactly ONE sendVideo         |
+| A4A-03 | the runtime does not pass `captionWhole` on to the messenger    | KILLED | RENDERED caption is over 1024                |
+| A4A-04 | no bare video when the caption is over the bound                | KILLED | a long guide … never a cut caption           |
+| A4A-05 | a bare video is re-sent on ANY refusal, not only over the bound | KILLED | Telegram refuses the video                   |
+| A4A-06 | no text fallback when the video is refused                      | KILLED | Telegram refuses the video                   |
+| A4A-07 | the buttons are dropped from the captioned video                | KILLED | a short guide … buttons on it                |
+| A4A-08 | text fallback on any non-DELIVERED outcome, not only REFUSED    | KILLED | UNKNOWN / RATE_LIMITED: nothing more is sent |
+| A4A-09 | the turn stops when the bare video is not delivered             | KILLED | a long guide whose bare video is refused     |
+| A4A-10 | the bare video's non-DELIVERED outcome becomes the turn's       | KILLED | … the bare video is decorative               |
+| A4A-11 | `cardMessageOf` targets a file message                          | KILLED | no editMessageText on a file message         |
+| A4A-12 | `callbackOriginOf` does not count a bare video as a file        | KILLED | (unit) with its file-ness                    |
 
-7 of 7 killed.
+12 of 12 killed (re-run after the PR #207 review fixes).
 
 ## Behaviour change to note
 
