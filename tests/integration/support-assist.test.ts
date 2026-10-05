@@ -133,6 +133,7 @@ describe('Assist Mode (TB5)', () => {
               attempts: 1,
               exhausted: null,
               imagesSent: 0,
+              sight: { seen: [], unseen: new Map() },
             };
           },
           visionStepConfigured: () => false,

@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TenantContext } from '@nexa/contracts';
 import {
+  SUPPORT_AI_LIMITS,
+  SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
+  SUPPORT_AI_VISION_MAX_IMAGES,
+  type TenantContext,
+} from '@nexa/contracts';
+import {
+  ASSISTANT_JOB_BOUNDS,
+  ASSISTANT_JOB_WORST_CASE_MS,
   ASSISTANT_LEASE_MS,
+  assistantLeaseMs,
   ASSISTANT_MAX_ATTEMPTS,
   AssistantLoop,
 } from '../../apps/api/src/modules/control/support-ai/application/assistant-loop';
@@ -101,5 +109,29 @@ describe('AssistantLoop', () => {
     await h.loop.tick();
     expect(h.logger.info).toHaveBeenCalledTimes(1);
     expect(h.assist.claimNext).not.toHaveBeenCalled();
+  });
+
+  /*
+   * PR #201 review, N2: TB6 downloads up to two images before the chain is called, each in two
+   * Telegram legs with their own timeout. The lease covers that too, and stays DERIVED, so
+   * raising any bound raises the lease with it.
+   */
+  it('the lease covers every image download leg, and raising any bound raises it', () => {
+    expect(ASSISTANT_JOB_BOUNDS).toEqual({
+      maxFallbacks: SUPPORT_AI_LIMITS.maxFallbacks,
+      providerTimeoutMs: SUPPORT_AI_LIMITS.timeoutMs.max,
+      visionMaxImages: SUPPORT_AI_VISION_MAX_IMAGES,
+      visionFetchTimeoutMs: SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
+    });
+    expect(ASSISTANT_JOB_WORST_CASE_MS).toBe(
+      (1 + SUPPORT_AI_LIMITS.maxFallbacks) * SUPPORT_AI_LIMITS.timeoutMs.max +
+        SUPPORT_AI_VISION_MAX_IMAGES * 2 * SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
+    );
+    expect(ASSISTANT_LEASE_MS).toBe(assistantLeaseMs(ASSISTANT_JOB_BOUNDS));
+    const base = assistantLeaseMs(ASSISTANT_JOB_BOUNDS);
+    for (const key of Object.keys(ASSISTANT_JOB_BOUNDS) as (keyof typeof ASSISTANT_JOB_BOUNDS)[]) {
+      const raised = { ...ASSISTANT_JOB_BOUNDS, [key]: ASSISTANT_JOB_BOUNDS[key] + 1 };
+      expect(assistantLeaseMs(raised), key).toBeGreaterThan(base);
+    }
   });
 });

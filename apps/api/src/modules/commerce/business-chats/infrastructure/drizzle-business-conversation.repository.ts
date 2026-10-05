@@ -443,10 +443,12 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
         text: sql`CASE WHEN ${businessMessages.textPurgedAt} IS NULL THEN ${input.text}::text ELSE NULL END`,
         contentVersion: sql`${businessMessages.contentVersion} + 1`,
         editedAt: input.editedAt,
-        // TB6: an edit can replace a photo's media; only a PHOTO row ever holds a reference.
-        photoFileId: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' THEN ${input.photo?.fileId ?? null}::text ELSE NULL END`,
-        photoFileUniqueId: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' THEN ${input.photo?.fileUniqueId ?? null}::text ELSE NULL END`,
-        photoFileSize: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' THEN ${input.photo?.fileSize ?? null}::integer ELSE NULL END`,
+        // TB6: an edit can replace a photo's media; only a PHOTO row ever holds a reference, and
+        // a row retention already purged gets none back — the reference is the customer's
+        // content exactly as the text is (PR #201 review, S2).
+        photoFileId: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' AND ${businessMessages.textPurgedAt} IS NULL THEN ${input.photo?.fileId ?? null}::text ELSE NULL END`,
+        photoFileUniqueId: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' AND ${businessMessages.textPurgedAt} IS NULL THEN ${input.photo?.fileUniqueId ?? null}::text ELSE NULL END`,
+        photoFileSize: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' AND ${businessMessages.textPurgedAt} IS NULL THEN ${input.photo?.fileSize ?? null}::integer ELSE NULL END`,
       })
       .where(
         and(

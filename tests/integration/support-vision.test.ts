@@ -57,6 +57,8 @@ const scopeA = { ...tenantA, botInstanceId: BOT_A } as never;
 const scopeB = { ...tenantB, botInstanceId: BOT_B } as never;
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+/** A JPEG past the stub adapters' 1,000,000-byte bound, and well inside the 5 MiB fetch bound. */
+const BIG_JPEG = Buffer.concat([JPEG, Buffer.alloc(1_100_000)]);
 
 const handoff = {
   decision: 'HANDOFF',
@@ -74,11 +76,14 @@ interface Recording {
   readonly adapter: SupportAiAdapter;
   readonly seen: SupportAiRequest[];
   next: SupportAiOutcome;
+  /** Runs inside the provider call: what happens between the chain call and the record. */
+  during: (() => Promise<unknown>) | null;
 }
 
 function recordingAdapter(provider: SupportAiProvider, vision: boolean): Recording {
   const recording: Recording = {
     seen: [],
+    during: null,
     next: {
       outcome: 'OK',
       output: handoff,
@@ -96,6 +101,7 @@ function recordingAdapter(provider: SupportAiProvider, vision: boolean): Recordi
       },
       async generate(_credential, request) {
         recording.seen.push(request);
+        if (recording.during !== null) await recording.during();
         return recording.next;
       },
       async testConnection() {
@@ -148,6 +154,7 @@ describe('Vision in Assist Mode (TB6)', () => {
       response.writeHead(200, { 'content-type': 'image/jpeg' });
       if (url.endsWith('/photos/photo-gif')) response.end(Buffer.from('GIF89a......'));
       else if (url.endsWith('/photos/photo-png')) response.end(PNG);
+      else if (url.endsWith('/photos/photo-big')) response.end(BIG_JPEG);
       else response.end(JPEG);
     });
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
@@ -328,6 +335,24 @@ describe('Vision in Assist Mode (TB6)', () => {
     });
     await loop.tick();
     return (await jobs.findById(scopeA, job.id))!;
+  }
+
+  async function stopTenant() {
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${SEED_IDS.tenantA}`,
+    );
+  }
+
+  /** A queued job claimed the way the `assistant` role claims it, not yet produced. */
+  async function claimed() {
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
+    const now = ctx.container.clock.now();
+    const lease = await service.claimNext(scopeA, now, new Date(now.getTime() + 60_000));
+    expect(lease?.id).toBe(job.id);
+    return lease!;
   }
 
   async function count(table: 'business_outbound_messages' | 'wallet_entries') {
@@ -586,5 +611,210 @@ describe('Vision in Assist Mode (TB6)', () => {
     );
     expect((rows.rows[0] as { n: number }).n).toBe(0);
     vi.restoreAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // Substitute review of PR #201
+  // -------------------------------------------------------------------------
+
+  describe('S1: image telemetry follows only a result that landed', () => {
+    it('a draft discarded during the chain call gets no image rows', async () => {
+      await configure([{ provider: 'OPENAI', model: 'gpt' }]);
+      ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-ok' }));
+      const job = await claimed();
+      adapters.OPENAI.during = () => service.discard(scopeA, operator, job.id);
+      expect(await service.produce(scopeA, job)).toBe('GONE');
+      expect(allImages(adapters.OPENAI)).toHaveLength(1);
+      expect((await jobs.findById(scopeA, job.id))?.state).toBe('DISCARDED');
+      expect(await jobs.imageOutcomes(scopeA, job.id)).toEqual([]);
+    });
+
+    it('a second writer after a lease takeover writes none: the rows are the winner’s, once', async () => {
+      await configure([{ provider: 'OPENAI', model: 'gpt' }]);
+      ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-ok' }));
+      const job = await claimed();
+      expect(await service.produce(scopeA, job)).toBe('READY');
+      // The same claimed job produced again, as a replica that took the lease over would.
+      expect(await service.produce(scopeA, job)).toBe('GONE');
+      expect(await jobs.imageOutcomes(scopeA, job.id)).toEqual([
+        expect.objectContaining({ outcome: 'PROCESSED', reason: null }),
+      ]);
+    });
+
+    it('a fail-closed handoff whose job was discarded meanwhile writes no rows either', async () => {
+      await configure([{ provider: 'OPENAI', model: 'gpt' }]);
+      ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-gone' }));
+      const job = await claimed();
+      await service.discard(scopeA, operator, job.id);
+      expect(await service.produce(scopeA, job)).toBe('GONE');
+      expect(await jobs.imageOutcomes(scopeA, job.id)).toEqual([]);
+    });
+  });
+
+  it('S4: a tenant stopped during the chain call records no image rows, and its job stays QUEUED', async () => {
+    await configure([{ provider: 'OPENAI', model: 'gpt' }]);
+    ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-ok' }));
+    const job = await claimed();
+    adapters.OPENAI.during = stopTenant;
+    expect(await service.produce(scopeA, job)).toBe('INACTIVE');
+    expect(allImages(adapters.OPENAI)).toHaveLength(1);
+    expect((await jobs.findById(scopeA, job.id))?.state).toBe('QUEUED');
+    expect(await jobs.imageOutcomes(scopeA, job.id)).toEqual([]);
+  });
+
+  it('S2: an edit after the 30-day purge does not bring a photo reference back', async () => {
+    const photo = await say(scopeA, BOT_A, { fileId: 'photo-ok', text: 'کپشن' });
+    const telegramMessageId = messageSeq;
+    await ctx.container.uow.run(scopeA, async (tx) => {
+      await messages.purgeText(scopeA, new Date(Date.now() + 86_400_000), new Date(), 100, tx);
+    });
+    expect(await messages.photoReference(scopeA, photo)).toBeNull();
+    const version = await ctx.container.uow.run(scopeA, (tx) =>
+      messages.applyEdit(
+        scopeA,
+        {
+          conversationId: photo.conversationId,
+          telegramMessageId,
+          text: 'کپشن تازه',
+          photo: { fileId: 'photo-new', fileUniqueId: 'u-photo-new', fileSize: 10 },
+          editedAt: new Date(Date.now() + 1_000),
+        },
+        tx,
+      ),
+    );
+    // The edit itself landed (its version moved); it carried no content back.
+    expect(version).toBe(2);
+    expect(await messages.photoReference(scopeA, photo)).toBeNull();
+    const rows = await ctx.container.database.db.execute(
+      sql`SELECT text, photo_file_id, photo_file_unique_id, photo_file_size FROM business_messages WHERE id = ${photo.messageId}`,
+    );
+    expect(rows.rows).toEqual([
+      { text: null, photo_file_id: null, photo_file_unique_id: null, photo_file_size: null },
+    ]);
+  });
+
+  it('S2: before the purge, an edit still replaces the media', async () => {
+    const photo = await say(scopeA, BOT_A, { fileId: 'photo-ok' });
+    await ctx.container.uow.run(scopeA, (tx) =>
+      messages.applyEdit(
+        scopeA,
+        {
+          conversationId: photo.conversationId,
+          telegramMessageId: messageSeq,
+          text: null,
+          photo: { fileId: 'photo-new', fileUniqueId: 'u-photo-new', fileSize: 11 },
+          editedAt: new Date(Date.now() + 1_000),
+        },
+        tx,
+      ),
+    );
+    expect(await messages.photoReference(scopeA, photo)).toEqual({
+      fileId: 'photo-new',
+      fileUniqueId: 'u-photo-new',
+      fileSize: 11,
+    });
+  });
+
+  it('N3: an older image too large for the step is dropped for it; the latest is still seen', async () => {
+    await configure([{ provider: 'OPENAI', model: 'gpt' }]);
+    let big: string;
+    ({ conversationId, messageId: big } = await say(scopeA, BOT_A, { fileId: 'photo-big' }));
+    const latest = await say(scopeA, BOT_A, { fileId: 'photo-ok' });
+    const result = await draft();
+    expect(result).toMatchObject({
+      state: 'READY',
+      provider: 'OPENAI',
+      unseenImageHandoff: null,
+      imagesSeen: 1,
+      imagesUnseen: 1,
+    });
+    expect(allImages(adapters.OPENAI)).toEqual([
+      { mediaType: 'image/jpeg', base64: JPEG.toString('base64') },
+    ]);
+    expect(adapters.OPENAI.seen[0]?.messages[0]?.text).toBe(
+      `${SUPPORT_AI_IMAGE_UNSEEN_MARKER}\n${SUPPORT_AI_IMAGE_ATTACHED_MARKER}`,
+    );
+    const outcomes = await jobs.imageOutcomes(scopeA, result.id);
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.find((o) => o.messageId === big)).toMatchObject({
+      outcome: 'SKIPPED',
+      reason: 'NO_VISION_CAPABILITY',
+      mediaType: 'image/jpeg',
+      byteSize: BIG_JPEG.byteLength,
+    });
+    expect(outcomes.find((o) => o.messageId === latest.messageId)).toMatchObject({
+      outcome: 'PROCESSED',
+      reason: null,
+    });
+  });
+
+  it('N3: a latest image too large for every step still hands off, no model asked', async () => {
+    await configure([{ provider: 'OPENAI', model: 'gpt' }]);
+    ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-ok' }));
+    await say(scopeA, BOT_A, { fileId: 'photo-big' });
+    const result = await draft();
+    expect(result).toMatchObject({
+      decision: 'HANDOFF',
+      provider: null,
+      unseenImageHandoff: 'NO_VISION_CAPABILITY',
+    });
+    expect(adapters.OPENAI.seen).toHaveLength(0);
+  });
+
+  it('N5: the business’s own photos are not counted as images the draft did not see', async () => {
+    await configure([{ provider: 'ZAI', model: 'glm' }]);
+    ({ conversationId } = await say(scopeA, BOT_A, { text: 'سلام' }));
+    await say(scopeA, BOT_A, { fileId: 'photo-ok', fromUserId: '5000001' });
+    await say(scopeA, BOT_A, { text: 'ممنون' });
+    const kinds = await ctx.container.database.db.execute(
+      sql`SELECT origin FROM business_messages WHERE kind = 'PHOTO'`,
+    );
+    expect(kinds.rows).toEqual([{ origin: 'HUMAN' }]);
+    const result = await draft();
+    expect(result).toMatchObject({ state: 'READY', imagesSeen: 0, imagesUnseen: 0 });
+    expect(requests).toEqual([]);
+  });
+
+  describe('N4: the tightened CHECKs refuse a direct write', () => {
+    it('a photo size never stands without a reference', async () => {
+      const photo = await say(scopeA, BOT_A, { fileId: 'photo-ok' });
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE business_messages SET photo_file_id = NULL, photo_file_unique_id = NULL WHERE id = ${photo.messageId}`,
+        ),
+      ).rejects.toMatchObject({ cause: { constraint: 'business_messages_photo_shape_check' } });
+      // Clearing all three is the purge's write, and is allowed.
+      await ctx.container.database.db.execute(
+        sql`UPDATE business_messages SET photo_file_id = NULL, photo_file_unique_id = NULL, photo_file_size = NULL WHERE id = ${photo.messageId}`,
+      );
+    });
+
+    it('a fail-closed handoff holds an empty reply (or none once purged), no model and no summary', async () => {
+      await configure([{ provider: 'ZAI', model: 'glm' }]);
+      ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-ok' }));
+      const result = await draft();
+      expect(result).toMatchObject({
+        unseenImageHandoff: 'NO_VISION_CAPABILITY',
+        suggestedReply: '',
+      });
+      for (const set of [
+        sql`suggested_reply = 'بله، تصویر را دیدم'`,
+        sql`suggested_reply = NULL`,
+        sql`model = 'glm'`,
+        sql`summary = 'خلاصه'`,
+      ]) {
+        await expect(
+          ctx.container.database.db.execute(
+            sql`UPDATE support_ai_jobs SET ${set} WHERE id = ${result.id}`,
+          ),
+        ).rejects.toMatchObject({
+          cause: { constraint: 'support_ai_jobs_unseen_image_handoff_shape_check' },
+        });
+      }
+      // The retention purge's own write — no reply, stamped as purged — is allowed.
+      const purged = await service.purgeExpired(scopeA, new Date(Date.now() + 40 * 86_400_000));
+      expect(purged).toBeGreaterThanOrEqual(1);
+      expect(await jobs.findById(scopeA, result.id)).toMatchObject({ suggestedReply: null });
+    });
   });
 });

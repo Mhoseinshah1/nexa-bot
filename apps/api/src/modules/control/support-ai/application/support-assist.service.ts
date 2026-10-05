@@ -43,7 +43,7 @@ import type {
   DrizzleSupportAiJobRepository,
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
-import type { SupportAiChain } from './support-ai-chain.js';
+import type { SupportAiChain, SupportAiVisionVariant } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
 
 /** TB6: one customer image fetched for this request, and its size (telemetry). */
@@ -276,9 +276,11 @@ export class SupportAssistService {
     }));
     const turns = transcriptMessages(lines, { attachImages: false });
     if (turns.length === 0) return this.fail(scope, job, 'transcript.empty');
+    // The CUSTOMER's images only: the business's own photos are never fetched, so they are not
+    // images the draft failed to see (PR #201 review, N5).
     const imagesInWindow = transcript
       .slice(-SUPPORT_AI_TRANSCRIPT_MESSAGES)
-      .filter((m) => m.kind === 'PHOTO').length;
+      .filter((m) => m.origin === 'INBOUND' && m.kind === 'PHOTO').length;
 
     /*
      * FAIL CLOSED (program §28): the customer's latest message is an image nobody could
@@ -297,8 +299,28 @@ export class SupportAssistService {
       );
     }
 
-    const visionTurns =
-      loaded.size === 0 ? null : transcriptMessages(lines, { attachImages: true });
+    // Each step is given exactly the images it can see (PR #201 review, N3): the chain picks
+    // them, and `render` attaches those and marks every other one unseen.
+    const vision: SupportAiVisionVariant | null =
+      loaded.size === 0
+        ? null
+        : {
+            images: transcript.flatMap((m) => {
+              const image = loaded.get(m.id)?.image;
+              return image === undefined ? [] : [{ id: m.id, image }];
+            }),
+            requiredId: latestImage,
+            render: (seen) =>
+              transcriptMessages(
+                transcript.map((m) => ({
+                  origin: m.origin,
+                  text: m.text,
+                  kind: m.kind,
+                  image: seen.has(m.id) ? (loaded.get(m.id)?.image ?? null) : null,
+                })),
+                { attachImages: true },
+              ),
+          };
     const result = await this.deps.chain.generate(scope, {
       operation: 'ASSIST_DRAFT',
       conversationId: conversation.id,
@@ -315,9 +337,7 @@ export class SupportAssistService {
         // Persian is token-dense; a generous bound, and the reply's own limit is checked below.
         maxOutputTokens: Math.min(4_000, config.maxOutputChars * 3 + 600),
       },
-      ...(visionTurns === null
-        ? {}
-        : { vision: { messages: visionTurns, required: latestImage !== null } }),
+      ...(vision === null ? {} : { vision }),
     });
     if (result.exhausted === 'NO_VISION_STEP') {
       return this.unseenImageHandoff(
@@ -330,15 +350,17 @@ export class SupportAssistService {
       );
     }
     const answered = result.outcome.outcome === 'OK' && result.step !== null;
-    const seen = answered && result.imagesSent > 0 ? result.imagesSent : 0;
+    const seenIds = new Set(answered ? result.sight.seen : []);
+    const seen = seenIds.size;
     // The per-image telemetry is written in the SAME transaction as the job's result, under
-    // the same activity check: a scope stopped during the call records neither.
-    const images = this.imageWriter(
-      scope,
-      job.id,
-      skipped,
-      loaded,
-      seen > 0 ? null : answered ? 'NO_VISION_CAPABILITY' : 'NOT_ANSWERED',
+    // the same activity check: a scope stopped during the call records neither. A loaded image
+    // is PROCESSED only when the step that ANSWERED was given it.
+    const images = this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
+      seenIds.has(messageId)
+        ? null
+        : answered
+          ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
+          : 'NOT_ANSWERED',
     );
     if (result.outcome.outcome !== 'OK' || result.step === null) {
       const code =
@@ -423,7 +445,12 @@ export class SupportAssistService {
     );
   }
 
-  /** One result write, in a transaction that checks the scope is still accepting work. */
+  /**
+   * One result write, in a transaction that checks the scope is still accepting work. The
+   * image telemetry follows ONLY a result that landed (PR #201 review, S1): `write` is a
+   * conditional transition out of QUEUED, so a job discarded meanwhile, or produced by a second
+   * replica after a lease takeover, gets no rows — exactly one writer ever records them.
+   */
   private async record(
     scope: ScopeContext,
     to: 'READY' | 'FAILED',
@@ -433,8 +460,9 @@ export class SupportAssistService {
     return this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'INACTIVE';
       const now = this.deps.clock.now();
+      if (!(await write(now, tx))) return 'GONE';
       if (images !== undefined) await images(now, tx);
-      return (await write(now, tx)) ? to : 'GONE';
+      return to;
     });
   }
 
@@ -457,14 +485,14 @@ export class SupportAssistService {
           { reason, imagesUnseen: imagesInWindow, now },
           tx,
         ),
-      this.imageWriter(scope, jobId, skipped, loaded, 'NOT_ANSWERED'),
+      this.imageWriter(scope, jobId, skipped, loaded, () => 'NOT_ANSWERED'),
     );
   }
 
   /**
    * TB6 telemetry: one row per customer image considered. A loaded image is PROCESSED only
-   * when `loadedReason` is null (the answering step was given it); otherwise it is SKIPPED with
-   * that reason. Never a byte, a file id or a URL. Returned as a write for `record`, so the
+   * when `loadedReason` gives null for it (the answering step was given it); otherwise it is
+   * SKIPPED with that reason. Never a byte, a file id or a URL. Returned as a write for `record`, so the
    * rows commit with the job's result or not at all.
    */
   private imageWriter(
@@ -472,17 +500,20 @@ export class SupportAssistService {
     jobId: string,
     skipped: ReadonlyMap<string, SupportAiImageSkipReason>,
     loaded: ReadonlyMap<string, LoadedImage>,
-    loadedReason: SupportAiImageSkipReason | null,
+    loadedReason: (messageId: string) => SupportAiImageSkipReason | null,
   ): ImageWrite {
     const rows = [
-      ...[...loaded].map(([messageId, { image, byteSize }]) => ({
-        id: this.deps.ids.uuid(),
-        messageId,
-        outcome: loadedReason === null ? ('PROCESSED' as const) : ('SKIPPED' as const),
-        reason: loadedReason,
-        mediaType: image.mediaType,
-        byteSize,
-      })),
+      ...[...loaded].map(([messageId, { image, byteSize }]) => {
+        const reason = loadedReason(messageId);
+        return {
+          id: this.deps.ids.uuid(),
+          messageId,
+          outcome: reason === null ? ('PROCESSED' as const) : ('SKIPPED' as const),
+          reason,
+          mediaType: image.mediaType,
+          byteSize,
+        };
+      }),
       ...[...skipped].map(([messageId, reason]) => ({
         id: this.deps.ids.uuid(),
         messageId,

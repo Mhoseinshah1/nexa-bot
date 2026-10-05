@@ -1,20 +1,53 @@
-import { SUPPORT_AI_LIMITS, type TenantContext } from '@nexa/contracts';
+import {
+  SUPPORT_AI_LIMITS,
+  SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
+  SUPPORT_AI_VISION_MAX_IMAGES,
+  type TenantContext,
+} from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { SupportAssistService } from './support-assist.service.js';
 
 export const ASSISTANT_INTERVAL_MS = 2_000;
+/** The bounds a job's worst case is derived from. */
+export interface AssistantJobBounds {
+  /** Fallbacks after the primary step. */
+  readonly maxFallbacks: number;
+  /** The longest provider timeout the configuration allows. */
+  readonly providerTimeoutMs: number;
+  /** TB6: customer images fetched per job, each in two Telegram legs (`getFile`, the file). */
+  readonly visionMaxImages: number;
+  readonly visionFetchTimeoutMs: number;
+}
+
 /**
  * The worst case of producing ONE job: every step of the chain (the primary and up to
- * `maxFallbacks` fallbacks) timing out at the longest timeout the configuration allows.
+ * `maxFallbacks` fallbacks) timing out at the longest timeout the configuration allows, after
+ * every image download has spent both of its legs' timeouts (PR #201 review, N2).
  */
-export const ASSISTANT_JOB_WORST_CASE_MS =
-  (1 + SUPPORT_AI_LIMITS.maxFallbacks) * SUPPORT_AI_LIMITS.timeoutMs.max;
+export function assistantJobWorstCaseMs(bounds: AssistantJobBounds): number {
+  return (
+    (1 + bounds.maxFallbacks) * bounds.providerTimeoutMs +
+    bounds.visionMaxImages * 2 * bounds.visionFetchTimeoutMs
+  );
+}
+
 /**
  * A claimed job is leased for its worst case plus a margin (the context build, the transcript
  * read and the result write), so a second replica never re-claims a job still being produced
  * (PR #200 review, finding 4). Derived, so raising a bound raises the lease with it.
  */
-export const ASSISTANT_LEASE_MS = ASSISTANT_JOB_WORST_CASE_MS + 2 * 60_000;
+export function assistantLeaseMs(bounds: AssistantJobBounds): number {
+  return assistantJobWorstCaseMs(bounds) + 2 * 60_000;
+}
+
+export const ASSISTANT_JOB_BOUNDS: AssistantJobBounds = {
+  maxFallbacks: SUPPORT_AI_LIMITS.maxFallbacks,
+  providerTimeoutMs: SUPPORT_AI_LIMITS.timeoutMs.max,
+  visionMaxImages: SUPPORT_AI_VISION_MAX_IMAGES,
+  visionFetchTimeoutMs: SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
+};
+export const ASSISTANT_JOB_WORST_CASE_MS = assistantJobWorstCaseMs(ASSISTANT_JOB_BOUNDS);
+export const ASSISTANT_LEASE_MS = assistantLeaseMs(ASSISTANT_JOB_BOUNDS);
 /** Jobs per pass, claimed and produced ONE at a time. */
 export const ASSISTANT_BATCH = 4;
 /** A job claimed this many times without a result is failed rather than retried for ever. */
