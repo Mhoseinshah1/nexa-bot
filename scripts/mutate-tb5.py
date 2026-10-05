@@ -47,7 +47,7 @@ M=[
  ('TB5-15',[(SVC,COURTESY,"    if (draft.state === 'SENT' && draft.sentOutboundId !== null) return { outboundId: draft.sentOutboundId };\n"+COURTESY)],T_I,'replay of the operator'),
  ('TB5-16',[(SVC,"    if (!inserted) {","    if ((false as boolean) && !inserted) {")],T_I,'used on a different draft'),
  ('TB5-17',[(LOOP,"new LoopProgress(Math.max(options.intervalMs * 3, ASSISTANT_LEASE_MS), 1)","new LoopProgress(options.intervalMs)")],T_L,'stays fresh'),
- ('TB5-18',[(LOOP,"export const ASSISTANT_LEASE_MS = ASSISTANT_JOB_WORST_CASE_MS + 2 * 60_000;","export const ASSISTANT_LEASE_MS = 5 * 60_000;")],T_I,'two assistant replicas'),
+ ('TB5-18',[(LOOP,"export const ASSISTANT_LEASE_MS = assistantLeaseMs(ASSISTANT_JOB_BOUNDS);","export const ASSISTANT_LEASE_MS = 5 * 60_000;")],T_I,'two assistant replicas'),
  ('TB5-19',[(REPO,"          eq(supportAiJobs.id, sql`(${next})`),","          inArray(supportAiJobs.id, next),")],T_I,'two assistant replicas'),
  ('TB5-20',[(SVC,"    if (existing.requestHash !== requestHash) {","    if ((false as boolean) && existing.requestHash !== requestHash) {")],T_I,'same key with another conversation'),
  ('TB5-21',[(SVC,"      await this.deps.jobs.failUnclaimed(scope, conversationId, unclaimedCutoff(now), now, tx);\n","")],T_I,'the listing fails'),
