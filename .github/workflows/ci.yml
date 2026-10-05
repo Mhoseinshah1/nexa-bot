@@ -46,23 +46,16 @@ permissions:
 env:
   NODE_VERSION: '22'
 
-# Every job runs on the project's own self-hosted runner (labels
-# `self-hosted, linux, x64, nexa-ci`): one runner, so jobs queue and run one at
-# a time. That host is not a throwaway VM, which is why the service containers
-# below publish EPHEMERAL host ports (Docker picks a free one, read back from
-# `job.services`) rather than 5432/6379/3306 — a fixed port collides with any
-# PostgreSQL, Redis or MySQL the host runs — and why the deployment smoke runs
-# under its own compose project name.
+# Every job runs on GitHub-hosted runners. The service containers publish
+# EPHEMERAL host ports (Docker picks a free one, read back from `job.services`)
+# rather than 5432/6379/3306, and the deployment smoke runs under its own compose
+# project name: neither is needed on a throwaway VM, and both keep these jobs
+# safe on a shared host (the self-hosted `nexa-ci` runner, paused for now).
 jobs:
   static:
     name: Typecheck, lint and boundaries
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
-    # The runner host's default V8 heap limit (~1.95 GB) is below what
-    # `tsc -p tsconfig.tests.json` needs: the pilot's first run died there with
-    # "JavaScript heap out of memory" (exit 134). Scoped to this job only.
-    env:
-      NODE_OPTIONS: --max-old-space-size=3072
     steps:
       # Pinned to an immutable commit. A tag is a moving pointer that whoever
       # controls the action's repository can repoint at any time, and CI runs
@@ -116,7 +109,7 @@ jobs:
   # against the same bytes, stamped with this SHA.
   build:
     name: Build
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -196,7 +189,7 @@ jobs:
   unit:
     name: Unit tests
     needs: build
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -227,7 +220,7 @@ jobs:
   web:
     name: Web admin tests
     needs: build
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -258,7 +251,7 @@ jobs:
   integration:
     name: Integration tests (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: build
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     # Bounded so a hang is reported rather than billed for six hours. A shard
     # takes roughly ten minutes; the step limit below fires first, so the log
     # says which step was stuck.
@@ -381,7 +374,7 @@ jobs:
   legacy-mysql:
     name: Legacy MySQL source
     needs: build
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     services:
@@ -436,7 +429,7 @@ jobs:
     name: Unit and integration tests
     if: always()
     needs: [unit, web, integration, legacy-mysql]
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Every test job succeeded
@@ -455,7 +448,7 @@ jobs:
   # longest in the workflow once the integration suite was sharded.
   deploy-logic:
     name: Deployment logic
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -494,7 +487,7 @@ jobs:
   # installation. `release.yml` publishes, and only from a tag.
   deploy:
     name: Deployment smoke
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     # The production compose file is named `nexa`, and both smokes end with
     # `compose down -v`. On a host that is not a throwaway VM that would take
@@ -531,7 +524,7 @@ jobs:
   # it, and do not weaken the threshold to get past it.
   audit:
     name: Dependency audit
-    runs-on: [self-hosted, linux, x64, nexa-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
