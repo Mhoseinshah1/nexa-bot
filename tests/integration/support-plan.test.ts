@@ -97,12 +97,23 @@ describe('the support query plans', () => {
                CROSS JOIN LATERAL (SELECT now() - (g * interval '1 day' * 365 / $4::int) AS t) s`,
             [tenant, bot, rows[0]!.id, ROWS],
           );
-          // One handoff and one job per conversation, at its own time.
+          /*
+           * One handoff and one job per conversation, at its own time — and written in
+           * time order, which is the order the application appends them in. Each statement
+           * below says so with its own ORDER BY. Without it the heap order is whatever plan
+           * the SELECT got: pg_statistic survives the reset's TRUNCATE, so an earlier file
+           * that left `business_conversations` analysed with one row (tenant_id
+           * n_distinct = -1) makes `tenant_id = $1` estimate ONE row here, and the scan is
+           * `business_conversations_tenant_id_key` — (tenant_id, id), random-UUID order.
+           * The month's 1 643 rows then land on every one of the tenant's ~300 heap pages
+           * and the window bound below fails on a correct plan (PR #208, shard 1).
+           */
           await client.query(
             `INSERT INTO business_conversation_escalations
                (id, tenant_id, conversation_id, control_epoch, reason, ticket_outcome, created_at)
              SELECT gen_random_uuid(), tenant_id, id, 1, 'LOW_CONFIDENCE', 'NO_CUSTOMER', created_at
-               FROM business_conversations WHERE tenant_id = $1::uuid`,
+               FROM business_conversations WHERE tenant_id = $1::uuid
+              ORDER BY created_at DESC, id`,
             [tenant],
           );
           await client.query(
@@ -110,7 +121,8 @@ describe('the support query plans', () => {
                (id, tenant_id, kind, conversation_id, idempotency_key, state, created_at)
              SELECT gen_random_uuid(), tenant_id, 'ASSIST_DRAFT', id, 'plan-' || id::text,
                     'FAILED', created_at
-               FROM business_conversations WHERE tenant_id = $1::uuid`,
+               FROM business_conversations WHERE tenant_id = $1::uuid
+              ORDER BY created_at DESC, id`,
             [tenant],
           );
           await client.query(
@@ -119,7 +131,8 @@ describe('the support query plans', () => {
                 input_tokens, output_tokens, outcome, created_at)
              SELECT gen_random_uuid(), tenant_id, 'ASSIST_DRAFT', 'OPENAI', 'model-x', 0,
                     100 + (random() * 900)::int, 1000, 100, 'OK', created_at
-               FROM business_conversations WHERE tenant_id = $1::uuid`,
+               FROM business_conversations WHERE tenant_id = $1::uuid
+              ORDER BY created_at DESC, id`,
             [tenant],
           );
           // PR #205 review, N4: one learning candidate per conversation, at its own time;
@@ -135,8 +148,9 @@ describe('the support query plans', () => {
                     CASE WHEN g.n % 4 = 1 THEN 'REVIEWER' END,
                     id, gen_random_uuid(), gen_random_uuid(),
                     CASE WHEN g.n % 4 = 1 THEN created_at END, created_at
-               FROM (SELECT *, row_number() OVER () AS n FROM business_conversations
-                      WHERE tenant_id = $1::uuid) g`,
+               FROM (SELECT *, row_number() OVER (ORDER BY created_at DESC, id) AS n
+                       FROM business_conversations WHERE tenant_id = $1::uuid) g
+              ORDER BY g.n`,
             [tenant],
           );
         }
