@@ -314,6 +314,9 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { DrizzleSupportKnowledgeRepository } from './modules/control/support-knowledge/infrastructure/drizzle-support-knowledge.repository.js';
+import { SupportKnowledgeService } from './modules/control/support-knowledge/application/support-knowledge.service.js';
+import { SupportLearningService } from './modules/control/support-knowledge/application/support-learning.service.js';
 import { DrizzleTermsRepository } from './modules/control/terms/infrastructure/drizzle-terms.repository.js';
 import { TermsService } from './modules/control/terms/application/terms.service.js';
 import { TermsAcceptanceService } from './modules/control/terms/application/terms-acceptance.service.js';
@@ -1164,6 +1167,9 @@ export interface Container {
   readonly assistantLoop: AssistantLoop;
   /** TB7: AUTO_REPLY_SAFE's producer (the `assistant` role runs it through the loop). */
   readonly supportAutoReply: SupportAutoReplyService;
+  /** TB8: support knowledge and its review, and controlled learning (ADR-0035). */
+  readonly supportKnowledge: SupportKnowledgeService;
+  readonly supportLearning: SupportLearningService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
@@ -5284,6 +5290,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * only. Nothing here charges a permission and nothing here writes — the FAQ is read
    * straight from its repository, never through `SupportScreenReader`, which seeds.
    */
+  /** TB8: the one home of support knowledge; the context reads only what was approved. */
+  const supportKnowledgeRepository = new DrizzleSupportKnowledgeRepository(database.db);
   const supportContextReader = new DrizzleSupportContextReader(database.db);
   const supportContext = new SupportContextBuilder({
     customers: customerRepository,
@@ -5292,6 +5300,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clientApps: clientAppRepository,
     serviceFacts: provisionedServiceFacts,
     faqs: supportFaqRepository,
+    knowledge: supportKnowledgeRepository,
     settings: settingsResolver,
     clock,
   });
@@ -5503,6 +5512,39 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     ids,
   });
+  /*
+   * TB8: controlled learning. A handback enqueues (inside its transaction); the `assistant`
+   * role extracts; only a reviewer's approval publishes.
+   */
+  const supportLearning = new SupportLearningService({
+    repository: supportKnowledgeRepository,
+    configs: supportAiConfigs,
+    chain: supportAiChain,
+    conversations: businessConversationRepository,
+    messages: businessMessageRepository,
+    outbound: businessOutboundRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const supportKnowledge = new SupportKnowledgeService({
+    repository: supportKnowledgeRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const businessConversations = new BusinessConversationService({
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
@@ -5521,6 +5563,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     autoTrigger: supportAutoEnqueuer,
     escalation: businessEscalation,
     escalations: businessEscalationRepository,
+    learning: supportLearning,
   });
   const supportContextSource = new TbSupportContextSource(supportContext);
   const supportImages = new TelegramSupportImageSource({
@@ -5571,6 +5614,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const assistantLoop = new AssistantLoop(supportAssist, {
     auto: supportAutoReply,
+    learning: supportLearning,
     scope: () =>
       installationTenantId === null
         ? null
@@ -6704,6 +6748,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportAssist,
     assistantLoop,
     supportAutoReply,
+    supportKnowledge,
+    supportLearning,
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,

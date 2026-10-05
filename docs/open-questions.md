@@ -3379,3 +3379,45 @@ TB7 (AUTO_REPLY_SAFE, handoff and tickets, `docs/support-agent/tb7-auto-reply.md
   tb0-audit §4 (a human message typed after the send stamp, or not yet delivered to the
   webhook) are unchanged and closed by nothing; the settle delay is mitigation only. The
   staging acceptance in `tb7-auto-reply.md` has not been run.
+
+TB8 (controlled learning, `docs/support-agent/tb8-controlled-learning.md`):
+
+- **OQ-TB-50 — the FAQ stays live in the context beside approved knowledge.** The TB3 payload
+  carries approved, enabled articles first (`KNOWLEDGE`), then the ACTIVE FAQ (`FAQ`), 20 in
+  all. The FAQ is the customer FAQ screen's own data and the agent sees what that screen shows.
+  Whether, once the TB9 build routinely imports the FAQ, the context should read knowledge
+  only (so an FAQ edit reaches the agent only through a reviewed build) is a Product Owner call.
+- **OQ-TB-51 — retrieval is newest-approved-first, not ranked.** ADR-0035 §4 describes scoring
+  by category, tag and a `simple` `tsvector` against the customer's question. The TB3 builder
+  takes no question, so TB8 reads the 20 most recently updated approved articles. Ranking needs
+  the question passed through `SupportContextSource`, and a measurement at a realistic size.
+- **OQ-TB-52 — only lane replies teach.** A learning source is an `OPERATOR` or `ASSIST` row of
+  the outbound lane, `DELIVERED`, with its text held. A message the owner typed on their phone
+  (`HUMAN` in the transcript) is not attributable to an admin and is never a source.
+- **OQ-TB-53 — no daily digest.** The optional digest (one operator notification per tenant per
+  day when there is a new candidate) is not built; it needs a notification kind, which is a
+  contract change of its own. The queue page is the only signal.
+- **OQ-TB-54 — what the scrubber guards.** It runs over the extractor's input and output, over
+  an approval of a LEARNED candidate (edited or not), and — since the substitute review of PR
+  #203 (finding 2) — over EVERY article write whatever its source: create, edit and publish,
+  `MANUAL` included. The earlier exemption for MANUAL articles ("a support phone or an official
+  link may belong there") is withdrawn: an article is what the agent repeats to every customer,
+  and an approved LEARNED article edited afterwards was being republished unscrubbed. Fail
+  closed: a support handle or an official domain belongs in a template or a setting, and a
+  false positive costs the reviewer an edit. It over-matches on purpose (any 7+ digit run, any
+  `@handle` or `t.me/<name>`, ANY URL or domain, a secret word followed by a value, any figure
+  with a currency word, in `k` or in words). Whether an operator needs an allowlist (their own
+  domain, say) is open; none is built.
+- **OQ-TB-55 — duplicate thresholds are constants.** Near duplicates are trigram Jaccard ≥ 0.8
+  over the 200 most recent candidates. Neither number was measured on real Persian titles.
+- **OQ-TB-56 — a PENDING candidate's text is purged too.** ADR-0035 states the 30-day purge for
+  a rejected candidate's body; TB8 applies it to every candidate never approved, so an old
+  pending one can be approved only with an edit. Keeping pending text longer is open.
+- **OQ-TB-57 — the windows bind explicit proposals.** One job per conversation per 24 hours
+  refuses a second «پیشنهاد به‌عنوان دانش» in the same conversation that day. Both windows
+  and the per-tenant hourly cap are counted under the tenant's learning-enqueue advisory lock
+  (`0x4c4a`, taken first in the enqueuing transaction), so they are exact under concurrency —
+  the substitute review of PR #203 (finding 3) showed two racing proposals both passing the
+  plain count. The lock is per tenant, not per conversation: enqueues are rare and short, and
+  one lock is the hourly cap's own scope. A proposal is also bound to its author (an operator
+  proposes their own replies; another's needs `support_knowledge.review`).

@@ -8,6 +8,7 @@ import {
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { SupportAssistService } from './support-assist.service.js';
 import type { SupportAutoReplyService } from './support-auto-reply.service.js';
+import type { SupportLearningService } from '../../support-knowledge/application/support-learning.service.js';
 
 export const ASSISTANT_INTERVAL_MS = 2_000;
 /** The bounds a job's worst case is derived from. */
@@ -54,6 +55,8 @@ export const ASSISTANT_LEASE_MS = assistantLeaseMs(ASSISTANT_JOB_BOUNDS);
 export const ASSISTANT_BATCH = 4;
 /** A job claimed this many times without a result is failed rather than retried for ever. */
 export const ASSISTANT_MAX_ATTEMPTS = 3;
+/** TB8: learning jobs per pass. Lower than drafts: nobody is waiting on a lesson. */
+export const ASSISTANT_LEARNING_BATCH = 2;
 const RETENTION_INTERVAL_MS = 10 * 60_000;
 
 /**
@@ -81,6 +84,8 @@ export class AssistantLoop {
     private readonly options: {
       /** TB7: the producer of AUTO_DECISION jobs. Without it, such a job is never claimed. */
       readonly auto?: Pick<SupportAutoReplyService, 'produce' | 'giveUp'>;
+      /** TB8: the producer of learning jobs. Without it, no learning job is ever claimed. */
+      readonly learning?: Pick<SupportLearningService, 'runDue' | 'purge'>;
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
       readonly now: () => Date;
@@ -167,12 +172,37 @@ export class AssistantLoop {
         this.progress.record(this.options.now().getTime());
         if (state === 'INACTIVE') break;
       }
+      // TB8: learning jobs, after the conversations' own jobs — a customer waits on those. ONE
+      // per claim, each leased from the moment it is claimed (TB5 review, finding 4): a batch
+      // leased up front would wait out its lease behind its sibling's provider call.
+      const learning = this.options.learning;
+      let learned = 0;
+      if (learning !== undefined) {
+        for (let pass = 0; pass < ASSISTANT_LEARNING_BATCH; pass += 1) {
+          const at = this.options.now();
+          const learningCounts = await learning.runDue(scope, {
+            now: at,
+            leaseUntil: new Date(at.getTime() + ASSISTANT_LEASE_MS),
+            limit: 1,
+          });
+          let ran = 0;
+          for (const [label, n] of Object.entries(learningCounts)) {
+            counts[label] = (counts[label] ?? 0) + n;
+            ran += n;
+          }
+          if (ran === 0) break;
+          learned += ran;
+          this.progress.record(this.options.now().getTime());
+        }
+      }
       const now = this.options.now();
       if (now.getTime() - this.lastRetentionAt >= RETENTION_INTERVAL_MS) {
         counts.purged = await this.assist.purgeExpired(scope, now);
+        if (learning !== undefined) counts.purged_candidates = await learning.purge(scope, now);
         this.lastRetentionAt = now.getTime();
       }
-      if (claimed > 0) this.options.logger.info({ claimed, ...counts }, 'assistant pass');
+      if (claimed > 0 || learned > 0)
+        this.options.logger.info({ claimed, ...counts }, 'assistant pass');
       this.progress.record(this.options.now().getTime());
     } catch (error: unknown) {
       this.options.logger.error({ err: error }, 'assistant pass failed');

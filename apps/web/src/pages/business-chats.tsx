@@ -57,6 +57,7 @@ import {
 } from '../ui/kit';
 import { Icon, type IconName } from '../ui/icons';
 import { AssistCard } from './support-assist';
+import { ProposeKnowledgeButton } from './support-knowledge';
 
 /**
  * TB2 — Telegram Business conversations (ADR-0033): the inbox, the connections it arrives
@@ -414,10 +415,13 @@ export function BusinessChatDetailPage({
   denied,
   mayReply,
   mayAssist = false,
+  mayPropose = false,
 }: {
   id: string;
   denied: boolean;
   mayReply: boolean;
+  /** TB8: draws "propose as knowledge" on delivered replies. Courtesy only. */
+  mayPropose?: boolean;
   /** TB5: draws the Assist panel. Courtesy only — the server charges `support_ai.assist`. */
   mayAssist?: boolean;
 }) {
@@ -461,7 +465,7 @@ export function BusinessChatDetailPage({
             <div className="stack">
               <ControlCard detail={data} mayReply={mayReply} />
               {data.escalations.length > 0 && <EscalationsCard detail={data} />}
-              <OutboundCard detail={data} />
+              <OutboundCard detail={data} mayPropose={mayPropose} />
             </div>
           </div>
         )}
@@ -694,7 +698,13 @@ function MessageBody({ text, kind }: { text: string | null; kind: BusinessMessag
   return <p className="bchat-body faint">{t('web.bchat_text_gone')}</p>;
 }
 
-function OutboundCard({ detail }: { detail: BusinessChatDetailResponse }) {
+function OutboundCard({
+  detail,
+  mayPropose = false,
+}: {
+  detail: BusinessChatDetailResponse;
+  mayPropose?: boolean;
+}) {
   const rows = [...detail.outbound].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
     <Card title={t('web.bchat_outbound')} hint={t('web.bchat_outbound_hint')}>
@@ -721,6 +731,15 @@ function OutboundCard({ detail }: { detail: BusinessChatDetailResponse }) {
                   {t('web.bchat_outbound_failure')} <Ltr>{row.failureCode}</Ltr>
                 </span>
               )}
+              {mayPropose &&
+                row.state === 'DELIVERED' &&
+                row.origin !== 'AUTO' &&
+                row.text !== null && (
+                  <ProposeKnowledgeButton
+                    conversationId={detail.conversation.id}
+                    outboundId={row.id}
+                  />
+                )}
             </li>
           ))}
         </ol>

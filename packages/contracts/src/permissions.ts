@@ -428,6 +428,25 @@ export const PERMISSIONS = [
   ),
 
   /*
+   * TB8 — support knowledge and controlled learning (ADR-0035). Reading the knowledge base
+   * and the candidate queue is LOW. Proposing one of your own replies as a lesson creates a
+   * CANDIDATE, never knowledge, and spends provider budget: MEDIUM. Reviewing — approving,
+   * editing then approving, rejecting, and every edit of an article — publishes text the
+   * support agent (and AUTO_REPLY_SAFE) repeats to every customer: HIGH, owner only by
+   * default, as publishing the terms is.
+   */
+  p('support_knowledge.view', 'View the support knowledge base and the learning candidates', 'LOW'),
+  p(
+    'support_knowledge.propose',
+    'Propose a reply from a business conversation as a support knowledge candidate',
+  ),
+  p(
+    'support_knowledge.review',
+    'Approve, edit or reject learning candidates and edit, publish or retire support knowledge',
+    'HIGH',
+  ),
+
+  /*
    * Campaigns (round N, C1, `docs/round-n-campaigns-audit.md` D10). A campaign composes
    * engines that already have their own permissions, and MANAGE is charged together with
    * each of those — a campaign is never a way to do what its operator could not do
@@ -634,6 +653,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'business_chats.view',
       'business_chats.reply',
       'support_ai.assist',
+      // TB8: an operator proposes lessons and reads the queue; approving stays the owner's.
+      'support_knowledge.view',
+      'support_knowledge.propose',
       'tickets.categories.edit',
       // Program §6: an operator drafts the rules; PUBLISHING them stays the owner's.
       'terms.view',
@@ -703,6 +725,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'business_chats.view',
       'business_chats.reply',
       'support_ai.assist',
+      // TB8: support proposes lessons from its own replies; approving stays the owner's.
+      'support_knowledge.view',
+      'support_knowledge.propose',
       // Phase A2: a direct message to one customer, from their page.
       'users.message.send',
       'users.message.view',
@@ -907,6 +932,12 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'business_chats.reply': 'business_chats.view',
   'support_ai.auto_reply': 'support_ai.configure',
   'support_ai.assist': 'business_chats.view',
+  /*
+   * TB8. A proposal is made FROM a business conversation, which `business_chats.view` reads;
+   * a review is made FROM the knowledge pages, which `support_knowledge.view` reads.
+   */
+  'support_knowledge.propose': 'business_chats.view',
+  'support_knowledge.review': 'support_knowledge.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass

@@ -38,6 +38,7 @@ import {
 } from '../domain/support-context-payload.js';
 import type {
   SupportContextReader,
+  SupportKnowledgeReader,
   SupportOrderFact,
   SupportPaymentFact,
   SupportServiceCardFact,
@@ -50,6 +51,8 @@ export interface SupportContextBuilderDeps {
   readonly clientApps: Pick<ClientAppRepository, 'list'>;
   readonly serviceFacts: Pick<ProvisionedServiceFacts, 'factsOf'>;
   readonly faqs: Pick<SupportFaqRepository, 'list'>;
+  /** TB8: approved, enabled support knowledge (ADR-0035 §1). */
+  readonly knowledge: SupportKnowledgeReader;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
   readonly clock: Clock;
 }
@@ -78,7 +81,7 @@ export interface SupportContextBuild {
  * message supplied.
  *
  * `customerId` null, or a customer this tenant does not have: PUBLIC support only —
- * client apps (unfiltered), FAQ knowledge and the support accounts. No account fact, and
+ * client apps (unfiltered), knowledge (approved articles, then the FAQ) and the support accounts. No account fact, and
  * no incident (incidents reach a customer through their services).
  *
  * A BLOCKED customer still gets their context, flagged `customerBlocked`: whether to answer
@@ -99,19 +102,30 @@ export class SupportContextBuilder {
 
   async build(scope: TenantContext, customerId: string | null): Promise<SupportContextBuild> {
     const now = this.deps.clock.now();
-    const [faqRows, accounts, appRows, customer] = await Promise.all([
+    const [articles, faqRows, accounts, appRows, customer] = await Promise.all([
+      this.deps.knowledge.activeForContext(scope, SUPPORT_CONTEXT_LIMITS.knowledge),
       this.deps.faqs.list(scope, { status: 'ACTIVE' }),
       this.deps.settings.valueOf<readonly string[]>(scope, 'support.accounts'),
       this.deps.clientApps.list(scope, { status: 'ENABLED' }),
       customerId === null ? null : this.deps.customers.findById(scope, customerId as UserId),
     ]);
-    const knowledge = faqRows
-      .slice(0, SUPPORT_CONTEXT_LIMITS.knowledge)
-      .map((row): SupportContextKnowledge => ({
+    /*
+     * TB8: reviewed knowledge first, then the live FAQ, together bounded by the family limit.
+     * Truncation drops from the TAIL, so under pressure the FAQ gives way before an article
+     * a reviewer approved for the agent.
+     */
+    const knowledge = [
+      ...articles.map((row): SupportContextKnowledge => ({
+        source: 'KNOWLEDGE',
+        question: clip(row.title, 512),
+        answer: clip(row.body, 4096),
+      })),
+      ...faqRows.map((row): SupportContextKnowledge => ({
         source: 'FAQ',
         question: clip(row.question, 512),
         answer: clip(row.answer, 4096),
-      }));
+      })),
+    ].slice(0, SUPPORT_CONTEXT_LIMITS.knowledge);
     const supportAccounts = accounts.slice(0, 10).map((handle) => clip(handle, 64));
 
     if (customer === null) {

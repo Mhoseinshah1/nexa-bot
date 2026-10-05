@@ -1450,6 +1450,20 @@
       "when": 1791191228906,
       "tag": "0206_support_ai_reply_stale",
       "breakpoints": true
+    },
+    {
+      "idx": 207,
+      "version": "7",
+      "when": 1791193497921,
+      "tag": "0207_support_knowledge",
+      "breakpoints": true
+    },
+    {
+      "idx": 208,
+      "version": "7",
+      "when": 1791193502424,
+      "tag": "0208_support_knowledge_grants",
+      "breakpoints": true
     }
   ]
 }

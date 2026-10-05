@@ -8,6 +8,7 @@ import {
 import {
   ASSISTANT_JOB_BOUNDS,
   ASSISTANT_JOB_WORST_CASE_MS,
+  ASSISTANT_LEARNING_BATCH,
   ASSISTANT_LEASE_MS,
   assistantLeaseMs,
   ASSISTANT_MAX_ATTEMPTS,
@@ -133,5 +134,48 @@ describe('AssistantLoop', () => {
       const raised = { ...ASSISTANT_JOB_BOUNDS, [key]: ASSISTANT_JOB_BOUNDS[key] + 1 };
       expect(assistantLeaseMs(raised), key).toBeGreaterThan(base);
     }
+  });
+
+  it('TB8: claims learning jobs ONE per claim, each leased from its own claim', async () => {
+    let ms = Date.parse('2026-10-05T00:00:00Z');
+    let pending = ASSISTANT_LEARNING_BATCH + 3;
+    const learning = {
+      runDue: vi.fn(
+        async (
+          _scope: TenantContext,
+          _input: { readonly now: Date; readonly leaseUntil: Date; readonly limit: number },
+        ): Promise<Record<string, number>> => {
+          if (pending === 0) return {};
+          pending -= 1;
+          ms += 60_000; // one provider call
+          return { learning_candidate: 1 };
+        },
+      ),
+      purge: vi.fn(async () => 0),
+    };
+    const loop = new AssistantLoop(
+      {
+        claimNext: vi.fn(async () => null),
+        produce: vi.fn(async () => 'READY' as const),
+        abandon: vi.fn(async () => 'FAILED' as const),
+        purgeExpired: vi.fn(async () => 0),
+      },
+      {
+        learning,
+        scope: () => scope,
+        intervalMs: 2_000,
+        now: () => new Date(ms),
+        logger: { info: vi.fn(), error: vi.fn() },
+      },
+    );
+    await loop.tick();
+    const calls = learning.runDue.mock.calls;
+    expect(calls).toHaveLength(ASSISTANT_LEARNING_BATCH);
+    for (const [, input] of calls) {
+      expect(input.limit).toBe(1);
+      expect(input.leaseUntil.getTime() - input.now.getTime()).toBe(ASSISTANT_LEASE_MS);
+    }
+    // The second claim is leased from its own instant, after the first job's provider call.
+    expect(calls[1]![1].now.getTime() - calls[0]![1].now.getTime()).toBe(60_000);
   });
 });

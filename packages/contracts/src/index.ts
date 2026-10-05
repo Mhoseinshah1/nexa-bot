@@ -146,3 +146,5 @@ export * from './business-chats.js';
 export * from './support-context.js';
 /** TB4: the support AI's provider foundation (ADR-0034). */
 export * from './support-ai.js';
+/** TB8: support knowledge and controlled learning (ADR-0035). */
+export * from './support-knowledge.js';

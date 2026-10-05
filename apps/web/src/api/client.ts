@@ -558,6 +558,18 @@ import {
   type SupportAiProvider,
   type SupportAiTestResponse,
   type SupportAiUsageResponse,
+  // TB8: support knowledge and the learning-candidate queue.
+  SUPPORT_KNOWLEDGE_ROUTES,
+  supportKnowledgeArticleViewSchema,
+  supportKnowledgeRevisionViewSchema,
+  supportLearningCandidateViewSchema,
+  type SupportKnowledgeArticleState,
+  type SupportKnowledgeArticleView,
+  type SupportKnowledgeContent,
+  type SupportKnowledgeRevisionView,
+  type SupportKnowledgeSource,
+  type SupportLearningCandidateState,
+  type SupportLearningCandidateView,
   TICKET_ROUTES,
   ticketAssigneesResponseSchema,
   ticketCategoryListResponseSchema,
@@ -4336,6 +4348,142 @@ export function sendSupportAiDraft(input: {
 /** TB5: throws a draft away. Nothing was sent, and nothing is. */
 export function discardSupportAiDraft(draftId: string): Promise<{ discarded: boolean }> {
   return post(SUPPORT_AI_ASSIST_ROUTES.discard(draftId), {}, oneField('discarded', 'boolean'));
+}
+
+// --- TB8: support knowledge and controlled learning ---------------------------------------
+
+function listOf<T>(field: string, item: { parse: (v: unknown) => T }) {
+  return {
+    parse(value: unknown): T[] {
+      if (typeof value === 'object' && value !== null && field in value) {
+        const rows = (value as Record<string, unknown>)[field];
+        if (Array.isArray(rows)) return rows.map((row) => item.parse(row));
+      }
+      throw new Error(`Unexpected response: no list "${field}".`);
+    },
+  };
+}
+
+function queryOf(filter: Record<string, string | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [name, value] of Object.entries(filter))
+    if (value !== undefined) query.set(name, value);
+  const text = query.toString();
+  return text === '' ? '' : `?${text}`;
+}
+
+/** The knowledge base, filtered by source and state. `support_knowledge.view`. */
+export function fetchSupportKnowledge(
+  filter: { source?: SupportKnowledgeSource; state?: SupportKnowledgeArticleState } = {},
+): Promise<SupportKnowledgeArticleView[]> {
+  return authedGet(
+    `${SUPPORT_KNOWLEDGE_ROUTES.articles}${queryOf(filter)}`,
+    listOf('articles', supportKnowledgeArticleViewSchema),
+  );
+}
+
+/** Every revision of one article, newest first. `support_knowledge.view`. */
+export function fetchSupportKnowledgeRevisions(
+  articleId: string,
+): Promise<SupportKnowledgeRevisionView[]> {
+  return authedGet(
+    SUPPORT_KNOWLEDGE_ROUTES.revisions(articleId),
+    listOf('revisions', supportKnowledgeRevisionViewSchema),
+  );
+}
+
+/** A reviewer writes an article: published at once, or saved as a draft. `.review`. */
+export function createSupportKnowledge(input: {
+  readonly idempotencyKey: string;
+  readonly content: SupportKnowledgeContent;
+  readonly publish: boolean;
+}): Promise<SupportKnowledgeArticleView> {
+  return post(SUPPORT_KNOWLEDGE_ROUTES.articles, input, supportKnowledgeArticleViewSchema);
+}
+
+/** Edits an article, naming the version read. An approved article gains a revision. */
+export function updateSupportKnowledge(input: {
+  readonly id: string;
+  readonly idempotencyKey: string;
+  readonly expectedVersion: number;
+  readonly content: SupportKnowledgeContent;
+}): Promise<SupportKnowledgeArticleView> {
+  const { id, ...body } = input;
+  return put(SUPPORT_KNOWLEDGE_ROUTES.article(id), body, supportKnowledgeArticleViewSchema);
+}
+
+/** Publish a draft, or retire an article. */
+export function controlSupportKnowledge(input: {
+  readonly id: string;
+  readonly action: 'publish' | 'retire';
+  readonly idempotencyKey: string;
+  readonly expectedVersion: number;
+}): Promise<SupportKnowledgeArticleView> {
+  const path =
+    input.action === 'publish'
+      ? SUPPORT_KNOWLEDGE_ROUTES.publish(input.id)
+      : SUPPORT_KNOWLEDGE_ROUTES.retire(input.id);
+  return post(
+    path,
+    { idempotencyKey: input.idempotencyKey, expectedVersion: input.expectedVersion },
+    supportKnowledgeArticleViewSchema,
+  );
+}
+
+/** Switches an article on or off. */
+export function setSupportKnowledgeEnabled(input: {
+  readonly id: string;
+  readonly idempotencyKey: string;
+  readonly expectedVersion: number;
+  readonly enabled: boolean;
+}): Promise<SupportKnowledgeArticleView> {
+  const { id, ...body } = input;
+  return post(SUPPORT_KNOWLEDGE_ROUTES.enabled(id), body, supportKnowledgeArticleViewSchema);
+}
+
+/** The learning-candidate queue. `support_knowledge.view`. */
+export function fetchLearningCandidates(
+  filter: { state?: SupportLearningCandidateState } = {},
+): Promise<SupportLearningCandidateView[]> {
+  return authedGet(
+    `${SUPPORT_KNOWLEDGE_ROUTES.candidates}${queryOf(filter)}`,
+    listOf('candidates', supportLearningCandidateViewSchema),
+  );
+}
+
+/** Approve as proposed (`edit` null) or «edit then approve». `support_knowledge.review`. */
+export function approveLearningCandidate(input: {
+  readonly id: string;
+  readonly idempotencyKey: string;
+  readonly expectedVersion: number;
+  readonly edit: SupportKnowledgeContent | null;
+}): Promise<SupportLearningCandidateView> {
+  const { id, ...body } = input;
+  return post(SUPPORT_KNOWLEDGE_ROUTES.approve(id), body, supportLearningCandidateViewSchema);
+}
+
+/** Reject a candidate. Terminal; it never enters knowledge. */
+export function rejectLearningCandidate(input: {
+  readonly id: string;
+  readonly idempotencyKey: string;
+  readonly expectedVersion: number;
+  readonly note?: string;
+}): Promise<SupportLearningCandidateView> {
+  const { id, ...body } = input;
+  return post(SUPPORT_KNOWLEDGE_ROUTES.reject(id), body, supportLearningCandidateViewSchema);
+}
+
+/** "Propose as knowledge" on one delivered reply. Creates a learning job, never knowledge. */
+export function proposeAsKnowledge(input: {
+  readonly conversationId: string;
+  readonly outboundId: string;
+  readonly idempotencyKey: string;
+}): Promise<{ jobId: string }> {
+  return post(
+    SUPPORT_KNOWLEDGE_ROUTES.propose(input.conversationId),
+    { idempotencyKey: input.idempotencyKey, outboundId: input.outboundId },
+    oneField('jobId', 'string'),
+  );
 }
 
 // --- Round N: the shared audience, broadcast and mass operations --------------------------
