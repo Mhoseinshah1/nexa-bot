@@ -44,6 +44,7 @@ import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chats';
 import { SupportAiPage } from './pages/support-ai';
+import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
   BulkOperationDetailPage,
@@ -191,6 +192,9 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/business-chats/:id',
   // TB4/TB5: the support AI's settings.
   '/support-ai',
+  // TB8: support knowledge and the learning-candidate queue.
+  '/support-knowledge',
+  '/support-knowledge/candidates',
   '/payments',
   '/payments/:id',
   '/compensations',
@@ -619,6 +623,7 @@ export function resolve(
           denied={!may('business_chats.view')}
           mayReply={may('business_chats.reply')}
           mayAssist={may('support_ai.assist')}
+          mayPropose={may('support_knowledge.propose')}
         />
       ),
       crumbs: [nav('business-chats'), { label: t('web.bchat_detail') }],
@@ -627,6 +632,32 @@ export function resolve(
   }
 
   // TB4/TB5: the support AI's mode, chain, keys and usage (ADR-0034 §8).
+  // TB8: the support knowledge base and the learning queue (ADR-0035).
+  if (route.path === '/support-knowledge') {
+    return {
+      element: (
+        <SupportKnowledgePage
+          denied={!may('support_knowledge.view')}
+          mayReview={may('support_knowledge.review')}
+        />
+      ),
+      crumbs: [{ label: t('web.sk_title') }],
+      title: t('web.sk_title'),
+    };
+  }
+  if (route.path === '/support-knowledge/candidates') {
+    return {
+      element: (
+        <LearningCandidatesPage
+          denied={!may('support_knowledge.view')}
+          mayReview={may('support_knowledge.review')}
+        />
+      ),
+      crumbs: [nav('support-knowledge'), { label: t('web.sk_cand_title') }],
+      title: t('web.sk_cand_title'),
+    };
+  }
+
   if (route.path === '/support-ai') {
     return {
       element: (

@@ -167,6 +167,27 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_ops',
   },
   {
+    /*
+     * TB8: the support knowledge base (ADR-0035). `support_knowledge.view`; every write on the
+     * page is charged `support_knowledge.review` by the server.
+     */
+    id: 'support-knowledge',
+    path: '/support-knowledge',
+    label: 'web.nav_support_knowledge',
+    icon: 'content',
+    permission: 'support_knowledge.view',
+    group: 'web.navgroup_ops',
+  },
+  {
+    // TB8: the lessons the support AI proposed from human replies, waiting for a reviewer.
+    id: 'learning-candidates',
+    path: '/support-knowledge/candidates',
+    label: 'web.nav_learning_candidates',
+    icon: 'check',
+    permission: 'support_knowledge.view',
+    group: 'web.navgroup_ops',
+  },
+  {
     // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
     id: 'bulk-operations',
     path: '/bulk-operations',
