@@ -151,10 +151,10 @@ describe('the knowledge build (TB9)', () => {
     const first = await build();
     const applyKey = key('apply');
     const result = await applyAll(first.build.id, applyKey);
-    expect(result).toEqual({ applied: first.proposals.length, conflicted: 0 });
+    expect(result).toEqual({ applied: first.proposals.length, conflicted: 0, skipped: 0 });
     // The same key replays the same answer; a new key finds nothing left to apply.
     expect(await applyAll(first.build.id, applyKey)).toEqual(result);
-    expect(await applyAll(first.build.id)).toEqual({ applied: 0, conflicted: 0 });
+    expect(await applyAll(first.build.id)).toEqual({ applied: 0, conflicted: 0, skipped: 0 });
     const articles = await builtArticles();
     expect(articles).toHaveLength(first.proposals.length);
     expect(articles.every((a) => a.state === 'APPROVED' && a.revision === 1)).toBe(true);
@@ -245,7 +245,7 @@ describe('the knowledge build (TB9)', () => {
         idempotencyKey: key('apply'),
         proposalIds: [conflict.id],
       }),
-    ).toEqual({ applied: 0, conflicted: 0 });
+    ).toEqual({ applied: 0, conflicted: 0, skipped: 0 });
     await applyAll(next.build.id);
     let current = (await builtArticles()).find((a) => a.id === faqArticle.id)!;
     expect(current.body).toBe('متن دستی اپراتور.');
@@ -306,7 +306,7 @@ describe('the knowledge build (TB9)', () => {
         tags: [],
       },
     });
-    expect(await applyAll(next.build.id)).toEqual({ applied: 0, conflicted: 1 });
+    expect(await applyAll(next.build.id)).toEqual({ applied: 0, conflicted: 1, skipped: 0 });
     const after = (await builtArticles()).find((a) => a.id === faqArticle.id)!;
     expect(after.body).toBe('ویرایش پس از ساخت.');
     const latest = await ctx.container.supportKnowledgeBuild.latest(tenantA, owner);

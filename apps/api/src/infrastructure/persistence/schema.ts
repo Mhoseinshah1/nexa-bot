@@ -14417,6 +14417,10 @@ export const supportKnowledgeBuilds = pgTable(
     updateCount: integer('update_count').notNull().default(0),
     unchangedCount: integer('unchanged_count').notNull().default(0),
     conflictCount: integer('conflict_count').notNull().default(0),
+    retireCount: integer('retire_count').notNull().default(0),
+    /** Items clipped to the article bounds, and items dropped by a bound (at least). */
+    truncatedCount: integer('truncated_count').notNull().default(0),
+    cappedCount: integer('capped_count').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -14437,7 +14441,8 @@ export const supportKnowledgeBuilds = pgTable(
     ),
     check(
       'support_knowledge_builds_counts_check',
-      sql`add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0`,
+      sql`add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0
+          AND retire_count >= 0 AND truncated_count >= 0 AND capped_count >= 0`,
     ),
   ],
 );

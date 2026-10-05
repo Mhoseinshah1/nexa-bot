@@ -1054,6 +1054,8 @@ export class DrizzleSupportKnowledgeRepository {
       readonly id: string;
       readonly createdByAdminId: string | null;
       readonly counts: KnowledgeBuildCounts;
+      readonly truncated: number;
+      readonly capped: number;
       readonly now: Date;
     },
     proposals: readonly NewProposal[],
@@ -1070,6 +1072,9 @@ export class DrizzleSupportKnowledgeRepository {
       updateCount: row.counts.update,
       unchangedCount: row.counts.unchanged,
       conflictCount: row.counts.conflict,
+      retireCount: row.counts.retire,
+      truncatedCount: row.truncated,
+      cappedCount: row.capped,
       createdAt: row.now,
       updatedAt: row.now,
     });
@@ -1203,12 +1208,29 @@ export class DrizzleSupportKnowledgeRepository {
     return rows.length > 0;
   }
 
-  /** A PENDING UPDATE whose article moved since the build becomes a CONFLICT to decide. */
-  async markConflict(scope: ScopeContext, id: string, now: Date, tx: unknown): Promise<boolean> {
+  /**
+   * A PENDING UPDATE whose article moved since the build becomes a CONFLICT to decide, against
+   * the article AS IT IS NOW (substitute review of PR #204, S1): the base is refreshed, so both
+   * choices are conditional on the current revision and the reviewer sees the current text.
+   * Leaving the build-time base would make TAKE_BUILD and KEEP_CURRENT both refuse for ever.
+   */
+  async markConflict(
+    scope: ScopeContext,
+    id: string,
+    base: { readonly revision: number; readonly title: string; readonly body: string },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
       .update(supportKnowledgeBuildProposals)
-      .set({ kind: 'CONFLICT', updatedAt: now })
+      .set({
+        kind: 'CONFLICT',
+        baseRevision: base.revision,
+        baseTitle: base.title,
+        baseBody: base.body,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(supportKnowledgeBuildProposals.tenantId, tenantId),
@@ -1219,6 +1241,28 @@ export class DrizzleSupportKnowledgeRepository {
       )
       .returning({ id: supportKnowledgeBuildProposals.id });
     return rows.length > 0;
+  }
+
+  /**
+   * The build's counts are the kinds of its proposals AS THEY STAND (N3): recounted from the
+   * rows after an apply, so an UPDATE that met an edit is counted as the CONFLICT it now is.
+   */
+  async recountBuild(scope: ScopeContext, id: string, now: Date, tx: unknown): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    const p = supportKnowledgeBuildProposals;
+    const count = (kind: SupportKnowledgeProposalKind) =>
+      sql<number>`(SELECT count(*)::int FROM ${p} WHERE ${p.tenantId} = ${tenantId} AND ${p.buildId} = ${id} AND ${p.kind} = ${kind})`;
+    await exec(this.db, tx)
+      .update(supportKnowledgeBuilds)
+      .set({
+        addCount: count('ADD'),
+        updateCount: count('UPDATE'),
+        unchangedCount: count('UNCHANGED'),
+        conflictCount: count('CONFLICT'),
+        retireCount: count('RETIRE'),
+        updatedAt: now,
+      })
+      .where(and(eq(supportKnowledgeBuilds.tenantId, tenantId), eq(supportKnowledgeBuilds.id, id)));
   }
 
   /** Locks the build row for the apply's transaction, so two applies of one build serialise. */
@@ -1243,12 +1287,17 @@ export interface KnowledgeBuildCounts {
   readonly update: number;
   readonly unchanged: number;
   readonly conflict: number;
+  readonly retire: number;
 }
 
 export interface KnowledgeBuildRecord {
   readonly id: string;
   readonly state: SupportKnowledgeBuildState;
   readonly counts: KnowledgeBuildCounts;
+  /** Items clipped to the article bounds when the build ran (N2). */
+  readonly truncated: number;
+  /** Items a per-source or per-build bound dropped, at least (N2). */
+  readonly capped: number;
   readonly createdAt: Date;
 }
 
@@ -1280,7 +1329,10 @@ function build(row: typeof supportKnowledgeBuilds.$inferSelect): KnowledgeBuildR
       update: row.updateCount,
       unchanged: row.unchangedCount,
       conflict: row.conflictCount,
+      retire: row.retireCount,
     },
+    truncated: row.truncatedCount,
+    capped: row.cappedCount,
     createdAt: row.createdAt,
   };
 }

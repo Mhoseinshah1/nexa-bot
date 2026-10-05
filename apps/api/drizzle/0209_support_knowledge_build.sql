@@ -22,7 +22,7 @@ CREATE TABLE "support_knowledge_build_proposals" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "support_knowledge_build_proposals_tenant_id_key" UNIQUE("tenant_id","id"),
 	CONSTRAINT "support_knowledge_build_proposals_source_type_check" CHECK (source_type IN ('PRODUCT', 'LOCATIONS', 'CLIENT_APP', 'TUTORIAL', 'FAQ', 'TERMS', 'SUPPORT_ACCOUNTS', 'PAYMENT_METHOD')),
-	CONSTRAINT "support_knowledge_build_proposals_kind_check" CHECK (kind IN ('ADD', 'UPDATE', 'UNCHANGED', 'CONFLICT')),
+	CONSTRAINT "support_knowledge_build_proposals_kind_check" CHECK (kind IN ('ADD', 'UPDATE', 'UNCHANGED', 'CONFLICT', 'RETIRE')),
 	CONSTRAINT "support_knowledge_build_proposals_state_check" CHECK (state IN ('PENDING', 'APPLIED', 'SKIPPED')),
 	CONSTRAINT "support_knowledge_build_proposals_category_check" CHECK (category IN ('CONNECTION', 'APPS', 'PLANS', 'PAYMENTS', 'ACCOUNT', 'POLICY', 'GENERAL')),
 	CONSTRAINT "support_knowledge_build_proposals_resolution_check" CHECK (resolution IS NULL OR resolution IN ('TAKE_BUILD', 'KEEP_CURRENT')),
@@ -41,11 +41,15 @@ CREATE TABLE "support_knowledge_builds" (
 	"update_count" integer DEFAULT 0 NOT NULL,
 	"unchanged_count" integer DEFAULT 0 NOT NULL,
 	"conflict_count" integer DEFAULT 0 NOT NULL,
+	"retire_count" integer DEFAULT 0 NOT NULL,
+	"truncated_count" integer DEFAULT 0 NOT NULL,
+	"capped_count" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "support_knowledge_builds_tenant_id_key" UNIQUE("tenant_id","id"),
 	CONSTRAINT "support_knowledge_builds_state_check" CHECK (state IN ('OPEN', 'SUPERSEDED')),
-	CONSTRAINT "support_knowledge_builds_counts_check" CHECK (add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0)
+	CONSTRAINT "support_knowledge_builds_counts_check" CHECK (add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0
+          AND retire_count >= 0 AND truncated_count >= 0 AND capped_count >= 0)
 );
 --> statement-breakpoint
 ALTER TABLE "support_knowledge_articles" ADD COLUMN "source_type" text;--> statement-breakpoint

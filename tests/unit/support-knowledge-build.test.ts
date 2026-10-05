@@ -38,6 +38,8 @@ const built = (overrides: Partial<BuiltArticle> = {}): BuiltArticle => ({
   builtHash: contentHash(item().content),
   title: 'سؤال',
   body: 'پاسخ',
+  category: 'GENERAL',
+  tags: [],
   ...overrides,
 });
 
@@ -73,7 +75,23 @@ describe('the build diff', () => {
 
   it('matches by (source type, source key) only, never by title', () => {
     const other = built({ sourceType: 'PRODUCT', sourceKey: 'faq-1' });
-    expect(diffBuild([item()], [other]).map((d) => d.kind)).toEqual(['ADD']);
+    // The FAQ is an ADD; the PRODUCT article, whose source is gone, is proposed for retirement.
+    expect(diffBuild([item()], [other]).map((d) => d.kind)).toEqual(['ADD', 'RETIRE']);
+  });
+
+  it('RETIRE when a built article\'s source left the allowlisted set; it carries the article text', () => {
+    const edited = built({ revision: 4, body: 'متن ویرایش‌شده' });
+    const drafts = diffBuild([], [edited]);
+    // Proposed even over an edit: a retire only proposes, a reviewer decides.
+    expect(drafts.map((d) => [d.kind, d.article?.id, d.item.content.body])).toEqual([
+      ['RETIRE', 'a1', 'متن ویرایش‌شده'],
+    ]);
+  });
+
+  it('no RETIRE for a retired article, a source still present (excluded), or a type a bound cut', () => {
+    expect(diffBuild([], [built({ state: 'RETIRED' })])).toEqual([]);
+    expect(diffBuild([], [built()], { present: new Set(['FAQ:faq-1']) })).toEqual([]);
+    expect(diffBuild([], [built()], { incomplete: new Set(['FAQ'] as const) })).toEqual([]);
   });
 
   it('the hash is stable and sees every field', () => {
@@ -124,9 +142,9 @@ describe('the source adapter keeps customer-facing fields only', () => {
   ];
   const queries: Record<string, unknown> = {};
   const sources = new NexaKnowledgeSources({
-    products: {
-      list: async (_scope, search) => {
-        queries['products'] = search;
+    catalogue: {
+      publicCatalogue: async (_scope, limit) => {
+        queries['products'] = { publicCatalogue: limit };
         return {
           items: [
             {
@@ -145,7 +163,7 @@ describe('the source adapter keeps customer-facing fields only', () => {
               updatedAt: new Date(),
             },
           ],
-          nextCursor: null,
+          hasMore: false,
         } as never;
       },
     },
@@ -219,14 +237,14 @@ describe('the source adapter keeps customer-facing fields only', () => {
     },
   });
 
-  it('reads active, public products and enabled apps only', async () => {
+  it('reads the public customer catalogue and enabled apps only', async () => {
     await sources.collect({ tenantId: 't' } as never);
-    expect(queries['products']).toEqual({ status: 'ACTIVE', audience: 'EVERYONE' });
+    expect(queries['products']).toEqual({ publicCatalogue: 100 });
     expect(queries['apps']).toEqual({ status: 'ENABLED' });
   });
 
   it('every item is an allowlisted type, and no secret, price or internal field appears', async () => {
-    const items = await sources.collect({ tenantId: 't' } as never);
+    const { items } = await sources.collect({ tenantId: 't' } as never);
     expect(new Set(items.map((i) => i.sourceType))).toEqual(
       new Set([
         'PRODUCT',
@@ -247,5 +265,49 @@ describe('the source adapter keeps customer-facing fields only', () => {
     expect(text).not.toContain('{amount}');
     expect(text).toContain('پلن طلایی');
     expect(text).toContain('آلمان');
+  });
+});
+
+/*
+ * Substitute review of PR #204, N2: the bounds are counted, never silent. A text clipped to
+ * the article bounds is `truncated`; what a per-source bound drops is `capped`, and its type is
+ * `incomplete` so the build proposes no RETIRE from a read that was cut.
+ */
+describe('the source adapter counts what its bounds do', () => {
+  const none = async () => [] as never;
+  const make = (faqs: readonly { id: string; question: string; answer: string }[], more = false) =>
+    new NexaKnowledgeSources({
+      catalogue: { publicCatalogue: async () => ({ items: [], hasMore: more }) as never },
+      locations: { list: none },
+      clientApps: { list: none },
+      templates: {
+        resolve: async (_scope, key) => ({ key, body: '{x}' }) as never,
+      },
+      faqs: { list: async () => faqs as never },
+      terms: { current: async () => null },
+      settings: { valueOf: async <T>() => [] as unknown as T },
+      gateways: { list: none },
+    });
+
+  it('a long FAQ question is clipped and counted; nothing is capped', async () => {
+    const result = await make([{ id: 'f1', question: 'س'.repeat(250), answer: 'پاسخ' }]).collect(
+      { tenantId: 't' } as never,
+    );
+    expect(result.items[0]?.content.title).toHaveLength(200);
+    expect(result.items[0]?.content.title.endsWith('…')).toBe(true);
+    expect([result.truncated, result.capped, result.incomplete]).toEqual([1, 0, []]);
+  });
+
+  it('the 101st FAQ is capped and FAQ is incomplete; a catalogue with more is capped too', async () => {
+    const faqs = Array.from({ length: 101 }, (_, i) => ({
+      id: `f${String(i)}`,
+      question: `سؤال ${String(i)}`,
+      answer: 'پاسخ',
+    }));
+    const result = await make(faqs, true).collect({ tenantId: 't' } as never);
+    expect(result.items).toHaveLength(100);
+    expect(result.truncated).toBe(0);
+    expect(result.capped).toBe(2);
+    expect([...result.incomplete].sort()).toEqual(['FAQ', 'PRODUCT']);
   });
 });

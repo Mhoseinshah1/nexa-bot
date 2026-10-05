@@ -5556,7 +5556,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const supportKnowledgeBuild = new SupportKnowledgeBuildService({
     repository: supportKnowledgeRepository,
     sources: new NexaKnowledgeSources({
-      products: productRepository,
+      catalogue: productService,
       locations: serviceLocationRepository,
       clientApps: clientAppRepository,
       templates: templateResolver,

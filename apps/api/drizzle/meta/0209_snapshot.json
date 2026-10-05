@@ -1,5 +1,5 @@
 {
-  "id": "13b174d0-bd99-4a38-8212-91b2a1b56a45",
+  "id": "138ee510-eb99-4e65-bf06-7b2e9063cbca",
   "prevId": "6ad2d18b-dd9b-4f82-8ac4-401864ba2f93",
   "version": "7",
   "dialect": "postgresql",
@@ -29743,7 +29743,7 @@
         },
         "support_knowledge_build_proposals_kind_check": {
           "name": "support_knowledge_build_proposals_kind_check",
-          "value": "kind IN ('ADD', 'UPDATE', 'UNCHANGED', 'CONFLICT')"
+          "value": "kind IN ('ADD', 'UPDATE', 'UNCHANGED', 'CONFLICT', 'RETIRE')"
         },
         "support_knowledge_build_proposals_state_check": {
           "name": "support_knowledge_build_proposals_state_check",
@@ -29828,6 +29828,27 @@
         },
         "conflict_count": {
           "name": "conflict_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "retire_count": {
+          "name": "retire_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "truncated_count": {
+          "name": "truncated_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "capped_count": {
+          "name": "capped_count",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -29936,7 +29957,7 @@
         },
         "support_knowledge_builds_counts_check": {
           "name": "support_knowledge_builds_counts_check",
-          "value": "add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0"
+          "value": "add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0\n          AND retire_count >= 0 AND truncated_count >= 0 AND capped_count >= 0"
         }
       },
       "isRLSEnabled": false

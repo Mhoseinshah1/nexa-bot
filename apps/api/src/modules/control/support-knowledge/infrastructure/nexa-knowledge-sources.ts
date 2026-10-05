@@ -14,7 +14,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { formatDurationDays, formatTrafficLimit } from '@nexa/i18n';
-import type { ProductRepository } from '../../../commerce/catalog/application/ports.js';
+import type { ProductService } from '../../../commerce/catalog/application/product.service.js';
 import type { ServiceLocationRepository } from '../../../commerce/locations/application/ports.js';
 import type { PaymentGatewayRepository } from '../../../commerce/payments/application/gateway-ports.js';
 import type { ClientAppRepository } from '../../client-apps/application/ports.js';
@@ -22,7 +22,10 @@ import type { SettingsResolver } from '../../settings/application/settings-resol
 import type { SupportFaqRepository } from '../../support/application/ports.js';
 import type { TemplateResolver } from '../../templates/application/template-resolver.js';
 import type { TermsRepository } from '../../terms/application/ports.js';
-import type { KnowledgeBuildSources } from '../application/support-knowledge-build.service.js';
+import type {
+  KnowledgeBuildCollection,
+  KnowledgeBuildSources,
+} from '../application/support-knowledge-build.service.js';
 import type { BuildItem } from '../domain/build-diff.js';
 
 /**
@@ -73,7 +76,12 @@ const PLATFORM_NAMES: Readonly<Record<string, string>> = {
 };
 
 export interface NexaKnowledgeSourcesDeps {
-  readonly products: Pick<ProductRepository, 'list'>;
+  /**
+   * The PUBLIC customer catalogue (B1, substitute review of PR #204): the customer browse's own
+   * predicate — product ACTIVE and for EVERYONE, priced, on a panel the sales gate says may take
+   * a new account, in an ACTIVE and VISIBLE category — never the operator's product list.
+   */
+  readonly catalogue: Pick<ProductService, 'publicCatalogue'>;
   readonly locations: Pick<ServiceLocationRepository, 'list'>;
   readonly clientApps: Pick<ClientAppRepository, 'list'>;
   readonly templates: Pick<TemplateResolver, 'resolve'>;
@@ -87,17 +95,43 @@ function clip(text: string, max: number): string {
   return [...text].length <= max ? text : `${[...text].slice(0, max - 1).join('')}…`;
 }
 
+/** One source item, and whether its text was clipped to the article bounds (N2). */
+interface Drafted {
+  readonly item: BuildItem;
+  readonly truncated: boolean;
+}
+
+/** One source's read: its items, and whether a bound stopped the read before the end. */
+interface SourceRead {
+  readonly type: SupportKnowledgeBuildSourceType;
+  readonly drafts: readonly (Drafted | null)[];
+  readonly more: boolean;
+}
+
 function item(
   sourceType: SupportKnowledgeBuildSourceType,
   sourceKey: string,
   category: SupportKnowledgeCategory,
   title: string,
   body: string,
-): BuildItem | null {
-  const t = clip(title.trim(), SUPPORT_KNOWLEDGE_LIMITS.titleChars);
-  const b = clip(body.trim(), SUPPORT_KNOWLEDGE_LIMITS.bodyChars);
+): Drafted | null {
+  const rawTitle = title.trim();
+  const rawBody = body.trim();
+  const t = clip(rawTitle, SUPPORT_KNOWLEDGE_LIMITS.titleChars);
+  const b = clip(rawBody, SUPPORT_KNOWLEDGE_LIMITS.bodyChars);
   if (t === '' || b === '') return null;
-  return { sourceType, sourceKey, content: { title: t, body: b, category, tags: [] } };
+  return {
+    item: { sourceType, sourceKey, content: { title: t, body: b, category, tags: [] } },
+    truncated: t !== rawTitle || b !== rawBody,
+  };
+}
+
+function read(
+  type: SupportKnowledgeBuildSourceType,
+  drafts: readonly (Drafted | null)[],
+  more = false,
+): SourceRead {
+  return { type, drafts, more };
 }
 
 /** A placeholder in a raw body means it is not text on its own: never rendered here. */
@@ -108,7 +142,12 @@ function hasPlaceholder(body: string): boolean {
 export class NexaKnowledgeSources implements KnowledgeBuildSources {
   constructor(private readonly deps: NexaKnowledgeSourcesDeps) {}
 
-  async collect(scope: TenantContext): Promise<readonly BuildItem[]> {
+  /**
+   * Every source, each bounded at `perSource`. What a bound drops is COUNTED (`capped`, at
+   * least) and its source type is reported `incomplete`: a key missing from a read that was
+   * cut proves nothing, so the build proposes no RETIRE for that type.
+   */
+  async collect(scope: TenantContext): Promise<KnowledgeBuildCollection> {
     const groups = await Promise.all([
       this.products(scope),
       this.locations(scope),
@@ -119,22 +158,36 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
       this.supportAccounts(scope),
       this.paymentMethods(scope),
     ]);
-    return groups.flatMap((group) =>
-      group
-        .filter((entry): entry is BuildItem => entry !== null)
-        .slice(0, SUPPORT_KNOWLEDGE_BUILD_LIMITS.perSource),
-    );
+    const items: BuildItem[] = [];
+    const incomplete = new Set<SupportKnowledgeBuildSourceType>();
+    let truncated = 0;
+    let capped = 0;
+    for (const group of groups) {
+      const drafts = group.drafts.filter((entry): entry is Drafted => entry !== null);
+      const kept = drafts.slice(0, SUPPORT_KNOWLEDGE_BUILD_LIMITS.perSource);
+      const dropped = drafts.length - kept.length + (group.more ? 1 : 0);
+      if (dropped > 0) {
+        capped += dropped;
+        incomplete.add(group.type);
+      }
+      for (const draft of kept) {
+        items.push(draft.item);
+        if (draft.truncated) truncated += 1;
+      }
+    }
+    return { items, truncated, capped, incomplete: [...incomplete] };
   }
 
-  /** ACTIVE, offered to EVERYONE: title, description, features, locations and the spec. */
-  private async products(scope: TenantContext) {
-    const page = await this.deps.products.list(
+  /**
+   * What the customer catalogue lists, and nothing else: title, description, features,
+   * locations and the spec. Never the price, never the panel.
+   */
+  private async products(scope: TenantContext): Promise<SourceRead> {
+    const page = await this.deps.catalogue.publicCatalogue(
       scope,
-      { status: 'ACTIVE', audience: 'EVERYONE' },
       SUPPORT_KNOWLEDGE_BUILD_LIMITS.perSource,
-      null,
     );
-    return page.items.map((product) => {
+    const drafts = page.items.map((product) => {
       const spec = product.specification;
       const lines = [
         product.description ?? '',
@@ -158,6 +211,7 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
       ].filter((line) => line.trim() !== '');
       return item('PRODUCT', product.id as ProductId, 'PLANS', product.title, lines.join('\n'));
     });
+    return read('PRODUCT', drafts, page.hasMore);
   }
 
   /** The labels of the enabled locations, as one article. Never a key, a panel or a price. */
@@ -166,8 +220,10 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
     const labels = [...new Set(rows.filter((row) => row.enabled).map((row) => row.label.trim()))]
       .filter((label) => label !== '')
       .sort((a, b) => a.localeCompare(b));
-    if (labels.length === 0) return [];
-    return [item('LOCATIONS', 'all', 'PLANS', BUILD_LABELS.locationsTitle, labels.join('\n'))];
+    if (labels.length === 0) return read('LOCATIONS', []);
+    return read('LOCATIONS', [
+      item('LOCATIONS', 'all', 'PLANS', BUILD_LABELS.locationsTitle, labels.join('\n')),
+    ]);
   }
 
   /**
@@ -176,7 +232,7 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
    */
   private async clientApps(scope: TenantContext) {
     const rows = await this.deps.clientApps.list(scope, { status: 'ENABLED' });
-    return rows.map((app) => {
+    const drafts = rows.map((app) => {
       const body = [
         neutralizeClientAppBareLinks(app.description),
         renderClientAppGuide(app.guide),
@@ -190,11 +246,12 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
         body.join('\n\n'),
       );
     });
+    return read('CLIENT_APP', drafts);
   }
 
   /** The connection guides, raw: they declare no placeholder, so nothing is rendered. */
   private async tutorials(scope: TenantContext) {
-    const out: (BuildItem | null)[] = [];
+    const out: (Drafted | null)[] = [];
     for (const key of BUILD_TUTORIAL_KEYS) {
       if (templateDefinition(key).placeholders.length > 0) continue;
       const resolved = await this.deps.templates.resolve(scope, key);
@@ -210,26 +267,29 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
         ),
       );
     }
-    return out;
+    return read('TUTORIAL', out);
   }
 
   private async faqs(scope: TenantContext) {
     const rows = await this.deps.faqs.list(scope, { status: 'ACTIVE' });
-    return rows.map((row) => item('FAQ', row.id, 'GENERAL', row.question, row.answer));
+    return read(
+      'FAQ',
+      rows.map((row) => item('FAQ', row.id, 'GENERAL', row.question, row.answer)),
+    );
   }
 
   /** The current PUBLISHED terms. A draft is not the rules yet. */
   private async terms(scope: TenantContext) {
     const current = await this.deps.terms.current(scope);
-    if (current === null) return [];
-    return [item('TERMS', 'current', 'POLICY', current.title, current.body)];
+    if (current === null) return read('TERMS', []);
+    return read('TERMS', [item('TERMS', 'current', 'POLICY', current.title, current.body)]);
   }
 
   private async supportAccounts(scope: TenantContext) {
     const handles = await this.deps.settings.valueOf<readonly string[]>(scope, 'support.accounts');
     const list = handles.map((handle) => handle.trim()).filter((handle) => handle !== '');
-    if (list.length === 0) return [];
-    return [
+    if (list.length === 0) return read('SUPPORT_ACCOUNTS', []);
+    return read('SUPPORT_ACCOUNTS', [
       item(
         'SUPPORT_ACCOUNTS',
         'support.accounts',
@@ -237,7 +297,7 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
         BUILD_LABELS.supportTitle,
         `${BUILD_LABELS.supportBody}\n${list.join('\n')}`,
       ),
-    ];
+    ]);
   }
 
   /**
@@ -246,7 +306,7 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
    */
   private async paymentMethods(scope: TenantContext) {
     const rows = await this.deps.gateways.list(scope);
-    return rows
+    const drafts = rows
       .filter(
         (route) =>
           route.status === 'ACTIVE' &&
@@ -264,5 +324,6 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
           route.instructions ?? '',
         ),
       );
+    return read('PAYMENT_METHOD', drafts);
   }
 }

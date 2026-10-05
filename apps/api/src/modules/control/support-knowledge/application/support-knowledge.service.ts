@@ -720,7 +720,7 @@ export function assertClean(content: {
   }
 }
 
-function articleAudit(row: KnowledgeArticleRecord): Record<string, unknown> {
+export function articleAudit(row: KnowledgeArticleRecord): Record<string, unknown> {
   return {
     source: row.source,
     state: row.state,

@@ -294,6 +294,8 @@ export function buildView(detail: KnowledgeBuildDetail): SupportKnowledgeBuildVi
     state: detail.build.state,
     createdAt: detail.build.createdAt.toISOString(),
     counts: { ...detail.build.counts },
+    truncated: detail.build.truncated,
+    capped: detail.build.capped,
     proposals: detail.proposals.map(proposalView),
   };
 }
