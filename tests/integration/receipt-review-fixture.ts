@@ -85,7 +85,7 @@ export async function receiptFixture(): Promise<ReceiptFixture> {
       fixture.sent.push({ method, body });
       const chat = String(body['chat_id'] ?? '');
       const mode = behaviour.get(chat) ?? 'OK';
-      const isFile = method === 'sendPhoto' || method === 'sendDocument';
+      const isFile = method === 'sendPhoto' || method === 'sendDocument' || method === 'sendVideo';
       const reply = (status: number, payload: unknown) => {
         response.writeHead(status, { 'content-type': 'application/json' });
         response.end(JSON.stringify(payload));
