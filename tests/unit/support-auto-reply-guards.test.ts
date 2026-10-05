@@ -9,6 +9,7 @@ import {
 } from '@nexa/contracts';
 import {
   autoDecisionGuards,
+  autoImageGuard,
   autoPreflight,
   type AutoContextFlags,
 } from '../../apps/api/src/modules/control/support-ai/domain/auto-reply-guards';
@@ -197,7 +198,8 @@ describe('automatic-reply guards (TB7)', () => {
       { origin: 'OWN_ECHO' as const, kind: 'TEXT' as const, text: 'x', deleted: false },
       { origin: 'HUMAN' as const, kind: 'TEXT' as const, text: 'x', deleted: false },
       { origin: 'OFFLINE' as const, kind: 'TEXT' as const, text: 'x', deleted: false },
-      { origin: 'INBOUND' as const, kind: 'PHOTO' as const, text: null, deleted: false },
+      { origin: 'INBOUND' as const, kind: 'OTHER' as const, text: null, deleted: false },
+      { origin: 'INBOUND' as const, kind: 'PHOTO' as const, text: null, deleted: true },
       { origin: 'INBOUND' as const, kind: 'TEXT' as const, text: null, deleted: true },
       { origin: 'INBOUND' as const, kind: 'TEXT' as const, text: '  ', deleted: false },
     ];
@@ -207,6 +209,25 @@ describe('automatic-reply guards (TB7)', () => {
         reason: 'UNSUPPORTED_CONTENT',
       });
     }
+  });
+
+  it('preflight: a customer photo is not refused before it is fetched (TB6)', () => {
+    expect(
+      preflight({ trigger: { origin: 'INBOUND', kind: 'PHOTO', text: null, deleted: false } }),
+    ).toEqual({ pass: true });
+  });
+
+  it('an image the reply would be about that was not loaded hands off', () => {
+    expect(autoImageGuard({ required: ['m1'], loaded: new Set() })).toMatchObject({
+      pass: false,
+      outcome: 'guard_content',
+      reason: 'UNSUPPORTED_CONTENT',
+    });
+    expect(autoImageGuard({ required: ['m1', 'm2'], loaded: new Set(['m1']) })).toMatchObject({
+      pass: false,
+    });
+    expect(autoImageGuard({ required: ['m1'], loaded: new Set(['m1']) })).toEqual({ pass: true });
+    expect(autoImageGuard({ required: [], loaded: new Set() })).toEqual({ pass: true });
   });
 
   it('preflight: a blocked customer, and the loop guard', () => {

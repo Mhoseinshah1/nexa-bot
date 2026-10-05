@@ -9,6 +9,7 @@ import {
   type ScopeContext,
   type SupportAiAutoOutcome,
   type SupportAiDecision,
+  type SupportAiImageSkipReason,
   type SupportAiProvider,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -25,10 +26,17 @@ import type {
 } from '../../../commerce/business-chats/application/ports.js';
 import {
   autoDecisionGuards,
+  autoImageGuard,
   autoPreflight,
   type AutoVerdict,
 } from '../domain/auto-reply-guards.js';
-import { supportSystemPrompt, transcriptMessages } from '../domain/prompt.js';
+import { planVision } from '../domain/vision.js';
+import {
+  supportSystemPrompt,
+  transcriptMessages,
+  type TranscriptImage,
+  type TranscriptLine,
+} from '../domain/prompt.js';
 import type { DrizzleSupportAiConfigRepository } from '../infrastructure/drizzle-support-ai.repository.js';
 import type {
   DrizzleSupportAiJobRepository,
@@ -36,6 +44,7 @@ import type {
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
 import type { SupportContextSource } from './support-assist.service.js';
 import type { SupportAiChain } from './support-ai-chain.js';
+import type { SupportImageSource } from './ports.js';
 
 /** The key that makes an automatic job idempotent on its message (and content version). */
 export function autoJobKey(conversationId: string, telegramMessageId: number, version: number) {
@@ -126,9 +135,12 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
 }
 
 export interface SupportAutoReplyServiceDeps {
-  readonly jobs: Pick<DrizzleSupportAiJobRepository, 'finishAuto'>;
+  readonly jobs: Pick<DrizzleSupportAiJobRepository, 'finishAuto' | 'recordImageOutcomes'>;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
-  readonly chain: Pick<SupportAiChain, 'generate'>;
+  readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
+  /** TB6: the one way a customer's image is read (tenant-scoped, bounded, sniffed). */
+  readonly images: SupportImageSource;
+  readonly ids: IdGenerator;
   readonly context: SupportContextSource;
   readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findByTelegramId'>;
@@ -208,17 +220,50 @@ export class SupportAutoReplyService {
     });
     if (!preflight.pass) return this.handOff(scope, job, preflight, null, null);
 
-    // 3. The model proposes — but never for a stopped tenant: the decision to send a
+    // 3. Never for a stopped tenant: the decision to send a customer's
     // transcript to a provider is business work and checks scope activity in a transaction
     // first (TB5 review, docs/conventions.md). The job ends `dropped_scope`, as at the result.
     const active = await this.deps.uow.run(scope, (tx) =>
       this.deps.scopeActivity.scopeIsActive(scope, tx),
     );
     if (!active) return this.drop(scope, job, 'dropped_scope');
+    // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
+    // transaction through the tenant-scoped source.
     const transcript = await this.deps.messages.recent(scope, conversation.id, 40);
-    const turns = transcriptMessages(
-      transcript.map((m) => ({ origin: m.origin, text: m.text, kind: m.kind })),
-    );
+    const plan = planVision(transcript, {
+      visionEnabled: config.visionEnabled,
+      visionStepConfigured: this.deps.chain.visionStepConfigured(config),
+    });
+    const skipped = new Map<string, SupportAiImageSkipReason>(plan.skipped);
+    const loaded = new Map<string, { image: TranscriptImage; byteSize: number }>();
+    for (const messageId of plan.fetch) {
+      const load = await this.deps.images.load(scope, {
+        conversationId: conversation.id,
+        messageId,
+      });
+      if (load.outcome === 'LOADED')
+        loaded.set(messageId, { image: load.image, byteSize: load.byteSize });
+      else skipped.set(messageId, load.reason);
+    }
+    // The image the reply would be about must be SEEN, or nobody answers it automatically.
+    const required = [
+      ...(trigger !== null && trigger.kind === 'PHOTO' ? [trigger.id] : []),
+      ...(plan.latestInboundImageId === null ? [] : [plan.latestInboundImageId]),
+    ];
+    const unseen = autoImageGuard({ required, loaded: new Set(loaded.keys()) });
+    if (!unseen.pass) {
+      await this.recordImages(scope, job.id, skipped, loaded, 'NOT_ANSWERED');
+      return this.handOff(scope, job, unseen, null, null);
+    }
+    const lines: TranscriptLine[] = transcript.map((m) => ({
+      origin: m.origin,
+      text: m.text,
+      kind: m.kind,
+      image: loaded.get(m.id)?.image ?? null,
+    }));
+
+    // 4. The model proposes.
+    const turns = transcriptMessages(lines, { attachImages: false });
     if (turns.length === 0) {
       const unreadable = {
         pass: false,
@@ -243,7 +288,28 @@ export class SupportAutoReplyService {
         schemaName: 'support_decision',
         maxOutputTokens: Math.min(4_000, config.maxOutputChars * 3 + 600),
       },
+      ...(loaded.size === 0
+        ? {}
+        : {
+            vision: {
+              messages: transcriptMessages(lines, { attachImages: true }),
+              required: required.length > 0,
+            },
+          }),
     });
+    const answered = result.outcome.outcome === 'OK' && result.step !== null;
+    const seen = answered && result.imagesSent > 0;
+    await this.recordImages(
+      scope,
+      job.id,
+      skipped,
+      loaded,
+      seen ? null : answered ? 'NO_VISION_CAPABILITY' : 'NOT_ANSWERED',
+    );
+    // No configured step could look at a required image: an unseen image hands off.
+    if (result.exhausted === 'NO_VISION_STEP' || (required.length > 0 && answered && !seen)) {
+      return this.handOff(scope, job, fail('content', 'UNSUPPORTED_CONTENT'), null, null);
+    }
     if (result.outcome.outcome !== 'OK' || result.step === null) {
       // A provider that refused or produced something unparseable is not "unavailable".
       const invalid =
@@ -280,6 +346,40 @@ export class SupportAutoReplyService {
     });
     if (!guards.pass) return this.handOff(scope, job, guards, parsed.data, produced);
     return this.enqueue(scope, job, parsed.data, produced);
+  }
+
+  /** TB6 telemetry: one row per customer image considered; never a byte, file id or URL. */
+  private async recordImages(
+    scope: ScopeContext,
+    jobId: string,
+    skipped: ReadonlyMap<string, SupportAiImageSkipReason>,
+    loaded: ReadonlyMap<string, { image: TranscriptImage; byteSize: number }>,
+    loadedReason: SupportAiImageSkipReason | null,
+  ): Promise<void> {
+    const rows = [
+      ...[...loaded].map(([messageId, { image, byteSize }]) => ({
+        id: this.deps.ids.uuid(),
+        messageId,
+        outcome: loadedReason === null ? ('PROCESSED' as const) : ('SKIPPED' as const),
+        reason: loadedReason,
+        mediaType: image.mediaType,
+        byteSize,
+      })),
+      ...[...skipped].map(([messageId, reason]) => ({
+        id: this.deps.ids.uuid(),
+        messageId,
+        outcome: 'SKIPPED' as const,
+        reason,
+        mediaType: null,
+        byteSize: null,
+      })),
+    ];
+    // Its own transaction, under the activity check every write takes (TB5 review): a tenant
+    // stopped during the fetch or the call records no telemetry.
+    await this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return;
+      await this.deps.jobs.recordImageOutcomes(scope, jobId, rows, this.deps.clock.now(), tx);
+    });
   }
 
   /** A job claimed too many times without a result: repeated failure hands off. */
@@ -439,6 +539,13 @@ export class SupportAutoReplyService {
       throw error;
     }
   }
+}
+
+function fail(
+  guard: 'content',
+  reason: BusinessHandoffReason,
+): Extract<AutoVerdict, { pass: false }> {
+  return { pass: false, guard, outcome: `guard_${guard}`, reason };
 }
 
 function verdict(

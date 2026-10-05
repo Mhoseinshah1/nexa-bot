@@ -68,15 +68,16 @@ export function autoPreflight(input: {
 }): AutoVerdict {
   const trigger = input.trigger;
   // Only a customer's own message is ever answered — never our echo, an away message or a
-  // human's message (the trigger is recorded INBOUND or it is not a trigger at all).
-  if (
-    trigger === null ||
-    trigger.origin !== 'INBOUND' ||
-    trigger.kind !== 'TEXT' ||
-    trigger.deleted ||
-    trigger.text === null ||
-    trigger.text.trim() === ''
-  ) {
+  // human's message (the trigger is recorded INBOUND or it is not a trigger at all). It is
+  // readable text, or a photo (TB6): whether the photo can actually be SEEN is decided after
+  // it is fetched, and an unseen one hands off too. Anything else (a file, a sticker) cannot
+  // be read at all.
+  const readable =
+    trigger !== null &&
+    !trigger.deleted &&
+    ((trigger.kind === 'TEXT' && trigger.text !== null && trigger.text.trim() !== '') ||
+      trigger.kind === 'PHOTO');
+  if (trigger === null || trigger.origin !== 'INBOUND' || !readable) {
     return fail('content', 'UNSUPPORTED_CONTENT');
   }
   if (input.customerBlocked) return fail('customer_blocked', 'CUSTOMER_BLOCKED');
@@ -90,6 +91,23 @@ const CONFIDENCE_RANK: Readonly<Record<SupportAiConfidence, number>> = {
   MEDIUM: 1,
   HIGH: 2,
 };
+
+/**
+ * TB6 × TB7 — the image rule, after the images were fetched: a customer image the reply would
+ * be about (the trigger, or the customer's latest message) that no model could SEE hands off.
+ * A model that cannot see it would answer the caption, or nothing, as though it had looked.
+ */
+export function autoImageGuard(input: {
+  /** The message ids of the images that must be seen: the trigger's and the latest inbound. */
+  readonly required: readonly string[];
+  /** The images actually loaded (sniffed, bounded) for this request. */
+  readonly loaded: ReadonlySet<string>;
+}): AutoVerdict {
+  if (input.required.some((id) => !input.loaded.has(id))) {
+    return fail('content', 'UNSUPPORTED_CONTENT');
+  }
+  return PASS;
+}
 
 /** After the decision: every guard must pass for a lane row to be enqueued. */
 export function autoDecisionGuards(input: {

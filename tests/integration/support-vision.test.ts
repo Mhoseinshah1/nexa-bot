@@ -298,7 +298,17 @@ describe('Vision in Assist Mode (TB6)', () => {
       chain,
       images,
       context: {
-        build: async () => ({ json: '{"services":[]}', aliases: new Map(), linked: true }),
+        build: async () => ({
+          json: '{"services":[]}',
+          aliases: new Map(),
+          linked: true,
+          flags: {
+            identityLinked: true,
+            customerBlocked: false,
+            hasUnderReviewPayment: false,
+            hasUnreconciledService: false,
+          },
+        }),
       },
       conversations,
       messages,

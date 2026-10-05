@@ -229,7 +229,10 @@ export const supportAiConfigInputSchema = z
      * nothing is ever sent automatically. Widening it charges `support_ai.auto_reply`.
      * Defaulted so a client that does not know the field saves the SAFE value: none.
      */
-    autoTopics: z.array(z.enum(SUPPORT_AI_SAFE_TOPICS)).max(SUPPORT_AI_SAFE_TOPICS.length).default([]),
+    autoTopics: z
+      .array(z.enum(SUPPORT_AI_SAFE_TOPICS))
+      .max(SUPPORT_AI_SAFE_TOPICS.length)
+      .default([]),
     /** TB7 — the lowest model confidence an automatic reply accepts. Default HIGH. */
     autoMinConfidence: z.enum(SUPPORT_AI_AUTO_MIN_CONFIDENCES).default('HIGH'),
   })

@@ -3366,9 +3366,15 @@ TB7 (AUTO_REPLY_SAFE, handoff and tickets, `docs/support-agent/tb7-auto-reply.md
 - **OQ-TB-45 — the loop guard's window is a constant.** At most 10 automatic replies per
   conversation per hour (`SUPPORT_AI_AUTO_WINDOW`), beside the configurable consecutive limit
   (`maxConsecutiveReplies`). Whether the window should be a setting is open.
-- **OQ-TB-46 — images before TB6.** This branch is built on TB5, without TB6. An image from the
-  customer hands off as `UNSUPPORTED_CONTENT`. TB6 decides whether vision may feed an
-  automatic reply at all.
+- **OQ-TB-46 — images in automatic replies (resolved by integrating TB6).** A customer photo
+  is no longer refused outright. It goes through TB6's vision path: the tenant's
+  `visionEnabled`, a vision-capable configured step, and the bounded, sniffed fetch. An AUTO job
+  whose trigger, or whose customer's latest message, is an image no model SAW hands off as
+  `UNSUPPORTED_CONTENT` (`guard_content`), with an image-outcome row saying why. That covers
+  vision off, no vision step, a fetch that failed, a type or size refused, or an answering step
+  that was not given the image. A seen image passes to the ordinary guards. Still open: whether
+  automatic replies to images should need their own owner switch beyond `visionEnabled`, and
+  `OQ-TB-32` (whether `getFile` works on business media at all).
 - **OQ-TB-47 — real-Telegram acceptance of automatic replies.** The two residual windows of
   tb0-audit §4 (a human message typed after the send stamp, or not yet delivered to the
   webhook) are unchanged and closed by nothing; the settle delay is mitigation only. The

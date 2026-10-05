@@ -5522,10 +5522,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     escalations: businessEscalationRepository,
   });
   const supportContextSource = new TbSupportContextSource(supportContext);
+  const supportImages = new TelegramSupportImageSource({
+    conversations: businessConversationRepository,
+    messages: businessMessageRepository,
+    bots: botInstances,
+    apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+    fileBaseUrl: config.TELEGRAM_API_BASE_URL,
+  });
   const supportAutoReply = new SupportAutoReplyService({
     jobs: supportAiJobs,
     configs: supportAiConfigs,
     chain: supportAiChain,
+    images: supportImages,
+    ids,
     context: supportContextSource,
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
@@ -5545,13 +5554,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * the one Telegram file download (bounded while streaming, no redirects, outside any
      * transaction). Same configured origin for files as the receipt reader.
      */
-    images: new TelegramSupportImageSource({
-      conversations: businessConversationRepository,
-      messages: businessMessageRepository,
-      bots: botInstances,
-      apiBaseUrl: config.TELEGRAM_API_BASE_URL,
-      fileBaseUrl: config.TELEGRAM_API_BASE_URL,
-    }),
+    images: supportImages,
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
     sender: businessConversations,

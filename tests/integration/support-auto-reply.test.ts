@@ -16,6 +16,7 @@ import {
   SupportAutoReplyService,
 } from '../../apps/api/src/modules/control/support-ai/application/support-auto-reply.service';
 import type { AutoContextFlags } from '../../apps/api/src/modules/control/support-ai/domain/auto-reply-guards';
+import type { SupportImageLoad } from '../../apps/api/src/modules/control/support-ai/application/ports';
 import { DrizzleSupportAiJobRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository';
 import { DrizzleSupportAiConfigRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
 import { BusinessOutboundService } from '../../apps/api/src/modules/commerce/business-chats/application/business-outbound.service';
@@ -94,6 +95,12 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   let duringCall: (() => Promise<void>) | null;
   let flags: AutoContextFlags;
   let offset: number;
+  // TB6: what the image source returns, whether a configured step can see, and whether the
+  // step that answered was actually given the images.
+  let imageLoad: SupportImageLoad;
+  let visionStep: boolean;
+  let modelSees: boolean;
+  let visionCalls: number[];
   let messageSeq = 100;
   let keySeq = 0;
   const key = (label: string) => `${label}-${Date.now()}-${(keySeq += 1)}`;
@@ -114,6 +121,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       editedAt: null,
       kind: 'TEXT',
       text: 'سلام، اینترنتم وصل نمی‌شود',
+      photo: null,
       ...overrides,
     };
   }
@@ -239,6 +247,14 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     };
     calls = 0;
     duringCall = null;
+    visionStep = true;
+    modelSees = true;
+    visionCalls = [];
+    imageLoad = {
+      outcome: 'LOADED',
+      image: { mediaType: 'image/png', base64: 'iVBORw0KGgo=' },
+      byteSize: 8,
+    };
     offset = 0;
     flags = {
       identityLinked: true,
@@ -254,17 +270,28 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       jobs,
       configs,
       chain: {
-        generate: async () => {
+        generate: async (_scope, input) => {
           calls += 1;
           if (duringCall !== null) await duringCall();
+          const imagesSent = (input.vision?.messages ?? []).reduce(
+            (sum, m) => sum + (m.images?.length ?? 0),
+            0,
+          );
+          visionCalls.push(imagesSent);
           return {
             outcome: next,
             step: { provider: 'OPENAI', model: 'gpt-5.5' },
             attempts: 1,
             exhausted: null,
+            imagesSent: modelSees ? imagesSent : 0,
           };
         },
+        visionStepConfigured: () => visionStep,
       },
+      images: {
+        load: async () => imageLoad,
+      },
+      ids: c.ids,
       context: {
         build: async () => ({
           json: '{"services":[{"alias":"S1"}]}',
@@ -720,6 +747,64 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(await autoJobs(first.conversationId)).toMatchObject([
       { outcome: 'handoff_ai_unavailable', handoff_reason: 'AI_UNAVAILABLE' },
     ]);
+  });
+
+  // --- TB6 × TB7: an image the reply would be about must be SEEN ---------------------------
+
+  const photo = () => message({ kind: 'PHOTO', text: null });
+  const imageOutcomes = async () =>
+    (
+      await db().execute(
+        sql`SELECT outcome, reason FROM support_ai_image_outcomes ORDER BY created_at, id`,
+      )
+    ).rows;
+
+  it('a photo the model can see may be answered automatically, and is recorded PROCESSED', async () => {
+    await configure({ visionEnabled: true });
+    const first = await record(photo());
+    await tick();
+    expect(visionCalls).toEqual([1]);
+    expect(await autoJobs(first.conversationId)).toMatchObject([{ outcome: 'sent' }]);
+    expect(await imageOutcomes()).toEqual([{ outcome: 'PROCESSED', reason: null }]);
+  });
+
+  it('a photo with vision off is never answered: no provider call, a handoff', async () => {
+    const first = await record(photo());
+    await tick();
+    expect(calls).toBe(0);
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { state: 'FAILED', outcome: 'guard_content', handoff_reason: 'UNSUPPORTED_CONTENT' },
+    ]);
+    expect(await imageOutcomes()).toEqual([{ outcome: 'SKIPPED', reason: 'VISION_DISABLED' }]);
+    expect(await autoRows(first.conversationId)).toEqual([]);
+  });
+
+  it('a photo that cannot be fetched or read hands off before any provider call', async () => {
+    await configure({ visionEnabled: true });
+    for (const reason of ['DOWNLOAD_FAILED', 'UNSUPPORTED_TYPE', 'TOO_LARGE'] as const) {
+      imageLoad = { outcome: 'SKIPPED', reason };
+      const recorded = await record(photo());
+      await tick();
+      expect((await autoJobs(recorded.conversationId)).at(-1), reason).toMatchObject({
+        state: 'FAILED',
+        outcome: 'guard_content',
+        handoff_reason: 'UNSUPPORTED_CONTENT',
+      });
+      await resume(recorded.conversationId);
+    }
+    expect(calls).toBe(0);
+  });
+
+  it('a photo the answering step was not given hands off, even with a valid REPLY', async () => {
+    await configure({ visionEnabled: true });
+    modelSees = false;
+    const first = await record(photo());
+    await tick();
+    expect(calls).toBe(1);
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { state: 'FAILED', outcome: 'guard_content', handoff_reason: 'UNSUPPORTED_CONTENT' },
+    ]);
+    expect(await autoRows(first.conversationId)).toEqual([]);
   });
 
   // --- the handoff: one ticket, linked on repeat, and a signal -----------------------------
