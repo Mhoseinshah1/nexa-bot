@@ -6519,6 +6519,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderService,
     antiSpam,
     botRuntime: new BotRuntime({
+      // A10: a best-effort step that failed after its turn's durable write is logged here.
+      logger,
       // WP20: more than 20 interactions in 10 s blocks the customer; fails open.
       antiSpam,
       // Package B: the REQUIRED channels, enforced before any business action; fails open.

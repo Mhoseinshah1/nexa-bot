@@ -3857,6 +3857,15 @@ export interface CustomServiceSurface {
 }
 
 export interface BotRuntimeDeps {
+  /**
+   * Where a BEST-EFFORT step that failed after its turn's durable write is reported: the
+   * receipt's invoice finalisation (A10), which must never cost the customer the one new
+   * message their filed receipt is owed. Optional for the fixtures that build a runtime
+   * without it; the composition root always supplies the process logger.
+   */
+  readonly logger?: {
+    readonly error: (context: Record<string, unknown>, message: string) => void;
+  };
   readonly customers: CustomerService;
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
@@ -5537,6 +5546,10 @@ export class BotRuntime {
      * commit, which is a mechanism rather than a line. Nothing sent here costs money
      * to duplicate: the most a customer sees twice is one order summary naming the
      * SAME order, because the idempotency key is the update's.
+     *
+     * One stated exception: a filed receipt (A10, `submitReceipt`) answers its redelivery
+     * with NOTHING — the PO's instruction is one new message per payment, keyed on its first
+     * receipt row.
      */
     if (reply.key === null || chatId === null) {
       await this.stopSpinner(scope, command, input.botInstanceId, reply.toast);
@@ -15200,15 +15213,29 @@ export class BotRuntime {
        * push is that event's consumer and its own lane — durable with the receipt, never
        * able to cost the customer this answer, and not lost by a crash after the commit.
        */
+      /*
+       * BEST EFFORT, and that is load-bearing. The receipt has committed: a throw here (the
+       * wizard row's write refused by a recovery quiesce, a guard, a lost connection) would
+       * fail the turn, and its redelivery answers `first: false` — so the one new message
+       * would never go out, or a refusal would be shown for a receipt that was filed. The
+       * invoice keeps its prompt instead, and the failure is logged rather than swallowed.
+       */
       if (chatId !== null) {
-        await this.finaliseReceiptInvoice(
-          scope,
-          actor,
-          botInstanceId,
-          chatId,
-          submitted.paymentId,
-          idempotencyKey,
-        );
+        try {
+          await this.finaliseReceiptInvoice(
+            scope,
+            actor,
+            botInstanceId,
+            chatId,
+            submitted.paymentId,
+            idempotencyKey,
+          );
+        } catch (error) {
+          this.deps.logger?.error(
+            { err: error, paymentId: submitted.paymentId, tenantId: scope.tenantId },
+            'receipt invoice finalisation failed; the receipt is filed and its message still goes',
+          );
+        }
       }
       if (!submitted.first) return { key: null, values: {}, buttons: [], orderId: null };
       return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };

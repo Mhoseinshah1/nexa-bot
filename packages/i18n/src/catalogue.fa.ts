@@ -756,7 +756,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * account afterwards does not change what this customer was told.
    */
   'bot.payment.transfer_instructions':
-    '{icon:invoice} جزئیات فاکتور پرداخت شما\n\nشناسه فاکتور: {reference}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر یا فایل رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
+    '{icon:invoice} جزئیات فاکتور پرداخت شما\n\nشناسه فاکتور: {reference}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
   'bot.payment.destination.bank': 'بانک: {value}',
   'bot.payment.destination.holder': 'به نام: {value}',
   'bot.payment.destination.card': 'شماره کارت: {value}',

@@ -57,6 +57,14 @@ const CHAT_ID = 8484;
 /** A10: the brief's exact copy for the one new message the first receipt sends. */
 const RECEIPT_RECEIVED_TEXT =
   'رسید شما دریافت شد و در حال بررسی می‌باشد.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.';
+/**
+ * A10: the invoice's final, button-less text — rendered from the catalogue and compared
+ * EXACTLY, because the receipt prompt opens with the same first sentence.
+ */
+const INVOICE_FINAL_TEXT = plain(CATALOGUE_FA['bot.payment.received_for_review']).replace(
+  '{icon:info}',
+  'ℹ️',
+);
 
 interface Sent {
   readonly url: string;
@@ -715,8 +723,7 @@ describe('the customer payment flow over Telegram', () => {
     const [final, fresh] = turn;
     expect(final?.url).toContain('/editMessageText');
     expect(final?.body['message_id']).toBe(invoice);
-    expect(String(final?.body['text'])).toContain('اعلام شما ثبت شد');
-    expect(String(final?.body['text'])).not.toContain('رسید شما دریافت شد');
+    expect(String(final?.body['text'])).toBe(INVOICE_FINAL_TEXT);
     // The keyboard is sent EMPTY, which is what removes the old one.
     expect(final?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     // …then ONE new message, the brief's copy word for word, with no button.
@@ -808,6 +815,77 @@ describe('the customer payment flow over Telegram', () => {
   });
 
   /*
+   * Review fix 1: the invoice finalisation is BEST EFFORT. The receipt has committed, so a
+   * throw there must not fail the turn — its redelivery answers `first: false`, and the one
+   * new message would then never go out.
+   */
+  it('still sends the one new message when finalising the invoice throws', async () => {
+    const { payment } = await atReceiptPrompt();
+    const state = (
+      api.container.botRuntime as unknown as {
+        deps: { messageState: { claimLatest: (...args: unknown[]) => Promise<unknown> } };
+      }
+    ).deps.messageState;
+    const spy = vi
+      .spyOn(state, 'claimLatest')
+      .mockRejectedValueOnce(new Error('wizard row unwritable'));
+    let calls: number;
+    try {
+      sent = [];
+      await photo('finalise-throws');
+      calls = spy.mock.calls.length;
+    } finally {
+      spy.mockRestore();
+    }
+    // The throw really happened, on the receipt's own turn.
+    expect(calls).toBe(1);
+    expect(newMessages()).toHaveLength(1);
+    expect(String(newMessages()[0]?.body['text'])).toBe(RECEIPT_RECEIVED_TEXT);
+    expect(await receiptsFiled(payment)).toBe(1);
+  });
+
+  /*
+   * Review fix 5: when Telegram refuses the final edit, the prompt's cancel button stays on
+   * the invoice. It is not a dead button — `x:` is not wizard-gated — and the withdrawal
+   * itself refuses a payment whose receipt is under review, so it answers truthfully.
+   */
+  it('answers the cancel button left by a refused final edit with withdraw_under_review', async () => {
+    const { payment, invoice } = await atReceiptPrompt();
+    reply = (request, response) => {
+      if ((request.url ?? '').includes('/editMessageText')) {
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            ok: false,
+            error_code: 400,
+            description: "Bad Request: message can't be edited",
+          }),
+        );
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+    };
+    sent = [];
+    await photo('edit-refused');
+    // The refused edit is NOT re-sent as a second message: the one new message is the answer.
+    expect(newMessages()).toHaveLength(1);
+    expect(String(newMessages()[0]?.body['text'])).toBe(RECEIPT_RECEIVED_TEXT);
+
+    reply = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+    };
+    await tap(`x:${payment}`, { message: invoice });
+    sent = [];
+    await tap(`z:${payment}`, { message: invoice });
+    expect(String(messages().at(-1)?.body['text'])).toBe(
+      CATALOGUE_FA['bot.payment.withdraw_under_review'],
+    );
+    expect((await payments())[0]?.['state']).toBe('PENDING');
+  });
+
+  /*
    * Codex 4170910529: the receipt arrives WHILE the «پرداخت را انجام دادم» turn is still
    * running — after its claim opened the upload window, before it put the prompt on the
    * invoice. The receipt cannot find the prompt (the invoice is still held by the tap), so
@@ -843,7 +921,7 @@ describe('the customer payment flow over Telegram', () => {
       (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
     );
     const lastOnInvoice = onInvoice.at(-1);
-    expect(String(lastOnInvoice?.body['text'])).toContain('اعلام شما ثبت شد');
+    expect(String(lastOnInvoice?.body['text'])).toBe(INVOICE_FINAL_TEXT);
     expect(lastOnInvoice?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     // The receipt's one new message went out once, although it never found the invoice.
     expect(
@@ -897,7 +975,7 @@ describe('the customer payment flow over Telegram', () => {
     const onInvoice = sent.filter(
       (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
     );
-    expect(String(onInvoice.at(-1)?.body['text'])).toContain('اعلام شما ثبت شد');
+    expect(String(onInvoice.at(-1)?.body['text'])).toBe(INVOICE_FINAL_TEXT);
     expect(onInvoice.at(-1)?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     expect(
       sent.filter(

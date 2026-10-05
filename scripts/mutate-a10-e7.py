@@ -18,6 +18,7 @@ BOT='apps/api/src/surfaces/telegram/bot-runtime.ts'
 CAT='packages/i18n/src/catalogue.fa.ts'
 T_I=('integration','tests/integration/telegram-payment-flow.test.ts')
 T_U=('unit','tests/unit/telegram-customer-ux.test.ts')
+T_S=('integration','tests/integration/payment-receipts.test.ts')
 
 M=[
  # --- exactly once: the new message is keyed on the payment's FIRST receipt row ----------------
@@ -36,6 +37,16 @@ M=[
  ('E7-01',[(CAT,"اکنون تصویر رسید را در همین گفتگو","اکنون تصویر یا فایل رسید را در همین گفتگو")],T_U,'no longer advertises a file'),
  ('E7-02',[(CAT,"اکنون تصویر رسید را در همین گفتگو","اکنون تصویر یا فایل رسید را در همین گفتگو")],T_I,'ends it button-less'),
  ('A10-09',[(CAT,"در حال بررسی می‌باشد.\\n\\nپس از بررسی","در حال بررسی می‌باشد.\\nپس از بررسی")],T_U,'blank line between them'),
+ # --- review round (PR #208) ------------------------------------------------------------------
+ # The invoice's final text must be EXACTLY received_for_review; the prompt shares its opening.
+ ('A10-11',[(BOT,"const RECEIPT_INVOICE_FINAL_KEY: TemplateKey = 'bot.payment.received_for_review';","const RECEIPT_INVOICE_FINAL_KEY: TemplateKey = 'bot.payment.receipt_prompt';")],T_I,'ends it button-less and sends ONE new message'),
+ # The invoice finalisation is best effort: a throw after the commit must not cost the message.
+ ('A10-12',[(BOT,"        } catch (error) {\n          this.deps.logger?.error(","        } catch (error) {\n          throw error;\n          this.deps.logger?.error(")],T_I,'finalising the invoice throws'),
+ # Service level: exactly one of two concurrent first receipts, and a replay is never first.
+ ('A10-13',[(SVC,"first: filed !== null && already === 0,","first: filed !== null && already <= 1,")],T_S,'exactly one of two concurrent first receipts'),
+ ('A10-14',[(SVC,"        held: replayed.result.held,\n        first: false,","        held: replayed.result.held,\n        first: replayed.result.filed && replayed.result.held === 1,")],T_S,'redelivered update without writing'),
+ # E7 on the invoice itself: the instructions ask for an image, not a file.
+ ('E7-03',[(CAT,"دکمهٔ پایین را بزنید و تصویر رسید را ارسال کنید.","دکمهٔ پایین را بزنید و تصویر یا فایل رسید را ارسال کنید.")],T_U,'image of the receipt, not a file'),
  ('A10-10',[(CAT,"در حال بررسی می‌باشد.\\n\\nپس از بررسی","در حال بررسی می‌باشد.\\nپس از بررسی")],T_I,'ends it button-less'),
 ]
 
@@ -67,8 +78,11 @@ for mid,edits,(project,test),filt in M:
     failed=[l.strip() for l in out.splitlines() if '×' in l]
     summ=[l.strip() for l in out.splitlines() if 'Tests ' in l]
     ran_any=any('passed' in l or 'failed' in l for l in summ)
-    if r.returncode!=0 and ran_any: killed+=1
-    print(mid,'KILLED' if (r.returncode!=0 and ran_any) else 'SURVIVED',summ,failed[:2],flush=True)
+    # KILLED only when a named test FAILED: a non-zero exit with no × line is a broken run
+    # (a compile error, a missing database), not a test that noticed the mutant.
+    dead=r.returncode!=0 and ran_any and len(failed)>0
+    if dead: killed+=1
+    print(mid,'KILLED' if dead else 'SURVIVED',summ,failed[:2],flush=True)
   for f,s in originals.items(): open(f,'w',encoding='utf-8').write(s)
   for p in pkgs: build_package(p)
 print(f'{killed} of {ran} killed',flush=True)
