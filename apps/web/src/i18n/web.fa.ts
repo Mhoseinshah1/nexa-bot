@@ -7634,6 +7634,7 @@ export const WEB_FA = {
   'web.sk_cand_confidence': 'اطمینان',
   'web.sk_cand_sources': 'تعداد منبع',
   'web.sk_cand_purged': 'متن این پیشنهاد طبق سیاست نگهداری پاک شده است.',
+  'web.sk_cand_title_purged': 'عنوان پاک شده',
   'web.sk_cand_auto_rejected': 'خودکار رد شد: اطلاعات حساس',
   'web.sk_cand_empty': 'پیشنهادی در این وضعیت نیست',
   'web.sk_cand_empty_hint':
@@ -7652,6 +7653,7 @@ export const WEB_FA = {
   'web.sk_kind_subscription_link': 'لینک اشتراک',
   'web.sk_kind_url_token': 'لینک دارای کلید',
   'web.sk_kind_ip': 'نشانی سرور',
+  'web.sk_kind_host': 'دامنه یا لینک سرور',
   'web.sk_kind_uuid': 'شناسه',
   'web.sk_kind_secret': 'رمز یا کلید',
   'web.sk_kind_username': 'نام کاربری تلگرام',

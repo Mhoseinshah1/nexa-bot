@@ -14000,10 +14000,12 @@ const KNOWLEDGE_TAGS_MAX = sql.raw(String(SUPPORT_KNOWLEDGE_LIMITS.tags));
  * reply, waiting for a reviewer (ADR-0035 §2–§3). `PENDING → APPROVED | REJECTED`, each a
  * conditional UPDATE naming `PENDING` and the version.
  *
- * `normalized_title` is unique per tenant across EVERY state: a proposal matching a pending,
- * approved or rejected candidate is merged into it as an extra source (`source_refs`), so a
- * rejected lesson is not proposed again. The text of a candidate never approved is purged
- * after `SUPPORT_LEARNING_TEXT_RETENTION_DAYS`; its normalised title survives.
+ * `normalized_title` is unique per tenant across every state but a scrubber rejection: a
+ * proposal matching a pending, approved or reviewer-rejected candidate is merged into it as an
+ * extra source (`source_refs`), so a rejected lesson is not proposed again. A
+ * `SENSITIVE_CONTENT` rejection is outside the index, so it never absorbs a later clean
+ * proposal. The text of a candidate never approved (title, body, rationale and tags) is purged
+ * after `SUPPORT_LEARNING_TEXT_RETENTION_DAYS`; only its normalised title survives.
  *
  * A candidate the scrubber still matched is stored REJECTED with `SENSITIVE_CONTENT`, by
  * nobody, with its text REDACTED and only the KINDS of what matched.
@@ -14016,7 +14018,8 @@ export const supportLearningCandidates = pgTable(
       .notNull()
       .references(() => tenants.id),
     state: text('state').notNull().default('PENDING'),
-    title: text('title').notNull(),
+    /** Null once purged (with the body, rationale and tags). */
+    title: text('title'),
     normalizedTitle: text('normalized_title').notNull(),
     body: text('body'),
     category: text('category').notNull(),
@@ -14051,7 +14054,13 @@ export const supportLearningCandidates = pgTable(
   },
   (table) => [
     unique('support_learning_candidates_tenant_id_key').on(table.tenantId, table.id),
-    uniqueIndex('support_learning_candidates_title_key').on(table.tenantId, table.normalizedTitle),
+    /*
+     * A lesson the scrubber rejected is not a decision about the lesson: it holds no title for
+     * the exact-duplicate rule, so the same lesson proposed cleanly later is its own candidate.
+     */
+    uniqueIndex('support_learning_candidates_title_key')
+      .on(table.tenantId, table.normalizedTitle)
+      .where(sql`reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'`),
     /** The review queue: by state, newest first. */
     index('support_learning_candidates_queue_idx').on(table.tenantId, table.state, table.createdAt),
     foreignKey({
@@ -14109,7 +14118,7 @@ export const supportLearningCandidates = pgTable(
     ),
     check(
       'support_learning_candidates_title_check',
-      sql`length(btrim(title)) BETWEEN 1 AND ${KNOWLEDGE_TITLE_MAX} AND length(normalized_title) >= 1`,
+      sql`(title IS NULL OR length(btrim(title)) BETWEEN 1 AND ${KNOWLEDGE_TITLE_MAX}) AND length(normalized_title) >= 1`,
     ),
     check(
       'support_learning_candidates_body_check',
@@ -14118,7 +14127,7 @@ export const supportLearningCandidates = pgTable(
     // Only purged text may be missing.
     check(
       'support_learning_candidates_purge_check',
-      sql`body IS NOT NULL OR text_purged_at IS NOT NULL`,
+      sql`(body IS NOT NULL AND title IS NOT NULL) OR text_purged_at IS NOT NULL`,
     ),
     check(
       'support_learning_candidates_tags_check',

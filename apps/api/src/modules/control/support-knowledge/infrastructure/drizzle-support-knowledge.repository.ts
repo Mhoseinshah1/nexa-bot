@@ -28,6 +28,17 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 
+/** `pg_advisory_xact_lock` class of the learning enqueue ('LJ'), keyed by the tenant. */
+export const SUPPORT_LEARNING_ENQUEUE_LOCK_CLASS = 0x4c4a;
+
+/**
+ * A candidate the scrubber rejected is outside the duplicate rules (the partial unique index
+ * `support_learning_candidates_title_key` says the same): it is not a decision about the
+ * lesson, so it never absorbs a later clean proposal of it. Unqualified, because it is also the
+ * `ON CONFLICT` arbiter's predicate, which must match the index's own.
+ */
+const notSensitiveRejection = sql.raw(`reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'`);
+
 // --- records -------------------------------------------------------------------
 
 export interface KnowledgeArticleRecord {
@@ -67,7 +78,8 @@ export interface LearningSourceRef {
 export interface LearningCandidateRecord {
   readonly id: string;
   readonly state: SupportLearningCandidateState;
-  readonly title: string;
+  /** Null once purged. */
+  readonly title: string | null;
   readonly normalizedTitle: string;
   readonly body: string | null;
   readonly category: SupportKnowledgeCategory;
@@ -491,7 +503,7 @@ export class DrizzleSupportKnowledgeRepository {
         normalizedTitle: supportLearningCandidates.normalizedTitle,
       })
       .from(supportLearningCandidates)
-      .where(eq(supportLearningCandidates.tenantId, tenantId))
+      .where(and(eq(supportLearningCandidates.tenantId, tenantId), notSensitiveRejection))
       .orderBy(desc(supportLearningCandidates.createdAt))
       .limit(limit);
   }
@@ -552,6 +564,7 @@ export class DrizzleSupportKnowledgeRepository {
       })
       .onConflictDoNothing({
         target: [supportLearningCandidates.tenantId, supportLearningCandidates.normalizedTitle],
+        where: notSensitiveRejection,
       })
       .returning();
     return inserted === undefined ? null : candidate(inserted);
@@ -570,6 +583,7 @@ export class DrizzleSupportKnowledgeRepository {
         and(
           eq(supportLearningCandidates.tenantId, tenantId),
           eq(supportLearningCandidates.normalizedTitle, normalizedTitle),
+          notSensitiveRejection,
         ),
       )
       .limit(1);
@@ -673,8 +687,10 @@ export class DrizzleSupportKnowledgeRepository {
   }
 
   /**
-   * ADR-0035 consequences: the text of a candidate never approved is purged after the
-   * retention; the normalised title stays, because the duplicate check matches it.
+   * ADR-0035 consequences: the text of a candidate never approved — title, body, rationale and
+   * tags — is purged after the retention. Only the normalised title stays, because the
+   * duplicate check matches it (a reviewer's rejection is not re-proposed); it is the scrubbed
+   * title folded to a match key, and no view or audit row carries it.
    */
   async purgeCandidateText(
     scope: ScopeContext,
@@ -699,7 +715,14 @@ export class DrizzleSupportKnowledgeRepository {
       .limit(limit);
     const rows = await db
       .update(supportLearningCandidates)
-      .set({ body: null, rationale: null, textPurgedAt: now, updatedAt: now })
+      .set({
+        title: null,
+        body: null,
+        rationale: null,
+        tags: sql`'{}'::text[]`,
+        textPurgedAt: now,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(supportLearningCandidates.tenantId, tenantId),
@@ -775,6 +798,17 @@ export class DrizzleSupportKnowledgeRepository {
       .where(and(eq(supportLearningJobs.tenantId, tenantId), eq(supportLearningJobs.id, id)))
       .limit(1);
     return row === undefined ? null : job(row);
+  }
+
+  /**
+   * The tenant's learning-enqueue lock, held to the end of `tx`: every enqueue counts its
+   * windows under it, so two racing proposals cannot both see an empty window.
+   */
+  async lockLearningEnqueue(scope: ScopeContext, tx: unknown): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await exec(this.db, tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${SUPPORT_LEARNING_ENQUEUE_LOCK_CLASS}, hashtext(${tenantId}))`,
+    );
   }
 
   /** Jobs since `since`: of one conversation when it is named, else of the whole tenant. */

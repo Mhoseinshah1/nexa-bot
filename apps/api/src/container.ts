@@ -5528,6 +5528,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     audit,
     opsLog,
     sessions,
+    idempotency,
     scopeActivity: tenants,
     clock,
     ids,

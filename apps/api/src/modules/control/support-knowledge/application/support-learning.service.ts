@@ -11,6 +11,7 @@ import {
   type AuditWriter,
   type Clock,
   type IdGenerator,
+  type IdempotencyStore,
   type OperationalEventRecorder,
   type PermissionKey,
   type ScopeContext,
@@ -23,6 +24,8 @@ import {
   recordMutationDenial,
   runAuthorizedMutation,
 } from '../../../platform/access/application/authorized-mutation.js';
+import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
+import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -39,6 +42,7 @@ import type { DrizzleSupportAiConfigRepository } from '../../support-ai/infrastr
 import { findDuplicate, normalizeTitle } from '../domain/dedupe.js';
 import { learningSystemPrompt, learningUserMessage } from '../domain/learning-prompt.js';
 import { scrubSensitive } from '../domain/scrubber.js';
+import { SUPPORT_KNOWLEDGE_REVIEW_PERMISSION } from './support-knowledge.service.js';
 import type {
   DrizzleSupportKnowledgeRepository,
   LearningJobRecord,
@@ -71,6 +75,7 @@ export interface SupportLearningServiceDeps {
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
+  readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -136,7 +141,14 @@ export class SupportLearningService implements HandbackLearningTrigger {
     );
   }
 
-  /** «پیشنهاد به‌عنوان دانش»: an operator proposes one of the delivered replies. */
+  /**
+   * «پیشنهاد به‌عنوان دانش»: an operator proposes one of THEIR delivered replies (the
+   * permission's own wording); proposing another person's reply needs `support_knowledge.review`.
+   *
+   * The idempotency key is bound to its payload (PR #203 review, finding 5): a replay answers
+   * with the job it made, and the same key with another reply is a payload mismatch, never a
+   * second proposal answered with the first one's job.
+   */
   async propose(
     scope: ScopeContext,
     actor: ActorContext,
@@ -169,76 +181,129 @@ export class SupportLearningService implements HandbackLearningTrigger {
       );
     }
     const adminId = actor.id;
-    const key = learningJobKey(command.outboundId);
-    // A replay — and a second proposal of a reply a handback already queued — is that job.
-    const existing = await this.deps.repository.findJobByKey(scope, key);
-    if (existing !== null && existing.conversationId === conversationId) return existing;
-    const { config } = await this.deps.configs.get(scope);
-    if (config.mode === 'OFF') {
-      throw errors.conflict(
-        SUPPORT_KNOWLEDGE_ERROR_CODES.AI_OFF,
-        'The support AI is off for this installation, so nothing is learned.',
-      );
-    }
-    return runAuthorizedMutation(
-      this.mutationDeps(),
+    const requestHash = hashRequest({
+      action: 'support_knowledge.propose',
+      conversationId,
+      outboundId: command.outboundId,
+    });
+    // Throws IDEMPOTENCY_PAYLOAD_MISMATCH when this key was used for another reply.
+    const found = await this.deps.idempotency.find<{ readonly id: string }>(
       scope,
-      actor,
-      SUPPORT_KNOWLEDGE_PROPOSE_PERMISSION,
-      denial,
-      async (tx) => {
-        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
-          throw errors.conflict(
-            SUPPORT_KNOWLEDGE_ERROR_CODES.SCOPE_STOPPED,
-            'This installation has stopped accepting work.',
-          );
-        }
-        const reply = await this.deps.outbound.findById(scope, command.outboundId, tx);
-        if (reply === null || !isEligibleReply(reply, conversationId)) {
-          throw errors.conflict(
-            SUPPORT_KNOWLEDGE_ERROR_CODES.SOURCE_NOT_ELIGIBLE,
-            'Only a delivered reply an operator wrote in this conversation can be proposed.',
-          );
-        }
-        const now = this.deps.clock.now();
-        const decision = await this.enqueue(
-          scope,
-          { reply, trigger: 'OPERATOR_PROPOSAL', adminId, now },
-          tx,
-        );
-        if (decision !== 'QUEUED' && decision !== 'EXISTS') {
-          throw errors.conflict(
-            SUPPORT_KNOWLEDGE_ERROR_CODES.RATE_LIMITED,
-            'A lesson was already proposed from this conversation recently, or too many were proposed in the last hour.',
-            { window: decision },
-          );
-        }
-        const job = await this.deps.repository.findJobByKey(scope, key, tx);
-        if (job === null) throw errors.internal('support_knowledge.job_missing', 'Job vanished.');
-        if (decision === 'QUEUED') {
-          await this.deps.audit.record(
+      actor.surface,
+      command.idempotencyKey,
+      requestHash,
+    );
+    if (found !== null) {
+      const replayed = await this.deps.repository.findJob(scope, found.result.id);
+      if (replayed !== null) return replayed;
+    }
+    const key = learningJobKey(command.outboundId);
+    const { config } = await this.deps.configs.get(scope);
+    try {
+      return await runAuthorizedMutation(
+        this.mutationDeps(),
+        scope,
+        actor,
+        SUPPORT_KNOWLEDGE_PROPOSE_PERMISSION,
+        denial,
+        async (tx) => {
+          if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+            throw errors.conflict(
+              SUPPORT_KNOWLEDGE_ERROR_CODES.SCOPE_STOPPED,
+              'This installation has stopped accepting work.',
+            );
+          }
+          const reply = await this.deps.outbound.findById(scope, command.outboundId, tx);
+          if (reply === null || !isEligibleReply(reply, conversationId)) {
+            throw errors.conflict(
+              SUPPORT_KNOWLEDGE_ERROR_CODES.SOURCE_NOT_ELIGIBLE,
+              'Only a delivered reply an operator wrote in this conversation can be proposed.',
+            );
+          }
+          // «your own replies»: another person's reply is a reviewer's to propose. The guard
+          // throws the review permission's denial, recorded below once the transaction unwinds.
+          if (reply.createdByAdminId !== adminId) {
+            await this.deps.guard.check(scope, actor, SUPPORT_KNOWLEDGE_REVIEW_PERMISSION, tx);
+          }
+          const remember = (job: LearningJobRecord) =>
+            rememberOnce(
+              this.deps.idempotency,
+              scope,
+              actor.surface,
+              command.idempotencyKey,
+              requestHash,
+              { id: job.id },
+              tx,
+            );
+          // A second proposal of a reply that already has a job — a handback's — is that job.
+          const existing = await this.deps.repository.findJobByKey(scope, key, tx);
+          if (existing !== null) {
+            await remember(existing);
+            return existing;
+          }
+          if (config.mode === 'OFF') {
+            throw errors.conflict(
+              SUPPORT_KNOWLEDGE_ERROR_CODES.AI_OFF,
+              'The support AI is off for this installation, so nothing is learned.',
+            );
+          }
+          const now = this.deps.clock.now();
+          const decision = await this.enqueue(
             scope,
-            actor,
-            {
-              action: 'support_knowledge.propose',
-              entityType: 'BusinessConversation',
-              entityId: conversationId,
-              before: null,
-              after: { jobId: job.id, outboundId: reply.id },
-              result: 'SUCCESS',
-            },
+            { reply, trigger: 'OPERATOR_PROPOSAL', adminId, now },
             tx,
           );
-        }
-        return job;
-      },
-    );
+          if (decision !== 'QUEUED' && decision !== 'EXISTS') {
+            throw errors.conflict(
+              SUPPORT_KNOWLEDGE_ERROR_CODES.RATE_LIMITED,
+              'A lesson was already proposed from this conversation recently, or too many were proposed in the last hour.',
+              { window: decision },
+            );
+          }
+          const job = await this.deps.repository.findJobByKey(scope, key, tx);
+          if (job === null) throw errors.internal('support_knowledge.job_missing', 'Job vanished.');
+          if (decision === 'QUEUED') {
+            await this.deps.audit.record(
+              scope,
+              actor,
+              {
+                action: 'support_knowledge.propose',
+                entityType: 'BusinessConversation',
+                entityId: conversationId,
+                before: null,
+                after: { jobId: job.id, outboundId: reply.id },
+                result: 'SUCCESS',
+              },
+              tx,
+            );
+          }
+          await remember(job);
+          return job;
+        },
+      );
+    } catch (error) {
+      // The authorship refusal is the REVIEW permission's denial: audited as such.
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        SUPPORT_KNOWLEDGE_REVIEW_PERMISSION,
+        denial,
+        error,
+      );
+      throw error;
+    }
   }
 
   /**
    * Enqueues the job for `reply` unless a bound refuses it. `EXISTS`: the reply already has a
-   * job. `CONVERSATION` / `TENANT`: a window is full. Counted inside the caller's transaction
-   * (a bound, not a lock: two operators racing may both pass, which costs one extra candidate).
+   * job. `CONVERSATION` / `TENANT`: a window is full.
+   *
+   * Counted under the tenant's learning-enqueue lock, taken first in the caller's transaction
+   * (PR #203 review, finding 3): without it, two proposals racing on one conversation both
+   * counted zero and both enqueued, and N racing past the hourly cap all passed. The second
+   * waits for the first to commit, and its count — a new statement under READ COMMITTED —
+   * sees the first one's job.
    */
   private async enqueue(
     scope: ScopeContext,
@@ -250,6 +315,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
     },
     tx: unknown,
   ): Promise<'QUEUED' | 'EXISTS' | 'CONVERSATION' | 'TENANT'> {
+    await this.deps.repository.lockLearningEnqueue(scope, tx);
     const key = learningJobKey(input.reply.id);
     if ((await this.deps.repository.findJobByKey(scope, key, tx)) !== null) return 'EXISTS';
     const windowStart = new Date(

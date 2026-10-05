@@ -51,7 +51,7 @@ CREATE TABLE "support_learning_candidates" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"tenant_id" uuid NOT NULL,
 	"state" text DEFAULT 'PENDING' NOT NULL,
-	"title" text NOT NULL,
+	"title" text,
 	"normalized_title" text NOT NULL,
 	"body" text,
 	"category" text NOT NULL,
@@ -79,16 +79,16 @@ CREATE TABLE "support_learning_candidates" (
 	CONSTRAINT "support_learning_candidates_category_check" CHECK (category IN ('CONNECTION', 'APPS', 'PLANS', 'PAYMENTS', 'ACCOUNT', 'POLICY', 'GENERAL')),
 	CONSTRAINT "support_learning_candidates_confidence_check" CHECK (confidence IN ('LOW', 'MEDIUM', 'HIGH')),
 	CONSTRAINT "support_learning_candidates_reject_reason_check" CHECK (reject_reason IS NULL OR reject_reason IN ('REVIEWER', 'SENSITIVE_CONTENT')),
-	CONSTRAINT "support_learning_candidates_sensitive_kinds_check" CHECK (sensitive_kinds <@ ARRAY['EMAIL', 'PHONE', 'CARD', 'IBAN', 'SUBSCRIPTION_LINK', 'URL_TOKEN', 'IP_ADDRESS', 'UUID', 'SECRET', 'USERNAME', 'AMOUNT', 'LONG_NUMBER', 'REDACTION_MARK']::text[]),
+	CONSTRAINT "support_learning_candidates_sensitive_kinds_check" CHECK (sensitive_kinds <@ ARRAY['EMAIL', 'PHONE', 'CARD', 'IBAN', 'SUBSCRIPTION_LINK', 'URL_TOKEN', 'IP_ADDRESS', 'HOST', 'UUID', 'SECRET', 'USERNAME', 'AMOUNT', 'LONG_NUMBER', 'REDACTION_MARK']::text[]),
 	CONSTRAINT "support_learning_candidates_provider_check" CHECK (provider IS NULL OR provider IN ('OPENAI', 'ANTHROPIC', 'ZAI')),
 	CONSTRAINT "support_learning_candidates_reject_shape_check" CHECK ((state = 'REJECTED') = (reject_reason IS NOT NULL)),
 	CONSTRAINT "support_learning_candidates_approve_shape_check" CHECK ((state = 'APPROVED') = (article_id IS NOT NULL)),
 	CONSTRAINT "support_learning_candidates_reviewed_check" CHECK ((state = 'PENDING') = (reviewed_at IS NULL)),
 	CONSTRAINT "support_learning_candidates_sensitive_shape_check" CHECK ((reject_reason IS NOT DISTINCT FROM 'SENSITIVE_CONTENT') = (cardinality(sensitive_kinds) > 0)
           AND (reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT' OR reviewed_by_admin_id IS NULL)),
-	CONSTRAINT "support_learning_candidates_title_check" CHECK (length(btrim(title)) BETWEEN 1 AND 200 AND length(normalized_title) >= 1),
+	CONSTRAINT "support_learning_candidates_title_check" CHECK ((title IS NULL OR length(btrim(title)) BETWEEN 1 AND 200) AND length(normalized_title) >= 1),
 	CONSTRAINT "support_learning_candidates_body_check" CHECK (body IS NULL OR length(body) <= 4000),
-	CONSTRAINT "support_learning_candidates_purge_check" CHECK (body IS NOT NULL OR text_purged_at IS NOT NULL),
+	CONSTRAINT "support_learning_candidates_purge_check" CHECK ((body IS NOT NULL AND title IS NOT NULL) OR text_purged_at IS NOT NULL),
 	CONSTRAINT "support_learning_candidates_tags_check" CHECK (cardinality(tags) <= 8),
 	CONSTRAINT "support_learning_candidates_counts_check" CHECK (source_count >= 1 AND version >= 1)
 );
@@ -133,7 +133,7 @@ ALTER TABLE "support_learning_jobs" ADD CONSTRAINT "support_learning_jobs_admin_
 CREATE INDEX "support_knowledge_articles_active_idx" ON "support_knowledge_articles" USING btree ("tenant_id","state","enabled","updated_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "support_knowledge_articles_candidate_key" ON "support_knowledge_articles" USING btree ("tenant_id","candidate_id") WHERE candidate_id IS NOT NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "support_knowledge_revisions_article_key" ON "support_knowledge_revisions" USING btree ("tenant_id","article_id","revision");--> statement-breakpoint
-CREATE UNIQUE INDEX "support_learning_candidates_title_key" ON "support_learning_candidates" USING btree ("tenant_id","normalized_title");--> statement-breakpoint
+CREATE UNIQUE INDEX "support_learning_candidates_title_key" ON "support_learning_candidates" USING btree ("tenant_id","normalized_title") WHERE reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT';--> statement-breakpoint
 CREATE INDEX "support_learning_candidates_queue_idx" ON "support_learning_candidates" USING btree ("tenant_id","state","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "support_learning_jobs_idempotency_key" ON "support_learning_jobs" USING btree ("tenant_id","idempotency_key");--> statement-breakpoint
 CREATE INDEX "support_learning_jobs_due_idx" ON "support_learning_jobs" USING btree ("tenant_id","created_at") WHERE state = 'QUEUED';--> statement-breakpoint

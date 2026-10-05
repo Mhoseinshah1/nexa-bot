@@ -29649,7 +29649,7 @@
           "name": "title",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "normalized_title": {
           "name": "normalized_title",
@@ -29809,6 +29809,7 @@
             }
           ],
           "isUnique": true,
+          "where": "reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -29917,7 +29918,7 @@
         },
         "support_learning_candidates_sensitive_kinds_check": {
           "name": "support_learning_candidates_sensitive_kinds_check",
-          "value": "sensitive_kinds <@ ARRAY['EMAIL', 'PHONE', 'CARD', 'IBAN', 'SUBSCRIPTION_LINK', 'URL_TOKEN', 'IP_ADDRESS', 'UUID', 'SECRET', 'USERNAME', 'AMOUNT', 'LONG_NUMBER', 'REDACTION_MARK']::text[]"
+          "value": "sensitive_kinds <@ ARRAY['EMAIL', 'PHONE', 'CARD', 'IBAN', 'SUBSCRIPTION_LINK', 'URL_TOKEN', 'IP_ADDRESS', 'HOST', 'UUID', 'SECRET', 'USERNAME', 'AMOUNT', 'LONG_NUMBER', 'REDACTION_MARK']::text[]"
         },
         "support_learning_candidates_provider_check": {
           "name": "support_learning_candidates_provider_check",
@@ -29941,7 +29942,7 @@
         },
         "support_learning_candidates_title_check": {
           "name": "support_learning_candidates_title_check",
-          "value": "length(btrim(title)) BETWEEN 1 AND 200 AND length(normalized_title) >= 1"
+          "value": "(title IS NULL OR length(btrim(title)) BETWEEN 1 AND 200) AND length(normalized_title) >= 1"
         },
         "support_learning_candidates_body_check": {
           "name": "support_learning_candidates_body_check",
@@ -29949,7 +29950,7 @@
         },
         "support_learning_candidates_purge_check": {
           "name": "support_learning_candidates_purge_check",
-          "value": "body IS NOT NULL OR text_purged_at IS NOT NULL"
+          "value": "(body IS NOT NULL AND title IS NOT NULL) OR text_purged_at IS NOT NULL"
         },
         "support_learning_candidates_tags_check": {
           "name": "support_learning_candidates_tags_check",

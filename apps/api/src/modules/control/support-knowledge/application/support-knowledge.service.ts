@@ -32,7 +32,7 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { detectSensitive } from '../domain/scrubber.js';
+import { detectSensitive, scrubSensitive } from '../domain/scrubber.js';
 import type {
   DrizzleSupportKnowledgeRepository,
   KnowledgeArticleRecord,
@@ -95,8 +95,9 @@ interface Applied<T> {
  *     conditional UPDATE naming `PENDING` and the version the reviewer read; approve and
  *     «edit then approve» insert the article, its first revision and the transition in ONE
  *     transaction, so a lost race publishes nothing.
- *   - What is approved is scrubbed once more, edited or not: an approval whose text the
- *     scrubber matches is refused, whoever typed it.
+ *   - Whatever becomes or stays knowledge is scrubbed as it is written: an approval (edited or
+ *     not), an article created or edited, and a draft published. Text the scrubber matches is
+ *     refused, whoever typed it and whatever the article's source.
  *   - An edit of APPROVED knowledge is a NEW revision; the old one stays (append-only table).
  *     An edit of a DRAFT publishes nothing.
  *   - Every command takes an idempotency key (a replay answers with the row as it is now),
@@ -161,6 +162,7 @@ export class SupportKnowledgeService {
       },
       (rid) => this.articleOrNull(scope, rid),
       async (tx, now) => {
+        assertClean(command.content);
         if (
           (await this.deps.repository.countArticles(scope, tx)) >= SUPPORT_KNOWLEDGE_LIMITS.articles
         ) {
@@ -222,6 +224,9 @@ export class SupportKnowledgeService {
         const before = await this.requireArticle(scope, articleId, tx);
         assertVersion(before.version, command.expectedVersion);
         if (before.state === 'RETIRED') throw notInState(before.state);
+        // Whatever the article's source: a LEARNED article edited after its approval is
+        // republished, and a MANUAL one is repeated to every customer just the same.
+        assertClean(command.content);
         const publish = before.state === 'APPROVED';
         const after = await this.deps.repository.rewrite(
           scope,
@@ -347,16 +352,7 @@ export class SupportKnowledgeService {
         assertVersion(before.version, command.expectedVersion);
         const content = command.edit ?? asProposed(before);
         // The last line before knowledge: whatever is approved, edited or not, is scrubbed.
-        const kinds = detectSensitive(
-          [content.title, content.body, content.tags.join(' ')].join('\n'),
-        );
-        if (kinds.length > 0) {
-          throw errors.conflict(
-            SUPPORT_KNOWLEDGE_ERROR_CODES.SENSITIVE_CONTENT,
-            'The text still contains personal or secret data. Edit it out and approve again.',
-            { kinds },
-          );
-        }
+        assertClean(content);
         if (
           (await this.deps.repository.countArticles(scope, tx)) >= SUPPORT_KNOWLEDGE_LIMITS.articles
         ) {
@@ -460,7 +456,13 @@ export class SupportKnowledgeService {
           audit: {
             entityId: candidateId,
             before: { state: before.state, version: before.version },
-            after: { state: after.state, version: after.version, note: command.note ?? null },
+            // The reviewer's note is free text about a customer's lesson: scrubbed like
+            // everything else that is kept (PR #203 review), so the audit log holds no value.
+            after: {
+              state: after.state,
+              version: after.version,
+              note: command.note === undefined ? null : scrubSensitive(command.note).text,
+            },
           },
         };
       },
@@ -497,6 +499,9 @@ export class SupportKnowledgeService {
         const before = await this.requireArticle(scope, articleId, tx);
         if (!spec.from.includes(before.state)) throw notInState(before.state);
         assertVersion(before.version, command.expectedVersion);
+        // What is published is scrubbed as it is published, whoever wrote the draft and
+        // whenever: the draft may predate a scrubber rule.
+        if (spec.publish) assertClean(before);
         const after = await this.deps.repository.rewrite(
           scope,
           articleId,
@@ -679,7 +684,7 @@ export class SupportKnowledgeService {
 
 /** The candidate's own proposal as article content; refused when its text was purged. */
 function asProposed(candidate: LearningCandidateRecord): SupportKnowledgeContent {
-  if (candidate.body === null) {
+  if (candidate.body === null || candidate.title === null) {
     throw errors.conflict(
       SUPPORT_KNOWLEDGE_ERROR_CODES.NOT_IN_STATE,
       'This candidate’s text was purged. Approve it with an edit, or reject it.',
@@ -692,6 +697,27 @@ function asProposed(candidate: LearningCandidateRecord): SupportKnowledgeContent
     category: candidate.category,
     tags: [...candidate.tags],
   };
+}
+
+/**
+ * Refuses content the scrubber matches, whoever wrote it and whatever the article's source
+ * (PR #203 review, finding 2; OQ-TB-54). Knowledge is what the support agent repeats to every
+ * customer, so a support phone or an official link belongs in a template or a setting, not
+ * here. Fail closed: a false positive costs the reviewer an edit.
+ */
+function assertClean(content: {
+  readonly title: string;
+  readonly body: string;
+  readonly tags: readonly string[];
+}): void {
+  const kinds = detectSensitive([content.title, content.body, content.tags.join(' ')].join('\n'));
+  if (kinds.length > 0) {
+    throw errors.conflict(
+      SUPPORT_KNOWLEDGE_ERROR_CODES.SENSITIVE_CONTENT,
+      'The text still contains personal or secret data. Edit it out and approve again.',
+      { kinds },
+    );
+  }
 }
 
 function articleAudit(row: KnowledgeArticleRecord): Record<string, unknown> {

@@ -10,6 +10,7 @@ import {
   type SupportAiOutcome,
 } from '@nexa/contracts';
 import { SupportLearningService } from '../../apps/api/src/modules/control/support-knowledge/application/support-learning.service';
+import { SupportKnowledgeService } from '../../apps/api/src/modules/control/support-knowledge/application/support-knowledge.service';
 import { DrizzleSupportKnowledgeRepository } from '../../apps/api/src/modules/control/support-knowledge/infrastructure/drizzle-support-knowledge.repository';
 import { DrizzleSupportAiConfigRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
 import { AssistantLoop } from '../../apps/api/src/modules/control/support-ai/application/assistant-loop';
@@ -62,6 +63,9 @@ describe('controlled learning (TB8)', () => {
   let next: SupportAiOutcome;
   let requests: (Omit<SupportAiRequest, 'model' | 'timeoutMs'> & { operation: string })[];
   let learning: SupportLearningService;
+  let makeLearning: (repository: DrizzleSupportKnowledgeRepository) => SupportLearningService;
+  /** Runs inside the provider call, between the claim and the result's transaction. */
+  let onGenerate: (() => Promise<void>) | null = null;
   let loop: AssistantLoop;
   let repo: DrizzleSupportKnowledgeRepository;
   let keySeq = 0;
@@ -152,6 +156,15 @@ describe('controlled learning (TB8)', () => {
     return built.payload.knowledge.filter((entry) => entry.source === 'KNOWLEDGE');
   }
 
+  function asContent(row: {
+    title: string;
+    body: string;
+    category: string;
+    tags: readonly string[];
+  }) {
+    return { title: row.title, body: row.body, category: row.category, tags: [...row.tags] };
+  }
+
   async function expectCode(promise: Promise<unknown>, code: string) {
     try {
       await promise;
@@ -183,35 +196,40 @@ describe('controlled learning (TB8)', () => {
       model: 'gpt-5.5',
     };
     requests = [];
+    onGenerate = null;
     repo = new DrizzleSupportKnowledgeRepository(c.database.db);
-    learning = new SupportLearningService({
-      repository: repo,
-      configs: new DrizzleSupportAiConfigRepository(c.database.db),
-      chain: {
-        generate: async (_scope, input) => {
-          requests.push({ ...input.request, operation: input.operation });
-          return {
-            outcome: next,
-            step: { provider: 'OPENAI', model: 'gpt-5.5' },
-            attempts: 1,
-            exhausted: null,
-            imagesSent: 0,
-            sight: { seen: [], unseen: new Map() },
-          };
+    makeLearning = (repository) =>
+      new SupportLearningService({
+        repository,
+        configs: new DrizzleSupportAiConfigRepository(c.database.db),
+        chain: {
+          generate: async (_scope, input) => {
+            requests.push({ ...input.request, operation: input.operation });
+            if (onGenerate !== null) await onGenerate();
+            return {
+              outcome: next,
+              step: { provider: 'OPENAI', model: 'gpt-5.5' },
+              attempts: 1,
+              exhausted: null,
+              imagesSent: 0,
+              sight: { seen: [], unseen: new Map() },
+            };
+          },
         },
-      },
-      conversations: new DrizzleBusinessConversationRepository(c.database.db),
-      messages: new DrizzleBusinessMessageRepository(c.database.db),
-      outbound: new DrizzleBusinessOutboundRepository(c.database.db),
-      guard: c.guard,
-      uow: c.uow,
-      audit: c.audit,
-      opsLog: c.opsLogWriter,
-      sessions: c.sessions,
-      scopeActivity: c.tenants,
-      clock: c.clock,
-      ids: c.ids,
-    });
+        conversations: new DrizzleBusinessConversationRepository(c.database.db),
+        messages: new DrizzleBusinessMessageRepository(c.database.db),
+        outbound: new DrizzleBusinessOutboundRepository(c.database.db),
+        guard: c.guard,
+        uow: c.uow,
+        audit: c.audit,
+        opsLog: c.opsLogWriter,
+        sessions: c.sessions,
+        idempotency: c.idempotency,
+        scopeActivity: c.tenants,
+        clock: c.clock,
+        ids: c.ids,
+      });
+    learning = makeLearning(repo);
     loop = new AssistantLoop(
       {
         claimNext: async () => null,
@@ -710,7 +728,7 @@ describe('controlled learning (TB8)', () => {
     expect(all[0]).toMatchObject({ title: lesson.title, sourceCount: 2 });
   });
 
-  it('the retention purges the text of candidates never approved, keeping the title', async () => {
+  it('the retention purges the title, body, rationale and tags of candidates never approved', async () => {
     const { candidate } = await pendingCandidate();
     const now = ctx.container.clock.now();
     // Not yet due: nothing is purged.
@@ -720,12 +738,22 @@ describe('controlled learning (TB8)', () => {
     );
     expect(await learning.purge(tenantA, now)).toBe(1);
     const [purged] = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    // PR #203 review, finding 6: no learning text outlives the purge, the title and tags
+    // included. Only the normalised title stays, as the duplicate check's match key.
     expect(purged).toMatchObject({
       id: candidate.id,
-      title: lesson.title,
+      title: null,
       body: null,
       rationale: null,
+      tags: [],
     });
+    const raw = await ctx.container.database.db.execute(
+      sql`SELECT title, tags::text AS tags, normalized_title FROM support_learning_candidates`,
+    );
+    expect(raw.rows).toEqual([
+      { title: null, tags: '{}', normalized_title: candidate.normalizedTitle },
+    ]);
+    expect(JSON.stringify(raw.rows)).not.toContain('v2rayNG');
     // A purged candidate cannot be approved as proposed: there is nothing to publish.
     await expectCode(
       ctx.container.supportKnowledge.approveCandidate(tenantA, owner, candidate.id, {
@@ -815,5 +843,448 @@ describe('controlled learning (TB8)', () => {
     const [kept] = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
     expect(kept).toMatchObject({ id: candidate.id, body: lesson.body });
     expect(await learning.purge(tenantA, now)).toBe(1);
+  });
+  // --- Substitute review of PR #203 ------------------------------------------------------
+
+  /** A barrier: `arrive` resolves `all` once `n` callers arrived, or after `ms` regardless. */
+  function barrier(n: number, ms: number) {
+    let arrived = 0;
+    let open!: () => void;
+    const all = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return {
+      arrive: async () => {
+        arrived += 1;
+        if (arrived >= n) open();
+        await Promise.race([all, new Promise((resolve) => setTimeout(resolve, ms))]);
+      },
+    };
+  }
+
+  /** A second reply, DELIVERED, in the same conversation. */
+  async function anotherReply(conversationId: string, operator: ActorContext, text: string) {
+    const row = await ctx.container.businessConversations.send(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('send'),
+      text,
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE business_outbound_messages SET state = 'DELIVERED', resolved_at = now(), telegram_message_id = 902 WHERE id = ${row.id}`,
+    );
+    return row.id;
+  }
+
+  async function articleRows() {
+    return (
+      await ctx.container.database.db.execute(
+        sql`SELECT source, state, title, body, revision FROM support_knowledge_articles ORDER BY created_at`,
+      )
+    ).rows;
+  }
+
+  it('finding 2: a LEARNED article edited or a draft published with personal data is refused; MANUAL too', async () => {
+    const k = ctx.container.supportKnowledge;
+    const { candidate } = await pendingCandidate();
+    await k.approveCandidate(tenantA, owner, candidate.id, {
+      idempotencyKey: key('approve'),
+      expectedVersion: candidate.version,
+      edit: null,
+    });
+    const [learned] = await k.listArticles(tenantA, owner, {});
+    expect(learned).toMatchObject({ source: 'LEARNED', revision: 1 });
+    // An approved LEARNED article is republished by an edit: scrubbed like the approval was.
+    await expectCode(
+      k.updateArticle(tenantA, owner, learned!.id, {
+        idempotencyKey: key('u'),
+        expectedVersion: learned!.version,
+        content: { ...asContent(learned!), body: 'به de1.example.com:443 وصل شوید' },
+      }),
+      'support_knowledge.sensitive_content',
+    );
+    expect(await k.revisions(tenantA, owner, learned!.id)).toHaveLength(1);
+    // A MANUAL article is repeated to every customer just the same (OQ-TB-54, fail closed).
+    await expectCode(
+      k.createArticle(tenantA, owner, {
+        idempotencyKey: key('c'),
+        content: {
+          title: 'پشتیبانی',
+          body: 'به t.me/ali_reza پیام بدهید',
+          category: 'GENERAL',
+          tags: [],
+        },
+        publish: true,
+      }),
+      'support_knowledge.sensitive_content',
+    );
+    // A draft written before a scrubber rule (or around it) is scrubbed as it is published.
+    const draft = await k.createArticle(tenantA, owner, {
+      idempotencyKey: key('c'),
+      content: { title: 'پرداخت', body: 'پرداخت از منوی کیف پول.', category: 'PAYMENTS', tags: [] },
+      publish: false,
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE support_knowledge_articles SET body = 'به کارت 6037  9975  1234  5678 واریز کنید' WHERE id = ${draft.id}`,
+    );
+    await expectCode(
+      k.publishArticle(tenantA, owner, draft.id, {
+        idempotencyKey: key('p'),
+        expectedVersion: draft.version,
+      }),
+      'support_knowledge.sensitive_content',
+    );
+    expect(await articleRows()).toMatchObject([
+      { source: 'LEARNED', state: 'APPROVED', revision: 1, body: lesson.body },
+      { source: 'MANUAL', state: 'DRAFT', revision: 0 },
+    ]);
+    expect((await knowledgeInContext(tenantA as never)).map((e) => e.answer)).toEqual([
+      lesson.body,
+    ]);
+  });
+
+  it('finding 3: two proposals racing on one conversation enqueue exactly one job', async () => {
+    const { conversationId, outboundId } = await conversationWithReply(
+      scopeA,
+      BOT,
+      support,
+      '7000010',
+      'برای اتصال برنامه را دوباره باز کنید.',
+    );
+    const second = await anotherReply(conversationId, support, 'و حالت هواپیما را خاموش کنید.');
+    // Both transactions stop at their first count until the other arrives (or 750 ms pass):
+    // without the enqueue lock both count zero; with it the second is still waiting for the
+    // lock, so the first goes on alone and the second counts the first one's job.
+    const gate = barrier(2, 750);
+    class Racing extends DrizzleSupportKnowledgeRepository {
+      override async countJobsSince(
+        ...args: Parameters<DrizzleSupportKnowledgeRepository['countJobsSince']>
+      ) {
+        await gate.arrive();
+        return super.countJobsSince(...args);
+      }
+    }
+    const racing = makeLearning(new Racing(ctx.container.database.db));
+    const results = await Promise.allSettled([
+      racing.propose(tenantA, support, conversationId, { idempotencyKey: key('p'), outboundId }),
+      racing.propose(tenantA, support, conversationId, {
+        idempotencyKey: key('p'),
+        outboundId: second,
+      }),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(isNexaError(refused.reason) ? refused.reason.code : refused.reason).toBe(
+      'support_knowledge.learning_rate_limited',
+    );
+    expect(await jobCount()).toBe(1);
+  });
+
+  it('finding 3: thirty jobs in the hour refuse the next proposal (RATE_LIMITED, TENANT)', async () => {
+    const seeded = await conversationWithReply(scopeA, BOT, support, '7000011', 'پاسخ اول.');
+    for (let i = 0; i < 30; i += 1) {
+      await ctx.container.database.db.execute(
+        sql`INSERT INTO support_learning_jobs (id, tenant_id, conversation_id, source_outbound_id, trigger, idempotency_key, created_at, updated_at)
+            VALUES (gen_random_uuid(), ${tenantA.tenantId}, ${seeded.conversationId}, ${seeded.outboundId}, 'HANDBACK', ${`seed-${String(i)}`}, now() - interval '10 minutes', now())`,
+      );
+    }
+    const { conversationId, outboundId } = await conversationWithReply(
+      scopeA,
+      BOT,
+      support,
+      '7000012',
+      'برای اتصال برنامه را دوباره باز کنید.',
+    );
+    try {
+      await learning.propose(tenantA, support, conversationId, {
+        idempotencyKey: key('p'),
+        outboundId,
+      });
+      throw new Error('expected RATE_LIMITED');
+    } catch (error) {
+      expect(isNexaError(error) ? [error.code, error.details['window']] : error).toEqual([
+        'support_knowledge.learning_rate_limited',
+        'TENANT',
+      ]);
+    }
+    expect(await jobCount()).toBe(30);
+  });
+
+  async function racedDecision(first: 'approve' | 'reject') {
+    const { candidate } = await pendingCandidate();
+    // Each decision stops after its transaction READ the candidate PENDING at its version, and
+    // before its conditional UPDATE: the service's own checks have passed for both.
+    const waiting = new Map<string, () => void>();
+    const reached = new Map<string, Promise<void>>();
+    const arrive = (name: string) => {
+      let signal!: () => void;
+      reached.set(name, new Promise<void>((resolve) => (signal = resolve)));
+      return { signal: () => signal() };
+    };
+    const arrivals = { approve: arrive('approve'), reject: arrive('reject') };
+    const hold = (name: 'approve' | 'reject') =>
+      new Promise<void>((resolve) => {
+        waiting.set(name, resolve);
+        arrivals[name].signal();
+      });
+    class Held extends DrizzleSupportKnowledgeRepository {
+      override async approveCandidate(
+        ...args: Parameters<DrizzleSupportKnowledgeRepository['approveCandidate']>
+      ) {
+        await hold('approve');
+        return super.approveCandidate(...args);
+      }
+      override async rejectCandidate(
+        ...args: Parameters<DrizzleSupportKnowledgeRepository['rejectCandidate']>
+      ) {
+        await hold('reject');
+        return super.rejectCandidate(...args);
+      }
+    }
+    const c = ctx.container;
+    const service = new SupportKnowledgeService({
+      repository: new Held(c.database.db),
+      guard: c.guard,
+      uow: c.uow,
+      audit: c.audit,
+      opsLog: c.opsLogWriter,
+      sessions: c.sessions,
+      idempotency: c.idempotency,
+      scopeActivity: c.tenants,
+      clock: c.clock,
+      ids: c.ids,
+    });
+    const decisions = {
+      approve: service.approveCandidate(tenantA, owner, candidate.id, {
+        idempotencyKey: key('approve'),
+        expectedVersion: candidate.version,
+        edit: null,
+      }),
+      reject: service.rejectCandidate(tenantA, owner, candidate.id, {
+        idempotencyKey: key('reject'),
+        expectedVersion: candidate.version,
+      }),
+    };
+    await Promise.all([reached.get('approve'), reached.get('reject')]);
+    const second = first === 'approve' ? 'reject' : 'approve';
+    waiting.get(first)!();
+    const winner = await decisions[first];
+    waiting.get(second)!();
+    const loser = await decisions[second].then(
+      () => 'committed',
+      (error: unknown) => (isNexaError(error) ? error.code : String(error)),
+    );
+    return { winner, loser };
+  }
+
+  it('finding 4: approve and reject racing on one candidate — the approval wins, nothing else moves', async () => {
+    const { winner, loser } = await racedDecision('approve');
+    expect(winner.state).toBe('APPROVED');
+    expect(loser).toBe('support_knowledge.not_in_state');
+    const [row] = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(row).toMatchObject({
+      state: 'APPROVED',
+      rejectReason: null,
+      articleId: winner.articleId,
+    });
+    expect(await articleRows()).toHaveLength(1);
+  });
+
+  it('finding 4: approve and reject racing on one candidate — the rejection wins, no article', async () => {
+    const { winner, loser } = await racedDecision('reject');
+    expect(winner.state).toBe('REJECTED');
+    expect(loser).toBe('support_knowledge.not_in_state');
+    const [row] = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(row).toMatchObject({ state: 'REJECTED', rejectReason: 'REVIEWER', articleId: null });
+    expect(await articleRows()).toHaveLength(0);
+  });
+
+  it('finding 4: each conditional UPDATE names both its from-state and the version read', async () => {
+    const { candidate } = await pendingCandidate();
+    const now = ctx.container.clock.now();
+    const decide = { reviewerAdminId: owner.id!, now };
+    // A PENDING candidate at another version: neither UPDATE touches it.
+    expect(
+      await repo.approveCandidate(
+        tenantA,
+        candidate.id,
+        { ...decide, expectedVersion: candidate.version + 1, articleId: candidate.id },
+        undefined,
+      ),
+    ).toBeNull();
+    expect(
+      await repo.rejectCandidate(
+        tenantA,
+        candidate.id,
+        { ...decide, expectedVersion: candidate.version + 1 },
+        undefined,
+      ),
+    ).toBeNull();
+    // A candidate the scrubber REJECTED at the version named: neither UPDATE touches it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE support_learning_candidates SET state = 'REJECTED', reject_reason = 'SENSITIVE_CONTENT', sensitive_kinds = ARRAY['PHONE'], reviewed_at = now() WHERE id = ${candidate.id}`,
+    );
+    expect(
+      await repo.approveCandidate(
+        tenantA,
+        candidate.id,
+        { ...decide, expectedVersion: candidate.version, articleId: candidate.id },
+        undefined,
+      ),
+    ).toBeNull();
+    expect(
+      await repo.rejectCandidate(
+        tenantA,
+        candidate.id,
+        { ...decide, expectedVersion: candidate.version },
+        undefined,
+      ),
+    ).toBeNull();
+    const [row] = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(row).toMatchObject({
+      state: 'REJECTED',
+      rejectReason: 'SENSITIVE_CONTENT',
+      version: candidate.version,
+    });
+  });
+
+  it('finding 5: a proposal key is bound to its reply — reused for another is a payload mismatch', async () => {
+    const { conversationId, outboundId } = await conversationWithReply(
+      scopeA,
+      BOT,
+      support,
+      '7000013',
+      'برای اتصال برنامه را دوباره باز کنید.',
+    );
+    const other = await conversationWithReply(scopeA, BOT, support, '7000014', 'پاسخ دیگر.');
+    const shared = key('p');
+    const first = await learning.propose(tenantA, support, conversationId, {
+      idempotencyKey: shared,
+      outboundId,
+    });
+    // The same key and payload: a replay, the same job.
+    expect(
+      (
+        await learning.propose(tenantA, support, conversationId, {
+          idempotencyKey: shared,
+          outboundId,
+        })
+      ).id,
+    ).toBe(first.id);
+    await expectCode(
+      learning.propose(tenantA, support, other.conversationId, {
+        idempotencyKey: shared,
+        outboundId: other.outboundId,
+      }),
+      'platform.idempotency_payload_mismatch',
+    );
+    expect(await jobCount()).toBe(1);
+  });
+
+  it('finding 7: a lesson the scrubber rejected never absorbs the same lesson proposed cleanly', async () => {
+    next = {
+      ...next,
+      output: { ...lesson, body: `${lesson.body} یا به @pay_admin1 پیام بدهید.` },
+    } as SupportAiOutcome;
+    await pendingCandidate();
+    let all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(all).toMatchObject([{ state: 'REJECTED', rejectReason: 'SENSITIVE_CONTENT' }]);
+    // The same lesson (same title), clean, from another conversation: its own PENDING candidate.
+    next = { ...next, output: lesson } as SupportAiOutcome;
+    const other = await conversationWithReply(scopeA, BOT, support, '7000015', 'همان پاسخ.');
+    await handBack(scopeA, support, other.conversationId);
+    await loop.tick();
+    all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(all.map((row) => [row.state, row.rejectReason, row.sourceCount]).sort()).toEqual([
+      ['PENDING', null, 1],
+      ['REJECTED', 'SENSITIVE_CONTENT', 1],
+    ]);
+    const pending = all.find((row) => row.state === 'PENDING')!;
+    expect(pending.body).toBe(lesson.body);
+    // And a reviewer's rejection still absorbs it: that IS a decision about the lesson.
+    await ctx.container.supportKnowledge.rejectCandidate(tenantA, owner, pending.id, {
+      idempotencyKey: key('reject'),
+      expectedVersion: pending.version,
+    });
+    const third = await conversationWithReply(scopeA, BOT, support, '7000016', 'باز همان پاسخ.');
+    await handBack(scopeA, support, third.conversationId);
+    await loop.tick();
+    all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(all).toHaveLength(2);
+    expect(all.find((row) => row.id === pending.id)).toMatchObject({ sourceCount: 2 });
+  });
+
+  it('nit: the reviewer’s reject note is scrubbed before it reaches the audit log', async () => {
+    const { candidate } = await pendingCandidate();
+    await ctx.container.supportKnowledge.rejectCandidate(tenantA, owner, candidate.id, {
+      idempotencyKey: key('reject'),
+      expectedVersion: candidate.version,
+      note: 'مشتری با ۰۹۱۲۱۲۳۴۵۶۷ تماس گرفت؛ موردی است',
+    });
+    const audits = await ctx.container.database.db.execute(
+      sql`SELECT after::text AS after FROM audit_logs WHERE action = 'support_knowledge.candidate.reject' AND result = 'SUCCESS'`,
+    );
+    expect(audits.rows).toHaveLength(1);
+    const after = (audits.rows[0] as { after: string }).after;
+    expect(after).not.toMatch(/0912|۰۹۱۲|1234567|۱۲۳۴۵۶۷/u);
+    expect(after).toContain('[REDACTED:PHONE]');
+  });
+
+  it('nit: a tenant stopped during the provider call writes nothing; the job stays QUEUED', async () => {
+    const { conversationId } = await conversationWithReply(
+      scopeA,
+      BOT,
+      support,
+      '7000017',
+      'سلام. لینک را از «سرویس‌های من» کپی کنید و در v2rayNG با + وارد کنید.',
+    );
+    await handBack(scopeA, support, conversationId);
+    const status = (value: 'STOPPED' | 'ACTIVE') =>
+      ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = ${value} WHERE id = ${tenantA.tenantId}`,
+      );
+    onGenerate = () => status('STOPPED').then(() => undefined);
+    try {
+      await loop.tick();
+      expect(requests).toHaveLength(1);
+      const jobs = await ctx.container.database.db.execute(
+        sql`SELECT state, outcome, candidate_id FROM support_learning_jobs`,
+      );
+      expect(jobs.rows).toEqual([{ state: 'QUEUED', outcome: null, candidate_id: null }]);
+      const candidates = await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM support_learning_candidates`,
+      );
+      expect((candidates.rows[0] as { n: number }).n).toBe(0);
+    } finally {
+      onGenerate = null;
+      await status('ACTIVE');
+    }
+  });
+
+  it('nit: an operator proposes only their own reply; another person’s needs the review permission', async () => {
+    // The owner wrote this reply; support may not propose it.
+    const { conversationId, outboundId } = await conversationWithReply(
+      scopeA,
+      BOT,
+      owner,
+      '7000018',
+      'برای اتصال برنامه را دوباره باز کنید.',
+    );
+    await expectCode(
+      learning.propose(tenantA, support, conversationId, { idempotencyKey: key('p'), outboundId }),
+      'platform.permission_denied',
+    );
+    expect(await jobCount()).toBe(0);
+    const denied = await ctx.container.database.db.execute(
+      sql`SELECT after::text AS after FROM audit_logs WHERE action = 'support_knowledge.propose' AND result = 'DENIED'`,
+    );
+    expect(denied.rows).toHaveLength(1);
+    expect((denied.rows[0] as { after: string }).after).toContain('support_knowledge.review');
+    // Support wrote this one; the owner, a reviewer, may propose it.
+    const theirs = await conversationWithReply(scopeA, BOT, support, '7000019', 'پاسخ پشتیبان.');
+    await learning.propose(tenantA, owner, theirs.conversationId, {
+      idempotencyKey: key('p'),
+      outboundId: theirs.outboundId,
+    });
+    expect(await jobCount()).toBe(1);
   });
 });

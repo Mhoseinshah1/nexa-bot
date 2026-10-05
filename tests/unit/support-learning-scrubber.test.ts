@@ -76,7 +76,104 @@ describe('scrubber: every shape it must catch', () => {
       expect(result.text).toContain(`[REDACTED:${kind}]`);
     });
   }
+});
 
+/*
+ * Substitute review of PR #203, finding 1: shapes that passed unredacted. Each names the rule
+ * that catches it; `scripts/mutate-tb8.py` TB8-32..TB8-40 revert those rules one at a time.
+ */
+describe('scrubber: the shapes the substitute review found passing (PR #203, finding 1)', () => {
+  const cases: readonly (readonly [string, string, SupportLearningSensitiveKind])[] = [
+    // Separator RUNS between digit groups.
+    ['a card with double spaces', 'کارت 6037  9975  1234  5678 است', 'CARD'],
+    ['a card with spaced en dashes', 'کارت 6037 – 9975 – 1234 – 5678', 'CARD'],
+    ['a card with em dashes in Persian digits', 'کارت ۶۰۳۷—۹۹۷۵—۱۲۳۴—۵۶۷۸', 'CARD'],
+    ['a card with dots and spaces', '6037 . 9975 . 1234 . 5678', 'CARD'],
+    ['a mobile with double spaces', 'شماره 0912  123  4567', 'PHONE'],
+    ['a mobile with spaced en dashes', 'شماره ۰۹۱۲ – ۱۲۳ – ۴۵۶۷', 'PHONE'],
+    ['a Telegram id with double spaces', 'آیدی ۷۰۰  ۰۰۰  ۱۲۳۴', 'LONG_NUMBER'],
+    // Any URL: a short or unlisted token, or just a server's name.
+    ['a URL with a short unlisted parameter', 'https://x/getSub?id=abc123', 'URL_TOKEN'],
+    ['a URL with a one-letter parameter', 'https://panel.x.io/s?t=abcdef', 'URL_TOKEN'],
+    ['a URL with a short token segment', 'https://bot.x/link/AbC12', 'URL_TOKEN'],
+    ['a URL with a digit in a segment', 'https://bot.example.org/c/k9', 'URL_TOKEN'],
+    [
+      'a store link with a query (fail closed)',
+      'https://play.google.com/store/apps/details?id=com.v2ray.ang',
+      'URL_TOKEN',
+    ],
+    ['a websocket URL with a query', 'wss://cdn.example.net/ws?ed=2048', 'URL_TOKEN'],
+    ['a plain URL still names a server', 'سایت https://example.com/ را باز کنید', 'HOST'],
+    ['a ws:// URL', 'ws://de1.example.com:8080/path', 'HOST'],
+    // A server by name, and a subscription path, without a scheme.
+    ['a scheme-less subscription path', 'panel.example.com/sub/abcdef', 'SUBSCRIPTION_LINK'],
+    [
+      'a scheme-less subscription path on an IP',
+      '185.12.34.56:2096/sub/abcdef',
+      'SUBSCRIPTION_LINK',
+    ],
+    ['a server by name', 'server: de1.example.com port 443', 'HOST'],
+    ['a server with a port', 'به de1.example.com:443 وصل شوید', 'HOST'],
+    ['a scheme-less path', 'cdn.example.ir/config/user', 'HOST'],
+    // Secrets in prose.
+    ['a password in prose', 'your password is hunter2', 'SECRET'],
+    ['a new password in prose', 'new password: hunter2', 'SECRET'],
+    ['a Persian password in prose', 'رمزتون abc123 هست', 'SECRET'],
+    ['a Persian password with a colon-free phrase', 'رمز عبور جدید Qw12345 است', 'SECRET'],
+    ['a Persian «کلمه عبور»', 'کلمه عبور شما xyz789 است', 'SECRET'],
+    ['a code', 'کد 4821 را وارد کنید', 'SECRET'],
+    ['a token in prose', 'the token is abcd-1234', 'SECRET'],
+    // A Telegram profile link names a person.
+    ['a t.me profile link', 'به t.me/ali_reza پیام بدهید', 'USERNAME'],
+    ['a t.me profile link with a scheme', 'https://t.me/ali_reza', 'USERNAME'],
+    // Amounts: a decimal separator, a k, and words.
+    ['an amount with the Arabic decimal separator', 'مبلغ ۲۵۰٫۰۰۰ تومان', 'AMOUNT'],
+    ['an amount with the Arabic thousands separator', 'مبلغ ۲۵۰٬۰۰۰ تومان', 'AMOUNT'],
+    ['an amount in k', 'ماهی 150k', 'AMOUNT'],
+    ['an amount in k in Persian digits', 'قیمت ۱۵۰K', 'AMOUNT'],
+    ['an amount in millions', 'حدود ۲ میلیون', 'AMOUNT'],
+    ['an amount in Persian words', 'صد و پنجاه هزار تومان', 'AMOUNT'],
+    ['an amount in Persian words, colloquial', 'دویست تومن', 'AMOUNT'],
+    ['an amount in English words', 'fifty dollars', 'AMOUNT'],
+  ];
+  for (const [label, text, kind] of cases) {
+    it(`${label} → ${kind}`, () => {
+      const result = scrubSensitive(text);
+      expect(result.kinds).toContain(kind);
+      expect(result.text).toContain(`[REDACTED:${kind}]`);
+    });
+  }
+
+  it('no digit of a separated card or phone survives', () => {
+    const text = scrubSensitive('کارت 6037 – 9975 – 1234 – 5678 و 0912  123  4567').text;
+    expect(text).not.toMatch(/6037|9975|5678|0912|4567/u);
+  });
+
+  it('no host, token or secret survives in the scrubbed text', () => {
+    const text = scrubSensitive(
+      'server: de1.example.com port 443, https://x/getSub?id=abc123, رمزتون abc123 هست, t.me/ali_reza',
+    ).text;
+    expect(text).not.toMatch(/example|getSub|abc123|ali_reza/u);
+  });
+
+  it('negative controls: plain Persian help text stays clean', () => {
+    const general = [
+      'اگر رمز عبور را فراموش کردید، از منوی تنظیمات آن را تغییر دهید.',
+      'کد تخفیف را در مرحله پرداخت وارد کنید.',
+      'کدام سرور سریع‌تر است؟',
+      'برای دریافت لینک اشتراک روی «سرویس‌های من» بزنید.',
+      'پلن یک‌ماهه برای دو کاربر است.',
+      'قیمت‌ها به تومان است.',
+      'برنامه را ببندید و دوباره باز کنید؛ اگر باز هم وصل نشد، یک بار گوشی را ری‌استارت کنید.',
+      'در iOS از برنامه Streisand و در اندروید از v2rayNG استفاده کنید.',
+      'پرداخت شده است و سرویس فعال می‌شود.',
+      'Open the app, tap + and choose "Import from clipboard".',
+    ];
+    for (const text of general) expect(detectSensitive(text), text).toEqual([]);
+  });
+});
+
+describe('scrubber: what it replaces and what it leaves', () => {
   it('replaces the value itself, so no digit of it survives', () => {
     const result = scrubSensitive('شماره ۰۹۱۲۱۲۳۴۵۶۷ و کارت 6037991234567890');
     expect(result.text).not.toMatch(/0912|1234567|6037|۰۹۱۲/u);
@@ -89,7 +186,6 @@ describe('scrubber: every shape it must catch', () => {
       'اگر وصل نمی‌شوید، یک بار حالت هواپیما را روشن و خاموش کنید.',
       'پلن ۳۰ روزه با ۲ کاربر همزمان است.',
       'Open Settings > Routing and pick "Global".',
-      'https://play.google.com/store/apps/details?id=com.v2ray.ang',
       'تاریخ انقضا 2026-10-04 است.',
       'نسخه 1.8.2 را نصب کنید.',
     ];

@@ -114,6 +114,7 @@ const SENSITIVE_LABELS: Readonly<Record<SupportLearningSensitiveKind, WebKey>> =
   SUBSCRIPTION_LINK: 'web.sk_kind_subscription_link',
   URL_TOKEN: 'web.sk_kind_url_token',
   IP_ADDRESS: 'web.sk_kind_ip',
+  HOST: 'web.sk_kind_host',
   UUID: 'web.sk_kind_uuid',
   SECRET: 'web.sk_kind_secret',
   USERNAME: 'web.sk_kind_username',
@@ -150,13 +151,13 @@ interface ContentForm {
 const EMPTY_CONTENT: ContentForm = { title: '', body: '', category: 'GENERAL', tags: '' };
 
 function formOf(content: {
-  title: string;
+  title: string | null;
   body: string | null;
   category: SupportKnowledgeCategory;
   tags: readonly string[];
 }): ContentForm {
   return {
-    title: content.title,
+    title: content.title ?? '',
     body: content.body ?? '',
     category: content.category,
     tags: content.tags.join(PERSIAN_COMMA_SPACE),
@@ -722,7 +723,7 @@ export function LearningCandidatesPage({
       wrap: true,
       render: (row) => (
         <CellMain
-          primary={<span className="strong">{row.title}</span>}
+          primary={<span className="strong">{row.title ?? t('web.sk_cand_title_purged')}</span>}
           secondary={<span className="support-answer">{row.body ?? t('web.sk_cand_purged')}</span>}
         />
       ),
