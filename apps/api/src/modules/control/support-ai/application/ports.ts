@@ -1,4 +1,10 @@
-import type { SupportAiCapabilities, SupportAiOutcome, SupportAiProvider } from '@nexa/contracts';
+import type {
+  ScopeContext,
+  SupportAiCapabilities,
+  SupportAiImageSkipReason,
+  SupportAiOutcome,
+  SupportAiProvider,
+} from '@nexa/contracts';
 
 /**
  * TB4 — the provider-neutral adapter port (ADR-0034 §2). Each adapter maps its provider's wire
@@ -50,4 +56,32 @@ export interface SupportAiAdapter {
 export interface SupportAiCredential {
   readonly apiKey: string;
   readonly region: 'INTERNATIONAL' | 'CHINA' | null;
+}
+
+/**
+ * TB6 — what fetching one customer image produced. `LOADED` bytes are already sniffed (JPEG,
+ * PNG or WEBP by magic bytes) and inside `SUPPORT_AI_VISION_MAX_BYTES`; nothing else is ever
+ * returned as an image.
+ */
+export type SupportImageLoad =
+  | { readonly outcome: 'LOADED'; readonly image: SupportAiImage; readonly byteSize: number }
+  | {
+      readonly outcome: 'SKIPPED';
+      readonly reason: Extract<
+        SupportAiImageSkipReason,
+        'NO_FILE_REFERENCE' | 'TOO_LARGE' | 'UNSUPPORTED_TYPE' | 'DOWNLOAD_FAILED'
+      >;
+    };
+
+/**
+ * TB6 — the one way a support flow reads a customer's image. The message is read by the
+ * tenant, the conversation and the row id TOGETHER, and the file is fetched with the token of
+ * the bot that conversation belongs to; a message of another conversation or tenant is
+ * `NO_FILE_REFERENCE`, never another tenant's file. Runs outside any transaction.
+ */
+export interface SupportImageSource {
+  load(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly messageId: string },
+  ): Promise<SupportImageLoad>;
 }

@@ -84,6 +84,7 @@ describe('Telegram Business conversations (TB2)', () => {
       editedAt: null,
       kind: 'TEXT',
       text: 'سلام، اینترنتم وصل نمی‌شود',
+      photo: null,
       ...overrides,
     };
   }

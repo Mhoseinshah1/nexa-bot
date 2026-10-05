@@ -446,6 +446,55 @@ export type SupportAiJobKind = (typeof SUPPORT_AI_JOB_KINDS)[number];
 export const SUPPORT_AI_JOB_STATES = ['QUEUED', 'READY', 'FAILED', 'SENT', 'DISCARDED'] as const;
 export type SupportAiJobState = (typeof SUPPORT_AI_JOB_STATES)[number];
 
+// ---------------------------------------------------------------------------
+// TB6 — vision (program §28, §36)
+// ---------------------------------------------------------------------------
+
+/**
+ * At most this many images go with one request: the most recent ones. An older image is
+ * marked unseen in the transcript, never silently dropped.
+ */
+export const SUPPORT_AI_VISION_MAX_IMAGES = 2;
+
+/**
+ * The largest image NEXA will fetch from Telegram for a model, enforced on the declared size,
+ * the declared length and WHILE streaming. A step whose own `maxImageBytes` is lower does not
+ * receive a larger image (the step is treated as unable to see it).
+ */
+export const SUPPORT_AI_VISION_MAX_BYTES = 5 * 1024 * 1024;
+
+/** Each of the two Telegram legs (`getFile`, then the file) is bounded by this. */
+export const SUPPORT_AI_VISION_FETCH_TIMEOUT_MS = 15_000;
+
+/** What happened to one image in one draft's request. Telemetry only — never a byte of it. */
+export const SUPPORT_AI_IMAGE_OUTCOMES = ['PROCESSED', 'SKIPPED'] as const;
+export type SupportAiImageOutcome = (typeof SUPPORT_AI_IMAGE_OUTCOMES)[number];
+
+/**
+ * Why an image was not given to a model.
+ *
+ * - `VISION_DISABLED` — the tenant's `visionEnabled` is off; nothing was fetched.
+ * - `NO_VISION_CAPABILITY` — no configured step can see it (capability, media type or size),
+ *   or the step that answered could not; nothing was sent to a model.
+ * - `OVER_LIMIT` — older than the `SUPPORT_AI_VISION_MAX_IMAGES` most recent images.
+ * - `NO_FILE_REFERENCE` — the message holds no file reference (purged, deleted, or older than TB6).
+ * - `TOO_LARGE` — larger than `SUPPORT_AI_VISION_MAX_BYTES`, declared or streamed.
+ * - `UNSUPPORTED_TYPE` — its magic bytes are not JPEG, PNG or WEBP.
+ * - `DOWNLOAD_FAILED` — `getFile` or the download failed, timed out, or the bot has no token.
+ * - `NOT_ANSWERED` — it was ready to send, but no provider step produced an answer.
+ */
+export const SUPPORT_AI_IMAGE_SKIP_REASONS = [
+  'VISION_DISABLED',
+  'NO_VISION_CAPABILITY',
+  'OVER_LIMIT',
+  'NO_FILE_REFERENCE',
+  'TOO_LARGE',
+  'UNSUPPORTED_TYPE',
+  'DOWNLOAD_FAILED',
+  'NOT_ANSWERED',
+] as const;
+export type SupportAiImageSkipReason = (typeof SUPPORT_AI_IMAGE_SKIP_REASONS)[number];
+
 export const supportAiDraftViewSchema = z.object({
   id: z.string(),
   state: z.enum(SUPPORT_AI_JOB_STATES),
@@ -463,6 +512,15 @@ export const supportAiDraftViewSchema = z.object({
   factLabels: z.array(z.string()),
   provider: z.enum(SUPPORT_AI_PROVIDERS).nullable(),
   model: z.string().nullable(),
+  /** TB6: images the answering model was actually given (at most `SUPPORT_AI_VISION_MAX_IMAGES`). */
+  imagesSeen: z.number().int().min(0),
+  /** TB6: images in the bounded transcript the model did NOT see, each marked as unseen. */
+  imagesUnseen: z.number().int().min(0),
+  /**
+   * TB6: set when the customer's LATEST message is an image nobody could process. The draft is
+   * then a HANDOFF produced without asking any model (fail closed), and this says why.
+   */
+  unseenImageHandoff: z.enum(SUPPORT_AI_IMAGE_SKIP_REASONS).nullable(),
 });
 export type SupportAiDraftView = z.infer<typeof supportAiDraftViewSchema>;
 

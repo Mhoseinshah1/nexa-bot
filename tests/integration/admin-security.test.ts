@@ -6,6 +6,7 @@ import {
   IDENTITY_ERROR_CODES,
   isNexaError,
   LOGIN_CHALLENGE_MAX_ATTEMPTS,
+  TOTP_PARAMETERS,
   type ActorContext,
   type CorrelationId,
 } from '@nexa/contracts';
@@ -20,6 +21,8 @@ import {
   operationalEvents,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
+  generateTotpSecret,
+  matchTotp,
   totpForStep,
   totpStepAt,
 } from '../../apps/api/src/modules/platform/identity/application/totp';
@@ -136,6 +139,27 @@ function code(secret: string, steps = 0): string {
   return totpForStep(secret, totpStepAt(ctx.container.clock.now()) + steps);
 }
 
+const STEP_MS = TOTP_PARAMETERS.periodSeconds * 1_000;
+/**
+ * How much of the current step must remain when a code is built. `enableFor` builds the code
+ * for step − 1 from the real clock and the server checks it moments later; if a step boundary
+ * passes in between, that code is now − 2, outside the ±1 skew, and refused (a CI failure,
+ * PR #201). Far more than the few milliseconds the call takes, and still a bounded wait.
+ */
+const BOUNDARY_GUARD_MS = 3_000;
+
+/** How long to wait before building a code at `now`: 0 mid-step, else until the next step. */
+function waitBeforeCode(now: Date): number {
+  const left = STEP_MS - (now.getTime() % STEP_MS);
+  return left <= BOUNDARY_GUARD_MS ? left + 50 : 0;
+}
+
+/** Waits (at most ~3 s) until a code built now is still in its step when the server checks it. */
+async function awayFromStepBoundary(): Promise<void> {
+  const wait = waitBeforeCode(ctx.container.clock.now());
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
 /** Enrols and activates the owner's factor. Returns the secret and the backup codes. */
 async function enableFor(admin: SeededAdmin) {
   const { actor, token } = await passwordLogin(admin);
@@ -145,7 +169,9 @@ async function enableFor(admin: SeededAdmin) {
     { password: admin.password },
     { ip: from.ip },
   );
-  // The step BEFORE now, so later tests can use the current and next step freely.
+  // The step BEFORE now, so later tests can use the current and next step freely — built
+  // away from a step boundary, so it is still "step − 1" when the server checks it.
+  await awayFromStepBoundary();
   const { backupCodes } = await ctx.container.accountSecurity.activateTotp(tenantA, actor, {
     code: code(enrolment.secret, -1),
   });
@@ -1409,5 +1435,34 @@ describe('security review fixes (#151)', () => {
     expect(
       Object.values(ctx.container).some((value) => value instanceof ServerSecondFactorRecovery),
     ).toBe(false);
+  });
+});
+
+/*
+ * The helper's own regression (PR #201 CI): deterministic, with the instant injected. Built 1 ms
+ * before a step boundary and checked 5 ms later, the old helper's code is refused; the guard
+ * waits past the boundary and its code is accepted. The server's skew and replay rule are
+ * untouched — this is the TEST no longer straddling a step.
+ */
+describe('enableFor never builds its code across a TOTP step boundary', () => {
+  const secret = generateTotpSecret();
+  const boundary = new Date((Math.ceil(Date.now() / STEP_MS) + 10) * STEP_MS);
+  const builtAt = new Date(boundary.getTime() - 1);
+
+  it('the old helper: step − 1, built 1 ms before the boundary, is refused once the step turns', () => {
+    const old = totpForStep(secret, totpStepAt(builtAt) - 1);
+    expect(matchTotp(secret, old, new Date(boundary.getTime() + 5), null)).toBeNull();
+  });
+
+  it('the guard waits past the boundary (bounded), and the code it then builds is accepted', () => {
+    const wait = waitBeforeCode(builtAt);
+    expect(wait).toBeGreaterThan(0);
+    expect(wait).toBeLessThanOrEqual(BOUNDARY_GUARD_MS + 50);
+    const at = new Date(builtAt.getTime() + wait);
+    const built = totpForStep(secret, totpStepAt(at) - 1);
+    expect(matchTotp(secret, built, new Date(at.getTime() + 5), null)).toBe(totpStepAt(at) - 1);
+    // Mid-step, it waits for nothing; within the guard of the boundary, it always waits.
+    expect(waitBeforeCode(new Date(boundary.getTime() + STEP_MS / 2))).toBe(0);
+    expect(waitBeforeCode(new Date(boundary.getTime() - BOUNDARY_GUARD_MS))).toBeGreaterThan(0);
   });
 });

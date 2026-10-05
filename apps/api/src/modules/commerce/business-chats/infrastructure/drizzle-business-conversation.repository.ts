@@ -33,6 +33,7 @@ import type {
   BusinessOutboundRepository,
   ConversationTransition,
 } from '../application/ports.js';
+import type { BusinessPhotoReference } from '../domain/telegram-business.js';
 
 /**
  * TB2 persistence: conversations, the bounded transcript and the outbound lane, plus the one
@@ -81,6 +82,18 @@ function toMessage(row: MessageRow): BusinessMessageRecord {
     sentAt: row.sentAt,
     editedAt: row.editedAt,
     deletedAt: row.deletedAt,
+    photo: photoOf(row),
+  };
+}
+
+function photoOf(
+  row: Pick<MessageRow, 'photoFileId' | 'photoFileUniqueId' | 'photoFileSize'>,
+): BusinessPhotoReference | null {
+  if (row.photoFileId === null || row.photoFileUniqueId === null) return null;
+  return {
+    fileId: row.photoFileId,
+    fileUniqueId: row.photoFileUniqueId,
+    fileSize: row.photoFileSize,
   };
 }
 
@@ -404,6 +417,9 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
         origin: row.origin,
         kind: row.kind,
         text: row.text,
+        photoFileId: row.photo?.fileId ?? null,
+        photoFileUniqueId: row.photo?.fileUniqueId ?? null,
+        photoFileSize: row.photo?.fileSize ?? null,
         sentAt: row.sentAt,
         createdAt: row.now,
       })
@@ -427,6 +443,12 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
         text: sql`CASE WHEN ${businessMessages.textPurgedAt} IS NULL THEN ${input.text}::text ELSE NULL END`,
         contentVersion: sql`${businessMessages.contentVersion} + 1`,
         editedAt: input.editedAt,
+        // TB6: an edit can replace a photo's media; only a PHOTO row ever holds a reference, and
+        // a row retention already purged gets none back — the reference is the customer's
+        // content exactly as the text is (PR #201 review, S2).
+        photoFileId: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' AND ${businessMessages.textPurgedAt} IS NULL THEN ${input.photo?.fileId ?? null}::text ELSE NULL END`,
+        photoFileUniqueId: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' AND ${businessMessages.textPurgedAt} IS NULL THEN ${input.photo?.fileUniqueId ?? null}::text ELSE NULL END`,
+        photoFileSize: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' AND ${businessMessages.textPurgedAt} IS NULL THEN ${input.photo?.fileSize ?? null}::integer ELSE NULL END`,
       })
       .where(
         and(
@@ -472,7 +494,14 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
     if (input.telegramMessageIds.length === 0) return 0;
     const rows = await executorOf(this.db, tx)
       .update(businessMessages)
-      .set({ deletedAt: input.now, text: null, textPurgedAt: input.now })
+      .set({
+        deletedAt: input.now,
+        text: null,
+        textPurgedAt: input.now,
+        photoFileId: null,
+        photoFileUniqueId: null,
+        photoFileSize: null,
+      })
       .where(
         and(
           eq(businessMessages.tenantId, tenantId),
@@ -505,6 +534,31 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
     return rows.map(toMessage).reverse();
   }
 
+  async photoReference(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly messageId: string },
+  ): Promise<BusinessPhotoReference | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select({
+        photoFileId: businessMessages.photoFileId,
+        photoFileUniqueId: businessMessages.photoFileUniqueId,
+        photoFileSize: businessMessages.photoFileSize,
+      })
+      .from(businessMessages)
+      .where(
+        and(
+          eq(businessMessages.tenantId, tenantId),
+          eq(businessMessages.conversationId, input.conversationId),
+          eq(businessMessages.id, input.messageId),
+          eq(businessMessages.kind, 'PHOTO'),
+          isNull(businessMessages.deletedAt),
+        ),
+      )
+      .limit(1);
+    return row === undefined ? null : photoOf(row);
+  }
+
   async purgeText(
     scope: ScopeContext,
     cutoff: Date,
@@ -519,7 +573,7 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
       .where(
         and(
           eq(businessMessages.tenantId, tenantId),
-          isNotNull(businessMessages.text),
+          or(isNotNull(businessMessages.text), isNotNull(businessMessages.photoFileId)),
           lt(businessMessages.sentAt, cutoff),
         ),
       )
@@ -527,7 +581,13 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
       .limit(limit);
     const rows = await executorOf(this.db, tx)
       .update(businessMessages)
-      .set({ text: null, textPurgedAt: now })
+      .set({
+        text: null,
+        textPurgedAt: now,
+        photoFileId: null,
+        photoFileUniqueId: null,
+        photoFileSize: null,
+      })
       .where(and(eq(businessMessages.tenantId, tenantId), inArray(businessMessages.id, due)))
       .returning({ id: businessMessages.id });
     return rows.length;

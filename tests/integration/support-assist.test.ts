@@ -132,7 +132,15 @@ describe('Assist Mode (TB5)', () => {
               step: { provider: 'OPENAI', model: 'gpt-5.5' },
               attempts: 1,
               exhausted: null,
+              imagesSent: 0,
+              sight: { seen: [], unseen: new Map() },
             };
+          },
+          visionStepConfigured: () => false,
+        },
+        images: {
+          load: async () => {
+            throw new Error('TB5 tests carry no image');
           },
         },
         context: {
@@ -185,6 +193,7 @@ describe('Assist Mode (TB5)', () => {
         editedAt: null,
         kind: 'TEXT',
         text: 'سلام، اینترنتم وصل نمی‌شود',
+        photo: null,
       },
     });
     return recorded!.conversationId;

@@ -271,6 +271,8 @@ import {
   SUPPORT_AI_DECISIONS,
   SUPPORT_AI_JOB_KINDS,
   SUPPORT_AI_JOB_STATES,
+  SUPPORT_AI_IMAGE_OUTCOMES,
+  SUPPORT_AI_IMAGE_SKIP_REASONS,
   SUPPORT_AI_TICKET_ACTIONS,
   SUPPORT_AI_TOPICS,
   OPS_LOG_TOPIC_STATES,
@@ -13366,6 +13368,16 @@ export const businessMessages = pgTable(
     editedAt: timestamptz('edited_at'),
     deletedAt: timestamptz('deleted_at'),
     textPurgedAt: timestamptz('text_purged_at'),
+    /**
+     * TB6 — the reference to a PHOTO's largest size, never its bytes and never a URL (a file
+     * URL carries the bot token). `file_id` is what `getFile` takes and is scoped to the bot
+     * that received it — `business_conversations.bot_instance_id`. Purged with the text, and
+     * at once on delete: a reference is as much the customer's content as the caption.
+     */
+    photoFileId: text('photo_file_id'),
+    photoFileUniqueId: text('photo_file_unique_id'),
+    /** Telegram's declared size of that photo size, when it gave one. A claim, not a bound. */
+    photoFileSize: integer('photo_file_size'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
@@ -13393,6 +13405,20 @@ export const businessMessages = pgTable(
     check('business_messages_version_check', sql`content_version >= 1`),
     // A deleted message holds no text.
     check('business_messages_deleted_check', sql`deleted_at IS NULL OR text IS NULL`),
+    // TB6: a photo reference belongs only to a PHOTO, comes as a pair, is bounded, and its
+    // declared size never outlives it (PR #201 review, N4).
+    check(
+      'business_messages_photo_shape_check',
+      sql`(photo_file_id IS NULL) = (photo_file_unique_id IS NULL) AND (photo_file_id IS NULL OR kind = 'PHOTO') AND (photo_file_size IS NULL OR photo_file_id IS NOT NULL)`,
+    ),
+    check(
+      'business_messages_photo_bounds_check',
+      sql`(photo_file_id IS NULL OR length(photo_file_id) BETWEEN 1 AND 256) AND (photo_file_unique_id IS NULL OR length(photo_file_unique_id) BETWEEN 1 AND 128) AND (photo_file_size IS NULL OR photo_file_size >= 0)`,
+    ),
+    check(
+      'business_messages_photo_deleted_check',
+      sql`deleted_at IS NULL OR photo_file_id IS NULL`,
+    ),
   ],
 );
 
@@ -13699,6 +13725,14 @@ export const supportAiJobs = pgTable(
     provider: text('provider'),
     model: text('model'),
     sentOutboundId: uuid('sent_outbound_id'),
+    /** TB6: images the answering model was given, and images in the transcript it did not see. */
+    imagesSeen: integer('images_seen').notNull().default(0),
+    imagesUnseen: integer('images_unseen').notNull().default(0),
+    /**
+     * TB6: the customer's latest message is an image nothing could process, so the draft is a
+     * HANDOFF produced WITHOUT a model (fail closed). Why the image was not processed.
+     */
+    unseenImageHandoff: text('unseen_image_handoff'),
     textPurgedAt: timestamptz('text_purged_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
@@ -13747,5 +13781,70 @@ export const supportAiJobs = pgTable(
     ),
     check('support_ai_jobs_summary_check', sql`summary IS NULL OR length(summary) <= 600`),
     check('support_ai_jobs_attempts_check', sql`attempts >= 0`),
+    check('support_ai_jobs_images_check', sql`images_seen >= 0 AND images_unseen >= 0`),
+    check(
+      'support_ai_jobs_unseen_image_handoff_check',
+      enumCheck('unseen_image_handoff', SUPPORT_AI_IMAGE_SKIP_REASONS),
+    ),
+    // The fail-closed draft is a HANDOFF that no model wrote and that saw no image: no provider,
+    // no model, no summary, and an empty reply — or none at all once retention purged the text
+    // (PR #201 review, N4). `IS NOT DISTINCT FROM`, because a CHECK passes on NULL: `= ''`
+    // would let a NULL reply (or a NULL decision) through.
+    check(
+      'support_ai_jobs_unseen_image_handoff_shape_check',
+      sql`unseen_image_handoff IS NULL OR (decision IS NOT DISTINCT FROM 'HANDOFF' AND provider IS NULL AND model IS NULL AND summary IS NULL AND images_seen = 0 AND (suggested_reply IS NOT DISTINCT FROM '' OR (suggested_reply IS NULL AND text_purged_at IS NOT NULL)))`,
+    ),
+  ],
+);
+
+/**
+ * TB6 — what happened to each image a draft's request considered (program §28): PROCESSED
+ * (given to the model that answered) or SKIPPED, and why. Operational telemetry only: no
+ * byte, no file id and no URL of the image is here — the message row is the reference.
+ */
+export const supportAiImageOutcomes = pgTable(
+  'support_ai_image_outcomes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    jobId: uuid('job_id').notNull(),
+    messageId: uuid('message_id').notNull(),
+    outcome: text('outcome').notNull(),
+    reason: text('reason'),
+    /** The SNIFFED type, when the bytes were read; never Telegram's declared one. */
+    mediaType: text('media_type'),
+    byteSize: integer('byte_size'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('support_ai_image_outcomes_job_idx').on(table.tenantId, table.jobId),
+    index('support_ai_image_outcomes_created_idx').on(table.tenantId, table.createdAt),
+    foreignKey({
+      columns: [table.tenantId, table.jobId],
+      foreignColumns: [supportAiJobs.tenantId, supportAiJobs.id],
+      name: 'support_ai_image_outcomes_job_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.messageId],
+      foreignColumns: [businessMessages.tenantId, businessMessages.id],
+      name: 'support_ai_image_outcomes_message_fk',
+    }),
+    check(
+      'support_ai_image_outcomes_outcome_check',
+      enumCheck('outcome', SUPPORT_AI_IMAGE_OUTCOMES),
+    ),
+    check(
+      'support_ai_image_outcomes_reason_check',
+      enumCheck('reason', SUPPORT_AI_IMAGE_SKIP_REASONS),
+    ),
+    // A processed image has no skip reason; a skipped one always says why.
+    check('support_ai_image_outcomes_shape_check', sql`(outcome = 'PROCESSED') = (reason IS NULL)`),
+    check(
+      'support_ai_image_outcomes_media_type_check',
+      sql`media_type IS NULL OR media_type IN ('image/jpeg', 'image/png', 'image/webp')`,
+    ),
+    check('support_ai_image_outcomes_size_check', sql`byte_size IS NULL OR byte_size >= 0`),
   ],
 );

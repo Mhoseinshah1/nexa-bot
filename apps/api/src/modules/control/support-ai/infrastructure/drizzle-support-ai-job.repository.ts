@@ -2,12 +2,17 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from
 import type {
   ScopeContext,
   SupportAiDecision,
+  SupportAiImageOutcome,
+  SupportAiImageSkipReason,
   SupportAiJobKind,
   SupportAiJobState,
   SupportAiProvider,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
-import { supportAiJobs } from '../../../../infrastructure/persistence/schema.js';
+import {
+  supportAiImageOutcomes,
+  supportAiJobs,
+} from '../../../../infrastructure/persistence/schema.js';
 import {
   requireTenantId,
   type TransactionScope,
@@ -37,7 +42,19 @@ export interface SupportAiJobRecord {
   readonly provider: SupportAiProvider | null;
   readonly model: string | null;
   readonly sentOutboundId: string | null;
+  readonly imagesSeen: number;
+  readonly imagesUnseen: number;
+  readonly unseenImageHandoff: SupportAiImageSkipReason | null;
   readonly createdAt: Date;
+}
+
+/** TB6: one image's outcome in one draft's request. No byte, file id or URL. */
+export interface SupportAiImageOutcomeRow {
+  readonly messageId: string;
+  readonly outcome: SupportAiImageOutcome;
+  readonly reason: SupportAiImageSkipReason | null;
+  readonly mediaType: string | null;
+  readonly byteSize: number | null;
 }
 
 function toRecord(row: Row): SupportAiJobRecord {
@@ -63,6 +80,9 @@ function toRecord(row: Row): SupportAiJobRecord {
     provider: row.provider as SupportAiProvider | null,
     model: row.model,
     sentOutboundId: row.sentOutboundId,
+    imagesSeen: row.imagesSeen,
+    imagesUnseen: row.imagesUnseen,
+    unseenImageHandoff: row.unseenImageHandoff as SupportAiImageSkipReason | null,
     createdAt: row.createdAt,
   };
 }
@@ -260,6 +280,9 @@ export class DrizzleSupportAiJobRepository {
       readonly factLabels: readonly string[];
       readonly provider: SupportAiProvider;
       readonly model: string;
+      /** TB6: images the answering model was given, and images it did not see. */
+      readonly imagesSeen: number;
+      readonly imagesUnseen: number;
       readonly now: Date;
     },
     tx: unknown,
@@ -282,6 +305,8 @@ export class DrizzleSupportAiJobRepository {
         factLabels: [...result.factLabels],
         provider: result.provider,
         model: result.model.slice(0, 128),
+        imagesSeen: result.imagesSeen,
+        imagesUnseen: result.imagesUnseen,
         updatedAt: result.now,
       })
       .where(
@@ -293,6 +318,103 @@ export class DrizzleSupportAiJobRepository {
       )
       .returning({ id: supportAiJobs.id });
     return rows.length > 0;
+  }
+
+  /**
+   * TB6 — the fail-closed draft: the customer's latest message is an image nothing could
+   * process, so NO model was asked and the draft is a HANDOFF that says why. Never a reply, a
+   * provider or a seen image (the table's CHECK holds the same shape).
+   */
+  async markUnseenImageHandoff(
+    scope: ScopeContext,
+    id: string,
+    input: {
+      readonly reason: SupportAiImageSkipReason;
+      readonly imagesUnseen: number;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .update(supportAiJobs)
+      .set({
+        state: 'READY',
+        readyAt: input.now,
+        claimedUntil: null,
+        decision: 'HANDOFF',
+        topic: 'OTHER',
+        confidence: 'LOW',
+        ticketAction: 'NONE',
+        summary: null,
+        intent: null,
+        suggestedReply: '',
+        factRefs: [],
+        factLabels: [],
+        provider: null,
+        model: null,
+        imagesSeen: 0,
+        imagesUnseen: input.imagesUnseen,
+        unseenImageHandoff: input.reason,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.id, id),
+          eq(supportAiJobs.state, 'QUEUED'),
+        ),
+      )
+      .returning({ id: supportAiJobs.id });
+    return rows.length > 0;
+  }
+
+  /** TB6 — the per-image telemetry of one draft's request. */
+  async recordImageOutcomes(
+    scope: ScopeContext,
+    jobId: string,
+    rows: readonly (SupportAiImageOutcomeRow & { readonly id: string })[],
+    now: Date,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    if (rows.length === 0) return;
+    await exec(this.db, tx)
+      .insert(supportAiImageOutcomes)
+      .values(
+        rows.map((row) => ({
+          id: row.id,
+          tenantId,
+          jobId,
+          messageId: row.messageId,
+          outcome: row.outcome,
+          reason: row.reason,
+          mediaType: row.mediaType,
+          byteSize: row.byteSize,
+          createdAt: now,
+        })),
+      );
+  }
+
+  async imageOutcomes(
+    scope: ScopeContext,
+    jobId: string,
+  ): Promise<readonly SupportAiImageOutcomeRow[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select()
+      .from(supportAiImageOutcomes)
+      .where(
+        and(eq(supportAiImageOutcomes.tenantId, tenantId), eq(supportAiImageOutcomes.jobId, jobId)),
+      )
+      .orderBy(asc(supportAiImageOutcomes.createdAt), asc(supportAiImageOutcomes.id));
+    return rows.map((row) => ({
+      messageId: row.messageId,
+      outcome: row.outcome as SupportAiImageOutcome,
+      reason: row.reason as SupportAiImageSkipReason | null,
+      mediaType: row.mediaType,
+      byteSize: row.byteSize,
+    }));
   }
 
   async markFailed(
