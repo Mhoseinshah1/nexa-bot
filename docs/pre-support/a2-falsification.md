@@ -1,48 +1,92 @@
 # Pre-support A2 — refresh on open: falsification
 
-Item A2 of the pre-support remaining-fixes audit (2026-10-05): opening a service card
-(`s:` → `SERVICE`, `sv:` → `SERVICE_CARD`) makes the same bounded live read the «♻️» button
-makes, before the card is drawn. The rule lives in `BotRuntime.openServiceCard`
-(`apps/api/src/surfaces/telegram/bot-runtime.ts`) and calls `ServiceRefreshService.refresh`
-and nothing else, so the 60 s minimum interval, the one-read-in-flight reservation, the
-tenant's single probe budget and the panel client's timeout all apply unchanged. No second
-budget is added.
+Item A2 of the pre-support remaining-fixes audit (2026-10-05). Opening a service card
+(`s:` → `SERVICE`, `sv:` → `SERVICE_CARD`) now makes a bounded live read before the card is
+drawn. The rule lives in `BotRuntime.openServiceCard`
+(`apps/api/src/surfaces/telegram/bot-runtime.ts`). It calls `ServiceRefreshService.refresh`
+in its `onOpen` mode.
 
-Only `NOT_FOUND` is an answer on open. `FAILED`, `RECENT`, `NOT_READ` and a thrown refresh
-draw the stored card with no toast. The «♻️» button stays. The «working» card is drawn by an
-action's own turn and is not refreshed.
+The bounds the «♻️» button already had apply unchanged:
+
+- the 60 s minimum interval;
+- the one-read-in-flight reservation;
+- the tenant's single probe bucket;
+- the panel client's timeout.
+
+## The open's own bounds (review B1)
+
+The interval does not hold during a panel outage. A failed read writes no `usage_synced_at`
+and gives its reservation back. Without more bounds, every open would dial again, hold the
+turn for the client's timeout and spend a token at reserve 0. So `onOpen`, and only
+`onOpen`, adds two bounds:
+
+- **A panel the monitor has confirmed unusable is not dialled.** The check is
+  `isConfirmedUnusable`, the same predicate eligibility uses: an unusable state, a streak at
+  `PANEL_UNHEALTHY_AFTER_FAILURES`, and a fresh check.
+- **The token is taken above the background floor, never from it.** The floor is the usage
+  sweep's `usageSyncBudgetReserveFor` value on the same bucket. It is one const in the
+  container, shared by the provisioner and the refresh. No second budget is added.
+
+The «♻️» button (`rs:`) passes no options and behaves exactly as before.
+
+## Outcomes and errors on open
+
+- `NOT_FOUND` is the only outcome that changes the reply.
+- `FAILED`, `RECENT` and `NOT_READ` draw the stored card with no toast.
+- An expected typed refusal draws the stored card too: recovery quiesced,
+  `PERMISSION_DENIED`, or a retryable error.
+- Any other error propagates. `BotRuntime` has no injected error sink, so propagating is how
+  it gets reported.
+- A service with a change in progress (`changeInProgress`, the «working» card) is drawn
+  without a read.
 
 ## Tests
 
 In `tests/integration/customer-ux-services.test.ts`, under "opening a card refreshes it,
 inside the refresh button's bounds":
 
-- opening a card makes one panel read and shows the fresh figure (and keeps `rs:`)
-- opening from the list (`sv:`) reads too, and edits the list message with the answer
-- opening twice within 60 s makes ONE panel read
-- opening while a tap's read is in flight makes no second read
-- a panel failure draws the stored card, with no error and no notice
-- an exhausted probe budget draws the stored card and dials nothing
-- a refresh that throws still opens the stored card
-- a service that is not theirs is answered not-found, and dials nothing
+- `s:` makes one panel read, shows the fresh figure and keeps `rs:`.
+- `sv:` makes one read and edits the list message with the fresh figure.
+- Two opens within 60 s make one read.
+- An open during a tap's in-flight read makes no second read.
+- A panel failure draws the stored card, with no error and no notice.
+- An exhausted budget draws the stored card and makes no read.
+- An expected refusal thrown by the refresh draws the stored card.
+- An unexpected error thrown by the refresh is surfaced, not swallowed.
+- A panel confirmed `UNREACHABLE` (fresh, streak at the threshold): `s:` makes 0 reads and
+  draws the stored card, while `rs:` makes 1.
+- A bucket exactly at the background floor: `s:` makes 0 reads, while `rs:` makes 1.
+- A service with a SUSPEND in flight is drawn without a read.
+- A DISABLED panel and a SUSPENDED service make 0 reads on open.
+- Another customer's service answers not-found and makes no read.
 
-"keeps unlimited and unread apart from zero" now makes the panel unable to answer, so the
-unread state it draws is still reachable after an open reads the panel.
+One existing test also changed. "Keeps unlimited and unread apart from zero" now makes the
+panel unable to answer, so the unread state it draws is still reachable after an open reads
+the panel.
 
 ## Mutants
 
-Driver: `python3 scripts/mutate-a2.py` (needs a clean `apps/`; set `TEST_DATABASE_URL` to a
-database of your own).
+Driver: `python3 scripts/mutate-a2.py`. It needs a clean `apps/`; set `TEST_DATABASE_URL` to
+a database of your own. Each write and restore is wrapped in `try`/`finally`.
 
-| Id    | Reverted rule                                            | Killed by                                         |
-| ----- | -------------------------------------------------------- | ------------------------------------------------- |
-| A2-01 | `SERVICE` draws the stored card without the refresh      | opening a card makes one panel read               |
-| A2-02 | `SERVICE_CARD` draws the stored card without the refresh | opening from the list (`sv:`) reads too           |
-| A2-03 | `FAILED` on open answers with the refresh-failed toast   | a panel failure draws the stored card             |
-| A2-04 | same mutant, reached through an exhausted budget         | an exhausted probe budget draws the stored card   |
-| A2-05 | a refresh that throws fails the open                     | a refresh that throws still opens the stored card |
+| Id    | Reverted rule                                            | Killed by                                     |
+| ----- | -------------------------------------------------------- | --------------------------------------------- |
+| A2-01 | `SERVICE` draws the stored card without the refresh      | one panel read on `s:`                        |
+| A2-02 | `SERVICE_CARD` draws the stored card without the refresh | `sv:` reads too                               |
+| A2-03 | `FAILED` on open answers with the refresh-failed toast   | panel failure; exhausted budget (2 tests)     |
+| A2-04 | an unexpected error is swallowed                         | unexpected error is surfaced                  |
+| A2-05 | an expected refusal propagates                           | expected refusal draws the stored card        |
+| A2-06 | the open does not ask for `onOpen`                       | confirmed unreachable; at the floor (2 tests) |
+| A2-07 | the confirmed-unusable guard removed                     | confirmed unreachable                         |
+| A2-08 | the confirmed-unusable guard also applied to ♻️          | confirmed unreachable (`rs:` must read)       |
+| A2-09 | the open takes its token at reserve 0                    | at the floor                                  |
+| A2-10 | ♻️ also takes its token above the floor                  | at the floor (`rs:` must read)                |
+| A2-11 | the change-in-progress skip removed                      | SUSPEND in flight                             |
 
-Result on 2026-10-05: 5 of 5 killed.
+Result on 2026-10-05: 11 mutants, 11 killed, 13 failing tests in all. A2-03 and A2-06 are
+one edit each and fail two tests. An earlier version of this record listed A2-03 and A2-04
+as two mutants; they were one edit run against two tests, so that record was 4 mutants and
+5 kills.
 
 Ignoring `NOT_FOUND` is an equivalent mutant: the stored card answers the same
 `bot.service.not_found` for a service that is not the customer's, so the branch only saves
