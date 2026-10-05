@@ -1,5 +1,5 @@
 {
-  "id": "e00cb25f-e504-4dce-becc-e7435c573040",
+  "id": "eaeca574-4944-4e3d-9edb-2ac981375a2d",
   "prevId": "b6c7dbeb-8f16-4665-9589-e16b2daf26a2",
   "version": "7",
   "dialect": "postgresql",
@@ -30412,6 +30412,33 @@
             },
             {
               "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "support_learning_candidates_created_idx": {
+          "name": "support_learning_candidates_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

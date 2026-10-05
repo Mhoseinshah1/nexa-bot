@@ -14084,6 +14084,18 @@ export const supportLearningCandidates = pgTable(
       .where(sql`reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'`),
     /** The review queue: by state, newest first. */
     index('support_learning_candidates_queue_idx').on(table.tenantId, table.state, table.createdAt),
+    /*
+     * TB10 (PR #205 review, N4): the analytics count candidates CREATED in a window, by state.
+     * The queue index leads with `state`, so that count walked the tenant's whole queue index
+     * with `created_at` checked entry by entry; this bounds it to the window, and carries
+     * `state` so the count stays an index-only scan (without it, the planner kept the queue
+     * index rather than visit the heap for each row's state).
+     */
+    index('support_learning_candidates_created_idx').on(
+      table.tenantId,
+      table.createdAt,
+      table.state,
+    ),
     foreignKey({
       columns: [table.tenantId, table.conversationId],
       foreignColumns: [businessConversations.tenantId, businessConversations.id],

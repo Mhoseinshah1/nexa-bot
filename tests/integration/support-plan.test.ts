@@ -122,8 +122,26 @@ describe('the support query plans', () => {
                FROM business_conversations WHERE tenant_id = $1::uuid`,
             [tenant],
           );
+          // PR #205 review, N4: one learning candidate per conversation, at its own time;
+          // a quarter rejected by a reviewer, the rest pending.
+          await client.query(
+            `INSERT INTO support_learning_candidates
+               (id, tenant_id, state, title, normalized_title, body, category, confidence,
+                reject_reason, conversation_id, source_outbound_id, job_id, reviewed_at,
+                created_at)
+             SELECT gen_random_uuid(), tenant_id,
+                    CASE WHEN g.n % 4 = 1 THEN 'REJECTED' ELSE 'PENDING' END,
+                    'lesson ' || id::text, 'lesson ' || id::text, 'body', 'CONNECTION', 'HIGH',
+                    CASE WHEN g.n % 4 = 1 THEN 'REVIEWER' END,
+                    id, gen_random_uuid(), gen_random_uuid(),
+                    CASE WHEN g.n % 4 = 1 THEN created_at END, created_at
+               FROM (SELECT *, row_number() OVER () AS n FROM business_conversations
+                      WHERE tenant_id = $1::uuid) g`,
+            [tenant],
+          );
         }
         for (const table of [
+          'support_learning_candidates',
           'business_conversations',
           'business_conversation_escalations',
           'support_ai_jobs',
@@ -230,6 +248,11 @@ describe('the support query plans', () => {
       },
       { table: 'support_ai_jobs', index: 'support_ai_jobs_created_idx' },
       { table: 'support_ai_runs', index: 'support_ai_runs_tenant_created_idx' },
+      // PR #205 review, N4.
+      {
+        table: 'support_learning_candidates',
+        index: 'support_learning_candidates_created_idx',
+      },
     ];
 
     for (const shape of windowed) {
@@ -242,6 +265,15 @@ describe('the support query plans', () => {
           /Index Cond:.*created_at/s,
         );
         expect(plan, `the table was walked:\n${plan}`).not.toContain(`Seq Scan on ${shape.table}`);
+        /*
+         * A window of a month, read as a range (PR #205 review, N4). Measured on this fixture:
+         * 44 buffers for escalations, 60 for jobs, 44 for runs, 23 for learning candidates.
+         * Before `support_learning_candidates_created_idx`, the candidate count was an
+         * index-only scan of the tenant's WHOLE review-queue index (it leads with `state`),
+         * `created_at` checked entry by entry: 228 buffers, and an Index Cond that still named
+         * `created_at`, which is why the bound and not the Index Cond is what catches it.
+         */
+        expect(buffersIn(plan), `more than the window was read:\n${plan}`).toBeLessThan(120);
       }, 60_000);
     }
 
