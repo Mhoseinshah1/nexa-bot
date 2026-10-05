@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_RULES,
@@ -10,6 +10,7 @@ import {
 import {
   BusinessChatDetailPage,
   BusinessChatsPage,
+  inboxRows,
   waitParts,
 } from '../../apps/web/src/pages/business-chats';
 import { SupportAiPage } from '../../apps/web/src/pages/support-ai';
@@ -100,6 +101,54 @@ describe('the inbox: the customer’s wait and the ticket', () => {
       .closest('tr') as HTMLElement;
     expect(within(answered).queryByText(t('web.unit_minutes'), { exact: false })).toBeNull();
     expect(within(answered).queryByRole('link', { name: t('web.bchat_ticket_badge') })).toBeNull();
+  });
+
+  /*
+   * PR #205 review, N2: the keyset's first key (handoffs first) is mutable, so a conversation
+   * handed back to the AI between two pages is read again on the next one.
+   */
+  it('draws a conversation once when «load more» reads it again, with the fresher read', async () => {
+    const SECOND = '019400ab-cdef-7012-8345-6789abcdef02';
+    const THIRD = '019400ab-cdef-7012-8345-6789abcdef03';
+    const second = { id: SECOND, peerTelegramUserId: '951002', customer: null };
+    expect(
+      inboxRows([
+        { conversations: [summary(), summary(second)] as never },
+        {
+          conversations: [
+            summary({ state: 'AI_ACTIVE', handoffReason: null }),
+            summary({ id: THIRD }),
+          ] as never,
+        },
+      ]).map((row) => `${row.id}/${row.state}`),
+    ).toEqual([`${CHAT_ID}/AI_ACTIVE`, `${SECOND}/HANDOFF_REQUIRED`, `${THIRD}/HANDOFF_REQUIRED`]);
+
+    stubApi([
+      {
+        url: '/business-chats',
+        body: { conversations: [summary(), summary(second)], nextCursor: 'page-2' },
+      },
+      {
+        url: '/business-chats?cursor=page-2',
+        body: {
+          conversations: [
+            summary({ state: 'AI_ACTIVE', handoffReason: null }),
+            summary({ id: THIRD, peerTelegramUserId: '951003', customer: null }),
+          ],
+          nextCursor: null,
+        },
+      },
+      { url: '/business-connections', body: { connections: [] } },
+    ]);
+    renderPage(<BusinessChatsPage route={inboxRoute} denied={false} />);
+    const table = await screen.findByRole('table', { name: t('web.bchats_title') });
+    fireEvent.click(screen.getByRole('button', { name: t('web.bchat_load_more') }));
+    await waitFor(() =>
+      expect(
+        within(table).getAllByRole('link', { name: t('web.bchat_unknown_customer') }),
+      ).toHaveLength(2),
+    );
+    expect(within(table).getAllByRole('link', { name: 'مریم' })).toHaveLength(1);
   });
 
   it('shows the wait and the ticket on the conversation itself', async () => {

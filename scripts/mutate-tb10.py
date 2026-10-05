@@ -83,6 +83,8 @@ M=[
  ('TB10-36',[(REPO,"AND m.sent_at >= COALESCE(date_trunc('second', ${replied}), '-infinity'::timestamptz))","AND m.sent_at > COALESCE(${replied}, '-infinity'::timestamptz))")],T_I,'same Telegram second as a reply confirmed'),
  ('TB10-37',[(OUTBOUND,"const repliedAt = sent.sentAt ?? now;","const repliedAt = now;")],T_I,'server clock running ahead'),
  ('TB10-38',[(SEND,"      ? { sentAt: new Date(date * 1000) }","      ? {}")],T_G,'own date for a sent message'),
+ # N2: «load more» draws a conversation the mutable keyset read twice once.
+ ('TB10-39',[(INBOX_PAGE,"  const rows = inboxRows(chats.data?.pages ?? []);","  const rows = chats.data?.pages.flatMap((page) => page.conversations) ?? [];")],T_W,'draws a conversation once'),
 ]
 
 def build_contracts():

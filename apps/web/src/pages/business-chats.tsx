@@ -267,6 +267,36 @@ function ticketPath(id: string): string {
 // The inbox
 // ---------------------------------------------------------------------------------------
 
+/**
+ * The inbox's pages, flattened, each conversation ONCE (PR #205 review, N2).
+ *
+ * The keyset's first key is mutable: a conversation handed back to the AI between two pages
+ * drops from the handoffs above the cursor to the rest below it, and the next page carries it
+ * a second time. It is drawn once, where it was first drawn, with the later (fresher) read.
+ * The opposite move is a SKIP, not a repeat: a conversation handed off, or with new activity,
+ * after its page was read moves above the cursor, and «load more» does not show it until the
+ * list is read again from the top. The handoffs-first order is what that costs; the
+ * notification inbox still announces every handoff (`support.handoff_required`).
+ */
+export function inboxRows(
+  pages: readonly { readonly conversations: readonly BusinessConversationSummary[] }[],
+): BusinessConversationSummary[] {
+  const position = new Map<string, number>();
+  const rows: BusinessConversationSummary[] = [];
+  for (const page of pages) {
+    for (const row of page.conversations) {
+      const at = position.get(row.id);
+      if (at === undefined) {
+        position.set(row.id, rows.length);
+        rows.push(row);
+      } else {
+        rows[at] = row;
+      }
+    }
+  }
+  return rows;
+}
+
 export function BusinessChatsPage({ route, denied }: { route: Route; denied: boolean }) {
   const state = stateOf(route.query.get('state'));
   const chats = useInfiniteQuery({
@@ -280,7 +310,7 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     enabled: !denied,
   });
-  const rows = chats.data?.pages.flatMap((page) => page.conversations) ?? [];
+  const rows = inboxRows(chats.data?.pages ?? []);
   const requestable = mayRequest(chats, denied);
   const onLink = useLinkHandler();
 
