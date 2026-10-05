@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { SUPPORT_AI_DEFAULT_CONFIG, type PERMISSION_KEYS } from '@nexa/contracts';
+import {
+  SUPPORT_AI_DEFAULT_CONFIG,
+  SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS,
+  type PERMISSION_KEYS,
+} from '@nexa/contracts';
 import { SupportAiPage, supportAiFault } from '../../apps/web/src/pages/support-ai';
-import { ASSIST_POLL_MS, AssistCard } from '../../apps/web/src/pages/support-assist';
+import {
+  ASSIST_POLL_MS,
+  ASSIST_WAIT_MS,
+  AssistCard,
+  awaitingDraft,
+} from '../../apps/web/src/pages/support-assist';
 import { BusinessChatDetailPage } from '../../apps/web/src/pages/business-chats';
 import { ApiError } from '../../apps/web/src/api/client';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -432,7 +441,9 @@ describe('the Assist panel', () => {
   });
 
   it('reads the drafts again while one is still being written', async () => {
-    const api = assist([draft({ state: 'QUEUED', suggestedReply: null })]);
+    const api = assist([
+      draft({ state: 'QUEUED', suggestedReply: null, createdAt: new Date().toISOString() }),
+    ]);
     expect(await screen.findByText(t('web.assist_queued'))).toBeTruthy();
     // The request button waits for the queued draft.
     expect(
@@ -441,6 +452,39 @@ describe('the Assist panel', () => {
     await waitFor(() => expect(calls(api, 'GET', '/drafts').length).toBeGreaterThan(1), {
       timeout: ASSIST_POLL_MS * 2,
     });
+  });
+});
+
+// PR #200 review, finding 6: the server fails a draft nothing claimed; the screen's wait is
+// bounded by the same number, so it neither polls for ever nor keeps re-request disabled.
+describe('the Assist panel and a draft nothing claims', () => {
+  it('waits on a QUEUED draft only for the server’s bound plus two polls', () => {
+    const createdAt = '2026-10-05T00:00:00.000Z';
+    const queuedAt = Date.parse(createdAt);
+    const queued = draft({ state: 'QUEUED', createdAt }) as never;
+    expect(ASSIST_WAIT_MS).toBe(SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS * 1_000 + 2 * ASSIST_POLL_MS);
+    expect(awaitingDraft(queued, queuedAt + ASSIST_WAIT_MS - 1)).toBe(true);
+    expect(awaitingDraft(queued, queuedAt + ASSIST_WAIT_MS)).toBe(false);
+    expect(awaitingDraft(draft({ createdAt }) as never, queuedAt)).toBe(false);
+  });
+
+  it('stops polling an overdue QUEUED draft and offers a new request', async () => {
+    const overdue = new Date(Date.now() - ASSIST_WAIT_MS - 1_000).toISOString();
+    const api = assist([draft({ state: 'QUEUED', suggestedReply: null, createdAt: overdue })]);
+    expect(await screen.findByText(t('web.assist_queued_overdue'))).toBeTruthy();
+    const button = screen.getByRole('button', { name: t('web.assist_request') });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, ASSIST_POLL_MS * 2));
+    expect(calls(api, 'GET', '/drafts')).toHaveLength(1);
+  });
+
+  it('shows the server’s unclaimed verdict as an ordinary failed draft', async () => {
+    assist([draft({ state: 'FAILED', failureCode: 'job.unclaimed', suggestedReply: null })]);
+    expect(await screen.findByText(t('web.assist_failed'))).toBeTruthy();
+    expect(screen.queryByText('job.unclaimed')).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: t('web.assist_request') }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 });
 

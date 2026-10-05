@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BUSINESS_MESSAGE_TEXT_MAX,
+  SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS,
   supportAiDraftSendRequestSchema,
   type SupportAiDecisionKind,
   type SupportAiDraftView,
@@ -51,6 +52,19 @@ import { Icon } from '../ui/icons';
 
 /** How often the drafts are read again while one is still QUEUED. */
 export const ASSIST_POLL_MS = 3_000;
+
+/**
+ * How long the screen waits on a QUEUED draft: the server's unclaimed bound plus two polls'
+ * grace, so the poll that reads the server's own `job.unclaimed` verdict still happens (PR #200
+ * review, finding 6). After it the screen stops polling and offers a new request — which the
+ * server answers by ending the old draft. The server decides; this only bounds the polling.
+ */
+export const ASSIST_WAIT_MS = SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS * 1_000 + 2 * ASSIST_POLL_MS;
+
+/** A QUEUED draft the screen is still waiting on. */
+export function awaitingDraft(draft: SupportAiDraftView, nowMs: number = Date.now()): boolean {
+  return draft.state === 'QUEUED' && nowMs - Date.parse(draft.createdAt) < ASSIST_WAIT_MS;
+}
 
 export const ASSIST_STATE_LABELS: Readonly<Record<SupportAiJobState, WebKey>> = {
   QUEUED: 'web.assist_state_queued',
@@ -150,7 +164,7 @@ export function AssistCard({
     queryFn: () => fetchSupportAiDrafts(conversationId),
     refetchInterval: pollUnlessFinalWhile<{ drafts: SupportAiDraftView[] }>(
       ASSIST_POLL_MS,
-      (data) => data.drafts.some((draft) => draft.state === 'QUEUED'),
+      (data) => data.drafts.some((draft) => awaitingDraft(draft)),
     ),
   });
   const request = useMutation({
@@ -163,7 +177,7 @@ export function AssistCard({
   const rows = [...(drafts.data?.drafts ?? [])].sort((a, b) =>
     b.createdAt === a.createdAt ? b.id.localeCompare(a.id) : b.createdAt.localeCompare(a.createdAt),
   );
-  const queued = rows.some((draft) => draft.state === 'QUEUED');
+  const queued = rows.some((draft) => awaitingDraft(draft));
 
   return (
     <Card
@@ -239,7 +253,11 @@ function DraftItem({
           </span>
         )}
       </div>
-      {draft.state === 'QUEUED' && <p className="muted small">{t('web.assist_queued')}</p>}
+      {draft.state === 'QUEUED' && (
+        <p className="muted small">
+          {t(awaitingDraft(draft) ? 'web.assist_queued' : 'web.assist_queued_overdue')}
+        </p>
+      )}
       {draft.state === 'FAILED' && <p className="muted">{t('web.assist_failed')}</p>}
       {draft.state !== 'QUEUED' && draft.state !== 'FAILED' && <DraftFacts draft={draft} />}
       {draft.state === 'READY' && (
