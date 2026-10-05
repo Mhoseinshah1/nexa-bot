@@ -10,11 +10,13 @@ import { DrizzleClientAppVideoRepository } from '../../apps/api/src/modules/cont
 import {
   BOT_A,
   TG,
+  keyboardOf,
   lastKeyboard,
   receiptFixture,
   rows,
   systemActor,
   tap,
+  tapOn,
   type ReceiptFixture,
 } from './receipt-review-fixture';
 
@@ -303,6 +305,138 @@ describe('the tutorial video wizard (spec §7)', () => {
     ]);
     const [audit] = await audits();
     expect(JSON.stringify(audit?.before)).toContain('other');
+  });
+
+  /*
+   * A4 (delta a): the video and the guide are ONE message when the RENDERED guide fits a
+   * caption whole — the messenger's `captionWhole`, the measure the referral invite uses —
+   * and two messages, video then text, when it does not. Never a cut guide.
+   */
+  describe('the customer’s app screen: video and guide (A4)', () => {
+    /** A fresh app with `guide`, its video set through the wizard, as the other cases do. */
+    async function appWithVideo(guide: string): Promise<void> {
+      appId = (
+        await f.ctx.container.clientApps.create(tenantA, f.owner, {
+          ...entry(),
+          name: `برنامهٔ ${String((seq += 1))}`,
+          guide,
+          idempotencyKey: `app-${String(seq)}`,
+        })
+      ).id;
+      await tap(f, app('s'), TG.owner);
+      expect((await sendVideo(TG.owner, `uniq-${appId}`)).replyKey).toBe(
+        'bot.admin.app_video_saved',
+      );
+    }
+    const customerSends = () => f.sent.filter((call) => call.method !== 'answerCallbackQuery');
+    const urls = (body: Record<string, unknown>) =>
+      keyboardOf(body).map((button) => (button as { url?: string }).url ?? null);
+
+    it('a short guide: exactly ONE sendVideo, the guide its caption, the buttons on it', async () => {
+      const guide = '1. برنامه را نصب کنید\n2. لینک را وارد کنید';
+      await appWithVideo(guide);
+      const result = await tap(f, `ca:${appId}`, TG.customer);
+      expect(result.sent).toBe('DELIVERED');
+      const sends = customerSends();
+      expect(sends.map((call) => call.method)).toEqual(['sendVideo']);
+      const [video] = sends;
+      expect(video?.body).toMatchObject({ chat_id: TG.customer, video: `file-uniq-${appId}` });
+      expect(String(video?.body['caption'])).toContain('2. لینک را وارد کنید');
+      expect(urls(video!.body)).toContain('https://downloads.example.com/app.apk');
+    });
+
+    it('a guide whose RENDERED caption is over 1024 (the guide alone is not): video bare, then the text with the buttons', async () => {
+      // Under the bound by itself; the name and description push the rendered caption over.
+      const guide = 'راهنما '.repeat(144).trim();
+      expect(guide.length).toBeLessThan(1024);
+      await appWithVideo(guide);
+      const result = await tap(f, `ca:${appId}`, TG.customer);
+      expect(result.sent).toBe('DELIVERED');
+      const sends = customerSends();
+      expect(sends.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
+      const [video, text] = sends;
+      expect(video?.body['caption']).toBeUndefined();
+      expect(keyboardOf(video!.body)).toEqual([]);
+      expect(String(text?.body['text'])).toContain(guide);
+      expect(urls(text!.body)).toContain('https://downloads.example.com/app.apk');
+    });
+
+    it('a long guide: the video, then the whole guide as text — never a cut caption', async () => {
+      const guide = 'مرحلهٔ نصب '.repeat(200).trim();
+      await appWithVideo(guide);
+      await tap(f, `ca:${appId}`, TG.customer);
+      const sends = customerSends();
+      expect(sends.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
+      expect(sends[0]?.body['caption']).toBeUndefined();
+      expect(String(sends[1]?.body['text'])).toContain(guide);
+      expect(urls(sends[1]!.body)).toContain('https://downloads.example.com/app.apk');
+    });
+
+    it('Telegram refuses the video: the guide still goes out as text, with its buttons', async () => {
+      await appWithVideo('1. برنامه را نصب کنید');
+      f.behaviour.set(TG.customer, 'REFUSE_FILE');
+      const result = await tap(f, `ca:${appId}`, TG.customer);
+      expect(result.sent).toBe('DELIVERED');
+      const sends = customerSends();
+      expect(sends.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
+      expect(String(sends[1]?.body['text'])).toContain('1. برنامه را نصب کنید');
+      expect(urls(sends[1]!.body)).toContain('https://downloads.example.com/app.apk');
+    });
+
+    it('a captioned video whose outcome is UNKNOWN: nothing more is sent — it may have arrived', async () => {
+      await appWithVideo('1. برنامه را نصب کنید');
+      f.behaviour.set(TG.customer, 'SERVER_ERROR');
+      const result = await tap(f, `ca:${appId}`, TG.customer);
+      expect(result.sent).toBe('UNKNOWN');
+      expect(customerSends().map((call) => call.method)).toEqual(['sendVideo']);
+    });
+
+    it('a captioned video that is RATE_LIMITED: nothing more is sent — the text would be too', async () => {
+      await appWithVideo('1. برنامه را نصب کنید');
+      f.behaviour.set(TG.customer, 'RATE_LIMITED');
+      const result = await tap(f, `ca:${appId}`, TG.customer);
+      expect(result.sent).toBe('RATE_LIMITED');
+      expect(customerSends().map((call) => call.method)).toEqual(['sendVideo']);
+    });
+
+    it('a long guide whose bare video is refused: the guide still goes as text, with its buttons', async () => {
+      const guide = 'مرحلهٔ نصب '.repeat(200).trim();
+      await appWithVideo(guide);
+      f.behaviour.set(TG.customer, 'REFUSE_FILE');
+      const result = await tap(f, `ca:${appId}`, TG.customer);
+      expect(result.sent).toBe('DELIVERED');
+      const sends = customerSends();
+      expect(sends.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
+      expect(String(sends[1]?.body['text'])).toContain(guide);
+      expect(urls(sends[1]!.body)).toContain('https://downloads.example.com/app.apk');
+    });
+
+    it('a long guide whose bare video’s outcome is UNKNOWN: the guide still goes as text — the bare video is decorative', async () => {
+      const guide = 'مرحلهٔ نصب '.repeat(200).trim();
+      await appWithVideo(guide);
+      f.behaviour.set(TG.customer, 'SERVER_ERROR_FILE');
+      const result = await tap(f, `ca:${appId}`, TG.customer);
+      expect(result.sent).toBe('DELIVERED');
+      const sends = customerSends();
+      expect(sends.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
+      expect(urls(sends[1]!.body)).toContain('https://downloads.example.com/app.apk');
+    });
+
+    it('a button on the captioned video opens its screen as a NEW message — no editMessageText on a file message', async () => {
+      await appWithVideo('1. برنامه را نصب کنید');
+      const { result } = tapOn(f, 'sl:1', TG.customer, {
+        id: 700,
+        video: true,
+        caption: 'برنامهٔ نمونه',
+      });
+      expect((await result).sent).toBe('DELIVERED');
+      expect(customerSends().map((call) => call.method)).toEqual(['sendMessage']);
+    });
+
+    it('no video: today’s single text message, unchanged', async () => {
+      await tap(f, `ca:${appId}`, TG.customer);
+      expect(customerSends().map((call) => call.method)).toEqual(['sendMessage']);
+    });
   });
 
   it('deleting the app deletes its video and any open prompt for it', async () => {
