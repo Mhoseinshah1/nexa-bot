@@ -46,12 +46,16 @@ permissions:
 env:
   NODE_VERSION: '22'
 
+# Every job runs on the project's own self-hosted runner (labels
+# `self-hosted, linux, x64, nexa-ci`): one runner, so jobs queue and run one at
+# a time. That host is not a throwaway VM, which is why the service containers
+# below publish EPHEMERAL host ports (Docker picks a free one, read back from
+# `job.services`) rather than 5432/6379/3306 — a fixed port collides with any
+# PostgreSQL, Redis or MySQL the host runs — and why the deployment smoke runs
+# under its own compose project name.
 jobs:
   static:
     name: Typecheck, lint and boundaries
-    # Pilot for the self-hosted runner: this job only, the lightest one, needs
-    # no service container and no secret. Every other job stays on GitHub's
-    # hosted runners until this one has proved the runner.
     runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 20
     # The runner host's default V8 heap limit (~1.95 GB) is below what
@@ -112,7 +116,7 @@ jobs:
   # against the same bytes, stamped with this SHA.
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -192,7 +196,7 @@ jobs:
   unit:
     name: Unit tests
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -223,7 +227,7 @@ jobs:
   web:
     name: Web admin tests
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -254,7 +258,7 @@ jobs:
   integration:
     name: Integration tests (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     # Bounded so a hang is reported rather than billed for six hours. A shard
     # takes roughly ten minutes; the step limit below fires first, so the log
     # says which step was stuck.
@@ -273,7 +277,7 @@ jobs:
           POSTGRES_USER: nexa
           POSTGRES_PASSWORD: nexa
           POSTGRES_DB: nexa_test
-        ports: ['5432:5432']
+        ports: ['5432']
         options: >-
           --health-cmd "pg_isready -U nexa -d nexa_test"
           --health-interval 5s
@@ -282,7 +286,7 @@ jobs:
 
       redis:
         image: redis:7-alpine
-        ports: ['6379:6379']
+        ports: ['6379']
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -290,15 +294,29 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
-      TEST_DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
-      REDIS_URL: redis://127.0.0.1:6379
+      # DATABASE_URL, TEST_DATABASE_URL and REDIS_URL are set by the first step,
+      # from the host ports Docker gave this job's service containers.
       # A throwaway key for the test database only. Real deployments supply
       # their own; nothing encrypted with this ever leaves CI.
       SECRETS_KEK: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       SECRETS_KEK_ID: ci-1
 
     steps:
+      # `job.services` is not readable in a job's `env:`, so the URLs are
+      # exported here, before anything can read them.
+      - name: Point at this job's service containers
+        env:
+          PG_PORT: ${{ job.services.postgres.ports['5432'] }}
+          REDIS_PORT: ${{ job.services.redis.ports['6379'] }}
+        run: |
+          set -euo pipefail
+          [ -n "$PG_PORT" ] && [ -n "$REDIS_PORT" ]
+          {
+            echo "DATABASE_URL=postgres://nexa:nexa@127.0.0.1:${PG_PORT}/nexa_test"
+            echo "TEST_DATABASE_URL=postgres://nexa:nexa@127.0.0.1:${PG_PORT}/nexa_test"
+            echo "REDIS_URL=redis://127.0.0.1:${REDIS_PORT}"
+          } >>"$GITHUB_ENV"
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
@@ -363,7 +381,7 @@ jobs:
   legacy-mysql:
     name: Legacy MySQL source
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 15
 
     services:
@@ -371,17 +389,23 @@ jobs:
         image: mariadb:10.11
         env:
           MARIADB_ROOT_PASSWORD: root
-        ports: ['3306:3306']
+        ports: ['3306']
         options: >-
           --health-cmd "healthcheck.sh --connect --innodb_initialized"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
 
-    env:
-      NEXA_LEGACY_MYSQL_ADMIN_DSN: mysql://root:root@127.0.0.1:3306/mysql
-
     steps:
+      # The DSN names the host port Docker gave the service (see `integration`).
+      - name: Point at this job's MariaDB
+        env:
+          MARIADB_PORT: ${{ job.services.mariadb.ports['3306'] }}
+        run: |
+          set -euo pipefail
+          [ -n "$MARIADB_PORT" ]
+          echo "NEXA_LEGACY_MYSQL_ADMIN_DSN=mysql://root:root@127.0.0.1:${MARIADB_PORT}/mysql" >>"$GITHUB_ENV"
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # No `version:` input: the pnpm the root package.json pins (see `unit`).
@@ -412,7 +436,7 @@ jobs:
     name: Unit and integration tests
     if: always()
     needs: [unit, web, integration, legacy-mysql]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 5
     steps:
       - name: Every test job succeeded
@@ -431,14 +455,15 @@ jobs:
   # longest in the workflow once the integration suite was sharded.
   deploy-logic:
     name: Deployment logic
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # Shell is the language the installer and updater are written in, and an
       # unquoted expansion there is a vulnerability rather than a style
-      # problem. The runner has shellcheck preinstalled.
+      # problem. The runner must have shellcheck installed: check-shell.sh
+      # fails, rather than skips, under CI when it is missing.
       # Called directly rather than through pnpm: this job needs no Node
       # toolchain beyond the runner's own, and installing one to run shellcheck
       # would add a minute and a dependency to a job that is about shell.
@@ -469,8 +494,16 @@ jobs:
   # installation. `release.yml` publishes, and only from a tag.
   deploy:
     name: Deployment smoke
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 40
+    # The production compose file is named `nexa`, and both smokes end with
+    # `compose down -v`. On a host that is not a throwaway VM that would take
+    # down, volumes included, any real `nexa` stack the host runs. A project of
+    # its own confines every container, network and volume the smokes create
+    # or remove; `NEXA_COMPOSE_PROJECT` is the name botctl's edge check reads.
+    env:
+      COMPOSE_PROJECT_NAME: nexa-ci-smoke
+      NEXA_COMPOSE_PROJECT: nexa-ci-smoke
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
@@ -498,7 +531,7 @@ jobs:
   # it, and do not weaken the threshold to get past it.
   audit:
     name: Dependency audit
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
