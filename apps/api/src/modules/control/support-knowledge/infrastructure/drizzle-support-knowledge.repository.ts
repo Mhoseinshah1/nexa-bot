@@ -5,6 +5,11 @@ import {
   type SupportAiConfidence,
   type SupportAiProvider,
   type SupportKnowledgeArticleState,
+  type SupportKnowledgeBuildSourceType,
+  type SupportKnowledgeBuildState,
+  type SupportKnowledgeConflictChoice,
+  type SupportKnowledgeProposalKind,
+  type SupportKnowledgeProposalState,
   type SupportKnowledgeCategory,
   type SupportKnowledgeContent,
   type SupportKnowledgeRevisionOrigin,
@@ -19,6 +24,8 @@ import {
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   supportKnowledgeArticles,
+  supportKnowledgeBuildProposals,
+  supportKnowledgeBuilds,
   supportKnowledgeRevisions,
   supportLearningCandidates,
   supportLearningJobs,
@@ -53,6 +60,11 @@ export interface KnowledgeArticleRecord {
   readonly revision: number;
   readonly version: number;
   readonly candidateId: string | null;
+  /** TB9 (NEXA_BUILD only). */
+  readonly sourceType: SupportKnowledgeBuildSourceType | null;
+  readonly sourceKey: string | null;
+  readonly builtRevision: number | null;
+  readonly builtHash: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -137,6 +149,10 @@ function article(row: ArticleRow): KnowledgeArticleRecord {
     revision: row.revision,
     version: row.version,
     candidateId: row.candidateId,
+    sourceType: row.sourceType as SupportKnowledgeBuildSourceType | null,
+    sourceKey: row.sourceKey,
+    builtRevision: row.builtRevision,
+    builtHash: row.builtHash,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -287,6 +303,12 @@ export class DrizzleSupportKnowledgeRepository {
       readonly revision: number;
       readonly candidateId: string | null;
       readonly createdByAdminId: string | null;
+      /** TB9: the source item a NEXA_BUILD article is built from, and the hash applied. */
+      readonly built?: {
+        readonly sourceType: SupportKnowledgeBuildSourceType;
+        readonly sourceKey: string;
+        readonly hash: string;
+      };
       readonly now: Date;
     },
     tx: unknown,
@@ -308,6 +330,10 @@ export class DrizzleSupportKnowledgeRepository {
         version: 1,
         candidateId: row.candidateId,
         createdByAdminId: row.createdByAdminId,
+        sourceType: row.built?.sourceType ?? null,
+        sourceKey: row.built?.sourceKey ?? null,
+        builtRevision: row.built === undefined ? null : row.revision,
+        builtHash: row.built?.hash ?? null,
         createdAt: row.now,
         updatedAt: row.now,
       })
@@ -915,4 +941,371 @@ export class DrizzleSupportKnowledgeRepository {
       .returning({ id: supportLearningJobs.id });
     return rows.length > 0;
   }
+
+  // --- TB9: the knowledge build ---------------------------------------------------------
+
+  /** Every NEXA_BUILD article of the tenant, whatever its state: the diff's other side. */
+  async listBuilt(scope: ScopeContext, tx: unknown): Promise<readonly KnowledgeArticleRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select()
+      .from(supportKnowledgeArticles)
+      .where(
+        and(
+          eq(supportKnowledgeArticles.tenantId, tenantId),
+          eq(supportKnowledgeArticles.source, 'NEXA_BUILD'),
+        ),
+      );
+    return rows.map(article);
+  }
+
+  /**
+   * Replaces a built article's text with a build's, ONLY from the revision the build saw and in
+   * APPROVED. `unedited`: also only when no reviewer edited it since the last build apply (an
+   * UPDATE); without it, the reviewer's explicit TAKE_BUILD on a CONFLICT. The new revision
+   * becomes the built revision.
+   */
+  async rewriteBuilt(
+    scope: ScopeContext,
+    id: string,
+    input: {
+      readonly baseRevision: number;
+      readonly unedited: boolean;
+      readonly content: SupportKnowledgeContent;
+      readonly hash: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<KnowledgeArticleRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .update(supportKnowledgeArticles)
+      .set({
+        title: input.content.title,
+        body: input.content.body,
+        category: input.content.category,
+        tags: [...input.content.tags],
+        revision: sql`${supportKnowledgeArticles.revision} + 1`,
+        builtRevision: sql`${supportKnowledgeArticles.revision} + 1`,
+        builtHash: input.hash,
+        version: sql`${supportKnowledgeArticles.version} + 1`,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(supportKnowledgeArticles.tenantId, tenantId),
+          eq(supportKnowledgeArticles.id, id),
+          eq(supportKnowledgeArticles.source, 'NEXA_BUILD'),
+          eq(supportKnowledgeArticles.state, 'APPROVED'),
+          eq(supportKnowledgeArticles.revision, input.baseRevision),
+          input.unedited
+            ? eq(supportKnowledgeArticles.builtRevision, input.baseRevision)
+            : undefined,
+        ),
+      )
+      .returning();
+    return row === undefined ? null : article(row);
+  }
+
+  /**
+   * KEEP_CURRENT: the reviewer saw this source text and kept their edit. Records the hash as
+   * acknowledged so the same source text is UNCHANGED next time; the article's text, revision
+   * and version are untouched. Conditional on the revision the build saw.
+   */
+  async acknowledgeBuilt(
+    scope: ScopeContext,
+    id: string,
+    input: { readonly baseRevision: number; readonly hash: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .update(supportKnowledgeArticles)
+      .set({ builtHash: input.hash, updatedAt: input.now })
+      .where(
+        and(
+          eq(supportKnowledgeArticles.tenantId, tenantId),
+          eq(supportKnowledgeArticles.id, id),
+          eq(supportKnowledgeArticles.source, 'NEXA_BUILD'),
+          eq(supportKnowledgeArticles.revision, input.baseRevision),
+        ),
+      )
+      .returning({ id: supportKnowledgeArticles.id });
+    return rows.length > 0;
+  }
+
+  /** OPEN → SUPERSEDED for the tenant's open build, if any. */
+  async supersedeOpenBuild(scope: ScopeContext, now: Date, tx: unknown): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await exec(this.db, tx)
+      .update(supportKnowledgeBuilds)
+      .set({ state: 'SUPERSEDED', updatedAt: now })
+      .where(
+        and(
+          eq(supportKnowledgeBuilds.tenantId, tenantId),
+          eq(supportKnowledgeBuilds.state, 'OPEN'),
+        ),
+      );
+  }
+
+  async insertBuild(
+    scope: ScopeContext,
+    row: {
+      readonly id: string;
+      readonly createdByAdminId: string | null;
+      readonly counts: KnowledgeBuildCounts;
+      readonly now: Date;
+    },
+    proposals: readonly NewProposal[],
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    const executor = exec(this.db, tx);
+    await executor.insert(supportKnowledgeBuilds).values({
+      id: row.id,
+      tenantId,
+      state: 'OPEN',
+      createdByAdminId: row.createdByAdminId,
+      addCount: row.counts.add,
+      updateCount: row.counts.update,
+      unchangedCount: row.counts.unchanged,
+      conflictCount: row.counts.conflict,
+      createdAt: row.now,
+      updatedAt: row.now,
+    });
+    if (proposals.length === 0) return;
+    await executor.insert(supportKnowledgeBuildProposals).values(
+      proposals.map((proposal) => ({
+        id: proposal.id,
+        tenantId,
+        buildId: row.id,
+        sourceType: proposal.sourceType,
+        sourceKey: proposal.sourceKey,
+        kind: proposal.kind,
+        state: proposal.kind === 'UNCHANGED' ? 'SKIPPED' : 'PENDING',
+        title: proposal.content.title,
+        body: proposal.content.body,
+        category: proposal.content.category,
+        tags: [...proposal.content.tags],
+        contentHash: proposal.hash,
+        articleId: proposal.articleId,
+        baseRevision: proposal.baseRevision,
+        baseTitle: proposal.baseTitle,
+        baseBody: proposal.baseBody,
+        createdAt: row.now,
+        updatedAt: row.now,
+      })),
+    );
+  }
+
+  async findBuild(
+    scope: ScopeContext,
+    id: string,
+    tx?: unknown,
+  ): Promise<KnowledgeBuildRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select()
+      .from(supportKnowledgeBuilds)
+      .where(and(eq(supportKnowledgeBuilds.tenantId, tenantId), eq(supportKnowledgeBuilds.id, id)))
+      .limit(1);
+    return row === undefined ? null : build(row);
+  }
+
+  /** The tenant's most recent build, open or not. */
+  async latestBuild(scope: ScopeContext): Promise<KnowledgeBuildRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select()
+      .from(supportKnowledgeBuilds)
+      .where(eq(supportKnowledgeBuilds.tenantId, tenantId))
+      .orderBy(desc(supportKnowledgeBuilds.createdAt), desc(supportKnowledgeBuilds.id))
+      .limit(1);
+    return row === undefined ? null : build(row);
+  }
+
+  async proposals(
+    scope: ScopeContext,
+    buildId: string,
+    tx?: unknown,
+  ): Promise<readonly KnowledgeProposalRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select()
+      .from(supportKnowledgeBuildProposals)
+      .where(
+        and(
+          eq(supportKnowledgeBuildProposals.tenantId, tenantId),
+          eq(supportKnowledgeBuildProposals.buildId, buildId),
+        ),
+      )
+      .orderBy(
+        asc(supportKnowledgeBuildProposals.sourceType),
+        asc(supportKnowledgeBuildProposals.title),
+        asc(supportKnowledgeBuildProposals.id),
+      );
+    return rows.map(proposal);
+  }
+
+  async findProposal(
+    scope: ScopeContext,
+    id: string,
+    tx?: unknown,
+  ): Promise<KnowledgeProposalRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select()
+      .from(supportKnowledgeBuildProposals)
+      .where(
+        and(
+          eq(supportKnowledgeBuildProposals.tenantId, tenantId),
+          eq(supportKnowledgeBuildProposals.id, id),
+        ),
+      )
+      .limit(1);
+    return row === undefined ? null : proposal(row);
+  }
+
+  /** PENDING → APPLIED | SKIPPED, naming the kind it was decided as. False: it moved. */
+  async decideProposal(
+    scope: ScopeContext,
+    id: string,
+    input: {
+      readonly kind: SupportKnowledgeProposalKind;
+      readonly to: 'APPLIED' | 'SKIPPED';
+      readonly resolution: SupportKnowledgeConflictChoice | null;
+      readonly articleId?: string;
+      readonly adminId: string | null;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .update(supportKnowledgeBuildProposals)
+      .set({
+        state: input.to,
+        resolution: input.resolution,
+        ...(input.articleId === undefined ? {} : { articleId: input.articleId }),
+        decidedByAdminId: input.adminId,
+        decidedAt: input.now,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(supportKnowledgeBuildProposals.tenantId, tenantId),
+          eq(supportKnowledgeBuildProposals.id, id),
+          eq(supportKnowledgeBuildProposals.state, 'PENDING'),
+          eq(supportKnowledgeBuildProposals.kind, input.kind),
+        ),
+      )
+      .returning({ id: supportKnowledgeBuildProposals.id });
+    return rows.length > 0;
+  }
+
+  /** A PENDING UPDATE whose article moved since the build becomes a CONFLICT to decide. */
+  async markConflict(scope: ScopeContext, id: string, now: Date, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .update(supportKnowledgeBuildProposals)
+      .set({ kind: 'CONFLICT', updatedAt: now })
+      .where(
+        and(
+          eq(supportKnowledgeBuildProposals.tenantId, tenantId),
+          eq(supportKnowledgeBuildProposals.id, id),
+          eq(supportKnowledgeBuildProposals.state, 'PENDING'),
+          eq(supportKnowledgeBuildProposals.kind, 'UPDATE'),
+        ),
+      )
+      .returning({ id: supportKnowledgeBuildProposals.id });
+    return rows.length > 0;
+  }
+
+  /** Locks the build row for the apply's transaction, so two applies of one build serialise. */
+  async lockBuild(
+    scope: ScopeContext,
+    id: string,
+    tx: unknown,
+  ): Promise<KnowledgeBuildRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select()
+      .from(supportKnowledgeBuilds)
+      .where(and(eq(supportKnowledgeBuilds.tenantId, tenantId), eq(supportKnowledgeBuilds.id, id)))
+      .for('update')
+      .limit(1);
+    return row === undefined ? null : build(row);
+  }
+}
+
+export interface KnowledgeBuildCounts {
+  readonly add: number;
+  readonly update: number;
+  readonly unchanged: number;
+  readonly conflict: number;
+}
+
+export interface KnowledgeBuildRecord {
+  readonly id: string;
+  readonly state: SupportKnowledgeBuildState;
+  readonly counts: KnowledgeBuildCounts;
+  readonly createdAt: Date;
+}
+
+export interface NewProposal {
+  readonly id: string;
+  readonly sourceType: SupportKnowledgeBuildSourceType;
+  readonly sourceKey: string;
+  readonly kind: SupportKnowledgeProposalKind;
+  readonly content: SupportKnowledgeContent;
+  readonly hash: string;
+  readonly articleId: string | null;
+  readonly baseRevision: number | null;
+  readonly baseTitle: string | null;
+  readonly baseBody: string | null;
+}
+
+export interface KnowledgeProposalRecord extends NewProposal {
+  readonly buildId: string;
+  readonly state: SupportKnowledgeProposalState;
+  readonly resolution: SupportKnowledgeConflictChoice | null;
+}
+
+function build(row: typeof supportKnowledgeBuilds.$inferSelect): KnowledgeBuildRecord {
+  return {
+    id: row.id,
+    state: row.state as SupportKnowledgeBuildState,
+    counts: {
+      add: row.addCount,
+      update: row.updateCount,
+      unchanged: row.unchangedCount,
+      conflict: row.conflictCount,
+    },
+    createdAt: row.createdAt,
+  };
+}
+
+function proposal(
+  row: typeof supportKnowledgeBuildProposals.$inferSelect,
+): KnowledgeProposalRecord {
+  return {
+    id: row.id,
+    buildId: row.buildId,
+    sourceType: row.sourceType as SupportKnowledgeBuildSourceType,
+    sourceKey: row.sourceKey,
+    kind: row.kind as SupportKnowledgeProposalKind,
+    state: row.state as SupportKnowledgeProposalState,
+    content: {
+      title: row.title,
+      body: row.body,
+      category: row.category as SupportKnowledgeCategory,
+      tags: row.tags,
+    },
+    hash: row.contentHash,
+    articleId: row.articleId,
+    baseRevision: row.baseRevision,
+    baseTitle: row.baseTitle,
+    baseBody: row.baseBody,
+    resolution: row.resolution as SupportKnowledgeConflictChoice | null,
+  };
 }

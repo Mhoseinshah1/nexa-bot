@@ -292,6 +292,12 @@ import {
   SUPPORT_LEARNING_JOB_TRIGGERS,
   SUPPORT_LEARNING_REJECT_REASONS,
   SUPPORT_LEARNING_SENSITIVE_KINDS,
+  // TB9: the knowledge build.
+  SUPPORT_KNOWLEDGE_BUILD_SOURCE_TYPES,
+  SUPPORT_KNOWLEDGE_BUILD_STATES,
+  SUPPORT_KNOWLEDGE_CONFLICT_CHOICES,
+  SUPPORT_KNOWLEDGE_PROPOSAL_KINDS,
+  SUPPORT_KNOWLEDGE_PROPOSAL_STATES,
   OPS_LOG_TOPIC_STATES,
   // R2: the Telegram messages edited in place.
   TELEGRAM_WIZARD_KINDS,
@@ -14166,11 +14172,37 @@ export const supportKnowledgeArticles = pgTable(
     version: integer('version').notNull().default(1),
     candidateId: uuid('candidate_id'),
     createdByAdminId: uuid('created_by_admin_id'),
+    /**
+     * TB9 (`NEXA_BUILD` only): the source item this article was built from, the revision the
+     * last build apply wrote, and the content hash it applied (or a reviewer acknowledged).
+     * `revision <> built_revision` means a reviewer edited it since: a changed source against
+     * it is a CONFLICT, never an overwrite.
+     */
+    sourceType: text('source_type'),
+    sourceKey: text('source_key'),
+    builtRevision: integer('built_revision'),
+    builtHash: text('built_hash'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     unique('support_knowledge_articles_tenant_id_key').on(table.tenantId, table.id),
+    /** TB9: one article per source item. */
+    uniqueIndex('support_knowledge_articles_source_key')
+      .on(table.tenantId, table.sourceType, table.sourceKey)
+      .where(sql`source_key IS NOT NULL`),
+    check(
+      'support_knowledge_articles_source_type_check',
+      nullableEnumCheck('source_type', SUPPORT_KNOWLEDGE_BUILD_SOURCE_TYPES),
+    ),
+    // A built article names its source, its built revision and hash; nothing else does.
+    check(
+      'support_knowledge_articles_built_check',
+      sql`(source = 'NEXA_BUILD') = (source_type IS NOT NULL)
+          AND (source_type IS NULL) = (source_key IS NULL)
+          AND (source_type IS NULL) = (built_revision IS NULL)
+          AND (source_type IS NULL) = (built_hash IS NULL)`,
+    ),
     /** The context read: approved and enabled, newest first. */
     index('support_knowledge_articles_active_idx').on(
       table.tenantId,
@@ -14360,5 +14392,152 @@ export const supportLearningJobs = pgTable(
       sql`(trigger = 'OPERATOR_PROPOSAL') = (requested_by_admin_id IS NOT NULL)`,
     ),
     check('support_learning_jobs_attempts_check', sql`attempts >= 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// TB9 — the one-click knowledge build (ADR-0035 §5)
+// ---------------------------------------------------------------------------
+
+/**
+ * TB9 — one run of «ساخت/به‌روزرسانی دانش پشتیبان از اطلاعات NEXA»: a change-set of proposals,
+ * never an applied change. At most one OPEN build per tenant (a partial unique index); a new run
+ * supersedes the open one in its own transaction, and a superseded build applies nothing.
+ */
+export const supportKnowledgeBuilds = pgTable(
+  'support_knowledge_builds',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    state: text('state').notNull().default('OPEN'),
+    createdByAdminId: uuid('created_by_admin_id'),
+    addCount: integer('add_count').notNull().default(0),
+    updateCount: integer('update_count').notNull().default(0),
+    unchangedCount: integer('unchanged_count').notNull().default(0),
+    conflictCount: integer('conflict_count').notNull().default(0),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('support_knowledge_builds_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('support_knowledge_builds_open_key')
+      .on(table.tenantId)
+      .where(sql`state = 'OPEN'`),
+    index('support_knowledge_builds_recent_idx').on(table.tenantId, table.createdAt),
+    foreignKey({
+      columns: [table.tenantId, table.createdByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'support_knowledge_builds_admin_fk',
+    }),
+    check(
+      'support_knowledge_builds_state_check',
+      enumCheck('state', SUPPORT_KNOWLEDGE_BUILD_STATES),
+    ),
+    check(
+      'support_knowledge_builds_counts_check',
+      sql`add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0`,
+    ),
+  ],
+);
+
+/**
+ * TB9 — one proposal of a build: what one allowlisted source item would do to the knowledge
+ * base. It records the content (customer-facing fields only), its hash, the article it would
+ * replace and that article's revision and text at build time (the diff's other side, and the
+ * base an apply is conditional on).
+ */
+export const supportKnowledgeBuildProposals = pgTable(
+  'support_knowledge_build_proposals',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    buildId: uuid('build_id').notNull(),
+    sourceType: text('source_type').notNull(),
+    sourceKey: text('source_key').notNull(),
+    kind: text('kind').notNull(),
+    state: text('state').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    category: text('category').notNull(),
+    tags: text('tags')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    contentHash: text('content_hash').notNull(),
+    articleId: uuid('article_id'),
+    baseRevision: integer('base_revision'),
+    baseTitle: text('base_title'),
+    baseBody: text('base_body'),
+    resolution: text('resolution'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    decidedAt: timestamptz('decided_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('support_knowledge_build_proposals_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('support_knowledge_build_proposals_source_key').on(
+      table.tenantId,
+      table.buildId,
+      table.sourceType,
+      table.sourceKey,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.buildId],
+      foreignColumns: [supportKnowledgeBuilds.tenantId, supportKnowledgeBuilds.id],
+      name: 'support_knowledge_build_proposals_build_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.articleId],
+      foreignColumns: [supportKnowledgeArticles.tenantId, supportKnowledgeArticles.id],
+      name: 'support_knowledge_build_proposals_article_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'support_knowledge_build_proposals_admin_fk',
+    }),
+    check(
+      'support_knowledge_build_proposals_source_type_check',
+      enumCheck('source_type', SUPPORT_KNOWLEDGE_BUILD_SOURCE_TYPES),
+    ),
+    check(
+      'support_knowledge_build_proposals_kind_check',
+      enumCheck('kind', SUPPORT_KNOWLEDGE_PROPOSAL_KINDS),
+    ),
+    check(
+      'support_knowledge_build_proposals_state_check',
+      enumCheck('state', SUPPORT_KNOWLEDGE_PROPOSAL_STATES),
+    ),
+    check(
+      'support_knowledge_build_proposals_category_check',
+      enumCheck('category', SUPPORT_KNOWLEDGE_CATEGORIES),
+    ),
+    check(
+      'support_knowledge_build_proposals_resolution_check',
+      nullableEnumCheck('resolution', SUPPORT_KNOWLEDGE_CONFLICT_CHOICES),
+    ),
+    // An ADD names no article; every other kind names the one it is about, and its base.
+    check(
+      'support_knowledge_build_proposals_article_check',
+      sql`(kind = 'ADD') = (article_id IS NULL) AND (article_id IS NULL) = (base_revision IS NULL)`,
+    ),
+    // Nothing to do is decided at birth; only a conflict is resolved by a choice.
+    check(
+      'support_knowledge_build_proposals_unchanged_check',
+      sql`kind <> 'UNCHANGED' OR state = 'SKIPPED'`,
+    ),
+    check(
+      'support_knowledge_build_proposals_resolution_shape_check',
+      sql`resolution IS NULL OR kind = 'CONFLICT'`,
+    ),
+    check(
+      'support_knowledge_build_proposals_text_check',
+      sql`length(btrim(title)) BETWEEN 1 AND ${KNOWLEDGE_TITLE_MAX} AND length(btrim(body)) BETWEEN 1 AND ${KNOWLEDGE_BODY_MAX}`,
+    ),
   ],
 );

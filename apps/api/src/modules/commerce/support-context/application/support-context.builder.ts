@@ -120,11 +120,22 @@ export class SupportContextBuilder {
         question: clip(row.title, 512),
         answer: clip(row.body, 4096),
       })),
-      ...faqRows.map((row): SupportContextKnowledge => ({
-        source: 'FAQ',
-        question: clip(row.question, 512),
-        answer: clip(row.answer, 4096),
-      })),
+      /*
+       * TB9: an FAQ entry the build brought into knowledge, approved and enabled, is read as
+       * that article — the reviewed text — and not a second time from the live FAQ.
+       */
+      ...faqRows
+        .filter(
+          (row) =>
+            !articles.some(
+              (article) => article.sourceType === 'FAQ' && article.sourceKey === row.id,
+            ),
+        )
+        .map((row): SupportContextKnowledge => ({
+          source: 'FAQ',
+          question: clip(row.question, 512),
+          answer: clip(row.answer, 4096),
+        })),
     ].slice(0, SUPPORT_CONTEXT_LIMITS.knowledge);
     const supportAccounts = accounts.slice(0, 10).map((handle) => clip(handle, 64));
 
