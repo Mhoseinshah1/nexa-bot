@@ -3861,6 +3861,15 @@ export interface CustomServiceSurface {
 }
 
 export interface BotRuntimeDeps {
+  /**
+   * Where a BEST-EFFORT step that failed is reported without costing the customer the
+   * screen it was helping draw: the live read a service card makes on open (pre-support
+   * A2). Optional for the fixtures that build a runtime without it; the composition root
+   * always supplies the process logger.
+   */
+  readonly logger?: {
+    readonly error: (context: Record<string, unknown>, message: string) => void;
+  };
   readonly customers: CustomerService;
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
@@ -4966,11 +4975,11 @@ function hasRefusalReply(error: unknown): boolean {
 }
 
 /**
- * Pre-support A2: what a card's opportunistic read on open may be refused with and still
- * draw the stored card — a typed refusal the open did not ask about: the installation is
+ * Pre-support A2: what a card's opportunistic read on open may be refused with SILENTLY —
+ * a typed refusal the open did not ask about: the installation is
  * quiesced for a recovery, the actor may not read (`PERMISSION_DENIED`), or a failure the
- * taxonomy marks retryable. Anything else (an untyped error, a non-retryable internal one)
- * is a defect and propagates, as it would from the stored card's own read.
+ * taxonomy marks retryable. Anything else (an untyped error, a non-retryable internal one
+ * such as an undecryptable credential) still draws the stored card, and is reported.
  */
 function isExpectedRefreshRefusal(error: unknown): boolean {
   if (!isNexaError(error)) return false;
@@ -12034,8 +12043,9 @@ export class BotRuntime {
    * an answer — the card is not theirs (or not there), told exactly as the stored card
    * would tell it. `FAILED` (panel down, budget spent, tenant stopped), `RECENT` and
    * `NOT_READ` draw the stored card with no toast: the failure notice belongs to the button
-   * the customer pressed to ask for a read. An expected refusal thrown by the refresh
-   * (`isExpectedRefreshRefusal`) draws the stored card too; anything else propagates.
+   * the customer pressed to ask for a read. Anything the refresh throws draws the stored
+   * card too: an expected refusal (`isExpectedRefreshRefusal`) silently, anything else
+   * reported through `logger`.
    *
    * Not for the «working» card: a service with a change still being applied is drawn
    * «working» from its operation rows, and its usage is not what the customer is waiting
@@ -12067,8 +12077,17 @@ export class BotRuntime {
           )
         ).outcome;
       } catch (error) {
-        if (!isExpectedRefreshRefusal(error)) throw error;
-        // A refusal the open is not about; the stored card is drawn below.
+        /*
+         * An opportunistic read never costs the customer the card: whatever it threw, the
+         * stored card is drawn below. An expected refusal is silent; anything else is a
+         * defect somebody must see (an unreadable credential, say), so it is reported.
+         */
+        if (!isExpectedRefreshRefusal(error)) {
+          this.deps.logger?.error(
+            { err: error, serviceId, tenantId: scope.tenantId },
+            'the live read on opening a service card failed; the stored card was drawn',
+          );
+        }
         outcome = null;
       }
       if (outcome === 'NOT_FOUND') {

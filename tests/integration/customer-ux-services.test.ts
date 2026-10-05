@@ -992,37 +992,101 @@ describe('a customer looks after the services they bought', () => {
       }
     };
 
-    it('an expected refusal thrown by the refresh still opens the stored card', async () => {
+    /** The runtime's logger, replaced for one test by one that records what it is told. */
+    const withLogger = async (
+      body: (logged: { context: Record<string, unknown>; message: string }[]) => Promise<void>,
+    ) => {
+      const deps = runtime() as unknown as {
+        deps: { logger?: { error: (context: Record<string, unknown>, message: string) => void } };
+      };
+      const original = deps.deps.logger;
+      const logged: { context: Record<string, unknown>; message: string }[] = [];
+      (deps.deps as { logger: unknown }).logger = {
+        error: (context: Record<string, unknown>, message: string) => {
+          logged.push({ context, message });
+        },
+      };
+      try {
+        await body(logged);
+      } finally {
+        (deps.deps as { logger: unknown }).logger = original;
+      }
+    };
+
+    it('an expected refusal thrown by the refresh opens the stored card, silently', async () => {
       const service = await activeService('open-refresh-refused');
       await stale(service.id);
-      await withRefresh(
-        () =>
-          Promise.reject(
-            new NexaError({
-              kind: 'PERMISSION_DENIED',
-              code: 'platform.permission_denied',
-              message: 'denied',
-            }),
-          ),
-        async () => {
-          sent = [];
-          const result = await handle(tap(`s:${service.id}`));
-          expect(result.replyKey).toBe('bot.service.card');
-          expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
-          noFailureNotice();
-        },
-      );
+      await withLogger(async (logged) => {
+        await withRefresh(
+          () =>
+            Promise.reject(
+              new NexaError({
+                kind: 'PERMISSION_DENIED',
+                code: 'platform.permission_denied',
+                message: 'denied',
+              }),
+            ),
+          async () => {
+            sent = [];
+            const result = await handle(tap(`s:${service.id}`));
+            expect(result.replyKey).toBe('bot.service.card');
+            expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+            noFailureNotice();
+          },
+        );
+        expect(logged, 'an expected refusal is not reported').toHaveLength(0);
+      });
     });
 
-    it('an unexpected error thrown by the refresh is surfaced, not swallowed', async () => {
+    it('an unexpected error thrown by the refresh opens the stored card, and is reported', async () => {
       const service = await activeService('open-refresh-throws');
       await stale(service.id);
-      await withRefresh(
-        () => Promise.reject(new Error('database unreadable')),
-        async () => {
-          await expect(handle(tap(`s:${service.id}`))).rejects.toThrow('database unreadable');
-        },
+      const thrown = new Error('database unreadable');
+      await withLogger(async (logged) => {
+        await withRefresh(
+          () => Promise.reject(thrown),
+          async () => {
+            sent = [];
+            const result = await handle(tap(`s:${service.id}`));
+            expect(result.replyKey).toBe('bot.service.card');
+            expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+            noFailureNotice();
+          },
+        );
+        expect(logged).toHaveLength(1);
+        expect(logged[0]?.context).toEqual({
+          err: thrown,
+          serviceId: service.id,
+          tenantId: tenantA.tenantId,
+        });
+      });
+    });
+
+    it('a panel whose stored credential cannot be decrypted still opens the stored card', async () => {
+      /*
+       * The real case behind the rule above: before the read on open, a card on such a
+       * panel opened; the read must not take that away. The cipher's refusal is INTERNAL and
+       * not retryable, so it is reported rather than silent.
+       */
+      const service = await activeService('open-bad-credential');
+      await stale(service.id);
+      await ctx.container.database.db.execute(
+        sql`UPDATE panel_credentials
+               SET username_ciphertext = 'fixture-not-a-real-ciphertext',
+                   password_ciphertext = 'fixture-not-a-real-ciphertext'
+             WHERE panel_id = ${panelId}`,
       );
+      const before = reads(service.username);
+      await withLogger(async (logged) => {
+        sent = [];
+        const result = await handle(tap(`s:${service.id}`));
+        expect(result.replyKey).toBe('bot.service.card');
+        expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+        noFailureNotice();
+        expect(reads(service.username) - before, 'nothing was dialled').toBe(0);
+        expect(logged).toHaveLength(1);
+        expect(logged[0]?.context['serviceId']).toBe(service.id);
+      });
     });
 
     it('a panel the monitor has confirmed unreachable is not dialled on open; ♻️ still reads', async () => {

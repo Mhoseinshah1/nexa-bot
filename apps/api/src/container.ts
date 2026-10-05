@@ -6561,6 +6561,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderService,
     antiSpam,
     botRuntime: new BotRuntime({
+      // Pre-support A2: a card's live read on open that failed unexpectedly is logged here.
+      logger,
       // WP20: more than 20 interactions in 10 s blocks the customer; fails open.
       antiSpam,
       // Package B: the REQUIRED channels, enforced before any business action; fails open.
