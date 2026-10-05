@@ -3431,9 +3431,13 @@ TB9 (the knowledge build, `docs/support-agent/tb9-knowledge-build.md`):
 - **OQ-TB-61 — a disabled built FAQ article.** The live FAQ entry is skipped in the context only
   while its built article is approved and enabled; disabling or retiring that article lets the
   live entry show again. Whether disabling should hide the FAQ entry from the agent too is open.
-- **OQ-TB-62 — a source that disappears.** A deactivated product, a removed app or a deleted FAQ
-  entry leaves its built article as it is; the build proposes no removal. A `RETIRE` proposal
-  kind would be a contract change.
+- **OQ-TB-62 — a source that disappears.** Resolved by the substitute review of PR #204 (S2): a
+  built article whose source the allowlist no longer yields (withdrawn, reseller-only, hidden
+  or stopped category, disabled app, inactive FAQ, switched-off route) is a `RETIRE` proposal.
+  It is only proposed — a reviewer applies it or leaves it — never part of «apply all», never
+  over an edit made after the build, and never for a source type whose read a bound cut short.
+  Still open: whether a source excluded by the scrubber (e.g. a FAQ answer that gained a link)
+  should also propose retiring its older, clean article; today it proposes nothing.
 - **OQ-TB-63 — which bot texts.** Only the five connection tutorials (`bot.tutorial.*`) are read:
   they declare no placeholder, so their raw body is the text. Other customer-facing templates
   either carry placeholders or are button labels. Widening the list is a reviewed change to
@@ -3441,8 +3445,9 @@ TB9 (the knowledge build, `docs/support-agent/tb9-knowledge-build.md`):
 - **OQ-TB-64 — scaffold labels.** The adapter writes a few Persian labels around raw facts
   («مدت», «حجم», «تعداد کاربر همزمان», titles of singleton articles). They are reviewed before
   they are knowledge, but they are not template keys; moving them to the catalogue is open.
-- **OQ-TB-65 — source bounds.** At most 100 items per source and 400 per build; a tenant with
-  more active products than that is cut silently in this release.
+- **OQ-TB-65 — source bounds.** At most 100 items per source and 400 per build. No longer
+  silent (PR #204, N2): the clipped and capped counts are in the run's audit row and on the
+  build page, and a cut source type proposes no RETIRE. Paging past the bound is open.
 - **OQ-TB-66 — what the fail-closed build leaves out.** Built knowledge carries nothing the TB8
   scrubber matches (TB9 decision 6). Lost from knowledge, not from the product: app download and
   help links (the TB3 context still carries them live), the support handles of
@@ -3451,3 +3456,9 @@ TB9 (the knowledge build, `docs/support-agent/tb9-knowledge-build.md`):
   except for the run's audit row; the build page does not yet show an "excluded" count. Whether
   such facts should reach the agent through a reviewed template field rendered at reply time —
   never through knowledge — is a Product Owner call.
+- **OQ-TB-67 — account-holder names in payment instructions.** A payment route's instructions
+  are the operator's public text and become a `PAYMENT_METHOD` proposal when the scrubber finds
+  nothing in them. An account holder's personal name (e.g. «به نام علی رضایی») is not something
+  the scrubber matches, so it can reach knowledge after review. The text is what every customer
+  already sees at payment, so no fix was made (PR #204, N4); whether knowledge should hold a
+  holder's name at all is a Product Owner call.
