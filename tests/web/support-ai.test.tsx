@@ -42,6 +42,10 @@ const credential = (overrides: Record<string, unknown> = {}) => ({
   trippedUntil: null,
   lastTestOutcome: 'OK',
   lastTestedAt: '2026-10-01T09:05:00.000Z',
+  // TB10: the provider's health, as the server derived it.
+  breaker: 'CLOSED',
+  consecutiveFailures: 0,
+  rejectedAt: null,
   ...overrides,
 });
 
@@ -69,6 +73,7 @@ const configResponse = (config: Record<string, unknown> = {}) => ({
     ANTHROPIC: { structuredOutput: true, vision: true },
     ZAI: { structuredOutput: false, vision: false },
   },
+  chainUnavailable: false,
 });
 
 const usage = {
@@ -506,6 +511,7 @@ describe('Assist on the conversation page, the route and the navigation', () => 
       lastMessageAt: null,
       lastInboundAt: null,
       preview: null,
+      unansweredSince: null,
       controlEpoch: 1,
       lastHumanAt: null,
       ticketId: null,

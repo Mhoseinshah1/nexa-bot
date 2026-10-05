@@ -52,6 +52,8 @@ export const CATEGORY_LABELS: Readonly<Record<NotificationCategory, WebKey>> = {
   RECOVERY: 'web.nc_cat_recovery',
   SECURITY: 'web.nc_cat_security',
   INCIDENTS: 'web.nc_cat_incidents',
+  SUPPORT: 'web.nc_cat_support',
+  SUPPORT_AI: 'web.nc_cat_support_ai',
 };
 
 const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
@@ -94,6 +96,11 @@ const TITLES: Readonly<Record<string, WebKey>> = {
   'admin.status_changed': 'web.nc_t_admin_status',
   'admin.password_reset': 'web.nc_t_admin_password_reset',
   'admin.sessions_revoked': 'web.nc_t_admin_sessions',
+  // TB10: the support agent.
+  'support.handoff_required': 'web.nc_t_support_handoff',
+  'support.business_connection.unusable': 'web.nc_t_support_connection',
+  'support.ai_provider.credential_rejected': 'web.nc_t_support_key_rejected',
+  'support.ai_provider.unavailable': 'web.nc_t_support_ai_unavailable',
 };
 
 const PREFIX_TITLES: readonly (readonly [string, WebKey])[] = [
@@ -144,6 +151,12 @@ export function pathOf(link: InboxLink): string {
       return '/incidents';
     case 'COMPENSATIONS':
       return '/compensations';
+    case 'BUSINESS_CHAT':
+      return id === '' ? '/business-chats' : `/business-chats/${id}`;
+    case 'BUSINESS_CHATS':
+      return '/business-chats';
+    case 'SUPPORT_AI':
+      return '/support-ai';
   }
 }
 

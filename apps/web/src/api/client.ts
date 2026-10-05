@@ -548,10 +548,13 @@ import {
   // TB4/TB5: the support AI's configuration and Assist drafts.
   SUPPORT_AI_ASSIST_ROUTES,
   SUPPORT_AI_ROUTES,
+  SUPPORT_ANALYTICS_ROUTES,
   supportAiConfigResponseSchema,
   supportAiDraftViewSchema,
   supportAiTestResponseSchema,
   supportAiUsageResponseSchema,
+  supportAnalyticsResponseSchema,
+  type SupportAnalyticsResponse,
   type SupportAiConfigInput,
   type SupportAiConfigResponse,
   type SupportAiDraftView,
@@ -4317,6 +4320,22 @@ export function testSupportAiProvider(input: {
 /** Thirty days of telemetry, summarised. Never a prompt, never a response. */
 export function fetchSupportAiUsage(): Promise<SupportAiUsageResponse> {
   return authedGet(SUPPORT_AI_ROUTES.usage, supportAiUsageResponseSchema);
+}
+
+/** TB10: support analytics over a report range, half-open. `support_ai.configure`. */
+export function fetchSupportAnalytics(query: {
+  readonly range: ReportRange;
+  readonly from?: string;
+  readonly to?: string;
+}): Promise<SupportAnalyticsResponse> {
+  return authedGet(
+    paged(SUPPORT_ANALYTICS_ROUTES.analytics, {
+      range: query.range,
+      from: query.from,
+      to: query.to,
+    }),
+    supportAnalyticsResponseSchema,
+  );
 }
 
 /** TB5: one conversation's recent drafts. `support_ai.assist`. */

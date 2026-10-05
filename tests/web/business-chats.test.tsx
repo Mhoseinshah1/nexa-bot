@@ -39,6 +39,8 @@ const summary = (overrides: Record<string, unknown> = {}) => ({
   lastMessageAt: '2026-10-01T10:00:00.000Z',
   lastInboundAt: '2026-10-01T10:00:00.000Z',
   preview: 'سرویس وصل نمی‌شود',
+  unansweredSince: null,
+  ticketId: null,
   ...overrides,
 });
 
@@ -54,7 +56,7 @@ const message = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const detail = (conversation: Record<string, unknown> = {}) => ({
-  conversation: { ...summary(conversation), controlEpoch: 3, lastHumanAt: null, ticketId: null },
+  conversation: { ...summary(conversation), controlEpoch: 3, lastHumanAt: null },
   escalations: [],
   messages: [
     // Deliberately out of order: the transcript reads oldest first whatever arrives.

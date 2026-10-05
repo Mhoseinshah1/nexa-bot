@@ -392,6 +392,7 @@ function DraftEditor({
         hint={t('web.assist_reply_hint')}
       >
         <textarea
+          dir="auto"
           id={fieldId}
           className="input"
           rows={6}

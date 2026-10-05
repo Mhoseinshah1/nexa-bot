@@ -7,6 +7,7 @@ import {
   SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS,
   SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS,
   supportAiConfigInputSchema,
+  type SupportAiBreakerState,
   type SupportAiConfigInput,
   type SupportAiConfigResponse,
   type SupportAiCredentialView,
@@ -90,7 +91,7 @@ export const SUPPORT_AI_PROVIDER_LABELS: Readonly<Record<SupportAiProvider, WebK
   ZAI: 'web.sai_provider_zai',
 };
 
-const OUTCOME_LABELS: Readonly<Record<SupportAiOutcomeKind, WebKey>> = {
+export const OUTCOME_LABELS: Readonly<Record<SupportAiOutcomeKind, WebKey>> = {
   OK: 'web.sai_outcome_ok',
   RATE_LIMITED: 'web.sai_outcome_rate_limited',
   AUTH_FAILED: 'web.sai_outcome_auth_failed',
@@ -100,7 +101,7 @@ const OUTCOME_LABELS: Readonly<Record<SupportAiOutcomeKind, WebKey>> = {
   TIMEOUT: 'web.sai_outcome_timeout',
 };
 
-const OUTCOME_TONES: Readonly<Record<SupportAiOutcomeKind, Tone>> = {
+export const OUTCOME_TONES: Readonly<Record<SupportAiOutcomeKind, Tone>> = {
   OK: 'ok',
   RATE_LIMITED: 'warn',
   AUTH_FAILED: 'danger',
@@ -110,7 +111,7 @@ const OUTCOME_TONES: Readonly<Record<SupportAiOutcomeKind, Tone>> = {
   TIMEOUT: 'warn',
 };
 
-const OPERATION_LABELS: Readonly<Record<SupportAiOperation, WebKey>> = {
+export const OPERATION_LABELS: Readonly<Record<SupportAiOperation, WebKey>> = {
   CONNECTION_TEST: 'web.sai_operation_connection_test',
   ASSIST_DRAFT: 'web.sai_operation_assist_draft',
   AUTO_DECISION: 'web.sai_operation_auto_decision',
@@ -119,6 +120,19 @@ const OPERATION_LABELS: Readonly<Record<SupportAiOperation, WebKey>> = {
 };
 
 type Region = 'INTERNATIONAL' | 'CHINA';
+/** TB10: the breaker as the server derived it at the read; the words say what it does. */
+export const BREAKER_LABELS: Readonly<Record<SupportAiBreakerState, WebKey>> = {
+  CLOSED: 'web.sai_breaker_closed',
+  OPEN: 'web.sai_breaker_open',
+  HALF_OPEN: 'web.sai_breaker_half_open',
+};
+
+const BREAKER_TONES: Readonly<Record<SupportAiBreakerState, Tone>> = {
+  CLOSED: 'ok',
+  OPEN: 'warn',
+  HALF_OPEN: 'info',
+};
+
 const REGIONS: readonly Region[] = ['INTERNATIONAL', 'CHINA'];
 const REGION_LABELS: Readonly<Record<Region, WebKey>> = {
   INTERNATIONAL: 'web.sai_region_international',
@@ -187,6 +201,11 @@ export function SupportAiPage({
       <StateSwitch query={config} denied={denied}>
         {data !== undefined && (
           <div className="stack">
+            {data.chainUnavailable && (
+              <Banner tone="danger" title={t('web.sai_chain_unavailable')}>
+                <p>{t('web.sai_chain_unavailable_hint')}</p>
+              </Banner>
+            )}
             <ConfigCard response={data} mayAutoReply={mayAutoReply} />
             <CredentialsCard response={data} />
             <UsageCard />
@@ -702,8 +721,8 @@ function CredentialRow({
     },
   });
 
-  const tripped =
-    credential.trippedUntil !== null && Date.parse(credential.trippedUntil) > Date.now();
+  // TB10: the server's breaker, as of its read — never re-derived from the client's clock.
+  const tripped = credential.breaker === 'OPEN';
   const name = t(SUPPORT_AI_PROVIDER_LABELS[provider]);
 
   return (
@@ -715,8 +734,18 @@ function CredentialRow({
         <Badge tone={credential.configured ? 'ok' : 'neutral'}>
           {t(credential.configured ? 'web.sai_key_configured' : 'web.sai_key_missing')}
         </Badge>
-        {tripped && <Badge tone="warn">{t('web.sai_breaker_open')}</Badge>}
+        {credential.configured && (
+          <Badge tone={BREAKER_TONES[credential.breaker]}>
+            {t(BREAKER_LABELS[credential.breaker])}
+          </Badge>
+        )}
+        {credential.rejectedAt !== null && <Badge tone="danger">{t('web.sai_key_rejected')}</Badge>}
       </div>
+      {credential.rejectedAt !== null && (
+        <Banner tone="danger" title={t('web.sai_key_rejected')}>
+          <p>{t('web.sai_key_rejected_hint')}</p>
+        </Banner>
+      )}
       <KV
         inline
         items={[
@@ -756,6 +785,22 @@ function CredentialRow({
                 ReactNode,
                 ReactNode,
               ][])
+            : []),
+          ...(credential.configured
+            ? ([
+                [
+                  t('web.sai_failures_in_row'),
+                  <Num key="f" value={credential.consecutiveFailures} />,
+                ],
+                [
+                  t('web.sai_rejected_at'),
+                  credential.rejectedAt === null ? (
+                    <Dash key="j" />
+                  ) : (
+                    formatTimestamp(credential.rejectedAt)
+                  ),
+                ],
+              ] as [ReactNode, ReactNode][])
             : []),
         ]}
       />

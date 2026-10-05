@@ -524,6 +524,19 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
+    /*
+     * TB10: support analytics — conversations, handoffs, automatic replies, drafts, provider
+     * runs, learning and knowledge, over a report range. Read under `support_ai.configure`,
+     * which the server charges; usage and cost are folded into that key (`tb0-audit.md` §7).
+     */
+    id: 'support-analytics',
+    path: '/support-analytics',
+    label: 'web.nav_support_analytics',
+    icon: 'activity',
+    permission: 'support_ai.configure',
+    group: 'web.navgroup_config',
+  },
+  {
     // R1: the customer main menu — order, switches (a setting) and labels (templates).
     id: 'bot-buttons',
     path: '/bot-buttons',
