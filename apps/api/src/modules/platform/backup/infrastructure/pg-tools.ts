@@ -94,6 +94,21 @@ export interface RunResult {
 /** Keeps a tool's diagnostics bounded and useful; a dump can be very loud. */
 const MAX_CAPTURED_OUTPUT = 16 * 1024;
 
+/**
+ * The most STDOUT a caller may be handed, and it is handed all of it or none.
+ *
+ * stdout is not a diagnostic: it is the answer a caller parses — a table count,
+ * and the whole migration history `inspectDatabase` reads one 79-byte line per
+ * migration. It used to share stderr's 16 KiB cap, applied per pipe chunk, so
+ * past 207 migrations the history came back whole or cut mid-hash depending on
+ * how the pipe happened to chunk it, and a cut line read as "unparseable" —
+ * `recovery.migration_state_unreadable` on a perfectly good candidate. So
+ * stdout is bounded far above anything a query here returns, and crossing the
+ * bound is a FAILURE, never a shorter answer: a truncated history is a wrong
+ * one.
+ */
+const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
+
 function run(
   command: string,
   args: readonly string[],
@@ -113,7 +128,9 @@ function run(
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    let stdout = '';
+    const stdoutChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stdoutOverflowed = false;
     let stderr = '';
     let timedOut = false;
 
@@ -126,7 +143,16 @@ function run(
     }, timeoutMs);
 
     child.stdout.on('data', (chunk: Buffer) => {
-      if (stdout.length < MAX_CAPTURED_OUTPUT) stdout += chunk.toString('utf8');
+      if (stdoutOverflowed) return;
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > MAX_STDOUT_BYTES) {
+        stdoutOverflowed = true;
+        stdoutChunks.length = 0;
+        return;
+      }
+      // Kept as bytes and decoded once: a chunk boundary may split a UTF-8
+      // sequence, and decoding chunk by chunk would mangle it.
+      stdoutChunks.push(chunk);
     });
     child.stderr.on('data', (chunk: Buffer) => {
       if (stderr.length < MAX_CAPTURED_OUTPUT) stderr += chunk.toString('utf8');
@@ -159,7 +185,18 @@ function run(
         );
         return;
       }
-      resolve({ code, signal, stdout, stderr });
+      if (stdoutOverflowed) {
+        reject(
+          new NexaError({
+            kind: 'INTERNAL',
+            code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,
+            message: `"${command}" wrote more than ${MAX_STDOUT_BYTES} bytes of output, which is not read as a partial answer.`,
+            details: { command, stderr: stderr.slice(0, 2000) },
+          }),
+        );
+        return;
+      }
+      resolve({ code, signal, stdout: Buffer.concat(stdoutChunks).toString('utf8'), stderr });
     });
   });
 }
