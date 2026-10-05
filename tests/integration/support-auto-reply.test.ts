@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import {
   SUPPORT_AI_DEFAULT_CONFIG,
+  SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS,
   isNexaError,
   systemJobActor,
   type ActorContext,
@@ -308,7 +309,9 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       scopeActivity: c.tenants,
       clock: c.clock,
     });
-    loop = new AssistantLoop({ produce: async () => 'GONE' as const }, jobs, {
+    // TB5's loop claims through the service (one job at a time, under the scope check); the
+    // container's own Assist service claims here, and no ASSIST draft is produced by it.
+    loop = new AssistantLoop(c.supportAssist, {
       auto,
       scope: () => scopeA,
       intervalMs: 1000,
@@ -502,11 +505,13 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       await record(message({ text: 'اینترنتم وصل نمی‌شود' }));
     };
     await tick();
-    expect(await autoJobs(first.conversationId)).toMatchObject([
-      { state: 'DISCARDED', outcome: 'dropped_coalesced' },
-      { state: 'QUEUED' },
-    ]);
-    expect(await autoRows(first.conversationId)).toEqual([]);
+    // TB5's loop claims ONE job at a time, so the same pass goes on to claim the replacement
+    // (already due at the shifted clock) and answers it. The replaced job wrote nothing: there
+    // is exactly one AUTO row, the replacement's.
+    const [replaced, replacement] = await autoJobs(first.conversationId);
+    expect(replaced).toMatchObject({ state: 'DISCARDED', outcome: 'dropped_coalesced' });
+    expect(replacement).toMatchObject({ state: 'SENT', outcome: 'sent' });
+    expect(await autoRows(first.conversationId)).toHaveLength(1);
     await tick();
     await deliver();
     expect(transport.sent).toHaveLength(1);
@@ -969,5 +974,82 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       sql`SELECT state, tenant_id FROM support_ai_jobs WHERE conversation_id = ${b1.conversationId}`,
     );
     expect(bJobs.rows).toEqual([{ state: 'QUEUED', tenant_id: SEED_IDS.tenantB }]);
+  });
+  describe('TB7 on the reviewed TB5: the AUTO kind with claimNext, the lease and the unclaimed rule', () => {
+    const BOTH = ['ASSIST_DRAFT', 'AUTO_DECISION'] as const;
+
+    it('a claimer without the AUTO producer never claims an AUTO job, and its due_at holds', async () => {
+      const first = await record(message());
+      const due = new Date(Date.now() + DUE);
+      const lease = new Date(due.getTime() + 60_000);
+      const assist = ctx.container.supportAssist;
+      // The default kinds are ASSIST only: an AUTO job is invisible to a loop with no producer.
+      expect(await assist.claimNext(scopeA, due, lease)).toBeNull();
+      // Not before its settle delay, whatever the kinds.
+      expect(await assist.claimNext(scopeA, new Date(), lease, BOTH)).toBeNull();
+      const claimed = await assist.claimNext(scopeA, due, lease, BOTH);
+      expect(claimed).toMatchObject({
+        kind: 'AUTO_DECISION',
+        conversationId: first.conversationId,
+        attempts: 1,
+        requestHash: null, // an AUTO job is keyed on its message, not on an operator's request
+      });
+      // One job at a time, under its lease: a second claim finds nothing.
+      expect(await assist.claimNext(scopeA, due, lease, BOTH)).toBeNull();
+    });
+
+    it("a stopped tenant's AUTO job is not claimed", async () => {
+      await record(message());
+      await db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${SEED_IDS.tenantA}`);
+      const due = new Date(Date.now() + DUE);
+      expect(
+        await ctx.container.supportAssist.claimNext(scopeA, due, new Date(due.getTime() + 1), BOTH),
+      ).toBeNull();
+      await db().execute(sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${SEED_IDS.tenantA}`);
+    });
+
+    it('the unclaimed rule fails a waiting ASSIST draft and never an AUTO job', async () => {
+      const first = await record(message());
+      const draft = await ctx.container.supportAssist.request(scopeA, owner, {
+        conversationId: first.conversationId,
+        idempotencyKey: key('draft'),
+      });
+      // Long past the bound, neither job ever claimed: only the draft is an operator's wait.
+      const later = new Date(Date.now() + 10 * SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS * 1000);
+      const failed = await ctx.container.uow.run(scopeA, (tx) =>
+        jobs.failUnclaimed(scopeA, null, later, later, tx),
+      );
+      expect(failed).toBe(1);
+      expect(await jobs.findById(scopeA, draft.id)).toMatchObject({
+        state: 'FAILED',
+        failureCode: 'job.unclaimed',
+      });
+      expect(await autoJobs(first.conversationId)).toMatchObject([{ state: 'QUEUED' }]);
+      // The operator's listing applies the rule too, and still leaves the AUTO job alone.
+      await ctx.container.supportAssist.drafts(scopeA, owner, first.conversationId);
+      expect(await autoJobs(first.conversationId)).toMatchObject([{ state: 'QUEUED' }]);
+      // Its own producer answers it.
+      await tick();
+      expect(await autoJobs(first.conversationId)).toMatchObject([
+        { state: 'SENT', outcome: 'sent' },
+      ]);
+    });
+
+    it('an AUTO job claimed while the tenant is active and produced after a stop asks no provider', async () => {
+      const first = await record(message());
+      const due = new Date(Date.now() + DUE);
+      const claimed = await ctx.container.supportAssist.claimNext(
+        scopeA,
+        due,
+        new Date(due.getTime() + 60_000),
+        BOTH,
+      );
+      expect(claimed).not.toBeNull();
+      await db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${SEED_IDS.tenantA}`);
+      expect(await auto.produce(scopeA, claimed!)).toBe('dropped_scope');
+      expect(calls).toBe(0);
+      expect(await autoRows(first.conversationId)).toEqual([]);
+      await db().execute(sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${SEED_IDS.tenantA}`);
+    });
   });
 });

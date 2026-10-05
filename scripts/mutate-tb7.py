@@ -51,6 +51,10 @@ M=[
  ('TB7-19',[(TICKETS,"        : await this.deps.tickets.latestActiveForCustomer(scope, customerId, scoped);","        : null;")],T_I,'existing active ticket'),
  ('TB7-20',[(CONV,"        if (conversation.state === 'HANDOFF_REQUIRED') {\n          await this.deps.escalation.resolved(scope, moved.id, tx);\n        }\n        return moved;\n      },","        return moved;\n      },")],T_I,'exactly one ticket'),
  ('TB7-21',[(CONFIG,"        if (widened) {","        if (false) {")],T_I,'widening the allowlist'),
+ # TB7 on the reviewed TB5: the AUTO kind under claimNext, the lease and the unclaimed rule.
+ ('TB7-24',[(JOBS,"          conversationId === null ? undefined : eq(supportAiJobs.conversationId, conversationId),\n          eq(supportAiJobs.kind, 'ASSIST_DRAFT'),\n","          conversationId === null ? undefined : eq(supportAiJobs.conversationId, conversationId),\n")],T_I,'never an AUTO job'),
+ ('TB7-25',[(JOBS,"          inArray(supportAiJobs.kind, [...kinds]),\n","")],T_I,'without the AUTO producer'),
+ ('TB7-26',[(AUTO,"    if (!active) return this.drop(scope, job, 'dropped_scope');\n","")],T_I,'produced after a stop'),
 ]
 
 only=sys.argv[1:]

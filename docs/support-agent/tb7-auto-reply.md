@@ -112,6 +112,18 @@ No grants are needed (no new permission), so `0206` is not used.
    `ASSIST_DRAFT` only. An operator's draft request no longer discards a pending automatic job.
 5. **Escalation lives in business-chats and calls the ticket system through a port.** It runs
    in the handoff's transaction, for the lane's handoffs and the AI's alike.
+6. **On the reviewed TB5 (PR #200), an AUTO job lives under TB5's concurrency rules.** It is
+   claimed by the same `claimNext` — one job at a time, in a transaction that checks scope
+   activity, under the `(1 + maxFallbacks) × timeout + 2 min` lease — which also filters by
+   kind (an AUTO job only when the loop has its producer) and by `due_at`. Its
+   `request_hash` is NULL: it is keyed on the triggering message, not on an operator's request.
+   The **unclaimed-draft rule (`job.unclaimed`) applies to `ASSIST_DRAFT` only**: an AUTO job
+   is nobody's screen wait, it is coalesced or dropped by its own producer, and one that keeps
+   failing hands off through `giveUp` with a ticket; failing it as unclaimed would silence a
+   customer with no handoff. Before the provider call the producer checks scope activity in a
+   transaction (a stopped tenant's transcript goes to no provider) and ends the job
+   `dropped_scope`, as it already did at the result; a drop and the image telemetry each write
+   under that same check.
 
 ## Tests
 

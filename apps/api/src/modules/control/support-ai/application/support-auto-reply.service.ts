@@ -489,7 +489,9 @@ export class SupportAutoReplyService {
   ): Promise<AutoJobResult> {
     // Every write checks scope activity in its own transaction (TB5 review): a drop for a
     // stopped tenant is recorded as `dropped_scope`, the same as a result that lands after a stop.
-    return this.inJobTransaction(scope, job, (tx, now) => this.finish(scope, job, outcome, now, tx));
+    return this.inJobTransaction(scope, job, (tx, now) =>
+      this.finish(scope, job, outcome, now, tx),
+    );
   }
 
   private async finish(
