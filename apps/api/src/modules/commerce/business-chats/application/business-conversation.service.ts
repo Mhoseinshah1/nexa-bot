@@ -330,7 +330,7 @@ export class BusinessConversationService {
     actor: ActorContext,
     input: {
       readonly state?: BusinessConversationState;
-      readonly before?: { readonly at: Date; readonly id: string };
+      readonly before?: { readonly priority: 0 | 1; readonly at: Date; readonly id: string };
       readonly limit: number;
     },
   ): Promise<readonly BusinessConversationListItem[]> {

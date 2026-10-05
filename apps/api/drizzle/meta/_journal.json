@@ -1471,6 +1471,13 @@
       "when": 1791210103258,
       "tag": "0209_support_knowledge_build",
       "breakpoints": true
+    },
+    {
+      "idx": 210,
+      "version": "7",
+      "when": 1791210287332,
+      "tag": "0210_tb10_support_indexes",
+      "breakpoints": true
     }
   ]
 }

@@ -13347,8 +13347,19 @@ export const businessConversations = pgTable(
       table.ownerTelegramUserId,
       table.chatId,
     ),
-    /** The inbox: newest activity first. */
-    index('business_conversations_inbox_idx').on(table.tenantId, table.lastMessageAt),
+    /**
+     * The inbox (TB10, program §47): conversations waiting for a person first, then newest
+     * activity, then id — EXACTLY the repository's ORDER BY and keyset, expression for
+     * expression, so a page is a bounded backward range scan of one tenant. The TB2 index on
+     * `(tenant_id, last_message_at)` matched no query (the list orders by the COALESCE) and
+     * is dropped by the same migration.
+     */
+    index('business_conversations_inbox_priority_idx').on(
+      table.tenantId,
+      sql`(${table.state} = 'HANDOFF_REQUIRED')`,
+      sql`COALESCE(${table.lastMessageAt}, ${table.createdAt})`,
+      table.id,
+    ),
     foreignKey({
       columns: [table.tenantId, table.connectionRowId],
       foreignColumns: [telegramBusinessConnections.tenantId, telegramBusinessConnections.id],
@@ -13579,6 +13590,8 @@ export const businessConversationEscalations = pgTable(
       table.controlEpoch,
     ),
     index('business_conversation_escalations_ticket_idx').on(table.tenantId, table.ticketId),
+    /** TB10 analytics: a tenant's handoffs in a window, by reason. */
+    index('business_conversation_escalations_created_idx').on(table.tenantId, table.createdAt),
     foreignKey({
       columns: [table.tenantId, table.conversationId],
       foreignColumns: [businessConversations.tenantId, businessConversations.id],
@@ -13878,6 +13891,8 @@ export const supportAiJobs = pgTable(
       table.conversationId,
       table.createdAt,
     ),
+    /** TB10 analytics: a tenant's jobs in a window (AUTO outcomes, Assist drafts). */
+    index('support_ai_jobs_created_idx').on(table.tenantId, table.createdAt),
     foreignKey({
       columns: [table.tenantId, table.conversationId],
       foreignColumns: [businessConversations.tenantId, businessConversations.id],

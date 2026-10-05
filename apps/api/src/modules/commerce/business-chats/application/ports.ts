@@ -284,7 +284,11 @@ export interface BusinessConversationRepository {
     scope: ScopeContext,
     input: {
       readonly state?: BusinessConversationState;
-      readonly before?: { readonly at: Date; readonly id: string };
+      /**
+       * The keyset of the last row of the previous page: its priority
+       * (`businessInboxPriority`), its activity and its id. All three, or no cursor.
+       */
+      readonly before?: { readonly priority: 0 | 1; readonly at: Date; readonly id: string };
       readonly limit: number;
     },
   ): Promise<readonly BusinessConversationListItem[]>;
@@ -301,6 +305,11 @@ export interface BusinessConversationListItem {
   readonly preview: string | null;
   /** The inbox's sort key: the latest message's time, or the row's creation. */
   readonly activityAt: Date;
+  /**
+   * TB10: the oldest customer message after the latest delivered reply, read in the same
+   * statement; null when there is none. `businessUnansweredSince` decides from it.
+   */
+  readonly firstUnansweredAt: Date | null;
 }
 
 export interface BusinessMessageRecord {

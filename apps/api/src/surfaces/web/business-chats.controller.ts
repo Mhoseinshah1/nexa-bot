@@ -8,6 +8,8 @@ import {
   businessChatListQuerySchema,
   businessChatSendRequestSchema,
   businessConnectionStatus,
+  businessInboxPriority,
+  businessUnansweredSince,
   routePattern,
   type BusinessChatControlResponse,
   type BusinessChatDetailResponse,
@@ -17,6 +19,7 @@ import {
   type BusinessConversationSummary,
   type TenantContext,
 } from '@nexa/contracts';
+import { z } from 'zod';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
@@ -86,7 +89,6 @@ export class BusinessChatsController {
         ...summary,
         controlEpoch: found.item.conversation.controlEpoch,
         lastHumanAt: found.item.conversation.lastHumanAt?.toISOString() ?? null,
-        ticketId: found.item.conversation.ticketId,
       },
       escalations: found.escalations.map((escalation) => ({
         id: escalation.id,
@@ -191,18 +193,44 @@ function toSummary(item: BusinessConversationListItem): BusinessConversationSumm
     lastMessageAt: conversation.lastMessageAt?.toISOString() ?? null,
     lastInboundAt: conversation.lastInboundAt?.toISOString() ?? null,
     preview: item.preview,
+    unansweredSince:
+      businessUnansweredSince({
+        lastInboundAt: conversation.lastInboundAt,
+        lastHumanAt: conversation.lastHumanAt,
+        lastAiAt: conversation.lastAiAt,
+        firstUnansweredAt: item.firstUnansweredAt,
+      })?.toISOString() ?? null,
+    ticketId: conversation.ticketId,
   };
 }
 
-/** `<iso>|<id>` of the last row's activity — an opaque cursor to the client. */
-function encodeCursor(item: BusinessConversationListItem): string {
-  return `${item.activityAt.toISOString()}|${item.conversation.id}`;
+/**
+ * `<priority>|<iso>|<id>` of the last row — an opaque cursor to the client. TB10 added the
+ * priority (handoffs first), so the keyset names all three sort keys.
+ */
+export function encodeCursor(item: BusinessConversationListItem): string {
+  return `${businessInboxPriority(item.conversation.state)}|${item.activityAt.toISOString()}|${item.conversation.id}`;
 }
 
-function decodeCursor(cursor: string | undefined): { at: Date; id: string } | null {
+/**
+ * A cursor this inbox issued, exactly. Anything else — a TB2 two-key cursor, a truncated
+ * one, a forged id — is a 400: answering page one to a request for a later page would show
+ * the operator rows they already saw as if they were the next ones.
+ */
+const inboxCursorSchema = z
+  .string()
+  .regex(
+    /^[01]\|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+    'The page cursor is not one this inbox issued; reload the first page.',
+  )
+  .refine((cursor) => !Number.isNaN(Date.parse(cursor.split('|')[1] ?? '')), {
+    message: 'The page cursor names no instant; reload the first page.',
+  });
+
+export function decodeCursor(
+  cursor: string | undefined,
+): { priority: 0 | 1; at: Date; id: string } | null {
   if (cursor === undefined) return null;
-  const [at, id] = cursor.split('|');
-  if (at === undefined || at === '' || id === undefined || id === '') return null;
-  const parsed = new Date(at);
-  return Number.isNaN(parsed.getTime()) ? null : { at: parsed, id };
+  const [priority, at, id] = inboxCursorSchema.parse(cursor).split('|') as [string, string, string];
+  return { priority: priority === '1' ? 1 : 0, at: new Date(at), id };
 }
