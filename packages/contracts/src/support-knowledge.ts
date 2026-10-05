@@ -379,8 +379,19 @@ export type SupportKnowledgeBuildState = (typeof SUPPORT_KNOWLEDGE_BUILD_STATES)
  * - `UNCHANGED` — the source is as last built (or its article was retired): nothing to do.
  * - `CONFLICT` — the source changed AND its article was edited since the last build. Never
  *   applied without an explicit choice: a manual edit is never silently overwritten.
+ * - `RETIRE` — a built article whose source is no longer in the allowlisted set (a product
+ *   withdrawn, made reseller-only or put in a hidden category, an app disabled, a FAQ entry
+ *   deactivated, a payment route switched off). Only ever PROPOSED: a reviewer applies it (the
+ *   article is retired) or leaves it. Never part of «apply all», never automatic, and never
+ *   forced over an article that moved since the build.
  */
-export const SUPPORT_KNOWLEDGE_PROPOSAL_KINDS = ['ADD', 'UPDATE', 'UNCHANGED', 'CONFLICT'] as const;
+export const SUPPORT_KNOWLEDGE_PROPOSAL_KINDS = [
+  'ADD',
+  'UPDATE',
+  'UNCHANGED',
+  'CONFLICT',
+  'RETIRE',
+] as const;
 export type SupportKnowledgeProposalKind = (typeof SUPPORT_KNOWLEDGE_PROPOSAL_KINDS)[number];
 
 /** `PENDING → APPLIED | SKIPPED`. An UNCHANGED proposal is SKIPPED from birth. */
@@ -398,7 +409,10 @@ export const supportKnowledgeBuildRunRequestSchema = z
   .object({ idempotencyKey: idempotencyKeySchema })
   .strict();
 
-/** Apply the named PENDING proposals, or every non-conflicting one. A CONFLICT never applies. */
+/**
+ * Apply the named PENDING proposals, or (null) every pending ADD and UPDATE. A CONFLICT never
+ * applies here; a RETIRE applies only when named.
+ */
 export const supportKnowledgeBuildApplyRequestSchema = z
   .object({
     idempotencyKey: idempotencyKeySchema,
@@ -434,12 +448,18 @@ export const supportKnowledgeBuildViewSchema = z.object({
   id: z.string(),
   state: z.enum(SUPPORT_KNOWLEDGE_BUILD_STATES),
   createdAt: z.string(),
+  /** The proposals of each kind, as they stand now (an UPDATE that met an edit is a CONFLICT). */
   counts: z.object({
     add: z.number().int(),
     update: z.number().int(),
     unchanged: z.number().int(),
     conflict: z.number().int(),
+    retire: z.number().int(),
   }),
+  /** Items whose text was clipped to the article bounds (title or body) when the build ran. */
+  truncated: z.number().int(),
+  /** Items dropped by the per-source or per-build bound (at least this many). */
+  capped: z.number().int(),
   proposals: z.array(supportKnowledgeProposalViewSchema),
 });
 export type SupportKnowledgeBuildView = z.infer<typeof supportKnowledgeBuildViewSchema>;
@@ -448,6 +468,11 @@ export const supportKnowledgeBuildApplyResponseSchema = z.object({
   applied: z.number().int(),
   /** Proposals whose article moved since the build: now CONFLICT, waiting for a choice. */
   conflicted: z.number().int(),
+  /**
+   * Proposals that could not apply and were closed: an ADD whose source already has an article,
+   * an UPDATE whose article was retired, a RETIRE whose article moved since the build.
+   */
+  skipped: z.number().int(),
 });
 export type SupportKnowledgeBuildApplyResponse = z.infer<
   typeof supportKnowledgeBuildApplyResponseSchema
@@ -467,4 +492,6 @@ export const SUPPORT_KNOWLEDGE_BUILD_ERROR_CODES = {
   PROPOSAL_NOT_FOUND: 'support_knowledge.proposal_not_found',
   NOT_A_CONFLICT: 'support_knowledge.not_a_conflict',
   BASE_MOVED: 'support_knowledge.base_moved',
+  /** Another run of the build for this tenant committed first; the newest build is that one. */
+  BUILD_RUNNING: 'support_knowledge.build_running',
 } as const;
