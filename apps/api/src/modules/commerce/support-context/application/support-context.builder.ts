@@ -45,7 +45,7 @@ import type {
 
 export interface SupportContextBuilderDeps {
   readonly customers: Pick<CustomerRepository, 'findById'>;
-  readonly services: Pick<ProvisioningService, 'pageForCustomer'>;
+  readonly services: Pick<ProvisioningService, 'supportServicesForCustomer'>;
   readonly reader: SupportContextReader;
   readonly clientApps: Pick<ClientAppRepository, 'list'>;
   readonly serviceFacts: Pick<ProvisionedServiceFacts, 'factsOf'>;
@@ -85,8 +85,9 @@ export interface SupportContextBuild {
  * is the AI policy's decision (TB5), not this reader's.
  *
  * Every account fact comes from a customer-scoped reader that puts the tenant and the
- * customer in its WHERE: `pageForCustomer` (which also hides a service refunded away at the
- * customer's request) and `SupportContextReader`. No operator service is used — the agent
+ * customer in its WHERE: `supportServicesForCustomer` (the `pageForCustomer` predicate,
+ * which hides a service refunded away at the customer's request, with non-terminated
+ * services first) and `SupportContextReader`. No operator service is used — the agent
  * acts as `SYSTEM_JOB`, which holds no operator permission, and borrowing one would be the
  * actor-type bypass this codebase refuses.
  *
@@ -136,13 +137,16 @@ export class SupportContextBuilder {
       );
     }
 
-    const [page, orders, payments, incidents] = await Promise.all([
-      this.deps.services.pageForCustomer(scope, customer.id, 1),
+    const [services, orders, payments, incidents] = await Promise.all([
+      this.deps.services.supportServicesForCustomer(
+        scope,
+        customer.id,
+        SUPPORT_CONTEXT_LIMITS.services,
+      ),
       this.deps.reader.recentOrders(scope, customer.id, SUPPORT_CONTEXT_LIMITS.orders),
       this.deps.reader.recentPayments(scope, customer.id, SUPPORT_CONTEXT_LIMITS.payments),
       this.deps.reader.activeIncidentNotices(scope, customer.id, SUPPORT_CONTEXT_LIMITS.incidents),
     ]);
-    const services = page.items.slice(0, SUPPORT_CONTEXT_LIMITS.services);
     const [cards, appFacts] = await Promise.all([
       services.length === 0
         ? Promise.resolve([] as readonly SupportServiceCardFact[])
@@ -202,15 +206,32 @@ export class SupportContextBuilder {
   ): SupportContextBuild {
     // Strict: a key outside the allowlist, or a value outside its bound, fails HERE.
     const parsed = supportContextPayloadSchema.parse(fitPayload(payload));
+    /*
+     * Only the aliases that SURVIVED the byte budget are resolvable: an alias the model was
+     * never shown must not name a row a later tool could act on.
+     */
     return {
       payload: parsed,
       references: {
-        services: new Map(ids.services.map((id, index) => [aliasFor('S', index), id])),
-        orders: new Map(ids.orders.map((id, index) => [aliasFor('O', index), id])),
-        payments: new Map(ids.payments.map((id, index) => [aliasFor('P', index), id])),
+        services: survivingReferences('S', ids.services, parsed.services),
+        orders: survivingReferences('O', ids.orders, parsed.orders),
+        payments: survivingReferences('P', ids.payments, parsed.payments),
       },
     };
   }
+}
+
+function survivingReferences(
+  prefix: 'S' | 'O' | 'P',
+  ids: readonly string[],
+  shown: readonly { readonly alias: string }[],
+): ReadonlyMap<string, string> {
+  const aliases = new Set(shown.map((entry) => entry.alias));
+  return new Map(
+    ids
+      .map((id, index) => [aliasFor(prefix, index), id] as const)
+      .filter(([alias]) => aliases.has(alias)),
+  );
 }
 
 /** The customer, minus everything the allowlist leaves out (phone, Telegram id, block reason). */

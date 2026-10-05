@@ -1004,6 +1004,31 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return { items: rows.map(toRecord), count: total };
   }
 
+  async supportServicesForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    limit: number,
+  ): Promise<readonly ServiceRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select()
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.customerId, customerId),
+          notRefundedAway(),
+        ),
+      )
+      .orderBy(
+        sql`CASE WHEN ${services.state} = 'TERMINATED' THEN 1 ELSE 0 END`,
+        desc(services.createdAt),
+        desc(services.id),
+      )
+      .limit(Math.max(1, limit));
+    return rows.map(toRecord);
+  }
+
   async searchForCustomer(
     scope: TenantContext,
     customerId: UserId,

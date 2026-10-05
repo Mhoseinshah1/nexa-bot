@@ -99,7 +99,8 @@ export class DrizzleSupportContextReader implements SupportContextReader {
   ): Promise<{ readonly items: readonly SupportPaymentFact[]; readonly anyUnderReview: boolean }> {
     const tenantId = requireTenantId(scope);
     const underReview = underReviewCondition();
-    const rows = await this.db
+    const owned = and(eq(payments.tenantId, tenantId), eq(payments.customerId, customerId));
+    const recent = this.db
       .select({
         id: payments.id,
         amountMinor: payments.amount,
@@ -110,17 +111,23 @@ export class DrizzleSupportContextReader implements SupportContextReader {
         createdAt: payments.createdAt,
         confirmedAt: payments.confirmedAt,
         underReview: sql<boolean>`${underReview}`,
-        /*
-         * Over EVERY payment of the customer, not only the five returned: a window is
-         * evaluated before LIMIT, so an older payment still under review raises the flag
-         * that makes it a hard handoff topic.
-         */
-        anyUnderReview: sql<boolean>`bool_or(${underReview}) OVER ()`,
       })
       .from(payments)
-      .where(and(eq(payments.tenantId, tenantId), eq(payments.customerId, customerId)))
+      .where(owned)
       .orderBy(desc(payments.createdAt), desc(payments.id))
       .limit(Math.max(1, limit));
+    /*
+     * The flag is over EVERY payment of the customer, not only the five returned, so an
+     * older payment still under review keeps it a hard handoff topic. Its own statement,
+     * `LIMIT 1` over the same predicate: it stops at the first match instead of evaluating
+     * the correlated queue subqueries for every payment the customer ever made.
+     */
+    const flagged = this.db
+      .select({ one: sql<number>`1` })
+      .from(payments)
+      .where(and(owned, underReview))
+      .limit(1);
+    const [rows, anyRows] = await Promise.all([recent, flagged]);
     return {
       items: rows.map((row) => ({
         id: row.id,
@@ -133,7 +140,7 @@ export class DrizzleSupportContextReader implements SupportContextReader {
         createdAt: row.createdAt,
         confirmedAt: row.confirmedAt,
       })),
-      anyUnderReview: rows[0]?.anyUnderReview === true,
+      anyUnderReview: anyRows.length > 0,
     };
   }
 

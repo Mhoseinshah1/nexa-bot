@@ -435,12 +435,10 @@ describe('TB3 support context — the builder over fakes', () => {
     return {
       customers: { findById: async (_s, id) => (id === customer.id ? customer : null) },
       services: {
-        pageForCustomer: async () => ({
-          items: [service('svc-a', 'ACTIVE'), service('svc-b', 'UNRECONCILED')],
-          page: 1,
-          pages: 1,
-          count: 2,
-        }),
+        supportServicesForCustomer: async () => [
+          service('svc-a', 'ACTIVE'),
+          service('svc-b', 'UNRECONCILED'),
+        ],
       },
       reader: {
         recentOrders: async () => [],
@@ -492,9 +490,9 @@ describe('TB3 support context — the builder over fakes', () => {
     const built = await new SupportContextBuilder(
       deps({
         services: {
-          pageForCustomer: async () => {
+          supportServicesForCustomer: async () => {
             asked.push('services');
-            return { items: [], page: 1, pages: 1, count: 0 };
+            return [];
           },
         },
         reader: {

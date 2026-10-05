@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  TONPAYS_TELEGRAM_REVIEW_WINDOW_HOURS,
   supportContextPayloadSchema,
   type ActorContext,
   type TenantContext,
@@ -103,24 +104,97 @@ describe('TB3 — support context', () => {
       readonly signalled?: boolean;
       readonly minutesAgo?: number;
       readonly orderId?: string | null;
+      readonly provider?: 'TONPAYS' | 'NOWPAYMENTS';
+      /** An open provider review (`provider_review_started_at`/`_until`), NOWPayments only. */
+      readonly providerReview?: boolean;
     },
   ): Promise<string> {
     const id = ctx.container.ids.uuid();
     const method = options.method ?? 'MANUAL_TRANSFER';
+    const review = options.providerReview === true;
     const confirmed = options.state === 'CONFIRMED';
     await run(sql`
       INSERT INTO payments (id, tenant_id, customer_id, order_id, state, method, amount, currency,
                             reference, external_reference, evidence_kind, confirmed_at,
-                            resolved_at, customer_signalled_at, gateway_provider, created_at)
+                            resolved_at, customer_signalled_at, gateway_provider,
+                            provider_review_started_at, provider_review_until, expires_at,
+                            created_at)
       VALUES (${id}, ${(options.tenant ?? tenantA).tenantId}, ${customerId},
               ${options.orderId ?? null}, ${options.state}, ${method}, 250000, 'IRT',
               ${`${PAY_REF}-${String(seq())}`}, ${EXT_REF},
               ${confirmed ? 'OPERATOR_REVIEW' : null}, ${confirmed ? sql`now()` : sql`NULL`},
               ${options.state === 'FAILED' ? sql`now()` : sql`NULL`},
               ${options.signalled === true ? sql`now()` : sql`NULL`},
-              ${method === 'GATEWAY' ? 'TONPAYS' : null},
+              ${method === 'GATEWAY' ? (options.provider ?? 'TONPAYS') : null},
+              ${review ? sql`now()` : sql`NULL`},
+              ${review ? sql`now() + make_interval(hours => ${TONPAYS_TELEGRAM_REVIEW_WINDOW_HOURS})` : sql`NULL`},
+              ${review ? sql`now() + interval '70 minutes'` : sql`NULL`},
               now() - make_interval(mins => ${options.minutesAgo ?? 1}))`);
     return id;
+  }
+
+  /** The gateway side of a payment (`payment-operations.test.ts`'s shape for each provider). */
+  async function invoice(
+    paymentId: string,
+    provider: 'TONPAYS' | 'NOWPAYMENTS',
+    extra: Record<string, unknown>,
+  ): Promise<void> {
+    const k = seq();
+    const row: Record<string, unknown> = {
+      payment_id: paymentId,
+      tenant_id: tenantA.tenantId,
+      provider,
+      provider_order_id: String(1_000_000_000 + k),
+      creation_state: 'CREATED',
+      provider_invoice_id: `inv-tb3-${String(k)}`,
+      created_invoice_at: new Date(),
+      provider_unit: 'IRT',
+      sent_amount: 250000,
+      ...(provider === 'NOWPAYMENTS'
+        ? {
+            provider_unit: 'USD',
+            sent_amount: 10,
+            conversion_policy: 'CENTRAL_FX',
+            fx_quote_id: `q-tb3-${String(k)}`,
+            fx_source: 'WALLEX',
+            fx_base_asset: 'USDT',
+            fx_quote_currency: 'IRT',
+            fx_rate_mantissa: 103500,
+            fx_rate_scale: 0,
+            fx_fetched_at: new Date(),
+            fx_quote_state: 'FRESH',
+            fx_policy_version: 1,
+            fx_unit_ratio_mantissa: 1,
+            fx_unit_ratio_scale: 0,
+            fx_effective_rate_numerator: 103500,
+            fx_effective_rate_denominator: 1,
+          }
+        : {}),
+      ...extra,
+    };
+    const columns = Object.keys(row);
+    await run(
+      sql`INSERT INTO gateway_invoices (${sql.raw(columns.join(', '))}) VALUES (${sql.join(
+        columns.map((column) => sql`${row[column]}`),
+        sql`, `,
+      )})`,
+    );
+  }
+
+  async function refundRow(paymentId: string, customerId: string): Promise<void> {
+    await run(sql`
+      INSERT INTO refunds (id, tenant_id, payment_id, customer_id, state, channel, amount,
+                           currency, reason)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${paymentId}, ${customerId},
+              'REQUESTED', 'WALLET_CREDIT', 1000, 'IRT', 'tb3 test refund')`);
+  }
+
+  async function writeCount(): Promise<number> {
+    const [row] = await rows<{ n: number }>(
+      sql`SELECT (SELECT count(*) FROM support_faq_seeds)::int + (SELECT count(*) FROM audit_logs)::int
+                 + (SELECT count(*) FROM outbox_messages)::int AS n`,
+    );
+    return row?.n ?? -1;
   }
 
   async function incident(input: {
@@ -388,10 +462,7 @@ describe('TB3 — support context', () => {
       value: ['@HelpTb3'],
       expectedVersion: null,
     });
-    const before = await rows<{ n: number }>(
-      sql`SELECT (SELECT count(*) FROM support_faq_seeds)::int + (SELECT count(*) FROM audit_logs)::int
-                 + (SELECT count(*) FROM outbox_messages)::int AS n`,
-    );
+    const before = await writeCount();
 
     const { payload } = await ctx.container.supportContext.build(tenantA, null);
     expect(payload.customer).toBeNull();
@@ -411,11 +482,13 @@ describe('TB3 — support context', () => {
     expect(payload.clientApps.map((app) => app.name)).toEqual(['Hiddify']);
     expect(payload.supportAccounts).toEqual(['@HelpTb3']);
 
-    const after = await rows<{ n: number }>(
-      sql`SELECT (SELECT count(*) FROM support_faq_seeds)::int + (SELECT count(*) FROM audit_logs)::int
-                 + (SELECT count(*) FROM outbox_messages)::int AS n`,
-    );
-    expect(after).toEqual(before);
+    expect(await writeCount()).toBe(before);
+
+    // A LINKED build writes nothing either.
+    const linked = await ctx.container.supportContext.build(tenantA, me);
+    expect(linked.payload.flags.identityLinked).toBe(true);
+    expect(linked.payload.services).toHaveLength(1);
+    expect(await writeCount()).toBe(before);
   });
 
   it('a BLOCKED customer still gets their context, flagged', async () => {
@@ -451,6 +524,10 @@ describe('TB3 — support context', () => {
     const me = await customer('900090');
     const product = await fx.product(panel);
     await liveService(me, panel, { productId: product });
+    // A deliverable customer whose ONLY service on the same panel and product is TERMINATED:
+    // never in the audience, so never in the context.
+    const dead = await customer('900091');
+    await liveService(dead, panel, { productId: product, state: 'TERMINATED' });
     const otherProduct = await fx.product(otherPanel);
     const location = ctx.container.ids.uuid();
     const otherLocation = ctx.container.ids.uuid();
@@ -480,6 +557,8 @@ describe('TB3 — support context', () => {
       const id = await incident({ message: shape, targets });
       const preview = await ctx.container.incidents.noticePreview(tenantA, owner, id);
       const notices = await reader.activeIncidentNotices(tenantA, me, 10);
+      expect(await reader.activeIncidentNotices(tenantA, dead, 10), shape).toEqual([]);
+      expect(preview.recipients, shape).toBeLessThanOrEqual(1);
       verdicts[shape] = { audience: preview.recipients === 1, context: notices.length === 1 };
     }
     for (const verdict of Object.values(verdicts)) expect(verdict.context).toBe(verdict.audience);
@@ -495,6 +574,193 @@ describe('TB3 — support context', () => {
       unknownLocation: true,
       otherPanelAndGateway: false,
     });
+  });
+
+  it('references hold only the aliases that survived the byte budget', async () => {
+    const panel = await fx.panel();
+    const me = await customer('900200');
+    const longLabel = 'ل'.repeat(200);
+    for (let i = 0; i < 10; i += 1) await liveService(me, panel);
+    await run(
+      sql`UPDATE services SET location_key = 'far', location_label = ${longLabel} WHERE customer_id = ${me}`,
+    );
+    for (let i = 0; i < 5; i += 1) await payment(me, { state: 'CONFIRMED', minutesAgo: i + 1 });
+    for (let i = 0; i < 3; i += 1) await incident({ message: 'پ'.repeat(1500) });
+
+    const built = await ctx.container.supportContext.build(tenantA, me);
+    const { payload, references } = built;
+    expect(new TextEncoder().encode(JSON.stringify(payload)).length).toBeLessThanOrEqual(16 * 1024);
+    // The budget really cut: the test is about what survives a cut.
+    expect(payload.services.length).toBeLessThan(10);
+    expect(payload.incidents).toHaveLength(3);
+    for (const family of ['services', 'orders', 'payments'] as const) {
+      expect(references[family].size, family).toBe(payload[family].length);
+      const shown = new Set(payload[family].map((entry) => entry.alias));
+      for (const alias of references[family].keys()) expect(shown.has(alias), alias).toBe(true);
+    }
+  });
+
+  it('an incident on a panel reaches only the customer with a live service there', async () => {
+    const panel = await fx.panel();
+    const otherPanel = await fx.panel();
+    const affected = await customer('900210');
+    const elsewhere = await customer('900211');
+    await liveService(affected, panel);
+    await liveService(elsewhere, otherPanel);
+    await incident({ message: 'panel down', targets: [{ kind: 'PANEL', ref: panel }] });
+    expect(
+      (await ctx.container.supportContext.build(tenantA, affected)).payload.incidents,
+    ).toHaveLength(1);
+    expect(
+      (await ctx.container.supportContext.build(tenantA, elsewhere)).payload.incidents,
+    ).toEqual([]);
+  });
+
+  it('under review, gateway facets: PARTIAL/LATE_COMPLETION unless CONFIRMED or refunded; PENDING with only a provider review', async () => {
+    const me = await customer('900220');
+    const partialFailed = await payment(me, {
+      state: 'FAILED',
+      method: 'GATEWAY',
+      provider: 'NOWPAYMENTS',
+      minutesAgo: 9,
+    });
+    await invoice(partialFailed, 'NOWPAYMENTS', {
+      provider_status: 'partially_paid',
+      provider_paid: false,
+    });
+    const partialConfirmed = await payment(me, {
+      state: 'CONFIRMED',
+      method: 'GATEWAY',
+      provider: 'NOWPAYMENTS',
+      minutesAgo: 8,
+    });
+    await invoice(partialConfirmed, 'NOWPAYMENTS', {
+      provider_status: 'partially_paid',
+      provider_paid: false,
+    });
+    const partialRefunded = await payment(me, {
+      state: 'FAILED',
+      method: 'GATEWAY',
+      provider: 'NOWPAYMENTS',
+      minutesAgo: 7,
+    });
+    await invoice(partialRefunded, 'NOWPAYMENTS', {
+      provider_status: 'partially_paid',
+      provider_paid: false,
+    });
+    await refundRow(partialRefunded, me);
+    const late = await payment(me, { state: 'FAILED', method: 'GATEWAY', minutesAgo: 6 });
+    await invoice(late, 'TONPAYS', {
+      outcome: 'LATE_COMPLETION',
+      outcome_at: new Date(),
+      late_completion_observed_at: new Date(),
+    });
+    const reviewed = await payment(me, {
+      state: 'PENDING',
+      method: 'GATEWAY',
+      provider: 'NOWPAYMENTS',
+      providerReview: true,
+      minutesAgo: 5,
+    });
+    const plainGateway = await payment(me, {
+      state: 'PENDING',
+      method: 'GATEWAY',
+      provider: 'NOWPAYMENTS',
+      minutesAgo: 4,
+    });
+
+    const reader = new DrizzleSupportContextReader(ctx.container.database.db);
+    const read = await reader.recentPayments(tenantA, me, 10);
+    const verdict = new Map(read.items.map((item) => [item.id, item.underReview]));
+    expect(
+      Object.fromEntries([
+        ['partialFailed', verdict.get(partialFailed)],
+        ['partialConfirmed', verdict.get(partialConfirmed)],
+        ['partialRefunded', verdict.get(partialRefunded)],
+        ['late', verdict.get(late)],
+        ['reviewed', verdict.get(reviewed)],
+        ['plainGateway', verdict.get(plainGateway)],
+      ]),
+    ).toEqual({
+      partialFailed: true,
+      partialConfirmed: false,
+      partialRefunded: false,
+      late: true,
+      reviewed: true,
+      plainGateway: false,
+    });
+  });
+
+  it('orders: a DRAFT is not in the context; an AWAITING_PAYMENT order is', async () => {
+    const panel = await fx.panel();
+    const me = await customer('900230');
+    const awaiting = await fx.order({ customerId: me, panelId: panel, state: 'AWAITING_PAYMENT' });
+    // A DRAFT written as the order service writes one: no confirmation, no expiry, no
+    // settlement (the snapshot guard refuses turning a row back into a draft by UPDATE).
+    const draft = ctx.container.ids.uuid();
+    await run(sql`
+      INSERT INTO orders (id, tenant_id, customer_id, state, purpose, product_id, panel_id,
+                          line_title, line_duration_days, line_traffic_bytes,
+                          line_unit_price_amount, line_quantity, subtotal_amount,
+                          discount_amount, total_amount, currency, quote)
+      SELECT ${draft}, tenant_id, customer_id, 'DRAFT', purpose, product_id, panel_id,
+             line_title, line_duration_days, line_traffic_bytes, line_unit_price_amount,
+             line_quantity, subtotal_amount, discount_amount, total_amount, currency, quote
+        FROM orders WHERE id = ${awaiting}`);
+    expect(draft).not.toBe(awaiting);
+    const built = await ctx.container.supportContext.build(tenantA, me);
+    expect([...built.references.orders.values()]).toEqual([awaiting]);
+    expect(built.payload.orders.map((order) => order.state)).toEqual(['AWAITING_PAYMENT']);
+  });
+
+  it('client apps: an app restricted to another provider is not offered to a customer on Marzban', async () => {
+    const panel = await fx.panel(); // provider_type 'marzban'
+    const me = await customer('900240');
+    await liveService(me, panel);
+    await run(sql`INSERT INTO client_apps (id, tenant_id, platform, name, description,
+                                           official_url, guide, status, provider_types)
+                  VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'ANDROID', 'AnyApp',
+                          'desc', 'https://play.example.com/any', 'g', 'ENABLED', '{}'::text[]),
+                         (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'ANDROID', 'SanaeiOnly',
+                          'desc', 'https://play.example.com/sanaei', 'g', 'ENABLED',
+                          ARRAY['sanaei']::text[])`);
+    const linked = await ctx.container.supportContext.build(tenantA, me);
+    expect(linked.payload.clientApps.map((app) => app.name)).toEqual(['AnyApp']);
+    // An unlinked peer has no services to filter by, and is shown both (WP-A10's rule).
+    const unlinked = await ctx.container.supportContext.build(tenantA, null);
+    expect(unlinked.payload.clientApps.map((app) => app.name).sort()).toEqual([
+      'AnyApp',
+      'SanaeiOnly',
+    ]);
+  });
+
+  it('service card facts read only the customer’s own order for a title', async () => {
+    const panel = await fx.panel();
+    const me = await customer('900250');
+    const other = await customer('900251');
+    await liveService(me, panel);
+    const [mine] = await rows<{ order_id: string }>(
+      sql`SELECT order_id FROM services WHERE customer_id = ${me}`,
+    );
+    const reader = new DrizzleSupportContextReader(ctx.container.database.db);
+    const refs = [{ orderId: mine?.order_id ?? '', productId: null }];
+    expect((await reader.serviceCardFacts(tenantA, me, refs))[0]?.title).toBe('plan');
+    expect((await reader.serviceCardFacts(tenantA, other, refs))[0]?.title).toBeNull();
+  });
+
+  it('live services come first: newer TERMINATED ones cannot push an ACTIVE one out of the ten', async () => {
+    const panel = await fx.panel();
+    const me = await customer('900260');
+    const active = await liveService(me, panel);
+    await run(
+      sql`UPDATE services SET created_at = now() - interval '30 days' WHERE id = ${active}`,
+    );
+    for (let i = 0; i < 11; i += 1) await liveService(me, panel, { state: 'TERMINATED' });
+    const built = await ctx.container.supportContext.build(tenantA, me);
+    expect(built.payload.services).toHaveLength(10);
+    expect(built.references.services.get('S1')).toBe(active);
+    expect(built.payload.services[0]?.state).toBe('ACTIVE');
+    expect(built.payload.services.slice(1).every((s) => s.state === 'TERMINATED')).toBe(true);
   });
 
   it('measures one full build: statements and wall time (recorded in the TB3 doc, not asserted)', async () => {

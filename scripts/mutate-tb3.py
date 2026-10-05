@@ -27,13 +27,15 @@ M=[
  # The tenant filter on incidents.
  ('TB3-03',[(READER,"       WHERE i.tenant_id = ${tenantId}\n","       WHERE ${tenantId}::uuid IS NOT NULL\n")],T_I,'every reader puts the tenant'),
  # The refunded-away filter (WP19), in the one customer page the builder reads.
- ('TB3-04',[(SERVICES,"      eq(services.customerId, customerId),\n      notRefundedAway(),\n    );\n    const [counted]","      eq(services.customerId, customerId),\n    );\n    const [counted]")],T_I,'refunded away'),
+ # (Review: re-anchored on `supportServicesForCustomer`, the read the builder now makes.)
+ ('TB3-04',[(SERVICES,"          notRefundedAway(),\n        ),\n      )\n      .orderBy(\n        sql`CASE","        ),\n      )\n      .orderBy(\n        sql`CASE")],T_I,'refunded away'),
  # underReview: the customer-signal arm of PENDING dropped.
  ('TB3-05',[(READER,"        AND (${payments.customerSignalledAt} IS NOT NULL\n             OR ${payments.providerReviewStartedAt} IS NOT NULL))","        AND (${payments.providerReviewStartedAt} IS NOT NULL))")],T_I,'under review: UNKNOWN'),
  # underReview: the UNKNOWN arm dropped.
  ('TB3-06',[(READER,"    ${paymentOpsQueueCondition('UNKNOWN')}\n    OR (","    false\n    OR (")],T_I,'under review: UNKNOWN'),
  # The flag over ALL payments becomes the first row's own verdict.
- ('TB3-07',[(READER,"sql<boolean>`bool_or(${underReview}) OVER ()`","sql<boolean>`${underReview}`")],T_I,'reads ALL payments'),
+ # (Review item 9: the flag is now its own LIMIT 1 statement; reverted to the shown rows' verdict.)
+ ('TB3-07',[(READER,"      anyUnderReview: anyRows.length > 0,","      anyUnderReview: rows.some((row) => row.underReview === true),")],T_I,'reads ALL payments'),
  # The allowlist: the contract admits a subscription URL and the builder emits it.
  ('TB3-08',[(CONTRACT,"    hasSubscriptionLink: z.boolean(),\n","    hasSubscriptionLink: z.boolean(),\n    subscriptionUrl: z.string().nullable(),\n"),
             (BUILDER,"    unreconciled: service.state === 'UNRECONCILED',\n","    unreconciled: service.state === 'UNRECONCILED',\n    subscriptionUrl: service.subscriptionUrl,\n")],T_I,'gives the exact customer'),
@@ -47,6 +49,27 @@ M=[
  ('TB3-12',[(READER,"                                   AND l.panel_id = s.panel_id))))","                                   ))))")],T_I,'agrees with the notice audience'),
  # Truncation drops from the HEAD of a family instead of the tail.
  ('TB3-13',[(DOMAIN,"current[family].slice(0, -1)","current[family].slice(1)")],T_U,'drops whole entries from the tail'),
+ # --- Substitute review of PR #198 -----------------------------------------------------
+ # 1. References built from every id, not from the aliases that survived the byte budget.
+ ('TB3-14',[(BUILDER,"        services: survivingReferences('S', ids.services, parsed.services),","        services: new Map(ids.services.map((id, index) => [aliasFor('S', index), id])),")],T_I,'references hold only the aliases'),
+ # 2. The incident match's customer filter.
+ ('TB3-15',[(READER,"              AND s.customer_id = ${customerId}\n","              AND ${customerId}::uuid IS NOT NULL\n")],T_I,'reaches only the customer with a live service'),
+ # 3. The live-state rule of the incident match.
+ ('TB3-16',[(READER,"              AND s.state IN ('ACTIVE', 'SUSPENDED')\n","")],T_I,'agrees with the notice audience'),
+ # 4a. PARTIAL/LATE_COMPLETION on a CONFIRMED payment.
+ ('TB3-17',[(READER,"        AND ${payments.state} <> 'CONFIRMED'\n","")],T_I,'gateway facets'),
+ # 4b. The provider-review half of the PENDING arm.
+ ('TB3-18',[(READER,"        AND (${payments.customerSignalledAt} IS NOT NULL\n             OR ${payments.providerReviewStartedAt} IS NOT NULL))","        AND (${payments.customerSignalledAt} IS NOT NULL))")],T_I,'gateway facets'),
+ # 4c. A refund already started takes the payment out of review.
+ ('TB3-19',[(READER,"        AND NOT ${paymentOpsQueueCondition('REFUND_RELATED')})","        )")],T_I,'gateway facets'),
+ # 5. The DRAFT exclusion.
+ ('TB3-20',[(READER,"          ne(orders.state, 'DRAFT'),\n","")],T_I,'a DRAFT is not in the context'),
+ # 6. The client-app relevance filter.
+ ('TB3-21',[(BUILDER,"row.status === 'ENABLED' && isClientAppRelevant(row, facts)","row.status === 'ENABLED'")],T_I,'restricted to another provider'),
+ # 8. The order filter of the service-card facts.
+ ('TB3-22',[(READER,"o.tenant_id = ${tenantId} AND o.customer_id = ${customerId} AND o.id","o.tenant_id = ${tenantId} AND o.id")],T_I,'own order for a title'),
+ # 11. Live services first in the bounded read.
+ ('TB3-23',[(SERVICES,"        sql`CASE WHEN ${services.state} = 'TERMINATED' THEN 1 ELSE 0 END`,\n","")],T_I,'live services come first'),
 ]
 
 def build(pkg):
