@@ -46,9 +46,9 @@ the two meet.
 `support_learning_jobs` (`0207`). A job names ONE human reply: a `business_outbound_messages` row
 of origin `OPERATOR` or `ASSIST`, `DELIVERED`, with its text still held, in that conversation.
 
-| Trigger             | When                                                                                                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `HANDBACK`          | An operator returns a conversation to the AI («سپردن دوباره به هوش مصنوعی»). Inside the resume's transaction, the latest eligible reply is enqueued. Never throws. |
+| Trigger             | When                                                                                                                                                                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HANDBACK`          | An operator returns a conversation to the AI («سپردن دوباره به هوش مصنوعی»). Inside the resume's transaction, the latest eligible reply is enqueued. Never throws.                                                                            |
 | `OPERATOR_PROPOSAL` | An operator presses «پیشنهاد به‌عنوان دانش» on one of THEIR delivered replies (`support_knowledge.propose`); another person's reply needs `support_knowledge.review`, and that refusal is audited as the review permission's denial. Audited. |
 
 Bounds, all counted in the enqueuing transaction, under the tenant's learning-enqueue lock
