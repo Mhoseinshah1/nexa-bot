@@ -54,6 +54,11 @@ jobs:
     # hosted runners until this one has proved the runner.
     runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 20
+    # The runner host's default V8 heap limit (~1.95 GB) is below what
+    # `tsc -p tsconfig.tests.json` needs: the pilot's first run died there with
+    # "JavaScript heap out of memory" (exit 134). Scoped to this job only.
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
     steps:
       # Pinned to an immutable commit. A tag is a moving pointer that whoever
       # controls the action's repository can repoint at any time, and CI runs
