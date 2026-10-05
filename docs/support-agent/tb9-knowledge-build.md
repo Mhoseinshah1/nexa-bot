@@ -39,7 +39,7 @@ A tutorial is persisted RAW: it declares no placeholder, so nothing is rendered 
 
 ## The change-set
 
-`support_knowledge_builds` and `support_knowledge_build_proposals` (migration `0208`). A run:
+`support_knowledge_builds` and `support_knowledge_build_proposals` (migration `0209`). A run:
 
 1. reads the sources outside any transaction;
 2. in ONE transaction, reads every `NEXA_BUILD` article, diffs, supersedes the tenant's open
@@ -109,7 +109,7 @@ the counts, each change with the current text beside the proposed one, «اعم�
 2. **A source that disappears leaves its article.** The build proposes no removal; retiring a
    built article is a reviewer's act (OQ-TB-62).
 3. **No new permission.** Running, applying and resolving are `support_knowledge.review`
-   (ADR-0035 §5); viewing is `.view`. No grants migration (`0209` unused).
+   (ADR-0035 §5); viewing is `.view`. No grants migration.
 4. **The build is synchronous.** It reads at most 400 bounded items with no provider call, so
    it runs in the request; no job and no process role.
 5. **Payment instructions with placeholders are skipped**, not rendered with sample values.
