@@ -117,4 +117,9 @@ Notes:
   index on `(tenant_id, normalized_title)` is partial (`WHERE reject_reason IS DISTINCT FROM
 'SENSITIVE_CONTENT'`). `0208` is unchanged.
 
-RESULT_PLACEHOLDER
+**59 of 59 killed** — the whole driver, TB8-01..31 included, on the fixed head; every kill is
+a failed assertion of the named test (the driver prints it). The first run was 57 of 58: TB8-53
+SURVIVED, because the payload-mismatch test reused the key in ANOTHER conversation, so a hash
+still carrying the conversation told the two requests apart without the reply; the test now
+proposes a second reply of the same conversation. TB8-10 reported `ANCHOR MISSING` (not run)
+because its check moved into `assertClean`; its anchor followed it, and it kills.
