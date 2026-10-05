@@ -1065,6 +1065,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
   'bot.service.delivered_qr_caption':
     '📷 کد QR لینک اتصال شما. جزئیات سرویس در پیام بعدی آمده است.',
+  'bot.service.link_qr_caption':
+    '📷 کد QR لینک اتصال بالا. می‌توانید آن را در برنامهٔ خود اسکن کنید.',
   'bot.service.tutorial_button': '📚 مشاهده آموزش استفاده',
   'bot.service.connected_button': '🥰 وصل شدم',
   'bot.service.problem_button': '😐 مشکل دارم',
