@@ -420,7 +420,7 @@ export function BusinessChatDetailPage({
   id: string;
   denied: boolean;
   mayReply: boolean;
-  /** TB8: draws «پیشنهاد به‌عنوان دانش» on delivered replies. Courtesy only. */
+  /** TB8: draws "propose as knowledge" on delivered replies. Courtesy only. */
   mayPropose?: boolean;
   /** TB5: draws the Assist panel. Courtesy only — the server charges `support_ai.assist`. */
   mayAssist?: boolean;

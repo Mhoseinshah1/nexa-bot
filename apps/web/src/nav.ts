@@ -181,7 +181,7 @@ export const NAV: readonly NavEntry[] = [
   {
     // TB8: the lessons the support AI proposed from human replies, waiting for a reviewer.
     id: 'learning-candidates',
-    path: '/support-knowledge/candidates',
+    path: '/support-learning',
     label: 'web.nav_learning_candidates',
     icon: 'check',
     permission: 'support_knowledge.view',

@@ -167,7 +167,7 @@ Approved candidates and every article and revision are kept.
   filters, create (publish or draft), edit (the drawer says an approved edit is a new
   revision), publish, enable/disable, retire, and the revision history with the live revision
   marked.
-- **«پیشنهادهای یادگیری»** (`/support-knowledge/candidates`): the queue by state (PENDING by
+- **«پیشنهادهای یادگیری»** (`/support-learning`): the queue by state (PENDING by
   default), approve, «ویرایش و تأیید» (the EDITED text is what is sent), reject. An auto-rejected
   candidate shows only the kinds found. A purged candidate cannot be approved as is.
 - **«پیشنهاد به‌عنوان دانش»** on each delivered operator or Assist reply of a business

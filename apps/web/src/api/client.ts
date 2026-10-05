@@ -4473,7 +4473,7 @@ export function rejectLearningCandidate(input: {
   return post(SUPPORT_KNOWLEDGE_ROUTES.reject(id), body, supportLearningCandidateViewSchema);
 }
 
-/** «پیشنهاد به‌عنوان دانش» on one delivered reply. Creates a learning job, never knowledge. */
+/** "Propose as knowledge" on one delivered reply. Creates a learning job, never knowledge. */
 export function proposeAsKnowledge(input: {
   readonly conversationId: string;
   readonly outboundId: string;

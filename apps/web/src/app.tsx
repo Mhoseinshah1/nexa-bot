@@ -194,7 +194,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/support-ai',
   // TB8: support knowledge and the learning-candidate queue.
   '/support-knowledge',
-  '/support-knowledge/candidates',
+  '/support-learning',
   '/payments',
   '/payments/:id',
   '/compensations',
@@ -645,7 +645,7 @@ export function resolve(
       title: t('web.sk_title'),
     };
   }
-  if (route.path === '/support-knowledge/candidates') {
+  if (route.path === '/support-learning') {
     return {
       element: (
         <LearningCandidatesPage

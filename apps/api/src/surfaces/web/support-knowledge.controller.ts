@@ -156,7 +156,7 @@ export class SupportKnowledgeController {
     );
   }
 
-  /** «پیشنهاد به‌عنوان دانش» on one delivered reply of a business conversation. */
+  /** "Propose as knowledge" on one delivered reply of a business conversation. */
   @Post(routePattern(SUPPORT_KNOWLEDGE_ROUTES.propose, 'conversationId'))
   async propose(
     @Req() request: FastifyRequest,

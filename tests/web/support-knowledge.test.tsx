@@ -409,10 +409,8 @@ describe('navigation', () => {
     expect(resolve({ path: '/support-knowledge', query: new URLSearchParams() }, view).title).toBe(
       t('web.sk_title'),
     );
-    const element = resolve(
-      { path: '/support-knowledge/candidates', query: new URLSearchParams() },
-      view,
-    ).element as { props: { denied: boolean; mayReview: boolean } };
+    const element = resolve({ path: '/support-learning', query: new URLSearchParams() }, view)
+      .element as { props: { denied: boolean; mayReview: boolean } };
     expect(element.props).toMatchObject({ denied: false, mayReview: false });
   });
 });

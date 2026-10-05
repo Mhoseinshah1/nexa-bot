@@ -159,7 +159,7 @@ function formOf(content: {
     title: content.title,
     body: content.body ?? '',
     category: content.category,
-    tags: content.tags.join('، '),
+    tags: content.tags.join(PERSIAN_COMMA_SPACE),
   };
 }
 
@@ -168,7 +168,7 @@ export function contentOf(form: ContentForm): SupportKnowledgeContent | null {
   const title = form.title.trim();
   const body = form.body.trim();
   const tags = form.tags
-    .split(/[,،]/u)
+    .split(/[,\u060C]/u)
     .map((tag) => tag.trim())
     .filter((tag) => tag.length > 0);
   if (title === '' || body === '') return null;
@@ -246,6 +246,9 @@ type Editor =
   | { readonly kind: 'edit'; readonly basis: SupportKnowledgeArticleView };
 
 type AnyFilter<T extends string> = T | 'ALL';
+
+/** The Arabic comma and a space: how a Persian list is joined. Escaped, not typed. */
+const PERSIAN_COMMA_SPACE = '\u060C ';
 
 // ---------------------------------------------------------------------------
 // The knowledge page
@@ -382,7 +385,7 @@ export function SupportKnowledgePage({
       key: 'state',
       header: t('web.sk_col_state'),
       render: (row) => (
-        <span data-article-state={row.state}>
+        <span data-lifecycle={row.state}>
           <Badge tone={STATE_TONES[row.state]} dot>
             {t(KNOWLEDGE_STATE_LABELS[row.state])}
           </Badge>{' '}
@@ -735,7 +738,9 @@ export function LearningCandidatesPage({
             <span className="stack">
               <Badge tone="danger">{t('web.sk_cand_auto_rejected')}</Badge>
               <span className="muted">
-                {row.sensitiveKinds.map((kind) => t(SENSITIVE_LABELS[kind])).join('، ')}
+                {row.sensitiveKinds
+                  .map((kind) => t(SENSITIVE_LABELS[kind]))
+                  .join(PERSIAN_COMMA_SPACE)}
               </span>
             </span>
           )}
