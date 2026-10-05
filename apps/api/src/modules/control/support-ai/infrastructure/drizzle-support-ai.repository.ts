@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import {
   SUPPORT_AI_BREAKER_OPEN_MS,
   SUPPORT_AI_BREAKER_THRESHOLD,
@@ -26,6 +26,18 @@ import type { SupportAiCredential } from '../application/ports.js';
 function exec(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
+
+/** One tenant's one provider's row, AT the key version a call was made with. */
+function sameKey(tenantId: string, provider: SupportAiProvider, keySetAt: Date) {
+  return and(
+    eq(supportAiProviderCredentials.tenantId, tenantId),
+    eq(supportAiProviderCredentials.provider, provider),
+    eq(supportAiProviderCredentials.apiKeySetAt, keySetAt),
+  );
+}
+
+/** A decrypted key together with the version (`api_key_set_at`) it was read at. */
+export type SupportAiReadCredential = SupportAiCredential & { readonly keySetAt: Date };
 
 export interface SupportAiCredentialState {
   readonly provider: SupportAiProvider;
@@ -77,11 +89,17 @@ export class DrizzleSupportAiCredentialStore {
     }));
   }
 
-  /** The decrypted key, scoped by tenant AND provider, or null when none is set. */
+  /**
+   * The decrypted key, scoped by tenant AND provider, or null when none is set.
+   *
+   * `keySetAt` is the key's VERSION: every write that follows a call made with this key names
+   * it (`recordResult`, `markRejected`, `clearRejected`, `claimProbe`), so a slow call holding
+   * an old key can neither reject nor trip the key an operator has set since.
+   */
   async read(
     scope: ScopeContext,
     provider: SupportAiProvider,
-  ): Promise<SupportAiCredential | null> {
+  ): Promise<SupportAiReadCredential | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.db
       .select({
@@ -89,6 +107,7 @@ export class DrizzleSupportAiCredentialStore {
         ciphertext: supportAiProviderCredentials.apiKeyCiphertext,
         keyId: supportAiProviderCredentials.apiKeyKeyId,
         region: supportAiProviderCredentials.region,
+        keySetAt: supportAiProviderCredentials.apiKeySetAt,
       })
       .from(supportAiProviderCredentials)
       .where(
@@ -103,7 +122,11 @@ export class DrizzleSupportAiCredentialStore {
       { keyId: row.keyId, ciphertext: row.ciphertext },
       { purpose: 'support_ai_provider.api_key', tenantId, entityId: row.id },
     );
-    return { apiKey, region: row.region as SupportAiCredential['region'] };
+    return {
+      apiKey,
+      region: row.region as SupportAiCredential['region'],
+      keySetAt: row.keySetAt,
+    };
   }
 
   /**
@@ -199,19 +222,19 @@ export class DrizzleSupportAiCredentialStore {
    * The breaker (ADR-0034 §3, state HERE — TB0 review F4). A success closes it; a transient
    * failure counts, and the THRESHOLD-th consecutive one opens it for
    * `SUPPORT_AI_BREAKER_OPEN_MS`. One conditional statement each, so two replicas recording at
-   * once still count correctly. Returns the state after the write.
+   * once still count correctly. Returns the state after the write, or null when the key the
+   * call was made with is no longer the stored one — a replaced key starts with a closed
+   * breaker, and an old key's failure is not its failure.
    */
   async recordResult(
     scope: ScopeContext,
     provider: SupportAiProvider,
+    keySetAt: Date,
     result: 'SUCCESS' | 'TRANSIENT_FAILURE',
     now: Date,
   ): Promise<{ readonly trippedUntil: Date | null; readonly consecutiveFailures: number } | null> {
     const tenantId = requireTenantId(scope);
-    const where = and(
-      eq(supportAiProviderCredentials.tenantId, tenantId),
-      eq(supportAiProviderCredentials.provider, provider),
-    );
+    const where = sameKey(tenantId, provider, keySetAt);
     const openUntil = new Date(now.getTime() + SUPPORT_AI_BREAKER_OPEN_MS);
     const [row] =
       result === 'SUCCESS'
@@ -242,11 +265,13 @@ export class DrizzleSupportAiCredentialStore {
 
   /**
    * Marks the key REJECTED. True only on the transition into rejected (null → set): the one
-   * moment `credential_rejected` is raised.
+   * moment `credential_rejected` is raised. Only the key the call was made with: a slow call
+   * holding a replaced key never rejects the new one.
    */
   async markRejected(
     scope: ScopeContext,
     provider: SupportAiProvider,
+    keySetAt: Date,
     now: Date,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
@@ -254,20 +279,20 @@ export class DrizzleSupportAiCredentialStore {
       .update(supportAiProviderCredentials)
       .set({ rejectedAt: now, updatedAt: now })
       .where(
-        and(
-          eq(supportAiProviderCredentials.tenantId, tenantId),
-          eq(supportAiProviderCredentials.provider, provider),
-          isNull(supportAiProviderCredentials.rejectedAt),
-        ),
+        and(sameKey(tenantId, provider, keySetAt), isNull(supportAiProviderCredentials.rejectedAt)),
       )
       .returning({ id: supportAiProviderCredentials.id });
     return rows.length > 0;
   }
 
-  /** Clears a rejection. True only on the transition out of rejected: the one recovery. */
+  /**
+   * Clears a rejection. True only on the transition out of rejected: the one recovery. Only
+   * for the key the call was made with.
+   */
   async clearRejected(
     scope: ScopeContext,
     provider: SupportAiProvider,
+    keySetAt: Date,
     now: Date,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
@@ -276,9 +301,59 @@ export class DrizzleSupportAiCredentialStore {
       .set({ rejectedAt: null, updatedAt: now })
       .where(
         and(
-          eq(supportAiProviderCredentials.tenantId, tenantId),
-          eq(supportAiProviderCredentials.provider, provider),
+          sameKey(tenantId, provider, keySetAt),
           isNotNull(supportAiProviderCredentials.rejectedAt),
+        ),
+      )
+      .returning({ id: supportAiProviderCredentials.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * Whether THIS key is rejected: `REJECTED`, `ACCEPTED`, or null when the key is no longer
+   * the stored one. Read by the alert's self-healing path, which must never act for a key an
+   * operator has since replaced.
+   */
+  async rejection(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+    keySetAt: Date,
+  ): Promise<'REJECTED' | 'ACCEPTED' | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select({ rejectedAt: supportAiProviderCredentials.rejectedAt })
+      .from(supportAiProviderCredentials)
+      .where(sameKey(tenantId, provider, keySetAt))
+      .limit(1);
+    if (row === undefined) return null;
+    return row.rejectedAt === null ? 'ACCEPTED' : 'REJECTED';
+  }
+
+  /**
+   * Claims the breaker's half-open probe. After the open window a provider gets exactly ONE
+   * trial call: this pushes `tripped_until` forward by another window, conditionally on it
+   * having passed, so of any number of concurrent callers (on any number of replicas) one
+   * row-update succeeds and every other caller still sees the breaker open. The probe's own
+   * result then closes it (`recordResult` SUCCESS) or re-opens it.
+   */
+  async claimProbe(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+    keySetAt: Date,
+    now: Date,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .update(supportAiProviderCredentials)
+      .set({
+        trippedUntil: new Date(now.getTime() + SUPPORT_AI_BREAKER_OPEN_MS),
+        updatedAt: now,
+      })
+      .where(
+        and(
+          sameKey(tenantId, provider, keySetAt),
+          isNotNull(supportAiProviderCredentials.trippedUntil),
+          lte(supportAiProviderCredentials.trippedUntil, now),
         ),
       )
       .returning({ id: supportAiProviderCredentials.id });

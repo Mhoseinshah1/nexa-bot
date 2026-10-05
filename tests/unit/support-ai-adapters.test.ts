@@ -3,7 +3,15 @@ import type { SupportAiOutcomeKind } from '@nexa/contracts';
 import { AnthropicAdapter } from '../../apps/api/src/infrastructure/ai/anthropic-adapter';
 import { OpenAiAdapter } from '../../apps/api/src/infrastructure/ai/openai-adapter';
 import { ZaiAdapter, ZAI_BASE_URLS } from '../../apps/api/src/infrastructure/ai/zai-adapter';
-import { retryAfterMsOf } from '../../apps/api/src/infrastructure/ai/ai-http';
+import {
+  AI_OUTPUT_TOKEN_BUDGET_MAX,
+  AI_OUTPUT_TOKEN_HEADROOM,
+  AI_RESPONSE_MAX_BYTES,
+  aiHttpRequest,
+  outputTokenBudget,
+  retryAfterMsOf,
+} from '../../apps/api/src/infrastructure/ai/ai-http';
+import { withinTransaction } from '../../apps/api/src/infrastructure/transaction-boundary';
 import type {
   SupportAiAdapter,
   SupportAiRequest,
@@ -24,6 +32,8 @@ interface Wire {
   readonly ok: (json: unknown) => Fixture;
   readonly refusal: Fixture;
   readonly truncated: Fixture;
+  /** Truncated, yet the text that did arrive PARSES: only the stop reason says it is cut. */
+  readonly truncatedParseable: Fixture;
   readonly notJson: Fixture;
   readonly authFailed: Fixture;
   readonly quota: Fixture;
@@ -62,6 +72,18 @@ const openAiWire: Wire = {
       model: 'm',
       choices: [
         { finish_reason: 'length', message: { content: '{"decision":"RE', refusal: null } },
+      ],
+    },
+  },
+  truncatedParseable: {
+    status: 200,
+    body: {
+      model: 'm',
+      choices: [
+        {
+          finish_reason: 'length',
+          message: { content: '{"decision":"REPLY","text":"سل"}', refusal: null },
+        },
       ],
     },
   },
@@ -132,6 +154,14 @@ const anthropicWire: Wire = {
       content: [{ type: 'text', text: '{"decision"' }],
     },
   },
+  truncatedParseable: {
+    status: 200,
+    body: {
+      model: 'm',
+      stop_reason: 'max_tokens',
+      content: [{ type: 'text', text: '{"decision":"REPLY","text":"سل"}' }],
+    },
+  },
   notJson: {
     status: 200,
     body: { model: 'm', stop_reason: 'end_turn', content: [{ type: 'text', text: 'not json' }] },
@@ -177,6 +207,15 @@ const zaiWire: Wire = {
   truncated: {
     status: 200,
     body: { model: 'm', choices: [{ finish_reason: 'length', message: { content: '{"de' } }] },
+  },
+  truncatedParseable: {
+    status: 200,
+    body: {
+      model: 'm',
+      choices: [
+        { finish_reason: 'length', message: { content: '{"decision":"REPLY","text":"سل"}' } },
+      ],
+    },
   },
   notJson: {
     status: 200,
@@ -254,6 +293,7 @@ describe.each(suites)('the $name adapter honours the provider contract', ({ wire
   it.each([
     ['refusal', 'REFUSED_BY_PROVIDER'],
     ['truncated', 'INVALID_OUTPUT'],
+    ['truncatedParseable', 'INVALID_OUTPUT'],
     ['notJson', 'INVALID_OUTPUT'],
     ['overloaded', 'TEMPORARY'],
   ] as const)('maps %s to %s', async (fixture, expected: SupportAiOutcomeKind) => {
@@ -302,6 +342,18 @@ describe.each(suites)('the $name adapter honours the provider contract', ({ wire
     expect(down.outcome).toBe('TEMPORARY');
   });
 
+  // Substitute review of PR #199: a proxy's HTML page on a 200 is not the provider answering.
+  it('reads a 200 whose body is not JSON as TEMPORARY, never INVALID_OUTPUT', async () => {
+    const { outcome } = await run({ status: 200, body: '<html><body>Gateway</body></html>' });
+    expect(outcome).toMatchObject({ outcome: 'TEMPORARY' });
+  });
+
+  it('never calls a connection test that met a non-JSON 200 a success', async () => {
+    const fetch = fetchAnswering({ status: 200, body: '<html>captive portal</html>' });
+    const outcome = await make(fetch).testConnection({ apiKey: KEY, region: null }, 'm', 1000);
+    expect(outcome.outcome).toBe('TEMPORARY');
+  });
+
   it('sends the key only in a header, never follows a redirect, and never puts the key in the URL', async () => {
     const { fetch } = await run(wire.ok(decision));
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
@@ -326,8 +378,44 @@ describe('provider-specific wire details', () => {
       type: 'json_schema',
       json_schema: { strict: true, name: 'support_decision' },
     });
-    expect(body.max_completion_tokens).toBe(400);
+    expect(body.max_completion_tokens).toBe(outputTokenBudget(400));
     expect(body).not.toHaveProperty('max_tokens');
+  });
+
+  // Finding 5: reasoning and thinking tokens share the output budget; a budget sized to the
+  // reply alone truncates it, and a truncation stops the chain.
+  it('gives every adapter a bounded output headroom over the requested reply', async () => {
+    expect(outputTokenBudget(400)).toBe(400 + AI_OUTPUT_TOKEN_HEADROOM);
+    expect(outputTokenBudget(AI_OUTPUT_TOKEN_BUDGET_MAX - 10)).toBe(AI_OUTPUT_TOKEN_BUDGET_MAX);
+    expect(outputTokenBudget(AI_OUTPUT_TOKEN_BUDGET_MAX + 500)).toBe(
+      AI_OUTPUT_TOKEN_BUDGET_MAX + 500,
+    );
+    const sent = async (
+      adapter: (fetch: ReturnType<typeof fetchAnswering>) => SupportAiAdapter,
+      ok: Fixture,
+    ) => {
+      const fetch = fetchAnswering(ok);
+      await adapter(fetch).generate(
+        { apiKey: KEY, region: null },
+        { ...request, model: 'm', timeoutMs: 1000 },
+      );
+      return JSON.parse(String((fetch.mock.calls[0] as [string, RequestInit])[1].body)) as Record<
+        string,
+        unknown
+      >;
+    };
+    const budget = 400 + AI_OUTPUT_TOKEN_HEADROOM;
+    expect(
+      (await sent((fetch) => new AnthropicAdapter({ fetch }), anthropicWire.ok(decision)))
+        .max_tokens,
+    ).toBe(budget);
+    expect(
+      (await sent((fetch) => new OpenAiAdapter({ fetch }), openAiWire.ok(decision)))
+        .max_completion_tokens,
+    ).toBe(budget);
+    expect(
+      (await sent((fetch) => new ZaiAdapter({ fetch }), zaiWire.ok(decision))).max_tokens,
+    ).toBe(budget);
   });
 
   it('Anthropic sends output_config json_schema, the version header, and no forced tool', async () => {
@@ -381,5 +469,44 @@ describe('provider-specific wire details', () => {
     ).toBe(6000);
     expect(retryAfterMsOf(new Headers({}), 0)).toBeNull();
     expect(retryAfterMsOf(new Headers({ 'retry-after': 'soon' }), 0)).toBeNull();
+  });
+});
+
+describe('the AI HTTP sink', () => {
+  const get = {
+    method: 'GET' as const,
+    url: 'https://example.test/x',
+    headers: {},
+    timeoutMs: 1000,
+  };
+
+  it('refuses a body over the 1 MB cap as body_too_large, not as a timeout', async () => {
+    const big = vi.fn(async () => new Response('x'.repeat(AI_RESPONSE_MAX_BYTES + 1)));
+    expect(await aiHttpRequest(get, big)).toEqual({ kind: 'NETWORK', code: 'body_too_large' });
+    const fits = vi.fn(async () => new Response('x'.repeat(AI_RESPONSE_MAX_BYTES)));
+    expect((await aiHttpRequest(get, fits)).kind).toBe('RESPONSE');
+  });
+
+  it('labels a body that fails mid-read as a read failure, not as too large', async () => {
+    const broken = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"par'));
+              controller.error(new Error('connection reset'));
+            },
+          }),
+        ),
+    );
+    expect(await aiHttpRequest(get, broken)).toEqual({ kind: 'NETWORK', code: 'body_read_failed' });
+  });
+
+  it('refuses to run inside a database transaction, before any request is sent', async () => {
+    const fetch = vi.fn(async () => new Response('{}'));
+    await expect(withinTransaction('tenant:t', () => aiHttpRequest(get, fetch))).rejects.toThrow(
+      /inside a database transaction/u,
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

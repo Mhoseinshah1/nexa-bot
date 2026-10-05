@@ -37,6 +37,7 @@ import type {
   DrizzleSupportAiRunRecorder,
 } from '../infrastructure/drizzle-support-ai.repository.js';
 import type { SupportAiAdapter } from './ports.js';
+import { SupportAiCredentialAlert, credentialRejectedDedupeKey } from './credential-alert.js';
 
 export const SUPPORT_AI_CONFIGURE_PERMISSION = 'support_ai.configure' satisfies PermissionKey;
 export const SUPPORT_AI_AUTO_REPLY_PERMISSION = 'support_ai.auto_reply' satisfies PermissionKey;
@@ -60,6 +61,10 @@ export interface SupportAiConfigServiceDeps {
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
+  /** Whether a provider's credential alert is open, so it heals itself (`credential-alert`). */
+  readonly conditions: {
+    conditionIsOpen(scope: ScopeContext, dedupeKey: string): Promise<boolean>;
+  };
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -78,7 +83,11 @@ export interface SupportAiConfigServiceDeps {
  *   transaction and records a telemetry row and the outcome — never the key, never a body.
  */
 export class SupportAiConfigService {
-  constructor(private readonly deps: SupportAiConfigServiceDeps) {}
+  private readonly alert: SupportAiCredentialAlert;
+
+  constructor(private readonly deps: SupportAiConfigServiceDeps) {
+    this.alert = new SupportAiCredentialAlert(deps);
+  }
 
   async view(scope: ScopeContext, actor: ActorContext): Promise<SupportAiConfigResponse> {
     await this.deps.guard.check(scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION);
@@ -144,7 +153,7 @@ export class SupportAiConfigService {
     );
     if (replay) return replay.result;
 
-    return runAuthorizedMutation(
+    const mutation = runAuthorizedMutation(
       this.mutationDeps(),
       scope,
       actor,
@@ -196,6 +205,23 @@ export class SupportAiConfigService {
         return result;
       },
     );
+    try {
+      return await mutation;
+    } catch (error) {
+      // ENTERING automatic replies is charged its own CRITICAL permission inside the
+      // transaction, and its refusal leaves its own trail: a DENIED audit row and a denial event
+      // naming `support_ai.auto_reply`, recorded here once the transaction has unwound.
+      // `runAuthorizedMutation` records only the permission it is given (`configure`).
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        SUPPORT_AI_AUTO_REPLY_PERMISSION,
+        denial,
+        error,
+      );
+      throw error;
+    }
   }
 
   async setCredential(
@@ -218,11 +244,14 @@ export class SupportAiConfigService {
       entityId: provider,
     };
     await this.authorize(scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION, denial);
-    // The key is hashed into the idempotency record only as a digest, never stored readably.
+    // The key is NOT in the request hash: an unsalted digest of a key is a key-guessing oracle
+    // stored beside the row, and the repository never hashes a secret into idempotency
+    // (panel and gateway credentials hash only WHICH credential). The cost, accepted: a replay
+    // of one idempotency key with a DIFFERENT key value answers the first result instead of
+    // refusing; a corrected key is a new submission with a new idempotency key.
     const requestHash = hashRequest({
       command: 'support_ai.credential.set',
       provider,
-      apiKey: command.apiKey,
       region: command.region ?? null,
     });
     const replay = await this.deps.idempotency.find<{ readonly replaced: boolean }>(
@@ -349,6 +378,10 @@ export class SupportAiConfigService {
   /**
    * The operator's connection test. Authorised and scope-checked first, then the provider is
    * called outside any transaction, then the outcome is recorded.
+   *
+   * The recording is not in a transaction and does not re-read scope activity — a stated
+   * exception (`docs/conventions.md`): it writes only telemetry, the last test result and the
+   * credential alert about a call already made, and creates no business state.
    */
   async test(
     scope: ScopeContext,
@@ -396,22 +429,16 @@ export class SupportAiConfigService {
       now,
     });
     await this.deps.credentials.recordTest(scope, provider, outcome.outcome, now);
-    if (
-      outcome.outcome === 'OK' &&
-      (await this.deps.credentials.clearRejected(scope, provider, now))
-    ) {
-      await this.closeRejection(scope, provider);
-    }
-    if (
-      outcome.outcome === 'AUTH_FAILED' &&
-      (await this.deps.credentials.markRejected(scope, provider, now))
-    ) {
-      await this.deps.opsLog.record(scope, {
-        code: SUPPORT_AI_CREDENTIAL_REJECTED_CODE,
-        severity: 'ERROR',
+    const keySetAt = credential.keySetAt;
+    if (outcome.outcome === 'OK') await this.alert.accepted(scope, { provider, keySetAt, now });
+    if (outcome.outcome === 'AUTH_FAILED') {
+      await this.alert.rejected(scope, {
+        provider,
+        keySetAt,
+        quota: outcome.quota,
+        code: outcome.code,
         message: 'An AI provider rejected its key during a connection test.',
-        dedupeKey: `${SUPPORT_AI_CREDENTIAL_REJECTED_CODE}:${provider}`,
-        context: { provider, quota: outcome.quota, code: outcome.code },
+        now,
       });
     }
     return {
@@ -430,17 +457,16 @@ export class SupportAiConfigService {
   private async closeRejection(
     scope: ScopeContext,
     provider: SupportAiProvider,
-    tx?: unknown,
+    tx: unknown,
   ): Promise<void> {
     await this.deps.opsLog.record(
       scope,
       {
         code: SUPPORT_AI_CREDENTIAL_ACCEPTED_CODE,
         severity: 'INFO',
-        message:
-          'An AI provider key that had been rejected was replaced, removed or accepted again.',
+        message: 'An AI provider key that had been rejected was replaced or removed.',
         recoversCode: SUPPORT_AI_CREDENTIAL_REJECTED_CODE,
-        recoversDedupeKey: `${SUPPORT_AI_CREDENTIAL_REJECTED_CODE}:${provider}`,
+        recoversDedupeKey: credentialRejectedDedupeKey(provider),
         context: { provider },
       },
       tx,

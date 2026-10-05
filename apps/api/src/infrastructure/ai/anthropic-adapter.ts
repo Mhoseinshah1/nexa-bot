@@ -6,6 +6,8 @@ import type {
 } from '../../modules/control/support-ai/application/ports.js';
 import {
   aiHttpRequest,
+  nonJsonSuccess,
+  outputTokenBudget,
   parseJson,
   retryAfterMsOf,
   type AiFetch,
@@ -49,7 +51,7 @@ export class AnthropicAdapter implements SupportAiAdapter {
         timeoutMs: request.timeoutMs,
         body: {
           model: request.model,
-          max_tokens: request.maxOutputTokens,
+          max_tokens: outputTokenBudget(request.maxOutputTokens),
           system: request.system,
           messages: request.messages.map((message) => ({
             role: message.role,
@@ -83,7 +85,12 @@ export class AnthropicAdapter implements SupportAiAdapter {
       },
       this.options.fetch,
     );
-    if (result.kind === 'RESPONSE' && result.status >= 200 && result.status < 300) {
+    if (
+      result.kind === 'RESPONSE' &&
+      result.status >= 200 &&
+      result.status < 300 &&
+      nonJsonSuccess(result, parseJson(result.body), 'anthropic') === null
+    ) {
       return { outcome: 'OK', output: {}, usage: { inputTokens: null, outputTokens: null }, model };
     }
     return readMessage(result, this.options.now?.() ?? Date.now());
@@ -99,6 +106,8 @@ export function readMessage(result: AiHttpResult, nowMs: number): SupportAiOutco
   if (result.kind === 'NETWORK')
     return { outcome: 'TEMPORARY', code: `anthropic.network.${result.code}` };
   const body = parseJson(result.body) as Record<string, unknown> | null;
+  const notJson = nonJsonSuccess(result, body, 'anthropic');
+  if (notJson !== null) return notJson;
   const status = result.status;
   if (status < 200 || status >= 300) {
     const error = (body?.error ?? null) as Record<string, unknown> | null;

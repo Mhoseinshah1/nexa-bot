@@ -4,7 +4,13 @@ import type {
   SupportAiCredential,
   SupportAiRequest,
 } from '../../modules/control/support-ai/application/ports.js';
-import { aiHttpRequest, parseJson, type AiFetch } from './ai-http.js';
+import {
+  aiHttpRequest,
+  nonJsonSuccess,
+  outputTokenBudget,
+  parseJson,
+  type AiFetch,
+} from './ai-http.js';
 import { openAiMessages, readChatCompletion } from './openai-adapter.js';
 
 /**
@@ -57,7 +63,7 @@ export class ZaiAdapter implements SupportAiAdapter {
           messages: openAiMessages(request, system),
           response_format: { type: 'json_object' },
           thinking: { type: 'disabled' },
-          max_tokens: request.maxOutputTokens,
+          max_tokens: outputTokenBudget(request.maxOutputTokens),
         },
       },
       this.options.fetch,
@@ -94,7 +100,12 @@ export class ZaiAdapter implements SupportAiAdapter {
     );
     const zaiCode = businessCodeOf(result);
     if (zaiCode === '1113') return { outcome: 'AUTH_FAILED', quota: true, code: 'zai.1113' };
-    if (result.kind === 'RESPONSE' && result.status >= 200 && result.status < 300) {
+    if (
+      result.kind === 'RESPONSE' &&
+      result.status >= 200 &&
+      result.status < 300 &&
+      nonJsonSuccess(result, parseJson(result.body), 'zai') === null
+    ) {
       return { outcome: 'OK', output: {}, usage: { inputTokens: null, outputTokens: null }, model };
     }
     return readChatCompletion(result, this.options.now?.() ?? Date.now(), 'zai');

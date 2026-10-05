@@ -6,6 +6,8 @@ import type {
 } from '../../modules/control/support-ai/application/ports.js';
 import {
   aiHttpRequest,
+  nonJsonSuccess,
+  outputTokenBudget,
   parseJson,
   retryAfterMsOf,
   type AiFetch,
@@ -51,7 +53,7 @@ export class OpenAiAdapter implements SupportAiAdapter {
             type: 'json_schema',
             json_schema: { name: request.schemaName, schema: request.jsonSchema, strict: true },
           },
-          max_completion_tokens: request.maxOutputTokens,
+          max_completion_tokens: outputTokenBudget(request.maxOutputTokens),
         },
       },
       this.options.fetch,
@@ -115,6 +117,8 @@ export function readChatCompletion(
   if (result.kind === 'NETWORK')
     return { outcome: 'TEMPORARY', code: `${prefix}.network.${result.code}` };
   const body = parseJson(result.body) as Record<string, unknown> | null;
+  const notJson = nonJsonSuccess(result, body, prefix);
+  if (notJson !== null) return notJson;
   if (result.status < 200 || result.status >= 300)
     return statusOutcome(result, body, nowMs, prefix);
 
@@ -159,6 +163,8 @@ export function readListing(
   if (result.kind === 'NETWORK')
     return { outcome: 'TEMPORARY', code: `${prefix}.network.${result.code}` };
   const body = parseJson(result.body) as Record<string, unknown> | null;
+  const notJson = nonJsonSuccess(result, body, prefix);
+  if (notJson !== null) return notJson;
   if (result.status >= 200 && result.status < 300) {
     return { outcome: 'OK', output: {}, usage: { inputTokens: null, outputTokens: null }, model };
   }

@@ -5426,6 +5426,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
   const supportAiConfigs = new DrizzleSupportAiConfigRepository(database.db);
   const supportAiRuns = new DrizzleSupportAiRunRecorder(database.db);
+  const supportAiConditions = new DrizzleOperationalConditionReader(database.db);
   const supportAiConfig = new SupportAiConfigService({
     configs: supportAiConfigs,
     credentials: supportAiCredentials,
@@ -5438,6 +5439,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     sessions,
     idempotency,
     scopeActivity: tenants,
+    conditions: supportAiConditions,
     clock,
     ids,
   });
@@ -5446,7 +5448,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     credentials: supportAiCredentials,
     configs: supportAiConfigs,
     runs: supportAiRuns,
-    conditions: new DrizzleOperationalConditionReader(database.db),
+    conditions: supportAiConditions,
     opsLog,
     clock,
     ids,
