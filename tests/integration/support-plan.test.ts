@@ -99,8 +99,9 @@ describe('the support query plans', () => {
           );
           /*
            * One handoff and one job per conversation, at its own time — and written in
-           * time order, which is the order the application appends them in. Each statement
-           * below says so with its own ORDER BY. Without it the heap order is whatever plan
+           * time order, newest first, as `business_conversations` itself was generated
+           * above (the application appends oldest first, which clusters a window just the
+           * same). Each statement below says so with its own ORDER BY. Without it the heap order is whatever plan
            * the SELECT got: pg_statistic survives the reset's TRUNCATE, so an earlier file
            * that left `business_conversations` analysed with one row (tenant_id
            * n_distinct = -1) makes `tenant_id = $1` estimate ONE row here, and the scan is
