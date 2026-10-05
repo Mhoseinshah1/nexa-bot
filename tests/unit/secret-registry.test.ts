@@ -30,7 +30,9 @@ describe('the secret column registry', () => {
 
   it('covers every ciphertext column in the schema', () => {
     const declared = declaredCiphertextColumns(schema).sort();
-    const registered = SECRET_COLUMNS.map((column) => column.ciphertextColumn).sort();
+    // Two tables may share a physical column name (`api_key_ciphertext`: the payment gateway's
+    // and the support AI's keys), and `declared` is a set of names, so the registry is too.
+    const registered = [...new Set(SECRET_COLUMNS.map((column) => column.ciphertextColumn))].sort();
     expect(declared.length, 'the schema declares no ciphertext column at all').toBeGreaterThan(0);
     expect(registered).toEqual(declared);
   });

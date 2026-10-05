@@ -263,6 +263,10 @@ import {
   BUSINESS_OUTBOUND_ORIGINS,
   BUSINESS_OUTBOUND_STATES,
   BUSINESS_TAKEOVER_REASONS,
+  SUPPORT_AI_MODES,
+  SUPPORT_AI_OPERATIONS,
+  SUPPORT_AI_OUTCOMES,
+  SUPPORT_AI_PROVIDERS,
   OPS_LOG_TOPIC_STATES,
   // R2: the Telegram messages edited in place.
   TELEGRAM_WIZARD_KINDS,
@@ -13470,5 +13474,169 @@ export const businessOutboundMessages = pgTable(
     ),
     check('business_outbound_messages_attempts_check', sql`attempts >= 0`),
     check('business_outbound_messages_epoch_check', sql`control_epoch >= 0`),
+  ],
+);
+
+/**
+ * TB4 — a tenant's support-AI configuration (ADR-0034 §8). One row per tenant, created on the
+ * first save; a tenant with no row is `SUPPORT_AI_DEFAULT_CONFIG` — mode `OFF`. No migration
+ * inserts a row, and none ever sets `AUTO_REPLY_SAFE` (program §49).
+ *
+ * Optimistic per-row versioning (ADR-0021). Every bound the input schema applies is also a
+ * CHECK, so a writer that forgets the schema is still refused.
+ */
+export const supportAiConfigs = pgTable(
+  'support_ai_configs',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    mode: text('mode').notNull().default('OFF'),
+    primaryProvider: text('primary_provider'),
+    primaryModel: text('primary_model'),
+    /** Ordered `[{provider, model}]`, at most two, each a different provider. */
+    fallbacks: jsonb('fallbacks')
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    visionEnabled: boolean('vision_enabled').notNull().default(false),
+    timeoutMs: integer('timeout_ms').notNull(),
+    maxOutputChars: integer('max_output_chars').notNull(),
+    maxConsecutiveReplies: integer('max_consecutive_replies').notNull(),
+    cooldownSeconds: integer('cooldown_seconds').notNull(),
+    settleDelaySeconds: integer('settle_delay_seconds').notNull().default(6),
+    toneInstructions: text('tone_instructions').notNull().default(''),
+    updatedByAdminId: uuid('updated_by_admin_id'),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.updatedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'support_ai_configs_admin_fk',
+    }),
+    check('support_ai_configs_mode_check', enumCheck('mode', SUPPORT_AI_MODES)),
+    check(
+      'support_ai_configs_primary_provider_check',
+      enumCheck('primary_provider', SUPPORT_AI_PROVIDERS),
+    ),
+    check(
+      'support_ai_configs_primary_shape_check',
+      sql`(primary_provider IS NULL) = (primary_model IS NULL)`,
+    ),
+    // A mode that does AI work names a provider.
+    check(
+      'support_ai_configs_mode_provider_check',
+      sql`mode = 'OFF' OR primary_provider IS NOT NULL`,
+    ),
+    check(
+      'support_ai_configs_fallbacks_check',
+      sql`jsonb_typeof(fallbacks) = 'array' AND jsonb_array_length(fallbacks) <= 2`,
+    ),
+    check('support_ai_configs_timeout_check', sql`timeout_ms BETWEEN 5000 AND 120000`),
+    check('support_ai_configs_output_check', sql`max_output_chars BETWEEN 200 AND 4000`),
+    check('support_ai_configs_replies_check', sql`max_consecutive_replies BETWEEN 1 AND 20`),
+    check('support_ai_configs_cooldown_check', sql`cooldown_seconds BETWEEN 0 AND 3600`),
+    check('support_ai_configs_settle_check', sql`settle_delay_seconds BETWEEN 3 AND 30`),
+    check('support_ai_configs_tone_check', sql`length(tone_instructions) <= 2000`),
+    check('support_ai_configs_version_check', sql`version >= 1`),
+  ],
+);
+
+/**
+ * TB4 — one tenant's key for one AI provider (ADR-0023 to the letter, ADR-0034 §8).
+ *
+ * The key travels ONE way: written encrypted (`support_ai_provider.api_key`, AAD bound to this
+ * row's id), read in plaintext only by the adapter's call, and projected to every surface as
+ * `set_at` alone — no ciphertext, no masked stand-in. The three key columns are all null or
+ * all present.
+ *
+ * The circuit breaker's state lives HERE (TB0 review F4), never in `operational_events`, which
+ * only reports it.
+ */
+export const supportAiProviderCredentials = pgTable(
+  'support_ai_provider_credentials',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    provider: text('provider').notNull(),
+    apiKeyCiphertext: text('api_key_ciphertext').notNull(),
+    apiKeyKeyId: text('api_key_key_id').notNull(),
+    apiKeySetAt: timestamptz('api_key_set_at').notNull(),
+    /** `ZAI` only: which host the key belongs to. A closed choice, never a URL. */
+    region: text('region'),
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    trippedUntil: timestamptz('tripped_until'),
+    /**
+     * Set when the provider last REJECTED this key (`AUTH_FAILED`), cleared by its next answer.
+     * The transition null → set raises `credential_rejected`; set → null closes it — so the
+     * alert is raised once and closed once, never re-recorded on every call.
+     */
+    rejectedAt: timestamptz('rejected_at'),
+    lastTestOutcome: text('last_test_outcome'),
+    lastTestedAt: timestamptz('last_tested_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('support_ai_provider_credentials_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('support_ai_provider_credentials_provider_key').on(table.tenantId, table.provider),
+    check(
+      'support_ai_provider_credentials_provider_check',
+      enumCheck('provider', SUPPORT_AI_PROVIDERS),
+    ),
+    check(
+      'support_ai_provider_credentials_region_check',
+      sql`region IS NULL OR (provider = 'ZAI' AND region IN ('INTERNATIONAL', 'CHINA'))`,
+    ),
+    check(
+      'support_ai_provider_credentials_test_outcome_check',
+      enumCheck('last_test_outcome', SUPPORT_AI_OUTCOMES),
+    ),
+    check('support_ai_provider_credentials_failures_check', sql`consecutive_failures >= 0`),
+  ],
+);
+
+/**
+ * TB4 — one provider call (ADR-0034 §9). Telemetry only: provider, model, position in the
+ * fallback chain, latency, tokens, outcome. NEVER a prompt and never a response — those are a
+ * customer's conversation, and keeping them would be PII at rest with no owner.
+ */
+export const supportAiRuns = pgTable(
+  'support_ai_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    conversationId: uuid('conversation_id'),
+    operation: text('operation').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    attemptIndex: integer('attempt_index').notNull(),
+    latencyMs: integer('latency_ms').notNull(),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    outcome: text('outcome').notNull(),
+    failureCode: text('failure_code'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The usage summary: a tenant's runs in a window. */
+    index('support_ai_runs_tenant_created_idx').on(table.tenantId, table.createdAt),
+    foreignKey({
+      columns: [table.tenantId, table.conversationId],
+      foreignColumns: [businessConversations.tenantId, businessConversations.id],
+      name: 'support_ai_runs_conversation_fk',
+    }),
+    check('support_ai_runs_operation_check', enumCheck('operation', SUPPORT_AI_OPERATIONS)),
+    check('support_ai_runs_provider_check', enumCheck('provider', SUPPORT_AI_PROVIDERS)),
+    check('support_ai_runs_outcome_check', enumCheck('outcome', SUPPORT_AI_OUTCOMES)),
+    check('support_ai_runs_attempt_check', sql`attempt_index BETWEEN 0 AND 2`),
+    check('support_ai_runs_latency_check', sql`latency_ms >= 0`),
+    check('support_ai_runs_model_check', sql`length(model) BETWEEN 1 AND 128`),
   ],
 );

@@ -50,6 +50,11 @@
  * another administrator's row — or kept across a disable and a re-enrolment, which
  * mints a new row — recomputes a different context and fails authentication.
  */
+/*
+ * `support_ai_provider.api_key` is a tenant's key for one AI provider (TB4, ADR-0034 §8), on
+ * its `support_ai_provider_credentials` row; the entity is that row's id, so a key moved onto
+ * another provider's row — or another tenant's — fails authentication.
+ */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
   'panel.username',
@@ -59,6 +64,7 @@ export const SECRET_PURPOSES = [
   'payment_gateway.webhook_secret',
   'payment_gateway.verify_key',
   'admin.totp_secret',
+  'support_ai_provider.api_key',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

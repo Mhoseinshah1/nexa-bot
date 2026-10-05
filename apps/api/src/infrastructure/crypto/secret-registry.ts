@@ -7,6 +7,7 @@ import {
   botInstances,
   panelCredentials,
   paymentGatewayCredentials,
+  supportAiProviderCredentials,
 } from '../persistence/schema.js';
 
 /**
@@ -519,6 +520,62 @@ const adminTotpSecret: SecretColumn = {
   },
 };
 
+// TB4: a tenant's key for one AI provider (ADR-0034 §8).
+const supportAiProviderApiKey: SecretColumn = {
+  purpose: 'support_ai_provider.api_key',
+  table: 'support_ai_provider_credentials',
+  ciphertextColumn: 'api_key_ciphertext',
+  keyIdColumn: 'api_key_key_id',
+
+  async all(db) {
+    return db
+      .select({
+        ciphertext: supportAiProviderCredentials.apiKeyCiphertext,
+        keyId: supportAiProviderCredentials.apiKeyKeyId,
+      })
+      .from(supportAiProviderCredentials);
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: supportAiProviderCredentials.id })
+      .from(supportAiProviderCredentials)
+      .where(cursor === null ? undefined : gt(supportAiProviderCredentials.id, cursor))
+      .orderBy(asc(supportAiProviderCredentials.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: supportAiProviderCredentials.id,
+        tenantId: supportAiProviderCredentials.tenantId,
+        ciphertext: supportAiProviderCredentials.apiKeyCiphertext,
+        keyId: supportAiProviderCredentials.apiKeyKeyId,
+      })
+      .from(supportAiProviderCredentials)
+      .where(eq(supportAiProviderCredentials.id, id))
+      .for('update')
+      .limit(1);
+    return row ?? null;
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(supportAiProviderCredentials)
+      .set({ apiKeyCiphertext: next.ciphertext, apiKeyKeyId: next.keyId })
+      .where(
+        and(
+          eq(supportAiProviderCredentials.id, id),
+          eq(supportAiProviderCredentials.apiKeyCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: supportAiProviderCredentials.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
@@ -528,4 +585,5 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   paymentGatewayWebhookSecret,
   paymentGatewayVerifyKey,
   adminTotpSecret,
+  supportAiProviderApiKey,
 ];

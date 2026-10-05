@@ -439,6 +439,22 @@ an explicit refusal while a destructive recovery holds the installation, checked
 on arrival and again under the table lock. It creates no order, payment, service
 or operation, and holds no dependency that could.
 
+**A third exception: the support AI's call bookkeeping (TB4, ADR-0034).** Two
+paths write after an AI provider call without reading `ScopeActivityReader` in a
+transaction: `SupportAiChain` (a telemetry row per attempt, the credential row's
+breaker counters, `tripped_until` and `rejected_at`, and the provider alerts) and
+the operator's connection test in `SupportAiConfigService.test` (the same, plus
+the last test result). The provider call cannot sit inside a transaction
+(`assertOutsideTransaction` refuses it), and what is written afterwards is a
+record of a call ALREADY made: dropping it for a stopped tenant would leave a
+breaker that never counted and a rejected key nobody was told about. What bounds
+it: these writes are telemetry and credential health only — no message, no
+conversation state, no order, payment, service or operation — and every one is a
+single conditional statement bound to the key version it was called with. The
+decision to MAKE a call is not exempt: the connection test checks activity on
+arrival, and the chain's callers (TB5 drafts, TB7 automatic replies) own a
+business transaction that must check it before they call the chain.
+
 ---
 
 ## Idempotency keys are namespaced per surface

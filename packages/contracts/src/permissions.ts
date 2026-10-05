@@ -409,6 +409,20 @@ export const PERMISSIONS = [
   ),
 
   /*
+   * TB4 — the support AI (ADR-0034 §8). Configuring a provider stores a third party's key and
+   * spends money: HIGH. Letting the AI answer customers on its own is the owner's call alone:
+   * CRITICAL, granted to no role but `owner`, and it requires `configure`. Leaving
+   * `AUTO_REPLY_SAFE` needs only `configure` — turning safety on is never harder than turning
+   * it off. Usage and cost are read under `configure` (`tb0-audit.md` §7).
+   */
+  p(
+    'support_ai.configure',
+    'Configure the support AI: mode (except entering automatic replies), providers, keys, limits; view usage and cost',
+    'HIGH',
+  ),
+  p('support_ai.auto_reply', 'Allow the support AI to answer customers automatically', 'CRITICAL'),
+
+  /*
    * Campaigns (round N, C1, `docs/round-n-campaigns-audit.md` D10). A campaign composes
    * engines that already have their own permissions, and MANAGE is charged together with
    * each of those — a campaign is never a way to do what its operator could not do
@@ -884,6 +898,7 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'tickets.close': 'tickets.view',
   'tickets.categories.edit': 'tickets.view',
   'business_chats.reply': 'business_chats.view',
+  'support_ai.auto_reply': 'support_ai.configure',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass

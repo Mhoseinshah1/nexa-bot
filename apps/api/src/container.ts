@@ -585,6 +585,18 @@ import { BusinessConnectionService } from './modules/commerce/business-chats/app
 import { BusinessTransport } from './modules/commerce/business-chats/application/business-transport.js';
 import { DrizzleBusinessConnectionRepository } from './modules/commerce/business-chats/infrastructure/drizzle-business-connection.repository.js';
 import { TelegramBusinessGateway } from './modules/commerce/business-chats/infrastructure/telegram-business.gateway.js';
+import type { SupportAiProvider } from '@nexa/contracts';
+import { SupportAiChain } from './modules/control/support-ai/application/support-ai-chain.js';
+import { SupportAiConfigService } from './modules/control/support-ai/application/support-ai-config.service.js';
+import type { SupportAiAdapter } from './modules/control/support-ai/application/ports.js';
+import {
+  DrizzleSupportAiConfigRepository,
+  DrizzleSupportAiCredentialStore,
+  DrizzleSupportAiRunRecorder,
+} from './modules/control/support-ai/infrastructure/drizzle-support-ai.repository.js';
+import { OpenAiAdapter } from './infrastructure/ai/openai-adapter.js';
+import { AnthropicAdapter } from './infrastructure/ai/anthropic-adapter.js';
+import { ZaiAdapter } from './infrastructure/ai/zai-adapter.js';
 import { BusinessConversationService } from './modules/commerce/business-chats/application/business-conversation.service.js';
 import { BusinessOutboundService } from './modules/commerce/business-chats/application/business-outbound.service.js';
 import {
@@ -1129,6 +1141,9 @@ export interface Container {
   readonly businessOutboundLoop: BusinessOutboundLoop;
   /** TB3: the support agent's read-only, allowlisted context for one conversation. */
   readonly supportContext: SupportContextBuilder;
+  /** TB4: the support AI's configuration, keys and provider chain (ADR-0034). */
+  readonly supportAiConfig: SupportAiConfigService;
+  readonly supportAiChain: SupportAiChain;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
@@ -5397,6 +5412,49 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   /*
+   * TB4 (ADR-0034): the support AI's provider foundation. Three adapters behind one port,
+   * the tenant's configuration and keys, and the fallback chain with its breaker. Nothing
+   * here sends a customer anything; TB5 and TB7 are the callers.
+   */
+  const supportAiAdapters = new Map<SupportAiProvider, SupportAiAdapter>([
+    ['OPENAI', new OpenAiAdapter()],
+    ['ANTHROPIC', new AnthropicAdapter()],
+    ['ZAI', new ZaiAdapter()],
+  ]);
+  const supportAiCredentials = new DrizzleSupportAiCredentialStore(database.db, cipher, () =>
+    ids.uuid(),
+  );
+  const supportAiConfigs = new DrizzleSupportAiConfigRepository(database.db);
+  const supportAiRuns = new DrizzleSupportAiRunRecorder(database.db);
+  const supportAiConditions = new DrizzleOperationalConditionReader(database.db);
+  const supportAiConfig = new SupportAiConfigService({
+    configs: supportAiConfigs,
+    credentials: supportAiCredentials,
+    runs: supportAiRuns,
+    adapters: supportAiAdapters,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    conditions: supportAiConditions,
+    clock,
+    ids,
+  });
+  const supportAiChain = new SupportAiChain({
+    adapters: supportAiAdapters,
+    credentials: supportAiCredentials,
+    configs: supportAiConfigs,
+    runs: supportAiRuns,
+    conditions: supportAiConditions,
+    opsLog,
+    clock,
+    ids,
+  });
+
+  /*
    * TB2 (ADR-0033 §4–§8): conversations, the human takeover, and the outbound lane. The lane
    * is BUILT in every role and STARTED only by the worker, like the customer notification lane.
    */
@@ -6537,6 +6595,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     businessConversations,
     businessOutboundLoop,
     supportContext,
+    supportAiConfig,
+    supportAiChain,
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,

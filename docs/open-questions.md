@@ -3280,3 +3280,35 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
   never edits, so TB2 treats an edit as ours only when that field names our bot; the send
   record proves the message id, not the edit (TB2 review F3). Real-Telegram acceptance should
   confirm it. Until then, an owner's edit of our message is a human act, which fails safe.
+
+- **OQ-TB-20 — the provider fixtures are not yet proven against the real APIs.** The TB4
+  shapes come from Anthropic's official reference, OpenAI's official OpenAPI spec and SDK, and
+  Z.AI's official SDK plus search snippets of its documentation; `docs.z.ai` and
+  `developers.openai.com` were egress-blocked from the build session. Z.AI is the weakest
+  evidence: the error body shape, `retry-after`, base64 image input, native JSON-schema output
+  and a models endpoint are unconfirmed. Resolved by the opt-in acceptance in
+  `tb4-provider-foundation.md` §5, which corrects the fixture and the adapter in one commit.
+  Two more questions the acceptance must settle (substitute review of PR #199):
+  - **Anthropic quota as a 400.** An exhausted credit balance may arrive as a 400
+    `invalid_request_error` whose message reads "credit balance is too low", not as a 402 or
+    `billing_error`. Unconfirmed, so it is NOT mapped: today it is `INVALID_OUTPUT`, which stops
+    the chain and — since only a real `OK` clears a rejection — never closes a
+    `credential_rejected` alert either. The acceptance records the real shape; if it is a 400,
+    the mapping to `AUTH_FAILED` with `quota` is added with that fixture, in one commit.
+  - **Effort and thinking control.** Reasoning and thinking tokens share the output budget, so
+    a budget sized to the reply alone truncates it (`INVALID_OUTPUT`, the chain stops). TB4
+    sends no effort, reasoning or thinking field for OpenAI or Anthropic, because none is
+    proven against the real APIs; instead `outputTokenBudget` adds `AI_OUTPUT_TOKEN_HEADROOM`
+    (4 096) to the caller's figure, capped at `AI_OUTPUT_TOKEN_BUDGET_MAX` (8 192). Which
+    field controls effort per model, and whether the headroom suffices, is settled by the
+    acceptance run.
+- **OQ-TB-21 — the strict JSON-schema dialects differ.** OpenAI `strict` and Anthropic
+  `output_config` each accept a subset of JSON Schema, and the subsets differ. Every decision
+  schema the support AI sends is written in the intersection: closed objects, every property
+  required, and no numeric or length keywords. Zod enforces the rest locally. A schema that
+  needs more is a reason to add a per-adapter transform, not to drop validation.
+- **OQ-TB-22 — telling an Anthropic spend-cap 429 apart from a rate limit.** A spend-cap 429
+  has no `retry-after`, but a plain rate limit may lack it too, so the two cannot be told
+  apart reliably. Both are read as `RATE_LIMITED`. The breaker opens after three, and the
+  chain falls back, so this is fail-safe for customers. It may delay the operator learning
+  that a cap was hit.
