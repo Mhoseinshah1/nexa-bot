@@ -3288,6 +3288,20 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
   evidence: the error body shape, `retry-after`, base64 image input, native JSON-schema output
   and a models endpoint are unconfirmed. Resolved by the opt-in acceptance in
   `tb4-provider-foundation.md` §5, which corrects the fixture and the adapter in one commit.
+  Two more questions the acceptance must settle (substitute review of PR #199):
+  - **Anthropic quota as a 400.** An exhausted credit balance may arrive as a 400
+    `invalid_request_error` whose message reads "credit balance is too low", not as a 402 or
+    `billing_error`. Unconfirmed, so it is NOT mapped: today it is `INVALID_OUTPUT`, which stops
+    the chain and — since only a real `OK` clears a rejection — never closes a
+    `credential_rejected` alert either. The acceptance records the real shape; if it is a 400,
+    the mapping to `AUTH_FAILED` with `quota` is added with that fixture, in one commit.
+  - **Effort and thinking control.** Reasoning and thinking tokens share the output budget, so
+    a budget sized to the reply alone truncates it (`INVALID_OUTPUT`, the chain stops). TB4
+    sends no effort, reasoning or thinking field for OpenAI or Anthropic, because none is
+    proven against the real APIs; instead `outputTokenBudget` adds `AI_OUTPUT_TOKEN_HEADROOM`
+    (4 096) to the caller's figure, capped at `AI_OUTPUT_TOKEN_BUDGET_MAX` (8 192). Which
+    field controls effort per model, and whether the headroom suffices, is settled by the
+    acceptance run.
 - **OQ-TB-21 — the strict JSON-schema dialects differ.** OpenAI `strict` and Anthropic
   `output_config` each accept a subset of JSON Schema, and the subsets differ. Every decision
   schema the support AI sends is written in the intersection: closed objects, every property
