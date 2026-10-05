@@ -13405,10 +13405,11 @@ export const businessMessages = pgTable(
     check('business_messages_version_check', sql`content_version >= 1`),
     // A deleted message holds no text.
     check('business_messages_deleted_check', sql`deleted_at IS NULL OR text IS NULL`),
-    // TB6: a photo reference belongs only to a PHOTO, comes as a pair, and is bounded.
+    // TB6: a photo reference belongs only to a PHOTO, comes as a pair, is bounded, and its
+    // declared size never outlives it (PR #201 review, N4).
     check(
       'business_messages_photo_shape_check',
-      sql`(photo_file_id IS NULL) = (photo_file_unique_id IS NULL) AND (photo_file_id IS NULL OR kind = 'PHOTO')`,
+      sql`(photo_file_id IS NULL) = (photo_file_unique_id IS NULL) AND (photo_file_id IS NULL OR kind = 'PHOTO') AND (photo_file_size IS NULL OR photo_file_id IS NOT NULL)`,
     ),
     check(
       'business_messages_photo_bounds_check',
@@ -13785,10 +13786,13 @@ export const supportAiJobs = pgTable(
       'support_ai_jobs_unseen_image_handoff_check',
       enumCheck('unseen_image_handoff', SUPPORT_AI_IMAGE_SKIP_REASONS),
     ),
-    // The fail-closed draft is a HANDOFF that no model wrote and that saw no image.
+    // The fail-closed draft is a HANDOFF that no model wrote and that saw no image: no provider,
+    // no model, no summary, and an empty reply — or none at all once retention purged the text
+    // (PR #201 review, N4). `IS NOT DISTINCT FROM`, because a CHECK passes on NULL: `= ''`
+    // would let a NULL reply (or a NULL decision) through.
     check(
       'support_ai_jobs_unseen_image_handoff_shape_check',
-      sql`unseen_image_handoff IS NULL OR (decision = 'HANDOFF' AND provider IS NULL AND images_seen = 0)`,
+      sql`unseen_image_handoff IS NULL OR (decision IS NOT DISTINCT FROM 'HANDOFF' AND provider IS NULL AND model IS NULL AND summary IS NULL AND images_seen = 0 AND (suggested_reply IS NOT DISTINCT FROM '' OR (suggested_reply IS NULL AND text_purged_at IS NOT NULL)))`,
     ),
   ],
 );

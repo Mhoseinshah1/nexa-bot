@@ -1,5 +1,5 @@
 {
-  "id": "60c9f999-69e6-4e7a-a0c1-a31dd50d4210",
+  "id": "a02c2e11-a168-4a54-9370-59d544ca9972",
   "prevId": "e87535fb-d9dd-474c-803b-047b32c6f0f0",
   "version": "7",
   "dialect": "postgresql",
@@ -4834,7 +4834,7 @@
         },
         "business_messages_photo_shape_check": {
           "name": "business_messages_photo_shape_check",
-          "value": "(photo_file_id IS NULL) = (photo_file_unique_id IS NULL) AND (photo_file_id IS NULL OR kind = 'PHOTO')"
+          "value": "(photo_file_id IS NULL) = (photo_file_unique_id IS NULL) AND (photo_file_id IS NULL OR kind = 'PHOTO') AND (photo_file_size IS NULL OR photo_file_id IS NOT NULL)"
         },
         "business_messages_photo_bounds_check": {
           "name": "business_messages_photo_bounds_check",
@@ -28339,7 +28339,7 @@
         },
         "support_ai_jobs_unseen_image_handoff_shape_check": {
           "name": "support_ai_jobs_unseen_image_handoff_shape_check",
-          "value": "unseen_image_handoff IS NULL OR (decision = 'HANDOFF' AND provider IS NULL AND images_seen = 0)"
+          "value": "unseen_image_handoff IS NULL OR (decision IS NOT DISTINCT FROM 'HANDOFF' AND provider IS NULL AND model IS NULL AND summary IS NULL AND images_seen = 0 AND (suggested_reply IS NOT DISTINCT FROM '' OR (suggested_reply IS NULL AND text_purged_at IS NOT NULL)))"
         }
       },
       "isRLSEnabled": false
