@@ -142,3 +142,5 @@ export * from './legacy-migration.js';
 export * from './legacy-import.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */
 export * from './business-chats.js';
+/** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */
+export * from './support-context.js';

@@ -819,6 +819,20 @@ export class ProvisioningService {
   }
 
   /**
+   * TB3: the customer's services for the support agent's context — the same scoping as
+   * `pageForCustomer` (tenant, customer, not refunded away; the customer id IS the
+   * authorisation), but every non-terminated service first, so a bounded read keeps the
+   * services a customer can still ask about.
+   */
+  async supportServicesForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    limit: number,
+  ): Promise<readonly ServiceRecord[]> {
+    return this.deps.services.supportServicesForCustomer(scope, customerId, limit);
+  }
+
+  /**
    * The customer's OWN services whose username starts with the typed text. The text is
    * canonicalised the way usernames are stored (lowercase); the repository puts the
    * tenant and the customer in the WHERE.

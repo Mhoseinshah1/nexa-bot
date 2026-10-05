@@ -192,6 +192,8 @@ import { OpsLogService } from './modules/platform/opslog/application/opslog.serv
 import { IncidentService } from './modules/platform/incidents/application/incident.service.js';
 import { IncidentSchedulerLoop } from './modules/platform/incidents/application/incident-scheduler-loop.js';
 import { DrizzleIncidentRepository } from './modules/platform/incidents/infrastructure/drizzle-incident.repository.js';
+import { SupportContextBuilder } from './modules/commerce/support-context/application/support-context.builder.js';
+import { DrizzleSupportContextReader } from './modules/commerce/support-context/infrastructure/drizzle-support-context.reader.js';
 import { ModuleIncidentEffects } from './modules/platform/incidents/infrastructure/incident-effects.js';
 import { NotificationCenterService } from './modules/platform/opslog/application/notification-center.service.js';
 import { DrizzleNotificationInboxRepository } from './modules/platform/opslog/infrastructure/drizzle-notification-inbox.repository.js';
@@ -1125,6 +1127,8 @@ export interface Container {
   readonly businessTransport: BusinessTransport;
   readonly businessConversations: BusinessConversationService;
   readonly businessOutboundLoop: BusinessOutboundLoop;
+  /** TB3: the support agent's read-only, allowlisted context for one conversation. */
+  readonly supportContext: SupportContextBuilder;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
@@ -5227,13 +5231,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     clock,
   });
+  const provisionedServiceFacts = new ProvisionedServiceFacts({
+    services: provisioningService,
+    panels: panelRepository,
+    subscriptionFiles: subscriptionFileService,
+  });
   const clientAppCatalog = new ClientAppCatalog({
     repository: clientAppRepository,
-    facts: new ProvisionedServiceFacts({
-      services: provisioningService,
-      panels: panelRepository,
-      subscriptionFiles: subscriptionFileService,
-    }),
+    facts: provisionedServiceFacts,
+  });
+  /*
+   * TB3 (ADR-0034 §4): the support agent's read-only context, from customer-scoped readers
+   * only. Nothing here charges a permission and nothing here writes — the FAQ is read
+   * straight from its repository, never through `SupportScreenReader`, which seeds.
+   */
+  const supportContext = new SupportContextBuilder({
+    customers: customerRepository,
+    services: provisioningService,
+    reader: new DrizzleSupportContextReader(database.db),
+    clientApps: clientAppRepository,
+    serviceFacts: provisionedServiceFacts,
+    faqs: supportFaqRepository,
+    settings: settingsResolver,
+    clock,
   });
 
   /**
@@ -6516,6 +6536,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     businessTransport,
     businessConversations,
     businessOutboundLoop,
+    supportContext,
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,

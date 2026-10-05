@@ -580,6 +580,18 @@ export interface ServiceRepository {
   ): Promise<{ readonly items: readonly ServiceRecord[]; readonly count: number }>;
 
   /**
+   * TB3: up to `limit` of the customer's services for the support context, every
+   * non-terminated one before any TERMINATED one, newest first within each — so a run of
+   * newer terminated services cannot push a live one out of a bounded read. The same
+   * ownership and refunded-away predicate as `pageForCustomer`, in the same statement shape.
+   */
+  supportServicesForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    limit: number,
+  ): Promise<readonly ServiceRecord[]>;
+
+  /**
    * The customer's OWN services whose username starts with `prefix`, in SQL — the
    * tenant and the customer are in the WHERE, so a crafted term can only ever match
    * rows the caller could list anyway.
