@@ -26,7 +26,7 @@ M=[
  ('A10-02',[(SVC,"        held: replayed.result.held,\n        first: false,","        held: replayed.result.held,\n        first: replayed.result.filed && replayed.result.held === 1,")],T_I,'redelivers the receipt update'),
  ('A10-03',[(BOT,"      if (!submitted.first) return { key: null, values: {}, buttons: [], orderId: null };\n","")],T_I,'second receipt'),
  # --- the invoice is edited into its final, button-less state, and is not the new message ------
- ('A10-04',[(BOT,"      if (chatId !== null) {\n        await this.finaliseReceiptInvoice(","      if (chatId === '') {\n        await this.finaliseReceiptInvoice(")],T_I,'ends it button-less and sends ONE new message'),
+ ('A10-04',[(BOT,"      if (chatId !== null) {\n        try {\n          await this.finaliseReceiptInvoice(","      if (chatId === '') {\n        try {\n          await this.finaliseReceiptInvoice(")],T_I,'ends it button-less and sends ONE new message'),
  ('A10-05',[(BOT,"const RECEIPT_INVOICE_FINAL_KEY: TemplateKey = 'bot.payment.received_for_review';","const RECEIPT_INVOICE_FINAL_KEY: TemplateKey = 'bot.payment.receipt_received';")],T_I,'ends it button-less and sends ONE new message'),
  ('A10-06',[(BOT,"      return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };","      return { key: 'bot.payment.received_for_review', values: {}, buttons: [], orderId: null };")],T_I,'ends it button-less and sends ONE new message'),
  # The prompt turn that releases its hold ends the invoice in the same final state, sends nothing.
