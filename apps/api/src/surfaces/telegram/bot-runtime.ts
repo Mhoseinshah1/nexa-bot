@@ -16687,6 +16687,13 @@ export function cardMessageOf(
     return null;
   }
   if (messageId <= 0) return null;
+  /*
+   * A4: a FILE message — a client app's tutorial video with the guide as its caption — has no
+   * text for `editMessageText` to replace; Telegram answers 400 "there is no text in the
+   * message to edit". No card there: the screen goes out as a new message, without spending
+   * a request on an edit that cannot succeed.
+   */
+  if (callbackOriginOf(update)?.media === true) return null;
   return { botInstanceId, chatId, messageId };
 }
 

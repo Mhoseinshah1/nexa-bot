@@ -54,13 +54,28 @@ export interface Button {
   readonly callback_data?: string;
 }
 
-/** How the stand-in answers a chat: success, 5xx (UNKNOWN), 429, or a 400 refusal. */
-export type ChatBehaviour = 'OK' | 'SERVER_ERROR' | 'RATE_LIMITED' | 'REFUSED' | 'REFUSE_FILE';
+/**
+ * How the stand-in answers a chat: success, 5xx (UNKNOWN), 429, or a refusal.
+ *
+ * `REFUSED` and `REFUSE_FILE` answer 403, which stands for ANY definite refusal here: the
+ * messenger classifies every 4xx but 429 as REFUSED. (A real bad `file_id` is a 400; the
+ * receipt review cases were written against the 403.) `REFUSE_FILE` and
+ * `SERVER_ERROR_FILE` touch only the file methods, so the text that follows a file is
+ * answered normally.
+ */
+export type ChatBehaviour =
+  'OK' | 'SERVER_ERROR' | 'RATE_LIMITED' | 'REFUSED' | 'REFUSE_FILE' | 'SERVER_ERROR_FILE';
 
 export interface ReceiptFixture {
   readonly ctx: TestContext;
   sent: Sent[];
   readonly behaviour: Map<string, ChatBehaviour>;
+  /**
+   * `chat:message_id` of the messages a case declared to be FILE messages (`tapOn` with a
+   * photo or a video). Real Telegram answers `editMessageText` on one with 400 "there is no
+   * text in the message to edit", and so does this stand-in.
+   */
+  readonly fileMessages: Set<string>;
   owner: ActorContext;
   ownerId: AdminId;
   panelA: string;
@@ -71,9 +86,11 @@ export interface ReceiptFixture {
 
 export async function receiptFixture(): Promise<ReceiptFixture> {
   const behaviour = new Map<string, ChatBehaviour>();
+  const fileMessages = new Set<string>();
   const fixture = {
     sent: [] as Sent[],
     behaviour,
+    fileMessages,
   } as unknown as ReceiptFixture & { ctx: TestContext };
 
   const telegram: Server = createServer((request, response) => {
@@ -90,8 +107,18 @@ export async function receiptFixture(): Promise<ReceiptFixture> {
         response.writeHead(status, { 'content-type': 'application/json' });
         response.end(JSON.stringify(payload));
       };
+      if (
+        method === 'editMessageText' &&
+        fileMessages.has(`${chat}:${String(body['message_id'])}`)
+      ) {
+        return reply(400, {
+          ok: false,
+          error_code: 400,
+          description: 'Bad Request: there is no text in the message to edit',
+        });
+      }
       if (method !== 'answerCallbackQuery') {
-        if (mode === 'SERVER_ERROR') {
+        if (mode === 'SERVER_ERROR' || (mode === 'SERVER_ERROR_FILE' && isFile)) {
           return reply(502, { ok: false, error_code: 502, description: 'Bad Gateway' });
         }
         if (mode === 'RATE_LIMITED') {
@@ -127,6 +154,7 @@ export async function receiptFixture(): Promise<ReceiptFixture> {
     ctx.container.setInstallationTenant(tenantA.tenantId);
     fixture.sent = [];
     behaviour.clear();
+    fileMessages.clear();
     const seededOwner = await createAdmin(ctx.container, tenantA, {
       username: 'owner-receipts',
       roleKeys: ['owner'],
@@ -378,9 +406,18 @@ export function tapOn(
   f: ReceiptFixture,
   data: string,
   telegramUserId: string,
-  message: { readonly id: number; readonly photo?: boolean },
+  message: {
+    readonly id: number;
+    readonly photo?: boolean;
+    /** A4: a client app's tutorial video, with its caption when it carries one. */
+    readonly video?: boolean;
+    readonly caption?: string;
+  },
 ) {
   f.sent = [];
+  if (message.photo === true || message.video === true) {
+    f.fileMessages.add(`${telegramUserId}:${String(message.id)}`);
+  }
   const update = baseUpdate(
     {
       callback_query: {
@@ -394,6 +431,18 @@ export function tapOn(
           ...(message.photo === true
             ? { photo: [{ file_id: 'receipt', file_unique_id: 'u-receipt', width: 9, height: 9 }] }
             : {}),
+          ...(message.video === true
+            ? {
+                video: {
+                  file_id: 'video',
+                  file_unique_id: 'u-video',
+                  duration: 1,
+                  width: 9,
+                  height: 9,
+                },
+              }
+            : {}),
+          ...(message.caption === undefined ? {} : { caption: message.caption }),
         },
       },
     },

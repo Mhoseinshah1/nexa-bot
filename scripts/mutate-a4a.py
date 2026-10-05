@@ -12,7 +12,17 @@ if subprocess.run(['git','diff','--quiet','--','apps','packages']).returncode !=
   sys.exit('apps/ or packages/ has uncommitted changes; a mutation restore would discard them')
 
 RT='apps/api/src/surfaces/telegram/bot-runtime.ts'
+WS='apps/api/src/surfaces/telegram/wizard-state.ts'
 T_I=('integration','tests/integration/client-app-video.test.ts')
+T_U=('unit','tests/unit/r2-wizard-state.test.ts')
+BARE="""      await this.deps.messenger.sendFile(scope, {
+        chatId,
+        botInstanceId: reply.media.botInstanceId,
+        kind: reply.media.kind,
+        source: { kind: 'FILE_ID', fileId: reply.media.fileId },
+      });
+    }"""
+BARE_RESULT=BARE.replace('      await this.deps.messenger.sendFile','      const bare = await this.deps.messenger.sendFile',1)
 
 M=[
  # The app screen sends its video AS the reply, whole-or-nothing.
@@ -27,6 +37,14 @@ M=[
  ('A4A-06',[(RT,"    if (reply.media !== undefined && sent.outcome === 'REFUSED') sent = await asText();","")],T_I,'refuses the video'),
  # The buttons ride on the captioned video.
  ('A4A-07',[(RT,"              ...(reply.media.captionWhole === true ? { captionWhole: true as const } : {}),\n              ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),","              ...(reply.media.captionWhole === true ? { captionWhole: true as const } : {}),")],T_I,'buttons on it'),
+ # PR #207 review. UNKNOWN / RATE_LIMITED on the captioned video: no text after it.
+ ('A4A-08',[(RT,"    if (reply.media !== undefined && sent.outcome === 'REFUSED') sent = await asText();","    if (reply.media !== undefined && sent.outcome !== 'DELIVERED') sent = await asText();")],T_I,'nothing more is sent'),
+ # The bare video (over the bound) is decorative: its outcome decides nothing.
+ ('A4A-09',[(RT,BARE,BARE_RESULT.replace('      });\n    }',"      });\n      if (bare.outcome !== 'DELIVERED') {\n        await this.stopSpinner(scope, command, input.botInstanceId);\n        return { intent, arrival, customerId: customer.id, replyKey: reply.key, orderId: reply.orderId, sent: bare.outcome };\n      }\n    }"))],T_I,'bare video is refused'),
+ ('A4A-10',[(RT,BARE,BARE_RESULT.replace('      });\n    }',"      });\n      if (bare.outcome !== 'DELIVERED') sent = bare;\n    }"))],T_I,'decorative'),
+ # A tap on a file message is never answered with editMessageText.
+ ('A4A-11',[(RT,"  if (callbackOriginOf(update)?.media === true) return null;\n","")],T_I,'no editMessageText on a file message'),
+ ('A4A-12',[(WS,"    (message.video !== undefined && message.video !== null) ||\n","")],T_U,'file-ness'),
 ]
 
 only=sys.argv[1:]

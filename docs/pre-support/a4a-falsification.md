@@ -13,6 +13,15 @@ contract change. Delta b (button toggles and per-app titles) is out of scope.
 3. Over the bound (`REFUSED` / `CAPTION_OVER_BOUND`, decided before any request), the video
    goes bare and the guide follows as today's text message with the buttons.
 4. Any other refusal of the video: the guide still goes out as text with its buttons.
+5. The captioned video's UNKNOWN or RATE_LIMITED outcome sends nothing more (the
+   `PendingReply.media` rule). The BARE video's outcome decides nothing: the guide follows it
+   whatever happened to it.
+6. A tap on a FILE message (a photo, a document, a video, or anything with a caption) is never
+   answered with `editMessageText`. `cardMessageOf` reads the tapped message from the raw
+   update through `callbackOriginOf`, which now also counts a `video` as a file. The screen
+   goes out as a new message. Before this, «سرویس‌ها» or «لینک اشتراک» on the captioned video
+   spent an `editMessageText` that Telegram answers with 400 "there is no text in the message
+   to edit", and only then sent the screen.
 
 ## Tests
 
@@ -24,10 +33,24 @@ guide (A4)":
   then the text with the buttons;
 - a long guide: the video, then the whole guide as text, never a cut caption;
 - Telegram refuses the video: the guide still goes out as text, with its buttons;
-- no video: today's single text message, unchanged.
+- no video: today's single text message, unchanged;
+- a captioned video whose outcome is UNKNOWN (5xx), or that is RATE_LIMITED: `sendVideo`
+  alone, and the turn reports that outcome;
+- a long guide whose bare video is refused, or answered 5xx: the guide still goes as text,
+  `DELIVERED`, with the buttons;
+- a button tapped on the captioned video (`sl:1`): one `sendMessage`, no `editMessageText`.
 
-The fixture's `REFUSE_FILE` mode now refuses `sendVideo` as well as `sendPhoto` and
-`sendDocument`.
+In `tests/unit/r2-wizard-state.test.ts`: a bare video message is a file message.
+
+Changes to the fixture (`tests/integration/receipt-review-fixture.ts`):
+
+- `REFUSE_FILE` now refuses `sendVideo` as well as `sendPhoto` and `sendDocument`. Its 403
+  stands for any definite refusal; a real bad `file_id` gets a 400, and the messenger
+  classifies both as REFUSED.
+- A new mode, `SERVER_ERROR_FILE`, answers 5xx to the file methods only.
+- The stand-in now answers `editMessageText` on a message that `tapOn` declared a file
+  message with the real 400 "Bad Request: there is no text in the message to edit". The fake
+  was corrected to match the real Telegram rule in the same commit.
 
 ## Mutation results
 
@@ -51,3 +74,8 @@ The captioned video now follows `PendingReply.media`'s rule: the text fallback i
 when the video is definitely REFUSED. If the video's outcome is UNKNOWN or RATE_LIMITED, the
 guide is not sent again. It may already have arrived as the caption, and a second copy would be
 a duplicate. Before this change, the bare video was decorative and the text always followed.
+
+An UNKNOWN or RATE_LIMITED video on this screen raises no operator signal. Nothing opens the
+send-failure condition, the same as for a receipt review reply sent as a file
+(`TelegramCustomerMessenger.sendFile`). The customer can tap the app again. Recorded as
+`OQ-A4-01` in `docs/open-questions.md`.

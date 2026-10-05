@@ -19,8 +19,8 @@ export interface CallbackOrigin {
   readonly chatId: string;
   readonly messageId: number;
   /**
-   * The message carries a file (a photo or a document) whose caption is its text — a
-   * reviewer's receipt. Telegram cannot turn it into a text message, so its CAPTION is what
+   * The message carries a file (a photo, a document, or — A4 — a client app's tutorial video)
+   * whose caption is its text — a reviewer's receipt. Telegram cannot turn it into a text message, so its CAPTION is what
    * an edit changes.
    */
   readonly media: boolean;
@@ -41,6 +41,7 @@ export function callbackOriginOf(update: unknown): CallbackOrigin | null {
           chat?: { id?: unknown; type?: unknown };
           photo?: unknown;
           document?: unknown;
+          video?: unknown;
           caption?: unknown;
         };
       };
@@ -55,6 +56,7 @@ export function callbackOriginOf(update: unknown): CallbackOrigin | null {
   const media =
     (Array.isArray(message.photo) && message.photo.length > 0) ||
     (message.document !== undefined && message.document !== null) ||
+    (message.video !== undefined && message.video !== null) ||
     typeof message.caption === 'string';
   return { chatId: String(chat.id), messageId: id, media };
 }
