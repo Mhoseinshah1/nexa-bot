@@ -88,6 +88,8 @@ M=[
  # N3: the six analytics statements are one REPEATABLE READ, READ ONLY snapshot.
  ('TB10-40',[(READER,"const SNAPSHOT = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;","const SNAPSHOT = { accessMode: 'read only' } as const;")],T_I,'one snapshot, blind to a commit'),
  ('TB10-41',[(READER,"    return this.db.transaction((q) => this.readIn(q, tenantId, window), SNAPSHOT);","    return this.readIn(this.db as never, tenantId, window);")],T_I,'one snapshot, blind to a commit'),
+ # N5: a CUSTOM window is capped at the longest preset's span, before anything is read.
+ ('TB10-42',[(ANALYTICS,"      query.range === 'CUSTOM' &&\n","      false &&\n")],T_U,'capped at a leap year'),
 ]
 
 def build_contracts():

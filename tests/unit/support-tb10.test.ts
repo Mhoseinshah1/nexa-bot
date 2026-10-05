@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   BUSINESS_CONVERSATION_STATES,
   NOTIFICATION_CATEGORY_PERMISSIONS,
@@ -14,6 +14,10 @@ import {
   visibleNotificationCategories,
 } from '@nexa/contracts';
 import { linkFor } from '../../apps/api/src/modules/platform/opslog/application/notification-center.service';
+import {
+  SUPPORT_ANALYTICS_CUSTOM_MAX_DAYS,
+  SupportAnalyticsService,
+} from '../../apps/api/src/modules/control/support-ai/application/support-analytics.service';
 import {
   assembleSupportAnalytics,
   type SupportAnalyticsFacts,
@@ -313,5 +317,52 @@ describe('the support notifications', () => {
       expect.arrayContaining(['SUPPORT', 'SUPPORT_AI']),
     );
     expect(visibleNotificationCategories(role('finance'))).not.toContain('SUPPORT');
+  });
+});
+
+/*
+ * PR #205 review, N5: the provider-run statement sorts every run in the window for its
+ * percentiles. A CUSTOM window is capped at the longest preset's span (a leap year), not the
+ * reports' 731 days, and the cap is decided before anything is read.
+ */
+describe('the support analytics’ CUSTOM window', () => {
+  const DAY = 86_400_000;
+  const nothing: SupportAnalyticsFacts = {
+    conversations: [],
+    handoffs: [],
+    jobs: [],
+    runs: [],
+    candidates: [],
+    articles: [],
+  };
+  const serviceFor = (days: number, extraMs = 0) => {
+    const start = new Date('2025-01-01T00:00:00.000Z');
+    const end = new Date(start.getTime() + days * DAY + extraMs);
+    const read = vi.fn(async () => nothing);
+    const service = new SupportAnalyticsService({
+      guard: { check: async () => undefined },
+      reader: { read },
+      windows: { resolve: async () => ({ start, end }) },
+    });
+    return { service, read };
+  };
+  const custom = { range: 'CUSTOM' as const, from: '2025-01-01', to: '2026-01-01' };
+
+  it('is capped at a leap year — a longer one is refused before anything is read', async () => {
+    expect(SUPPORT_ANALYTICS_CUSTOM_MAX_DAYS).toBe(366);
+    // 366 local days, an hour longer across a DST change: read.
+    const ok = serviceFor(366, 3_600_000);
+    await ok.service.analytics({} as never, {} as never, custom);
+    expect(ok.read).toHaveBeenCalledTimes(1);
+    // 367 days: refused as a validation error, and nothing is read.
+    const long = serviceFor(367);
+    await expect(long.service.analytics({} as never, {} as never, custom)).rejects.toMatchObject({
+      kind: 'VALIDATION',
+    });
+    expect(long.read).not.toHaveBeenCalled();
+    // A preset is never refused by it (THIS_YEAR is at most a leap year).
+    const year = serviceFor(366);
+    await year.service.analytics({} as never, {} as never, { range: 'THIS_YEAR' });
+    expect(year.read).toHaveBeenCalledTimes(1);
   });
 });
