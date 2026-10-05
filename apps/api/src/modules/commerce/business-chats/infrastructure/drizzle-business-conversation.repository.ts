@@ -363,7 +363,15 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
     input: Parameters<BusinessConversationRepository['list']>[1] & { readonly id?: string },
   ): Promise<readonly BusinessConversationListItem[]> {
     const tenantId = requireTenantId(scope);
+    /*
+     * The three sort keys are the index's expressions verbatim
+     * (`business_conversations_inbox_priority_idx`): a conversation waiting for a person
+     * first, then newest activity, then id — all descending, one backward range scan.
+     */
+    const priority = sql<boolean>`(${businessConversations.state} = 'HANDOFF_REQUIRED')`;
     const activity = sql<Date>`COALESCE(${businessConversations.lastMessageAt}, ${businessConversations.createdAt})`;
+    // The latest reply a person or the AI delivered; GREATEST skips a NULL.
+    const replied = sql`GREATEST(${businessConversations.lastHumanAt}, ${businessConversations.lastAiAt})`;
     const rows = await this.db
       .select({
         conversation: businessConversations,
@@ -385,6 +393,18 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
              AND m.conversation_id = ${businessConversations.id}
            ORDER BY m.sent_at DESC, m.telegram_message_id DESC
            LIMIT 1)`,
+        /*
+         * TB10: the oldest customer message from that reply's SECOND on (no N+1: the
+         * transcript index). `businessUnansweredSince` compares on Telegram's whole second and
+         * counts a message in the reply's own second as unanswered (PR #205 review, S1);
+         * `sent_at >= date_trunc('second', replied)` is that rule, kept sargable on `sent_at`.
+         */
+        firstUnansweredAt: sql<Date | string | null>`(
+          SELECT min(m.sent_at) FROM business_messages m
+           WHERE m.tenant_id = ${businessConversations.tenantId}
+             AND m.conversation_id = ${businessConversations.id}
+             AND m.origin = 'INBOUND'
+             AND m.sent_at >= COALESCE(date_trunc('second', ${replied}), '-infinity'::timestamptz))`,
       })
       .from(businessConversations)
       .innerJoin(
@@ -406,18 +426,18 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
           eq(businessConversations.tenantId, tenantId),
           input.id === undefined ? undefined : eq(businessConversations.id, input.id),
           input.state === undefined ? undefined : eq(businessConversations.state, input.state),
+          // A state filter fixes the priority too: said, so the index bounds the scan by it.
+          input.state === undefined
+            ? undefined
+            : sql`${priority} = ${input.state === 'HANDOFF_REQUIRED'}`,
           input.before === undefined
             ? undefined
-            : or(
-                lt(activity, input.before.at),
-                and(
-                  sql`${activity} = ${input.before.at}`,
-                  lt(businessConversations.id, input.before.id),
-                ),
-              ),
+            : sql`(${priority}, ${activity}, ${businessConversations.id}) < (${
+                input.before.priority === 1
+              }, ${input.before.at.toISOString()}::timestamptz, ${input.before.id}::uuid)`,
         ),
       )
-      .orderBy(desc(activity), desc(businessConversations.id))
+      .orderBy(desc(priority), desc(activity), desc(businessConversations.id))
       .limit(input.limit);
     return rows.map((row) => ({
       conversation: toConversation(row.conversation),
@@ -429,6 +449,7 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
       },
       preview: row.preview,
       activityAt: new Date(row.activityAt),
+      firstUnansweredAt: row.firstUnansweredAt === null ? null : new Date(row.firstUnansweredAt),
     }));
   }
 }

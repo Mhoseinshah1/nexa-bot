@@ -605,6 +605,8 @@ import {
 import { DrizzleSupportAiJobRepository } from './modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository.js';
 import { TelegramSupportImageSource } from './modules/control/support-ai/infrastructure/telegram-support-image-source.js';
 import { TbSupportContextSource } from './modules/control/support-ai/infrastructure/support-context-source.js';
+import { SupportAnalyticsService } from './modules/control/support-ai/application/support-analytics.service.js';
+import { DrizzleSupportAnalyticsReader } from './modules/control/support-ai/infrastructure/drizzle-support-analytics.reader.js';
 import { SupportAiConfigService } from './modules/control/support-ai/application/support-ai-config.service.js';
 import type { SupportAiAdapter } from './modules/control/support-ai/application/ports.js';
 import {
@@ -1163,6 +1165,8 @@ export interface Container {
   /** TB4: the support AI's configuration, keys and provider chain (ADR-0034). */
   readonly supportAiConfig: SupportAiConfigService;
   readonly supportAiChain: SupportAiChain;
+  /** TB10: read-only support analytics over a half-open report window. */
+  readonly supportAnalytics: SupportAnalyticsService;
   /** TB5: Assist Mode — drafts an operator may edit and send (ADR-0034 §7). */
   readonly supportAssist: SupportAssistService;
   /** TB5: produces drafts. Built in every role, STARTED only by the `assistant` role. */
@@ -5481,6 +5485,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  // TB10: support analytics, over the reports' own window resolver (tenant timezone/calendar).
+  const supportAnalytics = new SupportAnalyticsService({
+    guard,
+    reader: new DrizzleSupportAnalyticsReader(database.db),
+    windows: {
+      resolve: async (scope, query) => {
+        const resolved = paymentOpsPeriods.resolve(
+          query,
+          clock.now(),
+          await templatePresentation.presentationFor(scope),
+        );
+        return { start: resolved.current.start, end: resolved.current.end };
+      },
+    },
+  });
   const supportAiChain = new SupportAiChain({
     adapters: supportAiAdapters,
     credentials: supportAiCredentials,
@@ -6775,6 +6794,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportContext,
     supportAiConfig,
     supportAiChain,
+    supportAnalytics,
     supportAssist,
     assistantLoop,
     supportAutoReply,

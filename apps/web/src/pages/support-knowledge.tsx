@@ -94,7 +94,7 @@ export const KNOWLEDGE_CATEGORY_LABELS: Readonly<Record<SupportKnowledgeCategory
   GENERAL: 'web.sk_cat_general',
 };
 
-const CANDIDATE_STATE_LABELS: Readonly<Record<SupportLearningCandidateState, WebKey>> = {
+export const CANDIDATE_STATE_LABELS: Readonly<Record<SupportLearningCandidateState, WebKey>> = {
   PENDING: 'web.sk_cand_pending',
   APPROVED: 'web.sk_cand_approved',
   REJECTED: 'web.sk_cand_rejected',
@@ -202,6 +202,7 @@ function ContentFields({
       </Field>
       <Field label={t('web.sk_field_body')} htmlFor={`${idPrefix}-body`}>
         <textarea
+          dir="auto"
           id={`${idPrefix}-body`}
           className="input"
           rows={7}

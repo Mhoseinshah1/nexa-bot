@@ -44,6 +44,7 @@ import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chats';
 import { SupportAiPage } from './pages/support-ai';
+import { SupportAnalyticsPage } from './pages/support-analytics';
 import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
@@ -193,6 +194,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/business-chats/:id',
   // TB4/TB5: the support AI's settings.
   '/support-ai',
+  // TB10: support analytics.
+  '/support-analytics',
   // TB8: support knowledge and the learning-candidate queue.
   '/support-knowledge',
   '/support-learning',
@@ -683,6 +686,15 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.sai_title') }],
       title: t('web.sai_title'),
+    };
+  }
+
+  // TB10: support analytics over a report range (`support_ai.configure`).
+  if (route.path === '/support-analytics') {
+    return {
+      element: <SupportAnalyticsPage route={route} denied={!may('support_ai.configure')} />,
+      crumbs: [{ label: t('web.sa_title') }],
+      title: t('web.sa_title'),
     };
   }
 

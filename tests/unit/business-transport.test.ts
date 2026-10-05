@@ -38,6 +38,7 @@ function transportWith(
   answer: Awaited<ReturnType<BusinessTelegramGateway['sendText']>> = {
     outcome: 'SUCCEEDED',
     messageId: 55,
+    sentAt: new Date('2026-10-04T10:00:07Z'),
   },
 ) {
   const telegram = {
@@ -62,7 +63,12 @@ function transportWith(
 describe('sending as a connected Business account', () => {
   it('delivers through the connection, returning the message id that later proves an echo is ours', async () => {
     const { telegram, send } = transportWith(active);
-    expect(await send()).toEqual({ outcome: 'DELIVERED', messageId: 55 });
+    // ...and Telegram's own date for it, the clock the inbox compares replies on (PR #205, S1).
+    expect(await send()).toEqual({
+      outcome: 'DELIVERED',
+      messageId: 55,
+      sentAt: new Date('2026-10-04T10:00:07Z'),
+    });
     expect(telegram.sendText).toHaveBeenCalledWith('token', {
       businessConnectionId: 'conn-1',
       chatId: '7000001',

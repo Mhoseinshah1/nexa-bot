@@ -63,7 +63,9 @@ export class TelegramBusinessGateway implements BusinessTelegramGateway {
       method: 'sendMessage',
       body: businessTextMessageBody(input),
     });
-    if (sent.outcome === 'SUCCEEDED') return { outcome: 'SUCCEEDED', messageId: sent.messageId };
+    if (sent.outcome === 'SUCCEEDED') {
+      return { outcome: 'SUCCEEDED', messageId: sent.messageId, sentAt: sent.sentAt ?? null };
+    }
     if (sent.outcome === 'FAILED_RETRYABLE') {
       return {
         outcome: 'FAILED_RETRYABLE',

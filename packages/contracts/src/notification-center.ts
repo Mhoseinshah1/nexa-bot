@@ -34,6 +34,12 @@ export const NOTIFICATION_CATEGORIES = [
   'RECOVERY',
   'SECURITY',
   'INCIDENTS',
+  // TB10: Telegram Business support — a conversation waiting for a person, a connection that
+  // cannot send (`business_chats.view`).
+  'SUPPORT',
+  // TB10: the support AI's providers — a rejected key, no provider answering
+  // (`support_ai.configure`, the only key that can act on either).
+  'SUPPORT_AI',
 ] as const;
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
 
@@ -53,6 +59,8 @@ export const NOTIFICATION_CATEGORY_PERMISSIONS: Readonly<
   RECOVERY: 'backup.view',
   SECURITY: 'admins.view',
   INCIDENTS: 'incidents.view',
+  SUPPORT: 'business_chats.view',
+  SUPPORT_AI: 'support_ai.configure',
 };
 
 /**
@@ -78,6 +86,11 @@ export const NOTIFICATION_LINK_TARGETS = [
   'INCIDENTS',
   // The automatic wallet refunds of paid orders that could not be delivered (`payments.view`).
   'COMPENSATIONS',
+  // TB10: one business conversation, the business inbox (with its connections), and the
+  // support AI's settings page (providers, keys, health).
+  'BUSINESS_CHAT',
+  'BUSINESS_CHATS',
+  'SUPPORT_AI',
 ] as const;
 export type NotificationLinkTarget = (typeof NOTIFICATION_LINK_TARGETS)[number];
 
@@ -95,6 +108,7 @@ export const NOTIFICATION_ENTITY_LINKS: Readonly<
   SERVICE: { contextKey: 'serviceId', fallback: 'SERVICES' },
   ORDER: { contextKey: 'orderId', fallback: 'ORDERS' },
   INCIDENT: { contextKey: 'incidentId', fallback: 'INCIDENTS' },
+  BUSINESS_CHAT: { contextKey: 'conversationId', fallback: 'BUSINESS_CHATS' },
 };
 
 /**
@@ -233,6 +247,40 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
   // --- incidents and maintenance: the typed hook, matched by prefix ----------------------
   { prefix: 'incident.', category: 'INCIDENTS', link: 'INCIDENT', minSeverity: 'INFO' },
   { prefix: 'maintenance.', category: 'INCIDENTS', link: 'INCIDENT', minSeverity: 'INFO' },
+  // --- TB10: the support agent ----------------------------------------------------------
+  /*
+   * Exact codes, never a `support.` prefix: `support.handoff_resolved`, `….usable`,
+   * `….credential_accepted` and `….available` are recoveries, and a prefix would also admit
+   * whatever `support.` code a later package records without anyone deciding it should
+   * reach an inbox. Each one is a condition the recorder dedupes and a recovery closes.
+   */
+  // A conversation was handed to a person (TB7): open it. Deduped per conversation.
+  {
+    code: 'support.handoff_required',
+    category: 'SUPPORT',
+    link: 'BUSINESS_CHAT',
+    minSeverity: 'WARN',
+  },
+  // A Telegram Business connection is disabled or lost the right to reply (TB1).
+  {
+    code: 'support.business_connection.unusable',
+    category: 'SUPPORT',
+    link: 'BUSINESS_CHATS',
+    minSeverity: 'WARN',
+  },
+  // A provider rejected its key, or every configured provider failed (TB4).
+  {
+    code: 'support.ai_provider.credential_rejected',
+    category: 'SUPPORT_AI',
+    link: 'SUPPORT_AI',
+    minSeverity: 'WARN',
+  },
+  {
+    code: 'support.ai_provider.unavailable',
+    category: 'SUPPORT_AI',
+    link: 'SUPPORT_AI',
+    minSeverity: 'WARN',
+  },
 ];
 
 const SEVERITY_RANK = new Map<string, number>(

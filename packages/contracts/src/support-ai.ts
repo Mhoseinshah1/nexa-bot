@@ -330,6 +330,23 @@ export type SupportAiCredentialSetRequest = z.infer<typeof supportAiCredentialSe
 
 export const supportAiControlRequestSchema = z.object({ idempotencyKey: idempotencyKeySchema });
 
+/**
+ * TB10 — the breaker as the operator reads it, DERIVED from the credential row at read time
+ * and never stored (the row's `tripped_until` and `consecutive_failures` are the state):
+ *
+ * - `CLOSED` — calls go through (`tripped_until` is null);
+ * - `OPEN` — the provider is skipped until `tripped_until`;
+ * - `HALF_OPEN` — the window has passed: the next caller claims ONE probe call
+ *   (`claimProbe`), and its answer closes or re-opens the breaker.
+ */
+export const SUPPORT_AI_BREAKER_STATES = ['CLOSED', 'OPEN', 'HALF_OPEN'] as const;
+export type SupportAiBreakerState = (typeof SUPPORT_AI_BREAKER_STATES)[number];
+
+export function supportAiBreakerState(trippedUntil: Date | null, now: Date): SupportAiBreakerState {
+  if (trippedUntil === null) return 'CLOSED';
+  return trippedUntil.getTime() > now.getTime() ? 'OPEN' : 'HALF_OPEN';
+}
+
 export const supportAiCredentialViewSchema = z.object({
   provider: z.enum(SUPPORT_AI_PROVIDERS),
   configured: z.boolean(),
@@ -339,6 +356,12 @@ export const supportAiCredentialViewSchema = z.object({
   trippedUntil: z.string().nullable(),
   lastTestOutcome: z.enum(SUPPORT_AI_OUTCOMES).nullable(),
   lastTestedAt: z.string().nullable(),
+  /** TB10: `supportAiBreakerState` at the moment of the read; `CLOSED` with no key. */
+  breaker: z.enum(SUPPORT_AI_BREAKER_STATES),
+  /** TB10: transient failures in a row since the last answer (the breaker's counter). */
+  consecutiveFailures: z.number().int().nonnegative(),
+  /** TB10: when the provider last rejected THIS key; null once it answered again. */
+  rejectedAt: z.string().nullable(),
 });
 export type SupportAiCredentialView = z.infer<typeof supportAiCredentialViewSchema>;
 
@@ -350,6 +373,12 @@ export const supportAiConfigResponseSchema = z.object({
     z.enum(SUPPORT_AI_PROVIDERS),
     z.object({ structuredOutput: z.boolean(), vision: z.boolean() }),
   ),
+  /**
+   * TB10: `support.ai_provider.unavailable` is open — the last chain call found no provider
+   * that could answer, and none has answered since. Read from the operational log, which
+   * only REPORTS it; nothing decides from this field.
+   */
+  chainUnavailable: z.boolean(),
 });
 export type SupportAiConfigResponse = z.infer<typeof supportAiConfigResponseSchema>;
 

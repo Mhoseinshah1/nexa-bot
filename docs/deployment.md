@@ -2030,6 +2030,12 @@ recovers the state a cancelled build leaves behind: an index whose
 `indisvalid` is false is dropped concurrently and rebuilt, rather than being
 left to look healthy while the planner ignores it.
 
+(One exception is stated rather than hidden: `0210_tb10_support_indexes` is a
+plain migration because every table it indexes is created, empty, by a migration
+in the same unreleased set, `0196`–`0209`, and is indexed in the same migrator
+transaction. It must ship in the release that carries them; see
+`docs/support-agent/tb10-polish-analytics.md`, decision 9.)
+
 They are deliberately absent from `schema.ts`, so `pnpm db:check` cannot see
 them. `tests/integration/online-indexes.test.ts` is what does: it asserts each
 one exists and is valid after migrating, that a repeat run rebuilds nothing,

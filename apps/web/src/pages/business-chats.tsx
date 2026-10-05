@@ -223,9 +223,79 @@ function detailPath(id: string): string {
   return `/business-chats/${encodeURIComponent(id)}`;
 }
 
+/**
+ * TB10 — how long the customer has waited, in the one unit an operator reads at a glance:
+ * minutes under an hour, hours under two days, days beyond. Floors, so «۵۹ دقیقه» never
+ * reads as an hour; under a minute is «همین حالا». The instant is the server's
+ * (`unansweredSince`); only the subtraction happens here.
+ */
+export function waitParts(
+  sinceIso: string,
+  nowMs: number,
+): { readonly value: number; readonly unit: WebKey } | null {
+  const elapsed = nowMs - Date.parse(sinceIso);
+  if (Number.isNaN(elapsed) || elapsed < 60_000) return null;
+  if (elapsed < 3_600_000) return { value: Math.floor(elapsed / 60_000), unit: 'web.unit_minutes' };
+  if (elapsed < 172_800_000) {
+    return { value: Math.floor(elapsed / 3_600_000), unit: 'web.unit_hours' };
+  }
+  return { value: Math.floor(elapsed / 86_400_000), unit: 'web.unit_days' };
+}
+
+/** The customer's wait, or a dash when nobody owes them an answer. */
+function WaitAge({ since }: { since: string | null }) {
+  if (since === null) return <Dash />;
+  const parts = waitParts(since, Date.now());
+  return (
+    <span className="nowrap bchat-wait" title={formatTimestamp(since)}>
+      {parts === null ? (
+        t('web.bchat_wait_just_now')
+      ) : (
+        <>
+          <Num value={parts.value} /> {t(parts.unit)}
+        </>
+      )}
+    </span>
+  );
+}
+
+function ticketPath(id: string): string {
+  return `/tickets/${encodeURIComponent(id)}`;
+}
+
 // ---------------------------------------------------------------------------------------
 // The inbox
 // ---------------------------------------------------------------------------------------
+
+/**
+ * The inbox's pages, flattened, each conversation ONCE (PR #205 review, N2).
+ *
+ * The keyset's first key is mutable: a conversation handed back to the AI between two pages
+ * drops from the handoffs above the cursor to the rest below it, and the next page carries it
+ * a second time. It is drawn once, where it was first drawn, with the later (fresher) read.
+ * The opposite move is a SKIP, not a repeat: a conversation handed off, or with new activity,
+ * after its page was read moves above the cursor, and «load more» does not show it until the
+ * list is read again from the top. The handoffs-first order is what that costs; the
+ * notification inbox still announces every handoff (`support.handoff_required`).
+ */
+export function inboxRows(
+  pages: readonly { readonly conversations: readonly BusinessConversationSummary[] }[],
+): BusinessConversationSummary[] {
+  const position = new Map<string, number>();
+  const rows: BusinessConversationSummary[] = [];
+  for (const page of pages) {
+    for (const row of page.conversations) {
+      const at = position.get(row.id);
+      if (at === undefined) {
+        position.set(row.id, rows.length);
+        rows.push(row);
+      } else {
+        rows[at] = row;
+      }
+    }
+  }
+  return rows;
+}
 
 export function BusinessChatsPage({ route, denied }: { route: Route; denied: boolean }) {
   const state = stateOf(route.query.get('state'));
@@ -240,8 +310,9 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     enabled: !denied,
   });
-  const rows = chats.data?.pages.flatMap((page) => page.conversations) ?? [];
+  const rows = inboxRows(chats.data?.pages ?? []);
   const requestable = mayRequest(chats, denied);
+  const onLink = useLinkHandler();
 
   const columns: readonly Column<BusinessConversationSummary>[] = [
     {
@@ -267,8 +338,19 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
             <span className="small muted">{t(HANDOFF_LABELS[row.handoffReason])}</span>
           )}
           {row.connectionStatus !== 'ACTIVE' && <ConnectionBadge status={row.connectionStatus} />}
+          {row.ticketId !== null && (
+            <a className="badge info bchat-ticket" href={ticketPath(row.ticketId)} onClick={onLink}>
+              <Icon name="message" />
+              {t('web.bchat_ticket_badge')}
+            </a>
+          )}
         </span>
       ),
+    },
+    {
+      key: 'wait',
+      header: t('web.bchat_wait'),
+      render: (row) => <WaitAge since={row.unansweredSince} />,
     },
     {
       key: 'preview',
@@ -492,6 +574,7 @@ function ControlCard({
 }) {
   const { conversation } = detail;
   const notify = useToast();
+  const onLink = useLinkHandler();
   const refresh = useRefresh(conversation.id);
   const takeoverKey = useSubmissionKey();
   const resumeKey = useSubmissionKey();
@@ -581,6 +664,17 @@ function ControlCard({
               <Dash key="l" />
             ) : (
               formatTimestamp(conversation.lastHumanAt)
+            ),
+          ],
+          [t('web.bchat_wait'), <WaitAge key="w" since={conversation.unansweredSince} />],
+          [
+            t('web.bchat_ticket'),
+            conversation.ticketId === null ? (
+              <Dash key="k" />
+            ) : (
+              <a key="k" href={ticketPath(conversation.ticketId)} onClick={onLink}>
+                {t('web.bchat_ticket_open')}
+              </a>
             ),
           ],
         ]}
@@ -791,6 +885,7 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
       >
         <Field label={t('web.bchat_reply_text')} htmlFor="bchat-reply-text">
           <textarea
+            dir="auto"
             id="bchat-reply-text"
             className="input"
             rows={5}

@@ -86,6 +86,12 @@ badge counts it.
   under `INCIDENTS` (link `/alerts`, permission `opslog.view`).
 - A new category needs an entry in `NOTIFICATION_CATEGORIES`, a view key in
   `NOTIFICATION_CATEGORY_PERMISSIONS` and a Persian label in the web page.
+- Support agent (TB10): two categories, because the audiences differ. `SUPPORT`
+  (`business_chats.view`) carries `support.handoff_required` (linked to the conversation by
+  its `conversationId`) and `support.business_connection.unusable` (linked to the business
+  inbox). `SUPPORT_AI` (`support_ai.configure`) carries
+  `support.ai_provider.credential_rejected` and `support.ai_provider.unavailable` (linked to
+  the AI settings). Exact codes, never a `support.` prefix: the four recoveries share it.
 
 ## 4. Not covered here
 

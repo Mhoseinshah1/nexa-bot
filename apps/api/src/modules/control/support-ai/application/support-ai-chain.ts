@@ -57,6 +57,9 @@ export interface SupportAiChainDeps {
   readonly nowMs?: () => number;
 }
 
+/** The chain's one unavailability condition per tenant (TB4); TB10's health panel reads it. */
+export const SUPPORT_AI_UNAVAILABLE_DEDUPE_KEY = `${SUPPORT_AI_UNAVAILABLE_CODE}:chain`;
+
 /** What one call through the chain produced. */
 export interface SupportAiChainResult {
   readonly outcome: SupportAiOutcome;
@@ -267,7 +270,7 @@ export class SupportAiChain {
       severity: 'WARN',
       message:
         'No configured AI provider could answer. Support conversations hand off to a person until one can.',
-      dedupeKey: `${SUPPORT_AI_UNAVAILABLE_CODE}:chain`,
+      dedupeKey: SUPPORT_AI_UNAVAILABLE_DEDUPE_KEY,
       context: { attempts, lastOutcome: last?.outcome.outcome ?? null },
     });
     if (last === null) {
@@ -351,7 +354,7 @@ export class SupportAiChain {
       // Deduplicated: two successes that both saw the condition open collapse onto one row.
       dedupeKey: `${SUPPORT_AI_AVAILABLE_CODE}:chain`,
       recoversCode: SUPPORT_AI_UNAVAILABLE_CODE,
-      recoversDedupeKey: `${SUPPORT_AI_UNAVAILABLE_CODE}:chain`,
+      recoversDedupeKey: SUPPORT_AI_UNAVAILABLE_DEDUPE_KEY,
     });
   }
 

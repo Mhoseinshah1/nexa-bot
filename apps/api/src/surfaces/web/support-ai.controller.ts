@@ -15,18 +15,22 @@ import {
   API_PREFIX,
   SUPPORT_AI_ASSIST_ROUTES,
   SUPPORT_AI_ROUTES,
+  SUPPORT_ANALYTICS_ROUTES,
   routePattern,
   supportAiControlRequestSchema,
   supportAiDraftRequestSchema,
+  supportAnalyticsQuerySchema,
   type SupportAiConfigResponse,
   type SupportAiDraftView,
   type SupportAiTestResponse,
   type SupportAiUsageResponse,
+  type SupportAnalyticsResponse,
   type TenantContext,
 } from '@nexa/contracts';
 import { z } from 'zod';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { singleValued } from './query.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { SupportAiJobRecord } from '../../modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository.js';
 
@@ -94,6 +98,23 @@ export class SupportAiController {
   async usage(@Req() request: FastifyRequest): Promise<SupportAiUsageResponse> {
     const { scope, actor } = await this.authenticate(request);
     return this.container.supportAiConfig.usage(scope, actor);
+  }
+
+  /**
+   * TB10: support analytics over a half-open report window (`support_ai.configure`). The
+   * query is parsed before the session is used for anything else, so a malformed range is a
+   * 400 that reads nothing.
+   */
+  @Get(SUPPORT_ANALYTICS_ROUTES.analytics)
+  async analytics(
+    @Req() request: FastifyRequest,
+    @Query() query: unknown,
+  ): Promise<SupportAnalyticsResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = supportAnalyticsQuerySchema.parse(
+      singleValued((query ?? {}) as Record<string, unknown>),
+    );
+    return this.container.supportAnalytics.analytics(scope, actor, input);
   }
 
   /** TB5: the recent drafts of one conversation (`support_ai.assist`). */

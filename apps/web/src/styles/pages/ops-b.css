@@ -304,7 +304,12 @@ form.set-row > * + * {
 .support-destination p {
   margin: 2px 0 0;
 }
-/* The answer under its question, two lines at most in the list. */
+/*
+ * The answer under its question, two lines at most in the list. TB10: each paragraph takes
+ * its direction from its own first strong character, so an English answer (a client app's
+ * steps) reads left to right inside the Persian page instead of with its punctuation
+ * reordered, and aligns to its own start.
+ */
 .support-answer {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -312,6 +317,8 @@ form.set-row > * + * {
   overflow: hidden;
   color: var(--fg-3);
   font-size: var(--fs-sm);
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 .support-sort {
   max-width: 140px;
@@ -471,6 +478,22 @@ form.set-row > * + * {
   overflow: hidden;
   overflow-wrap: anywhere;
   max-width: 48ch;
+  /* TB10: a customer who writes in English is shown left to right (see `.bchat-body`). */
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+/* TB10: the ticket a conversation escalated to, as a badge that is also a link. */
+.bchat-ticket {
+  text-decoration: none;
+  gap: 4px;
+}
+.bchat-ticket:hover,
+.bchat-ticket:focus-visible {
+  text-decoration: underline;
+}
+/* TB10: the customer's wait — a figure and its unit, never split across lines. */
+.bchat-wait {
+  font-variant-numeric: tabular-nums;
 }
 .bchat-more {
   display: flex;
@@ -547,6 +570,13 @@ form.set-row > * + * {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.8;
+  /*
+   * TB10: what a person wrote keeps its own DIRECTION too. A customer's English message, or
+   * a Persian line that starts with a Latin product name, is laid out by its own first strong
+   * character, paragraph by paragraph, instead of being forced right to left by the page.
+   */
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 .bchat-outbound-row {
   border: 1px solid var(--line);
