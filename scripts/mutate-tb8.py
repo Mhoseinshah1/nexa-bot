@@ -71,6 +71,42 @@ M=[
  ('TB8-29',[(LEARN,"      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return [];\n","")],T_I,'no learning job claimed'),
  ('TB8-30',[(LEARN,"      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;\n","")],T_I,'purges nothing'),
  ('TB8-31',[(LEARN,"    if (!active) return 'inactive';\n","")],T_I,'no learning job claimed'),
+ # PR #203 substitute review, finding 1: the scrubber gaps, one rule at a time.
+ ('TB8-32',[(SCRUB,"]{0,3}';\nconst d =","]?';\nconst d =")],T_U,'a card with double spaces'),
+ ('TB8-33',[(SCRUB,"    kind: 'HOST',\n    regex: new RegExp(`(?<![\\\\w@.-])${DOMAIN}","    kind: 'HOST',\n    regex: new RegExp(`(?!)(?<![\\\\w@.-])${DOMAIN}")],T_U,'a server by name'),
+ ('TB8-34',[(SCRUB,'    kind: urlKind,\n    regex: /\\b(?:https?|','    kind: urlKind,\n    regex: /(?!)\\b(?:https?|')],T_U,'short unlisted parameter'),
+ ('TB8-35',[(SCRUB,"  if (authority.includes('@') || /[?#]/u.test(tail)) return 'URL_TOKEN';\n",'')],T_U,'one-letter parameter'),
+ ('TB8-36',[(SCRUB,'      /(?<![A-Za-z])(?:password|passwd|passcode','      /(?!)(?<![A-Za-z])(?:password|passwd|passcode')],T_U,'in prose'),
+ ('TB8-37',[(SCRUB,"    kind: 'USERNAME',\n    regex: /(?:https?:","    kind: 'USERNAME',\n    regex: /(?!)(?:https?:")],T_U,'t.me profile'),
+ ('TB8-38',[(SCRUB,"\\\\d[\\\\d,٬٫.'\\\\s]*","\\\\d[\\\\d,٬.'\\\\s]*")],T_U,'no figure of an amount'),
+ ('TB8-39',[(SCRUB,'      /(?<![\\w.])\\d+(?:','      /(?!)(?<![\\w.])\\d+(?:')],T_U,'amount in k'),
+ ('TB8-40',[(SCRUB,'`(?<![\\\\u0600-\\\\u06ffA-Za-z])${NUMBER_WORDS}','`(?!)(?<![\\\\u0600-\\\\u06ffA-Za-z])${NUMBER_WORDS}')],T_U,'in Persian words'),
+ ('TB8-41',[(SCRUB,'`(?<![\\\\w@.-])(?:${DOMAIN}|${IPV4})','`(?!)(?<![\\\\w@.-])(?:${DOMAIN}|${IPV4})')],T_U,'scheme-less subscription'),
+ # Finding 2: every article write is scrubbed, whatever its source.
+ ('TB8-42',[(REVIEW,'        assertClean(command.content);\n        const publish','        const publish')],T_I,'finding 2'),
+ ('TB8-43',[(REVIEW,'      async (tx, now) => {\n        assertClean(command.content);\n','      async (tx, now) => {\n')],T_I,'finding 2'),
+ ('TB8-44',[(REVIEW,'        if (spec.publish) assertClean(before);\n','')],T_I,'finding 2'),
+ # Finding 3: the enqueue lock and the hourly cap.
+ ('TB8-45',[(LEARN,'    await this.deps.repository.lockLearningEnqueue(scope, tx);\n','')],T_I,'racing on one conversation'),
+ ('TB8-46',[(LEARN,"      return 'TENANT';\n",'')],T_I,'thirty jobs'),
+ # Finding 4: each SQL predicate of the decisions, alone (the service checks left in place).
+ ('TB8-47',[(REPO,"\n          eq(supportLearningCandidates.state, 'PENDING'),\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /** PENDING → REJECTED",'\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /** PENDING → REJECTED')],T_I,'finding 4'),
+ ('TB8-48',[(REPO,"\n          eq(supportLearningCandidates.state, 'PENDING'),\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /**\n   * ADR-0035 consequences",'\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /**\n   * ADR-0035 consequences')],T_I,'finding 4'),
+ ('TB8-49',[(REPO,"\n          eq(supportLearningCandidates.state, 'PENDING'),\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /** PENDING → REJECTED",'\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /** PENDING → REJECTED')],T_I,'finding 4'),
+ ('TB8-50',[(REPO,"\n          eq(supportLearningCandidates.state, 'PENDING'),\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /** PENDING → REJECTED","\n          eq(supportLearningCandidates.state, 'PENDING'),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /** PENDING → REJECTED")],T_I,'finding 4'),
+ ('TB8-51',[(REPO,"\n          eq(supportLearningCandidates.state, 'PENDING'),\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /**\n   * ADR-0035 consequences",'\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /**\n   * ADR-0035 consequences')],T_I,'finding 4'),
+ ('TB8-52',[(REPO,"\n          eq(supportLearningCandidates.state, 'PENDING'),\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /**\n   * ADR-0035 consequences","\n          eq(supportLearningCandidates.state, 'PENDING'),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /**\n   * ADR-0035 consequences")],T_I,'finding 4'),
+ # Finding 5: the proposal key is bound to its reply.
+ ('TB8-53',[(LEARN,'      outboundId: command.outboundId,\n    });\n    // Throws IDEMPOTENCY_PAYLOAD_MISMATCH','    });\n    // Throws IDEMPOTENCY_PAYLOAD_MISMATCH')],T_I,'finding 5'),
+ # Finding 6: the purge takes the title and the tags too.
+ ('TB8-54',[(REPO,'        title: null,\n        body: null,\n        rationale: null,','        body: null,\n        rationale: null,')],T_I,'retention purges'),
+ ('TB8-55',[(REPO,"        tags: sql`'{}'::text[]`,\n        textPurgedAt: now,",'        textPurgedAt: now,')],T_I,'retention purges'),
+ # Finding 7: a scrubber rejection never absorbs a clean proposal.
+ ('TB8-56',[(REPO,'      .where(and(eq(supportLearningCandidates.tenantId, tenantId), notSensitiveRejection))','      .where(and(eq(supportLearningCandidates.tenantId, tenantId)))')],T_I,'finding 7'),
+ # Nits: the reject note, a stop during the provider call, the proposer is the author.
+ ('TB8-57',[(REVIEW,'scrubSensitive(command.note).text','command.note')],T_I,'reject note'),
+ ('TB8-58',[(LEARN,"        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'inactive';\n        if (duplicate !== null) {",'        if (duplicate !== null) {')],T_I,'during the provider call'),
+ ('TB8-59',[(LEARN,'          if (reply.createdByAdminId !== adminId) {','          if (false) {')],T_I,'their own reply'),
 ]
 
 only=sys.argv[1:]

@@ -149,6 +149,12 @@ describe('scrubber: the shapes the substitute review found passing (PR #203, fin
     expect(text).not.toMatch(/6037|9975|5678|0912|4567/u);
   });
 
+  it('no figure of an amount survives, whatever its separator', () => {
+    for (const text of ['مبلغ ۲۵۰٫۰۰۰ تومان', 'مبلغ ۲۵۰٬۰۰۰ تومان', 'مبلغ 250.000 تومان']) {
+      expect(scrubSensitive(text).text, text).not.toMatch(/250|۲۵۰/u);
+    }
+  });
+
   it('no host, token or secret survives in the scrubbed text', () => {
     const text = scrubSensitive(
       'server: de1.example.com port 443, https://x/getSub?id=abc123, رمزتون abc123 هست, t.me/ali_reza',
