@@ -110,5 +110,13 @@ export interface SupportKnowledgeReader {
   activeForContext(
     scope: TenantContext,
     limit: number,
-  ): Promise<readonly { readonly title: string; readonly body: string }[]>;
+  ): Promise<
+    readonly {
+      readonly title: string;
+      readonly body: string;
+      /** TB9: the source a NEXA_BUILD article was built from; null for any other article. */
+      readonly sourceType: string | null;
+      readonly sourceKey: string | null;
+    }[]
+  >;
 }

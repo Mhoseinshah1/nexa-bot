@@ -293,6 +293,24 @@ export class ProductService {
   }
 
   /**
+   * The PUBLIC catalogue — what an ordinary customer (no reseller standing) is shown — for a
+   * caller that has already been authorised for its own purpose: TB9's knowledge build, which
+   * charges `support_knowledge.review`. No guard here because no customer is browsing; the
+   * rule is not restated either — the same eligible-panel view (`PanelSalesGate` through
+   * `catalogueView`) and the same SQL predicate as `browseCategory`.
+   */
+  async publicCatalogue(scope: TenantContext, limit: number): Promise<CustomerPage<ProductRecord>> {
+    const view = await this.catalogueView(scope, undefined);
+    if (view === null) return { items: [], hasMore: false };
+    return this.deps.repository.listCustomerVisibleProducts(
+      scope,
+      Math.max(limit, 1),
+      view.panelIds,
+      view.audience,
+    );
+  }
+
+  /**
    * Whose catalogue this is, and on which panels (`docs/wp9-reseller-audit.md` R5, R6).
    *
    * An ordinary customer — and a SUSPENDED reseller — sees the public catalogue on every

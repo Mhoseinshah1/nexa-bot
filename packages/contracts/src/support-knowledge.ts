@@ -331,3 +331,167 @@ export const SUPPORT_KNOWLEDGE_ERROR_CODES = {
   LIMIT: 'support_knowledge.limit',
   SCOPE_STOPPED: 'support_knowledge.scope_stopped',
 } as const;
+
+// ---------------------------------------------------------------------------
+// TB9 — the one-click knowledge build from NEXA (ADR-0035 §5, program §30, §39)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE source allowlist. A build reads these and nothing else, each through one adapter that
+ * maps a record to its customer-facing fields only. A test pins this list exactly, so a new
+ * source is a reviewed change.
+ *
+ * - `PRODUCT` — an ACTIVE product offered to EVERYONE: its public title, description, display
+ *   features and locations, duration, traffic and device limit. Never the price (the pricing
+ *   boundary is the one answer to "what does this cost"), never the panel.
+ * - `LOCATIONS` — the labels of the enabled service locations, as one article.
+ * - `CLIENT_APP` — an ENABLED client app: name, description, guide, help and official URLs.
+ * - `TUTORIAL` — the connection guides `bot.tutorial.<platform>`, the tenant's override or the
+ *   default, raw (they declare no placeholder, so nothing is rendered).
+ * - `FAQ` — an ACTIVE support FAQ entry.
+ * - `TERMS` — the current published terms version.
+ * - `SUPPORT_ACCOUNTS` — the `support.accounts` setting.
+ * - `PAYMENT_METHOD` — an ENABLED payment route's display name and customer instructions,
+ *   only when the instructions declare no placeholder. Never an account number or a gateway
+ *   setting.
+ */
+export const SUPPORT_KNOWLEDGE_BUILD_SOURCE_TYPES = [
+  'PRODUCT',
+  'LOCATIONS',
+  'CLIENT_APP',
+  'TUTORIAL',
+  'FAQ',
+  'TERMS',
+  'SUPPORT_ACCOUNTS',
+  'PAYMENT_METHOD',
+] as const;
+export type SupportKnowledgeBuildSourceType = (typeof SUPPORT_KNOWLEDGE_BUILD_SOURCE_TYPES)[number];
+
+/** A build is the tenant's one OPEN change-set until the next run supersedes it. */
+export const SUPPORT_KNOWLEDGE_BUILD_STATES = ['OPEN', 'SUPERSEDED'] as const;
+export type SupportKnowledgeBuildState = (typeof SUPPORT_KNOWLEDGE_BUILD_STATES)[number];
+
+/**
+ * What one source item proposes against the knowledge base.
+ *
+ * - `ADD` — no article holds this source yet.
+ * - `UPDATE` — the source changed and its article was not edited since the last build.
+ * - `UNCHANGED` — the source is as last built (or its article was retired): nothing to do.
+ * - `CONFLICT` — the source changed AND its article was edited since the last build. Never
+ *   applied without an explicit choice: a manual edit is never silently overwritten.
+ * - `RETIRE` — a built article whose source is no longer in the allowlisted set (a product
+ *   withdrawn, made reseller-only or put in a hidden category, an app disabled, a FAQ entry
+ *   deactivated, a payment route switched off). Only ever PROPOSED: a reviewer applies it (the
+ *   article is retired) or leaves it. Never part of «apply all», never automatic, and never
+ *   forced over an article that moved since the build.
+ */
+export const SUPPORT_KNOWLEDGE_PROPOSAL_KINDS = [
+  'ADD',
+  'UPDATE',
+  'UNCHANGED',
+  'CONFLICT',
+  'RETIRE',
+] as const;
+export type SupportKnowledgeProposalKind = (typeof SUPPORT_KNOWLEDGE_PROPOSAL_KINDS)[number];
+
+/** `PENDING → APPLIED | SKIPPED`. An UNCHANGED proposal is SKIPPED from birth. */
+export const SUPPORT_KNOWLEDGE_PROPOSAL_STATES = ['PENDING', 'APPLIED', 'SKIPPED'] as const;
+export type SupportKnowledgeProposalState = (typeof SUPPORT_KNOWLEDGE_PROPOSAL_STATES)[number];
+
+/** A reviewer's explicit choice on a CONFLICT: the build's text, or the edited article as is. */
+export const SUPPORT_KNOWLEDGE_CONFLICT_CHOICES = ['TAKE_BUILD', 'KEEP_CURRENT'] as const;
+export type SupportKnowledgeConflictChoice = (typeof SUPPORT_KNOWLEDGE_CONFLICT_CHOICES)[number];
+
+/** Items per source type and per build: a bound, so one run is a reviewable change-set. */
+export const SUPPORT_KNOWLEDGE_BUILD_LIMITS = { perSource: 100, proposals: 400 } as const;
+
+export const supportKnowledgeBuildRunRequestSchema = z
+  .object({ idempotencyKey: idempotencyKeySchema })
+  .strict();
+
+/**
+ * Apply the named PENDING proposals, or (null) every pending ADD and UPDATE. A CONFLICT never
+ * applies here; a RETIRE applies only when named.
+ */
+export const supportKnowledgeBuildApplyRequestSchema = z
+  .object({
+    idempotencyKey: idempotencyKeySchema,
+    proposalIds: z.array(z.uuid()).max(SUPPORT_KNOWLEDGE_BUILD_LIMITS.proposals).nullable(),
+  })
+  .strict();
+
+export const supportKnowledgeBuildResolveRequestSchema = z
+  .object({
+    idempotencyKey: idempotencyKeySchema,
+    choice: z.enum(SUPPORT_KNOWLEDGE_CONFLICT_CHOICES),
+  })
+  .strict();
+
+export const supportKnowledgeProposalViewSchema = z.object({
+  id: z.string(),
+  sourceType: z.enum(SUPPORT_KNOWLEDGE_BUILD_SOURCE_TYPES),
+  kind: z.enum(SUPPORT_KNOWLEDGE_PROPOSAL_KINDS),
+  state: z.enum(SUPPORT_KNOWLEDGE_PROPOSAL_STATES),
+  title: z.string(),
+  body: z.string(),
+  category: z.enum(SUPPORT_KNOWLEDGE_CATEGORIES),
+  /** The article as it was when the build ran (null for an ADD): the diff's other side. */
+  baseTitle: z.string().nullable(),
+  baseBody: z.string().nullable(),
+  baseRevision: z.number().int().nullable(),
+  articleId: z.string().nullable(),
+  resolution: z.enum(SUPPORT_KNOWLEDGE_CONFLICT_CHOICES).nullable(),
+});
+export type SupportKnowledgeProposalView = z.infer<typeof supportKnowledgeProposalViewSchema>;
+
+export const supportKnowledgeBuildViewSchema = z.object({
+  id: z.string(),
+  state: z.enum(SUPPORT_KNOWLEDGE_BUILD_STATES),
+  createdAt: z.string(),
+  /** The proposals of each kind, as they stand now (an UPDATE that met an edit is a CONFLICT). */
+  counts: z.object({
+    add: z.number().int(),
+    update: z.number().int(),
+    unchanged: z.number().int(),
+    conflict: z.number().int(),
+    retire: z.number().int(),
+  }),
+  /** Items whose text was clipped to the article bounds (title or body) when the build ran. */
+  truncated: z.number().int(),
+  /** Items dropped by the per-source or per-build bound (at least this many). */
+  capped: z.number().int(),
+  proposals: z.array(supportKnowledgeProposalViewSchema),
+});
+export type SupportKnowledgeBuildView = z.infer<typeof supportKnowledgeBuildViewSchema>;
+
+export const supportKnowledgeBuildApplyResponseSchema = z.object({
+  applied: z.number().int(),
+  /** Proposals whose article moved since the build: now CONFLICT, waiting for a choice. */
+  conflicted: z.number().int(),
+  /**
+   * Proposals that could not apply and were closed: an ADD whose source already has an article,
+   * an UPDATE whose article was retired, a RETIRE whose article moved since the build.
+   */
+  skipped: z.number().int(),
+});
+export type SupportKnowledgeBuildApplyResponse = z.infer<
+  typeof supportKnowledgeBuildApplyResponseSchema
+>;
+
+export const SUPPORT_KNOWLEDGE_BUILD_ROUTES = {
+  builds: '/support-knowledge/builds',
+  latest: '/support-knowledge/builds/latest',
+  apply: (buildId: string) => `/support-knowledge/builds/${encodeURIComponent(buildId)}/apply`,
+  resolve: (proposalId: string) =>
+    `/support-knowledge/proposals/${encodeURIComponent(proposalId)}/resolve`,
+} as const;
+
+export const SUPPORT_KNOWLEDGE_BUILD_ERROR_CODES = {
+  BUILD_NOT_FOUND: 'support_knowledge.build_not_found',
+  BUILD_SUPERSEDED: 'support_knowledge.build_superseded',
+  PROPOSAL_NOT_FOUND: 'support_knowledge.proposal_not_found',
+  NOT_A_CONFLICT: 'support_knowledge.not_a_conflict',
+  BASE_MOVED: 'support_knowledge.base_moved',
+  /** Another run of the build for this tenant committed first; the newest build is that one. */
+  BUILD_RUNNING: 'support_knowledge.build_running',
+} as const;

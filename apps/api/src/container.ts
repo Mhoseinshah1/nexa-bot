@@ -317,6 +317,8 @@ import { SupportFaqService } from './modules/control/support/application/support
 import { DrizzleSupportKnowledgeRepository } from './modules/control/support-knowledge/infrastructure/drizzle-support-knowledge.repository.js';
 import { SupportKnowledgeService } from './modules/control/support-knowledge/application/support-knowledge.service.js';
 import { SupportLearningService } from './modules/control/support-knowledge/application/support-learning.service.js';
+import { SupportKnowledgeBuildService } from './modules/control/support-knowledge/application/support-knowledge-build.service.js';
+import { NexaKnowledgeSources } from './modules/control/support-knowledge/infrastructure/nexa-knowledge-sources.js';
 import { DrizzleTermsRepository } from './modules/control/terms/infrastructure/drizzle-terms.repository.js';
 import { TermsService } from './modules/control/terms/application/terms.service.js';
 import { TermsAcceptanceService } from './modules/control/terms/application/terms-acceptance.service.js';
@@ -1170,6 +1172,8 @@ export interface Container {
   /** TB8: support knowledge and its review, and controlled learning (ADR-0035). */
   readonly supportKnowledge: SupportKnowledgeService;
   readonly supportLearning: SupportLearningService;
+  /** TB9: the one-click knowledge build from NEXA (ADR-0035 §5). */
+  readonly supportKnowledgeBuild: SupportKnowledgeBuildService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
@@ -5545,6 +5549,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * TB9: the build reads ONLY the allowlisted sources, customer-facing fields only, and
+   * proposes; a reviewer applies.
+   */
+  const supportKnowledgeBuild = new SupportKnowledgeBuildService({
+    repository: supportKnowledgeRepository,
+    sources: new NexaKnowledgeSources({
+      catalogue: productService,
+      locations: serviceLocationRepository,
+      clientApps: clientAppRepository,
+      templates: templateResolver,
+      faqs: supportFaqRepository,
+      terms: termsRepository,
+      settings: settingsResolver,
+      gateways: paymentGatewayRepository,
+    }),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const businessConversations = new BusinessConversationService({
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
@@ -6750,6 +6780,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportAutoReply,
     supportKnowledge,
     supportLearning,
+    supportKnowledgeBuild,
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,

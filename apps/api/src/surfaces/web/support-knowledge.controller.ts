@@ -4,11 +4,15 @@ import { z } from 'zod';
 import {
   API_PREFIX,
   SUPPORT_KNOWLEDGE_ARTICLE_STATES,
+  SUPPORT_KNOWLEDGE_BUILD_ROUTES,
   SUPPORT_KNOWLEDGE_ROUTES,
   SUPPORT_KNOWLEDGE_SOURCES,
   SUPPORT_LEARNING_CANDIDATE_STATES,
   routePattern,
   type SupportKnowledgeArticleView,
+  type SupportKnowledgeBuildApplyResponse,
+  type SupportKnowledgeBuildView,
+  type SupportKnowledgeProposalView,
   type SupportKnowledgeRevisionView,
   type SupportLearningCandidateView,
   type TenantContext,
@@ -16,8 +20,10 @@ import {
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import type { KnowledgeBuildDetail } from '../../modules/control/support-knowledge/application/support-knowledge-build.service.js';
 import type {
   KnowledgeArticleRecord,
+  KnowledgeProposalRecord,
   LearningCandidateRecord,
 } from '../../modules/control/support-knowledge/infrastructure/drizzle-support-knowledge.repository.js';
 
@@ -168,6 +174,46 @@ export class SupportKnowledgeController {
     return { jobId: job.id, state: job.state };
   }
 
+  /** TB9: the latest build and its proposals (`support_knowledge.view`). */
+  @Get(SUPPORT_KNOWLEDGE_BUILD_ROUTES.latest)
+  async latestBuild(
+    @Req() request: FastifyRequest,
+  ): Promise<{ build: SupportKnowledgeBuildView | null }> {
+    const { scope, actor } = await this.authenticate(request);
+    const detail = await this.container.supportKnowledgeBuild.latest(scope, actor);
+    return { build: detail === null ? null : buildView(detail) };
+  }
+
+  /** TB9: "build from NEXA" — a change-set of proposals; no article changes. */
+  @Post(SUPPORT_KNOWLEDGE_BUILD_ROUTES.builds)
+  async runBuild(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<{ build: SupportKnowledgeBuildView }> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return { build: buildView(await this.container.supportKnowledgeBuild.run(scope, actor, body)) };
+  }
+
+  @Post(routePattern(SUPPORT_KNOWLEDGE_BUILD_ROUTES.apply, 'id'))
+  async applyBuild(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<SupportKnowledgeBuildApplyResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return this.container.supportKnowledgeBuild.apply(scope, actor, id, body);
+  }
+
+  @Post(routePattern(SUPPORT_KNOWLEDGE_BUILD_ROUTES.resolve, 'id'))
+  async resolveProposal(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<SupportKnowledgeProposalView> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return proposalView(await this.container.supportKnowledgeBuild.resolve(scope, actor, id, body));
+  }
+
   private async authenticate(
     request: FastifyRequest,
     options: { write?: boolean } = {},
@@ -221,5 +267,35 @@ export function candidateView(row: LearningCandidateRecord): SupportLearningCand
     version: row.version,
     createdAt: row.createdAt.toISOString(),
     reviewedAt: row.reviewedAt?.toISOString() ?? null,
+  };
+}
+
+/** The source key never leaves the server: it is a row id for most sources. */
+export function proposalView(row: KnowledgeProposalRecord): SupportKnowledgeProposalView {
+  return {
+    id: row.id,
+    sourceType: row.sourceType,
+    kind: row.kind,
+    state: row.state,
+    title: row.content.title,
+    body: row.content.body,
+    category: row.content.category,
+    baseTitle: row.baseTitle,
+    baseBody: row.baseBody,
+    baseRevision: row.baseRevision,
+    articleId: row.articleId,
+    resolution: row.resolution,
+  };
+}
+
+export function buildView(detail: KnowledgeBuildDetail): SupportKnowledgeBuildView {
+  return {
+    id: detail.build.id,
+    state: detail.build.state,
+    createdAt: detail.build.createdAt.toISOString(),
+    counts: { ...detail.build.counts },
+    truncated: detail.build.truncated,
+    capped: detail.build.capped,
+    proposals: detail.proposals.map(proposalView),
   };
 }

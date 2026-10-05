@@ -234,6 +234,21 @@ export interface ProductRepository {
     tx?: unknown,
   ): Promise<CustomerPage<ProductCategoryRecord>>;
 
+  /**
+   * Every product an ordinary customer may be shown, across categories, in browse order: the
+   * SAME predicate as `listCustomerProductsInCategory` (one SQL statement of it, shared), not a
+   * second one. TB9's knowledge build reads the catalogue through this, so a product in a
+   * hidden or inactive category, an uncategorised or unpriced one, or one no eligible panel can
+   * take never becomes knowledge (substitute review of PR #204, B1).
+   */
+  listCustomerVisibleProducts(
+    scope: TenantContext,
+    limit: number,
+    eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductRecord>>;
+
   /** One PAGE of the products inside one category, every predicate applied in SQL. */
   listCustomerProductsInCategory(
     scope: TenantContext,

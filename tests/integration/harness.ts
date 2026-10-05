@@ -179,7 +179,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        legacy_import_run_inputs,
        -- TB1: Telegram Business connections, before the bots and tenants they name.
        -- TB4: the support AI's runs, keys and configuration.
-       support_knowledge_revisions, support_knowledge_articles, support_learning_candidates, support_learning_jobs,
+       support_knowledge_build_proposals, support_knowledge_builds, support_knowledge_revisions, support_knowledge_articles, support_learning_candidates, support_learning_jobs,
        business_conversation_escalations, support_ai_image_outcomes, support_ai_jobs, support_ai_runs, support_ai_provider_credentials, support_ai_configs,
        business_outbound_messages, business_messages, business_conversations,
        telegram_business_connections,

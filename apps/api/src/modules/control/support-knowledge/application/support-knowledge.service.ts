@@ -705,7 +705,7 @@ function asProposed(candidate: LearningCandidateRecord): SupportKnowledgeContent
  * customer, so a support phone or an official link belongs in a template or a setting, not
  * here. Fail closed: a false positive costs the reviewer an edit.
  */
-function assertClean(content: {
+export function assertClean(content: {
   readonly title: string;
   readonly body: string;
   readonly tags: readonly string[];
@@ -720,7 +720,7 @@ function assertClean(content: {
   }
 }
 
-function articleAudit(row: KnowledgeArticleRecord): Record<string, unknown> {
+export function articleAudit(row: KnowledgeArticleRecord): Record<string, unknown> {
   return {
     source: row.source,
     state: row.state,

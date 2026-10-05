@@ -410,6 +410,37 @@ export class DrizzleProductRepository implements ProductRepository {
     return { items: rows.slice(0, limit).map(toRecord), hasMore: rows.length > limit };
   }
 
+  /** See the port. The category join and `customerVisibleProduct` are the browse's own. */
+  async listCustomerVisibleProducts(
+    scope: TenantContext,
+    limit: number,
+    eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductRecord>> {
+    const tenantId = requireTenantId(scope);
+    if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
+    const rows = await this.exec(tx)
+      .select(getTableColumns(products))
+      .from(products)
+      .innerJoin(
+        productCategories,
+        and(
+          eq(productCategories.id, products.categoryId),
+          eq(productCategories.tenantId, products.tenantId),
+        ),
+      )
+      .where(this.customerVisibleProduct(tenantId, eligiblePanelIds, audience))
+      .orderBy(
+        asc(productCategories.sortOrder),
+        asc(productCategories.id),
+        asc(products.sortOrder),
+        asc(products.id),
+      )
+      .limit(limit + 1);
+    return { items: rows.slice(0, limit).map(toRecord), hasMore: rows.length > limit };
+  }
+
   async listCatalog(
     scope: TenantContext,
     limit: number,
