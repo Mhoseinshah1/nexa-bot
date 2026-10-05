@@ -100,3 +100,15 @@ export interface SupportServiceCardFact {
   /** The product's `service_location_label`; null for none or for a custom service. */
   readonly productLocationLabel: string | null;
 }
+
+/**
+ * TB8 — approved support knowledge (ADR-0035 §1). The implementation's query names
+ * `state = 'APPROVED' AND enabled` in SQL: a draft, a retired article and a learning candidate
+ * are unreachable from here by construction.
+ */
+export interface SupportKnowledgeReader {
+  activeForContext(
+    scope: TenantContext,
+    limit: number,
+  ): Promise<readonly { readonly title: string; readonly body: string }[]>;
+}

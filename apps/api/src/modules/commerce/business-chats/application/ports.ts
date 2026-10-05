@@ -603,6 +603,20 @@ export interface HandoffDetail {
  * Called inside the transaction that moved a conversation INTO `HANDOFF_REQUIRED`, and inside
  * the one that moved it OUT of it to a person or back to the AI.
  */
+/**
+ * TB8 — when an operator hands a conversation back to the AI, the support reply they gave in it
+ * may hold a reusable lesson. Called inside the resume's transaction, under the conversation's
+ * lock; it only ENQUEUES a learning job (or decides not to) and never throws for a business
+ * reason, because a refused learning job must not undo the handback.
+ */
+export interface HandbackLearningTrigger {
+  onHandBack(
+    scope: ScopeContext,
+    input: { readonly conversation: BusinessConversationRecord; readonly now: Date },
+    tx: unknown,
+  ): Promise<void>;
+}
+
 export interface HandoffEscalation {
   escalate(
     scope: ScopeContext,

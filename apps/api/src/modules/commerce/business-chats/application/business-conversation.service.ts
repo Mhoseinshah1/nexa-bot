@@ -45,6 +45,7 @@ import type {
   BusinessMessageRepository,
   BusinessOutboundRecord,
   BusinessOutboundRepository,
+  HandbackLearningTrigger,
   HandoffDetail,
   HandoffEscalation,
   InboundAutoTrigger,
@@ -80,6 +81,8 @@ export interface BusinessConversationServiceDeps {
   /** TB7: a handoff opens or links a ticket and signals an operator, in its transaction. */
   readonly escalation: HandoffEscalation;
   readonly escalations: Pick<BusinessEscalationRepository, 'forConversation'>;
+  /** TB8: a handback may owe a learning job. Absent: nothing is learned from handbacks. */
+  readonly learning?: HandbackLearningTrigger;
 }
 
 /** Why an AUTO row was not enqueued: the conversation moved on, or cannot send. */
@@ -414,6 +417,7 @@ export class BusinessConversationService {
         if (conversation.state === 'HANDOFF_REQUIRED') {
           await this.deps.escalation.resolved(scope, moved.id, tx);
         }
+        await this.deps.learning?.onHandBack(scope, { conversation: moved, now }, tx);
         return moved;
       },
     );

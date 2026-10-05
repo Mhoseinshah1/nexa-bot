@@ -450,6 +450,7 @@ describe('TB3 support context — the builder over fakes', () => {
       clientApps: { list: async () => [app] },
       serviceFacts: { factsOf: async () => [] },
       faqs: { list: async () => [] },
+      knowledge: { activeForContext: async () => [] },
       settings: { valueOf: async <T>() => ['@support'] as unknown as T },
       clock,
       ...overrides,
