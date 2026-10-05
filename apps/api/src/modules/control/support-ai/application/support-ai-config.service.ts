@@ -2,6 +2,7 @@ import {
   SUPPORT_AI_CREDENTIAL_ACCEPTED_CODE,
   SUPPORT_AI_CREDENTIAL_REJECTED_CODE,
   SUPPORT_AI_PROVIDERS,
+  supportAiBreakerState,
   errors,
   PLATFORM_ERROR_CODES,
   supportAiConfigUpdateRequestSchema,
@@ -38,6 +39,7 @@ import type {
 } from '../infrastructure/drizzle-support-ai.repository.js';
 import type { SupportAiAdapter } from './ports.js';
 import { SupportAiCredentialAlert, credentialRejectedDedupeKey } from './credential-alert.js';
+import { SUPPORT_AI_UNAVAILABLE_DEDUPE_KEY } from './support-ai-chain.js';
 
 export const SUPPORT_AI_CONFIGURE_PERMISSION = 'support_ai.configure' satisfies PermissionKey;
 export const SUPPORT_AI_AUTO_REPLY_PERMISSION = 'support_ai.auto_reply' satisfies PermissionKey;
@@ -91,10 +93,13 @@ export class SupportAiConfigService {
 
   async view(scope: ScopeContext, actor: ActorContext): Promise<SupportAiConfigResponse> {
     await this.deps.guard.check(scope, actor, SUPPORT_AI_CONFIGURE_PERMISSION);
-    const [stored, states] = await Promise.all([
+    const [stored, states, chainUnavailable] = await Promise.all([
       this.deps.configs.get(scope),
       this.deps.credentials.states(scope),
+      // TB10: the operational log only REPORTS the chain's condition; nothing decides from it.
+      this.deps.conditions.conditionIsOpen(scope, SUPPORT_AI_UNAVAILABLE_DEDUPE_KEY),
     ]);
+    const now = this.deps.clock.now();
     const byProvider = new Map(states.map((state) => [state.provider, state]));
     return {
       config: stored.config,
@@ -109,6 +114,10 @@ export class SupportAiConfigService {
           trippedUntil: state?.trippedUntil?.toISOString() ?? null,
           lastTestOutcome: state?.lastTestOutcome ?? null,
           lastTestedAt: state?.lastTestedAt?.toISOString() ?? null,
+          // TB10: the breaker as of this read, derived and never stored.
+          breaker: supportAiBreakerState(state?.trippedUntil ?? null, now),
+          consecutiveFailures: state?.consecutiveFailures ?? 0,
+          rejectedAt: state?.rejectedAt?.toISOString() ?? null,
         };
       }),
       capabilities: Object.fromEntries(
@@ -123,6 +132,7 @@ export class SupportAiConfigService {
           ];
         }),
       ) as SupportAiConfigResponse['capabilities'],
+      chainUnavailable,
     };
   }
 

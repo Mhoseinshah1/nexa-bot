@@ -47,6 +47,8 @@ export interface SupportAiCredentialState {
   readonly trippedUntil: Date | null;
   readonly lastTestOutcome: SupportAiOutcomeKind | null;
   readonly lastTestedAt: Date | null;
+  /** TB10: when the provider last rejected this key; null once it answered again. */
+  readonly rejectedAt: Date | null;
 }
 
 /**
@@ -75,6 +77,7 @@ export class DrizzleSupportAiCredentialStore {
         trippedUntil: supportAiProviderCredentials.trippedUntil,
         lastTestOutcome: supportAiProviderCredentials.lastTestOutcome,
         lastTestedAt: supportAiProviderCredentials.lastTestedAt,
+        rejectedAt: supportAiProviderCredentials.rejectedAt,
       })
       .from(supportAiProviderCredentials)
       .where(eq(supportAiProviderCredentials.tenantId, tenantId));
@@ -86,6 +89,7 @@ export class DrizzleSupportAiCredentialStore {
       trippedUntil: row.trippedUntil,
       lastTestOutcome: row.lastTestOutcome as SupportAiOutcomeKind | null,
       lastTestedAt: row.lastTestedAt,
+      rejectedAt: row.rejectedAt,
     }));
   }
 
