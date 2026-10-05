@@ -91,15 +91,23 @@ them with the rest. See `docs/deployment.md`.
   provider's breaker for five minutes. The chain skips it and uses the next step.
 - After five minutes ONE caller probes it. An `OK` closes the breaker. A failure re-opens it.
 - With no provider answering, Assist drafts fail («این بار پیش‌نویسی آماده نشد»). Every automatic job
-  hands off (`AI_UNAVAILABLE`) with a ticket, and a person answers. Nothing is queued to be
-  sent later.
+  hands off (`AI_UNAVAILABLE`) and a person answers. Nothing is queued to be sent later, and
+  **the customer is sent nothing at all** — no automatic «a colleague will answer» message
+  exists. They wait, in silence, for a person.
 
 **What to do:**
 
 1. Check the provider's status page. If it is a regional outage, add or move a fallback step
    to another provider on `/support-ai` and save.
-2. If the mode is `AUTO_REPLY_SAFE` and the outage is long, consider `ASSIST_ONLY` (§8) so
-   customers are not told «به همکار سپرده شد» for every message.
+2. If the mode is `AUTO_REPLY_SAFE` and the outage is long, consider `ASSIST_ONLY` (§8). What
+   staying in AUTO costs: every conversation a customer writes in while it is `AI_ACTIVE` is
+   handed off — one escalation record, one `support.handoff_required` alert in the inbox, the
+   ops group and `/alerts`, and, for a linked NEXA customer, a ticket opened (or their active
+   ticket linked; an unlinked peer gets none, `OQ-TB-40`). The conversation then stays
+   `HANDOFF_REQUIRED`, so later messages in it raise nothing more until a person returns it to
+   the AI — and returning it during the outage hands it off again on the next message.
+   `ASSIST_ONLY` raises none of this: conversations stay `AI_ACTIVE`, and a person answers
+   from the inbox.
 3. Watch «آمار پشتیبانی» → «فراخوانی سرویس‌های هوش مصنوعی»: `TIMEOUT`/`TEMPORARY` falling
    back to `OK` is the recovery.
 
@@ -118,7 +126,7 @@ health: the chain falls back to the next step on every call until someone acts.
 2. Either top up and press «آزمون اتصال» (an `OK` closes the alert), or replace the key (§2),
    or delete it to take the provider out of the chain.
 3. If the provider was the only step, Assist and automatic replies are effectively off until
-   then. Every automatic job hands off.
+   then. Every automatic job hands off, at the cost described in §3 step 2.
 
 ## 5. A stuck outbound lane (UNCONFIRMED rows)
 
@@ -131,7 +139,7 @@ Telegram may have delivered it, and a second send would be a duplicate in the cu
 
 - In a conversation's «پیام‌های ارسالی» card, a row «نامشخص — دوباره ارسال نمی‌شود» (UNCONFIRMED).
 - For an automatic reply, the conversation is handed off (`SEND_OUTCOME_UNKNOWN`) with a
-  ticket and a `support.handoff_required` alert.
+  `support.handoff_required` alert, and a ticket when the customer is a linked NEXA customer.
 
 **What to do:**
 
@@ -249,9 +257,9 @@ already queued.
      restart assistant
    ```
 
-   A job claimed by the dead process is reclaimed when its lease expires. A job claimed three
-   times without a result is failed: as a draft, «این بار پیش‌نویسی آماده نشد»; as an automatic job,
-   a handoff.
+   A job claimed by the dead process is reclaimed when its lease expires. A job whose first
+   three claims all died without a result is failed on the next claim: as a draft,
+   «این بار پیش‌نویسی آماده نشد»; as an automatic job, a handoff.
 
 4. If it cannot be made healthy and automatic replies are on, set the mode to `ASSIST_ONLY` or
    `OFF` (§8) so customers are handed to people instead of waiting.
