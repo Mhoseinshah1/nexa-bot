@@ -34,8 +34,13 @@ restores the file byte for byte. Run on 2026-10-05 against a dedicated integrati
 | TB8-26 | Reject never calls the approve route (web)                                     | reject sends no edit, and never the approve route                                  | KILLED |
 | TB8-27 | No write control without `support_knowledge.review` (web)                      | draws no write control without the review permission                               | KILLED |
 | TB8-28 | One learning job per claim, leased from its own claim (TB5 review, finding 4)  | claims learning jobs ONE per claim, each leased from its own claim (unit)          | KILLED |
+| TB8-29 | A stopped tenant's learning jobs are not claimed (checked in the claim's tx)   | a stopped tenant: no learning job claimed, no provider call, no write              | KILLED |
+| TB8-30 | A stopped tenant's retention pass purges nothing                               | a stopped tenant: the retention is a pass that purges nothing                      | KILLED |
+| TB8-31 | A job claimed before a stop asks no provider after it                          | a stopped tenant: no learning job claimed, no provider call, no write              | KILLED |
 
-**28 of 28 killed** on the restack onto the reviewed TB5 (PR #200): TB8-21's anchor moved with
+**31 of 31 killed** on the restack onto the reviewed TB7 (PR #202), where TB8-29..31 were added
+for the scope-activity checks of the learning claim, the retention and the provider call.
+Before that, **28 of 28 killed** on the restack onto the reviewed TB5 (PR #200): TB8-21's anchor moved with
 the loop's one-per-claim learning pass, and TB8-28 was added for it. Before that, **27 of 27
 killed.** TB8-07 and TB8-08 were re-run after their anchors were corrected for
 prettier's line breaks (the first pass reported `ANCHOR MISSING`, which the driver counts as
@@ -53,6 +58,6 @@ Notes:
   match still merges through the index's `ON CONFLICT DO NOTHING` path, which the "merges as
   an extra source" test covers.
 - **Not mutated:** the per-tenant hourly cap (no test enqueues 30 jobs), the append-only
-  trigger on revisions (asserted by the integration test, but it is SQL in `0207`), and the
-  `dropped_scope` path of `produce` (no test stops a tenant mid-extraction). This record claims
-  nothing about them.
+  trigger on revisions (asserted by the integration test, but it is SQL in `0208`), and the
+  activity check in `produce`'s result transaction (no test stops a tenant mid-extraction).
+  This record claims nothing about them.

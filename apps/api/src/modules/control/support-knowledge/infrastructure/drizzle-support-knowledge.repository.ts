@@ -681,9 +681,11 @@ export class DrizzleSupportKnowledgeRepository {
     cutoff: Date,
     now: Date,
     limit: number,
+    tx?: unknown,
   ): Promise<number> {
     const tenantId = requireTenantId(scope);
-    const due = this.db
+    const db = exec(this.db, tx);
+    const due = db
       .select({ id: supportLearningCandidates.id })
       .from(supportLearningCandidates)
       .where(
@@ -695,7 +697,7 @@ export class DrizzleSupportKnowledgeRepository {
         ),
       )
       .limit(limit);
-    const rows = await this.db
+    const rows = await db
       .update(supportLearningCandidates)
       .set({ body: null, rationale: null, textPurgedAt: now, updatedAt: now })
       .where(
@@ -804,13 +806,15 @@ export class DrizzleSupportKnowledgeRepository {
     now: Date,
     leaseUntil: Date,
     limit: number,
+    tx?: unknown,
   ): Promise<readonly LearningJobRecord[]> {
     const tenantId = requireTenantId(scope);
+    const db = exec(this.db, tx);
     const free = or(
       isNull(supportLearningJobs.claimedUntil),
       lte(supportLearningJobs.claimedUntil, now),
     );
-    const selected = await this.db
+    const selected = await db
       .select({ id: supportLearningJobs.id })
       .from(supportLearningJobs)
       .where(
@@ -823,7 +827,7 @@ export class DrizzleSupportKnowledgeRepository {
       .orderBy(asc(supportLearningJobs.createdAt), asc(supportLearningJobs.id))
       .limit(limit);
     if (selected.length === 0) return [];
-    const rows = await this.db
+    const rows = await db
       .update(supportLearningJobs)
       .set({
         claimedUntil: leaseUntil,

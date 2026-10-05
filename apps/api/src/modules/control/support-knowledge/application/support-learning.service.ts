@@ -53,6 +53,12 @@ export const SUPPORT_LEARNING_DEDUPE_WINDOW = 200;
 /** A job claimed this many times without a result is failed, never retried for ever. */
 export const SUPPORT_LEARNING_MAX_ATTEMPTS = 3;
 
+/**
+ * What one learning job came to: its recorded outcome; `gone` when it was resolved elsewhere
+ * meanwhile; `inactive` when the tenant has stopped, and nothing was written.
+ */
+export type LearningRunResult = SupportLearningJobOutcome | 'gone' | 'inactive';
+
 export interface SupportLearningServiceDeps {
   readonly repository: DrizzleSupportKnowledgeRepository;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
@@ -289,12 +295,13 @@ export class SupportLearningService implements HandbackLearningTrigger {
     scope: ScopeContext,
     input: { readonly now: Date; readonly leaseUntil: Date; readonly limit: number },
   ): Promise<Record<string, number>> {
-    const claimed = await this.deps.repository.claimDue(
-      scope,
-      input.now,
-      input.leaseUntil,
-      input.limit,
-    );
+    // Claimed in a transaction that checks scope activity (docs/conventions.md, "Refusing is
+    // not ending"): a stopped tenant's learning jobs are not leased, counted or produced, and
+    // are left exactly as they are.
+    const claimed = await this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return [];
+      return this.deps.repository.claimDue(scope, input.now, input.leaseUntil, input.limit, tx);
+    });
     const counts: Record<string, number> = {};
     for (const job of claimed) {
       const outcome =
@@ -310,17 +317,18 @@ export class SupportLearningService implements HandbackLearningTrigger {
   /** Purges the text of candidates never approved, after the retention. */
   async purge(scope: ScopeContext, now: Date): Promise<number> {
     const cutoff = new Date(now.getTime() - SUPPORT_LEARNING_TEXT_RETENTION_DAYS * 86_400_000);
-    return this.deps.repository.purgeCandidateText(scope, cutoff, now, 500);
+    return this.deps.uow.run(scope, async (tx) => {
+      // A stopped tenant is a pass that did nothing, retention included.
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;
+      return this.deps.repository.purgeCandidateText(scope, cutoff, now, 500, tx);
+    });
   }
 
   /**
    * Produces one job, OUTSIDE any transaction (the provider call can take a minute). Returns
    * the outcome recorded, or `gone` when the job was resolved elsewhere meanwhile.
    */
-  async produce(
-    scope: ScopeContext,
-    job: LearningJobRecord,
-  ): Promise<SupportLearningJobOutcome | 'gone'> {
+  async produce(scope: ScopeContext, job: LearningJobRecord): Promise<LearningRunResult> {
     const { config } = await this.deps.configs.get(scope);
     if (config.mode === 'OFF') return this.finish(scope, job.id, 'DONE', 'dropped_mode');
 
@@ -328,6 +336,12 @@ export class SupportLearningService implements HandbackLearningTrigger {
     if (reply === null || !isEligibleReply(reply, job.conversationId) || reply.body === null) {
       return this.finish(scope, job.id, 'DONE', 'dropped_source');
     }
+    // The decision to send a transcript to a provider is business work: checked in a
+    // transaction first, and a stopped tenant's job is left untouched.
+    const active = await this.deps.uow.run(scope, (tx) =>
+      this.deps.scopeActivity.scopeIsActive(scope, tx),
+    );
+    if (!active) return 'inactive';
     const transcript = await this.deps.messages.recent(scope, job.conversationId, 40);
     const message = learningUserMessage({
       transcript: transcript.map((line) => ({
@@ -384,9 +398,9 @@ export class SupportLearningService implements HandbackLearningTrigger {
     try {
       return await this.deps.uow.run(scope, async (tx) => {
         const now = this.deps.clock.now();
-        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
-          return this.finishIn(scope, job.id, 'DONE', 'dropped_scope', null, now, tx);
-        }
+        // Refusing is not ending (docs/conventions.md): a tenant stopped during the call
+        // writes nothing, and its job is left QUEUED under its lease.
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'inactive';
         if (duplicate !== null) {
           await this.deps.repository.mergeSource(scope, duplicate.id, source, now, tx);
           return this.finishIn(scope, job.id, 'DONE', 'merged', duplicate.id, now, tx);
@@ -466,13 +480,19 @@ export class SupportLearningService implements HandbackLearningTrigger {
     jobId: string,
     state: 'DONE' | 'FAILED',
     outcome: SupportLearningJobOutcome,
-  ): Promise<SupportLearningJobOutcome | 'gone'> {
-    const ok = await this.deps.repository.finishJob(scope, jobId, {
-      state,
-      outcome,
-      now: this.deps.clock.now(),
+  ): Promise<LearningRunResult> {
+    // Every write checks scope activity in its own transaction; a stopped tenant's job is left
+    // as it is.
+    return this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'inactive';
+      const ok = await this.deps.repository.finishJob(
+        scope,
+        jobId,
+        { state, outcome, now: this.deps.clock.now() },
+        tx,
+      );
+      return ok ? outcome : 'gone';
     });
-    return ok ? outcome : 'gone';
   }
 
   private mutationDeps() {

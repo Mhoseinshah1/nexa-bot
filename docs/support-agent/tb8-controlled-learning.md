@@ -17,7 +17,7 @@ Only an approval publishes. Nothing becomes knowledge on a timer, by count or by
 ## Knowledge has one home
 
 `support_knowledge_articles` (current state) and `support_knowledge_revisions` (append-only,
-every body ever published, with its reviewer) — ADR-0035 §1, migration `0206`.
+every body ever published, with its reviewer) — ADR-0035 §1, migration `0207`.
 
 | Column     | Values                                                                                |
 | ---------- | ------------------------------------------------------------------------------------- |
@@ -43,7 +43,7 @@ the two meet.
 
 ## Learning jobs
 
-`support_learning_jobs` (`0206`). A job names ONE human reply: a `business_outbound_messages` row
+`support_learning_jobs` (`0207`). A job names ONE human reply: a `business_outbound_messages` row
 of origin `OPERATOR` or `ASSIST`, `DELIVERED`, with its text still held, in that conversation.
 
 | Trigger             | When                                                                                                                                                               |
@@ -86,7 +86,12 @@ lease behind its sibling's provider call), and gives up after three claims (`att
    KINDS of what matched (`auto_rejected`). It never reaches the review queue.
 5. Duplicates are merged (below), otherwise a `PENDING` candidate is inserted. One transaction
    writes the candidate and resolves the job from `QUEUED`; a job resolved elsewhere meanwhile
-   rolls the candidate back. A tenant that stopped meanwhile writes nothing (`dropped_scope`).
+   rolls the candidate back. A tenant that stopped meanwhile writes nothing: its job is left
+   QUEUED under its lease ("Refusing is not ending", `docs/conventions.md`). The same holds at
+   the claim, before the provider call, at every other job resolution and at the retention
+   pass — each checks scope activity in its own transaction, and a stopped tenant's learning is
+   left exactly as it is. `dropped_scope` stays in the contract's vocabulary and is no longer
+   written.
 
 ### The scrubber
 
@@ -124,7 +129,7 @@ a conflict.
 
 ## Review
 
-Permissions (contract commit; grants in `0207`):
+Permissions (contract commit; grants in `0208`):
 
 | Key                         | Risk   | Roles                              | Requires                 |
 | --------------------------- | ------ | ---------------------------------- | ------------------------ |

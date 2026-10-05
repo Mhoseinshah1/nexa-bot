@@ -67,6 +67,10 @@ M=[
  ('TB8-27',[(PAGE,"        actions={mayReview ? newButton : undefined}","        actions={newButton}")],T_W,'no write control'),
  # On the reviewed TB5 (PR #200, finding 4): one learning job per claim, leased from its claim.
  ('TB8-28',[(LOOP,"            limit: 1,\n","            limit: ASSISTANT_LEARNING_BATCH,\n")],T_L,'ONE per claim'),
+ # Refusing is not ending (docs/conventions.md): a stopped tenant's learning is left untouched.
+ ('TB8-29',[(LEARN,"      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return [];\n","")],T_I,'no learning job claimed'),
+ ('TB8-30',[(LEARN,"      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;\n","")],T_I,'purges nothing'),
+ ('TB8-31',[(LEARN,"    if (!active) return 'inactive';\n","")],T_I,'no learning job claimed'),
 ]
 
 only=sys.argv[1:]

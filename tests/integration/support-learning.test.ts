@@ -751,4 +751,69 @@ describe('controlled learning (TB8)', () => {
       'support_knowledge.scope_stopped',
     );
   });
+  it('a stopped tenant: no learning job claimed, no provider call, no write; retention does nothing', async () => {
+    const { conversationId } = await conversationWithReply(
+      scopeA,
+      BOT,
+      support,
+      '7000001',
+      'سلام. لینک را از «سرویس‌های من» کپی کنید و در v2rayNG با + وارد کنید.',
+    );
+    await handBack(scopeA, support, conversationId);
+    expect(await jobCount()).toBe(1);
+    const stop = (status: 'STOPPED' | 'ACTIVE') =>
+      ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = ${status} WHERE id = ${tenantA.tenantId}`,
+      );
+    const jobs = async () =>
+      (
+        await ctx.container.database.db.execute(
+          sql`SELECT state, outcome, attempts, claimed_until FROM support_learning_jobs`,
+        )
+      ).rows;
+    await stop('STOPPED');
+    try {
+      await loop.tick();
+      // Left exactly as it was: not leased, not counted, not resolved, no provider call.
+      expect(requests).toEqual([]);
+      expect(await jobs()).toEqual([
+        { state: 'QUEUED', outcome: null, attempts: 0, claimed_until: null },
+      ]);
+      expect(await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {})).toEqual([]);
+    } finally {
+      await stop('ACTIVE');
+    }
+    // Claimed while active, the tenant stops before the provider call: nothing happens.
+    const now = ctx.container.clock.now();
+    const [claimed] = await repo.claimDue(tenantA, now, new Date(now.getTime() + 60_000), 1);
+    await stop('STOPPED');
+    try {
+      expect(await learning.produce(tenantA, claimed!)).toBe('inactive');
+      expect(requests).toEqual([]);
+      expect(await jobs()).toMatchObject([{ state: 'QUEUED', outcome: null, attempts: 1 }]);
+    } finally {
+      await stop('ACTIVE');
+    }
+  });
+
+  it('a stopped tenant: the retention is a pass that purges nothing', async () => {
+    const { candidate } = await pendingCandidate();
+    await ctx.container.database.db.execute(
+      sql`UPDATE support_learning_candidates SET created_at = now() - interval '31 days'`,
+    );
+    const now = ctx.container.clock.now();
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+    try {
+      expect(await learning.purge(tenantA, now)).toBe(0);
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${tenantA.tenantId}`,
+      );
+    }
+    const [kept] = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(kept).toMatchObject({ id: candidate.id, body: lesson.body });
+    expect(await learning.purge(tenantA, now)).toBe(1);
+  });
 });
