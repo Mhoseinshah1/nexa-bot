@@ -66,7 +66,9 @@ export type SupportLearningRejectReason = (typeof SUPPORT_LEARNING_REJECT_REASON
 /**
  * What the scrubber recognises — only the KIND is ever stored or shown, never the match.
  * `REDACTION_MARK` is the scrubber's own placeholder appearing in a model's output: a lesson
- * written about the redacted value is about one customer.
+ * written about the redacted value is about one customer. `HOST` is a server address by name
+ * (a domain, with or without a port or a path, or a URL with no token in it): program §29
+ * lists server addresses beside phones and cards.
  */
 export const SUPPORT_LEARNING_SENSITIVE_KINDS = [
   'EMAIL',
@@ -76,6 +78,7 @@ export const SUPPORT_LEARNING_SENSITIVE_KINDS = [
   'SUBSCRIPTION_LINK',
   'URL_TOKEN',
   'IP_ADDRESS',
+  'HOST',
   'UUID',
   'SECRET',
   'USERNAME',
@@ -276,8 +279,11 @@ export type SupportKnowledgeRevisionView = z.infer<typeof supportKnowledgeRevisi
 export const supportLearningCandidateViewSchema = z.object({
   id: z.string(),
   state: z.enum(SUPPORT_LEARNING_CANDIDATE_STATES),
-  /** The title survives the purge: the duplicate check matches it (ADR-0035). */
-  title: z.string(),
+  /**
+   * Null once purged, like the body: a candidate never approved keeps no text after the
+   * retention. The duplicate check matches the normalised title, which is not shown.
+   */
+  title: z.string().nullable(),
   /** Null once purged (a candidate never approved, after the retention). */
   body: z.string().nullable(),
   category: z.enum(SUPPORT_KNOWLEDGE_CATEGORIES),
