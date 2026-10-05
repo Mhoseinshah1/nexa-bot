@@ -42,7 +42,7 @@ M=[
  ('TB10-05',[(BC,"  if (replied !== null && inbound.getTime() <= replied) return null;\n","")],T_U,'replied after the customer'),
  ('TB10-06',[(BC,"  return first !== null && (replied === null || first.getTime() > replied) ? first : inbound;","  return inbound;")],T_U,'OLDEST customer message'),
  ('TB10-07',[(SAI,"  return trippedUntil.getTime() > now.getTime() ? 'OPEN' : 'HALF_OPEN';","  return trippedUntil.getTime() >= now.getTime() ? 'OPEN' : 'HALF_OPEN';")],T_U,'HALF_OPEN from it on'),
- ('TB10-08',[(SAN,"    case 'handoff_ai_unavailable':\n      return 'HANDED_OFF';","    case 'handoff_ai_unavailable':\n      return 'DROPPED';")],T_U,'classifies every outcome'),
+ ('TB10-08',[(SAN,"    case 'handoff_ai_unavailable':\n    case 'handoff_stale':\n      return 'HANDED_OFF';","    case 'handoff_ai_unavailable':\n      return 'DROPPED';\n    case 'handoff_stale':\n      return 'HANDED_OFF';")],T_U,'classifies every outcome'),
  # --- the inbox query and cursor -----------------------------------------------------------
  ('TB10-09',[(REPO,".orderBy(desc(priority), desc(activity), desc(businessConversations.id))",".orderBy(desc(activity), desc(businessConversations.id))")],T_I,'waiting for a person first'),
  ('TB10-10',[(REPO,"            : sql`(${priority}, ${activity}, ${businessConversations.id}) < (${\n                input.before.priority === 1\n              }, ${input.before.at.toISOString()}::timestamptz, ${input.before.id}::uuid)`,","            : sql`(${activity}, ${businessConversations.id}) < (${input.before.at.toISOString()}::timestamptz, ${input.before.id}::uuid)`,")],T_I,'pages without a gap or a repeat'),
