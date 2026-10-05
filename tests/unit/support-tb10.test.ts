@@ -43,7 +43,41 @@ describe('the customer’s wait (businessUnansweredSince)', () => {
     expect(businessUnansweredSince({ ...base, lastHumanAt: at('2026-10-05T10:11:00Z') })).toBe(
       null,
     );
-    expect(businessUnansweredSince({ ...base, lastAiAt: at('2026-10-05T10:10:00Z') })).toBe(null);
+    expect(businessUnansweredSince({ ...base, lastAiAt: at('2026-10-05T10:10:01Z') })).toBe(null);
+  });
+
+  /*
+   * PR #205 review, S1: Telegram dates the customer's message in whole seconds; a reply the
+   * server stamped carries milliseconds. On one grain, a reply in the customer's own second
+   * does not say who spoke first — so the customer is still waiting.
+   */
+  it('is still waiting for a customer message in the same Telegram second as a reply (one clock, one grain)', () => {
+    const sameSecond = {
+      lastInboundAt: at('2026-10-05T10:10:00.000Z'),
+      lastHumanAt: null,
+      firstUnansweredAt: at('2026-10-05T10:10:00.000Z'),
+    };
+    // The reply confirmed at a sub-second server `now`, inside the customer's second.
+    expect(
+      businessUnansweredSince({ ...sameSecond, lastAiAt: at('2026-10-05T10:10:00.400Z') }),
+    ).toEqual(at('2026-10-05T10:10:00.000Z'));
+    // The reply's own Telegram date, the same second: still waiting.
+    expect(
+      businessUnansweredSince({ ...sameSecond, lastAiAt: at('2026-10-05T10:10:00.000Z') }),
+    ).toEqual(at('2026-10-05T10:10:00.000Z'));
+    // From the next second on, the reply answers the customer.
+    expect(
+      businessUnansweredSince({ ...sameSecond, lastAiAt: at('2026-10-05T10:10:01.000Z') }),
+    ).toBe(null);
+    // The held message in the reply's second is the start of the wait, not the inbound stamp.
+    expect(
+      businessUnansweredSince({
+        lastInboundAt: at('2026-10-05T10:12:00.000Z'),
+        lastHumanAt: at('2026-10-05T10:10:00.700Z'),
+        lastAiAt: null,
+        firstUnansweredAt: at('2026-10-05T10:10:00.000Z'),
+      }),
+    ).toEqual(at('2026-10-05T10:10:00.000Z'));
   });
 
   it('counts the LATER of a person’s and the AI’s replies', () => {

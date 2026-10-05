@@ -397,9 +397,23 @@ export function businessInboxPriority(state: BusinessConversationState): 0 | 1 {
 /**
  * TB10 — since when the customer has been waiting for an answer, or null when nobody owes
  * one: their latest message is not newer than the latest reply a person or the AI
- * delivered. The instant is the OLDEST of the customer's messages after that reply (what
- * the repository reads), falling back to the latest inbound stamp when no such message is
- * held (an edit of an older message counts as the customer speaking again).
+ * delivered. The instant is the OLDEST of the customer's messages from that reply's second
+ * on (what the repository reads), falling back to the latest inbound stamp when no such
+ * message is held (an edit of an older message counts as the customer speaking again).
+ *
+ * ONE CLOCK, ONE GRAIN (PR #205 review, S1). Every stamp compared here is Telegram's own
+ * `date` — whole seconds: the customer's message, an owner's message typed in Telegram, and
+ * (since the review) a reply NEXA delivered, stamped with the `date` Telegram returned for it
+ * (the same `date` its OWN_ECHO row carries). So the comparison is made on whole seconds, and
+ * a customer message in the SAME second as a reply is UNANSWERED: within one second Telegram
+ * does not say which came first, and doubt shows the customer as waiting rather than hiding
+ * them. A reply answers the customer only from the second after their message. A stamp from
+ * the server's clock (a delivery Telegram's answer gave no date for, or a row stamped before
+ * the review) is compared on the same grain.
+ *
+ * `businessUnansweredSecond` is that grain; the repository's `firstUnansweredAt` reads the
+ * same rule in SQL (`m.sent_at >= date_trunc('second', replied)`), and the integration suite
+ * pins that the two agree.
  *
  * Activity only, never a resolution (`OQ-TB-09`): a conversation nobody owes an answer is
  * not one the AI "resolved".
@@ -415,10 +429,17 @@ export function businessUnansweredSince(conversation: {
   const replies = [conversation.lastHumanAt, conversation.lastAiAt].filter(
     (at): at is Date => at !== null,
   );
-  const replied = replies.length === 0 ? null : Math.max(...replies.map((at) => at.getTime()));
-  if (replied !== null && inbound.getTime() <= replied) return null;
+  const replied = replies.length === 0 ? null : Math.max(...replies.map(businessUnansweredSecond));
+  if (replied !== null && businessUnansweredSecond(inbound) < replied) return null;
   const first = conversation.firstUnansweredAt;
-  return first !== null && (replied === null || first.getTime() > replied) ? first : inbound;
+  return first !== null && (replied === null || businessUnansweredSecond(first) >= replied)
+    ? first
+    : inbound;
+}
+
+/** The whole Telegram second an instant falls in — the grain `businessUnansweredSince` compares on. */
+export function businessUnansweredSecond(at: Date): number {
+  return Math.floor(at.getTime() / 1000);
 }
 
 const conversationSummarySchema = z.object({
