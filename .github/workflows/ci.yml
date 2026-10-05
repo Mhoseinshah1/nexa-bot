@@ -49,7 +49,10 @@ env:
 jobs:
   static:
     name: Typecheck, lint and boundaries
-    runs-on: ubuntu-latest
+    # Pilot for the self-hosted runner: this job only, the lightest one, needs
+    # no service container and no secret. Every other job stays on GitHub's
+    # hosted runners until this one has proved the runner.
+    runs-on: [self-hosted, linux, x64, nexa-ci]
     timeout-minutes: 20
     steps:
       # Pinned to an immutable commit. A tag is a moving pointer that whoever
