@@ -20,6 +20,7 @@ import type {
 } from '../../../platform/panels/application/ports.js';
 import { toProviderCredentials } from '../../../platform/panels/application/probe-core.js';
 import type { PanelPolicyGate } from '../../../platform/panels/application/panel-policy.js';
+import { isConfirmedUnusable } from '../../../platform/panels/application/panel-eligibility.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
@@ -91,6 +92,14 @@ export interface ServiceRefreshDeps {
   readonly http: Pick<SafeHttpClient, 'forBase'>;
   readonly urlPolicy: UrlPolicyOptions;
   readonly probeBudget: ProbeBudget;
+  /**
+   * Pre-support A2: the floor an OPPORTUNISTIC read (a card being opened) must leave in the
+   * tenant's bucket — the background floor the scheduled usage sweep already uses
+   * (`usageSyncBudgetReserveFor`), on the SAME bucket. A tapped «♻️» takes from the floor
+   * as it always did (reserve 0); an open is housekeeping and is outranked by the monitor,
+   * a paid create and an operator's test.
+   */
+  readonly backgroundBudgetReserve: number;
   readonly guard: PermissionGuard;
   readonly scopeActivity: ScopeActivityReader;
   readonly panelPolicy: PanelPolicyGate;
@@ -147,7 +156,20 @@ export class ServiceRefreshService {
     scope: TenantContext,
     actor: ActorContext,
     input: { readonly customerId: UserId; readonly serviceId: string },
+    /**
+     * Pre-support A2: `onOpen` is the read a card makes when it is opened, which nobody
+     * asked for. Two extra bounds, and only for it — the «♻️» button is unchanged:
+     *
+     * - a panel the monitor has CONFIRMED unusable (`isConfirmedUnusable`, the predicate
+     *   eligibility uses) is not dialled. During an outage a failed read writes no
+     *   `usage_synced_at` and gives its reservation back, so the minimum interval does
+     *   not hold, and every open would wait out the client's timeout and spend a token;
+     * - the token is taken above the background floor, not from it, so repeated opens
+     *   cannot drain the bucket under the monitor, the sweep or a paid create.
+     */
+    options: { readonly onOpen?: boolean } = {},
   ): Promise<ServiceRefreshResult> {
+    const onOpen = options.onOpen === true;
     await this.deps.guard.check(scope, actor, CUSTOMER_ROTATION_PERMISSION);
 
     let service: ServiceRecord;
@@ -173,6 +195,9 @@ export class ServiceRefreshService {
     }
 
     const view = await this.deps.panels.find(scope, service.panelId);
+    if (onOpen && view !== null && isConfirmedUnusable(view.health, this.deps.clock.now())) {
+      return { outcome: 'FAILED' };
+    }
     const operable = decideOperability({
       panel:
         view === null
@@ -224,7 +249,7 @@ export class ServiceRefreshService {
           this.deps.probeBudget,
           startedAt,
           tx,
-          0,
+          onOpen ? this.deps.backgroundBudgetReserve : 0,
         );
         if (!budget.permitted) throw new RefreshBudgetRefused();
         return 'ADMITTED' as const;
