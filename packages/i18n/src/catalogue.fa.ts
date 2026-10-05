@@ -94,7 +94,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.transfer_prompt':
     'سرویس را به چه کاربری می‌خواهید انتقال دهید؟ شناسه کاربری عددی مقصد را ارسال کنید.',
   'bot.service.transfer_confirm':
-    '🔄 انتقال سرویس\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n{icon:identity} آی دی عددی کاربر مقصد: {recipientId}\n{icon:user} نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
+    '🔄 انتقال سرویس\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n{icon:identity} شناسه کاربری مقصد: {recipientId}\n{icon:user} نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
   'bot.service.transfer_confirm_button': '✅ تأیید انتقال سرویس',
   'bot.service.transfer_done': '{icon:success} سرویس با موفقیت به کاربر مقصد منتقل شد.',
   'bot.service.transfer_received':

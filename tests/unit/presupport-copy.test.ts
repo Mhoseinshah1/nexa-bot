@@ -52,7 +52,24 @@ describe('A3: the wallet screen calls the identifier «شناسه کاربری»
     const text = body('bot.wallet.summary');
     expect(text).toContain('{icon:identity} شناسه کاربری: {telegramId}');
     expect(text).not.toContain('آی دی عددی');
+    // The brief spells the old label with a zero-width non-joiner; that form is refused too.
+    expect(text).not.toContain('آی\u200cدی');
     expect(tokensOf(text)).toEqual(declared('bot.wallet.summary'));
+  });
+
+  it('bot.service.transfer_confirm labels the recipient «شناسه کاربری مقصد»', () => {
+    // Brief §3: no customer-facing screen may still name a user's identifier the old way.
+    const text = body('bot.service.transfer_confirm');
+    expect(text).toContain('{icon:identity} شناسه کاربری مقصد: {recipientId}');
+    expect(text).not.toContain('آی دی عددی');
+    expect(text).not.toContain('آی\u200cدی');
+    expect(tokensOf(text)).toEqual(declared('bot.service.transfer_confirm'));
+  });
+
+  it('no customer-facing default still calls the identifier «آی دی»', () => {
+    for (const [key, text] of Object.entries(CATALOGUE_FA)) {
+      expect(text, key).not.toMatch(/آی[ \u200c]?دی/);
+    }
   });
 });
 

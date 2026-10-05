@@ -23,6 +23,8 @@ M=[
  ('COPY-02','bot.payment.gateway_invoice_order_fee',NEW_A11,OLD_A11,'gateway_invoice_order_fee says','A11 order-fee invoice'),
  ('COPY-03','bot.payment.gateway_invoice_topup_fee',NEW_A11,OLD_A11,'gateway_invoice_topup_fee says','A11 top-up-fee invoice'),
  ('COPY-04','bot.wallet.summary','شناسه کاربری: {telegramId}','آی دی عددی: {telegramId}','bot.wallet.summary labels','A3 wallet label'),
+ ('COPY-06','bot.service.transfer_confirm','شناسه کاربری مقصد: {recipientId}','آی دی عددی کاربر مقصد: {recipientId}','transfer_confirm labels','A3 transfer recipient label'),
+ ('COPY-07','bot.wallet.summary','شناسه کاربری: {telegramId}','آی\u200cدی عددی: {telegramId}','bot.wallet.summary labels','A3 wallet label, ZWNJ spelling'),
  ('COPY-05','bot.discount.ask',"'کد تخفیف خود را ارسال کنید'","'کد تخفیف خود را در پیام بعدی بفرستید.'",'bot.discount.ask reads','E4 discount prompt'),
 ]
 
