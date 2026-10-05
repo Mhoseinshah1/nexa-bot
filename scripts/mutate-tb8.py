@@ -1,0 +1,90 @@
+"""TB8 (controlled learning) mutation driver (docs/support-agent/tb8-falsification.md).
+
+Reverts one rule at a time, runs the named test, and restores the file from the copy it read.
+Most mutants need the integration database (`bash scripts/dev-services.sh`); point
+TEST_DATABASE_URL at a database of your own if another suite is running.
+Usage: python3 scripts/mutate-tb8.py [TB8-01 ...]
+"""
+import subprocess, sys, os
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if subprocess.run(['git','diff','--quiet','--','apps','packages']).returncode != 0:
+  sys.exit('apps/ or packages/ has uncommitted changes; a mutation restore would discard them')
+
+K='apps/api/src/modules/control/support-knowledge/'
+REPO=K+'infrastructure/drizzle-support-knowledge.repository.ts'
+REVIEW=K+'application/support-knowledge.service.ts'
+LEARN=K+'application/support-learning.service.ts'
+PROMPT=K+'domain/learning-prompt.ts'
+DEDUPE=K+'domain/dedupe.ts'
+SCRUB=K+'domain/scrubber.ts'
+BUILDER='apps/api/src/modules/commerce/support-context/application/support-context.builder.ts'
+CONV='apps/api/src/modules/commerce/business-chats/application/business-conversation.service.ts'
+LOOP='apps/api/src/modules/control/support-ai/application/assistant-loop.ts'
+PAGE='apps/web/src/pages/support-knowledge.tsx'
+T_I=('integration','tests/integration/support-learning.test.ts')
+T_U=('unit','tests/unit/support-learning-scrubber.test.ts')
+T_W=('web','tests/web/support-knowledge.test.tsx')
+
+M=[
+ # Only APPROVED and enabled knowledge reaches the agent, in SQL.
+ ('TB8-01',[(REPO,"          eq(supportKnowledgeArticles.state, 'APPROVED'),\n          eq(supportKnowledgeArticles.enabled, true),","          eq(supportKnowledgeArticles.enabled, true),")],T_I,'a draft, a disabled and a retired'),
+ ('TB8-02',[(REPO,"          eq(supportKnowledgeArticles.state, 'APPROVED'),\n          eq(supportKnowledgeArticles.enabled, true),","          eq(supportKnowledgeArticles.state, 'APPROVED'),")],T_I,'a draft, a disabled and a retired'),
+ ('TB8-03',[(BUILDER,"      this.deps.knowledge.activeForContext(scope, SUPPORT_CONTEXT_LIMITS.knowledge),","      Promise.resolve([] as readonly { title: string; body: string }[]),")],T_I,'approve publishes ONE article'),
+ # A decision is PENDING-only, versioned, idempotent and scoped.
+ ('TB8-04',[(REVIEW,"        if (before.state !== 'PENDING') throw notInState(before.state);\n        assertVersion(before.version, command.expectedVersion);\n        const after = await this.deps.repository.rejectCandidate(","        assertVersion(before.version, command.expectedVersion);\n        const after = await this.deps.repository.rejectCandidate("),
+            (REPO,"        rejectReason: 'REVIEWER',\n        reviewedByAdminId: input.reviewerAdminId,\n        reviewedAt: input.now,\n        version: sql`${supportLearningCandidates.version} + 1`,\n        updatedAt: input.now,\n      })\n      .where(\n        and(\n          eq(supportLearningCandidates.tenantId, tenantId),\n          eq(supportLearningCandidates.id, id),\n          eq(supportLearningCandidates.state, 'PENDING'),\n","        rejectReason: 'REVIEWER',\n        reviewedByAdminId: input.reviewerAdminId,\n        reviewedAt: input.now,\n        version: sql`${supportLearningCandidates.version} + 1`,\n        updatedAt: input.now,\n      })\n      .where(\n        and(\n          eq(supportLearningCandidates.tenantId, tenantId),\n          eq(supportLearningCandidates.id, id),\n")],T_I,'approve publishes ONE article'),
+ ('TB8-05',[(REVIEW,"        if (before.state !== 'PENDING') throw notInState(before.state);\n        assertVersion(before.version, command.expectedVersion);\n        const content = command.edit ?? asProposed(before);","        if (before.state !== 'PENDING') throw notInState(before.state);\n        const content = command.edit ?? asProposed(before);"),
+            (REPO,"          eq(supportLearningCandidates.state, 'PENDING'),\n          eq(supportLearningCandidates.version, input.expectedVersion),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /** PENDING → REJECTED","          eq(supportLearningCandidates.state, 'PENDING'),\n        ),\n      )\n      .returning();\n    return row === undefined ? null : candidate(row);\n  }\n\n  /** PENDING → REJECTED")],T_I,'a stale version is refused'),
+ ('TB8-06',[(REVIEW,"    if (found !== null) {\n      const replayed","    if (found !== null && false) {\n      const replayed")],T_I,'approve publishes ONE article'),
+ ('TB8-07',[(REVIEW,"  'support_knowledge.review' satisfies PermissionKey;","  'support_knowledge.view' satisfies PermissionKey;")],T_I,'permissions: support views'),
+ ('TB8-08',[(REPO,"      .where(\n        and(eq(supportLearningCandidates.tenantId, tenantId), eq(supportLearningCandidates.id, id)),\n      )\n      .limit(1);\n    return row === undefined ? null : candidate(row);","      .where(eq(supportLearningCandidates.id, id))\n      .limit(1);\n    return row === undefined ? null : candidate(row);")],T_I,'tenant isolation'),
+ ('TB8-09',[(REVIEW,"        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {","        if (false) {")],T_I,'a stopped tenant'),
+ # What is approved is scrubbed again; an approved edit is a new revision.
+ ('TB8-10',[(REVIEW,"        if (kinds.length > 0) {","        if (false) {")],T_I,'still holds personal data'),
+ ('TB8-11',[(REVIEW,"        const publish = before.state === 'APPROVED';","        const publish = false;")],T_I,'a draft, a disabled and a retired'),
+ # Learning: scrub before and after the provider; AI OFF learns nothing.
+ ('TB8-12',[(PROMPT,"    const result = scrubSensitive(value.slice(0, max));","    const result = { text: value.slice(0, max), kinds: [] as string[] };")],T_I,'never reads the customer'),
+ ('TB8-13',[(LEARN,"        const rejected = kinds.length > 0;","        const rejected = false;")],T_I,'rejected automatically'),
+ ('TB8-14',[(LEARN,"    if (config.mode === 'OFF') return;\n","")],T_I,'AI OFF'),
+ ('TB8-15',[(LEARN,"    if (config.mode === 'OFF') return this.finish(scope, job.id, 'DONE', 'dropped_mode');\n","")],T_I,'AI OFF'),
+ # Volume: the reply's key, the 24-hour window, duplicates.
+ ('TB8-16',[(LEARN,"      return 'CONVERSATION';\n","")],T_I,'24-hour window'),
+ ('TB8-17',[(LEARN,"    const duplicate = findDuplicate(normalizedTitle, recent);","    const duplicate = null as { id: string } | null;\n    void findDuplicate;\n    void recent;")],T_I,'NEAR duplicate'),
+ ('TB8-18',[(DEDUPE,"    .replace(/[يى]/gu, 'ی')\n","")],T_U,'normalises Arabic letters'),
+ # Which replies may teach: delivered, a person's, in that conversation.
+ ('TB8-19',[(LEARN,"    row.state === 'DELIVERED' &&\n","")],T_I,'only a DELIVERED reply'),
+ ('TB8-20',[(CONV,"        await this.deps.learning?.onHandBack(scope, { conversation: moved, now }, tx);\n","")],T_I,'a handback learns a PENDING candidate'),
+ ('TB8-21',[(LOOP,"      if (learning !== undefined) {\n        const learningCounts","      if (learning !== undefined && false) {\n        const learningCounts")],T_I,'a handback learns a PENDING candidate'),
+ # Retention: only what was never approved, and only once due.
+ ('TB8-22',[(REPO,"          lt(supportLearningCandidates.createdAt, cutoff),\n","")],T_I,'retention purges'),
+ # The scrubber's own shapes.
+ ('TB8-23',[(SCRUB,"  return text.replace(/[۰-۹٠-٩]/gu, (digit) => {","  return text.replace(/[٠-٩]/gu, (digit) => {")],T_U,'Persian digits'),
+ ('TB8-24',[(SCRUB,"  { kind: 'CARD', regex:","  { kind: 'LONG_NUMBER', regex:")],T_U,'card'),
+ # Web: the edited text is what is approved; reject is never an approve; gating.
+ ('TB8-25',[(PAGE,"run(editing, 'approve', editContent)","run(editing, 'approve', null)")],T_W,'EDITED text'),
+ ('TB8-26',[(PAGE,"      command.decision === 'approve'\n        ? approveLearningCandidate(","      command.decision !== 'never'\n        ? approveLearningCandidate(")],T_W,'reject sends no edit'),
+ ('TB8-27',[(PAGE,"        actions={mayReview ? newButton : undefined}","        actions={newButton}")],T_W,'no write control'),
+]
+
+only=sys.argv[1:]
+killed=0; ran=0
+for mid,edits,(project,test),filt in M:
+  if only and mid not in only: continue
+  originals={}; ok=True
+  for f,a,b in edits:
+    s=originals.get(f) or open(f).read()
+    originals.setdefault(f,s)
+    cur=open(f).read()
+    if cur.count(a)!=1:
+      print(mid,'ANCHOR MISSING in',f,cur.count(a),flush=True); ok=False; break
+    open(f,'w').write(cur.replace(a,b))
+  if ok:
+    ran+=1
+    r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
+    out=r.stdout+r.stderr
+    failed=[l.strip() for l in out.splitlines() if '×' in l]
+    summ=[l.strip() for l in out.splitlines() if 'Tests ' in l]
+    if r.returncode!=0: killed+=1
+    print(mid,'KILLED' if r.returncode!=0 else 'SURVIVED',summ,failed[:2],flush=True)
+  for f,s in originals.items(): open(f,'w').write(s)
+print(f'{killed} of {ran} killed',flush=True)
