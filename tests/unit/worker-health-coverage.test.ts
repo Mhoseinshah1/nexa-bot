@@ -98,6 +98,7 @@ describe('worker health coverage', () => {
   it('finds every entrypoint, so the scan below cannot pass vacuously', () => {
     const found = [...entrypoints().keys()].sort();
     expect(found).toEqual([
+      'main.assistant.ts',
       'main.monitor.ts',
       'main.provisioner.ts',
       'main.recovery.ts',

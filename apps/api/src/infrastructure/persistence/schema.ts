@@ -267,6 +267,12 @@ import {
   SUPPORT_AI_OPERATIONS,
   SUPPORT_AI_OUTCOMES,
   SUPPORT_AI_PROVIDERS,
+  SUPPORT_AI_CONFIDENCES,
+  SUPPORT_AI_DECISIONS,
+  SUPPORT_AI_JOB_KINDS,
+  SUPPORT_AI_JOB_STATES,
+  SUPPORT_AI_TICKET_ACTIONS,
+  SUPPORT_AI_TOPICS,
   OPS_LOG_TOPIC_STATES,
   // R2: the Telegram messages edited in place.
   TELEGRAM_WIZARD_KINDS,
@@ -13638,5 +13644,108 @@ export const supportAiRuns = pgTable(
     check('support_ai_runs_attempt_check', sql`attempt_index BETWEEN 0 AND 2`),
     check('support_ai_runs_latency_check', sql`latency_ms >= 0`),
     check('support_ai_runs_model_check', sql`length(model) BETWEEN 1 AND 128`),
+  ],
+);
+
+/**
+ * TB5 — a support-AI job and its result (ADR-0034 §7). In TB5 every job is an operator's
+ * request for an Assist draft; TB7 adds the automatic kind.
+ *
+ * The `assistant` process role claims QUEUED rows (`claimed_until` lease, `attempts`), calls the
+ * provider chain OUTSIDE any transaction, and records the validated decision here. A draft is a
+ * SUGGESTION: nothing on this row is ever sent except by an operator's explicit send, through
+ * the ordinary outbound lane as an `ASSIST` row (a human signal).
+ *
+ * The AI text (summary, suggested reply) is a customer's conversation restated: bounded, and
+ * purged with the transcript's retention (`SUPPORT_AI_DRAFT_RETENTION_DAYS`).
+ */
+export const supportAiJobs = pgTable(
+  'support_ai_jobs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    kind: text('kind').notNull(),
+    conversationId: uuid('conversation_id').notNull(),
+    requestedByAdminId: uuid('requested_by_admin_id'),
+    idempotencyKey: text('idempotency_key').notNull(),
+    /**
+     * What the key was used for (TB5 review, finding 5): a replay under the same key with a
+     * different conversation is refused, never answered with the other conversation's job.
+     * Nullable only because 0201 created rows without it; every insert writes it.
+     */
+    requestHash: text('request_hash'),
+    state: text('state').notNull().default('QUEUED'),
+    attempts: integer('attempts').notNull().default(0),
+    claimedUntil: timestamptz('claimed_until'),
+    readyAt: timestamptz('ready_at'),
+    failureCode: text('failure_code'),
+    decision: text('decision'),
+    topic: text('topic'),
+    confidence: text('confidence'),
+    ticketAction: text('ticket_action'),
+    summary: text('summary'),
+    intent: text('intent'),
+    suggestedReply: text('suggested_reply'),
+    factRefs: text('fact_refs')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    factLabels: text('fact_labels')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    provider: text('provider'),
+    model: text('model'),
+    sentOutboundId: uuid('sent_outbound_id'),
+    textPurgedAt: timestamptz('text_purged_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('support_ai_jobs_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('support_ai_jobs_idempotency_key').on(table.tenantId, table.idempotencyKey),
+    /** The claim: queued jobs, oldest first. */
+    index('support_ai_jobs_due_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`state = 'QUEUED'`),
+    index('support_ai_jobs_conversation_idx').on(
+      table.tenantId,
+      table.conversationId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.conversationId],
+      foreignColumns: [businessConversations.tenantId, businessConversations.id],
+      name: 'support_ai_jobs_conversation_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.requestedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'support_ai_jobs_admin_fk',
+    }),
+    check('support_ai_jobs_kind_check', enumCheck('kind', SUPPORT_AI_JOB_KINDS)),
+    check('support_ai_jobs_state_check', enumCheck('state', SUPPORT_AI_JOB_STATES)),
+    check('support_ai_jobs_decision_check', enumCheck('decision', SUPPORT_AI_DECISIONS)),
+    check('support_ai_jobs_topic_check', enumCheck('topic', SUPPORT_AI_TOPICS)),
+    check('support_ai_jobs_confidence_check', enumCheck('confidence', SUPPORT_AI_CONFIDENCES)),
+    check(
+      'support_ai_jobs_ticket_action_check',
+      enumCheck('ticket_action', SUPPORT_AI_TICKET_ACTIONS),
+    ),
+    check('support_ai_jobs_provider_check', enumCheck('provider', SUPPORT_AI_PROVIDERS)),
+    // A ready or sent draft carries a decision; a queued one carries nothing yet.
+    check(
+      'support_ai_jobs_result_shape_check',
+      sql`(state IN ('READY', 'SENT')) <= (decision IS NOT NULL OR text_purged_at IS NOT NULL)`,
+    ),
+    check('support_ai_jobs_sent_check', sql`(state = 'SENT') = (sent_outbound_id IS NOT NULL)`),
+    check(
+      'support_ai_jobs_reply_check',
+      sql`suggested_reply IS NULL OR length(suggested_reply) <= 4000`,
+    ),
+    check('support_ai_jobs_summary_check', sql`summary IS NULL OR length(summary) <= 600`),
+    check('support_ai_jobs_attempts_check', sql`attempts >= 0`),
   ],
 );

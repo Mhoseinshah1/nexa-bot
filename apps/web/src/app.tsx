@@ -43,6 +43,7 @@ import { TermsPage } from './pages/terms';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chats';
+import { SupportAiPage } from './pages/support-ai';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
   BulkOperationDetailPage,
@@ -188,6 +189,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   // TB2: Telegram Business conversations.
   '/business-chats',
   '/business-chats/:id',
+  // TB4/TB5: the support AI's settings.
+  '/support-ai',
   '/payments',
   '/payments/:id',
   '/compensations',
@@ -615,10 +618,25 @@ export function resolve(
           id={businessChat['id'] ?? ''}
           denied={!may('business_chats.view')}
           mayReply={may('business_chats.reply')}
+          mayAssist={may('support_ai.assist')}
         />
       ),
       crumbs: [nav('business-chats'), { label: t('web.bchat_detail') }],
       title: t('web.bchat_detail'),
+    };
+  }
+
+  // TB4/TB5: the support AI's mode, chain, keys and usage (ADR-0034 §8).
+  if (route.path === '/support-ai') {
+    return {
+      element: (
+        <SupportAiPage
+          denied={!may('support_ai.configure')}
+          mayAutoReply={may('support_ai.auto_reply')}
+        />
+      ),
+      crumbs: [{ label: t('web.sai_title') }],
+      title: t('web.sai_title'),
     };
   }
 

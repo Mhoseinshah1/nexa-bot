@@ -421,6 +421,11 @@ export const PERMISSIONS = [
     'HIGH',
   ),
   p('support_ai.auto_reply', 'Allow the support AI to answer customers automatically', 'CRITICAL'),
+  // TB5: asking the AI for a draft spends provider budget; sending it stays `business_chats.reply`.
+  p(
+    'support_ai.assist',
+    'Ask the support AI for a summary and a suggested reply in a business conversation',
+  ),
 
   /*
    * Campaigns (round N, C1, `docs/round-n-campaigns-audit.md` D10). A campaign composes
@@ -628,6 +633,7 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // TB2: the Telegram Business conversations the support account holds.
       'business_chats.view',
       'business_chats.reply',
+      'support_ai.assist',
       'tickets.categories.edit',
       // Program §6: an operator drafts the rules; PUBLISHING them stays the owner's.
       'terms.view',
@@ -696,6 +702,7 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // TB2: the Telegram Business conversations the support account holds.
       'business_chats.view',
       'business_chats.reply',
+      'support_ai.assist',
       // Phase A2: a direct message to one customer, from their page.
       'users.message.send',
       'users.message.view',
@@ -899,6 +906,7 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'tickets.categories.edit': 'tickets.view',
   'business_chats.reply': 'business_chats.view',
   'support_ai.auto_reply': 'support_ai.configure',
+  'support_ai.assist': 'business_chats.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass

@@ -481,6 +481,19 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
+    /*
+     * TB4/TB5: the support AI's mode, provider chain, keys and usage (ADR-0034 §8).
+     * `support_ai.configure`, which every read and write on the page charges; entering
+     * automatic replies is charged `support_ai.auto_reply` by the server on save.
+     */
+    id: 'support-ai',
+    path: '/support-ai',
+    label: 'web.nav_support_ai',
+    icon: 'zap',
+    permission: 'support_ai.configure',
+    group: 'web.navgroup_config',
+  },
+  {
     // R1: the customer main menu — order, switches (a setting) and labels (templates).
     id: 'bot-buttons',
     path: '/bot-buttons',

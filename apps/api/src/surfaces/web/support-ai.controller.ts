@@ -13,10 +13,13 @@ import {
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  SUPPORT_AI_ASSIST_ROUTES,
   SUPPORT_AI_ROUTES,
   routePattern,
   supportAiControlRequestSchema,
+  supportAiDraftRequestSchema,
   type SupportAiConfigResponse,
+  type SupportAiDraftView,
   type SupportAiTestResponse,
   type SupportAiUsageResponse,
   type TenantContext,
@@ -25,6 +28,7 @@ import { z } from 'zod';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import type { SupportAiJobRecord } from '../../modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository.js';
 
 const testRequestSchema = z.object({ model: z.string().trim().min(1).max(128) });
 
@@ -92,6 +96,51 @@ export class SupportAiController {
     return this.container.supportAiConfig.usage(scope, actor);
   }
 
+  /** TB5: the recent drafts of one conversation (`support_ai.assist`). */
+  @Get(routePattern(SUPPORT_AI_ASSIST_ROUTES.drafts, 'conversationId'))
+  async drafts(
+    @Req() request: FastifyRequest,
+    @Param('conversationId') conversationId: string,
+  ): Promise<{ drafts: SupportAiDraftView[] }> {
+    const { scope, actor } = await this.authenticate(request);
+    const drafts = await this.container.supportAssist.drafts(scope, actor, conversationId);
+    return { drafts: drafts.map(draftView) };
+  }
+
+  /** TB5: asks the `assistant` role for a draft. Nothing is sent. */
+  @Post(routePattern(SUPPORT_AI_ASSIST_ROUTES.drafts, 'conversationId'))
+  async requestDraft(
+    @Req() request: FastifyRequest,
+    @Param('conversationId') conversationId: string,
+    @Body() body: unknown,
+  ): Promise<SupportAiDraftView> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { idempotencyKey } = supportAiDraftRequestSchema.parse(body);
+    return draftView(
+      await this.container.supportAssist.request(scope, actor, { conversationId, idempotencyKey }),
+    );
+  }
+
+  /** TB5: the operator sends the draft, edited or not, through the ordinary lane. */
+  @Post(routePattern(SUPPORT_AI_ASSIST_ROUTES.send, 'draftId'))
+  async sendDraft(
+    @Req() request: FastifyRequest,
+    @Param('draftId') draftId: string,
+    @Body() body: unknown,
+  ): Promise<{ outboundId: string }> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return this.container.supportAssist.send(scope, actor, draftId, body);
+  }
+
+  @Post(routePattern(SUPPORT_AI_ASSIST_ROUTES.discard, 'draftId'))
+  async discardDraft(
+    @Req() request: FastifyRequest,
+    @Param('draftId') draftId: string,
+  ): Promise<{ discarded: boolean }> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return this.container.supportAssist.discard(scope, actor, draftId);
+  }
+
   private async authenticate(
     request: FastifyRequest,
     options: { write?: boolean } = {},
@@ -106,4 +155,24 @@ export class SupportAiController {
       actor: adminActor(admin, correlationId, request, session.id),
     };
   }
+}
+
+function draftView(job: SupportAiJobRecord): SupportAiDraftView {
+  return {
+    id: job.id,
+    state: job.state,
+    createdAt: job.createdAt.toISOString(),
+    readyAt: job.readyAt?.toISOString() ?? null,
+    failureCode: job.failureCode,
+    decision: job.decision,
+    topic: job.topic,
+    confidence: job.confidence,
+    summary: job.summary,
+    intent: job.intent,
+    suggestedReply: job.suggestedReply,
+    ticketAction: job.ticketAction,
+    factLabels: [...job.factLabels],
+    provider: job.provider,
+    model: job.model,
+  };
 }

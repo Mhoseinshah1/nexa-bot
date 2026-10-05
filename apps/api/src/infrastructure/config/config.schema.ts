@@ -549,6 +549,8 @@ export const configSchema = z
     PROVISIONER_TICK_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
     /** Where the provisioner writes its heartbeat. */
     PROVISIONER_HEARTBEAT_PATH: z.string().trim().min(1).default('/tmp/nexa-provisioner.heartbeat'),
+    /** TB5: the `assistant` role's heartbeat (deploy/compose.yml reads the same default). */
+    ASSISTANT_HEARTBEAT_PATH: z.string().trim().min(1).default('/tmp/nexa-assistant.heartbeat'),
 
     /**
      * Backup.

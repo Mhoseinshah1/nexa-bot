@@ -545,6 +545,19 @@ import {
   type BusinessChatSendResponse,
   type BusinessConnectionListResponse,
   type BusinessConversationState,
+  // TB4/TB5: the support AI's configuration and Assist drafts.
+  SUPPORT_AI_ASSIST_ROUTES,
+  SUPPORT_AI_ROUTES,
+  supportAiConfigResponseSchema,
+  supportAiDraftViewSchema,
+  supportAiTestResponseSchema,
+  supportAiUsageResponseSchema,
+  type SupportAiConfigInput,
+  type SupportAiConfigResponse,
+  type SupportAiDraftView,
+  type SupportAiProvider,
+  type SupportAiTestResponse,
+  type SupportAiUsageResponse,
   TICKET_ROUTES,
   ticketAssigneesResponseSchema,
   ticketCategoryListResponseSchema,
@@ -4178,6 +4191,151 @@ export function resumeBusinessChat(input: {
     { idempotencyKey: input.idempotencyKey },
     businessChatControlResponseSchema,
   );
+}
+
+// ---------------------------------------------------------------------------
+// TB4/TB5 — the support AI: configuration, keys, usage and Assist drafts (ADR-0034)
+// ---------------------------------------------------------------------------
+
+type FieldKind = 'boolean' | 'number' | 'string';
+type FieldValue<V extends FieldKind> = V extends 'boolean'
+  ? boolean
+  : V extends 'number'
+    ? number
+    : string;
+
+/**
+ * A one-field answer (`{ version }`, `{ replaced }`, `{ removed }`, `{ outboundId }`,
+ * `{ discarded }`). No shared schema declares these, and the web bundle carries no zod of
+ * its own, so the check is written out — the `customServiceDeletedResponse` pattern.
+ */
+function oneField<K extends string, V extends FieldKind>(
+  field: K,
+  kind: V,
+): { parse: (value: unknown) => Record<K, FieldValue<V>> } {
+  return {
+    parse(value: unknown) {
+      if (typeof value === 'object' && value !== null && field in value) {
+        const read = (value as Record<string, unknown>)[field];
+        if (typeof read === kind) return { [field]: read } as Record<K, FieldValue<V>>;
+      }
+      throw new Error(`Unexpected response: no ${kind} "${field}".`);
+    },
+  };
+}
+
+const supportAiDraftListResponse = {
+  parse(value: unknown): { drafts: SupportAiDraftView[] } {
+    if (typeof value === 'object' && value !== null && 'drafts' in value) {
+      const { drafts } = value as { drafts: unknown };
+      if (Array.isArray(drafts)) {
+        return { drafts: drafts.map((draft) => supportAiDraftViewSchema.parse(draft)) };
+      }
+    }
+    throw new Error('Unexpected response to a draft list.');
+  },
+};
+
+/**
+ * The tenant's support-AI configuration, its version and each provider's key STATE —
+ * `setAt`, region, breaker and last test. Never a key, never a masked stand-in (ADR-0023).
+ * `support_ai.configure`.
+ */
+export function fetchSupportAiConfig(): Promise<SupportAiConfigResponse> {
+  return authedGet(SUPPORT_AI_ROUTES.config, supportAiConfigResponseSchema);
+}
+
+/**
+ * Replaces the configuration, naming the version the operator saw. ENTERING automatic
+ * replies is charged `support_ai.auto_reply` by the server; nothing here decides that.
+ */
+export function saveSupportAiConfig(input: {
+  readonly idempotencyKey: string;
+  readonly expectedVersion: number | null;
+  readonly config: SupportAiConfigInput;
+}): Promise<{ version: number }> {
+  return put(SUPPORT_AI_ROUTES.config, input, oneField('version', 'number'));
+}
+
+/** Sets or replaces one provider's key. The key goes up once and is never read back. */
+export function setSupportAiCredential(input: {
+  readonly provider: SupportAiProvider;
+  readonly idempotencyKey: string;
+  readonly apiKey: string;
+  readonly region?: 'INTERNATIONAL' | 'CHINA';
+}): Promise<{ replaced: boolean }> {
+  const { provider, ...body } = input;
+  return put(SUPPORT_AI_ROUTES.credential(provider), body, oneField('replaced', 'boolean'));
+}
+
+/** Removes one provider's key. The controller reads the idempotency key from the query. */
+export function deleteSupportAiCredential(input: {
+  readonly provider: SupportAiProvider;
+  readonly idempotencyKey: string;
+}): Promise<{ removed: boolean }> {
+  const query = new URLSearchParams({ idempotencyKey: input.idempotencyKey });
+  return del(
+    `${SUPPORT_AI_ROUTES.credential(input.provider)}?${query.toString()}`,
+    {},
+    oneField('removed', 'boolean'),
+  );
+}
+
+/** The operator's connection test against one model of one provider. */
+export function testSupportAiProvider(input: {
+  readonly provider: SupportAiProvider;
+  readonly model: string;
+}): Promise<SupportAiTestResponse> {
+  return post(
+    SUPPORT_AI_ROUTES.test(input.provider),
+    { model: input.model },
+    supportAiTestResponseSchema,
+  );
+}
+
+/** Thirty days of telemetry, summarised. Never a prompt, never a response. */
+export function fetchSupportAiUsage(): Promise<SupportAiUsageResponse> {
+  return authedGet(SUPPORT_AI_ROUTES.usage, supportAiUsageResponseSchema);
+}
+
+/** TB5: one conversation's recent drafts. `support_ai.assist`. */
+export function fetchSupportAiDrafts(
+  conversationId: string,
+): Promise<{ drafts: SupportAiDraftView[] }> {
+  return authedGet(SUPPORT_AI_ASSIST_ROUTES.drafts(conversationId), supportAiDraftListResponse);
+}
+
+/** TB5: asks the `assistant` role for a draft. Nothing is sent to the customer. */
+export function requestSupportAiDraft(input: {
+  readonly conversationId: string;
+  readonly idempotencyKey: string;
+}): Promise<SupportAiDraftView> {
+  return post(
+    SUPPORT_AI_ASSIST_ROUTES.drafts(input.conversationId),
+    { idempotencyKey: input.idempotencyKey },
+    supportAiDraftViewSchema,
+  );
+}
+
+/**
+ * TB5: the operator sends a draft — the text as they left it, edited or not — through the
+ * ordinary outbound lane. The server also charges `business_chats.reply`.
+ */
+export function sendSupportAiDraft(input: {
+  readonly draftId: string;
+  readonly idempotencyKey: string;
+  readonly text: string;
+}): Promise<{ outboundId: string }> {
+  return post(
+    SUPPORT_AI_ASSIST_ROUTES.send(input.draftId),
+    { idempotencyKey: input.idempotencyKey, text: input.text },
+    oneField('outboundId', 'string'),
+  );
+}
+
+/** TB5: throws a draft away. Nothing was sent, and nothing is. */
+export function discardSupportAiDraft(draftId: string): Promise<{ discarded: boolean }> {
+  return post(SUPPORT_AI_ASSIST_ROUTES.discard(draftId), {}, oneField('discarded', 'boolean'));
 }
 
 // --- Round N: the shared audience, broadcast and mass operations --------------------------

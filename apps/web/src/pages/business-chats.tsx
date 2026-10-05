@@ -55,6 +55,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon, type IconName } from '../ui/icons';
+import { AssistCard } from './support-assist';
 
 /**
  * TB2 — Telegram Business conversations (ADR-0033): the inbox, the connections it arrives
@@ -407,10 +408,13 @@ export function BusinessChatDetailPage({
   id,
   denied,
   mayReply,
+  mayAssist = false,
 }: {
   id: string;
   denied: boolean;
   mayReply: boolean;
+  /** TB5: draws the Assist panel. Courtesy only — the server charges `support_ai.assist`. */
+  mayAssist?: boolean;
 }) {
   const chat = useQuery({
     queryKey: ['business-chat', id],
@@ -440,6 +444,13 @@ export function BusinessChatDetailPage({
           <div className="two-col bchat-layout">
             <div className="stack">
               <TranscriptCard detail={data} />
+              {mayAssist && (
+                <AssistCard
+                  conversationId={data.conversation.id}
+                  mayReply={mayReply}
+                  connected={data.conversation.connectionStatus === 'ACTIVE'}
+                />
+              )}
               {mayReply && <ComposerCard detail={data} />}
             </div>
             <div className="stack">
