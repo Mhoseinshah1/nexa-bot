@@ -3497,3 +3497,13 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
 - **OQ-TB-76 — the manual acceptance has not been run.** `docs/support-agent/acceptance-pack.md`
   is written and unrun. `OQ-TB-02`, `-03`, `-05`, `-19`, `-20`, `-22`, `-32` and `-47` are
   settled only by running it.
+
+## OQ-A4 — tutorial video and guide in one message (pre-support item A4)
+
+- **OQ-A4-01 — an UNKNOWN or RATE_LIMITED tutorial video raises no operator signal.** When the
+  client app's captioned video gets no definite answer (a timeout or 5xx) or a 429, the guide
+  is not re-sent as text: it may already have arrived as the caption. Nothing opens an
+  operational condition either. `sendFile` never opens the send-failure condition, the same as
+  for a receipt review reply sent as a file. The customer sees nothing or the video, and can tap
+  the app again. Whether this lane should count toward the bot's send-failure signal is open
+  (`docs/pre-support/a4a-falsification.md`).

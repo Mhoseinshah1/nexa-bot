@@ -33,6 +33,12 @@ describe('the message a tap came from', () => {
         tapIn({ message_id: 8, chat: { id: 42, type: 'private' }, photo: [{ file_id: 'f' }] }),
       ),
     ).toEqual({ chatId: '42', messageId: 8, media: true });
+    // A4: a bare tutorial video (no caption) is a file message too.
+    expect(
+      callbackOriginOf(
+        tapIn({ message_id: 9, chat: { id: 42, type: 'private' }, video: { file_id: 'v' } }),
+      ),
+    ).toEqual({ chatId: '42', messageId: 9, media: true });
   });
 
   it('is nothing for a group, a missing or malformed id, or an ordinary message', () => {
