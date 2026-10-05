@@ -51,6 +51,7 @@ import {
 import { formatTimestamp, splitBytes } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { HANDOFF_LABELS } from './handoff-labels';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { messageFor } from './settings';
@@ -144,6 +145,7 @@ const SYSTEM_LABELS: Readonly<Record<TicketSystemEvent, WebKey>> = {
   CLOSED_BY_CUSTOMER: 'web.ticket_system_closed_by_customer',
   CLOSED_BY_SUPPORT: 'web.ticket_system_closed_by_support',
   REOPENED_BY_SUPPORT: 'web.ticket_system_reopened',
+  ESCALATED_FROM_BUSINESS_CHAT: 'web.ticket_system_escalated',
 };
 
 /** The button each operator status change is drawn as. */
@@ -900,6 +902,7 @@ export function TicketDetailPage({
                 <TicketActionsCard ticket={data.ticket} mayAssign={mayAssign} mayClose={mayClose} />
               )}
               <TicketSummaryCard detail={data} />
+              {data.escalations.length > 0 && <TicketEscalationsCard detail={data} />}
               <TicketContextCard detail={data} mayAssign={mayAssign} />
             </div>
           </div>
@@ -933,6 +936,31 @@ function TicketSummaryCard({ detail }: { detail: TicketDetailResponse }) {
           ],
         ]}
       />
+    </Card>
+  );
+}
+
+/** TB7: the business-chat handoffs behind this ticket, and the AI's note for the operator. */
+function TicketEscalationsCard({ detail }: { detail: TicketDetailResponse }) {
+  const onLink = useLinkHandler();
+  return (
+    <Card title={t('web.ticket_escalations')} hint={t('web.ticket_escalations_hint')}>
+      <ol className="stack">
+        {detail.escalations.map((escalation) => (
+          <li key={`${escalation.conversationId}:${escalation.createdAt}`}>
+            <strong>{t(HANDOFF_LABELS[escalation.reason])}</strong>{' '}
+            <span className="muted small">{formatTimestamp(escalation.createdAt)}</span>
+            {escalation.summary !== null && <p className="muted small">{escalation.summary}</p>}
+            <a
+              href={`/business-chats/${encodeURIComponent(escalation.conversationId)}`}
+              onClick={onLink}
+              className="small"
+            >
+              {t('web.ticket_escalation_open_chat')}
+            </a>
+          </li>
+        ))}
+      </ol>
     </Card>
   );
 }

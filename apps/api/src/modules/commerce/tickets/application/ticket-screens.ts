@@ -19,6 +19,7 @@ const SYSTEM_KEYS: Readonly<Record<TicketSystemEvent, TemplateKey>> = {
   CLOSED_BY_CUSTOMER: 'bot.ticket.line_closed_by_customer',
   CLOSED_BY_SUPPORT: 'bot.ticket.line_closed_by_support',
   REOPENED_BY_SUPPORT: 'bot.ticket.line_reopened',
+  ESCALATED_FROM_BUSINESS_CHAT: 'bot.ticket.line_escalated',
 };
 
 /**

@@ -1,7 +1,24 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
+import { BUSINESS_ESCALATION_SUMMARY_MAX } from '@nexa/contracts';
 import type {
   BusinessBotRight,
   BusinessConversationState,
+  BusinessEscalationTicketOutcome,
   BusinessHandoffReason,
   BusinessMessageKind,
   BusinessMessageOrigin,
@@ -12,6 +29,7 @@ import type {
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  businessConversationEscalations,
   businessConversations,
   businessMessages,
   businessOutboundMessages,
@@ -27,6 +45,8 @@ import type {
   BusinessConversationRecord,
   BusinessConversationRepository,
   BusinessCustomerLookup,
+  BusinessEscalationRecord,
+  BusinessEscalationRepository,
   BusinessMessageRecord,
   BusinessMessageRepository,
   BusinessOutboundRecord,
@@ -66,6 +86,7 @@ function toConversation(row: ConversationRow): BusinessConversationRecord {
     lastInboundAt: row.lastInboundAt,
     lastHumanAt: row.lastHumanAt,
     lastAiAt: row.lastAiAt,
+    ticketId: row.ticketId,
     version: row.version,
   };
 }
@@ -279,6 +300,20 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
       )
       .returning();
     return row ? toConversation(row) : null;
+  }
+
+  async setTicket(
+    scope: ScopeContext,
+    id: string,
+    ticketId: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(businessConversations)
+      .set({ ticketId, updatedAt: now })
+      .where(and(eq(businessConversations.tenantId, tenantId), eq(businessConversations.id, id)));
   }
 
   async touch(
@@ -557,6 +592,27 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
       )
       .limit(1);
     return row === undefined ? null : photoOf(row);
+  }
+
+  async findByTelegramId(
+    scope: ScopeContext,
+    conversationId: string,
+    telegramMessageId: number,
+    tx?: unknown,
+  ): Promise<BusinessMessageRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .select()
+      .from(businessMessages)
+      .where(
+        and(
+          eq(businessMessages.tenantId, tenantId),
+          eq(businessMessages.conversationId, conversationId),
+          eq(businessMessages.telegramMessageId, telegramMessageId),
+        ),
+      )
+      .limit(1);
+    return row ? toMessage(row) : null;
   }
 
   async purgeText(
@@ -945,6 +1001,136 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
       )
       .returning({ id: businessOutboundMessages.id });
     return rows.length;
+  }
+
+  async countAuto(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number; readonly since: Date },
+    tx?: unknown,
+  ): Promise<{ readonly atEpoch: number; readonly inWindow: number }> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .select({
+        atEpoch: sql<number>`count(*) FILTER (WHERE ${businessOutboundMessages.controlEpoch} = ${input.epoch})::int`,
+        inWindow: sql<number>`count(*) FILTER (WHERE ${businessOutboundMessages.createdAt} >= ${input.since})::int`,
+      })
+      .from(businessOutboundMessages)
+      .where(
+        and(
+          eq(businessOutboundMessages.tenantId, tenantId),
+          eq(businessOutboundMessages.conversationId, input.conversationId),
+          eq(businessOutboundMessages.origin, 'AUTO'),
+          ne(businessOutboundMessages.state, 'SUPERSEDED'),
+          or(
+            eq(businessOutboundMessages.controlEpoch, input.epoch),
+            gte(businessOutboundMessages.createdAt, input.since),
+          ),
+        ),
+      );
+    return { atEpoch: Number(row?.atEpoch ?? 0), inWindow: Number(row?.inWindow ?? 0) };
+  }
+}
+
+/** TB7 — one row per handoff, and the AI's operator-facing note. */
+export class DrizzleBusinessEscalationRepository implements BusinessEscalationRepository {
+  constructor(private readonly db: Database) {}
+
+  async insertIfAbsent(
+    scope: ScopeContext,
+    row: Parameters<BusinessEscalationRepository['insertIfAbsent']>[1],
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const inserted = await executorOf(this.db, tx)
+      .insert(businessConversationEscalations)
+      .values({
+        id: row.id,
+        tenantId,
+        conversationId: row.conversationId,
+        controlEpoch: row.controlEpoch,
+        reason: row.reason,
+        summary:
+          row.summary === null ? null : row.summary.slice(0, BUSINESS_ESCALATION_SUMMARY_MAX),
+        ticketId: row.ticketId,
+        ticketOutcome: row.ticketOutcome,
+        jobId: row.jobId,
+        createdAt: row.now,
+      })
+      .onConflictDoNothing()
+      .returning({ id: businessConversationEscalations.id });
+    return inserted.length > 0;
+  }
+
+  async forConversation(scope: ScopeContext, conversationId: string, limit: number) {
+    return this.query(
+      scope,
+      eq(businessConversationEscalations.conversationId, conversationId),
+      limit,
+    );
+  }
+
+  async forTicket(scope: ScopeContext, ticketId: string, limit: number) {
+    return this.query(scope, eq(businessConversationEscalations.ticketId, ticketId), limit);
+  }
+
+  async purgeText(
+    scope: ScopeContext,
+    cutoff: Date,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const due = executorOf(this.db, tx)
+      .select({ id: businessConversationEscalations.id })
+      .from(businessConversationEscalations)
+      .where(
+        and(
+          eq(businessConversationEscalations.tenantId, tenantId),
+          isNotNull(businessConversationEscalations.summary),
+          lt(businessConversationEscalations.createdAt, cutoff),
+        ),
+      )
+      .limit(limit);
+    const rows = await executorOf(this.db, tx)
+      .update(businessConversationEscalations)
+      .set({ summary: null, textPurgedAt: now })
+      .where(
+        and(
+          eq(businessConversationEscalations.tenantId, tenantId),
+          inArray(businessConversationEscalations.id, due),
+        ),
+      )
+      .returning({ id: businessConversationEscalations.id });
+    return rows.length;
+  }
+
+  private async query(
+    scope: ScopeContext,
+    filter: SQL,
+    limit: number,
+  ): Promise<readonly BusinessEscalationRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select()
+      .from(businessConversationEscalations)
+      .where(and(eq(businessConversationEscalations.tenantId, tenantId), filter))
+      .orderBy(
+        desc(businessConversationEscalations.createdAt),
+        desc(businessConversationEscalations.id),
+      )
+      .limit(limit);
+    return rows.map((row) => ({
+      id: row.id,
+      conversationId: row.conversationId,
+      controlEpoch: row.controlEpoch,
+      reason: row.reason as BusinessHandoffReason,
+      summary: row.summary,
+      ticketId: row.ticketId,
+      ticketOutcome: row.ticketOutcome as BusinessEscalationTicketOutcome,
+      jobId: row.jobId,
+      createdAt: row.createdAt,
+    }));
   }
 }
 

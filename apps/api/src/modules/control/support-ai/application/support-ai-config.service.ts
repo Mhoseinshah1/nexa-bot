@@ -166,6 +166,15 @@ export class SupportAiConfigService {
         if (command.config.mode === 'AUTO_REPLY_SAFE' && before.config.mode !== 'AUTO_REPLY_SAFE') {
           await this.deps.guard.check(scope, actor, SUPPORT_AI_AUTO_REPLY_PERMISSION, tx);
         }
+        // TB7: WIDENING what may be answered automatically — a topic added to the allowlist, or
+        // a lower confidence accepted — is the same CRITICAL call. Narrowing never is.
+        const widened =
+          command.config.autoTopics.some((topic) => !before.config.autoTopics.includes(topic)) ||
+          (command.config.autoMinConfidence === 'MEDIUM' &&
+            before.config.autoMinConfidence !== 'MEDIUM');
+        if (widened) {
+          await this.deps.guard.check(scope, actor, SUPPORT_AI_AUTO_REPLY_PERMISSION, tx);
+        }
         const expected = command.expectedVersion ?? 0;
         if (expected !== before.version) throw this.versionConflict();
         const version = await this.deps.configs.save(

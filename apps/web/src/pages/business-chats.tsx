@@ -8,7 +8,7 @@ import {
   type BusinessConnectionStatus,
   type BusinessConversationState,
   type BusinessConversationSummary,
-  type BusinessHandoffReason,
+  type BusinessEscalationTicketOutcome,
   type BusinessMessageKind,
   type BusinessMessageOrigin,
   type BusinessOutboundOrigin,
@@ -27,7 +27,8 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
-import { setQuery, type Route } from '../router';
+import { setQuery, useLinkHandler, type Route } from '../router';
+import { HANDOFF_LABELS } from './handoff-labels';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { messageFor } from './settings';
@@ -98,9 +99,13 @@ const STATE_EXPLAINED: Readonly<Record<BusinessConversationState, WebKey>> = {
   PAUSED: 'web.bchat_explain_paused',
 };
 
-const HANDOFF_LABELS: Readonly<Record<BusinessHandoffReason, WebKey>> = {
-  SEND_OUTCOME_UNKNOWN: 'web.bchat_handoff_send_unknown',
-  TRANSPORT_REFUSED: 'web.bchat_handoff_transport_refused',
+const ESCALATION_TICKET_LABELS: Readonly<Record<BusinessEscalationTicketOutcome, WebKey>> = {
+  CREATED: 'web.bchat_escalation_ticket_created',
+  LINKED: 'web.bchat_escalation_ticket_linked',
+  NO_CUSTOMER: 'web.bchat_escalation_no_customer',
+  CUSTOMER_BLOCKED: 'web.bchat_escalation_customer_blocked',
+  NO_CATEGORY: 'web.bchat_escalation_no_category',
+  SCOPE_INACTIVE: 'web.bchat_escalation_scope_inactive',
 };
 
 const TAKEOVER_LABELS: Readonly<Record<BusinessTakeoverReason, WebKey>> = {
@@ -455,6 +460,7 @@ export function BusinessChatDetailPage({
             </div>
             <div className="stack">
               <ControlCard detail={data} mayReply={mayReply} />
+              {data.escalations.length > 0 && <EscalationsCard detail={data} />}
               <OutboundCard detail={data} />
             </div>
           </div>
@@ -649,6 +655,35 @@ function TranscriptCard({ detail }: { detail: BusinessChatDetailResponse }) {
           ))}
         </ol>
       )}
+    </Card>
+  );
+}
+
+/** TB7: each handoff — why, what became of the ticket, and the AI's note for the operator. */
+function EscalationsCard({ detail }: { detail: BusinessChatDetailResponse }) {
+  const onLink = useLinkHandler();
+  return (
+    <Card title={t('web.bchat_escalations')} hint={t('web.bchat_escalations_hint')}>
+      <ol className="stack">
+        {detail.escalations.map((escalation) => (
+          <li key={escalation.id}>
+            <div className="bchat-message-head">
+              <strong>{t(HANDOFF_LABELS[escalation.reason])}</strong>
+              <span className="muted small">{formatTimestamp(escalation.createdAt)}</span>
+            </div>
+            <div className="small">
+              {escalation.ticketId === null ? (
+                t(ESCALATION_TICKET_LABELS[escalation.ticketOutcome])
+              ) : (
+                <a href={`/tickets/${encodeURIComponent(escalation.ticketId)}`} onClick={onLink}>
+                  {t(ESCALATION_TICKET_LABELS[escalation.ticketOutcome])}
+                </a>
+              )}
+            </div>
+            {escalation.summary !== null && <p className="muted small">{escalation.summary}</p>}
+          </li>
+        ))}
+      </ol>
     </Card>
   );
 }

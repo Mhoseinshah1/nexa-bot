@@ -11,6 +11,7 @@ import { BusinessOutboundService } from '../../apps/api/src/modules/commerce/bus
 import type { BusinessSendOutcome } from '../../apps/api/src/modules/commerce/business-chats/application/business-transport';
 import {
   DrizzleBusinessConversationRepository,
+  DrizzleBusinessEscalationRepository,
   DrizzleBusinessMessageRepository,
   DrizzleBusinessOutboundRepository,
 } from '../../apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository';
@@ -162,6 +163,9 @@ describe('Telegram Business conversations (TB2)', () => {
       messages: new DrizzleBusinessMessageRepository(c.database.db),
       control: c.businessConversations,
       transport,
+      // TB7: these races are about the epoch and the state, under a mode that allows AUTO.
+      autoMode: { autoReplyEnabled: async () => true },
+      escalations: new DrizzleBusinessEscalationRepository(c.database.db),
       uow: c.uow,
       scopeActivity: c.tenants,
       clock: c.clock,

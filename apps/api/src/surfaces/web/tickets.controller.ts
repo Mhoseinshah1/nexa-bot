@@ -102,7 +102,13 @@ export class TicketsController {
     const found = await this.container.tickets.detail(scope, actor, ticketId);
     const customer = found.customer;
     return {
-      ticket: toSummary(found.item),
+      ticket: { ...toSummary(found.item), origin: found.item.ticket.origin },
+      escalations: found.escalations.map((escalation) => ({
+        conversationId: escalation.conversationId,
+        reason: escalation.reason,
+        summary: escalation.summary,
+        createdAt: escalation.createdAt.toISOString(),
+      })),
       messages: found.messages.map(toMessageView),
       customer: {
         id: found.item.ticket.customerId,

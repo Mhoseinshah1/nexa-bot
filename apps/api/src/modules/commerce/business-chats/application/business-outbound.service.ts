@@ -15,7 +15,9 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { BusinessConversationService } from './business-conversation.service.js';
 import type { BusinessTransport } from './business-transport.js';
 import type {
+  AutoReplyModeReader,
   BusinessConversationRepository,
+  BusinessEscalationRepository,
   BusinessMessageRepository,
   BusinessOutboundRecord,
   BusinessOutboundRepository,
@@ -36,6 +38,13 @@ export interface BusinessOutboundServiceDeps {
   readonly messages: BusinessMessageRepository;
   readonly control: Pick<BusinessConversationService, 'handOff'>;
   readonly transport: Pick<BusinessTransport, 'sendText'>;
+  /**
+   * TB7: an AUTO row is sent only while the tenant's mode still allows automatic replies,
+   * read inside the stamp's transaction — leaving AUTO_REPLY_SAFE silences what is queued.
+   */
+  readonly autoMode: AutoReplyModeReader;
+  /** TB7: the AI's escalation notes are purged with the transcript. */
+  readonly escalations: Pick<BusinessEscalationRepository, 'purgeText'>;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
@@ -146,9 +155,12 @@ export class BusinessOutboundService {
       const now = this.deps.clock.now();
       const conversation = await this.deps.conversations.lockById(scope, row.conversationId, tx);
       const active = await this.deps.scopeActivity.scopeIsActive(scope, tx);
+      const modeAllows =
+        row.origin !== 'AUTO' || (await this.deps.autoMode.autoReplyEnabled(scope, tx));
       const sendable =
         conversation !== null &&
         active &&
+        modeAllows &&
         row.body !== null &&
         businessOutboundSendable({
           origin: row.origin,
@@ -163,7 +175,11 @@ export class BusinessOutboundService {
           {
             state: 'SUPERSEDED',
             fromStamped: false,
-            failureCode: active ? 'conversation.moved_on' : 'scope.inactive',
+            failureCode: !active
+              ? 'scope.inactive'
+              : modeAllows
+                ? 'conversation.moved_on'
+                : 'support_ai.mode_off',
             attempted: false,
             now,
           },
@@ -315,7 +331,8 @@ export class BusinessOutboundService {
     const purged = await this.deps.uow.run(scope, async (tx) => {
       const texts = await this.deps.messages.purgeText(scope, cutoff, now, RETENTION_BATCH, tx);
       const bodies = await this.deps.outbound.purgeBodies(scope, cutoff, now, RETENTION_BATCH, tx);
-      return texts + bodies;
+      const notes = await this.deps.escalations.purgeText(scope, cutoff, now, RETENTION_BATCH, tx);
+      return texts + bodies + notes;
     });
     this.lastRetentionAt = now.getTime();
     return purged;

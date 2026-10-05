@@ -15,6 +15,7 @@ import {
   type TicketReplyFileMimeType,
   type TicketStatus,
   type TicketSystemEvent,
+  type TicketOrigin,
   type UserId,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -123,6 +124,7 @@ function toTicket(row: TicketRow): TicketRecord {
     orderId: row.orderId,
     paymentId: row.paymentId,
     openingKey: row.openingKey,
+    origin: row.origin as TicketOrigin,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     lastMessageAt: row.lastMessageAt,
@@ -223,6 +225,7 @@ export class DrizzleTicketRepository implements TicketRepository {
       readonly categoryTitle: string;
       readonly subject: string | null;
       readonly openingKey: string;
+      readonly origin?: TicketOrigin;
       readonly now: Date;
     },
     tx: unknown,
@@ -241,6 +244,7 @@ export class DrizzleTicketRepository implements TicketRepository {
         status: 'OPEN',
         priority: 'NORMAL',
         openingKey: input.openingKey,
+        origin: input.origin ?? 'BOT',
         createdAt: input.now,
         updatedAt: input.now,
         lastMessageAt: input.now,
@@ -250,6 +254,28 @@ export class DrizzleTicketRepository implements TicketRepository {
     /* istanbul ignore next -- an INSERT ... RETURNING that inserted returns its row. */
     if (row === undefined) throw new Error('A ticket insert returned no row.');
     return toTicket(row);
+  }
+
+  async latestActiveForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    tx: unknown,
+  ): Promise<TicketRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.tenantId, tenantId),
+          eq(tickets.customerId, customerId),
+          inArray(tickets.status, [...TICKET_ACTIVE_STATUSES]),
+        ),
+      )
+      .orderBy(desc(tickets.lastMessageAt), desc(tickets.id))
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toTicket(row);
   }
 
   async findById(scope: TenantContext, id: string, tx?: unknown): Promise<TicketRecord | null> {

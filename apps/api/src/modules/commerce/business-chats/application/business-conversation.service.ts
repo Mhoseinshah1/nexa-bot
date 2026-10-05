@@ -39,10 +39,15 @@ import type {
   BusinessConversationRecord,
   BusinessConversationRepository,
   BusinessCustomerLookup,
+  BusinessEscalationRecord,
+  BusinessEscalationRepository,
   BusinessMessageRecord,
   BusinessMessageRepository,
   BusinessOutboundRecord,
   BusinessOutboundRepository,
+  HandoffDetail,
+  HandoffEscalation,
+  InboundAutoTrigger,
 } from './ports.js';
 
 export const BUSINESS_CHATS_VIEW_PERMISSION = 'business_chats.view' satisfies PermissionKey;
@@ -70,7 +75,17 @@ export interface BusinessConversationServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** TB7: an INBOUND message in an AI_ACTIVE conversation may owe an automatic job. */
+  readonly autoTrigger: InboundAutoTrigger;
+  /** TB7: a handoff opens or links a ticket and signals an operator, in its transaction. */
+  readonly escalation: HandoffEscalation;
+  readonly escalations: Pick<BusinessEscalationRepository, 'forConversation'>;
 }
+
+/** Why an AUTO row was not enqueued: the conversation moved on, or cannot send. */
+export type AutoSendRefusal = 'epoch' | 'state' | 'connection';
+
+const NO_DETAIL: HandoffDetail = { summary: null, jobId: null };
 
 /** What one recorded business message did to its conversation. */
 export interface RecordedBusinessMessage {
@@ -205,6 +220,8 @@ export class BusinessConversationService {
         );
 
         let inserted = false;
+        // The content version this update produced; null when it produced none (a redelivery).
+        let contentVersion: number | null;
         if (input.edited) {
           const version = await this.deps.messages.applyEdit(
             scope,
@@ -220,14 +237,27 @@ export class BusinessConversationService {
           // An edit of a message we never saw is stored as the message it now is.
           if (version === null) {
             inserted = await this.insertMessage(scope, conversation.id, message, origin, now, tx);
+            contentVersion = inserted ? 1 : null;
+          } else {
+            contentVersion = version;
           }
         } else {
           inserted = await this.insertMessage(scope, conversation.id, message, origin, now, tx);
+          contentVersion = inserted ? 1 : null;
         }
 
         let tookOver = false;
         if (inserted || input.edited) {
-          tookOver = await this.applyOrigin(scope, actor, conversation, origin, message, now, tx);
+          tookOver = await this.applyOrigin(
+            scope,
+            actor,
+            conversation,
+            origin,
+            message,
+            { contentVersion, edited: input.edited && !inserted },
+            now,
+            tx,
+          );
         }
 
         const result: RecordedBusinessMessage = {
@@ -319,16 +349,18 @@ export class BusinessConversationService {
     readonly item: BusinessConversationListItem;
     readonly messages: readonly BusinessMessageRecord[];
     readonly outbound: readonly BusinessOutboundRecord[];
+    readonly escalations: readonly BusinessEscalationRecord[];
   }> {
     await this.deps.guard.check(scope, actor, BUSINESS_CHATS_VIEW_PERMISSION);
     const conversation = await this.deps.conversations.findById(scope, conversationId);
     if (conversation === null) throw this.notFound();
-    const [item, messages, outbound] = await Promise.all([
+    const [item, messages, outbound, escalations] = await Promise.all([
       this.listItemFor(scope, conversation),
       this.deps.messages.recent(scope, conversationId, BUSINESS_CHAT_DETAIL_MESSAGES),
       this.deps.outbound.recent(scope, conversationId, BUSINESS_CHAT_DETAIL_MESSAGES),
+      this.deps.escalations.forConversation(scope, conversationId, 20),
     ]);
-    return { item, messages, outbound };
+    return { item, messages, outbound, escalations };
   }
 
   /** The operator takes the conversation: HUMAN_ACTIVE, epoch+1 (a no-op when already human). */
@@ -379,6 +411,9 @@ export class BusinessConversationService {
         );
         if (moved === null) throw this.notInState();
         await this.deps.outbound.supersedeStale(scope, moved.id, moved.controlEpoch, now, tx);
+        if (conversation.state === 'HANDOFF_REQUIRED') {
+          await this.deps.escalation.resolved(scope, moved.id, tx);
+        }
         return moved;
       },
     );
@@ -411,8 +446,10 @@ export class BusinessConversationService {
   }
 
   /**
-   * The lane's handoff, inside its own transaction: AI_ACTIVE → HANDOFF_REQUIRED with a typed
-   * reason, epoch+1. A conversation a human already holds is left with the human.
+   * The handoff, inside the caller's transaction: AI_ACTIVE → HANDOFF_REQUIRED with a typed
+   * reason, epoch+1. A conversation a human already holds is left with the human. TB7: in the
+   * same transaction the handoff is recorded, a ticket is opened or linked, and an operator is
+   * signalled (`BusinessEscalationService`) — for the lane's handoffs and the AI's alike.
    */
   async handOff(
     scope: ScopeContext,
@@ -420,6 +457,7 @@ export class BusinessConversationService {
     reason: BusinessHandoffReason,
     now: Date,
     tx: unknown,
+    detail: HandoffDetail = NO_DETAIL,
   ): Promise<boolean> {
     const moved = await this.deps.conversations.transition(
       scope,
@@ -435,7 +473,55 @@ export class BusinessConversationService {
     );
     if (moved === null) return false;
     await this.deps.outbound.supersedeStale(scope, conversationId, moved.controlEpoch, now, tx);
+    await this.deps.escalation.escalate(scope, { conversation: moved, reason, detail, now }, tx);
     return true;
+  }
+
+  /**
+   * TB7 — the AI's reply onto the lane, in the caller's transaction, under the conversation's
+   * lock and the epoch the job CAPTURED when it was enqueued. Refused (nothing written) when the
+   * epoch moved, the conversation is no longer AI_ACTIVE, or the connection cannot send. This is
+   * the producer's check; TB2's final check at the send stamp remains the authority.
+   */
+  async enqueueAutoSend(
+    scope: ScopeContext,
+    input: {
+      readonly conversationId: string;
+      readonly controlEpoch: number;
+      readonly text: string;
+      readonly idempotencyKey: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<{ readonly row: BusinessOutboundRecord } | { readonly refused: AutoSendRefusal }> {
+    const conversation = await this.deps.conversations.lockById(scope, input.conversationId, tx);
+    if (conversation === null) return { refused: 'state' };
+    if (conversation.controlEpoch !== input.controlEpoch) return { refused: 'epoch' };
+    if (conversation.state !== 'AI_ACTIVE') return { refused: 'state' };
+    const connection = await this.deps.connections.findById(scope, conversation.connectionRowId);
+    if (connection === null || connection.status !== 'ACTIVE') return { refused: 'connection' };
+    const existing = await this.deps.outbound.findByIdempotencyKey(scope, input.idempotencyKey, tx);
+    if (existing !== null) return { row: existing };
+    const row = await this.deps.outbound.insert(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        conversationId: conversation.id,
+        origin: 'AUTO',
+        body: input.text,
+        createdByAdminId: null,
+        controlEpoch: input.controlEpoch,
+        idempotencyKey: input.idempotencyKey,
+        requestHash: hashRequest({
+          command: 'business_chat.auto_send',
+          conversationId: conversation.id,
+          text: input.text,
+        }),
+        now: input.now,
+      },
+      tx,
+    );
+    return { row };
   }
 
   // -------------------------------------------------------------------------
@@ -587,6 +673,9 @@ export class BusinessConversationService {
     );
     if (moved === null) return null;
     await this.deps.outbound.supersedeStale(scope, moved.id, moved.controlEpoch, now, tx);
+    if (conversation.state === 'HANDOFF_REQUIRED') {
+      await this.deps.escalation.resolved(scope, moved.id, tx);
+    }
     return moved;
   }
 
@@ -597,6 +686,7 @@ export class BusinessConversationService {
     conversation: BusinessConversationRecord,
     origin: BusinessMessageOrigin,
     message: ParsedBusinessMessage,
+    content: { readonly contentVersion: number | null; readonly edited: boolean },
     now: Date,
     tx: unknown,
   ): Promise<boolean> {
@@ -620,6 +710,21 @@ export class BusinessConversationService {
         },
         tx,
       );
+      // TB7: ONLY a customer's own message can start automatic work — never our echo, an
+      // away message, or anything not positively attributable to the customer.
+      if (content.contentVersion !== null) {
+        await this.deps.autoTrigger.onInbound(
+          scope,
+          {
+            conversation,
+            telegramMessageId: message.messageId,
+            contentVersion: content.contentVersion,
+            edited: content.edited,
+            now,
+          },
+          tx,
+        );
+      }
       return false;
     }
     if ((BUSINESS_TAKEOVER_ORIGINS as readonly string[]).includes(origin)) {

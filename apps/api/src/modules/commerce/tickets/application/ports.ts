@@ -12,6 +12,8 @@ import type {
   TicketReplyFileMimeType,
   TicketStatus,
   TicketSystemEvent,
+  TicketOrigin,
+  BusinessHandoffReason,
   UserId,
 } from '@nexa/contracts';
 
@@ -48,6 +50,8 @@ export interface TicketRecord {
   readonly orderId: string | null;
   readonly paymentId: string | null;
   readonly openingKey: string;
+  /** TB7: `BOT`, or `BUSINESS_CHAT` when the support agent escalated a business chat. */
+  readonly origin: TicketOrigin;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly lastMessageAt: Date;
@@ -140,6 +144,22 @@ export interface TicketListFilter {
   readonly limit: number;
 }
 
+/** TB7: the business-chat handoffs attached to a ticket (`business_conversation_escalations`). */
+export interface TicketEscalationReader {
+  forTicket(
+    scope: TenantContext,
+    ticketId: string,
+    limit: number,
+  ): Promise<
+    readonly {
+      readonly conversationId: string;
+      readonly reason: BusinessHandoffReason;
+      readonly summary: string | null;
+      readonly createdAt: Date;
+    }[]
+  >;
+}
+
 export interface TicketMessageInsert {
   readonly id: TicketMessageId;
   readonly ticketId: TicketId;
@@ -178,10 +198,18 @@ export interface TicketRepository {
       readonly categoryTitle: string;
       readonly subject: string | null;
       readonly openingKey: string;
+      /** Defaults to `BOT`. */
+      readonly origin?: TicketOrigin;
       readonly now: Date;
     },
     tx: unknown,
   ): Promise<TicketRecord>;
+  /** TB7: the customer's newest active ticket in any bot, or null. */
+  latestActiveForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    tx: unknown,
+  ): Promise<TicketRecord | null>;
   findById(scope: TenantContext, id: string, tx?: unknown): Promise<TicketRecord | null>;
   /** The ticket, row-locked until the caller's transaction ends. Every write takes this first. */
   findByIdForUpdate(scope: TenantContext, id: string, tx: unknown): Promise<TicketRecord | null>;

@@ -86,7 +86,16 @@ export class BusinessChatsController {
         ...summary,
         controlEpoch: found.item.conversation.controlEpoch,
         lastHumanAt: found.item.conversation.lastHumanAt?.toISOString() ?? null,
+        ticketId: found.item.conversation.ticketId,
       },
+      escalations: found.escalations.map((escalation) => ({
+        id: escalation.id,
+        reason: escalation.reason,
+        summary: escalation.summary,
+        ticketId: escalation.ticketId,
+        ticketOutcome: escalation.ticketOutcome,
+        createdAt: escalation.createdAt.toISOString(),
+      })),
       messages: found.messages.map((message) => ({
         id: message.id,
         origin: message.origin,

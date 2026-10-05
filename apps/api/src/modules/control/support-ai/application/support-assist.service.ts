@@ -14,6 +14,7 @@ import {
   type PermissionKey,
   type ScopeContext,
   type SupportAiImageSkipReason,
+  type SupportAiJobKind,
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -30,6 +31,7 @@ import type {
   BusinessConversationRepository,
   BusinessMessageRepository,
 } from '../../../commerce/business-chats/application/ports.js';
+import type { AutoContextFlags } from '../domain/auto-reply-guards.js';
 import {
   SUPPORT_AI_TRANSCRIPT_MESSAGES,
   supportSystemPrompt,
@@ -74,6 +76,8 @@ export interface SupportContextSource {
     readonly json: string;
     readonly aliases: ReadonlyMap<string, string>;
     readonly linked: boolean;
+    /** TB7: the payload's flags, which the automatic-reply guards read. */
+    readonly flags: AutoContextFlags;
   }>;
 }
 
@@ -409,10 +413,12 @@ export class SupportAssistService {
     scope: ScopeContext,
     now: Date,
     leaseUntil: Date,
+    /** TB7: the kinds the caller can produce; an AUTO_DECISION job only with its producer. */
+    kinds: readonly SupportAiJobKind[] = ['ASSIST_DRAFT'],
   ): Promise<SupportAiJobRecord | null> {
     return this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return null;
-      return this.deps.jobs.claimNext(scope, now, leaseUntil, tx);
+      return this.deps.jobs.claimNext(scope, now, leaseUntil, kinds, tx);
     });
   }
 
@@ -540,7 +546,8 @@ export class SupportAssistService {
       entityId: draftId,
     });
     const draft = await this.deps.jobs.findById(scope, draftId);
-    if (draft === null) throw this.notFound();
+    // An automatic job is not a draft: nobody sends it by hand (TB7).
+    if (draft === null || draft.kind !== 'ASSIST_DRAFT') throw this.notFound();
     // A courtesy, unlocked: a draft that plainly cannot be sent is refused before the lane is
     // asked. SENT passes, so a replay of the operator's key reaches the lane's own replay. The
     // DECISION is the conditional write inside the lane's transaction, below.
