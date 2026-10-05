@@ -3421,3 +3421,25 @@ TB8 (controlled learning, `docs/support-agent/tb8-controlled-learning.md`):
   plain count. The lock is per tenant, not per conversation: enqueues are rare and short, and
   one lock is the hourly cap's own scope. A proposal is also bound to its author (an operator
   proposes their own replies; another's needs `support_knowledge.review`).
+
+TB9 (the knowledge build, `docs/support-agent/tb9-knowledge-build.md`):
+
+- **OQ-TB-60 — no price in built knowledge.** Product articles carry the public title,
+  description, duration, traffic, device limit and display features, never the price: the
+  pricing boundary (discounts, reseller tiers, FX) is the one answer to "what does this cost".
+  Whether the agent should quote a list price at all is a Product Owner call.
+- **OQ-TB-61 — a disabled built FAQ article.** The live FAQ entry is skipped in the context only
+  while its built article is approved and enabled; disabling or retiring that article lets the
+  live entry show again. Whether disabling should hide the FAQ entry from the agent too is open.
+- **OQ-TB-62 — a source that disappears.** A deactivated product, a removed app or a deleted FAQ
+  entry leaves its built article as it is; the build proposes no removal. A `RETIRE` proposal
+  kind would be a contract change.
+- **OQ-TB-63 — which bot texts.** Only the five connection tutorials (`bot.tutorial.*`) are read:
+  they declare no placeholder, so their raw body is the text. Other customer-facing templates
+  either carry placeholders or are button labels. Widening the list is a reviewed change to
+  `BUILD_TUTORIAL_KEYS`.
+- **OQ-TB-64 — scaffold labels.** The adapter writes a few Persian labels around raw facts
+  («مدت», «حجم», «تعداد کاربر همزمان», titles of singleton articles). They are reviewed before
+  they are knowledge, but they are not template keys; moving them to the catalogue is open.
+- **OQ-TB-65 — source bounds.** At most 100 items per source and 400 per build; a tenant with
+  more active products than that is cut silently in this release.
