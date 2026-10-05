@@ -441,7 +441,14 @@ export class BusinessConversationService {
   // Internals
   // -------------------------------------------------------------------------
 
-  /** Shared by the operator's send and (TB5) an assist send. */
+  /**
+   * Shared by the operator's send and (TB5) an assist send.
+   *
+   * `within` runs inside the send's OWN transaction, after the row and its audit are written,
+   * and only on a fresh insert — never on a replay of the key. A throw from it rolls the whole
+   * send back, row and human signal included. TB5 uses it to move its draft READY→SENT in the
+   * same commit as the outbound row, so a draft is sent at most once (PR #200 review, finding 2).
+   */
   async enqueueHumanSend(
     scope: ScopeContext,
     actor: ActorContext,
@@ -451,6 +458,7 @@ export class BusinessConversationService {
       readonly text: string;
       readonly origin: Extract<BusinessOutboundOrigin, 'OPERATOR' | 'ASSIST'>;
     },
+    within?: (row: BusinessOutboundRecord, tx: TransactionScope) => Promise<void>,
   ): Promise<BusinessOutboundRecord> {
     if (actor.id === null) {
       throw errors.permissionDenied(
@@ -552,6 +560,7 @@ export class BusinessConversationService {
           },
           tx,
         );
+        if (within !== undefined) await within(row, tx);
         return row;
       },
     );

@@ -13670,6 +13670,12 @@ export const supportAiJobs = pgTable(
     conversationId: uuid('conversation_id').notNull(),
     requestedByAdminId: uuid('requested_by_admin_id'),
     idempotencyKey: text('idempotency_key').notNull(),
+    /**
+     * What the key was used for (TB5 review, finding 5): a replay under the same key with a
+     * different conversation is refused, never answered with the other conversation's job.
+     * Nullable only because 0201 created rows without it; every insert writes it.
+     */
+    requestHash: text('request_hash'),
     state: text('state').notNull().default('QUEUED'),
     attempts: integer('attempts').notNull().default(0),
     claimedUntil: timestamptz('claimed_until'),

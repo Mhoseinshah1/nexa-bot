@@ -1,0 +1,1 @@
+ALTER TABLE "support_ai_jobs" ADD COLUMN "request_hash" text;

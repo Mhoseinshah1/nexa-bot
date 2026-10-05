@@ -21,6 +21,7 @@ export interface SupportAiJobRecord {
   readonly conversationId: string;
   readonly requestedByAdminId: string | null;
   readonly idempotencyKey: string;
+  readonly requestHash: string | null;
   readonly state: SupportAiJobState;
   readonly attempts: number;
   readonly readyAt: Date | null;
@@ -46,6 +47,7 @@ function toRecord(row: Row): SupportAiJobRecord {
     conversationId: row.conversationId,
     requestedByAdminId: row.requestedByAdminId,
     idempotencyKey: row.idempotencyKey,
+    requestHash: row.requestHash,
     state: row.state as SupportAiJobState,
     attempts: row.attempts,
     readyAt: row.readyAt,
@@ -85,6 +87,7 @@ export class DrizzleSupportAiJobRepository {
       readonly conversationId: string;
       readonly requestedByAdminId: string | null;
       readonly idempotencyKey: string;
+      readonly requestHash: string;
       readonly now: Date;
     },
     tx: unknown,
@@ -99,6 +102,7 @@ export class DrizzleSupportAiJobRepository {
         conversationId: row.conversationId,
         requestedByAdminId: row.requestedByAdminId,
         idempotencyKey: row.idempotencyKey,
+        requestHash: row.requestHash,
         createdAt: row.now,
         updatedAt: row.now,
       })
@@ -174,23 +178,30 @@ export class DrizzleSupportAiJobRepository {
     return rows.length;
   }
 
-  /** Leases the due QUEUED jobs (unclaimed, or whose lease ran out), oldest first. */
-  async claimDue(
+  /**
+   * Leases ONE due QUEUED job (unclaimed, or whose lease ran out), oldest first (TB5 review,
+   * finding 4). One at a time because jobs are produced one at a time: a batch leased up front
+   * would wait out its lease behind its siblings and be re-claimed by a second replica while
+   * still being produced. `SKIP LOCKED` lets two replicas claim different jobs in parallel; the
+   * conditional UPDATE is the decision either way.
+   */
+  async claimNext(
     scope: ScopeContext,
     now: Date,
     leaseUntil: Date,
-    limit: number,
-  ): Promise<readonly SupportAiJobRecord[]> {
+    tx: unknown,
+  ): Promise<SupportAiJobRecord | null> {
     const tenantId = requireTenantId(scope);
+    const db = exec(this.db, tx);
     const free = or(isNull(supportAiJobs.claimedUntil), lte(supportAiJobs.claimedUntil, now));
-    const selected = await this.db
+    const next = db
       .select({ id: supportAiJobs.id })
       .from(supportAiJobs)
       .where(and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.state, 'QUEUED'), free))
       .orderBy(asc(supportAiJobs.createdAt), asc(supportAiJobs.id))
-      .limit(limit);
-    if (selected.length === 0) return [];
-    const rows = await this.db
+      .limit(1)
+      .for('update', { skipLocked: true });
+    const [row] = await db
       .update(supportAiJobs)
       .set({
         claimedUntil: leaseUntil,
@@ -200,16 +211,45 @@ export class DrizzleSupportAiJobRepository {
       .where(
         and(
           eq(supportAiJobs.tenantId, tenantId),
-          inArray(
-            supportAiJobs.id,
-            selected.map((row) => row.id),
-          ),
+          // A scalar subquery, evaluated ONCE (an InitPlan). `IN (… LIMIT 1 FOR UPDATE SKIP
+          // LOCKED)` may be re-run per candidate row and, skipping the row this statement has
+          // just locked, return the next one — leasing the whole queue in one claim.
+          eq(supportAiJobs.id, sql`(${next})`),
           eq(supportAiJobs.state, 'QUEUED'),
           free,
         ),
       )
       .returning();
-    return rows.map(toRecord);
+    return row ? toRecord(row) : null;
+  }
+
+  /**
+   * Fails every QUEUED job that has had no live lease for `cutoff` and longer (TB5 review,
+   * finding 6): never claimed since it was requested, or abandoned by a claim whose lease ran
+   * out. A job being produced holds a lease in the future and is never touched. Scoped to one
+   * conversation (the request and the listing), or to the whole tenant when `null`.
+   */
+  async failUnclaimed(
+    scope: ScopeContext,
+    conversationId: string | null,
+    cutoff: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .update(supportAiJobs)
+      .set({ state: 'FAILED', failureCode: 'job.unclaimed', claimedUntil: null, updatedAt: now })
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          conversationId === null ? undefined : eq(supportAiJobs.conversationId, conversationId),
+          eq(supportAiJobs.state, 'QUEUED'),
+          lte(sql`coalesce(${supportAiJobs.claimedUntil}, ${supportAiJobs.createdAt})`, cutoff),
+        ),
+      )
+      .returning({ id: supportAiJobs.id });
+    return rows.length;
   }
 
   async markReady(
@@ -222,9 +262,10 @@ export class DrizzleSupportAiJobRepository {
       readonly model: string;
       readonly now: Date;
     },
+    tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.db
+    const rows = await exec(this.db, tx)
       .update(supportAiJobs)
       .set({
         state: 'READY',
@@ -259,9 +300,10 @@ export class DrizzleSupportAiJobRepository {
     id: string,
     failureCode: string,
     now: Date,
+    tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.db
+    const rows = await exec(this.db, tx)
       .update(supportAiJobs)
       .set({
         state: 'FAILED',
@@ -319,9 +361,16 @@ export class DrizzleSupportAiJobRepository {
   }
 
   /** Purges the AI text of jobs older than `cutoff` (the transcript's retention). */
-  async purgeText(scope: ScopeContext, cutoff: Date, now: Date, limit: number): Promise<number> {
+  async purgeText(
+    scope: ScopeContext,
+    cutoff: Date,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<number> {
     const tenantId = requireTenantId(scope);
-    const due = this.db
+    const db = exec(this.db, tx);
+    const due = db
       .select({ id: supportAiJobs.id })
       .from(supportAiJobs)
       .where(
@@ -333,7 +382,7 @@ export class DrizzleSupportAiJobRepository {
         ),
       )
       .limit(limit);
-    const rows = await this.db
+    const rows = await db
       .update(supportAiJobs)
       .set({
         summary: null,

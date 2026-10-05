@@ -5506,7 +5506,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
-  const assistantLoop = new AssistantLoop(supportAssist, supportAiJobs, {
+  const assistantLoop = new AssistantLoop(supportAssist, {
     scope: () =>
       installationTenantId === null
         ? null

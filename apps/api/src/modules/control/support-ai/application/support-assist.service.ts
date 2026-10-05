@@ -1,5 +1,7 @@
 import {
   SUPPORT_AI_DECISION_JSON_SCHEMA,
+  SUPPORT_AI_DRAFT_RETENTION_DAYS,
+  SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS,
   errors,
   PLATFORM_ERROR_CODES,
   supportAiDecisionSchema,
@@ -21,6 +23,7 @@ import {
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { BusinessConversationService } from '../../../commerce/business-chats/application/business-conversation.service.js';
 import type {
   BusinessConversationRepository,
@@ -57,6 +60,14 @@ export interface SupportContextSource {
     readonly aliases: ReadonlyMap<string, string>;
     readonly linked: boolean;
   }>;
+}
+
+/** What `produce` did with a claimed job. `INACTIVE`: the scope stopped; nothing was written. */
+export type SupportAssistProduceResult = 'READY' | 'FAILED' | 'GONE' | 'INACTIVE';
+
+/** The instant before which a QUEUED job with no live lease counts as unclaimed. */
+export function unclaimedCutoff(now: Date): Date {
+  return new Date(now.getTime() - SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS * 1_000);
 }
 
 export interface SupportAssistServiceDeps {
@@ -105,8 +116,14 @@ export class SupportAssistService {
     };
     await this.authorize(scope, actor, SUPPORT_AI_ASSIST_PERMISSION, denial);
     const key = `${actor.surface}:${adminId}:${input.idempotencyKey}`;
+    // The key is bound to what it asked for (PR #200 review, finding 5): the same key with a
+    // different conversation is refused, never answered with the first conversation's job.
+    const requestHash = hashRequest({
+      command: 'support_ai.draft.request',
+      conversationId: input.conversationId,
+    });
     const existing = await this.deps.jobs.findByIdempotencyKey(scope, key);
-    if (existing !== null) return existing;
+    if (existing !== null) return this.replayOf(existing, requestHash);
     const { config } = await this.deps.configs.get(scope);
     if (config.mode === 'OFF') {
       throw errors.conflict(
@@ -123,7 +140,7 @@ export class SupportAssistService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         const raced = await this.deps.jobs.findByIdempotencyKey(scope, key, tx);
-        if (raced !== null) return raced;
+        if (raced !== null) return this.replayOf(raced, requestHash);
         const conversation = await this.deps.conversations.findById(
           scope,
           input.conversationId,
@@ -132,6 +149,8 @@ export class SupportAssistService {
         if (conversation === null)
           throw errors.notFound('business_chats.not_found', 'No such business conversation.');
         const now = this.deps.clock.now();
+        // An older draft nothing claimed is FAILED as such, not merely replaced.
+        await this.deps.jobs.failUnclaimed(scope, conversation.id, unclaimedCutoff(now), now, tx);
         await this.deps.jobs.discardOpen(scope, conversation.id, now, tx);
         const job = await this.deps.jobs.insert(
           scope,
@@ -141,6 +160,7 @@ export class SupportAssistService {
             conversationId: conversation.id,
             requestedByAdminId: adminId,
             idempotencyKey: key,
+            requestHash,
             now,
           },
           tx,
@@ -169,28 +189,37 @@ export class SupportAssistService {
     conversationId: string,
   ): Promise<readonly SupportAiJobRecord[]> {
     await this.deps.guard.check(scope, actor, SUPPORT_AI_ASSIST_PERMISSION);
+    // The server decides when a draft has waited too long (PR #200 review, finding 6): with the
+    // `assistant` role down nothing ever claims it, and the screen polls a QUEUED draft and
+    // keeps re-request disabled. Bookkeeping on the job's own row, under the activity check: a
+    // stopped scope's drafts are read, never written.
+    await this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return;
+      const now = this.deps.clock.now();
+      await this.deps.jobs.failUnclaimed(scope, conversationId, unclaimedCutoff(now), now, tx);
+    });
     return this.deps.jobs.recentForConversation(scope, conversationId, 5);
   }
 
   /**
    * Produces one draft. Called by the `assistant` role on a claimed job, OUTSIDE any
-   * transaction (the provider call can take a minute). Returns the job's new state.
+   * transaction (the provider call can take a minute). Returns what became of the job.
+   *
+   * The decision to CALL the provider is business work and checks scope activity in a
+   * transaction first (docs/conventions.md, the third exception's last sentence): a stopped
+   * tenant's transcript is never sent to a provider. The result is recorded in a transaction
+   * that checks again, so a stop that lands during the call writes nothing. Either way an
+   * inactive scope's job is left exactly as it is — QUEUED, under its lease — rather than
+   * FAILED: a stopped scope takes no writes, ours included, and once it is started again the
+   * job is claimed again or, if it waited too long, failed as unclaimed by the ordinary rule.
    */
-  async produce(
-    scope: ScopeContext,
-    job: SupportAiJobRecord,
-  ): Promise<'READY' | 'FAILED' | 'GONE'> {
+  async produce(scope: ScopeContext, job: SupportAiJobRecord): Promise<SupportAssistProduceResult> {
+    const active = await this.deps.uow.run(scope, (tx) =>
+      this.deps.scopeActivity.scopeIsActive(scope, tx),
+    );
+    if (!active) return 'INACTIVE';
     const conversation = await this.deps.conversations.findById(scope, job.conversationId);
-    if (conversation === null) {
-      return (await this.deps.jobs.markFailed(
-        scope,
-        job.id,
-        'conversation.missing',
-        this.deps.clock.now(),
-      ))
-        ? 'FAILED'
-        : 'GONE';
-    }
+    if (conversation === null) return this.fail(scope, job, 'conversation.missing');
     const [{ config }, transcript, context] = await Promise.all([
       this.deps.configs.get(scope),
       this.deps.messages.recent(scope, conversation.id, 40),
@@ -199,16 +228,7 @@ export class SupportAssistService {
     const turns = transcriptMessages(
       transcript.map((m) => ({ origin: m.origin, text: m.text, kind: m.kind })),
     );
-    if (turns.length === 0) {
-      return (await this.deps.jobs.markFailed(
-        scope,
-        job.id,
-        'transcript.empty',
-        this.deps.clock.now(),
-      ))
-        ? 'FAILED'
-        : 'GONE';
-    }
+    if (turns.length === 0) return this.fail(scope, job, 'transcript.empty');
     const result = await this.deps.chain.generate(scope, {
       operation: 'ASSIST_DRAFT',
       conversationId: conversation.id,
@@ -226,34 +246,83 @@ export class SupportAssistService {
         maxOutputTokens: Math.min(4_000, config.maxOutputChars * 3 + 600),
       },
     });
-    const now = this.deps.clock.now();
     if (result.outcome.outcome !== 'OK' || result.step === null) {
       const code =
         result.exhausted ??
         ('code' in result.outcome ? result.outcome.code : result.outcome.outcome);
-      return (await this.deps.jobs.markFailed(scope, job.id, `chain.${code}`, now))
-        ? 'FAILED'
-        : 'GONE';
+      return this.fail(scope, job, `chain.${code}`);
     }
     const parsed = supportAiDecisionSchema.safeParse(result.outcome.output);
     if (!parsed.success || parsed.data.replyText.length > config.maxOutputChars) {
-      return (await this.deps.jobs.markFailed(scope, job.id, 'decision.invalid', now))
-        ? 'FAILED'
-        : 'GONE';
+      return this.fail(scope, job, 'decision.invalid');
     }
     // A citation the payload did not contain is dropped: it is not evidence of anything.
     const factLabels = parsed.data.factRefs.flatMap((ref) => {
       const label = context.aliases.get(ref);
       return label === undefined ? [] : [label];
     });
-    const ok = await this.deps.jobs.markReady(scope, job.id, {
-      decision: parsed.data,
-      factLabels,
-      provider: result.step.provider,
-      model: result.outcome.model,
-      now,
+    const step = result.step;
+    const model = result.outcome.model;
+    return this.record(scope, 'READY', (now, tx) =>
+      this.deps.jobs.markReady(
+        scope,
+        job.id,
+        { decision: parsed.data, factLabels, provider: step.provider, model, now },
+        tx,
+      ),
+    );
+  }
+
+  /**
+   * The `assistant` role's claim of the next due job, in a transaction that checks the scope
+   * is accepting work: a stopped tenant's jobs are not leased, counted or produced.
+   */
+  async claimNext(
+    scope: ScopeContext,
+    now: Date,
+    leaseUntil: Date,
+  ): Promise<SupportAiJobRecord | null> {
+    return this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return null;
+      return this.deps.jobs.claimNext(scope, now, leaseUntil, tx);
     });
-    return ok ? 'READY' : 'GONE';
+  }
+
+  /** A job claimed too many times without a result is failed rather than retried for ever. */
+  abandon(scope: ScopeContext, job: SupportAiJobRecord): Promise<SupportAssistProduceResult> {
+    return this.fail(scope, job, 'job.attempts_exhausted');
+  }
+
+  /** The draft text's retention: purged with the transcript, 30 days after the request. */
+  async purgeExpired(scope: ScopeContext, now: Date): Promise<number> {
+    const cutoff = new Date(now.getTime() - SUPPORT_AI_DRAFT_RETENTION_DAYS * 86_400_000);
+    return this.deps.uow.run(scope, async (tx) => {
+      // A stopped tenant is a pass that did nothing (the TB2 lane's rule, retention included).
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;
+      return this.deps.jobs.purgeText(scope, cutoff, now, 500, tx);
+    });
+  }
+
+  private fail(
+    scope: ScopeContext,
+    job: SupportAiJobRecord,
+    code: string,
+  ): Promise<SupportAssistProduceResult> {
+    return this.record(scope, 'FAILED', (now, tx) =>
+      this.deps.jobs.markFailed(scope, job.id, code, now, tx),
+    );
+  }
+
+  /** One result write, in a transaction that checks the scope is still accepting work. */
+  private async record(
+    scope: ScopeContext,
+    to: 'READY' | 'FAILED',
+    write: (now: Date, tx: TransactionScope) => Promise<boolean>,
+  ): Promise<SupportAssistProduceResult> {
+    return this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'INACTIVE';
+      return (await write(this.deps.clock.now(), tx)) ? to : 'GONE';
+    });
   }
 
   /** The operator sends the draft — edited or not — as the business account. */
@@ -271,42 +340,60 @@ export class SupportAssistService {
     });
     const draft = await this.deps.jobs.findById(scope, draftId);
     if (draft === null) throw this.notFound();
-    if (draft.state === 'SENT' && draft.sentOutboundId !== null)
-      return { outboundId: draft.sentOutboundId };
-    if (draft.state !== 'READY') {
-      throw errors.conflict(
-        SUPPORT_ASSIST_ERROR_CODES.NOT_READY,
-        'This draft cannot be sent (it is not ready, or was replaced).',
-      );
-    }
+    // A courtesy, unlocked: a draft that plainly cannot be sent is refused before the lane is
+    // asked. SENT passes, so a replay of the operator's key reaches the lane's own replay. The
+    // DECISION is the conditional write inside the lane's transaction, below.
+    if (draft.state !== 'READY' && draft.state !== 'SENT') throw this.notReady();
     // The ordinary operator send: `business_chats.reply`, the connection check, the human
-    // signal and the lane. Idempotent on the operator's key, so a retry sends once.
-    const row = await this.deps.sender.enqueueHumanSend(scope, actor, {
-      conversationId: draft.conversationId,
-      idempotencyKey: command.idempotencyKey,
-      text: command.text,
-      origin: 'ASSIST',
-    });
-    await this.deps.uow.run(scope, async (tx) => {
-      await this.deps.jobs.markSent(scope, draft.id, row.id, this.deps.clock.now(), tx);
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action: 'support_ai.draft.send',
-          entityType: 'SupportAiJob',
-          entityId: draft.id,
-          before: { state: draft.state },
-          after: {
-            state: 'SENT',
-            outboundId: row.id,
-            edited: command.text !== draft.suggestedReply,
+    // signal and the lane. The draft moves READY→SENT in the SAME transaction as the outbound
+    // row (PR #200 review, finding 2): two sends under different keys, or a send racing a
+    // discard, commit at most one row, and the loser's whole transaction rolls back.
+    let inserted = false;
+    const row = await this.deps.sender.enqueueHumanSend(
+      scope,
+      actor,
+      {
+        conversationId: draft.conversationId,
+        idempotencyKey: command.idempotencyKey,
+        text: command.text,
+        origin: 'ASSIST',
+      },
+      async (outbound, tx) => {
+        const now = this.deps.clock.now();
+        if (!(await this.deps.jobs.markSent(scope, draft.id, outbound.id, now, tx))) {
+          throw this.notReady();
+        }
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'support_ai.draft.send',
+            entityType: 'SupportAiJob',
+            entityId: draft.id,
+            before: { state: 'READY' },
+            after: {
+              state: 'SENT',
+              outboundId: outbound.id,
+              edited: command.text !== draft.suggestedReply,
+            },
+            result: 'SUCCESS',
           },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-    });
+          tx,
+        );
+        inserted = true;
+      },
+    );
+    if (!inserted) {
+      // The lane replayed the operator's key. It answers for THIS draft only if this draft was
+      // sent as that row; the same key used on another draft is a different request.
+      const current = await this.deps.jobs.findById(scope, draft.id);
+      if (current?.state !== 'SENT' || current.sentOutboundId !== row.id) {
+        throw errors.conflict(
+          PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
+          'This idempotency key was already used to send a different draft.',
+        );
+      }
+    }
     return { outboundId: row.id };
   }
 
@@ -333,6 +420,23 @@ export class SupportAssistService {
         return { discarded };
       },
     );
+  }
+
+  private notReady() {
+    return errors.conflict(
+      SUPPORT_ASSIST_ERROR_CODES.NOT_READY,
+      'This draft cannot be sent (it is not ready, or was replaced).',
+    );
+  }
+
+  private replayOf(existing: SupportAiJobRecord, requestHash: string): SupportAiJobRecord {
+    if (existing.requestHash !== requestHash) {
+      throw errors.conflict(
+        PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
+        'This idempotency key was already used to ask for a draft of a different conversation.',
+      );
+    }
+    return existing;
   }
 
   private notFound() {

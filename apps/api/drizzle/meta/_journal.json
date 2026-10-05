@@ -1422,6 +1422,13 @@
       "when": 1791146629104,
       "tag": "0202_support_ai_assist_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 203,
+      "version": "7",
+      "when": 1791166224264,
+      "tag": "0203_support_ai_job_request_hash",
+      "breakpoints": true
     }
   ]
 }
