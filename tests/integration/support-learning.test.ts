@@ -196,6 +196,7 @@ describe('controlled learning (TB8)', () => {
             attempts: 1,
             exhausted: null,
             imagesSent: 0,
+            sight: { seen: [], unseen: new Map() },
           };
         },
       },
