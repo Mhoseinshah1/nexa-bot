@@ -439,7 +439,7 @@ describe('a customer pays through the approved screens', () => {
       expect(result.replyKey).toBe('bot.wallet.summary');
       const body = lastText();
       expect(body.startsWith('🎡 اطلاعات حساب کاربری شما:\n\n')).toBe(true);
-      expect(body).toContain('🪪 آی دی عددی: 910910');
+      expect(body).toContain('🪪 شناسه کاربری: 910910');
       expect(body).toContain('👤 نام: مریم احمدی');
       // Owner spec §4: every icon is an Appearance slot (phone 📱, balance `wallet`, referrals
       // `referral`), and §3 closes the screen with the date and time it was drawn.
