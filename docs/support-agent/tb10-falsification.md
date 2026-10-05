@@ -61,3 +61,38 @@ Notes:
   dropped from `nexa_test_tb10`, `support-plan.test.ts` failed five of its six plan cases. The
   first inbox page became a Seq Scan and a Sort, 1 118 buffers against 364 with the index.
   The indexes were then recreated.
+
+## Substitute review of PR #205 — every fix, falsified
+
+Codex was unavailable, so one read-only substitute review ran. It found no blocking defect,
+three should-fix findings and five nits; all were valid and all are fixed. Each code fix has a
+regression test, and reverting the fix fails that test. Run on 2026-10-05 against a dedicated
+integration database (`nexa_test_tb10fix`).
+
+| ID      | Finding                                                                                      | Fix                                                                                                                                                    | Regression test                                                                             | Result |
+| ------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- | ------ |
+| TB10-35 | S1: «waiting since» compared Telegram's whole-second date with the server's sub-second `now` | `businessUnansweredSince` compares on the whole second (`businessUnansweredSecond`); a message in the reply's second is unanswered (a contract commit) | is still waiting for a customer message in the same Telegram second as a reply (unit)       | KILLED |
+| TB10-36 | S1: the SQL's `firstUnansweredAt` used the millisecond rule                                  | `m.sent_at >= date_trunc('second', replied)`, the contract's rule, sargable                                                                            | a customer message in the same Telegram second as a reply confirmed at a sub-second now …   | KILLED |
+| TB10-37 | S1: a delivered reply was stamped on the server's clock                                      | the lane stamps the reply with Telegram's `date` for it (the OWN_ECHO row's date), `now` only when Telegram gave none                                  | a server clock running ahead of Telegram does not mark a later customer message as answered | KILLED |
+| TB10-38 | S1: Telegram's `date` for a sent message was never read                                      | `telegramSend` reads a positive integer `date`; the gateway and transport carry it                                                                     | reads Telegram’s own date for a sent message, and nothing that is not one (unit)            | KILLED |
+| TB10-39 | N2: «load more» could draw a conversation twice (mutable keyset key)                         | `inboxRows` draws each id once, first position, fresher read; the skip case documented                                                                 | draws a conversation once when «load more» reads it again (web)                             | KILLED |
+| TB10-40 | N3: the six analytics statements were six snapshots                                          | one `REPEATABLE READ, READ ONLY` transaction                                                                                                           | reads every figure from one snapshot, blind to a commit made mid-read                       | KILLED |
+| TB10-41 | N3: (the transaction itself)                                                                 | —                                                                                                                                                      | reads every figure from one snapshot, blind to a commit made mid-read                       | KILLED |
+| TB10-42 | N5: `percentile_cont` over a CUSTOM window of up to 731 days                                 | a CUSTOM window is at most 366 days (the longest preset), refused before reading                                                                       | is capped at a leap year — a longer one is refused before anything is read (unit)           | KILLED |
+| —       | N4: the learning-candidate count walked the tenant's whole review-queue index                | `support_learning_candidates_created_idx` on `(tenant_id, created_at, state)` in `0210`                                                                | counts support_learning_candidates in the window … (plan; falsified by hand, below)         | KILLED |
+| —       | N1: `0210` is a plain `CREATE INDEX`, not the online-index path                              | kept, and documented: every table it indexes is created empty by the same unreleased set; it ships with `0196`–`0209`                                  | — (a release rule, `tb10-polish-analytics.md` decision 9, `docs/deployment.md`)             | —      |
+| —       | S2: the execution board said only TB0 was merged                                             | TB0–TB9 merged as #195–#204, each with its merge commit; TB10 #205 open                                                                                | — (documentation)                                                                           | —      |
+| —       | S3: the runbook promised customers «به همکار سپرده شد» on a handoff                          | no such message exists; §3 now states the real cost of AUTO in an outage; §3, §5 and §9 corrected against the code                                     | — (documentation)                                                                           | —      |
+
+TB10-05 and TB10-06 were re-anchored onto the whole-second rule and still revert the same two
+rules. The unit test that pinned «a reply in the customer's own second answers them» was the
+old, wrong behaviour; it now uses the next second.
+
+**N4 by hand.** The harness applies migrations once per database, so the driver cannot revert
+`0210`. With `support_learning_candidates_created_idx` dropped from `nexa_test_tb10fix`, the
+plan case failed: the count went back to an index-only scan of the review-queue index, 228
+buffers against 23, under an Index Cond that still named `created_at` — which is why the case
+bounds the buffers rather than trusting the Index Cond. The index was then recreated.
+
+**8 of 8 new mutants killed; the whole driver, TB10-01..42, 42 of 42 killed** on the fixed
+head, with a clean tree after the run.
