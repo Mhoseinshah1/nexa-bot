@@ -126,6 +126,7 @@ import type {
 } from '../../modules/commerce/catalog/application/ports.js';
 import type { CommercialActionService } from '../../modules/commerce/commercial/application/commercial-action.service.js';
 import type { LocationChangeService } from '../../modules/commerce/locations/application/location-change.service.js';
+import { displayedServiceLocation } from '../../modules/commerce/locations/application/location-change-policy.js';
 import type { TrialService } from '../../modules/commerce/trials/application/trial.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
@@ -4199,6 +4200,11 @@ export interface BotRuntimeDeps {
   readonly routes: PaymentRouteSource;
   readonly support: SupportScreenSource;
   readonly productDisplay: ProductDisplaySource;
+  /**
+   * Pre-support A6: the operator's label for a panel's INITIAL location — where the card
+   * says a never-moved service is. Absent, the card falls back to the product's label.
+   */
+  readonly panelLocations?: PanelLocationLabelSource;
   readonly resellers?: Pick<ResellerService, 'standing'>;
   readonly referralGifts?: ReferralGiftSource;
   readonly media?: TenantMediaSource;
@@ -4298,6 +4304,11 @@ export interface ProductDisplaySource {
     readonly displayFeatures: readonly string[];
     readonly serviceLocationLabel: string | null;
   } | null>;
+}
+
+/** Pre-support A6: a panel's initial-location label, operator display text only. */
+export interface PanelLocationLabelSource {
+  initialLabelFor(scope: TenantContext, panelId: string): Promise<string | null>;
 }
 
 export interface ReferralGiftSource {
@@ -10887,8 +10898,15 @@ export class BotRuntime {
     return this.deps.screens.serviceCard(scope, {
       state: service.state,
       serviceUsername: service.providerUsername,
-      // WP-A6: where the service has moved to, when it has; the product's label otherwise.
-      serviceLocation: service.locationLabel ?? display?.serviceLocationLabel ?? null,
+      // Pre-support A6: moved label, then the CURRENT panel's initial location, then the
+      // product's label — one precedence, shared with the delivery card.
+      serviceLocation: displayedServiceLocation(
+        service.locationLabel,
+        service.locationLabel !== null
+          ? null
+          : ((await this.deps.panelLocations?.initialLabelFor(scope, service.panelId)) ?? null),
+        display?.serviceLocationLabel ?? null,
+      ),
       productName: title,
       trafficLimitBytes: service.trafficLimitBytes,
       trafficUsedBytes: service.trafficUsedBytes,

@@ -229,8 +229,40 @@ export function currentLocation(
   if (service.locationKey !== null && service.locationLabel !== null) {
     return { key: service.locationKey, label: service.locationLabel };
   }
-  const initial = rows.find((row) => row.initial && row.productId === null);
+  const initial = initialLocationOf(rows);
   return initial === undefined ? null : { key: initial.locationKey, label: initial.label };
+}
+
+/**
+ * The panel's INITIAL location: where it creates every new account. Panel-wide only — one
+ * per panel, and never product-scoped, because a panel places every new account the same
+ * way. The one reading of that rule, for `currentLocation` and for the card's label alike.
+ */
+export function initialLocationOf(
+  rows: readonly ServiceLocationRecord[],
+): ServiceLocationRecord | undefined {
+  return rows.find((row) => row.initial && row.productId === null);
+}
+
+/**
+ * The location a customer is TOLD their service is in (pre-support A6), most specific first:
+ *
+ * 1. where it was MOVED to (`services.location_label`, written only by a location change);
+ * 2. the operator's label for the initial location of the panel the service is ON NOW —
+ *    so a service balanced onto a sibling panel names that panel's place, not the home
+ *    product's;
+ * 3. the product's marketing label;
+ * 4. nothing, and the line is left out.
+ *
+ * Every candidate is operator-written display text. A panel's name, host, id or a
+ * provider's location key is never one of them, so none can reach a customer from here.
+ */
+export function displayedServiceLocation(
+  movedLabel: string | null,
+  panelInitialLabel: string | null,
+  productLabel: string | null,
+): string | null {
+  return movedLabel ?? panelInitialLabel ?? productLabel ?? null;
 }
 
 /**

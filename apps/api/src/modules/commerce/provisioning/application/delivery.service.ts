@@ -153,9 +153,10 @@ export interface DeliveryRecord {
 
 /**
  * What the delivery card says about the service besides its link (customer UX
- * completion §B): the product's public name (frozen on the order), the product's
- * service-location label (marketing display data, read live — a label is not a
- * snapshot-worthy fact), and the plan's duration and allowance. Null when the order or
+ * completion §B): the product's public name (frozen on the order), the service's
+ * location label (display data, read live — a label is not a snapshot-worthy fact; the
+ * precedence is `displayedServiceLocation`'s, pre-support A6), and the plan's duration and
+ * allowance. Null when the order or
  * product cannot be read, and then the plain link message is sent rather than a card
  * with holes in it.
  */
