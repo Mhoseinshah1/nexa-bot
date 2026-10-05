@@ -72,6 +72,8 @@ M=[
  ('TB10-31',[(CSS,"  font-variant-numeric: tabular-nums;\n}","  font-variant-numeric: tabular-nums;\n  color: #b00020;\n}")],T_W,'only theme tokens and logical sides'),
  ('TB10-32',[(CSS,".bchat-ticket {\n  text-decoration: none;",".bchat-ticket {\n  text-decoration: none;\n  margin-left: 4px;")],T_W,'only theme tokens and logical sides'),
  ('TB10-33',[(INBOX_PAGE,"          <textarea\n            dir=\"auto\"\n","          <textarea\n")],T_W,'direction of what is typed'),
+ # TB9's review (PR #204): a RETIRE proposal retires a built article; the snapshot counts it.
+ ('TB10-34',[(READER,"       WHERE tenant_id = ${tenantId}::uuid\n       GROUP BY source, state, enabled","       WHERE tenant_id = ${tenantId}::uuid AND state <> 'RETIRED'\n       GROUP BY source, state, enabled")],T_I,'retired by a RETIRE proposal'),
 ]
 
 def build_contracts():

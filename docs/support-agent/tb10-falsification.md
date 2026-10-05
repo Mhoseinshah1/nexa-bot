@@ -42,8 +42,10 @@ reported as SURVIVED. Run on 2026-10-05 against a dedicated integration database
 | TB10-31 | No hard-coded colour in a support rule (CSS)                                          | uses only theme tokens and logical sides in the support pages’ rules                      | KILLED |
 | TB10-32 | No physical side in a support rule (CSS)                                              | uses only theme tokens and logical sides in the support pages’ rules                      | KILLED |
 | TB10-33 | The composer is `dir="auto"` (web)                                                    | lets a text box take the direction of what is typed into it                               | KILLED |
+| TB10-34 | Knowledge by source counts every article state, RETIRED included (TB9 RETIRE)         | knowledge by source counts a built article retired by a RETIRE proposal                   | KILLED |
 
-**33 of 33 killed.**
+**34 of 34 killed** on the restack onto TB9's substitute review (PR #204), where TB10-34 was
+added for the RETIRE proposal kind. Before that, **33 of 33 killed.**
 
 Notes:
 

@@ -560,6 +560,53 @@ describe('TB10 — support polish against the database', () => {
       ]);
     });
 
+    /*
+     * TB9's review (PR #204) added the RETIRE proposal: a built article whose source left the
+     * allowlist is retired by a named apply. Knowledge by source is a snapshot of articles, so a
+     * retired built article is counted under NEXA_BUILD / RETIRED, and never as approved.
+     */
+    it('knowledge by source counts a built article retired by a RETIRE proposal', async () => {
+      const c = ctx.container;
+      const faq = await c.supportFaqs.create(tenantA, owner, {
+        idempotencyKey: `faq-${randomUUID()}`,
+        question: 'چطور وصل شوم؟',
+        answer: 'برنامه را باز کنید و لینک اشتراک را وارد کنید.',
+        sortOrder: 0,
+      });
+      const run = () =>
+        c.supportKnowledgeBuild.run(tenantA, owner, { idempotencyKey: `run-${randomUUID()}` });
+      const first = await run();
+      await c.supportKnowledgeBuild.apply(tenantA, owner, first.build.id, {
+        idempotencyKey: `apply-${randomUUID()}`,
+        proposalIds: null,
+      });
+      const built = async () =>
+        (await c.supportAnalytics.analytics(tenantA, owner, { range: 'TODAY' })).knowledgeBySource
+          .filter((row) => row.source === 'NEXA_BUILD')
+          .map(({ state, count }) => ({ state, count }));
+      // Every allowlisted source built an article (the seed has more than this FAQ).
+      const [approved] = await built();
+      expect(approved).toMatchObject({ state: 'APPROVED' });
+      const n = approved!.count;
+      await c.database.db.execute(
+        sql`UPDATE support_faqs SET status = 'INACTIVE' WHERE id = ${faq.id}`,
+      );
+      const next = await run();
+      const retire = next.proposals.find((p) => p.kind === 'RETIRE')!;
+      expect(next.build.counts.retire).toBe(1);
+      await c.supportKnowledgeBuild.apply(tenantA, owner, next.build.id, {
+        idempotencyKey: `retire-${randomUUID()}`,
+        proposalIds: [retire.id],
+      });
+      expect(await built()).toEqual(
+        expect.arrayContaining([
+          { state: 'APPROVED', count: n - 1 },
+          { state: 'RETIRED', count: 1 },
+        ]),
+      );
+      expect(await built()).toHaveLength(2);
+    });
+
     it('is charged support_ai.configure before anything is read, and answers in the reports’ range', async () => {
       expect(
         (
