@@ -7683,6 +7683,16 @@ export const WEB_FA = {
   'web.kb_kind_update': 'به‌روزرسانی',
   'web.kb_kind_unchanged': 'بدون تغییر',
   'web.kb_kind_conflict': 'تعارض',
+  'web.kb_kind_retire': 'بازنشسته‌کردن',
+  'web.kb_retire_explained':
+    'منبع این مطلب دیگر در اطلاعات NEXA نیست یا دیگر برای همه نمایش داده نمی‌شود. اگر بازنشسته شود، دستیار دیگر آن را نمی‌بیند.',
+  'web.kb_retire_one': 'بازنشسته‌کردن این مطلب',
+  'web.kb_applied_with_skipped':
+    'اعمال شد؛ برخی موارد در این فاصله تغییر کرده بودند و کنار گذاشته شدند.',
+  'web.kb_bounds': 'محدودیت‌های ساخت',
+  'web.kb_truncated': 'متن کوتاه‌شده',
+  'web.kb_capped': 'موارد خارج از سقف',
+  'web.kb_fault_running': 'ساخت دیگری هم‌زمان اجرا شد. آخرین ساخت را بررسی کنید.',
   'web.kb_state_applied': 'اعمال شد',
   'web.kb_state_skipped': 'کنار گذاشته شد',
   'web.kb_no_changes': 'همه‌چیز با دانش فعلی یکسان است؛ تغییری برای اعمال نیست.',

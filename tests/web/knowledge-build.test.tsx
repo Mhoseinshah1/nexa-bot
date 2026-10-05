@@ -20,6 +20,7 @@ const P_ADD = '019610ab-cdef-7012-8345-6789abcdef01';
 const P_CONFLICT = '019620ab-cdef-7012-8345-6789abcdef01';
 const P_SAME = '019630ab-cdef-7012-8345-6789abcdef01';
 const ARTICLE = '019500ab-cdef-7012-8345-6789abcdef01';
+const P_RETIRE = '019640ab-cdef-7012-8345-6789abcdef01';
 
 const proposal = (overrides: Record<string, unknown> = {}) => ({
   id: P_ADD,
@@ -71,7 +72,9 @@ const buildOf = (
   id: BUILD_ID,
   state: 'OPEN',
   createdAt: '2026-10-05T09:00:00.000Z',
-  counts: { add: 1, update: 0, unchanged: 1, conflict: 1 },
+  counts: { add: 1, update: 0, unchanged: 1, conflict: 1, retire: 0 },
+  truncated: 0,
+  capped: 0,
   proposals,
   ...overrides,
 });
@@ -83,7 +86,7 @@ function page(build: unknown = buildOf(), mayReview = true) {
   const api = stubApi([
     { url: '/support-knowledge/builds/latest', method: 'GET', body: { build } },
     { url: '/support-knowledge/builds', method: 'POST', body: { build: buildOf() } },
-    { url: '/apply', method: 'POST', body: { applied: 1, conflicted: 0 } },
+    { url: '/apply', method: 'POST', body: { applied: 1, conflicted: 0, skipped: 0 } },
     {
       url: '/resolve',
       method: 'POST',
@@ -93,6 +96,18 @@ function page(build: unknown = buildOf(), mayReview = true) {
   renderPage(<KnowledgeBuildPage denied={false} mayReview={mayReview} />);
   return api;
 }
+
+const retire = proposal({
+  id: P_RETIRE,
+  sourceType: 'PRODUCT',
+  kind: 'RETIRE',
+  title: 'پلن قدیمی',
+  body: 'متن مطلب منتشرشده',
+  baseTitle: 'پلن قدیمی',
+  baseBody: 'متن مطلب منتشرشده',
+  baseRevision: 1,
+  articleId: ARTICLE,
+});
 
 describe('the Build-from-NEXA page', () => {
   it('says nothing changes until applied, and offers a run when there is no build', async () => {
@@ -160,7 +175,9 @@ describe('the Build-from-NEXA page', () => {
   });
 
   it('a build with no changes says so', async () => {
-    page(buildOf({ counts: { add: 0, update: 0, unchanged: 1, conflict: 0 } }, [unchanged]));
+    page(
+      buildOf({ counts: { add: 0, update: 0, unchanged: 1, conflict: 0, retire: 0 } }, [unchanged]),
+    );
     expect(await screen.findByText(t('web.kb_no_changes'))).toBeInTheDocument();
   });
 
@@ -211,5 +228,56 @@ describe('the Build-from-NEXA page', () => {
       'support_knowledge.review',
     ]).element as { props: { denied: boolean; mayReview: boolean } };
     expect(element.props).toMatchObject({ denied: false, mayReview: true });
+  });
+
+  // --- Substitute review of PR #204 ------------------------------------------------------
+
+  it('S2: a RETIRE has its own label and its own button naming exactly it; apply all skips it', async () => {
+    const api = page(
+      buildOf({ counts: { add: 0, update: 0, unchanged: 1, conflict: 0, retire: 1 } }, [
+        retire,
+        unchanged,
+      ]),
+    );
+    const list = await screen.findByRole('list', { name: t('web.kb_proposals') });
+    const item = list.querySelector('[data-kind="RETIRE"]') as HTMLElement;
+    expect(within(item).getByText(t('web.kb_kind_retire'))).toBeInTheDocument();
+    expect(within(item).getByText(t('web.kb_retire_explained'))).toBeInTheDocument();
+    expect(within(item).queryByRole('button', { name: t('web.kb_apply_one') })).toBeNull();
+    // «Apply all» never retires: with only a RETIRE pending it is not offered.
+    expect(screen.getByRole('button', { name: t('web.kb_apply_all') })).toBeDisabled();
+    fireEvent.click(within(item).getByRole('button', { name: t('web.kb_retire_one') }));
+    await waitFor(() => expect(calls(api, 'POST', '/apply')).toHaveLength(1));
+    expect(calls(api, 'POST', '/apply')[0]!.body).toMatchObject({ proposalIds: [P_RETIRE] });
+  });
+
+  it('N2: the build shows how many items were clipped and how many a bound dropped', async () => {
+    page(buildOf({ truncated: 2, capped: 3 }));
+    const bounds = await screen.findByLabelText(t('web.kb_bounds'));
+    expect(bounds.textContent).toBe(`${t('web.kb_truncated')}: 2 · ${t('web.kb_capped')}: 3`);
+  });
+
+  it('N1: a concurrent run is shown as that', async () => {
+    stubApi([
+      { url: '/support-knowledge/builds/latest', method: 'GET', body: { build: null } },
+      {
+        url: '/support-knowledge/builds',
+        method: 'POST',
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'support_knowledge.build_running',
+            message: 'x',
+            details: {},
+            correlationId: 'c',
+          },
+        },
+      },
+    ]);
+    renderPage(<KnowledgeBuildPage denied={false} mayReview />);
+    await screen.findByText(t('web.kb_empty'));
+    fireEvent.click(screen.getByRole('button', { name: t('web.kb_run') }));
+    expect(await screen.findByText(t('web.kb_fault_running'))).toBeInTheDocument();
   });
 });

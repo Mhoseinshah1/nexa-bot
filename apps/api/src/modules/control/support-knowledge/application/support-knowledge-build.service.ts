@@ -28,12 +28,7 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
-import {
-  diffBuild,
-  sourceRef,
-  type BuildItem,
-  type BuiltArticle,
-} from '../domain/build-diff.js';
+import { diffBuild, sourceRef, type BuildItem, type BuiltArticle } from '../domain/build-diff.js';
 import type {
   DrizzleSupportKnowledgeRepository,
   KnowledgeBuildCounts,
@@ -323,9 +318,7 @@ export class SupportKnowledgeBuildService {
         const targets = (await this.deps.repository.proposals(scope, buildId, tx)).filter(
           (p) =>
             p.state === 'PENDING' &&
-            (p.kind === 'ADD' ||
-              p.kind === 'UPDATE' ||
-              (p.kind === 'RETIRE' && wanted !== null)) &&
+            (p.kind === 'ADD' || p.kind === 'UPDATE' || (p.kind === 'RETIRE' && wanted !== null)) &&
             (wanted === null || wanted.has(p.id)),
         );
         const applied: string[] = [];

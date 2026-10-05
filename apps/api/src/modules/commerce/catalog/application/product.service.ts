@@ -299,10 +299,7 @@ export class ProductService {
    * rule is not restated either — the same eligible-panel view (`PanelSalesGate` through
    * `catalogueView`) and the same SQL predicate as `browseCategory`.
    */
-  async publicCatalogue(
-    scope: TenantContext,
-    limit: number,
-  ): Promise<CustomerPage<ProductRecord>> {
+  async publicCatalogue(scope: TenantContext, limit: number): Promise<CustomerPage<ProductRecord>> {
     const view = await this.catalogueView(scope, undefined);
     if (view === null) return { items: [], hasMore: false };
     return this.deps.repository.listCustomerVisibleProducts(

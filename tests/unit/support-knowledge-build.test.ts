@@ -79,7 +79,7 @@ describe('the build diff', () => {
     expect(diffBuild([item()], [other]).map((d) => d.kind)).toEqual(['ADD', 'RETIRE']);
   });
 
-  it('RETIRE when a built article\'s source left the allowlisted set; it carries the article text', () => {
+  it("RETIRE when a built article's source left the allowlisted set; it carries the article text", () => {
     const edited = built({ revision: 4, body: 'متن ویرایش‌شده' });
     const drafts = diffBuild([], [edited]);
     // Proposed even over an edit: a retire only proposes, a reviewer decides.
@@ -290,9 +290,9 @@ describe('the source adapter counts what its bounds do', () => {
     });
 
   it('a long FAQ question is clipped and counted; nothing is capped', async () => {
-    const result = await make([{ id: 'f1', question: 'س'.repeat(250), answer: 'پاسخ' }]).collect(
-      { tenantId: 't' } as never,
-    );
+    const result = await make([{ id: 'f1', question: 'س'.repeat(250), answer: 'پاسخ' }]).collect({
+      tenantId: 't',
+    } as never);
     expect(result.items[0]?.content.title).toHaveLength(200);
     expect(result.items[0]?.content.title.endsWith('…')).toBe(true);
     expect([result.truncated, result.capped, result.incomplete]).toEqual([1, 0, []]);

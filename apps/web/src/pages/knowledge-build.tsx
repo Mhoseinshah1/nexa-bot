@@ -28,8 +28,9 @@ import { Icon } from '../ui/icons';
  * The build PROPOSES. Running it changes no article; every proposal shows what it would do
  * beside what the article says now. Apply takes the non-conflicting ones (or one at a time);
  * a CONFLICT — an article a reviewer edited since the last build — is never applied without an
- * explicit choice: take the build's text (a new revision) or keep the edit. A newer run
- * supersedes this one. Every write carries a fresh key per click; the server charges
+ * explicit choice: take the build's text (a new revision) or keep the edit. A RETIRE — a built
+ * article whose source left the allowlist — has its own label and its own button, and is never
+ * part of «apply all». A newer run supersedes this one. Every write carries a fresh key per click; the server charges
  * `support_knowledge.review`.
  */
 
@@ -49,6 +50,7 @@ const KIND_LABELS: Readonly<Record<SupportKnowledgeProposalKind, WebKey>> = {
   UPDATE: 'web.kb_kind_update',
   UNCHANGED: 'web.kb_kind_unchanged',
   CONFLICT: 'web.kb_kind_conflict',
+  RETIRE: 'web.kb_kind_retire',
 };
 
 const KIND_TONES: Readonly<Record<SupportKnowledgeProposalKind, Tone>> = {
@@ -56,6 +58,7 @@ const KIND_TONES: Readonly<Record<SupportKnowledgeProposalKind, Tone>> = {
   UPDATE: 'info',
   UNCHANGED: 'neutral',
   CONFLICT: 'danger',
+  RETIRE: 'warn',
 };
 
 const FAULTS: Readonly<Record<string, WebKey>> = {
@@ -63,6 +66,7 @@ const FAULTS: Readonly<Record<string, WebKey>> = {
   'support_knowledge.base_moved': 'web.kb_fault_base_moved',
   'support_knowledge.not_a_conflict': 'web.kb_fault_not_conflict',
   'support_knowledge.build_not_found': 'web.kb_fault_not_found',
+  'support_knowledge.build_running': 'web.kb_fault_running',
 };
 
 function buildFault(error: unknown): string {
@@ -106,8 +110,13 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
     }) => applyKnowledgeBuild(input),
     onSuccess: (result) => {
       notify({
-        tone: result.conflicted > 0 ? 'warn' : 'ok',
-        message: result.conflicted > 0 ? t('web.kb_applied_with_conflicts') : t('web.kb_applied'),
+        tone: result.conflicted > 0 || result.skipped > 0 ? 'warn' : 'ok',
+        message:
+          result.conflicted > 0
+            ? t('web.kb_applied_with_conflicts')
+            : result.skipped > 0
+              ? t('web.kb_applied_with_skipped')
+              : t('web.kb_applied'),
       });
       refresh();
     },
@@ -241,8 +250,13 @@ function BuildCard({
     >
       {!open && <Banner tone="warn">{t('web.kb_superseded')}</Banner>}
       <p className="small" aria-label={t('web.kb_counts')}>
-        {`${t('web.kb_kind_add')}: ${String(build.counts.add)} · ${t('web.kb_kind_update')}: ${String(build.counts.update)} · ${t('web.kb_kind_conflict')}: ${String(build.counts.conflict)} · ${t('web.kb_kind_unchanged')}: ${String(build.counts.unchanged)}`}
+        {`${t('web.kb_kind_add')}: ${String(build.counts.add)} · ${t('web.kb_kind_update')}: ${String(build.counts.update)} · ${t('web.kb_kind_conflict')}: ${String(build.counts.conflict)} · ${t('web.kb_kind_retire')}: ${String(build.counts.retire)} · ${t('web.kb_kind_unchanged')}: ${String(build.counts.unchanged)}`}
       </p>
+      {(build.truncated > 0 || build.capped > 0) && (
+        <p className="small muted" aria-label={t('web.kb_bounds')}>
+          {`${t('web.kb_truncated')}: ${String(build.truncated)} · ${t('web.kb_capped')}: ${String(build.capped)}`}
+        </p>
+      )}
       {changes.length === 0 ? (
         <p className="muted small">{t('web.kb_no_changes')}</p>
       ) : (
@@ -272,11 +286,15 @@ function BuildCard({
                     <p className="support-answer">{proposal.baseBody}</p>
                   </div>
                 )}
-                <div>
-                  <p className="small muted">{t('web.kb_proposed')}</p>
-                  <p className="strong">{proposal.title}</p>
-                  <p className="support-answer">{proposal.body}</p>
-                </div>
+                {proposal.kind === 'RETIRE' ? (
+                  <p className="small">{t('web.kb_retire_explained')}</p>
+                ) : (
+                  <div>
+                    <p className="small muted">{t('web.kb_proposed')}</p>
+                    <p className="strong">{proposal.title}</p>
+                    <p className="support-answer">{proposal.body}</p>
+                  </div>
+                )}
               </div>
               {mayReview && open && proposal.state === 'PENDING' && (
                 <div className="form-actions">
@@ -307,7 +325,7 @@ function BuildCard({
                       disabled={busy}
                       onClick={() => onApplyOne(proposal)}
                     >
-                      {t('web.kb_apply_one')}
+                      {t(proposal.kind === 'RETIRE' ? 'web.kb_retire_one' : 'web.kb_apply_one')}
                     </button>
                   )}
                 </div>
