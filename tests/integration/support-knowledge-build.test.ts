@@ -11,6 +11,11 @@ import {
   type SupportKnowledgeProposalKind,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import {
+  SupportKnowledgeBuildService,
+  type SupportKnowledgeBuildServiceDeps,
+} from '../../apps/api/src/modules/control/support-knowledge/application/support-knowledge-build.service';
+import { DrizzleSupportKnowledgeRepository } from '../../apps/api/src/modules/control/support-knowledge/infrastructure/drizzle-support-knowledge.repository';
 import { buildView } from '../../apps/api/src/surfaces/web/support-knowledge.controller';
 import {
   SEED_IDS,
@@ -62,6 +67,8 @@ describe('the knowledge build (TB9)', () => {
     title: string;
     audience: 'EVERYONE' | 'RESELLERS_ONLY' | 'HIDDEN';
     active: boolean;
+    categoryId?: string | null;
+    panel?: string;
   }) {
     const repo = new DrizzleProductRepository(ctx.container.database.db);
     const created = await repo.create(tenantA, {
@@ -71,8 +78,10 @@ describe('the knowledge build (TB9)', () => {
         description: 'یک ماهه با پشتیبانی',
         audience: input.audience,
         sortOrder: 10,
-        panelId: panelId as PanelId,
-        categoryId: SEED_IDS.categoryA as ProductCategoryId,
+        panelId: (input.panel ?? panelId) as PanelId,
+        categoryId: (input.categoryId === undefined
+          ? SEED_IDS.categoryA
+          : input.categoryId) as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(987_654_321n, 'IRT'),
         display: { ...EMPTY_PRODUCT_DISPLAY, displayFeatures: ['سرعت بالا'] },
@@ -440,5 +449,397 @@ describe('the knowledge build (TB9)', () => {
     // Each tenant has its own open build: B's run did not supersede A's.
     await applyAll(detailA.build.id);
     expect((await builtArticles()).length).toBeGreaterThan(0);
+  });
+
+  // --- Substitute review of PR #204 ------------------------------------------------------
+
+  async function category(status: 'ACTIVE' | 'INACTIVE', visibility: 'VISIBLE' | 'HIDDEN') {
+    const id = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO product_categories (id, tenant_id, name, status, visibility, sort_order)
+      VALUES (${id}, ${tenantA.tenantId}, ${`cat-${id.slice(0, 8)}`}, ${status}, ${visibility}, 5)`);
+    return id;
+  }
+
+  async function editFaqSource(answer: string, expectedVersion: number) {
+    await ctx.container.supportFaqs.update(tenantA, owner, {
+      idempotencyKey: key('faq-up'),
+      id: faqId,
+      expectedVersion,
+      question: 'چطور وصل شوم؟',
+      answer,
+      sortOrder: 0,
+    });
+  }
+
+  async function faqArticle() {
+    return (await builtArticles()).find((a) => a.sourceType === 'FAQ')!;
+  }
+
+  async function editArticle(body: string) {
+    const article = await faqArticle();
+    return ctx.container.supportKnowledge.updateArticle(tenantA, owner, article.id, {
+      idempotencyKey: key('edit'),
+      expectedVersion: article.version,
+      content: { title: 'چطور وصل شوم؟', body, category: 'GENERAL', tags: [] },
+    });
+  }
+
+  /** The service over a repository a test can slow down at one step. */
+  function serviceWith(repository: DrizzleSupportKnowledgeRepository) {
+    const deps = (
+      ctx.container.supportKnowledgeBuild as unknown as {
+        deps: SupportKnowledgeBuildServiceDeps;
+      }
+    ).deps;
+    return new SupportKnowledgeBuildService({ ...deps, repository });
+  }
+
+  /** A barrier: `arrive` resolves once `n` callers arrived, or after `ms` regardless. */
+  function barrier(n: number, ms: number) {
+    let arrived = 0;
+    let open!: () => void;
+    const all = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return {
+      arrive: async () => {
+        arrived += 1;
+        if (arrived >= n) open();
+        await Promise.race([all, new Promise((resolve) => setTimeout(resolve, ms))]);
+      },
+    };
+  }
+
+  /** An UPDATE proposal for the FAQ, with the FAQ article built and its source changed. */
+  async function pendingFaqUpdate() {
+    await applyAll((await build()).build.id);
+    await editFaqSource('پاسخ تازهٔ منبع.', 1);
+    const next = await build();
+    const update = next.proposals.find((p) => p.sourceType === 'FAQ')!;
+    expect(update.kind).toBe('UPDATE');
+    return { next, update };
+  }
+
+  /** A CONFLICT proposal for the FAQ, built normally: edited article, then the source changed. */
+  async function pendingFaqConflict() {
+    await applyAll((await build()).build.id);
+    await editArticle('متن دستی اپراتور.');
+    await editFaqSource('پاسخ تازهٔ منبع.', 1);
+    const next = await build();
+    const conflict = next.proposals.find((p) => p.sourceType === 'FAQ')!;
+    expect(conflict.kind).toBe('CONFLICT');
+    return { next, conflict };
+  }
+
+  it('B1: a product the customer catalogue does not list never becomes a proposal', async () => {
+    const hidden = await category('ACTIVE', 'HIDDEN');
+    const inactive = await category('INACTIVE', 'VISIBLE');
+    const otherPanel = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${otherPanel}, ${tenantA.tenantId}, 'unsellable', 'sanaei', 'https://unsellable.example.test', 'ACTIVE')`);
+    await product({
+      title: 'پلن فروش خصوصی',
+      audience: 'EVERYONE',
+      active: true,
+      categoryId: hidden,
+    });
+    await product({
+      title: 'پلن دسته‌ی متوقف',
+      audience: 'EVERYONE',
+      active: true,
+      categoryId: inactive,
+    });
+    await product({ title: 'پلن بی‌دسته', audience: 'EVERYONE', active: true, categoryId: null });
+    await product({ title: 'پلن بی‌پنل', audience: 'EVERYONE', active: true, panel: otherPanel });
+    const titles = (await build()).proposals
+      .filter((p) => p.sourceType === 'PRODUCT')
+      .map((p) => p.content.title);
+    expect(titles).toEqual(['پلن عمومی']);
+  });
+
+  it('S1: an UPDATE that meets an edit during apply is a CONFLICT on the current text; TAKE_BUILD works', async () => {
+    const { next, update } = await pendingFaqUpdate();
+    const edited = await editArticle('ویرایش پس از ساخت.');
+    expect(await applyAll(next.build.id)).toEqual({ applied: 0, conflicted: 1, skipped: 0 });
+    const latest = (await ctx.container.supportKnowledgeBuild.latest(tenantA, owner))!;
+    expect(latest.proposals.find((p) => p.id === update.id)).toMatchObject({
+      kind: 'CONFLICT',
+      baseRevision: edited.revision,
+      baseBody: 'ویرایش پس از ساخت.',
+    });
+    // N3: the counts follow the kinds.
+    expect(latest.build.counts).toMatchObject({ update: 0, conflict: 1 });
+    expect(buildView(latest).counts).toMatchObject({ update: 0, conflict: 1 });
+    await ctx.container.supportKnowledgeBuild.resolve(tenantA, owner, update.id, {
+      idempotencyKey: key('take'),
+      choice: 'TAKE_BUILD',
+    });
+    expect(await faqArticle()).toMatchObject({
+      body: 'پاسخ تازهٔ منبع.',
+      revision: edited.revision + 1,
+    });
+  });
+
+  it('S1: … and KEEP_CURRENT works, keeping the edit', async () => {
+    const { next, update } = await pendingFaqUpdate();
+    await editArticle('ویرایش پس از ساخت.');
+    await applyAll(next.build.id);
+    await ctx.container.supportKnowledgeBuild.resolve(tenantA, owner, update.id, {
+      idempotencyKey: key('keep'),
+      choice: 'KEEP_CURRENT',
+    });
+    expect((await faqArticle()).body).toBe('ویرایش پس از ساخت.');
+    expect(kinds(await build())['FAQ:چطور وصل شوم؟']).toBe('UNCHANGED');
+  });
+
+  it('S2: a product made reseller-only is proposed for RETIRE; only a named apply retires it', async () => {
+    await applyAll((await build()).build.id);
+    const inContext = async () =>
+      (await ctx.container.supportContext.build(tenantA, null)).payload.knowledge.map(
+        (k) => k.question,
+      );
+    expect(await inContext()).toContain('پلن عمومی');
+    await ctx.container.database.db.execute(
+      sql`UPDATE products SET audience = 'RESELLERS_ONLY' WHERE id = ${productId}`,
+    );
+    const next = await build();
+    const retire = next.proposals.find((p) => p.kind === 'RETIRE')!;
+    expect(retire).toMatchObject({ sourceType: 'PRODUCT', state: 'PENDING' });
+    expect(retire.content.title).toBe('پلن عمومی');
+    expect(next.build.counts.retire).toBe(1);
+    // «Apply all» never retires.
+    expect(await applyAll(next.build.id)).toEqual({ applied: 0, conflicted: 0, skipped: 0 });
+    expect(await inContext()).toContain('پلن عمومی');
+    expect(
+      await ctx.container.supportKnowledgeBuild.apply(tenantA, owner, next.build.id, {
+        idempotencyKey: key('retire'),
+        proposalIds: [retire.id],
+      }),
+    ).toEqual({ applied: 1, conflicted: 0, skipped: 0 });
+    const article = (await builtArticles()).find((a) => a.sourceType === 'PRODUCT')!;
+    expect(article.state).toBe('RETIRED');
+    expect(await inContext()).not.toContain('پلن عمومی');
+    // Retired is final for the build: the next run proposes nothing for it.
+    expect((await build()).proposals.filter((p) => p.sourceType === 'PRODUCT')).toEqual([]);
+  });
+
+  it('S2: a RETIRE never forces over an article edited after the build', async () => {
+    await applyAll((await build()).build.id);
+    await ctx.container.database.db.execute(
+      sql`UPDATE support_faqs SET status = 'INACTIVE' WHERE id = ${faqId}`,
+    );
+    const next = await build();
+    const retire = next.proposals.find((p) => p.kind === 'RETIRE')!;
+    expect(retire.sourceType).toBe('FAQ');
+    await editArticle('ویرایش پس از ساخت.');
+    expect(
+      await ctx.container.supportKnowledgeBuild.apply(tenantA, owner, next.build.id, {
+        idempotencyKey: key('retire'),
+        proposalIds: [retire.id],
+      }),
+    ).toEqual({ applied: 0, conflicted: 0, skipped: 1 });
+    expect(await faqArticle()).toMatchObject({ state: 'APPROVED', body: 'ویرایش پس از ساخت.' });
+    // Proposed again against the edited text: still only a proposal.
+    const again = (await build()).proposals.find((p) => p.kind === 'RETIRE')!;
+    expect(again.baseBody).toBe('ویرایش پس از ساخت.');
+  });
+
+  it('S3: TAKE_BUILD refuses a conflict whose text is not clean (the assertClean backstop)', async () => {
+    const { conflict } = await pendingFaqConflict();
+    await ctx.container.database.db.execute(
+      sql`UPDATE support_knowledge_build_proposals SET body = 'با ۰۹۱۲۱۲۳۴۵۶۷ تماس بگیرید' WHERE id = ${conflict.id}`,
+    );
+    await expectCode(
+      ctx.container.supportKnowledgeBuild.resolve(tenantA, owner, conflict.id, {
+        idempotencyKey: key('take'),
+        choice: 'TAKE_BUILD',
+      }),
+      'support_knowledge.sensitive_content',
+    );
+    expect((await faqArticle()).body).toBe('متن دستی اپراتور.');
+  });
+
+  it('S3: a stopped tenant: no run, no apply, no resolve', async () => {
+    const { next, conflict } = await pendingFaqConflict();
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+    try {
+      await expectCode(build(), 'support_knowledge.scope_stopped');
+      await expectCode(applyAll(next.build.id), 'support_knowledge.scope_stopped');
+      await expectCode(
+        ctx.container.supportKnowledgeBuild.resolve(tenantA, owner, conflict.id, {
+          idempotencyKey: key('keep'),
+          choice: 'KEEP_CURRENT',
+        }),
+        'support_knowledge.scope_stopped',
+      );
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${tenantA.tenantId}`,
+      );
+    }
+    const latest = (await ctx.container.supportKnowledgeBuild.latest(tenantA, owner))!;
+    expect(latest.build.id).toBe(next.build.id);
+    expect(latest.proposals.every((p) => p.state !== 'APPLIED')).toBe(true);
+    expect(latest.proposals.find((p) => p.id === conflict.id)?.state).toBe('PENDING');
+  });
+
+  it('S3: the same apply key with different proposals is a payload mismatch', async () => {
+    const first = await build();
+    const [a, b] = first.proposals;
+    const applyKey = key('apply');
+    await ctx.container.supportKnowledgeBuild.apply(tenantA, owner, first.build.id, {
+      idempotencyKey: applyKey,
+      proposalIds: [a!.id],
+    });
+    await expectCode(
+      ctx.container.supportKnowledgeBuild.apply(tenantA, owner, first.build.id, {
+        idempotencyKey: applyKey,
+        proposalIds: [b!.id],
+      }),
+      'platform.idempotency_payload_mismatch',
+    );
+    expect(await builtArticles()).toHaveLength(1);
+  });
+
+  it('S3: a manual edit that commits before the apply writes turns the UPDATE into a CONFLICT', async () => {
+    const { next, update } = await pendingFaqUpdate();
+    let hook: (() => Promise<unknown>) | null = () => editArticle('ویرایش هم‌زمان.');
+    class EditFirst extends DrizzleSupportKnowledgeRepository {
+      override async rewriteBuilt(
+        ...args: Parameters<DrizzleSupportKnowledgeRepository['rewriteBuilt']>
+      ) {
+        const run = hook;
+        hook = null;
+        if (run !== null) await run();
+        return super.rewriteBuilt(...args);
+      }
+    }
+    const racing = serviceWith(new EditFirst(ctx.container.database.db));
+    expect(
+      await racing.apply(tenantA, owner, next.build.id, {
+        idempotencyKey: key('apply'),
+        proposalIds: null,
+      }),
+    ).toEqual({ applied: 0, conflicted: 1, skipped: 0 });
+    expect((await faqArticle()).body).toBe('ویرایش هم‌زمان.');
+    const latest = (await ctx.container.supportKnowledgeBuild.latest(tenantA, owner))!;
+    expect(latest.proposals.find((p) => p.id === update.id)?.kind).toBe('CONFLICT');
+  });
+
+  it('S3: a manual edit that reaches the article after the apply wrote it is refused, not lost', async () => {
+    const { next } = await pendingFaqUpdate();
+    const before = await faqArticle();
+    let edit: Promise<unknown> | null = null;
+    class ApplyFirst extends DrizzleSupportKnowledgeRepository {
+      override async rewriteBuilt(
+        ...args: Parameters<DrizzleSupportKnowledgeRepository['rewriteBuilt']>
+      ) {
+        const written = await super.rewriteBuilt(...args);
+        // The edit read the article before this write and now waits on its row lock.
+        edit = ctx.container.supportKnowledge
+          .updateArticle(tenantA, owner, before.id, {
+            idempotencyKey: key('edit'),
+            expectedVersion: before.version,
+            content: { title: 'چطور وصل شوم؟', body: 'ویرایش دیر.', category: 'GENERAL', tags: [] },
+          })
+          .then(
+            () => 'committed',
+            (error: unknown) => (isNexaError(error) ? error.code : error),
+          );
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return written;
+      }
+    }
+    const racing = serviceWith(new ApplyFirst(ctx.container.database.db));
+    expect(
+      await racing.apply(tenantA, owner, next.build.id, {
+        idempotencyKey: key('apply'),
+        proposalIds: null,
+      }),
+    ).toMatchObject({ applied: 1, conflicted: 0 });
+    expect(await edit).toBe('support_knowledge.version_conflict');
+    expect((await faqArticle()).body).toBe('پاسخ تازهٔ منبع.');
+  });
+
+  it('S3/S4: an article that appeared for an ADD meanwhile is never doubled; the ADD is SKIPPED', async () => {
+    const first = await build();
+    const add = first.proposals.find((p) => p.sourceType === 'FAQ')!;
+    await new DrizzleSupportKnowledgeRepository(ctx.container.database.db).insertArticle(
+      tenantA,
+      {
+        id: ctx.container.ids.uuid(),
+        source: 'NEXA_BUILD',
+        state: 'APPROVED',
+        content: add.content,
+        revision: 1,
+        candidateId: null,
+        createdByAdminId: null,
+        built: { sourceType: 'FAQ', sourceKey: faqId, hash: add.hash },
+        now: ctx.container.clock.now(),
+      },
+      undefined,
+    );
+    const result = await applyAll(first.build.id);
+    expect(result).toEqual({ applied: first.proposals.length - 1, conflicted: 0, skipped: 1 });
+    expect((await builtArticles()).filter((a) => a.sourceType === 'FAQ')).toHaveLength(1);
+    const latest = (await ctx.container.supportKnowledgeBuild.latest(tenantA, owner))!;
+    expect(latest.proposals.find((p) => p.id === add.id)?.state).toBe('SKIPPED');
+    const [audit] = (
+      await ctx.container.database.db.execute(
+        sql`SELECT after FROM audit_logs WHERE action = 'support_knowledge.build.apply' ORDER BY occurred_at DESC LIMIT 1`,
+      )
+    ).rows as { after: { skipped: string[] } }[];
+    expect(audit!.after.skipped).toEqual([add.id]);
+  });
+
+  it('N1: two runs at once with different keys: one build, and the other is a clean conflict', async () => {
+    const gate = barrier(2, 1500);
+    class Racing extends DrizzleSupportKnowledgeRepository {
+      override async supersedeOpenBuild(
+        ...args: Parameters<DrizzleSupportKnowledgeRepository['supersedeOpenBuild']>
+      ) {
+        await super.supersedeOpenBuild(...args);
+        await gate.arrive();
+      }
+    }
+    const racing = serviceWith(new Racing(ctx.container.database.db));
+    const results = await Promise.allSettled([
+      racing.run(tenantA, owner, { idempotencyKey: key('run') }),
+      racing.run(tenantA, owner, { idempotencyKey: key('run') }),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(isNexaError(refused.reason) ? refused.reason.code : refused.reason).toBe(
+      'support_knowledge.build_running',
+    );
+    const open = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM support_knowledge_builds WHERE state = 'OPEN'`,
+    );
+    expect((open.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it('N2: clipped and capped items are counted in the audit row and shown on the build', async () => {
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO support_faqs (id, tenant_id, question, answer, status, sort_order)
+      SELECT gen_random_uuid(), ${tenantA.tenantId}, 'سؤال انبوه ' || g, 'پاسخ', 'ACTIVE', 50
+      FROM generate_series(1, 101) AS g`);
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO support_faqs (id, tenant_id, question, answer, status, sort_order)
+      VALUES (gen_random_uuid(), ${tenantA.tenantId}, ${'س'.repeat(250)}, 'پاسخ بلند', 'ACTIVE', 0)`);
+    const detail = await build();
+    // 103 active FAQ entries, 100 kept: three capped; the long question is clipped.
+    expect(detail.proposals.filter((p) => p.sourceType === 'FAQ')).toHaveLength(100);
+    const view = buildView(detail);
+    expect([view.truncated, view.capped]).toEqual([1, 3]);
+    const [audit] = (
+      await ctx.container.database.db.execute(
+        sql`SELECT after FROM audit_logs WHERE action = 'support_knowledge.build.run' ORDER BY occurred_at DESC LIMIT 1`,
+      )
+    ).rows as { after: { truncated: number; capped: number } }[];
+    expect([audit!.after.truncated, audit!.after.capped]).toEqual([1, 3]);
   });
 });
