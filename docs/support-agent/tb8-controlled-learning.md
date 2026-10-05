@@ -63,8 +63,9 @@ Bounds, all counted in the enqueuing transaction:
    without a provider call. The chain itself also refuses under OFF.
 
 The `assistant` role claims due jobs after its draft and automatic jobs (a customer waits on
-those; nobody waits on a lesson), two per pass, with a lease, and gives up after three claims
-(`attempts_exhausted`).
+those; nobody waits on a lesson), up to two per pass and ONE per claim, each leased from its own
+claim for TB5's worst case (PR #200 review, finding 4: a pair leased up front would wait out its
+lease behind its sibling's provider call), and gives up after three claims (`attempts_exhausted`).
 
 ## Extraction
 

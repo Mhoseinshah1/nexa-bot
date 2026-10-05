@@ -212,8 +212,12 @@ describe('controlled learning (TB8)', () => {
       ids: c.ids,
     });
     loop = new AssistantLoop(
-      { produce: async () => 'GONE' as const },
-      { claimDue: async () => [], markFailed: async () => true, purgeText: async () => 0 },
+      {
+        claimNext: async () => null,
+        produce: async () => 'GONE' as const,
+        abandon: async () => 'GONE' as const,
+        purgeExpired: async () => 0,
+      },
       {
         learning,
         scope: () => scopeA,

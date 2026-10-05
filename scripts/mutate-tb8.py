@@ -24,6 +24,7 @@ PAGE='apps/web/src/pages/support-knowledge.tsx'
 T_I=('integration','tests/integration/support-learning.test.ts')
 T_U=('unit','tests/unit/support-learning-scrubber.test.ts')
 T_W=('web','tests/web/support-knowledge.test.tsx')
+T_L=('unit','tests/unit/assistant-loop.test.ts')
 
 M=[
  # Only APPROVED and enabled knowledge reaches the agent, in SQL.
@@ -54,7 +55,7 @@ M=[
  # Which replies may teach: delivered, a person's, in that conversation.
  ('TB8-19',[(LEARN,"    row.state === 'DELIVERED' &&\n","")],T_I,'only a DELIVERED reply'),
  ('TB8-20',[(CONV,"        await this.deps.learning?.onHandBack(scope, { conversation: moved, now }, tx);\n","")],T_I,'a handback learns a PENDING candidate'),
- ('TB8-21',[(LOOP,"      if (learning !== undefined) {\n        const learningCounts","      if (learning !== undefined && false) {\n        const learningCounts")],T_I,'a handback learns a PENDING candidate'),
+ ('TB8-21',[(LOOP,"      if (learning !== undefined) {\n        for (let pass = 0;","      if (learning !== undefined && false) {\n        for (let pass = 0;")],T_I,'a handback learns a PENDING candidate'),
  # Retention: only what was never approved, and only once due.
  ('TB8-22',[(REPO,"          lt(supportLearningCandidates.createdAt, cutoff),\n","")],T_I,'retention purges'),
  # The scrubber's own shapes.
@@ -64,6 +65,8 @@ M=[
  ('TB8-25',[(PAGE,"run(editing, 'approve', editContent)","run(editing, 'approve', null)")],T_W,'EDITED text'),
  ('TB8-26',[(PAGE,"      command.decision === 'approve'\n        ? approveLearningCandidate(","      command.decision !== 'never'\n        ? approveLearningCandidate(")],T_W,'reject sends no edit'),
  ('TB8-27',[(PAGE,"        actions={mayReview ? newButton : undefined}","        actions={newButton}")],T_W,'no write control'),
+ # On the reviewed TB5 (PR #200, finding 4): one learning job per claim, leased from its claim.
+ ('TB8-28',[(LOOP,"            limit: 1,\n","            limit: ASSISTANT_LEARNING_BATCH,\n")],T_L,'ONE per claim'),
 ]
 
 only=sys.argv[1:]

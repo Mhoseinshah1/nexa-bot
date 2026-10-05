@@ -33,8 +33,11 @@ restores the file byte for byte. Run on 2026-10-05 against a dedicated integrati
 | TB8-25 | «ویرایش و تأیید» sends the edited text (web)                                   | edit then approve sends the EDITED text, not the proposal                          | KILLED |
 | TB8-26 | Reject never calls the approve route (web)                                     | reject sends no edit, and never the approve route                                  | KILLED |
 | TB8-27 | No write control without `support_knowledge.review` (web)                      | draws no write control without the review permission                               | KILLED |
+| TB8-28 | One learning job per claim, leased from its own claim (TB5 review, finding 4)  | claims learning jobs ONE per claim, each leased from its own claim (unit)          | KILLED |
 
-**27 of 27 killed.** TB8-07 and TB8-08 were re-run after their anchors were corrected for
+**28 of 28 killed** on the restack onto the reviewed TB5 (PR #200): TB8-21's anchor moved with
+the loop's one-per-claim learning pass, and TB8-28 was added for it. Before that, **27 of 27
+killed.** TB8-07 and TB8-08 were re-run after their anchors were corrected for
 prettier's line breaks (the first pass reported `ANCHOR MISSING`, which the driver counts as
 not run). `scripts/mutate-tb7.py` TB7-20's anchor moved because the handback now calls the
 learning trigger after resolving the handoff signal; it still kills.
