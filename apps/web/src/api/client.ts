@@ -570,6 +570,15 @@ import {
   type SupportKnowledgeSource,
   type SupportLearningCandidateState,
   type SupportLearningCandidateView,
+  // TB9: the knowledge build.
+  SUPPORT_KNOWLEDGE_BUILD_ROUTES,
+  supportKnowledgeBuildApplyResponseSchema,
+  supportKnowledgeBuildViewSchema,
+  supportKnowledgeProposalViewSchema,
+  type SupportKnowledgeBuildApplyResponse,
+  type SupportKnowledgeBuildView,
+  type SupportKnowledgeConflictChoice,
+  type SupportKnowledgeProposalView,
   TICKET_ROUTES,
   ticketAssigneesResponseSchema,
   ticketCategoryListResponseSchema,
@@ -4483,6 +4492,56 @@ export function proposeAsKnowledge(input: {
     SUPPORT_KNOWLEDGE_ROUTES.propose(input.conversationId),
     { idempotencyKey: input.idempotencyKey, outboundId: input.outboundId },
     oneField('jobId', 'string'),
+  );
+}
+
+// --- TB9: the knowledge build from NEXA ------------------------------------------------------
+
+const buildEnvelope = {
+  parse(value: unknown): { build: SupportKnowledgeBuildView | null } {
+    if (typeof value === 'object' && value !== null && 'build' in value) {
+      const { build } = value as { build: unknown };
+      return { build: build === null ? null : supportKnowledgeBuildViewSchema.parse(build) };
+    }
+    throw new Error('Unexpected response: no build.');
+  },
+};
+
+/** The latest build and its proposals, or null. `support_knowledge.view`. */
+export function fetchKnowledgeBuild(): Promise<{ build: SupportKnowledgeBuildView | null }> {
+  return authedGet(SUPPORT_KNOWLEDGE_BUILD_ROUTES.latest, buildEnvelope);
+}
+
+/** Runs the build: a change-set of proposals; no article changes. `.review`. */
+export function runKnowledgeBuild(
+  idempotencyKey: string,
+): Promise<{ build: SupportKnowledgeBuildView | null }> {
+  return post(SUPPORT_KNOWLEDGE_BUILD_ROUTES.builds, { idempotencyKey }, buildEnvelope);
+}
+
+/** Applies the named proposals, or (null) every non-conflicting one. Never a conflict. */
+export function applyKnowledgeBuild(input: {
+  readonly buildId: string;
+  readonly idempotencyKey: string;
+  readonly proposalIds: readonly string[] | null;
+}): Promise<SupportKnowledgeBuildApplyResponse> {
+  return post(
+    SUPPORT_KNOWLEDGE_BUILD_ROUTES.apply(input.buildId),
+    { idempotencyKey: input.idempotencyKey, proposalIds: input.proposalIds },
+    supportKnowledgeBuildApplyResponseSchema,
+  );
+}
+
+/** The reviewer's explicit choice on one conflict. */
+export function resolveKnowledgeProposal(input: {
+  readonly proposalId: string;
+  readonly idempotencyKey: string;
+  readonly choice: SupportKnowledgeConflictChoice;
+}): Promise<SupportKnowledgeProposalView> {
+  return post(
+    SUPPORT_KNOWLEDGE_BUILD_ROUTES.resolve(input.proposalId),
+    { idempotencyKey: input.idempotencyKey, choice: input.choice },
+    supportKnowledgeProposalViewSchema,
   );
 }
 

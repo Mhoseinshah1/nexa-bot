@@ -400,11 +400,11 @@ describe('«پیشنهاد به‌عنوان دانش»', () => {
 });
 
 describe('navigation', () => {
-  it('both pages are in the nav under support_knowledge.view and resolve', () => {
+  it('the knowledge pages are in the nav under support_knowledge.view and resolve', () => {
     const ids = NAV.filter((entry) => entry.permission === 'support_knowledge.view').map(
       (e) => e.id,
     );
-    expect(ids).toEqual(['support-knowledge', 'learning-candidates']);
+    expect(ids).toEqual(['support-knowledge', 'learning-candidates', 'knowledge-build']);
     const view = ['support_knowledge.view'] as const;
     expect(resolve({ path: '/support-knowledge', query: new URLSearchParams() }, view).title).toBe(
       t('web.sk_title'),

@@ -45,6 +45,7 @@ import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chats';
 import { SupportAiPage } from './pages/support-ai';
 import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
+import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
   BulkOperationDetailPage,
@@ -195,6 +196,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   // TB8: support knowledge and the learning-candidate queue.
   '/support-knowledge',
   '/support-learning',
+  // TB9: the knowledge build from NEXA.
+  '/knowledge-build',
   '/payments',
   '/payments/:id',
   '/compensations',
@@ -643,6 +646,18 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.sk_title') }],
       title: t('web.sk_title'),
+    };
+  }
+  if (route.path === '/knowledge-build') {
+    return {
+      element: (
+        <KnowledgeBuildPage
+          denied={!may('support_knowledge.view')}
+          mayReview={may('support_knowledge.review')}
+        />
+      ),
+      crumbs: [nav('support-knowledge'), { label: t('web.kb_title') }],
+      title: t('web.kb_title'),
     };
   }
   if (route.path === '/support-learning') {

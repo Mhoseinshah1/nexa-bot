@@ -188,6 +188,15 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_ops',
   },
   {
+    // TB9: the one-click build from NEXA — run, review the diff, resolve conflicts, apply.
+    id: 'knowledge-build',
+    path: '/knowledge-build',
+    label: 'web.nav_knowledge_build',
+    icon: 'refresh',
+    permission: 'support_knowledge.view',
+    group: 'web.navgroup_ops',
+  },
+  {
     // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
     id: 'bulk-operations',
     path: '/bulk-operations',
