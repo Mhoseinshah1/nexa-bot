@@ -11258,7 +11258,11 @@ export class BotRuntime {
     scope: TenantContext,
     customer: CustomerRecord,
     serviceId: string,
-    input: { readonly botInstanceId: BotInstanceId; readonly update: unknown },
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+    },
   ): Promise<PendingReply> {
     const service = await this.ownedService(scope, customer, serviceId);
     if (service === null) {
@@ -11289,7 +11293,9 @@ export class BotRuntime {
         customer.id,
         chatId,
         input.botInstanceId,
-        card === null ? {} : { card },
+        // Pre-support A9: the update's key claims the QR photo under the link view, so a
+        // redelivered tap shows the link again and never sends a second QR.
+        card === null ? {} : { card, linkQrKey: input.idempotencyKey },
       );
       return { key: null, values: {}, buttons: [], orderId: null };
     } catch {

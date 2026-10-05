@@ -126,7 +126,10 @@ import { DrizzleReadinessProbes } from './modules/platform/system/infrastructure
 import { DrizzleAuditWriter } from './modules/platform/audit/infrastructure/drizzle-audit-writer.js';
 import { DrizzleBootstrapRecordReader } from './modules/platform/identity/infrastructure/drizzle-bootstrap-record.reader.js';
 import { DrizzleOperationalEventRecorder } from './modules/platform/opslog/infrastructure/drizzle-operational-events.js';
-import { DrizzleIdempotencyStore } from './modules/platform/idempotency/infrastructure/drizzle-idempotency-store.js';
+import {
+  DrizzleIdempotencyStore,
+  hashRequest,
+} from './modules/platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import { PermissionGuard } from './modules/platform/access/application/permission-guard.js';
 import { AdminPermissionResolver } from './modules/platform/access/infrastructure/admin-permission-resolver.js';
 import { ScryptPasswordHasher, scryptParamsFor } from './infrastructure/crypto/password-hasher.js';
@@ -5137,6 +5140,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     // Round N (F4): a customer's link change is answered on the card it was asked from.
     cards: operationCardRepository,
+    /*
+     * Pre-support A9: the QR under the link view is claimed by the tap's update key, in the
+     * TELEGRAM namespace and suffixed so it can never meet the turn's own key.
+     */
+    linkQr: {
+      claim: (scope, key, tx) =>
+        idempotency.remember(
+          scope,
+          'TELEGRAM',
+          `${key}:link_qr`,
+          hashRequest({ command: 'service.link_qr' }),
+          { claimed: true },
+          tx,
+        ),
+    },
   });
 
   /**

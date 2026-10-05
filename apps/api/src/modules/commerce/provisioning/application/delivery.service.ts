@@ -228,6 +228,23 @@ export interface DeliveryServiceDeps {
    * Optional: without it the link change is announced as its own message, as in R3.
    */
   readonly cards?: Pick<OperationCardRepository, 'claimRotationCard' | 'release'>;
+  /**
+   * Pre-support A9: the durable claim behind the QR photo sent under the link view. Absent,
+   * the link view sends no QR at all — never one that a replay could send again.
+   */
+  readonly linkQr?: LinkQrClaims;
+}
+
+/**
+ * Pre-support A9: one QR photo per «🔗 لینک اشتراک» tap, and never a second for the same tap.
+ *
+ * `claim` records the tap's key inside the caller's transaction and answers whether THIS
+ * caller recorded it: `false` is a replay (Telegram redelivering the update), or a concurrent
+ * twin, and the photo is not sent. The claim is committed BEFORE the photo is sent, so a
+ * sender that died mid-send leaves the claim standing and the photo is never sent twice.
+ */
+export interface LinkQrClaims {
+  claim(scope: TenantContext, key: string, tx: TransactionScope): Promise<boolean>;
 }
 
 /**
@@ -309,6 +326,11 @@ export class DeliveryService {
        * own request.
        */
       readonly card?: CardMessageRef;
+      /**
+       * Pre-support A9: the tap's own key (the Telegram update's), which the QR photo under
+       * the link view is claimed by. Only with `card`; without it no QR is sent.
+       */
+      readonly linkQrKey?: string;
     } = {},
   ): Promise<DeliveryRecord> {
     if (service.subscriptionUrl === null) {
@@ -475,6 +497,19 @@ export class DeliveryService {
     );
 
     /*
+     * Pre-support A9: the link view shown, then ONE QR photo of the same `sentUrl` beneath it
+     * — only when the view is known to be on the customer's screen, never on an ambiguous
+     * edit, and never a second time for the same tap.
+     */
+    if (
+      options.card !== undefined &&
+      options.linkQrKey !== undefined &&
+      result.outcome === 'DELIVERED'
+    ) {
+      await this.sendLinkQr(scope, service, options.card, sentUrl, options.linkQrKey);
+    }
+
+    /*
      * The conditional UPDATE's answer, RETURNED rather than discarded.
      *
      * `false` means the delivery state moved between reading this service and recording
@@ -485,6 +520,56 @@ export class DeliveryService {
      * customer a second message.
      */
     return { state: to, recorded, ...(sentTo === undefined ? {} : { sentTo }) };
+  }
+
+  /**
+   * Pre-support A9: the QR of the EXACT link the view shows, as one photo under it, captioned
+   * with the delivery card's short QR caption.
+   *
+   * The panel's delivery mode is honoured exactly as the delivery card honours it: a
+   * `CARD_TEXT` panel gets no QR. The tap's key is claimed first, in its own transaction and
+   * with the tenant's activity read inside it, so a replayed tap — Telegram redelivering the
+   * update — finds the claim and sends nothing.
+   *
+   * Never throws and never touches the delivery record: the link was shown and recorded, and
+   * a photo Telegram declined (or answered ambiguously) is not a failed delivery. It is not
+   * retried either — the claim stands — because a QR that may already be on the screen must
+   * not be sent again; the customer can tap the link again.
+   */
+  private async sendLinkQr(
+    scope: TenantContext,
+    service: ServiceRecord,
+    card: CardMessageRef,
+    sentUrl: string,
+    key: string,
+  ): Promise<void> {
+    const claims = this.deps.linkQr;
+    if (claims === undefined) return;
+    try {
+      const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
+      if (mode === 'CARD_TEXT') return;
+      const claimed = await this.deps.uow.run(scope, async (tx) =>
+        (await this.deps.scopeActivity.scopeIsActive(scope, tx))
+          ? claims.claim(scope, key, tx)
+          : false,
+      );
+      if (!claimed) return;
+      await this.deps.messenger.sendFile(scope, {
+        chatId: card.chatId,
+        botInstanceId: card.botInstanceId,
+        kind: 'PHOTO',
+        source: {
+          kind: 'BYTES',
+          bytes: this.deps.qr.encode(sentUrl),
+          fileName: 'subscription.png',
+          mimeType: 'image/png',
+        },
+        caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },
+      });
+    } catch {
+      // Deliberately swallowed: the link view is shown and recorded already.
+      return;
+    }
   }
 
   /**
@@ -915,8 +1000,11 @@ export class DeliveryService {
     customerId: UserId,
     chatId: string,
     botInstanceId: BotInstanceId,
-    /** Round N (F4): the card the tap came from, which the link is shown on. */
-    options: { readonly card?: CardMessageRef } = {},
+    /**
+     * Round N (F4): the card the tap came from, which the link is shown on. Pre-support A9:
+     * the tap's key, which the QR photo under the link view is claimed by.
+     */
+    options: { readonly card?: CardMessageRef; readonly linkQrKey?: string } = {},
   ): Promise<DeliveryRecord> {
     if (service.customerId !== customerId) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
@@ -926,7 +1014,12 @@ export class DeliveryService {
       service,
       chatId,
       botInstanceId,
-      options.card === undefined ? {} : { card: options.card },
+      options.card === undefined
+        ? {}
+        : {
+            card: options.card,
+            ...(options.linkQrKey === undefined ? {} : { linkQrKey: options.linkQrKey }),
+          },
     );
   }
 
@@ -939,7 +1032,7 @@ export class DeliveryService {
    *
    * A card Telegram cannot edit (deleted, too old, a photo) gets the same link view ONCE as a
    * new message — the smallest fallback. A text card cannot become the QR photo, so the QR
-   * stays with the delivery card.
+   * goes beneath it as one photo of its own (pre-support A9, `sendLinkQr`).
    */
   private async showLinkOnCard(
     scope: TenantContext,

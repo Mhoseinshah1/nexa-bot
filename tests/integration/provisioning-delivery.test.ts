@@ -2255,7 +2255,8 @@ describe('a provisioned service announces itself', () => {
     // edit of that message, never a new one.
     const edits = () => sent.filter((one) => one.url.includes('/editMessageText'));
     const before = edits().length;
-    const sendsBefore = sent.filter((one) => /\/send(Message|Photo)$/u.test(one.url)).length;
+    const messagesBefore = sent.filter((one) => one.url.endsWith('/sendMessage')).length;
+    const photosBefore = sent.filter((one) => one.url.endsWith('/sendPhoto')).length;
 
     const update = tapUpdate(`r:${service?.id ?? ''}`);
     const result = await runtime().handle(tenantA, systemActor('bot'), update);
@@ -2280,9 +2281,30 @@ describe('a provisioned service announces itself', () => {
     // Back restores the same card, in place.
     expect(JSON.stringify(resent?.body['reply_markup'])).toContain(`sv:${service?.id ?? ''}`);
     expect(
-      sent.filter((one) => /\/send(Message|Photo)$/u.test(one.url)).length,
+      sent.filter((one) => one.url.endsWith('/sendMessage')).length,
       'no separate link message',
-    ).toBe(sendsBefore);
+    ).toBe(messagesBefore);
+    // Pre-support A9: ONE QR photo of the same link beneath the view, and nothing else.
+    const photos = sent.filter((one) => one.url.endsWith('/sendPhoto')).slice(photosBefore);
+    expect(photos).toHaveLength(1);
+    expect(JSON.stringify(photos[0]?.body), 'not the link again in text').not.toContain(
+      service?.subscriptionRef ?? 'MISSING',
+    );
+
+    // Telegram redelivering the SAME tap shows the link again and sends no second QR.
+    await runtime().handle(tenantA, systemActor('bot'), update);
+    expect(
+      sent.filter((one) => one.url.endsWith('/sendPhoto')).slice(photosBefore),
+      'a replay sends no second QR',
+    ).toHaveLength(1);
+    expect(JSON.stringify(photos[0]?.body), 'captioned as the QR of the link').toContain(
+      'کد QR لینک اتصال',
+    );
+    // A NEW tap is a new request, and is answered with its own QR.
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`r:${service?.id ?? ''}`));
+    expect(sent.filter((one) => one.url.endsWith('/sendPhoto')).slice(photosBefore)).toHaveLength(
+      2,
+    );
 
     const after = await services.findByOrderId(tenantA, orderId);
     expect(after?.deliveryAttempts, 'the attempt is accounted for').toBeGreaterThan(
