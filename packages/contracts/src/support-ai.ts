@@ -483,3 +483,12 @@ export const SUPPORT_AI_ASSIST_ROUTES = {
 
 /** Drafts and their AI text are purged with the transcript (ADR-0033 §8). */
 export const SUPPORT_AI_DRAFT_RETENTION_DAYS = 30;
+
+/**
+ * A QUEUED draft with no live lease, this long after it was requested, is FAILED with
+ * `job.unclaimed` (TB5 review, finding 6). With the `assistant` role down nothing claims a job,
+ * and without a bound the operator's screen waits for ever with re-request disabled. The
+ * server decides (the request, the listing and the assistant's own pass all apply it); the
+ * web uses the same number to bound its polling.
+ */
+export const SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS = 300;
