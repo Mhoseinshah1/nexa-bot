@@ -148,6 +148,12 @@ describe('Assist Mode (TB5)', () => {
             json: '{"services":[{"alias":"S1"}]}',
             aliases: new Map([['S1', 'سرویس user123']]),
             linked: true,
+            flags: {
+              identityLinked: true,
+              customerBlocked: false,
+              hasUnderReviewPayment: false,
+              hasUnreconciledService: false,
+            },
           }),
         },
         conversations: new DrizzleBusinessConversationRepository(c.database.db),

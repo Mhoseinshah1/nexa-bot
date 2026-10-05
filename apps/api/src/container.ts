@@ -589,6 +589,11 @@ import type { SupportAiProvider } from '@nexa/contracts';
 import { SupportAiChain } from './modules/control/support-ai/application/support-ai-chain.js';
 import { SupportAssistService } from './modules/control/support-ai/application/support-assist.service.js';
 import {
+  SupportAutoEnqueuer,
+  SupportAutoReplyService,
+} from './modules/control/support-ai/application/support-auto-reply.service.js';
+import { BusinessEscalationService } from './modules/commerce/business-chats/application/business-escalation.service.js';
+import {
   AssistantLoop,
   ASSISTANT_INTERVAL_MS,
 } from './modules/control/support-ai/application/assistant-loop.js';
@@ -613,6 +618,7 @@ import {
 } from './modules/commerce/business-chats/application/business-outbound-loop.js';
 import {
   DrizzleBusinessConversationRepository,
+  DrizzleBusinessEscalationRepository,
   DrizzleBusinessCustomerLookup,
   DrizzleBusinessMessageRepository,
   DrizzleBusinessOutboundRepository,
@@ -1156,6 +1162,8 @@ export interface Container {
   readonly supportAssist: SupportAssistService;
   /** TB5: produces drafts. Built in every role, STARTED only by the `assistant` role. */
   readonly assistantLoop: AssistantLoop;
+  /** TB7: AUTO_REPLY_SAFE's producer (the `assistant` role runs it through the loop). */
+  readonly supportAutoReply: SupportAutoReplyService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /** Phase B3: the administrator's notification inbox, a projection of the operations log. */
@@ -4183,9 +4191,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  // TB7: the business-chat handoffs a ticket carries (written by business-chats below).
+  const businessEscalationRepository = new DrizzleBusinessEscalationRepository(database.db);
   const ticketService = new TicketService({
     tickets: ticketRepository,
     categories: ticketCategoryRepository,
+    escalations: businessEscalationRepository,
+    categorySeeder: ticketCategoryService,
     customers: customerRepository,
     context: new DrizzleTicketContextReader(database.db),
     admins,
@@ -5272,10 +5284,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * only. Nothing here charges a permission and nothing here writes — the FAQ is read
    * straight from its repository, never through `SupportScreenReader`, which seeds.
    */
+  const supportContextReader = new DrizzleSupportContextReader(database.db);
   const supportContext = new SupportContextBuilder({
     customers: customerRepository,
     services: provisioningService,
-    reader: new DrizzleSupportContextReader(database.db),
+    reader: supportContextReader,
     clientApps: clientAppRepository,
     serviceFacts: provisionedServiceFacts,
     faqs: supportFaqRepository,
@@ -5473,6 +5486,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const businessConversationRepository = new DrizzleBusinessConversationRepository(database.db);
   const businessOutboundRepository = new DrizzleBusinessOutboundRepository(database.db);
   const businessMessageRepository = new DrizzleBusinessMessageRepository(database.db);
+  const supportAiJobs = new DrizzleSupportAiJobRepository(database.db);
+  /*
+   * TB7: AUTO_REPLY_SAFE. The enqueuer runs inside the webhook's transaction (it only writes a
+   * job row); the escalation runs inside every handoff's transaction (record, ticket, signal).
+   */
+  const supportAutoEnqueuer = new SupportAutoEnqueuer({
+    configs: supportAiConfigs,
+    jobs: supportAiJobs,
+    ids,
+  });
+  const businessEscalation = new BusinessEscalationService({
+    escalations: businessEscalationRepository,
+    conversations: businessConversationRepository,
+    tickets: ticketService,
+    opsLog,
+    ids,
+  });
   const businessConversations = new BusinessConversationService({
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
@@ -5488,25 +5518,45 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
     ids,
+    autoTrigger: supportAutoEnqueuer,
+    escalation: businessEscalation,
+    escalations: businessEscalationRepository,
   });
-  const supportAiJobs = new DrizzleSupportAiJobRepository(database.db);
+  const supportContextSource = new TbSupportContextSource(supportContext);
+  const supportImages = new TelegramSupportImageSource({
+    conversations: businessConversationRepository,
+    messages: businessMessageRepository,
+    bots: botInstances,
+    apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+    fileBaseUrl: config.TELEGRAM_API_BASE_URL,
+  });
+  const supportAutoReply = new SupportAutoReplyService({
+    jobs: supportAiJobs,
+    configs: supportAiConfigs,
+    chain: supportAiChain,
+    images: supportImages,
+    ids,
+    context: supportContextSource,
+    conversations: businessConversationRepository,
+    messages: businessMessageRepository,
+    outbound: businessOutboundRepository,
+    facts: supportContextReader,
+    control: businessConversations,
+    uow,
+    scopeActivity: tenants,
+    clock,
+  });
   const supportAssist = new SupportAssistService({
     jobs: supportAiJobs,
     configs: supportAiConfigs,
     chain: supportAiChain,
-    context: new TbSupportContextSource(supportContext),
+    context: supportContextSource,
     /*
      * TB6: a customer's photo, by the token of the bot the conversation belongs to, through
      * the one Telegram file download (bounded while streaming, no redirects, outside any
      * transaction). Same configured origin for files as the receipt reader.
      */
-    images: new TelegramSupportImageSource({
-      conversations: businessConversationRepository,
-      messages: businessMessageRepository,
-      bots: botInstances,
-      apiBaseUrl: config.TELEGRAM_API_BASE_URL,
-      fileBaseUrl: config.TELEGRAM_API_BASE_URL,
-    }),
+    images: supportImages,
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
     sender: businessConversations,
@@ -5520,6 +5570,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
   const assistantLoop = new AssistantLoop(supportAssist, {
+    auto: supportAutoReply,
     scope: () =>
       installationTenantId === null
         ? null
@@ -5535,6 +5586,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       messages: businessMessageRepository,
       control: businessConversations,
       transport: businessTransport,
+      autoMode: supportAutoEnqueuer,
+      escalations: businessEscalationRepository,
       uow,
       scopeActivity: tenants,
       clock,
@@ -6650,6 +6703,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     supportAiChain,
     supportAssist,
     assistantLoop,
+    supportAutoReply,
     opsGroupMaintainer,
     opsLogService,
     notificationCenter,

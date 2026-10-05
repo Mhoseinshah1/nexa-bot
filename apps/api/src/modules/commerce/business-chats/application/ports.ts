@@ -1,6 +1,7 @@
 import type {
   BusinessBotRight,
   BusinessConversationState,
+  BusinessEscalationTicketOutcome,
   BusinessHandoffReason,
   BusinessMessageKind,
   BusinessMessageOrigin,
@@ -185,6 +186,8 @@ export interface BusinessConversationRecord {
   readonly lastInboundAt: Date | null;
   readonly lastHumanAt: Date | null;
   readonly lastAiAt: Date | null;
+  /** TB7: the ticket this conversation escalated to, if any. */
+  readonly ticketId: string | null;
   readonly version: number;
 }
 
@@ -265,6 +268,15 @@ export interface BusinessConversationRepository {
       readonly customerId?: string;
       readonly now: Date;
     },
+    tx: unknown,
+  ): Promise<void>;
+
+  /** TB7: links the conversation to the ticket its handoff created or linked. */
+  setTicket(
+    scope: ScopeContext,
+    id: string,
+    ticketId: string,
+    now: Date,
     tx: unknown,
   ): Promise<void>;
 
@@ -377,6 +389,14 @@ export interface BusinessMessageRepository {
     scope: ScopeContext,
     input: { readonly conversationId: string; readonly messageId: string },
   ): Promise<BusinessPhotoReference | null>;
+
+  /** TB7: one message of a conversation by Telegram's id (the AUTO job's trigger). */
+  findByTelegramId(
+    scope: ScopeContext,
+    conversationId: string,
+    telegramMessageId: number,
+    tx?: unknown,
+  ): Promise<BusinessMessageRecord | null>;
 
   /** Purges text sent before `cutoff`, at most `limit` rows. */
   purgeText(
@@ -509,14 +529,20 @@ export interface BusinessOutboundRepository {
     tx: unknown,
   ): Promise<number>;
 
-  /** Stamped rows whose lease ran out: resolved UNCONFIRMED, returned so the caller can act. */
-  reapStranded(
+  /** Stamped rows whose lease ran out (oldest stamp first), at most `limit`. */
+  strandedIds(scope: ScopeContext, staleBefore: Date, limit: number): Promise<readonly string[]>;
+
+  /**
+   * One stranded row resolved UNCONFIRMED, returned so the caller can act; null when it is no
+   * longer PENDING and stamped before `staleBefore`.
+   */
+  reapStrandedRow(
     scope: ScopeContext,
+    id: string,
     staleBefore: Date,
     now: Date,
-    limit: number,
     tx: unknown,
-  ): Promise<readonly BusinessOutboundRecord[]>;
+  ): Promise<BusinessOutboundRecord | null>;
 
   /** Purges the body of rows resolved before `cutoff`. */
   purgeBodies(
@@ -526,6 +552,140 @@ export interface BusinessOutboundRepository {
     limit: number,
     tx: unknown,
   ): Promise<number>;
+
+  /**
+   * TB7 — the loop guard's facts: AUTO rows that were not superseded, at the conversation's
+   * CURRENT epoch (every human signal and every resume moves it, so these are the automatic
+   * replies since a person last acted), and since `since` whatever the epoch.
+   */
+  countAuto(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number; readonly since: Date },
+    tx?: unknown,
+  ): Promise<{ readonly atEpoch: number; readonly inWindow: number }>;
+}
+
+// ---------------------------------------------------------------------------
+// TB7 — automatic replies and the handoff's escalation
+// ---------------------------------------------------------------------------
+
+/**
+ * Called inside the transaction that recorded an INBOUND customer message, under the
+ * conversation's lock. The support AI decides whether an automatic job is owed (mode, state)
+ * and coalesces it. Implemented in `control/support-ai`; business-chats never knows a mode.
+ */
+export interface InboundAutoTrigger {
+  onInbound(
+    scope: ScopeContext,
+    input: {
+      readonly conversation: BusinessConversationRecord;
+      readonly telegramMessageId: number;
+      readonly contentVersion: number;
+      readonly edited: boolean;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<void>;
+}
+
+/** Whether a tenant's mode currently allows an AUTO row to be sent (read at the final check). */
+export interface AutoReplyModeReader {
+  autoReplyEnabled(scope: ScopeContext, tx: unknown): Promise<boolean>;
+}
+
+/** What a handoff carries beyond its reason: the AI's note, when the AI produced one. */
+export interface HandoffDetail {
+  readonly summary: string | null;
+  readonly jobId: string | null;
+}
+
+/**
+ * Called inside the transaction that moved a conversation INTO `HANDOFF_REQUIRED`, and inside
+ * the one that moved it OUT of it to a person or back to the AI.
+ */
+export interface HandoffEscalation {
+  escalate(
+    scope: ScopeContext,
+    input: {
+      readonly conversation: BusinessConversationRecord;
+      readonly reason: BusinessHandoffReason;
+      readonly detail: HandoffDetail;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<void>;
+  resolved(scope: ScopeContext, conversationId: string, tx: unknown): Promise<void>;
+}
+
+export interface BusinessEscalationRecord {
+  readonly id: string;
+  readonly conversationId: string;
+  readonly controlEpoch: number;
+  readonly reason: BusinessHandoffReason;
+  readonly summary: string | null;
+  readonly ticketId: string | null;
+  readonly ticketOutcome: BusinessEscalationTicketOutcome;
+  readonly jobId: string | null;
+  readonly createdAt: Date;
+}
+
+export interface BusinessEscalationRepository {
+  /** Once per handoff: false when this `(conversation, epoch)` was already recorded. */
+  insertIfAbsent(
+    scope: ScopeContext,
+    row: {
+      readonly id: string;
+      readonly conversationId: string;
+      readonly controlEpoch: number;
+      readonly reason: BusinessHandoffReason;
+      readonly summary: string | null;
+      readonly ticketId: string | null;
+      readonly ticketOutcome: BusinessEscalationTicketOutcome;
+      readonly jobId: string | null;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<boolean>;
+  forConversation(
+    scope: ScopeContext,
+    conversationId: string,
+    limit: number,
+  ): Promise<readonly BusinessEscalationRecord[]>;
+  forTicket(
+    scope: ScopeContext,
+    ticketId: string,
+    limit: number,
+  ): Promise<readonly BusinessEscalationRecord[]>;
+  purgeText(
+    scope: ScopeContext,
+    cutoff: Date,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<number>;
+}
+
+/**
+ * The ticket system, as a handoff needs it (implemented by `TicketService`): open a ticket for
+ * the conversation's customer, or link the active one, idempotently, in the caller's
+ * transaction.
+ */
+export interface TicketEscalationPort {
+  escalateFromBusinessChat(
+    scope: ScopeContext,
+    input: {
+      readonly customerId: string;
+      readonly botInstanceId: string;
+      readonly conversationId: string;
+      readonly currentTicketId: string | null;
+      readonly controlEpoch: number;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<{
+    readonly ticketId: string | null;
+    readonly outcome: BusinessEscalationTicketOutcome;
+  }>;
 }
 
 /** The NEXA customer behind a Telegram id: exact `(tenant, telegram_user_id)` only. */

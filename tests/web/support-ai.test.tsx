@@ -508,9 +508,11 @@ describe('Assist on the conversation page, the route and the navigation', () => 
       preview: null,
       controlEpoch: 1,
       lastHumanAt: null,
+      ticketId: null,
     },
     messages: [],
     outbound: [],
+    escalations: [],
   };
 
   it('draws the Assist panel only with the assist key', async () => {

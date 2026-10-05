@@ -413,6 +413,8 @@ export class DrizzleSupportAiConfigRepository {
         cooldownSeconds: row.cooldownSeconds,
         settleDelaySeconds: row.settleDelaySeconds,
         toneInstructions: row.toneInstructions,
+        autoTopics: (row.autoTopics ?? []) as SupportAiConfigInput['autoTopics'],
+        autoMinConfidence: row.autoMinConfidence as SupportAiConfigInput['autoMinConfidence'],
       },
     };
   }
@@ -444,6 +446,8 @@ export class DrizzleSupportAiConfigRepository {
       cooldownSeconds: input.config.cooldownSeconds,
       settleDelaySeconds: input.config.settleDelaySeconds,
       toneInstructions: input.config.toneInstructions,
+      autoTopics: [...input.config.autoTopics],
+      autoMinConfidence: input.config.autoMinConfidence,
       updatedByAdminId: input.adminId,
       updatedAt: input.now,
     };

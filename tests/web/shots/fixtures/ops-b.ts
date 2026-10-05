@@ -319,7 +319,8 @@ function message(id: string, sender: string, minutes: number, over: Json = {}): 
 }
 
 const TICKET_DETAIL = {
-  ticket: TICKETS[0],
+  ticket: { ...TICKETS[0], origin: 'BOT' },
+  escalations: [],
   customer: {
     id: '019210ab-cdef-7012-8345-6789abcdef01',
     telegramUserId: '5551234567',

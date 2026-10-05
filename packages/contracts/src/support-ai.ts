@@ -123,6 +123,41 @@ export type SupportAiOperation = (typeof SUPPORT_AI_OPERATIONS)[number];
 
 // --- configuration -------------------------------------------------------------
 
+/**
+ * The closed topic catalogue. The model names one; the deterministic guards (TB7) decide what
+ * a topic may lead to. The SAFE ones are the only topics an automatic reply may ever answer,
+ * and only when the tenant's allowlist names them (default: none).
+ */
+export const SUPPORT_AI_SAFE_TOPICS = [
+  'CONNECTION_TROUBLESHOOTING',
+  'APP_SETUP',
+  'SUBSCRIPTION_UPDATE',
+  'SERVICE_INFO',
+  'TRAFFIC_AND_EXPIRY',
+  'PLAN_INFO',
+  'KNOWN_ERROR',
+  'GREETING',
+] as const;
+export type SupportAiSafeTopic = (typeof SUPPORT_AI_SAFE_TOPICS)[number];
+
+/**
+ * TB7 — the safe topics that need no account: the only ones an UNLINKED customer may be
+ * answered on automatically (tb0-audit §3.5). The other safe topics are about one customer's
+ * own services, which an unlinked peer has none of in NEXA's eyes.
+ */
+export const SUPPORT_AI_GENERAL_TOPICS = [
+  'CONNECTION_TROUBLESHOOTING',
+  'APP_SETUP',
+  'PLAN_INFO',
+  'KNOWN_ERROR',
+  'GREETING',
+] as const satisfies readonly SupportAiSafeTopic[];
+
+export const SUPPORT_AI_CONFIDENCES = ['LOW', 'MEDIUM', 'HIGH'] as const;
+export type SupportAiConfidence = (typeof SUPPORT_AI_CONFIDENCES)[number];
+/** The lowest confidence an automatic reply may be configured to accept. LOW never sends. */
+export const SUPPORT_AI_AUTO_MIN_CONFIDENCES = ['MEDIUM', 'HIGH'] as const;
+
 /** The settle delay before an automatic reply's final check (TB0 amendment 3). */
 export const SUPPORT_AI_SETTLE_DELAY_DEFAULT_SECONDS = 6;
 export const SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS = 3;
@@ -189,8 +224,22 @@ export const supportAiConfigInputSchema = z
       .min(SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS)
       .max(SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS),
     toneInstructions: z.string().max(SUPPORT_AI_LIMITS.toneInstructionsChars),
+    /**
+     * TB7 — the safe topics an automatic reply may answer. EMPTY by default, and empty means
+     * nothing is ever sent automatically. Widening it charges `support_ai.auto_reply`.
+     * Defaulted so a client that does not know the field saves the SAFE value: none.
+     */
+    autoTopics: z
+      .array(z.enum(SUPPORT_AI_SAFE_TOPICS))
+      .max(SUPPORT_AI_SAFE_TOPICS.length)
+      .default([]),
+    /** TB7 — the lowest model confidence an automatic reply accepts. Default HIGH. */
+    autoMinConfidence: z.enum(SUPPORT_AI_AUTO_MIN_CONFIDENCES).default('HIGH'),
   })
   .superRefine((value, ctx) => {
+    if (new Set(value.autoTopics).size !== value.autoTopics.length) {
+      ctx.addIssue({ code: 'custom', path: ['autoTopics'], message: 'A topic is listed twice.' });
+    }
     // A mode that does AI work needs a provider to do it with.
     if (value.mode !== 'OFF' && value.primary === null) {
       ctx.addIssue({
@@ -229,7 +278,30 @@ export const SUPPORT_AI_DEFAULT_CONFIG: SupportAiConfigInput = {
   cooldownSeconds: SUPPORT_AI_LIMITS.cooldownSeconds.default,
   settleDelaySeconds: SUPPORT_AI_SETTLE_DELAY_DEFAULT_SECONDS,
   toneInstructions: '',
+  autoTopics: [],
+  autoMinConfidence: 'HIGH',
 };
+
+/**
+ * TB7 — the loop guard's window: at most `maxPerWindow` automatic replies per conversation in
+ * any `windowSeconds`, whatever the consecutive limit (`maxConsecutiveReplies`) allows.
+ */
+export const SUPPORT_AI_AUTO_WINDOW = { windowSeconds: 3_600, maxPerWindow: 10 } as const;
+
+/**
+ * TB7 — how late an automatic reply may still be (substitute review of PR #202). A job produced
+ * more than this after its `due_at`, or an AUTO lane row not yet sent this long after it was
+ * enqueued, is never sent: the conversation is handed to a person (`REPLY_STALE`).
+ *
+ * Measured from `due_at`, not from the message, because `due_at` is the message's arrival plus
+ * the settle delay (≤ 30 s) or the end of the owner's own cooldown (≤ 1 h), whichever is later;
+ * a bound on the message's age would hand off every reply the owner deliberately postponed.
+ * Ten minutes is far above the normal latency (the assistant polls every 2 s, and the worst
+ * case of one job is 7 min) and far below "the tenant was stopped and resumed later", which is
+ * what it exists for: a stopped scope takes no writes, so its jobs wait untouched, and on
+ * resume a person — not a reply about a conversation that moved on — answers them.
+ */
+export const SUPPORT_AI_AUTO_STALE_SECONDS = 600;
 
 const idempotencyKeySchema = z.string().min(8).max(128);
 
@@ -331,23 +403,6 @@ export const SUPPORT_AI_DECISIONS = [
 ] as const;
 export type SupportAiDecisionKind = (typeof SUPPORT_AI_DECISIONS)[number];
 
-/**
- * The closed topic catalogue. The model names one; the deterministic guards (TB7) decide what
- * a topic may lead to. The SAFE ones are the only topics an automatic reply may ever answer,
- * and only when the tenant's allowlist names them (default: none).
- */
-export const SUPPORT_AI_SAFE_TOPICS = [
-  'CONNECTION_TROUBLESHOOTING',
-  'APP_SETUP',
-  'SUBSCRIPTION_UPDATE',
-  'SERVICE_INFO',
-  'TRAFFIC_AND_EXPIRY',
-  'PLAN_INFO',
-  'KNOWN_ERROR',
-  'GREETING',
-] as const;
-export type SupportAiSafeTopic = (typeof SUPPORT_AI_SAFE_TOPICS)[number];
-
 /** Topics that ALWAYS hand off, whatever the model's decision or confidence (program §26). */
 export const SUPPORT_AI_HANDOFF_TOPICS = [
   'REFUND',
@@ -369,7 +424,6 @@ export const SUPPORT_AI_HANDOFF_TOPICS = [
 export const SUPPORT_AI_TOPICS = [...SUPPORT_AI_SAFE_TOPICS, ...SUPPORT_AI_HANDOFF_TOPICS] as const;
 export type SupportAiTopic = (typeof SUPPORT_AI_TOPICS)[number];
 
-export const SUPPORT_AI_CONFIDENCES = ['LOW', 'MEDIUM', 'HIGH'] as const;
 export const SUPPORT_AI_TICKET_ACTIONS = ['NONE', 'CREATE', 'LINK'] as const;
 
 /** The longest reply text a decision may carry, whatever the tenant configures. */
@@ -433,7 +487,7 @@ export const SUPPORT_AI_DECISION_JSON_SCHEMA: Record<string, unknown> = {
  * An AI job (TB5 Assist drafts; TB7 automatic decisions). The draft is the job's result and
  * lives on the same row, bounded and purged with the transcript's retention.
  */
-export const SUPPORT_AI_JOB_KINDS = ['ASSIST_DRAFT'] as const;
+export const SUPPORT_AI_JOB_KINDS = ['ASSIST_DRAFT', 'AUTO_DECISION'] as const;
 export type SupportAiJobKind = (typeof SUPPORT_AI_JOB_KINDS)[number];
 
 /**
@@ -538,6 +592,69 @@ export const SUPPORT_AI_ASSIST_ROUTES = {
   send: (draftId: string) => `/support-ai/drafts/${encodeURIComponent(draftId)}/send`,
   discard: (draftId: string) => `/support-ai/drafts/${encodeURIComponent(draftId)}/discard`,
 } as const;
+
+/**
+ * TB7 — the deterministic guards an automatic reply must pass, each named so its failure is
+ * a telemetry code (`guard_<name>`) and a typed handoff reason. EVERY failure hands off: a
+ * guard that merely means "not on the allowlist" fails closed too.
+ */
+export const SUPPORT_AI_AUTO_GUARDS = [
+  'content',
+  'customer_blocked',
+  'consecutive',
+  'window',
+  'decision',
+  'handoff_topic',
+  'human_requested',
+  'topic_allowlist',
+  'identity',
+  'account_review',
+  'confidence',
+  'reply_bounds',
+  'grounding',
+] as const;
+export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
+
+/**
+ * TB7 — what became of one automatic job (telemetry; a closed set pinned by a CHECK).
+ *
+ * - `sent` — a lane row was enqueued under the captured epoch (TB2's final check still rules).
+ * - `dropped_*` — nothing done and nobody handed off: the mode left AUTO, the conversation's
+ *   epoch or state moved (a person intervened), a newer inbound message replaced the job, the
+ *   connection cannot send, or the tenant stopped.
+ * - `guard_*` — a deterministic guard failed; the conversation was handed off.
+ * - `handoff_*` — the model asked for a person, or produced nothing usable; `handoff_stale`,
+ *   the job came too late to answer automatically (`SUPPORT_AI_AUTO_STALE_SECONDS`).
+ * - `dropped_scope` is no longer written: a stopped tenant's job is left untouched (substitute
+ *   review of PR #202). It stays in the set because the CHECK pins it and older rows carry it.
+ */
+export const SUPPORT_AI_AUTO_OUTCOMES = [
+  'sent',
+  'dropped_mode',
+  'dropped_epoch',
+  'dropped_state',
+  'dropped_coalesced',
+  'dropped_connection',
+  'dropped_scope',
+  'guard_content',
+  'guard_customer_blocked',
+  'guard_consecutive',
+  'guard_window',
+  'guard_decision',
+  'guard_handoff_topic',
+  'guard_human_requested',
+  'guard_topic_allowlist',
+  'guard_identity',
+  'guard_account_review',
+  'guard_confidence',
+  'guard_reply_bounds',
+  'guard_grounding',
+  'handoff_ai_requested',
+  'handoff_output_invalid',
+  'handoff_ai_unavailable',
+  'handoff_stale',
+] as const;
+export type SupportAiAutoOutcome = (typeof SUPPORT_AI_AUTO_OUTCOMES)[number];
 
 /** Drafts and their AI text are purged with the transcript (ADR-0033 §8). */
 export const SUPPORT_AI_DRAFT_RETENTION_DAYS = 30;

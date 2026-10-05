@@ -10,6 +10,7 @@ import {
   TICKET_PAGE_MAX,
   TICKET_REPLY_FILE_STAGED_MAX_BYTES,
   errors,
+  isNexaError,
   isTicketTextWithinBound,
   normalizeTicketText,
   telegramUserIdSchema,
@@ -21,12 +22,14 @@ import {
   ticketStatusAfterMessage,
   ticketSubjectOf,
   uuidV7Schema,
+  systemJobActor,
   type ActorContext,
   type Admin,
   type AdminId,
   type AuditWriter,
   type BotInstanceId,
   type Clock,
+  type CorrelationId,
   type IdGenerator,
   type OperationalEventRecorder,
   type PermissionKey,
@@ -67,6 +70,7 @@ import type {
   TicketAttachmentRecord,
   TicketCategoryRepository,
   TicketContextReader,
+  TicketEscalationReader,
   TicketListItem,
   TicketMessageListItem,
   TicketMessageRecord,
@@ -108,15 +112,27 @@ export interface TicketChanged {
   readonly changed: boolean;
 }
 
+/** Who may read the AI's escalation note (the business-chats module's view permission). */
+const BUSINESS_CHATS_VIEW_PERMISSION = 'business_chats.view' satisfies PermissionKey;
+
 export interface TicketDetail {
   readonly item: TicketListItem;
   readonly messages: readonly TicketMessageListItem[];
   readonly customer: CustomerRecord | null;
+  /** TB7: the business-chat handoffs attached to it, newest first. */
+  readonly escalations: Awaited<ReturnType<TicketEscalationReader['forTicket']>>;
 }
+
+/** TB7: what a business-chat handoff did about a ticket. */
+export type TicketEscalationOutcome =
+  'CREATED' | 'LINKED' | 'NO_CUSTOMER' | 'CUSTOMER_BLOCKED' | 'NO_CATEGORY' | 'SCOPE_INACTIVE';
 
 export interface TicketServiceDeps {
   readonly tickets: TicketRepository;
-  readonly categories: Pick<TicketCategoryRepository, 'findById'>;
+  readonly categories: Pick<TicketCategoryRepository, 'findById' | 'list'>;
+  readonly escalations: TicketEscalationReader;
+  /** TB7: the default categories, seeded in the escalation's transaction if never seeded. */
+  readonly categorySeeder: { seedIn(scope: TenantContext, tx: TransactionScope): Promise<void> };
   readonly customers: Pick<CustomerRepository, 'findById' | 'list'>;
   readonly context: TicketContextReader;
   readonly admins: Pick<AdminRepository, 'findById' | 'list'>;
@@ -154,6 +170,194 @@ export interface TicketServiceDeps {
  */
 export class TicketService {
   constructor(private readonly deps: TicketServiceDeps) {}
+
+  // --- TB7: the support agent's escalation of a Telegram Business conversation -----------
+
+  /**
+   * Opens a ticket for a handed-off business conversation, or links the active one — in the
+   * CALLER's transaction (the handoff's), so the handoff and its ticket commit together.
+   *
+   * - The conversation's own ticket, while still active, is linked again.
+   * - Otherwise the customer's newest active ticket is linked rather than duplicated.
+   * - Otherwise a ticket is opened (`origin = BUSINESS_CHAT`), idempotent on
+   *   `business-conversation:<id>:escalation:<epoch>`, with one SYSTEM fact and no customer
+   *   words: the transcript stays in the conversation under its 30-day retention.
+   * - A blocked customer, a tenant with no active category, or a stopped tenant gets no ticket;
+   *   the handoff still happens. Nothing here throws for a business reason, because a refused
+   *   ticket must never undo the handoff it belongs to.
+   *
+   * The linked ticket records the handoff as a SYSTEM fact too, once per handoff.
+   */
+  async escalateFromBusinessChat(
+    scope: TenantContext,
+    input: {
+      readonly customerId: string;
+      readonly botInstanceId: string;
+      readonly conversationId: string;
+      readonly currentTicketId: string | null;
+      readonly controlEpoch: number;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<{ readonly ticketId: string | null; readonly outcome: TicketEscalationOutcome }> {
+    const scoped = tx as TransactionScope;
+    const actor = systemJobActor(
+      `business-escalation:${input.conversationId}`,
+      input.conversationId as CorrelationId,
+    );
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope, scoped))) {
+      return { ticketId: null, outcome: 'SCOPE_INACTIVE' };
+    }
+    await this.deps.guard.check(scope, actor, CUSTOMER_PERMISSION, scoped);
+    const customerId = input.customerId as UserId;
+    const customer = await this.deps.customers.findById(scope, customerId, scoped);
+    if (customer === null) return { ticketId: null, outcome: 'NO_CUSTOMER' };
+    if (customer.status === 'BLOCKED') return { ticketId: null, outcome: 'CUSTOMER_BLOCKED' };
+    await this.deps.tickets.lockCustomer(scope, customerId, scoped);
+    const key = `business-conversation:${input.conversationId}:escalation:${input.controlEpoch}`;
+
+    const own =
+      input.currentTicketId === null
+        ? null
+        : await this.deps.tickets.findByIdForUpdate(scope, input.currentTicketId, scoped);
+    const linkable =
+      own !== null && own.customerId === customerId && own.status !== 'CLOSED'
+        ? own
+        : await this.deps.tickets.latestActiveForCustomer(scope, customerId, scoped);
+    if (linkable !== null) {
+      await this.recordEscalationFact(scope, actor, scoped, linkable.id, key, input.now);
+      return { ticketId: linkable.id, outcome: 'LINKED' };
+    }
+
+    const replayed = await this.deps.tickets.findByOpeningKey(scope, key, scoped);
+    if (replayed !== null) return { ticketId: replayed.id, outcome: 'LINKED' };
+    let [category] = await this.deps.categories.list(scope, { activeOnly: true }, scoped);
+    if (category === undefined) {
+      // A tenant whose customers never opened the ticket menu has never been seeded. One that
+      // was seeded and deactivated every category decided that, and is not re-seeded.
+      // Never throws for a business reason (substitute review of PR #202, finding 3): an
+      // operator override that renders an unusable default title refuses the SEED — which has
+      // then written nothing — and the handoff goes on with no ticket (`NO_CATEGORY`), recorded
+      // and signalled. A throw here would roll the handoff back with it.
+      if (!(await this.seedQuietly(scope, scoped)))
+        return { ticketId: null, outcome: 'NO_CATEGORY' };
+      [category] = await this.deps.categories.list(scope, { activeOnly: true }, scoped);
+    }
+    if (category === undefined) return { ticketId: null, outcome: 'NO_CATEGORY' };
+    const ticket = await this.deps.tickets.create(
+      scope,
+      {
+        id: this.deps.ids.uuid() as TicketId,
+        customerId,
+        botInstanceId: input.botInstanceId as BotInstanceId,
+        categoryId: category.id,
+        categoryTitle: category.title,
+        subject: null,
+        openingKey: key,
+        origin: 'BUSINESS_CHAT',
+        now: input.now,
+      },
+      scoped,
+    );
+    const message = await this.recordEscalationFact(
+      scope,
+      actor,
+      scoped,
+      ticket.id,
+      key,
+      input.now,
+    );
+    await this.deps.outbox.write(scoped, actor, {
+      eventType: 'TicketOpened',
+      aggregateType: 'Ticket',
+      aggregateId: ticket.id,
+      payload: {
+        ticketId: ticket.id,
+        customerId: ticket.customerId,
+        categoryId: ticket.categoryId,
+        messageId: message?.id ?? ticket.id,
+      },
+    });
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'ticket.escalate',
+        entityType: 'Ticket',
+        entityId: ticket.id,
+        before: null,
+        after: {
+          customerId: ticket.customerId,
+          categoryId: ticket.categoryId,
+          origin: 'BUSINESS_CHAT',
+          conversationId: input.conversationId,
+        },
+        result: 'SUCCESS',
+      },
+      scoped,
+    );
+    return { ticketId: ticket.id, outcome: 'CREATED' };
+  }
+
+  /** The default categories' seed, in the caller's transaction; false when it was refused. */
+  private async seedQuietly(scope: TenantContext, tx: TransactionScope): Promise<boolean> {
+    try {
+      await this.deps.categorySeeder.seedIn(scope, tx);
+      return true;
+    } catch (error: unknown) {
+      if (isNexaError(error) && error.code === TICKET_ERROR_CODES.TICKET_CATEGORY_INVALID) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /** The SYSTEM fact of a handoff, once per handoff key; skipped when the ticket is full. */
+  private async recordEscalationFact(
+    scope: TenantContext,
+    actor: ActorContext,
+    tx: TransactionScope,
+    ticketId: TicketId,
+    key: string,
+    now: Date,
+  ): Promise<TicketMessageRecord | null> {
+    if (
+      (await this.deps.tickets.countMessages(scope, ticketId, tx)) >= TICKET_MESSAGES_MAX_PER_TICKET
+    ) {
+      return null;
+    }
+    const message = await this.deps.tickets.insertMessage(
+      scope,
+      {
+        id: this.deps.ids.uuid() as TicketMessageId,
+        ticketId,
+        senderType: 'SYSTEM',
+        authorAdminId: null,
+        body: null,
+        systemEvent: 'ESCALATED_FROM_BUSINESS_CHAT',
+        attachment: null,
+        idempotencyKey: key,
+        requestHash: hashRequest({ op: 'escalate', ticketId, key }),
+        now,
+      },
+      tx,
+    );
+    if (message === null) return null;
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'ticket.escalation_recorded',
+        entityType: 'Ticket',
+        entityId: ticketId,
+        before: null,
+        after: { messageId: message.id, key },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return message;
+  }
 
   // --- the customer, through the bot ------------------------------------------------------
 
@@ -570,11 +774,23 @@ export class TicketService {
     await this.deps.guard.check(scope, actor, TICKETS_VIEW_PERMISSION);
     const item = await this.deps.tickets.findListItem(scope, this.ticketIdOf(ticketId));
     if (item === null) throw this.notFound();
-    const [messages, customer] = await Promise.all([
+    const [messages, customer, escalations, seesChats] = await Promise.all([
       this.deps.tickets.messagesOf(scope, item.ticket.id),
       this.deps.customers.findById(scope, item.ticket.customerId),
+      this.deps.escalations.forTicket(scope, item.ticket.id, 20),
+      this.deps.guard.has(scope, actor, BUSINESS_CHATS_VIEW_PERMISSION),
     ]);
-    return { item, messages, customer };
+    // TB7: the AI's note is a summary of the customer's Telegram Business conversation, so it is
+    // the conversation's to show: `tickets.view` alone sees that a handoff happened and why,
+    // never what the AI wrote about the chat (substitute review of PR #202, finding 5).
+    return {
+      item,
+      messages,
+      customer,
+      escalations: seesChats
+        ? escalations
+        : escalations.map((escalation) => ({ ...escalation, summary: null })),
+    };
   }
 
   /**

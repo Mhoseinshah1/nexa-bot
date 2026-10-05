@@ -6,12 +6,21 @@ import type {
   PaymentGatewayProvider,
   PaymentMethod,
   PaymentState,
+  ScopeContext,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
-import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { orders, payments } from '../../../../infrastructure/persistence/schema.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import {
+  requireTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  customers,
+  orders,
+  payments,
+  services,
+} from '../../../../infrastructure/persistence/schema.js';
 import { paymentOpsQueueCondition } from '../../payments/infrastructure/payment-ops-queue-sql.js';
 import type {
   SupportContextReader,
@@ -90,6 +99,57 @@ export class DrizzleSupportContextReader implements SupportContextReader {
       purpose: row.purpose as OrderPurpose,
       currency: row.currency as CurrencyCode,
     }));
+  }
+
+  /**
+   * TB7 (substitute review of PR #202, finding 1) — the four flags the automatic-reply guards
+   * decide on, read again INSIDE the transaction that enqueues the reply, so a guard never
+   * decides on facts that changed during the provider call. The same predicates as the payload's
+   * flags (`underReviewCondition`, a service `UNRECONCILED`, a `BLOCKED` customer), but over ALL
+   * of the customer's services rather than a page of them: broader is the fail-closed direction.
+   */
+  async autoGuardFlags(
+    scope: ScopeContext,
+    customerId: string | null,
+    tx?: unknown,
+  ): Promise<{
+    readonly identityLinked: boolean;
+    readonly customerBlocked: boolean;
+    readonly hasUnderReviewPayment: boolean;
+    readonly hasUnreconciledService: boolean;
+  }> {
+    const none = {
+      identityLinked: false,
+      customerBlocked: false,
+      hasUnderReviewPayment: false,
+      hasUnreconciledService: false,
+    };
+    if (customerId === null) return none;
+    const tenantId = requireTenantId(scope);
+    const executor: Executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
+    const [row] = await executor
+      .select({
+        status: customers.status,
+        underReview: sql<boolean>`EXISTS (
+          SELECT 1 FROM ${payments}
+           WHERE ${payments.tenantId} = ${tenantId}
+             AND ${payments.customerId} = ${customerId}
+             AND ${underReviewCondition()})`,
+        unreconciled: sql<boolean>`EXISTS (
+          SELECT 1 FROM ${services}
+           WHERE ${services.tenantId} = ${tenantId}
+             AND ${services.customerId} = ${customerId}
+             AND ${services.state} = 'UNRECONCILED')`,
+      })
+      .from(customers)
+      .where(and(eq(customers.tenantId, tenantId), eq(customers.id, customerId)));
+    if (row === undefined) return none;
+    return {
+      identityLinked: true,
+      customerBlocked: row.status === 'BLOCKED',
+      hasUnderReviewPayment: row.underReview === true,
+      hasUnreconciledService: row.unreconciled === true,
+    };
   }
 
   async recentPayments(

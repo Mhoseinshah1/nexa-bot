@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type {
+  BusinessHandoffReason,
   ScopeContext,
+  SupportAiAutoOutcome,
   SupportAiDecision,
   SupportAiImageOutcome,
   SupportAiImageSkipReason,
@@ -45,6 +47,13 @@ export interface SupportAiJobRecord {
   readonly imagesSeen: number;
   readonly imagesUnseen: number;
   readonly unseenImageHandoff: SupportAiImageSkipReason | null;
+  /** TB7 (AUTO_DECISION only). */
+  readonly triggerTelegramMessageId: number | null;
+  readonly triggerContentVersion: number | null;
+  readonly controlEpoch: number | null;
+  readonly dueAt: Date | null;
+  readonly outcome: SupportAiAutoOutcome | null;
+  readonly handoffReason: BusinessHandoffReason | null;
   readonly createdAt: Date;
 }
 
@@ -83,6 +92,12 @@ function toRecord(row: Row): SupportAiJobRecord {
     imagesSeen: row.imagesSeen,
     imagesUnseen: row.imagesUnseen,
     unseenImageHandoff: row.unseenImageHandoff as SupportAiImageSkipReason | null,
+    triggerTelegramMessageId: row.triggerTelegramMessageId,
+    triggerContentVersion: row.triggerContentVersion,
+    controlEpoch: row.controlEpoch,
+    dueAt: row.dueAt,
+    outcome: row.outcome as SupportAiAutoOutcome | null,
+    handoffReason: row.handoffReason as BusinessHandoffReason | null,
     createdAt: row.createdAt,
   };
 }
@@ -169,7 +184,11 @@ export class DrizzleSupportAiJobRepository {
       .select()
       .from(supportAiJobs)
       .where(
-        and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.conversationId, conversationId)),
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, conversationId),
+          eq(supportAiJobs.kind, 'ASSIST_DRAFT'),
+        ),
       )
       .orderBy(desc(supportAiJobs.createdAt), desc(supportAiJobs.id))
       .limit(limit);
@@ -191,6 +210,7 @@ export class DrizzleSupportAiJobRepository {
         and(
           eq(supportAiJobs.tenantId, tenantId),
           eq(supportAiJobs.conversationId, conversationId),
+          eq(supportAiJobs.kind, 'ASSIST_DRAFT'),
           inArray(supportAiJobs.state, ['QUEUED', 'READY']),
         ),
       )
@@ -199,25 +219,160 @@ export class DrizzleSupportAiJobRepository {
   }
 
   /**
+   * TB7 — enqueues an automatic job. False when this message (at this content version) already
+   * has one, of any state: the key makes it idempotent on the message.
+   */
+  async insertAuto(
+    scope: ScopeContext,
+    row: {
+      readonly id: string;
+      readonly conversationId: string;
+      readonly idempotencyKey: string;
+      readonly triggerTelegramMessageId: number;
+      readonly triggerContentVersion: number;
+      readonly controlEpoch: number;
+      readonly dueAt: Date;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const inserted = await exec(this.db, tx)
+      .insert(supportAiJobs)
+      .values({
+        id: row.id,
+        tenantId,
+        kind: 'AUTO_DECISION',
+        conversationId: row.conversationId,
+        requestedByAdminId: null,
+        idempotencyKey: row.idempotencyKey,
+        triggerTelegramMessageId: row.triggerTelegramMessageId,
+        triggerContentVersion: row.triggerContentVersion,
+        controlEpoch: row.controlEpoch,
+        dueAt: row.dueAt,
+        createdAt: row.now,
+        updatedAt: row.now,
+      })
+      .onConflictDoNothing()
+      .returning({ id: supportAiJobs.id });
+    return inserted.length > 0;
+  }
+
+  /** TB7 — the conversation's pending automatic job, if any (at most one, by index). */
+  async queuedAuto(
+    scope: ScopeContext,
+    conversationId: string,
+    tx: unknown,
+  ): Promise<SupportAiJobRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select()
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, conversationId),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.state, 'QUEUED'),
+        ),
+      )
+      .limit(1);
+    return row ? toRecord(row) : null;
+  }
+
+  /**
+   * TB7 — resolves an automatic job, ONLY from QUEUED: a job a newer message replaced while the
+   * `assistant` role was producing it stays replaced, and its late result writes nothing.
+   */
+  async finishAuto(
+    scope: ScopeContext,
+    id: string,
+    result: {
+      readonly state: 'SENT' | 'DISCARDED' | 'FAILED';
+      readonly outcome: SupportAiAutoOutcome;
+      readonly handoffReason?: BusinessHandoffReason | null;
+      readonly decision?: SupportAiDecision | null;
+      readonly provider?: SupportAiProvider | null;
+      readonly model?: string | null;
+      readonly sentOutboundId?: string | null;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const decision = result.decision ?? null;
+    const rows = await exec(this.db, tx)
+      .update(supportAiJobs)
+      .set({
+        state: result.state,
+        outcome: result.outcome,
+        handoffReason: result.handoffReason ?? null,
+        claimedUntil: null,
+        readyAt: decision === null ? null : result.now,
+        ...(decision === null
+          ? {}
+          : {
+              decision: decision.decision,
+              topic: decision.topic,
+              confidence: decision.confidence,
+              ticketAction: decision.ticketAction,
+              summary: decision.summary,
+              intent: decision.intent,
+              suggestedReply: decision.replyText,
+              factRefs: [...decision.factRefs],
+            }),
+        provider: result.provider ?? null,
+        model: result.model?.slice(0, 128) ?? null,
+        sentOutboundId: result.sentOutboundId ?? null,
+        failureCode: result.state === 'SENT' ? null : result.outcome,
+        updatedAt: result.now,
+      })
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.id, id),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.state, 'QUEUED'),
+        ),
+      )
+      .returning({ id: supportAiJobs.id });
+    return rows.length > 0;
+  }
+
+  /**
    * Leases ONE due QUEUED job (unclaimed, or whose lease ran out), oldest first (TB5 review,
    * finding 4). One at a time because jobs are produced one at a time: a batch leased up front
    * would wait out its lease behind its siblings and be re-claimed by a second replica while
    * still being produced. `SKIP LOCKED` lets two replicas claim different jobs in parallel; the
    * conditional UPDATE is the decision either way.
+   *
+   * TB7: only the `kinds` the caller can produce are claimed, and an automatic job is not due
+   * before its settle delay (`due_at`) has passed.
    */
   async claimNext(
     scope: ScopeContext,
     now: Date,
     leaseUntil: Date,
+    kinds: readonly SupportAiJobKind[],
     tx: unknown,
   ): Promise<SupportAiJobRecord | null> {
     const tenantId = requireTenantId(scope);
     const db = exec(this.db, tx);
-    const free = or(isNull(supportAiJobs.claimedUntil), lte(supportAiJobs.claimedUntil, now));
+    const free = and(
+      or(isNull(supportAiJobs.claimedUntil), lte(supportAiJobs.claimedUntil, now)),
+      or(isNull(supportAiJobs.dueAt), lte(supportAiJobs.dueAt, now)),
+    );
     const next = db
       .select({ id: supportAiJobs.id })
       .from(supportAiJobs)
-      .where(and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.state, 'QUEUED'), free))
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.state, 'QUEUED'),
+          inArray(supportAiJobs.kind, [...kinds]),
+          free,
+        ),
+      )
       .orderBy(asc(supportAiJobs.createdAt), asc(supportAiJobs.id))
       .limit(1)
       .for('update', { skipLocked: true });
@@ -248,6 +403,11 @@ export class DrizzleSupportAiJobRepository {
    * finding 6): never claimed since it was requested, or abandoned by a claim whose lease ran
    * out. A job being produced holds a lease in the future and is never touched. Scoped to one
    * conversation (the request and the listing), or to the whole tenant when `null`.
+   *
+   * ASSIST drafts only (TB7): an AUTO_DECISION job is not a draft an operator waits on. It is
+   * QUEUED until its `due_at`, is coalesced or dropped by its own producer, and a repeatedly
+   * failing one hands off through `giveUp` — failing it here as `job.unclaimed` would silence a
+   * customer's message without the handoff and ticket TB7 owes them.
    */
   async failUnclaimed(
     scope: ScopeContext,
@@ -264,6 +424,7 @@ export class DrizzleSupportAiJobRepository {
         and(
           eq(supportAiJobs.tenantId, tenantId),
           conversationId === null ? undefined : eq(supportAiJobs.conversationId, conversationId),
+          eq(supportAiJobs.kind, 'ASSIST_DRAFT'),
           eq(supportAiJobs.state, 'QUEUED'),
           lte(sql`coalesce(${supportAiJobs.claimedUntil}, ${supportAiJobs.createdAt})`, cutoff),
         ),
@@ -475,6 +636,7 @@ export class DrizzleSupportAiJobRepository {
         and(
           eq(supportAiJobs.tenantId, tenantId),
           eq(supportAiJobs.id, id),
+          eq(supportAiJobs.kind, 'ASSIST_DRAFT'),
           inArray(supportAiJobs.state, ['QUEUED', 'READY']),
         ),
       )

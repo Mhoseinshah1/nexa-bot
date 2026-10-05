@@ -23,7 +23,12 @@ export class TbSupportContextSource implements SupportContextSource {
         `${payment.method} ${payment.amount.amountMinor} ${payment.amount.currency}`,
       );
     }
-    return { json: JSON.stringify(payload), aliases, linked: payload.flags.identityLinked };
+    return {
+      json: JSON.stringify(payload),
+      aliases,
+      linked: payload.flags.identityLinked,
+      flags: payload.flags,
+    };
   }
 }
 

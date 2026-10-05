@@ -2,10 +2,12 @@ import {
   SUPPORT_AI_LIMITS,
   SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
   SUPPORT_AI_VISION_MAX_IMAGES,
+  type SupportAiJobKind,
   type TenantContext,
 } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { SupportAssistService } from './support-assist.service.js';
+import type { SupportAutoReplyService } from './support-auto-reply.service.js';
 
 export const ASSISTANT_INTERVAL_MS = 2_000;
 /** The bounds a job's worst case is derived from. */
@@ -77,6 +79,8 @@ export class AssistantLoop {
       'claimNext' | 'produce' | 'abandon' | 'purgeExpired'
     >,
     private readonly options: {
+      /** TB7: the producer of AUTO_DECISION jobs. Without it, such a job is never claimed. */
+      readonly auto?: Pick<SupportAutoReplyService, 'produce' | 'giveUp'>;
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
       readonly now: () => Date;
@@ -126,6 +130,10 @@ export class AssistantLoop {
         this.progress.record(this.options.now().getTime());
         return;
       }
+      const auto = this.options.auto;
+      // TB7: an AUTO_DECISION job is claimed only when its producer is wired.
+      const kinds: readonly SupportAiJobKind[] =
+        auto === undefined ? ['ASSIST_DRAFT'] : ['ASSIST_DRAFT', 'AUTO_DECISION'];
       const counts: Record<string, number> = {};
       let claimed = 0;
       while (claimed < ASSISTANT_BATCH) {
@@ -134,9 +142,22 @@ export class AssistantLoop {
           scope,
           at,
           new Date(at.getTime() + ASSISTANT_LEASE_MS),
+          kinds,
         );
         if (job === null) break;
         claimed += 1;
+        if (job.kind === 'AUTO_DECISION' && auto !== undefined) {
+          // A job that keeps dying mid-call is repeated failure: it hands off, never loops.
+          const outcome =
+            job.attempts > ASSISTANT_MAX_ATTEMPTS
+              ? await auto.giveUp(scope, job)
+              : await auto.produce(scope, job);
+          counts[outcome] = (counts[outcome] ?? 0) + 1;
+          this.progress.record(this.options.now().getTime());
+          // A stopped tenant: the job was left untouched, and so is the rest of the pass.
+          if (outcome === 'INACTIVE') break;
+          continue;
+        }
         // `attempts` already counts this claim: a job that keeps dying mid-call fails instead.
         const state =
           job.attempts > ASSISTANT_MAX_ATTEMPTS

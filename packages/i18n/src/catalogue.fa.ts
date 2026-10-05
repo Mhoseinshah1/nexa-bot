@@ -1376,6 +1376,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.line_closed_by_customer': '🔒 {at} — تیکت را بستید.',
   'bot.ticket.line_closed_by_support': '🔒 {at} — پشتیبانی تیکت را بست.',
   'bot.ticket.line_reopened': '🔓 {at} — پشتیبانی تیکت را دوباره باز کرد.',
+  'bot.ticket.line_escalated': '🧑‍💼 {at} — گفتگوی شما در تلگرام به پشتیبانی سپرده شد.',
   'bot.ticket.attachment_marker': '📎 پیوست',
   'bot.ticket.reply_button': '✍️ ارسال پاسخ',
   'bot.ticket.close_button': '🔒 بستن تیکت',

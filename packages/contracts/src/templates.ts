@@ -11225,6 +11225,21 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.ticket.line_escalated',
+    description:
+      'TB7: the conversation records that a Telegram Business chat was handed to support here.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was handed over.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.ticket.attachment_marker',
     description: 'WP-A7: marks a message in the conversation view that carries a file.',
     format: 'PLAIN_TEXT',

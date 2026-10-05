@@ -78,37 +78,51 @@ export class TicketCategoryService {
    */
   async ensureSeeded(scope: TenantContext): Promise<void> {
     if (await this.deps.categories.hasSeed(scope)) return;
-    await this.deps.uow.run(scope, async (tx) => {
-      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return;
-      await this.deps.categories.lockTenant(scope, tx);
-      const now = this.deps.clock.now();
-      if (!(await this.deps.categories.markSeeded(scope, now, tx))) return;
-      for (const [index, key] of SEED_TEMPLATES.entries()) {
-        const title = normalizeTicketCategoryTitle(
-          await this.deps.templates.render(scope, key, {}, undefined, tx),
-        );
-        if (title === null) {
-          throw errors.validation(
-            TICKET_ERROR_CODES.TICKET_CATEGORY_INVALID,
-            `The rendered default ticket category ${String(index + 1)} does not fit a category title.`,
-            { key },
-          );
-        }
-        // An operator may already hold the title (a category made before the seed ran).
-        if ((await this.deps.categories.findByTitle(scope, title, tx)) !== null) continue;
-        await this.deps.categories.insert(
-          scope,
-          {
-            id: this.deps.ids.uuid() as TicketCategoryId,
-            title,
-            sortOrder: (index + 1) * SEED_SORT_STEP,
-            isActive: true,
-            now,
-          },
-          tx,
+    await this.deps.uow.run(scope, async (tx) => this.seedIn(scope, tx));
+  }
+
+  /**
+   * The seed itself, in the caller's transaction — TB7's escalation, which may be the first
+   * thing in a tenant ever to need a category, runs inside its handoff's transaction.
+   */
+  async seedIn(scope: TenantContext, tx: TransactionScope): Promise<void> {
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return;
+    // Every title is rendered and judged BEFORE anything is written (substitute review of
+    // PR #202, finding 3): a bad operator override throws here, having written nothing, so a
+    // caller inside a larger transaction (TB7's handoff) may catch it and carry on with a
+    // transaction that holds no half-made seed.
+    const titles: string[] = [];
+    for (const [index, key] of SEED_TEMPLATES.entries()) {
+      const title = normalizeTicketCategoryTitle(
+        await this.deps.templates.render(scope, key, {}, undefined, tx),
+      );
+      if (title === null) {
+        throw errors.validation(
+          TICKET_ERROR_CODES.TICKET_CATEGORY_INVALID,
+          `The rendered default ticket category ${String(index + 1)} does not fit a category title.`,
+          { key },
         );
       }
-    });
+      titles.push(title);
+    }
+    await this.deps.categories.lockTenant(scope, tx);
+    const now = this.deps.clock.now();
+    if (!(await this.deps.categories.markSeeded(scope, now, tx))) return;
+    for (const [index, title] of titles.entries()) {
+      // An operator may already hold the title (a category made before the seed ran).
+      if ((await this.deps.categories.findByTitle(scope, title, tx)) !== null) continue;
+      await this.deps.categories.insert(
+        scope,
+        {
+          id: this.deps.ids.uuid() as TicketCategoryId,
+          title,
+          sortOrder: (index + 1) * SEED_SORT_STEP,
+          isActive: true,
+          now,
+        },
+        tx,
+      );
+    }
   }
 
   /** The categories a customer may choose from: active, in the operator's order. */

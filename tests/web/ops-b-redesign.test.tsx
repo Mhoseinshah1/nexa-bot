@@ -333,7 +333,9 @@ describe('one ticket', () => {
       {
         url: '/tickets/019300ab-cdef-7012-8345-6789abcdef01',
         body: {
+          escalations: [],
           ticket: {
+            origin: 'BOT',
             id: '019300ab-cdef-7012-8345-6789abcdef01',
             number: 42,
             status: 'WAITING_FOR_SUPPORT',

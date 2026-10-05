@@ -251,6 +251,7 @@ import {
   TICKET_STATUSES,
   TICKET_SUBJECT_MAX_LENGTH,
   TICKET_SYSTEM_EVENTS,
+  TICKET_ORIGINS,
   // WP-A4: the operations log group.
   OPS_LOG_GROUP_HEALTH,
   OPS_LOG_GROUP_PROBLEMS,
@@ -275,6 +276,10 @@ import {
   SUPPORT_AI_IMAGE_SKIP_REASONS,
   SUPPORT_AI_TICKET_ACTIONS,
   SUPPORT_AI_TOPICS,
+  SUPPORT_AI_SAFE_TOPICS,
+  SUPPORT_AI_AUTO_MIN_CONFIDENCES,
+  SUPPORT_AI_AUTO_OUTCOMES,
+  BUSINESS_ESCALATION_TICKET_OUTCOMES,
   OPS_LOG_TOPIC_STATES,
   // R2: the Telegram messages edited in place.
   TELEGRAM_WIZARD_KINDS,
@@ -10871,6 +10876,8 @@ export const tickets = pgTable(
      * answers with this ticket and never opens a second.
      */
     openingKey: text('opening_key').notNull(),
+    /** TB7: `BOT` (the customer opened it) or `BUSINESS_CHAT` (the support agent escalated). */
+    origin: text('origin').notNull().default('BOT'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     lastMessageAt: timestamptz('last_message_at').notNull().defaultNow(),
@@ -10917,6 +10924,7 @@ export const tickets = pgTable(
     }),
     check('tickets_status_check', enumCheck('status', TICKET_STATUSES)),
     check('tickets_priority_check', enumCheck('priority', TICKET_PRIORITIES)),
+    check('tickets_origin_check', enumCheck('origin', TICKET_ORIGINS)),
     /** An equality, the `customer_notifications_resolved_check` shape: closed iff stamped. */
     check('tickets_closed_check', sql`(status = 'CLOSED') = (closed_at IS NOT NULL)`),
     check(
@@ -13300,12 +13308,22 @@ export const businessConversations = pgTable(
     lastInboundAt: timestamptz('last_inbound_at'),
     lastHumanAt: timestamptz('last_human_at'),
     lastAiAt: timestamptz('last_ai_at'),
+    /**
+     * TB7: the ticket this conversation escalated to (the canonical escalation). At most one
+     * active link: a later handoff links this ticket again while it is still active.
+     */
+    ticketId: uuid('ticket_id'),
     version: integer('version').notNull().default(1),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     unique('business_conversations_tenant_id_key').on(table.tenantId, table.id),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'business_conversations_ticket_fk',
+    }),
     uniqueIndex('business_conversations_chat_key').on(
       table.botInstanceId,
       table.ownerTelegramUserId,
@@ -13510,6 +13528,71 @@ export const businessOutboundMessages = pgTable(
 );
 
 /**
+ * TB7 — one handoff of a business conversation to a person (program §27).
+ *
+ * Written in the transaction that moves the conversation to `HANDOFF_REQUIRED`, once per
+ * handoff: unique on `(conversation, control_epoch)`, the epoch the handoff produced. It
+ * records why, what became of the ticket (the canonical escalation), and the AI's short
+ * operator-facing summary when the AI produced one — bounded, never sent to the customer,
+ * and purged with the transcript's retention.
+ */
+export const businessConversationEscalations = pgTable(
+  'business_conversation_escalations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    conversationId: uuid('conversation_id').notNull(),
+    controlEpoch: integer('control_epoch').notNull(),
+    reason: text('reason').notNull(),
+    summary: text('summary'),
+    ticketId: uuid('ticket_id'),
+    ticketOutcome: text('ticket_outcome').notNull(),
+    jobId: uuid('job_id'),
+    textPurgedAt: timestamptz('text_purged_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('business_conversation_escalations_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('business_conversation_escalations_epoch_key').on(
+      table.tenantId,
+      table.conversationId,
+      table.controlEpoch,
+    ),
+    index('business_conversation_escalations_ticket_idx').on(table.tenantId, table.ticketId),
+    foreignKey({
+      columns: [table.tenantId, table.conversationId],
+      foreignColumns: [businessConversations.tenantId, businessConversations.id],
+      name: 'business_conversation_escalations_conversation_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'business_conversation_escalations_ticket_fk',
+    }),
+    check(
+      'business_conversation_escalations_reason_check',
+      enumCheck('reason', BUSINESS_HANDOFF_REASONS),
+    ),
+    check(
+      'business_conversation_escalations_ticket_outcome_check',
+      enumCheck('ticket_outcome', BUSINESS_ESCALATION_TICKET_OUTCOMES),
+    ),
+    // A ticket is named exactly when one was created or linked.
+    check(
+      'business_conversation_escalations_ticket_shape_check',
+      sql`(ticket_outcome IN ('CREATED', 'LINKED')) = (ticket_id IS NOT NULL)`,
+    ),
+    check(
+      'business_conversation_escalations_summary_check',
+      sql`summary IS NULL OR length(summary) <= 600`,
+    ),
+    check('business_conversation_escalations_epoch_check', sql`control_epoch >= 1`),
+  ],
+);
+
+/**
  * TB4 — a tenant's support-AI configuration (ADR-0034 §8). One row per tenant, created on the
  * first save; a tenant with no row is `SUPPORT_AI_DEFAULT_CONFIG` — mode `OFF`. No migration
  * inserts a row, and none ever sets `AUTO_REPLY_SAFE` (program §49).
@@ -13537,6 +13620,12 @@ export const supportAiConfigs = pgTable(
     cooldownSeconds: integer('cooldown_seconds').notNull(),
     settleDelaySeconds: integer('settle_delay_seconds').notNull().default(6),
     toneInstructions: text('tone_instructions').notNull().default(''),
+    /** TB7: the safe topics an automatic reply may answer. EMPTY by default: none. */
+    autoTopics: text('auto_topics')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    autoMinConfidence: text('auto_min_confidence').notNull().default('HIGH'),
     updatedByAdminId: uuid('updated_by_admin_id'),
     version: integer('version').notNull().default(1),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -13572,6 +13661,14 @@ export const supportAiConfigs = pgTable(
     check('support_ai_configs_cooldown_check', sql`cooldown_seconds BETWEEN 0 AND 3600`),
     check('support_ai_configs_settle_check', sql`settle_delay_seconds BETWEEN 3 AND 30`),
     check('support_ai_configs_tone_check', sql`length(tone_instructions) <= 2000`),
+    check(
+      'support_ai_configs_auto_topics_check',
+      sql`cardinality(auto_topics) = 0 OR (${enumSubsetCheck('auto_topics', SUPPORT_AI_SAFE_TOPICS)})`,
+    ),
+    check(
+      'support_ai_configs_auto_confidence_check',
+      enumCheck('auto_min_confidence', SUPPORT_AI_AUTO_MIN_CONFIDENCES),
+    ),
     check('support_ai_configs_version_check', sql`version >= 1`),
   ],
 );
@@ -13734,11 +13831,25 @@ export const supportAiJobs = pgTable(
      */
     unseenImageHandoff: text('unseen_image_handoff'),
     textPurgedAt: timestamptz('text_purged_at'),
+    /** TB7 (AUTO_DECISION): the inbound message that triggered it, and its content version. */
+    triggerTelegramMessageId: bigint('trigger_telegram_message_id', { mode: 'number' }),
+    triggerContentVersion: integer('trigger_content_version'),
+    /** TB7: the conversation's epoch when the job was enqueued — the lane row carries it. */
+    controlEpoch: integer('control_epoch'),
+    /** TB7: not claimed before this instant (the settle delay). Null: due at once (ASSIST). */
+    dueAt: timestamptz('due_at'),
+    /** TB7: what became of an automatic job (`SUPPORT_AI_AUTO_OUTCOMES`). */
+    outcome: text('outcome'),
+    handoffReason: text('handoff_reason'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     unique('support_ai_jobs_tenant_id_key').on(table.tenantId, table.id),
+    /** TB7: never two pending automatic jobs for one conversation (coalescing's backstop). */
+    uniqueIndex('support_ai_jobs_auto_pending_key')
+      .on(table.tenantId, table.conversationId)
+      .where(sql`kind = 'AUTO_DECISION' AND state = 'QUEUED'`),
     uniqueIndex('support_ai_jobs_idempotency_key').on(table.tenantId, table.idempotencyKey),
     /** The claim: queued jobs, oldest first. */
     index('support_ai_jobs_due_idx')
@@ -13793,6 +13904,21 @@ export const supportAiJobs = pgTable(
     check(
       'support_ai_jobs_unseen_image_handoff_shape_check',
       sql`unseen_image_handoff IS NULL OR (decision IS NOT DISTINCT FROM 'HANDOFF' AND provider IS NULL AND model IS NULL AND summary IS NULL AND images_seen = 0 AND (suggested_reply IS NOT DISTINCT FROM '' OR (suggested_reply IS NULL AND text_purged_at IS NOT NULL)))`,
+    ),
+    check('support_ai_jobs_outcome_check', nullableEnumCheck('outcome', SUPPORT_AI_AUTO_OUTCOMES)),
+    check(
+      'support_ai_jobs_handoff_reason_check',
+      nullableEnumCheck('handoff_reason', BUSINESS_HANDOFF_REASONS),
+    ),
+    // An automatic job names its trigger, its epoch and when it is due, and no person.
+    check(
+      'support_ai_jobs_auto_shape_check',
+      sql`(kind = 'AUTO_DECISION') = (trigger_telegram_message_id IS NOT NULL)
+          AND (kind = 'AUTO_DECISION') = (control_epoch IS NOT NULL)
+          AND (kind = 'AUTO_DECISION') = (due_at IS NOT NULL)
+          AND (kind = 'AUTO_DECISION') = (trigger_content_version IS NOT NULL)
+          AND (kind <> 'AUTO_DECISION' OR requested_by_admin_id IS NULL)
+          AND (kind = 'AUTO_DECISION' OR outcome IS NULL)`,
     ),
   ],
 );

@@ -54,7 +54,8 @@ const message = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const detail = (conversation: Record<string, unknown> = {}) => ({
-  conversation: { ...summary(conversation), controlEpoch: 3, lastHumanAt: null },
+  conversation: { ...summary(conversation), controlEpoch: 3, lastHumanAt: null, ticketId: null },
+  escalations: [],
   messages: [
     // Deliberately out of order: the transcript reads oldest first whatever arrives.
     message({
@@ -290,6 +291,43 @@ describe('one business conversation', () => {
   };
   const posted = (api: ReturnType<typeof stubApi>, suffix: string) =>
     api.calls.filter((call) => call.method === 'POST' && call.url.endsWith(suffix));
+
+  it('shows each handoff: its reason in words, the ticket, and the AI note for the operator', async () => {
+    stubApi([
+      {
+        url: `/business-chats/${CHAT_ID}`,
+        body: {
+          ...detail({ handoffReason: 'HANDOFF_TOPIC' }),
+          escalations: [
+            {
+              id: '019450ab-cdef-7012-8345-6789abcdef01',
+              reason: 'HANDOFF_TOPIC',
+              summary: 'مشتری بازپرداخت می‌خواهد.',
+              ticketId: '019460ab-cdef-7012-8345-6789abcdef01',
+              ticketOutcome: 'CREATED',
+              createdAt: '2026-10-01T10:06:00.000Z',
+            },
+            {
+              id: '019450ab-cdef-7012-8345-6789abcdef02',
+              reason: 'IDENTITY_UNVERIFIED',
+              summary: null,
+              ticketId: null,
+              ticketOutcome: 'NO_CUSTOMER',
+              createdAt: '2026-10-01T09:06:00.000Z',
+            },
+          ],
+        },
+      },
+    ]);
+    renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply={false} />);
+    expect(await screen.findByText(t('web.bchat_escalations'))).toBeTruthy();
+    expect(screen.getByText('مشتری بازپرداخت می‌خواهد.')).toBeTruthy();
+    const link = screen.getByRole('link', { name: t('web.bchat_escalation_ticket_created') });
+    expect(link.getAttribute('href')).toBe('/tickets/019460ab-cdef-7012-8345-6789abcdef01');
+    expect(screen.getByText(t('web.bchat_escalation_no_customer'))).toBeTruthy();
+    expect(screen.getAllByText(t('web.bchat_handoff_topic')).length).toBeGreaterThan(0);
+    expect(screen.getByText(t('web.bchat_handoff_identity'))).toBeTruthy();
+  });
 
   it('names every origin in words, oldest first, with edited, deleted and purged markers', async () => {
     page({}, false);

@@ -455,6 +455,16 @@ decision to MAKE a call is not exempt: the connection test checks activity on
 arrival, and the chain's callers (TB5 drafts, TB7 automatic replies) own a
 business transaction that must check it before they call the chain.
 
+**Refusing is not ending.** For queued work — a TB5 draft, a TB7 automatic job — a stopped
+scope's refusal writes NOTHING: the job is left exactly as it is (QUEUED, under its lease), not
+moved to a terminal state that records the stop. A "dropped because stopped" outcome is itself
+a write in a stopped scope; TB7 shipped one (`dropped_scope`) and the substitute review of
+PR #202 removed it. What happens on resume is the producer's own rule, never a write made
+during the stop: TB5 fails a draft nobody claimed in time (`job.unclaimed`), and TB7 hands off
+a job, or an AUTO lane row, that is older than `SUPPORT_AI_AUTO_STALE_SECONDS` rather than
+answering late (`REPLY_STALE`). Enforced by `tests/integration/support-auto-reply.test.ts`,
+"finding 2: a stop during the provider call writes nothing…" (mutant TB7-32).
+
 ---
 
 ## Idempotency keys are namespaced per surface
