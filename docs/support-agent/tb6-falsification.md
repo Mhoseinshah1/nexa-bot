@@ -31,3 +31,30 @@ The following were not mutated, and the reason for each:
 
 - `markDeleted` clearing the reference. Reverting it violates the `business_messages_photo_deleted_check` CHECK, so the database refuses that write before any test assertion could run. The rule is held by the schema.
 - The tenant condition in `photoReference` on its own. Conversation ids are unique and the conversation is itself read by tenant, so removing only that condition is an equivalent mutant. TB6-06 removes it together with the conversation condition.
+
+## Substitute review of PR #201 — every fix, falsified
+
+One read-only substitute review ran. It found no blocking defect, four should-fix defects and five nits; all were valid and all are fixed. Each fix has a regression test, and reverting the fix fails that test. Run on 2026-10-05 against `nexa_test_tb6fix`; the whole driver, TB6-01 to TB6-28, ran again with the fixes in place.
+
+| ID     | Finding                                                                                    | Fix                                                                                                                            | Regression test                                                  | Result |
+| ------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- | ------ |
+| TB6-19 | S1: image rows were inserted before the result write, and committed when the job was gone  | the rows are written only after the conditional result write lands, in the same transaction                                    | S1 (discarded during the call; a second writer after a takeover) | KILLED |
+| TB6-20 | S4: "nothing is written for a stopped tenant" had no test                                  | — (the rule held; a test now pins it)                                                                                          | S4                                                               | KILLED |
+| TB6-21 | S2: an edit after the 30-day purge restored a `file_id`                                    | the three photo columns are guarded by `text_purged_at IS NULL`, as the text is                                                | S2: an edit after the 30-day purge                               | KILLED |
+| TB6-22 | S3: a customer's text or caption could carry a marker verbatim and forge an attached image | every square bracket in a line's own text becomes a parenthesis; rule 12 says so; policy `tb6-2026-10-05`                      | … never forges it (5 cases)                                      | KILLED |
+| TB6-23 | N1: nothing pinned that Anthropic's raw bound encodes within 5 MB of base64                | — (the bound held; a test now pins `ceil(max/3)*4 <= 5_000_000`)                                                               | Anthropic: its declared image bound encodes within…              | KILLED |
+| TB6-24 | N2: the lease did not cover the image downloads                                            | `+ SUPPORT_AI_VISION_MAX_IMAGES * 2 * SUPPORT_AI_VISION_FETCH_TIMEOUT_MS`, derived by `assistantLeaseMs`                       | the lease covers every image download leg…                       | KILLED |
+| TB6-25 | N3: one oversized older image stopped a step from seeing the latest one                    | `stepSight`: an image that does not fit is dropped for that step only (`NO_VISION_CAPABILITY`); a required one still hands off | N3: an older image too large for the step…                       | KILLED |
+| TB6-26 | N4: `business_messages_photo_shape_check` allowed a size without a reference               | the CHECK requires the reference for a size (0204 regenerated)                                                                 | a photo size never stands without a reference                    | KILLED |
+| TB6-27 | N4: the handoff shape CHECK did not pin the reply                                          | reply `''`, or NULL only once purged; no model, no summary; `IS NOT DISTINCT FROM` (0204 regenerated)                          | a fail-closed handoff holds an empty reply…                      | KILLED |
+| TB6-28 | N5: `imagesUnseen` counted the business's own photos                                       | only `INBOUND` photos are counted                                                                                              | N5                                                               | KILLED |
+
+TB6-07, TB6-10, TB6-12 and TB6-15 had their anchors moved to the new shape of the code (`stepSight`, `requiredId`, the per-image reason) and still revert the same rule; all four were killed again.
+
+TB6-26 and TB6-27 are database mutants: a CHECK lives in the migrated database, not in `schema.ts`. The driver swaps the constraint for its pre-review form, runs the test, repairs any row the weak form let in, and restores the reviewed form.
+
+The first draft of TB6-27's CHECK used `suggested_reply = ''`. Its own test caught that a CHECK passes on NULL, so `= ''` let a NULL reply through; it is `IS NOT DISTINCT FROM ''`.
+
+Migration `0204` was regenerated in place (TB6 is neither merged nor deployed). Its snapshot id changed, so the branches stacked above (TB7 to TB10) must regenerate their snapshots.
+
+**28 of 28 killed, every one by an assertion.**
