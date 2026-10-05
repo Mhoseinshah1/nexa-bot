@@ -14,7 +14,14 @@ wired as `container.supportContext`) returns:
   its strict schema before it is returned, so a key outside the allowlist fails the build;
 - `references`: the alias to row-id maps (`S1` to a service id, and so on). They stay on the
   server. A later server-side tool resolves an alias through them and never through text a
-  model wrote.
+  model wrote. They hold **only the aliases that survived the byte budget**, so an alias
+  the model was never shown resolves to nothing.
+
+**Aliases are positional within one build.** `S2` in one build and `S2` in the next can name
+different services: a new purchase, a state change or a different truncation all reorder
+them. A consumer must therefore resolve an alias only through the `references` of the
+**same** build that produced the payload the model read. Keep that build with the turn, and
+never rebuild in order to resolve an alias.
 
 It is **read-only and deterministic**. It writes nothing, and its answer depends only on the
 rows and the `Clock`. The integration test pins that `support_faq_seeds`, `audit_logs` and
@@ -58,25 +65,31 @@ authorisation", as for `ProvisioningService.pageForCustomer`). The agent acts as
 `SYSTEM_JOB`, which holds only `maintenance.run`. Borrowing an operator service would be
 the actor-type bypass this codebase refuses.
 
-| Family           | Reader                                                                                                                                                                                                                                                                        | Statements                                             |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| customer         | `CustomerRepository.findById` (tenant in WHERE)                                                                                                                                                                                                                               | 1                                                      |
-| services         | `ProvisioningService.pageForCustomer(scope, id, 1)`: tenant, customer, `notRefundedAway()`, newest first, page of 10. **Not** `listForCustomer`, which still shows a service refunded away.                                                                                   | 2 (count + page)                                       |
-| service card     | `SupportContextReader.serviceCardFacts`: one `unnest … WITH ORDINALITY` over the page's `(order, product)` pairs, for the order line's title (this customer's order only) and the product's `service_location_label`. This replaces N `purchaseTitle` and `displayFor` calls. | 1                                                      |
-| status           | `serviceDisplayStatus` (provisioning domain) and `ProvisioningService.isDeliverable` for `hasSubscriptionLink`. The same answers the service card draws.                                                                                                                      | 0                                                      |
-| orders           | `SupportContextReader.recentOrders`: tenant, customer, not `DRAFT`, `(created_at, id)` DESC, limit 5 (`orders_customer_created_idx`).                                                                                                                                         | 1                                                      |
-| payments         | `SupportContextReader.recentPayments`: tenant, customer, DESC, limit 5, with `underReview` in SQL and `bool_or(underReview) OVER ()` over **all** of the customer's payments.                                                                                                 | 1                                                      |
-| incidents        | `SupportContextReader.activeIncidentNotices`: ACTIVE, with a `customer_message`, matched by the notice audience's rule, limit 3.                                                                                                                                              | 1                                                      |
-| client apps      | `ClientAppRepository.list(ENABLED)`, filtered by `isClientAppRelevant` with facts from `ProvisionedServiceFacts.factsOf(services already read)`. That method is new, and `factsFor` now delegates to it. Rendered as the customer's detail screen renders.                    | 1 + 1 (panels) + panel-policy reads per (panel, state) |
-| knowledge        | `SupportFaqRepository.list(ACTIVE)`, **not** `SupportScreenReader.screenFor`, which seeds on first read.                                                                                                                                                                      | 1                                                      |
-| support accounts | `SettingsResolver.valueOf('support.accounts')`                                                                                                                                                                                                                                | 1                                                      |
+| Family           | Reader                                                                                                                                                                                                                                                                                                                                                 | Statements                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| customer         | `CustomerRepository.findById` (tenant in WHERE)                                                                                                                                                                                                                                                                                                        | 1                                                      |
+| services         | `ProvisioningService.supportServicesForCustomer(scope, id, 10)`. It uses the same repository and the same tenant, customer and `notRefundedAway()` predicate as `pageForCustomer`. Every non-TERMINATED service comes before any TERMINATED one, newest first within each group. **Not** `listForCustomer`, which still shows a service refunded away. | 1                                                      |
+| service card     | `SupportContextReader.serviceCardFacts`: one `unnest … WITH ORDINALITY` over the page's `(order, product)` pairs, for the order line's title (this customer's order only) and the product's `service_location_label`. This replaces N `purchaseTitle` and `displayFor` calls.                                                                          | 1                                                      |
+| status           | `serviceDisplayStatus` (provisioning domain) and `ProvisioningService.isDeliverable` for `hasSubscriptionLink`. The same answers the service card draws.                                                                                                                                                                                               | 0                                                      |
+| orders           | `SupportContextReader.recentOrders`: tenant, customer, not `DRAFT`, `(created_at, id)` DESC, limit 5 (`orders_customer_created_idx`).                                                                                                                                                                                                                  | 1                                                      |
+| payments         | `SupportContextReader.recentPayments`: tenant, customer, DESC, limit 5, with `underReview` in SQL. A second `LIMIT 1` statement over the same predicate sets the flag across **all** of the customer's payments, and it stops at the first match.                                                                                                      | 2 (parallel)                                           |
+| incidents        | `SupportContextReader.activeIncidentNotices`: ACTIVE, with a `customer_message`, matched by the notice audience's rule, limit 3.                                                                                                                                                                                                                       | 1                                                      |
+| client apps      | `ClientAppRepository.list(ENABLED)`, filtered by `isClientAppRelevant` with facts from `ProvisionedServiceFacts.factsOf(services already read)`. That method is new, and `factsFor` now delegates to it. Rendered as the customer's detail screen renders.                                                                                             | 1 + 1 (panels) + panel-policy reads per (panel, state) |
+| knowledge        | `SupportFaqRepository.list(ACTIVE)`, **not** `SupportScreenReader.screenFor`, which seeds on first read.                                                                                                                                                                                                                                               | 1                                                      |
+| support accounts | `SettingsResolver.valueOf('support.accounts')`                                                                                                                                                                                                                                                                                                         | 1                                                      |
 
 **Measured** (`support-context.test.ts`, "measures one full build"; local PostgreSQL 16,
-warm pool, five runs on 2026-10-04, four of them also timing the public build). Statements are counted at `pool.query`.
+warm pool). Statements are counted at `pool.query`.
 
-- A customer with 12 services, 7 payments and one incident took **12 statements** and
-  **11.6–28.8 ms** wall time (median about 14 ms). The payload was 6,603 bytes.
-- A public-only build (`customerId` null) took **3 statements** and **1.9–6.0 ms**.
+- **After the PR #198 review** (five runs on 2026-10-05, run while `pnpm verify` was
+  loading the machine):
+  - A customer with 12 services, 7 payments and one incident took **12 statements** and
+    **12.9–20.1 ms** wall time (median 14.2 ms). The payload was 6,603 bytes.
+  - The statement count is unchanged. The services read lost its count statement (2 to 1),
+    and the payments read gained its flag statement (1 to 2).
+  - A public-only build took **3 statements** and **2.1–6.7 ms**.
+- **Before the review** (2026-10-04): 12 statements; 11.6–28.8 ms (median about 14 ms); a
+  public-only build took 3 statements and 1.9–6.0 ms.
 
 The test records these numbers and asserts none of them.
 
@@ -136,7 +149,12 @@ two rules cannot drift silently.
 7. **`remainingTrafficBytes` is null when usage was never synced or the allowance is
    unlimited.** An unread usage is unknown, never zero. It is clamped at zero when used up.
 8. **`hasUnderReviewPayment` covers all payments.** `hasUnreconciledService` covers the 10
-   services in the payload (`OQ-TB-17`).
+   services in the payload. Those ten are non-TERMINATED services first, so newer
+   terminated services cannot crowd a live or unreconciled one out (`OQ-TB-17`). This takes
+   the reviewer's first option (live first) rather than only recording the gap. The
+   ordering lives beside `pageForCustomer` in the same repository and reuses its
+   `notRefundedAway()`, so no predicate is copied, and it also removes the count statement
+   the context never used.
 9. **The service's `customerNote` is excluded.** It is free text the customer wrote,
    addressed to themselves. Customer- and operator-authored strings that **are** included
    (`firstName`, `username`, titles, FAQ, app text, incident message) are untrusted input
@@ -176,7 +194,7 @@ emptied, so the result always fits. The worst case for 20 FAQs at the stored max
   - truncation order and tail-dropping;
   - the builder over fakes: alias to reference mapping, no secret or id in the JSON, null
     customer reading no account reader, and the BLOCKED flag.
-- `tests/integration/support-context.test.ts` (12 tests, run on `nexa_test_tb3`):
+- `tests/integration/support-context.test.ts` (19 tests, run on `nexa_test_tb3`):
   - the exact customer's own services, orders and payments, and not another customer's;
   - the same Telegram id in tenant B;
   - another tenant's customer id resolving to nobody;
@@ -186,11 +204,23 @@ emptied, so the result always fits. The worst case for 20 FAQs at the stored max
     `CONFIRMED`;
   - the flag reading all payments;
   - null remaining traffic when unsynced;
-  - the null-customer public payload, and that the build performs no writes;
+  - the null-customer public payload, and that neither a public build nor a linked build
+    performs any write;
   - a BLOCKED customer being flagged;
   - incidents (ACTIVE with a message only, title and description absent);
   - incident agreement with `noticePreview` over ten target shapes;
-  - the measured build.
+  - the measured build;
+  - from the PR #198 review:
+    - references hold only the aliases that survived a real byte-budget cut;
+    - a panel-scoped incident reaches only the customer with a live service on that panel;
+    - a TERMINATED-only customer is in neither the notice audience nor the context, across
+      all ten target shapes;
+    - the gateway facets of `underReview`: `PARTIAL` on `FAILED`, on `CONFIRMED` and with a
+      refund row; `LATE_COMPLETION`; and `PENDING` with only a provider review;
+    - the DRAFT exclusion;
+    - client-app relevance for a Marzban customer;
+    - `serviceCardFacts` reading only the customer's own order;
+    - live services coming first.
   - The secrets seeded and asserted absent are the subscription URL and ref, the provider
     client id, the note, the payment reference and external reference, the phone, the
     Telegram id, the panel id and name, the service id, the customer id and the tenant id.

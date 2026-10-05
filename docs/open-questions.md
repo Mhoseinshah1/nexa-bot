@@ -3229,11 +3229,21 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
   `UNKNOWN`; `PENDING` with a customer signal or an open provider review; and `PARTIAL` or
   `LATE_COMPLETION` on a payment that is not `CONFIRMED` and not `REFUND_RELATED`. It leaves
   out `PROVIDER_ERROR` on its own, a `MISMATCH` that is no longer `UNKNOWN`, and a payment
-  under refund. The integration suite covers only the `UNKNOWN` and signalled-`PENDING`
-  arms. The others need a `gateway_invoices` fixture, which belongs with this decision.
+  under refund. **Every arm is now pinned** (PR #198 review), including `gateway_invoices`
+  fixtures in `support-context.test.ts`:
+  - `UNKNOWN`;
+  - `PENDING` with a customer signal, and `PENDING` with only `provider_review_started_at`;
+  - `PARTIAL` on `FAILED` (under review), on `CONFIRMED` (not) and with a refund row (not);
+  - `LATE_COMPLETION` on `FAILED`.
+
+  Each part is a mutant in `scripts/mutate-tb3.py` (TB3-05, -06, -17, -18, -19). Which
+  facets belong in the set is still the Product Owner's to confirm.
+
 - **OQ-TB-13 — DRAFT orders.** TB3 leaves them out. A draft is a quote the customer never
   confirmed, and showing it could make the agent discuss a price nobody committed to. This
-  may need revisiting if "I was about to buy X" becomes a common support question.
+  may need revisiting if "I was about to buy X" becomes a common support question. The
+  exclusion is pinned: a DRAFT next to an `AWAITING_PAYMENT` order is absent and the other
+  is present (mutant TB3-20).
 - **OQ-TB-14 — SCHEDULED incidents.** Only ACTIVE incidents with a `customer_message` are
   read. A planned maintenance window that has not started is not in the context, so the
   agent cannot say "maintenance is planned tonight" until it begins.
@@ -3248,10 +3258,18 @@ Each entry is resolved by observation or by the Product Owner, never by guessing
   service's `customerNote` is excluded. TB5's guards must frame these strings as data,
   never as instructions (ADR-0034 §6). TB3 only bounds their length.
 - **OQ-TB-17 — flags over a bounded sample.** `hasUnderReviewPayment` covers **every**
-  payment the customer has. `hasUnreconciledService` covers only the 10 newest services the
-  payload carries, so an UNRECONCILED service older than those ten does not raise it.
-  Widening it means a second, customer-scoped read that must repeat the refunded-away rule,
-  and that should reuse `pageForCustomer`'s predicate rather than copy it.
+  payment the customer has. `hasUnreconciledService` covers the 10 services the payload
+  carries.
+  - **Narrowed by the PR #198 review.** The services are now read by
+    `supportServicesForCustomer`, which uses the same repository, the same tenant and
+    customer filter, and the same `notRefundedAway()` as `pageForCustomer`. It orders
+    every non-TERMINATED service (`PENDING_PROVISION`, `ACTIVE`, `SUSPENDED`, `EXPIRED`,
+    `UNRECONCILED`) before any TERMINATED one, newest first within each group. Newer
+    terminated services can therefore no longer push a live or unreconciled one out of the
+    ten (mutant TB3-23).
+  - **What remains open.** A customer with more than ten non-terminated services still has
+    the older ones left out, and an UNRECONCILED service among those older ones does not
+    raise the flag.
 - **OQ-TB-18 — which six client apps.** TB3 keeps the first six relevant ENABLED apps in
   the operator's order, which is platform first. A tenant with many Android entries will
   therefore show no iOS app. A per-platform quota, or a choice by the customer's last-used
