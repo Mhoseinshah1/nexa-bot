@@ -42,14 +42,14 @@ CREATE TABLE "support_knowledge_builds" (
 	"unchanged_count" integer DEFAULT 0 NOT NULL,
 	"conflict_count" integer DEFAULT 0 NOT NULL,
 	"retire_count" integer DEFAULT 0 NOT NULL,
-	"truncated_count" integer DEFAULT 0 NOT NULL,
+	"clipped_count" integer DEFAULT 0 NOT NULL,
 	"capped_count" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "support_knowledge_builds_tenant_id_key" UNIQUE("tenant_id","id"),
 	CONSTRAINT "support_knowledge_builds_state_check" CHECK (state IN ('OPEN', 'SUPERSEDED')),
 	CONSTRAINT "support_knowledge_builds_counts_check" CHECK (add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0
-          AND retire_count >= 0 AND truncated_count >= 0 AND capped_count >= 0)
+          AND retire_count >= 0 AND clipped_count >= 0 AND capped_count >= 0)
 );
 --> statement-breakpoint
 ALTER TABLE "support_knowledge_articles" ADD COLUMN "source_type" text;--> statement-breakpoint

@@ -1073,7 +1073,7 @@ export class DrizzleSupportKnowledgeRepository {
       unchangedCount: row.counts.unchanged,
       conflictCount: row.counts.conflict,
       retireCount: row.counts.retire,
-      truncatedCount: row.truncated,
+      clippedCount: row.truncated,
       cappedCount: row.capped,
       createdAt: row.now,
       updatedAt: row.now,
@@ -1331,7 +1331,7 @@ function build(row: typeof supportKnowledgeBuilds.$inferSelect): KnowledgeBuildR
       conflict: row.conflictCount,
       retire: row.retireCount,
     },
-    truncated: row.truncatedCount,
+    truncated: row.clippedCount,
     capped: row.cappedCount,
     createdAt: row.createdAt,
   };

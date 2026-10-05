@@ -1,5 +1,5 @@
 {
-  "id": "138ee510-eb99-4e65-bf06-7b2e9063cbca",
+  "id": "b6c7dbeb-8f16-4665-9589-e16b2daf26a2",
   "prevId": "6ad2d18b-dd9b-4f82-8ac4-401864ba2f93",
   "version": "7",
   "dialect": "postgresql",
@@ -29840,8 +29840,8 @@
           "notNull": true,
           "default": 0
         },
-        "truncated_count": {
-          "name": "truncated_count",
+        "clipped_count": {
+          "name": "clipped_count",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -29957,7 +29957,7 @@
         },
         "support_knowledge_builds_counts_check": {
           "name": "support_knowledge_builds_counts_check",
-          "value": "add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0\n          AND retire_count >= 0 AND truncated_count >= 0 AND capped_count >= 0"
+          "value": "add_count >= 0 AND update_count >= 0 AND unchanged_count >= 0 AND conflict_count >= 0\n          AND retire_count >= 0 AND clipped_count >= 0 AND capped_count >= 0"
         }
       },
       "isRLSEnabled": false
