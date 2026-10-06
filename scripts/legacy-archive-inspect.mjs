@@ -5,7 +5,7 @@
  *
  *   node scripts/legacy-archive-inspect.mjs --archive PATH
  *        [--password-env NAME] [--engine mariadb|mysql8] [--out DIR [--extract]]
- *        [--require-class synthetic|staging]
+ *        [--require-class synthetic|staging] [--max-dump-bytes N]
  *
  * Accepted, and nothing else (each is an evidenced MirzaBot shape, docs/legacy-migration/
  * importer.md §10):
@@ -54,6 +54,7 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  renameSync,
   openSync,
   readSync,
   closeSync,
@@ -103,6 +104,12 @@ const PDO_HEADER = [
 const SYNTHETIC_HEADER = '-- SYNTHETIC legacy fixture v1 (not evidence)';
 const SYNTHETIC_TABLE = 'nexa_synthetic_fixture';
 const LINE_HEAD_BYTES = 8192;
+/**
+ * The most a plain or gzipped dump may expand to when no container states its size
+ * (`--max-dump-bytes`). A zip is held to its central directory's own uncompressed size
+ * instead. Generous for MirzaBot's few-thousand-user database; a gzip bomb stops here.
+ */
+export const DEFAULT_MAX_DUMP_BYTES = 8 * 1024 ** 3;
 
 class Usage extends Error {}
 
@@ -122,8 +129,10 @@ export function parseArgs(argv, env) {
     out: null,
     extract: false,
     requireClass: null,
+    maxDumpBytes: String(DEFAULT_MAX_DUMP_BYTES),
   };
   const takes = new Map([
+    ['--max-dump-bytes', 'maxDumpBytes'],
     ['--archive', 'archive'],
     ['--password-env', 'passwordEnv'],
     ['--engine', 'engine'],
@@ -160,6 +169,10 @@ export function parseArgs(argv, env) {
     throw new Usage(`--require-class must be synthetic or staging, not '${opts.requireClass}'.`);
   }
   if (opts.extract && opts.out === null) throw new Usage('--extract needs --out DIR.');
+  if (!/^[1-9][0-9]{0,15}$/u.test(opts.maxDumpBytes)) {
+    throw new Usage('--max-dump-bytes must be a positive whole number of bytes.');
+  }
+  opts.maxDumpBytes = Number(opts.maxDumpBytes);
   let password = null;
   if (opts.passwordEnv !== null) {
     if (!/^[A-Z_][A-Z0-9_]{0,63}$/u.test(opts.passwordEnv)) {
@@ -572,27 +585,66 @@ function magic(path) {
 }
 
 class Sink extends Writable {
-  constructor(scanner, file) {
+  /**
+   * @param {number} limit the most bytes the dump may expand to: the zip's own recorded
+   *   size, or `--max-dump-bytes`. Exceeding it aborts at once — before the bytes are
+   *   hashed, scanned or written — so a decompression bomb never fills the disk.
+   */
+  constructor(scanner, file, limit) {
     super();
     this.scanner = scanner;
     this.sha = createHash('sha256');
     this.crc = 0;
     this.file = file;
+    this.limit = limit;
+    this.written = 0;
+    this.fileError = null;
+    // A write failure (ENOSPC above all) ends the pipeline through the cleanup path,
+    // never as an unhandled 'error' event that kills the process with the file half-written.
+    // Settles when the file is closed, whatever happened: the real cause of a write failure
+    // (ENOSPC) can arrive after the "stream destroyed" echo that ended the pipeline.
+    this.fileClosed = file === null ? Promise.resolve() : new Promise((r) => file.once('close', r));
+    if (file !== null) {
+      file.on('error', (error) => {
+        this.noteFileError(error);
+        this.destroy(error);
+      });
+    }
+  }
+
+  /** The first real cause wins over the "stream destroyed" echoes that follow it. */
+  noteFileError(error) {
+    if (this.fileError === null || this.fileError.code === 'ERR_STREAM_DESTROYED') {
+      this.fileError = error;
+    }
   }
 
   _write(chunk, _enc, done) {
+    this.written += chunk.length;
+    if (this.written > this.limit) {
+      return done(
+        fail(
+          'DECOMPRESSED_SIZE_EXCEEDED',
+          `the dump expands past ${this.limit} bytes, more than its container states or --max-dump-bytes allows; stopped before writing it.`,
+        ),
+      );
+    }
     this.sha.update(chunk);
     this.crc = zlib.crc32(chunk, this.crc);
     this.scanner.push(chunk);
     if (this.file === null) return done();
     if (this.file.write(chunk)) return done();
-    this.file.once('drain', done);
+    this.file.once('drain', () => done());
   }
 
   _final(done) {
     this.scanner.end();
     if (this.file === null) return done();
-    this.file.end(done);
+    // The close can be where a full disk shows first (buffered writes flush here).
+    this.file.end((error) => {
+      if (error) this.noteFileError(error);
+      done(error);
+    });
   }
 }
 
@@ -662,10 +714,29 @@ export async function inspect(opts) {
   let dumpSha256 = null;
   let crcOk = null;
 
+  // The plaintext is written under a TEMPORARY name and takes its final name only after
+  // every check of its integrity (HMAC, CRC, size) passed: a reader that finds the final
+  // name finds an authenticated dump, never a half-checked one. Any failure unlinks it.
+  let partialPath = null;
+  let finalPath = null;
   const openOut = (name) => {
     if (!opts.extract) return null;
-    extractPath = join(opts.out, name);
-    return createWriteStream(extractPath, { flags: 'wx', mode: 0o600 });
+    finalPath = join(opts.out, name);
+    partialPath = join(opts.out, `.${name}.partial`);
+    return (opts.openFile ?? ((path) => createWriteStream(path, { flags: 'wx', mode: 0o600 })))(
+      partialPath,
+    );
+  };
+  const writeFailed = async (sink, error) => {
+    if (sink.fileError !== null) await sink.fileClosed;
+    return sink.fileError !== null
+      ? fail(
+          'EXTRACT_WRITE_FAILED',
+          `the extracted dump could not be written: ${sink.fileError.code ?? sink.fileError.message}`,
+        )
+      : error.blocker !== undefined
+        ? error
+        : null;
   };
 
   try {
@@ -713,12 +784,14 @@ export async function inspect(opts) {
         readEnd = zip.dataStart + zip.compressedSize - 10 - 1;
       }
       if (zip.method === 'deflate') stages.push(zlib.createInflateRaw());
-      const sink = new Sink(scanner, openOut(zip.name));
+      const sink = new Sink(scanner, openOut(zip.name), zip.uncompressedSize);
       const source =
         readEnd >= readStart ? createReadStream(archive, { start: readStart, end: readEnd }) : [];
       try {
         await pipeline(source, ...stages, sink);
       } catch (error) {
+        const known = await writeFailed(sink, error);
+        if (known !== null) throw known;
         if (ctr !== null && !timingSafeEqual(ctr.digest(), storedMac)) {
           throw fail(
             'AUTHENTICATION_FAILED',
@@ -752,16 +825,26 @@ export async function inspect(opts) {
         openOut(
           container === 'gzip' ? basename(archive).replace(/\.gz$/iu, '') : basename(archive),
         ),
+        opts.maxDumpBytes ?? DEFAULT_MAX_DUMP_BYTES,
       );
       try {
         await pipeline(createReadStream(archive), ...stages, sink);
       } catch (error) {
+        const known = await writeFailed(sink, error);
+        if (known !== null) throw known;
         throw fail('GZIP_INVALID', `the gzip stream does not decompress: ${error.message}`);
       }
       dumpSha256 = sink.sha.digest('hex');
     }
+    // Every integrity check passed: only now does the plaintext take its final name.
+    if (partialPath !== null) {
+      renameSync(partialPath, finalPath);
+      partialPath = null;
+      extractPath = finalPath;
+    }
   } catch (error) {
-    if (extractPath !== null && existsSync(extractPath)) unlinkSync(extractPath);
+    if (partialPath !== null && existsSync(partialPath)) unlinkSync(partialPath);
+    partialPath = null;
     extractPath = null;
     if (error.blocker === undefined) throw error;
     block(error.blocker, error.message);
@@ -924,7 +1007,7 @@ export async function inspect(opts) {
 
 const HELP = `usage: node scripts/legacy-archive-inspect.mjs --archive PATH
          [--password-env NAME] [--engine mariadb|mysql8] [--out DIR [--extract]]
-         [--require-class synthetic|staging]
+         [--require-class synthetic|staging] [--max-dump-bytes N]
 The password is read ONLY from the environment variable NAME; never pass it on argv.`;
 
 const isMain =

@@ -10,11 +10,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { LEGACY_REQUIRED_COLUMNS } from '../../apps/api/src/modules/platform/legacy-importer/application/source-port';
-import { REQUIRED_COLUMNS } from '../../scripts/legacy-archive-inspect.mjs';
+import { REQUIRED_COLUMNS, inspect } from '../../scripts/legacy-archive-inspect.mjs';
 
 /**
  * WP-D1a — `scripts/legacy-archive-inspect.mjs`, run as the operator runs it.
@@ -473,5 +474,106 @@ describe('usage', () => {
     expect(run(['--archive', archive, '--bogus']).status).toBe(64);
     expect(run(['--archive', archive, '--extract']).status).toBe(64);
     expect(existsSync(join(dir, 'archive.json'))).toBe(false);
+  });
+});
+
+describe('a dump cannot expand without bound, and no unauthenticated plaintext stays on disk', () => {
+  /** The unencrypted fixture with its central directory claiming a smaller entry. */
+  function lyingZip(claimedSize: number): string {
+    const bytes = Buffer.from(readFileSync(join(FIXTURES, 'backup_2026-01-03.zip')));
+    const eocd = bytes.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    const cd = bytes.readUInt32LE(eocd + 16);
+    bytes.writeUInt32LE(claimedSize, cd + 24);
+    return file('backup_2026-03-03.zip', bytes);
+  }
+
+  it('stops a zip entry the moment it expands past its own recorded size, extracting nothing', () => {
+    const out = join(dir, 'bomb-zip');
+    const { status, report } = run(['--archive', lyingZip(100), '--out', out, '--extract']);
+    expect(status).toBe(2);
+    expect(codes(report)).toEqual(['DECOMPRESSED_SIZE_EXCEEDED']);
+    expect(readdirSync(out)).toEqual(['archive.json']);
+  });
+
+  it('stops a gzip that expands past --max-dump-bytes (a bomb: 4 MiB of zeros in a few KiB)', () => {
+    const bomb = file('bomb.sql.gz', gzipSync(Buffer.alloc(4 * 1024 * 1024)));
+    expect(statSync(bomb).size).toBeLessThan(10_000);
+    const out = join(dir, 'bomb-gz');
+    const capped = run([
+      '--archive',
+      bomb,
+      '--max-dump-bytes',
+      '1048576',
+      '--out',
+      out,
+      '--extract',
+    ]);
+    expect(codes(capped.report)).toEqual(['DECOMPRESSED_SIZE_EXCEEDED']);
+    expect(readdirSync(out)).toEqual(['archive.json']);
+    // The same file under the default cap is merely not a dump.
+    expect(codes(run(['--archive', bomb]).report)).not.toContain('DECOMPRESSED_SIZE_EXCEEDED');
+    expect(run(['--archive', bomb, '--max-dump-bytes', '0']).status).toBe(64);
+  });
+
+  it('writes under a temporary name and renames only after the HMAC verified', async () => {
+    const opened: string[] = [];
+    const out = join(dir, 'tmp-name-ok');
+    const report = await inspect({
+      archive: join(FIXTURES, 'backup_2026-01-01.zip'),
+      password: PASSWORD,
+      engine: null,
+      out,
+      extract: true,
+      requireClass: null,
+      maxDumpBytes: 1024 ** 3,
+      openFile: (path: string) => {
+        opened.push(path);
+        return createWriteStream(path, { flags: 'wx', mode: 0o600 });
+      },
+    });
+    expect(opened).toEqual([join(out, '.backup_2026-01-01.sql.partial')]);
+    expect(report.extracted).toBe(join(out, 'backup_2026-01-01.sql'));
+    expect(readdirSync(out).sort()).toEqual(['archive.json', 'backup_2026-01-01.sql']);
+  });
+
+  it('a damaged ciphertext never takes the final name, even for a moment, and leaves nothing', async () => {
+    const bytes = Buffer.from(readFileSync(join(FIXTURES, 'backup_2026-01-02.zip')));
+    bytes[400] = (bytes[400] ?? 0) ^ 0x01;
+    const damaged = file('backup_2026-01-19.zip', bytes);
+    const out = join(dir, 'tmp-name-damaged');
+    const report = await inspect({
+      archive: damaged,
+      password: PASSWORD,
+      engine: null,
+      out,
+      extract: true,
+      requireClass: null,
+      maxDumpBytes: 1024 ** 3,
+    });
+    expect(report.blockers.map((b: { code: string }) => b.code)).toEqual(['AUTHENTICATION_FAILED']);
+    expect(readdirSync(out)).toEqual(['archive.json']);
+  });
+
+  it('a full disk (ENOSPC) takes the cleanup path: a blocker, no crash, nothing left', async () => {
+    const out = join(dir, 'enospc');
+    const report = await inspect({
+      archive: join(FIXTURES, 'backup_2026-01-01.zip'),
+      password: PASSWORD,
+      engine: null,
+      out,
+      extract: true,
+      requireClass: null,
+      maxDumpBytes: 1024 ** 3,
+      // /dev/full answers every write with ENOSPC.
+      openFile: () => createWriteStream('/dev/full'),
+    });
+    expect(report.blockers).toEqual([
+      expect.objectContaining({
+        code: 'EXTRACT_WRITE_FAILED',
+        detail: expect.stringContaining('ENOSPC'),
+      }),
+    ]);
+    expect(report.extracted).toBeNull();
+    expect(readdirSync(out)).toEqual(['archive.json']);
   });
 });
