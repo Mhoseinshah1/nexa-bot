@@ -344,6 +344,36 @@ describe('Assist Mode (TB5)', () => {
     });
   });
 
+  it('review item 6: newer undelivered rows never push a delivered reply out of the transcript', async () => {
+    const first = await readyDraft();
+    const sent = await service.send(scopeA, operator, first.id, {
+      idempotencyKey: key('s'),
+      text: 'متن تحویل‌شده',
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE business_outbound_messages
+             SET state = 'DELIVERED', telegram_message_id = 4243,
+                 send_started_at = now(), resolved_at = now()
+           WHERE id = ${sent.outboundId}`,
+    );
+    // Forty-five newer rows that were never delivered (a failing lane).
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO business_outbound_messages (id, tenant_id, conversation_id, origin, body,
+            created_by_admin_id, control_epoch, idempotency_key, request_hash, state, attempts,
+            resolved_at, created_at, updated_at)
+          SELECT gen_random_uuid(), tenant_id, conversation_id, origin, 'نرسید',
+                 created_by_admin_id, control_epoch, 'failed-' || g, request_hash, 'FAILED', 1,
+                 now(), now() + (g || ' seconds')::interval, now()
+            FROM business_outbound_messages, generate_series(1, 45) AS g
+           WHERE id = ${sent.outboundId}`,
+    );
+    await readyDraft();
+    expect(chainTurns.at(-1)).toEqual([
+      { role: 'user', text: 'سلام، اینترنتم وصل نمی‌شود' },
+      { role: 'assistant', text: 'متن تحویل‌شده' },
+    ]);
+  });
+
   it('records an invalid decision as FAILED, never as advice', async () => {
     next = {
       outcome: 'OK',

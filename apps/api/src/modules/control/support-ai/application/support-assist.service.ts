@@ -189,7 +189,7 @@ export interface SupportAssistServiceDeps {
   readonly conversations: Pick<BusinessConversationRepository, 'findById'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent'>;
   /** D7: NEXA's delivered replies, which the transcript carries whether or not they echoed. */
-  readonly outbound: Pick<BusinessOutboundRepository, 'recent'>;
+  readonly outbound: Pick<BusinessOutboundRepository, 'deliveredSince'>;
   readonly sender: Pick<BusinessConversationService, 'enqueueHumanSend'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;

@@ -174,7 +174,7 @@ export interface SupportAutoReplyServiceDeps {
   readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findByTelegramId'>;
   /** The loop guard's counts, and (D7) the delivered replies the transcript carries. */
-  readonly outbound: Pick<BusinessOutboundRepository, 'countAuto' | 'recent'>;
+  readonly outbound: Pick<BusinessOutboundRepository, 'countAuto' | 'deliveredSince'>;
   /**
    * The guards' account facts, read INSIDE the enqueue transaction (substitute review of
    * PR #202, finding 1): the decision guards run again on what is true at the enqueue, not on

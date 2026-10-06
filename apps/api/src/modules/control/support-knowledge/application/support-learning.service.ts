@@ -72,7 +72,7 @@ export interface SupportLearningServiceDeps {
   readonly conversations: Pick<BusinessConversationRepository, 'findById'>;
   /** The transcript, and (D8) a message the owner typed, proposed as a source. */
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findById'>;
-  readonly outbound: Pick<BusinessOutboundRepository, 'findById' | 'recent'>;
+  readonly outbound: Pick<BusinessOutboundRepository, 'findById' | 'recent' | 'deliveredSince'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;

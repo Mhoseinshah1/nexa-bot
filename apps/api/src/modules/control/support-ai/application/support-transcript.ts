@@ -16,15 +16,16 @@ export const SUPPORT_TRANSCRIPT_READ_LINES = 40;
 export async function readSupportTranscript(
   deps: {
     readonly messages: Pick<BusinessMessageRepository, 'recent'>;
-    readonly outbound: Pick<BusinessOutboundRepository, 'recent'>;
+    readonly outbound: Pick<BusinessOutboundRepository, 'deliveredSince'>;
   },
   scope: ScopeContext,
   conversationId: string,
   limit: number = SUPPORT_TRANSCRIPT_READ_LINES,
 ): Promise<readonly SupportTranscriptLine[]> {
-  const [messages, replies] = await Promise.all([
-    deps.messages.recent(scope, conversationId, limit),
-    deps.outbound.recent(scope, conversationId, limit),
-  ]);
+  const messages = await deps.messages.recent(scope, conversationId, limit);
+  // The replies of the same window (review item 6): when the messages filled their bound, from
+  // the oldest of them; DELIVERED only, so pending or failed rows never push one out.
+  const since = messages.length >= limit ? (messages[0]?.sentAt ?? null) : null;
+  const replies = await deps.outbound.deliveredSince(scope, conversationId, { since, limit });
   return mergeTranscript(messages, replies, limit);
 }

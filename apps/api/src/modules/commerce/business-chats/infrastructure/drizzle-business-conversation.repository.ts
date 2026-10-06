@@ -777,6 +777,32 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
     return rows.map(toOutbound).reverse();
   }
 
+  async deliveredSince(
+    scope: ScopeContext,
+    conversationId: string,
+    input: { readonly since: Date | null; readonly limit: number },
+  ): Promise<readonly BusinessOutboundRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const at = sql`coalesce(${businessOutboundMessages.sendStartedAt}, ${businessOutboundMessages.resolvedAt}, ${businessOutboundMessages.createdAt})`;
+    const rows = await this.db
+      .select()
+      .from(businessOutboundMessages)
+      .where(
+        and(
+          eq(businessOutboundMessages.tenantId, tenantId),
+          eq(businessOutboundMessages.conversationId, conversationId),
+          eq(businessOutboundMessages.state, 'DELIVERED'),
+          isNotNull(businessOutboundMessages.body),
+          input.since === null
+            ? undefined
+            : sql`${at} >= ${input.since.toISOString()}::timestamptz`,
+        ),
+      )
+      .orderBy(desc(businessOutboundMessages.createdAt), desc(businessOutboundMessages.id))
+      .limit(input.limit);
+    return rows.map(toOutbound).reverse();
+  }
+
   async isOwnMessage(
     scope: ScopeContext,
     input: Parameters<BusinessOutboundRepository['isOwnMessage']>[1],
