@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EXPECTED_PASS_CYCLE_0,
+  EXPECTED_PASS_EVERY_CYCLE,
+  EXPECTED_PASS_LATER_CYCLES,
   EXPECTED_PENDING,
   assertSynthetic,
 } from '../../scripts/legacy-rehearsal-synthetic-assert.mjs';
@@ -10,9 +13,17 @@ import {
 type Check = { cycle: number; check: string; result: string; expected: string; actual: string };
 
 function summary(over: Partial<Record<string, unknown>> = {}, extra: Check[] = []) {
-  const checks: Check[] = [];
+  const pass = (cycle: number, check: string): Check => ({
+    cycle,
+    check,
+    result: 'PASS',
+    expected: 'x',
+    actual: 'x',
+  });
+  const checks: Check[] = EXPECTED_PASS_CYCLE_0.map((c) => pass(0, c));
   for (const cycle of [1, 2]) {
-    checks.push({ cycle, check: 'customer_closure', result: 'PASS', expected: '10', actual: '10' });
+    for (const check of EXPECTED_PASS_EVERY_CYCLE) checks.push(pass(cycle, check));
+    if (cycle > 1) for (const check of EXPECTED_PASS_LATER_CYCLES) checks.push(pass(cycle, check));
     for (const check of EXPECTED_PENDING) {
       checks.push({ cycle, check, result: 'PENDING', expected: '0', actual: '1' });
     }
@@ -59,6 +70,17 @@ describe('assertSynthetic', () => {
       c.cycle === 2 && c.check === 'report_equation_C3' ? { ...c, result: 'PASS' } : c,
     );
     expect(assertSynthetic(s)).toContain('expected PENDING not recorded: 2:report_equation_C3');
+  });
+
+  it('refuses a summary in which an expected PASS check is missing, by name', () => {
+    const s = summary();
+    s.checks = s.checks.filter(
+      (c) => !(c.cycle === 2 && c.check === 'rollback_displaced_preserved'),
+    );
+    expect(assertSynthetic(s)).toEqual([
+      'expected PASS not recorded: 2:rollback_displaced_preserved',
+    ]);
+    expect(EXPECTED_PASS_EVERY_CYCLE.length).toBeGreaterThanOrEqual(60);
   });
 
   it('refuses a staging summary, and a decision the harness recorded by itself', () => {
