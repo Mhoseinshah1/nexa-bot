@@ -2,7 +2,6 @@ import {
   SUPPORT_AI_AUTO_STALE_SECONDS,
   SUPPORT_AI_AUTO_WINDOW,
   SUPPORT_AI_DECISION_JSON_SCHEMA,
-  supportAiDecisionSchema,
   type BusinessHandoffReason,
   type Clock,
   type IdGenerator,
@@ -10,6 +9,7 @@ import {
   type ScopeContext,
   type SupportAiAutoOutcome,
   type SupportAiDecision,
+  type SupportAiFailureClass,
   type SupportAiImageSkipReason,
   type SupportAiProvider,
   type UnitOfWork,
@@ -37,6 +37,7 @@ import {
 } from '../domain/auto-reply-guards.js';
 import { planVision } from '../domain/vision.js';
 import { latestCustomerWords } from '../domain/transcript.js';
+import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import {
   supportSystemPrompt,
   transcriptMessages,
@@ -49,7 +50,11 @@ import type {
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
 import type { SupportContextSource } from './support-assist.service.js';
-import type { SupportAiChain, SupportAiVisionVariant } from './support-ai-chain.js';
+import {
+  chainFailureClass,
+  type SupportAiChain,
+  type SupportAiVisionVariant,
+} from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
 import { readSupportTranscript } from './support-transcript.js';
 import { withKnowledgeCounts } from './knowledge-telemetry.js';
@@ -176,7 +181,10 @@ export interface SupportAutoReplyServiceDeps {
    * the snapshot the provider was given.
    */
   readonly facts: AutoGuardFacts;
-  readonly control: Pick<BusinessConversationService, 'handOff' | 'enqueueAutoSend'>;
+  readonly control: Pick<
+    BusinessConversationService,
+    'handOff' | 'enqueueAutoSend' | 'autoSendPossible'
+  >;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
@@ -266,11 +274,18 @@ export class SupportAutoReplyService {
       this.deps.scopeActivity.scopeIsActive(scope, tx),
     );
     if (!active) return 'INACTIVE';
-    // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
-    // transaction through the tenant-scoped source.
-    // D9: money in what the customer wrote is a person's, whatever topic a model would pick.
+    // 3b. A reply that could never be sent is never paid for: a connection that is not ACTIVE
+    // (disabled, or without the `can_reply` right) drops the job BEFORE the transcript goes to a
+    // provider — the same `dropped_connection` the enqueue would reach after the call. The
+    // enqueue still checks again, under the conversation's lock.
+    if (!(await this.deps.control.autoSendPossible(scope, conversation.id))) {
+      return this.drop(scope, job, 'dropped_connection');
+    }
+    // 3c. D9: money in what the customer wrote is a person's, whatever topic a model would pick.
     const money = autoMoneyGuard(customerTextsSinceReply(transcript, trigger?.text ?? null));
     if (!money.pass) return this.handOff(scope, job, money, null, null);
+    // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
+    // transaction through the tenant-scoped source.
     const plan = planVision(transcript, {
       visionEnabled: config.visionEnabled,
       visionStepConfigured: this.deps.chain.visionStepConfigured(config),
@@ -345,9 +360,19 @@ export class SupportAutoReplyService {
                 { attachImages: true },
               ),
           };
+    // The automatic reply's parse is STRICT (ADR-0034 §1): an operator note over its bound or
+    // any malformed citation is invalid output, and hands off. The reply's length is the
+    // `reply_bounds` guard's, not the parser's.
+    const parse = (output: unknown) =>
+      parseSupportDecision(output, { maxReplyChars: null, mode: 'STRICT' });
     const result = await this.deps.chain.generate(scope, {
       operation: 'AUTO_DECISION',
       conversationId: conversation.id,
+      jobId: job.id,
+      validate: (output) => {
+        const parsed = parse(output);
+        return parsed.ok ? null : parsed.failure;
+      },
       request: {
         system: supportSystemPrompt({
           businessToneInstructions: config.toneInstructions,
@@ -358,7 +383,7 @@ export class SupportAutoReplyService {
         messages: turns,
         jsonSchema: SUPPORT_AI_DECISION_JSON_SCHEMA,
         schemaName: 'support_decision',
-        maxOutputTokens: Math.min(4_000, config.maxOutputChars * 3 + 600),
+        maxOutputTokens: decisionOutputTokens(config.maxOutputChars),
       },
       ...(vision === null ? {} : { vision }),
     });
@@ -392,6 +417,8 @@ export class SupportAutoReplyService {
       const invalid =
         result.outcome.outcome === 'INVALID_OUTPUT' ||
         result.outcome.outcome === 'REFUSED_BY_PROVIDER';
+      // The customer-facing outcome stays coarse (the handoff reason); the CLASS is the
+      // operator's diagnosis, recorded on the job beside it.
       return this.handOff(
         scope,
         job,
@@ -401,11 +428,12 @@ export class SupportAutoReplyService {
         null,
         null,
         images,
+        chainFailureClass(result),
       );
     }
-    const parsed = supportAiDecisionSchema.safeParse(result.outcome.output);
+    const parsed = parse(result.outcome.output);
     const produced = { provider: result.step.provider, model: result.outcome.model };
-    if (!parsed.success) {
+    if (!parsed.ok) {
       return this.handOff(
         scope,
         job,
@@ -413,18 +441,20 @@ export class SupportAutoReplyService {
         null,
         produced,
         images,
+        parsed.failure.failureClass,
       );
     }
+    const decision = parsed.decision;
 
     // 6. NEXA decides.
     const guards = autoDecisionGuards({
-      decision: parsed.data,
+      decision,
       config,
       flags: context.flags,
       knownAliases: knownAliases(context),
     });
-    if (!guards.pass) return this.handOff(scope, job, guards, parsed.data, produced, images);
-    return this.enqueue(scope, job, parsed.data, produced, knownAliases(context), images);
+    if (!guards.pass) return this.handOff(scope, job, guards, decision, produced, images);
+    return this.enqueue(scope, job, decision, produced, knownAliases(context), images);
   }
 
   /**
@@ -617,9 +647,10 @@ export class SupportAutoReplyService {
     decision: SupportAiDecision | null,
     produced: { readonly provider: SupportAiProvider; readonly model: string } | null,
     images?: ImageWrite,
+    failureClass: SupportAiFailureClass | null = null,
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, (tx, now) =>
-      this.handOffChecked(scope, job, failed, decision, produced, now, tx),
+      this.handOffChecked(scope, job, failed, decision, produced, now, tx, failureClass),
     );
   }
 
@@ -636,6 +667,7 @@ export class SupportAutoReplyService {
     produced: { readonly provider: SupportAiProvider; readonly model: string } | null,
     now: Date,
     tx: TransactionScope,
+    failureClass: SupportAiFailureClass | null = null,
   ): Promise<AutoJobResult> {
     const conversation = await this.deps.conversations.lockById(scope, job.conversationId, tx);
     if (conversation === null || conversation.controlEpoch !== job.controlEpoch) {
@@ -659,6 +691,7 @@ export class SupportAutoReplyService {
           decision,
           provider: produced?.provider ?? null,
           model: produced?.model ?? null,
+          failureClass,
           now,
         },
         tx,

@@ -37,9 +37,14 @@ export class TbSupportContextSource implements SupportContextSource {
     for (const payment of payload.payments) {
       aliases.set(payment.alias, paymentLabel(payment));
     }
+    // Knowledge is cited apart from the facts (`knowledgeRefs`), and labelled by its question.
+    const knowledgeAliases = new Map<string, string>(
+      payload.knowledge.map((entry) => [entry.alias, entry.question]),
+    );
     return {
       json: JSON.stringify(payload),
       aliases,
+      knowledgeAliases,
       linked: payload.flags.identityLinked,
       flags: payload.flags,
       // D2 telemetry: what the budget left of the selected knowledge, and the candidates.

@@ -18,7 +18,7 @@ describe('TbSupportContextSource', () => {
         amount: { amountMinor: '150000', currency: 'IRR' },
       },
     ],
-    knowledge: [{ source: 'KNOWLEDGE', question: 'وصل نمی‌شود', answer: '…' }],
+    knowledge: [{ alias: 'K1', source: 'KNOWLEDGE', question: 'سرویس وصل نمی‌شود', answer: 'a' }],
     flags: { identityLinked: false },
   };
   const build = {
@@ -40,6 +40,11 @@ describe('TbSupportContextSource', () => {
       ['O1', 'سرویس یک‌ماهه'],
       ['P1', 'کارت به کارت 150,000 ریال'],
     ]);
+    // Knowledge is labelled apart: it is no fact a fact ref (or the grounding guard) may name.
+    expect([...(result.knowledgeAliases ?? new Map()).entries()]).toEqual([
+      ['K1', 'سرویس وصل نمی‌شود'],
+    ]);
+    expect(result.aliases.has('K1')).toBe(false);
     expect(result.json).not.toMatch(/row-id/u);
     expect([...result.aliases.values()].join(' ')).not.toMatch(/row-id/u);
   });

@@ -47,8 +47,19 @@ Assist drafts a reply. A person edits it and sends it. Nothing is sent by itself
    `botctl logs assistant` shows no restart loop.
 2. On `/support-ai`, under «کلیدهای ارائه‌دهنده‌ها», add a key for at least one provider. The
    key is written once and never shown again, not even masked.
-3. Press «آزمون اتصال» with the model you intend to use. Expect «موفق». A rejected key shows
-   «کلید رد شده است» on that row.
+3. Press «آزمون اتصال» with the EXACT model id you intend to use. The test is a capability
+   test (§11): it lists the model, then sends the same request Assist and automatic replies
+   send — the real system prompt, NEXA's decision schema as strict structured output, the
+   same output-token budget — over a fixed synthetic conversation with no customer data, and
+   parses the answer as a draft would be parsed. Expect «موفق» on every line:
+   «دسترسی به مدل», «تولید پاسخ ساختاریافته», «اعتبار ساختار تصمیم» (and «تصویر» when vision
+   is on). «موفق» on the first line alone is NOT readiness: a model that can be listed but
+   rejects structured output fails the second line, with its reason. A rejected key shows
+   «کلید رد شده است» on that row. A test costs one model lookup and one or two small
+   generations; pressing again after an answer is a new test, a lost answer re-asked is not,
+   and a provider's key can be tested at most once every 30 seconds («... پس از ۳۰ ثانیه دوباره امتحان کنید»).
+   The decision-schema check is STRICT, exactly as an automatic reply is parsed (Assist drafts
+   tolerate an over-long operator note or a malformed citation; automatic replies do not).
 4. In «پیکربندی», choose the primary provider and model (and optionally up to two
    fallbacks), set the mode to `ASSIST_ONLY` and save.
 5. Grant `support_ai.assist` to the roles that should ask for drafts. The seeded `support` and
@@ -303,3 +314,76 @@ replica is not a `botctl` operation and has not been accepted on a real installa
 - «پاسخ خودکار فرستاده شد» counts jobs that queued a reply. The lane's final check may still
   have superseded it, if a person spoke first. «بی‌اقدام کنار رفت» is not a failure: a person
   intervened, a newer message replaced the job, or the mode changed.
+
+## 11. Why the AI did not answer: diagnostics
+
+A customer whose conversation the AI could not answer is handed to a person, and is never
+shown an error. The handoff reason stays coarse — «خروجی هوش مصنوعی معتبر نبود»
+(`AI_OUTPUT_INVALID`) or «سرویس هوش مصنوعی در دسترس نبود» (`AI_UNAVAILABLE`) — and beside it NEXA
+records the exact **class** of the failure, the deciding provider call's provider, model,
+position in the chain, latency, tokens and HTTP status, the provider's own error code, type
+and parameter (short machine identifiers only), and, for an answer that failed NEXA's
+decision schema, the field and the rule it broke. Never the prompt, the model's answer, the
+provider's message or a key.
+
+### Where to read it
+
+| Where                                                  | What it shows                                                                |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `/support-ai` → «آزمون اتصال»                          | each check, its result, and for a failed one its class and particulars       |
+| `/support-ai` → the provider row → «آخرین آزمون اتصال» | the last test's outcome and, when not OK, its class                          |
+| A conversation → «دستیار هوشمند» → a failed draft      | «علت»: the class, then provider, model, HTTP status, error type/param, field |
+| A conversation → «سپردن‌ها به پشتیبان»                 | the same, under an `AI_OUTPUT_INVALID` / `AI_UNAVAILABLE` handoff            |
+| «آمار پشتیبانی» → «علت خطاهای هوش مصنوعی»              | failed calls in the period, by class, operation and provider                 |
+
+### The classes, and what to do
+
+| Class (`failure_class`)  | Persian label                             | Usually means                                                                                                   | Do                                                                       |
+| ------------------------ | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `unsupported_capability` | این مدل قابلیت لازم را ندارد              | the model refuses strict structured output (`param: response_format`), a `system` message, or a parameter       | choose a model that supports structured outputs; re-run «آزمون اتصال»    |
+| `request_rejected`       | ارائه‌دهنده درخواست را رد کرد             | HTTP 400/404/422: a mistyped model id (`model_not_found`), an output limit the model does not allow             | read the code/param; fix the model id; re-run the test                   |
+| `auth`                   | کلید رد شد                                | 401/403                                                                                                         | §4                                                                       |
+| `quota`                  | اعتبار یا سهمیهٔ حساب تمام شده است        | no balance or quota on the provider account                                                                     | top up the provider account                                              |
+| `rate_limited`           | محدودیت تعداد درخواست                     | 429 that is not quota                                                                                           | wait; the chain falls back meanwhile                                     |
+| `timeout`                | پاسخ در مهلت نرسید                        | no answer within «مهلت هر درخواست»                                                                              | §3; consider a longer timeout                                            |
+| `network`                | خطای شبکه                                 | no HTTP answer, or a 2xx that was not JSON (a proxy page)                                                       | check the server's egress (§3)                                           |
+| `provider_error`         | خطای سرور ارائه‌دهنده                     | 408/409/5xx/529                                                                                                 | §3                                                                       |
+| `refused`                | ارائه‌دهنده پاسخ را رد کرد (پالایش محتوا) | the provider's refusal or content filter                                                                        | nothing: a person answers                                                |
+| `no_content`             | پاسخ خالی بود                             | a 2xx with no text                                                                                              | re-run the test; if it repeats, change model                             |
+| `truncated`              | پاسخ ناقص ماند (سقف توکن خروجی)           | the answer hit the output-token limit (a reasoning model thinking at length)                                    | lower «بیشترین طول پاسخ (نویسه)», or choose a non-reasoning model        |
+| `not_json`               | پاسخ JSON نبود                            | the model ignored the output format                                                                             | change model                                                             |
+| `schema_invalid`         | ساختار تصمیم نامعتبر بود                  | JSON that is not NEXA's decision; «بخش نامعتبر تصمیم» names the field (e.g. `topic`, `factRefs.0`)              | re-run the test; if it repeats with one field, report it with that field |
+| `reply_too_long`         | پاسخ طولانی‌تر از حد مجاز بود             | the reply exceeded «بیشترین طول پاسخ (نویسه)» (the test, and automatic replies; Assist shows it with a warning) | raise the limit, or accept the handoff                                   |
+| `no_provider`            | هیچ ارائه‌دهنده‌ای قابل فراخوانی نبود     | no key, every breaker open, or the mode is OFF                                                                  | §3, §4                                                                   |
+
+A job that failed for a reason that is not the AI — the `assistant` role not running
+(«سرویس دستیار در حال اجرا نیست», `job.unclaimed`, §9), an empty transcript — carries no
+class; the draft panel says that reason in words instead.
+
+### From the database (read-only)
+
+```sql
+-- The last failed calls, with their class and particulars (no text is stored).
+SELECT created_at, operation, provider, model, attempt_index, outcome, failure_class,
+       http_status, provider_error_code, provider_error_type, provider_error_param,
+       schema_issue_path, schema_issue_code, latency_ms, input_tokens, output_tokens
+  FROM support_ai_runs
+ WHERE outcome <> 'OK'
+ ORDER BY created_at DESC
+ LIMIT 20;
+
+-- One handed-off conversation: the job's class and its deciding call.
+SELECT j.id, j.outcome, j.handoff_reason, j.failure_class,
+       r.provider, r.model, r.http_status, r.provider_error_param, r.schema_issue_path
+  FROM support_ai_jobs j
+  LEFT JOIN LATERAL (
+    SELECT * FROM support_ai_runs r
+     WHERE r.tenant_id = j.tenant_id AND r.job_id = j.id
+     ORDER BY r.created_at DESC, r.attempt_index DESC LIMIT 1
+  ) r ON true
+ WHERE j.conversation_id = '<conversation id>'
+ ORDER BY j.created_at DESC;
+```
+
+A run recorded before this release has no class (`failure_class` is null); its
+`failure_code` (`openai.http_400`, `openai.truncated`, …) still says roughly the same thing.

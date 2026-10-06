@@ -4,6 +4,7 @@ import type {
   ScopeContext,
   SupportAiAutoOutcome,
   SupportAiDecision,
+  SupportAiFailureClass,
   SupportAiImageOutcome,
   SupportAiImageSkipReason,
   SupportAiJobKind,
@@ -33,6 +34,8 @@ export interface SupportAiJobRecord {
   readonly attempts: number;
   readonly readyAt: Date | null;
   readonly failureCode: string | null;
+  /** Why the AI produced nothing usable (`SUPPORT_AI_FAILURE_CLASSES`); null otherwise. */
+  readonly failureClass: SupportAiFailureClass | null;
   readonly decision: SupportAiDecision['decision'] | null;
   readonly topic: SupportAiDecision['topic'] | null;
   readonly confidence: SupportAiDecision['confidence'] | null;
@@ -83,6 +86,7 @@ function toRecord(row: Row): SupportAiJobRecord {
     attempts: row.attempts,
     readyAt: row.readyAt,
     failureCode: row.failureCode,
+    failureClass: row.failureClass as SupportAiFailureClass | null,
     decision: row.decision as SupportAiJobRecord['decision'],
     topic: row.topic as SupportAiJobRecord['topic'],
     confidence: row.confidence as SupportAiJobRecord['confidence'],
@@ -314,6 +318,8 @@ export class DrizzleSupportAiJobRepository {
       readonly provider?: SupportAiProvider | null;
       readonly model?: string | null;
       readonly sentOutboundId?: string | null;
+      /** A handoff because the AI failed: why (`AI_OUTPUT_INVALID` / `AI_UNAVAILABLE`). */
+      readonly failureClass?: SupportAiFailureClass | null;
       readonly now: Date;
     },
     tx?: unknown,
@@ -344,6 +350,7 @@ export class DrizzleSupportAiJobRepository {
         model: result.model?.slice(0, 128) ?? null,
         sentOutboundId: result.sentOutboundId ?? null,
         failureCode: result.state === 'SENT' ? null : result.outcome,
+        failureClass: result.state === 'SENT' ? null : (result.failureClass ?? null),
         updatedAt: result.now,
       })
       .where(
@@ -663,12 +670,34 @@ export class DrizzleSupportAiJobRepository {
     }));
   }
 
+  /** The failure class of each named job that has one (the AI was why it failed). */
+  async failureClasses(
+    scope: ScopeContext,
+    ids: readonly string[],
+  ): Promise<ReadonlyMap<string, SupportAiFailureClass>> {
+    const tenantId = requireTenantId(scope);
+    if (ids.length === 0) return new Map();
+    const rows = await this.db
+      .select({ id: supportAiJobs.id, failureClass: supportAiJobs.failureClass })
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          inArray(supportAiJobs.id, [...ids]),
+          isNotNull(supportAiJobs.failureClass),
+        ),
+      );
+    return new Map(rows.map((row) => [row.id, row.failureClass as SupportAiFailureClass]));
+  }
+
   async markFailed(
     scope: ScopeContext,
     id: string,
     failureCode: string,
     now: Date,
     tx: unknown,
+    /** Why, when the AI was the reason (`SUPPORT_AI_FAILURE_CLASSES`). */
+    failureClass: SupportAiFailureClass | null = null,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
@@ -676,6 +705,7 @@ export class DrizzleSupportAiJobRepository {
       .set({
         state: 'FAILED',
         failureCode: failureCode.slice(0, 200),
+        failureClass,
         claimedUntil: null,
         updatedAt: now,
       })

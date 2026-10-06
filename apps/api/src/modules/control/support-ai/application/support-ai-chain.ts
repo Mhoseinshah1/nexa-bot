@@ -2,8 +2,10 @@ import {
   SUPPORT_AI_AVAILABLE_CODE,
   SUPPORT_AI_UNAVAILABLE_CODE,
   SUPPORT_AI_VISION_MAX_IMAGES,
+  supportAiFailureDetailOf,
   supportAiOutcomeFallsBack,
   type SupportAiConfigInput,
+  type SupportAiFailureClass,
   type SupportAiImageSkipReason,
   type Clock,
   type IdGenerator,
@@ -22,6 +24,7 @@ import type {
 } from './ports.js';
 import { SupportAiCredentialAlert } from './credential-alert.js';
 import { base64ByteLength } from '../domain/vision.js';
+import type { DecisionValidationFailure } from '../domain/decision.js';
 import type {
   DrizzleSupportAiConfigRepository,
   DrizzleSupportAiCredentialStore,
@@ -59,6 +62,18 @@ export interface SupportAiChainDeps {
 
 /** The chain's one unavailability condition per tenant (TB4); TB10's health panel reads it. */
 export const SUPPORT_AI_UNAVAILABLE_DEDUPE_KEY = `${SUPPORT_AI_UNAVAILABLE_CODE}:chain`;
+
+/**
+ * The operator's class for a chain result that is not a usable answer: the deciding call's
+ * own class, or `no_provider` when no step could be called at all. Null for `OK`.
+ */
+export function chainFailureClass(result: SupportAiChainResult): SupportAiFailureClass | null {
+  if (result.outcome.outcome === 'OK' && result.step !== null) return null;
+  if (result.exhausted === 'NOT_CONFIGURED' || result.exhausted === 'NO_USABLE_PROVIDER') {
+    return 'no_provider';
+  }
+  return supportAiFailureDetailOf(result.outcome)?.failureClass ?? null;
+}
 
 /** What one call through the chain produced. */
 export interface SupportAiChainResult {
@@ -179,9 +194,18 @@ export class SupportAiChain {
     input: {
       readonly operation: SupportAiOperation;
       readonly conversationId: string | null;
+      /** The AI job the call is for; its runs carry it, so a failed job can say why. */
+      readonly jobId?: string | null;
       readonly request: Omit<SupportAiRequest, 'model' | 'timeoutMs'>;
       /** TB6: the image variant, when the conversation has processed images. */
       readonly vision?: SupportAiVisionVariant;
+      /**
+       * The caller's parse of an answer (`parseSupportDecision`), run on an `OK` so the RUN
+       * records an answer that is not a decision as what it is — `INVALID_OUTPUT` with the
+       * zod issue's path and code — instead of a success. The caller parses again and stays
+       * the authority; an invalid answer still never falls back.
+       */
+      readonly validate?: (output: unknown) => DecisionValidationFailure | null;
     },
   ): Promise<SupportAiChainResult> {
     const { config } = await this.deps.configs.get(scope);
@@ -236,14 +260,39 @@ export class SupportAiChain {
       const imagesSent = messages.reduce((sum, message) => sum + (message.images?.length ?? 0), 0);
       attempts += 1;
       const started = this.wallMs();
-      const outcome = await adapter.generate(credential, {
+      const answer = await adapter.generate(credential, {
         ...input.request,
         messages,
         model: step.model,
         timeoutMs: config.timeoutMs,
       });
-      await this.recordRun(scope, input, step, index, this.wallMs() - started, outcome);
-      await this.observe(scope, step.provider, credential.keySetAt, outcome);
+      const invalid =
+        answer.outcome === 'OK' && input.validate !== undefined
+          ? input.validate(answer.output)
+          : null;
+      const outcome: SupportAiOutcome =
+        answer.outcome === 'OK' && invalid !== null
+          ? {
+              outcome: 'INVALID_OUTPUT',
+              code: `decision.${invalid.failureClass}`,
+              usage: answer.usage,
+              detail: {
+                failureClass: invalid.failureClass,
+                httpStatus: null,
+                providerErrorCode: null,
+                providerErrorType: null,
+                providerErrorParam: null,
+              },
+            }
+          : answer;
+      await this.recordRun(scope, input, step, index, this.wallMs() - started, outcome, invalid);
+      // The breaker and the key's alert read what the PROVIDER did: an answer that is not a
+      // decision still proves the key and the provider work.
+      await this.observe(scope, step.provider, credential.keySetAt, answer);
+      if (answer.outcome === 'OK' && invalid !== null) {
+        await this.recoverUnavailable(scope);
+        return { outcome, step, attempts, exhausted: null, imagesSent, sight };
+      }
 
       last = { outcome, step, attempts, exhausted: null, imagesSent, sight };
       if (outcome.outcome === 'OK') {
@@ -360,16 +409,22 @@ export class SupportAiChain {
 
   private async recordRun(
     scope: ScopeContext,
-    input: { readonly operation: SupportAiOperation; readonly conversationId: string | null },
+    input: {
+      readonly operation: SupportAiOperation;
+      readonly conversationId: string | null;
+      readonly jobId?: string | null;
+    },
     step: SupportAiProviderStep,
     attemptIndex: number,
     latencyMs: number,
     outcome: SupportAiOutcome,
+    invalid: DecisionValidationFailure | null,
   ): Promise<void> {
     const usage = 'usage' in outcome && outcome.usage !== undefined ? outcome.usage : null;
     await this.deps.runs.record(scope, {
       id: this.deps.ids.uuid(),
       conversationId: input.conversationId,
+      jobId: input.jobId ?? null,
       operation: input.operation,
       provider: step.provider,
       model: outcome.outcome === 'OK' ? outcome.model : step.model,
@@ -379,6 +434,8 @@ export class SupportAiChain {
       outputTokens: usage?.outputTokens ?? null,
       outcome: outcome.outcome,
       failureCode: outcome.outcome === 'OK' || outcome.outcome === 'TIMEOUT' ? null : outcome.code,
+      failure: supportAiFailureDetailOf(outcome),
+      schemaIssue: invalid === null ? null : { path: invalid.issuePath, code: invalid.issueCode },
       now: this.deps.clock.now(),
     });
   }

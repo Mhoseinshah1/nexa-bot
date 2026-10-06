@@ -204,6 +204,7 @@ describe('D2 — the knowledge reserve in the byte budget', () => {
       clientApps: [],
       incidents: [],
       knowledge: Array.from({ length: 20 }, (_, i) => ({
+        alias: `K${String(i + 1)}`,
         source: 'KNOWLEDGE' as const,
         question: `k${String(i)}`,
         answer: persian('متن', 1500),
@@ -248,8 +249,18 @@ describe('D2 — the knowledge reserve in the byte budget', () => {
     const big = {
       ...bigPayload(),
       knowledge: [
-        { source: 'KNOWLEDGE' as const, question: 'first', answer: persian('اول', 4000) },
-        { source: 'KNOWLEDGE' as const, question: 'second', answer: persian('دوم', 4000) },
+        {
+          alias: 'K1',
+          source: 'KNOWLEDGE' as const,
+          question: 'first',
+          answer: persian('اول', 4000),
+        },
+        {
+          alias: 'K2',
+          source: 'KNOWLEDGE' as const,
+          question: 'second',
+          answer: persian('دوم', 4000),
+        },
       ],
     };
     const fitted = fitPayload(big, 12 * 1024);

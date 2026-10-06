@@ -236,6 +236,17 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
   },
   // --- backup and recovery ---------------------------------------------------------------
   { code: 'backup.run_failed', category: 'BACKUPS', link: 'RECOVERY', minSeverity: 'WARN' },
+  // The archive did not leave the host, plaintext was left behind, the backup volume is
+  // nearly full, or the schedule has stopped producing verified backups.
+  { code: 'backup.delivery_failed', category: 'BACKUPS', link: 'RECOVERY', minSeverity: 'WARN' },
+  { code: 'backup.cleanup_failed', category: 'BACKUPS', link: 'RECOVERY', minSeverity: 'WARN' },
+  {
+    code: 'backup.disk_threshold_exceeded',
+    category: 'BACKUPS',
+    link: 'RECOVERY',
+    minSeverity: 'WARN',
+  },
+  { code: 'backup.interval_exceeded', category: 'BACKUPS', link: 'RECOVERY', minSeverity: 'WARN' },
   { code: 'recovery.run_failed', category: 'RECOVERY', link: 'RECOVERY', minSeverity: 'WARN' },
   // --- security: lock-outs and changes to who may do what --------------------------------
   { code: 'auth.login_locked_out', category: 'SECURITY', link: 'ADMINS', minSeverity: 'INFO' },

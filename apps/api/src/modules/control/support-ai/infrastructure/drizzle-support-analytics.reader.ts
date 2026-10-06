@@ -4,8 +4,10 @@ import type {
   BusinessHandoffReason,
   ScopeContext,
   SupportAiAutoOutcome,
+  SupportAiFailureClass,
   SupportAiJobKind,
   SupportAiJobState,
+  SupportAiOperation,
   SupportAiOutcomeKind,
   SupportAiProvider,
   SupportKnowledgeArticleState,
@@ -18,16 +20,16 @@ import type { SupportAnalyticsFacts, SupportAnalyticsWindow } from '../domain/su
 import { SUPPORT_AI_DRAFT_SUPERSEDED_CODE } from './drizzle-support-ai-job.repository.js';
 
 /**
- * TB10 — the support analytics, read (program §46–§47). Six grouped statements, each
+ * TB10 — the support analytics, read (program §46–§47). Seven grouped statements, each
  * TENANT-LEADING and each served by a `(tenant_id, …)` index: the two snapshots by the
- * table's tenant index, the four windowed counts by a `(tenant_id, created_at)` range,
+ * table's tenant index, the five windowed counts by a `(tenant_id, created_at)` range,
  * half-open — `created_at >= start AND created_at < end`.
  *
  * Counts and token sums only. No statement here selects a text column — not a message, a
  * prompt, a draft, a summary or a title — so nothing a customer wrote can leave through
  * this read.
  *
- * ONE SNAPSHOT (PR #205 review, N3). The six statements run inside one `REPEATABLE READ,
+ * ONE SNAPSHOT (PR #205 review, N3). The seven statements run inside one `REPEATABLE READ,
  * READ ONLY` transaction, so the page's figures are one observation: a handoff committed
  * between two statements cannot appear in the handoffs by reason and be missing from the
  * conversations by state beside it. Read-only, so it takes no lock and writes nothing.
@@ -98,6 +100,19 @@ export class DrizzleSupportAnalyticsReader {
        WHERE tenant_id = ${tenantId}::uuid
          AND created_at >= ${start}::timestamptz AND created_at < ${end}::timestamptz
        GROUP BY provider, outcome`);
+    // Why the failed runs failed (a run older than the class carries none and is not here).
+    const failures = await rows<{
+      operation: string;
+      provider: string;
+      failure_class: string;
+      n: number;
+    }>(sql`
+      SELECT operation, provider, failure_class, count(*)::int AS n
+        FROM support_ai_runs
+       WHERE tenant_id = ${tenantId}::uuid
+         AND created_at >= ${start}::timestamptz AND created_at < ${end}::timestamptz
+         AND failure_class IS NOT NULL
+       GROUP BY operation, provider, failure_class`);
     const candidates = await rows<{ state: string; n: number }>(sql`
       SELECT state, count(*)::int AS n
         FROM support_learning_candidates
@@ -134,6 +149,12 @@ export class DrizzleSupportAnalyticsReader {
         p95LatencyMs: Math.round(Number(row.p95 ?? 0)),
         inputTokens: Number(row.input_tokens),
         outputTokens: Number(row.output_tokens),
+      })),
+      failures: failures.map((row) => ({
+        operation: row.operation as SupportAiOperation,
+        provider: row.provider as SupportAiProvider,
+        failureClass: row.failure_class as SupportAiFailureClass,
+        runs: Number(row.n),
       })),
       candidates: candidates.map((row) => ({
         state: row.state as SupportLearningCandidateState,

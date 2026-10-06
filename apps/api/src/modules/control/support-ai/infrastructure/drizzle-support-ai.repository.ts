@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import {
   SUPPORT_AI_BREAKER_OPEN_MS,
   SUPPORT_AI_BREAKER_THRESHOLD,
@@ -6,6 +6,9 @@ import {
   type ScopeContext,
   type SecretCipher,
   type SupportAiConfigInput,
+  type SupportAiFailureClass,
+  type SupportAiFailureDetail,
+  type SupportAiFailureDiagnostic,
   type SupportAiOperation,
   type SupportAiOutcomeKind,
   type SupportAiProvider,
@@ -46,6 +49,7 @@ export interface SupportAiCredentialState {
   readonly consecutiveFailures: number;
   readonly trippedUntil: Date | null;
   readonly lastTestOutcome: SupportAiOutcomeKind | null;
+  readonly lastTestFailureClass: SupportAiFailureClass | null;
   readonly lastTestedAt: Date | null;
   /** TB10: when the provider last rejected this key; null once it answered again. */
   readonly rejectedAt: Date | null;
@@ -76,6 +80,7 @@ export class DrizzleSupportAiCredentialStore {
         consecutiveFailures: supportAiProviderCredentials.consecutiveFailures,
         trippedUntil: supportAiProviderCredentials.trippedUntil,
         lastTestOutcome: supportAiProviderCredentials.lastTestOutcome,
+        lastTestFailureClass: supportAiProviderCredentials.lastTestFailureClass,
         lastTestedAt: supportAiProviderCredentials.lastTestedAt,
         rejectedAt: supportAiProviderCredentials.rejectedAt,
       })
@@ -88,6 +93,7 @@ export class DrizzleSupportAiCredentialStore {
       consecutiveFailures: row.consecutiveFailures,
       trippedUntil: row.trippedUntil,
       lastTestOutcome: row.lastTestOutcome as SupportAiOutcomeKind | null,
+      lastTestFailureClass: row.lastTestFailureClass as SupportAiFailureClass | null,
       lastTestedAt: row.lastTestedAt,
       rejectedAt: row.rejectedAt,
     }));
@@ -178,6 +184,8 @@ export class DrizzleSupportAiCredentialStore {
       consecutiveFailures: 0,
       trippedUntil: null,
       lastTestOutcome: null,
+      // A new key is a new question: the old key's test, and why it failed, say nothing of it.
+      lastTestFailureClass: null,
       lastTestedAt: null,
       rejectedAt: null,
       updatedAt: input.now,
@@ -364,16 +372,63 @@ export class DrizzleSupportAiCredentialStore {
     return rows.length > 0;
   }
 
+  /**
+   * Claims the right to run a capability test: a conditional UPDATE that stamps
+   * `last_tested_at` only when the previous test is at least `cooldownMs` old (or there was
+   * none). Two presses, two tabs or two replicas meet at this row; exactly one wins, and the
+   * loser learns when the previous test was. Run in the caller's transaction.
+   */
+  async claimTest(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+    now: Date,
+    cooldownMs: number,
+    tx?: unknown,
+  ): Promise<
+    { readonly claimed: true } | { readonly claimed: false; readonly lastTestedAt: Date | null }
+  > {
+    const tenantId = requireTenantId(scope);
+    const since = new Date(now.getTime() - cooldownMs);
+    const rows = await exec(this.db, tx)
+      .update(supportAiProviderCredentials)
+      .set({ lastTestedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(supportAiProviderCredentials.tenantId, tenantId),
+          eq(supportAiProviderCredentials.provider, provider),
+          sql`(${supportAiProviderCredentials.lastTestedAt} IS NULL OR ${supportAiProviderCredentials.lastTestedAt} <= ${since.toISOString()}::timestamptz)`,
+        ),
+      )
+      .returning({ id: supportAiProviderCredentials.id });
+    if (rows.length > 0) return { claimed: true };
+    const [row] = await exec(this.db, tx)
+      .select({ lastTestedAt: supportAiProviderCredentials.lastTestedAt })
+      .from(supportAiProviderCredentials)
+      .where(
+        and(
+          eq(supportAiProviderCredentials.tenantId, tenantId),
+          eq(supportAiProviderCredentials.provider, provider),
+        ),
+      );
+    return { claimed: false, lastTestedAt: row?.lastTestedAt ?? null };
+  }
+
   async recordTest(
     scope: ScopeContext,
     provider: SupportAiProvider,
     outcome: SupportAiOutcomeKind,
     now: Date,
+    failureClass: SupportAiFailureClass | null = null,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
     await this.db
       .update(supportAiProviderCredentials)
-      .set({ lastTestOutcome: outcome, lastTestedAt: now, updatedAt: now })
+      .set({
+        lastTestOutcome: outcome,
+        lastTestFailureClass: outcome === 'OK' ? null : failureClass,
+        lastTestedAt: now,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(supportAiProviderCredentials.tenantId, tenantId),
@@ -496,14 +551,29 @@ export class DrizzleSupportAiRunRecorder {
       readonly outputTokens: number | null;
       readonly outcome: SupportAiOutcomeKind;
       readonly failureCode: string | null;
+      /** The AI job the call was for, when it was for one. */
+      readonly jobId?: string | null;
+      /** Why it failed (`supportAiFailureDetailOf`); null for `OK`. */
+      readonly failure?: SupportAiFailureDetail | null;
+      /** A decision that failed NEXA's schema: the zod issue's path and code, never a value. */
+      readonly schemaIssue?: { readonly path: string; readonly code: string } | null;
       readonly now: Date;
     },
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
+    const failure = run.outcome === 'OK' ? null : (run.failure ?? null);
     await this.db.insert(supportAiRuns).values({
       id: run.id,
       tenantId,
       conversationId: run.conversationId,
+      jobId: run.jobId ?? null,
+      failureClass: failure?.failureClass ?? null,
+      httpStatus: failure?.httpStatus ?? null,
+      providerErrorCode: failure?.providerErrorCode?.slice(0, 64) ?? null,
+      providerErrorType: failure?.providerErrorType?.slice(0, 64) ?? null,
+      providerErrorParam: failure?.providerErrorParam?.slice(0, 64) ?? null,
+      schemaIssuePath: run.schemaIssue?.path.slice(0, 128) ?? null,
+      schemaIssueCode: run.schemaIssue?.code.slice(0, 64) ?? null,
       operation: run.operation,
       provider: run.provider,
       model: run.model.slice(0, 128),
@@ -515,6 +585,57 @@ export class DrizzleSupportAiRunRecorder {
       failureCode: run.failureCode?.slice(0, 200) ?? null,
       createdAt: run.now,
     });
+  }
+
+  /**
+   * The DECIDING call of each job — its last attempt — as an operator's diagnosis. A job with
+   * no run (nothing could be called) is absent; the job's own `failure_class` says why.
+   */
+  async lastForJobs(
+    scope: ScopeContext,
+    jobIds: readonly string[],
+  ): Promise<
+    ReadonlyMap<
+      string,
+      Omit<SupportAiFailureDiagnostic, 'failureClass'> & {
+        readonly failureClass: SupportAiFailureClass | null;
+      }
+    >
+  > {
+    const tenantId = requireTenantId(scope);
+    if (jobIds.length === 0) return new Map();
+    const rows = await this.db
+      .selectDistinctOn([supportAiRuns.jobId])
+      .from(supportAiRuns)
+      .where(and(eq(supportAiRuns.tenantId, tenantId), inArray(supportAiRuns.jobId, [...jobIds])))
+      .orderBy(
+        supportAiRuns.jobId,
+        desc(supportAiRuns.createdAt),
+        desc(supportAiRuns.attemptIndex),
+      );
+    return new Map(
+      rows.map((row) => [
+        row.jobId as string,
+        {
+          failureClass: row.failureClass as SupportAiFailureClass | null,
+          operation: row.operation as SupportAiOperation,
+          provider: row.provider as SupportAiProvider,
+          model: row.model,
+          attemptIndex: row.attemptIndex,
+          outcome: row.outcome as SupportAiOutcomeKind,
+          httpStatus: row.httpStatus,
+          providerErrorCode: row.providerErrorCode,
+          providerErrorType: row.providerErrorType,
+          providerErrorParam: row.providerErrorParam,
+          issuePath: row.schemaIssuePath,
+          issueCode: row.schemaIssueCode,
+          latencyMs: row.latencyMs,
+          inputTokens: row.inputTokens,
+          outputTokens: row.outputTokens,
+          at: row.createdAt.toISOString(),
+        },
+      ]),
+    );
   }
 
   async usage(scope: ScopeContext, since: Date) {

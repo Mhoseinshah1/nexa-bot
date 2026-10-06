@@ -125,7 +125,12 @@ export class SupportContextBuilder {
       customerId === null ? null : this.deps.customers.findById(scope, customerId as UserId),
     ]);
     const selected = selectKnowledge(articles, faqRows, options.query ?? '');
-    const knowledge = selected.entries;
+    // By position, after the selection: `K1` is the most relevant entry the model reads. The
+    // byte budget drops from the tail, so a surviving entry keeps its alias.
+    const knowledge = selected.entries.map((entry, index): SupportContextKnowledge => ({
+      alias: aliasFor('K', index),
+      ...entry,
+    }));
     const supportAccounts = accounts.slice(0, 10).map((handle) => clip(handle, 64));
 
     if (customer === null) {
@@ -273,7 +278,7 @@ export function selectKnowledge(
   faqRows: readonly { readonly id: string; readonly question: string; readonly answer: string }[],
   query: string,
 ): {
-  readonly entries: SupportContextKnowledge[];
+  readonly entries: Omit<SupportContextKnowledge, 'alias'>[];
   readonly builtAppIds: ReadonlySet<string>;
   readonly available: number;
 } {
@@ -286,7 +291,7 @@ export function selectKnowledge(
         source: 'KNOWLEDGE',
         question: clip(row.title, 512),
         answer: clip(row.body, 4096),
-      } satisfies SupportContextKnowledge,
+      } satisfies Omit<SupportContextKnowledge, 'alias'>,
       appId: row.sourceType === 'CLIENT_APP' ? row.sourceKey : null,
     })),
     ...faqRows
@@ -302,7 +307,7 @@ export function selectKnowledge(
           source: 'FAQ',
           question: clip(row.question, 512),
           answer: clip(row.answer, 4096),
-        } satisfies SupportContextKnowledge,
+        } satisfies Omit<SupportContextKnowledge, 'alias'>,
         appId: null,
       })),
   ];

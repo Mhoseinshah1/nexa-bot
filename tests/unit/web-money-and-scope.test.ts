@@ -192,6 +192,39 @@ const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = 
     file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
     needle: "code: 'backup.run_ok'",
   },
+  // E5: the four further backup conditions and their recoveries.
+  'backup.delivery_failed': {
+    file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
+    needle: "code: 'backup.delivery_failed'",
+  },
+  'backup.delivery_ok': {
+    file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
+    needle: "code: 'backup.delivery_ok'",
+  },
+  'backup.cleanup_failed': {
+    file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
+    needle: "code: 'backup.cleanup_failed'",
+  },
+  'backup.cleanup_ok': {
+    file: 'apps/api/src/modules/platform/backup/application/backup-housekeeping.ts',
+    needle: "code: 'backup.cleanup_ok'",
+  },
+  'backup.disk_threshold_exceeded': {
+    file: 'apps/api/src/modules/platform/backup/application/backup-housekeeping.ts',
+    needle: "code: 'backup.disk_threshold_exceeded'",
+  },
+  'backup.disk_threshold_ok': {
+    file: 'apps/api/src/modules/platform/backup/application/backup-housekeeping.ts',
+    needle: "code: 'backup.disk_threshold_ok'",
+  },
+  'backup.interval_exceeded': {
+    file: 'apps/api/src/modules/platform/backup/application/backup-housekeeping.ts',
+    needle: "code: 'backup.interval_exceeded'",
+  },
+  'backup.interval_ok': {
+    file: 'apps/api/src/modules/platform/backup/application/backup-housekeeping.ts',
+    needle: "code: 'backup.interval_ok'",
+  },
   'recovery.run_failed': {
     file: 'apps/api/src/modules/platform/recovery/application/recovery-executor.ts',
     needle: "code: 'recovery.run_failed'",

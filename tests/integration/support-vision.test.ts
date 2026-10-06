@@ -19,7 +19,10 @@ import type {
   SupportAiRequest,
 } from '../../apps/api/src/modules/control/support-ai/application/ports';
 import { DrizzleSupportAiJobRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository';
-import { DrizzleSupportAiConfigRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
+import {
+  DrizzleSupportAiConfigRepository,
+  DrizzleSupportAiRunRecorder,
+} from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
 import { TelegramSupportImageSource } from '../../apps/api/src/modules/control/support-ai/infrastructure/telegram-support-image-source';
 import {
   SUPPORT_AI_IMAGE_ATTACHED_MARKER,
@@ -262,6 +265,7 @@ describe('Vision in Assist Mode (TB6)', () => {
             consecutiveFailures: 0,
             trippedUntil: null,
             lastTestOutcome: null,
+            lastTestFailureClass: null,
             lastTestedAt: null,
             rejectedAt: null,
           })),
@@ -296,6 +300,7 @@ describe('Vision in Assist Mode (TB6)', () => {
     });
     service = new SupportAssistService({
       jobs,
+      runs: new DrizzleSupportAiRunRecorder(c.database.db),
       configs,
       chain,
       images,

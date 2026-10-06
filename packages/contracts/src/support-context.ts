@@ -18,6 +18,7 @@ import { SERVICE_STATES } from './provisioning.js';
  * JSON-safe by construction: money and byte counts are decimal strings, instants are ISO
  * strings. Internal ids never appear; a service, order or payment is named by a short
  * per-payload alias (`S1`, `O1`, `P1`), and the mapping back to a row stays on the server.
+ * A knowledge entry is named `K1`, `K2`, … so a decision can cite it.
  *
  * NEVER part of this shape, by decision: a subscription URL or reference, a panel's name
  * or id, provider-side ids, raw service/order/payment ids, a payment's reference, external
@@ -195,6 +196,14 @@ export const supportContextIncidentSchema = z
 export const SUPPORT_CONTEXT_KNOWLEDGE_SOURCES = ['FAQ', 'KNOWLEDGE'] as const;
 export const supportContextKnowledgeSchema = z
   .object({
+    /**
+     * The entry's alias (`K1`, `K2`, …, by position), which a decision cites in
+     * `knowledgeRefs`. The decision schema has always required refs of this shape; before the
+     * alias existed a model grounding a reply on knowledge had nothing valid to cite, and
+     * whatever it wrote instead failed the decision's parse (support-agent runbook, §AI
+     * diagnostics).
+     */
+    alias: z.string().regex(/^K[1-9][0-9]?$/u),
     source: z.enum(SUPPORT_CONTEXT_KNOWLEDGE_SOURCES),
     question: text(512),
     answer: text(4096),

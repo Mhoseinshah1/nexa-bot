@@ -477,7 +477,7 @@ describe('TB3 — support context', () => {
       customerBlocked: false,
     });
     expect(payload.knowledge).toEqual([
-      { source: 'FAQ', question: 'Q active', answer: 'A active' },
+      { alias: 'K1', source: 'FAQ', question: 'Q active', answer: 'A active' },
     ]);
     expect(payload.clientApps.map((app) => app.name)).toEqual(['Hiddify']);
     expect(payload.supportAccounts).toEqual(['@HelpTb3']);

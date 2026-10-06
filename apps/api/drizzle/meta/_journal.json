@@ -1496,22 +1496,36 @@
     {
       "idx": 213,
       "version": "7",
-      "when": 1791282413356,
-      "tag": "0213_support_ai_knowledge_telemetry",
+      "when": 1791280575098,
+      "tag": "0213_backup_archive_pruned_at",
       "breakpoints": true
     },
     {
       "idx": 214,
       "version": "7",
-      "when": 1791283206243,
-      "tag": "0214_support_ai_draft_knowledge_labels",
+      "when": 1791293906857,
+      "tag": "0214_support_ai_failure_diagnostics",
       "breakpoints": true
     },
     {
       "idx": 215,
       "version": "7",
-      "when": 1791284196617,
-      "tag": "0215_support_learning_owner_messages",
+      "when": 1791295941979,
+      "tag": "0215_support_ai_knowledge_telemetry",
+      "breakpoints": true
+    },
+    {
+      "idx": 216,
+      "version": "7",
+      "when": 1791295946655,
+      "tag": "0216_support_ai_draft_knowledge_labels",
+      "breakpoints": true
+    },
+    {
+      "idx": 217,
+      "version": "7",
+      "when": 1791295951082,
+      "tag": "0217_support_learning_owner_messages",
       "breakpoints": true
     }
   ]

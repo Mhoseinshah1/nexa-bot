@@ -267,6 +267,7 @@ import {
   BUSINESS_OUTBOUND_STATES,
   BUSINESS_TAKEOVER_REASONS,
   SUPPORT_AI_MODES,
+  SUPPORT_AI_FAILURE_CLASSES,
   SUPPORT_AI_OPERATIONS,
   SUPPORT_AI_OUTCOMES,
   SUPPORT_AI_PROVIDERS,
@@ -2964,6 +2965,17 @@ export const backupRuns = pgTable(
      */
     cleanupOk: boolean('cleanup_ok').notNull(),
     cleanupDetail: text('cleanup_detail'),
+
+    /**
+     * When archive retention removed this run's directory from `BACKUP_WORK_DIR`.
+     *
+     * Null while the directory may still be on disk. It is what makes the two
+     * retentions coherent: the ROW purge (ADR-0027) removes only rows whose
+     * files the FILE retention has already removed, so a purged row can never
+     * orphan an archive, and the Web Admin can say "pruned by retention" rather
+     * than "missing".
+     */
+    archivePrunedAt: timestamptz('archive_pruned_at'),
   },
   (table) => [
     check('backup_runs_trigger_check', enumCheck('trigger', BACKUP_TRIGGERS)),
@@ -13792,6 +13804,8 @@ export const supportAiProviderCredentials = pgTable(
      */
     rejectedAt: timestamptz('rejected_at'),
     lastTestOutcome: text('last_test_outcome'),
+    /** Why the last capability test was not OK: its first failing check's class. */
+    lastTestFailureClass: text('last_test_failure_class'),
     lastTestedAt: timestamptz('last_tested_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
@@ -13810,6 +13824,15 @@ export const supportAiProviderCredentials = pgTable(
     check(
       'support_ai_provider_credentials_test_outcome_check',
       enumCheck('last_test_outcome', SUPPORT_AI_OUTCOMES),
+    ),
+    check(
+      'support_ai_provider_credentials_test_failure_class_check',
+      nullableEnumCheck('last_test_failure_class', SUPPORT_AI_FAILURE_CLASSES),
+    ),
+    // A passed test has no failure class (`lastTestOutcome` OK means every check passed).
+    check(
+      'support_ai_provider_credentials_test_failure_shape_check',
+      sql`last_test_outcome IS DISTINCT FROM 'OK' OR last_test_failure_class IS NULL`,
     ),
     check('support_ai_provider_credentials_failures_check', sql`consecutive_failures >= 0`),
   ],
@@ -13837,11 +13860,56 @@ export const supportAiRuns = pgTable(
     outputTokens: integer('output_tokens'),
     outcome: text('outcome').notNull(),
     failureCode: text('failure_code'),
+    /**
+     * The AI job this call was made for (Assist draft or automatic decision); null for a
+     * connection test, a summary or a learning extraction. How a job's failure is explained.
+     */
+    jobId: uuid('job_id'),
+    /**
+     * Why the call failed (`SUPPORT_AI_FAILURE_CLASSES`), and its safe particulars: the HTTP
+     * status, the provider's own error code, type and param as short tokens, and — for a
+     * decision that failed NEXA's schema — the zod issue's path and code. Never a value, the
+     * provider's message, the prompt or the response.
+     */
+    failureClass: text('failure_class'),
+    httpStatus: integer('http_status'),
+    providerErrorCode: text('provider_error_code'),
+    providerErrorType: text('provider_error_type'),
+    providerErrorParam: text('provider_error_param'),
+    schemaIssuePath: text('schema_issue_path'),
+    schemaIssueCode: text('schema_issue_code'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
     /** The usage summary: a tenant's runs in a window. */
     index('support_ai_runs_tenant_created_idx').on(table.tenantId, table.createdAt),
+    /** A job's calls, for its failure diagnosis. */
+    index('support_ai_runs_job_idx')
+      .on(table.tenantId, table.jobId)
+      .where(sql`job_id IS NOT NULL`),
+    foreignKey({
+      columns: [table.tenantId, table.jobId],
+      foreignColumns: [supportAiJobs.tenantId, supportAiJobs.id],
+      name: 'support_ai_runs_job_fk',
+    }),
+    check(
+      'support_ai_runs_failure_class_check',
+      nullableEnumCheck('failure_class', SUPPORT_AI_FAILURE_CLASSES),
+    ),
+    // A class is a failure's: an OK call carries none.
+    check('support_ai_runs_failure_shape_check', sql`outcome <> 'OK' OR failure_class IS NULL`),
+    check(
+      'support_ai_runs_http_status_check',
+      sql`http_status IS NULL OR http_status BETWEEN 100 AND 599`,
+    ),
+    check(
+      'support_ai_runs_provider_error_check',
+      sql`(provider_error_code IS NULL OR length(provider_error_code) <= 64)
+          AND (provider_error_type IS NULL OR length(provider_error_type) <= 64)
+          AND (provider_error_param IS NULL OR length(provider_error_param) <= 64)
+          AND (schema_issue_path IS NULL OR length(schema_issue_path) <= 128)
+          AND (schema_issue_code IS NULL OR length(schema_issue_code) <= 64)`,
+    ),
     foreignKey({
       columns: [table.tenantId, table.conversationId],
       foreignColumns: [businessConversations.tenantId, businessConversations.id],
@@ -13933,6 +14001,13 @@ export const supportAiJobs = pgTable(
     outcome: text('outcome'),
     handoffReason: text('handoff_reason'),
     /**
+     * Why the AI did not produce a usable result (`SUPPORT_AI_FAILURE_CLASSES`): a FAILED draft,
+     * or an automatic job handed off as `AI_OUTPUT_INVALID` / `AI_UNAVAILABLE`. The handoff
+     * reason stays coarse for the conversation's state; this is the operator's diagnosis, and
+     * the deciding call's particulars are its `support_ai_runs` row (`job_id`).
+     */
+    failureClass: text('failure_class'),
+    /**
      * D2 telemetry: how many knowledge entries the request that produced this job's result
      * carried to the provider, and how many the tenant had to choose from. Null when no
      * provider was asked (a guard, a drop, a job from before this column).
@@ -14006,6 +14081,10 @@ export const supportAiJobs = pgTable(
       sql`unseen_image_handoff IS NULL OR (decision IS NOT DISTINCT FROM 'HANDOFF' AND provider IS NULL AND model IS NULL AND summary IS NULL AND images_seen = 0 AND (suggested_reply IS NOT DISTINCT FROM '' OR (suggested_reply IS NULL AND text_purged_at IS NOT NULL)))`,
     ),
     check('support_ai_jobs_outcome_check', nullableEnumCheck('outcome', SUPPORT_AI_AUTO_OUTCOMES)),
+    check(
+      'support_ai_jobs_failure_class_check',
+      nullableEnumCheck('failure_class', SUPPORT_AI_FAILURE_CLASSES),
+    ),
     check(
       'support_ai_jobs_knowledge_check',
       sql`(knowledge_sent IS NULL) = (knowledge_available IS NULL) AND (knowledge_sent IS NULL OR knowledge_sent BETWEEN 0 AND knowledge_available)`,

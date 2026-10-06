@@ -4344,10 +4344,11 @@ export function deleteSupportAiCredential(input: {
 export function testSupportAiProvider(input: {
   readonly provider: SupportAiProvider;
   readonly model: string;
+  readonly idempotencyKey: string;
 }): Promise<SupportAiTestResponse> {
   return post(
     SUPPORT_AI_ROUTES.test(input.provider),
-    { model: input.model },
+    { model: input.model, idempotencyKey: input.idempotencyKey },
     supportAiTestResponseSchema,
   );
 }

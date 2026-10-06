@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BUSINESS_MESSAGE_TEXT_MAX,
@@ -23,6 +23,7 @@ import { pollUnlessFinalWhile } from '../polling';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
 import { SUPPORT_AI_PROVIDER_LABELS } from './support-ai';
+import { FailureDiagnosticView } from './support-ai-failure';
 import {
   Badge,
   Banner,
@@ -258,8 +259,14 @@ function DraftItem({
           {t(awaitingDraft(draft) ? 'web.assist_queued' : 'web.assist_queued_overdue')}
         </p>
       )}
-      {draft.state === 'FAILED' && <p className="muted">{t('web.assist_failed')}</p>}
+      {draft.state === 'FAILED' && <DraftFailure draft={draft} />}
       {draft.state !== 'QUEUED' && draft.state !== 'FAILED' && <DraftFacts draft={draft} />}
+      {draft.unseenImageHandoff !== null && (
+        <Banner tone="warn">{t('web.assist_unseen_image_handoff')}</Banner>
+      )}
+      {draft.state === 'READY' && draft.replyOverLimit && (
+        <Banner tone="warn">{t('web.assist_reply_over_limit')}</Banner>
+      )}
       {draft.state === 'READY' && (
         <DraftEditor
           draft={draft}
@@ -275,6 +282,29 @@ function DraftItem({
       {draft.state === 'DISCARDED' && (
         <p className="small muted">{t('web.assist_discarded_note')}</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Why there is no draft (program §12). The generic sentence leads; under it, the reason: the
+ * `assistant` role not running, the conversation itself, or — when the AI was why — the
+ * failure class and the deciding provider call's safe particulars. Never a prompt or reply.
+ */
+const NON_AI_FAILURES: Readonly<Record<string, WebKey>> = {
+  'job.unclaimed': 'web.assist_failed_unclaimed',
+  'job.attempts_exhausted': 'web.assist_failed_attempts',
+  'transcript.empty': 'web.assist_failed_transcript',
+  'conversation.missing': 'web.assist_failed_conversation',
+};
+
+function DraftFailure({ draft }: { draft: SupportAiDraftView }) {
+  const known = draft.failureCode === null ? undefined : NON_AI_FAILURES[draft.failureCode];
+  return (
+    <div className="stack-sm">
+      <p className="muted">{t('web.assist_failed')}</p>
+      {known !== undefined && <p className="small">{t(known)}</p>}
+      {draft.failure !== null && <FailureDiagnosticView failure={draft.failure} />}
     </div>
   );
 }
@@ -305,6 +335,17 @@ function DraftFacts({ draft }: { draft: SupportAiDraftView }) {
           ],
           [t('web.assist_intent'), draft.intent ?? dash],
           [t('web.assist_summary'), draft.summary ?? dash],
+          ...(draft.imagesSeen > 0 || draft.imagesUnseen > 0
+            ? ([
+                [
+                  t('web.assist_images'),
+                  <span key="img">
+                    {t('web.assist_images_seen')} <Num value={draft.imagesSeen} /> —{' '}
+                    {t('web.assist_images_unseen')} <Num value={draft.imagesUnseen} />
+                  </span>,
+                ],
+              ] as [ReactNode, ReactNode][])
+            : []),
         ]}
       />
       <div>

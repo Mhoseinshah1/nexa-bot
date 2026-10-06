@@ -58,7 +58,7 @@ import {
 import { Icon, type IconName } from '../ui/icons';
 import { AssistCard } from './support-assist';
 import { ProposeKnowledgeButton } from './support-knowledge';
-
+import { FailureDiagnosticView } from './support-ai-failure';
 /**
  * TB2 — Telegram Business conversations (ADR-0033): the inbox, the connections it arrives
  * through, and one conversation with the operator's three controls (take over, hand back,
@@ -797,6 +797,9 @@ function EscalationsCard({ detail }: { detail: BusinessChatDetailResponse }) {
               )}
             </div>
             {escalation.summary !== null && <p className="muted small">{escalation.summary}</p>}
+            {escalation.aiFailure !== null && (
+              <FailureDiagnosticView failure={escalation.aiFailure} />
+            )}
           </li>
         ))}
       </ol>

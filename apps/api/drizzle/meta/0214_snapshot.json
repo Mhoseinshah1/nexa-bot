@@ -1,6 +1,6 @@
 {
-  "id": "bce462ff-cf5c-46d5-b2f0-1fd659cff374",
-  "prevId": "418dd7a3-0dfd-4979-ab01-1e0331ebbbb7",
+  "id": "b631be3c-13b5-4439-9e9b-ad235397b872",
+  "prevId": "bea1a759-d931-4ffd-b4de-9bb02e3c4932",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2014,6 +2014,12 @@
         "cleanup_detail": {
           "name": "cleanup_detail",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "archive_pruned_at": {
+          "name": "archive_pruned_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }
@@ -28504,13 +28510,6 @@
           "notNull": true,
           "default": "'{}'::text[]"
         },
-        "knowledge_labels": {
-          "name": "knowledge_labels",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
         "provider": {
           "name": "provider",
           "type": "text",
@@ -28591,15 +28590,9 @@
           "primaryKey": false,
           "notNull": false
         },
-        "knowledge_sent": {
-          "name": "knowledge_sent",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "knowledge_available": {
-          "name": "knowledge_available",
-          "type": "integer",
+        "failure_class": {
+          "name": "failure_class",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -28855,9 +28848,9 @@
           "name": "support_ai_jobs_outcome_check",
           "value": "outcome IS NULL OR outcome IN ('sent', 'dropped_mode', 'dropped_epoch', 'dropped_state', 'dropped_coalesced', 'dropped_connection', 'dropped_scope', 'guard_content', 'guard_customer_blocked', 'guard_consecutive', 'guard_window', 'guard_decision', 'guard_handoff_topic', 'guard_human_requested', 'guard_topic_allowlist', 'guard_identity', 'guard_account_review', 'guard_confidence', 'guard_reply_bounds', 'guard_grounding', 'handoff_ai_requested', 'handoff_output_invalid', 'handoff_ai_unavailable', 'handoff_stale')"
         },
-        "support_ai_jobs_knowledge_check": {
-          "name": "support_ai_jobs_knowledge_check",
-          "value": "(knowledge_sent IS NULL) = (knowledge_available IS NULL) AND (knowledge_sent IS NULL OR knowledge_sent BETWEEN 0 AND knowledge_available)"
+        "support_ai_jobs_failure_class_check": {
+          "name": "support_ai_jobs_failure_class_check",
+          "value": "failure_class IS NULL OR failure_class IN ('request_rejected', 'unsupported_capability', 'auth', 'quota', 'rate_limited', 'timeout', 'network', 'provider_error', 'refused', 'no_content', 'truncated', 'not_json', 'schema_invalid', 'reply_too_long', 'no_provider')"
         },
         "support_ai_jobs_handoff_reason_check": {
           "name": "support_ai_jobs_handoff_reason_check",
@@ -28937,6 +28930,12 @@
         },
         "last_test_outcome": {
           "name": "last_test_outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_test_failure_class": {
+          "name": "last_test_failure_class",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -29025,6 +29024,14 @@
           "name": "support_ai_provider_credentials_test_outcome_check",
           "value": "last_test_outcome IN ('OK', 'RATE_LIMITED', 'AUTH_FAILED', 'TEMPORARY', 'INVALID_OUTPUT', 'REFUSED_BY_PROVIDER', 'TIMEOUT')"
         },
+        "support_ai_provider_credentials_test_failure_class_check": {
+          "name": "support_ai_provider_credentials_test_failure_class_check",
+          "value": "last_test_failure_class IS NULL OR last_test_failure_class IN ('request_rejected', 'unsupported_capability', 'auth', 'quota', 'rate_limited', 'timeout', 'network', 'provider_error', 'refused', 'no_content', 'truncated', 'not_json', 'schema_invalid', 'reply_too_long', 'no_provider')"
+        },
+        "support_ai_provider_credentials_test_failure_shape_check": {
+          "name": "support_ai_provider_credentials_test_failure_shape_check",
+          "value": "last_test_outcome IS DISTINCT FROM 'OK' OR last_test_failure_class IS NULL"
+        },
         "support_ai_provider_credentials_failures_check": {
           "name": "support_ai_provider_credentials_failures_check",
           "value": "consecutive_failures >= 0"
@@ -29108,6 +29115,54 @@
           "primaryKey": false,
           "notNull": false
         },
+        "job_id": {
+          "name": "job_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_class": {
+          "name": "failure_class",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "http_status": {
+          "name": "http_status",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_error_code": {
+          "name": "provider_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_error_type": {
+          "name": "provider_error_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_error_param": {
+          "name": "provider_error_param",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "schema_issue_path": {
+          "name": "schema_issue_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "schema_issue_code": {
+          "name": "schema_issue_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -29137,6 +29192,28 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "support_ai_runs_job_idx": {
+          "name": "support_ai_runs_job_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "job_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "job_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -29148,6 +29225,21 @@
             "tenant_id"
           ],
           "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "support_ai_runs_job_fk": {
+          "name": "support_ai_runs_job_fk",
+          "tableFrom": "support_ai_runs",
+          "tableTo": "support_ai_jobs",
+          "columnsFrom": [
+            "tenant_id",
+            "job_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
             "id"
           ],
           "onDelete": "no action",
@@ -29173,6 +29265,22 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "support_ai_runs_failure_class_check": {
+          "name": "support_ai_runs_failure_class_check",
+          "value": "failure_class IS NULL OR failure_class IN ('request_rejected', 'unsupported_capability', 'auth', 'quota', 'rate_limited', 'timeout', 'network', 'provider_error', 'refused', 'no_content', 'truncated', 'not_json', 'schema_invalid', 'reply_too_long', 'no_provider')"
+        },
+        "support_ai_runs_failure_shape_check": {
+          "name": "support_ai_runs_failure_shape_check",
+          "value": "outcome <> 'OK' OR failure_class IS NULL"
+        },
+        "support_ai_runs_http_status_check": {
+          "name": "support_ai_runs_http_status_check",
+          "value": "http_status IS NULL OR http_status BETWEEN 100 AND 599"
+        },
+        "support_ai_runs_provider_error_check": {
+          "name": "support_ai_runs_provider_error_check",
+          "value": "(provider_error_code IS NULL OR length(provider_error_code) <= 64)\n          AND (provider_error_type IS NULL OR length(provider_error_type) <= 64)\n          AND (provider_error_param IS NULL OR length(provider_error_param) <= 64)\n          AND (schema_issue_path IS NULL OR length(schema_issue_path) <= 128)\n          AND (schema_issue_code IS NULL OR length(schema_issue_code) <= 64)"
+        },
         "support_ai_runs_operation_check": {
           "name": "support_ai_runs_operation_check",
           "value": "operation IN ('CONNECTION_TEST', 'ASSIST_DRAFT', 'AUTO_DECISION', 'SUMMARY', 'LEARNING_EXTRACT')"

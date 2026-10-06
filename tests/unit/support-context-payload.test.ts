@@ -100,7 +100,7 @@ function payload(overrides: Partial<SupportContextPayload> = {}): SupportContext
       },
     ],
     incidents: [{ customerMessage: 'down', startedAt: NOW.toISOString(), scheduledEndAt: null }],
-    knowledge: [{ source: 'FAQ', question: 'q', answer: 'a' }],
+    knowledge: [{ alias: 'K1', source: 'FAQ', question: 'q', answer: 'a' }],
     supportAccounts: ['@support'],
     flags: {
       hasUnderReviewPayment: true,
@@ -192,6 +192,7 @@ describe('TB3 support context — the payload contract', () => {
         'incidents[].startedAt',
         'incidents[].scheduledEndAt',
         'knowledge',
+        'knowledge[].alias',
         'knowledge[].source',
         'knowledge[].question',
         'knowledge[].answer',
@@ -335,6 +336,7 @@ describe('TB3 support context — pure helpers', () => {
     ]);
     const big = payload({
       knowledge: Array.from({ length: 20 }, (_, i) => ({
+        alias: `K${String(i + 1)}`,
         source: 'FAQ' as const,
         question: `q${String(i)}`,
         answer: 'ا'.repeat(1000), // 2000 UTF-8 bytes each

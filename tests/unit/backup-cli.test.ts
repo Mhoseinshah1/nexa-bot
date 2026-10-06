@@ -1,7 +1,22 @@
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseArgs, UsageError, USAGE } from '../../apps/api/src/backup.cli';
+import { randomBytes } from 'node:crypto';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import {
+  checksumFile,
+  sealArchive,
+} from '../../apps/api/src/modules/platform/backup/infrastructure/archive';
+import {
+  backupWorkDirFromEnvironment,
+  cmdRun,
+  cmdVerify,
+  EXIT_RECOVERY_QUIESCED,
+  parseArgs,
+  UsageError,
+  USAGE,
+} from '../../apps/api/src/backup.cli';
 
 /**
  * The operator's backup commands.
@@ -158,5 +173,139 @@ describe('the backup CLI as a process', () => {
     const result = run(['verify', '--archive', '/etc/hostname']);
     expect(result.code).toBe(1);
     expect(result.stderr).toMatch(/backup\.archive_malformed/);
+  });
+});
+
+/**
+ * `backup run` during a recovery (E4: "backup while recovery quiesces").
+ *
+ * The scheduler and the Web button both refused; the CLI did not, so an
+ * operator's shell backup during QUIESCING or RESTORING dumped a database about
+ * to be renamed away. The integration twin is in
+ * `tests/integration/recovery-failure-drills.test.ts`.
+ */
+describe('backup run while a recovery holds the installation', () => {
+  function stub(quiesced: boolean) {
+    const calls: string[] = [];
+    const container = {
+      recoveryQuiesced: async () => {
+        calls.push('quiesced?');
+        return quiesced;
+      },
+      tenants: {
+        findPrimary: async () => {
+          calls.push('tenant');
+          return null;
+        },
+      },
+      setInstallationTenant: () => {
+        calls.push('setTenant');
+      },
+      logger: { warn() {} },
+      backup: {
+        run: async () => {
+          calls.push('run');
+          return {
+            kind: 'BUSY' as const,
+            holder: { id: 'h', startedAt: new Date(0), stage: 'DUMP' },
+          };
+        },
+      },
+    };
+    return { container: container as unknown as Parameters<typeof cmdRun>[0], calls };
+  }
+
+  it('refuses with its own exit code and starts nothing', async () => {
+    const { container, calls } = stub(true);
+    const write = process.stderr.write.bind(process.stderr);
+    let said = '';
+    process.stderr.write = ((chunk: string) => {
+      said += chunk;
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      expect(await cmdRun(container)).toBe(EXIT_RECOVERY_QUIESCED);
+    } finally {
+      process.stderr.write = write;
+    }
+    expect(EXIT_RECOVERY_QUIESCED).toBe(4);
+    // Asked FIRST, and nothing after it: no tenant lookup, no backup.
+    expect(calls).toEqual(['quiesced?']);
+    expect(said).toMatch(/recovery is restoring/);
+  });
+
+  it('runs exactly as before when no recovery holds the installation', async () => {
+    const { container, calls } = stub(false);
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    try {
+      // BUSY from the stub: exit 2, which proves `run` was reached.
+      expect(await cmdRun(container)).toBe(2);
+    } finally {
+      process.stdout.write = write;
+    }
+    expect(calls).toEqual(['quiesced?', 'tenant', 'setTenant', 'run']);
+  });
+});
+
+describe('where the CLI decrypts', () => {
+  it('verify decrypts under BACKUP_WORK_DIR and removes its directory afterwards', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nexa-cli-verify-'));
+    const saved = { ...process.env };
+    const write = process.stdout.write.bind(process.stdout);
+    try {
+      const key = randomBytes(32);
+      const dumpPath = join(dir, 'dump.pgcustom');
+      await writeFile(dumpPath, randomBytes(4096));
+      const archivePath = join(dir, 'archive.nxb');
+      await sealArchive({
+        dumpPath,
+        archivePath,
+        keyring: { activeKeyId: 'kcli', keys: new Map([['kcli', key]]), format: 'canonical' },
+        manifest: {
+          manifestVersion: 1,
+          backupId: '0192f000-0000-7000-8000-00000000c11a',
+          installationId: 'i',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          databaseName: 'nexa',
+          postgresVersion: '16.13',
+          pgDumpVersion: 'pg_dump (PostgreSQL) 16.13',
+          dumpFormat: 'custom',
+          dumpBytes: 4096,
+          checksumAlgorithm: 'sha256',
+          checksum: (await checksumFile(dumpPath)).checksum,
+          exclusions: [],
+        },
+      });
+      const workDir = join(dir, 'backups');
+      process.env.BACKUP_WORK_DIR = workDir;
+      process.env.SECRETS_KEYS = `kcli:${key.toString('base64')}`;
+      process.env.SECRETS_ACTIVE_KEY_ID = 'kcli';
+      delete process.env.SECRETS_KEK;
+      delete process.env.SECRETS_KEK_ID;
+      process.stdout.write = (() => true) as typeof process.stdout.write;
+
+      expect(await cmdVerify(archivePath)).toBe(0);
+      // The work root was used (created on demand, 0700) and the private
+      // `.cli-verify-*` directory inside it is gone again.
+      expect(await readdir(workDir)).toEqual([]);
+    } finally {
+      process.stdout.write = write;
+      process.env = saved;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses BACKUP_WORK_DIR, with the schema default, and never the system temp directory', () => {
+    const saved = process.env.BACKUP_WORK_DIR;
+    try {
+      delete process.env.BACKUP_WORK_DIR;
+      expect(backupWorkDirFromEnvironment()).toBe('/var/lib/nexa/backups');
+      process.env.BACKUP_WORK_DIR = '  /srv/nexa/backups ';
+      expect(backupWorkDirFromEnvironment()).toBe('/srv/nexa/backups');
+    } finally {
+      if (saved === undefined) delete process.env.BACKUP_WORK_DIR;
+      else process.env.BACKUP_WORK_DIR = saved;
+    }
   });
 });

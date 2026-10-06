@@ -77,6 +77,22 @@ export interface RecoveryExecutorDeps {
   readonly scope: () => ScopeContext | null;
   readonly leaseOwner: string;
   readonly tickIntervalMs: number;
+  /**
+   * How a RESUMED post-cutover recovery asks readiness (`resumeAfterCutover`
+   * only — the normal cutover path asks once, as before). A restart of the
+   * recovery container is often a restart of the whole stack, and Redis or the
+   * database may still be coming up: one failed probe there is not evidence the
+   * restore failed. Defaults: 6 attempts, 5 s doubling to at most 30 s between
+   * them — under two minutes in all, far inside the 15-minute lease window, and
+   * the lease is heartbeated throughout.
+   */
+  readonly resumeReadiness?: {
+    readonly attempts: number;
+    readonly initialDelayMs: number;
+    readonly maxDelayMs: number;
+  };
+  /** Waits between those attempts. Injected so a test does not sleep. */
+  readonly sleep?: (ms: number) => Promise<void>;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -195,6 +211,10 @@ export class RecoveryExecutor {
 
       this.lastTickAt = this.deps.clock.now().getTime();
       if (claimed === null) return;
+      if (own !== null && awaitsReadinessAfterCutover(own)) {
+        await this.resumeAfterCutover(own);
+        return;
+      }
       await this.execute(claimed);
     } catch (error) {
       // Never fatal to the loop: a tick that throws must not end recoveries for
@@ -444,6 +464,140 @@ export class RecoveryExecutor {
       });
       await this.deps.journal.clear(id).catch(() => undefined);
     }
+  }
+
+  /**
+   * THIS process's own recovery, found again after a restart, that had ALREADY
+   * cut over and was waiting only on readiness. ADR-0028 § 4.
+   *
+   * `docker restart` keeps the hostname, so the restarted executor's lease owner
+   * is the one on the row and `claimOwn` hands it back. Before this, that row
+   * went through `execute` from the top: the binding re-check failed on the
+   * expired confirmation, or the first transition failed because the row was not
+   * in RESTORE_REQUESTED — and a recovery whose two renames had SUCCEEDED was
+   * recorded FAILED with a CRITICAL event. That is the most dangerous wrong
+   * answer this design can give: an operator reading it tries to undo a restore
+   * that worked, on an installation that is serving the restored data.
+   *
+   * What remains after the re-assert is NON-DESTRUCTIVE: ask readiness, then one
+   * conditional transition. So finishing it is not adopting somebody else's
+   * work — nothing here renames, restores, creates or drops anything, and the
+   * displaced database is named on the row and left exactly where it is. The
+   * row is ours by lease (`claimOwn`), RESTARTING is written only by the
+   * re-assert after BOTH renames, and the transitions below name `RESTARTING`
+   * as their only `from`, so a row anything else has moved on is never touched.
+   *
+   * What it cannot recover is the audit of keys that arrived by restore: that
+   * list lived in the dead process's memory. The keys themselves were carried
+   * (and stamped `restored_at`) before the renames, so they are present; the log
+   * says the audit row may be missing.
+   *
+   * Anything BEFORE the cutover keeps the fail-safe path through `execute`: the
+   * restored candidate is not production, a half-finished restore must never be
+   * continued by a process that did not watch it start, and FAILED releases the
+   * quiesce while the candidate stays named on the row for an operator.
+   */
+  private async resumeAfterCutover(row: RecoveryRequestRow): Promise<void> {
+    const heartbeat = this.startHeartbeat(row.id);
+    const facts = {
+      recoveryId: row.id,
+      cutoverDone: true,
+      displacedDatabase: row.displacedDatabase,
+      candidateDatabase: row.candidateDatabase,
+    };
+    try {
+      this.deps.logger.warn(
+        facts,
+        'resuming a recovery that cut over before this process restarted; checking readiness ' +
+          '(an audit of keys that arrived by restore may be missing)',
+      );
+      const degraded = await this.readinessAfterRestart(row.id);
+      if (!degraded) {
+        const finished = await this.deps.requests.transition({
+          id: row.id,
+          from: ['RESTARTING'],
+          to: 'SUCCEEDED',
+          now: this.deps.clock.now(),
+          leaseOwner: this.deps.leaseOwner,
+          patch: { stage: 'DONE' },
+        });
+        if (finished) {
+          await this.report({
+            code: 'recovery.run_ok',
+            severity: 'INFO',
+            message: `Recovery ${row.id} completed after its executor restarted, and the installation reports ready.`,
+            context: { recoveryId: row.id, backupId: row.backupId, resumed: true },
+            recoversCode: 'recovery.run_failed',
+            recoversDedupeKey: `recovery.${row.id}`,
+          });
+        } else {
+          // Somebody else moved the row on. Not reported as a success; whatever
+          // moved it recorded its own outcome.
+          this.deps.logger.error(
+            facts,
+            'a resumed recovery was no longer RESTARTING when its success was recorded',
+          );
+        }
+        return;
+      }
+      const failed = await this.deps.requests.transition({
+        id: row.id,
+        from: ['RESTARTING'],
+        to: 'FAILED',
+        now: this.deps.clock.now(),
+        leaseOwner: this.deps.leaseOwner,
+        patch: { failureCode: 'recovery.readiness_failed' },
+      });
+      if (failed) {
+        await this.report({
+          code: 'recovery.run_failed',
+          severity: 'CRITICAL',
+          message:
+            `Recovery ${row.id} cut over before its executor restarted, and the installation ` +
+            `did not report ready afterwards (recovery.readiness_failed).`,
+          context: { ...facts, code: 'recovery.readiness_failed', resumed: true },
+          dedupeKey: `recovery.${row.id}`,
+        });
+      }
+    } finally {
+      heartbeat.stop();
+    }
+  }
+
+  /**
+   * Readiness for a resumed recovery: bounded retries with backoff, and degraded
+   * only if EVERY attempt said so. A throw counts as not ready for that attempt.
+   * The caller's heartbeat keeps the lease fresh while this waits.
+   */
+  private async readinessAfterRestart(recoveryId: string): Promise<boolean> {
+    const policy = this.deps.resumeReadiness ?? {
+      attempts: 6,
+      initialDelayMs: 5_000,
+      maxDelayMs: 30_000,
+    };
+    const sleep =
+      this.deps.sleep ??
+      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref()));
+    let delay = policy.initialDelayMs;
+    for (let attempt = 1; attempt <= Math.max(1, policy.attempts); attempt += 1) {
+      try {
+        if (!(await this.deps.readiness()).degraded) return false;
+        this.deps.logger.warn(
+          { recoveryId, attempt },
+          'a resumed recovery found the installation not ready yet',
+        );
+      } catch (error) {
+        this.deps.logger.error(
+          { recoveryId, attempt, err: rootMessage(error) },
+          'readiness could not be read for a resumed recovery',
+        );
+      }
+      if (attempt < policy.attempts) {
+        await sleep(delay);
+        delay = Math.min(delay * 2, policy.maxDelayMs);
+      }
+    }
+    return true;
   }
 
   /** Runs one confirmed recovery, or fails it with a safe code. */
@@ -1194,6 +1348,25 @@ export class RecoveryExecutor {
       );
     }
   }
+}
+
+/**
+ * Whether a row this process re-claimed after a restart had already completed
+ * its cutover and was waiting only on readiness.
+ *
+ * All four facts, not the state alone: `RESTARTING` is written only by the
+ * re-assert after both renames, and the re-assert writes the cutover time and
+ * both database names in the same statement — a row claiming RESTARTING
+ * without them is not one this executor wrote, and is left to the fail-safe
+ * path rather than finished on a guess.
+ */
+export function awaitsReadinessAfterCutover(row: RecoveryRequestRow): boolean {
+  return (
+    row.state === 'RESTARTING' &&
+    row.cutoverAt !== null &&
+    row.displacedDatabase !== null &&
+    row.candidateDatabase !== null
+  );
 }
 
 /**

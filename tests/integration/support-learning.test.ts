@@ -322,7 +322,7 @@ describe('controlled learning (TB8)', () => {
     );
     expect(revisions).toMatchObject([{ revision: 1, origin: 'CANDIDATE' }]);
     expect(await knowledgeInContext(tenantA as never)).toEqual([
-      { source: 'KNOWLEDGE', question: lesson.title, answer: lesson.body },
+      { alias: 'K1', source: 'KNOWLEDGE', question: lesson.title, answer: lesson.body },
     ]);
     // A second decision under a new key is refused: the candidate is no longer PENDING.
     await expectCode(
@@ -352,7 +352,7 @@ describe('controlled learning (TB8)', () => {
       edit,
     });
     expect(await knowledgeInContext(tenantA as never)).toEqual([
-      { source: 'KNOWLEDGE', question: edit.title, answer: edit.body },
+      { alias: 'K1', source: 'KNOWLEDGE', question: edit.title, answer: edit.body },
     ]);
 
     // A second lesson, rejected: no article, no context entry.
