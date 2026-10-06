@@ -167,6 +167,9 @@ async function main(): Promise<void> {
         // `start()` for one slack window, and an immediate first tick — so readiness no
         // longer waits on a first tick a whole `BACKUP_TICK_MS` away (spec §14).
         ['backup-scheduler', true, () => container.backupScheduler.isFresh(now)],
+        // E5: archive retention, plaintext debris, disk space and the overdue alert. No
+        // flag: the volume fills and the plaintext lingers whether the schedule is on or not.
+        ['backup-housekeeping', true, () => container.backupHousekeeping.isFresh(now)],
       ];
       const stalled = stalledLoops(loops);
       if (stalled.length > 0) {
@@ -293,6 +296,11 @@ async function main(): Promise<void> {
   // worker booted with the environment saying "off" still starts backing up the
   // tick after an operator switches it on, with no restart.
   container.backupScheduler.start();
+  // And its housekeeping (E5): archive-file retention coherent with the run table's,
+  // the plaintext an abandoned run or a killed CLI command left, and the disk-space
+  // and overdue conditions. Asks the same quiesce predicate, and does nothing during
+  // a recovery.
+  container.backupHousekeeping.start();
   container.logger.info(
     {
       environmentDefault: {

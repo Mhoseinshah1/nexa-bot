@@ -99,7 +99,19 @@ mistaken for oversights:
 
 - **No backup rotation.** Dumps accumulate in `/var/backups/nexa`. Retention is
   an operator decision and no duration is invented here, exactly as for the
-  notification and operational-event tables.
+  notification and operational-event tables. (This is `botctl backup`'s update
+  safety net only. The DR pipeline's archive FILES under `BACKUP_WORK_DIR` do have
+  a retention policy since Program E5 — `backup.archive_keep_count` /
+  `backup.archive_keep_days`, `docs/backup.md` § Archive retention.)
+- **OQ-E5-OFFHOST: DECISION, OPEN — an off-host copy above 50 MiB.** The DR archive
+  leaves the host only through Telegram, and a bot may send at most 50 MiB; above
+  that the group gets a notice and the only copy is on the server it protects. An
+  S3-compatible (or other object-storage) destination behind `RoutedBackupDelivery`
+  is the likely answer and is NOT built: it needs an ADR (ADR-0011 control 2 says
+  "not in V1"), a decision on who owns the bucket and how its credentials are
+  sealed and rotated, and real credentials to accept it against. Until decided,
+  copying the archive off the host is manual (`docs/backup.md` § What this does
+  NOT do).
 - **No secret rotation tooling.** Rotating the database password or the KEK on
   a live installation has no supported procedure yet; the KEK half of that
   belongs to `BLOCKER-SECRETS-V2` below.

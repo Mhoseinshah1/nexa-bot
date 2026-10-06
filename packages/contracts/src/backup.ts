@@ -286,6 +286,45 @@ export const BACKUP_SCHEDULE_SETTING_KEYS = {
 } as const;
 
 /**
+ * The settings-registry keys that bound how many archive FILES stay on the host.
+ *
+ * `backup_runs` ROWS have had a retention policy since ADR-0027; the archive files
+ * beside them had none, so `BACKUP_WORK_DIR` only ever grew — and a row purged
+ * after a year orphaned its directory for ever. These two keys are the files'
+ * policy, read on the installation tenant by the worker's backup housekeeping.
+ *
+ * An archive is pruned only when it fails BOTH: it is not among the newest
+ * `keepCount` verified archives, AND it finished more than `keepDays` days ago.
+ * Keeping on either test is the conservative reading — a lower value of one key
+ * never removes something the other still protects. Whatever the values, the
+ * newest verified archive, a run still in flight, an archive whose delivery
+ * outcome is unknown, and one an in-progress recovery refers to are never
+ * pruned. There is no zero: "keep nothing" is not a policy a backup feature
+ * offers.
+ */
+export const BACKUP_ARCHIVE_RETENTION_SETTING_KEYS = {
+  keepCount: 'backup.archive_keep_count',
+  keepDays: 'backup.archive_keep_days',
+} as const;
+export const BACKUP_ARCHIVE_KEEP_COUNT_MIN = 1;
+export const BACKUP_ARCHIVE_KEEP_COUNT_MAX = 1000;
+export const BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT = 14;
+export const BACKUP_ARCHIVE_KEEP_DAYS_MIN = 1;
+export const BACKUP_ARCHIVE_KEEP_DAYS_MAX = 3650;
+export const BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT = 30;
+
+/**
+ * How late a scheduled backup may be before `backup.interval_exceeded` opens.
+ *
+ * The condition opens when the schedule is ON and the last VERIFIED backup is
+ * older than the effective interval multiplied by this. Two, so one slow or
+ * failed night is `backup.run_failed`'s business and only a schedule that has
+ * stopped producing verified archives — a worker not deployed, a scheduler
+ * wedged in a way readiness misses — raises this one.
+ */
+export const BACKUP_OVERDUE_TOLERANCE = 2;
+
+/**
  * Where an effective schedule value came from: a value an operator stored from
  * the Web Admin, or the installation's environment default.
  */
