@@ -95,6 +95,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   let transport: ScriptedTransport;
   let next: SupportAiOutcome;
   let calls: number;
+  /** D7: the transcript each provider call was given, as role and text. */
+  let requests: { role: string; text: string }[][];
   let duringCall: (() => Promise<void>) | null;
   let flags: AutoContextFlags;
   let offset: number;
@@ -258,6 +260,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       model: 'gpt-5.5',
     };
     calls = 0;
+    requests = [];
     duringCall = null;
     visionStep = true;
     modelSees = true;
@@ -284,6 +287,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       chain: {
         generate: async (_scope, input) => {
           calls += 1;
+          requests.push(input.request.messages.map((m) => ({ role: m.role, text: m.text })));
           if (duringCall !== null) await duringCall();
           // The step is given every image of the variant, or (modelSees = false) none of them,
           // as TB6's `stepSight` reports it.
@@ -603,6 +607,54 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect((await conversation(first.conversationId)).state).toBe('AI_ACTIVE');
   });
 
+  // --- D7: the model reads its own delivered replies ------------------------------------
+
+  it('D7: with NO echo from Telegram, the next call still reads the reply it sent', async () => {
+    const first = await record(message({ text: 'سلام، سرویسم وصل نمیشه' }));
+    await tick();
+    await deliver();
+    expect(transport.sent).toHaveLength(1);
+    // Telegram does not echo the bot's own send: nothing is recorded for it.
+    await record(message({ text: 'باز کردم، هنوز وصل نمیشه' }));
+    await tick();
+    expect(calls).toBe(2);
+    expect(requests[1]).toEqual([
+      { role: 'user', text: 'سلام، سرویسم وصل نمیشه' },
+      { role: 'assistant', text: grounded.replyText },
+      { role: 'user', text: 'باز کردم، هنوز وصل نمیشه' },
+    ]);
+    expect((await autoJobs(first.conversationId))[1]).toMatchObject({ outcome: 'sent' });
+  });
+
+  it('D7: WITH the echo, the reply is read once, not twice', async () => {
+    const first = await record(message({ text: 'سلام، سرویسم وصل نمیشه' }));
+    await tick();
+    await deliver();
+    const [row] = await autoRows(first.conversationId);
+    const sentId = (
+      await db().execute(
+        sql`SELECT telegram_message_id FROM business_outbound_messages WHERE id = ${row!.id}`,
+      )
+    ).rows[0] as { telegram_message_id: number };
+    // Telegram echoes the bot's own send back; it is recorded as ours.
+    await record(
+      message({
+        messageId: Number(sentId.telegram_message_id),
+        fromUserId: OWNER,
+        senderBusinessBotId: OUR_BOT,
+        text: grounded.replyText,
+      }),
+    );
+    await record(message({ text: 'باز کردم، هنوز وصل نمیشه' }));
+    await tick();
+    expect(calls).toBe(2);
+    expect(requests[1]).toEqual([
+      { role: 'user', text: 'سلام، سرویسم وصل نمیشه' },
+      { role: 'assistant', text: grounded.replyText },
+      { role: 'user', text: 'باز کردم، هنوز وصل نمیشه' },
+    ]);
+  });
+
   // --- the loop guard ----------------------------------------------------------------------
 
   it('stops after N consecutive automatic replies with no person, before any provider cost', async () => {
@@ -892,7 +944,9 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       usage: { inputTokens: 1, outputTokens: 1 },
       model: 'm',
     };
-    const first = await record(message({ text: 'پولم را پس بدهید' }));
+    // Not money in the customer's words (D9 would hand off before the model and leave no AI
+    // note): the MODEL's topic is what hands this one off.
+    const first = await record(message({ text: 'سرویسم رو نمی‌خوام، لغوش کنید' }));
     await tick();
     const handed = await conversation(first.conversationId);
     expect(handed.state).toBe('HANDOFF_REQUIRED');

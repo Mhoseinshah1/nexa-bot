@@ -28,6 +28,7 @@ import { DrizzleSupportAiConfigRepository } from '../../apps/api/src/modules/con
 import {
   DrizzleBusinessConversationRepository,
   DrizzleBusinessMessageRepository,
+  DrizzleBusinessOutboundRepository,
 } from '../../apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository';
 import {
   SEED_IDS,
@@ -71,6 +72,8 @@ describe('Assist Mode (TB5)', () => {
   let conversationId: string;
   /** Every provider call the chain was asked for, by conversation. */
   let chainCalls: string[];
+  /** D7: the transcript each call was given, as role and text. */
+  let chainTurns: { role: string; text: string }[][];
   /** Runs inside the fake provider call, before it answers. */
   let duringCall: ((conversationId: string) => Promise<void>) | null;
   let build: (overrides?: Partial<SupportAssistServiceDeps>) => SupportAssistService;
@@ -111,6 +114,7 @@ describe('Assist Mode (TB5)', () => {
     });
     conversationId = await newConversation('7000001');
     chainCalls = [];
+    chainTurns = [];
     duringCall = null;
     next = {
       outcome: 'OK',
@@ -126,6 +130,7 @@ describe('Assist Mode (TB5)', () => {
         chain: {
           generate: async (_scope, input) => {
             chainCalls.push(input.conversationId ?? '');
+            chainTurns.push(input.request.messages.map((m) => ({ role: m.role, text: m.text })));
             if (duringCall !== null) await duringCall(input.conversationId ?? '');
             return {
               outcome: next,
@@ -158,6 +163,7 @@ describe('Assist Mode (TB5)', () => {
         },
         conversations: new DrizzleBusinessConversationRepository(c.database.db),
         messages: new DrizzleBusinessMessageRepository(c.database.db),
+        outbound: new DrizzleBusinessOutboundRepository(c.database.db),
         sender: c.businessConversations,
         guard: c.guard,
         uow: c.uow,
@@ -251,6 +257,26 @@ describe('Assist Mode (TB5)', () => {
     // The citation the facts contained is resolved; the one they did not (Z9) is dropped.
     expect(ready?.factLabels).toEqual(['سرویس user123']);
     expect(await outboundCount()).toBe(0);
+  });
+
+  it('D7: the next draft reads the reply the operator sent, with or without an echo', async () => {
+    const first = await readyDraft();
+    const sent = await service.send(scopeA, operator, first.id, {
+      idempotencyKey: key('s'),
+      text: 'متن ویرایش‌شده',
+    });
+    // Delivered, and Telegram did not echo it back: no business_messages row for it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE business_outbound_messages
+             SET state = 'DELIVERED', telegram_message_id = 4242,
+                 send_started_at = now(), resolved_at = now()
+           WHERE id = ${sent.outboundId}`,
+    );
+    await readyDraft();
+    expect(chainTurns.at(-1)).toEqual([
+      { role: 'user', text: 'سلام، اینترنتم وصل نمی‌شود' },
+      { role: 'assistant', text: 'متن ویرایش‌شده' },
+    ]);
   });
 
   it('records an invalid decision as FAILED, never as advice', async () => {

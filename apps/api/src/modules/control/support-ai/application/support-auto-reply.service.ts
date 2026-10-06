@@ -50,6 +50,7 @@ import type {
 import type { SupportContextSource } from './support-assist.service.js';
 import type { SupportAiChain, SupportAiVisionVariant } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
+import { readSupportTranscript } from './support-transcript.js';
 
 /** The key that makes an automatic job idempotent on its message (and content version). */
 export function autoJobKey(conversationId: string, telegramMessageId: number, version: number) {
@@ -162,7 +163,8 @@ export interface SupportAutoReplyServiceDeps {
   readonly context: SupportContextSource;
   readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findByTelegramId'>;
-  readonly outbound: Pick<BusinessOutboundRepository, 'countAuto'>;
+  /** The loop guard's counts, and (D7) the delivered replies the transcript carries. */
+  readonly outbound: Pick<BusinessOutboundRepository, 'countAuto' | 'recent'>;
   /**
    * The guards' account facts, read INSIDE the enqueue transaction (substitute review of
    * PR #202, finding 1): the decision guards run again on what is true at the enqueue, not on
@@ -257,7 +259,7 @@ export class SupportAutoReplyService {
     if (!active) return 'INACTIVE';
     // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
     // transaction through the tenant-scoped source.
-    const transcript = await this.deps.messages.recent(scope, conversation.id, 40);
+    const transcript = await readSupportTranscript(this.deps, scope, conversation.id);
     // D9: money in what the customer wrote is a person's, whatever topic a model would pick.
     const money = autoMoneyGuard(customerTextsSinceReply(transcript, trigger?.text ?? null));
     if (!money.pass) return this.handOff(scope, job, money, null, null);

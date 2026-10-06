@@ -5790,6 +5790,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     images: supportImages,
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
+    outbound: businessOutboundRepository,
     sender: businessConversations,
     guard,
     uow,

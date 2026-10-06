@@ -43,6 +43,7 @@ import { findDuplicate, normalizeTitle } from '../domain/dedupe.js';
 import { learningSystemPrompt, learningUserMessage } from '../domain/learning-prompt.js';
 import { scrubSensitive } from '../domain/scrubber.js';
 import { SUPPORT_KNOWLEDGE_REVIEW_PERMISSION } from './support-knowledge.service.js';
+import { readSupportTranscript } from '../../support-ai/application/support-transcript.js';
 import type {
   DrizzleSupportKnowledgeRepository,
   LearningJobRecord,
@@ -408,7 +409,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
       this.deps.scopeActivity.scopeIsActive(scope, tx),
     );
     if (!active) return 'inactive';
-    const transcript = await this.deps.messages.recent(scope, job.conversationId, 40);
+    const transcript = await readSupportTranscript(this.deps, scope, job.conversationId);
     const message = learningUserMessage({
       transcript: transcript.map((line) => ({
         side: line.origin === 'INBOUND' ? 'customer' : 'support',

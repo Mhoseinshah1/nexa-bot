@@ -30,6 +30,7 @@ import type { BusinessConversationService } from '../../../commerce/business-cha
 import type {
   BusinessConversationRepository,
   BusinessMessageRepository,
+  BusinessOutboundRepository,
 } from '../../../commerce/business-chats/application/ports.js';
 import type { AutoContextFlags } from '../domain/auto-reply-guards.js';
 import {
@@ -47,6 +48,7 @@ import type {
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
 import type { SupportAiChain, SupportAiVisionVariant } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
+import { readSupportTranscript } from './support-transcript.js';
 
 /** TB6: one customer image fetched for this request, and its size (telemetry). */
 interface LoadedImage {
@@ -101,6 +103,8 @@ export interface SupportAssistServiceDeps {
   readonly context: SupportContextSource;
   readonly conversations: Pick<BusinessConversationRepository, 'findById'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent'>;
+  /** D7: NEXA's delivered replies, which the transcript carries whether or not they echoed. */
+  readonly outbound: Pick<BusinessOutboundRepository, 'recent'>;
   readonly sender: Pick<BusinessConversationService, 'enqueueHumanSend'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -246,7 +250,7 @@ export class SupportAssistService {
     if (conversation === null) return this.fail(scope, job, 'conversation.missing');
     const [{ config }, transcript, context] = await Promise.all([
       this.deps.configs.get(scope),
-      this.deps.messages.recent(scope, conversation.id, 40),
+      readSupportTranscript(this.deps, scope, conversation.id),
       this.deps.context.build(scope, conversation.customerId),
     ]);
 
