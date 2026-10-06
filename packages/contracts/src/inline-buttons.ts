@@ -375,16 +375,27 @@ export function categoryButtonStyleOf(
  */
 export const CATEGORY_AFTER_EMOJI_MAX_CODE_POINTS = 8;
 
-/**
- * One code point an "after" emoji may contain: a pictograph, a skin-tone modifier, a
- * regional indicator (flags), a ZWJ, VS16, the keycap combiner, a tag character (subdivision
- * flags) or the three keycap bases `#`, `*` and a digit. Nothing else — no letter, no space,
- * no `<`, `&` or control character — so the value can never carry markup or a line break.
+/*
+ * The grammar of an "after" emoji: one or more emoji ELEMENTS, nothing between them. Each
+ * combining code point is accepted only where it belongs, never on its own (review of #217):
+ *
+ * - a keycap: `#`, `*` or a digit, an optional VS16, then U+20E3 — a digit is never text;
+ * - a subdivision flag: 🏴, one or more tag characters, then the CANCEL TAG U+E007F — tag
+ *   characters (invisible ASCII) are never accepted after any other pictograph;
+ * - a flag: exactly two regional indicators;
+ * - a pictograph with an optional VS16 and an optional skin tone, joined to more by ZWJ.
+ *
+ * No letter, space, `<`, `&`, control, bidi or zero-width character fits anywhere, so the
+ * value can never carry markup, a line break or a direction override.
  */
-const AFTER_EMOJI_CODE_POINT =
-  /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}#*0-9]|\u200D|\uFE0F|\u20E3|[\u{E0020}-\u{E007F}])$/u;
-/** At least one code point that IS an emoji, so `#`, `12` or a lone ZWJ are refused. */
-const AFTER_EMOJI_ANCHOR = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20E3]/u;
+const KEYCAP = String.raw`[#*0-9]\uFE0F?\u20E3`;
+const TAG_FLAG = String.raw`\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F}`;
+const FLAG = String.raw`\p{Regional_Indicator}{2}`;
+const PICTOGRAPH = String.raw`\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?`;
+const AFTER_EMOJI = new RegExp(
+  String.raw`^(?:${KEYCAP}|${TAG_FLAG}|${FLAG}|${PICTOGRAPH}(?:\u200D${PICTOGRAPH})*)+$`,
+  'u',
+);
 
 /**
  * Whether `value` is an ordinary Unicode emoji fit to follow a category's name on its button.
@@ -397,8 +408,7 @@ const AFTER_EMOJI_ANCHOR = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20
 export function isValidCategoryAfterEmoji(value: string): boolean {
   const points = [...value];
   if (points.length === 0 || points.length > CATEGORY_AFTER_EMOJI_MAX_CODE_POINTS) return false;
-  if (!points.every((point) => AFTER_EMOJI_CODE_POINT.test(point))) return false;
-  return AFTER_EMOJI_ANCHOR.test(value);
+  return AFTER_EMOJI.test(value);
 }
 
 export const categoryAfterEmojiSchema = z.string().refine(isValidCategoryAfterEmoji, {

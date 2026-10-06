@@ -69,6 +69,37 @@ describe('the bot.category_icons setting', () => {
     }
   });
 
+  it('accepts a combining code point only where it belongs (review of #217)', () => {
+    const refused = [
+      // Tag characters (invisible ASCII) after a pictograph that is not 🏴, or never cancelled.
+      '🔥\u{E0041}\u{E0042}',
+      '🏴\u{E0067}\u{E0062}',
+      // Digits are a keycap base, never text.
+      '1234567🔥',
+      '1🔥',
+      // A keycap combiner, VS15/VS16 or a skin tone with no base.
+      '\u20E3',
+      '\uFE0F',
+      '\uFE0E',
+      '🏻',
+      // A lone regional indicator.
+      '🇮',
+    ];
+    for (const after of refused) {
+      expect(isValidCategoryAfterEmoji(after), JSON.stringify(after)).toBe(false);
+    }
+    for (const after of ['#⃣', '*️⃣', '🏴󠁧󠁢󠁳󠁣󠁴󠁿', '🔥🇮🇷']) {
+      expect(isValidCategoryAfterEmoji(after), after).toBe(true);
+    }
+  });
+
+  it('refuses bidi and zero-width characters, alone or beside an emoji', () => {
+    for (const after of ['🔥\u202E', '\u200E🔥', '🔥\u2066', '\u200C', '\uFE0E', '🏻']) {
+      expect(isValidCategoryAfterEmoji(after), JSON.stringify(after)).toBe(false);
+      expect(parseSettingValue('bot.category_icons', { [A]: { after } }).ok).toBe(false);
+    }
+  });
+
   it('accepts ordinary emoji: a pictograph, VS16, a skin tone, a ZWJ family, a flag, a keycap', () => {
     for (const after of ['🔥', '❤️', '👍🏽', '👨‍👩‍👧‍👦', '🇮🇷', '1️⃣', '🏴󠁧󠁢󠁥󠁮󠁧󠁿', '⭐⭐']) {
       expect(isValidCategoryAfterEmoji(after), after).toBe(true);
