@@ -116,7 +116,7 @@ function harness(
               released.push(operationId);
               return true;
             },
-          } as unknown as DeliveryServiceDeps['cards'],
+          } as unknown as NonNullable<DeliveryServiceDeps['cards']>,
         }
       : {}),
     qr: new PngDeliveryQrRenderer(),
@@ -164,7 +164,7 @@ const BACK = { data: 'sv:service-1' };
 
 function qrOf(photo: CustomerFileMessage | undefined): string {
   if (photo === undefined || photo.source.kind !== 'BYTES') throw new Error('the QR is not bytes');
-  return decodeQrPng(photo.source.bytes);
+  return decodeQrPng(photo.source.bytes) ?? 'UNDECODABLE';
 }
 
 describe('B9/C3 — the link, its QR and the keyboard in ONE message', () => {
