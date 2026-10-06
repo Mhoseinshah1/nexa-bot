@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, stat, statfs } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, statfs, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   BackupDebrisStore,
@@ -77,7 +77,11 @@ export class FilesystemBackupDebris implements BackupDebrisStore {
       if (entry.startsWith(CLI_SCRATCH_PREFIX)) {
         const info = await stat(path).catch(() => null);
         if (info === null || !info.isDirectory()) continue;
-        if (info.mtimeMs >= cutoff) {
+        // The NEWEST of the directory and everything in it. A directory's own
+        // mtime changes only when an entry is added or removed, so a CLI restore
+        // streaming a large dump into it for an hour leaves the directory "old"
+        // while its file is being written that minute.
+        if ((await newestMtime(path, info.mtimeMs)) >= cutoff) {
           pending += 1;
           continue;
         }
@@ -114,6 +118,34 @@ export class FilesystemBackupDebris implements BackupDebrisStore {
       throw error;
     }
   }
+}
+
+/** The latest mtime among a directory and its direct entries. */
+async function newestMtime(directory: string, own: number): Promise<number> {
+  let newest = own;
+  const names = await readdir(directory).catch(() => [] as string[]);
+  for (const name of names) {
+    const info = await stat(join(directory, name)).catch(() => null);
+    if (info !== null && info.mtimeMs > newest) newest = info.mtimeMs;
+  }
+  return newest;
+}
+
+/**
+ * Keeps a CLI scratch directory looking alive while its command runs.
+ *
+ * `pg_restore` READS the decrypted dump for as long as the restore takes and
+ * writes nothing into the directory, so without this a restore longer than the
+ * debris sweep's grace would have its plaintext removed from under it. Touched
+ * every minute; the timer is unref'd and stopped by the caller's `finally`.
+ */
+export function keepScratchAlive(directory: string, everyMs = 60_000): { stop(): void } {
+  const timer = setInterval(() => {
+    const now = new Date();
+    void utimes(directory, now, now).catch(() => undefined);
+  }, everyMs);
+  timer.unref();
+  return { stop: () => clearInterval(timer) };
 }
 
 function isAbsent(error: unknown): boolean {

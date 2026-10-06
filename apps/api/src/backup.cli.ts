@@ -6,7 +6,10 @@ import { loadConfig } from './infrastructure/config/load-config.js';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { readArchiveHeader } from './modules/platform/backup/infrastructure/archive.js';
-import { privateScratchDirectory } from './modules/platform/backup/infrastructure/workspace.js';
+import {
+  keepScratchAlive,
+  privateScratchDirectory,
+} from './modules/platform/backup/infrastructure/workspace.js';
 import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
 import { openRecoveryKit } from './infrastructure/crypto/recovery-kit.js';
 
@@ -337,6 +340,7 @@ async function cmdVerify(archivePath: string, kitPath: string | null = null): Pr
   );
 
   const directory = await privateScratchDirectory(backupWorkDirFromEnvironment(), 'verify');
+  const alive = keepScratchAlive(directory);
   try {
     const opened = await archiver.open({
       archivePath,
@@ -358,6 +362,7 @@ async function cmdVerify(archivePath: string, kitPath: string | null = null): Pr
     );
     return matches ? 0 : 1;
   } finally {
+    alive.stop();
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -385,6 +390,7 @@ async function cmdRestore(
     );
   }
   const directory = await privateScratchDirectory(container.config.BACKUP_WORK_DIR, 'restore');
+  const alive = keepScratchAlive(directory);
   try {
     const dumpPath = join(directory, 'dump.pgcustom');
     const opened = await container.backupArchiver.open({ archivePath, dumpPath });
@@ -407,6 +413,7 @@ async function cmdRestore(
     process.stdout.write('Restored.\n');
     return 0;
   } finally {
+    alive.stop();
     await rm(directory, { recursive: true, force: true });
   }
 }
