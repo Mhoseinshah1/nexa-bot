@@ -2200,6 +2200,84 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       expect(transport.sent).toHaveLength(2);
     });
 
+    it('N1: a question still PENDING on the lane counts (fail closed)', async () => {
+      // Two questions produced, the lane has not sent the second yet.
+      next = askOut('سؤال ۱؟');
+      const id = (await record(message({ text: 'مشکل در اتصال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      next = askOut('سؤال ۲؟');
+      await record(message({ text: 'Sing-box' }));
+      await tick(); // no deliver(): ASK #2 is PENDING
+      expect((await autoRows(id)).map((r) => r.state)).toEqual(['DELIVERED', 'PENDING']);
+      expect(await streak(id)).toBe(2);
+      // The third question, at limit 2, hands off and is never sent.
+      next = askOut('سؤال ۳؟');
+      await record(message({ text: 'نمی‌دونم' }));
+      await tick();
+      expect(await outcomes(id)).toEqual([
+        'sent_clarifying',
+        'sent_clarifying',
+        'guard_clarifying_limit',
+      ]);
+      await deliver();
+      // The handoff superseded the pending second question; the third was never enqueued.
+      expect(transport.sent.map((m) => m.text)).toEqual(['سؤال ۱؟']);
+      expect((await autoRows(id)).map((r) => r.body)).toEqual(['سؤال ۱؟', 'سؤال ۲؟']);
+    });
+
+    it('N4: a save that omits the limit keeps the stored value; an explicit raise is still charged', async () => {
+      await configure({ maxConsecutiveClarifyingQuestions: 1 });
+      await db().execute(
+        sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+            SELECT tenant_id, id, 'support_ai.configure' FROM roles
+            WHERE tenant_id = ${SEED_IDS.tenantA} AND key = 'operator'`,
+      );
+      const admin = adminActorFor(
+        await createAdmin(ctx.container, tenantA, { username: 'admin4', roleKeys: ['operator'] }),
+      );
+      // An older client that does not know the field: everything else, the field absent.
+      const olderClientSave = async (
+        actor: ActorContext,
+        change: Partial<SupportAiConfigInput>,
+      ) => {
+        const current = await ctx.container.supportAiConfig.view(tenantA as never, owner);
+        const { maxConsecutiveClarifyingQuestions: _omitted, ...rest } = current.config;
+        return ctx.container.supportAiConfig.update(tenantA as never, actor, {
+          idempotencyKey: key('cfg-old'),
+          expectedVersion: current.version,
+          config: { ...rest, ...change },
+        });
+      };
+      // Under AUTO_REPLY_SAFE, by an actor WITHOUT support_ai.auto_reply: no widening happened.
+      const saved = await olderClientSave(admin, { cooldownSeconds: 25 });
+      expect(saved.config.maxConsecutiveClarifyingQuestions).toBe(1);
+      expect(
+        (await ctx.container.supportAiConfig.view(tenantA as never, owner)).config,
+      ).toMatchObject({ maxConsecutiveClarifyingQuestions: 1, cooldownSeconds: 25 });
+      // The same request replayed under its key is the same result, not a second write.
+      const current = await ctx.container.supportAiConfig.view(tenantA as never, owner);
+      const { maxConsecutiveClarifyingQuestions: _x, ...rest } = current.config;
+      const body = {
+        idempotencyKey: key('cfg-old-replay'),
+        expectedVersion: current.version,
+        config: { ...rest, toneInstructions: 'کوتاه' },
+      };
+      const first = await ctx.container.supportAiConfig.update(tenantA as never, admin, body);
+      const replay = await ctx.container.supportAiConfig.update(tenantA as never, admin, body);
+      expect(replay).toEqual(first);
+      expect(first.config.maxConsecutiveClarifyingQuestions).toBe(1);
+      // An explicit raise from 1 to 3 in AUTO is still the CRITICAL permission.
+      await expect(configure({ maxConsecutiveClarifyingQuestions: 3 }, admin)).rejects.toSatisfy(
+        isNexaError,
+      );
+      await configure({ maxConsecutiveClarifyingQuestions: 3 });
+      expect(
+        (await ctx.container.supportAiConfig.view(tenantA as never, owner)).config
+          .maxConsecutiveClarifyingQuestions,
+      ).toBe(3);
+    });
+
     it('13: a refused, superseded or failed reply, and a discarded job, never count', async () => {
       await configure({ maxConsecutiveClarifyingQuestions: 1, maxConsecutiveReplies: 10 });
       const id = await turn('مشکل در اتصال دارم', askOut('سؤال ۱؟'));

@@ -246,8 +246,17 @@ export class SupportAiConfigService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         const before = await this.deps.configs.get(scope, tx);
+        // N4 (review of PR #228): a save that omits the clarifying limit — an older client that
+        // does not know it — keeps the stored value (the default when nothing is stored). It is
+        // merged BEFORE the permission and version logic, so an absent field is never a widening.
+        const config: SupportAiConfigInput = {
+          ...command.config,
+          maxConsecutiveClarifyingQuestions:
+            command.config.maxConsecutiveClarifyingQuestions ??
+            before.config.maxConsecutiveClarifyingQuestions,
+        };
         // ENTERING automatic replies is the owner's call alone; staying in it or leaving it is not.
-        if (command.config.mode === 'AUTO_REPLY_SAFE' && before.config.mode !== 'AUTO_REPLY_SAFE') {
+        if (config.mode === 'AUTO_REPLY_SAFE' && before.config.mode !== 'AUTO_REPLY_SAFE') {
           await this.deps.guard.check(scope, actor, SUPPORT_AI_AUTO_REPLY_PERMISSION, tx);
         }
         // TB7: WIDENING what may be answered automatically is the same CRITICAL call; narrowing
@@ -261,7 +270,7 @@ export class SupportAiConfigService {
         //    and entering AUTO is itself charged above, so whoever enters it adopts every bound
         //    on the form under the CRITICAL permission. What is left is an AUTO tenant's bounds
         //    loosened by someone who could not have set the mode.
-        const next = command.config;
+        const next = config;
         const prev = before.config;
         const widened =
           next.autoTopics.some((topic) => !prev.autoTopics.includes(topic)) ||
@@ -280,7 +289,7 @@ export class SupportAiConfigService {
         const version = await this.deps.configs.save(
           scope,
           {
-            config: command.config,
+            config,
             expectedVersion: expected,
             adminId,
             now: this.deps.clock.now(),
@@ -296,12 +305,12 @@ export class SupportAiConfigService {
             entityType: 'SupportAiConfig',
             entityId: null,
             before: { version: before.version, ...before.config },
-            after: { version, ...command.config },
+            after: { version, ...config },
             result: 'SUCCESS',
           },
           tx,
         );
-        const result: Result = { version, config: command.config };
+        const result: Result = { version, config };
         await rememberOnce(
           this.deps.idempotency,
           scope,
