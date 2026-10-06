@@ -1195,20 +1195,23 @@ describe('a customer looks after the services they bought', () => {
       const service = await activeService('lc-at');
       const user = panel.users.get(service.username);
       if (user === undefined) throw new Error('no panel user');
-      // 08:30 UTC, written as v0.8.4 writes it: no offset at all.
-      user.onlineAt = marzbanOnlineAt(new Date('2026-10-06T08:30:00.000Z'));
-      expect(user.onlineAt).toBe('2026-10-06T08:30:00');
+      // 08:30 UTC, written as v0.8.4 writes it: no offset at all. A fixed day in the past,
+      // so the five-minute future bound never applies whatever the real clock says.
+      user.onlineAt = marzbanOnlineAt(new Date('2026-09-23T08:30:00.000Z'));
+      expect(user.onlineAt).toBe('2026-09-23T08:30:00');
       await stale(service.id);
       sent = [];
       expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
       expect(await lastSeenRow(service.id)).toEqual({
         state: 'AT',
-        at: '2026-10-06T08:30:00.000Z',
+        at: '2026-09-23T08:30:00.000Z',
       });
-      // Tehran is UTC+03:30: 12:00 on 14 Mehr 1405. Not 08:30, which is the naive string
-      // read as local time, and not 05:00, which is it read as Tehran and shifted again.
+      // The card renders the stored instant in the tenant's zone: Tehran is UTC+03:30, so
+      // 12:00 on 1 Mehr 1405. This suite runs with TZ=UTC, so it cannot tell a parser that
+      // reads a zoneless time as UTC from one that reads it as process-local time; that is
+      // `tests/unit/provider-last-seen.test.ts`, which runs the parser in Asia/Tehran.
       const body = lastText();
-      expect(body).toContain(`${LINE}1405/07/14 12:00`);
+      expect(body).toContain(`${LINE}1405/07/01 12:00`);
       expect(body).not.toContain('در دسترس نیست');
       expect(body).not.toContain('متصل نشده');
     });
@@ -1223,6 +1226,34 @@ describe('a customer looks after the services they bought', () => {
       const body = lastText();
       expect(body).toContain(`${LINE}متصل نشده`);
       expect(body).not.toContain('در دسترس نیست');
+    });
+
+    it('Marzban: a time more than five minutes after the read is not shown; the last known value stays', async () => {
+      const service = await activeService('lc-future');
+      await stale(service.id);
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(await lastSeenRow(service.id)).toEqual({ state: 'NEVER', at: null });
+
+      const user = panel.users.get(service.username);
+      if (user === undefined) throw new Error('no panel user');
+      const now = ctx.container.clock.now().getTime();
+      // What naive Tehran read as UTC looks like: three and a half hours ahead.
+      user.onlineAt = marzbanOnlineAt(new Date(now + 210 * 60_000));
+      await stale(service.id);
+      sent = [];
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(await lastSeenRow(service.id), 'nothing stored: the last known value stays').toEqual({
+        state: 'NEVER',
+        at: null,
+      });
+      expect(lastText()).toContain(`${LINE}متصل نشده`);
+
+      // A panel clock a minute fast is tolerated.
+      const nearly = new Date(Math.floor((now + 60_000) / 1000) * 1000);
+      user.onlineAt = marzbanOnlineAt(nearly);
+      await stale(service.id);
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(await lastSeenRow(service.id)).toEqual({ state: 'AT', at: nearly.toISOString() });
     });
 
     it('3X-UI: «در دسترس نیست», even when the panel’s record carries a `lastOnline`', async () => {
@@ -1240,7 +1271,7 @@ describe('a customer looks after the services they bought', () => {
         await validatePanelConnection(ctx.container, tenantA, panelId);
         const service = await activeService('lc-xui');
         expect(xui.clients.has(service.username), 'the fixture provisioned on 3X-UI').toBe(true);
-        xui.setLastOnline(service.username, Date.parse('2026-10-06T08:30:00.000Z'));
+        xui.setLastOnline(service.username, Date.parse('2026-09-23T08:30:00.000Z'));
         await stale(service.id);
         const before = xui.requests.filter((one) => one.path.includes('clients/traffic/')).length;
         sent = [];
@@ -1253,7 +1284,7 @@ describe('a customer looks after the services they bought', () => {
         const body = lastText();
         expect(body).toContain(`${LINE}در دسترس نیست`);
         expect(body).not.toContain('متصل نشده');
-        expect(body).not.toContain('1405/07/14');
+        expect(body).not.toContain('1405/07/01');
       } finally {
         await xui.close();
       }
