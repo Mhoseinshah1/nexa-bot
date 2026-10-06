@@ -170,8 +170,9 @@ const RECORDS = [
  * 39 rows and 48 citations in all (+6).
  * 2710 → 2751: Phase 2 UX wave, Item 2 (category premium icon before, ordinary emoji after),
  * `docs/phase2/category-icons-falsification.md` — 30 rows, 41 citations.
+ * 2751 → 2762: its PR #217 review — 40 rows and 52 citations in all (+11).
  */
-const EXPECTED = 2751;
+const EXPECTED = 2762;
 /**
  * A table whose last column is one of these is making citations.
  *

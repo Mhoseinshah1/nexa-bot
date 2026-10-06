@@ -35,10 +35,10 @@ keyed by category id like `bot.category_colors`:
 { "<category id>": { "before": "5368324170671202286", "after": "🔥" } }
 ```
 
-| Field    | Meaning                                                                                          | Validation                                                                                                                                                               |
-| -------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `before` | The button's **premium** icon (`icon_custom_emoji_id`), shown before the text                    | `customEmojiIdSchema`: digits only, 1..32 (the appearance-slot and Item 3 rule)                                                                                          |
-| `after`  | An **ordinary Unicode emoji** appended to the text. NOT premium: Telegram cannot draw that there | `isValidCategoryAfterEmoji`: only emoji code points (pictographs, modifiers, flags, ZWJ, VS16, keycaps, tags), at least one real emoji, at most 8 code points, no markup |
+| Field    | Meaning                                                                                          | Validation                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `before` | The button's **premium** icon (`icon_custom_emoji_id`), shown before the text                    | `customEmojiIdSchema`: digits only, 1..32 (the appearance-slot and Item 3 rule)                                                                                                                                                                                                                                                                                                                                |
+| `after`  | An **ordinary Unicode emoji** appended to the text. NOT premium: Telegram cannot draw that there | `isValidCategoryAfterEmoji`: a sequence of whole emoji elements — a pictograph (optional VS16, optional skin tone, ZWJ-joined to more), a two-indicator flag, a keycap (`#`, `*` or a digit, optional VS16, U+20E3) or 🏴 + tag characters + U+E007F; no combining code point on its own, no digit outside a keycap, no bidi or zero-width character; at most 8 code points (Unicode units, not visible emoji) |
 
 - Both optional and independent. An entry with neither, or with any other field, is refused:
   removing both is removing the key. At most 1000 categories (the colours' bound).
@@ -79,7 +79,9 @@ is retried ONCE without icons (`withoutButtonIcons`), keeping the text (with its
 style and callbacks. Because a category's `before` is an operator-typed id that the appearance
 probe never proved, it is a RAW icon (review B1 of PR #215): no refusal of it, not even a
 custom-emoji denial, switches the bot's eligibility off; the operational condition names the
-`catalog.category` button so the operator checks the id. A timeout, an unreadable 2xx, a 5xx or a 429 is never re-sent. An after
+`catalog.category` button and, when a category's OWN `before` was drawn, lists those category
+ids under `categories` and names `bot.category_icons` in its message, so the operator checks
+the right setting (a generic `catalog.category` icon from Item 3 lists no category). A timeout, an unreadable 2xx, a 5xx or a 429 is never re-sent. An after
 emoji alone never makes a keyboard owe the retry.
 
 ## Web Admin
