@@ -77,6 +77,22 @@ export interface RecoveryExecutorDeps {
   readonly scope: () => ScopeContext | null;
   readonly leaseOwner: string;
   readonly tickIntervalMs: number;
+  /**
+   * How a RESUMED post-cutover recovery asks readiness (`resumeAfterCutover`
+   * only — the normal cutover path asks once, as before). A restart of the
+   * recovery container is often a restart of the whole stack, and Redis or the
+   * database may still be coming up: one failed probe there is not evidence the
+   * restore failed. Defaults: 6 attempts, 5 s doubling to at most 30 s between
+   * them — under two minutes in all, far inside the 15-minute lease window, and
+   * the lease is heartbeated throughout.
+   */
+  readonly resumeReadiness?: {
+    readonly attempts: number;
+    readonly initialDelayMs: number;
+    readonly maxDelayMs: number;
+  };
+  /** Waits between those attempts. Injected so a test does not sleep. */
+  readonly sleep?: (ms: number) => Promise<void>;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -495,16 +511,7 @@ export class RecoveryExecutor {
         'resuming a recovery that cut over before this process restarted; checking readiness ' +
           '(an audit of keys that arrived by restore may be missing)',
       );
-      let degraded: boolean;
-      try {
-        degraded = (await this.deps.readiness()).degraded;
-      } catch (error) {
-        this.deps.logger.error(
-          { recoveryId: row.id, err: rootMessage(error) },
-          'readiness could not be read for a resumed recovery',
-        );
-        degraded = true;
-      }
+      const degraded = await this.readinessAfterRestart(row.id);
       if (!degraded) {
         const finished = await this.deps.requests.transition({
           id: row.id,
@@ -555,6 +562,42 @@ export class RecoveryExecutor {
     } finally {
       heartbeat.stop();
     }
+  }
+
+  /**
+   * Readiness for a resumed recovery: bounded retries with backoff, and degraded
+   * only if EVERY attempt said so. A throw counts as not ready for that attempt.
+   * The caller's heartbeat keeps the lease fresh while this waits.
+   */
+  private async readinessAfterRestart(recoveryId: string): Promise<boolean> {
+    const policy = this.deps.resumeReadiness ?? {
+      attempts: 6,
+      initialDelayMs: 5_000,
+      maxDelayMs: 30_000,
+    };
+    const sleep =
+      this.deps.sleep ??
+      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref()));
+    let delay = policy.initialDelayMs;
+    for (let attempt = 1; attempt <= Math.max(1, policy.attempts); attempt += 1) {
+      try {
+        if (!(await this.deps.readiness()).degraded) return false;
+        this.deps.logger.warn(
+          { recoveryId, attempt },
+          'a resumed recovery found the installation not ready yet',
+        );
+      } catch (error) {
+        this.deps.logger.error(
+          { recoveryId, attempt, err: rootMessage(error) },
+          'readiness could not be read for a resumed recovery',
+        );
+      }
+      if (attempt < policy.attempts) {
+        await sleep(delay);
+        delay = Math.min(delay * 2, policy.maxDelayMs);
+      }
+    }
+    return true;
   }
 
   /** Runs one confirmed recovery, or fails it with a safe code. */

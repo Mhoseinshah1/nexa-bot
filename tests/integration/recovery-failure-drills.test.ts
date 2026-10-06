@@ -196,6 +196,7 @@ describe('recovery and backup failure drills (E4)', () => {
     keys: Record<string, unknown>;
     recovery: Record<string, unknown>;
     readiness: () => Promise<{ degraded: boolean }>;
+    sleep?: (ms: number) => Promise<void>;
   };
   const depsOf = (container: Container): ExecutorDeps =>
     (container.recoveryExecutor as unknown as { deps: ExecutorDeps }).deps;
@@ -582,6 +583,8 @@ describe('recovery and backup failure drills (E4)', () => {
 
     const after = restarted(installation);
     depsOf(after).readiness = async () => ({ degraded: true });
+    // The resume retries readiness with backoff before it gives up; no waiting here.
+    depsOf(after).sleep = async () => undefined;
     await after.recoveryExecutor.tick();
 
     const row = await after.recoveryRequests.byIdUnscoped(recoveryId);
