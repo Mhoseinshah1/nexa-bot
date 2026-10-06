@@ -3752,6 +3752,61 @@ export const WEB_FA = {
   'web.panel_trial_updated_at': 'آخرین تغییر',
   'web.panel_trial_stale':
     'تنظیمات سرویس تست این پنل در این فاصله تغییر کرده است. مقادیر تازه را بررسی و دوباره ذخیره کنید.',
+
+  // Phase 2 item 5: the panel's post-delivery tutorial — its tab on the panel page.
+  'web.panel_tab_delivery_tutorial': 'آموزش پس از تحویل',
+  'web.delivery_tutorial_title': 'آموزش پس از تحویل سرویس',
+  'web.delivery_tutorial_hint':
+    'اختیاری. پس از اینکه سرویس خریداری‌شده یا آزمایشی روی این پنل به مشتری تحویل شد، یک بار و خودکار پس از لینک و فایل‌های اتصال فرستاده می‌شود؛ برای تغییر لینک یا ارسال دوبارهٔ کارت فرستاده نمی‌شود. دکمهٔ «📖 آموزش» و آموزش‌های برنامه‌ها مثل قبل سر جای خود هستند.',
+  'web.delivery_tutorial_unconfigured':
+    'برای این پنل هنوز آموزشی تنظیم نشده است و چیزی فرستاده نمی‌شود.',
+  'web.delivery_tutorial_mode': 'نوع آموزش',
+  'web.delivery_tutorial_mode_disabled': 'غیرفعال — چیزی فرستاده نمی‌شود',
+  'web.delivery_tutorial_mode_text': 'فقط متن',
+  'web.delivery_tutorial_mode_video': 'فقط ویدیو',
+  'web.delivery_tutorial_mode_video_text': 'ویدیو همراه متن',
+  'web.delivery_tutorial_disabled_note':
+    'در حالت غیرفعال متن و ویدیوی انتخاب‌شده نگه داشته می‌شوند تا با فعال‌کردن دوباره از دست نروند.',
+  'web.delivery_tutorial_applies': 'برای کدام سرویس‌ها فرستاده شود',
+  'web.delivery_tutorial_applies_purchase': 'پس از تحویل سرویس خریداری‌شده',
+  'web.delivery_tutorial_applies_trial': 'پس از تحویل سرویس تست',
+  'web.delivery_tutorial_applies_required':
+    'آموزش فعال باید دست‌کم برای یکی از این دو فرستاده شود.',
+  'web.delivery_tutorial_text': 'متن آموزش',
+  'web.delivery_tutorial_text_optional': 'متن آموزش (اختیاری در این حالت)',
+  'web.delivery_tutorial_text_hint':
+    'متن ساده؛ خطی که با «- » شروع شود فهرست و «[عنوان](https://…)» لینک می‌شود. HTML پذیرفته نیست. برای ایموجی پرمیوم از نشانگرهای زیر استفاده کنید.',
+  'web.delivery_tutorial_text_required': 'در این حالت متن آموزش لازم است.',
+  'web.delivery_tutorial_text_control': 'متن نویسهٔ کنترلی نامعتبر دارد.',
+  'web.delivery_tutorial_text_markup':
+    'HTML (از جمله <tg-emoji>) پذیرفته نیست؛ ایموجی پرمیوم را با نشانگر {icon:…} بنویسید.',
+  'web.delivery_tutorial_text_unsafe_link': 'هر لینک باید با https:// و به نام یک میزبان باشد.',
+  'web.delivery_tutorial_text_unknown_icon':
+    'یکی از نشانگرهای {icon:…} نام هیچ ایموجی ظاهر ربات نیست.',
+  'web.delivery_tutorial_text_too_long': 'متن آموزش بیش از اندازهٔ مجاز است.',
+  'web.delivery_tutorial_icons': 'نشانگرهای ایموجی پرمیوم',
+  'web.delivery_tutorial_icons_hint':
+    'هر نشانگر روی ربات‌هایی که ایموجی پرمیوم را پشتیبانی می‌کنند به ایموجی سفارشیِ تنظیم‌شده در «ظاهر ربات» و در غیر این صورت به ایموجی معمولی آن تبدیل می‌شود.',
+  'web.delivery_tutorial_length': '{count} از {max} نویسه',
+  'web.delivery_tutorial_caption_fallback':
+    'این متن در توضیح ویدیو (حداکثر ۱۰۲۴ نویسه) جا نمی‌شود؛ ویدیو جداگانه و متن کامل در پیام بعدی فرستاده می‌شود و هیچ بخشی بریده نمی‌شود.',
+  'web.delivery_tutorial_video': 'ویدیوی آموزش',
+  'web.delivery_tutorial_video_optional': 'ویدیوی آموزش (اختیاری در این حالت)',
+  'web.delivery_tutorial_video_hint':
+    'ویدیوی آموزشی یکی از برنامه‌ها، که از «برنامه‌ها و آموزش اتصال» از طریق ربات تنظیم شده است. فقط رباتی که آن ویدیو را دارد آن را می‌فرستد؛ اگر ربات تحویل‌دهنده ویدیو را نداشته باشد، در حالت «ویدیو همراه متن» فقط متن و در حالت «فقط ویدیو» چیزی فرستاده نمی‌شود.',
+  'web.delivery_tutorial_video_none': '— بدون ویدیو —',
+  'web.delivery_tutorial_video_missing': 'برنامهٔ انتخاب‌شده دیگر وجود ندارد',
+  'web.delivery_tutorial_video_bots': 'ویدیو روی {count} ربات',
+  'web.delivery_tutorial_video_app_disabled': 'برنامه غیرفعال است',
+  'web.delivery_tutorial_video_required': 'در این حالت انتخاب ویدیو لازم است.',
+  'web.delivery_tutorial_video_empty':
+    'هنوز برای هیچ برنامه‌ای ویدیوی آموزشی تنظیم نشده است؛ ابتدا از صفحهٔ برنامه‌ها ویدیو را از طریق ربات اضافه کنید.',
+  'web.delivery_tutorial_preview': 'پیش‌نمایش متن',
+  'web.delivery_tutorial_preview_hint':
+    'متن همان‌طور که مشتری می‌خواند؛ نشانگرهای {icon:…} در تلگرام به ایموجی تبدیل می‌شوند.',
+  'web.delivery_tutorial_updated_at': 'آخرین تغییر',
+  'web.delivery_tutorial_stale':
+    'آموزش این پنل در این فاصله تغییر کرده است. مقادیر تازه را بررسی و دوباره ذخیره کنید.',
   'web.trials_panels_title': 'پنل‌های دارای سرویس تست',
   'web.trials_panels_hint':
     'سرویس تست روی هر پنل جداگانه و از صفحهٔ همان پنل (زبانهٔ «سرویس تست») تنظیم می‌شود. «در حال ارائه» یعنی مشتری همین حالا می‌تواند آن را دریافت کند.',
