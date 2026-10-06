@@ -143,8 +143,8 @@ function validDecision(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
-const assist = { maxReplyChars: null, dropMalformedRefs: true } as const;
-const auto = { maxReplyChars: null, dropMalformedRefs: false } as const;
+const assist = { maxReplyChars: null, mode: 'ASSIST' } as const;
+const auto = { maxReplyChars: null, mode: 'STRICT' } as const;
 
 describe('parseSupportDecision — real-shaped model answers', () => {
   it('accepts a correct decision unchanged', () => {
@@ -152,17 +152,29 @@ describe('parseSupportDecision — real-shaped model answers', () => {
     expect(parsed).toEqual({ ok: true, decision: validDecision() });
   });
 
-  // Regression: a correct reply whose operator-only intent ran long was thrown away whole.
-  it('cuts an over-long intent or summary to its bound instead of failing the decision', () => {
+  // Regression: an Assist draft whose operator-only intent ran long was thrown away whole.
+  it('ASSIST cuts an over-long intent or summary to its bound instead of failing the draft', () => {
     const intent = 'مشتری می‌گوید سرویس او وصل نمی‌شود و ' + 'ا'.repeat(200);
     const summary = 'خلاصه '.repeat(200);
-    const parsed = parseSupportDecision(validDecision({ intent, summary }), auto);
+    const parsed = parseSupportDecision(validDecision({ intent, summary }), assist);
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.decision.intent).toBe(intent.slice(0, 120));
       expect(parsed.decision.summary.length).toBe(600);
       expect(parsed.decision.replyText).toBe(validDecision().replyText);
     }
+  });
+
+  // ADR-0034 §1, lead decision: an automatic reply is held to the schema exactly.
+  it('STRICT refuses an over-long intent or summary, naming the field', () => {
+    expect(parseSupportDecision(validDecision({ intent: 'ا'.repeat(121) }), auto)).toEqual({
+      ok: false,
+      failure: { failureClass: 'schema_invalid', issuePath: 'intent', issueCode: 'too_big' },
+    });
+    expect(parseSupportDecision(validDecision({ summary: 'ا'.repeat(601) }), auto)).toMatchObject({
+      ok: false,
+      failure: { issuePath: 'summary', issueCode: 'too_big' },
+    });
   });
 
   it('never alters the reply that would be sent: an over-long reply is still refused', () => {
@@ -183,12 +195,20 @@ describe('parseSupportDecision — real-shaped model answers', () => {
   });
 
   // Regression (agent audit D1): knowledge carried no alias, so a model citing it wrote
-  // something like "FAQ", and the whole decision failed the parse.
-  it('drops a knowledge citation that is not an alias, everywhere', () => {
+  // something like "FAQ", and the whole draft failed the parse.
+  it('ASSIST drops a knowledge citation that is not an alias; STRICT refuses it', () => {
     const answer = validDecision({ knowledgeRefs: ['FAQ', 'K2', 'سرویس وصل نمی‌شود'] });
-    const parsed = parseSupportDecision(answer, auto);
+    const parsed = parseSupportDecision(answer, assist);
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.decision.knowledgeRefs).toEqual(['K2']);
+    expect(parseSupportDecision(answer, auto)).toEqual({
+      ok: false,
+      failure: {
+        failureClass: 'schema_invalid',
+        issuePath: 'knowledgeRefs.0',
+        issueCode: 'invalid_format',
+      },
+    });
   });
 
   it('keeps a malformed FACT citation fatal for an automatic reply, and drops it for Assist', () => {

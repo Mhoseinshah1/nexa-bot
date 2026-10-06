@@ -844,16 +844,31 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(await failureClassOf(first.conversationId)).toBe('timeout');
   });
 
-  // Regression: the decision a correct model gives the field message, with an operator note
-  // over the bound and a knowledge citation that is not an alias, was handed off as invalid.
-  it('a correct reply with an over-long intent and a non-alias knowledge citation is sent', async () => {
+  // ADR-0034 §1 (lead decision on this branch): an automatic reply is held to the decision
+  // schema EXACTLY. Assist tolerates an over-long note or a non-alias citation; this does not.
+  it.each([
+    ['an over-long intent', { intent: 'ا'.repeat(121) }],
+    ['a non-alias knowledge citation', { knowledgeRefs: ['FAQ'] }],
+  ] as const)('%s hands off as AI_OUTPUT_INVALID, never sent', async (_what, change) => {
     next = {
       outcome: 'OK',
-      output: {
-        ...grounded,
-        intent: 'مشتری می‌گوید سرویس من وصل نمی‌شود و ' + 'ا'.repeat(150),
-        knowledgeRefs: ['FAQ'],
-      },
+      output: { ...grounded, ...change },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'gpt-5.5',
+    };
+    const first = await record(message());
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { outcome: 'handoff_output_invalid', handoff_reason: 'AI_OUTPUT_INVALID' },
+    ]);
+    expect(await autoRows(first.conversationId)).toEqual([]);
+    expect(await failureClassOf(first.conversationId)).toBe('schema_invalid');
+  });
+
+  it('a correct reply citing a knowledge alias is sent', async () => {
+    next = {
+      outcome: 'OK',
+      output: { ...grounded, knowledgeRefs: ['K1'] },
       usage: { inputTokens: 1, outputTokens: 1 },
       model: 'gpt-5.5',
     };
@@ -862,7 +877,6 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(await autoJobs(first.conversationId)).toMatchObject([
       { state: 'SENT', outcome: 'sent' },
     ]);
-    expect(await autoRows(first.conversationId)).toHaveLength(1);
     expect(await failureClassOf(first.conversationId)).toBeNull();
   });
 

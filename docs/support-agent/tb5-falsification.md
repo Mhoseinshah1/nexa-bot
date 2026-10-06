@@ -5,16 +5,23 @@ Driver: `scripts/mutate-tb5.py`. Each mutation reverts one rule, runs the named 
 | ID     | Rule reverted                                           | Test that failed                                                       | Result |
 | ------ | ------------------------------------------------------- | ---------------------------------------------------------------------- | ------ |
 | TB5-01 | An uncited alias is dropped (it was kept as a label)    | produces a draft and sends nothing by itself                           | KILLED |
-| TB5-02 | The strict decision schema (output trusted as-is)       | records an over-long reply, or a decision with an extra key, as FAILED | KILLED |
+| TB5-02 | The strict decision schema (output trusted as-is)       | records a decision with an extra key as FAILED, with its class¹        | KILLED |
 | TB5-03 | `markReady` only from QUEUED                            | a draft discarded while it was being produced is not resurrected       | KILLED |
 | TB5-04 | A newer request discards the open draft                 | a newer request discards the older draft…                              | KILLED |
 | TB5-05 | Mode OFF refuses                                        | refuses a draft while the support AI is OFF                            | KILLED |
 | TB5-06 | The send is an `ASSIST` row                             | sends a draft only by the operator…                                    | KILLED |
 | TB5-07 | Only a READY draft can be sent (both layers, see below) | …a discarded draft cannot be sent                                      | KILLED |
 | TB5-08 | An unlinked customer's prompt (it claimed linkage)      | tells an unlinked customer's model to discuss no account at all        | KILLED |
-| TB5-09 | The reply-length bound                                  | records an over-long reply… as FAILED                                  | KILLED |
+| TB5-09 | The reply-length bound                                  | keeps an over-long reply as a READY draft, marked over the limit¹      | KILLED |
 
 **9 of 9 killed.**
+
+¹ Revised 2026-10-06 (branch `sai/runtime-capability-diagnostics`, agent audit D10): an Assist
+reply over `maxOutputChars` is no longer FAILED. It is a READY draft with `replyOverLimit`, shown
+with a warning, because a person edits it before sending (the send stays bounded by the outbound
+limit). The test was split; both halves were re-falsified on that branch (the over-limit mark by
+mutation I6, the extra key by reverting the parse). Automatic replies still refuse an over-long
+reply (`reply_bounds`).
 
 A note on TB5-02: an earlier version of the test used an out-of-enum `decision`. The database CHECK refused that write, so the mutant died by the CHECK, not by the schema. The test now uses shapes no CHECK can refuse: an extra key, and an over-long reply.
 

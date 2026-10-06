@@ -345,10 +345,11 @@ export class SupportAutoReplyService {
                 { attachImages: true },
               ),
           };
-    // The automatic reply's parse: a malformed FACT ref stays a failure (it is the grounding
-    // guard's evidence); the reply's length is the `reply_bounds` guard's, not the parser's.
+    // The automatic reply's parse is STRICT (ADR-0034 §1): an operator note over its bound or
+    // any malformed citation is invalid output, and hands off. The reply's length is the
+    // `reply_bounds` guard's, not the parser's.
     const parse = (output: unknown) =>
-      parseSupportDecision(output, { maxReplyChars: null, dropMalformedRefs: false });
+      parseSupportDecision(output, { maxReplyChars: null, mode: 'STRICT' });
     const result = await this.deps.chain.generate(scope, {
       operation: 'AUTO_DECISION',
       conversationId: conversation.id,

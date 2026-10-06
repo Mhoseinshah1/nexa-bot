@@ -12,17 +12,20 @@ import {
  * The one way a model's output becomes a `SupportAiDecision` — Assist, Auto Reply and the
  * provider capability test all read it here, so the test proves what production does.
  *
- * `supportAiDecisionSchema` stays the authority: nothing that fails it is a decision, and the
- * reply an automatic answer would SEND is never altered. The two operator-only notes are the
- * exception: `summary` and `intent` are never shown to a customer, so a model that writes
- * a longer note than the bound is cut to the bound rather than having a correct reply thrown
- * away for it (the prompt states both bounds; this is the backstop).
+ * Two modes, and only one of them tolerates anything:
  *
- * Citations. `knowledgeRefs` is read by no guard — it only labels a draft — so an entry that is
- * not alias-shaped (`["FAQ"]`, a title) is DROPPED everywhere rather than discarding the whole
- * answer. `factRefs` is the automatic reply's grounding evidence (TB7's `grounding` guard): a
- * malformed one stays a parse failure there (`dropMalformedRefs: false`), and is dropped only
- * for an Assist draft, which a person reads and whose unknown citations were always dropped.
+ * - `STRICT` — Auto Reply and the capability test. `supportAiDecisionSchema` decides, exactly:
+ *   an operator note over its bound or any citation that is not alias-shaped is a failure
+ *   (`schema_invalid`, with its path), and an automatic reply hands off (ADR-0034 §1: invalid
+ *   output sends nothing). Lead decision, review of this branch.
+ * - `ASSIST` — an Assist draft, which a PERSON reads, edits and sends. The operator-only notes
+ *   (`summary`, `intent`) are cut to their bounds, and a citation that is not alias-shaped
+ *   (`["FAQ"]`, a title) is dropped — as unknown citations always were — rather than throwing
+ *   away a draft the operator could use. The suggested reply is never altered.
+ *
+ * The root-cause fix is the same for both: knowledge carries `K…` aliases and the prompt
+ * defines both reference lists and both note bounds, so a correct model has something valid
+ * to write. The tolerance is Assist's backstop, not the fix.
  */
 
 /** Why an output is not a decision: the class, and the first zod issue's path and code. */
@@ -45,12 +48,12 @@ export function parseSupportDecision(
      * Null where a deterministic guard enforces it instead (Auto Reply's `reply_bounds`).
      */
     readonly maxReplyChars: number | null;
-    /** Drop a malformed FACT ref too (Assist). Knowledge refs are always tolerated. */
-    readonly dropMalformedRefs: boolean;
+    /** `STRICT` (Auto Reply, the capability test) or `ASSIST` (a draft a person edits). */
+    readonly mode: 'STRICT' | 'ASSIST';
   },
 ): DecisionParse {
   const parsed = supportAiDecisionSchema.safeParse(
-    tolerateRefs(clampOperatorNotes(output), options.dropMalformedRefs),
+    options.mode === 'ASSIST' ? tolerateRefs(clampOperatorNotes(output)) : output,
   );
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -91,7 +94,7 @@ export function decisionOutputTokens(maxReplyChars: number): number {
   return chars * 2 + DECISION_STRUCTURE_TOKENS;
 }
 
-function tolerateRefs(output: unknown, facts: boolean): unknown {
+function tolerateRefs(output: unknown): unknown {
   if (output === null || typeof output !== 'object' || Array.isArray(output)) return output;
   const record = output as Record<string, unknown>;
   const wellFormed = (refs: unknown) =>
@@ -101,7 +104,7 @@ function tolerateRefs(output: unknown, facts: boolean): unknown {
   return {
     ...record,
     ...('knowledgeRefs' in record ? { knowledgeRefs: wellFormed(record.knowledgeRefs) } : {}),
-    ...(facts && 'factRefs' in record ? { factRefs: wellFormed(record.factRefs) } : {}),
+    ...('factRefs' in record ? { factRefs: wellFormed(record.factRefs) } : {}),
   };
 }
 

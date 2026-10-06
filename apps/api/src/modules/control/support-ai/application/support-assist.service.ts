@@ -426,11 +426,11 @@ export class SupportAssistService {
                 { attachImages: true },
               ),
           };
-    // Assist's parse: a malformed citation is dropped (the draft is a suggestion a person reads),
-    // and a reply over the tenant's limit is shown with a warning rather than thrown away — the
+    // Assist's parse (`ASSIST`): a malformed citation is dropped and an over-long operator note
+    // is cut (the draft is a suggestion a person reads), and a reply over the tenant's limit is shown with a warning rather than thrown away — the
     // operator edits it, and the send is bounded by the ordinary outbound limit.
     const parse = (output: unknown) =>
-      parseSupportDecision(output, { maxReplyChars: null, dropMalformedRefs: true });
+      parseSupportDecision(output, { maxReplyChars: null, mode: 'ASSIST' });
     const result = await this.deps.chain.generate(scope, {
       operation: 'ASSIST_DRAFT',
       conversationId: conversation.id,
