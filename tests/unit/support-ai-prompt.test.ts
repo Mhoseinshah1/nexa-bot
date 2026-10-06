@@ -40,6 +40,8 @@ describe('the support system prompt', () => {
     expect(prompt).toContain('For ASK_CLARIFYING_QUESTION, replyText IS the question');
     expect(prompt).toContain('never empty');
     expect(prompt).toContain('give its first step as a REPLY and cite it, instead of asking');
+    // N5: it never overrides the HANDOFF rules.
+    expect(prompt).toContain('9a. Unless rules 5–7 require HANDOFF:');
     expect(prompt).toContain('only when information you genuinely need is missing');
     expect(prompt).toContain('a question you already asked');
   });

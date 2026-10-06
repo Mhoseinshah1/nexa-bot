@@ -93,8 +93,9 @@ export interface SupportContextSource {
     readonly aliases: ReadonlyMap<string, string>;
     /**
      * The knowledge aliases (`K…`) and the label an operator reads for each. Kept apart from
-     * `aliases`: a knowledge entry is not an account fact, and the automatic reply's grounding
-     * guard reads `aliases` only.
+     * `aliases`: a knowledge entry is not an account fact. The automatic reply's grounding guard
+     * reads both, each against its own list: a `factRefs` alias must be in `aliases`, a
+     * `knowledgeRefs` alias in these (hotfix 2026-10-06).
      */
     readonly knowledgeAliases?: ReadonlyMap<string, string>;
     readonly linked: boolean;
