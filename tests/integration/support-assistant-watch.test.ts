@@ -164,6 +164,25 @@ describe('the assistant watch (D5)', () => {
     expect(await events()).toEqual([]);
   });
 
+  it('review item 5: an assistant busy on a learning job is not a stalled one', async () => {
+    await request();
+    const reply = await ctx.container.businessConversations.send(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('send'),
+      text: 'پاسخ پشتیبان',
+    });
+    await db().execute(
+      sql`INSERT INTO support_learning_jobs (id, tenant_id, conversation_id, source_outbound_id,
+            trigger, idempotency_key, state, claimed_until)
+          VALUES (gen_random_uuid(), ${SEED_IDS.tenantA}, ${conversationId}, ${reply.id},
+                  'HANDBACK', ${`learning:outbound:${reply.id}`}, 'QUEUED',
+                  now() + interval '1 hour')`,
+    );
+    offset = STALL_MS + 5_000;
+    expect(await watch.check(scopeA)).toBe('OK');
+    expect(await events()).toEqual([]);
+  });
+
   it('a stopped tenant is not a stalled assistant, and nothing is written', async () => {
     await request();
     await db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${SEED_IDS.tenantA}`);

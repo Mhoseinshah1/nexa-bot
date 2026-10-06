@@ -15,6 +15,7 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import {
   supportAiImageOutcomes,
   supportAiJobs,
+  supportLearningJobs,
 } from '../../../../infrastructure/persistence/schema.js';
 import {
   requireTenantId,
@@ -563,7 +564,8 @@ export class DrizzleSupportAiJobRepository {
   /**
    * D5 — what the worker's watch reads to tell a stalled assistant from a busy one: the Assist
    * drafts and automatic jobs QUEUED and due since `dueBefore` with no live lease (nobody is
-   * producing them), and how many QUEUED jobs hold a live lease (somebody is). One statement.
+   * producing them), and how many QUEUED jobs — learning jobs included — hold a live lease
+   * (somebody is). One statement.
    */
   async assistantBacklog(
     scope: ScopeContext,
@@ -586,7 +588,13 @@ export class DrizzleSupportAiJobRepository {
         oldestDueAt: sql<
           string | Date | null
         >`min(${due}) FILTER (WHERE ${due} <= ${before} AND ${unleased})`,
-        leased: sql<number>`count(*) FILTER (WHERE ${supportAiJobs.claimedUntil} > ${at})::int`,
+        // Review item 5: a learning job the assistant is extracting holds a lease too — a busy
+        // assistant, not a dead one.
+        leased: sql<number>`(count(*) FILTER (WHERE ${supportAiJobs.claimedUntil} > ${at})
+          + (SELECT count(*) FROM ${supportLearningJobs}
+              WHERE ${supportLearningJobs.tenantId} = ${tenantId}
+                AND ${supportLearningJobs.state} = 'QUEUED'
+                AND ${supportLearningJobs.claimedUntil} > ${at}))::int`,
       })
       .from(supportAiJobs)
       .where(
