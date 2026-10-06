@@ -3,6 +3,7 @@ import {
   type InlineButtonKey,
   type ScopeContext,
   type CategoryColors,
+  type InlineButtonIcons,
   type InlineButtonStyles,
   type TemplateValues,
 } from '@nexa/contracts';
@@ -66,4 +67,10 @@ export interface InlineButtonStyleReader {
    * every category with the generic category button's style.
    */
   categoryColorsFor?(scope: ScopeContext): Promise<CategoryColors>;
+  /**
+   * Phase 2 Item 3: each registry button's optional premium icon (`bot.inline_button_icons`),
+   * read only for a keyboard that names a registry button AND whose sending bot may carry
+   * custom emoji. Absent in a stand-in, which draws every button without an icon.
+   */
+  iconsFor?(scope: ScopeContext): Promise<InlineButtonIcons>;
 }

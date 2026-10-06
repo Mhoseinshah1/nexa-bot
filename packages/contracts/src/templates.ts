@@ -7654,6 +7654,26 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.delivery_tutorial',
+    description:
+      'Phase 2 item 5: the tutorial a panel sends automatically, once, after a service on it ' +
+      'is delivered (a purchase, a trial, or both, as the operator chose) — as its own ' +
+      'message, or as the caption of the tutorial video when it fits whole. The wrapper of ' +
+      'operator-authored content, like `bot.faq.page`: the text is the panel tutorial as the ' +
+      'operator wrote it, drawn by the client-app guide renderer, and `{icon:slot}` markers in ' +
+      'it become premium emoji on an eligible bot.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'text',
+        type: 'STRING',
+        description: 'The panel tutorial, whole.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.service.tutorial_button',
     description: 'Opens the connection guide’s platform choice.',
     format: 'PLAIN_TEXT',

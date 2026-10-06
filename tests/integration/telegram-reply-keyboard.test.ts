@@ -14,6 +14,7 @@ import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { APPEARANCE_DECORATION_FAILED_CODE } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
 import {
+  FAKE_KEYBOARD_INVALID,
   startFakeTelegramBotApi,
   type FakeTelegramBotApi,
   type FakeTelegramFault,
@@ -31,7 +32,7 @@ import {
 
 /**
  * Round T (T2) — the customer reply keyboard, end to end: a published layout read by the
- * runtime, its styles on the wire, no icon since the button icon was retired, and the
+ * runtime, its styles and per-BOT icons on the wire, the one-shot icon fallback, and the
  * UNKNOWN discipline, through the real app against the shared HTTP fake of the Bot API
  * (`tests/support/fake-telegram-bot-api.ts`, which now models `sendMessage`).
  *
@@ -48,16 +49,10 @@ const BOT_B1 = SEED_IDS.botB1 as BotInstanceId;
 const ID_A1 = 7_100_000_001;
 const ID_A2 = 7_100_000_002;
 const ID_B1 = 7_100_000_003;
-/** A custom emoji the tenant's Appearance `wallet` slot carries — the message-icon system, kept. */
 const WALLET_ICON = '5368324170671202286';
 const label = (key: TemplateKey) => (CATALOGUE_FA as Record<string, string>)[key] ?? '';
 
-/**
- * A published arrangement the legacy packing could never draw, with styles — and icon slots,
- * as a page or a snapshot of the previous release carries them. The icon is RETIRED (owner
- * order 2026-10-02): accepted, never drawn. The transport's own icon handling (R-4's
- * one-shot retry) is still driven by its unit tests, `telegram-reply-keyboard-wire.test.ts`.
- */
+/** A published arrangement the legacy packing could never draw, with styles and icons. */
 function layout(): ExplicitMainMenu {
   return {
     v: 1,
@@ -84,6 +79,14 @@ const PUBLISHED_PLAIN = [
   ],
   [{ text: label('bot.menu.help') }],
 ];
+const PUBLISHED_ICONED = [
+  [
+    { ...PUBLISHED_PLAIN[0]![0]!, icon_custom_emoji_id: WALLET_ICON },
+    ...PUBLISHED_PLAIN[0]!.slice(1),
+  ],
+  PUBLISHED_PLAIN[1]!,
+];
+
 describe('the customer reply keyboard on the wire (round T, T2)', () => {
   let api: ApiApp;
   let telegram: FakeTelegramBotApi;
@@ -253,28 +256,15 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
     );
   });
 
-  it('draws the published rows with their styles on EVERY bot, and no icon even on the eligible one (icon retired)', async () => {
+  it('draws the published rows with their styles, and the icon only from the bot that proved eligibility', async () => {
     await publishLayout();
     await say(BOT_A1);
     await say(BOT_A2);
     expect(sends()).toHaveLength(2);
-    // The publish request named icons (as a page of the previous release would): none drawn.
-    expect(keyboardOf(sends()[0]?.body)).toEqual(PUBLISHED_PLAIN);
+    expect(keyboardOf(sends()[0]?.body)).toEqual(PUBLISHED_ICONED);
+    // Same tenant, same layout, same message: the untested bot draws no icon.
     expect(keyboardOf(sends()[1]?.body)).toEqual(PUBLISHED_PLAIN);
     expect(await testOutcome(BOT_A1)).toBe('SENT');
-  });
-
-  it('draws a layout an EARLIER release published with icons without them, on an eligible bot', async () => {
-    await publishLayout();
-    // What v0.4.x stored: the wallet button carrying an icon slot with a configured emoji.
-    await db().execute(
-      sql`UPDATE main_menu_layouts SET published = ${JSON.stringify(layout())}::jsonb
-           WHERE tenant_id = ${tenantA.tenantId}`,
-    );
-    await say(BOT_A1);
-    expect(sends()).toHaveLength(1);
-    expect(keyboardOf(sends()[0]?.body)).toEqual(PUBLISHED_PLAIN);
-    expect(JSON.stringify(sends()[0]?.body['reply_markup'])).not.toContain('icon_custom_emoji_id');
   });
 
   it('isolates tenants: an eligible bot of a tenant that never published draws its own legacy rows', async () => {
@@ -288,46 +278,195 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
     ]);
   });
 
-  it('R-3 routes a tap on a styled button by its label, exactly as the slash command', async () => {
+  it('R-3 routes a tap on an iconed, styled button by its label, exactly as the slash command', async () => {
     await publishLayout();
     await say(BOT_A1);
-    // The text the styled wallet button actually carries on the wire — what a tap sends back.
-    const styled = (keyboardOf(sends()[0]?.body) as Record<string, unknown>[][])
+    // The text the ICONED button actually carries on the wire — what a tap sends back.
+    const iconed = (keyboardOf(sends()[0]?.body) as Record<string, unknown>[][])
       .flat()
-      .find((button) => button['style'] === 'success');
-    expect(styled?.['text']).toBe(label('bot.menu.wallet'));
+      .find((button) => button['icon_custom_emoji_id'] === WALLET_ICON);
+    expect(iconed?.['text']).toBe(label('bot.menu.wallet'));
     telegram.calls.length = 0;
-    await say(BOT_A1, String(styled?.['text']));
+    await say(BOT_A1, String(iconed?.['text']));
     await say(BOT_A1, '/wallet');
     expect(sends()).toHaveLength(2);
     expect(sends()[0]?.body['text']).toBe(sends()[1]?.body['text']);
   });
 
-  it('the retired icon can no longer cost a bot its custom emoji: a keyboard refusal is never an icon denial', async () => {
+  it('R-4 a custom-emoji denial: one icon-less retry lands, styles kept, the bot marked REJECTED', async () => {
     await publishLayout();
-    await db().execute(
-      sql`UPDATE main_menu_layouts SET published = ${JSON.stringify(layout())}::jsonb
-           WHERE tenant_id = ${tenantA.tenantId}`,
-    );
-    // This bot now refuses custom emoji: before the retirement the stored wallet icon made
-    // every keyboard a refused, retried, eligibility-switching send (the old R-4).
     telegram.setCustomEmoji(ID_A1, {
       kind: 'REFUSE',
       description: 'Bad Request: CUSTOM_EMOJI_INVALID',
     });
     await say(BOT_A1);
-    expect(sends()).toHaveLength(1);
+    expect(sends()).toHaveLength(2);
+    expect(keyboardOf(sends()[0]?.body)).toEqual(PUBLISHED_ICONED);
+    expect(keyboardOf(sends()[1]?.body)).toEqual(PUBLISHED_PLAIN);
+    expect(sends()[1]?.body['text']).toBe(sends()[0]?.body['text']);
     expect(telegram.delivered(ID_A1)).toHaveLength(1);
-    for (const send of sends()) {
-      expect(JSON.stringify(send.body['reply_markup'])).not.toContain('icon_custom_emoji_id');
-    }
-    expect(await testOutcome(BOT_A1)).toBe('SENT');
-    for (const event of await decorationEvents()) {
-      expect(event.context['keyboardIcons']).toBeUndefined();
-    }
+    expect(await testOutcome(BOT_A1)).toBe('REJECTED');
+    expect((await decorationEvents())[0]?.context).toMatchObject({
+      botInstanceId: BOT_A1,
+      eligibilityChanged: true,
+    });
+    // The next message from that bot carries no icon and needs no retry.
+    telegram.calls.length = 0;
+    await say(BOT_A1);
+    expect(sends()).toHaveLength(1);
+    expect(keyboardOf(sends()[0]?.body)).toEqual(PUBLISHED_PLAIN);
   });
 
-  it('R-5 never sends a styled keyboard twice when the first may have landed, or was not answered', async () => {
+  it('a GENERIC 400 on an iconed keyboard: the one retry lands and the bot stays eligible', async () => {
+    await publishLayout();
+    telegram.failNext('sendMessage', { kind: 'refuse', description: FAKE_KEYBOARD_INVALID });
+    await say(BOT_A1);
+    expect(sends()).toHaveLength(2);
+    expect(keyboardOf(sends()[1]?.body)).toEqual(PUBLISHED_PLAIN);
+    expect(await testOutcome(BOT_A1)).toBe('SENT');
+    expect((await decorationEvents())[0]?.context).toMatchObject({
+      botInstanceId: BOT_A1,
+      keyboardIcons: true,
+      eligibilityChanged: false,
+    });
+    // Eligibility unchanged: the next message carries the icon again.
+    telegram.calls.length = 0;
+    await say(BOT_A1);
+    expect(keyboardOf(sends()[0]?.body)).toEqual(PUBLISHED_ICONED);
+  });
+
+  describe('inline-button icons (Phase 2 Item 3, bot.inline_button_icons)', () => {
+    const MENU_ICON = '5368324170671202290';
+    const setIcons = (scope: TenantContext, actor: ActorContext, value: unknown) =>
+      api.container.settingsService.set(scope, actor, {
+        key: 'bot.inline_button_icons',
+        value,
+        expectedVersion: null,
+        idempotencyKey: key('icons'),
+      });
+    /** The inline keyboard of the last message a bot sent that carried one. */
+    const inlineOf = (bot: number) => {
+      const body = [...sends()]
+        .reverse()
+        .find(
+          (call) =>
+            String(call.body['chat_id']) === '4242' &&
+            call.botId === bot &&
+            (call.body['reply_markup'] as { inline_keyboard?: unknown } | undefined)
+              ?.inline_keyboard !== undefined,
+        )?.body;
+      return (body?.['reply_markup'] as { inline_keyboard: Record<string, unknown>[][] })
+        ?.inline_keyboard;
+    };
+    const withoutIcons = (rows: Record<string, unknown>[][] | undefined) =>
+      (rows ?? []).map((row) =>
+        row.map((cell) => {
+          const { icon_custom_emoji_id: _icon, ...rest } = cell;
+          return rest;
+        }),
+      );
+    const mainMenuCell = (rows: Record<string, unknown>[][] | undefined) =>
+      (rows ?? []).flat().find((cell) => cell['text'] === label('bot.menu.main_button'));
+
+    it('draws the configured icon on the eligible bot only, never on another tenant, and leaves every route as it was', async () => {
+      await setIcons(tenantA, owner, { main_menu: MENU_ICON });
+      await say(BOT_A1);
+      await say(BOT_A1, '/wallet');
+      await say(BOT_A2);
+      await say(BOT_A2, '/wallet');
+      await say(BOT_B1);
+      await say(BOT_B1, '/wallet');
+      const eligible = inlineOf(ID_A1);
+      const untested = inlineOf(ID_A2);
+      const otherTenant = inlineOf(ID_B1);
+      expect(mainMenuCell(eligible)?.['icon_custom_emoji_id']).toBe(MENU_ICON);
+      // The same tenant's never-tested bot, and tenant B's ELIGIBLE bot: no icon at all.
+      expect(JSON.stringify(untested)).not.toContain('icon_custom_emoji_id');
+      expect(JSON.stringify(otherTenant)).not.toContain('icon_custom_emoji_id');
+      // Text and callback data byte for byte the same with and without the icon.
+      expect(JSON.stringify(withoutIcons(eligible))).toBe(JSON.stringify(untested));
+      // Tenant B reads its own (empty) value.
+      expect(
+        await api.container.settingsResolver.valueOf(tenantB, 'bot.inline_button_icons'),
+      ).toEqual({});
+    });
+
+    it('a removed icon falls back to the plain button', async () => {
+      await setIcons(tenantA, owner, { main_menu: MENU_ICON });
+      await api.container.settingsService.set(tenantA, owner, {
+        key: 'bot.inline_button_icons',
+        value: {},
+        expectedVersion: 1,
+        idempotencyKey: key('icons'),
+      });
+      await say(BOT_A1);
+      await say(BOT_A1, '/wallet');
+      expect(mainMenuCell(inlineOf(ID_A1))).toBeDefined();
+      expect(JSON.stringify(inlineOf(ID_A1))).not.toContain('icon_custom_emoji_id');
+    });
+
+    it('refuses an id that is not digits, writes nothing, and audits the change it does accept', async () => {
+      for (const bad of ['abc', '', '💰', '1'.repeat(33), ' 1']) {
+        await expect(setIcons(tenantA, owner, { main_menu: bad })).rejects.toMatchObject({
+          code: 'control.invalid_value',
+        });
+      }
+      await expect(setIcons(tenantA, owner, { 'no.such.button': MENU_ICON })).rejects.toMatchObject(
+        { code: 'control.invalid_value' },
+      );
+      expect(
+        await api.container.settingsResolver.valueOf(tenantA, 'bot.inline_button_icons'),
+      ).toEqual({});
+      await setIcons(tenantA, owner, { main_menu: MENU_ICON });
+      const audit = (
+        await db().execute<{ entity_id: string; after: { value: unknown } }>(
+          sql`SELECT entity_id, after FROM audit_logs
+               WHERE tenant_id = ${tenantA.tenantId} AND action = 'settings.set'
+                 AND result = 'SUCCESS'`,
+        )
+      ).rows;
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.entity_id).toBe('bot.inline_button_icons');
+      expect(audit[0]?.after.value).toEqual({ main_menu: MENU_ICON });
+    });
+
+    it('a custom-emoji refusal of an iconed inline keyboard: one icon-less retry lands, and the bot stays eligible (review B1)', async () => {
+      await setIcons(tenantA, owner, { main_menu: MENU_ICON });
+      await say(BOT_A1);
+      telegram.setCustomEmoji(ID_A1, {
+        kind: 'REFUSE',
+        description: 'Bad Request: CUSTOM_EMOJI_INVALID',
+      });
+      telegram.calls.length = 0;
+      await say(BOT_A1, '/wallet');
+      const inline = sends().filter(
+        (call) =>
+          (call.body['reply_markup'] as { inline_keyboard?: unknown } | undefined)
+            ?.inline_keyboard !== undefined,
+      );
+      expect(inline).toHaveLength(2);
+      expect(JSON.stringify(inline[0]?.body['reply_markup'])).toContain(MENU_ICON);
+      expect(JSON.stringify(inline[1]?.body['reply_markup'])).not.toContain('icon_custom_emoji_id');
+      expect(withoutIcons(inlineOf(ID_A1))).toEqual(
+        withoutIcons(
+          (inline[0]?.body['reply_markup'] as { inline_keyboard: Record<string, unknown>[][] })
+            .inline_keyboard,
+        ),
+      );
+      expect(telegram.delivered(ID_A1).length).toBeGreaterThan(0);
+      // An operator-typed id proves nothing about the bot: its eligibility is untouched.
+      expect(await testOutcome(BOT_A1)).toBe('SENT');
+      const events = await decorationEvents();
+      expect(events.at(-1)?.context).toMatchObject({
+        keyboardIcons: true,
+        iconSource: 'RAW',
+        eligibilityChanged: false,
+        inlineButtons: ['main_menu'],
+      });
+    });
+  });
+
+  it('R-5 never sends an iconed keyboard twice when the first may have landed, or was not answered', async () => {
     await publishLayout();
     const faults: FakeTelegramFault[] = [
       { kind: 'apply_then_drop' },
@@ -343,7 +482,7 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
       telegram.failNext('sendMessage', fault);
       await say(BOT_A1);
       expect(sends(), fault.kind).toHaveLength(1);
-      expect(keyboardOf(sends()[0]?.body), fault.kind).toEqual(PUBLISHED_PLAIN);
+      expect(keyboardOf(sends()[0]?.body), fault.kind).toEqual(PUBLISHED_ICONED);
       const landed = fault.kind === 'apply_then_drop' || fault.kind === 'apply_then_garble' ? 1 : 0;
       expect(telegram.delivered(botId).length - before, fault.kind).toBe(landed);
     }

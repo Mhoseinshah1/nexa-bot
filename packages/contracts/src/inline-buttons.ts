@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { customEmojiIdSchema } from './appearance.js';
 import { MAIN_MENU_BUTTON_STYLES, type MainMenuButtonStyle } from './bot-menu-builder.js';
 import type { TemplateKey } from './templates.js';
 
@@ -261,6 +262,44 @@ export function inlineButtonStyleOf(
   styles: InlineButtonStyles,
 ): InlineButtonStyle {
   return styles[key] ?? inlineButtonDefinition(key).defaultStyle;
+}
+
+// ---------------------------------------------------------------------------
+// Per-button icons (Phase 2 UX wave, Item 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The value of the `bot.inline_button_icons` setting: ONE Telegram custom emoji id per
+ * registry button an operator gave an icon, drawn as `InlineKeyboardButton.icon_custom_emoji_id`.
+ *
+ * What Telegram allows, and so all this models (`@grammyjs/types` `InlineKeyboardButton`,
+ * Bot API 9.4; `docs/phase2/button-icons.md`):
+ *
+ * - ONE icon per button, shown BEFORE the text. There is no "after" position.
+ * - The button TEXT carries no entities: a premium emoji can never be put inside a label.
+ *   The icon is a separate field and the label stays exactly the template's text.
+ * - Only a bot able to use custom emoji may send one. Nexa decides that per BOT INSTANCE by
+ *   its own appearance test (`SENT`), never per tenant: on any other bot the icon is omitted.
+ *
+ * A SEPARATE setting rather than a widening of `bot.inline_buttons`: that value is a closed
+ * partial record an older release parses strictly, so a second field in it would make the
+ * previous release read every tenant's styles as unreadable after a rollback.
+ *
+ * Keyed by the closed registry (an unknown key is refused); each value is digits only, at
+ * most 32 (`customEmojiIdSchema`, the same rule the appearance slots use). A button absent
+ * from the value has no icon. Removing an icon is removing its key.
+ */
+export const inlineButtonIconsSchema = z.partialRecord(
+  z.enum(INLINE_BUTTON_KEYS),
+  customEmojiIdSchema,
+);
+export type InlineButtonIcons = Readonly<Partial<Record<InlineButtonKey, string>>>;
+
+/** The custom emoji id one button carries as its icon, or null for none. */
+export function inlineButtonIconOf(key: InlineButtonKey, icons: InlineButtonIcons): string | null {
+  if (!Object.prototype.hasOwnProperty.call(icons, key)) return null;
+  const icon = icons[key];
+  return icon === undefined || icon === '' ? null : icon;
 }
 
 // ---------------------------------------------------------------------------

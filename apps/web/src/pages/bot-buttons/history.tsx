@@ -28,6 +28,7 @@ function arrangedRows(
         key: id,
         label: config.enabled ? label : `${label} (${t('web.bb_state_off')})`,
         look: lookOf(config),
+        iconSlot: config.iconSlot,
       };
     }),
   );

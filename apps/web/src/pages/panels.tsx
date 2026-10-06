@@ -56,6 +56,7 @@ import {
 } from './panel-advanced';
 import { messageFor } from './settings';
 import { PanelTrialTab } from './panel-trial';
+import { DeliveryTutorialTab } from './delivery-tutorial';
 import { HEALTH_TONES } from './dashboard';
 /*
  * The product and service vocabularies, imported rather than restated.
@@ -552,6 +553,7 @@ const DETAIL_TABS = [
   'credentials',
   'capabilities',
   'trial',
+  'delivery-tutorial',
 ] as const;
 type DetailTab = (typeof DETAIL_TABS)[number];
 
@@ -791,6 +793,8 @@ export function PanelDetailPage({
                 { id: 'capabilities', label: t('web.panel_tab_capabilities') },
                 // R1: the panel's free trial — independent of the catalogue.
                 { id: 'trial', label: t('web.panel_tab_trial') },
+                // Phase 2 item 5: the optional tutorial sent after a delivery on this panel.
+                { id: 'delivery-tutorial', label: t('web.panel_tab_delivery_tutorial') },
               ]}
             />
 
@@ -837,6 +841,12 @@ export function PanelDetailPage({
               {tab === 'trial' && (
                 // Read-only on an ARCHIVED panel: the server refuses the write there.
                 <PanelTrialTab panelId={data.id} mayEdit={mayEdit && data.status !== 'ARCHIVED'} />
+              )}
+              {tab === 'delivery-tutorial' && (
+                <DeliveryTutorialTab
+                  panelId={data.id}
+                  mayEdit={mayEdit && data.status !== 'ARCHIVED'}
+                />
               )}
               {tab === 'capabilities' && (
                 <CapabilitiesTab

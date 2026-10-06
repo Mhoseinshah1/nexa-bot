@@ -486,6 +486,7 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'ops.notification.operational_event': { code: 'کد رخداد' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
   'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
+  'bot.service.delivery_tutorial': { text: 'متن آموزش پنل، همان‌طور که در پنل نوشته شده' },
   'bot.service.file_caption': {
     caption: 'توضیح آمادهٔ پنل برای این فایل',
     username: 'نام کاربری سرویس',
@@ -1805,6 +1806,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.service.link_qr_caption': [
     'توضیح تصویر QR زیر لینک اشتراک',
     'وقتی مشتری «🔗 لینک اشتراک» را می‌زند، زیر لینک نمایش‌داده‌شده تصویر QR همان لینک با این توضیح می‌آید.',
+  ],
+  'bot.service.delivery_tutorial': [
+    'آموزش پس از تحویل سرویس',
+    'متنی که هر پنل (در زبانهٔ «آموزش پس از تحویل») پس از تحویل سرویس خریداری‌شده یا آزمایشی یک بار خودکار می‌فرستد؛ تنها یا به‌عنوان توضیح ویدیوی آموزشی.',
   ],
   'bot.service.tutorial_button': [
     'دکمهٔ مشاهدهٔ آموزش',

@@ -10,6 +10,7 @@ import {
   type MainMenuButtonId,
   type MainMenuButtonStyle,
   type MainMenuGateOpenById,
+  type AppearanceSlot,
   type MainMenuBuilderItem,
 } from '@nexa/contracts';
 
@@ -163,6 +164,15 @@ export function lookOf(config: MainMenuButtonConfig | CustomerMainMenuButton): M
   return style;
 }
 
+/** The ICON slot (restored 2026-10-05). Never touches `appearanceSlot`, the screen's slot. */
+export function setIconSlot(
+  layout: ExplicitMainMenu,
+  id: MainMenuButtonId,
+  iconSlot: AppearanceSlot | null,
+): ExplicitMainMenu {
+  return withConfig(layout, id, { iconSlot });
+}
+
 // --- The non-drag moves: each one is a primitive above, never a second implementation ---
 
 /** One place earlier in its row. */
@@ -282,10 +292,10 @@ export function rowLooksCramped(
 
 /**
  * One button's difference between two layouts, for the publish confirmation. Only what a
- * customer's keyboard can show: the retired icon and the screen slot (no control, no runtime
- * consumer since the owner's 2026-10-02 order) are not changes an operator is asked about.
+ * customer's keyboard can show: the icon (restored 2026-10-05) is; the screen slot (no
+ * control, no runtime consumer since the owner's 2026-10-02 order) is not.
  */
-export type ButtonChange = 'added' | 'removed' | 'moved' | 'enabled' | 'disabled' | 'look';
+export type ButtonChange = 'added' | 'removed' | 'moved' | 'enabled' | 'disabled' | 'look' | 'icon';
 
 export function diffLayouts(
   before: ExplicitMainMenu,
@@ -307,6 +317,7 @@ export function diffLayouts(
     const cb = configOf(to, id);
     if (ca.enabled !== cb.enabled) changes.push(cb.enabled ? 'enabled' : 'disabled');
     if (lookOf(ca) !== lookOf(cb)) changes.push('look');
+    if (ca.iconSlot !== cb.iconSlot) changes.push('icon');
     if (changes.length > 0) out.push({ id, changes });
   }
   return out;
@@ -421,4 +432,9 @@ export function chipSide(
   if (previous !== null && Math.abs(x - middle) < band) return previous;
   const startSide = rtl ? x >= middle : x <= middle;
   return startSide ? 'before' : 'after';
+}
+
+/** A label that already starts with an emoji: an icon beside it draws two symbols. */
+export function startsWithEmoji(label: string): boolean {
+  return /^\p{Extended_Pictographic}/u.test(label.trimStart());
 }

@@ -1,6 +1,6 @@
 {
-  "id": "9c4396a9-72d4-48b0-b922-2ac4acf865df",
-  "prevId": "b553ea2a-7fd3-4c91-97a6-953b607d22d7",
+  "id": "b553ea2a-7fd3-4c91-97a6-953b607d22d7",
+  "prevId": "eaeca574-4944-4e3d-9edb-2ac981375a2d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -32074,7 +32074,7 @@
       "checkConstraints": {
         "tenant_media_assets_purpose_check": {
           "name": "tenant_media_assets_purpose_check",
-          "value": "purpose IN ('REFERRAL_BANNER', 'QR_BACKGROUND')"
+          "value": "purpose IN ('REFERRAL_BANNER')"
         },
         "tenant_media_assets_mime_check": {
           "name": "tenant_media_assets_mime_check",
