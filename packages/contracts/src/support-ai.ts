@@ -525,13 +525,19 @@ export type SupportAiConfigResponse = z.infer<typeof supportAiConfigResponseSche
  * The capability test's checks, in the order they run (program §11). Each one is a separate
  * provider call, except `DECISION_SCHEMA`, which reads the `STRUCTURED_GENERATION` answer:
  *
- * - `MODEL_ACCESS` — the provider's model lookup (`GET /models/{id}`), where it has one;
+ * - `MODEL_ACCESS` — the provider's model lookup (`GET /models/{id}`); Z.AI, which documents
+ *   none, answers it with its one-token request;
  * - `STRUCTURED_GENERATION` — the SAME request Assist and Auto Reply send (adapter `generate`,
  *   `SUPPORT_AI_DECISION_JSON_SCHEMA`, the same output-token budget), over a fixed synthetic
  *   conversation that holds no customer data;
- * - `DECISION_SCHEMA` — that answer parsed by `supportAiDecisionSchema` and the tenant's reply
- *   limit, exactly as a draft is;
+ * - `DECISION_SCHEMA` — that answer parsed STRICTLY, as an automatic reply parses it
+ *   (`supportAiDecisionSchema` exactly: no note cut, no citation dropped) and held to the
+ *   tenant's reply limit. The stricter of the two runtime parses is the readiness signal: a
+ *   model that passes it also produces usable Assist drafts, which tolerate more;
  * - `VISION` — only when vision is on: the same request with one tiny embedded image.
+ *
+ * The test makes paid calls: at most one per provider key every 30 seconds, claimed by a
+ * conditional write on the credential row before any call (`support_ai.test_too_soon`).
  */
 export const SUPPORT_AI_TEST_CHECKS = [
   'MODEL_ACCESS',
