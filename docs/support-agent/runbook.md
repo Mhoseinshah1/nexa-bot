@@ -271,6 +271,28 @@ already queued.
 4. If it cannot be made healthy and automatic replies are on, set the mode to `ASSIST_ONLY` or
    `OFF` (§8) so customers are handed to people instead of waiting.
 
+**Capacity under a burst (L5, an operational note — not a defect being fixed).** One
+`assistant` replica produces jobs strictly one at a time: each pass claims up to four
+(`ASSIST_BATCH`) every 2 s, and each job waits for its provider call. At 10–30 s per call that
+is roughly 2–6 jobs a minute. The bounds that then apply:
+
+- an automatic job produced more than 600 s (`SUPPORT_AI_AUTO_STALE_SECONDS`) after it fell
+  due is not answered: it hands off as `REPLY_STALE` (`handoff_stale`). A burst of more than
+  about 20–60 customer messages arriving together under `AUTO_REPLY_SAFE` therefore ends with
+  the late ones handed to a person;
+- an Assist draft waiting more than 300 s with no live lease (`SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS`)
+  is failed `job.unclaimed`, so an operator who requested one behind a long queue sees
+  «ناموفق» and requests again;
+- `support.assistant.stalled` (D5) does NOT fire while a job holds a live lease: a busy
+  assistant is not a dead one. A burst shows instead as `handoff_stale` in «آمار پشتیبانی» and
+  as a growing «هنوز در صف».
+
+Nothing is lost: every late job hands off or fails visibly, and none is sent late. What helps
+is a faster model or a shorter provider timeout (§1, «پیکربندی»), and during an announced
+outage switching to `ASSIST_ONLY` (§8). The claim is replica-safe (`FOR UPDATE SKIP LOCKED`,
+tested with two replicas in `support-assist.test.ts`), but running more than one `assistant`
+replica is not a `botctl` operation and has not been accepted on a real installation.
+
 ## 10. Reading «آمار پشتیبانی»
 
 - **Snapshots** (now, whatever the period): conversations by state, knowledge by source.
