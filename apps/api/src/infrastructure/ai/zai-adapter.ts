@@ -6,6 +6,7 @@ import type {
 } from '../../modules/control/support-ai/application/ports.js';
 import {
   aiHttpRequest,
+  failureDetail,
   nonJsonSuccess,
   outputTokenBudget,
   parseJson,
@@ -57,7 +58,11 @@ export class ZaiAdapter implements SupportAiAdapter {
   ): Promise<SupportAiOutcome> {
     // Defence in depth behind the chain's capability gate: an image is never sent here.
     if (request.messages.some((message) => (message.images?.length ?? 0) > 0)) {
-      return { outcome: 'INVALID_OUTPUT', code: 'zai.vision_unsupported' };
+      return {
+        outcome: 'INVALID_OUTPUT',
+        code: 'zai.vision_unsupported',
+        detail: failureDetail('unsupported_capability'),
+      };
     }
     const system =
       `${request.system}\n\nReply with ONE JSON object and nothing else. It must satisfy this JSON Schema:\n` +
@@ -79,8 +84,14 @@ export class ZaiAdapter implements SupportAiAdapter {
       this.options.fetch,
     );
     const zaiCode = businessCodeOf(result);
-    if (zaiCode === '1301') return { outcome: 'REFUSED_BY_PROVIDER', code: 'zai.1301' };
-    if (zaiCode === '1113') return { outcome: 'AUTH_FAILED', quota: true, code: 'zai.1113' };
+    if (zaiCode === '1301') {
+      const detail = businessDetail('refused', result);
+      return { outcome: 'REFUSED_BY_PROVIDER', code: 'zai.1301', detail };
+    }
+    if (zaiCode === '1113') {
+      const detail = businessDetail('quota', result);
+      return { outcome: 'AUTH_FAILED', quota: true, code: 'zai.1113', detail };
+    }
     return readChatCompletion(result, this.options.now?.() ?? Date.now(), 'zai');
   }
 
@@ -109,7 +120,10 @@ export class ZaiAdapter implements SupportAiAdapter {
       this.options.fetch,
     );
     const zaiCode = businessCodeOf(result);
-    if (zaiCode === '1113') return { outcome: 'AUTH_FAILED', quota: true, code: 'zai.1113' };
+    if (zaiCode === '1113') {
+      const detail = businessDetail('quota', result);
+      return { outcome: 'AUTH_FAILED', quota: true, code: 'zai.1113', detail };
+    }
     if (
       result.kind === 'RESPONSE' &&
       result.status >= 200 &&
@@ -120,6 +134,15 @@ export class ZaiAdapter implements SupportAiAdapter {
     }
     return readChatCompletion(result, this.options.now?.() ?? Date.now(), 'zai');
   }
+}
+
+function businessDetail(
+  failureClass: 'refused' | 'quota',
+  result: Awaited<ReturnType<typeof aiHttpRequest>>,
+) {
+  if (result.kind !== 'RESPONSE') return failureDetail(failureClass);
+  const body = parseJson(result.body) as { error?: Record<string, unknown> } | null;
+  return failureDetail(failureClass, { httpStatus: result.status, error: body?.error ?? null });
 }
 
 function businessCodeOf(result: Awaited<ReturnType<typeof aiHttpRequest>>): string | null {

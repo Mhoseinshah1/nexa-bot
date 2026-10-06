@@ -5803,6 +5803,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const supportAssist = new SupportAssistService({
     jobs: supportAiJobs,
+    runs: supportAiRuns,
     configs: supportAiConfigs,
     chain: supportAiChain,
     context: supportContextSource,

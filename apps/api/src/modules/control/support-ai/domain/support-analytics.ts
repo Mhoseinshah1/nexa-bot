@@ -6,8 +6,10 @@ import {
   type BusinessHandoffReason,
   type ReportRange,
   type SupportAiAutoOutcome,
+  type SupportAiFailureClass,
   type SupportAiJobKind,
   type SupportAiJobState,
+  type SupportAiOperation,
   type SupportAiOutcomeKind,
   type SupportAiProvider,
   type SupportAnalyticsResponse,
@@ -40,6 +42,13 @@ export interface SupportAnalyticsFacts {
     readonly p95LatencyMs: number;
     readonly inputTokens: number;
     readonly outputTokens: number;
+  }[];
+  /** Failed runs that carry a failure class, by operation, provider and class. */
+  readonly failures?: readonly {
+    readonly operation: SupportAiOperation;
+    readonly provider: SupportAiProvider;
+    readonly failureClass: SupportAiFailureClass;
+    readonly runs: number;
   }[];
   readonly candidates: readonly {
     readonly state: SupportLearningCandidateState;
@@ -143,6 +152,13 @@ export function assembleSupportAnalytics(
         a.provider.localeCompare(b.provider) ||
         b.runs - a.runs ||
         a.outcome.localeCompare(b.outcome),
+    ),
+    aiFailures: [...(facts.failures ?? [])].sort(
+      (a, b) =>
+        b.runs - a.runs ||
+        a.operation.localeCompare(b.operation) ||
+        a.provider.localeCompare(b.provider) ||
+        a.failureClass.localeCompare(b.failureClass),
     ),
     learningByState: SUPPORT_LEARNING_CANDIDATE_STATES.map((state) => ({
       state,

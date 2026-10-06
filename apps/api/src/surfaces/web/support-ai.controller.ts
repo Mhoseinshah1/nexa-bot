@@ -27,14 +27,11 @@ import {
   type SupportAnalyticsResponse,
   type TenantContext,
 } from '@nexa/contracts';
-import { z } from 'zod';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import type { SupportAiJobRecord } from '../../modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository.js';
-
-const testRequestSchema = z.object({ model: z.string().trim().min(1).max(128) });
+import type { SupportAiDraftRecord } from '../../modules/control/support-ai/application/support-assist.service.js';
 
 /**
  * TB4 — the support AI's configuration over HTTP (ADR-0034 §8). Authentication and the origin
@@ -90,8 +87,7 @@ export class SupportAiController {
     @Body() body: unknown,
   ): Promise<SupportAiTestResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
-    const { model } = testRequestSchema.parse(body);
-    return this.container.supportAiConfig.test(scope, actor, provider, model);
+    return this.container.supportAiConfig.test(scope, actor, provider, body);
   }
 
   @Get(SUPPORT_AI_ROUTES.usage)
@@ -137,9 +133,12 @@ export class SupportAiController {
   ): Promise<SupportAiDraftView> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const { idempotencyKey } = supportAiDraftRequestSchema.parse(body);
-    return draftView(
-      await this.container.supportAssist.request(scope, actor, { conversationId, idempotencyKey }),
-    );
+    const job = await this.container.supportAssist.request(scope, actor, {
+      conversationId,
+      idempotencyKey,
+    });
+    const [annotated] = await this.container.supportAssist.annotate(scope, [job]);
+    return draftView(annotated ?? { ...job, failure: null, replyOverLimit: false });
   }
 
   /** TB5: the operator sends the draft, edited or not, through the ordinary lane. */
@@ -178,19 +177,21 @@ export class SupportAiController {
   }
 }
 
-function draftView(job: SupportAiJobRecord): SupportAiDraftView {
+function draftView(job: SupportAiDraftRecord): SupportAiDraftView {
   return {
     id: job.id,
     state: job.state,
     createdAt: job.createdAt.toISOString(),
     readyAt: job.readyAt?.toISOString() ?? null,
     failureCode: job.failureCode,
+    failure: job.failure,
     decision: job.decision,
     topic: job.topic,
     confidence: job.confidence,
     summary: job.summary,
     intent: job.intent,
     suggestedReply: job.suggestedReply,
+    replyOverLimit: job.replyOverLimit,
     ticketAction: job.ticketAction,
     factLabels: [...job.factLabels],
     provider: job.provider,

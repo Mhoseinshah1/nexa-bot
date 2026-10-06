@@ -29,7 +29,13 @@ import {
 } from '../ui/kit';
 import { BUSINESS_STATE_LABELS } from './business-chats';
 import { HANDOFF_LABELS } from './handoff-labels';
-import { OUTCOME_LABELS, OUTCOME_TONES, SUPPORT_AI_PROVIDER_LABELS } from './support-ai';
+import {
+  OPERATION_LABELS,
+  OUTCOME_LABELS,
+  OUTCOME_TONES,
+  SUPPORT_AI_PROVIDER_LABELS,
+} from './support-ai';
+import { FAILURE_CLASS_LABELS } from './support-ai-failure';
 import {
   CANDIDATE_STATE_LABELS,
   KNOWLEDGE_SOURCE_LABELS,
@@ -217,6 +223,7 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
       </div>
 
       <ProviderRunsCard rows={data.providerRuns} />
+      <AiFailuresCard rows={data.aiFailures} />
 
       <div className="grid-2">
         <Card title={t('web.sa_learning')} hint={t('web.sa_learning_hint')}>
@@ -231,6 +238,43 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
         <KnowledgeCard rows={data.knowledgeBySource} />
       </div>
     </div>
+  );
+}
+
+/** Program §12: why the AI's failed calls failed, by class — counts only, never text. */
+function AiFailuresCard({ rows }: { rows: SupportAnalyticsResponse['aiFailures'] }) {
+  type Row = SupportAnalyticsResponse['aiFailures'][number];
+  const columns: readonly Column<Row>[] = [
+    {
+      key: 'class',
+      header: t('web.sai_failure_reason'),
+      render: (row) => t(FAILURE_CLASS_LABELS[row.failureClass]),
+    },
+    {
+      key: 'operation',
+      header: t('web.sai_diag_operation'),
+      render: (row) => t(OPERATION_LABELS[row.operation]),
+    },
+    {
+      key: 'provider',
+      header: t('web.sai_provider'),
+      render: (row) => t(SUPPORT_AI_PROVIDER_LABELS[row.provider]),
+    },
+    { key: 'runs', header: t('web.sa_runs'), render: (row) => <Num value={row.runs} /> },
+  ];
+  return (
+    <Card title={t('web.sai_ai_failures')} hint={t('web.sai_ai_failures_hint')}>
+      {rows.length === 0 ? (
+        <Empty title={t('web.sai_ai_failures_empty')} icon="activity" />
+      ) : (
+        <DataTable
+          caption={t('web.sai_ai_failures')}
+          columns={columns}
+          rows={rows}
+          rowKey={(row) => `${row.operation}:${row.provider}:${row.failureClass}`}
+        />
+      )}
+    </Card>
   );
 }
 

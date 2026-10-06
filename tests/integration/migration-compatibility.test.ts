@@ -299,6 +299,10 @@ describe('migration compatibility across the rollback window', () => {
 
     for (const entry of incoming) {
       const sql = sqlOf(entry.tag);
+      // The forbidden shapes are statements, so they are looked for OUTSIDE string literals:
+      // a CHECK listing the value 'truncated' (0214's failure classes) is not a TRUNCATE.
+      // A real statement is never quoted, so this narrows nothing the rule exists to refuse.
+      const unquoted = sql.replace(/'(?:[^']|'')*'/g, "''");
       // A unique index and a CHECK are additions that NARROW: rows the
       // previous release could write may stop being writable. They are allowed
       // — 0015 adds one — but only because the behavioural replay above proves
@@ -313,7 +317,7 @@ describe('migration compatibility across the rollback window', () => {
         'TRUNCATE',
       ]) {
         expect(
-          sql,
+          unquoted,
           `${entry.tag} contains ${forbidden}, which the previous release may still need`,
         ).not.toContain(forbidden);
       }

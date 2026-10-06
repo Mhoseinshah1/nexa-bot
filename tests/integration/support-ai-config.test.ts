@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import {
   PLATFORM_ERROR_CODES,
   SUPPORT_AI_CREDENTIAL_REJECTED_CODE,
+  SUPPORT_AI_DECISION_JSON_SCHEMA,
   SUPPORT_AI_DEFAULT_CONFIG,
   isNexaError,
   type ActorContext,
@@ -13,7 +14,11 @@ import {
 } from '@nexa/contracts';
 import { SupportAiConfigService } from '../../apps/api/src/modules/control/support-ai/application/support-ai-config.service';
 import { SupportAiChain } from '../../apps/api/src/modules/control/support-ai/application/support-ai-chain';
-import type { SupportAiAdapter } from '../../apps/api/src/modules/control/support-ai/application/ports';
+import type {
+  SupportAiAdapter,
+  SupportAiRequest,
+} from '../../apps/api/src/modules/control/support-ai/application/ports';
+import { capabilityTestRequest } from '../../apps/api/src/modules/control/support-ai/application/capability-test';
 import {
   DrizzleSupportAiConfigRepository,
   DrizzleSupportAiCredentialStore,
@@ -54,13 +59,18 @@ class ScriptedAdapter implements SupportAiAdapter {
   };
   seenKeys: string[] = [];
   generateCalls = 0;
+  /** What `generate` was asked, request by request (the capability test reads these). */
+  requests: SupportAiRequest[] = [];
+  /** `generate`'s own answers, in order; when empty it answers `next`. */
+  generated: SupportAiOutcome[] = [];
   /** Runs while the "provider" is answering, i.e. outside any transaction, mid-call. */
   during: (() => Promise<void>) | null = null;
   constructor(readonly provider: SupportAiProvider) {}
-  async generate() {
+  async generate(_credential: unknown, request: SupportAiRequest) {
     this.generateCalls += 1;
+    this.requests.push(request);
     if (this.during !== null) await this.during();
-    return this.next;
+    return this.generated.shift() ?? this.next;
   }
   async testConnection(credential: { apiKey: string }) {
     this.seenKeys.push(credential.apiKey);
@@ -68,10 +78,31 @@ class ScriptedAdapter implements SupportAiAdapter {
   }
 }
 
+/** A decision the parser accepts: what a capable model answers the synthetic conversation. */
+const DECISION = {
+  decision: 'REPLY',
+  replyText: 'لطفاً برنامه را ببندید و دوباره وصل شوید.',
+  topic: 'CONNECTION_TROUBLESHOOTING',
+  confidence: 'HIGH',
+  factRefs: [],
+  knowledgeRefs: ['K1'],
+  ticketAction: 'NONE',
+  summary: 'مشتری نمی‌تواند وصل شود.',
+  intent: 'رفع مشکل اتصال',
+};
+const decided = (output: unknown = DECISION): SupportAiOutcome => ({
+  outcome: 'OK',
+  output,
+  usage: { inputTokens: 900, outputTokens: 120 },
+  model: 'gpt-5.5',
+});
+
 describe('the support AI configuration (TB4)', () => {
   let ctx: TestContext;
   let owner: ActorContext;
   let service: SupportAiConfigService;
+  /** `service.test` without the cooldown's aging. */
+  let testNow: SupportAiConfigService['test'];
   let openai: ScriptedAdapter;
   let store: DrizzleSupportAiCredentialStore;
   let chain: (clock?: { now: () => Date }) => SupportAiChain;
@@ -127,6 +158,17 @@ describe('the support AI configuration (TB4)', () => {
       clock: c.clock,
       ids: c.ids,
     });
+    // The 30-second test cooldown is its own test below. Every other test here presses
+    // «آزمون اتصال» as if the previous test were a minute old.
+    testNow = service.test.bind(service);
+    service.test = async (...args) => {
+      await c.database.db.execute(
+        sql`UPDATE support_ai_provider_credentials
+               SET last_tested_at = last_tested_at - interval '1 minute'
+             WHERE last_tested_at IS NOT NULL`,
+      );
+      return testNow(...args);
+    };
   });
 
   afterAll(async () => {
@@ -249,7 +291,7 @@ describe('the support AI configuration (TB4)', () => {
               + (SELECT count(*) FROM support_ai_provider_credentials WHERE api_key_ciphertext LIKE ${'%' + KEY + '%'}) AS n`,
     );
     expect(Number((leaks.rows[0] as { n: number | string }).n)).toBe(0);
-    await service.test(tenantA, owner, 'OPENAI', 'gpt-5.5');
+    await service.test(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') });
     expect(openai.seenKeys).toEqual([KEY]);
   });
 
@@ -269,8 +311,8 @@ describe('the support AI configuration (TB4)', () => {
       apiKey: KEY,
     });
     openai.next = { outcome: 'AUTH_FAILED', quota: false, code: 'openai.http_401' };
-    await service.test(tenantA, owner, 'OPENAI', 'gpt-5.5');
-    await service.test(tenantA, owner, 'OPENAI', 'gpt-5.5');
+    await service.test(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') });
+    await service.test(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') });
     const open = async () =>
       (
         await ctx.container.database.db.execute(
@@ -320,16 +362,305 @@ describe('the support AI configuration (TB4)', () => {
       idempotencyKey: key('a'),
       apiKey: KEY,
     });
-    await service.test(tenantA, owner, 'OPENAI', 'gpt-5.5');
+    openai.next = {
+      outcome: 'OK',
+      output: {},
+      usage: { inputTokens: null, outputTokens: null },
+      model: 'gpt-5.5',
+    };
+    openai.generated = [decided()];
+    await service.test(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') });
     const usage = await service.usage(tenantA, owner);
+    // The model lookup and the structured generation: two calls, both answered.
     expect(usage.rows).toEqual([
       expect.objectContaining({
         provider: 'OPENAI',
         operation: 'CONNECTION_TEST',
-        calls: 1,
+        calls: 2,
         failures: 0,
       }),
     ]);
+    const leaks = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM support_ai_runs
+           WHERE row_to_json(support_ai_runs)::text LIKE ${'%' + KEY + '%'}
+              OR row_to_json(support_ai_runs)::text LIKE ${'%وصل%'}`,
+    );
+    expect((leaks.rows[0] as { n: number }).n).toBe(0);
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // Program §11 — the capability test runs the runtime request, and says which check failed.
+  // ---------------------------------------------------------------------------------------
+
+  const runRows = async () =>
+    (
+      await ctx.container.database.db.execute(
+        sql`SELECT outcome, failure_class, http_status, provider_error_type, provider_error_param,
+                   schema_issue_path, schema_issue_code, job_id
+              FROM support_ai_runs ORDER BY created_at, id`,
+      )
+    ).rows as Record<string, unknown>[];
+
+  // The field failure: «Test Connection: OK», yet every draft failed. A model that can be
+  // LISTED but rejects strict structured output must never read as OK again.
+  it('a listed model that rejects strict structured output is not OK, and says why', async () => {
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('a'),
+      apiKey: KEY,
+    });
+    await service.update(tenantA, owner, {
+      idempotencyKey: key('c'),
+      expectedVersion: null,
+      config: assist(),
+    });
+    openai.generated = [
+      {
+        outcome: 'INVALID_OUTPUT',
+        code: 'openai.http_400',
+        detail: {
+          failureClass: 'unsupported_capability',
+          httpStatus: 400,
+          providerErrorCode: null,
+          providerErrorType: 'invalid_request_error',
+          providerErrorParam: 'response_format',
+        },
+      },
+    ];
+    const answer = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: key('t'),
+    });
+    expect(answer).toMatchObject({
+      outcome: 'INVALID_OUTPUT',
+      code: 'openai.http_400',
+      failureClass: 'unsupported_capability',
+    });
+    expect(answer.checks.map((check) => [check.check, check.result])).toEqual([
+      ['MODEL_ACCESS', 'PASS'],
+      ['STRUCTURED_GENERATION', 'FAIL'],
+      ['DECISION_SCHEMA', 'NOT_TESTED'],
+      ['VISION', 'NOT_TESTED'],
+    ]);
+    expect(answer.checks[1]).toMatchObject({
+      httpStatus: 400,
+      providerErrorType: 'invalid_request_error',
+      providerErrorParam: 'response_format',
+    });
+    // The SAME request the runtime sends: the decision schema, its name, its token budget.
+    const sent = openai.requests[0]!;
+    const config = assist();
+    expect(sent).toEqual(capabilityTestRequest(config, 'gpt-5.5', false));
+    expect(sent.jsonSchema).toBe(SUPPORT_AI_DECISION_JSON_SCHEMA);
+    // Stored coherently: the last test is not OK, and why.
+    const view = await service.view(tenantA, owner);
+    expect(view.credentials.find((c) => c.provider === 'OPENAI')).toMatchObject({
+      lastTestOutcome: 'INVALID_OUTPUT',
+      lastTestFailureClass: 'unsupported_capability',
+    });
+    expect(await runRows()).toEqual([
+      expect.objectContaining({ outcome: 'OK', failure_class: null }),
+      expect.objectContaining({
+        outcome: 'INVALID_OUTPUT',
+        failure_class: 'unsupported_capability',
+        http_status: 400,
+        provider_error_type: 'invalid_request_error',
+        provider_error_param: 'response_format',
+        job_id: null,
+      }),
+    ]);
+  });
+
+  it('an answer that is not NEXA’s decision fails the schema check, with the field', async () => {
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('a'),
+      apiKey: KEY,
+    });
+    openai.generated = [decided({ ...DECISION, topic: 'SOMETHING_ELSE' })];
+    const answer = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: key('t'),
+    });
+    expect(answer).toMatchObject({ outcome: 'INVALID_OUTPUT', failureClass: 'schema_invalid' });
+    expect(answer.checks.find((check) => check.check === 'STRUCTURED_GENERATION')?.result).toBe(
+      'PASS',
+    );
+    expect(answer.checks.find((check) => check.check === 'DECISION_SCHEMA')).toMatchObject({
+      result: 'FAIL',
+      issuePath: 'topic',
+    });
+    expect(JSON.stringify(answer)).not.toContain('SOMETHING_ELSE');
+    expect((await runRows())[1]).toMatchObject({
+      outcome: 'INVALID_OUTPUT',
+      failure_class: 'schema_invalid',
+      schema_issue_path: 'topic',
+    });
+  });
+
+  // Review N5: the readiness signal is the STRICT parse an automatic reply uses — an answer
+  // an Assist draft would tolerate (an over-long operator note) is not «OK» here.
+  it('the schema check is strict: an over-long intent fails it, naming the field', async () => {
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('a'),
+      apiKey: KEY,
+    });
+    openai.generated = [decided({ ...DECISION, intent: 'ا'.repeat(121) })];
+    const answer = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: key('t'),
+    });
+    expect(answer).toMatchObject({ outcome: 'INVALID_OUTPUT', failureClass: 'schema_invalid' });
+    expect(answer.checks.find((check) => check.check === 'DECISION_SCHEMA')).toMatchObject({
+      result: 'FAIL',
+      issuePath: 'intent',
+      issueCode: 'too_big',
+    });
+  });
+
+  it('is OK only when every check passed; vision is tested only when on, and only if declared', async () => {
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('a'),
+      apiKey: KEY,
+    });
+    openai.generated = [decided()];
+    const plain = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: key('t'),
+    });
+    expect(plain.outcome).toBe('OK');
+    expect(plain.failureClass).toBeNull();
+    expect(plain.checks.map((check) => check.result)).toEqual([
+      'PASS',
+      'PASS',
+      'PASS',
+      'NOT_TESTED',
+    ]);
+    expect(openai.generateCalls).toBe(1);
+
+    await service.update(tenantA, owner, {
+      idempotencyKey: key('c'),
+      expectedVersion: null,
+      config: assist({ visionEnabled: true }),
+    });
+    // This scripted adapter declares no vision: the image is never sent.
+    openai.generated = [decided()];
+    const blind = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: key('t'),
+    });
+    expect(blind.outcome).toBe('OK');
+    expect(blind.checks[3]).toMatchObject({ check: 'VISION', result: 'UNSUPPORTED' });
+    expect(openai.generateCalls).toBe(2);
+
+    (openai.capabilities as { vision: boolean }).vision = true;
+    openai.generated = [decided(), { outcome: 'TIMEOUT' }];
+    const seeing = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: key('t'),
+    });
+    expect(openai.requests.at(-1)?.messages[0]?.images?.length).toBe(1);
+    expect(seeing).toMatchObject({ outcome: 'TIMEOUT', failureClass: 'timeout' });
+    expect(seeing.checks[3]).toMatchObject({ check: 'VISION', result: 'FAIL' });
+  });
+
+  it('a replayed test key answers the first result and calls nothing', async () => {
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('a'),
+      apiKey: KEY,
+    });
+    openai.generated = [decided()];
+    const testKey = key('t');
+    const first = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: testKey,
+    });
+    const calls = openai.generateCalls + openai.seenKeys.length;
+    const again = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: testKey,
+    });
+    expect(again).toEqual(first);
+    expect(openai.generateCalls + openai.seenKeys.length).toBe(calls);
+    // The same key for another model is another question, refused.
+    await expect(
+      service.test(tenantA, owner, 'OPENAI', { model: 'other-model', idempotencyKey: testKey }),
+    ).rejects.toMatchObject({ code: PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH });
+  });
+
+  // Review N5: the test makes paid calls; a second press within 30 s calls nothing.
+  it('refuses a second test of one key within the cooldown, before any call', async () => {
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('a'),
+      apiKey: KEY,
+    });
+    openai.generated = [decided()];
+    await testNow(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') });
+    const calls = openai.generateCalls + openai.seenKeys.length;
+    await expect(
+      testNow(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') }),
+    ).rejects.toMatchObject({ code: 'support_ai.test_too_soon' });
+    expect(openai.generateCalls + openai.seenKeys.length).toBe(calls);
+    // Another provider's key has its own cooldown.
+    await service.setCredential(tenantA, owner, 'ANTHROPIC', {
+      idempotencyKey: key('b'),
+      apiKey: KEY,
+    });
+    await expect(
+      testNow(tenantA, owner, 'ANTHROPIC', { model: 'claude-x', idempotencyKey: key('t') }),
+    ).resolves.toBeTruthy();
+  });
+
+  // Review N4: a new key is a new question; and a passed test carries no failure class.
+  it('replacing a key clears the last test and its failure class; OK never has a class', async () => {
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('a'),
+      apiKey: KEY,
+    });
+    openai.next = { outcome: 'AUTH_FAILED', quota: true, code: 'openai.quota' };
+    await service.test(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') });
+    const before = (await service.view(tenantA, owner)).credentials.find(
+      (c) => c.provider === 'OPENAI',
+    );
+    expect(before).toMatchObject({ lastTestOutcome: 'AUTH_FAILED', lastTestFailureClass: 'quota' });
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('b'),
+      apiKey: `${KEY}-new`,
+    });
+    const after = (await service.view(tenantA, owner)).credentials.find(
+      (c) => c.provider === 'OPENAI',
+    );
+    expect(after).toMatchObject({
+      lastTestOutcome: null,
+      lastTestFailureClass: null,
+      lastTestedAt: null,
+    });
+    await expect(
+      ctx.container.database.db.execute(
+        sql`UPDATE support_ai_provider_credentials
+               SET last_test_outcome = 'OK', last_test_failure_class = 'timeout'`,
+      ),
+    ).rejects.toMatchObject({
+      cause: { constraint: 'support_ai_provider_credentials_test_failure_shape_check' },
+    });
+  });
+
+  it('a model lookup that fails stops the test before anything is generated', async () => {
+    await service.setCredential(tenantA, owner, 'OPENAI', {
+      idempotencyKey: key('a'),
+      apiKey: KEY,
+    });
+    openai.next = { outcome: 'AUTH_FAILED', quota: true, code: 'openai.quota' };
+    const answer = await service.test(tenantA, owner, 'OPENAI', {
+      model: 'gpt-5.5',
+      idempotencyKey: key('t'),
+    });
+    expect(answer).toMatchObject({ outcome: 'AUTH_FAILED', failureClass: 'quota' });
+    expect(answer.checks.map((check) => check.result)).toEqual([
+      'FAIL',
+      'NOT_TESTED',
+      'NOT_TESTED',
+      'NOT_TESTED',
+    ]);
+    expect(openai.generateCalls).toBe(0);
   });
 
   // --- Substitute review of PR #199 ----------------------------------------------------------
@@ -429,7 +760,7 @@ describe('the support AI configuration (TB4)', () => {
       apiKey: KEY,
     });
     openai.next = { outcome: 'AUTH_FAILED', quota: false, code: 'openai.http_401' };
-    await service.test(tenantA, owner, 'OPENAI', 'gpt-5.5');
+    await service.test(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') });
     expect(await openRejections()).toBe(1);
     await service.deleteCredential(tenantA, owner, 'OPENAI', key('b'));
     expect(await openRejections()).toBe(0);
@@ -514,7 +845,7 @@ describe('the support AI configuration (TB4)', () => {
       });
       // The NEW key is refused meanwhile…
       openai.next = { outcome: 'AUTH_FAILED', quota: false, code: 'openai.http_401' };
-      await service.test(tenantA, owner, 'OPENAI', 'gpt-5.5');
+      await service.test(tenantA, owner, 'OPENAI', { model: 'gpt-5.5', idempotencyKey: key('t') });
       // …and the slow call made with the OLD key then answers.
       openai.next = answer;
     };
