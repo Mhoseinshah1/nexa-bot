@@ -2225,6 +2225,19 @@ export const TEMPLATES = [
         required: false,
         repeatable: false,
       },
+      /*
+       * B14: the payment's own tracking code — its stable `payments.reference`, read at send
+       * time from the payment the notification names (a READER, not a payload: ADR 0030 §1),
+       * so a replayed notification renders the same code. OPTIONAL for the WP3 lesson above:
+       * an installation may hold an override without the token.
+       */
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s tracking code (`payments.reference`), read at send time.',
+        required: false,
+        repeatable: false,
+      },
     ],
   },
   {
@@ -2266,6 +2279,19 @@ export const TEMPLATES = [
         type: 'MONEY',
         description: 'The amount the reviewer credited, from the RECEIPT_CREDIT entry.',
         required: true,
+        repeatable: false,
+      },
+      /*
+       * B14: the payment's own tracking code — its stable `payments.reference`, read at send
+       * time from the payment the notification names (a READER, not a payload: ADR 0030 §1),
+       * so a replayed notification renders the same code. OPTIONAL for the WP3 lesson above:
+       * an installation may hold an override without the token.
+       */
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s tracking code (`payments.reference`), read at send time.',
+        required: false,
         repeatable: false,
       },
     ],
