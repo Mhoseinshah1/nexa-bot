@@ -593,6 +593,69 @@ schema_count="$(gzip -dc "$backup_file" | grep -c 'CREATE TABLE' || true)"
 pass "botctl backup writes a verified 0600 dump of the real database"
 
 # ---------------------------------------------------------------------------
+step "7b. the disaster-recovery pipeline runs inside the release image"
+# ---------------------------------------------------------------------------
+# `botctl backup` above is the UPDATE SAFETY NET — a plain pg_dump on the host.
+# It is not the DR pipeline, and until this step nothing proved that the real
+# image's PostgreSQL 16 client, the `node` uid and the named backup volume work
+# together: dump, checksum, encrypt, restore-verify into a scratch database,
+# clean up. So the operator's own command runs, in the running api container,
+# exactly as `docs/backup.md` tells an operator to run it.
+DR_RUN_OUT="$(compose exec -T api node dist/backup.cli.js run 2>&1)" ||
+  fail "backup.cli.js run failed inside the image: ${DR_RUN_OUT}"
+# `case`, never `| grep -q`: under pipefail an early-exiting reader is 141 on
+# SUCCESS (see `check-shell`).
+case "$DR_RUN_OUT" in
+  *"state    SUCCEEDED"*) ;;
+  *) fail "the DR backup did not succeed: ${DR_RUN_OUT}" ;;
+esac
+case "$DR_RUN_OUT" in
+  *"cleanup  ok"*) ;;
+  *) fail "the DR backup left plaintext behind: ${DR_RUN_OUT}" ;;
+esac
+dr_id="$(printf '%s\n' "$DR_RUN_OUT" | awk '$1 == "backup" { print $2; exit }')"
+case "$dr_id" in
+  [0-9a-f]*-*-*-*-*) ;;
+  *) fail "could not read the backup id from: ${DR_RUN_OUT}" ;;
+esac
+dr_dir="/var/lib/nexa/backups/${dr_id}"
+pass "backup.cli.js run took a verified backup inside the image (${dr_id})"
+
+# Modes, read INSIDE the container, on the named volume: the root and the run
+# directory 0700, the archive 0600, all owned by the unprivileged runtime user.
+dr_modes="$(compose exec -T api stat -c '%a %U' /var/lib/nexa/backups "$dr_dir" \
+  "${dr_dir}/archive.nxb")" || fail "could not stat the DR archive"
+[ "$(printf '%s\n' "$dr_modes" | sed -n 1p)" = "700 node" ] ||
+  fail "the backup root is not 0700 node: ${dr_modes}"
+[ "$(printf '%s\n' "$dr_modes" | sed -n 2p)" = "700 node" ] ||
+  fail "the run directory is not 0700 node: ${dr_modes}"
+[ "$(printf '%s\n' "$dr_modes" | sed -n 3p)" = "600 node" ] ||
+  fail "the archive is not 0600 node: ${dr_modes}"
+# Only the archive survives a run; the plaintext dump and the verification copy
+# are gone.
+dr_files="$(compose exec -T api ls -A "$dr_dir")" || fail "could not list ${dr_dir}"
+[ "$dr_files" = "archive.nxb" ] || fail "the run directory holds more than the archive: ${dr_files}"
+dr_magic="$(compose exec -T api head -c 8 "${dr_dir}/archive.nxb")" ||
+  fail "could not read the archive"
+[ "$dr_magic" = "NEXABAK1" ] || fail "the archive is not a NEXABAK1 container"
+pass "the run directory is 0700, the archive 0600 and ciphertext, and no plaintext is left"
+
+# The operator's verify: decrypts through the real restore path and checksums,
+# touching no database, into a private directory under the backup volume that
+# it removes again.
+DR_VERIFY_OUT="$(compose exec -T api node dist/backup.cli.js verify \
+  --archive "${dr_dir}/archive.nxb" 2>&1)" ||
+  fail "backup.cli.js verify failed inside the image: ${DR_VERIFY_OUT}"
+case "$DR_VERIFY_OUT" in
+  *"checksum MATCHES"*) ;;
+  *) fail "the DR archive did not verify: ${DR_VERIFY_OUT}" ;;
+esac
+dr_scratch="$(compose exec -T api find /var/lib/nexa/backups /tmp -name '*.pgcustom')" ||
+  fail "could not search for plaintext"
+[ -z "$dr_scratch" ] || fail "plaintext was left after verify: ${dr_scratch}"
+pass "backup.cli.js verify decrypts and checksums the archive, and leaves no plaintext"
+
+# ---------------------------------------------------------------------------
 step "8. no secret appears in normal output"
 # ---------------------------------------------------------------------------
 # Everything an operator would see or paste into a ticket.
