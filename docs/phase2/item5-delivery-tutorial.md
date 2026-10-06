@@ -15,7 +15,7 @@ Modes: `DISABLED` (the default, and what "no row" means), `TEXT`, `VIDEO`, `VIDE
 
 - **Per panel.** What the tutorial says («only Sing-box») is a property of the panel's
   connection, so it is configured on the panel page, tab «آموزش پس از تحویل».
-- **Its own table, `delivery_tutorials`** (migration `0212`), never `panels.policy`: that jsonb
+- **Its own table, `delivery_tutorials`** (migration `0211`), never `panels.policy`: that jsonb
   is parsed strictly, and a rollback meeting an unknown key would refuse every customer action
   on the panel. Tenant-leading primary key, composite foreign key to the panel, a mode CHECK
   from `DELIVERY_TUTORIAL_MODES`, and a content CHECK that demands only what the mode sends.
@@ -67,6 +67,24 @@ screen is never sent twice. A stopped tenant claims and sends nothing.
 Outcomes are never retried: `UNKNOWN` may have arrived and `RATE_LIMITED` is Telegram declining
 a courtesy message. The sender never throws into delivery, and the sweep swallows anything that
 does.
+
+**PO-visible choice — at most once, never at least once.** The claim is committed before the
+send, so a tutorial Telegram answers with a 429 (`RATE_LIMITED`) or with an ambiguous outcome
+(`UNKNOWN`) is NOT sent again later: that customer simply does not get it. This is deliberate —
+a duplicate tutorial (or a tutorial resent after the customer already read it) is the failure
+the claim exists to rule out — and the customer can still open the connection guide from the
+delivery card's «📖 آموزش» button. In the too-long `VIDEO_TEXT` arrangement, a bare video
+answered `RATE_LIMITED` is not followed by the text either: the limit is per chat, so the text
+would only burst into a second 429.
+
+Two more consequences of "first automatic delivery only", stated so nobody reads them as bugs:
+
+- A first delivery that ends `UNCONFIRMED` (the card's send was ambiguous) sends **no** tutorial —
+  the hook runs only for a send recorded `DELIVERED`, and an unconfirmed row is never re-claimed
+  by the sweep.
+- A customer who fetched their link through `redeliver` (the service card, «🔗 لینک اشتراک», an
+  operator's resend) before the sweep delivered it gets **no** tutorial at all: `redeliver` never
+  calls the hook, and it records the delivery itself, so the sweep has nothing left to deliver.
 
 ## Rendering
 
