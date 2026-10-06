@@ -84,6 +84,13 @@ export class BusinessChatsController {
     const { scope, actor } = await this.authenticate(request);
     const found = await this.container.businessConversations.detail(scope, actor, conversationId);
     const summary = toSummary(found.item);
+    // Why the AI failed, beside each handoff an automatic job made (classes, never text).
+    const aiFailures = await this.container.supportAssist.failureDiagnostics(
+      scope,
+      found.escalations.flatMap((escalation) =>
+        escalation.jobId === null ? [] : [escalation.jobId],
+      ),
+    );
     return {
       conversation: {
         ...summary,
@@ -97,6 +104,7 @@ export class BusinessChatsController {
         ticketId: escalation.ticketId,
         ticketOutcome: escalation.ticketOutcome,
         createdAt: escalation.createdAt.toISOString(),
+        aiFailure: escalation.jobId === null ? null : (aiFailures.get(escalation.jobId) ?? null),
       })),
       messages: found.messages.map((message) => ({
         id: message.id,

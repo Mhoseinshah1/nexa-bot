@@ -309,6 +309,7 @@ describe('one business conversation', () => {
               ticketId: '019460ab-cdef-7012-8345-6789abcdef01',
               ticketOutcome: 'CREATED',
               createdAt: '2026-10-01T10:06:00.000Z',
+              aiFailure: null,
             },
             {
               id: '019450ab-cdef-7012-8345-6789abcdef02',
@@ -317,6 +318,34 @@ describe('one business conversation', () => {
               ticketId: null,
               ticketOutcome: 'NO_CUSTOMER',
               createdAt: '2026-10-01T09:06:00.000Z',
+              aiFailure: null,
+            },
+            {
+              id: '019450ab-cdef-7012-8345-6789abcdef03',
+              reason: 'AI_OUTPUT_INVALID',
+              summary: null,
+              ticketId: null,
+              ticketOutcome: 'NO_CUSTOMER',
+              createdAt: '2026-10-01T08:06:00.000Z',
+              // Program §12: WHY the AI's output was invalid, beside the coarse reason.
+              aiFailure: {
+                failureClass: 'schema_invalid',
+                operation: 'AUTO_DECISION',
+                provider: 'OPENAI',
+                model: 'gpt-test-1',
+                attemptIndex: 0,
+                outcome: 'INVALID_OUTPUT',
+                httpStatus: null,
+                providerErrorCode: null,
+                providerErrorType: null,
+                providerErrorParam: null,
+                issuePath: 'knowledgeRefs.0',
+                issueCode: 'invalid_format',
+                latencyMs: 900,
+                inputTokens: 2100,
+                outputTokens: 180,
+                at: '2026-10-01T08:06:00.000Z',
+              },
             },
           ],
         },
@@ -327,7 +356,10 @@ describe('one business conversation', () => {
     expect(screen.getByText('مشتری بازپرداخت می‌خواهد.')).toBeTruthy();
     const link = screen.getByRole('link', { name: t('web.bchat_escalation_ticket_created') });
     expect(link.getAttribute('href')).toBe('/tickets/019460ab-cdef-7012-8345-6789abcdef01');
-    expect(screen.getByText(t('web.bchat_escalation_no_customer'))).toBeTruthy();
+    expect(screen.getAllByText(t('web.bchat_escalation_no_customer')).length).toBeGreaterThan(0);
+    const failure = document.querySelector('[data-failure-class="schema_invalid"]')!;
+    expect(failure.textContent).toContain(t('web.sai_failure_schema_invalid'));
+    expect(failure.textContent).toContain('knowledgeRefs.0 (invalid_format)');
     expect(screen.getAllByText(t('web.bchat_handoff_topic')).length).toBeGreaterThan(0);
     expect(screen.getByText(t('web.bchat_handoff_identity'))).toBeTruthy();
   });

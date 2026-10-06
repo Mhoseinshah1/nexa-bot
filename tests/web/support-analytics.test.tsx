@@ -73,6 +73,9 @@ const analytics = (overrides: Record<string, unknown> = {}) => ({
     { state: 'REJECTED', count: 0 },
   ],
   knowledgeBySource: [{ source: 'NEXA_BUILD', state: 'APPROVED', enabled: true, count: 12 }],
+  aiFailures: [
+    { operation: 'AUTO_DECISION', provider: 'OPENAI', failureClass: 'schema_invalid', runs: 3 },
+  ],
   ...overrides,
 });
 
@@ -117,6 +120,11 @@ describe('the support analytics page', () => {
     expect(screen.getByText(t('web.bchat_handoff_low_confidence'))).toBeTruthy();
     // Automatic replies: the guard that failed, in words.
     expect(screen.getByText(t('web.sa_auto_guard_handoff_topic'))).toBeTruthy();
+    // Program §12: why the AI's calls failed, by class, in words.
+    const failures = screen.getByRole('table', { name: t('web.sai_ai_failures') });
+    expect(within(failures).getByText(t('web.sai_failure_schema_invalid'))).toBeTruthy();
+    expect(within(failures).getByText(t('web.sai_operation_auto_decision'))).toBeTruthy();
+    expect(failures.textContent).not.toContain('schema_invalid');
     // Provider runs: percentiles and tokens in the row of their provider and outcome.
     const table = screen.getByRole('table', { name: t('web.sa_runs_title') });
     const rows = within(table).getAllByRole('row');

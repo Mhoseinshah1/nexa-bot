@@ -776,6 +776,120 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     ]);
   });
 
+  // --- Program §A3 / §12: the handoff stays coarse for the customer; the class says why -----
+
+  const failureClassOf = async (conversationId: string) =>
+    (
+      (
+        await db().execute(
+          sql`SELECT failure_class FROM support_ai_jobs
+              WHERE kind = 'AUTO_DECISION' AND conversation_id = ${conversationId}`,
+        )
+      ).rows[0] as { failure_class: string | null }
+    ).failure_class;
+
+  it('a provider rejection hands off as AI_OUTPUT_INVALID, recording the class for the operator', async () => {
+    next = {
+      outcome: 'INVALID_OUTPUT',
+      code: 'openai.http_400',
+      detail: {
+        failureClass: 'unsupported_capability',
+        httpStatus: 400,
+        providerErrorCode: null,
+        providerErrorType: 'invalid_request_error',
+        providerErrorParam: 'response_format',
+      },
+    };
+    const first = await record(message());
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { outcome: 'handoff_output_invalid', handoff_reason: 'AI_OUTPUT_INVALID' },
+    ]);
+    expect(await failureClassOf(first.conversationId)).toBe('unsupported_capability');
+    // The customer is told nothing different: no automatic row at all.
+    expect(await autoRows(first.conversationId)).toEqual([]);
+    // The conversation screen's handoff carries the diagnosis.
+    const detail = await ctx.container.businessConversations.detail(
+      scopeA,
+      owner,
+      first.conversationId,
+    );
+    const jobIds = detail.escalations.flatMap((e) => (e.jobId === null ? [] : [e.jobId]));
+    const diagnostics = await ctx.container.supportAssist.failureDiagnostics(scopeA, jobIds);
+    expect([...diagnostics.values()]).toMatchObject([{ failureClass: 'unsupported_capability' }]);
+  });
+
+  it('an answer that fails the decision schema hands off with schema_invalid', async () => {
+    next = {
+      outcome: 'OK',
+      output: { ...grounded, factRefs: ['the customer’s service'] },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'gpt-5.5',
+    };
+    const first = await record(message());
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { outcome: 'handoff_output_invalid', handoff_reason: 'AI_OUTPUT_INVALID' },
+    ]);
+    expect(await failureClassOf(first.conversationId)).toBe('schema_invalid');
+  });
+
+  it('an unavailable chain hands off as AI_UNAVAILABLE with its own class', async () => {
+    next = { outcome: 'TIMEOUT' };
+    const first = await record(message());
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { outcome: 'handoff_ai_unavailable', handoff_reason: 'AI_UNAVAILABLE' },
+    ]);
+    expect(await failureClassOf(first.conversationId)).toBe('timeout');
+  });
+
+  // Regression: the decision a correct model gives the field message, with an operator note
+  // over the bound and a knowledge citation that is not an alias, was handed off as invalid.
+  it('a correct reply with an over-long intent and a non-alias knowledge citation is sent', async () => {
+    next = {
+      outcome: 'OK',
+      output: {
+        ...grounded,
+        intent: 'مشتری می‌گوید سرویس من وصل نمی‌شود و ' + 'ا'.repeat(150),
+        knowledgeRefs: ['FAQ'],
+      },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'gpt-5.5',
+    };
+    const first = await record(message());
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { state: 'SENT', outcome: 'sent' },
+    ]);
+    expect(await autoRows(first.conversationId)).toHaveLength(1);
+    expect(await failureClassOf(first.conversationId)).toBeNull();
+  });
+
+  // Agent audit D6: a connection without the reply right never gets a transcript sent to a
+  // provider, nor a provider paid, for a reply it could not send.
+  it('a connection without can_reply: no provider call, no AUTO row', async () => {
+    const first = await record(message());
+    await ctx.container.businessConnections.applyReport(scopeA, system(), {
+      idempotencyKey: key('conn-read-only'),
+      botInstanceId: BOT,
+      report: {
+        connectionId: 'conn-1',
+        ownerTelegramUserId: OWNER,
+        ownerUserChatId: OWNER,
+        isEnabled: true,
+        rights: [] as BusinessBotRight[],
+        connectedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    });
+    await tick();
+    expect(calls).toBe(0);
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { state: 'DISCARDED', outcome: 'dropped_connection' },
+    ]);
+    expect(await autoRows(first.conversationId)).toEqual([]);
+  });
+
   // --- TB6 × TB7: an image the reply would be about must be SEEN ---------------------------
 
   const photo = () => message({ kind: 'PHOTO', text: null });

@@ -115,7 +115,7 @@ export class SupportContextBuilder {
      * a reviewer approved for the agent.
      */
     const knowledge = [
-      ...articles.map((row): SupportContextKnowledge => ({
+      ...articles.map((row): Omit<SupportContextKnowledge, 'alias'> => ({
         source: 'KNOWLEDGE',
         question: clip(row.title, 512),
         answer: clip(row.body, 4096),
@@ -131,12 +131,16 @@ export class SupportContextBuilder {
               (article) => article.sourceType === 'FAQ' && article.sourceKey === row.id,
             ),
         )
-        .map((row): SupportContextKnowledge => ({
+        .map((row): Omit<SupportContextKnowledge, 'alias'> => ({
           source: 'FAQ',
           question: clip(row.question, 512),
           answer: clip(row.answer, 4096),
         })),
-    ].slice(0, SUPPORT_CONTEXT_LIMITS.knowledge);
+    ]
+      .slice(0, SUPPORT_CONTEXT_LIMITS.knowledge)
+      // By position, after the cut: `K1` is the first entry the model reads. The byte budget
+      // drops from the tail, so a surviving entry keeps its alias.
+      .map((entry, index): SupportContextKnowledge => ({ alias: aliasFor('K', index), ...entry }));
     const supportAccounts = accounts.slice(0, 10).map((handle) => clip(handle, 64));
 
     if (customer === null) {

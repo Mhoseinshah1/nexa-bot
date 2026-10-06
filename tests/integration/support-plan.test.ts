@@ -190,13 +190,15 @@ describe('the support query plans', () => {
   };
 
   /** The statement a call sent that reads `table`, captured on its way out. */
-  const statementOf = async (call: () => Promise<unknown>, table: string) => {
+  const statementsOf = async (call: () => Promise<unknown>, table: string, expected = 1) => {
     captured = [];
     await call();
     const found = captured.filter((one) => new RegExp(`from "?${table}"?\\b`, 'i').test(one.sql));
-    expect(found, `no statement read ${table}`).toHaveLength(1);
-    return found[0]!;
+    expect(found, `no statement read ${table}`).toHaveLength(expected);
+    return found;
   };
+  const statementOf = async (call: () => Promise<unknown>, table: string) =>
+    (await statementsOf(call, table))[0]!;
 
   const INBOX_INDEX = 'business_conversations_inbox_priority_idx';
 
@@ -256,13 +258,14 @@ describe('the support query plans', () => {
   });
 
   describe('the analytics', () => {
-    const windowed: readonly { table: string; index: string }[] = [
+    const windowed: readonly { table: string; index: string; statements?: number }[] = [
       {
         table: 'business_conversation_escalations',
         index: 'business_conversation_escalations_created_idx',
       },
       { table: 'support_ai_jobs', index: 'support_ai_jobs_created_idx' },
-      { table: 'support_ai_runs', index: 'support_ai_runs_tenant_created_idx' },
+      // Two statements: runs by provider and outcome, and failed runs by class (program §12).
+      { table: 'support_ai_runs', index: 'support_ai_runs_tenant_created_idx', statements: 2 },
       // PR #205 review, N4.
       {
         table: 'support_learning_candidates',
@@ -272,23 +275,29 @@ describe('the support query plans', () => {
 
     for (const shape of windowed) {
       it(`counts ${shape.table} in the window from ${shape.index}`, async () => {
-        const plan = await explain(
-          await statementOf(() => analytics.read(scope, window), shape.table),
-        );
-        expect(plan, `${shape.index} is not in the plan:\n${plan}`).toContain(shape.index);
-        expect(plan, `the window did not bound the scan:\n${plan}`).toMatch(
-          /Index Cond:.*created_at/s,
-        );
-        expect(plan, `the table was walked:\n${plan}`).not.toContain(`Seq Scan on ${shape.table}`);
-        /*
-         * A window of a month, read as a range (PR #205 review, N4). Measured on this fixture:
-         * 44 buffers for escalations, 60 for jobs, 44 for runs, 23 for learning candidates.
-         * Before `support_learning_candidates_created_idx`, the candidate count was an
-         * index-only scan of the tenant's WHOLE review-queue index (it leads with `state`),
-         * `created_at` checked entry by entry: 228 buffers, and an Index Cond that still named
-         * `created_at`, which is why the bound and not the Index Cond is what catches it.
-         */
-        expect(buffersIn(plan), `more than the window was read:\n${plan}`).toBeLessThan(120);
+        for (const statement of await statementsOf(
+          () => analytics.read(scope, window),
+          shape.table,
+          shape.statements ?? 1,
+        )) {
+          const plan = await explain(statement);
+          expect(plan, `${shape.index} is not in the plan:\n${plan}`).toContain(shape.index);
+          expect(plan, `the window did not bound the scan:\n${plan}`).toMatch(
+            /Index Cond:.*created_at/s,
+          );
+          expect(plan, `the table was walked:\n${plan}`).not.toContain(
+            `Seq Scan on ${shape.table}`,
+          );
+          /*
+           * A window of a month, read as a range (PR #205 review, N4). Measured on this fixture:
+           * 44 buffers for escalations, 60 for jobs, 44 for runs, 23 for learning candidates.
+           * Before `support_learning_candidates_created_idx`, the candidate count was an
+           * index-only scan of the tenant's WHOLE review-queue index (it leads with `state`),
+           * `created_at` checked entry by entry: 228 buffers, and an Index Cond that still named
+           * `created_at`, which is why the bound and not the Index Cond is what catches it.
+           */
+          expect(buffersIn(plan), `more than the window was read:\n${plan}`).toBeLessThan(120);
+        }
       }, 60_000);
     }
 

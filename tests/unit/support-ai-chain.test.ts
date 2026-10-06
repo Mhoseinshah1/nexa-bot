@@ -62,6 +62,8 @@ function chainWith(options: {
   /** Credential-alert conditions already open, by dedupe key. */
   openAlerts?: string[];
   unavailableOpen?: boolean;
+  /** The caller's decision parse, run by the chain on an `OK`. */
+  validate?: Parameters<SupportAiChain['generate']>[1]['validate'];
 }) {
   const keys = new Set(options.keys ?? options.adapters.map((a) => a.provider));
   const vanished = new Set(options.vanished ?? []);
@@ -102,6 +104,7 @@ function chainWith(options: {
               ? new Date(NOW.getTime() - 1)
               : null,
           lastTestOutcome: null,
+          lastTestFailureClass: null,
           lastTestedAt: null,
           rejectedAt: null,
         })),
@@ -151,7 +154,9 @@ function chainWith(options: {
     chain.generate(scope, {
       operation: 'ASSIST_DRAFT',
       conversationId: null,
+      jobId: 'job-1',
       request: { system: 's', messages: [], jsonSchema: {}, schemaName: 'x', maxOutputTokens: 10 },
+      ...(options.validate === undefined ? {} : { validate: options.validate }),
     });
   const codes = () =>
     opsLog.record.mock.calls.map(
@@ -382,5 +387,80 @@ describe('the support AI configuration schema', () => {
         ]),
       ).success,
     ).toBe(true);
+  });
+});
+
+describe('the chain records WHY a call failed (program §A3)', () => {
+  const invalid = () =>
+    ({ failureClass: 'schema_invalid', issuePath: 'intent', issueCode: 'too_big' }) as const;
+
+  it('an answer that fails the caller’s parse is recorded as INVALID_OUTPUT with the issue', async () => {
+    const primary = adapter('OPENAI', [ok()]);
+    const fallback = adapter('ANTHROPIC', [ok()]);
+    const { generate, runs, results, codes } = chainWith({
+      adapters: [primary, fallback],
+      validate: invalid,
+    });
+    const result = await generate();
+    expect(result.outcome).toMatchObject({
+      outcome: 'INVALID_OUTPUT',
+      code: 'decision.schema_invalid',
+      detail: { failureClass: 'schema_invalid' },
+    });
+    // Invalid output never falls back: asking another model until one agrees is laundering.
+    expect(fallback.calls).toBe(0);
+    expect(runs.record).toHaveBeenCalledTimes(1);
+    expect(runs.record.mock.calls[0]).toEqual([
+      scope,
+      expect.objectContaining({
+        jobId: 'job-1',
+        outcome: 'INVALID_OUTPUT',
+        failureCode: 'decision.schema_invalid',
+        failure: expect.objectContaining({ failureClass: 'schema_invalid' }),
+        schemaIssue: { path: 'intent', code: 'too_big' },
+      }),
+    ]);
+    // The PROVIDER answered: the breaker closes, and the chain counts as available.
+    expect(results).toEqual([{ provider: 'OPENAI', result: 'SUCCESS' }]);
+    expect(codes()).not.toContain(SUPPORT_AI_UNAVAILABLE_CODE);
+  });
+
+  it('a valid answer records OK with no class, and the job it was for', async () => {
+    const { generate, runs } = chainWith({
+      adapters: [adapter('OPENAI', [ok()])],
+      validate: () => null,
+    });
+    expect((await generate()).outcome.outcome).toBe('OK');
+    expect(runs.record.mock.calls[0]).toEqual([
+      scope,
+      expect.objectContaining({ jobId: 'job-1', outcome: 'OK', failure: null, schemaIssue: null }),
+    ]);
+  });
+
+  it('a provider failure records its class and particulars on the run', async () => {
+    const rejected: SupportAiOutcome = {
+      outcome: 'INVALID_OUTPUT',
+      code: 'openai.http_400',
+      detail: {
+        failureClass: 'unsupported_capability',
+        httpStatus: 400,
+        providerErrorCode: null,
+        providerErrorType: 'invalid_request_error',
+        providerErrorParam: 'response_format',
+      },
+    };
+    const { generate, runs } = chainWith({ adapters: [adapter('OPENAI', [rejected])] });
+    await generate();
+    expect(runs.record.mock.calls[0]).toEqual([
+      scope,
+      expect.objectContaining({
+        outcome: 'INVALID_OUTPUT',
+        failure: expect.objectContaining({
+          failureClass: 'unsupported_capability',
+          httpStatus: 400,
+          providerErrorParam: 'response_format',
+        }),
+      }),
+    ]);
   });
 });

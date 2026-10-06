@@ -487,6 +487,19 @@ export class BusinessConversationService {
    * epoch moved, the conversation is no longer AI_ACTIVE, or the connection cannot send. This is
    * the producer's check; TB2's final check at the send stamp remains the authority.
    */
+  /**
+   * Whether an automatic reply to this conversation could be sent at all right now: its
+   * connection is `ACTIVE` — enabled, with the `can_reply` right (the projected status). Read
+   * by the producer BEFORE a provider is paid and given the transcript; a courtesy, unlocked —
+   * `enqueueAutoSend` decides again under the conversation's lock.
+   */
+  async autoSendPossible(scope: ScopeContext, conversationId: string): Promise<boolean> {
+    const conversation = await this.deps.conversations.findById(scope, conversationId);
+    if (conversation === null) return false;
+    const connection = await this.deps.connections.findById(scope, conversation.connectionRowId);
+    return connection !== null && connection.status === 'ACTIVE';
+  }
+
   async enqueueAutoSend(
     scope: ScopeContext,
     input: {
