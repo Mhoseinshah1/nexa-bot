@@ -103,6 +103,8 @@ describe('the QR_BACKGROUND media slot', () => {
     expect(at(QR_BACKGROUND_MAX_SIDE, QR_BACKGROUND_MAX_SIDE).ok).toBe(true);
     expect(at(QR_BACKGROUND_MIN_SIDE - 1, 400)).toEqual({ ok: false, problem: 'DIMENSIONS' });
     expect(at(400, QR_BACKGROUND_MAX_SIDE + 1)).toEqual({ ok: false, problem: 'DIMENSIONS' });
+    expect(at(QR_BACKGROUND_MAX_SIDE + 1, 400)).toEqual({ ok: false, problem: 'DIMENSIONS' });
+    expect(at(400, QR_BACKGROUND_MIN_SIDE - 1)).toEqual({ ok: false, problem: 'DIMENSIONS' });
     // A header claiming a gigapixel is refused from the header, before anything is inflated.
     expect(at(65_535, 65_535)).toEqual({ ok: false, problem: 'DIMENSIONS' });
   });

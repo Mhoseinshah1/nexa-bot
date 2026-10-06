@@ -323,6 +323,21 @@ describe('composing the QR on a background', () => {
     }
   });
 
+  it('never rounds the module up into the quiet zone: the scale is the floor', () => {
+    // 37 modules + 2 × 4 quiet = 45 module widths; 440 / 45 = 9.78 → 9 px, never 10.
+    const count = qrModules(URL).length;
+    expect(count).toBe(37);
+    const region: QrTemplate = { x: 100, y: 100, size: 440, quietZoneModules: 4 };
+    const composed = composeQrOnBackground(URL, background, region);
+    if (!composed.ok) throw new Error(composed.reason);
+    expect(composed.scale).toBe(9);
+    // The white margin inside the region is at least four 9 px modules on the left.
+    const left = region.x + Math.floor((region.size - count * 9) / 2);
+    expect(left - region.x).toBeGreaterThanOrEqual(4 * 9);
+    expect(pixelAt(composed.png, left - 1, region.y + 220)).toEqual([255, 255, 255]);
+    expect(decodeAnyQrPng(composed.png)).toBe(URL);
+  });
+
   it('leaves the background outside the region exactly as it was', () => {
     const composed = composeQrOnBackground(URL, background, TEMPLATE);
     if (!composed.ok) throw new Error(composed.reason);
