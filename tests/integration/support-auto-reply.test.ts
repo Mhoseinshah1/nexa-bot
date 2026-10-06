@@ -382,6 +382,36 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(await count('business_conversation_escalations')).toBe(0);
   });
 
+  it('D9: «وصل نمیشه، پولمو پس بدید» never auto-replies, whatever topic the model picks', async () => {
+    // The model would label it a safe, confident, grounded connection answer.
+    const first = await record(message({ text: 'وصل نمیشه، پولمو پس بدید' }));
+    await tick();
+    await deliver();
+    expect(calls).toBe(0); // decided before any provider is asked
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { state: 'FAILED', outcome: 'guard_handoff_topic', handoff_reason: 'HANDOFF_TOPIC' },
+    ]);
+    expect(await conversation(first.conversationId)).toMatchObject({
+      state: 'HANDOFF_REQUIRED',
+      handoffReason: 'HANDOFF_TOPIC',
+    });
+    expect(await autoRows(first.conversationId)).toEqual([]);
+    expect(transport.sent).toEqual([]);
+    expect(await count('tickets')).toBe(1); // the refund path: escalation and ticket
+  });
+
+  it('D9: an earlier refund line still counts when a newer message is the trigger', async () => {
+    await record(message({ text: 'پول‌مو پس بدین' }));
+    const second = await record(message({ text: 'سرویسم هم وصل نمیشه' }));
+    await tick();
+    expect(calls).toBe(0);
+    expect((await autoJobs(second.conversationId)).at(-1)).toMatchObject({
+      state: 'FAILED',
+      outcome: 'guard_handoff_topic',
+    });
+    expect(await autoRows(second.conversationId)).toEqual([]);
+  });
+
   it('waits the settle delay: a job is not claimed before it is due', async () => {
     const first = await record(message());
     await tick(0);

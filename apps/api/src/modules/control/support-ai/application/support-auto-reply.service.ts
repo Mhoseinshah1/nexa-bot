@@ -29,7 +29,9 @@ import type {
 import {
   autoDecisionGuards,
   autoImageGuard,
+  autoMoneyGuard,
   autoPreflight,
+  customerTextsSinceReply,
   type AutoContextFlags,
   type AutoVerdict,
 } from '../domain/auto-reply-guards.js';
@@ -256,6 +258,9 @@ export class SupportAutoReplyService {
     // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
     // transaction through the tenant-scoped source.
     const transcript = await this.deps.messages.recent(scope, conversation.id, 40);
+    // D9: money in what the customer wrote is a person's, whatever topic a model would pick.
+    const money = autoMoneyGuard(customerTextsSinceReply(transcript, trigger?.text ?? null));
+    if (!money.pass) return this.handOff(scope, job, money, null, null);
     const plan = planVision(transcript, {
       visionEnabled: config.visionEnabled,
       visionStepConfigured: this.deps.chain.visionStepConfigured(config),
