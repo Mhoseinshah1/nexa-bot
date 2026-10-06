@@ -6690,6 +6690,63 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * B8: both directions of the switch ASK before acting. The first tap (`u:` / `e:`) edits the
+   * card into one of these questions and plans nothing; only the confirm button (`uq:` /
+   * `eq:`) plans the operation, and the cancel button redraws the card.
+   */
+  {
+    key: 'bot.service.suspend_confirm',
+    description:
+      'B8: the question a customer is asked before their service is switched OFF, drawn in ' +
+      'place of the service card. Nothing is changed on the server until they confirm.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service\u2019s account name on the panel, as the card shows it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.resume_confirm',
+    description:
+      'B8: the question a customer is asked before their service is switched back ON, drawn ' +
+      'in place of the service card. Nothing is changed on the server until they confirm.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service\u2019s account name on the panel, as the card shows it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.suspend_confirm_button',
+    description: 'B8: the button on the switch-off question that performs it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.resume_confirm_button',
+    description: 'B8: the button on the switch-on question that performs it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.toggle_cancel_button',
+    description:
+      'B8: the button on either switch question that changes nothing and puts the service ' +
+      'card back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.service.suspend_button',
     description:

@@ -978,6 +978,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.action_confirm_button': 'تأیید و پرداخت',
   'bot.service.suspend_button': '❌ خاموش کردن اکانت',
   'bot.service.resume_button': '✅ روشن کردن اکانت',
+  // B8: both directions of the switch ask first; nothing changes until the customer confirms.
+  'bot.service.suspend_confirm':
+    'آیا از خاموش کردن اکانت {serviceUsername} مطمئن هستید؟\nتا وقتی دوباره آن را روشن نکنید، اتصال شما برقرار نمی‌شود.',
+  'bot.service.resume_confirm': 'آیا از روشن کردن اکانت {serviceUsername} مطمئن هستید؟',
+  'bot.service.suspend_confirm_button': '✅ بله، خاموش شود',
+  'bot.service.resume_confirm_button': '✅ بله، روشن شود',
+  'bot.service.toggle_cancel_button': '✖️ انصراف',
   'bot.service.terminate_button': 'حذف سرویس',
   'bot.service.terminate_confirm':
     'آیا از حذف «{productTitle}» مطمئن هستید؟ با تأیید، حساب شما روی سرور پاک می‌شود و این کار برگشت‌پذیر نیست.',
