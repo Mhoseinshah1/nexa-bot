@@ -222,12 +222,15 @@ describe('the QR background and template (Phase 2 item 4)', () => {
       code: CONTROL_ERROR_CODES.INVALID_VALUE,
     });
     await upload(gradientBackground(500, 500));
-    // Each edge on its own: past the right edge, then past the bottom edge.
+    // Each edge on its own: past the right edge, then past the bottom edge. The refusal names
+    // the background's size, so the operator knows what the region must fit inside.
     await expect(setTemplate({ ...TEMPLATE, x: 100, y: 0, size: 401 })).rejects.toMatchObject({
       code: CONTROL_ERROR_CODES.INVALID_VALUE,
+      message: expect.stringContaining('500×500'),
     });
     await expect(setTemplate({ ...TEMPLATE, x: 0, y: 100, size: 401 })).rejects.toMatchObject({
       code: CONTROL_ERROR_CODES.INVALID_VALUE,
+      message: expect.stringContaining('500×500'),
     });
     // Exactly at the edge is inside.
     expect((await setTemplate({ ...TEMPLATE, x: 100, y: 80, size: 400 })).changed).toBe(true);
