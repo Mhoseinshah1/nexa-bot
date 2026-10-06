@@ -46,6 +46,9 @@ export interface SupportAiJobRecord {
   readonly sentOutboundId: string | null;
   readonly imagesSeen: number;
   readonly imagesUnseen: number;
+  /** D2: knowledge entries the request carried, and the candidates; null when none was asked. */
+  readonly knowledgeSent: number | null;
+  readonly knowledgeAvailable: number | null;
   readonly unseenImageHandoff: SupportAiImageSkipReason | null;
   /** TB7 (AUTO_DECISION only). */
   readonly triggerTelegramMessageId: number | null;
@@ -91,6 +94,8 @@ function toRecord(row: Row): SupportAiJobRecord {
     sentOutboundId: row.sentOutboundId,
     imagesSeen: row.imagesSeen,
     imagesUnseen: row.imagesUnseen,
+    knowledgeSent: row.knowledgeSent,
+    knowledgeAvailable: row.knowledgeAvailable,
     unseenImageHandoff: row.unseenImageHandoff as SupportAiImageSkipReason | null,
     triggerTelegramMessageId: row.triggerTelegramMessageId,
     triggerContentVersion: row.triggerContentVersion,
@@ -528,6 +533,24 @@ export class DrizzleSupportAiJobRepository {
       )
       .returning({ id: supportAiJobs.id });
     return rows.length > 0;
+  }
+
+  /**
+   * D2 telemetry — how many knowledge entries the job's request carried, and how many there
+   * were to choose from. Written in the job's result transaction (`withKnowledgeCounts`).
+   */
+  async recordKnowledgeCounts(
+    scope: ScopeContext,
+    jobId: string,
+    counts: { readonly sent: number; readonly available: number },
+    now: Date,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await exec(this.db, tx)
+      .update(supportAiJobs)
+      .set({ knowledgeSent: counts.sent, knowledgeAvailable: counts.available, updatedAt: now })
+      .where(and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.id, jobId)));
   }
 
   /** TB6 — the per-image telemetry of one draft's request. */

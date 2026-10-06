@@ -114,6 +114,8 @@ export interface SupportKnowledgeReader {
     readonly {
       readonly title: string;
       readonly body: string;
+      /** D2: the reviewer's tags, which the relevance score reads. */
+      readonly tags: readonly string[];
       /** TB9: the source a NEXA_BUILD article was built from; null for any other article. */
       readonly sourceType: string | null;
       readonly sourceKey: string | null;

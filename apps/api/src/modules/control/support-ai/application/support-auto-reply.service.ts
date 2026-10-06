@@ -36,6 +36,7 @@ import {
   type AutoVerdict,
 } from '../domain/auto-reply-guards.js';
 import { planVision } from '../domain/vision.js';
+import { latestCustomerWords } from '../domain/transcript.js';
 import {
   supportSystemPrompt,
   transcriptMessages,
@@ -51,6 +52,7 @@ import type { SupportContextSource } from './support-assist.service.js';
 import type { SupportAiChain, SupportAiVisionVariant } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
 import { readSupportTranscript } from './support-transcript.js';
+import { withKnowledgeCounts } from './knowledge-telemetry.js';
 
 /** The key that makes an automatic job idempotent on its message (and content version). */
 export function autoJobKey(conversationId: string, telegramMessageId: number, version: number) {
@@ -154,7 +156,10 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
 }
 
 export interface SupportAutoReplyServiceDeps {
-  readonly jobs: Pick<DrizzleSupportAiJobRepository, 'finishAuto' | 'recordImageOutcomes'>;
+  readonly jobs: Pick<
+    DrizzleSupportAiJobRepository,
+    'finishAuto' | 'recordImageOutcomes' | 'recordKnowledgeCounts'
+  >;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
   /** TB6: the one way a customer's image is read (tenant-scoped, bounded, sniffed). */
@@ -238,8 +243,12 @@ export class SupportAutoReplyService {
     const now = this.deps.clock.now();
     if (isStale(job, now)) return this.handOff(scope, job, STALE, null, null);
 
-    // 2. Preflight: nothing here needs the model.
-    const context = await this.deps.context.build(scope, conversation.customerId);
+    // 2. Preflight: nothing here needs the model. The transcript is read first: the customer's
+    // latest words choose the knowledge the context carries (D2).
+    const transcript = await readSupportTranscript(this.deps, scope, conversation.id);
+    const context = await this.deps.context.build(scope, conversation.customerId, {
+      query: latestCustomerWords(transcript),
+    });
     const { verdict: preflight, trigger } = await this.preflight(
       scope,
       job,
@@ -259,7 +268,6 @@ export class SupportAutoReplyService {
     if (!active) return 'INACTIVE';
     // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
     // transaction through the tenant-scoped source.
-    const transcript = await readSupportTranscript(this.deps, scope, conversation.id);
     // D9: money in what the customer wrote is a person's, whatever topic a model would pick.
     const money = autoMoneyGuard(customerTextsSinceReply(transcript, trigger?.text ?? null));
     if (!money.pass) return this.handOff(scope, job, money, null, null);
@@ -358,12 +366,19 @@ export class SupportAutoReplyService {
     const seenIds = new Set(answered ? result.sight.seen : []);
     // A loaded image is PROCESSED only when the step that ANSWERED was given it. The rows are
     // written only with this job's own transition, in its transaction (TB6 review, S1).
-    const images = this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
-      seenIds.has(messageId)
-        ? null
-        : answered
-          ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
-          : 'NOT_ANSWERED',
+    // D2: the knowledge counts go with the job's result, in its transaction.
+    const images = withKnowledgeCounts(
+      this.deps.jobs,
+      scope,
+      job.id,
+      context.knowledge,
+      this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
+        seenIds.has(messageId)
+          ? null
+          : answered
+            ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
+            : 'NOT_ANSWERED',
+      ),
     );
     // No configured step could look at a required image: an unseen image hands off.
     if (

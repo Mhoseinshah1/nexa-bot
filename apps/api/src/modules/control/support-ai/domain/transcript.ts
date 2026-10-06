@@ -107,3 +107,24 @@ export function mergeTranscript(
     .map((entry) => entry.line)
     .slice(-limit);
 }
+
+/** How many of the customer's latest messages choose the knowledge a request carries (D2). */
+export const KNOWLEDGE_QUERY_MESSAGES = 3;
+
+/**
+ * D2 — the words the knowledge is chosen by: the customer's latest `count` messages with text,
+ * oldest first, one per line. Empty when the customer has written nothing readable.
+ */
+export function latestCustomerWords(
+  lines: readonly Pick<SupportTranscriptLine, 'origin' | 'text'>[],
+  count: number = KNOWLEDGE_QUERY_MESSAGES,
+): string {
+  const words: string[] = [];
+  for (let index = lines.length - 1; index >= 0 && words.length < count; index -= 1) {
+    const line = lines[index];
+    if (line?.origin === 'INBOUND' && line.text !== null && line.text.trim() !== '') {
+      words.unshift(line.text);
+    }
+  }
+  return words.join('\n');
+}

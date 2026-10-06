@@ -41,6 +41,7 @@ import {
   type TranscriptLine,
 } from '../domain/prompt.js';
 import { planVision } from '../domain/vision.js';
+import { latestCustomerWords } from '../domain/transcript.js';
 import type { DrizzleSupportAiConfigRepository } from '../infrastructure/drizzle-support-ai.repository.js';
 import type {
   DrizzleSupportAiJobRepository,
@@ -49,6 +50,7 @@ import type {
 import type { SupportAiChain, SupportAiVisionVariant } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
 import { readSupportTranscript } from './support-transcript.js';
+import { withKnowledgeCounts, type KnowledgeCounts } from './knowledge-telemetry.js';
 
 /** TB6: one customer image fetched for this request, and its size (telemetry). */
 interface LoadedImage {
@@ -74,12 +76,16 @@ export interface SupportContextSource {
   build(
     scope: ScopeContext,
     customerId: string | null,
+    /** D2: the customer's latest words, which choose the knowledge sent. */
+    options?: { readonly query?: string | null },
   ): Promise<{
     readonly json: string;
     readonly aliases: ReadonlyMap<string, string>;
     readonly linked: boolean;
     /** TB7: the payload's flags, which the automatic-reply guards read. */
     readonly flags: AutoContextFlags;
+    /** D2 telemetry: knowledge entries sent, and how many there were to choose from. */
+    readonly knowledge?: KnowledgeCounts;
   }>;
 }
 
@@ -248,11 +254,13 @@ export class SupportAssistService {
     if (!active) return 'INACTIVE';
     const conversation = await this.deps.conversations.findById(scope, job.conversationId);
     if (conversation === null) return this.fail(scope, job, 'conversation.missing');
-    const [{ config }, transcript, context] = await Promise.all([
+    const [{ config }, transcript] = await Promise.all([
       this.deps.configs.get(scope),
       readSupportTranscript(this.deps, scope, conversation.id),
-      this.deps.context.build(scope, conversation.customerId),
     ]);
+    const context = await this.deps.context.build(scope, conversation.customerId, {
+      query: latestCustomerWords(transcript),
+    });
 
     /*
      * TB6 — vision. Which customer images may go with this request, fetched OUTSIDE any
@@ -363,12 +371,19 @@ export class SupportAssistService {
     // The per-image telemetry is written in the SAME transaction as the job's result, under
     // the same activity check: a scope stopped during the call records neither. A loaded image
     // is PROCESSED only when the step that ANSWERED was given it.
-    const images = this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
-      seenIds.has(messageId)
-        ? null
-        : answered
-          ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
-          : 'NOT_ANSWERED',
+    // D2: the knowledge counts go with the job's result, in its transaction.
+    const images = withKnowledgeCounts(
+      this.deps.jobs,
+      scope,
+      job.id,
+      context.knowledge,
+      this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
+        seenIds.has(messageId)
+          ? null
+          : answered
+            ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
+            : 'NOT_ANSWERED',
+      ),
     );
     if (result.outcome.outcome !== 'OK' || result.step === null) {
       const code =

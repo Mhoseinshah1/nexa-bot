@@ -97,6 +97,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   let calls: number;
   /** D7: the transcript each provider call was given, as role and text. */
   let requests: { role: string; text: string }[][];
+  /** D2: the query the context was built with, last call. */
+  let contextQuery: string | null | undefined;
   let duringCall: (() => Promise<void>) | null;
   let flags: AutoContextFlags;
   let offset: number;
@@ -319,12 +321,16 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       },
       ids: c.ids,
       context: {
-        build: async () => ({
-          json: '{"services":[{"alias":"S1"}]}',
-          aliases: new Map([['S1', 'سرویس user123']]),
-          linked: flags.identityLinked,
-          flags,
-        }),
+        build: async (_scope, _customer, options) => {
+          contextQuery = options?.query;
+          return {
+            json: '{"services":[{"alias":"S1"}]}',
+            aliases: new Map([['S1', 'سرویس user123']]),
+            linked: flags.identityLinked,
+            flags,
+            knowledge: { sent: 3, available: 4 },
+          };
+        },
       },
       conversations,
       messages: new DrizzleBusinessMessageRepository(c.database.db),
@@ -383,6 +389,14 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     await deliver();
     expect(transport.sent).toEqual([{ chatId: CUSTOMER, text: grounded.replyText }]);
     expect(await count('tickets')).toBe(0); // an ordinary answered question opens no ticket
+    // D2: the knowledge is chosen by the customer's own words.
+    expect(contextQuery).toBe('سلام، اینترنتم وصل نمی‌شود');
+    // D2 telemetry, recorded with the job's result.
+    const telemetry = await db().execute(
+      sql`SELECT knowledge_sent, knowledge_available FROM support_ai_jobs
+          WHERE conversation_id = ${first.conversationId}`,
+    );
+    expect(telemetry.rows).toEqual([{ knowledge_sent: 3, knowledge_available: 4 }]);
     expect(await count('business_conversation_escalations')).toBe(0);
   });
 

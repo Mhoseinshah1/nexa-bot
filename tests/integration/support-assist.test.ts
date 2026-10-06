@@ -159,6 +159,7 @@ describe('Assist Mode (TB5)', () => {
               hasUnderReviewPayment: false,
               hasUnreconciledService: false,
             },
+            knowledge: { sent: 2, available: 9 },
           }),
         },
         conversations: new DrizzleBusinessConversationRepository(c.database.db),
@@ -256,6 +257,8 @@ describe('Assist Mode (TB5)', () => {
     });
     // The citation the facts contained is resolved; the one they did not (Z9) is dropped.
     expect(ready?.factLabels).toEqual(['سرویس user123']);
+    // D2 telemetry: the knowledge the request carried, with the result.
+    expect(ready).toMatchObject({ knowledgeSent: 2, knowledgeAvailable: 9 });
     expect(await outboundCount()).toBe(0);
   });
 

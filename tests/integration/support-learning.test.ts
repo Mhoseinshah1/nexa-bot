@@ -629,6 +629,46 @@ describe('controlled learning (TB8)', () => {
     void scopeB;
   });
 
+  it('D2: the relevant article reaches the context though it is the oldest of 25 long ones', async () => {
+    const k = ctx.container.supportKnowledge;
+    const long = (topic: string) => {
+      let body = topic;
+      while (body.length < 1800) body += ' این راهنما مراحل را برای مشتری یکی‌یکی توضیح می‌دهد.';
+      return body.slice(0, 1800);
+    };
+    // The connection article first: every later one is newer, so "newest 20" left it out.
+    await k.createArticle(tenantA, owner, {
+      idempotencyKey: key('c'),
+      content: {
+        title: 'سرویس وصل نمی‌شود',
+        body: long('اگر سرویس وصل نمی‌شود برنامه را ببندید'),
+        category: 'CONNECTION',
+        tags: ['اتصال'],
+      },
+      publish: true,
+    });
+    for (let i = 0; i < 24; i += 1) {
+      await k.createArticle(tenantA, owner, {
+        idempotencyKey: key('c'),
+        content: {
+          title: `راهنمای شماره ${String(i)} درباره خرید و تمدید`,
+          body: long(`خرید و تمدید ${String(i)}`),
+          category: 'GENERAL',
+          tags: [],
+        },
+        publish: true,
+      });
+    }
+    const built = await ctx.container.supportContext.build(tenantA as never, null, {
+      query: 'سلام، سرویس من وصل نمیشه',
+    });
+    expect(built.knowledgeAvailable).toBe(25);
+    expect(built.payload.knowledge[0]?.question).toBe('سرویس وصل نمی‌شود');
+    // 25 × ~3.6 KB never fit 16 KB: the budget cut happened, and the reserve held.
+    expect(built.payload.knowledge.length).toBeGreaterThanOrEqual(1);
+    expect(built.payload.knowledge.length).toBeLessThan(25);
+  });
+
   it('a draft, a disabled and a retired article never reach the context; an edit is a new revision', async () => {
     const k = ctx.container.supportKnowledge;
     const content = (title: string) => ({

@@ -13927,6 +13927,13 @@ export const supportAiJobs = pgTable(
     /** TB7: what became of an automatic job (`SUPPORT_AI_AUTO_OUTCOMES`). */
     outcome: text('outcome'),
     handoffReason: text('handoff_reason'),
+    /**
+     * D2 telemetry: how many knowledge entries the request that produced this job's result
+     * carried to the provider, and how many the tenant had to choose from. Null when no
+     * provider was asked (a guard, a drop, a job from before this column).
+     */
+    knowledgeSent: integer('knowledge_sent'),
+    knowledgeAvailable: integer('knowledge_available'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -13994,6 +14001,10 @@ export const supportAiJobs = pgTable(
       sql`unseen_image_handoff IS NULL OR (decision IS NOT DISTINCT FROM 'HANDOFF' AND provider IS NULL AND model IS NULL AND summary IS NULL AND images_seen = 0 AND (suggested_reply IS NOT DISTINCT FROM '' OR (suggested_reply IS NULL AND text_purged_at IS NOT NULL)))`,
     ),
     check('support_ai_jobs_outcome_check', nullableEnumCheck('outcome', SUPPORT_AI_AUTO_OUTCOMES)),
+    check(
+      'support_ai_jobs_knowledge_check',
+      sql`(knowledge_sent IS NULL) = (knowledge_available IS NULL) AND (knowledge_sent IS NULL OR knowledge_sent BETWEEN 0 AND knowledge_available)`,
+    ),
     check(
       'support_ai_jobs_handoff_reason_check',
       nullableEnumCheck('handoff_reason', BUSINESS_HANDOFF_REASONS),

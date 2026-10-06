@@ -12,8 +12,16 @@ import type { SupportContextSource } from '../application/support-assist.service
 export class TbSupportContextSource implements SupportContextSource {
   constructor(private readonly builder: Pick<SupportContextBuilder, 'build'>) {}
 
-  async build(scope: ScopeContext, customerId: string | null) {
-    const { payload } = await this.builder.build(tenantOf(scope), customerId);
+  async build(
+    scope: ScopeContext,
+    customerId: string | null,
+    options: { readonly query?: string | null } = {},
+  ) {
+    const { payload, knowledgeAvailable } = await this.builder.build(
+      tenantOf(scope),
+      customerId,
+      options,
+    );
     const aliases = new Map<string, string>();
     for (const service of payload.services) aliases.set(service.alias, service.label);
     for (const order of payload.orders) aliases.set(order.alias, order.title);
@@ -28,6 +36,8 @@ export class TbSupportContextSource implements SupportContextSource {
       aliases,
       linked: payload.flags.identityLinked,
       flags: payload.flags,
+      // D2 telemetry: what the budget left of the selected knowledge, and the candidates.
+      knowledge: { sent: payload.knowledge.length, available: knowledgeAvailable },
     };
   }
 }
