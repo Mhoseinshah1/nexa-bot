@@ -352,23 +352,40 @@ jobs:
   # while this needs only a database server, which a service container provides on every
   # pull request. A rule about the source that only an operator's laptop checks is a rule
   # that rots. The data is SYNTHETIC; the suite is not evidence about the archive.
+  # The legacy source on BOTH engines: MariaDB 10.11 (what the rehearsal has run on) and
+  # MySQL 8.0 — MirzaBot's production engine (OQ-P7-03), whose default collation
+  # utf8mb4_0900_ai_ci MariaDB does not have. Collations are never rewritten: the same
+  # synthetic dataset is loaded into each engine as it is.
   legacy-mysql:
-    name: Legacy MySQL source
+    name: Legacy MySQL source (${{ matrix.engine.label }})
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - label: mariadb-10.11
+            image: mariadb:10.11
+            health: healthcheck.sh --connect --innodb_initialized
+          - label: mysql-8.0
+            image: mysql:8.0
+            health: mysqladmin ping -h 127.0.0.1 -proot
+
     services:
-      mariadb:
-        image: mariadb:10.11
+      legacydb:
+        image: ${{ matrix.engine.image }}
         env:
+          # Each image reads its own name; the other is ignored.
           MARIADB_ROOT_PASSWORD: root
+          MYSQL_ROOT_PASSWORD: root
         ports: ['3306:3306']
         options: >-
-          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-cmd "${{ matrix.engine.health }}"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 20
+          --health-retries 30
 
     env:
       NEXA_LEGACY_MYSQL_ADMIN_DSN: mysql://root:root@127.0.0.1:3306/mysql

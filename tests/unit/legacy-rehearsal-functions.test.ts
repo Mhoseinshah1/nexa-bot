@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -155,4 +156,114 @@ describe('a stage killed by INT/TERM takes its whole process tree with it', () =
     if (alive) process.kill(grandchild, 'SIGKILL');
     expect(alive, 'the stage left its grandchild running').toBe(false);
   }, 20_000);
+});
+
+describe('mysql8_server_version_ok: --legacy-engine mysql8 is MySQL 8.0, never MariaDB', () => {
+  const ok = (version: string) =>
+    bash(
+      `${lift('mysql8_server_version_ok')}\nmysql8_server_version_ok "$1" && echo yes || echo no`,
+      [version],
+    ).stdout.trim();
+
+  it('accepts MySQL 8.0 builds', () => {
+    expect(ok('/usr/sbin/mysqld  Ver 8.0.46-0ubuntu0.24.04.4 for Linux on x86_64 ((Ubuntu))')).toBe(
+      'yes',
+    );
+    expect(ok('mysqld  Ver 8.0.36 for Linux on x86_64 (MySQL Community Server - GPL)')).toBe('yes');
+  });
+
+  it("refuses MariaDB's mysqld symlink and any other major", () => {
+    expect(
+      ok(
+        'mysqld  Ver 10.11.14-MariaDB-0ubuntu0.24.04.1 for debian-linux-gnu on x86_64 (Ubuntu 24.04)',
+      ),
+    ).toBe('no');
+    expect(ok('mysqld  Ver 5.7.44 for Linux on x86_64')).toBe('no');
+    expect(ok('mysqld  Ver 8.4.2 for Linux on x86_64')).toBe('no');
+    expect(ok('')).toBe('no');
+  });
+});
+
+describe('inspect_legacy: the archive inspector gates the load (WP-D1b)', () => {
+  const INSPECT = join(ROOT, 'scripts/legacy-archive-inspect.mjs');
+  const FIXTURE_ZIP = join(ROOT, 'tests/fixtures/legacy/archive/backup_2026-01-01.zip');
+  const SYNTHETIC = join(ROOT, 'tests/fixtures/legacy/synthetic-legacy.sql');
+
+  function inspect(vars: Record<string, string>, env: Record<string, string> = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-rehearsal-inspect-'));
+    const assign = Object.entries({
+      OUT: dir,
+      MDB_RUN: join(dir, 'run'),
+      ARCHIVE_INSPECT: INSPECT,
+      REPORT_CHECK: CHECKER,
+      LEGACY_ARCHIVE: '',
+      LEGACY_ARCHIVE_PASSWORD_ENV: '',
+      LEGACY_ENGINE: 'mariadb',
+      EVIDENCE_CLASS: 'synthetic',
+      LEGACY_SCHEMA: 'oldbot',
+      ...vars,
+    })
+      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+      .join('\n');
+    const result = spawnSync(
+      'bash',
+      [
+        '-c',
+        `set -euo pipefail\n${assign}\nmkdir -p "$OUT/snapshots" "$MDB_RUN"\n${lift('die', 'json_get', 'inspect_legacy')}\ninspect_legacy\necho "LOAD=$LEGACY_LOAD_FILE"`,
+      ],
+      { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', ...env } },
+    );
+    return { ...result, dir };
+  }
+
+  it('decrypts the zip into the private run directory, never into --out, and records both hashes', () => {
+    const r = inspect(
+      {
+        LEGACY_INPUT: FIXTURE_ZIP,
+        LEGACY_ARCHIVE: FIXTURE_ZIP,
+        LEGACY_ARCHIVE_PASSWORD_ENV: 'LEGACY_ZIP_PASSWORD',
+      },
+      { LEGACY_ZIP_PASSWORD: 'nexa-synthetic-archive-test-only' },
+    );
+    expect(r.status).toBe(0);
+    const load = /LOAD=(.*)/u.exec(r.stdout)?.[1] ?? '';
+    expect(load.startsWith(join(r.dir, 'run', 'inspect'))).toBe(true);
+    expect(readFileSync(load).equals(readFileSync(SYNTHETIC))).toBe(true);
+    expect(readFileSync(join(r.dir, 'snapshots/legacy-archive.sha256'), 'utf8').trim()).toBe(
+      createHash('sha256').update(readFileSync(FIXTURE_ZIP)).digest('hex'),
+    );
+    expect(readFileSync(join(r.dir, 'snapshots/legacy-dump.sha256'), 'utf8').trim()).toBe(
+      createHash('sha256').update(readFileSync(SYNTHETIC)).digest('hex'),
+    );
+  });
+
+  it('refuses a utf8mb4_0900 dump on mariadb with the precise blocker, before any load', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-rehearsal-0900-'));
+    const dump = join(dir, 'mysql8.sql');
+    writeFileSync(
+      dump,
+      readFileSync(SYNTHETIC, 'utf8').replaceAll(
+        'COLLATE=utf8mb4_bin',
+        'COLLATE=utf8mb4_0900_ai_ci',
+      ),
+    );
+    const r = inspect({ LEGACY_INPUT: dump });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('BLOCKED by the archive inspector: COLLATION_REQUIRES_MYSQL8');
+    expect(r.stdout).not.toContain('LOAD=');
+    // The same dump is accepted for the engine it needs.
+    expect(inspect({ LEGACY_INPUT: dump, LEGACY_ENGINE: 'mysql8' }).status).toBe(0);
+  });
+
+  it('refuses a dump that selects another database than --legacy-schema', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-rehearsal-use-'));
+    const dump = join(dir, 'use.sql');
+    writeFileSync(
+      dump,
+      readFileSync(SYNTHETIC, 'utf8').replace('DROP TABLE', 'USE `mirza`;\nDROP TABLE'),
+    );
+    const r = inspect({ LEGACY_INPUT: dump });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('pass --legacy-schema mirza');
+  });
 });

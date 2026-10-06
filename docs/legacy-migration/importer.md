@@ -372,8 +372,9 @@ and a unit test holds them equal.
    (`COLLATION_REQUIRES_MYSQL8`) or taken from a MySQL ≥ 8 server (`ENGINE_MISMATCH`):
    the collation is never rewritten — MySQL 8 is the engine for it.
 
-1. Restore the archive into MySQL 8 (the CI covers MariaDB 10.11; MySQL 8 is the production
-   engine and its first run is this step), create `oldbot_ro` (SELECT only).
+1. Restore the archive into MySQL 8 (the CI covers MariaDB 10.11 and MySQL 8.0 with the
+   SYNTHETIC dataset — `legacy-mysql` job, OQ-P7-03; the real dump's first MySQL 8 load
+   is this step), create `oldbot_ro` (SELECT only).
 2. `audit` against staging with the real mapping file: record the evidence and the
    cross-checks into `sql-evidence.md` in their own commit — those, not the synthetic
    figures, are Item 1's result.

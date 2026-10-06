@@ -9,7 +9,8 @@ harness and P7's code only and are never recorded here as results.
 and rolls it back:
 
 ```
-legacy dump ──► throwaway MariaDB (started by the script, 127.0.0.1, SELECT-only reader)
+legacy dump or backup_*.zip ──► scripts/legacy-archive-inspect.mjs (blockers stop here)
+            ──► throwaway MariaDB or MySQL 8.0 (started by the script, 127.0.0.1, SELECT-only reader)
 NEXA backup ──► nexa_rehearsal_<stamp> (real `backup restore`, then migrate forward)
                   │ or: fresh migrate + provision --tenant
                   ▼
@@ -48,13 +49,19 @@ map, and on stop reports every request the fakes received after setup — so "pr
 writes = 0" is also checked on the wire (`wire_provider_writes_zero`). Loopback panel
 addresses are allowed for that run only.
 
-On a staging host (isolated PostgreSQL 16 and MariaDB; never the installation's own
-database — the script refuses the compose service names and any URL naming a database):
+On a staging host (isolated PostgreSQL 16, and MySQL 8.0 or MariaDB binaries for the
+throwaway legacy engine; never the installation's own database — the script refuses the
+compose service names and any URL naming a database):
+
+(For a plain dump, replace the two `--legacy-archive*` flags with
+`--legacy-dump <fresh oldbot dump, .sql or .sql.gz>`.)
 
 ```bash
+export LEGACY_ZIP_PASSWORD=…   # only for a MirzaBot zip; typed into the environment, never argv
 scripts/legacy-rehearsal.sh \
   --evidence-class staging \
-  --legacy-dump <fresh oldbot dump, .sql or .sql.gz> \
+  --legacy-archive <MirzaBot backup_YYYY-MM-DD.zip> --legacy-archive-password-env LEGACY_ZIP_PASSWORD \
+  --legacy-engine mysql8 [--mysql-bin-dir <dir with MySQL 8.0 mysqld, mysql, mysqladmin>] \
   --tenant <tenant-slug> \
   --panel-map <the reviewed panel-map.json> \
   --nexa-env <staging config with the production keyring able to open the archive> \
@@ -71,6 +78,27 @@ files and fed to `mariadb` on stdin, never as `-e` arguments.
 
 On INT/TERM the harness stops the running stage's whole process group (each stage runs in
 its own) before its cleanup, so no importer or helper is left running.
+
+### The legacy input and engine (WP-D1a/D1b)
+
+Before the throwaway engine is even started, `scripts/legacy-archive-inspect.mjs` inspects
+the input (`--legacy-dump` or `--legacy-archive`, exactly one) with
+`--engine <the --legacy-engine> --require-class <the evidence class>`. A blocker stops the
+rehearsal with its code: a dump that is truncated, lacks `user`/`invoice`/`product` or a
+required column, carries a stored object, selects another database than `--legacy-schema`,
+or needs another engine (`COLLATION_REQUIRES_MYSQL8`, `ENGINE_MISMATCH`). A zip is decrypted
+into the harness's private scratch directory — removed on exit with the engine's data, never
+under `--out` — and its report is kept as `archive.json` (hashes and shapes, no row
+content). `summary.json` records `legacyArchiveSha256` (the file as given),
+`legacyDumpSha256` (the inner dump: for a `.sql` they are equal; for a `.sql.gz` or a zip
+they are not), `legacyEngine` and `legacyInput`.
+
+`--legacy-engine mysql8` starts MySQL's own `mysqld` 8.0 (`--initialize-insecure` on a
+scratch data directory, `--mysqlx=OFF`, `--secure-file-priv=NULL`, bound to 127.0.0.1);
+`mysqld --version` must say `Ver 8.0.x` and not MariaDB — on many hosts `mysqld` is a
+MariaDB symlink, so pass `--mysql-bin-dir`. MirzaBot's tables declare no collation, so a
+MySQL 8 dump carries `utf8mb4_0900_ai_ci`, which MariaDB does not have: such a dump is
+refused on `mariadb`, never rewritten.
 
 `--check-only` runs every guard and prints the plan without touching anything. `--help`
 lists the rest (`--cycles`, `--kill-after-rows`, `--importer-arg`, `--keep-legacy-copy`).

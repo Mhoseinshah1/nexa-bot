@@ -5,8 +5,10 @@
 #
 #   1. an isolated NEXA database — restored from a NEXA backup archive through the real
 #      `backup restore` CLI, or freshly migrated and provisioned;
-#   2. a throwaway MariaDB this script starts itself, loaded from a legacy dump (on a
-#      developer machine: the SYNTHETIC fixture under tests/fixtures/legacy/);
+#   2. a throwaway MariaDB — or MySQL 8.0, `--legacy-engine mysql8` — this script starts
+#      itself, loaded from a legacy dump or a MirzaBot backup zip that
+#      scripts/legacy-archive-inspect.mjs validated first (on a developer machine: the
+#      SYNTHETIC fixture under tests/fixtures/legacy/);
 #   3. per cycle: pre-import snapshot -> P7 audit -> dry-run -> import, killed mid-run ->
 #      resume -> reconcile -> report -> independent reconciliation checks -> rollback
 #      rehearsal (restore the pre-import snapshot into a candidate, validate, cut over by
@@ -17,8 +19,8 @@
 # checks.tsv (PASS/FAIL per assertion), the snapshots, the P7 report, and summary.json.
 #
 # What it can NEVER do, by construction rather than by care:
-#   - reach the live MirzaBot database: the legacy side is ALWAYS a MariaDB this script
-#     started on a scratch data directory, bound to 127.0.0.1. There is no flag that
+#   - reach the live MirzaBot database: the legacy side is ALWAYS a MariaDB or MySQL this
+#     script started on a scratch data directory, bound to 127.0.0.1. There is no flag that
 #     points it at an existing MySQL server.
 #   - write to a NEXA database it did not create: every name it creates, renames or
 #     connects to for writing is `nexa_rehearsal_<stamp>[_suffix]`, asserted before use.
@@ -40,6 +42,7 @@ set -euo pipefail
 umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCHIVE_INSPECT="$ROOT/scripts/legacy-archive-inspect.mjs"
 CHECKS_SQL="$ROOT/scripts/legacy-rehearsal-checks.sql"
 SOURCE_SQL="$ROOT/scripts/legacy-rehearsal-source.sql"
 BACKUP_CLI="$ROOT/apps/api/dist/backup.cli.js"
@@ -86,8 +89,13 @@ TSX_BIN="$ROOT/apps/api/node_modules/.bin/tsx"
 # --- Output helpers -----------------------------------------------------------------------
 
 log() { printf '[rehearsal %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
+# The operator's stderr, kept on fd 3: a stage's own stderr goes to its log, and a refusal
+# raised inside one (run_direct, run_stage) must still reach the terminal — before this, a
+# helper that died inside run_direct ended the rehearsal with no word on the screen.
+exec 3>&2
 die() {
-  printf '\033[31mREFUSED/FAILED\033[0m %s\n' "$*" >&2
+  { printf '\033[31mREFUSED/FAILED\033[0m %s\n' "$*" >&3; } 2>/dev/null ||
+    printf '\033[31mREFUSED/FAILED\033[0m %s\n' "$*" >&2
   exit 1
 }
 
@@ -99,7 +107,13 @@ Required:
   --evidence-class synthetic|staging
                          synthetic: a fixture dump; proves code, NEVER evidence.
                          staging:   a real legacy dump on an isolated staging copy.
+  and exactly one of:
   --legacy-dump PATH     MySQL/MariaDB dump (.sql or .sql.gz) of the MirzaBot schema
+  --legacy-archive PATH  MirzaBot's backup_YYYY-MM-DD.zip (one entry, plain or AES-256);
+                         decrypted by scripts/legacy-archive-inspect.mjs into the private
+                         scratch directory, never into --out
+  Either is inspected BEFORE it is loaded (header, required tables, collations,
+  completeness, sha256 of archive and inner dump); a blocker stops the rehearsal.
   --tenant SLUG          the NEXA tenant to import into
   --panel-map PATH       the explicit legacy code_panel -> NEXA panel map P7 reads
                          (format nexa-legacy-panel-map/v1; omit with --synthetic-panels)
@@ -121,11 +135,19 @@ Optional:
   --cycles N             import+rollback cycles (default 2; cycle 2 repeats from the
                          clean restore and must reproduce cycle 1)
   --kill-after-rows N    interrupt the import once its run has seen N rows (default 1)
+  --legacy-archive-password-env NAME
+                         the environment variable holding the zip's password (never argv)
+  --legacy-engine mariadb|mysql8
+                         the throwaway legacy engine (default mariadb). MirzaBot's server
+                         is MySQL 8: a dump carrying utf8mb4_0900_* collations, or taken
+                         from a MySQL >= 8 server, is refused on mariadb (never rewritten)
+  --mysql-bin-dir DIR    mysql8 only: where mysqld, mysql and mysqladmin of MySQL 8.0 are
+                         (default: PATH; refused if they are MariaDB's)
   --legacy-schema NAME   schema the dump loads into (default oldbot)
-  --mariadb-port N       port of the throwaway MariaDB (default 33099)
+  --mariadb-port N       port of the throwaway legacy engine, either one (default 33099)
   --pg-admin-db NAME     maintenance database for CREATE/RENAME (default postgres)
   --importer-arg ARG     extra argument for every P7 call (repeatable)
-  --keep-legacy-copy     keep the throwaway MariaDB data directory afterwards
+  --keep-legacy-copy     keep the throwaway engine's data directory afterwards
   --synthetic-panels     synthetic only: stand up the two fake RickPanels the fixture
                          assumes, register them in the rehearsal database and write the
                          panel map (tests/support/legacy-rehearsal-synthetic-panels.ts)
@@ -136,10 +158,22 @@ e.g. services awaiting P6 adoption) — done, NOT passed; 1 a check failed or a 
 USAGE
 }
 
+# mysql8_server_version_ok "$(mysqld --version)" — MySQL 8.0 and not MariaDB.
+mysql8_server_version_ok() {
+  case "$1" in
+    *MariaDB* | *mariadb*) return 1 ;;
+  esac
+  [[ "$1" =~ Ver[[:space:]]+8\.0\.[0-9]+ ]]
+}
+
 # --- Arguments ----------------------------------------------------------------------------
 
 EVIDENCE_CLASS=""
 LEGACY_DUMP=""
+LEGACY_ARCHIVE=""
+LEGACY_ARCHIVE_PASSWORD_ENV=""
+LEGACY_ENGINE="mariadb"
+MYSQL_BIN_DIR=""
 TENANT=""
 PANEL_MAP=""
 NEXA_ENV=""
@@ -167,6 +201,12 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --evidence-class) need_value "$@"; EVIDENCE_CLASS="$2"; shift 2 ;;
     --legacy-dump) need_value "$@"; LEGACY_DUMP="$2"; shift 2 ;;
+    --legacy-archive) need_value "$@"; LEGACY_ARCHIVE="$2"; shift 2 ;;
+    --legacy-archive-password-env) need_value "$@"; LEGACY_ARCHIVE_PASSWORD_ENV="$2"; shift 2 ;;
+    --legacy-archive-password | --legacy-archive-password=* | --password | --password=*)
+      die "a password is never accepted on the command line (argv is world-readable). Put it in an environment variable and pass --legacy-archive-password-env NAME." ;;
+    --legacy-engine) need_value "$@"; LEGACY_ENGINE="$2"; shift 2 ;;
+    --mysql-bin-dir) need_value "$@"; MYSQL_BIN_DIR="$2"; shift 2 ;;
     --tenant) need_value "$@"; TENANT="$2"; shift 2 ;;
     --panel-map) need_value "$@"; PANEL_MAP="$2"; shift 2 ;;
     --nexa-env) need_value "$@"; NEXA_ENV="$2"; shift 2 ;;
@@ -204,14 +244,38 @@ case "$EVIDENCE_CLASS" in
   *) die "--evidence-class must be synthetic or staging, not '$EVIDENCE_CLASS'." ;;
 esac
 
-[ -n "$LEGACY_DUMP" ] || die "--legacy-dump is required."
-[ -f "$LEGACY_DUMP" ] && [ -r "$LEGACY_DUMP" ] || die "--legacy-dump $LEGACY_DUMP is not a readable file."
-LEGACY_DUMP="$(cd "$(dirname "$LEGACY_DUMP")" && pwd)/$(basename "$LEGACY_DUMP")"
-case "$LEGACY_DUMP" in
+if [ -n "$LEGACY_DUMP" ] && [ -n "$LEGACY_ARCHIVE" ]; then
+  die "pass --legacy-dump OR --legacy-archive, not both."
+fi
+[ -n "$LEGACY_DUMP" ] || [ -n "$LEGACY_ARCHIVE" ] ||
+  die "--legacy-dump PATH or --legacy-archive PATH is required."
+if [ -n "$LEGACY_ARCHIVE" ]; then
+  [ -f "$LEGACY_ARCHIVE" ] && [ -r "$LEGACY_ARCHIVE" ] || die "--legacy-archive $LEGACY_ARCHIVE is not a readable file."
+  LEGACY_INPUT="$(cd "$(dirname "$LEGACY_ARCHIVE")" && pwd)/$(basename "$LEGACY_ARCHIVE")"
+  LEGACY_INPUT_FLAG=--legacy-archive
+else
+  [ -z "$LEGACY_ARCHIVE_PASSWORD_ENV" ] ||
+    die "--legacy-archive-password-env is for --legacy-archive; a plain dump carries no password."
+  [ -f "$LEGACY_DUMP" ] && [ -r "$LEGACY_DUMP" ] || die "--legacy-dump $LEGACY_DUMP is not a readable file."
+  LEGACY_INPUT="$(cd "$(dirname "$LEGACY_DUMP")" && pwd)/$(basename "$LEGACY_DUMP")"
+  LEGACY_INPUT_FLAG=--legacy-dump
+fi
+case "$LEGACY_INPUT" in
   */tests/fixtures/*)
     [ "$EVIDENCE_CLASS" = "synthetic" ] ||
-      die "the dump is under tests/fixtures/ — that is SYNTHETIC data, and a run on it is never staging evidence. Use --evidence-class synthetic."
+      die "the $LEGACY_INPUT_FLAG input is under tests/fixtures/ — that is SYNTHETIC data, and a run on it is never staging evidence. Use --evidence-class synthetic."
     ;;
+esac
+if [ -n "$LEGACY_ARCHIVE_PASSWORD_ENV" ]; then
+  [[ "$LEGACY_ARCHIVE_PASSWORD_ENV" =~ ^[A-Z_][A-Z0-9_]{0,63}$ ]] ||
+    die "--legacy-archive-password-env must name an environment variable ([A-Z_][A-Z0-9_]*)."
+  [ -n "${!LEGACY_ARCHIVE_PASSWORD_ENV:-}" ] ||
+    die "--legacy-archive-password-env $LEGACY_ARCHIVE_PASSWORD_ENV: that environment variable is not set or is empty."
+fi
+case "$LEGACY_ENGINE" in
+  mariadb) [ -z "$MYSQL_BIN_DIR" ] || die "--mysql-bin-dir is for --legacy-engine mysql8." ;;
+  mysql8) ;;
+  *) die "--legacy-engine must be mariadb or mysql8, not '$LEGACY_ENGINE'." ;;
 esac
 
 [[ "$TENANT" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "--tenant must be a tenant slug ([a-z0-9-], got '$TENANT')."
@@ -292,7 +356,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
   cat <<PLAN
 guards passed (check only; nothing was touched)
   evidence class   $EVIDENCE_CLASS$([ "$EVIDENCE_CLASS" = synthetic ] && printf ' — NOT legacy evidence')
-  legacy dump      $LEGACY_DUMP (loaded into a throwaway MariaDB on 127.0.0.1:$MARIADB_PORT)
+  legacy input     $LEGACY_INPUT ($LEGACY_INPUT_FLAG; inspected, then loaded into a throwaway $LEGACY_ENGINE on 127.0.0.1:$MARIADB_PORT)
   NEXA database    $NEXA_DB on $PG_HOST ($([ -n "$NEXA_ARCHIVE" ] && printf 'restored from archive' || printf 'fresh migrate'))
   tenant           $TENANT
   cycles           $CYCLES (interrupt after $KILL_AFTER_ROWS rows)
@@ -321,9 +385,38 @@ for mode in "${P7_MODES[@]}"; do
     die "the P7 CLI's --help does not mention mode '$mode'. Reconcile the CLI contract block at the top of this script with its --help."
 done
 
-for tool in node psql pg_dump pg_restore mariadbd mariadb mariadb-install-db mariadb-admin sha256sum; do
+for tool in node psql pg_dump pg_restore sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || die "required tool '$tool' is not on PATH."
 done
+[ -f "$ARCHIVE_INSPECT" ] || die "the archive inspector is missing from scripts/."
+
+# The legacy engine's binaries. mysql8 is MySQL's own mysqld 8.0 — on many hosts `mysqld`
+# is a MariaDB symlink, so the version string decides, not the name.
+if [ "$LEGACY_ENGINE" = "mariadb" ]; then
+  for tool in mariadbd mariadb mariadb-install-db mariadb-admin; do
+    command -v "$tool" >/dev/null 2>&1 || die "required tool '$tool' is not on PATH."
+  done
+  LEGACY_SERVER=mariadbd
+  LEGACY_CLIENT=mariadb
+  LEGACY_ADMIN=mariadb-admin
+else
+  if [ -n "$MYSQL_BIN_DIR" ]; then
+    LEGACY_SERVER="$MYSQL_BIN_DIR/mysqld"
+    LEGACY_CLIENT="$MYSQL_BIN_DIR/mysql"
+    LEGACY_ADMIN="$MYSQL_BIN_DIR/mysqladmin"
+  else
+    LEGACY_SERVER="$(command -v mysqld || true)"
+    LEGACY_CLIENT="$(command -v mysql || true)"
+    LEGACY_ADMIN="$(command -v mysqladmin || true)"
+  fi
+  for tool in "$LEGACY_SERVER" "$LEGACY_CLIENT" "$LEGACY_ADMIN"; do
+    [ -n "$tool" ] && [ -x "$tool" ] ||
+      die "--legacy-engine mysql8 needs MySQL 8.0's mysqld, mysql and mysqladmin (pass --mysql-bin-dir DIR); '${tool:-mysqld/mysql/mysqladmin}' is not executable."
+  done
+  LEGACY_SERVER_VERSION="$("$LEGACY_SERVER" --version 2>&1 || true)"
+  mysql8_server_version_ok "$LEGACY_SERVER_VERSION" ||
+    die "--legacy-engine mysql8: '$LEGACY_SERVER' is not MySQL 8.0 ($LEGACY_SERVER_VERSION). Pass --mysql-bin-dir with MySQL 8.0's binaries."
+fi
 [ -f "$CHECKS_SQL" ] && [ -f "$SOURCE_SQL" ] || die "the reconciliation SQL files are missing from scripts/."
 [ -f "$BACKUP_CLI" ] && [ -f "$MIGRATE_JS" ] && [ -f "$PROVISION_CLI" ] ||
   die "apps/api/dist is not built. Run: pnpm build"
@@ -343,7 +436,7 @@ printf 'cycle\tcheck\tresult\texpected\tactual\n' >"$OUT/checks.tsv"
 CREATED_DBS_FILE="$OUT/databases-created.txt"
 : >"$CREATED_DBS_FILE"
 
-# A socket path is limited to ~108 bytes, so the MariaDB runtime lives under a short
+# A socket path is limited to ~108 bytes, so the legacy engine's runtime lives under a short
 # private temporary directory; the data directory lives under it too and is removed on
 # exit unless --keep-legacy-copy (it is a copy of customer data).
 MDB_RUN="$(mktemp -d "${TMPDIR:-/tmp}/nexa-rh.XXXXXX")"
@@ -377,7 +470,7 @@ cleanup() {
   kill_stage_group
   if [ -n "${PANELS_PID:-}" ]; then kill -TERM -- "-$PANELS_PID" 2>/dev/null || kill -TERM "$PANELS_PID" 2>/dev/null || true; fi
   if [ -n "$MDB_PID" ] && kill -0 "$MDB_PID" 2>/dev/null; then
-    mariadb-admin --defaults-extra-file="$MDB_ROOT_CNF" --socket="$MDB_SOCK" shutdown >/dev/null 2>&1 ||
+    "$LEGACY_ADMIN" --defaults-extra-file="$MDB_ROOT_CNF" --socket="$MDB_SOCK" shutdown >/dev/null 2>&1 ||
       kill "$MDB_PID" 2>/dev/null || true
     wait "$MDB_PID" 2>/dev/null || true
   fi
@@ -562,34 +655,46 @@ with_nexa_env() {
   )
 }
 
-# --- MariaDB: the throwaway legacy source -------------------------------------------------
+# --- The throwaway legacy source (MariaDB, or MySQL 8.0) ----------------------------------
 
-mdb_root() { mariadb --defaults-extra-file="$MDB_ROOT_CNF" --socket="$MDB_SOCK" "$@"; }
+mdb_root() { "$LEGACY_CLIENT" --defaults-extra-file="$MDB_ROOT_CNF" --socket="$MDB_SOCK" "$@"; }
 
 start_legacy() {
   local me
   me="$(id -un)"
-  mariadb-install-db --no-defaults --user="$me" --datadir="$MDB_DATA" \
-    --auth-root-authentication-method=normal --skip-test-db >/dev/null
-  mariadbd --no-defaults --user="$me" --datadir="$MDB_DATA" --socket="$MDB_SOCK" \
-    --port="$MARIADB_PORT" --bind-address=127.0.0.1 --pid-file="$MDB_RUN/mysqld.pid" \
-    --log-error="$OUT/logs/mariadb.err" &
+  if [ "$LEGACY_ENGINE" = "mariadb" ]; then
+    mariadb-install-db --no-defaults --user="$me" --datadir="$MDB_DATA" \
+      --auth-root-authentication-method=normal --skip-test-db >/dev/null
+    mariadbd --no-defaults --user="$me" --datadir="$MDB_DATA" --socket="$MDB_SOCK" \
+      --port="$MARIADB_PORT" --bind-address=127.0.0.1 --pid-file="$MDB_RUN/mysqld.pid" \
+      --log-error="$OUT/logs/mariadb.err" &
+  else
+    # MySQL 8.0: root@localhost without a password until the ALTER USER below; the X
+    # Protocol listener is off so it can never collide with another instance's port.
+    # secure_file_priv=NULL: no LOAD DATA / INTO OUTFILE at all — the instance reads its
+    # dump on stdin and never touches a file path.
+    "$LEGACY_SERVER" --no-defaults --initialize-insecure --user="$me" --datadir="$MDB_DATA" \
+      --secure-file-priv=NULL --log-error="$OUT/logs/mysql8-init.err"
+    "$LEGACY_SERVER" --no-defaults --user="$me" --datadir="$MDB_DATA" --socket="$MDB_SOCK" \
+      --port="$MARIADB_PORT" --bind-address=127.0.0.1 --mysqlx=OFF --secure-file-priv=NULL \
+      --pid-file="$MDB_RUN/mysqld.pid" --log-error="$OUT/logs/mysql8.err" &
+  fi
   MDB_PID=$!
   local i
-  for i in $(seq 1 60); do
-    if mariadb-admin --no-defaults --socket="$MDB_SOCK" --user=root ping >/dev/null 2>&1; then
+  for i in $(seq 1 120); do
+    if "$LEGACY_ADMIN" --no-defaults --socket="$MDB_SOCK" --user=root ping >/dev/null 2>&1; then
       break
     fi
-    kill -0 "$MDB_PID" 2>/dev/null || die "the throwaway MariaDB exited; see $OUT/logs/mariadb.err"
+    kill -0 "$MDB_PID" 2>/dev/null || die "the throwaway $LEGACY_ENGINE exited; see $OUT/logs/"
     sleep 1
-    [ "$i" -lt 60 ] || die "the throwaway MariaDB did not answer within 60s."
+    [ "$i" -lt 120 ] || die "the throwaway $LEGACY_ENGINE did not answer within 120s."
   done
   # Lock root to a random password kept in a 0600 file, and drop any TCP root account:
   # the instance is local and temporary, but it holds a copy of customer data.
   local root_pw
   root_pw="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   # On stdin, never -e: a password in argv is readable by every local user.
-  mariadb --no-defaults --socket="$MDB_SOCK" --user=root <<SQL
+  "$LEGACY_CLIENT" --no-defaults --socket="$MDB_SOCK" --user=root <<SQL
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$root_pw';
 DROP USER IF EXISTS 'root'@'127.0.0.1', 'root'@'::1';
 SQL
@@ -598,9 +703,9 @@ SQL
 
 load_legacy() {
   mdb_root -e "CREATE DATABASE IF NOT EXISTS \`$LEGACY_SCHEMA\` CHARACTER SET utf8mb4"
-  case "$LEGACY_DUMP" in
-    *.gz) gzip -dc "$LEGACY_DUMP" | mdb_root "$LEGACY_SCHEMA" ;;
-    *) mdb_root "$LEGACY_SCHEMA" <"$LEGACY_DUMP" ;;
+  case "$LEGACY_LOAD_FILE" in
+    *.gz) gzip -dc "$LEGACY_LOAD_FILE" | mdb_root "$LEGACY_SCHEMA" ;;
+    *) mdb_root "$LEGACY_SCHEMA" <"$LEGACY_LOAD_FILE" ;;
   esac
   local tables
   tables="$(mdb_root -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$LEGACY_SCHEMA' AND table_name IN ('user', 'invoice')")"
@@ -619,7 +724,7 @@ SQL
 }
 
 legacy_aggregates() {
-  mariadb --defaults-extra-file="$MDB_RUN/legacy_ro.cnf" --socket="$MDB_SOCK" \
+  "$LEGACY_CLIENT" --defaults-extra-file="$MDB_RUN/legacy_ro.cnf" --socket="$MDB_SOCK" \
     --database="$LEGACY_SCHEMA" --batch --skip-column-names --safe-updates \
     <"$SOURCE_SQL" >"$OUT/snapshots/legacy-source.tsv"
 }
@@ -646,6 +751,41 @@ imported_balance() {
       FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
      WHERE CAST(u.Balance AS DECIMAL(24,4)) <> 0" >"$OUT/snapshots/c${cycle}-legacy-imported.tsv"
   mdb_root -e "DROP DATABASE nexa_reconcile"
+}
+
+# inspect_legacy — WP-D1a's inspector on the legacy input, BEFORE the engine sees it. A zip is
+# decrypted into the private scratch directory (removed on exit, like the engine's data);
+# the report — hashes and shapes, no row content — is kept as $OUT/archive.json. Runs in
+# THIS shell (run_direct): it sets the file the load reads.
+inspect_legacy() {
+  local args=(--archive "$LEGACY_INPUT" --engine "$LEGACY_ENGINE" --require-class "$EVIDENCE_CLASS"
+    --out "$MDB_RUN/inspect")
+  [ -z "$LEGACY_ARCHIVE" ] || args+=(--extract)
+  [ -z "$LEGACY_ARCHIVE_PASSWORD_ENV" ] || args+=(--password-env "$LEGACY_ARCHIVE_PASSWORD_ENV")
+  local rc=0
+  (
+    # The password reaches the inspector through its environment, never through argv.
+    if [ -n "$LEGACY_ARCHIVE_PASSWORD_ENV" ]; then export "${LEGACY_ARCHIVE_PASSWORD_ENV?}"; fi
+    exec node "$ARCHIVE_INSPECT" "${args[@]}"
+  ) >"$OUT/archive.json" || rc=$?
+  case "$rc" in
+    0) ;;
+    2) die "the legacy input is BLOCKED by the archive inspector: $(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.blockers.map((b)=>b.code+": "+b.detail).join(" | "))' "$OUT/archive.json")" ;;
+    *) die "the archive inspector failed (exit $rc); see $OUT/logs/c0-legacy-inspect.log" ;;
+  esac
+  if [ -n "$LEGACY_ARCHIVE" ]; then
+    LEGACY_LOAD_FILE="$(json_get "$OUT/archive.json" extracted)"
+    [ -f "$LEGACY_LOAD_FILE" ] || die "the archive inspector accepted the zip but extracted nothing."
+  else
+    LEGACY_LOAD_FILE="$LEGACY_INPUT"
+  fi
+  # A dump that selects its own database loads there, not into --legacy-schema.
+  local selects
+  selects="$(node -e 'console.log((JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).dump.selectsDatabase||[]).join(","))' "$OUT/archive.json")"
+  [ -z "$selects" ] || [ "$selects" = "$LEGACY_SCHEMA" ] ||
+    die "the dump selects database '$selects' with USE; pass --legacy-schema $selects."
+  json_get "$OUT/archive.json" archive.sha256 >"$OUT/snapshots/legacy-archive.sha256"
+  json_get "$OUT/archive.json" dump.sha256 >"$OUT/snapshots/legacy-dump.sha256"
 }
 
 # --- NEXA: the isolated destination -------------------------------------------------------
@@ -697,13 +837,13 @@ start_synthetic_panels() {
     "$SYNTHETIC_PANELS_HELPER" --tenant "$TENANT" --mapping-out "$PANEL_MAP" \
     --ready-file "$OUT/synthetic-panels.ready" --requests-out "$OUT/synthetic-panel-requests.json" \
     --stop-file "$OUT/synthetic-panels.stop" \
-    >"$OUT/logs/c0-synthetic-panels.log" 2>&1 &
+    >"$OUT/logs/c0-synthetic-panels-helper.log" 2>&1 &
   PANELS_PID=$!
   set +m
   local i
   for i in $(seq 1 120); do
     [ ! -f "$OUT/synthetic-panels.ready" ] || return 0
-    kill -0 "$PANELS_PID" 2>/dev/null || die "the synthetic panels helper exited; see logs/c0-synthetic-panels.log"
+    kill -0 "$PANELS_PID" 2>/dev/null || die "the synthetic panels helper exited; see logs/c0-synthetic-panels-helper.log"
     sleep 0.5
   done
   die "the synthetic panels helper was not ready within 60s."
@@ -868,10 +1008,10 @@ rollback_rehearsal() {
 log "evidence class: $EVIDENCE_CLASS"
 [ "$EVIDENCE_CLASS" = "staging" ] || log "SYNTHETIC RUN — proves code and harness only; NEVER legacy evidence."
 
+run_direct 0 legacy-inspect inspect_legacy
 run_direct 0 legacy-start start_legacy
 run_stage 0 legacy-load load_legacy
 run_stage 0 legacy-aggregates legacy_aggregates
-sha256sum "$LEGACY_DUMP" | cut -d' ' -f1 >"$OUT/snapshots/legacy-dump.sha256"
 run_stage 0 nexa-prepare prepare_nexa
 if [ "$SYNTHETIC_PANELS" -eq 1 ]; then
   run_direct 0 synthetic-panels start_synthetic_panels
@@ -1053,7 +1193,8 @@ fi
 
 node -e '
   const fs = require("fs");
-  const [out, cls, cycles, failed, pendingN, dumpSha] = process.argv.slice(1);
+  const [out, cls, cycles, failed, pendingN, dumpSha, archiveSha, engine, inputFlag] = process.argv.slice(1);
+  const archive = JSON.parse(fs.readFileSync(out + "/archive.json", "utf8"));
   const rows = (f) => fs.readFileSync(f, "utf8").trim().split("\n").slice(1).map((l) => l.split("\t"));
   const checks = rows(out + "/checks.tsv").map(([cycle, check, result, expected, actual]) => ({ cycle: +cycle, check, result, expected, actual }));
   const durations = rows(out + "/durations.tsv").map(([cycle, stage, seconds, exit, loadBefore, loadAfter]) => ({ cycle: +cycle, stage, seconds: +seconds, exit, loadBefore, loadAfter }));
@@ -1065,6 +1206,16 @@ node -e '
       : "Staging rehearsal on a real legacy dump and an isolated NEXA copy.",
     cycles: +cycles,
     legacyDumpSha256: dumpSha,
+    legacyArchiveSha256: archiveSha,
+    legacyEngine: engine,
+    legacyInput: {
+      flag: inputFlag,
+      container: archive.archive.container,
+      encryption: archive.zip === null ? null : archive.zip.encryption,
+      format: archive.dump.format,
+      serverVersion: archive.dump.serverVersion,
+      collations: archive.dump.collations,
+    },
     checksFailed: +failed,
     checksPending: +pendingN,
     verdict: +failed > 0 ? "FAILED" : +pendingN > 0 ? "DONE_PENDING_DECISIONS (not passed)" : "PASSED",
@@ -1072,7 +1223,8 @@ node -e '
     durations,
   };
   fs.writeFileSync(out + "/summary.json", JSON.stringify(summary, null, 2) + "\n");
- ' "$OUT" "$EVIDENCE_CLASS" "$CYCLES" "$FAILED_CHECKS" "$PENDING_CHECKS" "$(cat "$OUT/snapshots/legacy-dump.sha256")"
+ ' "$OUT" "$EVIDENCE_CLASS" "$CYCLES" "$FAILED_CHECKS" "$PENDING_CHECKS" "$(cat "$OUT/snapshots/legacy-dump.sha256")" \
+  "$(cat "$OUT/snapshots/legacy-archive.sha256")" "$LEGACY_ENGINE" "$LEGACY_INPUT_FLAG"
 
 if [ "$FAILED_CHECKS" -ne 0 ]; then
   die "$FAILED_CHECKS check(s) failed ($PENDING_CHECKS pending); see $OUT/checks.tsv. The rehearsal did NOT pass."
