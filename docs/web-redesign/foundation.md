@@ -116,13 +116,41 @@ Groups follow the reference's semantic sections, extended to hold every
 surface the product has now: عملیات · فروش · نمایندگی · زیرساخت · ارتباط ·
 پیکربندی · سامانه.
 
-Later the support-AI pages got a group of their own, «هوش مصنوعی پشتیبانی», drawn
-second, between عملیات and فروش. Its six pages, in order, are
-`/business-chats`, `/support-ai`, `/support-knowledge`, `/support-learning`,
-`/knowledge-build` and `/support-analytics`. Their paths and permissions are
-unchanged, and so is where the generic support pages sit (`/tickets` in عملیات,
-`/support` in ارتباط). `tests/web/support-ai-nav.test.tsx` pins this, and the
-sidebar draws no group that holds no link the actor may see.
+**The current information architecture** (it supersedes the Group column of the
+Round W table below, which is kept as history) has ten groups, in this order:
+
+1. داشبورد — drawn as a plain link above the accordion.
+2. مشتریان و پشتیبانی — users, services, tickets, support/FAQ.
+3. هوش مصنوعی پشتیبانی — business chats, support AI, knowledge, learning
+   candidates, knowledge build, support analytics.
+4. فروش و محصولات — orders, products, categories, custom service, extra
+   devices, service locations, trials, discounts, campaigns, referrals, reports.
+5. مالی و پرداخت — payments, compensations, payment gateways, bulk operations.
+6. نمایندگان — resellers, tiers, plans.
+7. ربات و ارتباط با مشتری — bots, bot buttons, appearance, content, broadcasts,
+   reminders, client apps, terms.
+8. زیرساخت و پنل‌ها — panels, panel health, providers.
+9. تنظیمات — settings, features.
+10. مدیریت سیستم — notification center, audit log, incidents, alerts,
+    notifications, ops group, system, recovery.
+
+How the sidebar behaves:
+
+- Groups 2–10 are a **single-open accordion**: one group is open at a time, and
+  opening another closes the last.
+- The group that owns the current route opens on the first render (a deep link
+  included) and again on every navigation, a move between two pages of one group
+  included. A header also closes its own group, so at most one group is open;
+  on a page no group owns, such as `/`, none need be open.
+- A closed group's header shows the sum of its links' counters.
+- The collapsed icon rail keeps every icon with dividers.
+- Permission filtering happens before drawing, so a group with no permitted link is
+  not drawn at all.
+
+All 50 entries kept their path, label, icon, permission and owner-only flag.
+`tests/web/nav-accordion.test.tsx` pins the groups, that snapshot and the accordion.
+
+The table below is Round W's original placement.
 
 | Group    | Path                  | Label                   | Icon           | Permission (unchanged)                                                   |
 | -------- | --------------------- | ----------------------- | -------------- | ------------------------------------------------------------------------ |

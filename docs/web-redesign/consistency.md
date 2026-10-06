@@ -78,7 +78,9 @@ re-checks every call; nothing here is enforcement.
 | 53  | `/recovery`            | `RecoveryPage`            | OPS-B      | سامانه · `recovery`                                 | `backup.view`                                                               |
 | 54  | `/system`              | `SystemPage`              | OPS-B      | سامانه · `system`                                   | session only                                                                |
 
-Groups, in drawn order: عملیات (`navgroup_ops`, 8 entries), فروش
+(Historical: the sidebar has since been regrouped into ten groups and a single-open
+accordion; see `foundation.md` §4. The group column above records the placement of that
+time.) Groups, in drawn order then: عملیات (`navgroup_ops`, 8 entries), فروش
 (`navgroup_sales`, 10), نمایندگی (`navgroup_resellers`, 3), زیرساخت
 (`navgroup_infra`, 5), ارتباط (`navgroup_comms`, 5), پیکربندی
 (`navgroup_config`, 4), سامانه (`navgroup_system`, 5).

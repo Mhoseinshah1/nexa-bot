@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { PERMISSION_KEYS, type PermissionKey } from '@nexa/contracts';
 import { GROUP_ORDER, NAV, ROUTE_PATTERNS, navPermitted } from '../../apps/web/src/app';
 import { Sidebar } from '../../apps/web/src/shell';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { renderPage, stubApi } from './harness';
+import { navGroupHeader, renderPage, stubApi } from './harness';
 
 /**
  * Hotfix — «هوش مصنوعی پشتیبانی»: the support-AI pages in one navigation group of their own.
@@ -58,8 +58,8 @@ describe('the «هوش مصنوعی پشتیبانی» navigation group', () => 
 
   it('leaves the generic support pages where they were, and lists nothing twice', () => {
     const group = (id: string) => NAV.find((entry) => entry.id === id)?.group;
-    expect(group('tickets')).toBe('web.navgroup_ops');
-    expect(group('support')).toBe('web.navgroup_comms');
+    expect(group('tickets')).toBe('web.navgroup_customers');
+    expect(group('support')).toBe('web.navgroup_customers');
     const ids = NAV.map((entry) => entry.id);
     const paths = NAV.map((entry) => entry.path);
     expect(new Set(ids).size).toBe(ids.length);
@@ -69,6 +69,7 @@ describe('the «هوش مصنوعی پشتیبانی» navigation group', () => 
   it('is drawn when one child is permitted, with only that child', async () => {
     sidebar(['business_chats.view']);
     const group = await screen.findByRole('group', { name: t(GROUP) });
+    fireEvent.click(navGroupHeader(GROUP) as HTMLElement);
     const links = within(group).getAllByRole('link');
     expect(links.map((link) => link.getAttribute('href'))).toEqual(['/business-chats']);
     expect(within(group).getByText(t('web.nav_business_chats'))).toBeTruthy();
@@ -77,20 +78,29 @@ describe('the «هوش مصنوعی پشتیبانی» navigation group', () => 
   it('draws every child for an actor holding every permission, under the group', async () => {
     sidebar([...PERMISSION_KEYS]);
     const group = await screen.findByRole('group', { name: t(GROUP) });
+    fireEvent.click(navGroupHeader(GROUP) as HTMLElement);
     expect(
       within(group)
         .getAllByRole('link')
         .map((link) => link.getAttribute('href')),
     ).toEqual(AI_ENTRIES.map(([, path]) => path));
-    // No AI link is drawn a second time in another group.
-    for (const [, path] of AI_ENTRIES) {
-      expect(document.querySelectorAll(`a[href="${path}"]`)).toHaveLength(1);
+    // Every drawn copy of an AI link, whichever group is open, sits inside the AI group.
+    for (const other of GROUP_ORDER) {
+      const header = navGroupHeader(other);
+      if (header !== null && header.getAttribute('aria-expanded') === 'false') {
+        fireEvent.click(header);
+      }
+      for (const [, path] of AI_ENTRIES) {
+        for (const copy of document.querySelectorAll(`a[href="${path}"]`)) {
+          expect(copy.closest('[role="group"]')?.getAttribute('aria-label'), path).toBe(t(GROUP));
+        }
+      }
     }
   });
 
   it('is not drawn at all when no child is permitted', async () => {
     sidebar(['tickets.view', 'settings.view']);
-    await screen.findByRole('group', { name: t('web.navgroup_ops') });
+    await screen.findByRole('group', { name: t('web.navgroup_customers') });
     expect(screen.queryByRole('group', { name: t(GROUP) })).toBeNull();
     expect(screen.queryByText(t(GROUP))).toBeNull();
   });

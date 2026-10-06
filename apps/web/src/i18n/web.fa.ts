@@ -622,10 +622,12 @@ export const WEB_FA = {
   'web.not_found_hint': 'نشانی را بررسی کنید یا به نمای کلی برگردید.',
 
   // Round W (foundation): the shell, the command search and the shared kit.
-  'web.navgroup_ops': 'عملیات',
+  'web.navgroup_dashboard': 'داشبورد',
+  'web.navgroup_customers': 'مشتریان و پشتیبانی',
   'web.navgroup_support_ai': 'هوش مصنوعی پشتیبانی',
-  'web.navgroup_resellers': 'نمایندگی',
-  'web.navgroup_comms': 'ارتباط',
+  'web.navgroup_finance': 'مالی و پرداخت',
+  'web.navgroup_resellers': 'نمایندگان',
+  'web.navgroup_bot': 'ربات و ارتباط با مشتری',
   'web.open_menu': 'باز کردن منو',
   'web.close': 'بستن',
   'web.search_open': 'جست‌وجو یا رفتن به صفحه…',
@@ -659,10 +661,10 @@ export const WEB_FA = {
   'web.percent_sign': '٪',
 
   // --- Navigation groups ---------------------------------------------------
-  'web.navgroup_sales': 'فروش',
-  'web.navgroup_infra': 'زیرساخت',
-  'web.navgroup_config': 'پیکربندی',
-  'web.navgroup_system': 'سامانه',
+  'web.navgroup_sales': 'فروش و محصولات',
+  'web.navgroup_infra': 'زیرساخت و پنل‌ها',
+  'web.navgroup_config': 'تنظیمات',
+  'web.navgroup_system': 'مدیریت سیستم',
 
   // --- Navigation ----------------------------------------------------------
   'web.nav_users': 'کاربران',

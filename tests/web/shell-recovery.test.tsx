@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { customer, stubApi } from './harness';
+import { customer, sidebarLink, stubApi } from './harness';
 
 /**
  * The shell, rendered whole.
@@ -225,7 +225,7 @@ describe('a session that expires under an open tab', () => {
     ]);
     const { client } = renderShell();
     await screen.findByText('مدیر اصلی');
-    fireEvent.click(screen.getByRole('link', { name: t('web.nav_users') }));
+    fireEvent.click(sidebarLink(t('web.nav_users')));
     await screen.findByText('5551234567');
 
     // The cookie expires. No sign-out runs.
@@ -535,7 +535,7 @@ describe('the shell in the states a pure function cannot see', () => {
     const { client } = renderShell();
     await screen.findByText('مدیر اصلی');
 
-    fireEvent.click(screen.getByRole('link', { name: t('web.nav_users') }));
+    fireEvent.click(sidebarLink(t('web.nav_users')));
     // The first operator's customer is on screen and therefore in the cache.
     await screen.findByText('5551234567');
 
@@ -604,7 +604,7 @@ describe('the shell in the states a pure function cannot see', () => {
     fireEvent.submit(usernameInput.closest('form') as HTMLFormElement);
     await screen.findByText('مدیر دوم');
 
-    fireEvent.click(screen.getByRole('link', { name: t('web.nav_users') }));
+    fireEvent.click(sidebarLink(t('web.nav_users')));
     // The request failed, so SOMETHING has to be on screen — and it must not be
     // the previous operator's customer.
     await waitFor(() => {
