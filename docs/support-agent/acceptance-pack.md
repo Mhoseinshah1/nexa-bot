@@ -200,6 +200,56 @@ fallback.
    re-check of runbook §7's query 31 days later.
 4. Set the TEST tenant back to `OFF` unless the Product Owner asked for it to stay on.
 
+## L. Product-flow fixes (2026-10-06) — NOT RUN
+
+Added with the support-AI product-flow fixes (D2, D3, D5, D7, D8, D9, L1–L5). Every step below
+needs the real Telegram Business account and real provider keys of the prerequisites, and is
+**NOT RUN** until an operator records it. Steps L4 and L6 depend on the `K` aliases of the
+runtime-diagnostics branch (the model cites knowledge as `K1`…); run them on a build that has
+both.
+
+1. **The echo (D7, OQ-TB-03 #4).** In step C3, record whether Telegram echoed NEXA's own send:
+   `SELECT origin, telegram_message_id FROM business_messages WHERE conversation_id = '<id>' ORDER BY sent_at DESC LIMIT 3;`
+   - Either answer is acceptable since D7. Then, on the TEST tenant under `AUTO_REPLY_SAFE`,
+     ask a connection question, let the automatic reply arrive, and answer «باز کردم، هنوز
+     وصل نمیشه».
+   - **Expect:** the second reply builds on the first (a next step), not step one again.
+     Record the echo answer in OQ-TB-03 #4.
+2. **Owner typing (D8).** From the owner's phone, answer a customer's connection question
+   with a general instruction. On `/business-chats/<id>`, as `owner`:
+   - **Expect:** the owner's row (origin «اپراتور (دستی)», `HUMAN`) carries «پیشنهاد به‌عنوان دانش»; the
+     customer's rows do not. Press it: a PENDING candidate appears on `/support-learning`,
+     with no phone, card, link or personal handle.
+   - As `support` (no `support_knowledge.review`), press it on another owner row.
+   - **Expect:** refused with a permission error; the denial is audited.
+3. **Money guard (D9).** On the TEST tenant under `AUTO_REPLY_SAFE`, from the customer:
+   «سلام، سرویس من وصل نمیشه، پولمو پس بدید».
+   - **Expect:** no automatic reply; HANDOFF_REQUIRED with the hard-topic reason (`HANDOFF_TOPIC`); a ticket.
+   - **Evidence:** `SELECT outcome, handoff_reason FROM support_ai_jobs WHERE conversation_id = '<id>' ORDER BY created_at DESC LIMIT 1;`
+     returns `guard_handoff_topic` / `HANDOFF_TOPIC`, and no `support_ai_runs` row was written
+     for it (no provider was asked).
+4. **Knowledge reaches the model (D2).** With at least four client apps enabled and ten or more
+   approved articles of realistic length, one titled «وصل نمی‌شود» and NOT the most recently
+   edited, request a draft on «سرویس من وصل نمیشه».
+   - **Evidence:** `SELECT knowledge_sent, knowledge_available, knowledge_labels FROM support_ai_jobs WHERE id = '<draft id>';`
+     `knowledge_sent` ≥ 1, and `knowledge_labels` names «وصل نمی‌شود» when the draft cited it.
+5. **A stopped assistant (D5).** `docker stop` the `assistant` container. Request a draft (or,
+   on the TEST tenant under AUTO, send a connection question) and wait three minutes.
+   - **Expect:** a notification «دستیار هوشمند پشتیبانی اجرا نمی‌شود» for `owner`, not for
+     `support`. Start the container again: within a minute the alert shows as resolved
+     (`support.assistant.running`).
+6. **Grounding shown (D3).** Step I4 as rewritten above: the approved article's title under
+   «دانش پشتیبان:».
+7. **Analytics (L1).** Step E5 as rewritten above, pressing «درخواست پیش‌نویس» twice before
+   discarding: «کنار گذاشته شد» 1 and «جایگزین با درخواست تازه» 1.
+8. **Payment label (L2).** For a linked customer with a card-to-card payment, request a draft
+   that cites it.
+   - **Expect:** under «بر پایهٔ», «کارت به کارت 1,500,000 تومان» style — never `MANUAL_TRANSFER`
+     or minor units.
+9. **Support accounts in the build (L3).** With `support.accounts` set, run «ساخت دانش از NEXA».
+   - **Expect:** a SUPPORT_ACCOUNTS proposal that names the handle; an FAQ naming a personal
+     handle is still excluded (`after.excluded.kinds` contains `USERNAME`).
+
 ## Results
 
 | Step | Pass / Fail / Not run | Time (UTC) | Evidence | Notes (OQ to update) |
@@ -215,6 +265,15 @@ fallback.
 | I1–4 |                       |            |          |                      |
 | J1–3 |                       |            |          |                      |
 | K1–4 |                       |            |          |                      |
+| L1   | Not run               |            |          | OQ-TB-03 #4 (echo)   |
+| L2   | Not run               |            |          | D8 owner typing      |
+| L3   | Not run               |            |          | D9                   |
+| L4   | Not run               |            |          | D2 (needs K aliases) |
+| L5   | Not run               |            |          | D5                   |
+| L6   | Not run               |            |          | D3 (needs K aliases) |
+| L7   | Not run               |            |          | L1                   |
+| L8   | Not run               |            |          | L2                   |
+| L9   | Not run               |            |          | L3                   |
 
 Sign-off:
 
