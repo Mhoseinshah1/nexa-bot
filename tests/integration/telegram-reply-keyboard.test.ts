@@ -430,7 +430,7 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
       expect(audit[0]?.after.value).toEqual({ main_menu: MENU_ICON });
     });
 
-    it('a custom-emoji denial of an iconed inline keyboard: one icon-less retry lands, the bot marked REJECTED', async () => {
+    it('a custom-emoji refusal of an iconed inline keyboard: one icon-less retry lands, and the bot stays eligible (review B1)', async () => {
       await setIcons(tenantA, owner, { main_menu: MENU_ICON });
       await say(BOT_A1);
       telegram.setCustomEmoji(ID_A1, {
@@ -454,7 +454,15 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
         ),
       );
       expect(telegram.delivered(ID_A1).length).toBeGreaterThan(0);
-      expect(await testOutcome(BOT_A1)).toBe('REJECTED');
+      // An operator-typed id proves nothing about the bot: its eligibility is untouched.
+      expect(await testOutcome(BOT_A1)).toBe('SENT');
+      const events = await decorationEvents();
+      expect(events.at(-1)?.context).toMatchObject({
+        keyboardIcons: true,
+        iconSource: 'RAW',
+        eligibilityChanged: false,
+        inlineButtons: ['main_menu'],
+      });
     });
   });
 
