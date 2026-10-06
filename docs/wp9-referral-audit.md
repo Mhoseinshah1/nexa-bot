@@ -243,3 +243,28 @@ exists.
   commercial number with no evidence of how it is used (OQ-WP9-03).
 - **A customer notification when a commission is earned.** Cashback has none either. A
   notification that names an amount would need the parameterised payload ADR-0030 refuses.
+
+## B7 (2026-10-06) — the link names the referrer by numeric Telegram user id
+
+The owner asked for the referral link to be "based directly on the numeric Telegram User
+ID", with no internal code in the customer's link (pre-support brief item 7; master prompt
+§5 B7). No more specific format was recorded, so the link is
+`https://t.me/<bot>?start=ref-<telegramUserId>`.
+
+- **Privacy, decided by the owner.** The referrer's numeric Telegram id is now public in
+  every link they share. That was the owner's explicit choice; nothing else about the
+  customer is in the link.
+- **Three shapes are read** (`referralTargetFromStartPayload`): `ref-<CODE>` (every link
+  handed out before B7 keeps attributing), `ref-<digits>` (the new link), and a bare
+  `<digits>` (MirzaBot's legacy `?start=<from_id>`, so links an imported customer already
+  shared attribute). An eight-digit `ref-` payload matches both of the first two; the code
+  is looked up first.
+- **Every F2/F11 rule holds unchanged.** Attribution is made only on the update that
+  creates the referee and never changed afterwards. A numeric id is resolved inside the
+  tenant (`findTelegramIdOwner`), so another tenant's customer, or nobody, is
+  `CODE_UNKNOWN` — audited DENIED, with the same greeting as a `/start` with no link.
+- **Self-referral is now reachable and refused by name.** A code could never name a
+  customer created in the same transaction; `ref-<own id>` can, and is refused
+  `SELF_REFERRAL` (the `referrals_not_self_check` constraint refuses it too).
+- Pinned by `tests/integration/referrals.test.ts` ("B7: …") and
+  `tests/unit/referral-start-payload.test.ts`.
