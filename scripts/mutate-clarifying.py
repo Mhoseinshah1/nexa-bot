@@ -75,6 +75,16 @@ M = [
  ('web: no widening warning', W,
   "    (draft.mode === 'AUTO_REPLY_SAFE' &&\n      toNumber(draft.maxConsecutiveClarifyingQuestions) >\n        response.config.maxConsecutiveClarifyingQuestions);",
   "    false;", 'web'),
+ # Review of PR #228.
+ ('N1: PENDING rows not counted', R,
+  "inArray(businessOutboundMessages.state, ['PENDING', 'DELIVERED', 'UNCONFIRMED'])",
+  "inArray(businessOutboundMessages.state, ['DELIVERED', 'UNCONFIRMED'])", 'int'),
+ ('N4: an absent limit saved as the default', S,
+  "            command.config.maxConsecutiveClarifyingQuestions ??\n            before.config.maxConsecutiveClarifyingQuestions,",
+  "            command.config.maxConsecutiveClarifyingQuestions ?? 2,", 'int'),
+ ('N7: invisible-only text not treated as empty', G,
+  "    reply.replace(INVISIBLE_MARKS, '').trim() === '' ||",
+  "    reply === '' ||", 'unit'),
 ]
 
 env = dict(os.environ)

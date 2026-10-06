@@ -292,7 +292,11 @@ both.
 Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
 records it. On the TEST tenant under `AUTO_REPLY_SAFE` with `CONNECTION_TROUBLESHOOTING` and
 `GREETING` allowlisted, the confidence floor `HIGH`, «حداکثر سؤال تکمیلی پیاپی» at its default
-2, and at least one approved, enabled article about Sing-box connection errors.
+2, «بیشترین پاسخ خودکار پیاپی» (`maxConsecutiveReplies`) at **5 or more**, and at least one approved,
+enabled article about Sing-box connection errors. At its default of 4 the loop guard counts
+every automatic reply — the greeting too — so a flow of greeting, two questions and an answer
+uses all four, and any further automatic reply in the same epoch hands off as `LOOP_GUARD`
+(«پاسخ‌های خودکار پشت‌سرهم به سقف رسید»), not as the clarifying limit.
 
 1. **The conversation.** From the customer, one message at a time, waiting for each answer:
 

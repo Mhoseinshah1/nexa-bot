@@ -181,6 +181,16 @@ first step when a knowledge entry or fact covers the problem rather than ask, ne
 question already asked (the model reads its own delivered replies since D7). The policy version
 is `sai2-2026-10-06`. Assist reads the same prompt; its handling of a draft is unchanged.
 
+**Review of PR #228.** A save that omits `maxConsecutiveClarifyingQuestions` — an older web
+bundle that does not know it — keeps the STORED value (the default only when nothing is
+stored): the request schema makes the field optional (`supportAiConfigSaveSchema`) while the
+configuration as read always carries it, and the service merges it before the permission and
+version logic, so an absent field is never a widening (N4). A reply or question made only of
+zero-width or invisible marks (U+200B–U+200F, U+2060, U+FEFF) is empty and hands off as
+`REPLY_OUT_OF_BOUNDS`; the trimmed original is what is sent otherwise (N7). Rule 9a of the
+prompt yields to rules 5–7 («Unless rules 5–7 require HANDOFF», policy `sai3-2026-10-06`, N5).
+A question still `PENDING` on the lane counts toward the streak (N1, tested).
+
 **The setting** is in the tenant's Support AI configuration, versioned and idempotent like the
 other fields, drawn on `/support-ai` in the numeric-field pattern with its help text and the
 shared Persian bound error. Raising it while the resulting mode is `AUTO_REPLY_SAFE` is a widening

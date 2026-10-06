@@ -108,28 +108,41 @@ suite, and restores the file byte for byte). Run on 2026-10-06 against
 `nexa_test_clar`. Integration cases are in `describe('hotfix: automatic clarifying
 questions')`.
 
-| ID    | Rule reverted                                                   | Tests that failed                                                             | Result |
-| ----- | --------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------ |
-| CQ-01 | The guard change (`!== 'REPLY'` restored)                       | 1/17, 2, 3/10, 5/11, 10–16, item 3/12/16/20 (17 tests)                        | KILLED |
-| CQ-02 | The allowlist guard skipped for a question                      | 2: a clarifying question on a topic off the allowlist hands off               | KILLED |
-| CQ-03 | The hard-topic guard skipped for a question                     | 6/8: a hard topic cannot pass as a clarifying question                        | KILLED |
-| CQ-04 | The confidence guard skipped for a question                     | a clarifying question passes through EVERY guard a REPLY does (unit)          | KILLED |
-| CQ-05 | An empty question allowed                                       | a clarifying question passes through EVERY guard a REPLY does (unit)          | KILLED |
-| CQ-06 | The grounding guard skipped for a question                      | 5/11: a clarifying question citing a fact or knowledge entry it was not given | KILLED |
-| CQ-07 | Knowledge citations unchecked                                   | each guard individually blocks the reply…; 5/11                               | KILLED |
-| CQ-08 | The identity guard skipped for a question                       | item 16: an unlinked customer gets a general question                         | KILLED |
-| CQ-09 | The account-review guard skipped for a question                 | a clarifying question passes through EVERY guard a REPLY does (unit)          | KILLED |
-| CQ-10 | The limit `>=` → `>`                                            | 10, 11, 12/6, 10b, 14/15, 15                                                  | KILLED |
-| CQ-11 | The streak never counts                                         | 1/17, 10, 11, 12/6, … (10 tests)                                              | KILLED |
-| CQ-12 | A REPLY does not reset the streak                               | 12/6; item 20 (acceptance flow)                                               | KILLED |
-| CQ-13 | The epoch filter removed                                        | 14/15: a takeover and return to the AI start a new streak                     | KILLED |
-| CQ-14 | FAILED and SUPERSEDED rows counted                              | 13: a refused, superseded or failed reply, and a discarded job, never count   | KILLED |
-| CQ-15 | Jobs joined by conversation, not by the sent row (double count) | 11, 12/6, 14/15, 16/4, item 20                                                | KILLED |
-| CQ-16 | The enqueue-transaction recheck ignores the streak              | 10b: the limit is decided again in the enqueue transaction                    | KILLED |
-| CQ-17 | A sent question recorded as `sent`                              | 1/17, 10, 11, 12/6, … (13 tests)                                              | KILLED |
-| CQ-18 | Raising the limit in AUTO not charged `support_ai.auto_reply`   | 9: in AUTO, raising the clarifying limit needs support_ai.auto_reply          | KILLED |
-| CQ-19 | The default 3 instead of 2                                      | the setting's default and bounds (unit); 7, 9, 10, … (6 integration)          | KILLED |
-| CQ-20 | The web widening warning removed                                | warns that an increase under AUTO_REPLY_SAFE is a widening (web)              | KILLED |
+| ID    | Rule reverted                                                   | Tests that failed                                                                                                                      | Result |
+| ----- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| CQ-01 | The guard change (`!== 'REPLY'` restored)                       | 1/17, 2, 3/10, 5/11, 10–16, item 3/12/16/20 (17 tests)                                                                                 | KILLED |
+| CQ-02 | The allowlist guard skipped for a question                      | 2: a clarifying question on a topic off the allowlist hands off                                                                        | KILLED |
+| CQ-03 | The hard-topic guard skipped for a question                     | 6/8: a hard topic cannot pass as a clarifying question                                                                                 | KILLED |
+| CQ-04 | The confidence guard skipped for a question                     | a clarifying question passes through EVERY guard a REPLY does (unit)                                                                   | KILLED |
+| CQ-05 | An empty question allowed                                       | a clarifying question passes through EVERY guard a REPLY does (unit)                                                                   | KILLED |
+| CQ-06 | The grounding guard skipped for a question                      | 5/11: a clarifying question citing a fact or knowledge entry it was not given                                                          | KILLED |
+| CQ-07 | Knowledge citations unchecked                                   | each guard individually blocks the reply…; 5/11                                                                                        | KILLED |
+| CQ-08 | The identity guard skipped for a question                       | item 16: an unlinked customer gets a general question                                                                                  | KILLED |
+| CQ-09 | The account-review guard skipped for a question                 | a clarifying question passes through EVERY guard a REPLY does (unit)                                                                   | KILLED |
+| CQ-10 | The limit `>=` → `>`                                            | 10, 11, 12/6, 10b, 14/15, 15                                                                                                           | KILLED |
+| CQ-11 | The streak never counts                                         | 1/17, 10, 11, 12/6, … (10 tests)                                                                                                       | KILLED |
+| CQ-12 | A REPLY does not reset the streak                               | 12/6; item 20 (acceptance flow)                                                                                                        | KILLED |
+| CQ-13 | The epoch filter removed                                        | 14/15: a takeover and return to the AI start a new streak                                                                              | KILLED |
+| CQ-14 | FAILED and SUPERSEDED rows counted                              | 13: a refused, superseded or failed reply, and a discarded job, never count                                                            | KILLED |
+| CQ-15 | Jobs joined by conversation, not by the sent row (double count) | 11, 12/6, 14/15, 16/4, item 20                                                                                                         | KILLED |
+| CQ-16 | The enqueue-transaction recheck ignores the streak              | 10b: the limit is decided again in the enqueue transaction                                                                             | KILLED |
+| CQ-17 | A sent question recorded as `sent`                              | 1/17, 10, 11, 12/6, … (13 tests)                                                                                                       | KILLED |
+| CQ-18 | Raising the limit in AUTO not charged `support_ai.auto_reply`   | 9: in AUTO, raising the clarifying limit needs support_ai.auto_reply                                                                   | KILLED |
+| CQ-19 | The default 3 instead of 2                                      | the setting's default and bounds (unit); 7, 9, 10, … (6 integration)                                                                   | KILLED |
+| CQ-20 | The web widening warning removed                                | warns that an increase under AUTO_REPLY_SAFE is a widening (web)                                                                       | KILLED |
+| CQ-21 | N1: PENDING lane rows not counted                               | N1: a question still PENDING on the lane counts (fail closed)                                                                          | KILLED |
+| CQ-22 | N4: an absent limit saved as the default 2                      | N4: a save that omits the limit keeps the stored value                                                                                 | KILLED |
+| CQ-23 | N7: invisible-only text not treated as empty                    | N7: a reply or question of only zero-width or invisible marks is empty (unit); a clarifying question passes through EVERY guard (unit) | KILLED |
+
+CQ-21 to CQ-23 were added after the review of PR #228 and run on 2026-10-06 against the same
+database.
+
+Commit history note (review N2): the review reported the contract change as folded into the
+feature commit `96fa26e7`. Checked with `git show --name-only`: `96fa26e7` touches no file
+under `packages/contracts`; the whole contract surface of the hotfix is `a3f1473f`, committed
+before it. Nothing is rewritten either way (the history is pushed; no force-push). The review's
+own contract change (N4, `supportAiConfigSaveSchema`) has its own commit, before the code
+that uses it.
 
 Test 15 (a redelivered message and a repeated lane pass count one question) pins the
 idempotency TB7-02 already falsified and the one-row-per-job key; CQ-15, the mutation that
@@ -138,4 +151,4 @@ job and row multiply to one. Every new test also fails against the unchanged `ma
 (run on 2026-10-06: 7 of the new unit cases, all 8 web cases; the integration cases need the
 new contract and column).
 
-**20 of 20 killed.**
+**23 of 23 killed.**
