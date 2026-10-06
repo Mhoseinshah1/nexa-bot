@@ -171,6 +171,58 @@ describe('A2 — lookup and usage read the account that was asked for', () => {
   });
 });
 
+/*
+ * C1 — «آخرین زمان اتصال». NOT RUN at the time it was written (`docs/open-questions.md`
+ * OQ-LC-02): the shape below is read from v0.8.4's SOURCE, and this case is what turns it
+ * into evidence. The observer reads the raw record; the adapter must agree with it.
+ */
+describe('A9 — last connection: `online_at` is on the record, naive UTC or null', () => {
+  it('carries `online_at` on a fresh account, as null, and the adapter reads NEVER', async () => {
+    const a = await observe('a');
+    expect(a, 'A1 must have created A').not.toBeNull();
+    if (a === null) return;
+    expect(a.onlineAtPresent, '`online_at` is not on GET /api/user/{username}').toBe(true);
+    // Nobody has connected through A in this run, so the column is still NULL.
+    expect(a.onlineAt).toBeNull();
+    const outcome = await adapter.readUsage(target(), http(), ref('a'));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.usage.lastSeen).toEqual({ kind: 'NEVER' });
+  });
+
+  it('when a time is there, it is a naive ISO string and the adapter reads it as UTC', async () => {
+    /*
+     * Only a panel some client has used carries a time, and this suite passes no traffic.
+     * Set NEXA_ACCEPTANCE_MARZBAN_USED_USER to an account on the disposable panel that a
+     * client HAS connected through (the lifecycle script's account, say) to make this
+     * case assert; without it, it fails rather than skips, like the suite.
+     */
+    const used = process.env['NEXA_ACCEPTANCE_MARZBAN_USED_USER'];
+    expect(used, 'NEXA_ACCEPTANCE_MARZBAN_USED_USER is not set').toBeTruthy();
+    if (used === undefined || used === '') return;
+    const observed = await observeUser(panel, observer, used);
+    expect(observed?.onlineAtPresent).toBe(true);
+    const raw = observed?.onlineAt;
+    expect(typeof raw, 'a used account carries a time, not null').toBe('string');
+    if (typeof raw !== 'string') return;
+    // The SHAPE the source predicts: no `Z`, no offset, optional microseconds.
+    expect(raw).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?$/);
+    const outcome = await adapter.readUsage(target(), http(), {
+      username: used,
+      subscriptionRef: `sub-${used}`,
+      clientId: `client-${used}`,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.usage.lastSeen.kind).toBe('AT');
+    if (outcome.usage.lastSeen.kind !== 'AT') return;
+    const utc = Date.parse(`${raw.slice(0, 23)}Z`);
+    expect(outcome.usage.lastSeen.at.getTime()).toBe(utc);
+    // A last connection is in the past, never ahead of the panel's own clock by much.
+    expect(outcome.usage.lastSeen.at.getTime()).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
+  });
+});
+
 describe('A3 — suspend applies to one account and only that account', () => {
   it('suspends A while B keeps serving', async () => {
     const outcome = await adapter.suspendUser(target(), http(), ref('a'));

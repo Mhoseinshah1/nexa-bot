@@ -122,6 +122,38 @@ and the unit suite was green, because the fake had been written from the same se
 a panel that does not name its inbound tags is `PANEL_NOT_OPERABLE` rather than a source
 of accounts that connect to nothing.
 
+## Last connection — `online_at` (C1), read from the source, NOT yet from a panel
+
+Read from tag `v0.8.4`, three files:
+
+- `app/models/user.py`: `UserResponse.online_at: Optional[datetime]`;
+- `app/db/models.py`: `online_at = Column(DateTime, nullable=True, default=None)`;
+- `app/jobs/record_usages.py`: `online_at=datetime.utcnow()` whenever xray reports traffic
+  for the user.
+
+So the panel should answer with a **naive UTC** ISO time (`2026-10-06T08:30:00`, or with
+`.ffffff` when the microseconds are not zero, and no `Z`), or `null` for an account
+nobody has used. `readLastSeen` (`provider-numbers.ts`, called with `MARZBAN_USAGE`)
+reads exactly that:
+
+- no offset is UTC; an explicit `Z` or `±hh:mm` is honoured;
+- `null` is NEVER («متصل نشده»);
+- a missing key or any other value is UNSUPPORTED («در دسترس نیست»).
+
+The service repository also refuses a time more than five minutes after the Clock's
+read time (`boundedLastSeen`).
+
+**An UNSUPPORTED read keeps the last known value.** It writes nothing to
+`services.last_seen_*`, so the card goes on showing what the last read that DID prove
+something stored: a time, «متصل نشده», or «در دسترس نیست» if nothing ever did. A
+panel that stops reporting the field, or reports a future time, does not erase a time
+it proved earlier.
+
+**Not yet confirmed on a running panel.** `tests/acceptance/real-panel-marzban.test.ts`
+A9 checks that the key is present, `null` on a fresh account, and the naive shape on a
+used one. Its only zone check is "not more than five minutes after now", which would
+miss a panel writing local time WEST of UTC. `docs/open-questions.md` OQ-LC-02.
+
 ## Authentication
 
 One bearer token per call sequence, from the token route, never stored. `401` on a

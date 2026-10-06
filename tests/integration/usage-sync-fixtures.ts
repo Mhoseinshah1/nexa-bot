@@ -98,6 +98,7 @@ export function seedPanelUser(panel: FakeRickpanel, username: string, usedTraffi
     expire: 0,
     dataLimit: 0,
     usedTraffic,
+    onlineAt: null,
     proxies: { vless: { id: `internal-vless-${username}` } },
     subToken: `subtoken-${username}`,
   });
