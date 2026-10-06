@@ -604,10 +604,16 @@ create_db() {
   printf '%s\n' "$1" >>"$CREATED_DBS_FILE"
 }
 
+# rename_db FROM TO — ends the CLIENT sessions on FROM, then renames it. Client sessions
+# only: an autovacuum worker on a freshly restored candidate runs as the bootstrap
+# superuser, and a non-superuser's pg_terminate_backend on it fails ("permission denied
+# to terminate process") — which ended a synthetic rehearsal at the cutover. The server's
+# own RENAME signals autovacuum workers in that database itself and waits for them.
 rename_db() {
   assert_rehearsal_db "$1"
   assert_rehearsal_db "$2"
-  pg_admin -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$1' AND pid <> pg_backend_pid()" >/dev/null
+  pg_admin -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                WHERE datname = '$1' AND pid <> pg_backend_pid() AND backend_type = 'client backend'" >/dev/null
   pg_admin -c "ALTER DATABASE \"$1\" RENAME TO \"$2\""
 }
 

@@ -377,3 +377,25 @@ describe('same_tables: the exact rollback comparison (WP-D8)', () => {
     expect(run(file('empty.tsv', []), file('empty2.tsv', []))).toBe('missing');
   });
 });
+
+describe('rename_db: the cutover ends client sessions only (autovacuum is the server’s)', () => {
+  it('never asks to terminate an autovacuum worker, which a non-superuser cannot', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-rehearsal-rename-'));
+    const log = join(dir, 'sql.log');
+    // pg_admin stubbed: every statement the function would send is logged instead.
+    const result = bash(
+      [
+        `pg_admin() { printf '%s\\n---\\n' "$2" >>${JSON.stringify(log)}; }`,
+        lift('die', 'assert_rehearsal_db', 'rename_db'),
+        'rename_db nexa_rehearsal_20261006120000_cand_c1 nexa_rehearsal_20261006120000',
+      ].join('\n'),
+    );
+    expect(result.status).toBe(0);
+    const [terminate, rename] = readFileSync(log, 'utf8').split('\n---\n');
+    expect(terminate).toContain('pg_terminate_backend');
+    expect(terminate).toContain("backend_type = 'client backend'");
+    expect(rename).toContain(
+      'ALTER DATABASE "nexa_rehearsal_20261006120000_cand_c1" RENAME TO "nexa_rehearsal_20261006120000"',
+    );
+  });
+});
