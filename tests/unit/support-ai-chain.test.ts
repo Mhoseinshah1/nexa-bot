@@ -425,6 +425,23 @@ describe('the chain records WHY a call failed (program §A3)', () => {
     expect(codes()).not.toContain(SUPPORT_AI_UNAVAILABLE_CODE);
   });
 
+  // Review N3: the breaker and the key's alert judge what the PROVIDER did. A 2xx answer with
+  // a JSON object proves the key works even when it is not NEXA's decision — unlike an HTTP
+  // 4xx INVALID_OUTPUT (finding 4 above), which never clears a rejection.
+  it('an answer that fails the parse still proves the key: the rejection closes', async () => {
+    const { generate, codes, rejected, results } = chainWith({
+      adapters: [adapter('OPENAI', [ok()])],
+      rejected: ['OPENAI'],
+      openAlerts: [`${SUPPORT_AI_CREDENTIAL_REJECTED_CODE}:OPENAI`],
+      validate: invalid,
+    });
+    const result = await generate();
+    expect(result.outcome.outcome).toBe('INVALID_OUTPUT');
+    expect(codes()).toContain(SUPPORT_AI_CREDENTIAL_ACCEPTED_CODE);
+    expect(rejected.has('OPENAI')).toBe(false);
+    expect(results).toEqual([{ provider: 'OPENAI', result: 'SUCCESS' }]);
+  });
+
   it('a valid answer records OK with no class, and the job it was for', async () => {
     const { generate, runs } = chainWith({
       adapters: [adapter('OPENAI', [ok()])],
