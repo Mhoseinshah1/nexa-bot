@@ -41,6 +41,22 @@ scripts/legacy-rehearsal.sh \
   --out /tmp/rehearsal-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
+Or, asserted (WP-D6) — the same synthetic rehearsal through the fixture's AES-256 zip, then
+`scripts/legacy-rehearsal-synthetic-assert.mjs`, which requires 0 FAIL and EXACTLY the
+fixture's known PENDING checks in every cycle (one more PENDING is a regression as much as
+one FAIL):
+
+```bash
+PGPASSWORD=… pnpm rehearsal:synthetic [--engine mariadb|mysql8] [--mysql-bin-dir DIR] [--out DIR]
+```
+
+CI runs exactly that on MySQL 8.0 in the job `legacy-rehearsal` (about two minutes; part
+of the `test` gate), and keeps `summary.json`, `checks.tsv`, `durations.tsv`,
+`reconciliation.md`, `archive.json` and the logs as an artifact. The known PENDING checks
+are the fixture's deliberate owner-decision cases: `invoice_keys_outside_evidenced_shape`
+(S2, OQ-P4-01), `report_equation_C3` (a user id that is not a Telegram id) and
+`legacy_balance_fractional_users` (W8) — 3 per cycle.
+
 `--synthetic-panels` (synthetic only) runs `tests/support/legacy-rehearsal-synthetic-panels.ts`:
 it stands up the two fake RickPanels the fixture assumes on 127.0.0.2/3, registers them in
 the rehearsal database through the ordinary panel write path and the operator's connection
@@ -159,19 +175,25 @@ Pinned by `tests/unit/legacy-rehearsal-guards.test.ts`.
 
 ## What it records (`--out`)
 
-| file                                 | what                                                                                         |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `summary.json`                       | evidence class (and `notEvidence: true` for synthetic), verdict, every check, every duration |
-| `checks.tsv`                         | cycle, check, PASS/FAIL/PENDING, expected, actual                                            |
-| `durations.tsv`                      | cycle, stage, seconds, exit, load average before/after                                       |
-| `snapshots/*.tsv`                    | the NEXA and legacy aggregate snapshots (the reconciliation inputs)                          |
-| `snapshots/c<N>-pre-import.pgcustom` | the pre-import `pg_dump` the rollback restores (customer data: 0600)                         |
-| `c<N>-report.json`                   | P7's machine-readable report, and `c<N>-report.schema-violations.txt` (empty when valid)     |
-| `synthetic-panel-requests.json`      | synthetic only: requests the fake panels received after setup                                |
-| `reconciliation.md`                  | the reconciliation result table, generated from the checks (WP-D5)                           |
-| `archive.json`                       | the archive inspector's report: both sha256 values, format, engine, collations, blockers     |
-| `snapshots/c<N>-panel-state-*.json`  | P4: per production panel, account count and hashes; per-account digests under a deleted key  |
-| `logs/`                              | one log per stage                                                                            |
+| file                                 | what                                                                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `summary.json`                       | evidence class (and `notEvidence: true` for synthetic), verdict, every check, every duration; `pendingDecisions[]` (below) |
+| `checks.tsv`                         | cycle, check, PASS/FAIL/PENDING, expected, actual                                                                          |
+| `durations.tsv`                      | cycle, stage, seconds, exit, load average before/after                                                                     |
+| `snapshots/*.tsv`                    | the NEXA and legacy aggregate snapshots (the reconciliation inputs)                                                        |
+| `snapshots/c<N>-pre-import.pgcustom` | the pre-import `pg_dump` the rollback restores (customer data: 0600)                                                       |
+| `c<N>-report.json`                   | P7's machine-readable report, and `c<N>-report.schema-violations.txt` (empty when valid)                                   |
+| `synthetic-panel-requests.json`      | synthetic only: requests the fake panels received after setup                                                              |
+| `reconciliation.md`                  | the reconciliation result table, generated from the checks (WP-D5)                                                         |
+| `archive.json`                       | the archive inspector's report: both sha256 values, format, engine, collations, blockers                                   |
+| `snapshots/c<N>-panel-state-*.json`  | P4: per production panel, account count and hashes; per-account digests under a deleted key                                |
+| `logs/`                              | one log per stage                                                                                                          |
+
+`summary.json.pendingDecisions[]` lists every PENDING check as `{cycle, check, expected,
+actual, decision: null, decidedBy: null, decidedAt: null}` — the shape G11 accepts one by
+name (`production-gate.md`, `readiness-record.md`). The harness never fills a decision; a
+run whose PENDING checks have not each been accepted by the owner is not a passed
+rehearsal.
 
 The checks, by name: `dry_run_no_business_mutation`, `interrupted_run_left_running`,
 `no_run_left_running`, `one_apply_run_resumed`, `apply_run_completed`,

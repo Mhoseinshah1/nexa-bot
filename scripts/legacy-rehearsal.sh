@@ -1346,6 +1346,12 @@ node -e '
     checksFailed: +failed,
     checksPending: +pendingN,
     verdict: +failed > 0 ? "FAILED" : +pendingN > 0 ? "DONE_PENDING_DECISIONS (not passed)" : "PASSED",
+    // G11: every PENDING check, in the shape the readiness record accepts one by name.
+    // The harness never decides: decision, decidedBy and decidedAt stay null until the
+    // owner records them in docs/legacy-migration/readiness-record.md.
+    pendingDecisions: checks
+      .filter((c) => c.result === "PENDING")
+      .map((c) => ({ cycle: c.cycle, check: c.check, expected: c.expected, actual: c.actual, decision: null, decidedBy: null, decidedAt: null })),
     checks,
     durations,
   };
