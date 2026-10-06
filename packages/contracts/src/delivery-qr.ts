@@ -46,12 +46,41 @@ export const QR_TEMPLATE_QUIET_ZONE_MAX = 16;
 export const QR_TEMPLATE_MODULE_MIN_PX = 4;
 
 /**
+ * The longest side, in pixels, Telegram keeps of a photo it serves at full size. A larger
+ * photo is DOWNSCALED, and its modules with it, so the module minimum is measured after that
+ * scaling (`qrEffectiveModulePx`), not on the image NEXA uploads. Taken from the Bot API's
+ * behaviour as commonly observed (the largest `PhotoSize`); whether it holds for every client
+ * is `OQ-QR-TEMPLATE-01` in `docs/open-questions.md`, open until a real-Telegram acceptance.
+ */
+export const QR_TELEGRAM_PHOTO_MAX_SIDE = 1280;
+
+/**
+ * A module's size as a customer's screen receives it: `scale` pixels in an image whose longest
+ * side Telegram reduces to `QR_TELEGRAM_PHOTO_MAX_SIDE`. The ONE rule the renderer, the save
+ * guard and the Web Admin compare against `QR_TEMPLATE_MODULE_MIN_PX`.
+ */
+export function qrEffectiveModulePx(
+  scale: number,
+  background: { readonly width: number; readonly height: number },
+): number {
+  const longest = Math.max(background.width, background.height);
+  return scale * Math.min(1, QR_TELEGRAM_PHOTO_MAX_SIDE / longest);
+}
+
+/**
  * A text of the length a real subscription link has, for the Web Admin's preview. Never a
  * customer's link: the preview shows how a link of this length fits, and reports its module
  * size. A real link's length decides its own module count.
  */
 export const QR_TEMPLATE_PREVIEW_TEXT =
   'https://sub.example.com:2096/sub/bnhxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw';
+
+/**
+ * The module count of `QR_TEMPLATE_PREVIEW_TEXT`'s code (version 6 at level M, 41 modules),
+ * so the Web Admin, which has no QR encoder, can check a draft region against the module
+ * minimum for a link of typical length. Pinned to the encoder by a unit test.
+ */
+export const QR_TEMPLATE_PREVIEW_MODULES = 41;
 
 const pixel = z.number().int().min(0).max(QR_BACKGROUND_MAX_SIDE);
 
@@ -112,10 +141,15 @@ export const QR_TEMPLATE_FALLBACK_REASONS = [
   'BACKGROUND_UNREADABLE',
   /** The region does not lie inside the background (it was replaced with a smaller one). */
   'OUTSIDE_BACKGROUND',
-  /** This link needs more modules than the region holds at `QR_TEMPLATE_MODULE_MIN_PX`. */
+  /**
+   * This link needs more modules than the region holds at `QR_TEMPLATE_MODULE_MIN_PX`, as
+   * measured after Telegram's downscaling (`qrEffectiveModulePx`).
+   */
   'MODULE_TOO_SMALL',
   /** The composed image is larger than a photo upload should be. */
   'OUTPUT_TOO_LARGE',
+  /** The template setting could not be read (the database answered with an error). */
+  'CONFIG_UNREADABLE',
 ] as const;
 export type QrTemplateFallbackReason = (typeof QR_TEMPLATE_FALLBACK_REASONS)[number];
 

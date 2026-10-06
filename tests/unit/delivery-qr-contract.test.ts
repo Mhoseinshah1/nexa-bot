@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  QR_TELEGRAM_PHOTO_MAX_SIDE,
+  QR_TEMPLATE_MODULE_MIN_PX,
+  qrEffectiveModulePx,
   QR_BACKGROUND_MAX_SIDE,
   QR_BACKGROUND_MIN_SIDE,
   QR_TEMPLATE_QUIET_ZONE_MIN,
@@ -127,5 +130,21 @@ describe('the QR_BACKGROUND media slot', () => {
   it('accepts a complete PNG the test builder wrote', () => {
     const png = buildPng({ width: 200, height: 150, colourType: 2, pixel: () => [1, 2, 3] });
     expect(inspectQrBackgroundPng(png)).toEqual({ ok: true, width: 200, height: 150 });
+  });
+});
+
+describe('the module minimum after Telegram downscales the photo', () => {
+  it('measures a module as the customer receives it, not as it was uploaded', () => {
+    expect(QR_TELEGRAM_PHOTO_MAX_SIDE).toBe(1280);
+    // At or under 1280 px nothing is scaled.
+    expect(qrEffectiveModulePx(4, { width: 1280, height: 900 })).toBe(4);
+    expect(qrEffectiveModulePx(4, { width: 800, height: 700 })).toBe(4);
+    // A 2048 px background is shown at 1280: a 4 px module arrives as 2.5 px.
+    expect(qrEffectiveModulePx(4, { width: 2048, height: 1000 })).toBe(2.5);
+    expect(qrEffectiveModulePx(4, { width: 1000, height: 2048 })).toBeLessThan(
+      QR_TEMPLATE_MODULE_MIN_PX,
+    );
+    // The longest side decides: 6.4 px × 1280 / 2048 = 4.
+    expect(qrEffectiveModulePx(6.4, { width: 2048, height: 2048 })).toBe(4);
   });
 });
