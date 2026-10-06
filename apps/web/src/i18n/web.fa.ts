@@ -7770,6 +7770,8 @@ export const WEB_FA = {
   // Runtime capability test and AI failure diagnostics (program §11, §12).
   'web.sai_test_hint':
     'آزمون همان درخواستی را می‌فرستد که دستیار و پاسخ خودکار می‌فرستند، روی یک گفتگوی ساختگی بدون دادهٔ مشتری. «موفق» یعنی همهٔ بخش‌ها موفق شدند، نه فقط دسترسی به مدل.',
+  'web.sai_fault_test_too_soon':
+    'این ارائه‌دهنده همین چند لحظه پیش آزموده شد. هر آزمون هزینهٔ فراخوانی دارد؛ پس از ۳۰ ثانیه دوباره امتحان کنید.',
   'web.sai_test_check': 'بخش آزمون',
   'web.sai_test_check_model_access': 'دسترسی به مدل',
   'web.sai_test_check_structured_generation': 'تولید پاسخ ساختاریافته',

@@ -56,7 +56,10 @@ Assist drafts a reply. A person edits it and sends it. Nothing is sent by itself
    is on). «موفق» on the first line alone is NOT readiness: a model that can be listed but
    rejects structured output fails the second line, with its reason. A rejected key shows
    «کلید رد شده است» on that row. A test costs one model lookup and one or two small
-   generations; pressing again after an answer is a new test, a lost answer re-asked is not.
+   generations; pressing again after an answer is a new test, a lost answer re-asked is not,
+   and a provider's key can be tested at most once every 30 seconds («... پس از ۳۰ ثانیه دوباره امتحان کنید»).
+   The decision-schema check is STRICT, exactly as an automatic reply is parsed (Assist drafts
+   tolerate an over-long operator note or a malformed citation; automatic replies do not).
 4. In «پیکربندی», choose the primary provider and model (and optionally up to two
    fallbacks), set the mode to `ASSIST_ONLY` and save.
 5. Grant `support_ai.assist` to the roles that should ask for drafts. The seeded `support` and

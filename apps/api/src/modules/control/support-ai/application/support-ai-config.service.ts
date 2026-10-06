@@ -115,7 +115,14 @@ export const SUPPORT_AI_ERROR_CODES = {
   CREDENTIAL_MISSING: 'support_ai.credential_missing',
   UNKNOWN_PROVIDER: 'support_ai.unknown_provider',
   REGION_NOT_APPLICABLE: 'support_ai.region_not_applicable',
+  TEST_TOO_SOON: 'support_ai.test_too_soon',
 } as const;
+
+/**
+ * The capability test makes paid calls. One test per provider key per this interval, decided
+ * by a conditional write on the credential row (`claimTest`), never by a process's memory.
+ */
+export const SUPPORT_AI_TEST_COOLDOWN_MS = 30_000;
 
 export interface SupportAiConfigServiceDeps {
   readonly configs: DrizzleSupportAiConfigRepository;
@@ -528,6 +535,25 @@ export class SupportAiConfigService {
         'Set a key for this provider first.',
       );
     }
+    // The cooldown: claimed in a transaction that re-reads scope activity, BEFORE any paid
+    // call. A refused claim calls nothing.
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.assertScopeActive(scope, tx);
+      const claim = await this.deps.credentials.claimTest(
+        scope,
+        provider,
+        this.deps.clock.now(),
+        SUPPORT_AI_TEST_COOLDOWN_MS,
+        tx,
+      );
+      if (!claim.claimed) {
+        throw errors.conflict(
+          SUPPORT_AI_ERROR_CODES.TEST_TOO_SOON,
+          'This provider was tested a moment ago; wait before testing again.',
+          { lastTestedAt: claim.lastTestedAt?.toISOString() ?? null },
+        );
+      }
+    });
     const { config } = await this.deps.configs.get(scope);
     const started = this.deps.clock.now().getTime();
     const checks: SupportAiTestCheckView[] = [];
@@ -544,7 +570,7 @@ export class SupportAiConfigService {
     const strict = (output: unknown) =>
       parseSupportDecision(output, {
         maxReplyChars: config.maxOutputChars,
-        dropMalformedRefs: false,
+        mode: 'STRICT',
       });
     let decided = false;
     if (access.outcome.outcome !== 'OK') {

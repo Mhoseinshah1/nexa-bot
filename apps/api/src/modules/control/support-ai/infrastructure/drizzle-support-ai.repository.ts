@@ -184,6 +184,8 @@ export class DrizzleSupportAiCredentialStore {
       consecutiveFailures: 0,
       trippedUntil: null,
       lastTestOutcome: null,
+      // A new key is a new question: the old key's test, and why it failed, say nothing of it.
+      lastTestFailureClass: null,
       lastTestedAt: null,
       rejectedAt: null,
       updatedAt: input.now,
@@ -368,6 +370,45 @@ export class DrizzleSupportAiCredentialStore {
       )
       .returning({ id: supportAiProviderCredentials.id });
     return rows.length > 0;
+  }
+
+  /**
+   * Claims the right to run a capability test: a conditional UPDATE that stamps
+   * `last_tested_at` only when the previous test is at least `cooldownMs` old (or there was
+   * none). Two presses, two tabs or two replicas meet at this row; exactly one wins, and the
+   * loser learns when the previous test was. Run in the caller's transaction.
+   */
+  async claimTest(
+    scope: ScopeContext,
+    provider: SupportAiProvider,
+    now: Date,
+    cooldownMs: number,
+    tx?: unknown,
+  ): Promise<{ readonly claimed: true } | { readonly claimed: false; readonly lastTestedAt: Date | null }> {
+    const tenantId = requireTenantId(scope);
+    const since = new Date(now.getTime() - cooldownMs);
+    const rows = await exec(this.db, tx)
+      .update(supportAiProviderCredentials)
+      .set({ lastTestedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(supportAiProviderCredentials.tenantId, tenantId),
+          eq(supportAiProviderCredentials.provider, provider),
+          sql`(${supportAiProviderCredentials.lastTestedAt} IS NULL OR ${supportAiProviderCredentials.lastTestedAt} <= ${since.toISOString()}::timestamptz)`,
+        ),
+      )
+      .returning({ id: supportAiProviderCredentials.id });
+    if (rows.length > 0) return { claimed: true };
+    const [row] = await exec(this.db, tx)
+      .select({ lastTestedAt: supportAiProviderCredentials.lastTestedAt })
+      .from(supportAiProviderCredentials)
+      .where(
+        and(
+          eq(supportAiProviderCredentials.tenantId, tenantId),
+          eq(supportAiProviderCredentials.provider, provider),
+        ),
+      );
+    return { claimed: false, lastTestedAt: row?.lastTestedAt ?? null };
   }
 
   async recordTest(

@@ -156,6 +156,7 @@ const FAULTS: Readonly<Record<string, WebKey>> = {
   'support_ai.unknown_provider': 'web.sai_fault_unknown_provider',
   'support_ai.region_not_applicable': 'web.sai_fault_region',
   'platform.idempotency_payload_mismatch': 'web.sai_fault_retry',
+  'support_ai.test_too_soon': 'web.sai_fault_test_too_soon',
 };
 
 /**
