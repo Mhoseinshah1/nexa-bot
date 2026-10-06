@@ -99,9 +99,13 @@ function harness(script: Script, mode: PanelDeliveryMode = 'CARD_WITH_QR') {
       acknowledge: async () => undefined,
     },
     qr: {
-      encode: (text) => {
-        encoded.push(text);
-        return new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      render: async (_s, source) => {
+        encoded.push(source.kind === 'PAYLOAD' ? source.text : '<provider image>');
+        return {
+          bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+          origin: 'NEXA_GENERATED',
+          templated: false,
+        };
       },
     },
     card: {

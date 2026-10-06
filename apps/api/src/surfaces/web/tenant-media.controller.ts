@@ -1,8 +1,10 @@
-import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   clearTenantMediaRequestSchema,
+  deliveryQrPreviewRequestSchema,
+  type DeliveryQrPreviewResponse,
   tenantMediaPurposeSchema,
   uploadTenantMediaRequestSchema,
   type TenantContext,
@@ -71,6 +73,23 @@ export class TenantMediaController {
       idempotencyKey: command.idempotencyKey,
     });
     return { media: null };
+  }
+
+  /**
+   * Phase 2 item 4: the QR a customer would receive, for a DRAFT `delivery.qr_template`, on
+   * the background stored now and encoding a sample link — so the operator sees the real
+   * image, scannability included, before saving. Read-only: nothing is stored, so it takes
+   * no idempotency key; a POST because the draft is a body. `settings.view`.
+   */
+  @Post('delivery-qr/preview')
+  @HttpCode(200)
+  async previewQr(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<DeliveryQrPreviewResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const command = deliveryQrPreviewRequestSchema.parse(body);
+    return this.container.deliveryQrPreview.preview(scope, actor, command.template);
   }
 
   private async authenticate(

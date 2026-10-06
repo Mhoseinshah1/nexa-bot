@@ -113,6 +113,8 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   'bot.category_colors',
   // Phase 2 Item 2: each category's premium icon and after-emoji, on «دسته‌بندی‌ها».
   'bot.category_icons',
+  // Phase 2 item 4: the QR placement, on «🎨 ظاهر ربات» beside the background it places on.
+  'delivery.qr_template',
   // Spec 13.2: the automatic backup schedule is edited on «بکاپ و بازیابی», beside the
   // backups it schedules, as a switch and an interval with a unit — never raw minutes.
   BACKUP_SCHEDULE_SETTING_KEYS.enabled,
@@ -405,6 +407,16 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   'bot.category_icons': {
     title: 'web.setting_bot_category_icons',
     description: 'web.setting_bot_category_icons_desc',
+    group: 'support',
+    control: { kind: 'text' },
+  },
+  /*
+   * Phase 2 item 4: the QR placement. Edited on «🎨 ظاهر ربات», never here
+   * (`SETTINGS_MANAGED_ELSEWHERE`); the entry exists because this map is total.
+   */
+  'delivery.qr_template': {
+    title: 'web.setting_delivery_qr_template',
+    description: 'web.setting_delivery_qr_template_desc',
     group: 'support',
     control: { kind: 'text' },
   },

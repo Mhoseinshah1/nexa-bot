@@ -728,6 +728,19 @@
   gap: 8px;
 }
 
+/* Phase 2 item 4: the QR background preview — the delivered image, scaled down only. */
+.qrt-preview {
+  margin: 0;
+}
+.qrt-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+}
+
 /* --- Payment routes and FX --------------------------------------------------------- */
 
 .gateways-name,
