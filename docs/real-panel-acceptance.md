@@ -286,18 +286,19 @@ running from the pinned commit. The OBSERVER is
 `tests/acceptance/real-marzban-harness.ts`, on plain `fetch` with its own
 token, sharing no code with the adapter.
 
-Twenty-seven cases, in eight groups:
+Twenty-nine cases, in nine groups (A9 added for C1 and never yet run):
 
-| Group | What it establishes                                                                                                       |
-| ----- | ------------------------------------------------------------------------------------------------------------------------- |
-| A1    | A and B are created, are distinct accounts, and each subscription carries **its own** credential                          |
-| A2    | A lookup finds A; an absent name is ABSENT; unlimited reads back as no limit, never as zero                               |
-| A3    | Suspending A disables A, leaves B serving, does not rewrite A's allowance, and is idempotent                              |
-| A4    | Resuming A re-enables A, leaves B alone, is idempotent, and an account the panel lacks is `found:false`                   |
-| A5    | Terminating A removes A, leaves B serving, and a replayed terminate succeeds with `wasPresent:false`                      |
-| A6    | A username shaped like a path cannot reach B, through terminate or through suspend                                        |
-| A7    | No outcome — success or failure — carries the password, the username or an authorization header                           |
-| A8    | `applyAllowance` leaves the panel holding the TARGET — renew, add traffic and add time — and moves only the account named |
+| Group | What it establishes                                                                                                                                                                                                                 |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A1    | A and B are created, are distinct accounts, and each subscription carries **its own** credential                                                                                                                                    |
+| A2    | A lookup finds A; an absent name is ABSENT; unlimited reads back as no limit, never as zero                                                                                                                                         |
+| A3    | Suspending A disables A, leaves B serving, does not rewrite A's allowance, and is idempotent                                                                                                                                        |
+| A4    | Resuming A re-enables A, leaves B alone, is idempotent, and an account the panel lacks is `found:false`                                                                                                                             |
+| A5    | Terminating A removes A, leaves B serving, and a replayed terminate succeeds with `wasPresent:false`                                                                                                                                |
+| A6    | A username shaped like a path cannot reach B, through terminate or through suspend                                                                                                                                                  |
+| A7    | No outcome — success or failure — carries the password, the username or an authorization header                                                                                                                                     |
+| A8    | `applyAllowance` leaves the panel holding the TARGET — renew, add traffic and add time — and moves only the account named                                                                                                           |
+| A9    | **NOT RUN.** `online_at` is on `GET /api/user/{username}`: `null` on a fresh account (adapter: NEVER), and a naive ISO string on a used one (adapter: AT, read as UTC, not more than 5 min after now; this does NOT prove the zone) |
 
 ## Standing one up
 
@@ -441,3 +442,29 @@ refused, and while it was being served the harness was measuring nothing.
   properties of the executor, proved in
   `tests/integration/provisioning-delivery.test.ts` against a real PostgreSQL.
   A panel cannot observe any of them.
+
+## C1 — last connection (`online_at`): NOT RUN
+
+Added for «آخرین زمان اتصال» and **never run**: no disposable panel exists in the
+environment that wrote it. Marzban's shape comes from its v0.8.4 source; RickPanel has
+only its owner's PUT-body property list, so RickPanel's reader is OFF until its A9 passes
+(`docs/open-questions.md` OQ-LC-02). An UNSUPPORTED read stores nothing, so the card keeps
+the last known value.
+
+| Suite                          | Case | Asserts                                                                                                                                                                                   | Status  |
+| ------------------------------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `real-panel-marzban.test.ts`   | A9   | `online_at` present and `null` on a fresh account; adapter reads NEVER                                                                                                                    | NOT RUN |
+| `real-panel-marzban.test.ts`   | A9   | on `NEXA_ACCEPTANCE_MARZBAN_USED_USER`: a naive ISO string, read as UTC, not more than 5 min after now. **Not a zone proof.**                                                             | NOT RUN |
+| `real-panel-rickpanel.test.ts` | A9   | `online_at` present and `null` on a fresh account; adapter still UNSUPPORTED (gated)                                                                                                      | NOT RUN |
+| `real-panel-rickpanel.test.ts` | A9   | on `NEXA_ACCEPTANCE_RICKPANEL_USED_USER` (a client passing traffic DURING the run): read as UTC, within 2 min of the read; fails naming Tehran local time if only the +03:30 reading fits | NOT RUN |
+| 3X-UI v3.7.0                   | —    | not added: `lastOnline` is not read (OQ-LC-01 has the four-step check to run first)                                                                                                       | —       |
+
+```bash
+# Marzban: the suite's usual variables, plus an account the lifecycle script connected through
+NEXA_ACCEPTANCE_MARZBAN_USED_USER=<username> pnpm test:acceptance
+# RickPanel: the suite's three variables, plus an account a client is using right now
+NEXA_ACCEPTANCE_RICKPANEL_USED_USER=<username> pnpm test:acceptance
+```
+
+A passing RickPanel A9 is what allows flipping `RICKPANEL_USAGE` to `ONLINE_AT`, in the
+same commit that records the run.

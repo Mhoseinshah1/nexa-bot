@@ -256,6 +256,8 @@ describe('accounts', () => {
       usedTraffic: 1024,
       dataLimit: 4096,
       expire: 1_900_000_000,
+      // C1: the list carries `online_at`, and the inventory does NOT read it (OQ-LC-02).
+      onlineAt: '2026-10-06T08:30:00',
     });
     panel.seedUser('bob', { status: 'something-new' });
     const out = complete(await reader.listAll(target, http));
