@@ -208,6 +208,12 @@ export interface Fake3xUi {
    */
   useTraffic(email: string, bytes: { readonly up: number; readonly down: number }): void;
   /**
+   * C1: what `clients/traffic/:email` reports as `lastOnline` for this client, in epoch
+   * milliseconds as the source's example spells it. Unverified on a real panel
+   * (OQ-C1-01); here so a test can show the adapter ignores it.
+   */
+  setLastOnline(email: string, epochMs: number): void;
+  /**
    * Changes what the panel does, without changing its address.
    *
    * A panel that fails a create and then recovers is ONE panel: the same row, the same
@@ -275,6 +281,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
   // v3.7.0 binds its CSRF token to the session rather than to the request.
   const sessions = new Map<string, { csrf: string; loggedIn: boolean }>();
   const clients = new Map<string, FakeClient>();
+  const lastOnline = new Map<string, number>();
   const minted: string[] = [];
   let issued = 0;
 
@@ -658,6 +665,11 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
             down: client.down,
             expiryTime: client.expiryTime,
             total: client.totalGB,
+            // `xray.ClientTraffic.LastOnline` at the pinned commit
+            // (`internal/xray/client_traffic.go`, gorm default 0; the source's example is
+            // epoch MILLISECONDS). Served so a test can prove the adapter does NOT read
+            // it while OQ-C1-01 is open; its real presence and unit are unverified.
+            lastOnline: lastOnline.get(client.email) ?? 0,
           }),
         );
       }
@@ -783,10 +795,15 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
       if (client === undefined) throw new Error(`the fake panel has no client ${email}`);
       clients.set(email, { ...client, up: client.up + bytes.up, down: client.down + bytes.down });
     },
+    setLastOnline(email: string, epochMs: number): void {
+      if (!clients.has(email)) throw new Error(`the fake panel has no client ${email}`);
+      lastOnline.set(email, epochMs);
+    },
     reset(): void {
       requests.length = 0;
       sessions.clear();
       clients.clear();
+      lastOnline.clear();
       minted.length = 0;
     },
     async close(): Promise<void> {

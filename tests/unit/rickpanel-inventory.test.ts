@@ -256,6 +256,8 @@ describe('accounts', () => {
       usedTraffic: 1024,
       dataLimit: 4096,
       expire: 1_900_000_000,
+      // C1: the list carries `online_at` too; naive, so UTC.
+      onlineAt: '2026-10-06T08:30:00',
     });
     panel.seedUser('bob', { status: 'something-new' });
     const out = complete(await reader.listAll(target, http));
@@ -269,7 +271,7 @@ describe('accounts', () => {
           usedBytes: 1024n,
           totalBytes: 4096n,
           expiresAt: new Date(1_900_000_000_000),
-          lastSeen: { kind: 'UNSUPPORTED' },
+          lastSeen: { kind: 'AT', at: new Date('2026-10-06T08:30:00.000Z') },
         },
       },
       {
@@ -281,7 +283,7 @@ describe('accounts', () => {
           usedBytes: 0n,
           totalBytes: null,
           expiresAt: null,
-          lastSeen: { kind: 'UNSUPPORTED' },
+          lastSeen: { kind: 'NEVER' },
         },
       },
     ]);

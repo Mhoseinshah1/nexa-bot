@@ -1,4 +1,9 @@
-import type { ProviderAllowancePlan, ProviderFailureDetail, ProviderUsage } from '@nexa/contracts';
+import type {
+  ProviderAllowancePlan,
+  ProviderFailureDetail,
+  ProviderLastSeen,
+  ProviderUsage,
+} from '@nexa/contracts';
 
 /**
  * A panel's numeric field, read once at the adapter boundary (WP15 G2, G5).
@@ -57,6 +62,9 @@ export function readProviderNumber(value: unknown, max: bigint = SAFE_MAX): Prov
  * reports "the record is there, its usage figure is not" — a different fact from "the
  * account is not there". `data_limit` and `expire` absent or zero are "no limit", as the
  * panels themselves fold them. `expire` is epoch SECONDS.
+ *
+ * `online_at` is read by `readLastSeen` and is telemetry: whatever it holds, it never
+ * fails the usage read.
  */
 export type RecordUsage =
   | { readonly ok: true; readonly usage: ProviderUsage }
@@ -78,9 +86,73 @@ export function readRecordUsage(record: Readonly<Record<string, unknown>>): Reco
       totalBytes: limit.kind === 'VALUE' && limit.value > 0n ? limit.value : null,
       expiresAt:
         expire.kind === 'VALUE' && expire.value > 0n ? new Date(Number(expire.value) * 1000) : null,
-      lastSeen: { kind: 'UNSUPPORTED' },
+      lastSeen: readLastSeen(record),
     },
   };
+}
+
+/**
+ * A Marzban-shaped record's last connection: `online_at` (C1).
+ *
+ * The evidence, read from Gozargah/Marzban v0.8.4's source (`docs/providers/marzban.md`):
+ * `UserResponse.online_at: Optional[datetime]` (`app/models/user.py`), a nullable
+ * `DateTime` column (`app/db/models.py`) that `app/jobs/record_usages.py` sets to
+ * `datetime.utcnow()` — a NAIVE UTC time — whenever xray reports traffic for the user. So
+ * the panel emits it as `2026-10-06T08:30:00` or `2026-10-06T08:30:00.123456`, with no
+ * offset, and never wrote one at all for an account nobody has used: `null`. RickPanel is
+ * Marzban-derived and its owner's document names `online_at` among the user's properties.
+ * Neither has been read off a real panel yet (`docs/real-panel-acceptance.md`, NOT RUN).
+ *
+ * - key ABSENT → `UNSUPPORTED`: this panel does not say, which is a different fact from
+ *   "never" and renders «در دسترس نیست»;
+ * - `null` → `NEVER`: the panel saying the account has never connected;
+ * - an ISO 8601 date-time → `AT`. No offset is UTC, as the panel wrote it; `Z` or an
+ *   explicit `±hh:mm` is honoured, so a panel that does carry one is not shifted;
+ * - anything else — a number, a date without a time, an impossible date, a year before
+ *   2000 — is `UNSUPPORTED`. Never a guess, never another timestamp in its place, and
+ *   never a failure of the usage read it travels with.
+ */
+const ISO_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})?$/;
+
+/** No Marzban-lineage panel existed before this; an earlier "last connection" is not one. */
+const EARLIEST_LAST_SEEN_YEAR = 2000;
+
+export function readLastSeen(record: Readonly<Record<string, unknown>>): ProviderLastSeen {
+  if (!Object.prototype.hasOwnProperty.call(record, 'online_at')) return { kind: 'UNSUPPORTED' };
+  const raw = record['online_at'];
+  if (raw === null) return { kind: 'NEVER' };
+  const at = typeof raw === 'string' ? parseIsoDateTime(raw) : null;
+  return at === null ? { kind: 'UNSUPPORTED' } : { kind: 'AT', at };
+}
+
+function parseIsoDateTime(value: string): Date | null {
+  const match = ISO_DATE_TIME.exec(value);
+  if (match === null) return null;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  if (year < EARLIEST_LAST_SEEN_YEAR) return null;
+  if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return null;
+  const millis = Number((match[7] ?? '').padEnd(3, '0').slice(0, 3));
+  const wall = Date.UTC(year, month - 1, day, hour, minute, second, millis);
+  // `Date.UTC` rolls 31 February into March; a date the calendar does not have is garbage.
+  const check = new Date(wall);
+  if (check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
+  const zone = match[8];
+  let offsetMinutes = 0;
+  if (zone !== undefined && zone !== 'Z') {
+    const hours = Number(zone.slice(1, 3));
+    const minutes = Number(zone.slice(4, 6));
+    if (hours > 14 || minutes > 59) return null;
+    offsetMinutes = (zone.startsWith('-') ? -1 : 1) * (hours * 60 + minutes);
+  }
+  return new Date(wall - offsetMinutes * 60_000);
 }
 
 /**

@@ -122,6 +122,19 @@ and the unit suite was green, because the fake had been written from the same se
 a panel that does not name its inbound tags is `PANEL_NOT_OPERABLE` rather than a source
 of accounts that connect to nothing.
 
+## Last connection — `online_at` (C1), read from the source, NOT yet from a panel
+
+`UserResponse.online_at` is `Optional[datetime]` (`app/models/user.py`), a nullable
+`DateTime` column (`app/db/models.py`), set to `datetime.utcnow()` by
+`app/jobs/record_usages.py` whenever xray reports traffic for the user. So the panel
+should answer with a **naive UTC** ISO time — `2026-10-06T08:30:00`, or with `.ffffff`
+when the microseconds are not zero, and no `Z` — or `null` for an account nobody has
+used. `readLastSeen` (`provider-numbers.ts`) reads exactly that: no offset is UTC, an
+explicit `Z`/`±hh:mm` is honoured, `null` is NEVER («متصل نشده»), a missing key or any
+other value is UNSUPPORTED («در دسترس نیست»). Read from tag `v0.8.4`; **not yet
+confirmed on a running panel** — `tests/acceptance/real-panel-marzban.test.ts` A9 and
+`docs/open-questions.md` OQ-C1-02.
+
 ## Authentication
 
 One bearer token per call sequence, from the token route, never stored. `401` on a

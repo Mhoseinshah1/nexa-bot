@@ -138,6 +138,42 @@ describe('RickPanel acceptance', () => {
   }, 120_000);
 
   /**
+   * A9 (C1) — «آخرین زمان اتصال»: `online_at` is on the read, and the adapter agrees.
+   *
+   * NOT RUN (`docs/open-questions.md` OQ-C1-02). The owner's document lists `online_at`
+   * among the user's properties and types it `"string"`; this is what says whether
+   * `GET /api/user/{username}` carries it, and how a time is spelled. A1's account has
+   * passed no traffic, so it should read as never connected.
+   */
+  it('A9: carries `online_at` (null before first use) and the adapter reads it', async () => {
+    const username = nameFor('a1');
+    const record = await observeUser(panel, observer, username);
+    expect(record, 'A1 must have created the account').not.toBeNull();
+    if (record === null) return;
+    expect(
+      Object.prototype.hasOwnProperty.call(record, 'online_at'),
+      '`online_at` is not on GET /api/user/{username}',
+    ).toBe(true);
+    const raw = record['online_at'];
+    expect(raw === null || typeof raw === 'string', `online_at is ${JSON.stringify(raw)}`).toBe(
+      true,
+    );
+    const usage = await adapter.readUsage(target(), http(), refFor(username));
+    expect(
+      usage.ok,
+      JSON.stringify(usage, (_k, v: unknown) => (typeof v === 'bigint' ? String(v) : v)),
+    ).toBe(true);
+    if (!usage.ok) return;
+    if (raw === null) {
+      expect(usage.usage.lastSeen).toEqual({ kind: 'NEVER' });
+    } else {
+      // A spelling `readLastSeen` does not accept would read UNSUPPORTED: record it in
+      // OQ-C1-02 and correct the reader and the fake together.
+      expect(usage.usage.lastSeen.kind, `online_at spelled ${String(raw)}`).toBe('AT');
+    }
+  }, 60_000);
+
+  /**
    * A2 — a create for a name that already exists is REFUSED, and the account is untouched.
    *
    * This used to assert the opposite — that a replayed create adopted the account —

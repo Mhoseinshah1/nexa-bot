@@ -187,6 +187,8 @@ rather than guessed at here:
 - what the create actually returns (`OQ-RP-03`);
 - how long node propagation takes (`OQ-RP-04`).
 - whether a rotated link's OLD link is refused by the subscription host (`OQ-RP-07`).
+- whether `GET /api/user/{username}` carries `online_at`, and how it spells a time
+  (`OQ-C1-02` — the card shows «آخرین زمان اتصال» from it only when the key is there).
 
 Until then, the capabilities RickPanel advertises rest on a document and a fake.
 A Marzban acceptance result says nothing about any of this and must never be

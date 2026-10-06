@@ -3594,3 +3594,43 @@ and `OQ-T-4` are live again and apply to inline buttons too.
 - **OQ-QR-TEMPLATE-02: decided by this release, open to the PO.** The background is PNG only
   (no JPEG decoder dependency), and no built-in branded default ships: the default remains the
   plain QR. See `docs/phase2/item4-qr-template.md`.
+
+## OQ-C1 — «آخرین زمان اتصال»: what each panel actually reports (program item C1)
+
+- **OQ-C1-01 — 3X-UI v3.7.0: `lastOnline` on `clients/traffic/:email`. OPEN; the adapter
+  reads nothing (UNSUPPORTED, «در دسترس نیست»).** The evidence conflicts. The adapter used
+  to state that v3.7.0's traffic record has no last-connection field; at the pinned commit
+  `f727d04f6522bb94a8fb52e8352fdcafb51c11e1`, `internal/xray/client_traffic.go` declares
+  `` LastOnline int64 `json:"lastOnline" … gorm:"default:0" example:"1735680000000"` ``, an
+  example in epoch MILLISECONDS. Legacy MirzaBot reads `obj.lastOnline` as milliseconds
+  with `0` = never, but from the v2.x `getClientTraffics` route, and an older MirzaBot read
+  it as seconds. Nothing in this repository shows what WRITES the field in v3.7.0, in which
+  unit, or that `GET panel/api/clients/traffic/:email` serves it. A unit misread by 1000
+  is a fake time, so it is not read. **The check, against a disposable v3.7.0 panel
+  (`docs/real-panel-acceptance.md`), in order:**
+  1. create a client; `GET {base}/panel/api/clients/traffic/{email}` (Bearer token):
+     record whether `obj.lastOnline` is PRESENT and that it is `0` before any use;
+  2. connect a real xray client through that client's link, pass traffic, wait one stats
+     cycle, and read again: record the value and the wall-clock UTC time of the read;
+  3. decide the unit: `value / 1000` within a minute of the read's epoch seconds is
+     MILLISECONDS; `value` itself within a minute is SECONDS; anything else, stop;
+  4. disconnect, wait two cycles, read again: the value must NOT move (it is the last
+     time seen, not "now").
+     Only then: read `lastOnline` in `usageFromClient` (`0` → NEVER, the proven unit → AT,
+     anything else → UNSUPPORTED), serve it from `tests/support/fake-3xui.ts` in the same
+     commit (it already serves the source's field, default 0, through `setLastOnline`), add
+     the case to `tests/acceptance/real-panel-sanaei.test.ts`, and replace the 3X-UI
+     assertion in `tests/unit/provider-last-seen.test.ts` and
+     `tests/integration/customer-ux-services.test.ts` (C1).
+- **OQ-C1-02 — Marzban v0.8.4 and RickPanel: `online_at` on the real wire. Built from
+  evidence, NOT RUN.** Marzban's shape comes from its source at tag `v0.8.4`
+  (`docs/providers/marzban.md`, "Last connection"): naive UTC, `null` before first use.
+  RickPanel's comes from the owner's OpenAPI property list only (`provider.ts`, RickPanel
+  descriptor), which types every property `"string"`; its spelling of a time is assumed
+  to follow Marzban's lineage. Both adapters read it **only when the record carries the
+  key** — a missing key stays «در دسترس نیست», never «متصل نشده» — and a value that is not
+  an ISO date-time is UNSUPPORTED, never a guess and never another timestamp. **Settled
+  by** `pnpm test:acceptance`: Marzban A9 (`real-panel-marzban.test.ts`) and RickPanel A9
+  (`real-panel-rickpanel.test.ts`) assert the key is present on a fresh account, is `null`
+  or a string, and that the adapter's reading agrees with the observer's. If a panel
+  spells it differently, correct `readLastSeen` AND the fake in one commit.

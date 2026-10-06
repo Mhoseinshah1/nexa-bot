@@ -161,6 +161,9 @@ export interface ObservedUser {
   readonly links: readonly string[];
   readonly subscriptionUrl: string;
   readonly proxyIds: Readonly<Record<string, string>>;
+  /** C1: whether the record carried the `online_at` key at all, and its raw value. */
+  readonly onlineAtPresent: boolean;
+  readonly onlineAt: unknown;
 }
 
 export async function observeUser(
@@ -189,6 +192,8 @@ export async function observeUser(
     links: Array.isArray(body['links']) ? (body['links'] as string[]) : [],
     subscriptionUrl: String(body['subscription_url'] ?? ''),
     proxyIds,
+    onlineAtPresent: Object.prototype.hasOwnProperty.call(body, 'online_at'),
+    onlineAt: body['online_at'],
   };
 }
 
