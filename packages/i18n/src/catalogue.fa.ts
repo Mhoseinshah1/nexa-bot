@@ -756,7 +756,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * account afterwards does not change what this customer was told.
    */
   'bot.payment.transfer_instructions':
-    '{icon:invoice} جزئیات فاکتور پرداخت شما\n\nشناسه فاکتور: {reference}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر یا فایل رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
+    '{icon:invoice} جزئیات فاکتور پرداخت شما\n\nشناسه فاکتور: {reference}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
   'bot.payment.destination.bank': 'بانک: {value}',
   'bot.payment.destination.holder': 'به نام: {value}',
   'bot.payment.destination.card': 'شماره کارت: {value}',
@@ -802,13 +802,16 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.received_for_review':
     '{icon:info} اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.receipt_prompt':
-    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر یا فایل رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.',
+    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.',
   /*
-   * Owner spec §2.4, state 3: the invoice message's FINAL text, edited in place, with no
-   * button under it. Says the FILE arrived and is being reviewed — never that money did.
+   * A10 (pre-support brief §10, which supersedes owner spec §2.4 "state 3"): the ONE new
+   * message the first receipt of a payment sends, word for word the brief's copy, with a
+   * blank line between its two sentences. The invoice above it is edited into
+   * `bot.payment.received_for_review`, button-less. Says the FILE arrived and is being
+   * reviewed — never that money did.
    */
   'bot.payment.receipt_received':
-    '{icon:success} رسید شما دریافت شد و در حال بررسی می‌باشد.\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+    'رسید شما دریافت شد و در حال بررسی می‌باشد.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.receipt_not_expected':
     'در حال حاضر منتظر رسیدی از شما نیستیم. برای ارسال رسید، ابتدا پیام پرداخت خود را باز کنید و دکمهٔ ارسال رسید را بزنید.',
   'bot.payment.receipt_expired':

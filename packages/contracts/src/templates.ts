@@ -5643,7 +5643,9 @@ export const TEMPLATES = [
     description:
       'The answer to that tap. It has to carry two facts at once and neither may be ' +
       'dropped: the claim is on record and a person will check it, AND the customer may ' +
-      'now send the receipt image or file. The minutes are a token rather than a number ' +
+      'now send the receipt. The copy asks for an image; a document is still accepted, ' +
+      'because refusing one would be a contract change of its own. The minutes are a token ' +
+      'rather than a number ' +
       'in the sentence, so `RECEIPT_CAPTURE_MINUTES` and the text cannot disagree. ' +
       'Nothing here says the payment was received \u2014 the caution ' +
       '`bot.payment.received_for_review` records applies word for word.',
@@ -5663,12 +5665,12 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.receipt_received',
     description:
-      'The answer to a receipt that was filed. It confirms the FILE arrived and says a ' +
-      'reviewer will look at it \u2014 it must not say the payment is confirmed, for the ' +
-      'reason `bot.payment.received_for_review` gives at length. It is also the answer to ' +
-      'a redelivered upload of the same file, because the customer\u2019s situation is ' +
-      'identical either way and a second sentence for a Telegram retry would be a ' +
-      'difference they cannot act on.',
+      'The answer to the FIRST receipt filed for a payment, sent as a new message after ' +
+      'the invoice is edited into its final, button-less state. It confirms the file ' +
+      'arrived and says a reviewer will look at it \u2014 it must not say the payment is ' +
+      'confirmed, for the reason `bot.payment.received_for_review` gives at length. It is ' +
+      'sent at most once per payment: a redelivered update, the same file again or a ' +
+      'further receipt sends nothing new.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

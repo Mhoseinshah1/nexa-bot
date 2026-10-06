@@ -224,7 +224,8 @@ describe('the administrators’ receipt push', () => {
     const first = await f.ctx.container.botRuntime.handle(tenantA, systemActor('bot'), update);
     const again = await f.ctx.container.botRuntime.handle(tenantA, systemActor('bot'), update);
     expect(first.replyKey).toBe('bot.payment.receipt_received');
-    expect(again.replyKey).toBe('bot.payment.receipt_received');
+    // A10: the redelivery files nothing new and so sends nothing new to the customer.
+    expect(again.replyKey).toBeNull();
     await relay();
     await relay();
     f.sent = [];

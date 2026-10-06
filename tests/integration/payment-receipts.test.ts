@@ -306,6 +306,9 @@ describe('a customer sending a receipt', () => {
 
     expect(first.filed).toBe(true);
     expect(replay.held).toBe(first.held);
+    // A10: the original filing is the payment's first; its replay is NOT, whatever it stored.
+    expect(first.first).toBe(true);
+    expect(replay.first).toBe(false);
     expect(await receiptRows(payment.id)).toHaveLength(1);
     // One audit row, not one per retry. A log that grew a line per redelivery is the
     // legacy activity feed.
@@ -431,6 +434,30 @@ describe('a customer sending a receipt', () => {
         ? null
         : refused.error.code,
     ).toBe('commerce.receipt_not_expected');
+  });
+
+  /*
+   * A10: `first` is what the bot keys its one new message on, so two different files
+   * arriving together on an EMPTY payment must yield exactly one `first: true`. The count is
+   * read under the same advisory lock both are blocked on.
+   */
+  it('answers first: true to exactly one of two concurrent first receipts', async () => {
+    const payment = await pending('c10');
+    await signal(payment.id, 'c10-signal');
+
+    const settled = await withHeldLock(async () => {
+      const one = outcomeOf(submit(payment.id, photo('u-c10-a'), 'c10-file-a'));
+      await awaitWaiters(1, 'the first receipt');
+      const two = outcomeOf(submit(payment.id, photo('u-c10-b'), 'c10-file-b'));
+      await awaitWaiters(2, 'the second receipt');
+      return [one, two] as const;
+    });
+
+    const done = await Promise.all(settled);
+    const values = done.map((one) => (one.ok ? one.value : null));
+    expect(values.every((value) => value?.filed === true)).toBe(true);
+    expect(values.filter((value) => value?.first === true)).toHaveLength(1);
+    expect(await receiptRows(payment.id)).toHaveLength(2);
   });
 
   it('answers both of two concurrent taps on two invoices', async () => {
