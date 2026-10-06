@@ -15,11 +15,15 @@ import {
   templateDefinition,
   APPEARANCE_SLOTS,
   appearanceMarker,
+  categoryButtonIconOf,
   categoryButtonStyleOf,
+  categoryButtonText,
+  categoryIconOf,
   inlineButtonIconOf,
   inlineButtonStyleOf,
   type AppearanceTestErrorCode,
   type CategoryColors,
+  type CategoryIcons,
   type InlineButtonIcons,
   type InlineButtonStyles,
 } from '@nexa/contracts';
@@ -1103,14 +1107,30 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       buttons.some((button) => categoryOf(button) !== undefined)
         ? await this.inlineStyles.categoryColorsFor(scope)
         : {};
+    /*
+     * Phase 2 Item 2: read once, and only for a keyboard that lists categories. The `after`
+     * emoji is ordinary text and is drawn by every bot; the `before` icon only by one that may
+     * carry custom emoji, exactly as Item 3's icons.
+     */
+    const categoryIcons: CategoryIcons =
+      this.inlineStyles?.categoryIconsFor !== undefined &&
+      buttons.some((button) => categoryOf(button) !== undefined)
+        ? await this.inlineStyles.categoryIconsFor(scope)
+        : {};
+    const iconsAllowed = mayCarryCustomEmoji(decoration);
     for (const button of buttons) {
-      const text = await this.labelText(scope, button.label);
+      const category = categoryOf(button);
+      const label = await this.labelText(scope, button.label);
+      // Item 2: a category's `after` emoji follows its label; with none the label is unchanged.
+      const text =
+        category === undefined
+          ? label
+          : categoryButtonText(label, categoryIconOf(category, categoryIcons).after);
       /*
        * Owner spec §6: the registry button's style, `default` omitted. The route below is
        * the caller's and the style never touches it. A category button takes its own
        * category's colour first (item 2), through the one fallback rule.
        */
-      const category = categoryOf(button);
       const style =
         button.inline === undefined
           ? 'default'
@@ -1120,7 +1140,18 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
             (category !== undefined
               ? categoryButtonStyleOf(category, colors, styles)
               : inlineButtonStyleOf(button.inline, styles)));
-      const icon = button.inline === undefined ? null : inlineButtonIconOf(button.inline, icons);
+      /*
+       * Item 2: a category button's icon is its own `before` first, then the generic category
+       * button's (Item 3) — and, like every icon, only from a bot that may carry custom emoji.
+       */
+      const icon =
+        button.inline === undefined
+          ? null
+          : category !== undefined
+            ? iconsAllowed
+              ? categoryButtonIconOf(category, categoryIcons, icons)
+              : null
+            : inlineButtonIconOf(button.inline, icons);
       const styled = {
         ...(style === 'default' ? {} : { style }),
         ...(icon === null ? {} : { iconCustomEmojiId: icon }),
