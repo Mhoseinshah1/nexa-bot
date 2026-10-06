@@ -41,6 +41,18 @@ describe('the migration journal', () => {
     );
   });
 
+  /*
+   * The file's number IS its index. `drizzle-kit generate` numbers the next migration and its
+   * snapshot from the last idx + 1, so a tag numbered past its idx (a gap) is a snapshot the
+   * next generate silently overwrites — and the drift check regenerates on every run.
+   */
+  it('numbers every tag with its own idx, so no gap can be overwritten by the next generate', () => {
+    const misnumbered = journal.entries
+      .filter((entry) => entry.tag.slice(0, 4) !== String(entry.idx).padStart(4, '0'))
+      .map((entry) => `${entry.tag} is at idx ${entry.idx}`);
+    expect(misnumbered).toEqual([]);
+  });
+
   it('has a strictly increasing `when`, which is what the migrator orders by', () => {
     const outOfOrder = journal.entries
       .map((entry, index) => ({ entry, previous: journal.entries[index - 1] }))

@@ -331,6 +331,9 @@ import { TermsService } from './modules/control/terms/application/terms.service.
 import { TermsAcceptanceService } from './modules/control/terms/application/terms-acceptance.service.js';
 import { ClientAppVideoService } from './modules/control/client-apps/application/client-app-video.service.js';
 import { ClientAppVideoWebService } from './modules/control/client-apps/application/client-app-video-web.service.js';
+import { DeliveryTutorialService } from './modules/control/client-apps/application/delivery-tutorial.service.js';
+import { DeliveryTutorialSender } from './modules/control/client-apps/application/delivery-tutorial-sender.js';
+import { DrizzleDeliveryTutorialRepository } from './modules/control/client-apps/infrastructure/drizzle-delivery-tutorial.repository.js';
 import { DrizzleClientAppVideoRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app-video.repository.js';
 import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
 import { ClientAppCatalog } from './modules/control/client-apps/application/client-app-catalog.js';
@@ -1148,6 +1151,8 @@ export interface Container {
   readonly clientAppVideos: ClientAppVideoService;
   /** UX Batch 01 item 6: the Web Admin's «افزودن ویدیو از تلگرام» over the same prompt. */
   readonly clientAppVideoWeb: ClientAppVideoWebService;
+  /** Phase 2 item 5: one panel's post-delivery tutorial, as the operator maintains it. */
+  readonly deliveryTutorials: DeliveryTutorialService;
   /** WP-A10: the customer's read of them, filtered by what their services are. */
   readonly clientAppCatalog: ClientAppCatalog;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
@@ -5157,6 +5162,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // Round N (F4): a customer's link change is answered on the card it was asked from.
     cards: operationCardRepository,
     /*
+     * Phase 2 item 5: the panel's tutorial after a first delivery. A closure because the
+     * sender is built further down, beside the client-app video service it reads.
+     */
+    tutorial: {
+      afterDelivery: (scope, service, contact) =>
+        deliveryTutorialSender.afterDelivery(scope, service, contact),
+    },
+    /*
      * Pre-support A9: the QR under the link view is claimed by the tap's update key, in the
      * TELEGRAM namespace and suffixed so it can never meet the turn's own key.
      */
@@ -5317,6 +5330,34 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     ids,
     clock,
+  });
+  /*
+   * Phase 2 item 5: a panel's post-delivery tutorial. Its video is a client app's tutorial
+   * video above — the same bot-scoped `file_id`, read through `videoFor` — so there is one
+   * video capture flow, not two. The sender is what the delivery sweep calls (a closure
+   * there: the sweep is built before this).
+   */
+  const deliveryTutorialRepository = new DrizzleDeliveryTutorialRepository(database.db);
+  const deliveryTutorialService = new DeliveryTutorialService({
+    tutorials: deliveryTutorialRepository,
+    apps: clientAppRepository,
+    panels: panelRepository,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    uow,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
+  const deliveryTutorialSender = new DeliveryTutorialSender({
+    tutorials: deliveryTutorialRepository,
+    videos: clientAppVideoService,
+    messenger: customerMessenger,
+    idempotency,
+    scopeActivity: tenants,
+    uow,
   });
   const clientAppVideoWebService = new ClientAppVideoWebService({
     videos: clientAppVideoRepository,
@@ -6836,6 +6877,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clientApps: clientAppService,
     clientAppVideos: clientAppVideoService,
     clientAppVideoWeb: clientAppVideoWebService,
+    deliveryTutorials: deliveryTutorialService,
     clientAppCatalog,
     templateRepository,
     notifications,

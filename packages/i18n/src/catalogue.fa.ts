@@ -1070,6 +1070,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '📷 کد QR لینک اتصال شما. جزئیات سرویس در پیام بعدی آمده است.',
   'bot.service.link_qr_caption':
     '📷 کد QR لینک اتصال بالا. می‌توانید آن را در برنامهٔ خود اسکن کنید.',
+  'bot.service.delivery_tutorial': '{text}',
   'bot.service.tutorial_button': '📚 مشاهده آموزش استفاده',
   'bot.service.connected_button': '🥰 وصل شدم',
   'bot.service.problem_button': '😐 مشکل دارم',

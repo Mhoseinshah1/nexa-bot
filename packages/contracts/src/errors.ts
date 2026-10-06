@@ -674,6 +674,11 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_POLICY_STALE: 'panel.policy_stale',
   /**
+   * Phase 2 item 5: the panel's post-delivery tutorial changed since the operator read it.
+   * The panel trial's and the policy's rule: a reload, never a silent overwrite.
+   */
+  DELIVERY_TUTORIAL_STALE: 'panel.delivery_tutorial_stale',
+  /**
    * A username policy that leaves a customer no way to name their service.
    *
    * Both modes off is not a strict configuration, it is a panel nothing can be bought

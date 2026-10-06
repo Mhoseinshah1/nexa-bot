@@ -233,6 +233,26 @@ export interface DeliveryServiceDeps {
    * the link view sends no QR at all — never one that a replay could send again.
    */
   readonly linkQr?: LinkQrClaims;
+  /**
+   * Phase 2 item 5: the panel's optional tutorial, after the connection files of the FIRST
+   * automatic delivery of a purchase or a trial — never a rotation's, never a resend's.
+   * Optional: without it nothing follows the files.
+   */
+  readonly tutorial?: AutomaticTutorialSender;
+}
+
+/**
+ * Phase 2 item 5: what sends a panel's tutorial after a service on it was delivered.
+ *
+ * Holds its own at-most-once claim per service and never throws for a send; whatever it
+ * returns is for a log line. The delivery is recorded already and is never touched by it.
+ */
+export interface AutomaticTutorialSender {
+  afterDelivery(
+    scope: TenantContext,
+    service: ServiceRecord,
+    contact: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<unknown>;
 }
 
 /**
@@ -690,6 +710,9 @@ export class DeliveryService {
         if (record.recorded && record.state === 'DELIVERED') {
           // Codex review of #116: beside the link — the card's own chat and bot, if it went there.
           await this.sendFilesAfter(scope, service, record.sentTo ?? lookup.contact);
+          // Phase 2 item 5: the panel's tutorial, after the files — a first delivery only.
+          if (!rotated)
+            await this.sendTutorialAfter(scope, service, record.sentTo ?? lookup.contact);
         }
         if (!record.recorded) {
           // Sent, and the outcome could not be written because somebody else had
@@ -744,6 +767,24 @@ export class DeliveryService {
     } catch {
       // Deliberately swallowed: the link is delivered and recorded, and the customer
       // can still ask for the files from the card («📁 دریافت فایل‌های اتصال»).
+      return;
+    }
+  }
+
+  /**
+   * Phase 2 item 5: the panel's tutorial after a FIRST delivery. Never throws and never
+   * writes the delivery: the sender claims the service once and sends at most once.
+   */
+  private async sendTutorialAfter(
+    scope: TenantContext,
+    service: ServiceRecord,
+    contact: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<void> {
+    if (this.deps.tutorial === undefined) return;
+    try {
+      await this.deps.tutorial.afterDelivery(scope, service, contact);
+    } catch {
+      // Deliberately swallowed: the link is delivered and recorded; a tutorial is a courtesy.
       return;
     }
   }

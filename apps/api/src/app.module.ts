@@ -43,6 +43,7 @@ import { FxController } from './surfaces/web/fx.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { TermsController } from './surfaces/web/terms.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
+import { DeliveryTutorialController } from './surfaces/web/delivery-tutorial.controller.js';
 import { TicketsController } from './surfaces/web/tickets.controller.js';
 import { BusinessChatsController } from './surfaces/web/business-chats.controller.js';
 import { SupportAiController } from './surfaces/web/support-ai.controller.js';
@@ -142,6 +143,8 @@ export class AppModule implements NestModule {
         SupportFaqController as never,
         TermsController as never,
         ClientAppController as never,
+        // Phase 2 item 5: a panel's post-delivery tutorial.
+        DeliveryTutorialController as never,
         // WP-A7: support tickets.
         TicketsController as never,
         BusinessChatsController as never,

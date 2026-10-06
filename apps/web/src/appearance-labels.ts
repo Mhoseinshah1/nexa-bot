@@ -1,4 +1,9 @@
-import type { AppearanceSlot } from '@nexa/contracts';
+import {
+  APPEARANCE_MARKER_EXPRESSION_SOURCE,
+  APPEARANCE_SLOT_FALLBACKS,
+  isAppearanceSlot,
+  type AppearanceSlot,
+} from '@nexa/contracts';
 import type { WebKey } from './i18n/web.fa';
 
 /**
@@ -37,3 +42,15 @@ export const APPEARANCE_SLOT_LABEL: Readonly<Record<AppearanceSlot, WebKey>> = {
   group: 'web.appearance_slot_group',
   clock: 'web.appearance_slot_clock',
 };
+
+/**
+ * Text with every known `{icon:slot}` marker replaced by the slot's fallback emoji — what the
+ * messenger draws (and measures against Telegram's bounds) before any custom-emoji entity is
+ * laid over it. An unknown marker is left literal, as the server's renderer leaves it.
+ */
+export function withMarkersAsFallback(text: string): string {
+  return text.replace(
+    new RegExp(APPEARANCE_MARKER_EXPRESSION_SOURCE, 'g'),
+    (match, slot: string) => (isAppearanceSlot(slot) ? APPEARANCE_SLOT_FALLBACKS[slot] : match),
+  );
+}

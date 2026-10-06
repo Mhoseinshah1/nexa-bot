@@ -168,6 +168,8 @@ import {
   PANEL_TRIAL_HOURS_MAX,
   PANEL_TRIAL_HOURS_MIN,
   PANEL_TRIAL_LABEL_MAX_LENGTH,
+  DELIVERY_TUTORIAL_MODES,
+  DELIVERY_TUTORIAL_TEXT_MAX_LENGTH,
   PANEL_TRIAL_TRAFFIC_MAX_BYTES,
   TRIAL_LIMIT_MIN,
   // Package D: the custom service.
@@ -8977,6 +8979,59 @@ export const panelTrialConfigs = pgTable(
       sql`label IS NULL OR length(btrim(label)) BETWEEN 1 AND ${sql.raw(String(PANEL_TRIAL_LABEL_MAX_LENGTH))}`,
     ),
     check('panel_trial_configs_revision_check', sql`revision >= 1`),
+  ],
+);
+
+/**
+ * Phase 2 item 5: the OPTIONAL tutorial a panel sends a customer once, automatically, right
+ * after a service on it was delivered (`DeliveryTutorialSender`). One row per configured
+ * panel; no row is the same as `DISABLED`.
+ *
+ * Its own table, never `panels.policy`: that jsonb is parsed strictly, and a rollback that
+ * met a policy carrying a tutorial would refuse every customer action on the panel.
+ *
+ * `text` and `video_client_app_id` are KEPT while the mode does not use them, so an operator
+ * who turns the tutorial off and on again gets it back; the CHECK only demands what the mode
+ * sends. `video_client_app_id` names a client app whose tutorial video (`client_app_videos`,
+ * one per bot) is sent — deliberately NOT a foreign key: deleting the app must not delete or
+ * block the tutorial, and the send reads the video through `ClientAppVideoService.videoFor`,
+ * which answers nothing for a missing or disabled app.
+ */
+export const deliveryTutorials = pgTable(
+  'delivery_tutorials',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    mode: text('mode').notNull().default('DISABLED'),
+    /** Stored RAW, as the operator wrote it; drawn by `renderClientAppGuide` at send. */
+    text: text('text'),
+    videoClientAppId: uuid('video_client_app_id'),
+    appliesToPurchase: boolean('applies_to_purchase').notNull().default(true),
+    appliesToTrial: boolean('applies_to_trial').notNull().default(true),
+    revision: integer('revision').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.panelId], name: 'delivery_tutorials_pk' }),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'delivery_tutorials_panel_fk',
+    }),
+    check('delivery_tutorials_mode_check', enumCheck('mode', DELIVERY_TUTORIAL_MODES)),
+    check(
+      'delivery_tutorials_text_check',
+      sql`text IS NULL OR length(btrim(text)) BETWEEN 1 AND ${sql.raw(String(DELIVERY_TUTORIAL_TEXT_MAX_LENGTH))}`,
+    ),
+    check(
+      'delivery_tutorials_content_check',
+      sql`(mode NOT IN ('TEXT', 'VIDEO_TEXT') OR text IS NOT NULL)
+          AND (mode NOT IN ('VIDEO', 'VIDEO_TEXT') OR video_client_app_id IS NOT NULL)`,
+    ),
+    check('delivery_tutorials_revision_check', sql`revision >= 1`),
   ],
 );
 
