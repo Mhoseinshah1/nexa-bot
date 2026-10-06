@@ -74,6 +74,13 @@ export interface FakeMarzbanUser {
   expire: number | null;
   dataLimit: number | null;
   usedTraffic: number;
+  /**
+   * `online_at` exactly as v0.8.4 serialises it: a NAIVE UTC ISO time with no offset
+   * (`datetime.utcnow()` in `app/jobs/record_usages.py`, through pydantic), or `null` for an
+   * account nobody has used. `marzbanOnlineAt` spells one. Moved by xray, never by the API,
+   * so a test sets it directly.
+   */
+  onlineAt: string | null;
   /** Which inbounds this account is NOT excluded from, per protocol. */
   inbounds: Record<string, string[]>;
   proxies: Record<string, { id: string }>;
@@ -116,6 +123,17 @@ export interface FakeMarzban {
   subscriptionFor(username: string): string;
   reset(): void;
   close(): Promise<void>;
+}
+
+/**
+ * A time as v0.8.4 puts it on the wire: pydantic's rendering of a naive `datetime`, so
+ * `YYYY-MM-DDTHH:MM:SS`, with `.ffffff` only when the fraction is not zero, and NO `Z`.
+ */
+export function marzbanOnlineAt(at: Date): string {
+  const iso = at.toISOString(); // 2026-10-06T08:30:00.123Z
+  const millis = at.getUTCMilliseconds();
+  const whole = iso.slice(0, 19);
+  return millis === 0 ? whole : `${whole}.${String(millis).padStart(3, '0')}000`;
 }
 
 const DEFAULT_INBOUNDS: Readonly<Record<string, readonly string[]>> = {
@@ -246,6 +264,8 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
           expire: expire === null || expire === 0 ? null : expire,
           dataLimit: zeroToNull(numberOrNull(payload['data_limit'])),
           usedTraffic: 0,
+          // A fresh account has never connected: v0.8.4's column defaults to NULL.
+          onlineAt: null,
           inbounds: kept,
           proxies,
         };
@@ -369,6 +389,7 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
       data_limit: user.dataLimit,
       used_traffic: user.usedTraffic,
       lifetime_used_traffic: user.usedTraffic,
+      online_at: user.onlineAt,
       links,
       /*
        * A PATH, and a different one every time it is rendered.
@@ -410,6 +431,7 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
         expire: null,
         dataLimit: null,
         usedTraffic: 0,
+        onlineAt: null,
         inbounds: { vless: ['VLESS TCP'] },
         proxies: { vless: { id: `uuid-${user.username}-vless` } },
         ...user,

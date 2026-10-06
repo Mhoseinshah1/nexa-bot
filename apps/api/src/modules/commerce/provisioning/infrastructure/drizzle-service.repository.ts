@@ -31,6 +31,7 @@ import type {
   UserId,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import { boundedLastSeen } from '../domain/last-seen.js';
 import {
   requireTenantId,
   type TransactionScope,
@@ -1184,7 +1185,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         trafficUsedBytes: usage.usedBytes,
         usageSyncedAt: usage.syncedAt,
         updatedAt: usage.syncedAt,
-        ...lastSeenColumns(usage.lastSeen),
+        ...lastSeenColumns(usage.lastSeen, usage.syncedAt),
       })
       .where(
         and(
@@ -1346,12 +1347,17 @@ export class DrizzleServiceRepository implements ServiceRepository {
 /**
  * What a usage read says about the last connection, as columns. UNSUPPORTED (and an
  * absent value) writes nothing: a panel that cannot say must not erase what another
- * read proved, and must never be stored as "never connected".
+ * read proved, and must never be stored as "never connected". So the card shows the LAST
+ * KNOWN value until a read proves a new one. A time more than five minutes after the read
+ * (`syncedAt`, the Clock's) is UNSUPPORTED too (`boundedLastSeen`, C1 N3).
  */
 function lastSeenColumns(
-  lastSeen: ProviderLastSeen | undefined,
+  reported: ProviderLastSeen | undefined,
+  readAt: Date,
 ): { lastSeenAt: Date | null; lastSeenState: ServiceLastSeenState } | Record<string, never> {
-  if (lastSeen === undefined || lastSeen.kind === 'UNSUPPORTED') return {};
+  if (reported === undefined) return {};
+  const lastSeen = boundedLastSeen(reported, readAt);
+  if (lastSeen.kind === 'UNSUPPORTED') return {};
   if (lastSeen.kind === 'AT') return { lastSeenAt: lastSeen.at, lastSeenState: 'AT' };
   return { lastSeenAt: null, lastSeenState: 'NEVER' };
 }
