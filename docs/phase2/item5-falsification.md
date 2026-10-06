@@ -21,6 +21,7 @@ against a dedicated integration database (`nexa_test_p2d`).
 | D5-09 | Too long for a caption: the bare video is still sent                                            | VIDEO_TEXT too long for a caption: the bare video, then the text whole (unit)                     | KILLED |
 | D5-10 | Too long for a caption: the text follows whole                                                  | VIDEO_TEXT too long for a caption: the bare video, then the text whole (unit)                     | KILLED |
 | D5-11 | UNKNOWN / RATE_LIMITED are not followed by the text                                             | VIDEO_TEXT answered UNKNOWN is neither retried nor followed by the text (unit)                    | KILLED |
+| D5-32 | Too long, bare video RATE_LIMITED: the text is not burst into the same per-chat limit           | VIDEO_TEXT too long whose bare video is RATE_LIMITED: no text bursts into the limit (unit)        | KILLED |
 | D5-12 | A video Telegram refuses still lets the text go                                                 | VIDEO_TEXT whose video Telegram refuses: the text still goes, once (unit)                         | KILLED |
 | D5-13 | Nothing this bot can send: no claim, no send                                                    | VIDEO whose bot holds no video sends nothing, and claims nothing (unit)                           | KILLED |
 | D5-14 | The text is drawn by the client-app guide renderer                                              | draws the text with the client-app guide renderer (bullets, links) (unit)                         | KILLED |
@@ -39,9 +40,11 @@ against a dedicated integration database (`nexa_test_p2d`).
 | D5-27 | Contract: an unknown `{icon:…}` marker is refused                                               | refuses raw markup (<tg-emoji>) and an unknown icon marker; accepts a known one (unit)            | KILLED |
 | D5-28 | Contract: a mode that sends text needs the text                                                 | refuses a mode without what it sends (unit)                                                       | KILLED |
 | D5-29 | Web: the draft refuses a mode without its text                                                  | refuses a draft without what its mode sends, and sends nothing (web)                              | KILLED |
+| D5-33 | Web: the caption-fallback notice measures markers as one emoji, like the server                 | warns of the caption fallback by the length the server measures, markers as one emoji (web)       | KILLED |
 | D5-30 | Web: a partial edit keeps the text the mode does not use                                        | shows what is stored and sends a partial edit whole, keeping the text and video (web)             | KILLED |
 
-31 of 31 killed.
+33 of 33 killed. (Re-run after the review of #216: the full set of 33 run again, D5-09 re-anchored on
+the new bare-video send and run again on its own.)
 
 ## What the first run found
 
