@@ -1397,3 +1397,43 @@ export interface QrCodeEncoder {
   /** A PNG. Throws a validation error for empty text or text too long to encode. */
   encode(text: string): Uint8Array;
 }
+
+/**
+ * What a delivered QR is drawn from (Phase 2 item 4).
+ *
+ * - `PAYLOAD`: NEXA encodes `text` — the EXACT subscription URL, under the same rule as
+ *   `QrCodeEncoder` — and may draw it on the tenant's QR background. Only the image's look
+ *   is configurable; what the code says never is.
+ * - `PROVIDER_IMAGE`: a QR image the PROVIDER produced (item 6, RickPanel, not built yet).
+ *   It is delivered exactly as given: never decoded, never re-encoded, never drawn on the
+ *   template, because a provider may encode more than the visible link and a NEXA-made code
+ *   of the same URL would silently drop it. A later caller that has such an image passes it
+ *   here instead of the link; nothing in this release does.
+ */
+export type DeliveryQrSource =
+  | { readonly kind: 'PAYLOAD'; readonly text: string }
+  | { readonly kind: 'PROVIDER_IMAGE'; readonly bytes: Uint8Array };
+
+/** Who made the code a customer receives — for item 6's audit of the delivered QR. */
+export type DeliveryQrOrigin = 'NEXA_GENERATED' | 'PROVIDER_ORIGINATED';
+
+export interface DeliveryQrImage {
+  /** A PNG. */
+  readonly bytes: Uint8Array;
+  readonly origin: DeliveryQrOrigin;
+  /** True when the tenant's QR background was used. */
+  readonly templated: boolean;
+}
+
+/**
+ * The ONE seam every customer QR NEXA delivers passes through: the delivery card (purchase
+ * and trial alike), a changed link, and the QR under the link view (`delivery.service.ts`).
+ *
+ * Tenant-scoped: the template and the background are the tenant's own. With neither
+ * configured the bytes are exactly the plain QR's, as before this port existed. Throws only
+ * what the plain encoder throws — text that cannot be encoded; a template that cannot be
+ * used falls back to the plain QR and is never a failed delivery.
+ */
+export interface DeliveryQrRenderer {
+  render(scope: TenantContext, source: DeliveryQrSource): Promise<DeliveryQrImage>;
+}

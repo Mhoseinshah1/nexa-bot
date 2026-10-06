@@ -231,12 +231,13 @@ export function faqNumberMarker(position: number): string {
 // --- Tenant media ----------------------------------------------------------------
 
 /**
- * The one media slot this release stores: the referral banner. A row per (tenant,
+ * The media slots this release stores: the referral banner, and (Phase 2 item 4) the
+ * background the subscription QR is drawn on (`delivery-qr.ts`). A row per (tenant,
  * purpose) holding the bytes, so nothing customer-facing ever carries a filesystem path
  * and a bot-scoped Telegram `file_id` is never the source of truth. Grows a member when a
  * screen needs one — never a generic CMS.
  */
-export const TENANT_MEDIA_PURPOSES = ['REFERRAL_BANNER'] as const;
+export const TENANT_MEDIA_PURPOSES = ['REFERRAL_BANNER', 'QR_BACKGROUND'] as const;
 export type TenantMediaPurpose = (typeof TENANT_MEDIA_PURPOSES)[number];
 export const tenantMediaPurposeSchema = z.enum(TENANT_MEDIA_PURPOSES);
 
@@ -246,6 +247,18 @@ export const tenantMediaMimeTypeSchema = z.enum(TENANT_MEDIA_MIME_TYPES);
 
 /** One mebibyte. Telegram accepts far more; a banner needs far less. */
 export const TENANT_MEDIA_MAX_BYTES = 1024 * 1024;
+
+/**
+ * The types each slot accepts, a subset of `TENANT_MEDIA_MIME_TYPES`. The QR background is
+ * PNG only: it is DECODED and composed with the code on the server, and this release ships
+ * a PNG decoder and no JPEG one (no new dependency in a process that holds bot tokens).
+ */
+export const TENANT_MEDIA_PURPOSE_MIME_TYPES: Readonly<
+  Record<TenantMediaPurpose, readonly TenantMediaMimeType[]>
+> = {
+  REFERRAL_BANNER: ['image/png', 'image/jpeg'],
+  QR_BACKGROUND: ['image/png'],
+};
 
 // --- Referral signup gift --------------------------------------------------------
 

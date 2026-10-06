@@ -16,7 +16,7 @@ import type {
   CustomerMessage,
   CustomerSendResult,
 } from '../../apps/api/src/modules/commerce/messaging/application/ports';
-import { PngQrCodeEncoder } from '../../apps/api/src/infrastructure/qr/qr-png';
+import { PngDeliveryQrRenderer } from '../../apps/api/src/infrastructure/qr/qr-template';
 import { FixedClock } from '../../apps/api/src/infrastructure/clock';
 import { decodeQrPng } from '../support/qr-decode';
 
@@ -88,7 +88,7 @@ function harness(
       },
       acknowledge: async () => undefined,
     },
-    qr: new PngQrCodeEncoder(),
+    qr: new PngDeliveryQrRenderer(),
     card: { factsFor: async () => null },
     scopeActivity: { scopeIsActive: async () => options.active ?? true },
     uow: { run: async (_s: unknown, fn: (tx: never) => unknown) => fn({} as never) } as never,

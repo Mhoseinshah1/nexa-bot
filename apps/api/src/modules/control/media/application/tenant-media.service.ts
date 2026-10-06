@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   COMMERCE_ERROR_CODES,
   TENANT_MEDIA_MAX_BYTES,
+  TENANT_MEDIA_PURPOSE_MIME_TYPES,
   errors,
   type ActorContext,
   type AuditWriter,
@@ -24,7 +25,12 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { TenantMediaContent, TenantMediaRecord, TenantMediaRepository } from './ports.js';
+import type {
+  TenantMediaContent,
+  TenantMediaContentCheck,
+  TenantMediaRecord,
+  TenantMediaRepository,
+} from './ports.js';
 
 export const MEDIA_VIEW: PermissionKey = 'settings.view';
 export const MEDIA_EDIT: PermissionKey = 'settings.edit';
@@ -49,6 +55,8 @@ export interface TenantMediaServiceDeps {
   readonly uow: UnitOfWork<TransactionScope>;
   readonly idempotency: IdempotencyStore;
   readonly clock: Clock;
+  /** Phase 2 item 4: the slot's own content rule (the QR background must decode). */
+  readonly contentCheck: TenantMediaContentCheck;
 }
 
 /** What the idempotency store keeps of an upload. A Date does not survive `jsonb`. */
@@ -131,7 +139,21 @@ export class TenantMediaService {
     const denial = { action: 'tenant_media.upload', entityType: 'TenantMedia', entityId: purpose };
     await this.authorize(scope, actor, denial);
 
+    if (!TENANT_MEDIA_PURPOSE_MIME_TYPES[purpose].includes(input.mimeType)) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.MEDIA_INVALID,
+        `This slot does not accept ${input.mimeType}.`,
+        { reason: 'TYPE_NOT_ALLOWED', mimeType: input.mimeType, purpose },
+      );
+    }
     const bytes = decodeVerified(input.mimeType, input.contentBase64);
+    const refusal = this.deps.contentCheck.refusal(purpose, input.mimeType, bytes);
+    if (refusal !== null) {
+      throw errors.validation(COMMERCE_ERROR_CODES.MEDIA_INVALID, refusal.message, {
+        reason: refusal.reason,
+        purpose,
+      });
+    }
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const requestHash = hashRequest({ purpose, mimeType: input.mimeType, sha256 });
 
