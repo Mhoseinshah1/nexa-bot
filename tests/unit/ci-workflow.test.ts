@@ -244,7 +244,7 @@ describe('the CI workflow', () => {
     // check is not a red one.
     expect(job.if).toBe('always()');
     expect(job.needs).toEqual(
-      expect.arrayContaining(['unit', 'web', 'integration', 'legacy-mysql']),
+      expect.arrayContaining(['unit', 'web', 'integration', 'legacy-mysql', 'legacy-rehearsal']),
     );
     const run = job.steps.map((s) => s.run ?? '').join('\n');
     for (const result of [
@@ -258,12 +258,16 @@ describe('the CI workflow', () => {
     expect(run, 'a result test was inverted').not.toContain('!= "success"');
   });
 
-  it('runs the legacy MySQL source suite against a real MariaDB on every run', () => {
+  it('runs the legacy MySQL source suite against a real MariaDB AND MySQL 8.0 on every run', () => {
     const job = workflow.jobs['legacy-mysql']!;
     expect(job, 'the legacy-mysql job is gone').toBeDefined();
-    expect(Object.keys(job.services ?? {})).toEqual(['mariadb']);
-    const service = (job.services ?? {})['mariadb'] as { image?: string };
-    expect(service.image).toMatch(/^mariadb:/u);
+    expect(Object.keys(job.services ?? {})).toEqual(['legacydb']);
+    const service = (job.services ?? {})['legacydb'] as { image?: string };
+    expect(service.image).toBe('${{ matrix.engine.image }}');
+    // WP-D1b (OQ-P7-03): both engines, collations never rewritten.
+    const matrix = (job as unknown as { strategy?: { matrix?: { engine?: { image: string }[] } } })
+      .strategy?.matrix?.engine;
+    expect((matrix ?? []).map((e) => e.image)).toEqual(['mariadb:10.11', 'mysql:8.0']);
     expect(job.steps.some((s) => s.run === 'pnpm test:legacy-mysql')).toBe(true);
     // The suite FAILS without its DSN; the job must supply one.
     const env = (job as unknown as { env?: Record<string, string> }).env ?? {};
@@ -286,7 +290,7 @@ describe('the CI workflow', () => {
     ]) {
       expect(paths, `${dist} is not handed on`).toContain(dist);
     }
-    for (const name of ['unit', 'web', 'integration', 'legacy-mysql']) {
+    for (const name of ['unit', 'web', 'integration', 'legacy-mysql', 'legacy-rehearsal']) {
       const job = workflow.jobs[name]!;
       expect(job.needs, `${name} does not wait for the build`).toBe('build');
       const download = job.steps.find((s) => s.uses?.startsWith('actions/download-artifact'));
