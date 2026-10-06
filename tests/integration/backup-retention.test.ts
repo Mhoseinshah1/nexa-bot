@@ -457,6 +457,27 @@ describe('backup run retention', () => {
     expect(left).not.toContain(pruned);
   });
 
+  it('lists every leftover any run recorded, and answers whether a database exists', async () => {
+    const dirty = await insert({
+      state: 'FAILED',
+      startedAt: ancient(5),
+      finishedAt: ancient(5),
+      cleanupOk: false,
+    });
+    await context.container.database.db.execute(
+      sql`UPDATE backup_runs SET cleanup_detail = '/w/a/dump.pgcustom, nexa_verify_deadbeef'
+           WHERE id = ${dirty}`,
+    );
+    await insert({ state: 'SUCCEEDED', startedAt: NOW, finishedAt: NOW });
+    expect([...(await runs.recordedLeftovers())].sort()).toEqual([
+      '/w/a/dump.pgcustom',
+      'nexa_verify_deadbeef',
+    ]);
+    const live = new URL(context.container.config.DATABASE_URL).pathname.slice(1);
+    expect(await runs.databaseExists(live)).toBe(true);
+    expect(await runs.databaseExists('nexa_verify_deadbeef_absent')).toBe(false);
+  });
+
   describe('archive FILE retention candidates (E5)', () => {
     const KEEP_BEFORE = new Date(NOW.getTime() - 30 * 24 * 3_600_000);
     const daysAgo = (days: number) => new Date(NOW.getTime() - days * 24 * 3_600_000);

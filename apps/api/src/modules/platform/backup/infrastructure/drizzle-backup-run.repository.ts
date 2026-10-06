@@ -491,14 +491,25 @@ export class DrizzleBackupRunRepository
     return rows.map((row) => row.id);
   }
 
-  async latestFinished(): Promise<BackupRunRow | null> {
-    const [row] = await this.db
-      .select()
+  /** Whether a database of this name exists in the cluster (a leaked scratch database). */
+  async databaseExists(name: string): Promise<boolean> {
+    const found = await this.db.execute(sql`SELECT 1 FROM pg_database WHERE datname = ${name}`);
+    return found.rows.length > 0;
+  }
+
+  async recordedLeftovers(): Promise<readonly string[]> {
+    const rows = await this.db
+      .select({ detail: backupRuns.cleanupDetail })
       .from(backupRuns)
-      .where(sql`${backupRuns.finishedAt} IS NOT NULL`)
-      .orderBy(desc(backupRuns.startedAt), desc(backupRuns.id))
-      .limit(1);
-    return row === undefined ? null : toRow(row);
+      .where(and(eq(backupRuns.cleanupOk, false), sql`${backupRuns.cleanupDetail} IS NOT NULL`));
+    // `finish` writes the survivor list joined by ', '.
+    const items = new Set<string>();
+    for (const row of rows) {
+      for (const item of (row.detail ?? '').split(', ')) {
+        if (item.trim() !== '') items.add(item.trim());
+      }
+    }
+    return [...items];
   }
 
   async latestVerified(): Promise<BackupRunRow | null> {

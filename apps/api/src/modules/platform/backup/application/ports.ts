@@ -268,8 +268,11 @@ export interface BackupArchiveRetentionStore {
   markArchivePruned(input: { readonly id: string; readonly now: Date }): Promise<boolean>;
   /** Ids of runs that are RUNNING now: their directories are being written. */
   runningIds(): Promise<readonly string[]>;
-  /** The newest finished run, for the cleanup condition's closing test. */
-  latestFinished(): Promise<BackupRunRow | null>;
+  /**
+   * Every leftover any run recorded (`cleanup_detail` of rows with
+   * `cleanup_ok = false`), for the cleanup condition's closing test.
+   */
+  recordedLeftovers(): Promise<readonly string[]>;
   /** The newest verified success, for the disk-space estimate. */
   latestVerified(): Promise<BackupRunRow | null>;
 }

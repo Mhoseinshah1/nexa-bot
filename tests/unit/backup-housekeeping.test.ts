@@ -17,6 +17,7 @@ import {
   CLI_SCRATCH_PREFIX,
   FilesystemBackupDebris,
   FilesystemBackupWorkspaces,
+  keepScratchAlive,
   privateScratchDirectory,
 } from '../../apps/api/src/modules/platform/backup/infrastructure/workspace';
 import {
@@ -82,7 +83,10 @@ interface World {
   sweepInputs: { olderThan: Date; skipIds: ReadonlySet<string> }[];
   free: number | null;
   latestVerified: BackupRunRow | null;
-  latestFinished: BackupRunRow | null;
+  leftovers: string[];
+  existing: Set<string>;
+  /** Each stamp, with whether the directory was already gone at that moment. */
+  stampedAfterRemoval: boolean[];
   lastSucceededAt: Date | null;
   open: Set<string>;
   recorded: OperationalEventInput[];
@@ -105,7 +109,9 @@ function world(): World {
     sweepInputs: [],
     free: 100 * GIB,
     latestVerified: row(),
-    latestFinished: row(),
+    leftovers: [],
+    existing: new Set(),
+    stampedAfterRemoval: [],
     lastSucceededAt: NOW,
     open: new Set(),
     recorded: [],
@@ -122,10 +128,11 @@ function housekeeping(w: World, scoped = true): BackupHousekeeping {
       },
       markArchivePruned: async ({ id }) => {
         w.stamped.push(id);
+        w.stampedAfterRemoval.push(w.removed.includes(id));
         return true;
       },
       runningIds: async () => w.running,
-      latestFinished: async () => w.latestFinished,
+      recordedLeftovers: async () => w.leftovers,
       latestVerified: async () => w.latestVerified,
     },
     debris: {
@@ -159,6 +166,7 @@ function housekeeping(w: World, scoped = true): BackupHousekeeping {
     scope: () => (scoped ? { tenantId: 't1' as never, botInstanceId: null } : null),
     conditionOpen: async (code) => w.open.has(code),
     quiesced: async () => w.quiesced,
+    leftoverExists: async (item) => w.existing.has(item),
     schedule: async () => w.schedule,
     retention: async () => w.retention,
     protectedByRecovery: async () => w.protectedIds,
@@ -199,6 +207,8 @@ describe('backup housekeeping: archive retention', () => {
     expect(pruned).toBe(2);
     expect(w.removed).toEqual(w.candidates.map((c) => c.id));
     expect(w.stamped).toEqual(w.candidates.map((c) => c.id));
+    // The ORDER: at each stamp, that run's directory had already been removed.
+    expect(w.stampedAfterRemoval).toEqual([true, true]);
   });
 
   it('never stamps a row whose directory survived, so the row purge cannot orphan it', async () => {
@@ -208,6 +218,17 @@ describe('backup housekeeping: archive retention', () => {
     w.removeSurvives.add(id);
     expect(await housekeeping(w).pruneArchives()).toBe(0);
     expect(w.stamped).toEqual([]);
+    // Reported through the existing cleanup condition, never a new code.
+    expect(codes(w)).toEqual(['backup.cleanup_failed']);
+  });
+
+  it('does not close the cleanup condition in a pass whose retention left a directory behind', async () => {
+    const w = world();
+    w.open.add('backup.cleanup_failed');
+    w.candidates = [{ id: '0192f000-0000-7000-8000-000000000015', state: 'SUCCEEDED' }];
+    w.removeSurvives.add('0192f000-0000-7000-8000-000000000015');
+    await housekeeping(w).pass();
+    expect(codes(w)).not.toContain('backup.cleanup_ok');
   });
 
   it('does nothing at all while a recovery holds the installation', async () => {
@@ -259,12 +280,21 @@ describe('backup housekeeping: plaintext debris and the cleanup condition', () =
     await housekeeping(pending).sweepDebris();
     expect(codes(pending)).toEqual([]);
 
-    // The newest run left a scratch database: NOT clean.
+    // An EARLIER run's leaked scratch database still exists — even though the
+    // newest run cleaned up: NOT clean.
     const leaked = world();
     leaked.open.add('backup.cleanup_failed');
-    leaked.latestFinished = row({ cleanupOk: false });
+    leaked.leftovers = ['nexa_verify_0123abcd', '/b/x/dump.pgcustom'];
+    leaked.existing.add('nexa_verify_0123abcd');
     await housekeeping(leaked).sweepDebris();
     expect(codes(leaked)).toEqual([]);
+
+    // Every recorded leftover is gone: closed.
+    const gone = world();
+    gone.open.add('backup.cleanup_failed');
+    gone.leftovers = ['nexa_verify_0123abcd', '/b/x/dump.pgcustom'];
+    await housekeeping(gone).sweepDebris();
+    expect(codes(gone)).toEqual(['backup.cleanup_ok']);
 
     // Nothing open: nothing recorded.
     const healthy = world();
@@ -452,11 +482,19 @@ describe('the backup volume on disk', () => {
     await utimes(join(root, running, 'dump.pgcustom'), old, old);
     const cliOld = join(root, `${CLI_SCRATCH_PREFIX}verify-old`);
     const cliNew = join(root, `${CLI_SCRATCH_PREFIX}restore-new`);
+    const cliLong = join(root, `${CLI_SCRATCH_PREFIX}restore-long`);
     await mkdir(cliOld);
     await mkdir(cliNew);
+    await mkdir(cliLong);
     await writeFile(join(cliOld, 'dump.pgcustom'), 'PGDMP');
+    await utimes(join(cliOld, 'dump.pgcustom'), old, old);
     await utimes(cliOld, old, old);
     await utimes(cliNew, recent, recent);
+    // A long CLI restore: the DIRECTORY's own mtime is old (nothing added since
+    // the dump was created), its file was written recently.
+    await writeFile(join(cliLong, 'dump.pgcustom'), 'PGDMP');
+    await utimes(join(cliLong, 'dump.pgcustom'), recent, recent);
+    await utimes(cliLong, old, old);
     // A directory that is not a run's is not this sweep's business.
     await mkdir(join(root, 'lost+found'));
     await writeFile(join(root, 'lost+found', 'dump.pgcustom'), 'x');
@@ -475,11 +513,27 @@ describe('the backup volume on disk', () => {
         cliOld,
       ].sort(),
     );
-    expect(sweep.pending).toBe(2); // the fresh dump and the fresh CLI directory
+    // the fresh dump, the fresh CLI directory, and the long restore's directory
+    expect(sweep.pending).toBe(3);
+    expect(await readdir(cliLong)).toEqual(['dump.pgcustom']);
     expect(await readdir(join(root, abandoned))).toEqual(['archive.nxb']);
     expect((await readdir(join(root, fresh))).sort()).toEqual(['archive.nxb', 'dump.pgcustom']);
     expect((await readdir(join(root, running))).sort()).toEqual(['archive.nxb', 'dump.pgcustom']);
     expect(await readdir(join(root, 'lost+found'))).toEqual(['dump.pgcustom']);
+  });
+
+  it('keeps a CLI scratch directory looking alive while its command runs', async () => {
+    const directory = join(root, `${CLI_SCRATCH_PREFIX}restore-x`);
+    await mkdir(directory);
+    const old = new Date(NOW.getTime() - 3 * DAY);
+    await utimes(directory, old, old);
+    const alive = keepScratchAlive(directory, 10);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    } finally {
+      alive.stop();
+    }
+    expect((await stat(directory)).mtimeMs).toBeGreaterThan(Date.now() - 60_000);
   });
 
   it('removes a run directory by id, and refuses anything that is not a run id', async () => {

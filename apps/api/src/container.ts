@@ -57,6 +57,7 @@ import type {
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { panelUrlPolicy } from './infrastructure/net/installation-policy.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import {
@@ -6448,6 +6449,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         : { tenantId: installationTenantId, botInstanceId: null },
     conditionOpen: backupConditionOpen,
     quiesced: recoveryQuiesced,
+    leftoverExists: async (leftover) => {
+      if (leftover.startsWith('/')) {
+        return stat(leftover).then(
+          () => true,
+          (error: unknown) => (error as { code?: unknown }).code !== 'ENOENT',
+        );
+      }
+      if (/^nexa_[a-z0-9_]+$/.test(leftover)) return backupRuns.databaseExists(leftover);
+      return false;
+    },
     schedule: () => backupSchedule.effective(),
     retention: async () => {
       // The registry's defaults apply when nothing is stored, and with no tenant

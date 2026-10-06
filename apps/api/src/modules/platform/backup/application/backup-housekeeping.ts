@@ -53,6 +53,13 @@ export interface BackupHousekeepingDeps {
   readonly scope: () => ScopeContext | null;
   /** Whether the installation's condition of this code is open now. */
   readonly conditionOpen: (code: string) => Promise<boolean>;
+  /**
+   * Whether one leftover a run recorded in `cleanup_detail` still exists: an
+   * absolute path on disk, or a scratch database by name. Anything else (a
+   * sentence, from a reclaimed run) is covered by the debris sweep and answers
+   * false.
+   */
+  readonly leftoverExists: (leftover: string) => Promise<boolean>;
   /** `Container.recoveryQuiesced`: the one predicate every backup trigger asks. */
   readonly quiesced: () => Promise<boolean>;
   /** `BackupSchedulePolicy.effective`, the value the scheduler acts on. */
@@ -124,6 +131,8 @@ export class BackupHousekeeping {
    * backup immediately, so this only fires when that first one never lands.
    */
   private readonly watchingSince: number;
+  /** Directories the last retention pass selected and could not remove. */
+  private retentionSurvivors = 0;
 
   constructor(private readonly deps: BackupHousekeepingDeps) {
     this.progress = new LoopProgress(deps.tickIntervalMs);
@@ -212,6 +221,7 @@ export class BackupHousekeeping {
       limit: PRUNE_BATCH,
     });
     let pruned = 0;
+    let survivedDirectories = 0;
     for (const candidate of candidates) {
       const survived = await this.deps.debris.removeRunDirectory(candidate.id);
       if (survived.length > 0) {
@@ -221,6 +231,7 @@ export class BackupHousekeeping {
           { backupId: candidate.id, survived },
           'archive retention could not remove a backup directory',
         );
+        survivedDirectories += 1;
         continue;
       }
       if (await this.deps.runs.markArchivePruned({ id: candidate.id, now })) pruned += 1;
@@ -230,6 +241,19 @@ export class BackupHousekeeping {
         { pruned, keepCount, keepDays },
         'backup archives removed by retention',
       );
+    }
+    // Reported through the EXISTING cleanup condition rather than a new code: a
+    // directory retention could not remove is something left on this host that
+    // should not be. The sweep will not close the condition after such a pass.
+    this.retentionSurvivors = survivedDirectories;
+    if (survivedDirectories > 0) {
+      await this.record({
+        code: 'backup.cleanup_failed',
+        severity: 'ERROR',
+        message: `${String(survivedDirectories)} backup directory(ies) archive retention selected could not be removed.`,
+        context: { retentionSurvivors: survivedDirectories },
+        dedupeKey: KEYS.cleanup,
+      });
     }
     return pruned;
   }
@@ -266,12 +290,27 @@ export class BackupHousekeeping {
     }
     /*
      * CLOSED only when the host is actually clean: nothing survived, nothing is
-     * still inside the grace window, and the newest finished run cleaned up after
-     * itself (a leaked scratch database is on ITS list, not on disk).
+     * still inside the grace window, and nothing any run recorded as left behind
+     * still exists.
      */
-    if (sweep.pending === 0 && (await this.deps.conditionOpen('backup.cleanup_failed'))) {
-      const latest = await this.deps.runs.latestFinished();
-      if (latest === null || latest.cleanupOk) {
+    if (
+      sweep.pending === 0 &&
+      this.retentionSurvivors === 0 &&
+      (await this.deps.conditionOpen('backup.cleanup_failed'))
+    ) {
+      // Every leftover ANY run recorded — a plaintext path, a leaked scratch
+      // database — must be gone, not merely the newest run's. A clean run after a
+      // dirty one says nothing about the dirty one's files or databases.
+      const remaining: string[] = [];
+      for (const leftover of await this.deps.runs.recordedLeftovers()) {
+        if (await this.deps.leftoverExists(leftover)) remaining.push(leftover);
+      }
+      if (remaining.length > 0) {
+        this.deps.logger.warn(
+          { remaining },
+          'backup cleanup condition stays open: recorded leftovers still exist',
+        );
+      } else {
         await this.record({
           code: 'backup.cleanup_ok',
           severity: 'INFO',
