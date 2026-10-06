@@ -110,6 +110,9 @@ function toRecord(row: Row): SupportAiJobRecord {
   };
 }
 
+/** L1: the mark of a draft a newer request replaced — a DISCARDED job no person discarded. */
+export const SUPPORT_AI_DRAFT_SUPERSEDED_CODE = 'job.superseded';
+
 function exec(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
@@ -203,7 +206,10 @@ export class DrizzleSupportAiJobRepository {
     return rows.map(toRecord);
   }
 
-  /** Newer draft requested: every older QUEUED or READY draft of the conversation is discarded. */
+  /**
+   * Newer draft requested: every older QUEUED or READY draft of the conversation is discarded,
+   * marked `job.superseded` (L1) so the analytics tell it from an operator's discard.
+   */
   async discardOpen(
     scope: ScopeContext,
     conversationId: string,
@@ -213,7 +219,12 @@ export class DrizzleSupportAiJobRepository {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
       .update(supportAiJobs)
-      .set({ state: 'DISCARDED', claimedUntil: null, updatedAt: now })
+      .set({
+        state: 'DISCARDED',
+        failureCode: SUPPORT_AI_DRAFT_SUPERSEDED_CODE,
+        claimedUntil: null,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(supportAiJobs.tenantId, tenantId),

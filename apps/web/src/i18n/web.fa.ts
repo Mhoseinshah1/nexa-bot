@@ -7709,6 +7709,7 @@ export const WEB_FA = {
   'web.sa_assist_requested': 'پیش‌نویس درخواست‌شده',
   'web.sa_assist_sent': 'فرستاده شد',
   'web.sa_assist_discarded': 'کنار گذاشته شد',
+  'web.sa_assist_superseded': 'جایگزین با درخواست تازه',
   'web.sa_assist_failed': 'بدون پیش‌نویس',
   'web.sa_assist_open': 'بی‌پاسخ مانده',
   'web.sa_runs_title': 'فراخوانی سرویس‌های هوش مصنوعی',

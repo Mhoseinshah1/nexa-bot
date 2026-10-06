@@ -46,7 +46,7 @@ const analytics = (overrides: Record<string, unknown> = {}) => ({
       { outcome: 'guard_handoff_topic', count: 4 },
     ],
   },
-  assist: { requested: 9, sent: 6, discarded: 2, failed: 1, open: 0 },
+  assist: { requested: 9, sent: 6, discarded: 2, superseded: 0, failed: 1, open: 0 },
   providerRuns: [
     {
       provider: 'OPENAI',

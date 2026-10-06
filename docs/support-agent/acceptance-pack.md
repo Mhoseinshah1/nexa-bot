@@ -96,7 +96,9 @@ Set the mode to `ASSIST_ONLY` on `/support-ai`, with the primary provider from P
 4. Request another draft and discard it.
    - **Expect:** nothing is sent.
 5. On «آمار پشتیبانی», for today:
-   - **Expect:** «پیش‌نویس درخواست‌شده» 2, «فرستاده شد» 1, «کنار گذاشته شد» 1. Under
+   - **Expect:** «پیش‌نویس درخواست‌شده» 2, «فرستاده شد» 1, «کنار گذاشته شد» 1,
+     «جایگزین با درخواست تازه» 0 (L1: a draft a second «درخواست پیش‌نویس» replaced is counted
+     there, never as discarded — if you pressed request twice, both figures say so). Under
      «فراخوانی سرویس‌های هوش مصنوعی», runs with real latencies and token counts.
 
 ## F. AUTO_REPLY_SAFE — on the TEST tenant only

@@ -406,6 +406,33 @@ describe('Assist Mode (TB5)', () => {
     expect((await jobs.findById(scopeA, job.id))?.state).toBe('DISCARDED');
   });
 
+  it("L1: a draft a re-request replaced is counted apart from an operator's discard", async () => {
+    const first = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('d'),
+    });
+    const second = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('d'),
+    });
+    expect(await jobs.findById(scopeA, first.id)).toMatchObject({
+      state: 'DISCARDED',
+      failureCode: 'job.superseded',
+    });
+    await service.discard(scopeA, operator, second.id);
+    expect(await jobs.findById(scopeA, second.id)).toMatchObject({
+      state: 'DISCARDED',
+      failureCode: null,
+    });
+    const owner = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'owner-l1', roleKeys: ['owner'] }),
+    );
+    const figures = await ctx.container.supportAnalytics.analytics(tenantA as never, owner, {
+      range: 'TODAY',
+    });
+    expect(figures.assist).toMatchObject({ requested: 2, discarded: 1, superseded: 1 });
+  });
+
   it('refuses a draft while the support AI is OFF', async () => {
     await ctx.container.database.db.execute(sql`UPDATE support_ai_configs SET mode = 'OFF'`);
     await expect(

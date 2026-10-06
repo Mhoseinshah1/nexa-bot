@@ -15,6 +15,7 @@ import type {
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SupportAnalyticsFacts, SupportAnalyticsWindow } from '../domain/support-analytics.js';
+import { SUPPORT_AI_DRAFT_SUPERSEDED_CODE } from './drizzle-support-ai-job.repository.js';
 
 /**
  * TB10 — the support analytics, read (program §46–§47). Six grouped statements, each
@@ -65,12 +66,20 @@ export class DrizzleSupportAnalyticsReader {
        WHERE tenant_id = ${tenantId}::uuid
          AND created_at >= ${start}::timestamptz AND created_at < ${end}::timestamptz
        GROUP BY reason`);
-    const jobs = await rows<{ kind: string; state: string; outcome: string | null; n: number }>(sql`
-      SELECT kind, state, outcome, count(*)::int AS n
+    const jobs = await rows<{
+      kind: string;
+      state: string;
+      outcome: string | null;
+      superseded: boolean;
+      n: number;
+    }>(sql`
+      SELECT kind, state, outcome,
+             (failure_code IS NOT DISTINCT FROM ${SUPPORT_AI_DRAFT_SUPERSEDED_CODE}) AS superseded,
+             count(*)::int AS n
         FROM support_ai_jobs
        WHERE tenant_id = ${tenantId}::uuid
          AND created_at >= ${start}::timestamptz AND created_at < ${end}::timestamptz
-       GROUP BY kind, state, outcome`);
+       GROUP BY kind, state, outcome, superseded`);
     const runs = await rows<{
       provider: string;
       outcome: string;
@@ -114,6 +123,7 @@ export class DrizzleSupportAnalyticsReader {
         kind: row.kind as SupportAiJobKind,
         state: row.state as SupportAiJobState,
         outcome: row.outcome as SupportAiAutoOutcome | null,
+        superseded: row.superseded === true,
         count: Number(row.n),
       })),
       runs: runs.map((row) => ({

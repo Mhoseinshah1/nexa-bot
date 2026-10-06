@@ -228,12 +228,21 @@ describe('assembling the analytics', () => {
       jobs: [
         { kind: 'ASSIST_DRAFT', state: 'SENT', outcome: null, count: 6 },
         { kind: 'ASSIST_DRAFT', state: 'DISCARDED', outcome: null, count: 2 },
+        // L1: replaced by a newer request — not an operator's discard.
+        { kind: 'ASSIST_DRAFT', state: 'DISCARDED', outcome: null, superseded: true, count: 5 },
         { kind: 'ASSIST_DRAFT', state: 'FAILED', outcome: null, count: 1 },
         { kind: 'ASSIST_DRAFT', state: 'READY', outcome: null, count: 3 },
         { kind: 'ASSIST_DRAFT', state: 'QUEUED', outcome: null, count: 1 },
       ],
     });
-    expect(result.assist).toEqual({ requested: 13, sent: 6, discarded: 2, failed: 1, open: 4 });
+    expect(result.assist).toEqual({
+      requested: 18,
+      sent: 6,
+      discarded: 2,
+      superseded: 5,
+      failed: 1,
+      open: 4,
+    });
     expect(result.auto).toMatchObject({ sent: 0, handedOff: 0, dropped: 0, pending: 0 });
   });
 
