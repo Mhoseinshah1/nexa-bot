@@ -183,6 +183,7 @@ const credential = (overrides: Record<string, unknown> = {}) => ({
   region: null,
   trippedUntil: null,
   lastTestOutcome: 'OK',
+  lastTestFailureClass: null,
   lastTestedAt: '2026-10-01T09:05:00.000Z',
   breaker: 'CLOSED',
   consecutiveFailures: 0,

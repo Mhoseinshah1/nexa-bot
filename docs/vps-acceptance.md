@@ -88,8 +88,10 @@ sudo ./install.sh --domain admin.staging.example.com \
 
 ## 4. The services
 
-- [ ] `sudo botctl status` shows `caddy`, `api`, `worker`, `postgres` and
-      `redis` running, and readiness `ready`.
+- [ ] `sudo botctl status` shows `caddy`, `api`, `worker`, `monitor`,
+      `provisioner`, `recovery`, `postgres` and `redis` running, and readiness
+      `ready`. (`assistant` is also listed; it is deliberately not in the
+      required-ready set.)
 - [ ] `sudo botctl version` prints a version, a commit and a digest.
 - [ ] The digest matches the one in the release job's summary for that version.
 
@@ -125,6 +127,8 @@ sudo botctl backup
 - [ ] `sudo ls -la /var/backups/nexa` — the file is `0600`.
 - [ ] `sudo gzip -dc <file> | head -20` shows real SQL.
 - [ ] `sudo gzip -dc <file> | tail -3` ends with the pg_dump completion marker.
+
+That is the update safety net only. The disaster-recovery pipeline is § 7b.
 
 ## 8. Update
 
@@ -219,6 +223,57 @@ Worth doing once, on staging, so the behaviour is known rather than assumed:
       start, and exits non-zero. This is the state an interrupted update leaves,
       and it used to be undetectable. Put the value back afterwards.
 
+## 7b. The disaster-recovery pipeline (E1) — NOT RUN
+
+§ 7 is `botctl backup`, the update safety net: a plain `pg_dump` on the host. It
+is NOT the disaster-recovery pipeline. This section runs the real one — dump,
+checksum, encrypt, restore-verify, deliver, clean up — inside the release image,
+exactly as `docs/backup.md` § Commands tells an operator to. Record every output.
+
+```bash
+C='sudo docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml'
+PSQL="$C exec -T postgres psql -U nexa -d postgres -Atc"
+```
+
+| #   | Command                                                                                                                                                                                                                                      | Expected                                                                                                                                                                                    | Evidence                                     |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| 1   | `sudo botctl version; sudo botctl status`                                                                                                                                                                                                    | version and digest; the § 4 services running; readiness `ready`; the `scheduled backup` and `backup delivery` rows                                                                          | full output                                  |
+| 2   | `$C exec -T api node dist/backup.cli.js run; echo "exit=$?"`                                                                                                                                                                                 | `state SUCCEEDED`, `dump N bytes`, `archive M bytes`, `sha256 <64 hex>`, `verified <ISO>`, `delivery …`, `cleanup ok`, `exit=0` (2 = busy, 3 = plaintext left, 4 = a recovery is restoring) | output; note `<id>` and the sha256           |
+| 3   | `$C exec -T api node dist/backup.cli.js list --limit 5`                                                                                                                                                                                      | top row `<id> MANUAL SUCCEEDED verified …`, no `CLEANUP-INCOMPLETE`                                                                                                                         | output                                       |
+| 4   | `$C exec -T api stat -c '%a %U %n' /var/lib/nexa/backups /var/lib/nexa/backups/<id> /var/lib/nexa/backups/<id>/archive.nxb`                                                                                                                  | `700 node`, `700 node`, `600 node`                                                                                                                                                          | output                                       |
+| 5   | `$C exec -T api ls -la /var/lib/nexa/backups/<id>`                                                                                                                                                                                           | ONLY `archive.nxb`; no `dump.pgcustom`, no `verify.pgcustom`                                                                                                                                | output                                       |
+| 6   | `$C exec -T api head -c 8 /var/lib/nexa/backups/<id>/archive.nxb; echo`                                                                                                                                                                      | `NEXABAK1`, never `PGDMP` or SQL                                                                                                                                                            | output                                       |
+| 7   | `$C exec -T api node dist/backup.cli.js verify --archive /var/lib/nexa/backups/<id>/archive.nxb; echo "exit=$?"`                                                                                                                             | `format 1`, `key <keyId>`, sha256 = step 2, `checksum MATCHES`, `excluded nothing`, `exit=0`                                                                                                | output                                       |
+| 8   | `$C exec -T postgres createdb -U nexa nexa_drill_e1` then `$C exec -T api node dist/backup.cli.js restore --archive /var/lib/nexa/backups/<id>/archive.nxb --target nexa_drill_e1; echo "exit=$?"`                                           | `Archive <id> …`, `Target nexa_drill_e1`, `Restored.`, `exit=0`                                                                                                                             | output                                       |
+| 9   | `for d in nexa nexa_drill_e1; do $C exec -T postgres psql -U nexa -d $d -Atc "SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public'), (SELECT count(*) FROM drizzle.__drizzle_migrations)"; done`               | equal table and migration counts                                                                                                                                                            | output                                       |
+| 10  | Rerun step 8's restore into the same target; then `… restore --archive … --target nexa`                                                                                                                                                      | both REFUSED (not empty / `backup.unsafe_restore_target`), exit ≠ 0                                                                                                                         | output                                       |
+| 11  | `$C exec -T postgres dropdb -U nexa nexa_drill_e1`, then `$PSQL "SELECT datname FROM pg_database WHERE datname LIKE 'nexa_verify_%' OR datname LIKE 'nexa_rtest_%'"` and `$C exec -T api find /var/lib/nexa/backups /tmp -name '*.pgcustom'` | both empty                                                                                                                                                                                  | output                                       |
+| 12  | Telegram: the ops group's «💾 بکاپ‌ها» topic                                                                                                                                                                                                 | one document naming `<id>`, caption with id, size, sha256 and verification, **no key** (or the RETAINED notice above 50 MiB)                                                                | screenshot                                   |
+| 13  | Web Admin «بکاپ و بازیابی»: automatic backup on, interval 60 minutes; wait more than an hour; repeat step 3                                                                                                                                  | a `SCHEDULED SUCCEEDED verified` row; `botctl status` still ready                                                                                                                           | output and a screenshot of the schedule card |
+| 14  | `$C exec -u root -T api chmod 500 /var/lib/nexa/backups`, step 2; then `$C exec -u root -T api chmod 700 /var/lib/nexa/backups`, step 2 again                                                                                                | first `state FAILED`, `exit=1`, the ops group gets `backup.run_failed`; second SUCCEEDED and the condition closes (`backup.run_ok`)                                                         | outputs and screenshots                      |
+| 15  | Web «دریافت آرشیو رمزشده», then `file x.nxb; head -c 8 x.nxb \| xxd`                                                                                                                                                                         | `data`; `NEXABAK1`; the audit log shows `backup.archive_downloaded`                                                                                                                         | output and an audit screenshot               |
+| 16  | Settings → operations: set `backup.archive_keep_count` to 1 and `backup.archive_keep_days` to 1; take three backups; wait more than a day (or for the next housekeeping pass a day later)                                                    | only the newest verified archive's directory remains (plus any newer than a day); older run rows still listed; nothing else under `/var/lib/nexa/backups` removed                           | `ls` before and after                        |
+| 17  | With a delivery destination that refuses (remove the bot from the ops group), step 2                                                                                                                                                         | `delivery FAILED_DEFINITIVE`, run still SUCCEEDED, the notification centre shows «آرشیو بکاپ از سرور خارج نشد»; restore the bot, step 2 again → it closes                                   | screenshots                                  |
+
+## 7c. The Recovery Kit on a second server (E3) — NOT RUN
+
+Needs two servers: **A** (the one above) and a **fresh** install **B** with its
+own key. Never put the kit and its passphrase in the same place as the backups.
+
+| #   | Action                                                                                                                                                                                                                                                           | Expected                                                                                                                 | Evidence                                    |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| 1   | On A: «کیت بازیابی» → «دریافت کیت بازیابی»: account password (and TOTP if on), passphrase of at least 12 characters typed twice → «ساخت و دریافت کیت»                                                                                                            | a `.nxkit` downloads; the audit log shows the export; no key bytes on screen; `head -c 8 kit.nxkit` is `NEXAKIT1`        | screenshot, audit row                       |
+| 2   | Download a fresh `.nxb` from A (§ 7b #15)                                                                                                                                                                                                                        | —                                                                                                                        | sha256 of the file                          |
+| 3   | Install B from zero (§ 1)                                                                                                                                                                                                                                        | B has a different active key                                                                                             | `sudo botctl secrets status` (key ids only) |
+| 4   | On B, upload A's `.nxb` BEFORE importing the kit                                                                                                                                                                                                                 | `recovery.archive_foreign_key`, and the page says to import the kit                                                      | screenshot                                  |
+| 5   | CLI on B: copy the archive and kit in as in `docs/backup.md` § Commands, then `read -rs P; printf %s "$P" \| $C exec -T api node dist/backup.cli.js verify --archive /var/lib/nexa/backups/old.nxb --kit /var/lib/nexa/backups/old.nxkit` and remove both copies | `kit N key(s), decrypt-only`, `checksum MATCHES`                                                                         | output; the passphrase is not in `history`  |
+| 6   | Step 5 with a wrong passphrase                                                                                                                                                                                                                                   | one authentication error code, no hint which part was wrong                                                              | output                                      |
+| 7   | Web on B: «وارد کردن کیت» with the passphrase and the account password                                                                                                                                                                                           | keys listed as imported, decrypt-only; B's own key stays active                                                          | screenshot                                  |
+| 8   | Upload A's `.nxb` → verify → confirm, as § 12b                                                                                                                                                                                                                   | SUCCEEDED; A's data visible; bot tokens and panel credentials readable (the bot answers, a panel connection test passes) | screenshots                                 |
+| 9   | Take a new backup on B; `… verify --archive …`                                                                                                                                                                                                                   | the header `key` is B's active key id, never A's                                                                         | output                                      |
+| 10  | `sudo grep -ri '<a non-secret fingerprint prefix of A's key>' $(sudo docker inspect --format '{{.LogPath}}' nexa-api-1)`; read the audit log                                                                                                                     | no key bytes in logs or audit                                                                                            | output                                      |
+| 11  | Write down where the kit and where the passphrase are kept, apart from the backups                                                                                                                                                                               | —                                                                                                                        | a named location (not in the repository)    |
+
 ## 12b. Restore from the Web Admin, on the real box
 
 This is the part no test can do for you, and it is the reason the rest of this
@@ -231,7 +286,10 @@ the only thing that performs a restore. Check it first:
 
 ```bash
 sudo botctl status            # the recovery container is up
-sudo docker compose -f /opt/nexa/deploy/docker-compose.yml logs --tail=20 recovery
+sudo botctl logs recovery     # Ctrl-C after a few lines: the executor is ticking, no errors
+# or, without botctl:
+C='sudo docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml'
+$C logs --tail=20 recovery
 ```
 
 Then, signed in as the owner, open **بکاپ و بازیابی** under **سامانه و عملیات**:
@@ -263,9 +321,13 @@ visible in the Web Admin and belongs to no customer:
       REFUSED, not silently ignored.
 - [ ] When it reports success, the template holds the text from the FIRST edit.
       That is the only proof that matters.
-- [ ] `sudo -u postgres psql -c "SELECT datname FROM pg_database"` shows a
-      `nexa_pre_restore_*` database. It is your rollback and nothing will remove
-      it. Note its name; drop it only once you are satisfied.
+- [ ] While it is restoring, `$C exec -T api node dist/backup.cli.js run; echo
+"exit=$?"` is REFUSED with `exit=4` and no new backup row appears.
+- [ ] `$C exec -T postgres psql -U nexa -d postgres -Atc "SELECT datname FROM
+pg_database ORDER BY 1"` shows a `nexa_pre_restore_*` database and no
+      `nexa_candidate_*` or `nexa_rtest_*`. It is your rollback and nothing will
+      remove it. Note its name; drop it only once you are satisfied.
+- [ ] The backup list shows a `PRE_RESTORE SUCCEEDED verified` run.
 - [ ] `sudo botctl status` is healthy and `/health/ready` is ready afterwards.
 - [ ] The report group received the recovery's own event, and that message
       contains identifiers and a code — no stack trace, no file path, no secret.
@@ -278,8 +340,20 @@ that does not work:
       nothing behind in the recovery work directory.
 - [ ] Flip one byte in the middle of a real archive and upload it. It must fail
       authentication — not "succeed with a warning".
-- [ ] `sudo ls -la <RECOVERY_WORK_DIR>` after all of the above: no world-readable
-      files, and no leftover directory for a recovery that failed.
+- [ ] `$C exec -T recovery ls -la /var/lib/nexa/recovery` after all of the above:
+      no world-readable files, and no leftover directory for a recovery that failed.
+
+Then the two failure paths that need a real box (E2):
+
+- [ ] **Restart during readiness.** On a disposable box, confirm a restore and run
+      `$C restart recovery` as soon as the stage reads READINESS. The recovery
+      still ends `SUCCEEDED` (the restarted executor re-checks readiness), and the
+      `nexa_pre_restore_*` database is still there. Restarting during RESTORING
+      instead ends `FAILED`, production untouched, the candidate named on the row.
+- [ ] **Rollback rehearsal.** After a successful restore, follow
+      [`docs/recovery-rollback.md`](recovery-rollback.md) § 2 exactly — stop the
+      roles, the two renames back, start. The template shows the SECOND edit again,
+      `botctl status` is ready, and `nexa_restored_*` is still on the server.
 
 ## 12c. Does a `nexa.env` edit actually reach a container?
 
@@ -360,26 +434,38 @@ status`, the variable is set in **sudo's** own environment, where `env_reset`
 
 ## Sign-off
 
-| Item                                   | Result | Notes |
-| -------------------------------------- | ------ | ----- |
-| Installed from zero                    |        |       |
-| No secret printed or world-readable    |        |       |
-| HTTPS certificate issued               |        |       |
-| Owner login works                      |        |       |
-| Database/Redis not publicly reachable  |        |       |
-| Survives reboot unattended             |        |       |
-| Backup verified                        |        |       |
-| Update succeeded                       |        |       |
-| Update lock refused a second writer    |        |       |
-| Rollback succeeded, data intact        |        |       |
-| Update after rollback succeeded        |        |       |
-| Reinstall preserved secrets and data   |        |       |
-| Installer refused a version change     |        |       |
-| A divergent deploy.env was reported    |        |       |
-| Web Admin restore: content came back   |        |       |
-| Writes were refused during the restore |        |       |
-| The displaced database is still there  |        |       |
-| A corrupt archive was refused          |        |       |
-| A nexa.env edit reached a container    |        |       |
+| Item                                          | Result  | Notes                         |
+| --------------------------------------------- | ------- | ----------------------------- |
+| Installed from zero                           |         |                               |
+| No secret printed or world-readable           |         |                               |
+| HTTPS certificate issued                      |         |                               |
+| Owner login works                             |         |                               |
+| Database/Redis not publicly reachable         |         |                               |
+| Survives reboot unattended                    |         |                               |
+| Backup verified                               |         |                               |
+| Update succeeded                              |         |                               |
+| Update lock refused a second writer           |         |                               |
+| Rollback succeeded, data intact               |         |                               |
+| Update after rollback succeeded               |         |                               |
+| Reinstall preserved secrets and data          |         |                               |
+| Installer refused a version change            |         |                               |
+| A divergent deploy.env was reported           |         |                               |
+| Web Admin restore: content came back          |         |                               |
+| Writes were refused during the restore        |         |                               |
+| The displaced database is still there         |         |                               |
+| A corrupt archive was refused                 |         |                               |
+| A nexa.env edit reached a container           |         |                               |
+| DR pipeline run/verify/restore in image       | NOT RUN | § 7b #1–#11                   |
+| DR archive 0600, directory 0700, no plaintext | NOT RUN | § 7b #4–#6, #11               |
+| DR delivery to the ops group, no key          | NOT RUN | § 7b #12, #17                 |
+| Scheduled DR backup and failure alert         | NOT RUN | § 7b #13–#14                  |
+| Archive retention kept the newest             | NOT RUN | § 7b #16                      |
+| CLI backup refused during a restore           | NOT RUN | § 12b                         |
+| Restart during readiness still succeeded      | NOT RUN | § 12b                         |
+| Rollback rehearsal: two renames back          | NOT RUN | § 12b, `recovery-rollback.md` |
+| Recovery Kit export, no key shown             | NOT RUN | § 7c #1                       |
+| Foreign archive refused without the kit       | NOT RUN | § 7c #4                       |
+| Kit restore on a second server                | NOT RUN | § 7c #5–#9                    |
+| No key bytes in logs or audit                 | NOT RUN | § 7c #10                      |
 
 Only when every row passes should this deployment model carry a customer.

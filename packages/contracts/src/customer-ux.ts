@@ -110,11 +110,15 @@ export const SERVICES_LIST_PAGE_SIZE = 10;
  * Last connection, as a provider can actually answer it.
  *
  * `AT` is a time the panel returned. `NEVER` is the panel saying the account has never
- * connected. `UNSUPPORTED` is the panel having no such field, which every adapter in
- * this release returns: no research or acceptance evidence establishes a last-seen field
- * for any panel, and an adapter declares a fact after the real panel proves it. The
- * three are kept apart because the customer-facing words differ — «متصل نشده» is a
- * claim about the account, and showing it for a panel that cannot say so is a lie.
+ * connected. `UNSUPPORTED` is the panel not saying: no such field on the record it
+ * returned, a value that is not a time, a time more than five minutes after the read, or
+ * a provider whose field is not read. Marzban reads `online_at`, only when the record
+ * carries the key (C1; v0.8.4's source writes naive UTC; real-panel A9 NOT RUN).
+ * RickPanel does not read it until its own A9 runs (OQ-LC-02), and 3X-UI does not read
+ * `lastOnline` until OQ-LC-01 is settled. The three are kept apart because the
+ * customer-facing words differ — «متصل نشده» is a claim about the account, and showing it
+ * for a panel that cannot say so is a lie. Nothing derives a value from any other
+ * timestamp.
  */
 export type ProviderLastSeen =
   | { readonly kind: 'AT'; readonly at: Date }

@@ -4,7 +4,6 @@ import {
   SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS,
   errors,
   PLATFORM_ERROR_CODES,
-  supportAiDecisionSchema,
   supportAiDraftSendRequestSchema,
   type ActorContext,
   type AuditWriter,
@@ -13,6 +12,8 @@ import {
   type OperationalEventRecorder,
   type PermissionKey,
   type ScopeContext,
+  type SupportAiFailureClass,
+  type SupportAiFailureDiagnostic,
   type SupportAiImageSkipReason,
   type SupportAiJobKind,
   type UnitOfWork,
@@ -40,12 +41,20 @@ import {
   type TranscriptLine,
 } from '../domain/prompt.js';
 import { planVision } from '../domain/vision.js';
-import type { DrizzleSupportAiConfigRepository } from '../infrastructure/drizzle-support-ai.repository.js';
+import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
+import type {
+  DrizzleSupportAiConfigRepository,
+  DrizzleSupportAiRunRecorder,
+} from '../infrastructure/drizzle-support-ai.repository.js';
 import type {
   DrizzleSupportAiJobRepository,
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
-import type { SupportAiChain, SupportAiVisionVariant } from './support-ai-chain.js';
+import {
+  chainFailureClass,
+  type SupportAiChain,
+  type SupportAiVisionVariant,
+} from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
 
 /** TB6: one customer image fetched for this request, and its size (telemetry). */
@@ -74,7 +83,14 @@ export interface SupportContextSource {
     customerId: string | null,
   ): Promise<{
     readonly json: string;
+    /** The FACT aliases (`S…`, `O…`, `P…`) — the only ones a fact ref may name. */
     readonly aliases: ReadonlyMap<string, string>;
+    /**
+     * The knowledge aliases (`K…`) and the label an operator reads for each. Kept apart from
+     * `aliases`: a knowledge entry is not an account fact, and the automatic reply's grounding
+     * guard reads `aliases` only.
+     */
+    readonly knowledgeAliases?: ReadonlyMap<string, string>;
     readonly linked: boolean;
     /** TB7: the payload's flags, which the automatic-reply guards read. */
     readonly flags: AutoContextFlags;
@@ -92,8 +108,53 @@ export function unclaimedCutoff(now: Date): Date {
   return new Date(now.getTime() - SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS * 1_000);
 }
 
+/** A job as the operator reads it: why it failed, and whether its reply is over the limit. */
+export type SupportAiDraftRecord = SupportAiJobRecord & {
+  readonly failure: SupportAiFailureDiagnostic | null;
+  readonly replyOverLimit: boolean;
+};
+
+/**
+ * A job's failure as an operator reads it: its class and, when a provider was called, the
+ * deciding call's safe telemetry. Null when the AI was not the reason (no class).
+ */
+export function failureDiagnosticOf(
+  failureClass: SupportAiFailureClass | null,
+  run: Awaited<ReturnType<DrizzleSupportAiRunRecorder['lastForJobs']>> extends ReadonlyMap<
+    string,
+    infer R
+  >
+    ? R | undefined
+    : never,
+): SupportAiFailureDiagnostic | null {
+  if (failureClass === null) return null;
+  if (run === undefined) {
+    return {
+      failureClass,
+      operation: null,
+      provider: null,
+      model: null,
+      attemptIndex: null,
+      outcome: null,
+      httpStatus: null,
+      providerErrorCode: null,
+      providerErrorType: null,
+      providerErrorParam: null,
+      issuePath: null,
+      issueCode: null,
+      latencyMs: null,
+      inputTokens: null,
+      outputTokens: null,
+      at: null,
+    };
+  }
+  return { ...run, failureClass };
+}
+
 export interface SupportAssistServiceDeps {
   readonly jobs: DrizzleSupportAiJobRepository;
+  /** The deciding provider call of each failed draft (`support_ai_runs.job_id`). */
+  readonly runs: Pick<DrizzleSupportAiRunRecorder, 'lastForJobs'>;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
   /** TB6: the one way a customer's image is read (tenant-scoped, bounded, sniffed). */
@@ -211,7 +272,7 @@ export class SupportAssistService {
     scope: ScopeContext,
     actor: ActorContext,
     conversationId: string,
-  ): Promise<readonly SupportAiJobRecord[]> {
+  ): Promise<readonly SupportAiDraftRecord[]> {
     await this.deps.guard.check(scope, actor, SUPPORT_AI_ASSIST_PERMISSION);
     // The server decides when a draft has waited too long (PR #200 review, finding 6): with the
     // `assistant` role down nothing ever claims it, and the screen polls a QUEUED draft and
@@ -222,7 +283,47 @@ export class SupportAssistService {
       const now = this.deps.clock.now();
       await this.deps.jobs.failUnclaimed(scope, conversationId, unclaimedCutoff(now), now, tx);
     });
-    return this.deps.jobs.recentForConversation(scope, conversationId, 5);
+    const [jobs, { config }] = await Promise.all([
+      this.deps.jobs.recentForConversation(scope, conversationId, 5),
+      this.deps.configs.get(scope),
+    ]);
+    return this.annotate(scope, jobs, config.maxOutputChars);
+  }
+
+  /**
+   * The AI-failure diagnosis of each named job that has one — the conversation screen's
+   * handoff list reads it beside `AI_OUTPUT_INVALID` / `AI_UNAVAILABLE`. A read of telemetry
+   * the caller's own permission already covers (`business_chats.view`): classes and provider
+   * identifiers, never text.
+   */
+  async failureDiagnostics(
+    scope: ScopeContext,
+    jobIds: readonly string[],
+  ): Promise<ReadonlyMap<string, SupportAiFailureDiagnostic>> {
+    const classes = await this.deps.jobs.failureClasses(scope, jobIds);
+    const runs = await this.deps.runs.lastForJobs(scope, [...classes.keys()]);
+    return new Map(
+      [...classes].flatMap(([jobId, failureClass]) => {
+        const diagnostic = failureDiagnosticOf(failureClass, runs.get(jobId));
+        return diagnostic === null ? [] : [[jobId, diagnostic] as const];
+      }),
+    );
+  }
+
+  /** Each job with its failure diagnosis and its reply's length against the tenant's limit. */
+  async annotate(
+    scope: ScopeContext,
+    jobs: readonly SupportAiJobRecord[],
+    maxOutputChars?: number,
+  ): Promise<readonly SupportAiDraftRecord[]> {
+    const limit = maxOutputChars ?? (await this.deps.configs.get(scope)).config.maxOutputChars;
+    const failed = jobs.filter((job) => job.failureClass !== null).map((job) => job.id);
+    const runs = await this.deps.runs.lastForJobs(scope, failed);
+    return jobs.map((job) => ({
+      ...job,
+      failure: failureDiagnosticOf(job.failureClass, runs.get(job.id)),
+      replyOverLimit: job.suggestedReply !== null && job.suggestedReply.length > limit,
+    }));
   }
 
   /**
@@ -325,9 +426,19 @@ export class SupportAssistService {
                 { attachImages: true },
               ),
           };
+    // Assist's parse (`ASSIST`): a malformed citation is dropped and an over-long operator note
+    // is cut (the draft is a suggestion a person reads), and a reply over the tenant's limit is shown with a warning rather than thrown away — the
+    // operator edits it, and the send is bounded by the ordinary outbound limit.
+    const parse = (output: unknown) =>
+      parseSupportDecision(output, { maxReplyChars: null, mode: 'ASSIST' });
     const result = await this.deps.chain.generate(scope, {
       operation: 'ASSIST_DRAFT',
       conversationId: conversation.id,
+      jobId: job.id,
+      validate: (output) => {
+        const parsed = parse(output);
+        return parsed.ok ? null : parsed.failure;
+      },
       request: {
         system: supportSystemPrompt({
           businessToneInstructions: config.toneInstructions,
@@ -338,8 +449,8 @@ export class SupportAssistService {
         messages: turns,
         jsonSchema: SUPPORT_AI_DECISION_JSON_SCHEMA,
         schemaName: 'support_decision',
-        // Persian is token-dense; a generous bound, and the reply's own limit is checked below.
-        maxOutputTokens: Math.min(4_000, config.maxOutputChars * 3 + 600),
+        // The decision's own worst case at the tenant's limit (`decisionOutputTokens`).
+        maxOutputTokens: decisionOutputTokens(config.maxOutputChars),
       },
       ...(vision === null ? {} : { vision }),
     });
@@ -367,20 +478,34 @@ export class SupportAssistService {
           : 'NOT_ANSWERED',
     );
     if (result.outcome.outcome !== 'OK' || result.step === null) {
+      const failureClass = chainFailureClass(result);
+      // An answer that is not a decision keeps its long-standing code; the CLASS says which.
+      if (failureClass === 'schema_invalid' || failureClass === 'reply_too_long') {
+        return this.fail(scope, job, 'decision.invalid', images, failureClass);
+      }
       const code =
         result.exhausted ??
         ('code' in result.outcome ? result.outcome.code : result.outcome.outcome);
-      return this.fail(scope, job, `chain.${code}`, images);
+      return this.fail(scope, job, `chain.${code}`, images, failureClass);
     }
-    const parsed = supportAiDecisionSchema.safeParse(result.outcome.output);
-    if (!parsed.success || parsed.data.replyText.length > config.maxOutputChars) {
-      return this.fail(scope, job, 'decision.invalid', images);
+    // The chain validated already; this parse is the authority over what is recorded.
+    const parsed = parse(result.outcome.output);
+    if (!parsed.ok) {
+      return this.fail(scope, job, 'decision.invalid', images, parsed.failure.failureClass);
     }
-    // A citation the payload did not contain is dropped: it is not evidence of anything.
-    const factLabels = parsed.data.factRefs.flatMap((ref) => {
-      const label = context.aliases.get(ref);
-      return label === undefined ? [] : [label];
-    });
+    const decision = parsed.decision;
+    // A citation the payload did not contain is dropped: it is not evidence of anything. A
+    // knowledge citation is shown after the facts, by the entry's question.
+    const factLabels = [
+      ...decision.factRefs.flatMap((ref) => {
+        const label = context.aliases.get(ref);
+        return label === undefined ? [] : [label];
+      }),
+      ...decision.knowledgeRefs.flatMap((ref) => {
+        const label = context.knowledgeAliases?.get(ref);
+        return label === undefined ? [] : [label];
+      }),
+    ];
     const step = result.step;
     const model = result.outcome.model;
     return this.record(
@@ -391,7 +516,7 @@ export class SupportAssistService {
           scope,
           job.id,
           {
-            decision: parsed.data,
+            decision,
             factLabels,
             provider: step.provider,
             model,
@@ -442,11 +567,12 @@ export class SupportAssistService {
     job: SupportAiJobRecord,
     code: string,
     images?: ImageWrite,
+    failureClass: SupportAiFailureClass | null = null,
   ): Promise<SupportAssistProduceResult> {
     return this.record(
       scope,
       'FAILED',
-      (now, tx) => this.deps.jobs.markFailed(scope, job.id, code, now, tx),
+      (now, tx) => this.deps.jobs.markFailed(scope, job.id, code, now, tx, failureClass),
       images,
     );
   }

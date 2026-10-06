@@ -1,3 +1,8 @@
+import {
+  safeProviderToken,
+  type SupportAiFailureClass,
+  type SupportAiFailureDetail,
+} from '@nexa/contracts';
 import { assertOutsideTransaction } from '../transaction-boundary.js';
 
 /**
@@ -115,7 +120,17 @@ async function readBounded(response: Response, controller: AbortController): Pro
  * reply's real bound is the caller's schema and character limit, not this number.
  */
 export const AI_OUTPUT_TOKEN_HEADROOM = 4_096;
-export const AI_OUTPUT_TOKEN_BUDGET_MAX = 8_192;
+/**
+ * The cap. 16,384 is the smallest output limit among the models that accept strict structured
+ * output at all (the earliest such OpenAI snapshots; every Anthropic model with
+ * `output_config`, and every reasoning model, allows more), so the cap never turns a capable
+ * model's request into a 400 — while still leaving a decision at the largest configurable
+ * reply (`decisionOutputTokens(4000)`) its own full worst-case budget plus the headroom.
+ * The earlier cap (8,192, so 8,096 at the largest reply) left a reasoning model only what a
+ * 4,000-character Persian reply did not use — a few thousand tokens — before the answer was
+ * cut (`finish_reason: length`, read as `truncated`).
+ */
+export const AI_OUTPUT_TOKEN_BUDGET_MAX = 16_384;
 
 export function outputTokenBudget(requested: number): number {
   return Math.max(
@@ -140,6 +155,28 @@ export function retryAfterMsOf(headers: Headers, nowMs: number): number | null {
 }
 
 /**
+ * A failed call's operator diagnosis (`SUPPORT_AI_FAILURE_CLASSES`). The provider's error
+ * `code`, `type` and `param` are kept only as short machine tokens (`safeProviderToken`) —
+ * never its `message`, which is prose and may quote the request.
+ */
+export function failureDetail(
+  failureClass: SupportAiFailureClass,
+  from: {
+    readonly httpStatus?: number | null;
+    readonly error?: Record<string, unknown> | null;
+  } = {},
+): SupportAiFailureDetail {
+  const error = from.error ?? null;
+  return {
+    failureClass,
+    httpStatus: from.httpStatus ?? null,
+    providerErrorCode: safeProviderToken(error?.code),
+    providerErrorType: safeProviderToken(error?.type),
+    providerErrorParam: safeProviderToken(error?.param),
+  };
+}
+
+/**
  * A 2xx whose body is not JSON at all — a proxy's or captive portal's HTML page — is not the
  * provider answering. It is `TEMPORARY` (the next provider may be reachable), never
  * `INVALID_OUTPUT`, which would stop the chain and blame the model, and never `OK`.
@@ -148,10 +185,18 @@ export function nonJsonSuccess(
   result: Extract<AiHttpResult, { kind: 'RESPONSE' }>,
   body: unknown,
   prefix: string,
-): { readonly outcome: 'TEMPORARY'; readonly code: string } | null {
+): {
+  readonly outcome: 'TEMPORARY';
+  readonly code: string;
+  readonly detail: SupportAiFailureDetail;
+} | null {
   if (result.status < 200 || result.status >= 300) return null;
   if (body !== null && typeof body === 'object') return null;
-  return { outcome: 'TEMPORARY', code: `${prefix}.non_json_body` };
+  return {
+    outcome: 'TEMPORARY',
+    code: `${prefix}.non_json_body`,
+    detail: failureDetail('network', { httpStatus: result.status }),
+  };
 }
 
 /** `JSON.parse` that returns null instead of throwing. */

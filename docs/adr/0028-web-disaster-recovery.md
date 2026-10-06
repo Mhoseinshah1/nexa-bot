@@ -224,6 +224,25 @@ suite — real `pg_dump`, real `pg_restore`, real `CREATE DATABASE`, real rename
 and not a production incident. `docs/vps-acceptance.md` gains the section that
 decides that.
 
+**Amendment (Program E5, 2026-10-06): an executor that restarts AFTER its
+cutover finishes the recovery instead of failing it.** The lease owner is
+`recovery:<hostname>`, `docker restart` keeps the hostname, and `claimOwn` hands
+the restarted executor its own in-flight row. Until this amendment that row went
+through `execute` from the top and was recorded FAILED with a CRITICAL event —
+including a row already in `RESTARTING` after two successful renames, which told
+an operator to undo a restore that had worked. Now a re-claimed row that is
+`RESTARTING` and carries the cutover time and both database names (all four are
+written together by the re-assert, § 4) is asked for readiness again and moved
+`RESTARTING → SUCCEEDED` (or `→ FAILED`, `recovery.readiness_failed`) by the same
+conditional transitions, lease-guarded. Nothing destructive remains at that point:
+the displaced database is untouched and named on the row. Every state BEFORE the
+cutover keeps the fail-safe behaviour — FAILED, quiesce released, candidate named
+— because a half-finished restore must not be continued by a process that did not
+watch it start. A process down longer than the stale-lease window still goes
+through `recovery.lease_expired`. Tests: `tests/integration/recovery-failure-drills.test.ts`,
+`tests/unit/recovery-restart.test.ts`. The rollback procedure is
+`docs/recovery-rollback.md`.
+
 ## What was considered and rejected
 
 **`pg_restore --clean` into the live database.** This is what the legacy system
