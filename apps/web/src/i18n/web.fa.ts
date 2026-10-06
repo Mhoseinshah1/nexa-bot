@@ -6107,6 +6107,7 @@ export const WEB_FA = {
   'web.bchat_handoff_low_confidence': 'اطمینان هوش مصنوعی کافی نبود',
   'web.bchat_handoff_reply_bounds': 'متن پاسخ خالی یا بیش از حد بلند بود',
   'web.bchat_handoff_not_reply': 'هوش مصنوعی پاسخ مستقیمی نداشت',
+  'web.bchat_handoff_clarifying_limit': 'سؤال‌های تکمیلی پیاپی هوش مصنوعی به سقف رسید',
   'web.bchat_handoff_output_invalid': 'خروجی هوش مصنوعی معتبر نبود',
   'web.bchat_handoff_ai_unavailable': 'سرویس هوش مصنوعی در دسترس نبود',
   'web.bchat_handoff_account_review': 'پرداخت در حال بررسی یا سرویس ناهماهنگ دارد',
@@ -7643,14 +7644,17 @@ export const WEB_FA = {
   'web.sai_auto_min_confidence_hint':
     'پاسخی که هوش مصنوعی به آن کمتر از این مقدار مطمئن باشد خودکار فرستاده نمی‌شود و به پشتیبان سپرده می‌شود.',
   'web.sai_auto_widen_entering':
-    'افزودن موضوع یا پایین آوردن حداقل اطمینان به اجازهٔ جداگانهٔ «پاسخ خودکار» نیاز دارد و سرور هنگام ذخیره آن را بررسی می‌کند.',
+    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی به اجازهٔ جداگانهٔ «پاسخ خودکار» نیاز دارد و سرور هنگام ذخیره آن را بررسی می‌کند.',
   'web.sai_auto_widen_needs_owner':
-    'افزودن موضوع یا پایین آوردن حداقل اطمینان به اجازهٔ «پاسخ خودکار» نیاز دارد که معمولاً فقط مالک دارد؛ اگر این اجازه را ندارید، سرور ذخیره را رد می‌کند.',
+    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی به اجازهٔ «پاسخ خودکار» نیاز دارد که معمولاً فقط مالک دارد؛ اگر این اجازه را ندارید، سرور ذخیره را رد می‌کند.',
   'web.sai_invalid_auto_topics': 'هر موضوع پاسخ خودکار فقط یک بار می‌تواند انتخاب شود.',
   'web.sai_range': 'بازهٔ مجاز:',
   'web.sai_timeout_ms': 'مهلت هر درخواست (میلی‌ثانیه)',
   'web.sai_max_output_chars': 'بیشترین طول پاسخ (نویسه)',
   'web.sai_max_consecutive_replies': 'بیشترین پاسخ خودکار پیاپی',
+  'web.sai_max_consecutive_clarifying': 'حداکثر سؤال تکمیلی پیاپی',
+  'web.sai_max_consecutive_clarifying_hint':
+    'حداکثر تعداد سؤال‌های تکمیلی متوالی که هوش مصنوعی می‌تواند در پاسخ خودکار از مشتری بپرسد. پس از رسیدن به این حد، گفتگو به پشتیبان ارجاع می‌شود.',
   'web.sai_cooldown_seconds': 'فاصلهٔ آرام‌سازی بین پاسخ‌ها (ثانیه)',
   'web.sai_settle_delay_seconds': 'تأخیر پیش از بررسی نهایی پاسخ خودکار (ثانیه)',
   'web.sai_tone': 'دستور لحن',
@@ -7745,6 +7749,7 @@ export const WEB_FA = {
   'web.sa_enabled_no': 'خیر',
   'web.sa_count': 'تعداد',
   'web.sa_auto_sent': 'فرستاده شد',
+  'web.sa_auto_sent_clarifying': 'سؤال تکمیلی فرستاده شد',
   'web.sa_auto_dropped_mode': 'حالت پاسخ خودکار خاموش شد',
   'web.sa_auto_dropped_epoch': 'یک همکار وارد گفت‌وگو شد',
   'web.sa_auto_dropped_state': 'گفت‌وگو دیگر در اختیار دستیار نبود',
@@ -7764,6 +7769,7 @@ export const WEB_FA = {
   'web.sa_auto_guard_confidence': 'اطمینان کافی نبود',
   'web.sa_auto_guard_reply_bounds': 'پاسخ خالی یا بیش از اندازه بود',
   'web.sa_auto_guard_grounding': 'پاسخ به داده‌های موجود تکیه نداشت',
+  'web.sa_auto_guard_clarifying_limit': 'سقف سؤال‌های تکمیلی پیاپی',
   'web.sa_auto_handoff_ai_requested': 'مدل خواست به همکار سپرده شود',
   'web.sa_auto_handoff_output_invalid': 'خروجی مدل نامعتبر بود',
   'web.sa_auto_handoff_ai_unavailable': 'هیچ سرویسی پاسخ نداد',

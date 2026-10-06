@@ -109,16 +109,31 @@ export function autoImageGuard(input: {
   return PASS;
 }
 
-/** After the decision: every guard must pass for a lane row to be enqueued. */
+/**
+ * After the decision: every guard must pass for a lane row to be enqueued.
+ *
+ * Two decisions may be sent (hotfix 2026-10-06): `REPLY`, and `ASK_CLARIFYING_QUESTION`, whose
+ * question is `replyText`. Both pass EVERY guard below — the allowlist, identity, account
+ * review, confidence, bounds (an empty question is never sent) and grounding — and a question
+ * passes one more: the clarifying streak is below the tenant's limit. `NO_ACTION` is never a
+ * customer message; `HANDOFF` and `CREATE_OR_LINK_TICKET` are the model asking for a person.
+ */
 export function autoDecisionGuards(input: {
   readonly decision: SupportAiDecision;
   readonly config: Pick<
     SupportAiConfigInput,
-    'autoTopics' | 'autoMinConfidence' | 'maxOutputChars'
+    'autoTopics' | 'autoMinConfidence' | 'maxOutputChars' | 'maxConsecutiveClarifyingQuestions'
   >;
   readonly flags: AutoContextFlags;
-  /** The aliases the NEXA payload actually contained. */
+  /** The FACT aliases (`S…`, `O…`, `P…`) the NEXA payload actually contained. */
   readonly knownAliases: ReadonlySet<string>;
+  /** The KNOWLEDGE aliases (`K…`) the NEXA payload actually contained. */
+  readonly knownKnowledgeAliases: ReadonlySet<string>;
+  /**
+   * Automatic clarifying questions sent in a row at the job's epoch, since the last automatic
+   * REPLY (`clarifyingStreakOf`). Read by NEXA from the rows, never from the model.
+   */
+  readonly clarifyingStreak: number;
 }): AutoVerdict {
   const { decision, config, flags } = input;
   // The model itself asked for a person: never second-guessed into a reply.
@@ -129,7 +144,9 @@ export function autoDecisionGuards(input: {
   if ((SUPPORT_AI_HANDOFF_TOPICS as readonly string[]).includes(decision.topic)) {
     return fail('handoff_topic', 'HANDOFF_TOPIC');
   }
-  if (decision.decision !== 'REPLY') return fail('decision', 'DECISION_NOT_REPLY');
+  if (decision.decision !== 'REPLY' && decision.decision !== 'ASK_CLARIFYING_QUESTION') {
+    return fail('decision', 'DECISION_NOT_REPLY');
+  }
   if (!(config.autoTopics as readonly string[]).includes(decision.topic)) {
     return fail('topic_allowlist', 'TOPIC_NOT_ALLOWED');
   }
@@ -153,11 +170,37 @@ export function autoDecisionGuards(input: {
   ) {
     return fail('reply_bounds', 'REPLY_OUT_OF_BOUNDS');
   }
-  // A fact the payload did not contain is not evidence of anything (support-ai.ts).
-  if (decision.factRefs.some((ref) => !input.knownAliases.has(ref))) {
+  // A fact the payload did not contain is not evidence of anything (support-ai.ts), and neither
+  // is a knowledge entry it did not carry: a citation of either is fake grounding.
+  if (
+    decision.factRefs.some((ref) => !input.knownAliases.has(ref)) ||
+    decision.knowledgeRefs.some((ref) => !input.knownKnowledgeAliases.has(ref))
+  ) {
     return fail('grounding', 'INSUFFICIENT_GROUNDING');
   }
+  if (
+    decision.decision === 'ASK_CLARIFYING_QUESTION' &&
+    input.clarifyingStreak >= config.maxConsecutiveClarifyingQuestions
+  ) {
+    return fail('clarifying_limit', 'CLARIFYING_LIMIT');
+  }
   return PASS;
+}
+
+/**
+ * The clarifying streak: walking back from the newest, the automatic replies that count (see
+ * the repository), how many are `ASK_CLARIFYING_QUESTION` before the first `REPLY`. A REPLY
+ * ends the streak; a customer message does not (the point is a question, an answer, a question).
+ */
+export function clarifyingStreakOf(
+  newestFirst: readonly { readonly decision: string | null }[],
+): number {
+  let streak = 0;
+  for (const row of newestFirst) {
+    if (row.decision === 'ASK_CLARIFYING_QUESTION') streak += 1;
+    else if (row.decision === 'REPLY') break;
+  }
+  return streak;
 }
 
 /**

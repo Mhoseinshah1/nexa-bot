@@ -21,4 +21,5 @@ export const HANDOFF_LABELS: Readonly<Record<BusinessHandoffReason, WebKey>> = {
   LOOP_GUARD: 'web.bchat_handoff_loop_guard',
   UNSUPPORTED_CONTENT: 'web.bchat_handoff_unsupported',
   REPLY_STALE: 'web.bchat_handoff_stale',
+  CLARIFYING_LIMIT: 'web.bchat_handoff_clarifying_limit',
 };

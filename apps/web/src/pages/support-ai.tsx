@@ -245,6 +245,7 @@ interface ConfigDraft {
   readonly timeoutMs: string;
   readonly maxOutputChars: string;
   readonly maxConsecutiveReplies: string;
+  readonly maxConsecutiveClarifyingQuestions: string;
   readonly cooldownSeconds: string;
   readonly settleDelaySeconds: string;
   readonly toneInstructions: string;
@@ -281,12 +282,15 @@ type NumericField =
   | 'timeoutMs'
   | 'maxOutputChars'
   | 'maxConsecutiveReplies'
+  | 'maxConsecutiveClarifyingQuestions'
   | 'cooldownSeconds'
   | 'settleDelaySeconds';
 
 const NUMERIC_FIELDS: readonly {
   field: NumericField;
   label: WebKey;
+  /** What the field means, drawn before its range. */
+  help?: WebKey;
   min: number;
   max: number;
 }[] = [
@@ -307,6 +311,13 @@ const NUMERIC_FIELDS: readonly {
     label: 'web.sai_max_consecutive_replies',
     min: SUPPORT_AI_LIMITS.maxConsecutiveReplies.min,
     max: SUPPORT_AI_LIMITS.maxConsecutiveReplies.max,
+  },
+  {
+    field: 'maxConsecutiveClarifyingQuestions',
+    label: 'web.sai_max_consecutive_clarifying',
+    help: 'web.sai_max_consecutive_clarifying_hint',
+    min: SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.min,
+    max: SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.max,
   },
   {
     field: 'cooldownSeconds',
@@ -335,6 +346,7 @@ function toDraft(config: SupportAiConfigInput): ConfigDraft {
     timeoutMs: String(config.timeoutMs),
     maxOutputChars: String(config.maxOutputChars),
     maxConsecutiveReplies: String(config.maxConsecutiveReplies),
+    maxConsecutiveClarifyingQuestions: String(config.maxConsecutiveClarifyingQuestions),
     cooldownSeconds: String(config.cooldownSeconds),
     settleDelaySeconds: String(config.settleDelaySeconds),
     toneInstructions: config.toneInstructions,
@@ -362,6 +374,7 @@ function fromDraft(draft: ConfigDraft): unknown {
     timeoutMs: toNumber(draft.timeoutMs),
     maxOutputChars: toNumber(draft.maxOutputChars),
     maxConsecutiveReplies: toNumber(draft.maxConsecutiveReplies),
+    maxConsecutiveClarifyingQuestions: toNumber(draft.maxConsecutiveClarifyingQuestions),
     cooldownSeconds: toNumber(draft.cooldownSeconds),
     settleDelaySeconds: toNumber(draft.settleDelaySeconds),
     toneInstructions: draft.toneInstructions,
@@ -377,6 +390,7 @@ const ISSUE_LABELS: Readonly<Record<string, WebKey>> = {
   timeoutMs: 'web.sai_invalid_bounds',
   maxOutputChars: 'web.sai_invalid_bounds',
   maxConsecutiveReplies: 'web.sai_invalid_bounds',
+  maxConsecutiveClarifyingQuestions: 'web.sai_invalid_bounds',
   cooldownSeconds: 'web.sai_invalid_bounds',
   settleDelaySeconds: 'web.sai_invalid_bounds',
   toneInstructions: 'web.sai_invalid_tone',
@@ -435,7 +449,11 @@ function ConfigCard({
   // the save rather than only after the refusal.
   const widened =
     draft.autoTopics.some((topic) => !response.config.autoTopics.includes(topic)) ||
-    (draft.autoMinConfidence === 'MEDIUM' && response.config.autoMinConfidence !== 'MEDIUM');
+    (draft.autoMinConfidence === 'MEDIUM' && response.config.autoMinConfidence !== 'MEDIUM') ||
+    // Hotfix: more clarifying questions in a row is a widening while AUTO_REPLY_SAFE.
+    (draft.mode === 'AUTO_REPLY_SAFE' &&
+      toNumber(draft.maxConsecutiveClarifyingQuestions) >
+        response.config.maxConsecutiveClarifyingQuestions);
   const stale = response.version !== baseVersion;
   const reload = () => {
     setDraft(toDraft(response.config));
@@ -595,12 +613,12 @@ function ConfigCard({
         )}
 
         <div className="grid-2">
-          {NUMERIC_FIELDS.map(({ field, label, min, max }) => (
+          {NUMERIC_FIELDS.map(({ field, label, help, min, max }) => (
             <Field
               key={field}
               label={t(label)}
               htmlFor={`sai-${field}`}
-              hint={`${t('web.sai_range')} ${min} – ${max}`}
+              hint={`${help === undefined ? '' : `${t(help)} `}${t('web.sai_range')} ${min} – ${max}`}
             >
               <input
                 id={`sai-${field}`}

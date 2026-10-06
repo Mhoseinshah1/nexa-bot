@@ -1,22 +1,25 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
-import type {
-  BusinessHandoffReason,
-  ScopeContext,
-  SupportAiAutoOutcome,
-  SupportAiDecision,
-  SupportAiFailureClass,
-  SupportAiImageOutcome,
-  SupportAiImageSkipReason,
-  SupportAiJobKind,
-  SupportAiJobState,
-  SupportAiProvider,
+import {
+  SUPPORT_AI_LIMITS,
+  type BusinessHandoffReason,
+  type ScopeContext,
+  type SupportAiAutoOutcome,
+  type SupportAiDecision,
+  type SupportAiFailureClass,
+  type SupportAiImageOutcome,
+  type SupportAiImageSkipReason,
+  type SupportAiJobKind,
+  type SupportAiJobState,
+  type SupportAiProvider,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  businessOutboundMessages,
   supportAiImageOutcomes,
   supportAiJobs,
   supportLearningJobs,
 } from '../../../../infrastructure/persistence/schema.js';
+import { clarifyingStreakOf } from '../domain/auto-reply-guards.js';
 import {
   requireTenantId,
   type TransactionScope,
@@ -302,6 +305,52 @@ export class DrizzleSupportAiJobRepository {
       )
       .limit(1);
     return row ? toRecord(row) : null;
+  }
+
+  /**
+   * Hotfix (2026-10-06) — the conversation's clarifying streak at `epoch`: walking back over the
+   * automatic replies the AI actually produced, the `ASK_CLARIFYING_QUESTION`s before the
+   * newest `REPLY` (`clarifyingStreakOf`). A reply is an AUTO lane row joined to the SENT job
+   * that enqueued it (`sent_outbound_id`), whose recorded `decision` says what it was.
+   *
+   * What counts is the lane row's state: PENDING (on its way; counting it is fail closed, and
+   * it stops counting the moment it is superseded), DELIVERED, and UNCONFIRMED (Telegram may
+   * have shown it, and it is never resent). FAILED — Telegram refused it — and SUPERSEDED never
+   * reached the customer and count neither as a question nor as the REPLY that resets. A job
+   * DISCARDED or FAILED has no lane row at all, and one job has at most one row (its key), so a
+   * redelivered message or a retried send is one row, once. Another epoch is another streak.
+   */
+  async clarifyingStreak(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number },
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select({ decision: supportAiJobs.decision })
+      .from(businessOutboundMessages)
+      .innerJoin(
+        supportAiJobs,
+        and(
+          eq(supportAiJobs.tenantId, businessOutboundMessages.tenantId),
+          eq(supportAiJobs.sentOutboundId, businessOutboundMessages.id),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.state, 'SENT'),
+        ),
+      )
+      .where(
+        and(
+          eq(businessOutboundMessages.tenantId, tenantId),
+          eq(businessOutboundMessages.conversationId, input.conversationId),
+          eq(businessOutboundMessages.origin, 'AUTO'),
+          eq(businessOutboundMessages.controlEpoch, input.epoch),
+          inArray(businessOutboundMessages.state, ['PENDING', 'DELIVERED', 'UNCONFIRMED']),
+        ),
+      )
+      .orderBy(desc(businessOutboundMessages.createdAt), desc(businessOutboundMessages.id))
+      // Past the highest limit there is nothing more to know.
+      .limit(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.max + 1);
+    return clarifyingStreakOf(rows);
   }
 
   /**

@@ -254,8 +254,9 @@ export class SupportAiConfigService {
         // never is. Two kinds of widening (substitute review of PR #202):
         //  - what may be answered at all — a topic added to the allowlist, a lower confidence
         //    accepted — charged in every mode, because the allowlist means nothing else;
-        //  - how much and how often — more consecutive replies, longer replies, a shorter
-        //    cooldown, a shorter settle delay — charged when the result is AUTO_REPLY_SAFE.
+        //  - how much and how often — more consecutive replies, more consecutive clarifying
+        //    questions (hotfix 2026-10-06), longer replies, a shorter cooldown, a shorter
+        //    settle delay — charged when the result is AUTO_REPLY_SAFE.
         //    These also shape Assist drafts, so outside AUTO they are ordinary configuration;
         //    and entering AUTO is itself charged above, so whoever enters it adopts every bound
         //    on the form under the CRITICAL permission. What is left is an AUTO tenant's bounds
@@ -267,6 +268,7 @@ export class SupportAiConfigService {
           (next.autoMinConfidence === 'MEDIUM' && prev.autoMinConfidence !== 'MEDIUM') ||
           (next.mode === 'AUTO_REPLY_SAFE' &&
             (next.maxConsecutiveReplies > prev.maxConsecutiveReplies ||
+              next.maxConsecutiveClarifyingQuestions > prev.maxConsecutiveClarifyingQuestions ||
               next.maxOutputChars > prev.maxOutputChars ||
               next.cooldownSeconds < prev.cooldownSeconds ||
               next.settleDelaySeconds < prev.settleDelaySeconds));
