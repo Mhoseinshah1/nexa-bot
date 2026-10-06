@@ -55,6 +55,12 @@ import {
 import { syntheticMappingFile } from '../fixtures/legacy/synthetic-support';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import { changedTables, databaseFingerprint } from '../support/database-fingerprint';
+import {
+  PANEL_STATE_SCHEMA,
+  comparePanelStates,
+  panelState,
+  type PanelStateSnapshot,
+} from '../support/legacy-rehearsal-panel-state';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { RickpanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
 import {
@@ -1647,6 +1653,48 @@ describe('Migration P7: the legacy importer', () => {
     });
     expect((resumed.sections as Record<string, any>)['run'].status).toBe('COMPLETED');
     await other?.release();
+  });
+
+  it('WP-D4 (P4): the import leaves every production panel account as it was; a panel write would show', async () => {
+    const key = Buffer.alloc(32, 9);
+    const walk = async (): Promise<PanelStateSnapshot> => {
+      const real = ctx.container.legacyImporter({ inventoryPageSize: 3 });
+      const panels = [];
+      let requests = { reads: 0, refusedWrites: 0 };
+      for (const id of [panelAId, panelBId]) {
+        const result = await real.readPanelInventory(tenantA, id);
+        panels.push(panelState(id, result.read, key));
+        requests = result.requests;
+      }
+      expect(requests.refusedWrites).toBe(0);
+      expect(requests.reads).toBeGreaterThan(0);
+      return { schema: PANEL_STATE_SCHEMA, panels, requests };
+    };
+    const before = await walk();
+    expect(before.panels.map((p) => p.complete)).toEqual([true, true]);
+    expect(before.panels.map((p) => p.accounts)).toEqual([
+      SYNTHETIC_PANEL_ACCOUNTS.A.length,
+      SYNTHETIC_PANEL_ACCOUNTS.B.length,
+    ]);
+    // A full import with the real P6: adoption reads, and must change nothing on a panel.
+    const report = await ctx.container
+      .legacyImporter({ inventoryPageSize: 3 })
+      .apply({ ...input('import-p4', await snapshot()), mode: 'IMPORT' });
+    expect(report.verdict).toBe('COMPLETED');
+    expect(await count('services')).toBeGreaterThan(0);
+    expect(comparePanelStates(before, await walk())).toBe('unchanged');
+    expectOnlyReads();
+
+    // What a panel write looks like to the same walk: one account's limit changed.
+    const victim = SYNTHETIC_PANEL_ACCOUNTS.A[0] as string;
+    panelA.seedUser(victim, {
+      expire: Math.floor(Date.UTC(2027, 0, 1) / 1000),
+      dataLimit: 60 * 1024 ** 3,
+      usedTraffic: 1024 ** 3,
+    });
+    expect(comparePanelStates(before, await walk())).toBe(
+      `changed: ${panelAId}: accounts ${SYNTHETIC_PANEL_ACCOUNTS.A.length}->${SYNTHETIC_PANEL_ACCOUNTS.A.length}, added 0, removed 0, changed 1`,
+    );
   });
 
   it('a stopped tenant accepts no import write', async () => {

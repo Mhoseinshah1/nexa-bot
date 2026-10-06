@@ -84,6 +84,7 @@ P7_SOURCE_PASSWORD_ENV=NEXA_REHEARSAL_LEGACY_PASSWORD
 REPORT_SCHEMA="$ROOT/docs/legacy-migration/final-report.schema.json"
 REPORT_CHECK="$ROOT/scripts/legacy-rehearsal-report-check.mjs"
 SYNTHETIC_PANELS_HELPER="$ROOT/tests/support/legacy-rehearsal-synthetic-panels.ts"
+PANEL_STATE_HELPER="$ROOT/tests/support/legacy-rehearsal-panel-state.ts"
 TSX_BIN="$ROOT/apps/api/node_modules/.bin/tsx"
 
 # --- Output helpers -----------------------------------------------------------------------
@@ -425,6 +426,9 @@ if [ "$SYNTHETIC_PANELS" -eq 1 ]; then
   [ -f "$SYNTHETIC_PANELS_HELPER" ] && [ -x "$TSX_BIN" ] ||
     die "--synthetic-panels needs $SYNTHETIC_PANELS_HELPER and tsx (pnpm install)."
 fi
+# Equation P4 walks the production panels read-only before and after every import.
+[ -f "$PANEL_STATE_HELPER" ] && [ -x "$TSX_BIN" ] ||
+  die "the panel-state walk (P4) needs $PANEL_STATE_HELPER and tsx: run pnpm install (with dev dependencies)."
 
 # --- Workspace ----------------------------------------------------------------------------
 
@@ -444,6 +448,9 @@ MDB_DATA="$MDB_RUN/data"
 MDB_SOCK="$MDB_RUN/mysqld.sock"
 MDB_ROOT_CNF="$MDB_RUN/root.cnf"
 MDB_PID=""
+# The per-run key P4's account digests are HMACed with. It lives and dies with the private
+# scratch directory, so the digests under --out are unlinkable to any username afterwards.
+od -An -N32 -tx1 /dev/urandom | tr -d ' \n' >"$MDB_RUN/panel-state.key"
 
 # The process group of the stage running now. Every stage starts in its own group (job
 # control on for that one launch), so stopping it reaches the node process at the end of
@@ -827,6 +834,18 @@ importer() { # importer MODE [args...]
   )
 }
 
+# panel_state LABEL — P4: every production panel of the map, walked through the importer's
+# own read-only inventory port; aggregates and keyed digests only (no username, no link).
+panel_state() {
+  CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env "$TSX_BIN" "$PANEL_STATE_HELPER" snapshot \
+    --tenant "$TENANT" --panel-map "$PANEL_MAP" --key-file "$MDB_RUN/panel-state.key" \
+    --out "$OUT/snapshots/$1.json"
+}
+
+panel_state_compare() { # PRE POST — "unchanged", or what changed (counts only)
+  "$TSX_BIN" "$PANEL_STATE_HELPER" compare "$1" "$2" 2>&1 || printf 'compare-failed\n'
+}
+
 # --- Synthetic only: the fake RickPanels the fixture assumes ------------------------------
 
 PANELS_PID=""
@@ -1025,6 +1044,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   S="$OUT/snapshots/c${cycle}"
   run_stage "$cycle" snapshot-pre snapshot "c${cycle}-pre-import"
   run_stage "$cycle" pg-dump-pre pg_dump_snapshot "$cycle"
+  run_stage "$cycle" panel-state-pre panel_state "c${cycle}-panel-state-pre"
 
   run_p7 "$cycle" p7-audit audit --format json
   cp "$OUT/logs/c${cycle}-p7-audit.log" "$OUT/c${cycle}-audit.json"
@@ -1169,6 +1189,13 @@ for cycle in $(seq 1 "$CYCLES"); do
 
   # Provider writes = 0, and nothing was sent to a customer.
   check "$cycle" provider_writes_zero 0 "$(delta provisioning_operations_total)"
+  # P4 (WP-D4): the panels themselves, walked read-only before and after — the staging
+  # equivalent of wire_provider_writes_zero, which only a fake panel can count.
+  run_stage "$cycle" panel-state-post panel_state "c${cycle}-panel-state-post"
+  check "$cycle" panel_state_unchanged unchanged \
+    "$(panel_state_compare "$S-panel-state-pre.json" "$S-panel-state-post.json")"
+  check "$cycle" panel_state_walk_reads_only 0 \
+    "$(json_get "$S-panel-state-post.json" requests.refusedWrites)"
   check "$cycle" adopted_services_without_operations 0 "$(metric "$POST" adopted_services_with_provisioning_operation)"
   check "$cycle" no_customer_messages 0 "$(delta customer_notifications)"
 

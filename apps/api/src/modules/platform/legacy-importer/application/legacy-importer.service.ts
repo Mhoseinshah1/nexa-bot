@@ -357,6 +357,24 @@ export class LegacyImporterService {
     };
   }
 
+  /**
+   * WP-D4 — one panel's complete inventory, read exactly as `audit` reads it (the same
+   * read-only port: GETs and the token exchange, nothing else can be sent), for the
+   * rehearsal's equation P4 — a panel's accounts are the same before and after the
+   * import. No run, no write, no permission: it changes nothing. The caller hashes what it
+   * needs; the runtime (and its subscription links) never leaves this process.
+   */
+  async readPanelInventory(
+    scope: TenantContext,
+    panelId: string,
+  ): Promise<{
+    readonly read: LegacyInventoryRead;
+    readonly requests: { readonly reads: number; readonly refusedWrites: number };
+  }> {
+    const read = await this.deps.inventory.read(scope, panelId);
+    return { read, requests: this.deps.inventory.requestCounts() };
+  }
+
   // --- audit ---------------------------------------------------------------------------
 
   async audit(

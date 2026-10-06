@@ -266,6 +266,18 @@ a provider for a write only through a `provisioning_operations` row, so:
   and after the import window agrees within the drift a live panel allows, and no account's
   expiry, limit or status changed because of NEXA. P7 `reconcile` reports the per-panel
   comparison; spot-check two adopted accounts by hand in the panel UI.
+  **Machine check (WP-D4):** the rehearsal walks every `productionPanels` panel through the
+  importer's own read-only inventory port before the audit and after the resume
+  (`tests/support/legacy-rehearsal-panel-state.ts`) and records `panel_state_unchanged`:
+  per panel, the account count and a hash over every account's admin-controlled facts —
+  lower(username), data limit, expiry, sha256 of the subscription link — must be equal;
+  added / removed / changed accounts are counted on failure. State and used bytes move on
+  a live panel by themselves, so they are hashed separately and never compared. Nothing
+  under `--out` names an account: per-account digests are HMACs under a per-run key that
+  is deleted on exit. **Not detected:** a `sub_updated_at` bump that leaves the link
+  unchanged (the read-only inventory does not expose the field), and on staging any write
+  MirzaBot itself makes during the window — run it frozen (cutover step 7), or read the
+  counts. Also `panel_state_walk_reads_only`: the walk's guard refused no write.
 
 Also: `delta(customer_notifications) = 0` — the import sends no customer message;
 reminder thresholds already passed are **seeded**, not sent (Item 8,

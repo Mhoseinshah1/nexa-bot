@@ -267,3 +267,41 @@ describe('inspect_legacy: the archive inspector gates the load (WP-D1b)', () => 
     expect(r.stderr).toContain('pass --legacy-schema mirza');
   });
 });
+
+describe('panel_state_compare: a broken comparison never reads as "unchanged" (P4)', () => {
+  const HELPER = join(ROOT, 'tests/support/legacy-rehearsal-panel-state.ts');
+  const TSX = join(ROOT, 'apps/api/node_modules/.bin/tsx');
+  const run = (pre: string, post: string) =>
+    bash(
+      `TSX_BIN=${JSON.stringify(TSX)}\nPANEL_STATE_HELPER=${JSON.stringify(HELPER)}\n${lift('panel_state_compare')}\npanel_state_compare "$1" "$2"`,
+      [pre, post],
+    ).stdout.trim();
+
+  it('passes identical walks and names a changed one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-rehearsal-p4-'));
+    const panel = (hash: string) => ({
+      panelId: 'A',
+      complete: true,
+      reason: null,
+      accounts: 1,
+      controlHash: hash,
+      runtimeHash: 'r',
+      accountKeys: { k: hash },
+    });
+    const doc = (hash: string) =>
+      JSON.stringify({
+        schema: 'nexa-legacy-panel-state/v1',
+        panels: [panel(hash)],
+        requests: { reads: 1, refusedWrites: 0 },
+      });
+    writeFileSync(join(dir, 'pre.json'), doc('h1'));
+    writeFileSync(join(dir, 'same.json'), doc('h1'));
+    writeFileSync(join(dir, 'other.json'), doc('h2'));
+    expect(run(join(dir, 'pre.json'), join(dir, 'same.json'))).toBe('unchanged');
+    expect(run(join(dir, 'pre.json'), join(dir, 'other.json'))).toBe(
+      'changed: A: accounts 1->1, added 0, removed 0, changed 1',
+    );
+    // A missing walk is a failure the check records, never an "unchanged".
+    expect(run(join(dir, 'pre.json'), join(dir, 'absent.json'))).toContain('compare-failed');
+  }, 60_000);
+});

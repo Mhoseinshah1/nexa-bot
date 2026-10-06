@@ -168,6 +168,8 @@ Pinned by `tests/unit/legacy-rehearsal-guards.test.ts`.
 | `snapshots/c<N>-pre-import.pgcustom` | the pre-import `pg_dump` the rollback restores (customer data: 0600)                         |
 | `c<N>-report.json`                   | P7's machine-readable report, and `c<N>-report.schema-violations.txt` (empty when valid)     |
 | `synthetic-panel-requests.json`      | synthetic only: requests the fake panels received after setup                                |
+| `archive.json`                       | the archive inspector's report: both sha256 values, format, engine, collations, blockers     |
+| `snapshots/c<N>-panel-state-*.json`  | P4: per production panel, account count and hashes; per-account digests under a deleted key  |
 | `logs/`                              | one log per stage                                                                            |
 
 The checks, by name: `dry_run_no_business_mutation`, `interrupted_run_left_running`,
@@ -189,7 +191,10 @@ owner decision about ids that are not Telegram ids), `wire_provider_writes_zero`
 `wallet_equation_imported_balance`, `openings_one_per_nonzero_user`, `unchanged_*` (sales,
 revenue, payments, top-ups), `adoption_orders_zero_total`, `one_service_per_adoption`,
 `provider_writes_zero`, `adopted_services_without_operations`, `no_customer_messages`,
-`rollback_restores_pre_import`, `repeat_reproduces_cycle_1`. Each maps to an equation in
+`rollback_restores_pre_import`, `repeat_reproduces_cycle_1`, `panel_map_complete` (G10:
+every live real `code_panel` accounted for, WP-D2), `panel_state_unchanged` and
+`panel_state_walk_reads_only` (P4: the production panels walked read-only before the audit
+and after the resume, WP-D4). Each maps to an equation in
 [`reconciliation.md`](reconciliation.md).
 
 ## What it does not cover
