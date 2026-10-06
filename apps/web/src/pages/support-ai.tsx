@@ -54,6 +54,13 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import {
+  FAILURE_CLASS_LABELS,
+  TEST_CHECK_LABELS,
+  TEST_RESULT_LABELS,
+  TEST_RESULT_TONES,
+  failureParticulars,
+} from './support-ai-failure';
 
 /**
  * TB4 — the support AI's settings (ADR-0034 §8): the mode, the provider chain, the bounds,
@@ -742,6 +749,39 @@ function CredentialsCard({ response }: { response: SupportAiConfigResponse }) {
   );
 }
 
+/**
+ * The capability test's answer, check by check (program §11). The headline is `OK` only when
+ * every check that ran passed; a listed-but-unusable model reads as the check that failed.
+ */
+function TestResult({ result }: { result: SupportAiTestResponse }) {
+  return (
+    <Banner tone={OUTCOME_TONES[result.outcome]} role="status">
+      <p>
+        {t('web.sai_test_result')} {t(OUTCOME_LABELS[result.outcome])}
+        {result.failureClass !== null && (
+          <> — {t(FAILURE_CLASS_LABELS[result.failureClass])}</>
+        )} — <Num value={result.latencyMs} /> {t('web.sai_ms')}
+      </p>
+      <ul className="stack-sm" aria-label={t('web.sai_test_check')}>
+        {result.checks.map((check) => (
+          <li key={check.check} data-check={check.check} data-result={check.result}>
+            <strong>{t(TEST_CHECK_LABELS[check.check])}:</strong>{' '}
+            <Badge tone={TEST_RESULT_TONES[check.result]}>
+              {t(TEST_RESULT_LABELS[check.result])}
+            </Badge>
+            {check.failureClass !== null && check.result === 'FAIL' && (
+              <> {t(FAILURE_CLASS_LABELS[check.failureClass])}</>
+            )}
+            {check.result === 'FAIL' && failureParticulars(check).length > 0 && (
+              <KV inline items={failureParticulars(check)} />
+            )}
+          </li>
+        ))}
+      </ul>
+    </Banner>
+  );
+}
+
 function CredentialRow({
   credential,
   defaultModel,
@@ -754,12 +794,15 @@ function CredentialRow({
   const notify = useToast();
   const setKey = useSubmissionKey();
   const deleteKey = useSubmissionKey();
+  const testKey = useSubmissionKey();
   const [editing, setEditing] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [region, setRegion] = useState<Region>(credential.region ?? 'INTERNATIONAL');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [model, setModel] = useState(defaultModel);
   const [lastTest, setLastTest] = useState<SupportAiTestResponse | null>(null);
+  // A settled test's next press is a NEW test (the fingerprint changes with the round).
+  const [testRound, setTestRound] = useState(0);
   useUnsavedChanges(apiKey !== '');
   const refresh = () => void queries.invalidateQueries({ queryKey: ['support-ai-config'] });
   const keyValid = apiKey.trim().length >= 8 && apiKey.trim().length <= 512;
@@ -811,10 +854,21 @@ function CredentialRow({
     },
   });
   const test = useMutation({
-    mutationFn: (value: string) => testSupportAiProvider({ provider, model: value }),
+    // One key per submission: a lost answer re-asked is a replay, never a second paid test.
+    mutationFn: (value: string) =>
+      testSupportAiProvider({
+        provider,
+        model: value,
+        idempotencyKey: testKey.current({ provider, model: value, at: testRound }),
+      }),
     onSuccess: (result) => {
+      testKey.settle();
+      setTestRound((round) => round + 1);
       setLastTest(result);
       refresh();
+    },
+    onError: (error) => {
+      testKey.settleOn(error);
     },
   });
 
@@ -871,6 +925,11 @@ function CredentialRow({
                 <Badge tone={OUTCOME_TONES[credential.lastTestOutcome]}>
                   {t(OUTCOME_LABELS[credential.lastTestOutcome])}
                 </Badge>{' '}
+                {credential.lastTestFailureClass !== null && (
+                  <span className="small">
+                    {t(FAILURE_CLASS_LABELS[credential.lastTestFailureClass])}{' '}
+                  </span>
+                )}
                 {credential.lastTestedAt === null ? null : (
                   <span className="muted small">{formatTimestamp(credential.lastTestedAt)}</span>
                 )}
@@ -1015,18 +1074,8 @@ function CredentialRow({
           </button>
         </form>
       )}
-      {lastTest !== null && (
-        <Banner tone={OUTCOME_TONES[lastTest.outcome]} role="status">
-          {t('web.sai_test_result')} {t(OUTCOME_LABELS[lastTest.outcome])} —{' '}
-          <Num value={lastTest.latencyMs} /> {t('web.sai_ms')}
-          {lastTest.code !== null && (
-            <>
-              {' '}
-              <Ltr>{lastTest.code}</Ltr>
-            </>
-          )}
-        </Banner>
-      )}
+      {credential.configured && <p className="muted small">{t('web.sai_test_hint')}</p>}
+      {lastTest !== null && <TestResult result={lastTest} />}
       {test.error !== null && <Banner tone="danger">{supportAiFault(test.error)}</Banner>}
 
       {confirmingDelete && (
