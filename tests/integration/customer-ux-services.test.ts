@@ -580,7 +580,7 @@ describe('a customer looks after the services they bought', () => {
 
     it('shows the switch-on button, not the switch-off one, for a suspended service', async () => {
       const service = await activeService('card-suspended');
-      await handle(tap(`u:${service.id}`));
+      await handle(tap(`uq:${service.id}`));
       await ctx.container.database.db.execute(
         sql`UPDATE provisioning_operations SET next_attempt_at = now() - interval '1 hour'`,
       );
@@ -1136,7 +1136,7 @@ describe('a customer looks after the services they bought', () => {
 
     it('a service with a change in progress is drawn «working» without a read', async () => {
       const service = await activeService('open-working');
-      await handle(tap(`u:${service.id}`));
+      await handle(tap(`uq:${service.id}`));
       await stale(service.id);
       const before = reads(service.username);
       sent = [];

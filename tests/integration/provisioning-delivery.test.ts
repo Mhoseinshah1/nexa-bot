@@ -2231,7 +2231,7 @@ describe('a provisioned service announces itself', () => {
     }
 
     // And the request itself is refused, not merely undrawn.
-    const tapped = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${id}`));
+    const tapped = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${id}`));
     // R3: refused as a notice on the button. Round N (F4): the stale card is redrawn as
     // the service is, still without the switch.
     expect(tapped.replyKey).toBe('bot.service.card');

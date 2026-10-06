@@ -331,10 +331,11 @@ describe('a customer manages the service they bought', () => {
     const tapped = await runtime().handle(
       tenantA,
       systemActor('bot'),
-      tapUpdate(`u:${service.id}`),
+      tapUpdate(`uq:${service.id}`),
     );
 
-    expect(tapped.intent).toBe('SERVICE_SUSPEND');
+    // B8: the confirm (`uq:`) is the tap that plans it; `u:` only asks.
+    expect(tapped.intent).toBe('SERVICE_SUSPEND_CONFIRM');
     /*
      * The panel has NOT been called yet. The provisioner claims the operation on its
      * next tick — so the tap claims nothing at all (R3 item 10): no «request recorded»,
@@ -354,7 +355,7 @@ describe('a customer manages the service they bought', () => {
 
   it('then offers resume instead of pause, and resuming puts it back', async () => {
     const service = await activeService('resume-ok');
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${service.id}`));
     await ctx.container.provisionerLoop.tick();
 
     const detail = await runtime().handle(
@@ -368,7 +369,7 @@ describe('a customer manages the service they bought', () => {
       `u:${service.id}`,
     );
 
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`e:${service.id}`));
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`eq:${service.id}`));
     await ctx.container.provisionerLoop.tick();
 
     expect(panel.users.get(service.username)?.status).toBe('active');
@@ -387,7 +388,7 @@ describe('a customer manages the service they bought', () => {
     const before = panel.users.get(service.username);
     expect(before?.dataLimit, 'the fixture sells 50GB').toBe(53_687_091_200);
 
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${service.id}`));
     await ctx.container.provisionerLoop.tick();
 
     const after = panel.users.get(service.username);
@@ -479,7 +480,7 @@ describe('a customer manages the service they bought', () => {
     const paused = await runtime().handle(
       tenantA,
       systemActor('bot'),
-      tapUpdate(`u:${service.id}`),
+      tapUpdate(`uq:${service.id}`),
     );
     // R3: answered as a notice on the button. Round N (F4): and the stale card is redrawn
     // as the service now is, so the keyboard that offered the pause is gone.
@@ -504,7 +505,7 @@ describe('a customer manages the service they bought', () => {
     const stolen = await runtime().handle(
       tenantA,
       systemActor('bot'),
-      tapUpdate(`u:${service.id}`, '920920'),
+      tapUpdate(`uq:${service.id}`, '920920'),
     );
 
     // R3: the SAME notice an unknown id gets, on the button (`bot.service.not_found`).
@@ -546,11 +547,11 @@ describe('a customer manages the service they bought', () => {
      * second suspend for a service that is already being suspended.
      */
     const service = await activeService('replay-one');
-    const tap = tapUpdate(`u:${service.id}`);
+    const tap = tapUpdate(`uq:${service.id}`);
 
     await runtime().handle(tenantA, systemActor('bot'), tap);
     await runtime().handle(tenantA, systemActor('bot'), tap);
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${service.id}`));
 
     const all = (await operations.listForService(tenantA, service.id, 50)).filter(
       (operation) => operation.type === 'SUSPEND',
@@ -569,7 +570,7 @@ describe('a customer manages the service they bought', () => {
      * which answers whether an account EXISTS and never what state it is in.
      */
     const service = await activeService('suspend-retry');
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${service.id}`));
 
     panel.behaviour = 'server-error';
     await ctx.container.provisionerLoop.tick();
@@ -596,7 +597,7 @@ describe('a customer manages the service they bought', () => {
      * customer their service is paused while something, somewhere, keeps serving it.
      */
     const service = await activeService('suspend-absent');
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${service.id}`));
     // Removed behind Nexa's back, as an operator poking the panel directly would.
     panel.forget(service.username);
 
@@ -686,7 +687,7 @@ describe('a customer manages the service they bought', () => {
                  completed_at = NULL
            WHERE service_id = ${service.id} AND type = 'PROVISION'`,
     );
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${service.id}`));
     const deletesBefore = panel.requests.filter((one) => one.method === 'PUT').length;
 
     await ctx.container.provisionerLoop.tick();
@@ -738,7 +739,7 @@ describe('a customer manages the service they bought', () => {
      * refuse it.
      */
     const service = await activeService('stranded-suspend');
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${service.id}`));
     await ctx.container.database.db.execute(
       sql`UPDATE provisioning_operations
              SET state = 'IN_FLIGHT',
@@ -806,7 +807,7 @@ describe('a customer manages the service they bought', () => {
 
     try {
       await expect(
-        runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`)),
+        runtime().handle(tenantA, systemActor('bot'), tapUpdate(`uq:${service.id}`)),
       ).rejects.toThrow();
     } finally {
       await ctx.container.database.db.execute(
@@ -865,7 +866,7 @@ describe('a customer manages the service they bought', () => {
      * customer's two taps, then the operator's terminate.
      */
     const service = await activeService('outside-transactions');
-    for (const data of [`u:${service.id}`, `e:${service.id}`]) {
+    for (const data of [`uq:${service.id}`, `eq:${service.id}`]) {
       await runtime().handle(tenantA, systemActor('bot'), tapUpdate(data));
       await ctx.container.provisionerLoop.tick();
     }

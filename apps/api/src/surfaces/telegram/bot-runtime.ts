@@ -323,8 +323,14 @@ export const BOT_INTENTS = [
   'SERVICE_RESEND',
   /** Package E: the panel's ready-made connection files, sent as documents. */
   'SERVICE_FILES',
+  /*
+   * B8: `SERVICE_SUSPEND` / `SERVICE_RESUME` (`u:` / `e:`) only ASK; the two confirms are
+   * the only taps that plan the operation.
+   */
   'SERVICE_SUSPEND',
   'SERVICE_RESUME',
+  'SERVICE_SUSPEND_CONFIRM',
+  'SERVICE_RESUME_CONFIRM',
   'SERVICE_TERMINATE_ASK',
   'SERVICE_TERMINATE',
   /* WP6-C: a customer's own link rotation, ask then confirm. */
@@ -1002,6 +1008,16 @@ export const SERVICE_RESEND_CALLBACK_PREFIX = 'r:';
  */
 export const SERVICE_SUSPEND_CALLBACK_PREFIX = 'u:';
 export const SERVICE_RESUME_CALLBACK_PREFIX = 'e:';
+/**
+ * B8: the switch asks before it acts, in both directions. `u:` and `e:` — on every card,
+ * including one drawn before this release — now only draw the question; these two are the
+ * question's confirm buttons and the only taps that plan SUSPEND or RESUME. `u` then `q` and
+ * `e` then `q`: neither begins, or is begun by, any other prefix (pinned in
+ * `bot-runtime.test.ts`). A uuid after three characters is 39 bytes, inside the 64 bytes
+ * Telegram allows a `callback_data`.
+ */
+export const SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX = 'uq:';
+export const SERVICE_RESUME_CONFIRM_CALLBACK_PREFIX = 'eq:';
 export const SERVICE_TERMINATE_ASK_CALLBACK_PREFIX = 't:';
 export const SERVICE_TERMINATE_CALLBACK_PREFIX = 'k:';
 /**
@@ -2878,6 +2894,20 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       return callbackCommand(
         'SERVICE_RESEND',
         data.slice(SERVICE_RESEND_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_SUSPEND_CONFIRM',
+        data.slice(SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_RESUME_CONFIRM_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_RESUME_CONFIRM',
+        data.slice(SERVICE_RESUME_CONFIRM_CALLBACK_PREFIX.length),
         id,
       );
     }
@@ -10520,7 +10550,17 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_FILES' && command.targetId !== null) {
       return this.serviceFiles(scope, actor, customer, command.targetId, input);
     }
+    /*
+     * B8: the switch's first tap draws the question IN the card and plans nothing — on any
+     * card, so an old message's `u:` / `e:` can no longer act on one tap either.
+     */
     if (command.intent === 'SERVICE_SUSPEND' && command.targetId !== null) {
+      return this.serviceToggleAsk(scope, actor, customer, command.targetId, 'SUSPEND');
+    }
+    if (command.intent === 'SERVICE_RESUME' && command.targetId !== null) {
+      return this.serviceToggleAsk(scope, actor, customer, command.targetId, 'RESUME');
+    }
+    if (command.intent === 'SERVICE_SUSPEND_CONFIRM' && command.targetId !== null) {
       return this.serviceAction(
         scope,
         actor,
@@ -10531,7 +10571,7 @@ export class BotRuntime {
         cardMessageOf(input.update, input.botInstanceId),
       );
     }
-    if (command.intent === 'SERVICE_RESUME' && command.targetId !== null) {
+    if (command.intent === 'SERVICE_RESUME_CONFIRM' && command.targetId !== null) {
       return this.serviceAction(
         scope,
         actor,
@@ -11539,6 +11579,60 @@ export class BotRuntime {
     }
     if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
     return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
+  }
+
+  /**
+   * B8: the question between a customer and their service's switch, in both directions.
+   *
+   * Plans nothing and writes nothing: it only asks, IN the card (`edit`), with the confirm
+   * (`uq:` / `eq:`, the only taps that plan the operation) and a cancel that redraws the card
+   * (`sv:`, which changes nothing and is safe to repeat). The switch is re-offered first, as
+   * `serviceAction` re-offers it: a tap from an out-of-date keyboard gets the card as it is
+   * now, with the notice, rather than a question it could not act on.
+   */
+  private async serviceToggleAsk(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    type: 'SUSPEND' | 'RESUME',
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    // The same notice on the button an unknown id gets from the switch itself: another
+    // customer's service is indistinguishable from none.
+    if (service === null) return toastReply('bot.service.not_found');
+    if (!(await this.deps.services.customerActionsFor(scope, service)).includes(type)) {
+      return this.cardWithToast(
+        scope,
+        actor,
+        customer,
+        serviceId,
+        'bot.service.capability_unsupported',
+      );
+    }
+    const suspend = type === 'SUSPEND';
+    return {
+      key: suspend ? 'bot.service.suspend_confirm' : 'bot.service.resume_confirm',
+      values: { serviceUsername: service.providerUsername },
+      buttons: [
+        {
+          ...inlineLabel(suspend ? 'service.suspend_confirm' : 'service.resume_confirm'),
+          data: `${
+            suspend
+              ? SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX
+              : SERVICE_RESUME_CONFIRM_CALLBACK_PREFIX
+          }${service.id}`,
+          row: 0,
+        },
+        {
+          ...inlineLabel('service.toggle_cancel'),
+          data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
+          row: 0,
+        },
+      ],
+      orderId: null,
+      edit: true,
+    };
   }
 
   /**
