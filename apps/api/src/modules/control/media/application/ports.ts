@@ -78,6 +78,7 @@ export interface QrTemplatePreviewer {
     scope: TenantContext,
     text: string,
     draft: QrTemplate | null,
+    options: { readonly describeBackground?: boolean },
   ): Promise<{
     readonly bytes: Uint8Array;
     readonly templated: boolean;
@@ -85,5 +86,6 @@ export interface QrTemplatePreviewer {
     readonly scale: number;
     readonly width: number;
     readonly height: number;
+    readonly background: { readonly width: number; readonly height: number } | null;
   }>;
 }

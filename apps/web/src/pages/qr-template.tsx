@@ -8,7 +8,10 @@ import {
   QR_TEMPLATE_QUIET_ZONE_MIN,
   QR_TEMPLATE_REGION_MIN,
   TENANT_MEDIA_MAX_BYTES,
+  QR_TEMPLATE_PREVIEW_MODULES,
   inspectQrBackgroundPng,
+  qrEffectiveModulePx,
+  qrModuleScale,
   qrTemplatePlacementProblem,
   qrTemplateSchema,
   qrTemplateSettingSchema,
@@ -67,6 +70,7 @@ const FALLBACK_LABEL: Readonly<Record<QrTemplateFallbackReason, WebKey>> = {
   OUTSIDE_BACKGROUND: 'web.qrt_fallback_outside',
   MODULE_TOO_SMALL: 'web.qrt_fallback_too_small',
   OUTPUT_TOO_LARGE: 'web.qrt_fallback_too_large',
+  CONFIG_UNREADABLE: 'web.qrt_fallback_config_unreadable',
 };
 
 /** A server refusal of a background, in the operator's words when the reason is known. */
@@ -221,6 +225,17 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
     parsedDraft === null || background === null
       ? null
       : qrTemplatePlacementProblem(parsedDraft, background);
+  /*
+   * The module a link of typical length gets in this region, as the customer receives it
+   * (Telegram shows a photo at most 1280 px on its longest side) — the server's own rule.
+   */
+  const tooSmall =
+    parsedDraft !== null &&
+    background !== null &&
+    qrEffectiveModulePx(
+      qrModuleScale(parsedDraft.size, QR_TEMPLATE_PREVIEW_MODULES, parsedDraft.quietZoneModules),
+      background,
+    ) < QR_TEMPLATE_MODULE_MIN_PX;
   const fieldError: string | undefined =
     parsedDraft === null
       ? t('web.qrt_invalid_fields')
@@ -228,7 +243,9 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
         ? t('web.qrt_needs_background')
         : placement !== null
           ? t('web.qrt_outside')
-          : undefined;
+          : tooSmall
+            ? t('web.qrt_too_small')
+            : undefined;
 
   const unsaved = draft !== null && JSON.stringify(parsedDraft) !== JSON.stringify(stored);
   useUnsavedChanges(mayEdit && unsaved);

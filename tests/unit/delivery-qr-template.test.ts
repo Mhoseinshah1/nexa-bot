@@ -1,6 +1,9 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
+  QR_TEMPLATE_PREVIEW_MODULES,
+  QR_TEMPLATE_PREVIEW_TEXT,
   QR_TEMPLATE_MODULE_MIN_PX,
   qrModuleScale,
   resolvePanelPolicy,
@@ -16,8 +19,10 @@ import {
 } from '../../apps/api/src/infrastructure/qr/png-codec';
 import {
   PngDeliveryQrRenderer,
+  QR_COMPOSITE_MAX_BYTES,
   QrBackgroundContentCheck,
   composeQrOnBackground,
+  probeQrTemplate,
   type QrTemplateSources,
 } from '../../apps/api/src/infrastructure/qr/qr-template';
 import { encodeQrPng, qrModules } from '../../apps/api/src/infrastructure/qr/qr-png';
@@ -28,6 +33,7 @@ import {
 import type { ServiceRecord } from '../../apps/api/src/modules/commerce/provisioning/application/ports';
 import type { CustomerFileMessage } from '../../apps/api/src/modules/commerce/messaging/application/ports';
 import { FixedClock } from '../../apps/api/src/infrastructure/clock';
+import { QrTemplatePreviewService } from '../../apps/api/src/modules/control/media/application/qr-template.service';
 import { decodeAnyQrPng, decodeQrPng, readPngPixels } from '../support/qr-decode';
 import { buildPng, chunk, gradientBackground, ihdr, pngFromChunks } from '../support/png-build';
 
@@ -48,12 +54,20 @@ function solid(width: number, height: number, rgb: readonly [number, number, num
   return buildPng({ width, height, colourType: 2, pixel: () => rgb });
 }
 
+/** How many times any `sources()` stub has read background BYTES (not the digest). */
+const reads = { count: 0 };
+
 function sources(
   config: Partial<Record<string, { template: QrTemplate | null; background: Uint8Array | null }>>,
 ): QrTemplateSources {
   return {
     template: async (scope) => config[scope.tenantId]?.template ?? null,
+    backgroundDigest: async (scope) => {
+      const bytes = config[scope.tenantId]?.background ?? null;
+      return bytes === null ? null : createHash('sha256').update(bytes).digest('hex');
+    },
     background: async (scope) => {
+      reads.count += 1;
       const bytes = config[scope.tenantId]?.background ?? null;
       return bytes === null ? null : { bytes };
     },
@@ -487,13 +501,78 @@ describe('the delivery QR renderer', () => {
         template: async () => {
           throw new Error('settings unreadable');
         },
+        backgroundDigest: async () => null,
         background: async () => null,
       },
       (_s, reason) => reasons.push(reason),
     );
     const image = await renderer.render(A, { kind: 'PAYLOAD', text: URL });
     expect(decodeQrPng(image.bytes)).toBe(URL);
+    // Its own reason: the setting failed to read, the background was never asked for.
+    expect(reasons).toEqual(['CONFIG_UNREADABLE']);
+  });
+
+  it('falls back when reading the background throws, under the background’s reason', async () => {
+    const reasons: string[] = [];
+    const renderer = new PngDeliveryQrRenderer(
+      {
+        template: async () => TEMPLATE,
+        backgroundDigest: async () => 'a'.repeat(64),
+        background: async () => {
+          throw new Error('media unreadable');
+        },
+      },
+      (_s, reason) => reasons.push(reason),
+    );
+    const image = await renderer.render(A, { kind: 'PAYLOAD', text: URL });
+    expect(Buffer.from(image.bytes).equals(Buffer.from(encodeQrPng(URL)))).toBe(true);
     expect(reasons).toEqual(['BACKGROUND_UNREADABLE']);
+  });
+
+  it('reads and decodes a background once, and composes a given link once', async () => {
+    let decodes = 0;
+    const renderer = new PngDeliveryQrRenderer(
+      sources({ 'tenant-a': { template: TEMPLATE, background: backgroundPng } }),
+      () => undefined,
+      {
+        decode: (bytes) => {
+          decodes += 1;
+          return decodePngToRgb(bytes);
+        },
+      },
+    );
+    const before = reads.count;
+    const first = await renderer.render(A, { kind: 'PAYLOAD', text: URL });
+    const second = await renderer.render(A, { kind: 'PAYLOAD', text: URL });
+    expect(second.bytes).toBe(first.bytes);
+    expect(reads.count - before, 'the background bytes are read once').toBe(1);
+    expect(decodes, 'the background is decoded once').toBe(1);
+    // Another link on the same background: composed anew, the background neither read nor
+    // decoded again.
+    const other = await renderer.render(A, { kind: 'PAYLOAD', text: `${URL}x` });
+    expect(decodeAnyQrPng(other.bytes)).toBe(`${URL}x`);
+    expect(reads.count - before).toBe(1);
+    expect(decodes).toBe(1);
+  });
+
+  it('is cached per tenant: the same background and link for another tenant is its own entry', async () => {
+    let decodes = 0;
+    const renderer = new PngDeliveryQrRenderer(
+      sources({
+        'tenant-a': { template: TEMPLATE, background: backgroundPng },
+        'tenant-b': { template: null, background: backgroundPng },
+      }),
+      () => undefined,
+      {
+        decode: (bytes) => {
+          decodes += 1;
+          return decodePngToRgb(bytes);
+        },
+      },
+    );
+    expect((await renderer.render(A, { kind: 'PAYLOAD', text: URL })).templated).toBe(true);
+    expect((await renderer.render(B, { kind: 'PAYLOAD', text: URL })).templated).toBe(false);
+    expect(decodes).toBe(1);
   });
 
   it('still refuses text that cannot be encoded, templated or not', async () => {
@@ -645,5 +724,160 @@ describe('the three delivery sites draw the configured template', () => {
     });
     expectTemplated(h.files);
     expect(h.files[0]?.caption?.templateKey).toBe('bot.service.link_qr_caption');
+  });
+});
+
+describe('review of PR #218: size, downscaling, the decoder’s bounds, the preview', () => {
+  /** A raster with no structure for deflate to find: random bytes. */
+  function noise(width: number, height: number): RgbImage {
+    return { width, height, rgb: randomBytes(width * height * 3) };
+  }
+
+  it('the preview text’s module count is the one the contract states', () => {
+    expect(qrModules(QR_TEMPLATE_PREVIEW_TEXT).length).toBe(QR_TEMPLATE_PREVIEW_MODULES);
+  });
+
+  it('refuses a composite over 1.5 MiB, and keeps a photo-like one under it', () => {
+    expect(QR_COMPOSITE_MAX_BYTES).toBe(1.5 * 1024 * 1024);
+    const template: QrTemplate = { x: 100, y: 100, size: 600, quietZoneModules: 4 };
+    expect(composeQrOnBackground(URL, noise(1200, 1200), template)).toMatchObject({
+      ok: false,
+      reason: 'OUTPUT_TOO_LARGE',
+    });
+    const photo = decodePngToRgb(gradientBackground(1200, 1200));
+    const fine = composeQrOnBackground(URL, photo, template);
+    expect(fine.ok).toBe(true);
+    if (fine.ok) expect(fine.png.byteLength).toBeLessThan(QR_COMPOSITE_MAX_BYTES);
+  });
+
+  it('measures the module after Telegram’s downscale: 4 px on 2048 px falls back', () => {
+    const count = qrModules(URL).length;
+    const big: RgbImage = { width: 2048, height: 2048, rgb: Buffer.alloc(2048 * 2048 * 3, 0x80) };
+    const at = (scale: number) =>
+      composeQrOnBackground(URL, big, {
+        x: 0,
+        y: 0,
+        size: (count + 8) * scale,
+        quietZoneModules: 4,
+      });
+    // 4 px reaches the customer at 2.5 px; 6 px at 3.75; 7 px at 4.375.
+    expect(at(4)).toMatchObject({ ok: false, reason: 'MODULE_TOO_SMALL' });
+    expect(at(6)).toMatchObject({ ok: false, reason: 'MODULE_TOO_SMALL' });
+    expect(at(7).ok).toBe(true);
+    // At 1280 px nothing is scaled, and 4 px is enough.
+    const fits: RgbImage = { width: 1280, height: 900, rgb: Buffer.alloc(1280 * 900 * 3, 0x80) };
+    expect(
+      composeQrOnBackground(URL, fits, { x: 0, y: 0, size: (count + 8) * 4, quietZoneModules: 4 })
+        .ok,
+    ).toBe(true);
+  });
+
+  it('probes a template for a typical link, as the save guard asks', () => {
+    const bg = gradientBackground(800, 700);
+    expect(probeQrTemplate(TEMPLATE, bg)).toBeNull();
+    expect(probeQrTemplate({ x: 0, y: 0, size: 128, quietZoneModules: 4 }, bg)).toBe(
+      'MODULE_TOO_SMALL',
+    );
+    expect(probeQrTemplate({ ...TEMPLATE, x: 500 }, bg)).toBe('OUTSIDE_BACKGROUND');
+    expect(probeQrTemplate(TEMPLATE, Buffer.from('not a png'))).toBe('BACKGROUND_UNREADABLE');
+  });
+
+  const problem = (png: Uint8Array) => {
+    try {
+      decodePngToRgb(png);
+      return 'ACCEPTED';
+    } catch (error) {
+      return (error as PngDecodeError).problem;
+    }
+  };
+
+  it('refuses a second IHDR', () => {
+    const good = solid(130, 130, [1, 2, 3]);
+    // Signature + IHDR is 33 bytes: insert a second IHDR right after the first.
+    const twice = Buffer.concat([good.subarray(0, 33), ihdr(130, 130, 2), good.subarray(33)]);
+    expect(problem(twice)).toBe('CORRUPT');
+  });
+
+  it('refuses a chunk whose length runs past the end of the file', () => {
+    const good = solid(130, 130, [1, 2, 3]);
+    const lying = Buffer.from(good);
+    // The IDAT's length field, right after IHDR: claim far more than the file holds.
+    lying.writeUInt32BE(0x00ffffff, 33);
+    expect(problem(lying)).toBe('CORRUPT');
+  });
+
+  it('refuses a pixel that names a palette entry past the end', () => {
+    const outOfPalette = buildPng({
+      width: 130,
+      height: 130,
+      colourType: 3,
+      palette: [
+        [1, 2, 3],
+        [4, 5, 6],
+      ],
+      pixel: (x) => [x === 129 ? 2 : 1],
+    });
+    expect(problem(outOfPalette)).toBe('CORRUPT');
+  });
+
+  it('applies a palette tRNS: a half-transparent entry over white, an absent one opaque', () => {
+    const image = decodePngToRgb(
+      buildPng({
+        width: 130,
+        height: 130,
+        colourType: 3,
+        palette: [
+          [0, 0, 0],
+          [0, 0, 0],
+          [0, 0, 0],
+        ],
+        // Entry 2 has no alpha in tRNS: opaque.
+        paletteAlpha: [128, 0],
+        pixel: (x) => [x % 3],
+      }),
+    );
+    expect([...image.rgb.subarray(0, 3)]).toEqual([127, 127, 127]);
+    expect([...image.rgb.subarray(3, 6)]).toEqual([255, 255, 255]);
+    expect([...image.rgb.subarray(6, 9)]).toEqual([0, 0, 0]);
+  });
+
+  it('the preview is charged settings.view before anything is rendered', async () => {
+    let rendered = 0;
+    const previewer = {
+      renderText: async () => {
+        rendered += 1;
+        return {
+          bytes: Uint8Array.from([1]),
+          templated: false,
+          fallback: 'NO_TEMPLATE' as const,
+          scale: 8,
+          width: 1,
+          height: 1,
+          background: { width: 800, height: 700 },
+        };
+      },
+    };
+    const checked: string[] = [];
+    const refusing = new QrTemplatePreviewService(
+      {
+        check: async (_s: unknown, _a: unknown, permission: string) => {
+          checked.push(permission);
+          throw new Error('denied');
+        },
+      } as never,
+      previewer,
+    );
+    await expect(refusing.preview(A, {} as never, null)).rejects.toThrow('denied');
+    expect(checked).toEqual(['settings.view']);
+    expect(rendered).toBe(0);
+
+    const allowing = new QrTemplatePreviewService(
+      { check: async () => undefined } as never,
+      previewer,
+    );
+    expect(await allowing.preview(A, {} as never, null)).toMatchObject({
+      background: { width: 800, height: 700 },
+    });
+    expect(rendered).toBe(1);
   });
 });

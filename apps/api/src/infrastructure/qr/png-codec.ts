@@ -247,49 +247,26 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
  * An RGB raster as an 8-bit RGB PNG: IHDR, one IDAT, IEND, and nothing else — no metadata an
  * uploaded file carried survives into what a customer receives.
  *
- * Each row takes the filter (of the five) whose output has the smallest sum of absolute
- * signed bytes, the heuristic libpng uses: a photo-like background compresses several times
- * better filtered than not. Deterministic: the same raster gives the same bytes.
+ * Every row uses ONE filter, Paeth: it compresses a photo-like background close to libpng's
+ * per-row search at a fifth of the work (review of PR #218 measured the five-filter search at
+ * up to 1.5 s for a 2048 px image, on the thread that answers Telegram updates). The first
+ * row has no row above it, where Paeth reduces to Sub. Deterministic: the same raster gives
+ * the same bytes.
  */
 export function encodeRgbPng(image: RgbImage): Uint8Array {
   const { width, height, rgb } = image;
   const stride = width * 3;
   const out = Buffer.alloc(height * (stride + 1));
-  const candidate = Buffer.alloc(stride);
-  const best = Buffer.alloc(stride);
   for (let y = 0; y < height; y += 1) {
     const row = y * stride;
-    let bestFilter = 0;
-    let bestScore = Number.POSITIVE_INFINITY;
-    for (let filter = 0; filter <= 4; filter += 1) {
-      let score = 0;
-      for (let i = 0; i < stride; i += 1) {
-        const x = rgb[row + i] as number;
-        const a = i >= 3 ? (rgb[row + i - 3] as number) : 0;
-        const b = y > 0 ? (rgb[row - stride + i] as number) : 0;
-        const c = y > 0 && i >= 3 ? (rgb[row - stride + i - 3] as number) : 0;
-        const predictor =
-          filter === 0
-            ? 0
-            : filter === 1
-              ? a
-              : filter === 2
-                ? b
-                : filter === 3
-                  ? (a + b) >> 1
-                  : paeth(a, b, c);
-        const value = (x - predictor) & 0xff;
-        candidate[i] = value;
-        score += value < 128 ? value : 256 - value;
-      }
-      if (score < bestScore) {
-        bestScore = score;
-        bestFilter = filter;
-        candidate.copy(best);
-      }
+    const target = y * (stride + 1);
+    out[target] = 4;
+    for (let i = 0; i < stride; i += 1) {
+      const a = i >= 3 ? (rgb[row + i - 3] as number) : 0;
+      const b = y > 0 ? (rgb[row - stride + i] as number) : 0;
+      const c = y > 0 && i >= 3 ? (rgb[row - stride + i - 3] as number) : 0;
+      out[target + 1 + i] = ((rgb[row + i] as number) - paeth(a, b, c)) & 0xff;
     }
-    out[y * (stride + 1)] = bestFilter;
-    best.copy(out, y * (stride + 1) + 1);
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);

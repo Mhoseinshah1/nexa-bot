@@ -21,7 +21,14 @@ const MEDIA = {
   updatedAt: '2026-10-06T10:00:00.000Z',
 };
 
-function api(options: { template?: unknown; version?: number | null; media?: unknown } = {}) {
+function api(
+  options: {
+    template?: unknown;
+    version?: number | null;
+    media?: unknown;
+    background?: { width: number; height: number };
+  } = {},
+) {
   const media = options.media === undefined ? null : options.media;
   return stubApi([
     {
@@ -50,7 +57,7 @@ function api(options: { template?: unknown; version?: number | null; media?: unk
         fallback:
           media === null ? 'NO_BACKGROUND' : options.template === undefined ? 'NO_TEMPLATE' : null,
         moduleScale: 8,
-        background: media === null ? null : { width: 800, height: 700 },
+        background: media === null ? null : (options.background ?? { width: 800, height: 700 }),
       },
     },
     {
@@ -170,6 +177,22 @@ describe('«پس‌زمینهٔ QR اشتراک»', () => {
       value: { x: 500, y: 0, size: 300, quietZoneModules: 4 },
       expectedVersion: null,
     });
+  });
+
+  it('refuses a region whose modules Telegram would shrink under 4 px, before saving', async () => {
+    api({ media: MEDIA, background: { width: 2048, height: 2048 } });
+    renderPage(<QrTemplateSection mayEdit />);
+    await waitFor(() =>
+      expect(screen.getByTestId('qrt-background').textContent).toContain('2048 × 2048'),
+    );
+    // A typical link: 41 modules + 8 quiet. 294 px → 6 px modules → 3.75 px at 1280.
+    fireEvent.change(input('qrt-size'), { target: { value: '294' } });
+    expect((await screen.findByTestId('qrt-field-error')).textContent).toBe(t('web.qrt_too_small'));
+    expect(
+      (screen.getByRole('button', { name: t('web.qrt_save') }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.change(input('qrt-size'), { target: { value: '343' } });
+    await waitFor(() => expect(screen.queryByTestId('qrt-field-error')).toBeNull());
   });
 
   it('refuses a region while there is no background to place it on', async () => {

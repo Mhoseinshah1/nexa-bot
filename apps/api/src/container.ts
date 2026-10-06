@@ -582,6 +582,7 @@ import { PngQrCodeEncoder } from './infrastructure/qr/qr-png.js';
 import {
   PngDeliveryQrRenderer,
   QrBackgroundContentCheck,
+  probeQrTemplate,
 } from './infrastructure/qr/qr-template.js';
 import { CustomerCaptureService } from './modules/commerce/customers/application/customer-capture.service.js';
 import { DrizzleCustomerCaptureRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-capture.repository.js';
@@ -2870,6 +2871,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     {
       template: (scope) =>
         settingsResolver.valueOf<QrTemplate | null>(scope, 'delivery.qr_template'),
+      backgroundDigest: async (scope) =>
+        (await tenantMediaRepository.find(scope, 'QR_BACKGROUND'))?.sha256 ?? null,
       background: (scope) => tenantMediaRepository.content(scope, 'QR_BACKGROUND'),
     },
     (scope, reason, error) =>
@@ -2878,11 +2881,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         'The QR template was not used; the plain QR was sent.',
       ),
   );
-  const deliveryQrPreview = new QrTemplatePreviewService(
-    guard,
-    deliveryQrRenderer,
-    tenantMediaRepository,
-  );
+  const deliveryQrPreview = new QrTemplatePreviewService(guard, deliveryQrRenderer);
 
   const refundService = new RefundService({
     cashback: cashbackService,
@@ -3642,7 +3641,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       new StarsPricingModeGuard(),
       new StarsPerUsdtGuard(paymentGatewayRepository),
       // Phase 2 item 4: a QR template needs a background its region lies inside.
-      new QrTemplateGuard(tenantMediaRepository),
+      new QrTemplateGuard(tenantMediaRepository, probeQrTemplate),
       // The trial product must be a product of this tenant (WP6-A).
       new TrialProductGuard(productRepository),
       // One per reminder threshold. The five have to agree with one another, and no

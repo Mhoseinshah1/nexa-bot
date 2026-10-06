@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -234,6 +235,40 @@ describe('the QR background and template (Phase 2 item 4)', () => {
     expect((await setTemplate(null)).changed).toBe(true);
   });
 
+  it('refuses at save a region whose modules Telegram would shrink under 4 px', async () => {
+    // 2048 px is shown at 1280: a typical link (41 modules + 8 quiet) at 6 px arrives at 3.75.
+    await upload(solid(2048, 2048, [30, 60, 90]));
+    await expect(
+      setTemplate({ x: 0, y: 0, size: 49 * 6, quietZoneModules: 4 }),
+    ).rejects.toMatchObject({ code: CONTROL_ERROR_CODES.INVALID_VALUE });
+    expect((await setTemplate({ x: 0, y: 0, size: 49 * 7, quietZoneModules: 4 })).changed).toBe(
+      true,
+    );
+  });
+
+  it('refuses at save a background that composes too large to send in time', async () => {
+    // Under the 1 MiB upload cap as a 256-colour palette PNG of random indices, about three
+    // times that as the RGB photo: deflate cannot learn 256 arbitrary 3-byte colours.
+    const indices = randomBytes(1000 * 1000);
+    const colours = randomBytes(256 * 3);
+    const busy = buildPng({
+      width: 1000,
+      height: 1000,
+      colourType: 3,
+      palette: Array.from(
+        { length: 256 },
+        (_, i) => [colours[i * 3] ?? 0, colours[i * 3 + 1] ?? 0, colours[i * 3 + 2] ?? 0] as const,
+      ),
+      filterOf: () => 0,
+      pixel: (x, y) => [indices[y * 1000 + x] ?? 0],
+    });
+    expect(busy.length).toBeLessThan(1024 * 1024);
+    await upload(busy);
+    await expect(
+      setTemplate({ x: 100, y: 100, size: 600, quietZoneModules: 4 }),
+    ).rejects.toMatchObject({ code: CONTROL_ERROR_CODES.INVALID_VALUE });
+  });
+
   it('refuses a quiet zone under four modules and a fractional size at the schema', async () => {
     await upload(gradientBackground(800, 700));
     await expect(setTemplate({ ...TEMPLATE, quietZoneModules: 3 })).rejects.toMatchObject({
@@ -315,7 +350,12 @@ describe('the QR background and template (Phase 2 item 4)', () => {
     const setting = await ctx.container.settingsService.get(tenantA, owner, 'delivery.qr_template');
     expect(setting).toMatchObject({ value: null, source: 'DEFAULT' });
     const plain = await ctx.container.deliveryQrPreview.preview(tenantA, observer, null);
-    expect(plain).toMatchObject({ templated: false, fallback: 'NO_TEMPLATE' });
+    // With no template the preview still states the background's size, for the form's checks.
+    expect(plain).toMatchObject({
+      templated: false,
+      fallback: 'NO_TEMPLATE',
+      background: { width: 800, height: 700 },
+    });
   });
 });
 

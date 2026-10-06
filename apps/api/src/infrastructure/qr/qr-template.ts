@@ -1,5 +1,9 @@
+import { createHash } from 'node:crypto';
 import {
+  QR_BACKGROUND_MAX_SIDE,
   QR_TEMPLATE_MODULE_MIN_PX,
+  QR_TEMPLATE_PREVIEW_TEXT,
+  qrEffectiveModulePx,
   qrModuleScale,
   qrTemplatePlacementProblem,
   type QrTemplate,
@@ -15,7 +19,7 @@ import type {
   DeliveryQrSource,
 } from '../../modules/commerce/provisioning/application/ports.js';
 import { decodePngToRgb, encodeRgbPng, PngDecodeError, type RgbImage } from './png-codec.js';
-import { encodeQrPng, qrModules } from './qr-png.js';
+import { encodeQrModulesPng, qrModules } from './qr-png.js';
 
 /**
  * Phase 2 item 4: the subscription QR on the tenant's own background.
@@ -32,8 +36,9 @@ import { encodeQrPng, qrModules } from './qr-png.js';
  * - the code is black on white whatever the background is, so the background's colours
  *   cannot lower the contrast a camera needs.
  *
- * Below `QR_TEMPLATE_MODULE_MIN_PX` the template is NOT used: a long link in a small region
- * gets the plain QR instead of an unreadable decorated one.
+ * Below `QR_TEMPLATE_MODULE_MIN_PX` — measured after Telegram downscales the photo to 1280 px
+ * (`qrEffectiveModulePx`) — the template is NOT used: a long link in a small region gets the
+ * plain QR instead of an unreadable decorated one.
  *
  * ## The fallback is the plain QR, never a failure
  *
@@ -44,12 +49,23 @@ import { encodeQrPng, qrModules } from './qr-png.js';
  * encoder throws, a link that cannot be encoded at all, exactly as before.
  */
 
-/** A composed image larger than this is not sent; Telegram's photo upload limit is 10 MB. */
-export const QR_COMPOSITE_MAX_BYTES = 5 * 1024 * 1024;
+/**
+ * A composed image larger than this is not sent, and a template that would produce one for a
+ * typical link is refused at save (`probeQrTemplate`).
+ *
+ * Far below Telegram's 10 MB photo limit on purpose: the upload has to finish inside the
+ * customer send timeout (`NOTIFICATION_SEND_TIMEOUT_MS`, 10 s by default), and a send that
+ * times out is an UNKNOWN outcome that the delivery card never retries. 1.5 MiB leaves that
+ * upload room on a slow uplink; a photo-like 1280 px background composes well under it, and
+ * a high-entropy 2048 px one (review of PR #218 measured 12.4 MB) is refused.
+ */
+export const QR_COMPOSITE_MAX_BYTES = 1.5 * 1024 * 1024;
 
 export type QrComposition =
   | { readonly ok: true; readonly png: Uint8Array; readonly scale: number }
   | { readonly ok: false; readonly reason: QrTemplateFallbackReason; readonly scale: number };
+
+type Modules = readonly (readonly boolean[])[];
 
 /**
  * The code of `text` drawn on `background` as `template` says. Pure and deterministic.
@@ -60,13 +76,23 @@ export function composeQrOnBackground(
   background: RgbImage,
   template: QrTemplate,
 ): QrComposition {
-  const modules = qrModules(text);
+  return composeModules(qrModules(text), background, template);
+}
+
+function composeModules(
+  modules: Modules,
+  background: RgbImage,
+  template: QrTemplate,
+): QrComposition {
   const count = modules.length;
   const scale = qrModuleScale(template.size, count, template.quietZoneModules);
   if (qrTemplatePlacementProblem(template, background) !== null) {
     return { ok: false, reason: 'OUTSIDE_BACKGROUND', scale };
   }
-  if (scale < QR_TEMPLATE_MODULE_MIN_PX) return { ok: false, reason: 'MODULE_TOO_SMALL', scale };
+  // Measured as the customer receives it: Telegram downscales a photo over 1280 px.
+  if (qrEffectiveModulePx(scale, background) < QR_TEMPLATE_MODULE_MIN_PX) {
+    return { ok: false, reason: 'MODULE_TOO_SMALL', scale };
+  }
 
   const { width, height } = background;
   const rgb = Buffer.from(background.rgb);
@@ -79,7 +105,7 @@ export function composeQrOnBackground(
   const left = template.x + Math.floor((template.size - side) / 2);
   const top = template.y + Math.floor((template.size - side) / 2);
   for (let row = 0; row < count; row += 1) {
-    const cells = modules[row] as boolean[];
+    const cells = modules[row] as readonly boolean[];
     for (let col = 0; col < count; col += 1) {
       if (cells[col] !== true) continue;
       const x0 = left + col * scale;
@@ -96,11 +122,32 @@ export function composeQrOnBackground(
   return { ok: true, png, scale };
 }
 
-/** What the renderer reads of a tenant's configuration. Both are tenant-scoped reads. */
+/**
+ * Whether `template` on the background `bytes` would be used for a link of typical length
+ * (`QR_TEMPLATE_PREVIEW_TEXT`), or why not. The save guard's question: an operator learns at
+ * save that a region is too small or a composite too large, not from a log line later.
+ */
+export function probeQrTemplate(
+  template: QrTemplate,
+  bytes: Uint8Array,
+): QrTemplateFallbackReason | null {
+  let image: RgbImage;
+  try {
+    image = decodePngToRgb(bytes);
+  } catch {
+    return 'BACKGROUND_UNREADABLE';
+  }
+  const composed = composeModules(qrModules(QR_TEMPLATE_PREVIEW_TEXT), image, template);
+  return composed.ok ? null : composed.reason;
+}
+
+/** What the renderer reads of a tenant's configuration. All are tenant-scoped reads. */
 export interface QrTemplateSources {
   /** `delivery.qr_template`; null is no template. */
   template(scope: TenantContext): Promise<QrTemplate | null>;
-  /** The `QR_BACKGROUND` slot's bytes; null when it is empty. */
+  /** The `QR_BACKGROUND` slot's SHA-256, read without its bytes; null when it is empty. */
+  backgroundDigest(scope: TenantContext): Promise<string | null>;
+  /** The `QR_BACKGROUND` slot's bytes; null when it is empty. Read only on a cache miss. */
   background(scope: TenantContext): Promise<{ readonly bytes: Uint8Array } | null>;
 }
 
@@ -113,25 +160,79 @@ export interface QrRenderOutcome {
   readonly scale: number;
   readonly width: number;
   readonly height: number;
+  /** The stored background's dimensions, when it was read and decodes; else null. */
+  readonly background: { readonly width: number; readonly height: number } | null;
 }
 
 const PLAIN_SCALE = 8;
 const PLAIN_MARGIN = 4;
 
 function plain(
-  text: string,
-  moduleCount: number,
+  modules: Modules,
   fallback: QrTemplateFallbackReason | null,
+  background: QrRenderOutcome['background'] = null,
 ): QrRenderOutcome {
-  const side = (moduleCount + 2 * PLAIN_MARGIN) * PLAIN_SCALE;
+  const side = (modules.length + 2 * PLAIN_MARGIN) * PLAIN_SCALE;
   return {
-    bytes: encodeQrPng(text),
+    bytes: encodeQrModulesPng(modules),
     templated: false,
     fallback,
     scale: PLAIN_SCALE,
     width: side,
     height: side,
+    background,
   };
+}
+
+/** A map that forgets its least recently used entries past a count and a byte budget. */
+class Lru<V> {
+  private readonly entries = new Map<string, V>();
+  private bytes = 0;
+
+  constructor(
+    private readonly maxEntries: number,
+    private readonly maxBytes: number,
+    private readonly sizeOf: (value: V) => number,
+  ) {}
+
+  get(key: string): V | undefined {
+    const value = this.entries.get(key);
+    if (value === undefined) return undefined;
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    return value;
+  }
+
+  set(key: string, value: V): void {
+    const before = this.entries.get(key);
+    if (before !== undefined) {
+      this.bytes -= this.sizeOf(before);
+      this.entries.delete(key);
+    }
+    this.entries.set(key, value);
+    this.bytes += this.sizeOf(value);
+    while (this.entries.size > this.maxEntries || this.bytes > this.maxBytes) {
+      const oldest = this.entries.keys().next();
+      if (oldest.done === true) break;
+      const gone = this.entries.get(oldest.value) as V;
+      this.entries.delete(oldest.value);
+      this.bytes -= this.sizeOf(gone);
+    }
+  }
+}
+
+type DecodedBackground = { readonly image: RgbImage } | { readonly unreadable: unknown };
+
+/** Decoded backgrounds kept: each is up to 2048 × 2048 × 3 bytes (12 MiB). */
+const DECODED_MAX_ENTRIES = 2;
+const DECODED_MAX_BYTES = 2 * QR_BACKGROUND_MAX_SIDE * QR_BACKGROUND_MAX_SIDE * 3;
+/** Composed images kept: a link view tapped twice, a sweep's batch for one tenant. */
+const COMPOSED_MAX_ENTRIES = 32;
+const COMPOSED_MAX_BYTES = 24 * 1024 * 1024;
+
+export interface PngDeliveryQrRendererOptions {
+  /** The decoder; replaced in a test that counts decodes. */
+  readonly decode?: (bytes: Uint8Array) => RgbImage;
 }
 
 /**
@@ -139,8 +240,30 @@ function plain(
  *
  * With no sources (or no template, or no background) the bytes are EXACTLY `encodeQrPng`'s —
  * the image every tenant received before this feature, byte for byte.
+ *
+ * ## Caches (review of PR #218)
+ *
+ * Composing runs on the thread that answers Telegram updates (the link view's QR) and the
+ * Web Admin's preview, and costs up to a second at 2048 px. So the decoded background is
+ * kept per (tenant, background SHA-256) and the composed image per (tenant, background
+ * SHA-256, template, text), both bounded LRUs in this process. A render on a warm cache reads
+ * the template and the background's digest — never its bytes — and decodes nothing. A
+ * replaced background has a new digest, so nothing stale is ever served; a changed template
+ * is a new key. The keys hold a subscription link, which never leaves the process.
  */
 export class PngDeliveryQrRenderer implements DeliveryQrRenderer {
+  private readonly decoded = new Lru<DecodedBackground>(
+    DECODED_MAX_ENTRIES,
+    DECODED_MAX_BYTES,
+    (value) => ('image' in value ? value.image.rgb.length : 0),
+  );
+  private readonly composed = new Lru<QrRenderOutcome>(
+    COMPOSED_MAX_ENTRIES,
+    COMPOSED_MAX_BYTES,
+    (value) => value.bytes.byteLength,
+  );
+  private readonly decode: (bytes: Uint8Array) => RgbImage;
+
   constructor(
     private readonly sources: QrTemplateSources | null = null,
     /** Told every time a configured template was not used. For a log line; never throws. */
@@ -149,7 +272,10 @@ export class PngDeliveryQrRenderer implements DeliveryQrRenderer {
       reason: QrTemplateFallbackReason,
       error?: unknown,
     ) => void = () => undefined,
-  ) {}
+    options: PngDeliveryQrRendererOptions = {},
+  ) {
+    this.decode = options.decode ?? decodePngToRgb;
+  }
 
   async render(scope: TenantContext, source: DeliveryQrSource): Promise<DeliveryQrImage> {
     if (source.kind === 'PROVIDER_IMAGE') {
@@ -166,54 +292,109 @@ export class PngDeliveryQrRenderer implements DeliveryQrRenderer {
 
   /**
    * `text` as the tenant's configuration draws it; `draft` (for the Web Admin's preview)
-   * replaces the stored template, `undefined` reads it.
+   * replaces the stored template, `undefined` reads it. `describeBackground` reads the
+   * background even when there is no template, so the preview can state its dimensions.
    */
   async renderText(
     scope: TenantContext,
     text: string,
     draft?: QrTemplate | null,
+    options: { readonly describeBackground?: boolean } = {},
   ): Promise<QrRenderOutcome> {
-    // Refuses text that cannot be encoded, exactly as the plain encoder always has.
-    const count = qrModules(text).length;
-    if (this.sources === null) return plain(text, count, 'NO_TEMPLATE');
+    // Refuses text that cannot be encoded, exactly as the plain encoder always has. Built
+    // once: the plain path and the composition both draw this matrix.
+    const modules = qrModules(text);
+    const sources = this.sources;
+    if (sources === null) return plain(modules, 'NO_TEMPLATE');
     let template: QrTemplate | null;
-    let background: { readonly bytes: Uint8Array } | null;
     try {
-      template = draft === undefined ? await this.sources.template(scope) : draft;
-      if (template === null) return plain(text, count, 'NO_TEMPLATE');
-      background = await this.sources.background(scope);
+      template = draft === undefined ? await sources.template(scope) : draft;
+    } catch (error) {
+      this.onFallback(scope, 'CONFIG_UNREADABLE', error);
+      return plain(modules, 'CONFIG_UNREADABLE');
+    }
+    if (template === null && options.describeBackground !== true) {
+      return plain(modules, 'NO_TEMPLATE');
+    }
+    let loaded: { readonly digest: string; readonly decoded: DecodedBackground } | null;
+    try {
+      loaded = await this.loadBackground(scope, sources);
     } catch (error) {
       this.onFallback(scope, 'BACKGROUND_UNREADABLE', error);
-      return plain(text, count, 'BACKGROUND_UNREADABLE');
+      return plain(modules, 'BACKGROUND_UNREADABLE');
     }
-    if (background === null) {
+    const dimensions =
+      loaded !== null && 'image' in loaded.decoded
+        ? { width: loaded.decoded.image.width, height: loaded.decoded.image.height }
+        : null;
+    if (template === null) return plain(modules, 'NO_TEMPLATE', dimensions);
+    if (loaded === null) {
       this.onFallback(scope, 'NO_BACKGROUND');
-      return plain(text, count, 'NO_BACKGROUND');
+      return plain(modules, 'NO_BACKGROUND');
     }
-    let image: RgbImage;
-    try {
-      image = decodePngToRgb(background.bytes);
-    } catch (error) {
-      this.onFallback(
-        scope,
-        'BACKGROUND_UNREADABLE',
-        error instanceof PngDecodeError ? error : undefined,
-      );
-      return plain(text, count, 'BACKGROUND_UNREADABLE');
+    if (!('image' in loaded.decoded)) {
+      this.onFallback(scope, 'BACKGROUND_UNREADABLE', loaded.decoded.unreadable);
+      return plain(modules, 'BACKGROUND_UNREADABLE');
     }
-    const composed = composeQrOnBackground(text, image, template);
-    if (!composed.ok) {
+    const key = [
+      scope.tenantId,
+      loaded.digest,
+      template.x,
+      template.y,
+      template.size,
+      template.quietZoneModules,
+      text,
+    ].join('\u0000');
+    const cached = this.composed.get(key);
+    if (cached !== undefined) return cached;
+
+    const image = loaded.decoded.image;
+    const composed = composeModules(modules, image, template);
+    let outcome: QrRenderOutcome;
+    if (composed.ok) {
+      outcome = {
+        bytes: composed.png,
+        templated: true,
+        fallback: null,
+        scale: composed.scale,
+        width: image.width,
+        height: image.height,
+        background: dimensions,
+      };
+    } else {
       this.onFallback(scope, composed.reason);
-      return plain(text, count, composed.reason);
+      outcome = plain(modules, composed.reason, dimensions);
     }
-    return {
-      bytes: composed.png,
-      templated: true,
-      fallback: null,
-      scale: composed.scale,
-      width: image.width,
-      height: image.height,
-    };
+    this.composed.set(key, outcome);
+    return outcome;
+  }
+
+  /**
+   * The tenant's background, decoded, by its digest: the bytes are read and decoded only when
+   * this digest is not cached. A background that does not decode is cached as such, so a
+   * damaged file is not decoded again on every delivery.
+   */
+  private async loadBackground(
+    scope: TenantContext,
+    sources: QrTemplateSources,
+  ): Promise<{ readonly digest: string; readonly decoded: DecodedBackground } | null> {
+    const digest = await sources.backgroundDigest(scope);
+    if (digest === null) return null;
+    const hit = this.decoded.get(`${scope.tenantId}:${digest}`);
+    if (hit !== undefined) return { digest, decoded: hit };
+    const stored = await sources.background(scope);
+    if (stored === null) return null;
+    // Keyed by the digest of the bytes actually read: a replacement landing between the two
+    // reads is cached under its own digest, never under the one it replaced.
+    const actual = createHash('sha256').update(stored.bytes).digest('hex');
+    let decoded: DecodedBackground;
+    try {
+      decoded = { image: this.decode(stored.bytes) };
+    } catch (error) {
+      decoded = { unreadable: error instanceof PngDecodeError ? error : undefined };
+    }
+    this.decoded.set(`${scope.tenantId}:${actual}`, decoded);
+    return { digest: actual, decoded };
   }
 }
 

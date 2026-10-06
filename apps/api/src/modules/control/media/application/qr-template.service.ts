@@ -7,6 +7,7 @@ import {
   type ActorContext,
   type DeliveryQrPreviewResponse,
   type QrTemplate,
+  type QrTemplateFallbackReason,
   type ScopeContext,
   type TenantContext,
 } from '@nexa/contracts';
@@ -15,6 +16,22 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { SettingChangeGuard } from '../../settings/application/settings.service.js';
 import type { QrTemplatePreviewer, TenantMediaRepository } from './ports.js';
 import { MEDIA_VIEW } from './tenant-media.service.js';
+
+/** Why a probe would not use the template, as the operator is told at save. */
+const PROBE_REFUSAL: Readonly<Record<QrTemplateFallbackReason, string>> = {
+  NO_TEMPLATE: 'There is no template to save.',
+  NO_BACKGROUND: 'Upload a QR background before placing the code on it.',
+  BACKGROUND_UNREADABLE: 'The stored QR background cannot be decoded; replace it first.',
+  OUTSIDE_BACKGROUND: 'The QR region does not lie inside the background.',
+  MODULE_TOO_SMALL:
+    'The QR region is too small: a link of typical length would be drawn with modules under ' +
+    '4 px as Telegram shows the photo (backgrounds over 1280 px are shown scaled down). ' +
+    'Make the region larger, or the background smaller.',
+  OUTPUT_TOO_LARGE:
+    'This background composes to an image too large to send in time; use a simpler or smaller ' +
+    'background.',
+  CONFIG_UNREADABLE: 'The QR template could not be read.',
+};
 
 /** The key this module's veto speaks for. */
 export const QR_TEMPLATE_SETTING = 'delivery.qr_template';
@@ -33,7 +50,19 @@ export const QR_TEMPLATE_SETTING = 'delivery.qr_template';
 export class QrTemplateGuard implements SettingChangeGuard {
   readonly key = QR_TEMPLATE_SETTING;
 
-  constructor(private readonly media: Pick<TenantMediaRepository, 'content'>) {}
+  constructor(
+    private readonly media: Pick<TenantMediaRepository, 'content'>,
+    /**
+     * Whether the template would be USED for a link of typical length on these background
+     * bytes, or why not (`probeQrTemplate`): a region whose modules Telegram would shrink
+     * under the minimum, or a composite too large to send in time, is refused here, at save,
+     * rather than discovered as a fallback in the log.
+     */
+    private readonly probe: (
+      template: QrTemplate,
+      bytes: Uint8Array,
+    ) => QrTemplateFallbackReason | null,
+  ) {}
 
   async refuseChange(
     scope: ScopeContext,
@@ -64,6 +93,8 @@ export class QrTemplateGuard implements SettingChangeGuard {
         `does not lie inside the ${String(header.width)}×${String(header.height)} background.`
       );
     }
+    const unusable = this.probe(template, stored.bytes);
+    if (unusable !== null) return PROBE_REFUSAL[unusable];
     return null;
   }
 }
@@ -78,7 +109,6 @@ export class QrTemplatePreviewService {
   constructor(
     private readonly guard: PermissionGuard,
     private readonly previewer: QrTemplatePreviewer,
-    private readonly media: Pick<TenantMediaRepository, 'content'>,
   ) {}
 
   async preview(
@@ -87,12 +117,12 @@ export class QrTemplatePreviewService {
     draft: QrTemplate | null,
   ): Promise<DeliveryQrPreviewResponse> {
     await this.guard.check(scope, actor, MEDIA_VIEW);
-    const outcome = await this.previewer.renderText(scope, QR_TEMPLATE_PREVIEW_TEXT, draft);
-    const stored = await this.media.content(scope, 'QR_BACKGROUND');
-    const header = stored === null ? null : inspectQrBackgroundPng(stored.bytes);
+    // One read of the background, by the renderer, which also states its dimensions.
+    const outcome = await this.previewer.renderText(scope, QR_TEMPLATE_PREVIEW_TEXT, draft, {
+      describeBackground: true,
+    });
     return {
-      background:
-        header === null || !header.ok ? null : { width: header.width, height: header.height },
+      background: outcome.background,
       pngBase64: Buffer.from(outcome.bytes).toString('base64'),
       width: outcome.width,
       height: outcome.height,

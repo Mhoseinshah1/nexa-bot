@@ -3563,3 +3563,19 @@ and `OQ-T-4` are live again and apply to inline buttons too.
   - Icons published on THIS release are lost if the installation is rolled back and the
     operator publishes again on the retiring release: its normalisation writes null. A rollback
     alone (no new publish) only hides them; rolling forward again draws them.
+
+## OQ-QR-TEMPLATE — the QR on a background (Phase 2 UX wave, Item 4)
+
+- **OQ-QR-TEMPLATE-01: OPEN — real-Telegram acceptance of the downscale rule.** The module
+  minimum (4 px) is measured after Telegram scales a photo to at most 1280 px on its longest
+  side (`QR_TELEGRAM_PHOTO_MAX_SIDE`, `qrEffectiveModulePx`). The 1280 figure is the size of
+  the largest `PhotoSize` as commonly observed from the Bot API; it was NOT measured from this
+  sandbox (`core.telegram.org` and the Bot API are unreachable here), and whether every client
+  shows that size, or a smaller one, is not known. The acceptance, still to run: send a
+  composed 2048 px QR photo with `sendPhoto` through a real bot, read the largest size back
+  with `getFile`, decode it with `jsqr` and compare it with the link; repeat at the minimum
+  module the rule allows (7 px on 2048 px). Until then nothing here claims that a templated QR
+  scans on every client — only that the rule's arithmetic and the composed upload decode.
+- **OQ-QR-TEMPLATE-02: decided by this release, open to the PO.** The background is PNG only
+  (no JPEG decoder dependency), and no built-in branded default ships: the default remains the
+  plain QR. See `docs/phase2/item4-qr-template.md`.

@@ -3911,6 +3911,8 @@ export const WEB_FA = {
   'web.qrt_invalid_fields': 'همهٔ مقادیر باید عدد صحیح و در محدودهٔ مجاز باشند.',
   'web.qrt_needs_background': 'برای تعیین جای QR ابتدا پس‌زمینه را بارگذاری کنید.',
   'web.qrt_outside': 'مربع QR باید کاملاً داخل تصویر پس‌زمینه باشد.',
+  'web.qrt_too_small':
+    'این مربع برای یک لینک معمولی کوچک است: هر خانهٔ QR، آن‌طور که تلگرام عکس را نشان می‌دهد (حداکثر ۱۲۸۰ پیکسل در ضلع بلند)، کمتر از ۴ پیکسل می‌شود. مربع را بزرگ‌تر یا تصویر را کوچک‌تر کنید.',
   'web.qrt_save': 'ذخیرهٔ جای QR',
   'web.qrt_saved': 'جای QR ذخیره شد.',
   'web.qrt_unchanged': 'جای QR تغییری نکرده بود.',
@@ -3933,6 +3935,7 @@ export const WEB_FA = {
   'web.qrt_fallback_too_small':
     'این مربع برای این لینک کوچک است (کمتر از ۴ پیکسل برای هر خانه): QR ساده فرستاده می‌شود.',
   'web.qrt_fallback_too_large': 'تصویر نهایی بیش از حد بزرگ است: QR ساده فرستاده می‌شود.',
+  'web.qrt_fallback_config_unreadable': 'تنظیم جای QR خوانده نشد: QR ساده فرستاده می‌شود.',
   // Owner spec §6: «دکمه‌های شیشه‌ای ربات» — the inline button registry's section.
   'web.ib_title': 'دکمه‌های شیشه‌ای ربات',
   'web.ib_hint':

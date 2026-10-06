@@ -61,7 +61,9 @@ BEFORE anything is inflated, and `inflateSync` is given exactly the size the hea
 
 At save (`QrTemplateGuard`, inside the settings write's transaction): the schema demands whole
 numbers, a region of at least 128 px and a quiet zone of 4–16 modules; the guard demands a
-stored background and a region wholly inside it. Clearing (null) is never refused.
+stored background and a region wholly inside it, and composes a link of typical length
+(`probeQrTemplate`, 41 modules) on it: a region whose modules would reach the customer under
+4 px, or a composite over 1.5 MiB, is refused at save. Clearing (null) is never refused.
 
 At render (`composeQrOnBackground`), every delivery:
 
@@ -71,13 +73,27 @@ At render (`composeQrOnBackground`), every delivery:
   modules on every side (the floor's remainder only adds to it) and the background never
   touches a finder pattern;
 - the code is black on white whatever the background, so contrast does not depend on it;
-- a module under 4 px (a long link in a small region), a region outside a background that was
+- a module under 4 px **as the customer receives it** — Telegram serves a photo at most
+  1280 px on its longest side, so the rule is `scale × min(1, 1280 / longest side) ≥ 4`
+  (`qrEffectiveModulePx`, shared by the renderer, the guard and the Web Admin; unverified
+  against real Telegram, `OQ-QR-TEMPLATE-01`) — a long link in a small region, a region outside a background that was
   replaced by a smaller one, a background that no longer decodes, or a composed image over
-  5 MiB sends the **plain QR** instead and is logged (`The QR template was not used`). A
+  1.5 MiB sends the **plain QR** instead and is logged (`The QR template was not used`). A
   delivery never fails because of decoration.
 
-The output is a freshly encoded 8-bit RGB PNG (IHDR, IDAT, IEND only), so no metadata an
-uploaded file carried reaches a customer. It is deterministic.
+The output is a freshly encoded 8-bit RGB PNG (IHDR, IDAT, IEND only; every row Paeth
+filtered), so no metadata an uploaded file carried reaches a customer. It is deterministic.
+
+**Why 1.5 MiB.** The upload must finish inside the customer send timeout
+(`NOTIFICATION_SEND_TIMEOUT_MS`, 10 s by default), and a timed-out send is an UNKNOWN outcome
+the delivery card never retries. Telegram's own 10 MB limit is not the bound that matters.
+
+**Caching.** Composition runs on the API thread for the link view's QR and the preview. The
+renderer keeps the decoded background per (tenant, SHA-256) and the composed image per
+(tenant, background SHA-256, template, link) in bounded in-process LRUs (2 decoded images,
+32 composites / 24 MiB). A warm render reads the template and the background's digest — never
+its bytes — and decodes nothing; a replaced background has a new digest, so nothing stale is
+served.
 
 ## Web Admin
 
@@ -96,7 +112,7 @@ then removes the background. The settings page does not draw the key
 The QR is sent with `sendPhoto`, as before. Telegram recompresses a photo (JPEG), which is why
 the minimum module is 4 px and the code is drawn black on white. Nothing about the background
 is rendered by Telegram; it is part of the delivered image. Telegram's photo limits (10 MB,
-width + height ≤ 10000, aspect ≤ 20) are inside the bounds above (≤ 2048 px a side, ≤ 5 MiB).
+width + height ≤ 10000, aspect ≤ 20) are inside the bounds above (≤ 2048 px a side, ≤ 1.5 MiB).
 
 ## Item 6 (provider-originated QR) — the seam, not the feature
 
