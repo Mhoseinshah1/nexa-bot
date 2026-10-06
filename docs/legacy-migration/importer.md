@@ -336,6 +336,42 @@ and a unit test holds them equal.
 
 ## 10. Manual acceptance (needs the real archive, panels and staging)
 
+0. Inspect the archive BEFORE anything loads it (WP-D1a, `scripts/legacy-archive-inspect.mjs`):
+
+   ```bash
+   export LEGACY_ZIP_PASSWORD=…        # typed into the environment; NEVER on argv
+   node scripts/legacy-archive-inspect.mjs --archive backup_YYYY-MM-DD.zip \
+     --password-env LEGACY_ZIP_PASSWORD --engine mysql8 --require-class staging \
+     --out <new dir> --extract
+   ```
+
+   It accepts only the evidenced shapes: a `mysqldump`/`mariadb-dump` `.sql` or `.sql.gz`,
+   MirzaBot's PDO-fallback `.sql` (`SET NAMES utf8mb4;` / `SET FOREIGN_KEY_CHECKS=0;` /
+   `SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';`), and `backup_YYYY-MM-DD.zip` with exactly one
+   entry `backup_YYYY-MM-DD.sql`, unencrypted or WinZip AES-256 — what MirzaBot revision
+   `e4966ff` writes with `ZipArchive::EM_AES_256`. ZipCrypto, AES-128/192, zip64, two
+   entries or another entry name are refused. It reports, with no row content: the SHA-256
+   of the archive AND of the inner dump, the header (client, server version, engine),
+   whether the dump ends the way its writer ends one (a truncated dump is refused), the
+   tables and whether `user`/`invoice`/`product` carry the importer's required columns
+   (pinned equal to `LEGACY_REQUIRED_COLUMNS`), character sets and collations, stored
+   objects / `DEFINER` (refused: MirzaBot has none), `USE`/`CREATE DATABASE`, and
+   `blockers[]`. Exit 0 ACCEPTED, 2 BLOCKED, 64 usage.
+
+   **Decryption needs no external tool.** WinZip AES (PBKDF2-HMAC-SHA1 → AES-256-CTR with a
+   little-endian counter, 10-byte HMAC-SHA1) is implemented on `node:crypto`; the operator
+   dependency is Node ≥ 22.11 with OpenSSL (the tool fails with a precise message if
+   `aes-256-ecb` or `zlib.crc32` is missing). Info-ZIP `unzip` and Python's `zipfile`
+   cannot open these entries; `7z x` can, but is not needed. The HMAC is verified over the
+   whole entry and an extracted dump whose HMAC does not verify is deleted. The tests run
+   against zips written by PHP's libzip — MirzaBot's own encoder — with a TEST-ONLY
+   password (`tests/fixtures/legacy/archive/make-fixtures.php`); MirzaBot's real hardcoded
+   password is deliberately not in this repository.
+
+   `--engine mariadb` refuses a dump carrying `utf8mb4_0900_*` collations
+   (`COLLATION_REQUIRES_MYSQL8`) or taken from a MySQL ≥ 8 server (`ENGINE_MISMATCH`):
+   the collation is never rewritten — MySQL 8 is the engine for it.
+
 1. Restore the archive into MySQL 8 (the CI covers MariaDB 10.11; MySQL 8 is the production
    engine and its first run is this step), create `oldbot_ro` (SELECT only).
 2. `audit` against staging with the real mapping file: record the evidence and the
