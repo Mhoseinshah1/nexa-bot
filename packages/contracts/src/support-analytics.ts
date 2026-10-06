@@ -3,6 +3,8 @@ import { BUSINESS_CONVERSATION_STATES, BUSINESS_HANDOFF_REASONS } from './busine
 import { REPORT_RANGES, reportRangeQuerySchema } from './reporting.js';
 import {
   SUPPORT_AI_AUTO_OUTCOMES,
+  SUPPORT_AI_FAILURE_CLASSES,
+  SUPPORT_AI_OPERATIONS,
   SUPPORT_AI_OUTCOMES,
   SUPPORT_AI_PROVIDERS,
   type SupportAiAutoOutcome,
@@ -142,6 +144,19 @@ export const supportAnalyticsResponseSchema = z.object({
       p95LatencyMs: count,
       inputTokens: count,
       outputTokens: count,
+    }),
+  ),
+  /**
+   * `support_ai_runs` created in the window that FAILED, by operation, provider and failure
+   * class (`SUPPORT_AI_FAILURE_CLASSES`): why the AI did not answer, without reading any text.
+   * A run recorded before the class existed is counted under its outcome only (above).
+   */
+  aiFailures: z.array(
+    z.object({
+      operation: z.enum(SUPPORT_AI_OPERATIONS),
+      provider: z.enum(SUPPORT_AI_PROVIDERS),
+      failureClass: z.enum(SUPPORT_AI_FAILURE_CLASSES),
+      runs: count,
     }),
   ),
   /** `support_learning_candidates` created in the window, by their state now. */

@@ -47,6 +47,77 @@ export interface SupportAiUsage {
   readonly outputTokens: number | null;
 }
 
+/**
+ * WHY one provider call (or the decision it produced) failed — the operator's diagnosis, a
+ * closed set pinned by CHECK constraints on `support_ai_runs`, `support_ai_jobs` and the
+ * credential's last test. The seven outcomes above decide what the CHAIN does (fall back or
+ * stop); a class says what an operator must change, and several classes share one outcome.
+ *
+ * - `request_rejected` — HTTP 400/404/422: the provider refused the request itself (a model id,
+ *   a parameter). The provider's own error code, type and param ride along when safe.
+ * - `unsupported_capability` — a rejection that names the capability NEXA needs: strict
+ *   structured output (`response_format`), an unsupported parameter or value, or an image sent
+ *   to an adapter that cannot see.
+ * - `auth` / `quota` — the key was rejected / the account has no quota or balance.
+ * - `rate_limited` — a 429 that is not quota. `timeout` — no answer in time.
+ * - `network` — no HTTP answer (connection, DNS, an oversized or unreadable body, a 2xx that is
+ *   not JSON). `provider_error` — a 408/409/5xx/529 from the provider.
+ * - `refused` — the provider's refusal or content filter.
+ * - `no_content` / `truncated` / `not_json` — a 2xx that carried no text, stopped at the
+ *   output limit, or was not a JSON object.
+ * - `schema_invalid` — JSON that fails `supportAiDecisionSchema` (recorded with the zod issue's
+ *   PATH and CODE only, never a value). `reply_too_long` — a reply over the tenant's limit.
+ * - `no_provider` — no step could be called at all (off, no key, every breaker open).
+ *
+ * Never the provider's free-text message, the prompt or the response: a class and a few
+ * provider-defined identifiers are what is stored.
+ */
+export const SUPPORT_AI_FAILURE_CLASSES = [
+  'request_rejected',
+  'unsupported_capability',
+  'auth',
+  'quota',
+  'rate_limited',
+  'timeout',
+  'network',
+  'provider_error',
+  'refused',
+  'no_content',
+  'truncated',
+  'not_json',
+  'schema_invalid',
+  'reply_too_long',
+  'no_provider',
+] as const;
+export type SupportAiFailureClass = (typeof SUPPORT_AI_FAILURE_CLASSES)[number];
+
+/**
+ * The safe part of a failed call: its class, the HTTP status, and the provider's own
+ * MACHINE identifiers (`error.code`, `error.type`, `error.param`) when each is a short token
+ * (`safeProviderToken`). Never `error.message`.
+ */
+export interface SupportAiFailureDetail {
+  readonly failureClass: SupportAiFailureClass;
+  readonly httpStatus: number | null;
+  readonly providerErrorCode: string | null;
+  readonly providerErrorType: string | null;
+  readonly providerErrorParam: string | null;
+}
+
+/**
+ * A provider-defined identifier is kept only when it is a short token — letters, digits and
+ * `_ . : - [ ]` (so `messages[0].role` survives) — and nothing that could be prose, a
+ * customer's words or a key fragment of unbounded length.
+ */
+export const SUPPORT_AI_PROVIDER_TOKEN_MAX = 64;
+export function safeProviderToken(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isInteger(value)) value = String(value);
+  if (typeof value !== 'string') return null;
+  return value.length <= SUPPORT_AI_PROVIDER_TOKEN_MAX && /^[A-Za-z0-9_.:[\]-]+$/u.test(value)
+    ? value
+    : null;
+}
+
 export type SupportAiOutcome =
   | {
       readonly outcome: 'OK';
@@ -59,16 +130,77 @@ export type SupportAiOutcome =
       readonly outcome: 'RATE_LIMITED';
       readonly retryAfterMs: number | null;
       readonly code: string;
+      readonly detail?: SupportAiFailureDetail;
     }
-  | { readonly outcome: 'AUTH_FAILED'; readonly quota: boolean; readonly code: string }
-  | { readonly outcome: 'TEMPORARY'; readonly code: string }
-  | { readonly outcome: 'INVALID_OUTPUT'; readonly code: string; readonly usage?: SupportAiUsage }
+  | {
+      readonly outcome: 'AUTH_FAILED';
+      readonly quota: boolean;
+      readonly code: string;
+      readonly detail?: SupportAiFailureDetail;
+    }
+  | {
+      readonly outcome: 'TEMPORARY';
+      readonly code: string;
+      readonly detail?: SupportAiFailureDetail;
+    }
+  | {
+      readonly outcome: 'INVALID_OUTPUT';
+      readonly code: string;
+      readonly usage?: SupportAiUsage;
+      readonly detail?: SupportAiFailureDetail;
+    }
   | {
       readonly outcome: 'REFUSED_BY_PROVIDER';
       readonly code: string;
       readonly usage?: SupportAiUsage;
+      readonly detail?: SupportAiFailureDetail;
     }
-  | { readonly outcome: 'TIMEOUT' };
+  | { readonly outcome: 'TIMEOUT'; readonly detail?: SupportAiFailureDetail };
+
+/**
+ * The detail of a failed outcome: the adapter's own when it gave one, otherwise the class the
+ * outcome kind implies with nothing else known. Null for `OK`. A code ending `.truncated`,
+ * `.no_content`, `.not_json` or `.schema_invalid` keeps its precise class even without a detail,
+ * so an older or hand-built outcome is never reported vaguer than its code says.
+ */
+export function supportAiFailureDetailOf(outcome: SupportAiOutcome): SupportAiFailureDetail | null {
+  if (outcome.outcome === 'OK') return null;
+  if (outcome.detail !== undefined) return outcome.detail;
+  const bare = (failureClass: SupportAiFailureClass): SupportAiFailureDetail => ({
+    failureClass,
+    httpStatus: null,
+    providerErrorCode: null,
+    providerErrorType: null,
+    providerErrorParam: null,
+  });
+  switch (outcome.outcome) {
+    case 'TIMEOUT':
+      return bare('timeout');
+    case 'RATE_LIMITED':
+      return bare('rate_limited');
+    case 'AUTH_FAILED':
+      return bare(outcome.quota ? 'quota' : 'auth');
+    case 'REFUSED_BY_PROVIDER':
+      return bare('refused');
+    case 'TEMPORARY':
+      return bare(/\.http_\d+$/u.test(outcome.code) ? 'provider_error' : 'network');
+    case 'INVALID_OUTPUT': {
+      const suffix = outcome.code.slice(outcome.code.lastIndexOf('.') + 1);
+      const known: Readonly<Record<string, SupportAiFailureClass>> = {
+        truncated: 'truncated',
+        no_content: 'no_content',
+        not_json: 'not_json',
+        schema_invalid: 'schema_invalid',
+        reply_too_long: 'reply_too_long',
+      };
+      return bare(known[suffix] ?? 'request_rejected');
+    }
+    default: {
+      const unreachable: never = outcome;
+      throw new Error(`unclassified outcome ${String(unreachable)}`);
+    }
+  }
+}
 
 /**
  * The outcomes that move to the next configured provider (ADR-0034 §3, TB0 amendment 4).
@@ -355,6 +487,13 @@ export const supportAiCredentialViewSchema = z.object({
   /** The breaker: open until this instant, or null. */
   trippedUntil: z.string().nullable(),
   lastTestOutcome: z.enum(SUPPORT_AI_OUTCOMES).nullable(),
+  /**
+   * Why the last test was not `OK` — the first failing check's class; null when it passed or
+   * no test ran since this column existed. `lastTestOutcome` keeps its meaning: `OK` only when
+   * EVERY check that ran passed (model access, structured generation, decision schema, and
+   * vision when vision is on), never because the model could merely be listed.
+   */
+  lastTestFailureClass: z.enum(SUPPORT_AI_FAILURE_CLASSES).nullable(),
   lastTestedAt: z.string().nullable(),
   /** TB10: `supportAiBreakerState` at the moment of the read; `CLOSED` with no key. */
   breaker: z.enum(SUPPORT_AI_BREAKER_STATES),
@@ -382,10 +521,67 @@ export const supportAiConfigResponseSchema = z.object({
 });
 export type SupportAiConfigResponse = z.infer<typeof supportAiConfigResponseSchema>;
 
+/**
+ * The capability test's checks, in the order they run (program §11). Each one is a separate
+ * provider call, except `DECISION_SCHEMA`, which reads the `STRUCTURED_GENERATION` answer:
+ *
+ * - `MODEL_ACCESS` — the provider's model lookup (`GET /models/{id}`), where it has one;
+ * - `STRUCTURED_GENERATION` — the SAME request Assist and Auto Reply send (adapter `generate`,
+ *   `SUPPORT_AI_DECISION_JSON_SCHEMA`, the same output-token budget), over a fixed synthetic
+ *   conversation that holds no customer data;
+ * - `DECISION_SCHEMA` — that answer parsed by `supportAiDecisionSchema` and the tenant's reply
+ *   limit, exactly as a draft is;
+ * - `VISION` — only when vision is on: the same request with one tiny embedded image.
+ */
+export const SUPPORT_AI_TEST_CHECKS = [
+  'MODEL_ACCESS',
+  'STRUCTURED_GENERATION',
+  'DECISION_SCHEMA',
+  'VISION',
+] as const;
+export type SupportAiTestCheck = (typeof SUPPORT_AI_TEST_CHECKS)[number];
+
+/**
+ * - `PASS` / `FAIL`;
+ * - `NOT_TESTED` — not run: the provider has no model lookup, vision is off, or an earlier
+ *   check failed (a call that cannot succeed is not paid for);
+ * - `UNSUPPORTED` — vision is on but this adapter declares no vision, so no image is ever sent.
+ */
+export const SUPPORT_AI_TEST_CHECK_RESULTS = ['PASS', 'FAIL', 'NOT_TESTED', 'UNSUPPORTED'] as const;
+export type SupportAiTestCheckResult = (typeof SUPPORT_AI_TEST_CHECK_RESULTS)[number];
+
+export const supportAiTestRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  model: modelIdSchema,
+});
+export type SupportAiTestRequest = z.infer<typeof supportAiTestRequestSchema>;
+
+export const supportAiTestCheckViewSchema = z.object({
+  check: z.enum(SUPPORT_AI_TEST_CHECKS),
+  result: z.enum(SUPPORT_AI_TEST_CHECK_RESULTS),
+  /** The provider call's outcome; null when no call was made for this check. */
+  outcome: z.enum(SUPPORT_AI_OUTCOMES).nullable(),
+  failureClass: z.enum(SUPPORT_AI_FAILURE_CLASSES).nullable(),
+  code: z.string().nullable(),
+  httpStatus: z.number().int().nullable(),
+  providerErrorCode: z.string().nullable(),
+  providerErrorType: z.string().nullable(),
+  providerErrorParam: z.string().nullable(),
+  /** `DECISION_SCHEMA`: the first zod issue's path (`intent`, `factRefs.0`) and code. */
+  issuePath: z.string().nullable(),
+  issueCode: z.string().nullable(),
+  latencyMs: z.number().int().nullable(),
+});
+export type SupportAiTestCheckView = z.infer<typeof supportAiTestCheckViewSchema>;
+
 export const supportAiTestResponseSchema = z.object({
+  /** `OK` only when every check that ran passed; otherwise the first failing check's outcome. */
   outcome: z.enum(SUPPORT_AI_OUTCOMES),
   code: z.string().nullable(),
+  failureClass: z.enum(SUPPORT_AI_FAILURE_CLASSES).nullable(),
+  /** The whole test, every check included. */
   latencyMs: z.number().int(),
+  checks: z.array(supportAiTestCheckViewSchema),
 });
 export type SupportAiTestResponse = z.infer<typeof supportAiTestResponseSchema>;
 
@@ -457,11 +653,18 @@ export const SUPPORT_AI_TICKET_ACTIONS = ['NONE', 'CREATE', 'LINK'] as const;
 
 /** The longest reply text a decision may carry, whatever the tenant configures. */
 export const SUPPORT_AI_REPLY_MAX_CHARS = 4000;
+/** The operator-only notes of a decision: stated to the model, and the parser's bounds. */
+export const SUPPORT_AI_SUMMARY_MAX_CHARS = 600;
+export const SUPPORT_AI_INTENT_MAX_CHARS = 120;
+/** How a cited alias is spelled: `S1`, `O2`, `P3` (facts) and `K4` (knowledge). */
+export const SUPPORT_AI_REF_PATTERN = /^[A-Z][0-9]{1,3}$/u;
+export const SUPPORT_AI_MAX_REFS = 20;
 
 /**
  * THE decision a model must return, validated by zod before anything reads it. Invalid output
- * sends nothing (ADR-0034 §1). `factRefs` and `knowledgeRefs` name payload aliases (`S1`, `P2`,
- * `K3`); a ref the payload did not contain is a reason to refuse the decision (TB7).
+ * sends nothing (ADR-0034 §1). `factRefs` name the payload's fact aliases (`S1`, `O2`, `P3`);
+ * `knowledgeRefs` name its knowledge aliases (`K1`…, `supportContextKnowledgeSchema`). A fact
+ * ref the payload did not contain is a reason to refuse the decision (TB7).
  */
 export const supportAiDecisionSchema = z
   .object({
@@ -469,13 +672,13 @@ export const supportAiDecisionSchema = z
     replyText: z.string().max(SUPPORT_AI_REPLY_MAX_CHARS),
     topic: z.enum(SUPPORT_AI_TOPICS),
     confidence: z.enum(SUPPORT_AI_CONFIDENCES),
-    factRefs: z.array(z.string().regex(/^[A-Z][0-9]{1,3}$/u)).max(20),
-    knowledgeRefs: z.array(z.string().regex(/^[A-Z][0-9]{1,3}$/u)).max(20),
+    factRefs: z.array(z.string().regex(SUPPORT_AI_REF_PATTERN)).max(SUPPORT_AI_MAX_REFS),
+    knowledgeRefs: z.array(z.string().regex(SUPPORT_AI_REF_PATTERN)).max(SUPPORT_AI_MAX_REFS),
     ticketAction: z.enum(SUPPORT_AI_TICKET_ACTIONS),
     /** One or two sentences for the operator: what the customer wants, in Persian. */
-    summary: z.string().max(600),
+    summary: z.string().max(SUPPORT_AI_SUMMARY_MAX_CHARS),
     /** A short label of the customer's intent, for the operator. */
-    intent: z.string().max(120),
+    intent: z.string().max(SUPPORT_AI_INTENT_MAX_CHARS),
   })
   .strict();
 export type SupportAiDecision = z.infer<typeof supportAiDecisionSchema>;
@@ -578,18 +781,52 @@ export const SUPPORT_AI_IMAGE_SKIP_REASONS = [
 ] as const;
 export type SupportAiImageSkipReason = (typeof SUPPORT_AI_IMAGE_SKIP_REASONS)[number];
 
+/**
+ * What an operator reads about a failed AI job: the class (`SUPPORT_AI_FAILURE_CLASSES`) and,
+ * when a provider was called, the deciding attempt's safe telemetry from `support_ai_runs` —
+ * never a prompt, a response or the provider's message.
+ */
+export const supportAiFailureDiagnosticSchema = z.object({
+  failureClass: z.enum(SUPPORT_AI_FAILURE_CLASSES),
+  operation: z.enum(SUPPORT_AI_OPERATIONS).nullable(),
+  provider: z.enum(SUPPORT_AI_PROVIDERS).nullable(),
+  model: z.string().nullable(),
+  /** 0 is the primary; 1 and 2 the fallbacks. */
+  attemptIndex: z.number().int().nullable(),
+  outcome: z.enum(SUPPORT_AI_OUTCOMES).nullable(),
+  httpStatus: z.number().int().nullable(),
+  providerErrorCode: z.string().nullable(),
+  providerErrorType: z.string().nullable(),
+  providerErrorParam: z.string().nullable(),
+  issuePath: z.string().nullable(),
+  issueCode: z.string().nullable(),
+  latencyMs: z.number().int().nullable(),
+  inputTokens: z.number().int().nullable(),
+  outputTokens: z.number().int().nullable(),
+  at: z.string().nullable(),
+});
+export type SupportAiFailureDiagnostic = z.infer<typeof supportAiFailureDiagnosticSchema>;
+
 export const supportAiDraftViewSchema = z.object({
   id: z.string(),
   state: z.enum(SUPPORT_AI_JOB_STATES),
   createdAt: z.string(),
   readyAt: z.string().nullable(),
   failureCode: z.string().nullable(),
+  /** Why a FAILED draft failed, when the AI was the reason; null otherwise. */
+  failure: supportAiFailureDiagnosticSchema.nullable(),
   decision: z.enum(SUPPORT_AI_DECISIONS).nullable(),
   topic: z.enum(SUPPORT_AI_TOPICS).nullable(),
   confidence: z.enum(SUPPORT_AI_CONFIDENCES).nullable(),
   summary: z.string().nullable(),
   intent: z.string().nullable(),
   suggestedReply: z.string().nullable(),
+  /**
+   * The suggested reply is longer than the tenant's `maxOutputChars`. An Assist draft is
+   * SHOWN with a warning rather than failed — a person edits it before sending, and the send is
+   * held to the ordinary outbound limit. An automatic reply over the limit never sends.
+   */
+  replyOverLimit: z.boolean(),
   ticketAction: z.enum(SUPPORT_AI_TICKET_ACTIONS).nullable(),
   /** Payload aliases the model cited, resolved server-side to short human labels. */
   factLabels: z.array(z.string()),
