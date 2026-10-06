@@ -199,6 +199,29 @@ describe('the panel tutorial after delivery — what is sent', () => {
     expect(h.order.slice(-3)).toEqual(['sendFile', 'sendFile', 'send']);
   });
 
+  it('VIDEO_TEXT too long whose bare video is RATE_LIMITED: no text bursts into the limit', async () => {
+    const h = sender({
+      row: tutorial({ mode: 'VIDEO_TEXT' }),
+      files: [{ outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' }, { outcome: 'RATE_LIMITED' }],
+    });
+    expect(await h.instance.afterDelivery(scope, PAID, CONTACT)).toEqual({
+      kind: 'SENT',
+      arrangement: 'VIDEO_THEN_TEXT',
+      outcome: 'RATE_LIMITED',
+    });
+    expect(h.files).toHaveLength(2);
+    expect(h.texts, 'the text is not sent into the same per-chat limit').toHaveLength(0);
+  });
+
+  it('VIDEO_TEXT too long whose bare video is UNKNOWN: the text still follows', async () => {
+    const h = sender({
+      row: tutorial({ mode: 'VIDEO_TEXT' }),
+      files: [{ outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' }, { outcome: 'UNKNOWN' }],
+    });
+    await h.instance.afterDelivery(scope, PAID, CONTACT);
+    expect(h.texts).toHaveLength(1);
+  });
+
   it('VIDEO_TEXT whose video Telegram refuses: the text still goes, once', async () => {
     const h = sender({ row: tutorial({ mode: 'VIDEO_TEXT' }), files: [{ outcome: 'REFUSED' }] });
     expect(await h.instance.afterDelivery(scope, PAID, CONTACT)).toEqual({

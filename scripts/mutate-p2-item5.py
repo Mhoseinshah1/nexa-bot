@@ -55,6 +55,8 @@ M=[
  ('D5-10',[(SENDER,"arrangement: 'VIDEO_THEN_TEXT', outcome: await asText() };","arrangement: 'VIDEO_THEN_TEXT', outcome: 'DELIVERED' };")],T_U,'too long'),
  # UNKNOWN / RATE_LIMITED are not followed by the text (no retry in another shape).
  ('D5-11',[(SENDER,"if (captioned.outcome !== 'REFUSED') {","if (captioned.outcome === 'DELIVERED') {")],T_U,'neither retried'),
+ # Too long, bare video RATE_LIMITED: the text is not burst into the same per-chat limit.
+ ('D5-32',[(SENDER,"      if (bare === 'RATE_LIMITED') {","      if (bare === 'RATE_LIMITED' && false) {")],T_U,'bare video is RATE_LIMITED'),
  # A video Telegram refuses still lets the text go.
  ('D5-12',[(SENDER,"    // Telegram refused the video itself: the text still goes, whole.\n    return { kind: 'SENT', arrangement: 'TEXT', outcome: await asText() };","    return { kind: 'SENT', arrangement: 'TEXT', outcome: 'REFUSED' };")],T_U,'Telegram refuses'),
  # Nothing this bot can send: no claim, no send.
@@ -91,6 +93,8 @@ M=[
  ('D5-28',[(CONTRACT,"    if (deliveryTutorialSendsText(body.mode) && body.text === null) {","    if (false && body.text === null) {")],T_U,'without what it sends'),
  # Web: the draft refuses a mode without its text.
  ('D5-29',[(WEB,"  } else if (deliveryTutorialSendsText(draft.mode)) {","  } else if (false) {")],T_W,'refuses a draft'),
+ # Web: the caption-fallback notice measures markers as their one emoji, like the server.
+ ('D5-33',[(WEB,"  const captionLength = withMarkersAsFallback(rendered).length;","  const captionLength = rendered.length;")],T_W,'caption fallback'),
  # Web: a partial edit keeps the text the mode does not use.
  ('D5-30',[(WEB,"      text: text === '' ? null : text,","      text: text === '' || !deliveryTutorialSendsText(draft.mode) ? null : text,")],T_W,'partial edit'),
 ]
@@ -111,16 +115,19 @@ for mid,edits,(project,test),filt in M:
       print(mid,'ANCHOR MISSING in',f,cur.count(a),flush=True); ok=False; break
     open(f,'w',encoding='utf-8').write(cur.replace(a,b))
   contracts=any(f.startswith('packages/contracts') for f in originals)
-  if ok:
+  try:
+    if ok:
+      if contracts: build_contracts()
+      ran+=1
+      r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
+      out=r.stdout+r.stderr
+      failed=[l.strip() for l in out.splitlines() if '×' in l]
+      summ=[l.strip() for l in out.splitlines() if 'Tests ' in l]
+      ran_any=any('passed' in l or 'failed' in l for l in summ)
+      if r.returncode!=0 and ran_any: killed+=1
+      print(mid,'KILLED' if (r.returncode!=0 and ran_any) else 'SURVIVED',summ,failed[:2],flush=True)
+  finally:
+    # Restored whatever happened above — an interrupt, a failed build, a crashed runner.
+    for f,s in originals.items(): open(f,'w',encoding='utf-8').write(s)
     if contracts: build_contracts()
-    ran+=1
-    r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
-    out=r.stdout+r.stderr
-    failed=[l.strip() for l in out.splitlines() if '×' in l]
-    summ=[l.strip() for l in out.splitlines() if 'Tests ' in l]
-    ran_any=any('passed' in l or 'failed' in l for l in summ)
-    if r.returncode!=0 and ran_any: killed+=1
-    print(mid,'KILLED' if (r.returncode!=0 and ran_any) else 'SURVIVED',summ,failed[:2],flush=True)
-  for f,s in originals.items(): open(f,'w',encoding='utf-8').write(s)
-  if contracts: build_contracts()
 print(f'{killed} of {ran} killed',flush=True)

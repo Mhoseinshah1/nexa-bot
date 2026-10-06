@@ -154,8 +154,15 @@ export class DeliveryTutorialSender {
       return { kind: 'SENT', arrangement: 'VIDEO_CAPTIONED', outcome: captioned.outcome };
     }
     if (captioned.reason === 'CAPTION_OVER_BOUND') {
-      // Too long to be a caption: the video bare (its own outcome decorative), then the text.
-      await bareVideo(video.fileId);
+      // Too long to be a caption: the video bare, then the text.
+      const bare = await bareVideo(video.fileId);
+      /*
+       * Except after a 429 on the video: the limit is per chat, so the text would only burst
+       * into a second one. Not retried either way — the tutorial is at-most-once.
+       */
+      if (bare === 'RATE_LIMITED') {
+        return { kind: 'SENT', arrangement: 'VIDEO_THEN_TEXT', outcome: 'RATE_LIMITED' };
+      }
       return { kind: 'SENT', arrangement: 'VIDEO_THEN_TEXT', outcome: await asText() };
     }
     // Telegram refused the video itself: the text still goes, whole.

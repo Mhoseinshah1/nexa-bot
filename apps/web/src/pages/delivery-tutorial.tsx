@@ -17,7 +17,7 @@ import {
   type DeliveryTutorialVideoOption,
 } from '@nexa/contracts';
 import { ApiError, fetchDeliveryTutorial, saveDeliveryTutorial } from '../api/client';
-import { APPEARANCE_SLOT_LABEL } from '../appearance-labels';
+import { APPEARANCE_SLOT_LABEL, withMarkersAsFallback } from '../appearance-labels';
 import { formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
@@ -192,6 +192,11 @@ function TutorialForm({
   const sendsText = deliveryTutorialSendsText(draft.mode);
   const sendsVideo = deliveryTutorialSendsVideo(draft.mode);
   const rendered = draft.text.trim() === '' ? '' : renderClientAppGuide(draft.text);
+  /*
+   * Measured as the server measures the caption: rendered, with each {icon:…} marker drawn as
+   * its one emoji (a custom emoji entity covers that same emoji, so the length is the same).
+   */
+  const captionLength = withMarkersAsFallback(rendered).length;
   const named = videoOptions.find((option) => option.clientAppId === draft.videoClientAppId);
   const id = (field: string) => `delivery-tutorial-${field}`;
   const textError = shown('text');
@@ -287,7 +292,7 @@ function TutorialForm({
             .replace('{count}', formatNumber(draft.text.trim().length))
             .replace('{max}', formatNumber(DELIVERY_TUTORIAL_TEXT_MAX_LENGTH))}
         </p>
-        {draft.mode === 'VIDEO_TEXT' && rendered.length > TELEGRAM_CAPTION_MAX_LENGTH && (
+        {draft.mode === 'VIDEO_TEXT' && captionLength > TELEGRAM_CAPTION_MAX_LENGTH && (
           <Banner tone="info">{t('web.delivery_tutorial_caption_fallback')}</Banner>
         )}
 

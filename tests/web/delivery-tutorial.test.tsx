@@ -87,6 +87,22 @@ describe('the post-delivery tutorial tab', () => {
     expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
   });
 
+  it('warns of the caption fallback by the length the server measures, markers as one emoji', async () => {
+    // 1000 letters and ten markers: 1140 characters as typed, 1020 as drawn — it fits.
+    const fits = `${'ا'.repeat(1000)}${'{icon:warning}'.repeat(10)}`;
+    stubApi([{ url: route, method: 'GET', body: stored({ mode: 'VIDEO_TEXT', text: fits }) }]);
+    const view = renderPage(<DeliveryTutorialTab panelId={PANEL} mayEdit />);
+    await screen.findByLabelText(t('web.delivery_tutorial_mode'));
+    expect(screen.queryByText(t('web.delivery_tutorial_caption_fallback'))).toBeNull();
+
+    // Over the bound once drawn: the notice is shown.
+    fireEvent.change(screen.getByLabelText(new RegExp(t('web.delivery_tutorial_text'))), {
+      target: { value: `${fits}${'ب'.repeat(10)}` },
+    });
+    expect(screen.getByText(t('web.delivery_tutorial_caption_fallback'))).toBeInTheDocument();
+    view.unmount();
+  });
+
   it('a reader without panels.edit sees the tutorial and no save button', async () => {
     stubApi([{ url: route, method: 'GET', body: stored() }]);
     renderPage(<DeliveryTutorialTab panelId={PANEL} mayEdit={false} />);
