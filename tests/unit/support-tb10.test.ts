@@ -139,7 +139,8 @@ describe('the automatic outcome classes', () => {
   it('classifies every outcome: sent, every guard and handoff as HANDED_OFF, every drop as DROPPED', () => {
     for (const outcome of SUPPORT_AI_AUTO_OUTCOMES) {
       const expected =
-        outcome === 'sent'
+        // A sent clarifying question (hotfix 2026-10-06) is a send too.
+        outcome === 'sent' || outcome === 'sent_clarifying'
           ? 'SENT'
           : outcome.startsWith('dropped_')
             ? 'DROPPED'
