@@ -149,6 +149,10 @@ import {
   type ResellerUpdateRequest,
   REFERRAL_ROUTES,
   TENANT_MEDIA_ROUTES,
+  DELIVERY_QR_ROUTES,
+  deliveryQrPreviewSchema,
+  type DeliveryQrPreviewResponse,
+  type QrTemplate,
   customerReferralResponseSchema,
   referralCommissionListResponseSchema,
   referralListResponseSchema,
@@ -3639,6 +3643,14 @@ export function clearTenantMedia(input: {
 }): Promise<TenantMediaStateResponse> {
   const { purpose, ...body } = input;
   return post(TENANT_MEDIA_ROUTES.clear(purpose), body, tenantMediaStateSchema);
+}
+
+/**
+ * Phase 2 item 4: the QR a customer would receive for a DRAFT template (null: the plain QR),
+ * on the background stored now. Read-only on the server; a POST because the draft is a body.
+ */
+export function previewDeliveryQr(template: QrTemplate | null): Promise<DeliveryQrPreviewResponse> {
+  return post(DELIVERY_QR_ROUTES.preview, { template }, deliveryQrPreviewSchema);
 }
 
 // ---------------------------------------------------------------------------

@@ -109,6 +109,8 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   'bot.inline_buttons',
   // UX Batch 01, item 2: each category's colour, on «🎨 ظاهر ربات» beside the categories.
   'bot.category_colors',
+  // Phase 2 item 4: the QR placement, on «🎨 ظاهر ربات» beside the background it places on.
+  'delivery.qr_template',
   // Spec 13.2: the automatic backup schedule is edited on «بکاپ و بازیابی», beside the
   // backups it schedules, as a switch and an interval with a unit — never raw minutes.
   BACKUP_SCHEDULE_SETTING_KEYS.enabled,
@@ -380,6 +382,16 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   'bot.category_colors': {
     title: 'web.setting_bot_category_colors',
     description: 'web.setting_bot_category_colors_desc',
+    group: 'support',
+    control: { kind: 'text' },
+  },
+  /*
+   * Phase 2 item 4: the QR placement. Edited on «🎨 ظاهر ربات», never here
+   * (`SETTINGS_MANAGED_ELSEWHERE`); the entry exists because this map is total.
+   */
+  'delivery.qr_template': {
+    title: 'web.setting_delivery_qr_template',
+    description: 'web.setting_delivery_qr_template_desc',
     group: 'support',
     control: { kind: 'text' },
   },

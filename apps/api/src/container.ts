@@ -210,6 +210,10 @@ import { SignupGiftTermsGuard } from './modules/control/settings/application/sig
 import { SignupGiftActivationGuard } from './modules/control/features/application/signup-gift-activation.guard.js';
 import { TenantMediaService } from './modules/control/media/application/tenant-media.service.js';
 import { DrizzleTenantMediaRepository } from './modules/control/media/infrastructure/drizzle-tenant-media.repository.js';
+import {
+  QrTemplateGuard,
+  QrTemplatePreviewService,
+} from './modules/control/media/application/qr-template.service.js';
 import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
 import { CONTROL_ERROR_CODES, SERVICE_REMINDER_DEFAULTS, isNexaError } from '@nexa/contracts';
@@ -340,7 +344,10 @@ import {
   SupportFaqSeeder,
   SupportScreenReader,
 } from './modules/control/support/application/support-screen.reader.js';
-import type { CustomerContactReader } from './modules/commerce/provisioning/application/ports.js';
+import type {
+  CustomerContactReader,
+  DeliveryQrRenderer,
+} from './modules/commerce/provisioning/application/ports.js';
 import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
@@ -411,7 +418,7 @@ import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/ce
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
-import type { CategoryColors, FxSource, InlineButtonStyles } from '@nexa/contracts';
+import type { CategoryColors, FxSource, InlineButtonStyles, QrTemplate } from '@nexa/contracts';
 import {
   FX_REFRESH_INTERVAL_MS,
   FxRefreshLoop,
@@ -563,6 +570,10 @@ import {
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
 import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
 import { PngQrCodeEncoder } from './infrastructure/qr/qr-png.js';
+import {
+  PngDeliveryQrRenderer,
+  QrBackgroundContentCheck,
+} from './infrastructure/qr/qr-template.js';
 import { CustomerCaptureService } from './modules/commerce/customers/application/customer-capture.service.js';
 import { DrizzleCustomerCaptureRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-capture.repository.js';
 import { DrizzleCustomerCountersReader } from './modules/commerce/customers/infrastructure/drizzle-customer-counters.reader.js';
@@ -933,6 +944,10 @@ export interface Container {
   readonly operationsOverview: OperationsOverviewService;
   readonly referralSignupGifts: ReferralSignupGiftService;
   readonly tenantMedia: TenantMediaService;
+  /** Phase 2 item 4: the Web Admin's preview of the QR on the tenant's background. */
+  readonly deliveryQrPreview: QrTemplatePreviewService;
+  /** Phase 2 item 4: the one renderer every customer QR the delivery lane sends goes through. */
+  readonly deliveryQr: DeliveryQrRenderer;
   /** WP9-B: a reseller's standing, entitlements, pricing layer, credit and purchase record. */
   readonly resellers: ResellerService;
   /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
@@ -2820,8 +2835,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   /* The tenant's media slots (customer UX §I): the referral banner, bytes in the database. */
+  const tenantMediaRepository = new DrizzleTenantMediaRepository(database.db);
   const tenantMediaService = new TenantMediaService({
-    repository: new DrizzleTenantMediaRepository(database.db),
+    repository: tenantMediaRepository,
     guard,
     audit,
     opsLog,
@@ -2830,7 +2846,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     idempotency,
     clock,
+    // Phase 2 item 4: a QR background must decode, within its bounds, before it is stored.
+    contentCheck: new QrBackgroundContentCheck(),
   });
+
+  /*
+   * Phase 2 item 4: every customer QR NEXA delivers, drawn on the tenant's QR background when
+   * `delivery.qr_template` places it — else exactly the plain QR. A template that cannot be
+   * used is logged and the plain QR is sent; a delivery never fails on decoration.
+   */
+  const deliveryQrRenderer = new PngDeliveryQrRenderer(
+    {
+      template: (scope) =>
+        settingsResolver.valueOf<QrTemplate | null>(scope, 'delivery.qr_template'),
+      background: (scope) => tenantMediaRepository.content(scope, 'QR_BACKGROUND'),
+    },
+    (scope, reason, error) =>
+      logger.warn(
+        { tenantId: scope.tenantId, reason, err: error },
+        'The QR template was not used; the plain QR was sent.',
+      ),
+  );
+  const deliveryQrPreview = new QrTemplatePreviewService(
+    guard,
+    deliveryQrRenderer,
+    tenantMediaRepository,
+  );
 
   const refundService = new RefundService({
     cashback: cashbackService,
@@ -3589,6 +3630,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // cannot be cleared while the Stars route is switched on.
       new StarsPricingModeGuard(),
       new StarsPerUsdtGuard(paymentGatewayRepository),
+      // Phase 2 item 4: a QR template needs a background its region lies inside.
+      new QrTemplateGuard(tenantMediaRepository),
       // The trial product must be a product of this tenant (WP6-A).
       new TrialProductGuard(productRepository),
       // One per reminder threshold. The five have to agree with one another, and no
@@ -5089,9 +5132,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     messenger: customerMessenger,
     /*
      * The QR is encoded from the EXACT link the row holds at send time; the encoder is
-     * a pure function of that string and nothing else (customer UX completion §B).
+     * a pure function of that string and nothing else (customer UX completion §B). Phase 2
+     * item 4: drawn on the tenant's QR background when one is configured.
      */
-    qr: new PngQrCodeEncoder(),
+    qr: deliveryQrRenderer,
     /*
      * The card's facts: the product name frozen on the ORDER (a historical fact), the
      * plan's duration and allowance from the same snapshot, and the product's
@@ -6504,6 +6548,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     operationsOverview,
     referralSignupGifts: referralSignupGiftService,
     tenantMedia: tenantMediaService,
+    deliveryQrPreview,
+    deliveryQr: deliveryQrRenderer,
     resellers: resellerService,
     resellersAdmin: resellerAdminService,
     resellerMinimums: resellerMinimumService,

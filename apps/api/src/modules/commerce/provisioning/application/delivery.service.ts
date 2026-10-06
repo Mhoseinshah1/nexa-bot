@@ -31,7 +31,7 @@ import {
 } from './operation-card.js';
 import type {
   CustomerContactReader,
-  QrCodeEncoder,
+  DeliveryQrRenderer,
   ServiceRecord,
   ServiceRepository,
 } from './ports.js';
@@ -176,11 +176,13 @@ export interface DeliveryServiceDeps {
   readonly contacts: CustomerContactReader;
   readonly messenger: CustomerMessenger;
   /**
-   * The QR encoder, called with the EXACT `subscriptionUrl` the row holds at send time —
-   * the same string `markSendStarted` compares-and-sets — and with nothing else. Never a
-   * draft URL, never the panel's base URL, never the username.
+   * The QR renderer, asked for the code of the EXACT `subscriptionUrl` the row holds at send
+   * time — the same string `markSendStarted` compares-and-sets — and of nothing else. Never a
+   * draft URL, never the panel's base URL, never the username. Phase 2 item 4: it draws the
+   * code on the tenant's QR background when one is configured, at all three sites below;
+   * what the code encodes is the same either way.
    */
-  readonly qr: QrCodeEncoder;
+  readonly qr: DeliveryQrRenderer;
   readonly card: DeliveryCardFactsReader;
   /**
    * The tenant kill switch, read before anything leaves the process.
@@ -560,7 +562,7 @@ export class DeliveryService {
         kind: 'PHOTO',
         source: {
           kind: 'BYTES',
-          bytes: this.deps.qr.encode(sentUrl),
+          bytes: (await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: sentUrl })).bytes,
           fileName: 'subscription.png',
           mimeType: 'image/png',
         },
@@ -857,7 +859,7 @@ export class DeliveryService {
         buttons,
       });
     }
-    const png = this.deps.qr.encode(sentUrl);
+    const png = (await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: sentUrl })).bytes;
     const photo = {
       chatId,
       botInstanceId,
@@ -975,7 +977,7 @@ export class DeliveryService {
       kind: 'PHOTO' as const,
       source: {
         kind: 'BYTES' as const,
-        bytes: this.deps.qr.encode(sentUrl),
+        bytes: (await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: sentUrl })).bytes,
         fileName: 'subscription.png',
         mimeType: 'image/png' as const,
       },
