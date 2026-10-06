@@ -414,6 +414,35 @@ describe('the knowledge build (TB9)', () => {
     expect(await builtArticles()).toEqual([]);
   });
 
+  it('L3: the support-accounts source is proposed and applied; any other handle is still excluded', async () => {
+    const c = ctx.container;
+    await c.settingsService.set(tenantA, owner, {
+      idempotencyKey: key('accounts'),
+      key: 'support.accounts',
+      value: ['@Nexa_Support'],
+      expectedVersion: null,
+    });
+    // A FAQ naming somebody's personal handle: still personal data, still excluded.
+    await c.supportFaqs.create(tenantA, owner, {
+      idempotencyKey: key('faq'),
+      question: 'با چه کسی صحبت کنم؟',
+      answer: 'به @ali_customer_99 پیام بدهید.',
+      sortOrder: 2,
+    });
+    const detail = await build();
+    const accounts = detail.proposals.find((p) => p.sourceType === 'SUPPORT_ACCOUNTS');
+    expect(accounts?.content.body).toContain('@Nexa_Support');
+    expect(detail.proposals.map((p) => p.content.title)).not.toContain('با چه کسی صحبت کنم؟');
+    const [audit] = (
+      await c.database.db.execute(
+        sql`SELECT after FROM audit_logs WHERE action = 'support_knowledge.build.run' ORDER BY occurred_at DESC LIMIT 1`,
+      )
+    ).rows as { after: { excluded: { count: number; kinds: string[] } } }[];
+    expect(audit!.after.excluded).toEqual({ count: 1, kinds: ['USERNAME'] });
+    await applyAll(detail.build.id);
+    expect((await builtArticles()).map((a) => a.body).join('\n')).toContain('@Nexa_Support');
+  });
+
   it('permissions: support may view the build but not run or apply it; the denial is audited', async () => {
     const detail = await build();
     expect((await ctx.container.supportKnowledgeBuild.latest(tenantA, support))?.build.id).toBe(

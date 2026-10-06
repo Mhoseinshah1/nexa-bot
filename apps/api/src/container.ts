@@ -5705,6 +5705,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const supportKnowledge = new SupportKnowledgeService({
     repository: supportKnowledgeRepository,
+    settings: settingsResolver,
     guard,
     uow,
     audit,
@@ -5731,6 +5732,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       settings: settingsResolver,
       gateways: paymentGatewayRepository,
     }),
+    settings: settingsResolver,
     guard,
     uow,
     audit,

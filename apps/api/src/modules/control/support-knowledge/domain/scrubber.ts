@@ -200,25 +200,63 @@ export interface ScrubResult {
   readonly kinds: readonly SupportLearningSensitiveKind[];
 }
 
+/**
+ * L3 — a Telegram handle as one comparable form: `@name`, `t.me/name` and
+ * `https://telegram.me/name` all read `name`, lower case.
+ */
+export function handleKey(handle: string): string {
+  return handle
+    .trim()
+    .replace(/^(?:https?:\/\/)?(?:t|telegram)\.me\/(?:s\/)?/iu, '')
+    .replace(/^@/u, '')
+    .toLowerCase();
+}
+
+export interface ScrubOptions {
+  /**
+   * L3: the installation's OWN public support handles (the `support.accounts` setting). A
+   * USERNAME hit that is exactly one of them is the business pointing customers at itself, not
+   * a person's data, and is left as it is. Every other handle — a customer's, an operator's —
+   * is still scrubbed, and no other kind is affected.
+   */
+  readonly allowedHandles?: readonly string[];
+}
+
 /** Scrubs `text`: every sensitive span becomes a marker naming its kind. */
-export function scrubSensitive(text: string): ScrubResult {
+export function scrubSensitive(text: string, options: ScrubOptions = {}): ScrubResult {
   let out = foldDigits(text.normalize('NFKC'));
   const found = new Set<SupportLearningSensitiveKind>();
+  const allowed = new Set(
+    (options.allowedHandles ?? []).map(handleKey).filter((key) => key.length > 0),
+  );
+  const kept: string[] = [];
   for (const pattern of PATTERNS) {
     out = out.replace(pattern.regex, (match) => {
       const kind = typeof pattern.kind === 'function' ? pattern.kind(match) : pattern.kind;
+      // An allowed handle is set aside under a private-use mark no later pattern reads (a
+      // `t.me/name` would otherwise be a HOST), and put back at the end.
+      if (kind === 'USERNAME' && allowed.has(handleKey(match))) {
+        kept.push(match);
+        return `\uE000${String(kept.length - 1)}\uE001`;
+      }
       // A marker an earlier pattern wrote is not re-scrubbed; one in the INPUT is a hit.
       if (kind !== 'REDACTION_MARK' && match.includes(`[${REDACTION_MARK}:`)) return match;
       found.add(kind);
       return `[${REDACTION_MARK}:${kind}]`;
     });
   }
+  out = out.replace(/\uE000(\d+)\uE001/gu, (mark: string, index: string) =>
+    kept.length === 0 ? mark : (kept[Number(index)] ?? mark),
+  );
   return { text: out, kinds: orderKinds(found) };
 }
 
 /** The kinds `text` contains, without changing it. Empty means nothing was recognised. */
-export function detectSensitive(text: string): readonly SupportLearningSensitiveKind[] {
-  return scrubSensitive(text).kinds;
+export function detectSensitive(
+  text: string,
+  options: ScrubOptions = {},
+): readonly SupportLearningSensitiveKind[] {
+  return scrubSensitive(text, options).kinds;
 }
 
 const KIND_ORDER: readonly SupportLearningSensitiveKind[] = [
