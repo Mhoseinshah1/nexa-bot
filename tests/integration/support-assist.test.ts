@@ -465,10 +465,10 @@ describe('Assist Mode (TB5)', () => {
       idempotencyKey: key('draft'),
     });
     await loop.tick();
-    expect((await jobs.findById(scopeA, job.id))?.factLabels).toEqual([
-      'سرویس user123',
-      'سرویس وصل نمی‌شود',
-    ]);
+    // D3: the knowledge citation is labelled apart from the facts; the unknown K9 is dropped.
+    const ready = await jobs.findById(scopeA, job.id);
+    expect(ready?.factLabels).toEqual(['سرویس user123']);
+    expect(ready?.knowledgeLabels).toEqual(['سرویس وصل نمی‌شود']);
   });
 
   it('records a chain failure as FAILED', async () => {
