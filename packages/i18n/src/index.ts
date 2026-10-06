@@ -396,3 +396,4 @@ export {
   type ReportExportHeaderKey,
 } from './reports.fa.js';
 export { AUDIT_EXPORT_HEADERS_FA, type AuditExportHeaderKey } from './audit-log.fa.js';
+export { PAYMENT_METHOD_NAMES_FA } from './payment-methods.fa.js';
