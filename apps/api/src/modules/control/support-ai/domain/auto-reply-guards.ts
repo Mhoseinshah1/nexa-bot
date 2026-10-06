@@ -86,6 +86,9 @@ export function autoPreflight(input: {
   return PASS;
 }
 
+/** Zero-width and invisible format marks (U+200B–U+200F, ZWNJ among them; U+2060; U+FEFF). */
+const INVISIBLE_MARKS = /[\u200B-\u200F\u2060\uFEFF]/gu;
+
 const CONFIDENCE_RANK: Readonly<Record<SupportAiConfidence, number>> = {
   LOW: 0,
   MEDIUM: 1,
@@ -163,8 +166,10 @@ export function autoDecisionGuards(input: {
     return fail('confidence', 'LOW_CONFIDENCE');
   }
   const reply = decision.replyText.trim();
+  // N7 (review of PR #228): a text of nothing but zero-width or invisible marks is empty too —
+  // for a reply and a question alike. Judged here only; the trimmed original is what is sent.
   if (
-    reply === '' ||
+    reply.replace(INVISIBLE_MARKS, '').trim() === '' ||
     reply.length > config.maxOutputChars ||
     reply.length > BUSINESS_MESSAGE_TEXT_MAX
   ) {

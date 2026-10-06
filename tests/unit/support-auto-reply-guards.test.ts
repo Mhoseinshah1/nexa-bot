@@ -6,6 +6,7 @@ import {
   SUPPORT_AI_LIMITS,
   SUPPORT_AI_SAFE_TOPICS,
   supportAiConfigInputSchema,
+  supportAiConfigSaveSchema,
   type SupportAiDecision,
 } from '@nexa/contracts';
 import {
@@ -73,6 +74,7 @@ const ask: Partial<SupportAiDecision> = {
   factRefs: [],
 };
 const askWith = (over: Partial<SupportAiDecision>) => ({ ...ask, ...over });
+const INVISIBLE_ONLY = '\u200b\u200c\u200d\u200e\u200f\u2060\ufeff';
 
 const preflight = (over: Partial<Parameters<typeof autoPreflight>[0]> = {}) =>
   autoPreflight({
@@ -195,7 +197,7 @@ describe('automatic-reply guards (TB7)', () => {
       guards({ decision: askWith({ confidence: 'LOW' }), config: { autoMinConfidence: 'MEDIUM' } }),
     ).toMatchObject({ outcome: 'guard_confidence' });
     // bounds: an empty or blank question is never sent; neither is an over-long one
-    for (const replyText of ['', '   ', 'ب'.repeat(1201)]) {
+    for (const replyText of ['', '   ', 'ب'.repeat(1201), INVISIBLE_ONLY]) {
       expect(guards({ decision: askWith({ replyText }) })).toMatchObject({
         outcome: 'guard_reply_bounds',
         reason: 'REPLY_OUT_OF_BOUNDS',
@@ -258,11 +260,18 @@ describe('automatic-reply guards (TB7)', () => {
       default: 2,
     });
     expect(SUPPORT_AI_DEFAULT_CONFIG.maxConsecutiveClarifyingQuestions).toBe(2);
-    const parsed = supportAiConfigInputSchema.parse({
-      ...SUPPORT_AI_DEFAULT_CONFIG,
-      maxConsecutiveClarifyingQuestions: undefined,
-    });
-    expect(parsed.maxConsecutiveClarifyingQuestions).toBe(2);
+    // N4: a configuration always carries it (no schema default to widen a tenant at 1)…
+    const absent = { ...SUPPORT_AI_DEFAULT_CONFIG, maxConsecutiveClarifyingQuestions: undefined };
+    expect(supportAiConfigInputSchema.safeParse(absent).success).toBe(false);
+    // …while a SAVE may omit it, and then carries nothing the service could mistake for a value.
+    const saved = supportAiConfigSaveSchema.parse(absent);
+    expect(saved.maxConsecutiveClarifyingQuestions).toBeUndefined();
+    expect(
+      supportAiConfigSaveSchema.safeParse({
+        ...SUPPORT_AI_DEFAULT_CONFIG,
+        maxConsecutiveClarifyingQuestions: 11,
+      }).success,
+    ).toBe(false);
     for (const value of [0, 11, 2.5]) {
       expect(
         supportAiConfigInputSchema.safeParse({
@@ -325,6 +334,32 @@ describe('automatic-reply guards (TB7)', () => {
       });
     }
     expect(guards({ decision: { replyText: 'ب'.repeat(1200) } })).toEqual({ pass: true });
+  });
+
+  it('N7: a reply or question of only zero-width or invisible marks is empty, and hands off', () => {
+    for (const replyText of [
+      '\u200b',
+      '\u200c\u200c',
+      '\u200d \u200e\u200f',
+      '\u2060',
+      '\ufeff',
+      ` ${INVISIBLE_ONLY} `,
+    ]) {
+      for (const kind of ['REPLY', 'ASK_CLARIFYING_QUESTION'] as const) {
+        expect(
+          guards({ decision: { decision: kind, replyText } }),
+          `${kind} ${JSON.stringify(replyText)}`,
+        ).toMatchObject({
+          outcome: 'guard_reply_bounds',
+          reason: 'REPLY_OUT_OF_BOUNDS',
+        });
+      }
+    }
+    // A real word joined by a ZWNJ is text, not invisible.
+    expect(guards({ decision: { replyText: 'می\u200cشود' } })).toEqual({ pass: true });
+    expect(guards({ decision: askWith({ replyText: 'چه\u200cبرنامه‌ای؟' }) })).toEqual({
+      pass: true,
+    });
   });
 
   it('a citation the payload did not contain hands off', () => {
