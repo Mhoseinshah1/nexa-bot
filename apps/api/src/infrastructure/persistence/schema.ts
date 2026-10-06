@@ -2964,6 +2964,17 @@ export const backupRuns = pgTable(
      */
     cleanupOk: boolean('cleanup_ok').notNull(),
     cleanupDetail: text('cleanup_detail'),
+
+    /**
+     * When archive retention removed this run's directory from `BACKUP_WORK_DIR`.
+     *
+     * Null while the directory may still be on disk. It is what makes the two
+     * retentions coherent: the ROW purge (ADR-0027) removes only rows whose
+     * files the FILE retention has already removed, so a purged row can never
+     * orphan an archive, and the Web Admin can say "pruned by retention" rather
+     * than "missing".
+     */
+    archivePrunedAt: timestamptz('archive_pruned_at'),
   },
   (table) => [
     check('backup_runs_trigger_check', enumCheck('trigger', BACKUP_TRIGGERS)),

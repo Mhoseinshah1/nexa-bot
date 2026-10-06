@@ -9,7 +9,12 @@ import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { backupRuns } from '../../../../infrastructure/persistence/schema.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
-import type { BackupRunRepository, BackupRunRow, StartOutcome } from '../application/ports.js';
+import type {
+  BackupArchiveRetentionStore,
+  BackupRunRepository,
+  BackupRunRow,
+  StartOutcome,
+} from '../application/ports.js';
 
 /**
  * The backup run table, and the installation's backup lock.
@@ -50,10 +55,13 @@ function toRow(row: Row): BackupRunRow {
     failureMessage: row.failureMessage,
     cleanupOk: row.cleanupOk,
     cleanupDetail: row.cleanupDetail,
+    archivePrunedAt: row.archivePrunedAt,
   };
 }
 
-export class DrizzleBackupRunRepository implements BackupRunRepository {
+export class DrizzleBackupRunRepository
+  implements BackupRunRepository, BackupArchiveRetentionStore
+{
   constructor(private readonly db: Database) {}
 
   async start(input: {
@@ -395,12 +403,123 @@ export class DrizzleBackupRunRepository implements BackupRunRepository {
                 LIMIT 1),
               '00000000-0000-0000-0000-000000000000'::uuid
             )
+            -- And a row whose DIRECTORY may still be on disk. Archive retention
+            -- removes the directory first and stamps archive_pruned_at; only then
+            -- may the row go. A row purged first would orphan its archive for
+            -- ever, because nothing removes a directory no row names -- and an
+            -- orphan cannot be told apart from a pre-restore archive that only the
+            -- displaced database still describes, which must never be removed.
+            AND candidate.archive_pruned_at IS NOT NULL
           ORDER BY candidate.finished_at ASC, candidate.id ASC
           LIMIT ${limit}
         )`,
       )
       .returning({ id: backupRuns.id });
     return rows.length;
+  }
+
+  /**
+   * Finished runs whose directory archive retention may remove. See the port:
+   * every exclusion is HERE, in one statement, so no caller can forget one.
+   */
+  async archivePruneCandidates(input: {
+    finishedBefore: Date;
+    keepCount: number;
+    protectedIds: readonly string[];
+    limit: number;
+  }): Promise<readonly { id: string; state: BackupRunState }[]> {
+    const unprotected =
+      input.protectedIds.length === 0
+        ? sql``
+        : sql`AND candidate.id NOT IN (${sql.join(
+            input.protectedIds.map((id) => sql`${id}::uuid`),
+            sql`, `,
+          )})`;
+    const rows = await this.db.execute<{ id: string; state: string }>(sql`
+      SELECT candidate.id, candidate.state FROM ${backupRuns} AS candidate
+       WHERE candidate.finished_at IS NOT NULL
+         AND candidate.state <> 'RUNNING'
+         AND candidate.archive_pruned_at IS NULL
+         AND candidate.finished_at < ${input.finishedBefore}
+         -- Telegram may hold this archive and nobody knows; the local copy is
+         -- what an operator reconciles against. Kept until resolved.
+         AND candidate.delivery_state <> 'OUTCOME_UNKNOWN'
+         -- The keep-count rule: the newest N verified successes.
+         AND candidate.id NOT IN (
+           SELECT newest.id FROM ${backupRuns} AS newest
+            WHERE newest.state = 'SUCCEEDED' AND newest.verified_at IS NOT NULL
+            ORDER BY newest.started_at DESC, newest.id DESC
+            LIMIT ${input.keepCount}
+         )
+         -- And the newest verified success BY ITS OWN CLAUSE, so no keep count —
+         -- a bug, a hand-edited setting — can be the reason the last good archive
+         -- is removed. lastSucceededAt's predicate, character for character.
+         AND candidate.id <> COALESCE(
+           (SELECT newest.id FROM ${backupRuns} AS newest
+             WHERE newest.state = 'SUCCEEDED' AND newest.verified_at IS NOT NULL
+             ORDER BY newest.started_at DESC, newest.id DESC
+             LIMIT 1),
+           '00000000-0000-0000-0000-000000000000'::uuid
+         )
+         ${unprotected}
+       ORDER BY candidate.finished_at ASC, candidate.id ASC
+       LIMIT ${input.limit}
+    `);
+    return rows.rows.map((row) => ({ id: row.id, state: row.state as BackupRunState }));
+  }
+
+  async markArchivePruned(input: { id: string; now: Date }): Promise<boolean> {
+    const rows = await this.db
+      .update(backupRuns)
+      .set({ archivePrunedAt: input.now })
+      .where(
+        and(
+          eq(backupRuns.id, input.id),
+          sql`${backupRuns.archivePrunedAt} IS NULL`,
+          sql`${backupRuns.state} <> 'RUNNING'`,
+        ),
+      )
+      .returning({ id: backupRuns.id });
+    return rows.length > 0;
+  }
+
+  async runningIds(): Promise<readonly string[]> {
+    const rows = await this.db
+      .select({ id: backupRuns.id })
+      .from(backupRuns)
+      .where(eq(backupRuns.state, 'RUNNING'));
+    return rows.map((row) => row.id);
+  }
+
+  /** Whether a database of this name exists in the cluster (a leaked scratch database). */
+  async databaseExists(name: string): Promise<boolean> {
+    const found = await this.db.execute(sql`SELECT 1 FROM pg_database WHERE datname = ${name}`);
+    return found.rows.length > 0;
+  }
+
+  async recordedLeftovers(): Promise<readonly string[]> {
+    const rows = await this.db
+      .select({ detail: backupRuns.cleanupDetail })
+      .from(backupRuns)
+      .where(and(eq(backupRuns.cleanupOk, false), sql`${backupRuns.cleanupDetail} IS NOT NULL`));
+    // `finish` writes the survivor list joined by ', '.
+    const items = new Set<string>();
+    for (const row of rows) {
+      for (const item of (row.detail ?? '').split(', ')) {
+        if (item.trim() !== '') items.add(item.trim());
+      }
+    }
+    return [...items];
+  }
+
+  async latestVerified(): Promise<BackupRunRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(backupRuns)
+      .where(and(eq(backupRuns.state, 'SUCCEEDED'), sql`${backupRuns.verifiedAt} IS NOT NULL`))
+      .orderBy(desc(backupRuns.startedAt), desc(backupRuns.id))
+      .limit(1);
+    return row === undefined ? null : toRow(row);
   }
 
   /** The most recent run that actually produced a verified artifact. */
