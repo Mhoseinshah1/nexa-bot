@@ -301,6 +301,12 @@ export const SUPPORT_AI_LIMITS = {
   timeoutMs: { min: 5_000, max: 120_000, default: 30_000 },
   maxOutputChars: { min: 200, max: 4_000, default: 1_200 },
   maxConsecutiveReplies: { min: 1, max: 20, default: 4 },
+  /**
+   * Hotfix (2026-10-06): how many automatic `ASK_CLARIFYING_QUESTION` replies in a row, in one
+   * control epoch, before the conversation is handed to a person (`clarifying_limit`). Separate
+   * from `maxConsecutiveReplies`, which bounds ALL automatic replies (loop safety).
+   */
+  maxConsecutiveClarifyingQuestions: { min: 1, max: 10, default: 2 },
   cooldownSeconds: { min: 0, max: 3_600, default: 20 },
   toneInstructionsChars: 2_000,
   modelIdChars: 128,
@@ -345,6 +351,17 @@ export const supportAiConfigInputSchema = z
       .int()
       .min(SUPPORT_AI_LIMITS.maxConsecutiveReplies.min)
       .max(SUPPORT_AI_LIMITS.maxConsecutiveReplies.max),
+    /**
+     * Hotfix — the clarifying-question streak limit. Defaulted so a client that does not know
+     * the field still saves a valid configuration; raising it under AUTO_REPLY_SAFE is a
+     * widening charged `support_ai.auto_reply`.
+     */
+    maxConsecutiveClarifyingQuestions: z
+      .number()
+      .int()
+      .min(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.min)
+      .max(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.max)
+      .default(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.default),
     cooldownSeconds: z
       .number()
       .int()
@@ -407,6 +424,7 @@ export const SUPPORT_AI_DEFAULT_CONFIG: SupportAiConfigInput = {
   timeoutMs: SUPPORT_AI_LIMITS.timeoutMs.default,
   maxOutputChars: SUPPORT_AI_LIMITS.maxOutputChars.default,
   maxConsecutiveReplies: SUPPORT_AI_LIMITS.maxConsecutiveReplies.default,
+  maxConsecutiveClarifyingQuestions: SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.default,
   cooldownSeconds: SUPPORT_AI_LIMITS.cooldownSeconds.default,
   settleDelaySeconds: SUPPORT_AI_SETTLE_DELAY_DEFAULT_SECONDS,
   toneInstructions: '',
@@ -891,6 +909,12 @@ export const SUPPORT_AI_AUTO_GUARDS = [
   'confidence',
   'reply_bounds',
   'grounding',
+  /**
+   * Hotfix — an `ASK_CLARIFYING_QUESTION` when the conversation's streak of sent automatic
+   * clarifying questions (this epoch, since the last automatic REPLY) has reached
+   * `maxConsecutiveClarifyingQuestions`.
+   */
+  'clarifying_limit',
 ] as const;
 export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
 
@@ -898,6 +922,9 @@ export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
  * TB7 — what became of one automatic job (telemetry; a closed set pinned by a CHECK).
  *
  * - `sent` — a lane row was enqueued under the captured epoch (TB2's final check still rules).
+ * - `sent_clarifying` — the same, for an `ASK_CLARIFYING_QUESTION` (hotfix 2026-10-06): the
+ *   question is the reply text. Kept apart from `sent` so analytics can tell an answer from a
+ *   question.
  * - `dropped_*` — nothing done and nobody handed off: the mode left AUTO, the conversation's
  *   epoch or state moved (a person intervened), a newer inbound message replaced the job, the
  *   connection cannot send, or the tenant stopped.
@@ -909,6 +936,7 @@ export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
  */
 export const SUPPORT_AI_AUTO_OUTCOMES = [
   'sent',
+  'sent_clarifying',
   'dropped_mode',
   'dropped_epoch',
   'dropped_state',
@@ -928,6 +956,7 @@ export const SUPPORT_AI_AUTO_OUTCOMES = [
   'guard_confidence',
   'guard_reply_bounds',
   'guard_grounding',
+  'guard_clarifying_limit',
   'handoff_ai_requested',
   'handoff_output_invalid',
   'handoff_ai_unavailable',

@@ -50,6 +50,7 @@ export type SupportAutoOutcomeClass = (typeof SUPPORT_AUTO_OUTCOME_CLASSES)[numb
 export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportAutoOutcomeClass {
   switch (outcome) {
     case 'sent':
+    case 'sent_clarifying':
       return 'SENT';
     case 'dropped_mode':
     case 'dropped_epoch':
@@ -71,6 +72,7 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'guard_confidence':
     case 'guard_reply_bounds':
     case 'guard_grounding':
+    case 'guard_clarifying_limit':
     case 'handoff_ai_requested':
     case 'handoff_output_invalid':
     case 'handoff_ai_unavailable':
