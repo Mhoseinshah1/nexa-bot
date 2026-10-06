@@ -1083,6 +1083,7 @@ describe('controlled learning (TB8)', () => {
     const c = ctx.container;
     const service = new SupportKnowledgeService({
       repository: new Held(c.database.db),
+      settings: c.settingsResolver,
       guard: c.guard,
       uow: c.uow,
       audit: c.audit,

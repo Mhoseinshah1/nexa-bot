@@ -502,6 +502,7 @@ describe('TB3 support context — the builder over fakes', () => {
           recentPayments: async () => (asked.push('payments'), { items: [], anyUnderReview: true }),
           activeIncidentNotices: async () => (asked.push('incidents'), []),
           serviceCardFacts: async () => (asked.push('cards'), []),
+          anyUnreconciledService: async () => (asked.push('unreconciled'), false),
         },
       }),
     ).build(scope, null);

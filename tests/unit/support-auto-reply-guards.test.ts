@@ -301,7 +301,7 @@ describe('automatic-reply money guard (D9)', () => {
     'poolamo pas bedid',
     'pardakht kardam',
   ];
-  const safe: readonly string[] = [
+  const safe: readonly (string | null)[] = [
     'سلام، سرویس من وصل نمیشه',
     'سلام، اینترنتم وصل نمی‌شود',
     'پس چرا وصل نمیشه؟',
