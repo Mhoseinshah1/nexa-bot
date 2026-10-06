@@ -1,0 +1,1 @@
+ALTER TABLE "backup_runs" ADD COLUMN "archive_pruned_at" timestamp with time zone;
