@@ -3555,6 +3555,14 @@ and `OQ-T-4` are live again and apply to inline buttons too.
   never published since, draws those icons again after this upgrade. The retiring release never
   rewrote stored rows, by design (expand/contract). Rolling back to the retiring release hides
   every icon again and makes no layout unreadable.
+  Two more consequences (review N3 of PR #215):
+  - A DRAFT saved between 2026-10-02 and this upgrade was canonicalised by the retiring release,
+    so it carries `iconSlot: null` for every button. If the published layout still carries
+    pre-retirement icons, the builder shows a pending icon REMOVAL the operator did not make;
+    publishing that draft removes them. The publish diff lists it as «آیکون تغییر می‌کند».
+  - Icons published on THIS release are lost if the installation is rolled back and the
+    operator publishes again on the retiring release: its normalisation writes null. A rollback
+    alone (no new publish) only hides them; rolling forward again draws them.
 
 ## OQ-P2-CAT — category decorations (Phase 2 UX wave, Item 2)
 

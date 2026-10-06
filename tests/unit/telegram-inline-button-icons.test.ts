@@ -293,7 +293,7 @@ describe('inline-button icons as the messenger draws them', () => {
 });
 
 describe('the one icon-less retry (owner rule B5, extended to inline buttons)', () => {
-  it('a custom-emoji DENIAL: ONE retry without icons, routes and text kept, the bot switched off', async () => {
+  it('a CUSTOM_EMOJI_INVALID on an operator-typed id: ONE retry without icons, and the bot is NEVER switched off (review B1)', async () => {
     const { messenger, calls, events, refused, respondWith } = harness({
       icons: { 'payment.sent': ICON },
     });
@@ -304,9 +304,22 @@ describe('the one icon-less retry (owner rule B5, extended to inline buttons)', 
     expect(JSON.stringify(calls[1]?.body)).not.toContain('icon_custom_emoji_id');
     expect(routesOf(calls[1]?.body)).toEqual(routesOf(calls[0]?.body));
     expect(calls[1]?.body['text']).toBe(calls[0]?.body['text']);
-    expect(refused).toEqual([eligibleBot]);
+    // A wrong-but-numeric id is not a proof the bot may not send custom emoji: the bot's
+    // shared state (text decoration, main-menu icons) is left alone.
+    expect(refused).toEqual([]);
     expect(events.map((event) => event.code)).toEqual([APPEARANCE_DECORATION_FAILED_CODE]);
-    expect(events[0]?.context).toMatchObject({ keyboardIcons: true, eligibilityChanged: true });
+    expect(events[0]?.context).toMatchObject({
+      keyboardIcons: true,
+      iconSource: 'RAW',
+      eligibilityChanged: false,
+      inlineButtons: ['payment.sent'],
+    });
+    // And the next message is not a flip-flop: still eligible, the icon is tried again.
+    calls.length = 0;
+    respondWith([OK]);
+    await send(messenger);
+    expect(iconsOf(calls[0]?.body)).toContain(ICON);
+    expect(refused).toEqual([]);
   });
 
   it('a GENERIC 400: the same one retry lands, and the bot’s eligibility is NOT touched', async () => {
@@ -377,7 +390,7 @@ describe('the one icon-less retry (owner rule B5, extended to inline buttons)', 
     expect(iconsOf(calls[0]?.body)).toContain(ICON);
     expect(JSON.stringify(calls[1]?.body)).not.toContain('icon_custom_emoji_id');
     expect(routesOf(calls[1]?.body)).toEqual(routesOf(calls[0]?.body));
-    expect(refused).toEqual([eligibleBot]);
+    expect(refused).toEqual([]);
   });
 
   it('a caption EDIT carries the icon, and a denial retries it once without', async () => {

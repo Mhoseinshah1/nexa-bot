@@ -243,6 +243,36 @@ function rowOf(button: { readonly row?: CustomerButtonRow }): { row?: number } {
   return button.row === undefined ? {} : { row: button.row };
 }
 
+/**
+ * Which kind of button icon a request carried — what decides what a refusal of it may teach
+ * the bot's shared custom-emoji state (owner rule B5, review B1 of PR #215).
+ *
+ * - `SLOT`: reply-keyboard icons resolved from the tenant's appearance slots — the same custom
+ *   emoji the appearance probe proved this bot may send. A refusal that names custom emoji is
+ *   reliably an eligibility denial.
+ * - `RAW`: inline-button icons an operator typed as ids (`bot.inline_button_icons`), checked
+ *   for shape only and NEVER proven by the probe. A refusal naming custom emoji may just be a
+ *   wrong id, so it never switches the bot off: that would turn every decoration of the bot off
+ *   for one mistyped id, and the probe (which does not send these ids) would turn it back on,
+ *   for ever.
+ */
+type IconSource =
+  false | { readonly kind: 'SLOT' } | { readonly kind: 'RAW'; readonly keys: readonly string[] };
+
+/** The registry keys whose button went out with an icon: what the operator is told to check. */
+function rawIconSource(
+  input: readonly CustomerButton[],
+  labelled: readonly TelegramButton[],
+): IconSource {
+  if (!buttonsHaveIcons(labelled)) return false;
+  const keys = input.flatMap((button, index) =>
+    button.inline !== undefined && labelled[index]?.iconCustomEmojiId !== undefined
+      ? [button.inline]
+      : [],
+  );
+  return { kind: 'RAW', keys };
+}
+
 /** Why a reply did not certainly reach the customer. Context, never a code. */
 type SendFailureReason = 'NO_BOT' | 'UNCERTAIN' | 'REFUSED';
 
@@ -508,8 +538,15 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
        * makes the part DECORATED, and the one undecorated retry below covers it: the plain
        * request strips the entities, the tags AND the icons, and keeps every label and style.
        */
-      const iconed = last && (keyboardHasIcon || inlineHasIcon) && !decorationRefused;
-      const isDecorated = decorated.decorated > 0 || iconed;
+      const iconed: IconSource =
+        !last || decorationRefused
+          ? false
+          : keyboardHasIcon
+            ? { kind: 'SLOT' }
+            : inlineHasIcon
+              ? rawIconSource(message.buttons ?? [], buttons)
+              : false;
+      const isDecorated = decorated.decorated > 0 || iconed !== false;
       const partKeyboard = (plain: boolean) =>
         plain || decorationRefused ? plainKeyboard : keyboard;
       const request = (plain: boolean): TelegramRequest => {
@@ -664,7 +701,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       await this.decorationFor(scope, message.botInstanceId),
     );
     // Phase 2 Item 3: an iconed keyboard owes the same one icon-less retry as a decoration.
-    const iconed = buttonsHaveIcons(buttons);
+    const iconed = rawIconSource(message.buttons ?? [], buttons);
 
     const method =
       message.kind === 'PHOTO'
@@ -723,7 +760,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         botInstanceId: message.botInstanceId,
         ...(message.caption === undefined ? {} : { templateKey: message.caption.templateKey }),
       },
-      rendered?.decorated === true || iconed,
+      rendered?.decorated === true || iconed !== false,
       request,
       iconed,
     );
@@ -876,12 +913,12 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
     const buttons = await this.labelButtons(scope, message.buttons, decoration);
-    const iconed = buttonsHaveIcons(buttons);
+    const iconed = rawIconSource(message.buttons, buttons);
     const plainCaption = html ? undoHtmlDecoration(caption) : caption;
     const { raw: outcome } = await this.deliverDecorated(
       scope,
       message,
-      decorated.decorated > 0 || iconed,
+      decorated.decorated > 0 || iconed !== false,
       (plain) => ({
         token,
         apiBaseUrl: this.apiBaseUrl,
@@ -1028,12 +1065,12 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
     const buttons = await this.labelButtons(scope, message.buttons, decoration);
-    const iconed = buttonsHaveIcons(buttons);
+    const iconed = rawIconSource(message.buttons, buttons);
     const plainText = html ? undoHtmlDecoration(text) : text;
     const { raw: outcome } = await this.deliverDecorated(
       scope,
       message,
-      decorated.decorated > 0 || iconed,
+      decorated.decorated > 0 || iconed !== false,
       (plain) => ({
         token,
         apiBaseUrl: this.apiBaseUrl,
@@ -1288,12 +1325,16 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    *
    * - text decoration only — the decoration was the cause, as it has always been read: the
    *   condition is recorded and the bot's decoration is switched off until re-tested;
-   * - a keyboard icon (`iconed`: a reply-keyboard icon, or since Phase 2 Item 3 an inline
-   *   button's icon) — owner rule B5: the bot is switched off ONLY when the
-   *   refusal is reliably a custom-emoji denial (`isCustomEmojiDenial`, the probe's own
-   *   classifier). A generic 400 leaves the eligibility as it was; the operator is told the
-   *   icons were dropped from that message, under the same per-bot condition, and nothing
-   *   else changes.
+   * - a reply-keyboard icon (`iconed.kind === 'SLOT'`) — owner rule B5: the bot is switched
+   *   off ONLY when the refusal is reliably a custom-emoji denial (`isCustomEmojiDenial`, the
+   *   probe's own classifier). A generic 400 leaves the eligibility as it was; the operator is
+   *   told the icons were dropped from that message, under the same per-bot condition, and
+   *   nothing else changes;
+   * - an inline button's operator-typed icon (`iconed.kind === 'RAW'`, Phase 2 Item 3) —
+   *   NEVER switches the bot off, whatever the refusal says: the id was never proven, so a
+   *   denial may only mean a wrong id (review B1 of PR #215). The operator is told which
+   *   buttons' icons were dropped. A text decoration refused in the SAME message is then not
+   *   learned either — an ambiguous refusal teaches nothing, and costs that message one retry.
    *
    * Either way the caller sends the rest of the message undecorated (`decorationRefused`),
    * so one send makes at most ONE retry.
@@ -1303,7 +1344,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     message: { readonly botInstanceId: BotInstanceId; readonly templateKey?: TemplateKey },
     decorated: boolean,
     request: (plain: boolean) => TelegramRequest,
-    iconed = false,
+    iconed: IconSource = false,
   ): Promise<{ readonly raw: TelegramSendOutcome; readonly decorationRefused: boolean }> {
     const first = await telegramSend(request(false));
     if (!decorated || first.outcome !== 'FAILED_PERMANENT' || isMessageNotModified(first)) {
@@ -1311,22 +1352,38 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     }
     const second = await telegramSend(request(true));
     if (second.outcome !== 'SUCCEEDED') return { raw: second, decorationRefused: false };
-    const denied = !iconed || isCustomEmojiDenial(first.errorMessage);
+    const denied =
+      iconed === false
+        ? true
+        : iconed.kind === 'RAW'
+          ? false
+          : isCustomEmojiDenial(first.errorMessage);
     await this.opsLog.record(scope, {
       code: APPEARANCE_DECORATION_FAILED_CODE,
       severity: 'WARN',
       message: denied
         ? 'Telegram refused a message decorated with custom emoji and accepted it undecorated; ' +
           'this bot\u2019s custom emoji are off until it is tested again.'
-        : 'Telegram refused a message whose keyboard carried custom-emoji icons and accepted it ' +
-          'without them; the refusal did not name custom emoji, so this bot\u2019s eligibility ' +
-          'is unchanged.',
+        : iconed !== false && iconed.kind === 'RAW'
+          ? 'Telegram refused a message whose inline buttons carried premium icons and accepted ' +
+            'it without them; check the custom emoji ids of those buttons. This bot\u2019s ' +
+            'eligibility is unchanged: an icon id typed by an operator proves nothing about it.'
+          : 'Telegram refused a message whose keyboard carried custom-emoji icons and accepted it ' +
+            'without them; the refusal did not name custom emoji, so this bot\u2019s eligibility ' +
+            'is unchanged.',
       dedupeKey: appearanceDecorationConditionKey(message.botInstanceId),
       context: {
         botInstanceId: message.botInstanceId,
         ...(message.templateKey === undefined ? {} : { templateKey: message.templateKey }),
         errorCode: first.errorCode,
-        ...(iconed ? { keyboardIcons: true, eligibilityChanged: denied } : {}),
+        ...(iconed === false
+          ? {}
+          : {
+              keyboardIcons: true,
+              iconSource: iconed.kind,
+              eligibilityChanged: denied,
+              ...(iconed.kind === 'RAW' ? { inlineButtons: [...iconed.keys] } : {}),
+            }),
       },
     });
     if (denied) await this.appearance?.recordRuntimeRefusal(scope, message.botInstanceId);

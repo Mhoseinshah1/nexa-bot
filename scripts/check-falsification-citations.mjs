@@ -166,10 +166,12 @@ const RECORDS = [
  * 2026-10-05 master prompt). R-01 of the T3 record now cites the ONE test that pins the
  * reversed rule instead of the two that pinned the retirement (−1), and
  * `docs/phase2/button-icons-falsification.md` adds 31 rows, 42 citations (+42).
- * 2704 → 2745: Phase 2 UX wave, Item 2 (category premium icon before, ordinary emoji after),
+ * 2704 → 2710: its PR #215 review — re-run with eight more rows (P2I-32..39: B1, N1, N2, N6),
+ * 39 rows and 48 citations in all (+6).
+ * 2710 → 2751: Phase 2 UX wave, Item 2 (category premium icon before, ordinary emoji after),
  * `docs/phase2/category-icons-falsification.md` — 30 rows, 41 citations.
  */
-const EXPECTED = 2745;
+const EXPECTED = 2751;
 /**
  * A table whose last column is one of these is making citations.
  *

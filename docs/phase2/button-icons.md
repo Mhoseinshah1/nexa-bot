@@ -96,6 +96,11 @@ SLOT whose custom emoji the tenant configured in «ظاهر ربات».
   requires `settings.edit`.
 - It is NOT a widening of `bot.inline_buttons`. That value is parsed strictly by the previous
   release, and a test pins that it still refuses an id.
+- The Web Admin accepts Persian (۰-۹) and Arabic-Indic (٠-٩) digits and stores them as ASCII.
+- Why the contract commit `725a71ee` also touches two Web files (review N5): the Web's settings
+  presentation map (`apps/web/src/settings-presentation.ts`) is TOTAL over the registry, so a
+  new key does not typecheck without its entry and two strings. They went into the same commit
+  to keep every commit buildable; nothing else of the Web is in it.
 
 #### Transport API (`apps/api/src/infrastructure/telegram/send-message.ts`)
 
@@ -119,10 +124,22 @@ retry is already wired into `send`, `edit`, `editCaption` and `sendFile`.
   keyboard names a registry button AND the sending bot may carry custom emoji.
 - An iconed keyboard counts as decorated in `deliverDecorated`. A definite 4xx is answered by
   exactly ONE retry, which carries the same text, labels, styles and routes without the icons.
-  - When the refusal names custom emoji (`isCustomEmojiDenial`), the bot's eligibility is
-    switched off (owner rule B5).
-  - A generic 400 leaves the eligibility unchanged. The operator is told under the existing
-    `telegram.appearance_decoration_failed` condition, with `keyboardIcons: true`.
+  - **An inline icon NEVER switches the bot's eligibility off**, whatever the refusal says
+    (review B1 of PR #215). The id was typed by an operator and checked for shape only; the
+    appearance probe never sends it, so `CUSTOM_EMOJI_INVALID` may only mean a wrong id.
+    Marking the bot REJECTED for it would have turned off every text decoration and main-menu
+    icon of that bot, a re-test would have turned them back on, and the next message would
+    have flipped it again. The messenger tells the two kinds apart (`IconSource`: `SLOT` for
+    reply-keyboard icons from the proven appearance slots, `RAW` for inline ids). The operator
+    is told under the existing `telegram.appearance_decoration_failed` condition, with
+    `keyboardIcons: true`, `iconSource: 'RAW'`, `eligibilityChanged: false` and the inline keys
+    whose icons were dropped.
+  - Reply-keyboard (`SLOT`) icons keep owner rule B5: a refusal naming custom emoji
+    (`isCustomEmojiDenial`) switches the bot off; a generic 400 does not.
+  - A consequence (review N4): a message that carries an inline icon AND decorated text
+    teaches the bot's state nothing from its refusal. A text-decoration refusal — even one the
+    classifier would recognise — no longer switches the bot off when the same message carries
+    an inline icon; that message costs one retry instead.
   - UNKNOWN (a timeout, a 5xx, an unreadable 2xx) and 429 are never resent.
 - `sendMediaGroup` carries no buttons, so it is unchanged.
 
@@ -136,7 +153,10 @@ Each row has an optional «آیکون پریمیوم» field next to the colour:
 - the preview shows a dashed marker before the label;
 - a stated-limits line sits above the list.
 
-The section's save writes only what changed. Styles and icons are two settings, so they are
+The section's save writes only what changed (review N1 of #215: each setting has its own
+idempotency key fingerprinted by its own command; when the colours land and the icons are
+refused, the draft adopts the colours' new version, the operator reads «رنگ‌ها ذخیره شد، اما
+آیکون‌ها ذخیره نشد», and the next click sends only the icons). Styles and icons are two settings, so they are
 two writes, each with its own expected version and its own idempotency key, derived from the
 one submission. An unreadable stored icon value is announced, and a save repairs it.
 

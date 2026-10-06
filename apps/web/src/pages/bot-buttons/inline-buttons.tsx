@@ -53,6 +53,16 @@ import { fill } from './canvas';
  */
 
 export const INLINE_BUTTONS_SETTING = 'bot.inline_buttons';
+
+/** The icons' write failed; `stylesSaved` says whether the styles' write of the SAME click landed. */
+class InlineSaveError extends Error {
+  constructor(
+    override readonly cause: unknown,
+    readonly stylesSaved: boolean,
+  ) {
+    super(cause instanceof Error ? cause.message : 'icons not saved');
+  }
+}
 export const INLINE_BUTTON_ICONS_SETTING = 'bot.inline_button_icons';
 
 const GROUP_TITLE: Readonly<Record<InlineButtonGroup, WebKey>> = {
@@ -206,10 +216,21 @@ function sameStyles(a: InlineButtonStyles, b: InlineButtonStyles): boolean {
 export function canonicalIcons(icons: InlineButtonIcons): InlineButtonIcons {
   const out: Partial<Record<InlineButtonKey, string>> = {};
   for (const entry of INLINE_BUTTONS) {
-    const icon = icons[entry.key]?.trim();
+    const typed = icons[entry.key];
+    const icon = typed === undefined ? undefined : asciiDigits(typed).trim();
     if (icon !== undefined && icon !== '') out[entry.key] = icon;
   }
   return out;
+}
+
+/**
+ * Persian (۰-۹) and Arabic-Indic (٠-٩) digits as ASCII — what a Persian keyboard types for an
+ * id. Telegram's id is ASCII digits; anything else is left as it is for `invalidIcons` to name.
+ */
+export function asciiDigits(text: string): string {
+  return text
+    .replace(/[\u06F0-\u06F9]/gu, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/gu, (digit) => String(digit.charCodeAt(0) - 0x0660));
 }
 
 /** The buttons whose typed icon is not a custom emoji id: the save is refused until fixed. */
@@ -243,7 +264,10 @@ export function InlineButtonsSection({
 }) {
   const client = useQueryClient();
   const notify = useToast();
+  // One key per setting, each fingerprinted by ITS command: a retry after one write landed
+  // and the other did not replays exactly the write that is still owed (review N1 of #215).
   const submission = useSubmissionKey();
+  const iconSubmission = useSubmissionKey();
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
   const setting = settings.data?.settings.find((one) => one.key === INLINE_BUTTONS_SETTING);
   const iconSetting = settings.data?.settings.find(
@@ -303,45 +327,58 @@ export function InlineButtonsSection({
   const edit = (styles: InlineButtonStyles) => editBoth(styles, currentIcons);
   const editIcon = (key: InlineButtonKey, icon: string) => {
     const next: Partial<Record<InlineButtonKey, string>> = { ...currentIcons };
-    if (icon === '') delete next[key];
-    else next[key] = icon;
+    const typed = asciiDigits(icon);
+    if (typed === '') delete next[key];
+    else next[key] = typed;
     editBoth(current, next);
   };
   // Codex 4170910519: a leave (sidebar, back, reload, close) asks before dropping an edit.
   useUnsavedChanges(mayEdit && unsaved);
 
   /*
-   * Two settings, two writes, each with its OWN version and its own key (derived from the one
-   * submission key, so a retry of the same click replays both). Only what changed is written:
-   * an edit of a style alone is still ONE settings write, exactly as before Item 3.
+   * Two settings, two writes, each with its OWN version and its OWN idempotency key. Only
+   * what changed is written: an edit of a style alone is still ONE settings write, exactly as
+   * before Item 3. When the styles land and the icons do not, the draft adopts the styles'
+   * new version at once — so the next click sends only the icons, and no "changed elsewhere"
+   * is claimed for a change this page made — and the operator is told exactly that.
    */
   const save = useMutation({
     mutationFn: async (command: {
-      idempotencyKey: string;
-      styles: { value: InlineButtonStyles; expectedVersion: number | null } | null;
-      icons: { value: InlineButtonIcons; expectedVersion: number | null } | null;
+      styles: {
+        value: InlineButtonStyles;
+        expectedVersion: number | null;
+        idempotencyKey: string;
+      } | null;
+      icons: {
+        value: InlineButtonIcons;
+        expectedVersion: number | null;
+        idempotencyKey: string;
+      } | null;
     }) => {
       let changed = false;
+      let stylesSaved = false;
       if (command.styles !== null) {
-        const result = await saveSetting({
-          key: INLINE_BUTTONS_SETTING,
-          ...command.styles,
-          idempotencyKey: `${command.idempotencyKey}-styles`,
-        });
+        const result = await saveSetting({ key: INLINE_BUTTONS_SETTING, ...command.styles });
+        submission.settle();
+        stylesSaved = true;
         changed ||= result.changed;
+        setDraft((before) =>
+          before === null ? before : { ...before, basisVersion: result.setting.version },
+        );
       }
       if (command.icons !== null) {
-        const result = await saveSetting({
-          key: INLINE_BUTTON_ICONS_SETTING,
-          ...command.icons,
-          idempotencyKey: `${command.idempotencyKey}-icons`,
-        });
-        changed ||= result.changed;
+        try {
+          const result = await saveSetting({ key: INLINE_BUTTON_ICONS_SETTING, ...command.icons });
+          changed ||= result.changed;
+        } catch (error) {
+          throw new InlineSaveError(error, stylesSaved);
+        }
       }
       return { changed };
     },
     onSuccess: async (result) => {
       submission.settle();
+      iconSubmission.settle();
       setDraft(null);
       notify({
         tone: result.changed ? 'ok' : 'info',
@@ -350,8 +387,16 @@ export function InlineButtonsSection({
       await client.invalidateQueries({ queryKey: ['settings'] });
     },
     onError: (error: unknown) => {
-      submission.settleOn(error);
-      notify({ tone: 'danger', message: t('web.ib_failed') });
+      if (error instanceof InlineSaveError) {
+        iconSubmission.settleOn(error.cause);
+        notify({
+          tone: 'danger',
+          message: t(error.stylesSaved ? 'web.ib_icons_failed_styles_saved' : 'web.ib_failed'),
+        });
+      } else {
+        submission.settleOn(error);
+        notify({ tone: 'danger', message: t('web.ib_failed') });
+      }
       void client.invalidateQueries({ queryKey: ['settings'] });
     },
   });
@@ -555,24 +600,31 @@ export function InlineButtonsSection({
               onClick={() => {
                 // Snapshotted at the click, so a retry cannot carry a later edit; each version
                 // is the one the DRAFT was edited from, never a later read's.
-                const command = {
+                const styles =
+                  stylesUnsaved || invalid
+                    ? {
+                        value: canonicalStyles(current),
+                        expectedVersion: draft === null ? basisVersion : draft.basisVersion,
+                      }
+                    : null;
+                const icons =
+                  iconsUnsaved || iconsInvalid
+                    ? {
+                        value: canonicalIcons(currentIcons),
+                        expectedVersion:
+                          draft === null ? iconsBasisVersion : draft.iconsBasisVersion,
+                      }
+                    : null;
+                save.mutate({
                   styles:
-                    stylesUnsaved || invalid
-                      ? {
-                          value: canonicalStyles(current),
-                          expectedVersion: draft === null ? basisVersion : draft.basisVersion,
-                        }
-                      : null,
+                    styles === null
+                      ? null
+                      : { ...styles, idempotencyKey: submission.current(styles) },
                   icons:
-                    iconsUnsaved || iconsInvalid
-                      ? {
-                          value: canonicalIcons(currentIcons),
-                          expectedVersion:
-                            draft === null ? iconsBasisVersion : draft.iconsBasisVersion,
-                        }
-                      : null,
-                };
-                save.mutate({ ...command, idempotencyKey: submission.current(command) });
+                    icons === null
+                      ? null
+                      : { ...icons, idempotencyKey: iconSubmission.current(icons) },
+                });
               }}
             >
               {t('web.ib_save')}
