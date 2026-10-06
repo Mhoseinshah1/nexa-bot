@@ -274,9 +274,48 @@ describe('the button builder — editing the draft', () => {
     expect(body.layout.buttons.find((one) => one.button === 'wallet')?.style).toBe('danger');
   });
 
-  it('offers no icon control — neither «آیکون دکمه» nor «آیکون معنایی» — and keeps what is stored', async () => {
-    // A draft as a replica of the previous release could still answer mid-rollout: an icon
-    // on catalog, and a screen slot an operator once chose for it.
+  it('chooses an icon slot (restored 2026-10-05) without touching the screen slot, and shows per-bot eligibility', async () => {
+    const api = liveBuilderApi();
+    renderPage(page());
+    await ready();
+    select('catalog');
+    const control = inspector().getByLabelText(t('web.bb_icon_title')) as HTMLSelectElement;
+    // Optional: «بدون آیکون» is the default and the first choice.
+    expect(control.value).toBe('');
+    expect(control.options[0]?.textContent).toBe(t('web.bb_icon_none'));
+    fireEvent.change(control, { target: { value: 'wallet' } });
+    // The marker is the slot's ordinary emoji in a frame, never the label's text.
+    expect(chip('catalog')?.querySelector('.bb-icon-mark')?.textContent).toBe('💰');
+    expect(chip('catalog')?.querySelector('.bb-chip-label')?.textContent).toBe(LABEL('catalog'));
+    const eligibility = within(screen.getByTestId('bb-eligibility'));
+    expect(eligibility.getByText('@acme_store_bot')).toBeTruthy();
+    expect(eligibility.getByText(t('web.bb_icon_eligible'))).toBeTruthy();
+    expect(eligibility.getByText(t('web.bb_icon_not_eligible'))).toBeTruthy();
+    // The customer preview draws the same marker before the same label.
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
+    const key = screen
+      .getByTestId('bb-customer-preview')
+      .querySelector('[data-key="catalog"]') as HTMLElement;
+    expect(key.querySelector('.bb-icon-mark')?.getAttribute('data-icon-slot')).toBe('wallet');
+    expect(key.textContent).toBe(`💰${LABEL('catalog')}`);
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_edit') }));
+
+    let body = await saveAndRead(api);
+    let config = body.layout.buttons.find((one) => one.button === 'catalog');
+    expect(config?.iconSlot).toBe('wallet');
+    expect(config?.appearanceSlot).toBeNull();
+
+    // Removing it is choosing «بدون آیکون» again: saved as null, the marker gone.
+    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
+      target: { value: '' },
+    });
+    expect(chip('catalog')?.querySelector('.bb-icon-mark')).toBeNull();
+    body = await saveAndRead(api);
+    config = body.layout.buttons.find((one) => one.button === 'catalog');
+    expect(config?.iconSlot).toBeNull();
+  });
+
+  it('keeps a stored screen slot it has no control for, beside the icon', async () => {
     const layout: ExplicitMainMenu = {
       ...DEFAULT_EXPLICIT_MAIN_MENU,
       buttons: DEFAULT_EXPLICIT_MAIN_MENU.buttons.map((one) =>
@@ -289,26 +328,38 @@ describe('the button builder — editing the draft', () => {
     renderPage(page());
     await ready();
     select('catalog');
-    expect(document.body.textContent).not.toMatch(/آیکون دکمه|آیکون معنایی/);
-    expect(
-      inspector()
-        .queryAllByRole('combobox')
-        .map((one) => one.id),
-    ).toHaveLength(1);
-    expect(document.querySelector('.bb-icon-mark')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
-    expect(
-      screen.getByTestId('bb-customer-preview').querySelector('[data-key="catalog"]')?.textContent,
-    ).toBe(LABEL('catalog'));
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_edit') }));
-
-    // An edit saves the layout with both values as they were: the server decides (it
-    // canonicalises the retired icon to null and keeps the screen slot).
+    expect(document.body.textContent).not.toMatch(/آیکون معنایی/);
+    expect((inspector().getByLabelText(t('web.bb_icon_title')) as HTMLSelectElement).value).toBe(
+      'wallet',
+    );
     fireEvent.click(inspector().getByLabelText(t('web.bb_style_success')));
     const body = await saveAndRead(api);
     const config = body.layout.buttons.find((one) => one.button === 'catalog');
     expect(config?.appearanceSlot).toBe('payment');
+    expect(config?.iconSlot).toBe('wallet');
     expect(config?.style).toBe('success');
+  });
+
+  it('says when no bot can show an icon', async () => {
+    builderApi(
+      builderView({
+        iconEligibility: [
+          {
+            botInstanceId: '01900000-0000-7000-8000-00000000a003',
+            username: 'only_bot',
+            status: 'ACTIVE',
+            eligible: false,
+          },
+        ],
+      }),
+    );
+    renderPage(page());
+    await ready();
+    select('catalog');
+    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
+      target: { value: 'purchase' },
+    });
+    expect(inspector().getByText(t('web.bb_icon_no_eligible_bot'))).toBeTruthy();
   });
 
   it('warns about a crowded row without refusing it', async () => {
@@ -547,6 +598,36 @@ describe('the button builder — publish, history, reset', () => {
     expect(body.expectedDraftVersion).toBe(3);
     expect(body.expectedPublishedRevision).toBe(2);
     expect(typeof body.idempotencyKey).toBe('string');
+  });
+
+  it('lists an icon-only change in the publish diff (restored 2026-10-05)', async () => {
+    builderApi(
+      builderView({
+        source: 'EXPLICIT',
+        draft: draftView({
+          version: 3,
+          differsFromPublished: true,
+          layout: {
+            ...DEFAULT_EXPLICIT_MAIN_MENU,
+            buttons: DEFAULT_EXPLICIT_MAIN_MENU.buttons.map((one) =>
+              one.button === 'wallet' ? { ...one, iconSlot: 'wallet' } : one,
+            ),
+          },
+        }),
+        published: {
+          layout: DEFAULT_EXPLICIT_MAIN_MENU,
+          revision: 2,
+          publishedAt: '2026-09-30T10:00:00.000Z',
+          publishedByAdminId: null,
+        },
+      }),
+    );
+    renderPage(page());
+    await ready();
+    fireEvent.click(toolbarButton(t('web.bb_publish')));
+    const entry = document.querySelector('[data-diff="wallet"]') as HTMLElement | null;
+    expect(entry?.textContent).toContain(t('web.bb_change_icon'));
+    expect(document.querySelector('[data-diff="catalog"]')).toBeNull();
   });
 
   it('cannot publish an unsaved edit or an unsaved draft', async () => {
@@ -882,7 +963,7 @@ describe('the button builder — review of PR #134', () => {
     expect(screen.getByTestId('bb-live').textContent).not.toBe(t('web.bb_reloaded'));
   });
 
-  it('#5 draws the live keyboard with the published layout’s styles, and no icon', async () => {
+  it('#5 draws the live keyboard with the published layout’s styles and icons', async () => {
     builderApi(explicitView());
     renderPage(page());
     await ready();
@@ -891,7 +972,7 @@ describe('the button builder — review of PR #134', () => {
     const first = live.querySelector('[data-key="0-0"]') as HTMLElement;
     expect(first.textContent).toContain(LABEL('catalog'));
     expect(first.getAttribute('data-look')).toBe('primary');
-    expect(first.textContent).toBe(LABEL('catalog'));
+    expect(first.querySelector('.bb-icon-mark')?.getAttribute('data-icon-slot')).toBe('purchase');
     expect(live.querySelector('[data-key="0-1"]')?.getAttribute('data-look')).toBe('default');
     cleanup();
     // The legacy keyboard has no styles to show.
@@ -952,21 +1033,21 @@ describe('the button builder — review of PR #134', () => {
     expect(dialog.queryByTestId('bb-diff')).toBeNull();
   });
 
-  it('#8 (round-T QA-3, obsolete) never draws a second symbol beside a label’s own emoji', async () => {
-    // The doubled «💰💰» came from an icon marker drawn beside a label that starts with an
-    // emoji. The icon is retired, so every surface draws the label alone.
-    const layout: ExplicitMainMenu = {
-      ...DEFAULT_EXPLICIT_MAIN_MENU,
-      buttons: DEFAULT_EXPLICIT_MAIN_MENU.buttons.map((one) =>
-        one.button === 'wallet' ? { ...one, iconSlot: 'wallet' } : one,
-      ),
-    };
-    builderApi(builderView({ draft: draftView({ version: 1, layout }) }));
+  it('#8 warns, without refusing, when an icon would sit beside a label’s own emoji', async () => {
+    builderApi(builderView({ itemOverrides: { services: { label: 'سرویس‌ها' } } }));
     renderPage(page());
     await ready();
-    expect(chip('wallet')?.querySelector('.bb-chip-label')?.textContent).toBe(LABEL('wallet'));
-    expect(chip('wallet')?.querySelector('.bb-chip-main')?.textContent).toBe(LABEL('wallet'));
+    select('catalog');
+    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
+      target: { value: 'purchase' },
+    });
+    expect(screen.getByTestId('bb-icon-doubled')).toBeTruthy();
+    select('services');
+    fireEvent.change(inspector().getByLabelText(t('web.bb_icon_title')), {
+      target: { value: 'service' },
+    });
     expect(screen.queryByTestId('bb-icon-doubled')).toBeNull();
+    expect(toolbarButton(t('web.bb_save_draft')).disabled).toBe(false);
   });
 });
 

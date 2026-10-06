@@ -606,6 +606,28 @@
   }
 }
 
+/* The icon marker (restored 2026-10-05): the slot's ordinary emoji in a dashed frame, never a
+   custom emoji — and the same frame for an inline button's premium icon («آیکون پریمیوم»). */
+.bb-icon-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 0 2px;
+  margin-inline-end: 4px;
+  border: 1px dashed var(--fg-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.bb-eligibility ul {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 /* The Inspector. */
 .bb-fieldset {
   margin: 0;
@@ -845,6 +867,21 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+/* Phase 2 Item 3: the optional premium icon of an inline button. */
+.ib-icon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  grid-column: 1 / -1;
+}
+.ib-icon .input {
+  width: 22ch;
+  max-width: 100%;
+}
+.ib-icon-error {
+  color: var(--danger);
 }
 .ib-actions {
   display: flex;
