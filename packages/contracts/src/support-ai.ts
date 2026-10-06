@@ -593,6 +593,13 @@ export const supportAiDraftViewSchema = z.object({
   ticketAction: z.enum(SUPPORT_AI_TICKET_ACTIONS).nullable(),
   /** Payload aliases the model cited, resolved server-side to short human labels. */
   factLabels: z.array(z.string()),
+  /**
+   * D3: the knowledge entries the draft cited (`knowledgeRefs`), resolved server-side to the
+   * entry's title — what the operator reads to tell advice grounded on approved knowledge from
+   * an invention. Empty when none was cited or none resolved; a draft from before this field
+   * reads empty.
+   */
+  knowledgeLabels: z.array(z.string()),
   provider: z.enum(SUPPORT_AI_PROVIDERS).nullable(),
   model: z.string().nullable(),
   /** TB6: images the answering model was actually given (at most `SUPPORT_AI_VISION_MAX_IMAGES`). */
