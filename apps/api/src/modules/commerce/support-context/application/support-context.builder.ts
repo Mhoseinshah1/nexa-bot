@@ -152,7 +152,7 @@ export class SupportContextBuilder {
       );
     }
 
-    const [services, orders, payments, incidents] = await Promise.all([
+    const [services, orders, payments, incidents, anyUnreconciled] = await Promise.all([
       this.deps.services.supportServicesForCustomer(
         scope,
         customer.id,
@@ -161,6 +161,8 @@ export class SupportContextBuilder {
       this.deps.reader.recentOrders(scope, customer.id, SUPPORT_CONTEXT_LIMITS.orders),
       this.deps.reader.recentPayments(scope, customer.id, SUPPORT_CONTEXT_LIMITS.payments),
       this.deps.reader.activeIncidentNotices(scope, customer.id, SUPPORT_CONTEXT_LIMITS.incidents),
+      // L4: over ALL of the customer's services, not the page shown.
+      this.deps.reader.anyUnreconciledService(scope, customer.id),
     ]);
     const [cards, appFacts] = await Promise.all([
       services.length === 0
@@ -198,7 +200,8 @@ export class SupportContextBuilder {
         supportAccounts,
         flags: {
           hasUnderReviewPayment: payments.anyUnderReview,
-          hasUnreconciledService: serviceEntries.some((entry) => entry.unreconciled),
+          hasUnreconciledService:
+            anyUnreconciled || serviceEntries.some((entry) => entry.unreconciled),
           identityLinked: true,
           customerBlocked: customer.status === 'BLOCKED',
         },

@@ -128,6 +128,7 @@ function deps(over: {
       recentOrders: async () => [],
       recentPayments: async () => ({ items: [], anyUnderReview: false }),
       activeIncidentNotices: async () => [],
+      anyUnreconciledService: async () => false,
       serviceCardFacts: async () => [],
     },
     clientApps: { list: async () => over.apps ?? [] },

@@ -102,6 +102,20 @@ export class DrizzleSupportContextReader implements SupportContextReader {
   }
 
   /**
+   * L4 — whether ANY of the customer's services is UNRECONCILED, not only the page the payload
+   * shows: the same predicate as `autoGuardFlags`. One EXISTS.
+   */
+  async anyUnreconciledService(scope: TenantContext, customerId: UserId): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute(sql`SELECT EXISTS (
+          SELECT 1 FROM ${services}
+           WHERE ${services.tenantId} = ${tenantId}
+             AND ${services.customerId} = ${customerId}
+             AND ${services.state} = 'UNRECONCILED') AS unreconciled`);
+    return (result.rows[0] as { unreconciled?: boolean } | undefined)?.unreconciled === true;
+  }
+
+  /**
    * TB7 (substitute review of PR #202, finding 1) — the four flags the automatic-reply guards
    * decide on, read again INSIDE the transaction that enqueues the reply, so a guard never
    * decides on facts that changed during the provider call. The same predicates as the payload's

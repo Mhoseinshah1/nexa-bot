@@ -444,6 +444,7 @@ describe('TB3 support context — the builder over fakes', () => {
         recentOrders: async () => [],
         recentPayments: async () => ({ items: [], anyUnderReview: true }),
         activeIncidentNotices: async () => [],
+        anyUnreconciledService: async () => false,
         serviceCardFacts: async (_s, _c, refs) =>
           refs.map(() => ({ title: 'Plan', productLocationLabel: 'DE' })),
       },
