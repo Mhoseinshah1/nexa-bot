@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
+  PRODUCT_DESCRIPTION_MAX_LENGTH,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -153,12 +154,13 @@ describe('a customer pays through the approved screens', () => {
     key: string,
     display: ProductDisplay = EMPTY_PRODUCT_DISPLAY,
     priceMinor = 250_000n,
+    description: string | null = null,
   ): Promise<ProductId> {
     const row = await products.create(tenantA, {
       id: ctx.container.ids.uuid() as ProductId,
       draft: {
         title: `پلن ${key}`,
-        description: null,
+        description,
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelId as PanelId,
@@ -276,12 +278,17 @@ describe('a customer pays through the approved screens', () => {
   // §D — the pre-invoice
   // =========================================================================
   describe('the pre-invoice', () => {
-    it('renders the approved structure with the product’s ordered locations and features, and the payment buttons', async () => {
-      const productId = await product('pre', {
-        displayLocations: ['🇩🇪 آلمان', '🇳🇱 هلند'],
-        displayFeatures: ['✅ اتصال همزمان ۳ دستگاه', '✅ پشتیبانی ۲۴ ساعته'],
-        serviceLocationLabel: 'مولتی لوکیشن',
-      });
+    it('renders the approved structure with the product’s ONE customer-facing description (B1), and the payment buttons', async () => {
+      const productId = await product(
+        'pre',
+        {
+          displayLocations: ['🇩🇪 آلمان', '🇳🇱 هلند'],
+          displayFeatures: ['✅ اتصال همزمان ۳ دستگاه', '✅ پشتیبانی ۲۴ ساعته'],
+          serviceLocationLabel: 'مولتی لوکیشن',
+        },
+        250_000n,
+        'سرورهای پرسرعت آلمان و هلند\nاتصال همزمان ۳ دستگاه',
+      );
       await credit(maryam, 1_000_000n, 'pre');
       const orderId = await draftTo(productId);
       const body = lastText();
@@ -290,9 +297,13 @@ describe('a customer pays through the approved screens', () => {
       expect(body).toContain(
         '🔐 نام سرویس: پلن pre\n📆 مدت اعتبار: 30 روز\n💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n',
       );
+      // B1: the description, in place of the two blocks — the locations and features stay
+      // product data and are not drawn.
       expect(body).toContain(
-        '🌍 لوکیشن‌های محصول:\n🇩🇪 آلمان\n🇳🇱 هلند\n\n✅ اتصال همزمان ۳ دستگاه\n✅ پشتیبانی ۲۴ ساعته\n\n',
+        '👥 حجم اکانت: 50 گیگابایت\n\nسرورهای پرسرعت آلمان و هلند\nاتصال همزمان ۳ دستگاه\n\n💰 موجودی',
       );
+      expect(body).not.toContain('لوکیشن‌های محصول');
+      expect(body).not.toContain('🇩🇪');
       expect(
         body.endsWith('💰 موجودی کیف پول شما: 1,000,000 تومان\n\n💰 سفارش شما آماده پرداخت است'),
       ).toBe(true);
@@ -310,11 +321,16 @@ describe('a customer pays through the approved screens', () => {
       ]);
     });
 
-    it('omits the location and feature sections when the product has none, and never draws a gateway button', async () => {
-      const productId = await product('plain');
+    it('omits the description when the product has none, leaving no empty block, and never draws a gateway button', async () => {
+      const productId = await product('plain', {
+        ...EMPTY_PRODUCT_DISPLAY,
+        displayLocations: ['🇩🇪 آلمان'],
+      });
       await draftTo(productId);
       const body = lastText();
       expect(body).not.toContain('لوکیشن');
+      expect(body).not.toContain('🇩🇪');
+      expect(body).toContain('👥 حجم اکانت: 50 گیگابایت\n\n💰 موجودی کیف پول شما');
       expect(body).not.toContain('{');
       expect(lastMarkup()).not.toContain('💳 پرداخت با درگاه');
       expect(buttonsOf(lastMarkup()).some((b) => b.startsWith('g:'))).toBe(false);
@@ -329,32 +345,42 @@ describe('a customer pays through the approved screens', () => {
       expect(buttonsOf(lastMarkup())).toEqual([`w:${orderId}`, `dc:${orderId}`, 'mm:']);
     });
 
-    it('splits a long pre-invoice at section boundaries and puts the keyboard on the last part only', async () => {
-      const productId = await product('long', {
-        displayLocations: Array.from(
-          { length: 30 },
-          (_, i) => `🌐 لوکیشن شمارهٔ ${String(i + 1)} ${'—'.repeat(40)}`,
-        ),
-        displayFeatures: Array.from(
-          { length: 30 },
-          // Each section fits a message on its own, so the cut falls BETWEEN sections;
-          // a section wider than the bound would be cut line by line into a third part.
-          (_, i) => `✅ ویژگی شمارهٔ ${String(i + 1)} ${'—'.repeat(100)}`,
-        ),
-        serviceLocationLabel: null,
-      });
+    /*
+     * B1: the long display lists are no longer drawn, and the description is bounded
+     * (PRODUCT_DESCRIPTION_MAX_LENGTH), so even the longest product's pre-invoice is ONE
+     * message under Telegram's 4096 with the keyboard on it. Splitting a long text at
+     * section boundaries stays pinned in `message-split`'s own tests.
+     */
+    it('fits the longest description in ONE pre-invoice message, with the keyboard on it', async () => {
+      const longest = Array.from(
+        { length: 40 },
+        (_, i) => `✅ ویژگی شمارهٔ ${String(i + 1)} ${'—'.repeat(30)}`,
+      )
+        .join('\n')
+        .slice(0, PRODUCT_DESCRIPTION_MAX_LENGTH);
+      const productId = await product(
+        'long',
+        {
+          displayLocations: Array.from(
+            { length: 30 },
+            (_, i) => `🌐 لوکیشن شمارهٔ ${String(i + 1)} ${'—'.repeat(40)}`,
+          ),
+          displayFeatures: [],
+          serviceLocationLabel: null,
+        },
+        250_000n,
+        longest,
+      );
+      const before = messages().length;
       await draftTo(productId);
-      const parts = messages().slice(-2);
-      expect(parts.length).toBe(2);
-      const [first, second] = parts;
-      expect(String(first?.body['text']).length).toBeLessThanOrEqual(4096);
-      expect(String(second?.body['text']).length).toBeLessThanOrEqual(4096);
-      expect(first?.body['reply_markup']).toBeUndefined();
-      expect(second?.body['reply_markup']).toBeDefined();
-      const whole = `${String(first?.body['text'])}\n\n${String(second?.body['text'])}`;
-      expect(whole).toContain('🌐 لوکیشن شمارهٔ 30');
-      expect(whole).toContain('✅ ویژگی شمارهٔ 30');
-      expect(whole).toContain('💰 سفارش شما آماده پرداخت است');
+      const drawn = messages().slice(before);
+      const last = drawn[drawn.length - 1];
+      const text = String(last?.body['text']);
+      expect(text.length).toBeLessThanOrEqual(4096);
+      expect(text).toContain(longest.split('\n')[0] ?? 'MISSING');
+      expect(text).toContain('💰 سفارش شما آماده پرداخت است');
+      expect(text).not.toContain('🌐 لوکیشن شمارهٔ');
+      expect(last?.body['reply_markup']).toBeDefined();
     });
   });
 

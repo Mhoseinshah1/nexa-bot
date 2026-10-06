@@ -484,6 +484,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   Record<TemplateKey, Readonly<Record<string, string>>>
 > = {
   'ops.notification.operational_event': { code: 'کد رخداد' },
+  // B1: the product's own description, the one customer-facing text on the pre-invoice.
+  'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
   'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.service.delivery_tutorial': { text: 'متن آموزش پنل، همان‌طور که در پنل نوشته شده' },
@@ -867,7 +869,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.order.preinvoice': [
     'پیش‌فاکتور خرید',
-    'پیش‌فاکتوری که مشتری از روی آن پرداخت می‌کند: نام کاربری، محصول، مدت، حجم، مبلغ و موجودی کیف پول.',
+    'پیش‌فاکتوری که مشتری از روی آن پرداخت می‌کند: نام کاربری، محصول، مدت، حجم، مبلغ، توضیح محصول برای مشتری و موجودی کیف پول.',
   ],
   'bot.order.preinvoice_devices': [
     'بخش افزایش کاربر / دستگاه در پیش‌فاکتور',

@@ -212,8 +212,15 @@ describe('the pre-invoice', () => {
     walletBalance: money(1_000_000n, 'IRT'),
   };
 
-  it('renders the approved structure with the ordered blocks', async () => {
-    const screen = await composer.preinvoice(scope, facts);
+  /*
+   * B1: the customer is shown ONE editable description — the product's own — in place of the
+   * separate «لوکیشن‌های محصول» and features blocks. The locations and features are still
+   * product data (and still composed for an override that uses their blocks).
+   */
+  const description = 'سرورهای پرسرعت آلمان و هلند\nمناسب استفادهٔ روزمره و استریم';
+
+  it('B1: renders the one customer-facing description in place of the location and feature blocks', async () => {
+    const screen = await composer.preinvoice(scope, { ...facts, description });
     expect(screen.key).toBe('bot.order.preinvoice');
     expect(render(screen.key, screen.values)).toBe(
       [
@@ -225,13 +232,8 @@ describe('the pre-invoice', () => {
         '💵 قیمت: 250,000 تومان',
         '👥 حجم اکانت: 50 گیگابایت',
         '',
-        '🌍 لوکیشن‌های محصول:',
-        '🇩🇪 آلمان',
-        '🇳🇱 هلند',
-        '🇹🇷 ترکیه',
-        '',
-        '✅ اتصال همزمان ۳ دستگاه',
-        '✅ پشتیبانی ۲۴ ساعته',
+        'سرورهای پرسرعت آلمان و هلند',
+        'مناسب استفادهٔ روزمره و استریم',
         '',
         '💰 موجودی کیف پول شما: 1,000,000 تومان',
         '',
@@ -240,7 +242,40 @@ describe('the pre-invoice', () => {
     );
   });
 
-  it('omits the location and feature sections cleanly when a product has none', async () => {
+  it.each([
+    ['no description', null],
+    ['a blank description', '  \n '],
+  ])(
+    'B1: %s leaves no empty block, whatever locations and features the product has',
+    async (_label, none) => {
+      const screen = await composer.preinvoice(scope, { ...facts, description: none });
+      const text = render(screen.key, screen.values);
+      expect(text).not.toContain('لوکیشن');
+      expect(text).not.toContain('آلمان');
+      expect(text).not.toContain('{');
+      expect(text).toContain(
+        '💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n💰 موجودی کیف پول شما',
+      );
+    },
+  );
+
+  it('B1: an installation override that still names the blocks renders them from the kept data', async () => {
+    const screen = await composer.preinvoice(scope, { ...facts, description });
+    const override = '{productName}\n\n{locationsBlock}\n\n{featuresBlock}';
+    const text = appearanceFallbackText(
+      renderTemplateBody(
+        templateDefinition('bot.order.preinvoice'),
+        override,
+        screen.values,
+        'fa',
+        DEFAULT_TEMPLATE_PRESENTATION,
+      ),
+    );
+    expect(text).toContain('🌍 لوکیشن‌های محصول:\n🇩🇪 آلمان\n🇳🇱 هلند\n🇹🇷 ترکیه');
+    expect(text).toContain('✅ اتصال همزمان ۳ دستگاه\n✅ پشتیبانی ۲۴ ساعته');
+  });
+
+  it('omits the optional sections cleanly when a product has nothing to show', async () => {
     const screen = await composer.preinvoice(scope, {
       ...facts,
       serviceUsername: null,

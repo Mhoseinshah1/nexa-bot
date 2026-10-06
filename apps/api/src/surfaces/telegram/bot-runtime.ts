@@ -4346,6 +4346,8 @@ export interface ProductDisplaySource {
     readonly displayLocations: readonly string[];
     readonly displayFeatures: readonly string[];
     readonly serviceLocationLabel: string | null;
+    /** B1: the product's customer-facing description, shown on the pre-invoice. */
+    readonly description?: string | null;
   } | null>;
 }
 
@@ -13847,6 +13849,8 @@ export class BotRuntime {
       cashback: cashback === undefined ? null : cashback.amount,
       locations: display?.displayLocations ?? [],
       features: display?.displayFeatures ?? [],
+      // B1: the one editable customer-facing description, in place of the two blocks.
+      description: display?.description ?? null,
       walletBalance: money(balance.amountMinor, balance.currency),
     });
     const routes = await this.orderRouteButtons(scope, customer.id, order.id, order.totals.total);

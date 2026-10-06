@@ -6726,7 +6726,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           // A custom service (Package D) was bought from no product, so it has no display.
           if (productId === null) return null;
           const product = await productRepository.findById(scope, productId);
-          return product === null ? null : product.display;
+          // B1: the description travels with the display data, for the pre-invoice.
+          return product === null ? null : { ...product.display, description: product.description };
         },
       },
       resellers: resellerService,
