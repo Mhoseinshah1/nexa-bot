@@ -293,6 +293,14 @@ activity read inside the transaction and an audit row.
   same fingerprint and mapping, and re-walks every phase; nothing is duplicated (tested:
   a crash after the openings phase, then resume: 6 openings, not 12). An error inside a
   phase leaves the run RUNNING, as a killed process does — one recovery for both.
+- **One applying process per tenant (WP-D3).** `import` and `resume` first take a
+  per-tenant claim — a PostgreSQL session advisory lock (class `0x4c49`) on a connection
+  of their own, never a pooled one — and hold it until the run ends. A second `import` or
+  `resume` while a live process holds it is refused with `RUN_CONFLICT` ("Another
+  importer process…") before it reads or writes anything. Before this, two resumes of one
+  interrupted run both proceeded, walked the same rows and deadlocked (40P01). A process
+  that dies — `kill -9`, a lost host — loses its connection and so its claim, at once: a
+  resume after a crash is never refused by a dead holder, and needs no operator step.
 - **reconcile** — the latest APPLY run, which must be **COMPLETED** (RUNNING: resume or
   abort it first; ABORTED: there is no finished import), against a fresh snapshot of the
   SAME source fingerprint and the SAME mapping fingerprint (both refused otherwise):
@@ -337,7 +345,15 @@ every user) against the importer's own decisions. A disagreement is reported, no
   synthetic dataset; interrupted + resume; rerun; drift; discrepancy; P6 port; **real P6
   adoption** (the container default: every eligible candidate adopted, zero-total
   `LEGACY_ADOPTION` orders, no provisioning operation, a rerun `ALREADY_ADOPTED`, provider
-  writes 0); permissions; stopped tenant; the CLI glue.
+  writes 0); permissions; stopped tenant; the CLI glue. WP-D3 tightened it: `audit`
+  is compared over EVERY table (row count and an md5 of every row,
+  `tests/support/database-fingerprint.ts`), not four; a drifted source refuses resume
+  with `RUN_CONFLICT` and the database unchanged (any error used to pass); a crash after
+  EACH phase (`customers`, `openings`, `trials`, `products`, `adoption`), and a crash
+  INSIDE adoption after two services were committed, each resume to exactly the state a
+  clean uninterrupted import leaves (a digest over stable keys: legacy ids, Telegram ids,
+  usernames, panel names — one order and one service per adopted invoice); and two
+  concurrent resumes: exactly one completes, the other is refused cleanly.
 - **MySQL engine: `pnpm test:legacy-mysql`** (`tests/legacy-mysql/`) — read-only proof, a
   write refused even with a grant that allows it, consistent snapshot, fingerprint parity,
   every evidence query and its cross-checks, on a real MariaDB. Its own CI job

@@ -46,6 +46,7 @@ import type {
   LegacyCustomerWriter,
   LegacyImporterDestination,
   LegacyInventoryPort,
+  LegacyImportProcessLock,
   LegacyInventoryRead,
   LegacyRunInputs,
   LegacyRunInputsRepository,
@@ -104,6 +105,8 @@ export interface LegacyImporterDeps {
   >;
   /** P6. Null until agent ADOPT's service is wired; eligible candidates are then PENDING. */
   readonly adoption: LegacyAdoptionPort | null;
+  /** WP-D3: one applying process per tenant; a second import or resume is refused. */
+  readonly processLock: LegacyImportProcessLock;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -462,6 +465,29 @@ export class LegacyImporterService {
   // --- import / resume -----------------------------------------------------------------
 
   async apply(
+    input: LegacyImportInput & {
+      readonly mode: 'IMPORT' | 'RESUME';
+      readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
+    },
+  ): Promise<LegacyImportReport> {
+    // Claimed BEFORE anything is read, held until the last write: a second process is
+    // refused at once instead of walking the same rows beside this one.
+    const lease = await this.deps.processLock.tryAcquire(input.scope.tenantId);
+    if (lease === null) {
+      throw errors.conflict(
+        LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+        "Another importer process is applying this tenant's import right now. Wait for it to finish. " +
+          'A process that died holds nothing: its claim ended with its database connection, so a resume after a crash is never refused here.',
+      );
+    }
+    try {
+      return await this.applyClaimed(input);
+    } finally {
+      await lease.release();
+    }
+  }
+
+  private async applyClaimed(
     input: LegacyImportInput & {
       readonly mode: 'IMPORT' | 'RESUME';
       readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;

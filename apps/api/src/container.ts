@@ -304,6 +304,7 @@ import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/i
 import { LegacyImporterService } from './modules/platform/legacy-importer/application/legacy-importer.service.js';
 import type { LegacyAdoptionPort } from './modules/platform/legacy-importer/application/ports.js';
 import { DrizzleLegacyImporterRepository } from './modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.js';
+import { PgLegacyImportProcessLock } from './modules/platform/legacy-importer/infrastructure/pg-legacy-import-process-lock.js';
 import { RickpanelInventorySource } from './modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source.js';
 import { DrizzleLegacyImportRepository } from './modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
@@ -6978,6 +6979,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         settingsResolver.valueOf<CurrencyCode>(scope, 'sales.currency'),
       );
       return new LegacyImporterService({
+        processLock: new PgLegacyImportProcessLock(config.DATABASE_URL),
         destination: importerRepository,
         runs: new DrizzleLegacyImportRepository(database.db),
         runInputs: importerRepository,
