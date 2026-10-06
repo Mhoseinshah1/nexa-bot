@@ -83,6 +83,7 @@ P7_EXPECTED_MAP_FP_FLAG="--expected-panel-map-fingerprint"
 P7_SOURCE_PASSWORD_ENV=NEXA_REHEARSAL_LEGACY_PASSWORD
 REPORT_SCHEMA="$ROOT/docs/legacy-migration/final-report.schema.json"
 REPORT_CHECK="$ROOT/scripts/legacy-rehearsal-report-check.mjs"
+RECONCILIATION="$ROOT/scripts/legacy-rehearsal-reconciliation.mjs"
 SYNTHETIC_PANELS_HELPER="$ROOT/tests/support/legacy-rehearsal-synthetic-panels.ts"
 PANEL_STATE_HELPER="$ROOT/tests/support/legacy-rehearsal-panel-state.ts"
 TSX_BIN="$ROOT/apps/api/node_modules/.bin/tsx"
@@ -422,6 +423,7 @@ fi
 [ -f "$BACKUP_CLI" ] && [ -f "$MIGRATE_JS" ] && [ -f "$PROVISION_CLI" ] ||
   die "apps/api/dist is not built. Run: pnpm build"
 [ -f "$REPORT_SCHEMA" ] && [ -f "$REPORT_CHECK" ] || die "the report schema or its checker is missing."
+[ -f "$RECONCILIATION" ] || die "the reconciliation table generator is missing from scripts/."
 if [ "$SYNTHETIC_PANELS" -eq 1 ]; then
   [ -f "$SYNTHETIC_PANELS_HELPER" ] && [ -x "$TSX_BIN" ] ||
     die "--synthetic-panels needs $SYNTHETIC_PANELS_HELPER and tsx (pnpm install)."
@@ -630,6 +632,16 @@ delta() {
   fi
 }
 
+# le_holds A B — "holds" when both are integers and A <= B; otherwise what failed. For
+# the equations that are an inequality (C2), still recorded as one exact string.
+le_holds() {
+  if [[ "$1" =~ ^-?[0-9]+$ ]] && [[ "$2" =~ ^-?[0-9]+$ ]]; then
+    if [ "$1" -le "$2" ]; then printf 'holds\n'; else printf 'fails: %s > %s\n' "$1" "$2"; fi
+  else
+    printf 'absent: %s / %s\n' "$1" "$2"
+  fi
+}
+
 # Sum of every `prefix*` line's value (e.g. all map:user:* decisions).
 metric_sum() {
   awk -F '\t' -v p="$2" 'index($1, p) == 1 { s += $2 } END { print s + 0 }' "$1"
@@ -743,12 +755,20 @@ legacy_aggregates() {
 imported_balance() {
   local cycle="$1"
   mdb_root -e "DROP DATABASE IF EXISTS nexa_reconcile; CREATE DATABASE nexa_reconcile;
-               CREATE TABLE nexa_reconcile.imported (legacy_id VARCHAR(20) PRIMARY KEY)"
+               CREATE TABLE nexa_reconcile.imported (legacy_id VARCHAR(20) PRIMARY KEY);
+               CREATE TABLE nexa_reconcile.customer_missing (legacy_id VARCHAR(64) PRIMARY KEY)"
   pg_nexa -c "SELECT m.legacy_id FROM legacy_import_map m JOIN tenants t ON t.id = m.tenant_id
               WHERE t.slug = '$TENANT' AND m.legacy_table = 'user' AND m.status = 'IMPORTED'" |
     # "0" is a sentinel that keeps the statement valid when nothing was imported; it can
     # never match, because a legacy user id is ^[1-9][0-9]*$.
     awk 'BEGIN { print "INSERT INTO nexa_reconcile.imported VALUES (\"0\")" } NF { printf ",(\"%s\")", $1 } END { print ";" }' |
+    mdb_root
+  # S4: the live invoices NEXA recorded as CUSTOMER_MISSING review. An invoice key is the
+  # map's evidenced shape (hex, digits), checked again here before it reaches SQL.
+  pg_nexa -c "SELECT m.legacy_id FROM legacy_import_map m JOIN tenants t ON t.id = m.tenant_id
+              WHERE t.slug = '$TENANT' AND m.legacy_table = 'invoice' AND m.status = 'MANUAL_REVIEW'
+                AND m.reason_code = 'CUSTOMER_MISSING'" |
+    awk 'BEGIN { print "INSERT INTO nexa_reconcile.customer_missing VALUES (\"-\")" } $1 ~ /^[0-9a-f]+$/ { printf ",(\"%s\")", $1 } END { print ";" }' |
     mdb_root
   mdb_root -N -B -e "
     SELECT 'imported_balance_sum', CAST(COALESCE(SUM(CAST(u.Balance AS DECIMAL(24,4))), 0) AS CHAR)
@@ -756,7 +776,21 @@ imported_balance() {
     UNION ALL
     SELECT 'imported_nonzero_users', CAST(COUNT(*) AS CHAR)
       FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
-     WHERE CAST(u.Balance AS DECIMAL(24,4)) <> 0" >"$OUT/snapshots/c${cycle}-legacy-imported.tsv"
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) <> 0
+    UNION ALL
+    -- W8: a fractional Toman balance is never imported (IRT has no minor digits): it is held
+    -- for review, never rounded.
+    SELECT 'imported_fractional_users', CAST(COUNT(*) AS CHAR)
+      FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) <> FLOOR(CAST(u.Balance AS DECIMAL(24,4)))
+    UNION ALL
+    -- S4: every live REAL invoice with no owning user is in the CUSTOMER_MISSING review set.
+    SELECT 'orphans_outside_customer_missing', CAST(COUNT(*) AS CHAR)
+      FROM \`$LEGACY_SCHEMA\`.invoice i LEFT JOIN \`$LEGACY_SCHEMA\`.user u ON u.id = i.id_user
+     WHERE i.Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume') AND i.is_test = 0
+       AND u.id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM nexa_reconcile.customer_missing c
+                        WHERE c.legacy_id = CAST(i.id_invoice AS CHAR))" >"$OUT/snapshots/c${cycle}-legacy-imported.tsv"
   mdb_root -e "DROP DATABASE nexa_reconcile"
 }
 
@@ -832,6 +866,35 @@ importer() { # importer MODE [args...]
       --evidence-class "$EVIDENCE_CLASS" \
       "${IMPORTER_ARGS[@]+"${IMPORTER_ARGS[@]}"}" "$@"
   )
+}
+
+# revenue_snapshot LABEL — R3: PAID orders by origin, exactly as the revenue reports group
+# them (reconciliation.md §2): origin, orders, total minor units.
+revenue_snapshot() {
+  pg_nexa -F "$(printf '\t')" -c "SELECT o.origin, count(*), COALESCE(SUM(o.total_amount), 0)
+      FROM orders o JOIN tenants t ON t.id = o.tenant_id
+     WHERE t.slug = '$TENANT' AND o.state = 'PAID' GROUP BY o.origin ORDER BY o.origin" \
+    >"$OUT/snapshots/$1.tsv"
+}
+
+revenue_view() { # ORIGIN FILE — "orders/total" for that origin, "0/0" when it has none
+  awk -F '\t' -v o="$1" '$1 == o { n = $2; s = $3 } END { printf "%d/%s\n", n, (s == "" ? 0 : s) }' "$2"
+}
+
+# R3: the wallet by report group over the import window — from the APPLY run's start (the
+# interrupted import's, which the resume continued) to now. Openings only.
+wallet_window_groups() {
+  pg_nexa -c "SELECT COALESCE(string_agg(g, ',' ORDER BY g), 'none') FROM (
+      SELECT DISTINCT CASE WHEN w.reason = 'MIGRATION_OPENING_BALANCE' THEN 'OPENING_BALANCE'
+                           WHEN w.reason LIKE 'TOPUP_%' THEN 'TOPUP' ELSE 'OTHER' END AS g
+        FROM wallet_entries w JOIN tenants t ON t.id = w.tenant_id
+       WHERE t.slug = '$TENANT'
+         AND w.created_at >= (SELECT r.started_at FROM legacy_import_runs r
+                               WHERE r.tenant_id = t.id AND r.mode = 'APPLY')) groups"
+}
+
+wallet_window_expected() { # OPENING_BALANCE when the import posted any opening, else none
+  if [ "$(delta opening_entries_total)" = "0" ]; then printf 'none\n'; else printf 'OPENING_BALANCE\n'; fi
 }
 
 # panel_state LABEL — P4: every production panel of the map, walked through the importer's
@@ -1045,6 +1108,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   run_stage "$cycle" snapshot-pre snapshot "c${cycle}-pre-import"
   run_stage "$cycle" pg-dump-pre pg_dump_snapshot "$cycle"
   run_stage "$cycle" panel-state-pre panel_state "c${cycle}-panel-state-pre"
+  run_stage "$cycle" revenue-pre revenue_snapshot "c${cycle}-revenue-pre"
 
   run_p7 "$cycle" p7-audit audit --format json
   cp "$OUT/logs/c${cycle}-p7-audit.log" "$OUT/c${cycle}-audit.json"
@@ -1084,6 +1148,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   run_p7 "$cycle" p7-reconcile reconcile
   run_stage "$cycle" p7-report report_json "$cycle"
   run_stage "$cycle" snapshot-post snapshot "c${cycle}-post-import"
+  run_stage "$cycle" revenue-post revenue_snapshot "c${cycle}-revenue-post"
   run_stage "$cycle" legacy-imported-balance imported_balance "$cycle"
 
   PRE="$S-pre-import.tsv"
@@ -1115,6 +1180,8 @@ for cycle in $(seq 1 "$CYCLES"); do
     "$(($(metric_sum "$POST" 'map:invoice:') + KEY_INVALID))"
   if [ "$KEY_INVALID" != "0" ]; then
     pending "$cycle" invoice_keys_outside_evidenced_shape 0 "$KEY_INVALID live invoice(s); owner decision (OQ-P4-01)"
+  else
+    check "$cycle" invoice_keys_outside_evidenced_shape 0 "$KEY_INVALID"
   fi
   ADOPTION_PENDING="$(report_get "$cycle" manualReview.byReason.ADOPTION_PENDING_P6)"
   if [ "$ADOPTION_PENDING" != "absent" ] && [ "$ADOPTION_PENDING" != "0" ]; then
@@ -1137,6 +1204,35 @@ for cycle in $(seq 1 "$CYCLES"); do
       *) check "$cycle" "report_equation_$eq" true "$HOLDS" ;;
     esac
   done
+
+  # C2: a customer is created only by an import decision.
+  check "$cycle" customers_created_le_imported holds \
+    "$(le_holds "$(delta customers_total)" "$(($(metric_sum "$POST" 'map:user:IMPORTED:') - $(metric_sum "$PRE" 'map:user:IMPORTED:')))")"
+  # S4: an invoice with no owning user is CUSTOMER_MISSING review, exactly — never adopted.
+  check "$cycle" orphans_in_customer_missing 0 "$(metric "$S-legacy-imported.tsv" orphans_outside_customer_missing)"
+  # W8: IRT has no minor digits. A fractional legacy balance is never imported (rounded);
+  # it is held for review, and the population itself is the owner's to decide. A NULL
+  # balance must be explained by the owner too.
+  check "$cycle" fractional_balances_never_imported 0 "$(metric "$S-legacy-imported.tsv" imported_fractional_users)"
+  for w8 in balance_fractional_users balance_null_users; do
+    W8_N="$(metric "$LEGACY_SRC" "$w8")"
+    if [ "$W8_N" = "0" ]; then
+      check "$cycle" "legacy_$w8" 0 "$W8_N"
+    elif [[ "$W8_N" =~ ^[0-9]+$ ]]; then
+      pending "$cycle" "legacy_$w8" 0 "$W8_N legacy user(s); held for review, owner decision (W8)"
+    else
+      check "$cycle" "legacy_$w8" 0 "$W8_N"
+    fi
+  done
+  # The import gives no trial (reconciliation.md §5).
+  check "$cycle" no_trial_grants 0 "$(delta trial_grants)"
+  # R3, machine half: the revenue view the reports use (PAID orders by origin) and the
+  # wallet by report group inside the import window. Sales untouched; adoption orders
+  # total zero; the window's wallet movement is openings and nothing else. (The manual
+  # half — the Web Admin financial report read by eye — is in manual-acceptance.)
+  check "$cycle" revenue_view_standard_unchanged "$(revenue_view STANDARD "$S-revenue-pre.tsv")" "$(revenue_view STANDARD "$S-revenue-post.tsv")"
+  check "$cycle" revenue_view_adoption_zero 0 "$(awk -F '\t' '$1 == "LEGACY_ADOPTION" { s += $3 } END { print s + 0 }' "$S-revenue-post.tsv")"
+  check "$cycle" wallet_window_openings_only "$(wallet_window_expected)" "$(wallet_window_groups)"
 
   # Wallet: only openings moved the wallet; one per customer; derived from the right id.
   check "$cycle" wallet_moved_only_by_openings "$(delta opening_signed_total_minor)" "$(delta wallet_signed_total_minor)"
@@ -1256,6 +1352,10 @@ node -e '
   fs.writeFileSync(out + "/summary.json", JSON.stringify(summary, null, 2) + "\n");
  ' "$OUT" "$EVIDENCE_CLASS" "$CYCLES" "$FAILED_CHECKS" "$PENDING_CHECKS" "$(cat "$OUT/snapshots/legacy-dump.sha256")" \
   "$(cat "$OUT/snapshots/legacy-archive.sha256")" "$LEGACY_ENGINE" "$LEGACY_INPUT_FLAG"
+
+# The reconciliation.md result table, generated from the checks rather than transcribed.
+node "$RECONCILIATION" "$OUT/summary.json" >"$OUT/reconciliation.md" ||
+  die "could not generate $OUT/reconciliation.md from summary.json"
 
 if [ "$FAILED_CHECKS" -ne 0 ]; then
   die "$FAILED_CHECKS check(s) failed ($PENDING_CHECKS pending); see $OUT/checks.tsv. The rehearsal did NOT pass."

@@ -305,3 +305,32 @@ describe('panel_state_compare: a broken comparison never reads as "unchanged" (P
     expect(run(join(dir, 'pre.json'), join(dir, 'absent.json'))).toContain('compare-failed');
   }, 60_000);
 });
+
+describe('le_holds: the inequality equations (C2) never pass on a missing figure', () => {
+  const run = (a: string, b: string) =>
+    bash(`${lift('le_holds')}\nle_holds "$1" "$2"`, [a, b]).stdout.trim();
+
+  it('holds for a <= b, and fails for a > b naming both', () => {
+    expect(run('7', '8')).toBe('holds');
+    expect(run('8', '8')).toBe('holds');
+    expect(run('9', '8')).toBe('fails: 9 > 8');
+  });
+
+  it('is absent, never holds, when either side is not a number', () => {
+    expect(run('absent', '8')).toBe('absent: absent / 8');
+    expect(run('', '')).toBe('absent:  /');
+  });
+});
+
+describe('revenue_view: R3 reads the revenue view by origin', () => {
+  it('reports one origin as orders/total, and 0/0 for an origin with none', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-rehearsal-r3-'));
+    const file = join(dir, 'revenue.tsv');
+    writeFileSync(file, 'LEGACY_ADOPTION\t4\t0\nSTANDARD\t12\t2400000\n');
+    const view = (origin: string) =>
+      bash(`${lift('revenue_view')}\nrevenue_view "$1" "$2"`, [origin, file]).stdout.trim();
+    expect(view('STANDARD')).toBe('12/2400000');
+    expect(view('LEGACY_ADOPTION')).toBe('4/0');
+    expect(view('NONE')).toBe('0/0');
+  });
+});

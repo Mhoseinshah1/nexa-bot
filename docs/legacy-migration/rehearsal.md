@@ -168,6 +168,7 @@ Pinned by `tests/unit/legacy-rehearsal-guards.test.ts`.
 | `snapshots/c<N>-pre-import.pgcustom` | the pre-import `pg_dump` the rollback restores (customer data: 0600)                         |
 | `c<N>-report.json`                   | P7's machine-readable report, and `c<N>-report.schema-violations.txt` (empty when valid)     |
 | `synthetic-panel-requests.json`      | synthetic only: requests the fake panels received after setup                                |
+| `reconciliation.md`                  | the reconciliation result table, generated from the checks (WP-D5)                           |
 | `archive.json`                       | the archive inspector's report: both sha256 values, format, engine, collations, blockers     |
 | `snapshots/c<N>-panel-state-*.json`  | P4: per production panel, account count and hashes; per-account digests under a deleted key  |
 | `logs/`                              | one log per stage                                                                            |
@@ -194,7 +195,11 @@ revenue, payments, top-ups), `adoption_orders_zero_total`, `one_service_per_adop
 `rollback_restores_pre_import`, `repeat_reproduces_cycle_1`, `panel_map_complete` (G10:
 every live real `code_panel` accounted for, WP-D2), `panel_state_unchanged` and
 `panel_state_walk_reads_only` (P4: the production panels walked read-only before the audit
-and after the resume, WP-D4). Each maps to an equation in
+and after the resume, WP-D4), `customers_created_le_imported` (C2),
+`fractional_balances_never_imported` and `legacy_balance_{fractional,null}_users` (W8; the
+latter PENDING when non-zero), `revenue_view_standard_unchanged`,
+`revenue_view_adoption_zero`, `wallet_window_openings_only` (R3, machine half),
+`orphans_in_customer_missing` (S4), `no_trial_grants` (WP-D5). Each maps to an equation in
 [`reconciliation.md`](reconciliation.md).
 
 ## What it does not cover

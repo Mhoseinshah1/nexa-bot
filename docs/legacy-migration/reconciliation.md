@@ -298,6 +298,22 @@ burst (cutover runbook, observation step).
 
 ## Result table (filled per run; aggregates only)
 
+**Generated, not transcribed (WP-D5).** `scripts/legacy-rehearsal-reconciliation.mjs`
+turns a rehearsal's `summary.json` into this table — each equation with the harness checks
+that evidence it and a state: `HOLDS` (every mapped check PASSED in every cycle), `FAILS`
+(naming the failed checks), `PENDING` (an owner decision, never a pass) or `MISSING` (a
+mapped check was never recorded). The harness writes it to `--out/reconciliation.md` at the
+end of every run; paste the staging run's states here as their own commit. R3 and P4 also
+carry a manual half, marked NOT RUN until a person has done it. Since WP-D5 every equation
+has a machine check: C2 `customers_created_le_imported`; W8
+`fractional_balances_never_imported` (a fractional balance is held for review, never
+rounded) plus `legacy_balance_{fractional,null}_users` (PENDING when non-zero: the owner
+decides the population); R3 `revenue_view_standard_unchanged`,
+`revenue_view_adoption_zero`, `wallet_window_openings_only`; S2 is recorded as a PASS when
+zero; S4 `orphans_in_customer_missing` (exact: the legacy orphans are compared invoice by
+invoice with the CUSTOMER_MISSING review rows, in the throwaway engine's scratch schema);
+§5's `delta(trial_grants) = 0` as `no_trial_grants`.
+
 | equation | staging rehearsal | production | notes |
 | -------- | ----------------- | ---------- | ----- |
 | C1       |                   |            |       |
