@@ -48,6 +48,7 @@ import { qrTemplateSettingSchema } from './delivery-qr.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
 import {
   categoryColorsSchema,
+  categoryIconsSchema,
   inlineButtonIconsSchema,
   inlineButtonStylesSchema,
 } from './inline-buttons.js';
@@ -1013,6 +1014,33 @@ export const SETTINGS = [
     defaultValue: {},
     configures: null,
     // Empty is not "no categories": every category is then drawn with the fallback.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * Phase 2 UX wave, Item 2: each product category's optional decorations — a premium icon
+   * BEFORE the name and an ordinary emoji AFTER it — edited on the Web Admin's «دسته‌بندی‌ها»
+   * page and nowhere else (it is not drawn on the settings page). Keyed by category id, as
+   * `bot.category_colors` is, so a rename keeps its icons and no table changes.
+   */
+  {
+    key: 'bot.category_icons',
+    description:
+      'Optional decorations of each product category\u2019s button in the bot\u2019s catalogue, ' +
+      'by category id. "before" is a Telegram custom emoji id (digits only), drawn as the ' +
+      'button\u2019s premium icon: Telegram shows one, before the text, and only a bot whose ' +
+      'custom-emoji appearance test succeeded sends it; it takes precedence over the generic ' +
+      'category button\u2019s icon. "after" is an ordinary Unicode emoji appended to the ' +
+      'name: Telegram cannot draw a premium emoji inside or after a button\u2019s text. A ' +
+      'category this value does not name is drawn exactly as before; an id naming a deleted ' +
+      'category is ignored. Only the look changes: a category button routes by its own ' +
+      'callback data.',
+    schema: categoryIconsSchema,
+    defaultValue: {},
+    configures: null,
+    // Empty is not "no categories": every category is then drawn without decorations.
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

@@ -442,6 +442,123 @@ describe('the customer purchase flow over Telegram', () => {
     ]);
   });
 
+  describe('category decorations (Phase 2 Item 2, bot.category_icons)', () => {
+    const ICON = '5368324170671202286';
+    const GENERIC_ICON = '5368324170671202287';
+    type Cell = { text: string; callback_data: string; icon_custom_emoji_id?: string };
+    const setup = async (eligible: boolean) => {
+      const owner = adminActorFor(
+        await createAdmin(api.container, tenantA, {
+          username: `owner-tg-icons-${String(eligible)}`,
+          roleKeys: ['owner'],
+        }),
+      );
+      await product(tenantA, 'ACTIVE');
+      const fresh = await category({ name: 'تازه', sortOrder: 1 });
+      await product(tenantA, 'ACTIVE', { categoryId: fresh as ProductCategoryId });
+      await api.container.database.db.execute(sql`
+        UPDATE bot_instances
+           SET custom_emoji_tested_at = ${eligible ? sql`now()` : null},
+               custom_emoji_test_outcome = ${eligible ? 'SENT' : null}
+         WHERE id = ${BOT_A}`);
+      // Saving a slot drops the appearance reader's 30-second cache for the tenant.
+      await api.container.appearance.saveSlot(tenantA, owner, 'wallet', {
+        idempotencyKey: `tg-icons-slot-${String(eligible)}`,
+        customEmojiId: '5368324170671202299',
+        enabled: true,
+        expectedVersion: null,
+      });
+      const set = (key: 'bot.category_icons' | 'bot.inline_button_icons', value: unknown) =>
+        api.container.settingsService.set(tenantA, owner, {
+          key,
+          value,
+          expectedVersion: null,
+          idempotencyKey: `tg-icons-${key}-${String(eligible)}`,
+        });
+      return { fresh, set };
+    };
+    const catalogueCells = () => buttonsOf(lastMessage()) as unknown as Cell[];
+
+    it('draws the premium icon before and the emoji after on an ELIGIBLE bot, callbacks unchanged', async () => {
+      const { fresh, set } = await setup(true);
+      await command('/catalog');
+      const legacy = catalogueCells();
+      await set('bot.category_icons', {
+        [SEEDED_CATEGORY()]: { before: ICON, after: '🔥' },
+        [fresh]: { after: '⭐' },
+      });
+      await set('bot.inline_button_icons', { 'catalog.category': GENERIC_ICON });
+      await command('/catalog');
+      const cells = catalogueCells();
+      expect(cells.map((cell) => cell.callback_data)).toStrictEqual(
+        legacy.map((cell) => cell.callback_data),
+      );
+      expect(cells.map((cell) => [cell.text, cell.icon_custom_emoji_id])).toStrictEqual([
+        [`${legacy[0]?.text ?? ''} 🔥`, ICON],
+        // No own `before`: the generic category button's icon (Item 3), and its own after.
+        [`${legacy[1]?.text ?? ''} ⭐`, GENERIC_ICON],
+      ]);
+      expect(legacy.some((cell) => cell.icon_custom_emoji_id !== undefined)).toBe(false);
+    });
+
+    it('an INELIGIBLE bot draws no premium icon, and still draws the ordinary after emoji', async () => {
+      const { set } = await setup(false);
+      await command('/catalog');
+      const legacy = catalogueCells();
+      await set('bot.category_icons', { [SEEDED_CATEGORY()]: { before: ICON, after: '🔥' } });
+      await command('/catalog');
+      const cells = catalogueCells();
+      expect(JSON.stringify(lastMessage()?.body)).not.toContain('icon_custom_emoji_id');
+      expect(cells.map((cell) => cell.text)).toStrictEqual([
+        `${legacy[0]?.text ?? ''} 🔥`,
+        legacy[1]?.text,
+      ]);
+      expect(cells.map((cell) => cell.callback_data)).toStrictEqual(
+        legacy.map((cell) => cell.callback_data),
+      );
+    });
+
+    it('a refused icon is sent once more without it, keeping the after emoji and callbacks', async () => {
+      const { set } = await setup(true);
+      await set('bot.category_icons', { [SEEDED_CATEGORY()]: { before: ICON, after: '🔥' } });
+      reply = (_request, response) => {
+        const last = sent[sent.length - 1];
+        if (JSON.stringify(last?.body).includes('icon_custom_emoji_id')) {
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 400,
+              description: 'Bad Request: CUSTOM_EMOJI_INVALID',
+            }),
+          );
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+      };
+      sent = [];
+      await command('/catalog');
+      const tries = messages();
+      expect(tries).toHaveLength(2);
+      const [iconed, plain] = tries.map((one) => buttonsOf(one) as unknown as Cell[]);
+      expect(iconed?.[0]?.icon_custom_emoji_id).toBe(ICON);
+      expect(JSON.stringify(tries[1]?.body)).not.toContain('icon_custom_emoji_id');
+      expect(plain?.[0]?.text.endsWith(' 🔥')).toBe(true);
+      expect(plain?.map((cell) => cell.callback_data)).toStrictEqual(
+        iconed?.map((cell) => cell.callback_data),
+      );
+      // Review B1 of PR #215: an operator-typed icon id proves nothing about the bot, so even a
+      // custom-emoji denial leaves its eligibility as it was.
+      const outcome = (
+        await api.container.database.db.execute<{ outcome: string | null }>(
+          sql`SELECT custom_emoji_test_outcome AS outcome FROM bot_instances WHERE id = ${BOT_A}`,
+        )
+      ).rows[0]?.outcome;
+      expect(outcome).toBe('SENT');
+    });
+  });
+
   it('pages a long category, drawing Next and Previous only when that page exists', async () => {
     /*
      * Nine products and a page of eight: page 0 has eight and a Next, page 1 has one

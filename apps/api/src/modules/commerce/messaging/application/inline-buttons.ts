@@ -3,6 +3,7 @@ import {
   type InlineButtonKey,
   type ScopeContext,
   type CategoryColors,
+  type CategoryIcons,
   type InlineButtonIcons,
   type InlineButtonStyles,
   type TemplateValues,
@@ -73,4 +74,11 @@ export interface InlineButtonStyleReader {
    * custom emoji. Absent in a stand-in, which draws every button without an icon.
    */
   iconsFor?(scope: ScopeContext): Promise<InlineButtonIcons>;
+  /**
+   * Phase 2 Item 2: each product category's decorations (`bot.category_icons`), read only for
+   * a keyboard that lists categories — whatever the bot's eligibility, because the `after`
+   * emoji is ordinary text; the `before` icon is drawn only from an eligible bot. Absent in a
+   * stand-in, which draws every category exactly as before Item 2.
+   */
+  categoryIconsFor?(scope: ScopeContext): Promise<CategoryIcons>;
 }
