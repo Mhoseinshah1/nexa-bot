@@ -304,7 +304,9 @@ laptop) are not counted, as before.
 
 **Plaintext debris.** A run abandoned mid-dump keeps its plaintext by design (its
 process may still be writing), and a killed CLI `verify`/`restore` leaves a
-`.cli-*` directory. Both are removed once nothing has written them for the grace
+`.cli-*` directory (judged by the newest mtime of the directory and its files; a
+running CLI command also touches its directory every minute). Both are removed
+once nothing has written them for the grace
 window: the longer of 24 hours and `BACKUP_DUMP_TIMEOUT_MS +
 BACKUP_RESTORE_TIMEOUT_MS + 15 minutes`. The directory of a RUNNING run is never
 touched, and an archive is never touched by this sweep. Leaked scratch
@@ -317,13 +319,13 @@ the notification centre (category BACKUPS) and the ops group's backups topic (th
 `backup.` prefix route). Each is deduped installation-wide onto one open row and
 closed by its `_ok` twin only when open — a healthy installation records nothing.
 
-| Opens                            | Severity | When                                                                                                                     | Closes with                                                                               |
-| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `backup.run_failed`              | ERROR    | a run failed, or an abandoned run was reclaimed                                                                          | `backup.run_ok`, the next successful run                                                  |
-| `backup.delivery_failed`         | WARN     | a verified run's archive did not leave the host (`FAILED_DEFINITIVE` or `OUTCOME_UNKNOWN`)                               | `backup.delivery_ok`, a later run that delivered (or had no destination configured)       |
-| `backup.cleanup_failed`          | ERROR    | a run, or the debris sweep, left plaintext or a scratch database                                                         | `backup.cleanup_ok`, when the sweep finds no plaintext left and the newest run cleaned up |
-| `backup.disk_threshold_exceeded` | WARN     | free space on `BACKUP_WORK_DIR`'s volume is below max(1 GiB, 1.5 × (2 × last dump + last archive))                       | `backup.disk_threshold_ok`                                                                |
-| `backup.interval_exceeded`       | ERROR    | **overdue**: the schedule is on and the last verified backup is older than the interval × 2 (`BACKUP_OVERDUE_TOLERANCE`) | `backup.interval_ok`, when a verified backup lands or the schedule is switched off        |
+| Opens                            | Severity | When                                                                                                                     | Closes with                                                                                                                   |
+| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `backup.run_failed`              | ERROR    | a run failed, or an abandoned run was reclaimed                                                                          | `backup.run_ok`, the next successful run                                                                                      |
+| `backup.delivery_failed`         | WARN     | a verified run's archive did not leave the host (`FAILED_DEFINITIVE` or `OUTCOME_UNKNOWN`)                               | `backup.delivery_ok`, a later run that delivered (or had no destination configured)                                           |
+| `backup.cleanup_failed`          | ERROR    | a run, the debris sweep, or archive retention left plaintext, a scratch database or a directory behind                   | `backup.cleanup_ok`, when no plaintext is left on disk and EVERY leftover any run recorded (paths, scratch databases) is gone |
+| `backup.disk_threshold_exceeded` | WARN     | free space on `BACKUP_WORK_DIR`'s volume is below max(1 GiB, 1.5 × (2 × last dump + last archive))                       | `backup.disk_threshold_ok`                                                                                                    |
+| `backup.interval_exceeded`       | ERROR    | **overdue**: the schedule is on and the last verified backup is older than the interval × 2 (`BACKUP_OVERDUE_TOLERANCE`) | `backup.interval_ok`, when a verified backup lands or the schedule is switched off                                            |
 
 The overdue alert is evaluated in the WORKER, so it catches a scheduler that is
 running and not producing verified backups. A worker that is not running at all
@@ -442,7 +444,9 @@ restart` keeps the hostname, so a restarted executor finds its OWN in-flight
 recovery at once instead of waiting out the 15-minute stale-lease window:
 
 - **Already cut over, waiting only on readiness** (`RESTARTING` with the cutover
-  time and both database names on the row): it asks readiness again and records
+  time and both database names on the row): it asks readiness again — up to six
+  times, 5 s doubling to 30 s apart, because after a whole-stack restart Redis or
+  the database may still be starting — and records
   `SUCCEEDED` (or `FAILED` with `recovery.readiness_failed`). Nothing destructive
   is left at that point, so finishing it renames, restores and drops nothing; the
   displaced database stays where it is. The audit row for keys that arrived by

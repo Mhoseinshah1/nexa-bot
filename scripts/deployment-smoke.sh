@@ -653,7 +653,11 @@ esac
 dr_scratch="$(compose exec -T api find /var/lib/nexa/backups /tmp -name '*.pgcustom')" ||
   fail "could not search for plaintext"
 [ -z "$dr_scratch" ] || fail "plaintext was left after verify: ${dr_scratch}"
-pass "backup.cli.js verify decrypts and checksums the archive, and leaves no plaintext"
+# And the private directory verify decrypted into is gone, not merely emptied.
+dr_cli="$(compose exec -T api find /var/lib/nexa/backups -maxdepth 1 -name '.cli-*')" ||
+  fail "could not search for CLI scratch directories"
+[ -z "$dr_cli" ] || fail "verify left its scratch directory behind: ${dr_cli}"
+pass "backup.cli.js verify decrypts and checksums the archive, and leaves no plaintext or scratch directory"
 
 # ---------------------------------------------------------------------------
 step "8. no secret appears in normal output"
