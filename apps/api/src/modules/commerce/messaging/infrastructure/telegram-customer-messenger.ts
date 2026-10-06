@@ -257,12 +257,23 @@ function rowOf(button: { readonly row?: CustomerButtonRow }): { row?: number } {
  *   for ever.
  */
 type IconSource =
-  false | { readonly kind: 'SLOT' } | { readonly kind: 'RAW'; readonly keys: readonly string[] };
+  | false
+  | { readonly kind: 'SLOT' }
+  | {
+      readonly kind: 'RAW';
+      readonly keys: readonly string[];
+      /** Phase 2 Item 2: the categories whose OWN `before` (`bot.category_icons`) was drawn. */
+      readonly categories: readonly string[];
+    };
 
-/** The registry keys whose button went out with an icon: what the operator is told to check. */
+/**
+ * The registry keys whose button went out with an icon, and the categories whose own icon
+ * went out: what the operator is told to check.
+ */
 function rawIconSource(
   input: readonly CustomerButton[],
   labelled: readonly TelegramButton[],
+  categories: readonly string[] = [],
 ): IconSource {
   if (!buttonsHaveIcons(labelled)) return false;
   const keys = input.flatMap((button, index) =>
@@ -270,7 +281,7 @@ function rawIconSource(
       ? [button.inline]
       : [],
   );
-  return { kind: 'RAW', keys };
+  return { kind: 'RAW', keys, categories };
 }
 
 /** Why a reply did not certainly reach the customer. Context, never a code. */
@@ -363,6 +374,13 @@ export interface BotInstanceTokenSource {
  *   customer message is either noise or a contradiction.
  */
 export class TelegramCustomerMessenger implements CustomerMessenger {
+  /**
+   * Phase 2 Item 2: for a keyboard `labelButtons` returned, the categories whose OWN premium
+   * icon (`bot.category_icons.before`) it carries — so a refusal names them to the operator.
+   * Keyed by the returned array, so it lives exactly as long as that keyboard.
+   */
+  private readonly categoryIconsDrawn = new WeakMap<readonly TelegramButton[], string[]>();
+
   constructor(
     private readonly templates: CustomerTemplateRenderer,
     private readonly bots: BotInstanceTokenSource,
@@ -544,7 +562,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
           : keyboardHasIcon
             ? { kind: 'SLOT' }
             : inlineHasIcon
-              ? rawIconSource(message.buttons ?? [], buttons)
+              ? rawIconSource(message.buttons ?? [], buttons, this.categoryIconsDrawn.get(buttons))
               : false;
       const isDecorated = decorated.decorated > 0 || iconed !== false;
       const partKeyboard = (plain: boolean) =>
@@ -701,7 +719,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       await this.decorationFor(scope, message.botInstanceId),
     );
     // Phase 2 Item 3: an iconed keyboard owes the same one icon-less retry as a decoration.
-    const iconed = rawIconSource(message.buttons ?? [], buttons);
+    const iconed = rawIconSource(
+      message.buttons ?? [],
+      buttons,
+      this.categoryIconsDrawn.get(buttons),
+    );
 
     const method =
       message.kind === 'PHOTO'
@@ -913,7 +935,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
     const buttons = await this.labelButtons(scope, message.buttons, decoration);
-    const iconed = rawIconSource(message.buttons, buttons);
+    const iconed = rawIconSource(message.buttons, buttons, this.categoryIconsDrawn.get(buttons));
     const plainCaption = html ? undoHtmlDecoration(caption) : caption;
     const { raw: outcome } = await this.deliverDecorated(
       scope,
@@ -1065,7 +1087,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
     const buttons = await this.labelButtons(scope, message.buttons, decoration);
-    const iconed = rawIconSource(message.buttons, buttons);
+    const iconed = rawIconSource(message.buttons, buttons, this.categoryIconsDrawn.get(buttons));
     const plainText = html ? undoHtmlDecoration(text) : text;
     const { raw: outcome } = await this.deliverDecorated(
       scope,
@@ -1155,6 +1177,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         ? await this.inlineStyles.categoryIconsFor(scope)
         : {};
     const iconsAllowed = mayCarryCustomEmoji(decoration);
+    const ownIconCategories: string[] = [];
     for (const button of buttons) {
       const category = categoryOf(button);
       const label = await this.labelText(scope, button.label);
@@ -1189,6 +1212,13 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
               ? categoryButtonIconOf(category, categoryIcons, icons)
               : null
             : inlineButtonIconOf(button.inline, icons);
+      if (
+        icon !== null &&
+        category !== undefined &&
+        categoryIconOf(category, categoryIcons).before !== null
+      ) {
+        ownIconCategories.push(category);
+      }
       const styled = {
         ...(style === 'default' ? {} : { style }),
         ...(icon === null ? {} : { iconCustomEmojiId: icon }),
@@ -1208,6 +1238,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         labelled.push({ text, data: button.data, ...rowOf(button), ...styled });
       }
     }
+    this.categoryIconsDrawn.set(labelled, ownIconCategories);
     return labelled;
   }
 
@@ -1367,7 +1398,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         : iconed !== false && iconed.kind === 'RAW'
           ? 'Telegram refused a message whose inline buttons carried premium icons and accepted ' +
             'it without them; check the custom emoji ids of those buttons. This bot\u2019s ' +
-            'eligibility is unchanged: an icon id typed by an operator proves nothing about it.'
+            'eligibility is unchanged: an icon id typed by an operator proves nothing about it.' +
+            (iconed.categories.length > 0
+              ? ' Product categories\u2019 own icons (bot.category_icons) were among them.'
+              : '')
           : 'Telegram refused a message whose keyboard carried custom-emoji icons and accepted it ' +
             'without them; the refusal did not name custom emoji, so this bot\u2019s eligibility ' +
             'is unchanged.',
@@ -1383,6 +1417,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
               iconSource: iconed.kind,
               eligibilityChanged: denied,
               ...(iconed.kind === 'RAW' ? { inlineButtons: [...iconed.keys] } : {}),
+              // Phase 2 Item 2: which categories' own `before` ids to check.
+              ...(iconed.kind === 'RAW' && iconed.categories.length > 0
+                ? { categories: [...iconed.categories] }
+                : {}),
             }),
       },
     });

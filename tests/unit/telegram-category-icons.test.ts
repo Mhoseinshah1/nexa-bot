@@ -59,7 +59,7 @@ function harness(
   } = {},
 ) {
   const calls: { url: string; body: Record<string, unknown> }[] = [];
-  const events: { code: string; context?: Record<string, unknown> }[] = [];
+  const events: { code: string; message?: string; context?: Record<string, unknown> }[] = [];
   const refused: BotInstanceId[] = [];
   let categoryIconReads = 0;
   const appearance: AppearanceReader = {
@@ -316,7 +316,21 @@ describe('a refused category icon (owner rule B5, through Item 3’s retry)', ()
       iconSource: 'RAW',
       eligibilityChanged: false,
       inlineButtons: ['catalog.category'],
+      // Review of #217: the operator is told WHICH categories' own ids to check.
+      categories: [CAT_A],
     });
+    expect(events[0]?.message).toContain('bot.category_icons');
+  });
+
+  it('a refused GENERIC category icon names no category of its own', async () => {
+    const { messenger, events, respondWith } = harness({
+      inlineIcons: { 'catalog.category': GENERIC_ICON },
+    });
+    respondWith([DENIAL, OK]);
+    expect(await send(messenger)).toEqual({ outcome: 'DELIVERED', messageId: 7 });
+    expect(events[0]?.context).toMatchObject({ iconSource: 'RAW' });
+    expect(events[0]?.context).not.toHaveProperty('categories');
+    expect(events[0]?.message).not.toContain('bot.category_icons');
   });
 
   it('an after emoji alone is plain text: a refusal is one call, never an icon-less retry', async () => {
