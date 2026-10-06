@@ -41,6 +41,7 @@ export * from './panels.js';
 export * from './panel-advanced.js';
 /** R1: the per-panel trial configuration, independent of the catalogue. */
 export * from './panel-trial.js';
+export * from './delivery-tutorial.js';
 export * from './pricing.js';
 /**
  * Phase 4 vocabularies.
