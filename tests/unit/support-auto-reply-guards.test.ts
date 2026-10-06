@@ -300,6 +300,20 @@ describe('automatic-reply money guard (D9)', () => {
     'transaction declined',
     'poolamo pas bedid',
     'pardakht kardam',
+    // B2: ZWNJ compounds.
+    `کیف${ZWNJ}پولم خالی شد`,
+    `کیف${ZWNJ}پولم`,
+    `پول${ZWNJ}مو`,
+    `پس${ZWNJ}بدید`,
+    // Review item 3: currency, money taken from the account, a top-up, Finglish, accents.
+    'صد تومن کم شد',
+    '۵۰ هزار تومان',
+    'ریال',
+    'از حسابم کم شد',
+    'شارژ کردم ولی نیومد',
+    'pulamo bedid',
+    're fund',
+    'réfund please',
   ];
   const safe: readonly (string | null)[] = [
     'سلام، سرویس من وصل نمیشه',
@@ -339,6 +353,36 @@ describe('automatic-reply money guard (D9)', () => {
     expect(autoMoneyGuard([]).pass).toBe(true);
   });
 
+  it('B1: an away message (OFFLINE) is not a reply; the walk goes past it', () => {
+    const lines = [
+      { origin: 'OWN_ECHO' as const, text: 'پاسخ قبلی' },
+      { origin: 'INBOUND' as const, text: 'پولمو پس بدید' },
+      { origin: 'OFFLINE' as const, text: 'در ساعت کاری پاسخ می‌دهیم' },
+      { origin: 'INBOUND' as const, text: 'وصل نمیشه' },
+    ];
+    expect(customerTextsSinceReply(lines, 'وصل نمیشه')).toContain('پولمو پس بدید');
+    expect(autoMoneyGuard(customerTextsSinceReply(lines, 'وصل نمیشه')).pass).toBe(false);
+    // A real reply (the owner, or another bot) still ends it.
+    for (const origin of ['HUMAN', 'OTHER_BOT'] as const) {
+      const replied = [lines[1]!, { origin, text: 'پاسخ' }, lines[3]!];
+      expect(autoMoneyGuard(customerTextsSinceReply(replied, 'وصل نمیشه')).pass).toBe(true);
+    }
+  });
+
+  it('item 4: a customer line in the same second as the reply counts as after it', () => {
+    const at = (ms: number) => new Date(Date.UTC(2026, 9, 6, 10, 0, 0) + ms);
+    const lines = [
+      // Telegram's whole second, which sorts before our reply's 10:00:00.400.
+      { origin: 'INBOUND' as const, text: 'پولمو پس بدید', sentAt: at(0) },
+      { origin: 'OWN_ECHO' as const, text: 'پاسخ', sentAt: at(400) },
+      { origin: 'INBOUND' as const, text: 'وصل نمیشه', sentAt: at(5_000) },
+    ];
+    expect(autoMoneyGuard(customerTextsSinceReply(lines, 'وصل نمیشه')).pass).toBe(false);
+    // A line a whole second earlier was answered by that reply.
+    const older = [{ ...lines[0]!, sentAt: at(-1_000) }, lines[1]!, lines[2]!];
+    expect(autoMoneyGuard(customerTextsSinceReply(older, 'وصل نمیشه')).pass).toBe(true);
+  });
+
   it('reads the trigger and every customer line after the business last spoke', () => {
     const lines = [
       { origin: 'INBOUND' as const, text: 'قبلی' },
@@ -355,6 +399,8 @@ describe('automatic-reply money guard (D9)', () => {
   });
 
   it('folds Arabic letters, joiners and diacritics', () => {
-    expect(foldCustomerText(`كيف${ZWNJ}پولِ`)).toBe('کیفپول');
+    // B2: a ZWNJ is a word boundary inside a compound, so it folds to a space.
+    expect(foldCustomerText(`كيف${ZWNJ}پولِ`)).toBe('کیف پول');
+    expect(foldCustomerText('réfund')).toBe('refund');
   });
 });
