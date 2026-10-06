@@ -11,12 +11,13 @@ import { isSuperAdmin } from './report-view';
  * re-checks every call. It is re-exported from `app.tsx`, where the route
  * table that serves each path lives.
  *
- * Round W regrouped the entries into the reference's semantic sections —
- * عملیات · فروش · نمایندگی · زیرساخت · ارتباط · پیکربندی · سامانه — without
- * changing a single entry's path or permission; the support-AI pages later got
- * their own group, «هوش مصنوعی پشتیبانی», the same way. The full map is in
- * `docs/web-redesign/foundation.md`, and `tests/web/route-inventory.test.tsx`
- * proves every entry is in exactly one group and resolves to a real page.
+ * The sidebar information architecture: ten groups — داشبورد, then nine drawn as a
+ * single-open accordion (`shell.tsx`). Every regrouping (Round W's semantic
+ * sections, the support-AI group, this one) moved entries between groups without
+ * changing a single entry's path, label or permission. The full map is in
+ * `docs/web-redesign/foundation.md`; `tests/web/route-inventory.test.tsx` proves
+ * every entry is in exactly one group and resolves to a real page, and
+ * `tests/web/nav-accordion.test.tsx` pins the groups and the accordion.
  */
 
 export interface NavEntry {
@@ -94,15 +95,15 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_overview',
     icon: 'dashboard',
     permission: null,
-    group: 'web.navgroup_ops',
+    group: 'web.navgroup_dashboard',
   },
   {
-    id: 'orders',
-    path: '/orders',
-    label: 'web.nav_orders',
-    icon: 'orders',
-    permission: 'orders.view',
-    group: 'web.navgroup_ops',
+    id: 'users',
+    path: '/users',
+    label: 'web.nav_users',
+    icon: 'users',
+    permission: 'users.view',
+    group: 'web.navgroup_customers',
   },
   {
     id: 'services',
@@ -112,36 +113,7 @@ export const NAV: readonly NavEntry[] = [
     // ANY of the two: the page is the services list AND the customers' refund-request queue
     // (WP19), and a finance reviewer may hold `refunds.view` alone (Codex review of #83).
     permission: ['services.view', 'refunds.view'],
-    group: 'web.navgroup_ops',
-  },
-  {
-    id: 'users',
-    path: '/users',
-    label: 'web.nav_users',
-    icon: 'users',
-    permission: 'users.view',
-    group: 'web.navgroup_ops',
-  },
-  {
-    id: 'payments',
-    path: '/payments',
-    label: 'web.nav_payments',
-    icon: 'payments',
-    permission: 'payments.view',
-    group: 'web.navgroup_ops',
-  },
-  {
-    /*
-     * The compensation list (Payment File 02 §21, D7), directly under payments because it
-     * is a view OF payments: the automatic wallet refunds of paid orders that could not be
-     * delivered. `payments.view`, the key `GET /compensations` charges.
-     */
-    id: 'compensations',
-    path: '/compensations',
-    label: 'web.nav_compensations',
-    icon: 'undo',
-    permission: 'payments.view',
-    group: 'web.navgroup_ops',
+    group: 'web.navgroup_customers',
   },
   {
     /*
@@ -153,20 +125,22 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_tickets',
     icon: 'message',
     permission: 'tickets.view',
-    group: 'web.navgroup_ops',
+    group: 'web.navgroup_customers',
   },
   {
-    // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
-    id: 'bulk-operations',
-    path: '/bulk-operations',
-    label: 'web.nav_bulk_operations',
-    icon: 'grid',
-    permission: 'bulk_operations.view',
-    group: 'web.navgroup_ops',
+    id: 'support',
+    path: '/support',
+    label: 'web.nav_support',
+    icon: 'help',
+    /*
+     * `settings.view`, and only that — the payment-gateways rule. The FAQ is
+     * configuration: the server's list charges `settings.view` and its writes
+     * `settings.edit`, the same pair the settings page beside it uses, because the
+     * support DESTINATION is a setting on that page.
+     */
+    permission: 'settings.view',
+    group: 'web.navgroup_customers',
   },
-  // «هوش مصنوعی پشتیبانی»: the support-AI subsystem, in one group of its own. Moved here from
-  // عملیات and پیکربندی without changing a path or a permission; the generic support pages
-  // (tickets, the FAQ) stay where they were.
   {
     /*
      * TB2: Telegram Business conversations (ADR-0033). `business_chats.view`; the take over,
@@ -236,6 +210,14 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_support_ai',
   },
   {
+    id: 'orders',
+    path: '/orders',
+    label: 'web.nav_orders',
+    icon: 'orders',
+    permission: 'orders.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'products',
     path: '/products',
     label: 'web.nav_products',
@@ -261,6 +243,20 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    id: 'custom-service',
+    path: '/custom-service',
+    label: 'web.nav_custom_service',
+    icon: 'sliders',
+    /*
+     * `catalog.view`, and only that — the rule the discounts entry states. Both
+     * lists need it (`CustomServiceAdminService` charges it to read), and every write
+     * opens from a row or a form beside them; an actor holding only
+     * `catalog.pricing.edit` would reach forms with nothing to edit.
+     */
+    permission: 'catalog.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     // WP-A5: the extra users / devices rate — an `ADD_DEVICES` add-on, under the catalogue's
     // own pair and for the reason `/products` gives: the create form needs only edit.
     id: 'extra-devices',
@@ -278,20 +274,6 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_service_locations',
     icon: 'globe',
     permission: ['catalog.view', 'catalog.edit'],
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'custom-service',
-    path: '/custom-service',
-    label: 'web.nav_custom_service',
-    icon: 'sliders',
-    /*
-     * `catalog.view`, and only that — the rule the discounts entry states. Both
-     * lists need it (`CustomServiceAdminService` charges it to read), and every write
-     * opens from a row or a form beside them; an actor holding only
-     * `catalog.pricing.edit` would reach forms with nothing to edit.
-     */
-    permission: 'catalog.view',
     group: 'web.navgroup_sales',
   },
   {
@@ -361,6 +343,57 @@ export const NAV: readonly NavEntry[] = [
     ownerOnly: true,
   },
   {
+    id: 'payments',
+    path: '/payments',
+    label: 'web.nav_payments',
+    icon: 'payments',
+    permission: 'payments.view',
+    group: 'web.navgroup_finance',
+  },
+  {
+    /*
+     * The compensation list (Payment File 02 §21, D7), directly under payments because it
+     * is a view OF payments: the automatic wallet refunds of paid orders that could not be
+     * delivered. `payments.view`, the key `GET /compensations` charges.
+     */
+    id: 'compensations',
+    path: '/compensations',
+    label: 'web.nav_compensations',
+    icon: 'undo',
+    permission: 'payments.view',
+    group: 'web.navgroup_finance',
+  },
+  {
+    id: 'payment-gateways',
+    path: '/payment-gateways',
+    label: 'web.nav_payment_gateways',
+    icon: 'wallet',
+    /*
+     * The VIEW keys, and no edit key — a link is a promise that a page will work.
+     *
+     * `payments.gateways.view` is the list: the route passes `denied={!may(…view)}` and
+     * `PaymentGatewayService.list` charges the same key, so an edit-only role would reach a
+     * page it could not load and therefore could not edit from.
+     *
+     * `payments.accounts.view` since UX Batch 01, item 7: the separate «حساب‌های دریافت»
+     * entry is gone and the cards are managed on the card-to-card method's own view, so a
+     * role that reads the cards alone needs this entry to reach them. The list sends that
+     * role straight on to the card-to-card view (`PaymentGatewaysTabbedPage`
+     * `mayViewCards`), and `PaymentAccountService.list` still charges the accounts key.
+     */
+    permission: ['payments.gateways.view', 'payments.accounts.view'],
+    group: 'web.navgroup_finance',
+  },
+  {
+    // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
+    id: 'bulk-operations',
+    path: '/bulk-operations',
+    label: 'web.nav_bulk_operations',
+    icon: 'grid',
+    permission: 'bulk_operations.view',
+    group: 'web.navgroup_finance',
+  },
+  {
     id: 'resellers',
     path: '/resellers',
     label: 'web.nav_resellers',
@@ -393,6 +426,82 @@ export const NAV: readonly NavEntry[] = [
     // `orders.view` as well and says so when it is missing.
     permission: 'resellers.view',
     group: 'web.navgroup_resellers',
+  },
+  {
+    id: 'bots',
+    path: '/bots',
+    label: 'web.nav_bots',
+    icon: 'bots',
+    permission: 'settings.view',
+    group: 'web.navgroup_bot',
+  },
+  {
+    // R1: the customer main menu — order, switches (a setting) and labels (templates).
+    id: 'bot-buttons',
+    path: '/bot-buttons',
+    label: 'web.nav_bot_buttons',
+    icon: 'keyboard',
+    permission: 'settings.view',
+    group: 'web.navgroup_bot',
+  },
+  {
+    // Premium UI: «ظاهر ربات» — custom emoji per semantic slot. Read with `settings.view`,
+    // edited and tested with `settings.edit`, the bot-buttons pair.
+    id: 'appearance',
+    path: '/appearance',
+    label: 'web.nav_appearance',
+    icon: 'palette',
+    permission: 'settings.view',
+    group: 'web.navgroup_bot',
+  },
+  {
+    id: 'content',
+    path: '/content',
+    label: 'web.nav_templates',
+    icon: 'content',
+    permission: 'templates.view',
+    group: 'web.navgroup_bot',
+  },
+  {
+    /*
+     * Round N (B1): «ارسال همگانی». `broadcasts.view` reads the list and the reports;
+     * composing and launching is `broadcasts.send`, which requires it.
+     */
+    id: 'broadcasts',
+    path: '/broadcasts',
+    label: 'web.nav_broadcasts',
+    icon: 'send',
+    permission: 'broadcasts.view',
+    group: 'web.navgroup_bot',
+  },
+  {
+    // WP-A9: every automated customer reminder, its schedule and its message.
+    id: 'reminders',
+    path: '/reminders',
+    label: 'web.nav_reminders',
+    icon: 'clock',
+    permission: 'settings.view',
+    group: 'web.navgroup_bot',
+  },
+  {
+    // WP-A10: the client apps and connection guides the bot recommends. Its own pair,
+    // `client_apps.*`: the list charges the view and every write the edit.
+    id: 'client-apps',
+    path: '/client-apps',
+    label: 'web.nav_client_apps',
+    icon: 'devices',
+    permission: 'client_apps.view',
+    group: 'web.navgroup_bot',
+  },
+  {
+    // Program §6: the terms and rules. `terms.view`, the key `GET /terms` charges; the
+    // draft, publication and enforcement switch are each drawn under their own key.
+    id: 'terms',
+    path: '/terms',
+    label: 'web.nav_terms',
+    icon: 'shield',
+    permission: 'terms.view',
+    group: 'web.navgroup_bot',
   },
   {
     id: 'panels',
@@ -433,98 +542,6 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_infra',
   },
   {
-    id: 'bots',
-    path: '/bots',
-    label: 'web.nav_bots',
-    icon: 'bots',
-    permission: 'settings.view',
-    group: 'web.navgroup_infra',
-  },
-  {
-    id: 'payment-gateways',
-    path: '/payment-gateways',
-    label: 'web.nav_payment_gateways',
-    icon: 'wallet',
-    /*
-     * The VIEW keys, and no edit key — a link is a promise that a page will work.
-     *
-     * `payments.gateways.view` is the list: the route passes `denied={!may(…view)}` and
-     * `PaymentGatewayService.list` charges the same key, so an edit-only role would reach a
-     * page it could not load and therefore could not edit from.
-     *
-     * `payments.accounts.view` since UX Batch 01, item 7: the separate «حساب‌های دریافت»
-     * entry is gone and the cards are managed on the card-to-card method's own view, so a
-     * role that reads the cards alone needs this entry to reach them. The list sends that
-     * role straight on to the card-to-card view (`PaymentGatewaysTabbedPage`
-     * `mayViewCards`), and `PaymentAccountService.list` still charges the accounts key.
-     */
-    permission: ['payments.gateways.view', 'payments.accounts.view'],
-    group: 'web.navgroup_infra',
-  },
-  {
-    /*
-     * Round N (B1): «ارسال همگانی». `broadcasts.view` reads the list and the reports;
-     * composing and launching is `broadcasts.send`, which requires it.
-     */
-    id: 'broadcasts',
-    path: '/broadcasts',
-    label: 'web.nav_broadcasts',
-    icon: 'send',
-    permission: 'broadcasts.view',
-    group: 'web.navgroup_comms',
-  },
-  {
-    id: 'content',
-    path: '/content',
-    label: 'web.nav_templates',
-    icon: 'content',
-    permission: 'templates.view',
-    group: 'web.navgroup_comms',
-  },
-  {
-    // WP-A9: every automated customer reminder, its schedule and its message.
-    id: 'reminders',
-    path: '/reminders',
-    label: 'web.nav_reminders',
-    icon: 'clock',
-    permission: 'settings.view',
-    group: 'web.navgroup_comms',
-  },
-  {
-    id: 'support',
-    path: '/support',
-    label: 'web.nav_support',
-    icon: 'help',
-    /*
-     * `settings.view`, and only that — the payment-gateways rule. The FAQ is
-     * configuration: the server's list charges `settings.view` and its writes
-     * `settings.edit`, the same pair the settings page beside it uses, because the
-     * support DESTINATION is a setting on that page.
-     */
-    permission: 'settings.view',
-    group: 'web.navgroup_comms',
-  },
-  {
-    // Program §6: the terms and rules. `terms.view`, the key `GET /terms` charges; the
-    // draft, publication and enforcement switch are each drawn under their own key.
-    id: 'terms',
-    path: '/terms',
-    label: 'web.nav_terms',
-    icon: 'shield',
-    permission: 'terms.view',
-    group: 'web.navgroup_comms',
-  },
-  {
-    // WP-A10: the client apps and connection guides the bot recommends. Its own pair,
-    // `client_apps.*`: the list charges the view and every write the edit.
-    id: 'client-apps',
-    path: '/client-apps',
-    label: 'web.nav_client_apps',
-    icon: 'devices',
-    permission: 'client_apps.view',
-    group: 'web.navgroup_comms',
-  },
-  {
     id: 'settings',
     path: '/settings',
     label: 'web.nav_settings',
@@ -537,25 +554,6 @@ export const NAV: readonly NavEntry[] = [
     path: '/features',
     label: 'web.nav_features',
     icon: 'toggle',
-    permission: 'settings.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    // R1: the customer main menu — order, switches (a setting) and labels (templates).
-    id: 'bot-buttons',
-    path: '/bot-buttons',
-    label: 'web.nav_bot_buttons',
-    icon: 'keyboard',
-    permission: 'settings.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    // Premium UI: «ظاهر ربات» — custom emoji per semantic slot. Read with `settings.view`,
-    // edited and tested with `settings.edit`, the bot-buttons pair.
-    id: 'appearance',
-    path: '/appearance',
-    label: 'web.nav_appearance',
-    icon: 'palette',
     permission: 'settings.view',
     group: 'web.navgroup_config',
   },
@@ -646,14 +644,19 @@ export const NAV: readonly NavEntry[] = [
   },
 ];
 
-/** The groups, in the order the sidebar draws them. */
+/**
+ * The groups, in the order the sidebar draws them. The first, `NAV_STANDALONE_GROUP`, is
+ * drawn as plain links above the accordion; every other group is an accordion section.
+ */
 export const GROUP_ORDER: readonly WebKey[] = [
-  'web.navgroup_ops',
+  'web.navgroup_dashboard',
+  'web.navgroup_customers',
   'web.navgroup_support_ai',
   'web.navgroup_sales',
+  'web.navgroup_finance',
   'web.navgroup_resellers',
+  'web.navgroup_bot',
   'web.navgroup_infra',
-  'web.navgroup_comms',
   'web.navgroup_config',
   'web.navgroup_system',
 ];
@@ -668,4 +671,16 @@ export const GROUP_ORDER: readonly WebKey[] = [
 export function isCurrent(entryPath: string, currentPath: string): boolean {
   if (entryPath === '/') return currentPath === '/';
   return currentPath === entryPath || currentPath.startsWith(`${entryPath}/`);
+}
+
+/** The group drawn as plain links above the accordion: the dashboard, one click from anywhere. */
+export const NAV_STANDALONE_GROUP: WebKey = 'web.navgroup_dashboard';
+
+/**
+ * The group that owns a path: the group of the entry `isCurrent` lights up for it, or null for
+ * a path no entry owns (`/account`, a redirect). Route ownership is what opens the accordion,
+ * so a deep link lands with its own group expanded on the first render.
+ */
+export function navGroupOf(entries: readonly NavEntry[], currentPath: string): WebKey | null {
+  return entries.find((entry) => isCurrent(entry.path, currentPath))?.group ?? null;
 }

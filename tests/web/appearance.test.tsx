@@ -195,10 +195,10 @@ describe('the appearance page', () => {
     expect(screen.getByText(t('web.appearance_test_nothing'))).toBeInTheDocument();
   });
 
-  it('is reachable from the configuration group on settings.view, and is a page of its own', () => {
+  it('is reachable from the bot group on settings.view, and is a page of its own', () => {
     const entry = NAV.find((one) => one.path === '/appearance');
     expect(entry?.permission).toBe('settings.view');
-    expect(entry?.group).toBe('web.navgroup_config');
+    expect(entry?.group).toBe('web.navgroup_bot');
     const resolved = resolve({ path: '/appearance', query: new URLSearchParams() }, [
       'settings.view',
     ]);

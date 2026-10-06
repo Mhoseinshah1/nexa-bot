@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, type RenderResult } from '@testing-library/react';
+import { fireEvent, render, screen, within, type RenderResult } from '@testing-library/react';
 import { vi } from 'vitest';
 import type { ReactElement, ReactNode } from 'react';
 import { CAPABILITY_REGISTRY_ROWS } from '@nexa/contracts';
 import { ToastProvider } from '../../apps/web/src/ui/kit';
+import { NAV } from '../../apps/web/src/nav';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * The Web Admin test harness.
@@ -394,4 +396,32 @@ export function event(overrides: Record<string, unknown> = {}): Record<string, u
     resolvedByEventId: null,
     ...overrides,
   };
+}
+
+/**
+ * The open group's header button for a nav group, or null when the group is not drawn.
+ * Matched on the header's own label, so a counter beside it does not change the lookup.
+ */
+export function navGroupHeader(group: string): HTMLButtonElement | null {
+  const label = t(group as never);
+  return (
+    [...document.querySelectorAll<HTMLButtonElement>('.nav-group-head')].find(
+      (head) => head.querySelector('.lbl')?.textContent === label,
+    ) ?? null
+  );
+}
+
+/**
+ * A sidebar link by its accessible name, as an operator reaches it: the sidebar is a
+ * single-open accordion, so a link in a CLOSED group is first revealed by clicking that
+ * group's header — never by reaching past it.
+ */
+export function sidebarLink(name: string): HTMLElement {
+  const nav = screen.getByRole('navigation', { name: t('web.nav_label') });
+  const drawn = within(nav).queryByRole('link', { name });
+  if (drawn !== null) return drawn;
+  const entry = NAV.find((candidate) => t(candidate.label) === name);
+  const header = entry === undefined ? null : navGroupHeader(entry.group);
+  if (header !== null && header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
+  return within(nav).getByRole('link', { name });
 }

@@ -16,7 +16,7 @@ import {
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { paymentMethodPath } from '../../apps/web/src/payment-method-routes';
 import { navigate } from '../../apps/web/src/router';
-import { renderPage, stubApi } from './harness';
+import { navGroupHeader, renderPage, sidebarLink, stubApi } from './harness';
 
 /**
  * The route inventory (brief §18): every route the Web Admin serves resolves
@@ -157,16 +157,26 @@ describe('the navigation groups', () => {
         },
       },
     ]);
+    act(() => navigate('/', { replace: true, force: true }));
     renderPage(<App />);
     const nav = await screen.findByRole('navigation', { name: t('web.nav_label') });
-    const links = within(nav).getAllByRole('link');
-    expect(links).toHaveLength(NAV.length);
-    for (const entry of NAV) {
-      const matching = links.filter((link) => link.getAttribute('href') === entry.path);
-      expect(matching, entry.path).toHaveLength(1);
-      const group = (matching[0] as HTMLElement).closest('[role="group"]');
-      expect(group?.getAttribute('aria-label'), entry.path).toBe(t(entry.group));
+    // The sidebar is a single-open accordion: open each group in turn and collect what it
+    // draws. Every entry must turn up exactly once, inside the group it declares.
+    const seen = new Map<string, number>();
+    for (const group of GROUP_ORDER) {
+      const header = navGroupHeader(group);
+      if (header !== null) fireEvent.click(header);
+      for (const link of within(nav).getAllByRole('link')) {
+        const owner = link.closest('[role="group"]')?.getAttribute('aria-label');
+        if (owner !== t(group)) continue;
+        const path = link.getAttribute('href') as string;
+        seen.set(path, (seen.get(path) ?? 0) + 1);
+        const entry = NAV.find((candidate) => candidate.path === path);
+        expect(entry?.group, path).toBe(group);
+      }
     }
+    expect([...seen.keys()].sort()).toEqual(NAV.map((entry) => entry.path).sort());
+    for (const [path, times] of seen) expect(times, path).toBe(1);
   });
 
   /*
@@ -213,9 +223,9 @@ describe('the navigation groups', () => {
     renderPage(<App />);
     const nav = await screen.findByRole('navigation', { name: t('web.nav_label') });
     for (const entry of NAV) {
-      const link = within(nav)
-        .getAllByRole('link')
-        .find((candidate) => candidate.getAttribute('href') === entry.path) as HTMLElement;
+      const link = sidebarLink(t(entry.label));
+      expect(nav.contains(link), entry.path).toBe(true);
+      expect(link.getAttribute('href'), entry.path).toBe(entry.path);
       act(() => {
         fireEvent.click(link);
       });

@@ -7,7 +7,7 @@ import { NAV_PREFETCH_FRESH_MS, prefetchNav } from '../../apps/web/src/nav-prefe
 import { createQueryClient } from '../../apps/web/src/query-client';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { customer, stubApi } from './harness';
+import { customer, sidebarLink, stubApi } from './harness';
 
 /**
  * Navigation between Web Admin pages (Issue 16, `docs/perf/web-admin-navigation.md`).
@@ -71,7 +71,7 @@ const getsOf = (calls: readonly { url: string; method: string }[], path: string)
     return pathname === `/api/admin/v1${path}`;
   }).length;
 
-const link = (label: string) => screen.getByRole('link', { name: t(label as never) });
+const link = (label: string) => sidebarLink(t(label as never));
 
 beforeEach(() => {
   act(() => navigate('/', { replace: true, force: true }));

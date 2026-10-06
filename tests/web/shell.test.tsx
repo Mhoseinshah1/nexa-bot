@@ -8,7 +8,7 @@ import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { formatNumber } from '../../apps/web/src/format';
 import { COUNTER_CAP } from '@nexa/contracts';
-import { renderPage, stubApi } from './harness';
+import { navGroupHeader, renderPage, stubApi } from './harness';
 
 /**
  * The shell the owner's reference defines: sidebar, topbar, command search.
@@ -67,7 +67,9 @@ describe('the command search', () => {
     const options = () =>
       within(dialog)
         .queryAllByRole('option')
-        .map((o) => o.textContent ?? '');
+        // The page's own label, without the group named beside it: «زیرساخت و پنل‌ها» is a
+        // group a session-only page sits in, and must not read as the panels page.
+        .map((o) => (o.textContent ?? '').replace(o.querySelector('.sub')?.textContent ?? '', ''));
     // Dashboard, users, orders, providers and system need no more than a session.
     expect(options().some((o) => o.includes(t('web.nav_users')))).toBe(true);
     expect(options().some((o) => o.includes(t('web.nav_orders')))).toBe(true);
@@ -255,8 +257,9 @@ describe('the sidebar', () => {
     ]);
     const { container } = renderPage(<App />);
     await waitFor(() => expect(container.querySelectorAll('.nav .cnt')).toHaveLength(2));
+    // Both groups are folded on the dashboard: open each to read its link's own counter.
+    fireEvent.click(navGroupHeader('web.navgroup_customers') as HTMLElement);
     const services = container.querySelector('.nav a[href="/services"]') as HTMLElement;
-    const payments = container.querySelector('.nav a[href="/payments"]') as HTMLElement;
     const capped = formatNumber(COUNTER_CAP);
     // Seen as "1,000+", heard as "1,000 or more" — never as an exact 1,000.
     expect(services.querySelector('.cnt [aria-hidden="true"]')?.textContent).toBe(`${capped}+`);
@@ -267,6 +270,8 @@ describe('the sidebar', () => {
     expect(services).toHaveAccessibleName(
       `${t('web.nav_services')}${t('web.nav_counter_at_least_spoken').replace('{count}', capped)}`,
     );
+    fireEvent.click(navGroupHeader('web.navgroup_finance') as HTMLElement);
+    const payments = container.querySelector('.nav a[href="/payments"]') as HTMLElement;
     expect(payments.querySelector('.cnt')?.textContent).toBe(formatNumber(7));
     expect(payments).toHaveAccessibleDescription(formatNumber(7));
   });
@@ -291,7 +296,8 @@ describe('the sidebar', () => {
     ]);
     const { container } = renderPage(<App />);
     await waitFor(() => expect(container.querySelector('.nav .cnt')).not.toBeNull());
-    const badge = container.querySelector('.nav .cnt') as HTMLElement;
+    fireEvent.click(navGroupHeader('web.navgroup_system') as HTMLElement);
+    const badge = container.querySelector('.nav a .cnt') as HTMLElement;
     const capped = formatNumber(COUNTER_CAP);
     const spoken = t('web.nav_counter_at_least_spoken').replace('{count}', capped);
     expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${capped}+`);
