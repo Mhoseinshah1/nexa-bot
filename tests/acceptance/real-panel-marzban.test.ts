@@ -173,7 +173,7 @@ describe('A2 — lookup and usage read the account that was asked for', () => {
 
 /*
  * C1 — «آخرین زمان اتصال». NOT RUN at the time it was written (`docs/open-questions.md`
- * OQ-C1-02): the shape below is read from v0.8.4's SOURCE, and this case is what turns it
+ * OQ-LC-02): the shape below is read from v0.8.4's SOURCE, and this case is what turns it
  * into evidence. The observer reads the raw record; the adapter must agree with it.
  */
 describe('A9 — last connection: `online_at` is on the record, naive UTC or null', () => {

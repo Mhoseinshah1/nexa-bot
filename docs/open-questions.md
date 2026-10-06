@@ -3595,9 +3595,9 @@ and `OQ-T-4` are live again and apply to inline buttons too.
   (no JPEG decoder dependency), and no built-in branded default ships: the default remains the
   plain QR. See `docs/phase2/item4-qr-template.md`.
 
-## OQ-C1 — «آخرین زمان اتصال»: what each panel actually reports (program item C1)
+## OQ-LC — «آخرین زمان اتصال»: what each panel actually reports (program item C1)
 
-- **OQ-C1-01 — 3X-UI v3.7.0: `lastOnline` on `clients/traffic/:email`. OPEN; the adapter
+- **OQ-LC-01 — 3X-UI v3.7.0: `lastOnline` on `clients/traffic/:email`. OPEN; the adapter
   reads nothing (UNSUPPORTED, «در دسترس نیست»).** The evidence conflicts. The adapter used
   to state that v3.7.0's traffic record has no last-connection field; at the pinned commit
   `f727d04f6522bb94a8fb52e8352fdcafb51c11e1`, `internal/xray/client_traffic.go` declares
@@ -3622,15 +3622,27 @@ and `OQ-T-4` are live again and apply to inline buttons too.
      the case to `tests/acceptance/real-panel-sanaei.test.ts`, and replace the 3X-UI
      assertion in `tests/unit/provider-last-seen.test.ts` and
      `tests/integration/customer-ux-services.test.ts` (C1).
-- **OQ-C1-02 — Marzban v0.8.4 and RickPanel: `online_at` on the real wire. Built from
-  evidence, NOT RUN.** Marzban's shape comes from its source at tag `v0.8.4`
-  (`docs/providers/marzban.md`, "Last connection"): naive UTC, `null` before first use.
-  RickPanel's comes from the owner's OpenAPI property list only (`provider.ts`, RickPanel
-  descriptor), which types every property `"string"`; its spelling of a time is assumed
-  to follow Marzban's lineage. Both adapters read it **only when the record carries the
-  key** — a missing key stays «در دسترس نیست», never «متصل نشده» — and a value that is not
-  an ISO date-time is UNSUPPORTED, never a guess and never another timestamp. **Settled
-  by** `pnpm test:acceptance`: Marzban A9 (`real-panel-marzban.test.ts`) and RickPanel A9
-  (`real-panel-rickpanel.test.ts`) assert the key is present on a fresh account, is `null`
-  or a string, and that the adapter's reading agrees with the observer's. If a panel
-  spells it differently, correct `readLastSeen` AND the fake in one commit.
+- **OQ-LC-02 — Marzban v0.8.4 and RickPanel: `online_at` on the real wire.**
+  - **Marzban: read; source-evidenced; A9 NOT RUN.** At tag `v0.8.4`:
+    `app/models/user.py` (`online_at: Optional[datetime]`), `app/db/models.py` (a nullable
+    `DateTime` column) and `app/jobs/record_usages.py` (`online_at=datetime.utcnow()`): naive
+    UTC, `null` before first use. Marzban A9 checks presence, `null` on a fresh account,
+    and the naive SHAPE on a used one; its only zone check is that the value is not more
+    than five minutes after now. It does NOT prove the zone the way a wall-clock window
+    would.
+  - **RickPanel: NOT read — the card shows «در دسترس نیست» (lead decision, C1 review).**
+    The only RickPanel evidence is the owner's OpenAPI property list for the **PUT (modify)
+    body** (`provider.ts`, RickPanel descriptor), where every property is typed `"string"`.
+    That says nothing about the GET response or its time zone; a panel writing naive
+    TEHRAN time would put a time three and a half hours in the future on the card. So
+    `RICKPANEL_USAGE` is `NOT_READ` (adapter and inventory). **Settled by** RickPanel A9
+    (`real-panel-rickpanel.test.ts`): `online_at` present and `null` on a fresh account,
+    then, on `NEXA_ACCEPTANCE_RICKPANEL_USED_USER` with a client passing traffic during the
+    run, the value read as UTC within two minutes of the observer's read time (and NOT
+    within two minutes only when read as Asia/Tehran). Enable it by flipping
+    `RICKPANEL_USAGE` to `ONLINE_AT` in the commit that records that run.
+  - Both readers refuse a value that is not an ISO date-time, and the service repository
+    refuses a time more than five minutes after the Clock's read time
+    (`boundedLastSeen`). Either refusal stores nothing, so the card keeps the LAST KNOWN
+    value. If a panel spells it differently, correct `readLastSeen` AND the fake in one
+    commit.
