@@ -716,7 +716,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * under it (`wallet.open`, `catalog.open`), never «/wallet» in the text.
    */
   'bot.wallet.topup_credited':
-    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.',
+    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.\n\n\nکد پیگیری پرداخت: {reference}',
   'bot.wallet.topup_gift_credited':
     '{icon:referral} مبلغ {amount} نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.',
   /* WP-A9: sent once per fall below the tenant's threshold. */
@@ -734,7 +734,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * sentence no longer explains it, and never sends the customer to «/wallet».
    */
   'bot.payment.receipt_credited_to_wallet':
-    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.',
+    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.\n\n\nکد پیگیری پرداخت: {reference}',
 
   /*
    * It used to end «سپس رسید را ارسال نمایید» — "then send the receipt" — and no

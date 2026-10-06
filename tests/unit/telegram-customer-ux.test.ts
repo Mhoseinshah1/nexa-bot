@@ -65,6 +65,25 @@ describe('§2.2 the wallet-credit message', () => {
     },
   );
 
+  /*
+   * B14: the approved-receipt success message ends with the payment's tracking code, after
+   * exactly two blank lines — and without a code (an override, a reader not wired) it is the
+   * two lines alone, with no blank line left behind.
+   */
+  it.each(['bot.wallet.topup_credited', 'bot.payment.receipt_credited_to_wallet'] as const)(
+    '%s ends with «کد پیگیری پرداخت: …» after two blank lines',
+    (key) => {
+      const text = rendered(key, {
+        amount,
+        reference: 'c0ffee00-0000-7000-8000-000000000001:topup',
+      });
+      expect(text).toBe(
+        '✅ پرداخت شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما اضافه شد.' +
+          '\n\n\nکد پیگیری پرداخت: c0ffee00-0000-7000-8000-000000000001:topup',
+      );
+    },
+  );
+
   it.each(['WALLET_TOPUP_CREDITED', 'RECEIPT_CREDITED_TO_WALLET'] as const)(
     '%s carries exactly «کیف پول» and «خرید سرویس», side by side, from the registry',
     (kind) => {

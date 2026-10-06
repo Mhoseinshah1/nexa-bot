@@ -546,6 +546,13 @@ export interface PaymentRepository {
   rejectionReasonFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
 
   /**
+   * B14: the payment's tracking code — its own `reference`, NOT NULL, unique per tenant and
+   * never rewritten — for the approved-receipt credit messages to quote. Null only for a
+   * payment this tenant does not have.
+   */
+  trackingCodeFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
+
+  /**
    * Opens the provider review window (`docs/tonpays-telegram-gateway-audit.md` §9.6.3 c), as
    * ONE conditional UPDATE naming its `from`: PENDING, no window yet, and the payment's own
    * deadline strictly after the acknowledgement. There is no setter. False on a repeated or

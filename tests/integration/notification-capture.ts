@@ -21,12 +21,15 @@ export function capturingLane(ctx: TestContext) {
   const sends: CustomerMessage[] = [];
   const wallet = new DrizzleWalletRepository(ctx.container.database.db);
   const people = new DrizzleCustomerRepository(ctx.container.database.db);
+  const payments = new DrizzlePaymentRepository(ctx.container.database.db);
   const service = new CustomerNotificationService({
     notifications: ctx.container.customerNotifications,
     refundFigures: wallet,
     paymentCredits: wallet,
     // The rejection's reason (File 01 §7): the production reader over the real payment row.
-    rejectionReasons: new DrizzlePaymentRepository(ctx.container.database.db),
+    rejectionReasons: payments,
+    // B14: the approved-receipt credit's tracking code, from the payment's own row.
+    paymentReferences: payments,
     reminderSnapshots: new DrizzleServiceReminderSnapshotReader(ctx.container.database.db),
     contacts: {
       contactFor: async (scope, customerId, tx) => {

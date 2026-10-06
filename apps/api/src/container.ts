@@ -4814,6 +4814,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // The same repository, for the same reason: the three payment-credit sentences
       // (Payment File 02 §18) read their figure from the entries the payment names.
       paymentCredits: walletRepository,
+      // B14: the approved-receipt credit's tracking code, from the payment's own row.
+      paymentReferences: paymentRepository,
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);
