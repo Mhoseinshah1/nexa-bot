@@ -162,3 +162,33 @@ describe('the recording rules', () => {
     ]);
   });
 });
+
+describe('rollback-runbook.md § Recording the lane (WP-D8, G13 part b)', () => {
+  const RUNBOOK = readFileSync(
+    join(__dirname, '../../docs/legacy-migration/rollback-runbook.md'),
+    'utf8',
+  );
+  const lane = table(RUNBOOK, '### Recording the lane', 'step');
+
+  it('records the request id, every stage duration, the displaced database and the R4 diff', () => {
+    const what = lane.rows.map((r) => r['what is recorded']).join('\n');
+    for (const needle of [
+      'recovery request id',
+      'stage durations',
+      'pre-restore backup id',
+      'nexa_pre_restore_<id>',
+      '`diff`',
+      'PRE_IMPORT_BACKUP_ID',
+    ]) {
+      expect(what, needle).toContain(needle);
+    }
+  });
+
+  it('marks a step PASS only with its value, and today none has run', () => {
+    for (const row of lane.rows) {
+      expect(['PASS', 'FAIL', 'NOT RUN']).toContain(row['result']);
+      if (row['result'] === 'PASS') expect(row['value'], row['step']).not.toMatch(/^(—|)$/u);
+    }
+    expect(new Set(lane.rows.map((r) => r['result']))).toEqual(new Set(['NOT RUN']));
+  });
+});

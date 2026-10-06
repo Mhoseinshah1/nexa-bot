@@ -240,9 +240,9 @@ same table).
 
 `result` is exactly one of:
 
-- `PASS` — every place agreed. Allowed only with the evidence filled in: `seed`, `source
-ref`, `map decision`, `customer`, `balance`, `service`, `panel / runtime read` and
-  `Web Admin` all recorded (not `—`), and each uuid column holding a uuid or `n/a (why)`
+- `PASS` — every place agreed. Allowed only with the evidence filled in: `seed`,
+  `source ref`, `map decision`, `customer`, `balance`, `service`, `panel / runtime read`
+  and `Web Admin` all recorded (not `—`), and each uuid column holding a uuid or `n/a (why)`
   (a B2 sample has no service). `Telegram` may be `n/a (uncontrolled account)`.
 - `FAIL` — anything disagreed; `notes` names which place (no PII).
 - `N/A (reason)` — the row cannot apply to this installation (for example R3 when no

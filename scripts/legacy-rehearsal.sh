@@ -45,6 +45,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARCHIVE_INSPECT="$ROOT/scripts/legacy-archive-inspect.mjs"
 CHECKS_SQL="$ROOT/scripts/legacy-rehearsal-checks.sql"
 SOURCE_SQL="$ROOT/scripts/legacy-rehearsal-source.sql"
+TABLE_HASHES_SQL="$ROOT/scripts/legacy-rehearsal-table-hashes.sql"
 BACKUP_CLI="$ROOT/apps/api/dist/backup.cli.js"
 MIGRATE_JS="$ROOT/apps/api/dist/infrastructure/persistence/migrate.js"
 PROVISION_CLI="$ROOT/apps/api/dist/provision-installation.cli.js"
@@ -419,7 +420,8 @@ else
   mysql8_server_version_ok "$LEGACY_SERVER_VERSION" ||
     die "--legacy-engine mysql8: '$LEGACY_SERVER' is not MySQL 8.0 ($LEGACY_SERVER_VERSION). Pass --mysql-bin-dir with MySQL 8.0's binaries."
 fi
-[ -f "$CHECKS_SQL" ] && [ -f "$SOURCE_SQL" ] || die "the reconciliation SQL files are missing from scripts/."
+[ -f "$CHECKS_SQL" ] && [ -f "$SOURCE_SQL" ] && [ -f "$TABLE_HASHES_SQL" ] ||
+  die "the reconciliation SQL files are missing from scripts/."
 [ -f "$BACKUP_CLI" ] && [ -f "$MIGRATE_JS" ] && [ -f "$PROVISION_CLI" ] ||
   die "apps/api/dist is not built. Run: pnpm build"
 [ -f "$REPORT_SCHEMA" ] && [ -f "$REPORT_CHECK" ] || die "the report schema or its checker is missing."
@@ -1059,6 +1061,27 @@ links_in_artifacts() {
     { grep -rlF --exclude='*.pgcustom' -f - "$OUT" 2>/dev/null || true; } | wc -l | tr -d ' '
 }
 
+# table_hashes DATABASE LABEL — the EXACT per-table fingerprint (WP-D8): rows and a hash
+# of every row of every table, read-only. What "restored = PRE" and "the displaced database
+# is the post-import state" are compared on; the aggregate snapshot compares only figures.
+table_hashes() {
+  assert_rehearsal_db "$1"
+  psql -X -q -At -F "$(printf '\t')" -v ON_ERROR_STOP=1 "$PG_URL/$1" -f "$TABLE_HASHES_SQL" \
+    >"$OUT/snapshots/$2.tsv"
+}
+
+# same_tables A B — "identical", or how many tables differ and the first few names.
+same_tables() {
+  if [ ! -s "$1" ] || [ ! -s "$2" ]; then
+    printf 'missing\n'
+  elif cmp -s "$1" "$2"; then
+    printf 'identical\n'
+  else
+    printf 'differ: %s\n' "$(diff <(cut -f1-3 "$1") <(cut -f1-3 "$2") | awk '/^[<>]/ { print $2 }' | sort -u |
+      awk 'NR <= 5 { printf "%s%s", (NR > 1 ? "," : ""), $0 } END { if (NR > 5) printf ",+%d more", NR - 5 }')"
+  fi
+}
+
 pg_dump_snapshot() {
   pg_dump -Fc --no-owner -d "$PG_URL/$NEXA_DB" -f "$OUT/snapshots/c$1-pre-import.pgcustom"
   sha256sum "$OUT/snapshots/c$1-pre-import.pgcustom" | cut -d' ' -f1 >"$OUT/snapshots/c$1-pre-import.sha256"
@@ -1107,6 +1130,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   S="$OUT/snapshots/c${cycle}"
   run_stage "$cycle" snapshot-pre snapshot "c${cycle}-pre-import"
   run_stage "$cycle" pg-dump-pre pg_dump_snapshot "$cycle"
+  run_stage "$cycle" tables-pre table_hashes "$NEXA_DB" "c${cycle}-tables-pre-import"
   run_stage "$cycle" panel-state-pre panel_state "c${cycle}-panel-state-pre"
   run_stage "$cycle" revenue-pre revenue_snapshot "c${cycle}-revenue-pre"
 
@@ -1148,6 +1172,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   run_p7 "$cycle" p7-reconcile reconcile
   run_stage "$cycle" p7-report report_json "$cycle"
   run_stage "$cycle" snapshot-post snapshot "c${cycle}-post-import"
+  run_stage "$cycle" tables-post table_hashes "$NEXA_DB" "c${cycle}-tables-post-import"
   run_stage "$cycle" revenue-post revenue_snapshot "c${cycle}-revenue-post"
   run_stage "$cycle" legacy-imported-balance imported_balance "$cycle"
 
@@ -1300,6 +1325,18 @@ for cycle in $(seq 1 "$CYCLES"); do
   run_stage "$cycle" snapshot-after-rollback snapshot "c${cycle}-after-rollback"
   check "$cycle" rollback_restores_pre_import \
     "$(sha256sum <"$PRE" | cut -d' ' -f1)" "$(sha256sum <"$S-after-rollback.tsv" | cut -d' ' -f1)"
+  # WP-D8: exactly, table by table and row by row — not only the aggregate figures.
+  run_stage "$cycle" tables-after-rollback table_hashes "$NEXA_DB" "c${cycle}-tables-after-rollback"
+  check "$cycle" rollback_restores_pre_import_exact identical \
+    "$(same_tables "$S-tables-pre-import.tsv" "$S-tables-after-rollback.tsv")"
+  # The displaced database is KEPT (ADR-0028), and it IS the post-import state: the
+  # forensic copy of what the import did, and the way back if the rollback was wrong.
+  DISPLACED="${NEXA_DB}_pre_restore_c${cycle}"
+  check "$cycle" rollback_displaced_exists 1 \
+    "$(pg_admin -c "SELECT count(*) FROM pg_database WHERE datname = '$DISPLACED'")"
+  run_stage "$cycle" tables-displaced table_hashes "$DISPLACED" "c${cycle}-tables-displaced"
+  check "$cycle" rollback_displaced_preserved identical \
+    "$(same_tables "$S-tables-post-import.tsv" "$S-tables-displaced.tsv")"
 
   # Repeat from clean restore: cycle N must reproduce cycle 1 exactly.
   if [ "$cycle" -gt 1 ]; then

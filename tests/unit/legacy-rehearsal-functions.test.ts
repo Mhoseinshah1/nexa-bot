@@ -334,3 +334,46 @@ describe('revenue_view: R3 reads the revenue view by origin', () => {
     expect(view('NONE')).toBe('0/0');
   });
 });
+
+describe('same_tables: the exact rollback comparison (WP-D8)', () => {
+  const run = (a: string, b: string) =>
+    bash(`${lift('same_tables')}\nsame_tables "$1" "$2"`, [a, b]).stdout.trim();
+  const dir = mkdtempSync(join(tmpdir(), 'nexa-rehearsal-tables-'));
+  const file = (name: string, rows: string[]) => {
+    const path = join(dir, name);
+    writeFileSync(path, rows.map((r) => `${r}\n`).join(''));
+    return path;
+  };
+  const pre = file('pre.tsv', [
+    'public.customers\t8\t1:2',
+    'public.orders\t4\t3:4',
+    'public.wallet_entries\t6\t5:6',
+  ]);
+
+  it('is identical only when every table has the same rows and hash', () => {
+    expect(
+      run(
+        pre,
+        file('same.tsv', [
+          'public.customers\t8\t1:2',
+          'public.orders\t4\t3:4',
+          'public.wallet_entries\t6\t5:6',
+        ]),
+      ),
+    ).toBe('identical');
+  });
+
+  it('names the tables that differ — by one row, or by content alone', () => {
+    const other = file('other.tsv', [
+      'public.customers\t8\t1:2',
+      'public.orders\t5\t3:9',
+      'public.wallet_entries\t6\t5:7',
+    ]);
+    expect(run(pre, other)).toBe('differ: public.orders,public.wallet_entries');
+  });
+
+  it('never passes on a missing or empty reading', () => {
+    expect(run(pre, join(dir, 'absent.tsv'))).toBe('missing');
+    expect(run(file('empty.tsv', []), file('empty2.tsv', []))).toBe('missing');
+  });
+});
