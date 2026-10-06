@@ -114,6 +114,7 @@ const RECORDS = [
   'docs/round-t-t3-falsification.md',
   'docs/tonpays-telegram-falsification.md',
   'docs/recovery-kit-falsification.md',
+  'docs/phase2/button-icons-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -160,8 +161,12 @@ const RECORDS = [
  * record says so above its table.
  * 2636 → 2646: the Recovery Kit (ADR-0032), `docs/recovery-kit-falsification.md` — ten rows.
  * 2646 → 2663: its PR #144 review fixes — seventeen rows, RK-11..RK-27.
+ * 2663 → 2704: Phase 2 UX wave, Items 1 and 3 (the button icon restored by the owner's
+ * 2026-10-05 master prompt). R-01 of the T3 record now cites the ONE test that pins the
+ * reversed rule instead of the two that pinned the retirement (−1), and
+ * `docs/phase2/button-icons-falsification.md` adds 31 rows, 42 citations (+42).
  */
-const EXPECTED = 2663;
+const EXPECTED = 2704;
 /**
  * A table whose last column is one of these is making citations.
  *

@@ -434,7 +434,7 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
     revision: 1,
   });
 
-  it('draws the operator’s rows with style and icon slot (restored 2026-10-05); hidden buttons leave a gap, never a reflow', async () => {
+  it('draws the operator’s rows with style and icon slot (restored 2026-10-05), hidden buttons leaving a gap and never a reflow', async () => {
     const layout = layoutWith({ source: published(explicit), trialOffered: false });
     expect(await layout.keyboardFor(scope)).toEqual([
       [{ text: CATALOGUE_FA['bot.menu.wallet'], style: 'danger', iconSlot: 'payment' }],

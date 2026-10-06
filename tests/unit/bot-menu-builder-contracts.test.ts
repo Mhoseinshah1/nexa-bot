@@ -467,7 +467,7 @@ describe('the button icon, restored (owner master prompt 2026-10-05, Item 3)', (
     expect(explicitMainMenusEqual(stored, stored)).toBe(true);
   });
 
-  it('draws the icon slot beside the style; a button without one draws null', () => {
+  it('draws the icon slot beside the style, and null for a button without one', () => {
     expect(customerRowsOf(stored, allOpen)).toEqual([
       [
         { button: 'wallet', style: 'default', iconSlot: 'wallet' },
