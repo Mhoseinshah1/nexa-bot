@@ -8178,9 +8178,12 @@ export const TEMPLATES = [
   {
     key: 'bot.order.preinvoice',
     description:
-      'The pre-invoice a customer pays from. Composed: the location and feature blocks ' +
-      'are optional STRING tokens rendered from `bot.order.preinvoice_locations` and ' +
-      '`bot.order.preinvoice_features`, so a product with neither shows neither. The ' +
+      'The pre-invoice a customer pays from. B1: the product is described to the customer ' +
+      'by ONE editable text, `{description}` (the product\u2019s own description), absent ' +
+      'with no blank block left behind when the product has none. The location and ' +
+      'feature blocks are still optional STRING tokens rendered from ' +
+      '`bot.order.preinvoice_locations` and `bot.order.preinvoice_features` for an ' +
+      'override that uses them; the default body no longer does. The ' +
       'discount and cashback lines are optional for the same reason. The price is the ' +
       'FINAL total; a discounted order shows the subtotal on its own line. The wallet ' +
       'balance is read when the card is rendered. Buttons are the payment routes the ' +
@@ -8240,6 +8243,15 @@ export const TEMPLATES = [
         token: 'cashbackLine',
         type: 'STRING',
         description: 'Rendered `bot.order.preinvoice_cashback_line`, when cashback is promised.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'description',
+        type: 'STRING',
+        description:
+          'B1: the product\u2019s customer-facing description, as the operator wrote it; ' +
+          'absent when the product has none (and for a package or a custom service).',
         required: false,
         repeatable: false,
       },
