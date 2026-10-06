@@ -163,6 +163,18 @@ function scanlines(
  * producing an image that encodes nothing or that nothing can read.
  */
 export function encodeQrPng(text: string, options: QrPngOptions = {}): Uint8Array {
+  return encodeQrModulesPng(qrModules(text), options);
+}
+
+/**
+ * The same PNG from a module matrix `qrModules` already built — for a caller (the delivery
+ * renderer) that needs the matrix anyway and must not build it twice. `encodeQrPng(text)` is
+ * exactly `encodeQrModulesPng(qrModules(text))`.
+ */
+export function encodeQrModulesPng(
+  modules: readonly (readonly boolean[])[],
+  options: QrPngOptions = {},
+): Uint8Array {
   const scale = options.scale ?? DEFAULT_SCALE;
   const margin = options.margin ?? DEFAULT_MARGIN;
   if (!Number.isInteger(scale) || scale < 1) {
@@ -174,7 +186,7 @@ export function encodeQrPng(text: string, options: QrPngOptions = {}): Uint8Arra
     });
   }
 
-  const { raw, size } = scanlines(qrModules(text), scale, margin);
+  const { raw, size } = scanlines(modules, scale, margin);
 
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(size, 0); // width

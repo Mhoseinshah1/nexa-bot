@@ -22,6 +22,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { APPEARANCE_SLOT_LABEL as SLOT_LABEL } from '../appearance-labels';
 import { messageFor } from './settings';
 import { CategoryColorsSection } from './category-colors';
+import { QrTemplateSection } from './qr-template';
 import {
   Badge,
   Banner,
@@ -164,6 +165,8 @@ export function AppearancePage({
           mayViewCategories={mayViewCategories}
         />
       )}
+      {/* Phase 2 item 4: the subscription QR on the tenant's own background. */}
+      {!denied && <QrTemplateSection mayEdit={mayEdit} />}
     </>
   );
 }

@@ -1,0 +1,2 @@
+ALTER TABLE "tenant_media_assets" DROP CONSTRAINT "tenant_media_assets_purpose_check";--> statement-breakpoint
+ALTER TABLE "tenant_media_assets" ADD CONSTRAINT "tenant_media_assets_purpose_check" CHECK (purpose IN ('REFERRAL_BANNER', 'QR_BACKGROUND'));

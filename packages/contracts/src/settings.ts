@@ -44,6 +44,7 @@ import {
   TOPUP_PRESETS_MAX,
 } from './payment.js';
 import { referralSignupGiftShareSchema } from './customer-ux.js';
+import { qrTemplateSettingSchema } from './delivery-qr.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
 import {
   categoryColorsSchema,
@@ -1041,6 +1042,32 @@ export const SETTINGS = [
     configures: null,
     // Empty is not "no categories": every category is then drawn without decorations.
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * Phase 2 item 4: where the subscription QR is drawn on the tenant's QR background (the
+   * `QR_BACKGROUND` media slot), edited on the Web Admin's «🎨 ظاهر ربات» page, section
+   * «پس‌زمینهٔ QR», beside the background it places the code on, and nowhere else (it is not
+   * drawn on the settings page). A write is refused while no background is stored, or when
+   * the region does not lie inside it (`QrTemplateGuard`).
+   */
+  {
+    key: 'delivery.qr_template',
+    description:
+      'Where the subscription QR is drawn on the tenant\u2019s QR background: the top-left ' +
+      'corner (x, y) and side (size) of a square region in background pixels, and the white ' +
+      'quiet zone around the code in modules (at least 4). The code is drawn black on white, ' +
+      'centred in the region at a whole number of pixels per module, never stretched; only ' +
+      'its look changes, never what it encodes. Empty means no template: the plain QR. With ' +
+      'no background stored, a region outside the background, or a link whose modules would ' +
+      'be under 4 px in the region, the plain QR is sent instead.',
+    schema: qrTemplateSettingSchema,
+    defaultValue: null,
+    configures: null,
+    // Null is "no template": the plain QR, exactly as before this setting existed.
+    zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
