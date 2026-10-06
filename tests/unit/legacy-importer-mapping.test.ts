@@ -4,6 +4,8 @@ import {
   PanelMappingRefused,
   parsePanelMapping,
   INVALID_CODE_PANEL_KEY,
+  UNRESOLVED_PANEL_REASONS,
+  panelMappingCompleteness,
   unmappedCodePanels,
   validatePanelMappingAgainstTenant,
   validateProductMappingAgainstTenant,
@@ -93,6 +95,7 @@ describe('parsing', () => {
         tenantId: TENANT,
         format: PANEL_MAPPING_FORMAT,
         products: [{ productId: SYNTHETIC_P1_PRODUCT, codeProduct: 'p1' }],
+        unresolvedPanels: [{ reason: 'OWNER_DECIDES_LATER', codePanel: 'zzz' }],
       }),
       TENANT,
     ).fingerprint;
@@ -168,5 +171,145 @@ describe('validation against the tenant', () => {
       ['x'.repeat(200)]: 1,
     });
     expect(INVALID_CODE_PANEL_KEY.length).toBeLessThanOrEqual(40);
+  });
+});
+
+describe('WP-D2: unresolvedPanels and completeness (G10)', () => {
+  const live = (codePanel: string | null, isTest = '0') => ({ codePanel, isTest });
+
+  it('keeps the fingerprint of every v1 map written before the key existed', () => {
+    // Computed by the code on main before WP-D2 (edd13981) over this exact file.
+    const v1 = JSON.stringify({
+      format: PANEL_MAPPING_FORMAT,
+      tenantId: TENANT,
+      panels: [
+        { codePanel: 'rp1', panelId: A },
+        { codePanel: 'rp2', panelId: B },
+      ],
+      testPanels: ['tst'],
+      missingPanels: ['gone'],
+      productionPanels: [A, B],
+      products: [{ codeProduct: 'p1', productId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }],
+    });
+    const pinned = '75005ea8c6a1d4552eef77bb11f47b047f31c2ed91c4ddda1069cd19d17c5c1f';
+    expect(parsePanelMapping(v1, TENANT).fingerprint).toBe(pinned);
+    // An empty list means the same as no list.
+    const empty = JSON.stringify({ ...JSON.parse(v1), unresolvedPanels: [] });
+    expect(parsePanelMapping(empty, TENANT).fingerprint).toBe(pinned);
+    // A declaration changes the meaning, so it changes the fingerprint — and the reason
+    // is part of it.
+    const declared = (reason: string) =>
+      parsePanelMapping(
+        JSON.stringify({ ...JSON.parse(v1), unresolvedPanels: [{ codePanel: 'zzz', reason }] }),
+        TENANT,
+      ).fingerprint;
+    expect(declared('OWNER_DECIDES_LATER')).not.toBe(pinned);
+    expect(declared('OWNER_DECIDES_LATER')).not.toBe(declared('UNKNOWN_ORIGIN'));
+  });
+
+  it('takes a closed reason only, and no other key', () => {
+    expect(UNRESOLVED_PANEL_REASONS).toEqual([
+      'OWNER_DECIDES_LATER',
+      'DECOMMISSIONED_PANEL',
+      'UNKNOWN_ORIGIN',
+    ]);
+    expect(
+      refusal(file({ unresolvedPanels: [{ codePanel: 'zzz', reason: 'maybe rp1' }] })),
+    ).toEqual([expect.stringMatching(/^unresolvedPanels\.0\.reason:/u)]);
+    expect(
+      refusal(
+        file({ unresolvedPanels: [{ codePanel: 'zzz', reason: 'UNKNOWN_ORIGIN', panelId: A }] }),
+      ),
+    ).toEqual([expect.stringMatching(/^unresolvedPanels\.0:.*panelId/u)]);
+  });
+
+  it('refuses an unresolved code that is also mapped, tested, missing, or declared twice', () => {
+    for (const code of ['rp1', 'tst', 'gone']) {
+      expect(
+        refusal(file({ unresolvedPanels: [{ codePanel: code, reason: 'UNKNOWN_ORIGIN' }] })),
+      ).toEqual([expect.stringContaining(`${JSON.stringify(code)} is in both`)]);
+    }
+    expect(
+      refusal(
+        file({
+          unresolvedPanels: [
+            { codePanel: 'zzz', reason: 'UNKNOWN_ORIGIN' },
+            { codePanel: 'zzz', reason: 'OWNER_DECIDES_LATER' },
+          ],
+        }),
+      ),
+    ).toEqual(['code_panel "zzz" appears twice in unresolvedPanels']);
+  });
+
+  it('an unresolved code matches nothing: it is in no list the matcher reads', () => {
+    const declared = parsePanelMapping(file(), TENANT);
+    expect(declared.unresolved).toEqual(new Map([['zzz', 'OWNER_DECIDES_LATER']]));
+    expect(declared.policy.knownPanels.has('zzz')).toBe(false);
+    expect(declared.policy.testPanels.has('zzz')).toBe(false);
+    expect(declared.policy.missingPanels.has('zzz')).toBe(false);
+  });
+
+  it('is complete when every live real code is accounted for; a declared code is counted, not blocking', () => {
+    const mapping = parsePanelMapping(file(), TENANT);
+    const result = panelMappingCompleteness(
+      [live('rp1'), live('rp1'), live('rp2'), live('tst'), live('gone'), live('zzz'), live(null)],
+      mapping,
+    );
+    expect(result).toEqual({
+      complete: true,
+      unmapped: {},
+      declaredUnresolved: { zzz: { reason: 'OWNER_DECIDES_LATER', liveRealInvoices: 1 } },
+      stale: [],
+      productionPanelsUnreferenced: [],
+    });
+  });
+
+  it('is INCOMPLETE on a code no list names, with the code and its count', () => {
+    const forgot = parsePanelMapping(syntheticMappingFile(TENANT, A, B, null, false), TENANT);
+    const result = panelMappingCompleteness(
+      [live('rp1'), live('rp2'), live('zzz'), live(' zzz '), live('yyy'), live('yyy', '1')],
+      forgot,
+    );
+    expect(result.complete).toBe(false);
+    // A test invoice's code is not a live REAL code: it decides nothing about completeness.
+    expect(result.unmapped).toEqual({ zzz: 2, yyy: 1 });
+    expect(result.declaredUnresolved).toEqual({});
+  });
+
+  it('source codes no file could name block until their placeholder is declared', () => {
+    const live2 = [live('rp1'), live('a\u0000b'), live('two\nlines')];
+    expect(panelMappingCompleteness(live2, parsePanelMapping(file(), TENANT)).unmapped).toEqual({
+      [INVALID_CODE_PANEL_KEY]: 2,
+    });
+    const declared = parsePanelMapping(
+      file({
+        unresolvedPanels: [
+          { codePanel: 'zzz', reason: 'OWNER_DECIDES_LATER' },
+          { codePanel: INVALID_CODE_PANEL_KEY, reason: 'UNKNOWN_ORIGIN' },
+        ],
+      }),
+      TENANT,
+    );
+    const result = panelMappingCompleteness(live2, declared);
+    expect(result.complete).toBe(true);
+    expect(result.declaredUnresolved[INVALID_CODE_PANEL_KEY]).toEqual({
+      reason: 'UNKNOWN_ORIGIN',
+      liveRealInvoices: 2,
+    });
+    // Present under its placeholder, so never stale itself.
+    expect(result.stale).not.toContain(INVALID_CODE_PANEL_KEY);
+    expect(result.stale).toEqual(['gone', 'rp2', 'tst', 'zzz']);
+  });
+
+  it('reports stale map entries and production panels no live code points at', () => {
+    const mapping = parsePanelMapping(file(), TENANT);
+    const result = panelMappingCompleteness([live('rp1'), live('rp2', '1')], mapping);
+    expect(result.complete).toBe(true);
+    // rp2 is carried by a live TEST invoice only: not stale, but panel B is unreferenced.
+    expect(result.stale).toEqual(['gone', 'tst', 'zzz']);
+    expect(result.productionPanelsUnreferenced).toEqual([B]);
+    expect(result.declaredUnresolved).toEqual({
+      zzz: { reason: 'OWNER_DECIDES_LATER', liveRealInvoices: 0 },
+    });
   });
 });

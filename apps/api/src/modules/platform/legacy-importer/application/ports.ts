@@ -195,3 +195,27 @@ export interface LegacyAdoptionPort {
     candidate: LegacyAdoptionCandidate,
   ): Promise<LegacyAdoptionOutcome>;
 }
+
+/**
+ * WP-D3 — at most one importer PROCESS applies a tenant's import at a time.
+ *
+ * The RUNNING run row alone cannot say whether the process that owns it is alive: a resume
+ * after `kill -9` and a second resume beside a live one look the same to it. Two resumes of
+ * one run used to proceed together, walk the same rows, and deadlock in the database — the
+ * "loser" died of a 40P01 rather than being refused. The holder is a database session: a
+ * process that dies loses its connection and so its claim, at once, which is exactly the
+ * takeover a resume after a crash needs, and a live holder refuses everyone else.
+ */
+export interface LegacyImportProcessLock {
+  /** The claim, or null when another live process holds this tenant's import. */
+  tryAcquire(tenantId: string): Promise<LegacyImportProcessLease | null>;
+}
+
+export interface LegacyImportProcessLease {
+  /**
+   * True once the claim's session ended without `release` — the lock is gone and another
+   * process may hold it. The holder checks it between phases and stops as interrupted.
+   */
+  isLost(): boolean;
+  release(): Promise<void>;
+}

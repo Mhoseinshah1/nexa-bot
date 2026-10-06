@@ -158,6 +158,22 @@ export class DrizzleReferralRepository implements ReferralRepository {
       : { customerId: row.customerId, status: row.status as CustomerStatus };
   }
 
+  async findTelegramIdOwner(
+    scope: TenantContext,
+    telegramUserId: string,
+    tx?: unknown,
+  ): Promise<{ readonly customerId: string; readonly status: CustomerStatus } | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select({ customerId: customers.id, status: customers.status })
+      .from(customers)
+      .where(and(eq(customers.tenantId, tenantId), eq(customers.telegramUserId, telegramUserId)))
+      .limit(1);
+    return row === undefined
+      ? null
+      : { customerId: row.customerId, status: row.status as CustomerStatus };
+  }
+
   async attribute(
     scope: TenantContext,
     input: {

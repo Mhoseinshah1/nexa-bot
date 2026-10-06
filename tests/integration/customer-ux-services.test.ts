@@ -581,7 +581,7 @@ describe('a customer looks after the services they bought', () => {
 
     it('shows the switch-on button, not the switch-off one, for a suspended service', async () => {
       const service = await activeService('card-suspended');
-      await handle(tap(`u:${service.id}`));
+      await handle(tap(`uq:${service.id}`));
       await ctx.container.database.db.execute(
         sql`UPDATE provisioning_operations SET next_attempt_at = now() - interval '1 hour'`,
       );
@@ -1137,7 +1137,7 @@ describe('a customer looks after the services they bought', () => {
 
     it('a service with a change in progress is drawn «working» without a read', async () => {
       const service = await activeService('open-working');
-      await handle(tap(`u:${service.id}`));
+      await handle(tap(`uq:${service.id}`));
       await stale(service.id);
       const before = reads(service.username);
       sent = [];
@@ -1174,6 +1174,69 @@ describe('a customer looks after the services they bought', () => {
       const result = await handle(tap(`s:${theirs.id}`));
       expect(result.replyKey).toBe('bot.service.not_found');
       expect(reads(theirs.username) - before).toBe(0);
+    });
+  });
+
+  // =========================================================================
+  // B9/C3 — «🔗 لینک اشتراک»: the QR, the link and the keyboard in ONE message
+  // =========================================================================
+  describe('the link tap on a service card', () => {
+    const photos = () => sent.filter((one) => one.url.includes('/sendPhoto'));
+    const of = (method: string) => sent.filter((one) => one.url.includes(`/${method}`));
+    const captionOf = (raw: string) => /name="caption"\r\n\r\n([\s\S]*?)\r\n--/u.exec(raw)?.[1];
+
+    it('sends ONE photo with the link as its caption and the way back on it, and deletes the card', async () => {
+      const service = await activeService('link-one');
+      const url = (await services.findById(tenantA, service.id))?.subscriptionUrl ?? '';
+      expect(url).not.toBe('');
+      sent = [];
+      const tapped = tapOn(`r:${service.id}`, 4242);
+      await handle(tapped);
+
+      expect(photos(), 'exactly one photo').toHaveLength(1);
+      expect(of('sendMessage'), 'no text message').toHaveLength(0);
+      expect(of('editMessageText'), 'no edit').toHaveLength(0);
+      const raw = photos()[0]?.raw ?? '';
+      expect(raw).toContain('name="photo"; filename="subscription.png"');
+      expect(captionOf(raw)).toBe(`🔗 لینک اشتراک شما:\n<code>${url}</code>`);
+      expect(raw).toContain('name="reply_markup"');
+      expect(buttonsOf(raw), 'the keyboard is under the same message').toEqual([
+        `sv:${service.id}`,
+      ]);
+      const deleted = of('deleteMessage');
+      expect(deleted, 'the superseded text card is removed').toHaveLength(1);
+      expect(deleted[0]?.body['message_id']).toBe(4242);
+
+      // Telegram redelivers the same update: nothing more is sent.
+      const before = sent.length;
+      await handle(tapped);
+      expect(photos()).toHaveLength(1);
+      expect(sent.length - before, 'a replayed tap sends nothing').toBeLessThanOrEqual(1);
+      expect(sent.slice(before).every((one) => one.url.includes('/answerCallbackQuery'))).toBe(
+        true,
+      );
+    });
+
+    it('over the 1024 caption bound: the card becomes the link, then the QR alone beneath it', async () => {
+      const service = await activeService('link-long');
+      const long = `https://sub.example.test/sub/${'a'.repeat(1100)}`;
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET subscription_url = ${long} WHERE id = ${service.id}`,
+      );
+      sent = [];
+      await handle(tapOn(`r:${service.id}`, 4343));
+
+      const edits = of('editMessageText');
+      expect(edits, 'the card is edited into the link view').toHaveLength(1);
+      expect(edits[0]?.body['message_id']).toBe(4343);
+      expect(String(edits[0]?.body['text'])).toContain(`<code>${long}</code>`);
+      expect(JSON.stringify(edits[0]?.body['reply_markup'])).toContain(`sv:${service.id}`);
+      expect(photos(), 'one QR photo, no request for the over-bound one').toHaveLength(1);
+      const raw = photos()[0]?.raw ?? '';
+      expect(captionOf(raw)).toContain('کد QR لینک اتصال بالا');
+      expect(raw).not.toContain('name="reply_markup"');
+      expect(of('deleteMessage')).toHaveLength(0);
+      expect(of('sendMessage')).toHaveLength(0);
     });
   });
 

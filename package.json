@@ -25,6 +25,7 @@
     "test:acceptance": "vitest run --project acceptance",
     "test:acceptance:inventory": "vitest run --project acceptance-inventory",
     "test:legacy-mysql": "vitest run --project legacy-mysql",
+    "rehearsal:synthetic": "bash scripts/legacy-rehearsal-synthetic.sh",
     "test:watch": "vitest",
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @nexa/api db:migrate",

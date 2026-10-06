@@ -62,7 +62,9 @@ import {
   SERVICE_CALLBACK_PREFIX,
   SERVICE_RESEND_CALLBACK_PREFIX,
   SERVICE_RESUME_CALLBACK_PREFIX,
+  SERVICE_RESUME_CONFIRM_CALLBACK_PREFIX,
   SERVICE_SUSPEND_CALLBACK_PREFIX,
+  SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX,
   SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
   SERVICE_ROTATE_ASK_CALLBACK_PREFIX,
   SERVICE_ROTATE_CALLBACK_PREFIX,
@@ -1017,6 +1019,9 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.renew_unavailable',
       'bot.service.renewed_details_button',
       'bot.service.resume_button',
+      // B8: the switch asks first, in both directions; only the confirm acts.
+      'bot.service.resume_confirm',
+      'bot.service.resume_confirm_button',
       'bot.service.rotate_ask',
       'bot.service.rotate_button',
       'bot.service.rotate_confirm_button',
@@ -1028,6 +1033,9 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.search_prompt',
       'bot.service.search_results',
       'bot.service.suspend_button',
+      'bot.service.suspend_confirm',
+      'bot.service.suspend_confirm_button',
+      'bot.service.toggle_cancel_button',
       /*
        * Package F: a customer hands a service to another customer. Reviewed, one at a time:
        * the button and the prompt ASK and move nothing; the confirmation names what moves
@@ -1742,6 +1750,9 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_RESEND: SERVICE_RESEND_CALLBACK_PREFIX,
     SERVICE_SUSPEND: SERVICE_SUSPEND_CALLBACK_PREFIX,
     SERVICE_RESUME: SERVICE_RESUME_CALLBACK_PREFIX,
+    // B8: `uq:` / `eq:` begin with `u` / `e` like the switch's own; the shadowing case proves it safe.
+    SERVICE_SUSPEND_CONFIRM: SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX,
+    SERVICE_RESUME_CONFIRM: SERVICE_RESUME_CONFIRM_CALLBACK_PREFIX,
     SERVICE_TERMINATE_ASK: SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
     SERVICE_TERMINATE: SERVICE_TERMINATE_CALLBACK_PREFIX,
     SERVICE_ROTATE_ASK: SERVICE_ROTATE_ASK_CALLBACK_PREFIX,

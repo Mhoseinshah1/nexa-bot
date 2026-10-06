@@ -2225,6 +2225,19 @@ export const TEMPLATES = [
         required: false,
         repeatable: false,
       },
+      /*
+       * B14: the payment's own tracking code — its stable `payments.reference`, read at send
+       * time from the payment the notification names (a READER, not a payload: ADR 0030 §1),
+       * so a replayed notification renders the same code. OPTIONAL for the WP3 lesson above:
+       * an installation may hold an override without the token.
+       */
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s tracking code (`payments.reference`), read at send time.',
+        required: false,
+        repeatable: false,
+      },
     ],
   },
   {
@@ -2266,6 +2279,19 @@ export const TEMPLATES = [
         type: 'MONEY',
         description: 'The amount the reviewer credited, from the RECEIPT_CREDIT entry.',
         required: true,
+        repeatable: false,
+      },
+      /*
+       * B14: the payment's own tracking code — its stable `payments.reference`, read at send
+       * time from the payment the notification names (a READER, not a payload: ADR 0030 §1),
+       * so a replayed notification renders the same code. OPTIONAL for the WP3 lesson above:
+       * an installation may hold an override without the token.
+       */
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s tracking code (`payments.reference`), read at send time.',
+        required: false,
         repeatable: false,
       },
     ],
@@ -6664,6 +6690,63 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * B8: both directions of the switch ASK before acting. The first tap (`u:` / `e:`) edits the
+   * card into one of these questions and plans nothing; only the confirm button (`uq:` /
+   * `eq:`) plans the operation, and the cancel button redraws the card.
+   */
+  {
+    key: 'bot.service.suspend_confirm',
+    description:
+      'B8: the question a customer is asked before their service is switched OFF, drawn in ' +
+      'place of the service card. Nothing is changed on the server until they confirm.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service\u2019s account name on the panel, as the card shows it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.resume_confirm',
+    description:
+      'B8: the question a customer is asked before their service is switched back ON, drawn ' +
+      'in place of the service card. Nothing is changed on the server until they confirm.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service\u2019s account name on the panel, as the card shows it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.suspend_confirm_button',
+    description: 'B8: the button on the switch-off question that performs it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.resume_confirm_button',
+    description: 'B8: the button on the switch-on question that performs it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.toggle_cancel_button',
+    description:
+      'B8: the button on either switch question that changes nothing and puts the service ' +
+      'card back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.service.suspend_button',
     description:
@@ -8095,9 +8178,12 @@ export const TEMPLATES = [
   {
     key: 'bot.order.preinvoice',
     description:
-      'The pre-invoice a customer pays from. Composed: the location and feature blocks ' +
-      'are optional STRING tokens rendered from `bot.order.preinvoice_locations` and ' +
-      '`bot.order.preinvoice_features`, so a product with neither shows neither. The ' +
+      'The pre-invoice a customer pays from. B1: the product is described to the customer ' +
+      'by ONE editable text, `{description}` (the product\u2019s own description), absent ' +
+      'with no blank block left behind when the product has none. The location and ' +
+      'feature blocks are still optional STRING tokens rendered from ' +
+      '`bot.order.preinvoice_locations` and `bot.order.preinvoice_features` for an ' +
+      'override that uses them; the default body no longer does. The ' +
       'discount and cashback lines are optional for the same reason. The price is the ' +
       'FINAL total; a discounted order shows the subtotal on its own line. The wallet ' +
       'balance is read when the card is rendered. Buttons are the payment routes the ' +
@@ -8157,6 +8243,15 @@ export const TEMPLATES = [
         token: 'cashbackLine',
         type: 'STRING',
         description: 'Rendered `bot.order.preinvoice_cashback_line`, when cashback is promised.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'description',
+        type: 'STRING',
+        description:
+          'B1: the product\u2019s customer-facing description, as the operator wrote it; ' +
+          'absent when the product has none (and for a package or a custom service).',
         required: false,
         repeatable: false,
       },

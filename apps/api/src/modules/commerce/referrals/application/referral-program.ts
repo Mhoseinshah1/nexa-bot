@@ -4,7 +4,9 @@ import {
   isDiscountablePurpose,
   money,
   referralCodeFor,
-  referralCodeFromStartPayload,
+  referralTargetFromStartPayload,
+  referralStartPayloadForTelegramId,
+  REFERRAL_TELEGRAM_ID_PATTERN,
   referralCommissionMinor,
   referralScopeOf,
   referralStartPayload,
@@ -165,8 +167,10 @@ export class ReferralProgram {
     tx: TransactionScope,
   ): Promise<void> {
     if (input.startPayload === null) return;
-    const code = referralCodeFromStartPayload(input.startPayload);
-    if (code === null) return;
+    // B7: `ref-<CODE>` (links before B7), `ref-<telegram id>` (B7's link) or a bare
+    // `<telegram id>` (MirzaBot's legacy link). Anything else is no referral at all.
+    const target = referralTargetFromStartPayload(input.startPayload);
+    if (target === null) return;
 
     const refuse = async (reason: ReferralRejection): Promise<void> => {
       await this.deps.audit.record(
@@ -188,11 +192,23 @@ export class ReferralProgram {
     const terms = await this.terms(scope, tx);
     if (!terms.active) return refuse('PROGRAM_INACTIVE');
 
-    const owner = await this.deps.referrals.findCodeOwner(scope, code, tx);
+    /*
+     * The code first, then the numeric id — an eight-digit `ref-` payload is both shapes.
+     * Each lookup is the TENANT's: another tenant's code or Telegram id is nobody's here,
+     * and is refused `CODE_UNKNOWN` with the same greeting as any other unknown referrer.
+     */
+    const byCode =
+      target.code === null ? null : await this.deps.referrals.findCodeOwner(scope, target.code, tx);
+    const owner =
+      byCode ??
+      (target.telegramUserId === null
+        ? null
+        : await this.deps.referrals.findTelegramIdOwner(scope, target.telegramUserId, tx));
     if (owner === null) return refuse('CODE_UNKNOWN');
-    // Unreachable for a customer created in this transaction — nobody has handed out a
-    // code for an id that did not exist — and the database refuses it too. Kept so the
-    // refusal is named rather than a constraint violation.
+    // A code cannot name a customer created in this transaction — nobody has handed out a
+    // code for an id that did not exist — but a numeric link can: `ref-<own id>` resolves to
+    // the customer this very `/start` just registered. Refused by name, and the database
+    // refuses it too.
     if (owner.customerId === input.refereeId) return refuse('SELF_REFERRAL');
     if (owner.status === 'BLOCKED') return refuse('REFERRER_BLOCKED');
 
@@ -334,7 +350,13 @@ export class ReferralProgram {
         return {
           outcome: 'READY',
           code,
-          link: `https://t.me/${username}?start=${referralStartPayload(code)}`,
+          // B7: the link names the customer by their numeric Telegram user id. A customer
+          // row whose id is not one (none should exist) keeps the code link.
+          link: `https://t.me/${username}?start=${
+            REFERRAL_TELEGRAM_ID_PATTERN.test(customer.telegramUserId)
+              ? referralStartPayloadForTelegramId(customer.telegramUserId)
+              : referralStartPayload(code)
+          }`,
           referredCount,
         };
       },

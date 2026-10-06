@@ -116,6 +116,16 @@ export interface ReferralRepository {
     tx?: unknown,
   ): Promise<{ readonly customerId: string; readonly status: CustomerStatus } | null>;
 
+  /**
+   * B7: the customer of THIS tenant whose numeric Telegram user id this is, with their
+   * standing. Null when nobody's — an id from another tenant is nobody's here.
+   */
+  findTelegramIdOwner(
+    scope: TenantContext,
+    telegramUserId: string,
+    tx?: unknown,
+  ): Promise<{ readonly customerId: string; readonly status: CustomerStatus } | null>;
+
   /** Idempotent per referee. True when this call wrote the attribution. */
   attribute(
     scope: TenantContext,

@@ -44,6 +44,12 @@ export interface PreinvoiceFacts {
   readonly cashback: Money | null;
   readonly locations: readonly string[];
   readonly features: readonly string[];
+  /**
+   * B1: the product's ONE customer-facing description, as the operator wrote it. Null or
+   * blank renders nothing — no empty block. The locations and features above are still
+   * composed for an override that uses their blocks; the default body shows this instead.
+   */
+  readonly description?: string | null;
   readonly walletBalance: Money;
   /**
    * An extra users / devices purchase (WP-A5), from the order's own frozen line; null or
@@ -205,6 +211,11 @@ export class CustomerScreenComposer {
               cashback: facts.cashback,
             }),
           }),
+      ...(facts.description === null ||
+      facts.description === undefined ||
+      facts.description.trim() === ''
+        ? {}
+        : { description: facts.description.trim() }),
       ...(facts.locations.length === 0
         ? {}
         : {

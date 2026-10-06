@@ -717,6 +717,110 @@ describe('the referral program: attribution, the promise, the credit and its rev
       ).rejects.toMatchObject({ cause: { constraint: 'referrals_not_self_check' } });
     });
 
+    // -- B7: the numeric Telegram user id ---------------------------------------
+
+    it('B7: attributes a NEW customer arriving through the link the invite now hands out, ref-<telegram id>', async () => {
+      await f.program();
+      const referrer = await f.registered('930101');
+      const invited = await f.invite(referrer);
+      expect(invited).toMatchObject({
+        outcome: 'READY',
+        link: `https://t.me/${BOT_A_USERNAME}?start=ref-930101`,
+      });
+
+      const arrived = await f.register('930102', 'ref-930101');
+
+      expect(arrived.arrival).toBe('FIRST_SEEN');
+      expect(await f.referralRows()).toEqual([
+        { referrer_id: referrer, referee_id: arrived.customer.id, trigger: 'ON_FIRST_PAID_ORDER' },
+      ]);
+      expect(await f.attempts(arrived.customer.id)).toEqual([{ result: 'SUCCESS', reason: null }]);
+      expect(await f.events('ReferralAttributed')).toBe(1);
+    });
+
+    it('B7: still attributes the old ref-<CODE> link, beside the numeric one', async () => {
+      await f.program();
+      const referrer = await f.registered('930111');
+      const code = await f.codeOf(referrer);
+      const byCode = await f.registered('930112', `ref-${code}`);
+      const byId = await f.registered('930113', 'ref-930111');
+      expect(await f.referralRows()).toEqual([
+        { referrer_id: referrer, referee_id: byCode, trigger: 'ON_FIRST_PAID_ORDER' },
+        { referrer_id: referrer, referee_id: byId, trigger: 'ON_FIRST_PAID_ORDER' },
+      ]);
+    });
+
+    it('B7: attributes MirzaBot’s legacy bare ?start=<telegram id>, so an imported customer’s old link works', async () => {
+      await f.program();
+      const imported = await f.registered('5150123');
+      const arrived = await f.register('930121', '5150123');
+      expect(await f.referralRows()).toEqual([
+        { referrer_id: imported, referee_id: arrived.customer.id, trigger: 'ON_FIRST_PAID_ORDER' },
+      ]);
+    });
+
+    it('B7: refuses an unknown numeric id as CODE_UNKNOWN, with the same arrival as no link at all', async () => {
+      await f.program();
+      for (const [telegramId, payload] of [
+        ['930131', 'ref-930199'],
+        ['930132', '930198'],
+      ] as const) {
+        const withLink = await f.register(telegramId, payload);
+        await expectRefused(withLink.customer.id, 'CODE_UNKNOWN');
+        expect(withLink.arrival).toBe('FIRST_SEEN');
+      }
+      const without = await f.register('930133');
+      expect(without.arrival).toBe('FIRST_SEEN');
+    });
+
+    it('B7: refuses another tenant’s customer’s numeric id as CODE_UNKNOWN: the id is resolved inside the tenant', async () => {
+      await f.program();
+      await f.program({}, tenantB, ownerB);
+      await f.registered('930140', null, tenantB, BOT_B);
+
+      const inA = await f.registered('930141', 'ref-930140');
+      const bare = await f.registered('930142', '930140');
+
+      await expectRefused(inA, 'CODE_UNKNOWN');
+      await expectRefused(bare, 'CODE_UNKNOWN');
+      expect(await f.referralRows()).toEqual([]);
+    });
+
+    it('B7: refuses one’s own numeric id at registration as SELF_REFERRAL', async () => {
+      await f.program();
+      const self = await f.register('930150', 'ref-930150');
+      expect(self.arrival).toBe('FIRST_SEEN');
+      await expectRefused(self.customer.id, 'SELF_REFERRAL');
+      const bare = await f.register('930151', '930151');
+      await expectRefused(bare.customer.id, 'SELF_REFERRAL');
+    });
+
+    it('B7: refuses a BLOCKED referrer’s numeric link as REFERRER_BLOCKED', async () => {
+      await f.program();
+      const referrer = await f.registered('930160');
+      await f.block(referrer);
+      const arrived = await f.register('930161', 'ref-930160');
+      await expectRefused(arrived.customer.id, 'REFERRER_BLOCKED');
+      expect(arrived.arrival).toBe('FIRST_SEEN');
+    });
+
+    it('B7: never changes an attribution afterwards — a referee following another numeric link is ALREADY_REGISTERED', async () => {
+      await f.program();
+      const first = await f.registered('930170');
+      const second = await f.registered('930171');
+      const referee = await f.registered('930172', 'ref-930170');
+      const again = await f.register('930172', 'ref-930171');
+      expect(again.arrival).toBe('RETURNING');
+      expect(await f.referralRows()).toEqual([
+        { referrer_id: first, referee_id: referee, trigger: 'ON_FIRST_PAID_ORDER' },
+      ]);
+      expect(await f.attempts(referee)).toEqual([
+        { result: 'SUCCESS', reason: null },
+        { result: 'DENIED', reason: 'ALREADY_REGISTERED' },
+      ]);
+      expect(second).not.toBe(first);
+    });
+
     it('refuses every link as PROGRAM_INACTIVE while the program is off, or on with no rate chosen', async () => {
       await f.program();
       const referrer = await f.registered('930070');
@@ -746,10 +850,11 @@ describe('the referral program: attribution, the promise, the credit and its rev
       expect(await f.invite(referrer)).toEqual({
         outcome: 'READY',
         code,
-        link: `https://t.me/${BOT_A_USERNAME}?start=ref-${code}`,
+        // B7: the link names the customer by their numeric Telegram user id.
+        link: `https://t.me/${BOT_A_USERNAME}?start=ref-931001`,
         referredCount: 0,
       });
-      await f.registered('931002', `ref-${code}`);
+      await f.registered('931002', 'ref-931001');
       expect(await f.invite(referrer)).toMatchObject({ outcome: 'READY', code, referredCount: 1 });
 
       expect(
@@ -811,7 +916,7 @@ describe('the referral program: attribution, the promise, the credit and its rev
       const invited = await f.invite(customer);
       expect(invited).toMatchObject({
         outcome: 'READY',
-        link: `https://t.me/acme_renamed_bot?start=ref-${referralCodeFor(customer)}`,
+        link: 'https://t.me/acme_renamed_bot?start=ref-931050',
       });
     });
 
@@ -1952,7 +2057,8 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
 
       await f.program();
       const code = referralCodeFor(referrer);
-      const link = `https://t.me/${BOT_A_USERNAME}?start=ref-${code}`;
+      // B7: the link names the referrer by their numeric Telegram user id.
+      const link = `https://t.me/${BOT_A_USERNAME}?start=ref-${REFERRER_TELEGRAM_ID}`;
       const twoMessages = (referredCount: number) => {
         const [invite, dashboard, ...rest] = messagesSince(0);
         expect(rest, 'exactly two messages').toEqual([]);

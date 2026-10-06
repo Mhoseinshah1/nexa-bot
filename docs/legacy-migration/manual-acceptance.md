@@ -233,10 +233,65 @@ explain).
 
 ## Recording
 
-One row per sample in the final report (`final-report-template.md` § Manual acceptance):
+**Status: NOT RUN.** No row has been run: there is no staging import to sample yet. Every
+row starts `NOT RUN` and changes only when its sample was followed through the six places
+on a staging copy (one row per sample; the final report's § Manual acceptance carries the
+same table).
 
-| sample | seed | NEXA customer uuid | NEXA service uuid | Legacy | Decision | NEXA DB | Web Admin | Telegram | RickPanel | notes (no PII) |
-| ------ | ---- | ------------------ | ----------------- | ------ | -------- | ------- | --------- | -------- | --------- | -------------- |
+`result` is exactly one of:
+
+- `PASS` — every place agreed. Allowed only with the evidence filled in: `seed`,
+  `source ref`, `map decision`, `customer`, `balance`, `service`, `panel / runtime read`
+  and `Web Admin` all recorded (not `—`), and each uuid column holding a uuid or `n/a (why)`
+  (a B2 sample has no service). `Telegram` may be `n/a (uncontrolled account)`.
+- `FAIL` — anything disagreed; `notes` names which place (no PII).
+- `N/A (reason)` — the row cannot apply to this installation (for example R3 when no
+  financial report exists for the day); the reason is required.
+- `NOT RUN` — not done yet. The initial state of every row.
+- `POPULATION 0` — the selector returned nothing and the reconciliation snapshot confirms
+  an empty population; `notes` names the snapshot metric that shows it (for example
+  `map:invoice:MANUAL_REVIEW:INVALID_PHONE absent`).
+
+A unit test (`tests/unit/legacy-manual-acceptance-doc.test.ts`) refuses a `PASS` without
+its evidence, a status outside this vocabulary, a sample of the matrix missing here, and an
+F1 row for anything but the closed manual-review reasons (`LEGACY_REVIEW_REASON_CODES`).
+F1 has one row per reason. R3 is the reconciliation's manual half (the Web Admin financial
+report for the import day: sales and revenue unmoved, the openings only under «موجودی
+افتتاحیه (انتقال از ربات قبلی)»); P4 is the panel-UI spot check of two adopted accounts
+(their last-modified / subscription-updated fields predate the import window).
+
+| sample                           | seed | source ref (category only) | NEXA customer uuid | NEXA service uuid | map decision | customer | balance | service | panel / runtime read | Web Admin | Telegram | result  | notes (no PII) |
+| -------------------------------- | ---- | -------------------------- | ------------------ | ----------------- | ------------ | -------- | ------- | ------- | -------------------- | --------- | -------- | ------- | -------------- |
+| A1                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| A2                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| B1                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| B2                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| B3                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| C1                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| C2                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| C3                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| D1                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| D2                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| D3                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| E1                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| E2                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F0                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · PROVIDER_MISSING            | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · AMBIGUOUS_PANEL             | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · USERNAME_CASE_COLLISION     | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · PANEL_UNMAPPED              | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · INVENTORY_INCOMPLETE        | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · CUSTOMER_MISSING            | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · PRODUCT_MAPPING_UNRESOLVED  | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · SUBSCRIPTION_REF_BLOCKED    | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · INVALID_PHONE               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · CONFLICTING_EXISTING_ENTITY | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · UNSUPPORTED_SHAPE           | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| F1 · INVALID_SOURCE_ROW          | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| G1                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| G2                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| R3                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
+| P4                               | —    | —                          | —                  | —                 | —            | —        | —       | —       | —                    | —         | —        | NOT RUN | —              |
 
 A FAIL that is not a documented manual-review outcome is a rollback trigger (T4) at
-cutover; on staging it blocks the production gate (G14).
+cutover; on staging it blocks the production gate (G15).

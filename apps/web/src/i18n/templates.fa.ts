@@ -484,6 +484,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   Record<TemplateKey, Readonly<Record<string, string>>>
 > = {
   'ops.notification.operational_event': { code: 'کد رخداد' },
+  // B1: the product's own description, the one customer-facing text on the pre-invoice.
+  'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
   'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.service.delivery_tutorial': { text: 'متن آموزش پنل، همان‌طور که در پنل نوشته شده' },
@@ -867,7 +869,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.order.preinvoice': [
     'پیش‌فاکتور خرید',
-    'پیش‌فاکتوری که مشتری از روی آن پرداخت می‌کند: نام کاربری، محصول، مدت، حجم، مبلغ و موجودی کیف پول.',
+    'پیش‌فاکتوری که مشتری از روی آن پرداخت می‌کند: نام کاربری، محصول، مدت، حجم، مبلغ، توضیح محصول برای مشتری و موجودی کیف پول.',
   ],
   'bot.order.preinvoice_devices': [
     'بخش افزایش کاربر / دستگاه در پیش‌فاکتور',
@@ -1695,6 +1697,26 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'درخواست غیرفعال کردن موقت سرویس؛ فقط برای سرویس فعال روی پنلی که این کار را پشتیبانی می‌کند.',
   ],
   'bot.service.resume_button': ['دکمهٔ روشن کردن اکانت', 'درخواست فعال کردن دوبارهٔ سرویس خاموش.'],
+  'bot.service.suspend_confirm': [
+    'پرسش تأیید خاموش کردن اکانت',
+    'پیش از خاموش کردن سرویس، به جای کارت سرویس پرسیده می‌شود؛ تا مشتری تأیید نکند چیزی روی سرور تغییر نمی‌کند.',
+  ],
+  'bot.service.resume_confirm': [
+    'پرسش تأیید روشن کردن اکانت',
+    'پیش از روشن کردن دوبارهٔ سرویس، به جای کارت سرویس پرسیده می‌شود؛ تا مشتری تأیید نکند چیزی روی سرور تغییر نمی‌کند.',
+  ],
+  'bot.service.suspend_confirm_button': [
+    'دکمهٔ تأیید خاموش کردن',
+    'دکمه‌ای که در صفحهٔ پرسش، خاموش کردن سرویس را انجام می‌دهد.',
+  ],
+  'bot.service.resume_confirm_button': [
+    'دکمهٔ تأیید روشن کردن',
+    'دکمه‌ای که در صفحهٔ پرسش، روشن کردن سرویس را انجام می‌دهد.',
+  ],
+  'bot.service.toggle_cancel_button': [
+    'دکمهٔ انصراف از خاموش/روشن کردن',
+    'چیزی را تغییر نمی‌دهد و کارت سرویس را برمی‌گرداند.',
+  ],
   'bot.service.terminate_button': [
     'دکمهٔ حذف سرویس',
     'حذف سرویس را شروع می‌کند و پرسش تأیید را نشان می‌دهد؛ خودش چیزی حذف نمی‌کند.',

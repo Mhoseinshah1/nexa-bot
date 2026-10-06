@@ -186,6 +186,21 @@ export const PAYMENT_CREDIT_FIGURES: Readonly<
 };
 
 /**
+ * B14: the wallet-credit success messages, which end with the payment's tracking code
+ * (`{reference}`, two blank lines below the sentence). Asked for on the approved receipt,
+ * and deliberately not limited to it: `WALLET_TOPUP_CREDITED` is the one top-up credit
+ * sentence for EVERY rail — a reviewed card-to-card receipt and an external gateway's
+ * confirmation (`PaymentService`'s generic confirm path) alike — so a gateway top-up quotes
+ * its reference too, the same code the Web payment search finds. `RECEIPT_CREDITED_TO_WALLET`
+ * is the reviewer crediting a receipt instead. The gift's sentence is a second message of
+ * the same payment and does not repeat it.
+ */
+const PAYMENT_TRACKED_KINDS: ReadonlySet<CustomerNotificationKind> = new Set([
+  'WALLET_TOPUP_CREDITED',
+  'RECEIPT_CREDITED_TO_WALLET',
+]);
+
+/**
  * The six kinds whose message carries figures, as a set, derived from the contract.
  *
  * Derived rather than listed, so a seventh reminder kind is covered the moment it is
@@ -281,6 +296,17 @@ export interface CustomerNotificationDeps {
       paymentId: string,
       reasons: readonly PaymentCreditReason[],
     ) => Promise<Money | null>;
+  };
+  /**
+   * B14: the tracking code a wallet-credit message ends with (an approved receipt, a
+   * gateway top-up, a receipt credited to the wallet) — the payment's own
+   * stable `payments.reference`, read at send time from the payment the notification names.
+   * A reader, not a payload (ADR 0030 §1), the same shape as `drizzle-renewal-facts.reader`'s
+   * `{reference}`: a replayed or re-dispatched notification reads the same row and renders
+   * the same code. Absent, the line is simply not drawn.
+   */
+  readonly paymentReferences?: {
+    trackingCodeFor: (scope: TenantContext, paymentId: string) => Promise<string | null>;
   };
   /**
    * Package F: what `SERVICE_TRANSFER_RECEIVED` renders — the service's name, location and
@@ -761,7 +787,11 @@ export class CustomerNotificationService {
         row.subjectId,
         creditReason,
       );
-      return amount === null ? null : { amount };
+      if (amount === null) return null;
+      const reference = PAYMENT_TRACKED_KINDS.has(row.kind)
+        ? ((await this.deps.paymentReferences?.trackingCodeFor(scope, row.subjectId)) ?? null)
+        : null;
+      return reference === null ? { amount } : { amount, reference };
     }
     if (ACCOUNT_REMINDER_KINDS.has(row.kind)) {
       if (this.deps.reminderFacts === undefined) return null;

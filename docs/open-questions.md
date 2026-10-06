@@ -3178,6 +3178,18 @@ HISTORY_NOT_IMPORTED` (not adopted by registered decision; it expires on the pan
 - **OQ-P7-03 — MySQL 8 parity.** CI runs the source suite on MariaDB 10.11; the production
   archive is MySQL. The first MySQL 8 run is manual acceptance step 1 of
   `docs/legacy-migration/importer.md` §10; a `mysql:8.0` matrix entry should follow it.
+  **Code side addressed, real side still open (WP-D1b, 2026-10-06).** The `legacy-mysql`
+  CI job now runs on `mariadb:10.11` AND `mysql:8.0`, and the rehearsal harness takes
+  `--legacy-engine mysql8`. Locally, on MySQL 8.0.46 (Ubuntu package), with the SYNTHETIC
+  dataset only: the source suite passed 7/7, and a full synthetic rehearsal through the
+  AES zip passed with the same 2 PENDING as MariaDB. It found two defects in
+  `scripts/legacy-rehearsal-source.sql` that MariaDB had hidden — `BINARY … REGEXP`
+  (ERROR 3995 under ICU) and a GROUP BY expression refused by `ONLY_FULL_GROUP_BY`
+  (ERROR 1055) — both fixed, with identical aggregates on both engines. It also showed a
+  genuine `mysqldump` 8.0 of a default-collation schema failing to load into MariaDB
+  (`Unknown collation: 'utf8mb4_0900_ai_ci'`), which is why the inspector refuses that
+  dump on mariadb instead of letting it fail mid-load. What stays open: the REAL archive
+  has never been loaded into MySQL 8 — that is still step 1 of §10.
 - **OQ-P7-04 — inventory reads do not take the tenant probe budget.** The importer is an
   operator-run CLI bounded by page size and `maxPages`; two full walks per production panel
   per mode. Whether a cutover-day run should share the monitor's budget is open.

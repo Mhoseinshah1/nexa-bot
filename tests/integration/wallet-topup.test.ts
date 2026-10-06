@@ -1009,8 +1009,12 @@ describe('a customer topping up their wallet', () => {
       expect(report.delivered).toBe(2);
       // The figures come from the payment's OWN two ledger entries — the principal from
       // TOPUP_RECEIPT and the gift from CASHBACK_TOPUP — never one from the other.
+      // B14: the principal's sentence also carries the payment's own tracking code.
       expect(lane.sends.map((one) => [one.templateKey, one.values])).toEqual([
-        ['bot.wallet.topup_credited', { amount: money(500_000n, 'IRT') }],
+        [
+          'bot.wallet.topup_credited',
+          { amount: money(500_000n, 'IRT'), reference: payment.reference },
+        ],
         ['bot.wallet.topup_gift_credited', { amount: money(50_000n, 'IRT') }],
       ]);
       const [principal, gift] = lane.rendered();
@@ -1020,6 +1024,40 @@ describe('a customer topping up their wallet', () => {
       );
       expect(principal).not.toContain('/wallet');
       expect(gift).toContain('🎁 مبلغ 50,000 تومان نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.');
+      expect(gift, 'the gift does not repeat the code').not.toContain('کد پیگیری');
+    });
+
+    /*
+     * B14: the top-up's success message ends, after TWO blank lines, with
+     * «کد پیگیری پرداخت: …» — the payment's own stable `payments.reference`, read at send
+     * time. Here an approved receipt; a gateway top-up is the same kind and shows the same
+     * line. A replayed dispatch reads the same row and renders the same code.
+     */
+    it('ends the approved top-up message with the payment’s tracking code after two blank lines, the same on a replay', async () => {
+      const { payment } = await topup(500_000n, 'b14');
+      await confirm(payment.id, 'b14-confirm');
+      const [stored] = await ctx.container.database.db
+        .execute(sql`SELECT reference FROM payments WHERE id = ${payment.id}`)
+        .then((result) => result.rows as { reference: string }[]);
+      expect(stored?.reference).toBe(payment.reference);
+
+      const lane = capturingLane(ctx);
+      await lane.sweep(tenantA);
+      const [first] = lane.rendered();
+      expect(first).toBe(
+        '✅ پرداخت شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما اضافه شد.' +
+          `\n\n\nکد پیگیری پرداخت: ${stored?.reference ?? 'MISSING'}`,
+      );
+
+      // The same notification dispatched again (a redelivery, a re-armed row).
+      await ctx.container.database.db.execute(sql`
+        UPDATE customer_notifications
+           SET state = 'PENDING', resolved_at = NULL, send_started_at = NULL,
+               next_attempt_at = NULL, attempts = 0
+         WHERE subject_id = ${payment.id} AND kind = 'WALLET_TOPUP_CREDITED'`);
+      const again = capturingLane(ctx);
+      await again.sweep(tenantA);
+      expect(again.rendered()).toEqual([first]);
     });
 
     it('gives nothing, and says nothing, at 0%', async () => {
