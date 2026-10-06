@@ -13818,6 +13818,11 @@ export const supportAiProviderCredentials = pgTable(
       'support_ai_provider_credentials_test_failure_class_check',
       nullableEnumCheck('last_test_failure_class', SUPPORT_AI_FAILURE_CLASSES),
     ),
+    // A passed test has no failure class (`lastTestOutcome` OK means every check passed).
+    check(
+      'support_ai_provider_credentials_test_failure_shape_check',
+      sql`last_test_outcome IS DISTINCT FROM 'OK' OR last_test_failure_class IS NULL`,
+    ),
     check('support_ai_provider_credentials_failures_check', sql`consecutive_failures >= 0`),
   ],
 );

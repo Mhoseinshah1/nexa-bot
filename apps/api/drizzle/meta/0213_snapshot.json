@@ -1,5 +1,5 @@
 {
-  "id": "d7c687cc-2328-4e9d-adb1-f88a2d1f2c55",
+  "id": "41201efc-9e87-425b-a047-a785d9dfc22b",
   "prevId": "9c4396a9-72d4-48b0-b922-2ac4acf865df",
   "version": "7",
   "dialect": "postgresql",
@@ -29021,6 +29021,10 @@
         "support_ai_provider_credentials_test_failure_class_check": {
           "name": "support_ai_provider_credentials_test_failure_class_check",
           "value": "last_test_failure_class IS NULL OR last_test_failure_class IN ('request_rejected', 'unsupported_capability', 'auth', 'quota', 'rate_limited', 'timeout', 'network', 'provider_error', 'refused', 'no_content', 'truncated', 'not_json', 'schema_invalid', 'reply_too_long', 'no_provider')"
+        },
+        "support_ai_provider_credentials_test_failure_shape_check": {
+          "name": "support_ai_provider_credentials_test_failure_shape_check",
+          "value": "last_test_outcome IS DISTINCT FROM 'OK' OR last_test_failure_class IS NULL"
         },
         "support_ai_provider_credentials_failures_check": {
           "name": "support_ai_provider_credentials_failures_check",
