@@ -236,3 +236,17 @@ SELECT count(*) FROM payments
 - **Automatic Star refunds** (brief A6).
 - **Reconciling a lost `successful_payment` through `getStarTransactions`.** The webhook
   answers non-2xx instead, so Telegram redelivers.
+
+## 5. B12 (2026-10-06): no «check payment status» button on the Stars summary
+
+The owner's item «Dragon Stars» names a surface that appears nowhere in this repository,
+its history or the legacy MirzaBot source. It is read as the one Stars route,
+`TELEGRAM_STARS` — the safest reading, recorded here so a later reader can revisit it.
+
+The Stars summary (`gatewayAttemptScreen`, the `BOT_TOKEN` branch) now carries only the
+way back to the main menu. A Stars payment settles from Telegram's own
+`successful_payment`, never from a status read, so the `gc:` button could only answer
+"still waiting". The invoice is still sent with no `reply_markup`, so its first and only
+button is Telegram's own Pay. Pinned by `tests/integration/telegram-stars.test.ts`
+("draws no check-status button on the Stars summary…"). The `gc:` callback itself is still
+recognised, so a summary drawn before this release keeps working.

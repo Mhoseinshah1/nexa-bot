@@ -16503,6 +16503,11 @@ export function gatewayAttemptScreen(
    * shows the principal, the fee when there is one, the payable in the sales currency and the
    * Stars asked for — all from THIS attempt's snapshot — while the invoice is being sent and
    * once it has been.
+   *
+   * B12: no «check payment status» button here. A Stars payment settles from Telegram's own
+   * `successful_payment`, never from a status read, so the button could only ever answer
+   * "still waiting"; the invoice message's Pay button (Telegram's own, the first and only
+   * button of an invoice sent with no keyboard) is the one action, and the way back stays.
    */
   if (
     PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceCredential === 'BOT_TOKEN' &&
@@ -16510,7 +16515,7 @@ export function gatewayAttemptScreen(
   ) {
     return {
       ...starsInvoiceBody(payment, invoice.sentAmount),
-      buttons: [check, mainMenuButton()],
+      buttons: [mainMenuButton()],
       orderId,
       wizard: { kind, step: 'INVOICE', paymentId: payment.id },
     };

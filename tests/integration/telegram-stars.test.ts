@@ -849,6 +849,36 @@ describe('Telegram Stars (Package A)', () => {
       expect(JSON.stringify(calls.at(-1)?.body.reply_markup ?? {})).not.toContain('"url"');
     });
 
+    /*
+     * B12: the Stars summary carries no «check payment status» button — a Stars payment
+     * settles from Telegram's own successful_payment, never from a status read — and the way
+     * back stays. The invoice goes with no keyboard, so its one button is Telegram's own Pay.
+     */
+    it('draws no check-status button on the Stars summary, keeps the way back, and the invoice’s only button is Pay', async () => {
+      await enableStars();
+      const orderId = await draftOrder(260_000n);
+      calls = [];
+      await tapAs(MARYAM, `gp:${orderId}.TELEGRAM_STARS`);
+      const summary = calls.find(
+        (call) => call.method === 'sendMessage' || call.method === 'editMessageText',
+      );
+      expect(String(summary?.body.text ?? '')).toContain('تلگرام استارز');
+      const markup = JSON.stringify(summary?.body.reply_markup ?? {});
+      const data = [...markup.matchAll(/"callback_data":"([^"]+)"/gu)].map((m) => m[1]);
+      expect(data, 'only the way back').toEqual(['mm:']);
+      expect(markup).not.toContain('gc:');
+
+      await worker();
+      const invoices = calls.filter((call) => call.method === 'sendInvoice');
+      expect(invoices).toHaveLength(1);
+      expect(invoices[0]!.body.reply_markup, 'Telegram draws its own Pay button').toBeUndefined();
+      // Re-drawn once the invoice exists: still no check button.
+      const after = calls
+        .filter((call) => call.method === 'editMessageText' || call.method === 'sendMessage')
+        .map((call) => JSON.stringify(call.body.reply_markup ?? {}));
+      expect(after.every((one) => !one.includes('gc:'))).toBe(true);
+    });
+
     it('draws one named button per external route', async () => {
       await enableStars();
       const orderId = await draftOrder(260_000n);
