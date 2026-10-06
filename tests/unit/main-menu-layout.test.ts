@@ -4,6 +4,7 @@ import {
   DEFAULT_MAIN_MENU_LAYOUT,
   defaultMainMenuButtonConfig,
   explicitFromLegacy,
+  explicitMainMenuSchema,
   type ExplicitMainMenu,
   type OperationalEventInput,
   MAIN_MENU_BUTTON_IDS,
@@ -433,10 +434,10 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
     revision: 1,
   });
 
-  it('draws the operator’s rows with style and NO icon (retired, even when the layout names one); hidden buttons leave a gap, never a reflow', async () => {
+  it('draws the operator’s rows with style and icon slot (restored 2026-10-05); hidden buttons leave a gap, never a reflow', async () => {
     const layout = layoutWith({ source: published(explicit), trialOffered: false });
     expect(await layout.keyboardFor(scope)).toEqual([
-      [{ text: CATALOGUE_FA['bot.menu.wallet'], style: 'danger', iconSlot: null }],
+      [{ text: CATALOGUE_FA['bot.menu.wallet'], style: 'danger', iconSlot: 'payment' }],
       [{ text: CATALOGUE_FA['bot.menu.help'], style: 'default', iconSlot: null }],
     ]);
     // `rowsFor` is the text-only view of the same rows — what the transport draws until T2.
@@ -480,6 +481,56 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
       ['apps', false],
       ['tickets', false],
     ]);
+  });
+
+  it('Item 1 (Phase 2): for 300 generated layouts the keyboard is the SAVED order exactly — rows, positions, style and icon', async () => {
+    // A small deterministic generator: any permutation, any split into rows, any switch.
+    let seed = 20261005;
+    const next = () => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed / 2_147_483_648;
+    };
+    const styles = ['default', 'primary', 'success', 'danger'] as const;
+    let checked = 0;
+    for (let run = 0; run < 300; run += 1) {
+      const ids = [...MAIN_MENU_BUTTON_IDS].sort(() => next() - 0.5);
+      const placed = ids.slice(0, 1 + Math.floor(next() * ids.length));
+      const rows: (typeof placed)[] = [];
+      for (const id of placed) {
+        if (rows.length === 0 || next() < 0.4) rows.push([id]);
+        else rows[rows.length - 1]?.push(id);
+      }
+      const buttons = MAIN_MENU_BUTTON_IDS.map((id) => ({
+        ...defaultMainMenuButtonConfig(id),
+        // The first placed button stays on, so the layout is one the schema accepts.
+        enabled: id === placed[0] || next() < 0.8,
+        style: styles[Math.floor(next() * styles.length)] ?? 'default',
+        iconSlot: next() < 0.3 ? ('wallet' as const) : null,
+      }));
+      const layout: ExplicitMainMenu = { v: 1, rows, buttons };
+      if (!explicitMainMenuSchema.safeParse(layout).success) continue;
+      const keyboard = await layoutWith({
+        source: published(layout),
+        trialOffered: true,
+        flags: { referrals: true },
+      }).keyboardFor(scope);
+      const byId = new Map(buttons.map((one) => [one.button, one]));
+      const expected = rows
+        .map((row) =>
+          row
+            .filter((id) => byId.get(id)?.enabled === true)
+            .map((id) => ({
+              text: CATALOGUE_FA[mainMenuButton(id).label],
+              style: byId.get(id)?.style,
+              iconSlot: byId.get(id)?.iconSlot,
+            })),
+        )
+        .filter((row) => row.length > 0);
+      expect(keyboard, JSON.stringify(layout.rows)).toEqual(expected);
+      checked += 1;
+    }
+    // Most generated layouts are valid; the property was not vacuously true.
+    expect(checked).toBeGreaterThan(200);
   });
 
   it('a LEGACY answer (nothing published, superseded, unreadable) is today’s keyboard exactly', async () => {

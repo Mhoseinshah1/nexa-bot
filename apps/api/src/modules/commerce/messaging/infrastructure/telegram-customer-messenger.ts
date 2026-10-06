@@ -16,13 +16,17 @@ import {
   APPEARANCE_SLOTS,
   appearanceMarker,
   categoryButtonStyleOf,
+  inlineButtonIconOf,
   inlineButtonStyleOf,
   type AppearanceTestErrorCode,
   type CategoryColors,
+  type InlineButtonIcons,
   type InlineButtonStyles,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
+  buttonsHaveIcons,
+  withoutButtonIcons,
   callbackAnswerBody,
   chatAccessProblemOf,
   editMessageBody,
@@ -54,6 +58,7 @@ import {
   decorateAppearance,
   entitiesWithin,
   maskAppearanceMarkers,
+  mayCarryCustomEmoji,
   undoHtmlDecoration,
   type AppearanceDecoration,
   type CustomEmojiEntity,
@@ -382,7 +387,15 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * `formatMoney`, so an amount on a button and the same amount in the message it
      * belongs to cannot be written two different ways.
      */
-    const buttons = await this.labelButtons(scope, message.buttons ?? []);
+    /*
+     * Round T (T2): the decoration is the SENDING bot's (`decorationFor`), read once for the
+     * text, the reply keyboard's icons AND (Phase 2 Item 3) the inline buttons' icons, so one
+     * per-bot eligibility answers all three and a second bot of the same tenant that never
+     * passed its test draws no icon.
+     */
+    const decoration = await this.decorationFor(scope, message.botInstanceId);
+    const buttons = await this.labelButtons(scope, message.buttons ?? [], decoration);
+    const plainButtons = withoutButtonIcons(buttons);
     /*
      * The main menu, as this tenant has it (R1).
      *
@@ -407,12 +420,6 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
                 iconSlot: null,
               })),
             );
-    /*
-     * Round T (T2): the decoration is the SENDING bot's (`decorationFor`), read once for the
-     * text AND the keyboard's icons, so one per-bot eligibility answers both and a second
-     * bot of the same tenant that never passed its test draws no icon.
-     */
-    const decoration = await this.decorationFor(scope, message.botInstanceId);
     const iconKeyboard =
       customerRows === undefined ? undefined : replyKeyboardFor(customerRows, decoration);
     /*
@@ -441,6 +448,8 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       buttons.length === 0 &&
       (keyboard?.some((row) => row.some((button) => button.iconCustomEmojiId !== undefined)) ??
         false);
+    // Phase 2 Item 3: an inline keyboard (which wins the reply_markup) carrying an icon.
+    const inlineHasIcon = buttonsHaveIcons(buttons);
     /*
      * A body over Telegram's bound goes as SEVERAL messages, in order, cut by
      * `splitMessageBody` — between paragraphs, then lines, then characters. Telegram
@@ -495,7 +504,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
        * makes the part DECORATED, and the one undecorated retry below covers it: the plain
        * request strips the entities, the tags AND the icons, and keeps every label and style.
        */
-      const iconed = last && keyboardHasIcon && !decorationRefused;
+      const iconed = last && (keyboardHasIcon || inlineHasIcon) && !decorationRefused;
       const isDecorated = decorated.decorated > 0 || iconed;
       const partKeyboard = (plain: boolean) =>
         plain || decorationRefused ? plainKeyboard : keyboard;
@@ -513,7 +522,12 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
             ...(index === 0 && message.replyToMessageId !== undefined
               ? { replyToMessageId: message.replyToMessageId }
               : {}),
-            ...(last ? { buttons, ...(rows === undefined ? {} : { keyboard: rows }) } : {}),
+            ...(last
+              ? {
+                  buttons: plain || decorationRefused ? plainButtons : buttons,
+                  ...(rows === undefined ? {} : { keyboard: rows }),
+                }
+              : {}),
           }),
         };
       };
@@ -640,7 +654,13 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     ) {
       return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
     }
-    const buttons = await this.labelButtons(scope, message.buttons ?? []);
+    const buttons = await this.labelButtons(
+      scope,
+      message.buttons ?? [],
+      await this.decorationFor(scope, message.botInstanceId),
+    );
+    // Phase 2 Item 3: an iconed keyboard owes the same one icon-less retry as a decoration.
+    const iconed = buttonsHaveIcons(buttons);
 
     const method =
       message.kind === 'PHOTO'
@@ -657,7 +677,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         ...(wire === undefined || wire.entities.length === 0
           ? {}
           : { captionEntities: wire.entities }),
-        buttons,
+        buttons: plain ? withoutButtonIcons(buttons) : buttons,
       };
     };
     /*
@@ -699,8 +719,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         botInstanceId: message.botInstanceId,
         ...(message.caption === undefined ? {} : { templateKey: message.caption.templateKey }),
       },
-      rendered?.decorated === true,
+      rendered?.decorated === true || iconed,
       request,
+      iconed,
     );
     const sent = this.classify(outcome).sent;
     if (outcome.outcome !== 'SUCCEEDED') return sent;
@@ -840,11 +861,8 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const format = templateDefinition(message.templateKey).format;
     const html = format === 'TELEGRAM_HTML';
     // Premium UI: the same decoration a fresh send of this key would get, by the same path.
-    const decorated = decorateAppearance(
-      rendered,
-      format,
-      await this.decorationFor(scope, message.botInstanceId),
-    );
+    const decoration = await this.decorationFor(scope, message.botInstanceId);
+    const decorated = decorateAppearance(rendered, format, decoration);
     const caption = decorated.text;
     // Round N (F1): a caption that must arrive whole is refused, not cut, over the bound.
     if (message.whole === true && caption.length > TELEGRAM_CAPTION_MAX) {
@@ -853,12 +871,13 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     if (caption.length === 0 || (html && caption.length > TELEGRAM_CAPTION_MAX)) {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
-    const buttons = await this.labelButtons(scope, message.buttons);
+    const buttons = await this.labelButtons(scope, message.buttons, decoration);
+    const iconed = buttonsHaveIcons(buttons);
     const plainCaption = html ? undoHtmlDecoration(caption) : caption;
     const { raw: outcome } = await this.deliverDecorated(
       scope,
       message,
-      decorated.decorated > 0,
+      decorated.decorated > 0 || iconed,
       (plain) => ({
         token,
         apiBaseUrl: this.apiBaseUrl,
@@ -869,10 +888,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
           messageId: message.messageId,
           caption: plain ? plainCaption : caption,
           html,
-          buttons,
+          buttons: plain ? withoutButtonIcons(buttons) : buttons,
           captionEntities: plain ? [] : decorated.entities,
         }),
       }),
+      iconed,
     );
     if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
     const sent = this.classify(outcome).sent;
@@ -993,11 +1013,8 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * in place and the same card sent fresh carry the same text and the same entities
      * (`telegram-messenger-appearance.test.ts` asserts the parity).
      */
-    const decorated = decorateAppearance(
-      rendered,
-      format,
-      await this.decorationFor(scope, message.botInstanceId),
-    );
+    const decoration = await this.decorationFor(scope, message.botInstanceId);
+    const decorated = decorateAppearance(rendered, format, decoration);
     const text = decorated.text;
     // Round N (F1): a body that must arrive whole says WHY it was refused.
     if (message.whole === true && text.length > TELEGRAM_MESSAGE_MAX) {
@@ -1006,12 +1023,13 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     if (text.length === 0 || text.length > TELEGRAM_MESSAGE_MAX) {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
-    const buttons = await this.labelButtons(scope, message.buttons);
+    const buttons = await this.labelButtons(scope, message.buttons, decoration);
+    const iconed = buttonsHaveIcons(buttons);
     const plainText = html ? undoHtmlDecoration(text) : text;
     const { raw: outcome } = await this.deliverDecorated(
       scope,
       message,
-      decorated.decorated > 0,
+      decorated.decorated > 0 || iconed,
       (plain) => ({
         token,
         apiBaseUrl: this.apiBaseUrl,
@@ -1022,10 +1040,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
           messageId: message.messageId,
           text: plain ? plainText : text,
           html,
-          buttons,
+          buttons: plain ? withoutButtonIcons(buttons) : buttons,
           entities: plain ? [] : decorated.entities,
         }),
       }),
+      iconed,
     );
     if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
     const sent = this.classify(outcome).sent;
@@ -1049,16 +1068,32 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     return label.amount === undefined ? label.text : `${label.text} — ${formatMoney(label.amount)}`;
   }
 
-  /** A label is either a catalogue key or tenant data. One place that knows which. */
+  /**
+   * A label is either a catalogue key or tenant data. One place that knows which.
+   *
+   * Phase 2 Item 3: a registry button also takes its optional premium ICON here
+   * (`bot.inline_button_icons`) — only when `decoration` is the SENDING bot's and that bot may
+   * carry custom emoji (`mayCarryCustomEmoji`, a recorded `SENT`). The text and the route are
+   * never touched by it; a caller that sends an iconed keyboard owns the one icon-less retry.
+   */
   private async labelButtons(
     scope: TenantContext,
     buttons: readonly CustomerButton[],
+    decoration: AppearanceDecoration,
   ): Promise<TelegramButton[]> {
     const labelled: TelegramButton[] = [];
+    const namesRegistryButton = buttons.some((button) => button.inline !== undefined);
     // Read once per keyboard, and only for a keyboard that names a registry button.
     const styles: InlineButtonStyles =
-      this.inlineStyles !== undefined && buttons.some((button) => button.inline !== undefined)
+      this.inlineStyles !== undefined && namesRegistryButton
         ? await this.inlineStyles.stylesFor(scope)
+        : {};
+    // Item 3: read once, and only when a registry button could carry an icon from THIS bot.
+    const icons: InlineButtonIcons =
+      this.inlineStyles?.iconsFor !== undefined &&
+      namesRegistryButton &&
+      mayCarryCustomEmoji(decoration)
+        ? await this.inlineStyles.iconsFor(scope)
         : {};
     // UX Batch 01, item 2: read once, and only for a keyboard that lists categories.
     const categoryOf = (button: CustomerButton): string | undefined =>
@@ -1085,7 +1120,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
             (category !== undefined
               ? categoryButtonStyleOf(category, colors, styles)
               : inlineButtonStyleOf(button.inline, styles)));
-      const styled = style === 'default' ? {} : { style };
+      const icon = button.inline === undefined ? null : inlineButtonIconOf(button.inline, icons);
+      const styled = {
+        ...(style === 'default' ? {} : { style }),
+        ...(icon === null ? {} : { iconCustomEmojiId: icon }),
+      };
       /*
        * The union is discriminated by the field that IS the difference, not by a `kind`
        * tag beside it. A URL button carries a link the client opens; a copy button
@@ -1218,7 +1257,8 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    *
    * - text decoration only — the decoration was the cause, as it has always been read: the
    *   condition is recorded and the bot's decoration is switched off until re-tested;
-   * - a keyboard icon (`iconed`) — owner rule B5: the bot is switched off ONLY when the
+   * - a keyboard icon (`iconed`: a reply-keyboard icon, or since Phase 2 Item 3 an inline
+   *   button's icon) — owner rule B5: the bot is switched off ONLY when the
    *   refusal is reliably a custom-emoji denial (`isCustomEmojiDenial`, the probe's own
    *   classifier). A generic 400 leaves the eligibility as it was; the operator is told the
    *   icons were dropped from that message, under the same per-bot condition, and nothing
