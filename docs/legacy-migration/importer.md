@@ -131,6 +131,7 @@ username; `invoice:v1` over the invoice's decision columns.
   "panels": [{ "codePanel": "bac6", "panelId": "<NEXA RickPanel uuid>" }],
   "testPanels": ["<code>"],
   "missingPanels": ["<code searched by username across productionPanels>"],
+  "unresolvedPanels": [{ "codePanel": "<code>", "reason": "OWNER_DECIDES_LATER" }],
   "productionPanels": ["<every NEXA RickPanel uuid a missing code_panel is searched across>"],
   "products": [{ "codeProduct": "<legacy code_product>", "productId": "<NEXA product uuid>" }]
 }
@@ -156,6 +157,24 @@ key only if a mapping file could name it (the file's own code rule); any other s
 is counted under `(invalid code_panel)` and never echoed. Missing
 `code_panel` goes through P5's matcher (exact lowercase username, complete inventories
 only, case collision → review). Example: `tests/fixtures/legacy/synthetic-support.ts`.
+
+**Completeness (WP-D2, G10).** `unresolvedPanels` (optional) is how a live `code_panel`
+nobody has decided yet is _declared_ rather than forgotten: `{codePanel, reason}`, with the
+reason one of `OWNER_DECIDES_LATER`, `DECOMMISSIONED_PANEL`, `UNKNOWN_ORIGIN` and no other
+key. A declared code is in no list the matcher reads, so its invoices stay `PANEL_UNMAPPED`
+manual review exactly as before; it is exclusive with the other lists, and it enters the
+fingerprint only when non-empty — every v1 map written before it keeps its fingerprint
+(pinned by a unit test). `audit` reports `sections.panelMapping.completeness`:
+
+- `unmapped` — live REAL invoices' codes in no list, with counts. **Non-empty makes the
+  audit `BLOCKED`**, with a blocker naming each code and count. Source values no file could
+  name are counted under `(invalid code_panel)`, and that exact key may be declared.
+- `declaredUnresolved` — each declared code, its reason, and its live real invoices.
+- `stale` — codes the map names that no live invoice carries (a typo, a retired panel).
+- `productionPanelsUnreferenced` — production panels no mapped code with a live real
+  invoice points at (they may still serve the missing-panel search).
+
+The rehearsal turns `complete` into the check `panel_map_complete`.
 
 ## 5. Decisions (one pure plan; `plan.ts`, `decisions.ts`)
 

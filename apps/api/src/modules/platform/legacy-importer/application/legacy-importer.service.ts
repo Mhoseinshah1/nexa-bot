@@ -35,6 +35,7 @@ import type { LegacyProductService } from '../../../commerce/catalog/application
 import { legacyProfileUsername, type ServiceCandidateCategory } from './decisions.js';
 import { crossCheckEvidence, type LegacyEvidence } from './evidence-runner.js';
 import {
+  panelMappingCompleteness,
   validatePanelMappingAgainstTenant,
   validateProductMappingAgainstTenant,
   type PanelMapping,
@@ -326,6 +327,7 @@ export class LegacyImporterService {
       mappedCodes: mapping.file.panels.length,
       testCodes: mapping.file.testPanels.length,
       declaredMissingCodes: mapping.file.missingPanels.length,
+      declaredUnresolvedCodes: mapping.unresolved.size,
       productionPanels: mapping.policy.productionPanelIds,
     };
   }
@@ -367,6 +369,17 @@ export class LegacyImporterService {
       if (!panel.complete)
         blockers.push(`inventory of panel ${panel.panelId} is incomplete (${panel.reason ?? '?'})`);
     }
+    // WP-D2 / G10: every live real code_panel is mapped, a test panel, declared missing,
+    // or declared unresolved with a reason. A code the map does not account for blocks.
+    const completeness = panelMappingCompleteness(input.snapshot.liveInvoices, input.mapping);
+    const unmapped = Object.entries(completeness.unmapped);
+    if (unmapped.length > 0) {
+      blockers.push(
+        `the panel map does not account for ${unmapped.length} live code_panel value(s) ` +
+          `(${unmapped.map(([code, n]) => `${JSON.stringify(code)}: ${n} invoice(s)`).join(', ')}); ` +
+          'map each, list it as a test or missing panel, or declare it in unresolvedPanels with a reason',
+      );
+    }
     return this.report(
       'AUDIT',
       input.scope,
@@ -374,7 +387,7 @@ export class LegacyImporterService {
       startedAt,
       {
         source: this.sourceSection(input.snapshot),
-        panelMapping: this.mappingSection(input.mapping),
+        panelMapping: { ...this.mappingSection(input.mapping), completeness },
         provider: this.providerSection(prepared),
         plan: prepared.plan.tallies,
         evidence: input.evidence,

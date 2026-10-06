@@ -247,6 +247,62 @@ describe('Migration P7: the legacy importer', () => {
     expectOnlyReads();
   });
 
+  it('WP-D2: an audit BLOCKS on a live code_panel the map does not account for, and passes once it is declared', async () => {
+    const snap = await snapshot();
+    const forgot = parsePanelMapping(
+      JSON.stringify(
+        (({ unresolvedPanels: _drop, ...rest }) => rest)(
+          JSON.parse(mappingText) as Record<string, unknown>,
+        ),
+      ),
+      tenantA.tenantId as unknown as string,
+    );
+    const blocked = await importer().audit({
+      ...input('audit-forgot', snap, forgot),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    expect(blocked.verdict).toBe('BLOCKED');
+    const blockedSections = blocked.sections as Record<string, any>;
+    expect(blockedSections['panelMapping'].completeness).toMatchObject({
+      complete: false,
+      unmapped: { zzz: 1 },
+      declaredUnresolved: {},
+    });
+    expect(blockedSections['blockers']).toEqual([expect.stringContaining('"zzz": 1 invoice(s)')]);
+
+    const declared = await importer().audit({
+      ...input('audit-declared', snap),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    expect(declared.verdict).toBe('READY_FOR_DRY_RUN');
+    const sections = declared.sections as Record<string, any>;
+    expect(sections['panelMapping'].completeness).toEqual({
+      complete: true,
+      unmapped: {},
+      declaredUnresolved: { zzz: { reason: 'OWNER_DECIDES_LATER', liveRealInvoices: 1 } },
+      stale: [],
+      productionPanelsUnreferenced: [],
+    });
+    expect(sections['panelMapping'].declaredUnresolvedCodes).toBe(1);
+    // Declaring a code decides nothing about its invoices: they stay PANEL_UNMAPPED review.
+    expect(sections['plan'].services.categories).toEqual(SYNTHETIC_EXPECTED.services.categories);
+
+    // A map entry no live invoice carries is reported as stale, and does not block.
+    const stale = parsePanelMapping(
+      JSON.stringify({ ...JSON.parse(mappingText), testPanels: ['tst', 'old-test'] }),
+      tenantA.tenantId as unknown as string,
+    );
+    const withStale = await importer().audit({
+      ...input('audit-stale', snap, stale),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    expect(withStale.verdict).toBe('READY_FOR_DRY_RUN');
+    expect((withStale.sections as Record<string, any>)['panelMapping'].completeness.stale).toEqual([
+      'old-test',
+    ]);
+    expectOnlyReads();
+  });
+
   it('dry-run decides everything on a DRY_RUN run row and writes no business row', async () => {
     const report = await importer().dryRun(input('dry', await snapshot()));
     expect(await count('customers')).toBe(1);

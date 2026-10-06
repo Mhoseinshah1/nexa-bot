@@ -22,6 +22,11 @@ export function syntheticMappingFile(
   panelA: string,
   panelB: string,
   p1Product: string | null = SYNTHETIC_P1_PRODUCT,
+  /**
+   * WP-D2: the fixture's deliberately unmapped code (`zzz`) is DECLARED unresolved, so a
+   * synthetic audit is READY; pass false to see the audit BLOCK on a forgotten code.
+   */
+  declareUnmapped = true,
 ): string {
   return JSON.stringify(
     {
@@ -33,6 +38,13 @@ export function syntheticMappingFile(
       ],
       testPanels: [SYNTHETIC_PANEL_CODES.test],
       missingPanels: [SYNTHETIC_PANEL_CODES.declaredMissing],
+      ...(declareUnmapped
+        ? {
+            unresolvedPanels: [
+              { codePanel: SYNTHETIC_PANEL_CODES.unmapped, reason: 'OWNER_DECIDES_LATER' },
+            ],
+          }
+        : {}),
       productionPanels: [panelA, panelB],
       products: p1Product === null ? [] : [{ codeProduct: 'p1', productId: p1Product }],
     },

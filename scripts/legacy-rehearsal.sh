@@ -1033,6 +1033,10 @@ for cycle in $(seq 1 "$CYCLES"); do
   [[ "$AUDIT_FP" =~ ^[0-9a-f]{64}$ ]] && [[ "$AUDIT_MAP_FP" =~ ^[0-9a-f]{64}$ ]] ||
     die "cycle $cycle: the audit report carries no source or panel-map fingerprint; see $OUT/c${cycle}-audit.json"
   FP_ARGS=("$P7_EXPECTED_FP_FLAG" "$AUDIT_FP" "$P7_EXPECTED_MAP_FP_FLAG" "$AUDIT_MAP_FP")
+  # G10 (WP-D2): every live real code_panel is mapped, a test panel, declared missing or
+  # declared unresolved with a reason. The unmapped codes and counts are in the audit JSON.
+  check "$cycle" panel_map_complete "true unmapped={}" \
+    "$(json_get "$OUT/c${cycle}-audit.json" sections.panelMapping.completeness.complete) unmapped=$(json_get "$OUT/c${cycle}-audit.json" sections.panelMapping.completeness.unmapped)"
   run_p7 "$cycle" p7-dry-run dry-run --format json
   cp "$OUT/logs/c${cycle}-p7-dry-run.log" "$OUT/c${cycle}-dry-run.json"
   run_stage "$cycle" snapshot-after-dry-run snapshot "c${cycle}-after-dry-run"
