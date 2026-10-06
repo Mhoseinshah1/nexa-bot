@@ -25,19 +25,19 @@ Conventions used below:
 
 ## 0. What the alerts mean
 
-The support agent raises four conditions. Each is deduplicated, closed by its own recovery,
+The support agent raises five conditions. Each is deduplicated, closed by its own recovery,
 and shown in the notification inbox (TB10) as well as on `/alerts` and in the ops group's
 SYSTEM topic.
 
-| Code                                      | Inbox category                     | Who sees it            | Closed by                                                                       |
-| ----------------------------------------- | ---------------------------------- | ---------------------- | ------------------------------------------------------------------------------- |
-| `support.handoff_required`                | گفت‌وگوهای پشتیبانی (`SUPPORT`)    | `business_chats.view`  | a person taking the conversation, or returning it to the AI                     |
-| `support.business_connection.unusable`    | گفت‌وگوهای پشتیبانی (`SUPPORT`)    | `business_chats.view`  | the connection being enabled again with `can_reply`, or replaced                |
-| `support.ai_provider.credential_rejected` | هوش مصنوعی پشتیبانی (`SUPPORT_AI`) | `support_ai.configure` | the provider answering `OK` with that key, or the key being replaced or removed |
-| `support.ai_provider.unavailable`         | هوش مصنوعی پشتیبانی (`SUPPORT_AI`) | `support_ai.configure` | any provider in the chain answering again                                       |
+| Code                                      | Inbox category                     | Who sees it            | Closed by                                                                        |
+| ----------------------------------------- | ---------------------------------- | ---------------------- | -------------------------------------------------------------------------------- |
+| `support.handoff_required`                | گفت‌وگوهای پشتیبانی (`SUPPORT`)    | `business_chats.view`  | a person taking the conversation, or returning it to the AI                      |
+| `support.business_connection.unusable`    | گفت‌وگوهای پشتیبانی (`SUPPORT`)    | `business_chats.view`  | the connection being enabled again with `can_reply`, or replaced                 |
+| `support.ai_provider.credential_rejected` | هوش مصنوعی پشتیبانی (`SUPPORT_AI`) | `support_ai.configure` | the provider answering `OK` with that key, or the key being replaced or removed  |
+| `support.ai_provider.unavailable`         | هوش مصنوعی پشتیبانی (`SUPPORT_AI`) | `support_ai.configure` | any provider in the chain answering again                                        |
+| `support.assistant.stalled`               | هوش مصنوعی پشتیبانی (`SUPPORT_AI`) | `support_ai.configure` | the `assistant` role completing a pass of its loop (`support.assistant.running`) |
 
-A handoff alert links to the conversation. The other three link to the page that acts on
-them.
+A handoff alert links to the conversation. The others link to the page that acts on them.
 
 ## 1. Enabling Assist
 
@@ -239,6 +239,13 @@ already queued.
 
 **You see:**
 
+- A notification «دستیار هوشمند پشتیبانی اجرا نمی‌شود» (`support.assistant.stalled`, D5). The
+  WORKER raises it when an Assist draft or an automatic job has been due for 120 s
+  (`SUPPORT_ASSISTANT_STALL_SECONDS`) with no live lease while no job is leased at all — the
+  assistant's own heartbeat is a file inside its container, which no other role can read, so
+  the watch reads the work it leaves undone. It closes by itself when the assistant completes
+  a pass of its loop (`support.assistant.running`). A job under a live lease is a busy
+  assistant, not a dead one, and raises nothing.
 - `botctl status` shows `assistant` unhealthy or restarting.
 - A requested draft keeps saying «دستیار در حال نوشتن پیش‌نویس است».
 - Under `AUTO_REPLY_SAFE`, customers get no automatic answer. «آمار پشتیبانی» shows

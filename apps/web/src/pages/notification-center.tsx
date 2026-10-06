@@ -101,6 +101,8 @@ const TITLES: Readonly<Record<string, WebKey>> = {
   'support.business_connection.unusable': 'web.nc_t_support_connection',
   'support.ai_provider.credential_rejected': 'web.nc_t_support_key_rejected',
   'support.ai_provider.unavailable': 'web.nc_t_support_ai_unavailable',
+  // D5: the assistant role is not claiming due AI work.
+  'support.assistant.stalled': 'web.nc_t_support_assistant_stalled',
 };
 
 const PREFIX_TITLES: readonly (readonly [string, WebKey])[] = [

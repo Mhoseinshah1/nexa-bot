@@ -543,6 +543,50 @@ export class DrizzleSupportAiJobRepository {
   }
 
   /**
+   * D5 — what the worker's watch reads to tell a stalled assistant from a busy one: the Assist
+   * drafts and automatic jobs QUEUED and due since `dueBefore` with no live lease (nobody is
+   * producing them), and how many QUEUED jobs hold a live lease (somebody is). One statement.
+   */
+  async assistantBacklog(
+    scope: ScopeContext,
+    now: Date,
+    dueBefore: Date,
+    tx?: unknown,
+  ): Promise<{
+    readonly overdue: number;
+    readonly oldestDueAt: Date | null;
+    readonly leased: number;
+  }> {
+    const tenantId = requireTenantId(scope);
+    const at = sql`${now.toISOString()}::timestamptz`;
+    const before = sql`${dueBefore.toISOString()}::timestamptz`;
+    const due = sql`coalesce(${supportAiJobs.dueAt}, ${supportAiJobs.createdAt})`;
+    const unleased = sql`(${supportAiJobs.claimedUntil} IS NULL OR ${supportAiJobs.claimedUntil} <= ${at})`;
+    const [row] = await exec(this.db, tx)
+      .select({
+        overdue: sql<number>`count(*) FILTER (WHERE ${due} <= ${before} AND ${unleased})::int`,
+        oldestDueAt: sql<
+          string | Date | null
+        >`min(${due}) FILTER (WHERE ${due} <= ${before} AND ${unleased})`,
+        leased: sql<number>`count(*) FILTER (WHERE ${supportAiJobs.claimedUntil} > ${at})::int`,
+      })
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.state, 'QUEUED'),
+          inArray(supportAiJobs.kind, ['ASSIST_DRAFT', 'AUTO_DECISION']),
+        ),
+      );
+    const oldest = row?.oldestDueAt ?? null;
+    return {
+      overdue: Number(row?.overdue ?? 0),
+      oldestDueAt: oldest === null ? null : new Date(oldest),
+      leased: Number(row?.leased ?? 0),
+    };
+  }
+
+  /**
    * D2 telemetry — how many knowledge entries the job's request carried, and how many there
    * were to choose from. Written in the job's result transaction (`withKnowledgeCounts`).
    */

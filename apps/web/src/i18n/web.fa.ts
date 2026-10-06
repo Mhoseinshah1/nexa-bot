@@ -6909,6 +6909,7 @@ export const WEB_FA = {
   'web.nc_t_support_connection': 'اتصال تلگرام بیزینس نمی‌تواند پیام بفرستد',
   'web.nc_t_support_key_rejected': 'کلید یک سرویس هوش مصنوعی رد شد',
   'web.nc_t_support_ai_unavailable': 'هیچ سرویس هوش مصنوعی پاسخ نمی‌دهد',
+  'web.nc_t_support_assistant_stalled': 'دستیار هوشمند پشتیبانی اجرا نمی‌شود',
   'web.nc_t_admin_sessions': 'نشست‌های یک مدیر لغو شد',
   'web.nc_t_incident': 'به‌روزرسانی رخداد یا نگهداری',
   // --- Phase D2: the administrator's own account and its security section ------------

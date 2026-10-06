@@ -631,6 +631,12 @@ import {
   AssistantLoop,
   ASSISTANT_INTERVAL_MS,
 } from './modules/control/support-ai/application/assistant-loop.js';
+import {
+  SUPPORT_ASSISTANT_WATCH_INTERVAL_MS,
+  SupportAssistantLiveness,
+  SupportAssistantWatch,
+  SupportAssistantWatchLoop,
+} from './modules/control/support-ai/application/assistant-watch.js';
 import { DrizzleSupportAiJobRepository } from './modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository.js';
 import { TelegramSupportImageSource } from './modules/control/support-ai/infrastructure/telegram-support-image-source.js';
 import { TbSupportContextSource } from './modules/control/support-ai/infrastructure/support-context-source.js';
@@ -1195,6 +1201,8 @@ export interface Container {
   readonly businessTransport: BusinessTransport;
   readonly businessConversations: BusinessConversationService;
   readonly businessOutboundLoop: BusinessOutboundLoop;
+  /** D5: the worker's watch for a stalled `assistant` role. */
+  readonly supportAssistantWatchLoop: SupportAssistantWatchLoop;
   /** TB3: the support agent's read-only, allowlisted context for one conversation. */
   readonly supportContext: SupportContextBuilder;
   /** TB4: the support AI's configuration, keys and provider chain (ADR-0034). */
@@ -5804,6 +5812,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const assistantLoop = new AssistantLoop(supportAssist, {
     auto: supportAutoReply,
     learning: supportLearning,
+    // D5: the assistant closes the worker's "stalled" condition itself.
+    liveness: new SupportAssistantLiveness({
+      conditions: supportAiConditions,
+      opsLog,
+      uow,
+      scopeActivity: tenants,
+    }),
     scope: () =>
       installationTenantId === null
         ? null
@@ -5812,6 +5827,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     now: () => clock.now(),
     logger,
   });
+  const supportAssistantWatchLoop = new SupportAssistantWatchLoop(
+    new SupportAssistantWatch({
+      jobs: supportAiJobs,
+      opsLog,
+      uow,
+      scopeActivity: tenants,
+      clock,
+    }),
+    {
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: SUPPORT_ASSISTANT_WATCH_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      logger,
+    },
+  );
   const businessOutboundLoop = new BusinessOutboundLoop(
     new BusinessOutboundService({
       outbound: businessOutboundRepository,
@@ -6941,6 +6974,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     businessTransport,
     businessConversations,
     businessOutboundLoop,
+    supportAssistantWatchLoop,
     supportContext,
     supportAiConfig,
     supportAiChain,
@@ -7045,6 +7079,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await customerNotificationLoop.stop();
       // TB2: a stamped business send is recorded before the pool closes.
       await businessOutboundLoop.stop();
+      await supportAssistantWatchLoop.stop();
       // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
       await broadcastLoop.stop();
       await incidentSchedulerLoop.stop();

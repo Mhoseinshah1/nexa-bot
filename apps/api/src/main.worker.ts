@@ -142,6 +142,8 @@ async function main(): Promise<void> {
         // TB2: the business outbound lane. A stalled one is an operator's reply that never
         // leaves, which looks exactly like nothing being wrong.
         ['business-outbound', true, () => container.businessOutboundLoop.isFresh(now)],
+        // D5: and the watch that raises a stalled assistant role.
+        ['support-assistant-watch', true, () => container.supportAssistantWatchLoop.isFresh(now)],
         // Round N: the broadcast lane. No flag: a confirmed broadcast nobody sends is a
         // report that says "sending" for ever, and silence is what a stalled lane looks like.
         ['broadcasts', true, () => container.broadcastLoop.isFresh(now)],
@@ -247,6 +249,9 @@ async function main(): Promise<void> {
   container.customerNotificationLoop.start();
   // TB2: and the Telegram Business outbound lane (ADR-0033).
   container.businessOutboundLoop.start();
+  // D5: and the watch over the `assistant` role, which no other signal covers: due AI work left
+  // unclaimed raises `support.assistant.stalled`, and the assistant closes it once it runs.
+  container.supportAssistantWatchLoop.start();
   // Round N: and the broadcast lane — frozen recipients, paced per bot, at most once.
   container.broadcastLoop.start();
   container.incidentSchedulerLoop.start();
