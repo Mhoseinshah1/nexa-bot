@@ -22,6 +22,13 @@ import {
 } from './customer-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 import {
+  BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT,
+  BACKUP_ARCHIVE_KEEP_COUNT_MAX,
+  BACKUP_ARCHIVE_KEEP_COUNT_MIN,
+  BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
+  BACKUP_ARCHIVE_KEEP_DAYS_MAX,
+  BACKUP_ARCHIVE_KEEP_DAYS_MIN,
+  BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
   BACKUP_SCHEDULE_SETTING_KEYS,
@@ -418,6 +425,42 @@ export const SETTINGS = [
       .nullable(),
     defaultValue: null,
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /*
+   * How many backup archive FILES stay on the host (E5). Read on the installation tenant
+   * by the worker's backup housekeeping on every pass. An archive is pruned only when it
+   * fails BOTH keys; the newest verified archive, a running run, an unknown delivery and
+   * an archive an in-progress recovery names are never pruned whatever these say.
+   */
+  {
+    key: BACKUP_ARCHIVE_RETENTION_SETTING_KEYS.keepCount,
+    description:
+      'How many of the newest VERIFIED backup archives are always kept on the server, ' +
+      `between ${String(BACKUP_ARCHIVE_KEEP_COUNT_MIN)} and ${String(BACKUP_ARCHIVE_KEEP_COUNT_MAX)}. ` +
+      'An archive is removed only when it is outside this count AND older than ' +
+      'backup.archive_keep_days. The newest verified archive is never removed.',
+    schema: z.number().int().min(BACKUP_ARCHIVE_KEEP_COUNT_MIN).max(BACKUP_ARCHIVE_KEEP_COUNT_MAX),
+    defaultValue: BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: BACKUP_ARCHIVE_RETENTION_SETTING_KEYS.keepDays,
+    description:
+      'How many days every backup archive is kept on the server after its run finished, ' +
+      `between ${String(BACKUP_ARCHIVE_KEEP_DAYS_MIN)} and ${String(BACKUP_ARCHIVE_KEEP_DAYS_MAX)}. ` +
+      'An archive is removed only when it is older than this AND outside ' +
+      'backup.archive_keep_count.',
+    schema: z.number().int().min(BACKUP_ARCHIVE_KEEP_DAYS_MIN).max(BACKUP_ARCHIVE_KEEP_DAYS_MAX),
+    defaultValue: BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,

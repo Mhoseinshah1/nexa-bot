@@ -224,9 +224,24 @@ export class ClientAppController {
   }
 }
 
-/** A two-parameter contract route, `:id` and `:sessionId`, as the server declares it. */
-function sessionRoute(build: (id: string, sessionId: string) => string): string {
-  return routePattern((id) => routePattern((sessionId) => build(id, sessionId), 'sessionId'), 'id');
+/**
+ * A two-parameter contract route, `:id` and `:sessionId`, as the server declares it.
+ *
+ * Each parameter gets its OWN placeholder. Nesting `routePattern` twice does not work: both
+ * calls use the same token and each replaces the FIRST occurrence, so the inner `:sessionId`
+ * landed in the app-id slot and the server declared `/client-apps/:sessionId/video-sessions/:id`
+ * — every poll then looked the app id up as a session and answered «no longer exists».
+ */
+export function sessionRoute(build: (id: string, sessionId: string) => string): string {
+  const id = 'nexaRouteParamId';
+  const sessionId = 'nexaRouteParamSessionId';
+  const built = build(id, sessionId);
+  if (built.split(id).length !== 2 || built.split(sessionId).length !== 2) {
+    throw new Error(
+      `sessionRoute: the builder must pass each argument through verbatim, once (got ${built}).`,
+    );
+  }
+  return built.replace(id, ':id').replace(sessionId, ':sessionId');
 }
 
 /** The wire shape, `clientAppSchema`. A write answers with the ROW, unwrapped. */

@@ -1,8 +1,9 @@
-import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, ne, notInArray, sql } from 'drizzle-orm';
 import {
   NexaError,
   PLATFORM_ERROR_CODES,
   RECOVERY_ACTIVE_DESTRUCTIVE_STATES,
+  RECOVERY_TERMINAL_STATES,
   isDestructiveRecoveryState,
   quiescesInstallation,
   type RecoveryFailureCode,
@@ -414,6 +415,35 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
       )
       .returning();
     return rows.map(toRow);
+  }
+
+  /**
+   * Backup run ids an UNFINISHED recovery refers to: its pre-restore backup, and
+   * the backup id of the archive it is working with.
+   *
+   * For archive retention (E5), which must never remove an archive an
+   * in-progress recovery may need. Every non-terminal state, not only the
+   * destructive ones: a recovery verified and awaiting confirmation is still a
+   * recovery somebody intends to run, and keeping an extra archive for a few
+   * days costs nothing next to removing the one it names.
+   */
+  async backupIdsInUse(): Promise<readonly string[]> {
+    const rows = await this.db
+      .select({
+        preRestoreBackupId: recoveryRequests.preRestoreBackupId,
+        backupId: recoveryRequests.backupId,
+      })
+      .from(recoveryRequests)
+      .where(notInArray(recoveryRequests.state, [...RECOVERY_TERMINAL_STATES]));
+    const ids = new Set<string>();
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    for (const row of rows) {
+      for (const id of [row.preRestoreBackupId, row.backupId]) {
+        // `backup_id` comes from an uploaded manifest; only a UUID can name a run.
+        if (id !== null && uuid.test(id)) ids.add(id);
+      }
+    }
+    return [...ids];
   }
 
   /**

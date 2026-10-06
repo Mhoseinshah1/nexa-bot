@@ -89,6 +89,7 @@ class FakeRuns implements BackupRunRepository {
       failureMessage: null,
       cleanupOk: true,
       cleanupDetail: null,
+      archivePrunedAt: null,
     };
     this.rows.set(row.id, row);
     return { claimed: true, run: row };
@@ -229,6 +230,8 @@ interface Harness {
     /** Null models an installation with no tenant provisioned yet. */
     scoped: boolean;
     opsLogThrows: boolean;
+    /** Codes whose installation condition is open, for `conditionOpen`. */
+    open: Set<string>;
     /** Called inside the DUMP stage, so a test can look at the service mid-run. */
     onDump?: () => void;
   };
@@ -262,6 +265,7 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
     recorded: [],
     scoped: true,
     opsLogThrows: false,
+    open: new Set<string>(),
   };
 
   const workspace: BackupWorkspace = {
@@ -386,6 +390,7 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
     logger: { info() {}, warn() {}, error() {} },
     leaseOwner: 'worker:1:aaaa',
     retainedArchiveHint: '/var/lib/nexa/backups',
+    conditionOpen: async (code) => state.open.has(code),
   });
 
   return { service, runs, clock, state };
@@ -1146,5 +1151,85 @@ describe('the backup schedule policy', () => {
     const effective = await policy({ enabled: true, intervalMinutes: 60 }, false).effective();
     expect(effective.enabled).toBe(false);
     expect(effective.source).toEqual({ enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT' });
+  });
+});
+
+/**
+ * E5: the two conditions the pipeline itself raises beside `backup.run_failed`.
+ *
+ * Before these, a run whose archive never left the host recorded `backup.run_ok`
+ * and nothing else, and a run that left plaintext behind wrote a log line and a
+ * column. Each case below fails if the rule it names is removed.
+ */
+describe('the backup conditions beside the run (E5)', () => {
+  it.each(['FAILED_DEFINITIVE', 'OUTCOME_UNKNOWN'] as const)(
+    'opens backup.delivery_failed when a verified archive did not leave the host (%s)',
+    async (deliveryState) => {
+      const h = harness();
+      h.state.delivery =
+        deliveryState === 'FAILED_DEFINITIVE'
+          ? { state: 'FAILED_DEFINITIVE', detail: 'chat not found' }
+          : { state: 'OUTCOME_UNKNOWN', detail: 'timed out after the upload' };
+      const run = await completed(h);
+
+      // The run is still a success: the archive is verified and on disk.
+      expect(run.state).toBe('SUCCEEDED');
+      expect(h.state.recorded.some((event) => event.code === 'backup.run_ok')).toBe(true);
+      const failed = h.state.recorded.find((event) => event.code === 'backup.delivery_failed');
+      expect(failed).toBeDefined();
+      expect(failed?.severity).toBe('WARN');
+      expect(failed?.dedupeKey).toBe('backup.delivery');
+      expect(failed?.message).toContain(deliveryState);
+    },
+  );
+
+  it('closes an OPEN delivery condition when a run delivers, and records nothing when none is open', async () => {
+    const healthy = harness();
+    await completed(healthy);
+    // Nothing open, nothing recorded: a healthy installation is not told it is
+    // healthy on every run.
+    expect(healthy.state.recorded.map((event) => event.code)).not.toContain('backup.delivery_ok');
+
+    const recovering = harness();
+    recovering.state.open.add('backup.delivery_failed');
+    await completed(recovering);
+    const ok = recovering.state.recorded.find((event) => event.code === 'backup.delivery_ok');
+    expect(ok?.recoversCode).toBe('backup.delivery_failed');
+    expect(recovering.state.recorded.map((event) => event.code)).not.toContain(
+      'backup.delivery_failed',
+    );
+  });
+
+  it('opens backup.cleanup_failed when a successful run leaves plaintext, with a count and no path', async () => {
+    const h = harness();
+    h.state.cleanupFails = true;
+    const run = await completed(h);
+
+    expect(run.state).toBe('SUCCEEDED');
+    expect(run.cleanupOk).toBe(false);
+    const failed = h.state.recorded.find((event) => event.code === 'backup.cleanup_failed');
+    expect(failed?.severity).toBe('ERROR');
+    expect(failed?.dedupeKey).toBe('backup.cleanup');
+    // `message` is projected to Telegram: the paths name plaintext dumps.
+    expect(failed?.message).not.toContain('/w/');
+    expect(failed?.message).toContain('left 1 artifact');
+  });
+
+  it('opens backup.cleanup_failed when a FAILED run leaves its workspace or a scratch database', async () => {
+    const h = harness();
+    h.state.dumpFails = true;
+    h.state.leaked = ['nexa_verify_leftover'];
+    const run = await completed(h);
+
+    expect(run.state).toBe('FAILED');
+    const failed = h.state.recorded.find((event) => event.code === 'backup.cleanup_failed');
+    expect(failed).toBeDefined();
+    expect(failed?.context).toMatchObject({ state: 'FAILED', leftovers: 1 });
+  });
+
+  it('opens no cleanup condition for a run that cleaned up', async () => {
+    const h = harness();
+    await completed(h);
+    expect(h.state.recorded.map((event) => event.code)).not.toContain('backup.cleanup_failed');
   });
 });
