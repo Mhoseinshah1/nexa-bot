@@ -412,6 +412,52 @@ export function referralCodeFromStartPayload(payload: string): string | null {
 }
 
 /**
+ * B7: the referral link names the referrer by their NUMERIC Telegram user id —
+ * `/start ref-<telegramUserId>` — as the owner decided (pre-support brief item 7: "based
+ * directly on the numeric Telegram User ID", no internal code in the customer's link). The
+ * id becomes public in every link the customer shares; that is the owner's decision,
+ * recorded in `docs/wp9-referral-audit.md`.
+ *
+ * A Telegram user id is a positive integer below 2^53, so at most sixteen digits, and never
+ * written with a leading zero.
+ */
+export const REFERRAL_TELEGRAM_ID_PATTERN = /^[1-9][0-9]{0,15}$/;
+
+export function referralStartPayloadForTelegramId(telegramUserId: string): string {
+  if (!REFERRAL_TELEGRAM_ID_PATTERN.test(telegramUserId)) {
+    throw new Error('a referral link is derived from a numeric Telegram user id');
+  }
+  return `${REFERRAL_START_PREFIX}${telegramUserId}`;
+}
+
+/**
+ * Who a `/start` payload names as the referrer, in the order to look them up.
+ *
+ * - `ref-<CODE>` — the eight-character code of every link handed out before B7. Old links
+ *   keep attributing.
+ * - `ref-<digits>` — B7's link: the referrer's numeric Telegram user id.
+ * - `<digits>`, bare — MirzaBot's legacy `?start=<from_id>`, so the links imported customers
+ *   already shared keep attributing.
+ *
+ * Eight digits after `ref-` match BOTH shapes (the code alphabet contains the digits): the
+ * code is looked up first, then the Telegram id. Null for anything else — the caller treats
+ * a payload it does not recognise as no payload at all.
+ */
+export interface ReferralStartTarget {
+  readonly code: string | null;
+  readonly telegramUserId: string | null;
+}
+
+export function referralTargetFromStartPayload(payload: string): ReferralStartTarget | null {
+  if (REFERRAL_TELEGRAM_ID_PATTERN.test(payload)) return { code: null, telegramUserId: payload };
+  if (!payload.toLowerCase().startsWith(REFERRAL_START_PREFIX)) return null;
+  const rest = payload.slice(REFERRAL_START_PREFIX.length);
+  const code = REFERRAL_CODE_PATTERN.test(rest.toUpperCase()) ? rest.toUpperCase() : null;
+  const telegramUserId = REFERRAL_TELEGRAM_ID_PATTERN.test(rest) ? rest : null;
+  return code === null && telegramUserId === null ? null : { code, telegramUserId };
+}
+
+/**
  * How many of a referee's paid orders pay their referrer (WP9 F5).
  *
  * `FIRST_PAID_ORDER` is the default and the bounded one: one referral, one commission,
