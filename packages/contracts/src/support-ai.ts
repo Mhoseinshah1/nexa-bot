@@ -312,6 +312,13 @@ export const SUPPORT_AI_LIMITS = {
   modelIdChars: 128,
 } as const;
 
+/** The clarifying-question streak limit's bounds (hotfix 2026-10-06). */
+const clarifyingLimitSchema = z
+  .number()
+  .int()
+  .min(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.min)
+  .max(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.max);
+
 const modelIdSchema = z
   .string()
   .trim()
@@ -330,90 +337,105 @@ export type SupportAiProviderStep = z.infer<typeof supportAiProviderStepSchema>;
  * second, CRITICAL permission by the service (ADR-0034 §8). Turning safety on is never harder
  * than turning it off.
  */
-export const supportAiConfigInputSchema = z
-  .object({
-    mode: z.enum(SUPPORT_AI_MODES),
-    primary: supportAiProviderStepSchema.nullable(),
-    fallbacks: z.array(supportAiProviderStepSchema).max(SUPPORT_AI_LIMITS.maxFallbacks),
-    visionEnabled: z.boolean(),
-    timeoutMs: z
-      .number()
-      .int()
-      .min(SUPPORT_AI_LIMITS.timeoutMs.min)
-      .max(SUPPORT_AI_LIMITS.timeoutMs.max),
-    maxOutputChars: z
-      .number()
-      .int()
-      .min(SUPPORT_AI_LIMITS.maxOutputChars.min)
-      .max(SUPPORT_AI_LIMITS.maxOutputChars.max),
-    maxConsecutiveReplies: z
-      .number()
-      .int()
-      .min(SUPPORT_AI_LIMITS.maxConsecutiveReplies.min)
-      .max(SUPPORT_AI_LIMITS.maxConsecutiveReplies.max),
-    /**
-     * Hotfix — the clarifying-question streak limit. Defaulted so a client that does not know
-     * the field still saves a valid configuration; raising it under AUTO_REPLY_SAFE is a
-     * widening charged `support_ai.auto_reply`.
-     */
-    maxConsecutiveClarifyingQuestions: z
-      .number()
-      .int()
-      .min(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.min)
-      .max(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.max)
-      .default(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.default),
-    cooldownSeconds: z
-      .number()
-      .int()
-      .min(SUPPORT_AI_LIMITS.cooldownSeconds.min)
-      .max(SUPPORT_AI_LIMITS.cooldownSeconds.max),
-    settleDelaySeconds: z
-      .number()
-      .int()
-      .min(SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS)
-      .max(SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS),
-    toneInstructions: z.string().max(SUPPORT_AI_LIMITS.toneInstructionsChars),
-    /**
-     * TB7 — the safe topics an automatic reply may answer. EMPTY by default, and empty means
-     * nothing is ever sent automatically. Widening it charges `support_ai.auto_reply`.
-     * Defaulted so a client that does not know the field saves the SAFE value: none.
-     */
-    autoTopics: z
-      .array(z.enum(SUPPORT_AI_SAFE_TOPICS))
-      .max(SUPPORT_AI_SAFE_TOPICS.length)
-      .default([]),
-    /** TB7 — the lowest model confidence an automatic reply accepts. Default HIGH. */
-    autoMinConfidence: z.enum(SUPPORT_AI_AUTO_MIN_CONFIDENCES).default('HIGH'),
-  })
-  .superRefine((value, ctx) => {
-    if (new Set(value.autoTopics).size !== value.autoTopics.length) {
-      ctx.addIssue({ code: 'custom', path: ['autoTopics'], message: 'A topic is listed twice.' });
-    }
-    // A mode that does AI work needs a provider to do it with.
-    if (value.mode !== 'OFF' && value.primary === null) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['primary'],
-        message: 'A mode other than OFF needs a provider.',
-      });
-    }
-    // Each fallback must be an INDEPENDENTLY configured provider (TB0 amendment 4).
-    const providers = [
-      value.primary?.provider,
-      ...value.fallbacks.map((step) => step.provider),
-    ].filter((provider): provider is SupportAiProvider => provider !== undefined);
-    if (new Set(providers).size !== providers.length) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['fallbacks'],
-        message: 'Each step of the chain must be a different provider.',
-      });
-    }
-    if (value.primary === null && value.fallbacks.length > 0) {
-      ctx.addIssue({ code: 'custom', path: ['fallbacks'], message: 'A fallback needs a primary.' });
-    }
-  });
+const supportAiConfigShape = z.object({
+  mode: z.enum(SUPPORT_AI_MODES),
+  primary: supportAiProviderStepSchema.nullable(),
+  fallbacks: z.array(supportAiProviderStepSchema).max(SUPPORT_AI_LIMITS.maxFallbacks),
+  visionEnabled: z.boolean(),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(SUPPORT_AI_LIMITS.timeoutMs.min)
+    .max(SUPPORT_AI_LIMITS.timeoutMs.max),
+  maxOutputChars: z
+    .number()
+    .int()
+    .min(SUPPORT_AI_LIMITS.maxOutputChars.min)
+    .max(SUPPORT_AI_LIMITS.maxOutputChars.max),
+  maxConsecutiveReplies: z
+    .number()
+    .int()
+    .min(SUPPORT_AI_LIMITS.maxConsecutiveReplies.min)
+    .max(SUPPORT_AI_LIMITS.maxConsecutiveReplies.max),
+  /**
+   * Hotfix — the clarifying-question streak limit; raising it under AUTO_REPLY_SAFE is a
+   * widening charged `support_ai.auto_reply`. Always present in a configuration; a SAVE may
+   * omit it (`supportAiConfigUpdateRequestSchema`), which keeps the stored value.
+   */
+  maxConsecutiveClarifyingQuestions: clarifyingLimitSchema,
+  cooldownSeconds: z
+    .number()
+    .int()
+    .min(SUPPORT_AI_LIMITS.cooldownSeconds.min)
+    .max(SUPPORT_AI_LIMITS.cooldownSeconds.max),
+  settleDelaySeconds: z
+    .number()
+    .int()
+    .min(SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS)
+    .max(SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS),
+  toneInstructions: z.string().max(SUPPORT_AI_LIMITS.toneInstructionsChars),
+  /**
+   * TB7 — the safe topics an automatic reply may answer. EMPTY by default, and empty means
+   * nothing is ever sent automatically. Widening it charges `support_ai.auto_reply`.
+   * Defaulted so a client that does not know the field saves the SAFE value: none.
+   */
+  autoTopics: z
+    .array(z.enum(SUPPORT_AI_SAFE_TOPICS))
+    .max(SUPPORT_AI_SAFE_TOPICS.length)
+    .default([]),
+  /** TB7 — the lowest model confidence an automatic reply accepts. Default HIGH. */
+  autoMinConfidence: z.enum(SUPPORT_AI_AUTO_MIN_CONFIDENCES).default('HIGH'),
+});
+
+/** The cross-field rules every configuration is held to, read and written. */
+function refineSupportAiConfig(
+  value: Pick<
+    z.infer<typeof supportAiConfigShape>,
+    'autoTopics' | 'mode' | 'primary' | 'fallbacks'
+  >,
+  ctx: z.RefinementCtx,
+): void {
+  if (new Set(value.autoTopics).size !== value.autoTopics.length) {
+    ctx.addIssue({ code: 'custom', path: ['autoTopics'], message: 'A topic is listed twice.' });
+  }
+  // A mode that does AI work needs a provider to do it with.
+  if (value.mode !== 'OFF' && value.primary === null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['primary'],
+      message: 'A mode other than OFF needs a provider.',
+    });
+  }
+  // Each fallback must be an INDEPENDENTLY configured provider (TB0 amendment 4).
+  const providers = [
+    value.primary?.provider,
+    ...value.fallbacks.map((step) => step.provider),
+  ].filter((provider): provider is SupportAiProvider => provider !== undefined);
+  if (new Set(providers).size !== providers.length) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['fallbacks'],
+      message: 'Each step of the chain must be a different provider.',
+    });
+  }
+  if (value.primary === null && value.fallbacks.length > 0) {
+    ctx.addIssue({ code: 'custom', path: ['fallbacks'], message: 'A fallback needs a primary.' });
+  }
+}
+
+export const supportAiConfigInputSchema = supportAiConfigShape.superRefine(refineSupportAiConfig);
 export type SupportAiConfigInput = z.infer<typeof supportAiConfigInputSchema>;
+
+/**
+ * What a save may send (N4, review of PR #228): the configuration, with the clarifying limit
+ * OPTIONAL. An older client that does not know the field omits it, and the service keeps the
+ * stored value — a schema default would have silently raised a tenant at 1 to 2, a widening
+ * nobody asked for. Every other field is required as before.
+ */
+export const supportAiConfigSaveSchema = supportAiConfigShape
+  .extend({ maxConsecutiveClarifyingQuestions: clarifyingLimitSchema.optional() })
+  .superRefine(refineSupportAiConfig);
+export type SupportAiConfigSave = z.infer<typeof supportAiConfigSaveSchema>;
 
 /** The configuration every tenant starts with — and has until an owner changes it. */
 export const SUPPORT_AI_DEFAULT_CONFIG: SupportAiConfigInput = {
@@ -459,7 +481,7 @@ export const supportAiConfigUpdateRequestSchema = z.object({
   idempotencyKey: idempotencyKeySchema,
   /** Optimistic concurrency (ADR-0021): the version the operator saw; null for "none stored yet". */
   expectedVersion: z.number().int().min(0).nullable(),
-  config: supportAiConfigInputSchema,
+  config: supportAiConfigSaveSchema,
 });
 export type SupportAiConfigUpdateRequest = z.infer<typeof supportAiConfigUpdateRequestSchema>;
 
