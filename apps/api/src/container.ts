@@ -416,6 +416,7 @@ import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
 import type {
   CategoryColors,
+  CategoryIcons,
   FxSource,
   InlineButtonIcons,
   InlineButtonStyles,
@@ -4569,6 +4570,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // Phase 2 Item 3: each inline button's optional premium icon, `bot.inline_button_icons`.
       iconsFor: (scope) =>
         settingsResolver.valueOf<InlineButtonIcons>(scope, 'bot.inline_button_icons'),
+      // Phase 2 Item 2: each category's premium icon and after-emoji, `bot.category_icons`.
+      categoryIconsFor: (scope) =>
+        settingsResolver.valueOf<CategoryIcons>(scope, 'bot.category_icons'),
     },
   );
   const appearance = new AppearanceService({

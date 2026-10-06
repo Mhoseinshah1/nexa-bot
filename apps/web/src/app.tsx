@@ -409,7 +409,12 @@ export function resolve(
   if (route.path === '/product-categories') {
     return {
       element: (
-        <ProductCategoriesPage mayEdit={may('catalog.edit')} denied={!may('catalog.view')} />
+        <ProductCategoriesPage
+          mayEdit={may('catalog.edit')}
+          denied={!may('catalog.view')}
+          maySettingsView={may('settings.view')}
+          maySettingsEdit={may('settings.edit')}
+        />
       ),
       crumbs: [{ label: t('web.categories_title') }],
       title: t('web.categories_title'),
