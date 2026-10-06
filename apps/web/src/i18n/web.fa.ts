@@ -152,6 +152,7 @@ export const WEB_FA = {
   'web.unit_percent': 'درصد',
   'web.unit_times': 'بار',
   'web.unit_messages': 'پیام',
+  'web.unit_archives': 'آرشیو',
   'web.setting_severity_debug': 'جزئیات اشکال‌زدایی',
   'web.setting_severity_info': 'اطلاع',
   'web.setting_severity_warn': 'هشدار',
@@ -173,6 +174,12 @@ export const WEB_FA = {
   'web.setting_ops_max_attempts': 'دفعات تلاش برای ارسال هر گزارش',
   'web.setting_ops_max_attempts_desc':
     'برای ارسال هر گزارش حداکثر این تعداد بار تلاش می‌شود؛ پس از آن ارسال ناموفق ثبت می‌شود.',
+  'web.setting_backup_keep_count': 'تعداد آرشیوهای بکاپ نگه‌داشته‌شده',
+  'web.setting_backup_keep_count_desc':
+    'این تعداد از تازه‌ترین بکاپ‌های تأییدشده همیشه روی سرور می‌مانند. آرشیوی فقط وقتی پاک می‌شود که هم بیرون از این تعداد باشد و هم از مدت نگهداری قدیمی‌تر. تازه‌ترین بکاپ تأییدشده هرگز پاک نمی‌شود.',
+  'web.setting_backup_keep_days': 'مدت نگهداری آرشیوهای بکاپ',
+  'web.setting_backup_keep_days_desc':
+    'هر آرشیو بکاپ دست‌کم این تعداد روز پس از پایان روی سرور می‌ماند. آرشیوی که بازیابیِ در جریان به آن نیاز دارد یا ارسالش نامعلوم مانده هرگز پاک نمی‌شود.',
   'web.setting_ops_max_per_minute': 'سقف ارسال گزارش در هر دقیقه',
   'web.setting_ops_max_per_minute_desc':
     'بیشترین تعداد گزارش مدیریتی که در یک دقیقه به تلگرام فرستاده می‌شود. گزارش‌های بیشتر حذف نمی‌شوند؛ در صف می‌مانند و در دقیقه‌های بعد فرستاده می‌شوند.',
@@ -6899,6 +6906,10 @@ export const WEB_FA = {
   'web.nc_t_provisioning_stalled': 'ساخت سرویس متوقف مانده است',
   'web.nc_t_refunded_undeliverable': 'سفارشی تحویل‌نشدنی بود و وجه آن بازگشت',
   'web.nc_t_backup_failed': 'پشتیبان‌گیری ناموفق بود',
+  'web.nc_t_backup_delivery_failed': 'آرشیو بکاپ از سرور خارج نشد',
+  'web.nc_t_backup_cleanup_failed': 'فایل رمزنشدهٔ بکاپ روی سرور مانده است',
+  'web.nc_t_backup_disk_low': 'فضای دیسک بکاپ رو به پایان است',
+  'web.nc_t_backup_overdue': 'بکاپ خودکار عقب افتاده است',
   'web.nc_t_recovery_failed': 'بازیابی ناموفق بود',
   'web.nc_t_login_locked_out': 'ورود به‌دلیل تلاش‌های ناموفق قفل شد',
   'web.nc_t_admin_created': 'مدیر جدیدی ساخته شد',

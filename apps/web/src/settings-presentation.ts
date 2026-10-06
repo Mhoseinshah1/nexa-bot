@@ -241,6 +241,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_minutes', optional: true },
   },
+  // E5: how many archive FILES stay on the server. On the generic settings page, under ops.
+  'backup.archive_keep_count': {
+    title: 'web.setting_backup_keep_count',
+    description: 'web.setting_backup_keep_count_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_archives' },
+  },
+  'backup.archive_keep_days': {
+    title: 'web.setting_backup_keep_days',
+    description: 'web.setting_backup_keep_days_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
   'sales.currency': {
     title: 'web.setting_sales_currency',
     description: 'web.setting_sales_currency_desc',

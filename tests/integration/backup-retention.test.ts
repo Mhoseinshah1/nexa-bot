@@ -70,6 +70,15 @@ describe('backup run retention', () => {
      * the database admits and a future finish path could produce.
      */
     verified?: boolean;
+    /**
+     * Whether archive retention has already removed this run's directory.
+     *
+     * Defaults to TRUE for a finished row, so the row-purge rules above are
+     * tested on their own: since E5 a row also waits for its files, and that
+     * rule has its own case below.
+     */
+    pruned?: boolean;
+    cleanupOk?: boolean;
   }): Promise<string> => {
     const id = input.id ?? randomUUID();
     await context.container.database.db.insert(backupRuns).values({
@@ -83,7 +92,9 @@ describe('backup run retention', () => {
       leaseHeartbeatAt: input.startedAt,
       deliveryState: input.deliveryState ?? 'SUCCEEDED',
       verifiedAt: input.state === 'SUCCEEDED' && input.verified !== false ? input.startedAt : null,
-      cleanupOk: true,
+      cleanupOk: input.cleanupOk ?? true,
+      archivePrunedAt:
+        input.finishedAt !== null && input.pruned !== false ? input.finishedAt : null,
     } as never);
     return id;
   };
@@ -420,5 +431,101 @@ describe('backup run retention', () => {
     await runs.purgeFinishedBefore(CUTOFF, 100);
 
     expect(await count()).toBe(before);
+  });
+  it('NEVER removes a row whose archive directory retention has not removed yet', async () => {
+    /*
+     * E5. A row purged while its directory is still on disk orphans the archive
+     * for ever: nothing removes a directory no row names. So the row waits for
+     * the file retention's stamp, and the two policies cannot disagree.
+     */
+    const unpruned = await insert({
+      state: 'SUCCEEDED',
+      startedAt: ancient(20),
+      finishedAt: ancient(20),
+      pruned: false,
+    });
+    const pruned = await insert({
+      state: 'SUCCEEDED',
+      startedAt: ancient(10),
+      finishedAt: ancient(10),
+    });
+    await insert({ state: 'SUCCEEDED', startedAt: NOW, finishedAt: NOW });
+
+    expect(await runs.purgeFinishedBefore(CUTOFF, 100)).toBe(1);
+    const left = await ids();
+    expect(left).toContain(unpruned);
+    expect(left).not.toContain(pruned);
+  });
+
+  describe('archive FILE retention candidates (E5)', () => {
+    const KEEP_BEFORE = new Date(NOW.getTime() - 30 * 24 * 3_600_000);
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * 24 * 3_600_000);
+    const candidates = async (input: { keepCount: number; protectedIds?: string[] }) =>
+      (
+        await runs.archivePruneCandidates({
+          finishedBefore: KEEP_BEFORE,
+          keepCount: input.keepCount,
+          protectedIds: input.protectedIds ?? [],
+          limit: 100,
+        })
+      ).map((row) => row.id);
+    const unpruned = (state: 'SUCCEEDED' | 'FAILED' | 'RUNNING', days: number, extra = {}) =>
+      insert({
+        state,
+        startedAt: daysAgo(days),
+        finishedAt: state === 'RUNNING' ? null : daysAgo(days),
+        pruned: false,
+        ...extra,
+      });
+
+    it('offers only what fails BOTH keep-days and keep-count, oldest first', async () => {
+      const a = await unpruned('SUCCEEDED', 90);
+      const b = await unpruned('SUCCEEDED', 80);
+      const c = await unpruned('SUCCEEDED', 70); // within the newest 2 verified? no: see below
+      const recent = await unpruned('SUCCEEDED', 5); // inside keep-days
+      const newest = await unpruned('SUCCEEDED', 1);
+      // keepCount 2 keeps `newest` and `recent`; keep-days keeps them anyway.
+      expect(await candidates({ keepCount: 2 })).toEqual([a, b, c]);
+      // keepCount 4 also keeps c and b (the 3rd and 4th newest verified).
+      expect(await candidates({ keepCount: 4 })).toEqual([a]);
+      void recent;
+      void newest;
+    });
+
+    it('never offers the newest VERIFIED archive, even when it is ancient and keep-count is 0', async () => {
+      // Zero is refused by the settings schema; it is passed here to prove the
+      // newest-verified clause stands on its own, whatever a keep count says.
+      const unverified = await unpruned('SUCCEEDED', 40, { verified: false });
+      const verified = await unpruned('SUCCEEDED', 100);
+      const failed = await unpruned('FAILED', 50);
+      const offered = await candidates({ keepCount: 0 });
+      expect(offered).not.toContain(verified);
+      expect(offered.sort()).toEqual([unverified, failed].sort());
+    });
+
+    it('never offers a RUNNING run, an unknown delivery, an already-pruned run, or a protected id', async () => {
+      await unpruned('SUCCEEDED', 1); // the newest verified
+      const running = await unpruned('RUNNING', 60);
+      const unknown = await unpruned('SUCCEEDED', 60, { deliveryState: 'OUTCOME_UNKNOWN' });
+      const already = await insert({
+        state: 'SUCCEEDED',
+        startedAt: daysAgo(61),
+        finishedAt: daysAgo(61),
+      });
+      const protectedId = await unpruned('SUCCEEDED', 62);
+      const eligible = await unpruned('SUCCEEDED', 63);
+      const offered = await candidates({ keepCount: 1, protectedIds: [protectedId] });
+      expect(offered).toEqual([eligible]);
+      for (const id of [running, unknown, already, protectedId]) expect(offered).not.toContain(id);
+    });
+
+    it('stamps a pruned run once, and never a RUNNING one', async () => {
+      const done = await unpruned('FAILED', 60);
+      const running = await unpruned('RUNNING', 60);
+      expect(await runs.markArchivePruned({ id: done, now: NOW })).toBe(true);
+      expect(await runs.markArchivePruned({ id: done, now: NOW })).toBe(false);
+      expect(await runs.markArchivePruned({ id: running, now: NOW })).toBe(false);
+      expect((await runs.byId(done))?.archivePrunedAt?.toISOString()).toBe(NOW.toISOString());
+    });
   });
 });

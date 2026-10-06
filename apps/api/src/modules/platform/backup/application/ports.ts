@@ -92,6 +92,33 @@ export interface BackupWorkspaceFactory {
   create(backupId: string): Promise<BackupWorkspace>;
 }
 
+/** What one plaintext-debris pass did. Paths are for the LOG, never an event message. */
+export interface BackupDebrisSweep {
+  /** Plaintext files and abandoned CLI scratch directories removed. */
+  readonly removed: readonly string[];
+  /** What it tried to remove and could not. */
+  readonly survived: readonly string[];
+  /** Plaintext still inside the grace window: possibly being written, left alone. */
+  readonly pending: number;
+}
+
+/** The filesystem side of archive retention and the debris sweep (E5). */
+export interface BackupDebrisStore {
+  /** Removes one run's directory, archive included. Returns what survived. */
+  removeRunDirectory(backupId: string): Promise<readonly string[]>;
+  /**
+   * Removes plaintext dumps from run directories, and CLI scratch directories,
+   * that nothing has written since `olderThan`. Never touches an archive, and
+   * never a directory named in `skipIds` (a RUNNING run's).
+   */
+  sweepPlaintext(input: {
+    readonly olderThan: Date;
+    readonly skipIds: ReadonlySet<string>;
+  }): Promise<BackupDebrisSweep>;
+  /** Free bytes available on the backup volume, or null when the root does not exist. */
+  freeBytes(): Promise<number | null>;
+}
+
 /**
  * The delivery attempt's THREE outcomes, which is the point of this port.
  *
@@ -202,6 +229,49 @@ export interface BackupRunRow {
   readonly failureMessage: string | null;
   readonly cleanupOk: boolean;
   readonly cleanupDetail: string | null;
+  /** When archive retention removed this run's directory, or null while it may be on disk. */
+  readonly archivePrunedAt: Date | null;
+}
+
+/**
+ * What archive-FILE retention needs from the run table (E5).
+ *
+ * Separate from `BackupRunRepository` because it is a different reader with a
+ * different job: the pipeline never asks which archives may go, and the
+ * retention pass never starts, finishes or leases a run.
+ */
+export interface BackupArchiveRetentionStore {
+  /**
+   * Finished runs whose directory may be removed, oldest first, at most `limit`.
+   *
+   * EVERY exclusion is in the query, for the reason `purgeFinishedBefore`'s are:
+   * a predicate a caller has to remember is one some caller will not.
+   *
+   *   - a run that has not finished (a RUNNING row is the installation's lock,
+   *     and its directory is being written);
+   *   - a run that finished at or after `finishedBefore` (the keep-days rule);
+   *   - the newest `keepCount` VERIFIED successes (the keep-count rule), and the
+   *     newest verified success by its own clause, so a keep count can never be
+   *     the reason the last good archive goes;
+   *   - a run whose delivery outcome is unknown — its archive may be the only
+   *     thing an operator can reconcile a chat against;
+   *   - a run whose directory was already removed;
+   *   - every id in `protectedIds` (an in-progress recovery's backups).
+   */
+  archivePruneCandidates(input: {
+    readonly finishedBefore: Date;
+    readonly keepCount: number;
+    readonly protectedIds: readonly string[];
+    readonly limit: number;
+  }): Promise<readonly { readonly id: string; readonly state: BackupRunState }[]>;
+  /** Records that the directory is gone. Conditional: a second stamp is a no-op. */
+  markArchivePruned(input: { readonly id: string; readonly now: Date }): Promise<boolean>;
+  /** Ids of runs that are RUNNING now: their directories are being written. */
+  runningIds(): Promise<readonly string[]>;
+  /** The newest finished run, for the cleanup condition's closing test. */
+  latestFinished(): Promise<BackupRunRow | null>;
+  /** The newest verified success, for the disk-space estimate. */
+  latestVerified(): Promise<BackupRunRow | null>;
 }
 
 /** What a start attempt learned. `BUSY` is a fact, never an error to retry. */
@@ -326,6 +396,10 @@ export interface BackupRunRepository {
    *   - the most recent run of ANY state. That is the run an operator is looking
    *     at when something has just gone wrong, and a `backup.run_failed`
    *     condition with no run to inspect is an alert that cannot be actioned.
+   *   - a run whose directory archive retention has not yet removed
+   *     (`archive_pruned_at IS NULL`). Purging that row would orphan its
+   *     archive for ever — nothing removes a directory no row names — so the
+   *     row waits for the file retention, and the two policies cannot disagree.
    */
   purgeFinishedBefore(cutoff: Date, limit: number): Promise<number>;
 }

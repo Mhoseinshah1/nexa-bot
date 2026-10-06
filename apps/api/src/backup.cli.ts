@@ -1,5 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isNexaError } from '@nexa/contracts';
 import { createContainer, type Container } from './container.js';
@@ -7,6 +6,7 @@ import { loadConfig } from './infrastructure/config/load-config.js';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { readArchiveHeader } from './modules/platform/backup/infrastructure/archive.js';
+import { privateScratchDirectory } from './modules/platform/backup/infrastructure/workspace.js';
 import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
 import { openRecoveryKit } from './infrastructure/crypto/recovery-kit.js';
 
@@ -37,7 +37,8 @@ class UsageError extends Error {}
 
 const USAGE = [
   'usage:',
-  '  backup run                              take a backup now (trigger MANUAL)',
+  '  backup run                              take a backup now (trigger MANUAL); exits 2 when',
+  '                                          one is running, 4 while a recovery is restoring',
   '  backup list [--limit N]                 recent runs and their delivery state',
   '  backup verify --archive PATH            decrypt and checksum; touches no database',
   '  backup restore --archive PATH --target DB',
@@ -171,7 +172,9 @@ async function withKit(keyring: InstallationKeyring, kitPath: string): Promise<n
  * because a tenant lookup failed; losing the condition is the status quo this
  * fixes, and losing the backup would be worse than the defect.
  */
-async function pointAtInstallation(container: Container): Promise<void> {
+async function pointAtInstallation(
+  container: Pick<Container, 'tenants' | 'setInstallationTenant' | 'logger'>,
+): Promise<void> {
   try {
     const primary = await container.tenants.findPrimary();
     container.setInstallationTenant(primary?.id ?? null);
@@ -183,7 +186,40 @@ async function pointAtInstallation(container: Container): Promise<void> {
   }
 }
 
-async function cmdRun(container: Container): Promise<number> {
+/** `backup run` refused because a recovery holds the installation. Distinct from BUSY (2). */
+const EXIT_RECOVERY_QUIESCED = 4;
+
+async function cmdRun(
+  container: Pick<
+    Container,
+    'backup' | 'recoveryQuiesced' | 'tenants' | 'setInstallationTenant' | 'logger'
+  >,
+): Promise<number> {
+  /*
+   * NOT DURING A RECOVERY — the scheduler's rule and the Web button's, for the
+   * third trigger.
+   *
+   * `backup_runs` is written on the database handle, not through the unit of
+   * work, so neither quiesce chokepoint stops a backup: a shell `backup run`
+   * while a recovery is QUIESCING or RESTORING dumped a database that was about
+   * to be renamed away, and its later writes landed in whichever database then
+   * held the live name. Asked of the SAME predicate the scheduler asks
+   * (`container.recoveryQuiesced`), before anything else, so a refusal writes
+   * nothing — not even the tenant lookup's role repairs.
+   *
+   * Racy by construction, exactly like the button: a recovery can begin
+   * quiescing a millisecond later. The executor's own pre-restore backup holds
+   * the one-at-a-time lock up to the quiesce, which is what closes the window
+   * from the other side. `PRE_RESTORE_BACKUP` is deliberately outside the
+   * quiesce (ADR-0028), so this refuses nothing the executor needs.
+   */
+  if (await container.recoveryQuiesced()) {
+    process.stderr.write(
+      'A recovery is restoring this installation, which is not taking backups until it ' +
+        'finishes. The recovery takes its own pre-restore backup. Nothing was started.\n',
+    );
+    return EXIT_RECOVERY_QUIESCED;
+  }
   await pointAtInstallation(container);
   const outcome = await container.backup.run('MANUAL');
   if (outcome.kind === 'BUSY') {
@@ -242,8 +278,24 @@ async function cmdList(container: Container, limit: number): Promise<number> {
 }
 
 /**
+ * `BACKUP_WORK_DIR` as `verify` sees it: the environment, with the configuration
+ * schema's own default — the same reasoning as the keyring below. `verify` must
+ * not need `loadConfig()`, and the directory it decrypts into must be the SAME
+ * 0700 volume the pipeline writes to, never `/tmp`: there a SIGKILL left a
+ * plaintext database outside the volume, in a directory nothing ever cleaned.
+ */
+function backupWorkDirFromEnvironment(): string {
+  const configured = process.env.BACKUP_WORK_DIR?.trim() ?? '';
+  return configured === '' ? '/var/lib/nexa/backups' : configured;
+}
+
+/**
  * Decrypts an archive to a temporary file and checks it against its own
  * manifest. Never opens a database.
+ *
+ * The temporary directory is a 0700 `.cli-verify-*` directory under
+ * `BACKUP_WORK_DIR`; if this process is killed before its `finally`, the
+ * backup housekeeping's debris sweep removes it once it is past the grace.
  *
  * The temporary directory is removed in a `finally`, including on failure: the
  * file it holds is a plaintext database, and leaving one behind because a
@@ -284,7 +336,7 @@ async function cmdVerify(archivePath: string, kitPath: string | null = null): Pr
       `key      ${header.header.keyId}\n`,
   );
 
-  const directory = await mkdtemp(join(tmpdir(), 'nexa-verify-'));
+  const directory = await privateScratchDirectory(backupWorkDirFromEnvironment(), 'verify');
   try {
     const opened = await archiver.open({
       archivePath,
@@ -332,7 +384,7 @@ async function cmdRestore(
       `Kit       ${String(await withKit(container.keyring, kitPath))} key(s), decrypt-only\n`,
     );
   }
-  const directory = await mkdtemp(join(tmpdir(), 'nexa-restore-'));
+  const directory = await privateScratchDirectory(container.config.BACKUP_WORK_DIR, 'restore');
   try {
     const dumpPath = join(directory, 'dump.pgcustom');
     const opened = await container.backupArchiver.open({ archivePath, dumpPath });
@@ -401,4 +453,13 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   });
 }
 
-export { parseArgs, cmdVerify, cmdRun, pointAtInstallation, UsageError, USAGE };
+export {
+  backupWorkDirFromEnvironment,
+  parseArgs,
+  cmdVerify,
+  cmdRun,
+  pointAtInstallation,
+  UsageError,
+  USAGE,
+  EXIT_RECOVERY_QUIESCED,
+};
