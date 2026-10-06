@@ -13905,6 +13905,11 @@ export const supportAiJobs = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
+    /** D3: the knowledge entries the draft cited, resolved to their titles. */
+    knowledgeLabels: text('knowledge_labels')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     provider: text('provider'),
     model: text('model'),
     sentOutboundId: uuid('sent_outbound_id'),

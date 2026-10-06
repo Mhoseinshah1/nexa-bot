@@ -7824,6 +7824,7 @@ export const WEB_FA = {
   'web.assist_summary': 'خلاصه',
   'web.assist_based_on': 'بر پایهٔ:',
   'web.assist_based_on_none': 'هیچ داده‌ای از حساب مشتری استفاده نشد.',
+  'web.assist_based_on_knowledge': 'دانش پشتیبان:',
   'web.assist_reply_label': 'پیش‌نویس پاسخ (قابل ویرایش)',
   'web.assist_reply_hint': 'آنچه در این کادر است همان چیزی است که با «ارسال» فرستاده می‌شود.',
   'web.assist_send': 'ارسال برای مشتری',

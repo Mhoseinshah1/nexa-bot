@@ -193,6 +193,7 @@ function draftView(job: SupportAiJobRecord): SupportAiDraftView {
     suggestedReply: job.suggestedReply,
     ticketAction: job.ticketAction,
     factLabels: [...job.factLabels],
+    knowledgeLabels: [...job.knowledgeLabels],
     provider: job.provider,
     model: job.model,
     imagesSeen: job.imagesSeen,

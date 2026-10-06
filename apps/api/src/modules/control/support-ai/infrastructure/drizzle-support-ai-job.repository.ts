@@ -41,6 +41,8 @@ export interface SupportAiJobRecord {
   readonly intent: string | null;
   readonly suggestedReply: string | null;
   readonly factLabels: readonly string[];
+  /** D3: the knowledge entries the draft cited, by title; empty for none. */
+  readonly knowledgeLabels: readonly string[];
   readonly provider: SupportAiProvider | null;
   readonly model: string | null;
   readonly sentOutboundId: string | null;
@@ -89,6 +91,7 @@ function toRecord(row: Row): SupportAiJobRecord {
     intent: row.intent,
     suggestedReply: row.suggestedReply,
     factLabels: row.factLabels ?? [],
+    knowledgeLabels: row.knowledgeLabels ?? [],
     provider: row.provider as SupportAiProvider | null,
     model: row.model,
     sentOutboundId: row.sentOutboundId,
@@ -444,6 +447,8 @@ export class DrizzleSupportAiJobRepository {
     result: {
       readonly decision: SupportAiDecision;
       readonly factLabels: readonly string[];
+      /** D3: resolved knowledge citations; omitted is none. */
+      readonly knowledgeLabels?: readonly string[];
       readonly provider: SupportAiProvider;
       readonly model: string;
       /** TB6: images the answering model was given, and images it did not see. */
@@ -469,6 +474,7 @@ export class DrizzleSupportAiJobRepository {
         suggestedReply: result.decision.replyText,
         factRefs: [...result.decision.factRefs],
         factLabels: [...result.factLabels],
+        knowledgeLabels: [...(result.knowledgeLabels ?? [])],
         provider: result.provider,
         model: result.model.slice(0, 128),
         imagesSeen: result.imagesSeen,
@@ -517,6 +523,7 @@ export class DrizzleSupportAiJobRepository {
         suggestedReply: '',
         factRefs: [],
         factLabels: [],
+        knowledgeLabels: [],
         provider: null,
         model: null,
         imagesSeen: 0,
@@ -696,6 +703,7 @@ export class DrizzleSupportAiJobRepository {
         intent: null,
         suggestedReply: null,
         factLabels: [],
+        knowledgeLabels: [],
         textPurgedAt: now,
         updatedAt: now,
       })

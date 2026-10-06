@@ -167,7 +167,13 @@ fallback.
 3. Propose another, and reject it with a reason.
    - **Expect:** REJECTED. No article is created.
 4. Request a draft on a related question.
-   - **Expect:** the draft can cite the approved article, never the rejected one.
+   - **Expect:** under «بر پایهٔ», the line «دانش پشتیبان:» lists the approved article's
+     **title** (D3) — the model cites it by its `K` alias in `knowledgeRefs`, and the server
+     shows the title. The rejected candidate's title never appears there, nor anywhere in the
+     draft. A draft that cited no knowledge shows no such line; that is not a failure of this
+     step unless the reply plainly uses the article's content.
+   - **Evidence:** `SELECT knowledge_labels, fact_labels, knowledge_sent, knowledge_available FROM support_ai_jobs WHERE id = '<draft id>';`
+     `knowledge_labels` holds the approved title; `knowledge_sent` is at least 1 (D2).
 
 ## J. Knowledge build from NEXA: apply and conflict
 

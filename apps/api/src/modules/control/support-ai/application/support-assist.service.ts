@@ -80,7 +80,14 @@ export interface SupportContextSource {
     options?: { readonly query?: string | null },
   ): Promise<{
     readonly json: string;
+    /** The FACT aliases (`S…`, `O…`, `P…`) — the only ones a fact ref may name. */
     readonly aliases: ReadonlyMap<string, string>;
+    /**
+     * The knowledge aliases (`K…`) and the label an operator reads for each. Kept apart from
+     * `aliases`: a knowledge entry is not an account fact, and the automatic reply's grounding
+     * guard reads `aliases` only.
+     */
+    readonly knowledgeAliases?: ReadonlyMap<string, string>;
     readonly linked: boolean;
     /** TB7: the payload's flags, which the automatic-reply guards read. */
     readonly flags: AutoContextFlags;
@@ -94,6 +101,24 @@ export type SupportAssistProduceResult = 'READY' | 'FAILED' | 'GONE' | 'INACTIVE
 
 /** TB6: the per-image outcome rows of one request, written inside the result's transaction. */
 type ImageWrite = (now: Date, tx: TransactionScope) => Promise<void>;
+
+/**
+ * D3 — a draft's knowledge citations as the operator reads them: each `K…` the payload carried,
+ * by its title, once, in the order cited. A citation the payload did not carry is dropped — it
+ * is not evidence of anything — and a source with no knowledge aliases resolves nothing.
+ */
+export function resolveKnowledgeLabels(
+  refs: readonly string[],
+  aliases: ReadonlyMap<string, string> | undefined,
+): string[] {
+  if (aliases === undefined) return [];
+  const labels: string[] = [];
+  for (const ref of refs) {
+    const label = aliases.get(ref);
+    if (label !== undefined && !labels.includes(label)) labels.push(label);
+  }
+  return labels;
+}
 
 /** The instant before which a QUEUED job with no live lease counts as unclaimed. */
 export function unclaimedCutoff(now: Date): Date {
@@ -400,6 +425,11 @@ export class SupportAssistService {
       const label = context.aliases.get(ref);
       return label === undefined ? [] : [label];
     });
+    // D3: the knowledge it cited, by title, the same way; never a fact label.
+    const knowledgeLabels = resolveKnowledgeLabels(
+      parsed.data.knowledgeRefs,
+      context.knowledgeAliases,
+    );
     const step = result.step;
     const model = result.outcome.model;
     return this.record(
@@ -412,6 +442,7 @@ export class SupportAssistService {
           {
             decision: parsed.data,
             factLabels,
+            knowledgeLabels,
             provider: step.provider,
             model,
             imagesSeen: seen,

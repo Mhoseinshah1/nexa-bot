@@ -152,6 +152,10 @@ describe('Assist Mode (TB5)', () => {
           build: async () => ({
             json: '{"services":[{"alias":"S1"}]}',
             aliases: new Map([['S1', 'سرویس user123']]),
+            knowledgeAliases: new Map([
+              ['K1', 'سرویس وصل نمی‌شود'],
+              ['K2', 'نصب روی آیفون'],
+            ]),
             linked: true,
             flags: {
               identityLinked: true,
@@ -280,6 +284,20 @@ describe('Assist Mode (TB5)', () => {
       { role: 'user', text: 'سلام، اینترنتم وصل نمی‌شود' },
       { role: 'assistant', text: 'متن ویرایش‌شده' },
     ]);
+  });
+
+  it('D3: the knowledge a draft cited is stored by title, apart from the facts', async () => {
+    next = {
+      outcome: 'OK',
+      // K1 twice, an unknown K9, and a fact: the knowledge labels are K1's title, once.
+      output: { ...valid, knowledgeRefs: ['K1', 'K9', 'K1'] },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const job = await readyDraft();
+    const ready = await jobs.findById(scopeA, job.id);
+    expect(ready?.knowledgeLabels).toEqual(['سرویس وصل نمی‌شود']);
+    expect(ready?.factLabels).toEqual(['سرویس user123']);
   });
 
   it('records an invalid decision as FAILED, never as advice', async () => {
