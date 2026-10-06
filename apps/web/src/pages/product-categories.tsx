@@ -35,6 +35,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { SaveBar, revealField } from './editor-layout';
+import { CategoryIconsSection } from './category-icons';
 
 /**
  * Product categories — the one place a tenant arranges what it sells.
@@ -97,7 +98,19 @@ function deleteMessage(error: unknown): string {
   return messageFor(error);
 }
 
-export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
+export function ProductCategoriesPage({
+  denied,
+  mayEdit,
+  maySettingsView = false,
+  maySettingsEdit = false,
+}: {
+  denied: boolean;
+  mayEdit: boolean;
+  /** `settings.view`: draws «آیکون دسته‌بندی‌ها» (Phase 2 Item 2) under the list. */
+  maySettingsView?: boolean;
+  /** `settings.edit`: the decorations may be changed. */
+  maySettingsEdit?: boolean;
+}) {
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -414,6 +427,14 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
                 <li>{t('web.category_hidden_note')}</li>
               </ul>
             </Card>
+            {/*
+              Phase 2 Item 2: each category's premium icon before and ordinary emoji after,
+              a separate setting (`bot.category_icons`) saved on its own — a category edit
+              above never writes it, and it never writes a category.
+            */}
+            {maySettingsView && (
+              <CategoryIconsSection denied={false} mayEdit={maySettingsEdit} categories={rows} />
+            )}
           </StateSwitch>
         </div>
 
