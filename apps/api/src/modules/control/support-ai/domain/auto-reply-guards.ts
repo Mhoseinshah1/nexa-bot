@@ -193,12 +193,12 @@ export function foldCustomerText(text: string): string {
   return text
     .normalize('NFKC')
     .toLowerCase()
-    .replace(/[يى]/gu, 'ی')
-    .replace(/ك/gu, 'ک')
-    .replace(/ة/gu, 'ه')
-    .replace(/[أإٱ]/gu, 'ا')
-    .replace(/[ً-ٰٟـ]/gu, '')
-    .replace(/[​-‏⁠﻿]/gu, '')
+    .replace(/[\u064A\u0649]/gu, '\u06CC')
+    .replace(/\u0643/gu, '\u06A9')
+    .replace(/\u0629/gu, '\u0647')
+    .replace(/[\u0623\u0625\u0671]/gu, '\u0627')
+    .replace(/[\u064B-\u065F\u0670\u0640]/gu, '')
+    .replace(/[\u200B-\u200F\u2060\uFEFF]/gu, '')
     .replace(/\s+/gu, ' ');
 }
 
