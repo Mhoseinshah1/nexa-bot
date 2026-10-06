@@ -121,8 +121,12 @@ expected and actual figure. Any `holds = no` must name its cause and its decisio
 
 ## 11. Manual acceptance
 
-The recording table of [`manual-acceptance.md`](manual-acceptance.md): one row per sample,
-the seed, NEXA uuids, and six PASS/FAIL/N/A marks.
+The recording table of [`manual-acceptance.md`](manual-acceptance.md) § Recording, copied
+with its columns (sample, seed, source ref, NEXA customer and service uuids, map decision,
+customer, balance, service, panel / runtime read, Web Admin, Telegram, result, notes) and
+its status vocabulary: `PASS` (only with the evidence filled in), `FAIL`, `N/A (reason)`,
+`NOT RUN`, `POPULATION 0`. One row per sample; F1 once per manual-review reason; R3 and P4
+are the reconciliation's manual halves.
 
 ## 12. Durations and load (staging rehearsal and production)
 

@@ -310,8 +310,12 @@ import { LegacyReviewQueueService } from './modules/platform/legacy-import/appli
 import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
 import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store.js';
 import { LegacyImporterService } from './modules/platform/legacy-importer/application/legacy-importer.service.js';
-import type { LegacyAdoptionPort } from './modules/platform/legacy-importer/application/ports.js';
+import type {
+  LegacyAdoptionPort,
+  LegacyInventoryPort,
+} from './modules/platform/legacy-importer/application/ports.js';
 import { DrizzleLegacyImporterRepository } from './modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.js';
+import { PgLegacyImportProcessLock } from './modules/platform/legacy-importer/infrastructure/pg-legacy-import-process-lock.js';
 import { RickpanelInventorySource } from './modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source.js';
 import { DrizzleLegacyImportRepository } from './modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
@@ -1302,6 +1306,14 @@ export interface Container {
     readonly adoption?: LegacyAdoptionPort | null;
     readonly inventoryPageSize?: number;
   }) => LegacyImporterService;
+
+  /**
+   * WP-D4: the read-only inventory port alone, for the rehearsal's panel-state walk
+   * (tests/support/legacy-rehearsal-panel-state.ts). Reads only; no surface reaches it.
+   */
+  readonly legacyPanelInventory: (options?: {
+    readonly inventoryPageSize?: number;
+  }) => LegacyInventoryPort;
 
   shutdown(): Promise<void>;
 }
@@ -6591,6 +6603,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   };
 
+  /**
+   * The importer's read-only RickPanel inventory port (GETs and the token exchange; it has
+   * no method that could send anything else). The importer reads through it, and so does
+   * the rehearsal's P4 panel-state walk — which is why it is built here, outside the
+   * application service, with no write path of its own.
+   */
+  const legacyInventory = (options: { readonly inventoryPageSize?: number } = {}) =>
+    new RickpanelInventorySource(
+      {
+        panel: async (scope, panelId) => {
+          const view = await panelRepository.find(scope, panelId);
+          return view === null
+            ? null
+            : { baseUrl: view.panel.baseUrl, providerType: view.panel.providerType };
+        },
+        credentials: (scope, panelId) => panelCredentials.read(scope, panelId),
+        http: (baseUrl) => panelHttp.forBase(baseUrl),
+      },
+      options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize },
+      () => clock.now(),
+    );
+
   const container: Container = {
     config,
     logger,
@@ -7080,29 +7114,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     installationKeyLoader,
     installationKeyRepository,
     installationKeys,
+    legacyPanelInventory: (options = {}) => legacyInventory(options),
     legacyImporter: (options = {}) => {
       const importerRepository = new DrizzleLegacyImporterRepository(database.db, (scope) =>
         settingsResolver.valueOf<CurrencyCode>(scope, 'sales.currency'),
       );
       return new LegacyImporterService({
+        processLock: new PgLegacyImportProcessLock(config.DATABASE_URL),
         destination: importerRepository,
         runs: new DrizzleLegacyImportRepository(database.db),
         runInputs: importerRepository,
         customers: importerRepository,
-        inventory: new RickpanelInventorySource(
-          {
-            panel: async (scope, panelId) => {
-              const view = await panelRepository.find(scope, panelId);
-              return view === null
-                ? null
-                : { baseUrl: view.panel.baseUrl, providerType: view.panel.providerType };
-            },
-            credentials: (scope, panelId) => panelCredentials.read(scope, panelId),
-            http: (baseUrl) => panelHttp.forBase(baseUrl),
-          },
-          options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize },
-          () => clock.now(),
-        ),
+        inventory: legacyInventory(options),
         openings: migrationOpeningBalance,
         trials: legacyTrialEligibilityService,
         products: legacyProductService,

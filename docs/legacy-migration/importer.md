@@ -131,6 +131,7 @@ username; `invoice:v1` over the invoice's decision columns.
   "panels": [{ "codePanel": "bac6", "panelId": "<NEXA RickPanel uuid>" }],
   "testPanels": ["<code>"],
   "missingPanels": ["<code searched by username across productionPanels>"],
+  "unresolvedPanels": [{ "codePanel": "<code>", "reason": "OWNER_DECIDES_LATER" }],
   "productionPanels": ["<every NEXA RickPanel uuid a missing code_panel is searched across>"],
   "products": [{ "codeProduct": "<legacy code_product>", "productId": "<NEXA product uuid>" }]
 }
@@ -156,6 +157,24 @@ key only if a mapping file could name it (the file's own code rule); any other s
 is counted under `(invalid code_panel)` and never echoed. Missing
 `code_panel` goes through P5's matcher (exact lowercase username, complete inventories
 only, case collision → review). Example: `tests/fixtures/legacy/synthetic-support.ts`.
+
+**Completeness (WP-D2, G10).** `unresolvedPanels` (optional) is how a live `code_panel`
+nobody has decided yet is _declared_ rather than forgotten: `{codePanel, reason}`, with the
+reason one of `OWNER_DECIDES_LATER`, `DECOMMISSIONED_PANEL`, `UNKNOWN_ORIGIN` and no other
+key. A declared code is in no list the matcher reads, so its invoices stay `PANEL_UNMAPPED`
+manual review exactly as before; it is exclusive with the other lists, and it enters the
+fingerprint only when non-empty — every v1 map written before it keeps its fingerprint
+(pinned by a unit test). `audit` reports `sections.panelMapping.completeness`:
+
+- `unmapped` — live REAL invoices' codes in no list, with counts. **Non-empty makes the
+  audit `BLOCKED`**, with a blocker naming each code and count. Source values no file could
+  name are counted under `(invalid code_panel)`, and that exact key may be declared.
+- `declaredUnresolved` — each declared code, its reason, and its live real invoices.
+- `stale` — codes the map names that no live invoice carries (a typo, a retired panel).
+- `productionPanelsUnreferenced` — production panels no mapped code with a live real
+  invoice points at (they may still serve the missing-panel search).
+
+The rehearsal turns `complete` into the check `panel_map_complete`.
 
 ## 5. Decisions (one pure plan; `plan.ts`, `decisions.ts`)
 
@@ -274,6 +293,27 @@ activity read inside the transaction and an audit row.
   same fingerprint and mapping, and re-walks every phase; nothing is duplicated (tested:
   a crash after the openings phase, then resume: 6 openings, not 12). An error inside a
   phase leaves the run RUNNING, as a killed process does — one recovery for both.
+- **One applying process per tenant (WP-D3).** `import` and `resume` first take a
+  per-tenant claim — a PostgreSQL session advisory lock (class `0x4c49`) on a connection
+  of their own, never a pooled one — and hold it until the run ends. A second `import` or
+  `resume` while a live process holds it is refused with `RUN_CONFLICT` ("Another
+  importer process…") before it reads or writes anything. Before this, two resumes of one
+  interrupted run both proceeded, walked the same rows and deadlocked (40P01). A process
+  that dies — `kill -9`, a lost host — loses its connection and so its claim, at once: a
+  resume after a crash is never refused by a dead holder, and needs no operator step.
+  If that session ends while the import runs (the backend terminated, the server
+  restarted, a network cut — noticed by TCP keepalive), the claim is LOST: the import
+  stops before its next phase as an interruption, the run stays RUNNING, and `resume`
+  finishes it. **The claim needs a direct PostgreSQL connection.** A session advisory lock
+  lives on one server session; behind a transaction-pooling proxy (PgBouncer in
+  `transaction` or `statement` mode) the lock and the session that should hold it come
+  apart, and two importers could both believe they hold the tenant. Point `DATABASE_URL`
+  of the importer at PostgreSQL itself, or at a pooler in `session` mode. (NEXA's own
+  deployment has no pooler: `deploy/` connects to PostgreSQL directly.)
+- **G10 at apply.** `import` and `resume` re-decide the panel-map completeness with the
+  audit's own predicate before any write, and refuse (exit 65, mapping refused) while a
+  live real `code_panel` is in no list and not declared in `unresolvedPanels` — whatever
+  an earlier audit said.
 - **reconcile** — the latest APPLY run, which must be **COMPLETED** (RUNNING: resume or
   abort it first; ABORTED: there is no finished import), against a fresh snapshot of the
   SAME source fingerprint and the SAME mapping fingerprint (both refused otherwise):
@@ -318,7 +358,15 @@ every user) against the importer's own decisions. A disagreement is reported, no
   synthetic dataset; interrupted + resume; rerun; drift; discrepancy; P6 port; **real P6
   adoption** (the container default: every eligible candidate adopted, zero-total
   `LEGACY_ADOPTION` orders, no provisioning operation, a rerun `ALREADY_ADOPTED`, provider
-  writes 0); permissions; stopped tenant; the CLI glue.
+  writes 0); permissions; stopped tenant; the CLI glue. WP-D3 tightened it: `audit`
+  is compared over EVERY table (row count and an md5 of every row,
+  `tests/support/database-fingerprint.ts`), not four; a drifted source refuses resume
+  with `RUN_CONFLICT` and the database unchanged (any error used to pass); a crash after
+  EACH phase (`customers`, `openings`, `trials`, `products`, `adoption`), and a crash
+  INSIDE adoption after two services were committed, each resume to exactly the state a
+  clean uninterrupted import leaves (a digest over stable keys: legacy ids, Telegram ids,
+  usernames, panel names — one order and one service per adopted invoice); and two
+  concurrent resumes: exactly one completes, the other is refused cleanly.
 - **MySQL engine: `pnpm test:legacy-mysql`** (`tests/legacy-mysql/`) — read-only proof, a
   write refused even with a grant that allows it, consistent snapshot, fingerprint parity,
   every evidence query and its cross-checks, on a real MariaDB. Its own CI job
@@ -336,8 +384,45 @@ and a unit test holds them equal.
 
 ## 10. Manual acceptance (needs the real archive, panels and staging)
 
-1. Restore the archive into MySQL 8 (the CI covers MariaDB 10.11; MySQL 8 is the production
-   engine and its first run is this step), create `oldbot_ro` (SELECT only).
+0. Inspect the archive BEFORE anything loads it (WP-D1a, `scripts/legacy-archive-inspect.mjs`):
+
+   ```bash
+   export LEGACY_ZIP_PASSWORD=…        # typed into the environment; NEVER on argv
+   node scripts/legacy-archive-inspect.mjs --archive backup_YYYY-MM-DD.zip \
+     --password-env LEGACY_ZIP_PASSWORD --engine mysql8 --require-class staging \
+     --out <new dir> --extract
+   ```
+
+   It accepts only the evidenced shapes: a `mysqldump`/`mariadb-dump` `.sql` or `.sql.gz`,
+   MirzaBot's PDO-fallback `.sql` (`SET NAMES utf8mb4;` / `SET FOREIGN_KEY_CHECKS=0;` /
+   `SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';`), and `backup_YYYY-MM-DD.zip` with exactly one
+   entry `backup_YYYY-MM-DD.sql`, unencrypted or WinZip AES-256 — what MirzaBot revision
+   `e4966ff` writes with `ZipArchive::EM_AES_256`. ZipCrypto, AES-128/192, zip64, two
+   entries or another entry name are refused. It reports, with no row content: the SHA-256
+   of the archive AND of the inner dump, the header (client, server version, engine),
+   whether the dump ends the way its writer ends one (a truncated dump is refused), the
+   tables and whether `user`/`invoice`/`product` carry the importer's required columns
+   (pinned equal to `LEGACY_REQUIRED_COLUMNS`), character sets and collations, stored
+   objects / `DEFINER` (refused: MirzaBot has none), `USE`/`CREATE DATABASE`, and
+   `blockers[]`. Exit 0 ACCEPTED, 2 BLOCKED, 64 usage.
+
+   **Decryption needs no external tool.** WinZip AES (PBKDF2-HMAC-SHA1 → AES-256-CTR with a
+   little-endian counter, 10-byte HMAC-SHA1) is implemented on `node:crypto`; the operator
+   dependency is Node ≥ 22.11 with OpenSSL (the tool fails with a precise message if
+   `aes-256-ecb` or `zlib.crc32` is missing). Info-ZIP `unzip` and Python's `zipfile`
+   cannot open these entries; `7z x` can, but is not needed. The HMAC is verified over the
+   whole entry and an extracted dump whose HMAC does not verify is deleted. The tests run
+   against zips written by PHP's libzip — MirzaBot's own encoder — with a TEST-ONLY
+   password (`tests/fixtures/legacy/archive/make-fixtures.php`); MirzaBot's real hardcoded
+   password is deliberately not in this repository.
+
+   `--engine mariadb` refuses a dump carrying `utf8mb4_0900_*` collations
+   (`COLLATION_REQUIRES_MYSQL8`) or taken from a MySQL ≥ 8 server (`ENGINE_MISMATCH`):
+   the collation is never rewritten — MySQL 8 is the engine for it.
+
+1. Restore the archive into MySQL 8 (the CI covers MariaDB 10.11 and MySQL 8.0 with the
+   SYNTHETIC dataset — `legacy-mysql` job, OQ-P7-03; the real dump's first MySQL 8 load
+   is this step), create `oldbot_ro` (SELECT only).
 2. `audit` against staging with the real mapping file: record the evidence and the
    cross-checks into `sql-evidence.md` in their own commit — those, not the synthetic
    figures, are Item 1's result.

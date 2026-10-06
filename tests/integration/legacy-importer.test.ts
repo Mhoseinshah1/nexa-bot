@@ -42,6 +42,10 @@ import {
 } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import { FixtureLegacySourceConnector } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/fixture-legacy-source';
 import {
+  LEGACY_IMPORT_PROCESS_LOCK_CLASS,
+  PgLegacyImportProcessLock,
+} from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/pg-legacy-import-process-lock';
+import {
   SYNTHETIC_EXISTING_CUSTOMER,
   SYNTHETIC_EXPECTED,
   SYNTHETIC_PANEL_ACCOUNTS,
@@ -50,6 +54,13 @@ import {
 } from '../fixtures/legacy/synthetic-legacy';
 import { syntheticMappingFile } from '../fixtures/legacy/synthetic-support';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
+import { changedTables, databaseFingerprint } from '../support/database-fingerprint';
+import {
+  PANEL_STATE_SCHEMA,
+  comparePanelStates,
+  panelState,
+  type PanelStateSnapshot,
+} from '../support/legacy-rehearsal-panel-state';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { RickpanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
 import {
@@ -126,7 +137,7 @@ describe('Migration P7: the legacy importer', () => {
     return { fake, id: created.view.panel.id };
   }
 
-  beforeEach(async () => {
+  async function setup(): Promise<void> {
     await ctx.reset();
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-legacy', roleKeys: ['owner'] }),
@@ -177,7 +188,8 @@ describe('Migration P7: the legacy importer', () => {
       },
       botInstanceId: BOT_A,
     });
-  });
+  }
+  beforeEach(setup);
 
   async function snapshot(
     dataset: SyntheticLegacyDataset = buildSyntheticLegacyDataset(),
@@ -221,6 +233,9 @@ describe('Migration P7: the legacy importer', () => {
   }
 
   it('audit reads the source, NEXA and the panels, and writes nothing at all', async () => {
+    // WP-D3: EVERY table, not a chosen few — a write anywhere (a probe budget, an
+    // operational event, a cache row) breaks "audit is read-only".
+    const everything = await databaseFingerprint(ctx.container.database.db);
     const before = await Promise.all([
       count('customers'),
       count('wallet_entries'),
@@ -238,12 +253,71 @@ describe('Migration P7: the legacy importer', () => {
       count('products'),
     ]);
     expect(after).toEqual(before);
+    expect(changedTables(everything, await databaseFingerprint(ctx.container.database.db))).toEqual(
+      {},
+    );
     expect(report.synthetic).toBe(true);
     expect(report.verdict).toBe('READY_FOR_DRY_RUN');
     const sections = report.sections as Record<string, any>;
     expect(sections['plan'].services.categories).toEqual(SYNTHETIC_EXPECTED.services.categories);
     expect(sections['provider']).toMatchObject({ writes: 0, refusedWrites: 0 });
     expect(sections['provider'].reads).toBeGreaterThan(0);
+    expectOnlyReads();
+  });
+
+  it('WP-D2: an audit BLOCKS on a live code_panel the map does not account for, and passes once it is declared', async () => {
+    const snap = await snapshot();
+    const forgot = parsePanelMapping(
+      JSON.stringify(
+        (({ unresolvedPanels: _drop, ...rest }) => rest)(
+          JSON.parse(mappingText) as Record<string, unknown>,
+        ),
+      ),
+      tenantA.tenantId as unknown as string,
+    );
+    const blocked = await importer().audit({
+      ...input('audit-forgot', snap, forgot),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    expect(blocked.verdict).toBe('BLOCKED');
+    const blockedSections = blocked.sections as Record<string, any>;
+    expect(blockedSections['panelMapping'].completeness).toMatchObject({
+      complete: false,
+      unmapped: { zzz: 1 },
+      declaredUnresolved: {},
+    });
+    expect(blockedSections['blockers']).toEqual([expect.stringContaining('"zzz": 1 invoice(s)')]);
+
+    const declared = await importer().audit({
+      ...input('audit-declared', snap),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    expect(declared.verdict).toBe('READY_FOR_DRY_RUN');
+    const sections = declared.sections as Record<string, any>;
+    expect(sections['panelMapping'].completeness).toEqual({
+      complete: true,
+      unmapped: {},
+      declaredUnresolved: { zzz: { reason: 'OWNER_DECIDES_LATER', liveRealInvoices: 1 } },
+      stale: [],
+      productionPanelsUnreferenced: [],
+    });
+    expect(sections['panelMapping'].declaredUnresolvedCodes).toBe(1);
+    // Declaring a code decides nothing about its invoices: they stay PANEL_UNMAPPED review.
+    expect(sections['plan'].services.categories).toEqual(SYNTHETIC_EXPECTED.services.categories);
+
+    // A map entry no live invoice carries is reported as stale, and does not block.
+    const stale = parsePanelMapping(
+      JSON.stringify({ ...JSON.parse(mappingText), testPanels: ['tst', 'old-test'] }),
+      tenantA.tenantId as unknown as string,
+    );
+    const withStale = await importer().audit({
+      ...input('audit-stale', snap, stale),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    expect(withStale.verdict).toBe('READY_FOR_DRY_RUN');
+    expect((withStale.sections as Record<string, any>)['panelMapping'].completeness.stale).toEqual([
+      'old-test',
+    ]);
     expectOnlyReads();
   });
 
@@ -480,9 +554,18 @@ describe('Migration P7: the legacy importer', () => {
         user: changed.tables.user.map((u, i) => (i === 0 ? { ...u, Balance: '1' } : u)),
       },
     };
-    await expect(
-      importer().apply({ ...input('drift', await snapshot(drifted)), mode: 'RESUME' }),
-    ).rejects.toThrow();
+    // WP-D3: refused for THAT reason (any error used to pass here), and before any write.
+    const beforeDrift = await databaseFingerprint(ctx.container.database.db);
+    const drift = importer()
+      .apply({ ...input('drift', await snapshot(drifted)), mode: 'RESUME' })
+      .catch((e: unknown) => e);
+    expect(await drift).toMatchObject({
+      code: 'legacy_import.run_conflict',
+      message: expect.stringContaining('a different source or mode'),
+    });
+    expect(
+      changedTables(beforeDrift, await databaseFingerprint(ctx.container.database.db)),
+    ).toEqual({});
 
     const resumed = await importer().apply({ ...input('resume', snap), mode: 'RESUME' });
     const applied = (resumed.sections as Record<string, any>)['applied'];
@@ -1335,6 +1418,363 @@ describe('Migration P7: the legacy importer', () => {
       importer().dryRun({ ...input('dry', await snapshot()), actor: support }),
     ).rejects.toThrow();
     expect(await count('legacy_import_runs')).toBe(0);
+  });
+
+  // --- WP-D3: interruption at every phase, inside adoption, and concurrent resumes -----
+
+  /**
+   * What an import leaves behind, keyed by what is STABLE across two fresh databases
+   * (legacy ids, Telegram ids, usernames, panel names) — never a generated uuid, a
+   * timestamp or the random subscription_ref. Two imports of the same source into the
+   * same starting state must produce the same digest, however they were interrupted.
+   */
+  async function businessDigest(): Promise<Record<string, unknown>> {
+    const tenant = tenantA.tenantId as unknown as string;
+    const q = async (query: ReturnType<typeof sql>) =>
+      (await ctx.container.database.db.execute<Record<string, unknown>>(query)).rows;
+    return {
+      customers: await q(sql`
+        SELECT telegram_user_id, username FROM customers
+         WHERE tenant_id = ${tenant} ORDER BY telegram_user_id`),
+      wallet: await q(sql`
+        SELECT c.telegram_user_id, w.direction, w.reason, w.amount::text AS amount, w.currency
+          FROM wallet_entries w JOIN customers c ON c.tenant_id = w.tenant_id AND c.id = w.customer_id
+         WHERE w.tenant_id = ${tenant} ORDER BY c.telegram_user_id, w.reason, w.amount`),
+      map: await q(sql`
+        SELECT legacy_table, legacy_id, checksum, status, reason_code, entity_type,
+               entity_id IS NOT NULL AS has_entity, review_state
+          FROM legacy_import_map WHERE tenant_id = ${tenant} ORDER BY legacy_table, legacy_id`),
+      shapes: await q(sql`
+        SELECT shape_key, legacy_code_panel, traffic_bytes::text AS traffic, duration_days,
+               is_custom, product_id IS NOT NULL AS has_product, tariff_status, unresolved_reason
+          FROM legacy_product_shapes WHERE tenant_id = ${tenant} ORDER BY shape_key`),
+      trials: await q(sql`
+        SELECT c.telegram_user_id, t.legacy_limit_usertest, t.legacy_had_trial, t.decision,
+               t.override_before, t.override_after, t.input_hash
+          FROM legacy_trial_eligibility t JOIN customers c ON c.tenant_id = t.tenant_id AND c.id = t.customer_id
+         WHERE t.tenant_id = ${tenant} ORDER BY c.telegram_user_id`),
+      overrides: await q(sql`
+        SELECT c.telegram_user_id, o.trial_limit
+          FROM trial_limit_overrides o JOIN customers c ON c.tenant_id = o.tenant_id AND c.id = o.customer_id
+         WHERE o.tenant_id = ${tenant} ORDER BY c.telegram_user_id`),
+      orders: await q(sql`
+        SELECT o.origin, o.purpose, o.state, o.total_amount::text AS total, c.telegram_user_id,
+               count(*)::int AS n
+          FROM orders o JOIN customers c ON c.tenant_id = o.tenant_id AND c.id = o.customer_id
+         WHERE o.tenant_id = ${tenant}
+         GROUP BY o.origin, o.purpose, o.state, o.total_amount, c.telegram_user_id
+         ORDER BY c.telegram_user_id, o.origin`),
+      services: await q(sql`
+        SELECT s.provider_username, p.name AS panel, s.state, s.order_id IS NOT NULL AS has_order,
+               s.subscription_url IS NOT NULL AS has_link, s.expires_at, s.traffic_limit_bytes::text AS traffic
+          FROM services s JOIN panels p ON p.tenant_id = s.tenant_id AND p.id = s.panel_id
+         WHERE s.tenant_id = ${tenant} ORDER BY p.name, s.provider_username`),
+      runs: await q(sql`
+        SELECT mode, status, count(*)::int AS n FROM legacy_import_runs
+         WHERE tenant_id = ${tenant} GROUP BY mode, status ORDER BY mode, status`),
+      customerImportedEvents: await count('outbox_messages', "event_type = 'CustomerImported'"),
+      provisioningOperations: await count('provisioning_operations'),
+      customerNotifications: await count('customer_notifications'),
+    };
+  }
+
+  /** The digest a clean, uninterrupted import with the real P6 leaves, on a fresh state. */
+  async function cleanImportDigest(): Promise<Record<string, unknown>> {
+    await panelA.close();
+    await panelB.close();
+    await setup();
+    const report = await ctx.container
+      .legacyImporter({ inventoryPageSize: 3 })
+      .apply({ ...input('clean', await snapshot()), mode: 'IMPORT' });
+    expect(report.verdict).toBe('COMPLETED');
+    return businessDigest();
+  }
+
+  const PHASES = ['customers', 'openings', 'trials', 'products', 'adoption'] as const;
+
+  it.each(PHASES)(
+    'a crash after the %s phase leaves one RUNNING run; its resume ends exactly where a clean import does',
+    async (crashAfter) => {
+      const real = ctx.container.legacyImporter({ inventoryPageSize: 3 });
+      const snap = await snapshot();
+      const crashed = await real
+        .apply({
+          ...input(`crash-${crashAfter}`, snap),
+          mode: 'IMPORT',
+          afterPhase: (phase) => {
+            if (phase === crashAfter) throw new Error(`simulated crash after ${crashAfter}`);
+          },
+        })
+        .catch((e: unknown) => e);
+      expect(crashed).toBeInstanceOf(LegacyImportInterrupted);
+      expect((crashed as LegacyImportInterrupted).phase).toBe(crashAfter);
+      expect(await count('legacy_import_runs', "status = 'RUNNING' AND mode = 'APPLY'")).toBe(1);
+
+      const resumed = await real.apply({ ...input(`resume-${crashAfter}`, snap), mode: 'RESUME' });
+      expect(resumed.verdict).toBe('COMPLETED');
+      expect((resumed.sections as Record<string, any>)['run'].status).toBe('COMPLETED');
+      const afterResume = await businessDigest();
+      expect(afterResume['runs']).toEqual([{ mode: 'APPLY', status: 'COMPLETED', n: 1 }]);
+      expectOnlyReads();
+
+      expect(afterResume).toEqual(await cleanImportDigest());
+    },
+  );
+
+  it('a crash INSIDE adoption (after some services exist) resumes to one order and one service per invoice', async () => {
+    const real = ctx.container.legacyImporter({ inventoryPageSize: 3 });
+    const eligible = SYNTHETIC_EXPECTED.services.categories.ADOPTION_ELIGIBLE;
+    expect(eligible).toBeGreaterThan(2);
+    let adopted = 0;
+    // The real P6, killed mid-phase: two candidates adopted and committed, then the process
+    // "dies" before the third.
+    const dying: LegacyAdoptionPort = {
+      adopt: async (scope, actor, candidate) => {
+        if (adopted === 2) throw new Error('simulated crash inside the adoption phase');
+        const outcome = await ctx.container.legacyAdoption.adoptCandidate(scope, actor, candidate);
+        adopted += 1;
+        return outcome;
+      },
+    };
+    const snap = await snapshot();
+    const crashed = await importer(dying)
+      .apply({ ...input('crash-in-adoption', snap), mode: 'IMPORT' })
+      .catch((e: unknown) => e);
+    expect(crashed).toBeInstanceOf(LegacyImportInterrupted);
+    expect((crashed as LegacyImportInterrupted).phase).toBe('adoption');
+    expect(await count('services')).toBe(2);
+    expect(await count('orders')).toBe(2);
+    expect(await count('legacy_import_runs', "status = 'RUNNING' AND mode = 'APPLY'")).toBe(1);
+
+    const resumed = await real.apply({ ...input('resume-in-adoption', snap), mode: 'RESUME' });
+    expect(resumed.verdict).toBe('COMPLETED');
+    const adoption = (resumed.sections as Record<string, any>)['applied'].services.adoption;
+    expect(adoption).toMatchObject({ ADOPTED: eligible - 2, ALREADY_ADOPTED: 2 });
+    expect(await count('services')).toBe(eligible);
+    expect(await count('orders', "origin = 'LEGACY_ADOPTION'")).toBe(eligible);
+    // One service per adopted invoice, and every service has its own order.
+    const perInvoice = await ctx.container.database.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM legacy_import_map m
+        JOIN services s ON s.tenant_id = m.tenant_id AND s.id = m.entity_id
+       WHERE m.tenant_id = ${tenantA.tenantId as unknown as string}
+         AND m.legacy_table = 'invoice' AND m.status = 'IMPORTED'`);
+    expect(perInvoice.rows[0]?.n).toBe(eligible);
+    expect(
+      await count('services', 'order_id IN (SELECT id FROM orders) AND order_id IS NOT NULL'),
+    ).toBe(eligible);
+    expect(await count('provisioning_operations')).toBe(0);
+    expectOnlyReads();
+
+    const afterResume = await businessDigest();
+    expect(afterResume).toEqual(await cleanImportDigest());
+  });
+
+  it('two concurrent resumes of one interrupted run: exactly one completes it, the other is refused', async () => {
+    const snap = await snapshot();
+    await expect(
+      ctx.container.legacyImporter({ inventoryPageSize: 3 }).apply({
+        ...input('crash-concurrent', snap),
+        mode: 'IMPORT',
+        afterPhase: (phase) => {
+          if (phase === 'openings') throw new Error('simulated crash after openings');
+        },
+      }),
+    ).rejects.toBeInstanceOf(LegacyImportInterrupted);
+
+    const resume = (name: string) =>
+      ctx.container.legacyImporter({ inventoryPageSize: 3 }).apply({
+        ...input(name, snap),
+        mode: 'RESUME',
+      });
+    const results = await Promise.allSettled([resume('resume-1'), resume('resume-2')]);
+    const won = results.filter((r) => r.status === 'fulfilled');
+    const lost = results.filter((r) => r.status === 'rejected');
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect((won[0] as PromiseFulfilledResult<{ verdict: string }>).value.verdict).toBe('COMPLETED');
+    // Refused cleanly, as a conflict — not a deadlock, not an interruption half-way.
+    expect((lost[0] as PromiseRejectedResult).reason).toMatchObject({
+      code: 'legacy_import.run_conflict',
+    });
+    expect((lost[0] as PromiseRejectedResult).reason).not.toBeInstanceOf(LegacyImportInterrupted);
+
+    // One run, completed once, resumed once; nothing written twice.
+    expect(await count('legacy_import_runs')).toBe(1);
+    expect(await count('legacy_import_runs', "status = 'COMPLETED'")).toBe(1);
+    const afterResume = await businessDigest();
+    expectOnlyReads();
+    expect(afterResume).toEqual(await cleanImportDigest());
+  });
+
+  it('a live importer process refuses a resume with zero writes; once it dies, the resume proceeds', async () => {
+    const snap = await snapshot();
+    await expect(
+      importer().apply({
+        ...input('crash-held', snap),
+        mode: 'IMPORT',
+        afterPhase: (phase) => {
+          if (phase === 'customers') throw new Error('simulated crash after customers');
+        },
+      }),
+    ).rejects.toBeInstanceOf(LegacyImportInterrupted);
+
+    // Another process holds the tenant's claim (a live importer elsewhere).
+    const other = await new PgLegacyImportProcessLock(ctx.container.config.DATABASE_URL).tryAcquire(
+      tenantA.tenantId as unknown as string,
+    );
+    expect(other).not.toBeNull();
+    const before = await databaseFingerprint(ctx.container.database.db);
+    const refused = await importer()
+      .apply({ ...input('resume-refused', snap), mode: 'RESUME' })
+      .catch((e: unknown) => e);
+    expect(refused).toMatchObject({
+      code: 'legacy_import.run_conflict',
+      message: expect.stringContaining('Another importer process'),
+    });
+    expect(changedTables(before, await databaseFingerprint(ctx.container.database.db))).toEqual({});
+
+    // That process dies: its session ends, and the claim with it — no operator step.
+    await ctx.container.database.db.execute(sql`
+      SELECT pg_terminate_backend(pid) FROM pg_locks
+       WHERE locktype = 'advisory' AND classid = ${LEGACY_IMPORT_PROCESS_LOCK_CLASS} AND granted
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`);
+    // pg_terminate_backend only signals; the session ends (and frees the lock) a moment later.
+    for (let i = 0; i < 100; i += 1) {
+      const held = await ctx.container.database.db.execute<{ n: number }>(sql`
+        SELECT count(*)::int AS n FROM pg_locks
+         WHERE locktype = 'advisory' AND classid = ${LEGACY_IMPORT_PROCESS_LOCK_CLASS}
+           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`);
+      if (held.rows[0]?.n === 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const resumed = await importer().apply({
+      ...input('resume-after-death', snap),
+      mode: 'RESUME',
+    });
+    expect((resumed.sections as Record<string, any>)['run'].status).toBe('COMPLETED');
+    await other?.release();
+  });
+
+  it('WP-D4 (P4): the import leaves every production panel account as it was; a panel write would show', async () => {
+    const key = Buffer.alloc(32, 9);
+    const walk = async (): Promise<PanelStateSnapshot> => {
+      const inventory = ctx.container.legacyPanelInventory({ inventoryPageSize: 3 });
+      const panels = [];
+      for (const id of [panelAId, panelBId]) {
+        panels.push(panelState(id, await inventory.read(tenantA, id), key));
+      }
+      const requests = inventory.requestCounts();
+      expect(requests.refusedWrites).toBe(0);
+      expect(requests.reads).toBeGreaterThan(0);
+      return { schema: PANEL_STATE_SCHEMA, panels, requests };
+    };
+    const before = await walk();
+    expect(before.panels.map((p) => p.complete)).toEqual([true, true]);
+    expect(before.panels.map((p) => p.accounts)).toEqual([
+      SYNTHETIC_PANEL_ACCOUNTS.A.length,
+      SYNTHETIC_PANEL_ACCOUNTS.B.length,
+    ]);
+    // A full import with the real P6: adoption reads, and must change nothing on a panel.
+    const report = await ctx.container
+      .legacyImporter({ inventoryPageSize: 3 })
+      .apply({ ...input('import-p4', await snapshot()), mode: 'IMPORT' });
+    expect(report.verdict).toBe('COMPLETED');
+    expect(await count('services')).toBeGreaterThan(0);
+    expect(comparePanelStates(before, await walk())).toBe('unchanged');
+    expectOnlyReads();
+
+    // What a panel write looks like to the same walk: one account's limit changed.
+    const victim = SYNTHETIC_PANEL_ACCOUNTS.A[0] as string;
+    panelA.seedUser(victim, {
+      expire: Math.floor(Date.UTC(2027, 0, 1) / 1000),
+      dataLimit: 60 * 1024 ** 3,
+      usedTraffic: 1024 ** 3,
+    });
+    expect(comparePanelStates(before, await walk())).toBe(
+      `changed: ${panelAId}: accounts ${SYNTHETIC_PANEL_ACCOUNTS.A.length}->${SYNTHETIC_PANEL_ACCOUNTS.A.length}, added 0, removed 0, changed 1`,
+    );
+  });
+
+  it('a claim whose session is killed mid-import stops the import as interrupted; resume finishes it', async () => {
+    const snap = await snapshot();
+    const lockBackend = sql`
+      SELECT pid FROM pg_locks
+       WHERE locktype = 'advisory' AND classid = ${LEGACY_IMPORT_PROCESS_LOCK_CLASS} AND granted
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`;
+    let killedPid: number | null = null;
+    const crashed = await ctx.container
+      .legacyImporter({ inventoryPageSize: 3 })
+      .apply({
+        ...input('claim-lost', snap),
+        mode: 'IMPORT',
+        afterPhase: async (phase) => {
+          if (phase !== 'customers') return;
+          // Exactly the claim's own connection: one pid, the lock's holder. Nothing else.
+          const holders = await ctx.container.database.db.execute<{ pid: number }>(lockBackend);
+          expect(holders.rows).toHaveLength(1);
+          killedPid = holders.rows[0]?.pid ?? null;
+          await ctx.container.database.db.execute(sql`SELECT pg_terminate_backend(${killedPid})`);
+          // The client hears its session end a moment later.
+          for (let i = 0; i < 100; i += 1) {
+            const still = await ctx.container.database.db.execute<{ n: number }>(
+              sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE pid = ${killedPid}`,
+            );
+            if (still.rows[0]?.n === 0) break;
+            await new Promise((r) => setTimeout(r, 20));
+          }
+          await new Promise((r) => setTimeout(r, 200));
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(killedPid).not.toBeNull();
+    expect(crashed).toBeInstanceOf(LegacyImportInterrupted);
+    expect(String((crashed as LegacyImportInterrupted).cause)).toContain('process claim was lost');
+    // Stopped before the next phase wrote anything: customers exist, openings do not.
+    expect(await count('legacy_import_runs', "status = 'RUNNING' AND mode = 'APPLY'")).toBe(1);
+    expect(await count('wallet_entries')).toBe(0);
+
+    const resumed = await ctx.container
+      .legacyImporter({ inventoryPageSize: 3 })
+      .apply({ ...input('resume-after-lost', snap), mode: 'RESUME' });
+    expect(resumed.verdict).toBe('COMPLETED');
+    expect(await count('legacy_import_runs', "status = 'COMPLETED'")).toBe(1);
+  });
+
+  it('G10 at apply time: import and resume refuse a map that forgets a live code_panel, writing nothing', async () => {
+    const snap = await snapshot();
+    const forgot = parsePanelMapping(
+      JSON.stringify(
+        (({ unresolvedPanels: _drop, ...rest }) => rest)(
+          JSON.parse(mappingText) as Record<string, unknown>,
+        ),
+      ),
+      tenantA.tenantId as unknown as string,
+    );
+    const before = await databaseFingerprint(ctx.container.database.db);
+    for (const mode of ['IMPORT', 'RESUME'] as const) {
+      const refused = await importer()
+        .apply({ ...input(`g10-${mode}`, snap, forgot), mode })
+        .catch((e: unknown) => e);
+      expect(refused, mode).toBeInstanceOf(PanelMappingRefused);
+      expect(String((refused as Error).message)).toContain('"zzz": 1 invoice(s)');
+    }
+    expect(changedTables(before, await databaseFingerprint(ctx.container.database.db))).toEqual({});
+    // A RUNNING run from before the map lost the declaration cannot be resumed under it.
+    await expect(
+      importer().apply({
+        ...input('g10-crash', snap),
+        mode: 'IMPORT',
+        afterPhase: (phase) => {
+          if (phase === 'customers') throw new Error('simulated crash');
+        },
+      }),
+    ).rejects.toBeInstanceOf(LegacyImportInterrupted);
+    await expect(
+      importer().apply({ ...input('g10-resume', snap, forgot), mode: 'RESUME' }),
+    ).rejects.toBeInstanceOf(PanelMappingRefused);
+    // With the declaration, the same import goes through.
+    const ok = await importer().apply({ ...input('g10-ok', snap), mode: 'RESUME' });
+    expect((ok.sections as Record<string, any>)['run'].status).toBe('COMPLETED');
   });
 
   it('a stopped tenant accepts no import write', async () => {

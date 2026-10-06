@@ -303,9 +303,45 @@ The production gate requires a successful rollback rehearsal (G13). Two parts:
    snapshot into a candidate, validates it against the pre-import aggregates, cuts over by
    two renames, keeps the displaced database, and requires the post-restore snapshot to equal
    the pre-import one exactly (`rollback_restores_pre_import`), then repeats the import from
-   that clean restore (`repeat_reproduces_cycle_1`).
+   that clean restore (`repeat_reproduces_cycle_1`). Since WP-D8 "exactly" is exact: every
+   table of `public` and `drizzle` is fingerprinted (rows, and two 64-bit sums over
+   `md5(row::text)`, `scripts/legacy-rehearsal-table-hashes.sql`) before the import and after
+   the rollback, and must be identical (`rollback_restores_pre_import_exact`); and the
+   displaced database must exist (`rollback_displaced_exists`) and be, table by table, the
+   post-import state (`rollback_displaced_preserved`). The harness's mechanism is
+   `pg_dump`/`pg_restore` and two renames — NOT the `.nxb` archive and the recovery executor
+   production uses, so it never satisfies part 2.
 2. **The lane, by hand, once per release candidate**: on the staging installation, after a
    staging import, run R0–R4 above with the staging pre-import backup id — download,
    upload, verify, `RESTORE NEXA`, watch the stages, validate with the same `diff`. Record the
    duration of each stage and the recovery request id. A rehearsal that skipped the Web
    Admin lane does not satisfy G13.
+
+### Recording the lane (G13 part b)
+
+**Status: NOT RUN.** No staging import exists yet, so the lane has not been rehearsed on
+it. Fill one table per rehearsal, in the readiness record, from the Web Admin and the R4
+commands; every row starts `NOT RUN` and is `PASS` only with its value recorded.
+
+| step | what is recorded                                                                                                           | value | result  |
+| ---- | -------------------------------------------------------------------------------------------------------------------------- | ----- | ------- |
+| R0   | release candidate (version and image digest) and the time traffic stopped                                                  | —     | NOT RUN |
+| R1   | `PRE_IMPORT_BACKUP_ID`; `backup list` row `MANUAL SUCCEEDED verified`; `verify` OK                                         | —     | NOT RUN |
+| R2.1 | the archive's SHA-256 (download or off-host copy)                                                                          | —     | NOT RUN |
+| R2.3 | the verified manifest's backup id — must equal `PRE_IMPORT_BACKUP_ID`                                                      | —     | NOT RUN |
+| R2.4 | the restore test (scratch `pg_restore`) passed                                                                             | —     | NOT RUN |
+| R2.5 | the recovery request id                                                                                                    | —     | NOT RUN |
+| R2.6 | stage durations: `PRE_RESTORE_BACKUP`, `QUIESCING`, `RESTORING`, `VALIDATING`, `CUTTING_OVER`, `RESTARTING` (seconds each) | —     | NOT RUN |
+| R2.6 | the pre-restore backup id (the forensic copy of the post-import state)                                                     | —     | NOT RUN |
+| R2.6 | the displaced database `nexa_pre_restore_<id>` — exists after the cutover                                                  | —     | NOT RUN |
+| R3   | the running release's migration level equals the restored database's                                                       | —     | NOT RUN |
+| R4   | `/health/ready` 200 and every role healthy                                                                                 | —     | NOT RUN |
+| R4   | `diff` of `nexa-PRE.tsv` and `nexa-RESTORED.tsv` (noise lines excluded): empty                                             | —     | NOT RUN |
+| R4   | the import's `APPLY` run absent from `legacy_import_runs`; none `RUNNING`                                                  | —     | NOT RUN |
+| R4   | an imported customer unknown again (or an existing one at its pre-import balance)                                          | —     | NOT RUN |
+| R4   | the recovery request `SUCCEEDED`; the operations group got the recovery event                                              | —     | NOT RUN |
+
+Optional and stronger than the R4 `diff`: run `scripts/legacy-rehearsal-table-hashes.sql`
+against the staging database before the import and after the lane, and record whether the
+two outputs are identical (`cmp`). The runbook's `diff` compares the aggregate figures; the
+table hashes compare every row.
