@@ -623,6 +623,7 @@ export const WEB_FA = {
 
   // Round W (foundation): the shell, the command search and the shared kit.
   'web.navgroup_ops': 'عملیات',
+  'web.navgroup_support_ai': 'هوش مصنوعی پشتیبانی',
   'web.navgroup_resellers': 'نمایندگی',
   'web.navgroup_comms': 'ارتباط',
   'web.open_menu': 'باز کردن منو',
@@ -7516,6 +7517,26 @@ export const WEB_FA = {
   'web.sai_provider_zai': 'Z.AI',
   'web.sai_model': 'شناسهٔ مدل',
   'web.sai_vision': 'اجازهٔ خواندن تصویر (برای مدل‌هایی که پشتیبانی می‌کنند)',
+  // Hotfix: the automatic-reply allowlist and confidence floor on «دستیار هوشمند پشتیبانی».
+  'web.sai_auto_topics': 'موضوعات مجاز برای پاسخ خودکار',
+  'web.sai_auto_topics_hint':
+    'پاسخ خودکار فقط برای موضوع‌های انتخاب‌شده فرستاده می‌شود. اگر هیچ موضوعی انتخاب نشود، هیچ پاسخی خودکار فرستاده نمی‌شود.',
+  'web.sai_auto_topic_connection_troubleshooting': 'مشکل اتصال',
+  'web.sai_auto_topic_app_setup': 'راه‌اندازی برنامه',
+  'web.sai_auto_topic_subscription_update': 'بروزرسانی اشتراک',
+  'web.sai_auto_topic_service_info': 'اطلاعات سرویس',
+  'web.sai_auto_topic_traffic_and_expiry': 'حجم و تاریخ انقضا',
+  'web.sai_auto_topic_plan_info': 'اطلاعات پلن',
+  'web.sai_auto_topic_known_error': 'خطای شناخته‌شده',
+  'web.sai_auto_topic_greeting': 'سلام و احوالپرسی',
+  'web.sai_auto_min_confidence': 'حداقل اطمینان برای پاسخ خودکار',
+  'web.sai_auto_min_confidence_hint':
+    'پاسخی که هوش مصنوعی به آن کمتر از این مقدار مطمئن باشد خودکار فرستاده نمی‌شود و به پشتیبان سپرده می‌شود.',
+  'web.sai_auto_widen_entering':
+    'افزودن موضوع یا پایین آوردن حداقل اطمینان به اجازهٔ جداگانهٔ «پاسخ خودکار» نیاز دارد و سرور هنگام ذخیره آن را بررسی می‌کند.',
+  'web.sai_auto_widen_needs_owner':
+    'افزودن موضوع یا پایین آوردن حداقل اطمینان به اجازهٔ «پاسخ خودکار» نیاز دارد که معمولاً فقط مالک دارد؛ اگر این اجازه را ندارید، سرور ذخیره را رد می‌کند.',
+  'web.sai_invalid_auto_topics': 'هر موضوع پاسخ خودکار فقط یک بار می‌تواند انتخاب شود.',
   'web.sai_range': 'بازهٔ مجاز:',
   'web.sai_timeout_ms': 'مهلت هر درخواست (میلی‌ثانیه)',
   'web.sai_max_output_chars': 'بیشترین طول پاسخ (نویسه)',

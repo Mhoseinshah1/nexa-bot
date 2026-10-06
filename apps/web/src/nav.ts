@@ -13,7 +13,8 @@ import { isSuperAdmin } from './report-view';
  *
  * Round W regrouped the entries into the reference's semantic sections —
  * عملیات · فروش · نمایندگی · زیرساخت · ارتباط · پیکربندی · سامانه — without
- * changing a single entry's path or permission; the full map is in
+ * changing a single entry's path or permission; the support-AI pages later got
+ * their own group, «هوش مصنوعی پشتیبانی», the same way. The full map is in
  * `docs/web-redesign/foundation.md`, and `tests/web/route-inventory.test.tsx`
  * proves every entry is in exactly one group and resolves to a real page.
  */
@@ -155,6 +156,18 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_ops',
   },
   {
+    // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
+    id: 'bulk-operations',
+    path: '/bulk-operations',
+    label: 'web.nav_bulk_operations',
+    icon: 'grid',
+    permission: 'bulk_operations.view',
+    group: 'web.navgroup_ops',
+  },
+  // «هوش مصنوعی پشتیبانی»: the support-AI subsystem, in one group of its own. Moved here from
+  // عملیات and پیکربندی without changing a path or a permission; the generic support pages
+  // (tickets, the FAQ) stay where they were.
+  {
     /*
      * TB2: Telegram Business conversations (ADR-0033). `business_chats.view`; the take over,
      * hand back and reply controls are drawn on `business_chats.reply` inside the page.
@@ -164,7 +177,20 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_business_chats',
     icon: 'send',
     permission: 'business_chats.view',
-    group: 'web.navgroup_ops',
+    group: 'web.navgroup_support_ai',
+  },
+  {
+    /*
+     * TB4/TB5: the support AI's mode, provider chain, keys and usage (ADR-0034 §8).
+     * `support_ai.configure`, which every read and write on the page charges; entering
+     * automatic replies is charged `support_ai.auto_reply` by the server on save.
+     */
+    id: 'support-ai',
+    path: '/support-ai',
+    label: 'web.nav_support_ai',
+    icon: 'zap',
+    permission: 'support_ai.configure',
+    group: 'web.navgroup_support_ai',
   },
   {
     /*
@@ -176,7 +202,7 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_support_knowledge',
     icon: 'content',
     permission: 'support_knowledge.view',
-    group: 'web.navgroup_ops',
+    group: 'web.navgroup_support_ai',
   },
   {
     // TB8: the lessons the support AI proposed from human replies, waiting for a reviewer.
@@ -185,7 +211,7 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_learning_candidates',
     icon: 'check',
     permission: 'support_knowledge.view',
-    group: 'web.navgroup_ops',
+    group: 'web.navgroup_support_ai',
   },
   {
     // TB9: the one-click build from NEXA — run, review the diff, resolve conflicts, apply.
@@ -194,16 +220,20 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_knowledge_build',
     icon: 'refresh',
     permission: 'support_knowledge.view',
-    group: 'web.navgroup_ops',
+    group: 'web.navgroup_support_ai',
   },
   {
-    // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
-    id: 'bulk-operations',
-    path: '/bulk-operations',
-    label: 'web.nav_bulk_operations',
-    icon: 'grid',
-    permission: 'bulk_operations.view',
-    group: 'web.navgroup_ops',
+    /*
+     * TB10: support analytics — conversations, handoffs, automatic replies, drafts, provider
+     * runs, learning and knowledge, over a report range. Read under `support_ai.configure`,
+     * which the server charges; usage and cost are folded into that key (`tb0-audit.md` §7).
+     */
+    id: 'support-analytics',
+    path: '/support-analytics',
+    label: 'web.nav_support_analytics',
+    icon: 'activity',
+    permission: 'support_ai.configure',
+    group: 'web.navgroup_support_ai',
   },
   {
     id: 'products',
@@ -511,32 +541,6 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
-    /*
-     * TB4/TB5: the support AI's mode, provider chain, keys and usage (ADR-0034 §8).
-     * `support_ai.configure`, which every read and write on the page charges; entering
-     * automatic replies is charged `support_ai.auto_reply` by the server on save.
-     */
-    id: 'support-ai',
-    path: '/support-ai',
-    label: 'web.nav_support_ai',
-    icon: 'zap',
-    permission: 'support_ai.configure',
-    group: 'web.navgroup_config',
-  },
-  {
-    /*
-     * TB10: support analytics — conversations, handoffs, automatic replies, drafts, provider
-     * runs, learning and knowledge, over a report range. Read under `support_ai.configure`,
-     * which the server charges; usage and cost are folded into that key (`tb0-audit.md` §7).
-     */
-    id: 'support-analytics',
-    path: '/support-analytics',
-    label: 'web.nav_support_analytics',
-    icon: 'activity',
-    permission: 'support_ai.configure',
-    group: 'web.navgroup_config',
-  },
-  {
     // R1: the customer main menu — order, switches (a setting) and labels (templates).
     id: 'bot-buttons',
     path: '/bot-buttons',
@@ -645,6 +649,7 @@ export const NAV: readonly NavEntry[] = [
 /** The groups, in the order the sidebar draws them. */
 export const GROUP_ORDER: readonly WebKey[] = [
   'web.navgroup_ops',
+  'web.navgroup_support_ai',
   'web.navgroup_sales',
   'web.navgroup_resellers',
   'web.navgroup_infra',
