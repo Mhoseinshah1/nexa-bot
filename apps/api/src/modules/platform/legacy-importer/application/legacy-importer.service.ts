@@ -35,7 +35,9 @@ import type { LegacyProductService } from '../../../commerce/catalog/application
 import { legacyProfileUsername, type ServiceCandidateCategory } from './decisions.js';
 import { crossCheckEvidence, type LegacyEvidence } from './evidence-runner.js';
 import {
+  PanelMappingRefused,
   panelMappingCompleteness,
+  type PanelMappingCompleteness,
   validatePanelMappingAgainstTenant,
   validateProductMappingAgainstTenant,
   type PanelMapping,
@@ -46,6 +48,7 @@ import type {
   LegacyCustomerWriter,
   LegacyImporterDestination,
   LegacyInventoryPort,
+  LegacyImportProcessLease,
   LegacyImportProcessLock,
   LegacyInventoryRead,
   LegacyRunInputs,
@@ -223,6 +226,17 @@ export function applyAttention(tallies: ApplyTallies) {
   return { ...counts, total };
 }
 
+/** G10's blocker sentence, or null when every live real code_panel is accounted for. */
+export function incompletePanelMapMessage(completeness: PanelMappingCompleteness): string | null {
+  const unmapped = Object.entries(completeness.unmapped);
+  if (unmapped.length === 0) return null;
+  return (
+    `the panel map does not account for ${unmapped.length} live code_panel value(s) ` +
+    `(${unmapped.map(([code, n]) => `${JSON.stringify(code)}: ${n} invoice(s)`).join(', ')}); ` +
+    'map each, list it as a test or missing panel, or declare it in unresolvedPanels with a reason'
+  );
+}
+
 export class LegacyImporterService {
   constructor(private readonly deps: LegacyImporterDeps) {}
 
@@ -393,14 +407,8 @@ export class LegacyImporterService {
     // WP-D2 / G10: every live real code_panel is mapped, a test panel, declared missing,
     // or declared unresolved with a reason. A code the map does not account for blocks.
     const completeness = panelMappingCompleteness(input.snapshot.liveInvoices, input.mapping);
-    const unmapped = Object.entries(completeness.unmapped);
-    if (unmapped.length > 0) {
-      blockers.push(
-        `the panel map does not account for ${unmapped.length} live code_panel value(s) ` +
-          `(${unmapped.map(([code, n]) => `${JSON.stringify(code)}: ${n} invoice(s)`).join(', ')}); ` +
-          'map each, list it as a test or missing panel, or declare it in unresolvedPanels with a reason',
-      );
-    }
+    const incomplete = incompletePanelMapMessage(completeness);
+    if (incomplete !== null) blockers.push(incomplete);
     return this.report(
       'AUDIT',
       input.scope,
@@ -499,7 +507,7 @@ export class LegacyImporterService {
       );
     }
     try {
-      return await this.applyClaimed(input);
+      return await this.applyClaimed(input, lease);
     } finally {
       await lease.release();
     }
@@ -510,10 +518,17 @@ export class LegacyImporterService {
       readonly mode: 'IMPORT' | 'RESUME';
       readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
     },
+    lease: LegacyImportProcessLease,
   ): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
     const prepared = await this.prepare(scope, snapshot, mapping);
+    // G10, the same predicate as the audit, decided again NOW: an import never starts on
+    // a map that forgets a live code_panel — whatever the audit said earlier.
+    const incomplete = incompletePanelMapMessage(
+      panelMappingCompleteness(snapshot.liveInvoices, mapping),
+    );
+    if (incomplete !== null) throw new PanelMappingRefused([incomplete]);
     if (prepared.salesCurrency !== LEGACY_BALANCE_CURRENCY) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
@@ -613,8 +628,16 @@ export class LegacyImporterService {
     let phase: ApplyPhase = 'customers';
     const hook = async (p: ApplyPhase) => {
       if (input.afterPhase !== undefined) await input.afterPhase(p);
+      // Between phases: a claim whose session ended may already be someone else's.
+      // Stopping here leaves the run RUNNING — the ordinary interruption a resume finishes.
+      if (lease.isLost()) {
+        throw new Error('the process claim was lost (its database session ended); stopping');
+      }
     };
     try {
+      if (lease.isLost()) {
+        throw new Error('the process claim was lost (its database session ended); stopping');
+      }
       const imported = await this.customersPhase(scope, actor, run.id, prepared.plan, tallies);
       await hook('customers');
       phase = 'openings';

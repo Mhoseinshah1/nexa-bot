@@ -1697,6 +1697,88 @@ describe('Migration P7: the legacy importer', () => {
     );
   });
 
+  it('a claim whose session is killed mid-import stops the import as interrupted; resume finishes it', async () => {
+    const snap = await snapshot();
+    const lockBackend = sql`
+      SELECT pid FROM pg_locks
+       WHERE locktype = 'advisory' AND classid = ${LEGACY_IMPORT_PROCESS_LOCK_CLASS} AND granted
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`;
+    let killedPid: number | null = null;
+    const crashed = await ctx.container
+      .legacyImporter({ inventoryPageSize: 3 })
+      .apply({
+        ...input('claim-lost', snap),
+        mode: 'IMPORT',
+        afterPhase: async (phase) => {
+          if (phase !== 'customers') return;
+          // Exactly the claim's own connection: one pid, the lock's holder. Nothing else.
+          const holders = await ctx.container.database.db.execute<{ pid: number }>(lockBackend);
+          expect(holders.rows).toHaveLength(1);
+          killedPid = holders.rows[0]?.pid ?? null;
+          await ctx.container.database.db.execute(sql`SELECT pg_terminate_backend(${killedPid})`);
+          // The client hears its session end a moment later.
+          for (let i = 0; i < 100; i += 1) {
+            const still = await ctx.container.database.db.execute<{ n: number }>(
+              sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE pid = ${killedPid}`,
+            );
+            if (still.rows[0]?.n === 0) break;
+            await new Promise((r) => setTimeout(r, 20));
+          }
+          await new Promise((r) => setTimeout(r, 200));
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(killedPid).not.toBeNull();
+    expect(crashed).toBeInstanceOf(LegacyImportInterrupted);
+    expect(String((crashed as LegacyImportInterrupted).cause)).toContain('process claim was lost');
+    // Stopped before the next phase wrote anything: customers exist, openings do not.
+    expect(await count('legacy_import_runs', "status = 'RUNNING' AND mode = 'APPLY'")).toBe(1);
+    expect(await count('wallet_entries')).toBe(0);
+
+    const resumed = await ctx.container
+      .legacyImporter({ inventoryPageSize: 3 })
+      .apply({ ...input('resume-after-lost', snap), mode: 'RESUME' });
+    expect(resumed.verdict).toBe('COMPLETED');
+    expect(await count('legacy_import_runs', "status = 'COMPLETED'")).toBe(1);
+  });
+
+  it('G10 at apply time: import and resume refuse a map that forgets a live code_panel, writing nothing', async () => {
+    const snap = await snapshot();
+    const forgot = parsePanelMapping(
+      JSON.stringify(
+        (({ unresolvedPanels: _drop, ...rest }) => rest)(
+          JSON.parse(mappingText) as Record<string, unknown>,
+        ),
+      ),
+      tenantA.tenantId as unknown as string,
+    );
+    const before = await databaseFingerprint(ctx.container.database.db);
+    for (const mode of ['IMPORT', 'RESUME'] as const) {
+      const refused = await importer()
+        .apply({ ...input(`g10-${mode}`, snap, forgot), mode })
+        .catch((e: unknown) => e);
+      expect(refused, mode).toBeInstanceOf(PanelMappingRefused);
+      expect(String((refused as Error).message)).toContain('"zzz": 1 invoice(s)');
+    }
+    expect(changedTables(before, await databaseFingerprint(ctx.container.database.db))).toEqual({});
+    // A RUNNING run from before the map lost the declaration cannot be resumed under it.
+    await expect(
+      importer().apply({
+        ...input('g10-crash', snap),
+        mode: 'IMPORT',
+        afterPhase: (phase) => {
+          if (phase === 'customers') throw new Error('simulated crash');
+        },
+      }),
+    ).rejects.toBeInstanceOf(LegacyImportInterrupted);
+    await expect(
+      importer().apply({ ...input('g10-resume', snap, forgot), mode: 'RESUME' }),
+    ).rejects.toBeInstanceOf(PanelMappingRefused);
+    // With the declaration, the same import goes through.
+    const ok = await importer().apply({ ...input('g10-ok', snap), mode: 'RESUME' });
+    expect((ok.sections as Record<string, any>)['run'].status).toBe('COMPLETED');
+  });
+
   it('a stopped tenant accepts no import write', async () => {
     await ctx.container.database.db.execute(
       sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId as unknown as string}`,

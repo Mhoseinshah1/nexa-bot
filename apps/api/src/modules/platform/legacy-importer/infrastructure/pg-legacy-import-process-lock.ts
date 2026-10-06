@@ -18,9 +18,20 @@ export class PgLegacyImportProcessLock implements LegacyImportProcessLock {
   constructor(private readonly databaseUrl: string) {}
 
   async tryAcquire(tenantId: string): Promise<LegacyImportProcessLease | null> {
-    const client = new Client({ connectionString: this.databaseUrl });
-    // A connection-level failure must not escape as an unhandled 'error' event.
-    client.on('error', () => undefined);
+    // keepAlive: an idle connection whose peer vanished (a network cut, a dead pooler) is
+    // noticed by TCP rather than never.
+    const client = new Client({ connectionString: this.databaseUrl, keepAlive: true });
+    let lost = false;
+    let released = false;
+    // The claim IS this session. If it ends for any reason but our own release — the
+    // backend terminated, the server restarted, the network cut — the lock is gone and
+    // another process may already hold it, so the claim is LOST and the holder must stop.
+    // (And a connection-level failure must not escape as an unhandled 'error' event.)
+    const markLost = () => {
+      if (!released) lost = true;
+    };
+    client.on('error', markLost);
+    client.on('end', markLost);
     await client.connect();
     let held = false;
     try {
@@ -33,8 +44,8 @@ export class PgLegacyImportProcessLock implements LegacyImportProcessLock {
       if (!held) await client.end().catch(() => undefined);
     }
     if (!held) return null;
-    let released = false;
     return {
+      isLost: () => lost,
       release: async () => {
         if (released) return;
         released = true;

@@ -212,5 +212,10 @@ export interface LegacyImportProcessLock {
 }
 
 export interface LegacyImportProcessLease {
+  /**
+   * True once the claim's session ended without `release` — the lock is gone and another
+   * process may hold it. The holder checks it between phases and stops as interrupted.
+   */
+  isLost(): boolean;
   release(): Promise<void>;
 }
