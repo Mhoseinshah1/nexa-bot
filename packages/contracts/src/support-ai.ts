@@ -703,3 +703,18 @@ export const SUPPORT_AI_DRAFT_RETENTION_DAYS = 30;
  * web uses the same number to bound its polling.
  */
 export const SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS = 300;
+
+/**
+ * D5 — the `assistant` role is not running (or not claiming). Opened by the WORKER, which sees
+ * an Assist draft or an automatic job due for `SUPPORT_ASSISTANT_STALL_SECONDS` with no live
+ * lease while no job is leased at all; closed by the ASSISTANT itself, by `…running`, once a
+ * pass of its loop completes. Without it a dead assistant made no sound: it is outside
+ * `NEXA_READY_SERVICES`, drafts failed as a generic «ناموفق» after five minutes, and under
+ * `AUTO_REPLY_SAFE` customers got neither a reply nor a handoff until it came back.
+ *
+ * Codes are schema (CLAUDE.md, Phase 3C): named once, here.
+ */
+export const SUPPORT_ASSISTANT_STALLED_CODE = 'support.assistant.stalled';
+export const SUPPORT_ASSISTANT_RUNNING_CODE = 'support.assistant.running';
+/** How long due AI work may wait unclaimed before the worker raises the condition. */
+export const SUPPORT_ASSISTANT_STALL_SECONDS = 120;

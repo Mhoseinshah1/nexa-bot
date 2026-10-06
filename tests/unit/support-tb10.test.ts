@@ -267,6 +267,8 @@ describe('the support notifications', () => {
       'SUPPORT_AI',
     );
     expect(notificationRuleFor('support.ai_provider.unavailable')?.category).toBe('SUPPORT_AI');
+    // D5: a stalled assistant reaches whoever configures the support AI.
+    expect(notificationRuleFor('support.assistant.stalled')?.category).toBe('SUPPORT_AI');
     expect(NOTIFICATION_CATEGORY_PERMISSIONS.SUPPORT).toBe('business_chats.view');
     expect(NOTIFICATION_CATEGORY_PERMISSIONS.SUPPORT_AI).toBe('support_ai.configure');
   });
@@ -277,6 +279,7 @@ describe('the support notifications', () => {
       'support.business_connection.usable',
       'support.ai_provider.credential_accepted',
       'support.ai_provider.available',
+      'support.assistant.running',
       'support.something_new',
     ]) {
       expect(notificationRuleFor(code), code).toBeNull();
