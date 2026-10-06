@@ -4850,6 +4850,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // The same repository, for the same reason: the three payment-credit sentences
       // (Payment File 02 §18) read their figure from the entries the payment names.
       paymentCredits: walletRepository,
+      // B14: a wallet credit's tracking code (receipt or gateway), from the payment's own row.
+      paymentReferences: paymentRepository,
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);
@@ -6863,7 +6865,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           // A custom service (Package D) was bought from no product, so it has no display.
           if (productId === null) return null;
           const product = await productRepository.findById(scope, productId);
-          return product === null ? null : product.display;
+          // B1: the description travels with the display data, for the pre-invoice.
+          return product === null ? null : { ...product.display, description: product.description };
         },
       },
       resellers: resellerService,

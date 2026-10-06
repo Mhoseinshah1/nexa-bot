@@ -380,13 +380,110 @@ describe('R3 — service delivery, connection files and the service card', () =>
   describe('disable and enable on the service card', () => {
     const CARD = 5150;
 
+    /*
+     * B8: both directions ASK first. The switch's own tap (`u:` / `e:` — also on a card
+     * drawn before this release) edits the SAME card into the question and plans nothing;
+     * only the confirm (`uq:` / `eq:`) plans the operation, and cancel (`sv:`) puts the card
+     * back unchanged.
+     */
+    const operations = (serviceId: string, type: string) =>
+      count(
+        sql`SELECT count(*)::int AS n FROM provisioning_operations
+             WHERE service_id = ${serviceId} AND type = ${type}`,
+      );
+    const callbacks = (one: Sent | undefined) =>
+      [
+        ...JSON.stringify(one?.body['reply_markup'] ?? {}).matchAll(/"callback_data":"([^"]+)"/gu),
+      ].map((m) => m[1] as string);
+
+    it('B8: switching OFF asks in the card first, and plans nothing until confirmed', async () => {
+      const service = await paidService('b8-off');
+      sent = [];
+      const asked = await tap(`u:${service.id}`, CARD);
+      expect(asked.replyKey).toBe('bot.service.suspend_confirm');
+      expect(of('sendMessage'), 'no new message').toHaveLength(0);
+      const [question] = of('editMessageText');
+      expect(of('editMessageText')).toHaveLength(1);
+      expect(question?.body['message_id']).toBe(CARD);
+      expect(String(question?.body['text'])).toBe(
+        `آیا از خاموش کردن اکانت ${service.providerUsername} مطمئن هستید؟\nتا وقتی دوباره آن را روشن نکنید، اتصال شما برقرار نمی‌شود.`,
+      );
+      const data = callbacks(question);
+      expect(data).toEqual([`uq:${service.id}`, `sv:${service.id}`]);
+      expect(JSON.stringify(question?.body['reply_markup'])).toContain('✖️ انصراف');
+      for (const one of data) expect(Buffer.byteLength(one, 'utf8')).toBeLessThanOrEqual(64);
+      expect(await operations(service.id, 'SUSPEND'), 'the question plans nothing').toBe(0);
+      await ctx.container.provisionerLoop.tick();
+      expect(panel.users.get(service.providerUsername)?.status).toBe('active');
+
+      // The confirm is the only tap that plans it — once, whatever Telegram redelivers.
+      const key = `b8-confirm-${randomUUID()}`;
+      await tap(`uq:${service.id}`, CARD, key);
+      await tap(`uq:${service.id}`, CARD, key);
+      expect(await operations(service.id, 'SUSPEND')).toBe(1);
+      await ctx.container.provisionerLoop.tick();
+      expect(panel.users.get(service.providerUsername)?.status).toBe('disabled');
+    });
+
+    it('B8: switching ON asks in the card first, and plans nothing until confirmed', async () => {
+      const service = await paidService('b8-on');
+      await tap(`uq:${service.id}`, CARD);
+      await ctx.container.provisionerLoop.tick();
+      expect((await services.findById(tenantA, service.id as never))?.state).toBe('SUSPENDED');
+
+      sent = [];
+      const asked = await tap(`e:${service.id}`, CARD);
+      expect(asked.replyKey).toBe('bot.service.resume_confirm');
+      const [question] = of('editMessageText');
+      expect(question?.body['message_id']).toBe(CARD);
+      expect(String(question?.body['text'])).toBe(
+        `آیا از روشن کردن اکانت ${service.providerUsername} مطمئن هستید؟`,
+      );
+      expect(callbacks(question)).toEqual([`eq:${service.id}`, `sv:${service.id}`]);
+      expect(of('sendMessage')).toHaveLength(0);
+      expect(await operations(service.id, 'RESUME')).toBe(0);
+
+      await tap(`eq:${service.id}`, CARD);
+      expect(await operations(service.id, 'RESUME')).toBe(1);
+      await ctx.container.provisionerLoop.tick();
+      expect((await services.findById(tenantA, service.id as never))?.state).toBe('ACTIVE');
+    });
+
+    it('B8: cancel puts the same card back and changes nothing', async () => {
+      const service = await paidService('b8-cancel');
+      await tap(`u:${service.id}`, CARD);
+      sent = [];
+      await tap(`sv:${service.id}`, CARD);
+      const [card] = of('editMessageText');
+      expect(of('editMessageText')).toHaveLength(1);
+      expect(card?.body['message_id']).toBe(CARD);
+      expect(String(card?.body['text'])).toContain('🟢');
+      expect(callbacks(card)).toContain(`u:${service.id}`);
+      expect(of('sendMessage')).toHaveLength(0);
+      expect(await operations(service.id, 'SUSPEND')).toBe(0);
+      await ctx.container.provisionerLoop.tick();
+      expect(panel.users.get(service.providerUsername)?.status).toBe('active');
+    });
+
+    it('B8: a switch the service no longer offers is not asked about — the card is redrawn with the notice', async () => {
+      const service = await paidService('b8-stale');
+      sent = [];
+      // Enable on an ACTIVE service: a keyboard from before it was switched back on.
+      const stale = await tap(`e:${service.id}`, CARD);
+      expect(stale.replyKey).toBe('bot.service.card');
+      expect(JSON.stringify(of('answerCallbackQuery').at(-1))).toContain(
+        'این قابلیت برای سرویس شما در دسترس نیست',
+      );
+      expect(await operations(service.id, 'RESUME')).toBe(0);
+    });
+
     it('disable edits the same card to inactive and turns the switch into enable, and back', async () => {
       const service = await paidService('switch');
       sent = [];
 
       // The tap sends nothing new: no «request registered». Round N (F4): the SAME card
       // reads «working», with no switch to tap twice, until the panel has answered.
-      const tapped = await tap(`u:${service.id}`, CARD);
+      const tapped = await tap(`uq:${service.id}`, CARD);
       expect(tapped.replyKey).toBeNull();
       expect(of('sendMessage')).toHaveLength(0);
       const [working] = of('editMessageText');
@@ -423,7 +520,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       expect(of('editMessageText')).toHaveLength(0);
 
       // Enable, from the same card: back to active, and the switch turned round again.
-      await tap(`e:${service.id}`, CARD);
+      await tap(`eq:${service.id}`, CARD);
       sent = [];
       await ctx.container.provisionerLoop.tick();
       expect((await services.findById(tenantA, service.id as never))?.state).toBe('ACTIVE');
@@ -443,7 +540,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
         body: { ok: false, error_code: 400, description: 'Bad Request: message to edit not found' },
       };
       sent = [];
-      await tap(`u:${service.id}`, CARD);
+      await tap(`uq:${service.id}`, CARD);
       // The «working» edit is best effort: refused, it is not sent instead.
       expect(of('editMessageText')).toHaveLength(1);
       expect(of('sendMessage')).toHaveLength(0);
@@ -464,7 +561,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
     it('a disable the panel cannot perform puts the card back as it was, with the failure on it', async () => {
       const service = await paidService('switch-fail');
       (panel.users as Map<string, unknown>).delete(service.providerUsername);
-      await tap(`u:${service.id}`, CARD);
+      await tap(`uq:${service.id}`, CARD);
       sent = [];
       await ctx.container.provisionerLoop.tick();
       expect((await services.findById(tenantA, service.id as never))?.state).toBe('ACTIVE');
@@ -502,8 +599,8 @@ describe('R3 — service delivery, connection files and the service card', () =>
 
     it('a double tap plans one operation and keeps the first card', async () => {
       const service = await paidService('switch-twice');
-      await tap(`u:${service.id}`, CARD);
-      await tap(`u:${service.id}`, CARD + 1);
+      await tap(`uq:${service.id}`, CARD);
+      await tap(`uq:${service.id}`, CARD + 1);
       expect(
         await count(
           sql`SELECT count(*)::int AS n FROM provisioning_operations
@@ -584,7 +681,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
         status: 429,
         body: { ok: false, error_code: 429, parameters: { retry_after: 30 } },
       };
-      await tap(`u:${service.id}`, CARD);
+      await tap(`uq:${service.id}`, CARD);
       sent = [];
       await ctx.container.provisionerLoop.tick();
       expect(of('editMessageText')).toHaveLength(1);
@@ -606,7 +703,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
         status: 429,
         body: { ok: false, error_code: 429, parameters: { retry_after: 20 } },
       };
-      await tap(`u:${service.id}`, CARD);
+      await tap(`uq:${service.id}`, CARD);
       sent = [];
       await ctx.container.provisionerLoop.tick();
       expect(of('editMessageText')).toHaveLength(1);
@@ -631,7 +728,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       const service = await paidService('replay-switch');
       (panel.users as Map<string, unknown>).delete(service.providerUsername);
       const key = `replay-${randomUUID()}`;
-      await tap(`u:${service.id}`, CARD, key);
+      await tap(`uq:${service.id}`, CARD, key);
       await ctx.container.provisionerLoop.tick();
       const [ended] = (
         (await ctx.container.database.db.execute(
@@ -642,7 +739,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       expect(ended?.state).toBe('FAILED');
 
       sent = [];
-      const again = await tap(`u:${service.id}`, CARD, key);
+      const again = await tap(`uq:${service.id}`, CARD, key);
       expect(again.replyKey).toBeNull();
       expect(of('editMessageText'), 'the answered card is not touched').toHaveLength(0);
       expect(of('sendMessage')).toHaveLength(0);
@@ -656,7 +753,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
 
     it('reads «working» wherever it is drawn while a change is unsettled, then final', async () => {
       const service = await paidService('working-any');
-      await tap(`u:${service.id}`, CARD);
+      await tap(`uq:${service.id}`, CARD);
       // The card opened again — from another message — before the panel has answered.
       sent = [];
       await tap(`sv:${service.id}`, CARD + 1);

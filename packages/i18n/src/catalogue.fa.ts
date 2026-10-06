@@ -716,7 +716,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * under it (`wallet.open`, `catalog.open`), never «/wallet» in the text.
    */
   'bot.wallet.topup_credited':
-    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.',
+    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.\n\n\nکد پیگیری پرداخت: {reference}',
   'bot.wallet.topup_gift_credited':
     '{icon:referral} مبلغ {amount} نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.',
   /* WP-A9: sent once per fall below the tenant's threshold. */
@@ -734,7 +734,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * sentence no longer explains it, and never sends the customer to «/wallet».
    */
   'bot.payment.receipt_credited_to_wallet':
-    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.',
+    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.\n\n\nکد پیگیری پرداخت: {reference}',
 
   /*
    * It used to end «سپس رسید را ارسال نمایید» — "then send the receipt" — and no
@@ -978,6 +978,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.action_confirm_button': 'تأیید و پرداخت',
   'bot.service.suspend_button': '❌ خاموش کردن اکانت',
   'bot.service.resume_button': '✅ روشن کردن اکانت',
+  // B8: both directions of the switch ask first; nothing changes until the customer confirms.
+  'bot.service.suspend_confirm':
+    'آیا از خاموش کردن اکانت {serviceUsername} مطمئن هستید؟\nتا وقتی دوباره آن را روشن نکنید، اتصال شما برقرار نمی‌شود.',
+  'bot.service.resume_confirm': 'آیا از روشن کردن اکانت {serviceUsername} مطمئن هستید؟',
+  'bot.service.suspend_confirm_button': '✅ بله، خاموش شود',
+  'bot.service.resume_confirm_button': '✅ بله، روشن شود',
+  'bot.service.toggle_cancel_button': '✖️ انصراف',
   'bot.service.terminate_button': 'حذف سرویس',
   'bot.service.terminate_confirm':
     'آیا از حذف «{productTitle}» مطمئن هستید؟ با تأیید، حساب شما روی سرور پاک می‌شود و این کار برگشت‌پذیر نیست.',
@@ -1147,7 +1154,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.contact': '{icon:support} برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
   'bot.order.preinvoice':
-    '{icon:invoice} پیش فاکتور شما:\n\n{icon:user} نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n{icon:amount} قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n{icon:wallet} موجودی کیف پول شما: {walletBalance}\n\n{icon:wallet} سفارش شما آماده پرداخت است',
+    '{icon:invoice} پیش فاکتور شما:\n\n{icon:user} نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n{icon:amount} قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n\n{description}\n\n{icon:wallet} موجودی کیف پول شما: {walletBalance}\n\n{icon:wallet} سفارش شما آماده پرداخت است',
   'bot.order.preinvoice_custom':
     '🛠 سرویس دلخواه\n📍 لوکیشن: {location}\n📦 حجم: {volumeBytes} × {pricePerGb} = {volumePrice}\n{icon:time} مدت: {durationDays} × {pricePerDay} = {timePrice}',
   'bot.order.preinvoice_devices':

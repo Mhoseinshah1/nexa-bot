@@ -85,6 +85,25 @@ describe('the product display editors', () => {
     expect(body?.['serviceLocationLabel']).toBe('Frankfurt');
   });
 
+  /*
+   * B1: the description is now the ONE customer-facing text on the pre-invoice, and the
+   * form says so where the operator types it; the location and feature lists say they are
+   * internal data the default pre-invoice no longer shows.
+   */
+  it('tells the operator the description is shown to the customer, and the lists are internal', async () => {
+    stubApi(fixtures());
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await screen.findByLabelText('عنوان');
+    expect(
+      screen.getAllByText(/همین متن در پیش‌فاکتور به مشتری نشان داده می‌شود/u).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/به مشتری نشان داده نمی‌شود؛ برای خود شماست/u)).toBeNull();
+    expect(
+      screen.getAllByText(/دادهٔ داخلی محصول؛ پیش‌فاکتور پیش‌فرض به جای آن «توضیح» را نشان می‌دهد/u)
+        .length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
   it('opens a product with no display data as empty editors and sends empty lists back', async () => {
     const api = stubApi(fixtures());
     renderPage(<ProductDetailPage id={ID} mayEdit denied={false} />);

@@ -396,6 +396,19 @@ export class DeliveryService {
 
     const from = service.deliveryState;
     /*
+     * B9/C3: «🔗 لینک اشتراک» answered by ONE photo — the QR, the link as its caption and the
+     * way back under the same message. The tap's key is claimed FIRST, before the send stamp
+     * and before anything leaves the process, so a replayed tap (Telegram redelivering the
+     * update) sends nothing at all: never a second photo of a link already on the screen,
+     * and no stamp left for the reaper.
+     */
+    let linkPhoto = false;
+    if (options.card !== undefined && options.rotated !== true) {
+      const claim = await this.claimLinkPhoto(scope, service, options.linkQrKey);
+      if (claim === 'REPLAY') return { state: from, recorded: false };
+      linkPhoto = claim === 'PHOTO';
+    }
+    /*
      * The stamp that makes a dead sender recoverable, committed BEFORE the send.
      *
      * `markCallStarted` for the announcement half, and it exists for the same reason:
@@ -454,7 +467,7 @@ export class DeliveryService {
       rotated !== null
         ? rotated.result
         : options.card !== undefined
-          ? await this.showLinkOnCard(scope, service, options.card, sentUrl)
+          ? await this.showLinkOnCard(scope, service, options.card, sentUrl, linkPhoto)
           : await this.sendCard(scope, service, chatId, botInstanceId, sentUrl);
 
     const now = this.deps.clock.now();
@@ -519,19 +532,6 @@ export class DeliveryService {
     );
 
     /*
-     * Pre-support A9: the link view shown, then ONE QR photo of the same `sentUrl` beneath it
-     * — only when the view is known to be on the customer's screen, never on an ambiguous
-     * edit, and never a second time for the same tap.
-     */
-    if (
-      options.card !== undefined &&
-      options.linkQrKey !== undefined &&
-      result.outcome === 'DELIVERED'
-    ) {
-      await this.sendLinkQr(scope, service, options.card, sentUrl, options.linkQrKey);
-    }
-
-    /*
      * The conditional UPDATE's answer, RETURNED rather than discarded.
      *
      * `false` means the delivery state moved between reading this service and recording
@@ -545,53 +545,92 @@ export class DeliveryService {
   }
 
   /**
-   * Pre-support A9: the QR of the EXACT link the view shows, as one photo under it, captioned
-   * `bot.service.link_qr_caption` — the QR of the link above it.
+   * B9/C3: whether «🔗 لینک اشتراک» is answered by the ONE QR photo, and the claim that makes
+   * that photo once-only.
    *
-   * The panel's delivery mode is honoured exactly as the delivery card honours it: a
-   * `CARD_TEXT` panel gets no QR. The tap's key is claimed first, in its own transaction and
-   * with the tenant's activity read inside it, so a replayed tap — Telegram redelivering the
-   * update — finds the claim and sends nothing.
+   * `PHOTO` — the tap's key was claimed now, in its own transaction with the tenant's activity
+   * read inside it: send the photo. `REPLAY` — the key was claimed before: Telegram redelivered
+   * the tap, and nothing is sent or stamped. `TEXT` — no photo is possible or wanted: a
+   * `CARD_TEXT` panel (the delivery card's own rule), no key, no claim store, or a claim that
+   * could not be written; the link is then shown ON the card as text, an edit a replay can
+   * safely repeat.
    *
-   * Never throws and never touches the delivery record: the link was shown and recorded, and
-   * a photo Telegram declined (or answered ambiguously) is not a failed delivery. It is not
-   * retried either — the claim stands — because a QR that may already be on the screen must
-   * not be sent again; the customer can tap the link again.
+   * The claim is taken BEFORE the send and stands whatever the send answers. A photo whose
+   * answer was lost may be on the customer's screen, so it is never sent a second time for
+   * the same tap — the customer can tap again.
    */
-  private async sendLinkQr(
+  private async claimLinkPhoto(
     scope: TenantContext,
     service: ServiceRecord,
-    card: CardMessageRef,
-    sentUrl: string,
-    key: string,
-  ): Promise<void> {
+    key: string | undefined,
+  ): Promise<'PHOTO' | 'TEXT' | 'REPLAY'> {
     const claims = this.deps.linkQr;
-    if (claims === undefined) return;
+    if (claims === undefined || key === undefined) return 'TEXT';
+    let claimed: boolean | 'INACTIVE';
     try {
       const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
-      if (mode === 'CARD_TEXT') return;
-      const claimed = await this.deps.uow.run(scope, async (tx) =>
+      if (mode === 'CARD_TEXT') return 'TEXT';
+      claimed = await this.deps.uow.run(scope, async (tx) =>
         (await this.deps.scopeActivity.scopeIsActive(scope, tx))
           ? claims.claim(scope, key, tx)
-          : false,
+          : ('INACTIVE' as const),
       );
-      if (!claimed) return;
-      await this.deps.messenger.sendFile(scope, {
+    } catch {
+      // A claim that could not be written: the link as text on the card, which a replay can
+      // repeat without harm — never a photo a replay could send again.
+      return 'TEXT';
+    }
+    if (claimed === 'INACTIVE') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_NOT_DELIVERABLE,
+        'That tenant has stopped accepting work.',
+        { reason: 'SCOPE_INACTIVE' },
+      );
+    }
+    return claimed ? 'PHOTO' : 'REPLAY';
+  }
+
+  /** The QR of `sentUrl` as a photo upload, or null when it could not be drawn. */
+  private async qrPhoto(
+    scope: TenantContext,
+    target: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+    sentUrl: string,
+  ) {
+    let bytes: Uint8Array;
+    try {
+      bytes = (await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: sentUrl })).bytes;
+    } catch {
+      return null;
+    }
+    return {
+      chatId: target.chatId,
+      botInstanceId: target.botInstanceId,
+      kind: 'PHOTO' as const,
+      source: {
+        kind: 'BYTES' as const,
+        bytes,
+        fileName: 'subscription.png',
+        mimeType: 'image/png' as const,
+      },
+    };
+  }
+
+  /**
+   * B9/C3: the text card a photo replaced, deleted — best effort. A text message cannot be
+   * edited into a photo, so the photo is the one controlled new message and the card it
+   * superseded is taken away rather than left as a second, stale screen. Telegram refusing
+   * (a message older than 48 hours) leaves the card where it is; nothing else depends on it.
+   */
+  private async removeSupersededCard(scope: TenantContext, card: CardMessageRef): Promise<void> {
+    const remove = this.deps.messenger.remove;
+    if (remove === undefined) return;
+    try {
+      await remove.call(this.deps.messenger, scope, {
         chatId: card.chatId,
+        messageId: card.messageId,
         botInstanceId: card.botInstanceId,
-        kind: 'PHOTO',
-        source: {
-          kind: 'BYTES',
-          bytes: (await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: sentUrl })).bytes,
-          fileName: 'subscription.png',
-          mimeType: 'image/png',
-        },
-        // Its own caption: the delivery card's says the details follow in the NEXT message,
-        // and here the link is in the message ABOVE.
-        caption: { templateKey: 'bot.service.link_qr_caption', values: {} },
       });
     } catch {
-      // Deliberately swallowed: the link view is shown and recorded already.
       return;
     }
   }
@@ -967,10 +1006,16 @@ export class DeliveryService {
      * its own transaction, so a replica cannot edit the same card; a 429 gives it back with
      * Telegram's wait, and this delivery is re-queued by the caller.
      *
-     * Text only: a text message cannot be edited into a photo, so the QR the panel's
-     * delivery mode may ask for is not drawn on the card. A card Telegram cannot edit
+     * B9/C3: on a panel whose delivery mode carries the QR, the answer is ONE photo — the QR
+     * of `sentUrl`, this text as its caption and the card's buttons with the way back under
+     * the same message — because a text message cannot be edited into a photo. The «working»
+     * card it replaces is then deleted, best effort, and only once the photo is DELIVERED.
+     * An over-bound caption (`CAPTION_OVER_BOUND`, refused with no request) falls back to the
+     * text edit below with the QR beneath it as its own photo; any other refusal to the text
+     * edit alone. A `CARD_TEXT` panel is the text edit, as before. A card Telegram cannot edit
      * (deleted, too old) falls back, once, to the message R3 sends — the smallest fallback.
      */
+    const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
     const edit = this.deps.messenger.edit;
     const cards = this.deps.cards;
     if (edit !== undefined && cards !== undefined) {
@@ -978,14 +1023,45 @@ export class DeliveryService {
         cards.claimRotationCard(scope, service.id, this.deps.clock.now(), tx),
       );
       if (card !== null) {
+        const onCard = [...buttons, { ...backToCardButton(service.id), row: 2 }];
+        const sentTo = { chatId: card.chatId, botInstanceId: card.botInstanceId };
+        const cardPhoto = mode === 'CARD_TEXT' ? null : await this.qrPhoto(scope, card, sentUrl);
+        let overBound = false;
+        if (cardPhoto !== null) {
+          const single = await this.deps.messenger.sendFile(scope, {
+            ...cardPhoto,
+            caption: { templateKey: 'bot.service.link_rotated', values },
+            buttons: onCard,
+          });
+          if (single.outcome === 'RATE_LIMITED') {
+            const retryAt = new Date(
+              this.deps.clock.now().getTime() + cardRetryDelayMs(single.retryAfterMs),
+            );
+            await this.deps.uow.run(scope, async (tx) =>
+              cards.release(scope, card.operationId, retryAt, tx),
+            );
+            return { result: single };
+          }
+          if (single.outcome === 'DELIVERED') await this.removeSupersededCard(scope, card);
+          if (single.outcome !== 'REFUSED') return { result: single, sentTo };
+          overBound = single.reason === 'CAPTION_OVER_BOUND';
+        }
         const edited = await edit.call(this.deps.messenger, scope, {
           chatId: card.chatId,
           messageId: card.messageId,
           botInstanceId: card.botInstanceId,
           templateKey: 'bot.service.link_rotated',
           values,
-          buttons: [...buttons, { ...backToCardButton(service.id), row: 2 }],
+          buttons: onCard,
         });
+        if (overBound && cardPhoto !== null && edited.outcome === 'DELIVERED') {
+          await this.deps.messenger
+            .sendFile(scope, {
+              ...cardPhoto,
+              caption: { templateKey: 'bot.service.link_qr_caption', values: {} },
+            })
+            .catch(() => undefined);
+        }
         if (edited.outcome === 'RATE_LIMITED') {
           const retryAt = new Date(
             this.deps.clock.now().getTime() + cardRetryDelayMs(edited.retryAfterMs),
@@ -995,12 +1071,7 @@ export class DeliveryService {
           );
           return { result: edited };
         }
-        if (edited.outcome !== 'REFUSED') {
-          return {
-            result: edited,
-            sentTo: { chatId: card.chatId, botInstanceId: card.botInstanceId },
-          };
-        }
+        if (edited.outcome !== 'REFUSED') return { result: edited, sentTo };
       }
     }
     const text = {
@@ -1010,7 +1081,6 @@ export class DeliveryService {
       values,
       buttons,
     };
-    const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
     if (mode === 'CARD_TEXT') return { result: await this.deps.messenger.send(scope, text) };
     const photo = {
       chatId,
@@ -1069,17 +1139,64 @@ export class DeliveryService {
   }
 
   /**
-   * Round N (F4): «🔗 لینک اشتراک» on the service card. The card itself becomes the link
-   * (`bot.service.subscription`, the link in `<code>` so it copies on tap) with a way back
-   * to the card — no separate link message. Recorded exactly as any delivery is: the same
-   * `markSendStarted` stamp and outcome record, so a customer whose automatic announcement
-   * was UNCONFIRMED is now recorded as told.
+   * «🔗 لینک اشتراک» on the service card (round N F4; B9/C3). Recorded exactly as any delivery
+   * is: the same `markSendStarted` stamp and outcome record, so a customer whose automatic
+   * announcement was UNCONFIRMED is now recorded as told.
    *
-   * A card Telegram cannot edit (deleted, too old, a photo) gets the same link view ONCE as a
-   * new message — the smallest fallback. A text card cannot become the QR photo, so the QR
-   * goes beneath it as one photo of its own (pre-support A9, `sendLinkQr`).
+   * B9/C3, whenever Telegram permits: ONE `sendPhoto` — the QR of `sentUrl`, the link as its
+   * caption (`bot.service.subscription`, the link in `<code>` so it copies on tap) and the
+   * way back to the card under the SAME message. A text card cannot be edited into a photo,
+   * so the photo is the one controlled new message, and the card it replaced is deleted
+   * best effort once the photo is DELIVERED — never before, so a refused or ambiguous photo
+   * never leaves the customer with no screen at all.
+   *
+   * The controlled fallback, exactly the delivery card's (`sendCard`): the messenger refuses
+   * an over-bound HTML caption (1024) WITHOUT a request (`CAPTION_OVER_BOUND`), and then the
+   * card itself becomes the link view as text and the QR goes beneath it as a photo of its
+   * own (`bot.service.link_qr_caption`, «the QR of the link above»). The URL is never cut.
+   * A photo refused for any other reason gets the text view alone.
+   *
+   * A `CARD_TEXT` panel, or a tap with no claim (`claimLinkPhoto`), is the text view on the
+   * card with no QR, as before. A card Telegram cannot edit gets that view ONCE as a new
+   * message — the smallest fallback.
    */
   private async showLinkOnCard(
+    scope: TenantContext,
+    service: ServiceRecord,
+    card: CardMessageRef,
+    sentUrl: string,
+    asPhoto: boolean,
+  ): Promise<CustomerSendResult> {
+    const back = [backToCardButton(service.id)];
+    const photo = asPhoto ? await this.qrPhoto(scope, card, sentUrl) : null;
+    if (photo !== null) {
+      const single = await this.deps.messenger.sendFile(scope, {
+        ...photo,
+        caption: { templateKey: 'bot.service.subscription', values: { subscriptionUrl: sentUrl } },
+        buttons: back,
+      });
+      if (single.outcome === 'DELIVERED') {
+        await this.removeSupersededCard(scope, card);
+        return single;
+      }
+      if (single.outcome !== 'REFUSED') return single;
+      const view = await this.linkViewOnCard(scope, service, card, sentUrl);
+      if (single.reason === 'CAPTION_OVER_BOUND' && view.outcome === 'DELIVERED') {
+        // The QR beneath the text view, best effort: the link is shown and recorded already.
+        await this.deps.messenger
+          .sendFile(scope, {
+            ...photo,
+            caption: { templateKey: 'bot.service.link_qr_caption', values: {} },
+          })
+          .catch(() => undefined);
+      }
+      return view;
+    }
+    return this.linkViewOnCard(scope, service, card, sentUrl);
+  }
+
+  /** The link as text ON the card, with the way back; a new message only if it cannot be edited. */
+  private async linkViewOnCard(
     scope: TenantContext,
     service: ServiceRecord,
     card: CardMessageRef,

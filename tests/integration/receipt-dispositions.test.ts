@@ -588,7 +588,16 @@ describe('a submitted receipt and its three dispositions', () => {
       const said = lane.sends.filter(
         (one) => one.templateKey === 'bot.payment.receipt_credited_to_wallet',
       );
-      expect(said.map((one) => one.values)).toEqual([{ amount: money(240_000n, 'IRT') }]);
+      // B14: and the payment's own tracking code, after two blank lines.
+      const [payment] = await rows<{ reference: string }>(
+        sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
+      );
+      expect(said.map((one) => one.values)).toEqual([
+        { amount: money(240_000n, 'IRT'), reference: payment?.reference },
+      ]);
+      expect(lane.rendered().join('\n')).toContain(
+        `اضافه شد.\n\n\nکد پیگیری پرداخت: ${payment?.reference ?? 'MISSING'}`,
+      );
       // Owner spec §2.2: the reviewer's figure in the approved credit copy, and no command.
       expect(lane.rendered().join('\n')).toContain(
         '💎 مبلغ 240,000 تومان به کیف پول شما اضافه شد.',

@@ -172,6 +172,10 @@ export const INLINE_BUTTONS = [
   button('service.location_confirm', 'SERVICE_ACTIONS', 'bot.service.location_confirm_button'),
   button('service.suspend', 'SERVICE_ACTIONS', 'bot.service.suspend_button'),
   button('service.resume', 'SERVICE_ACTIONS', 'bot.service.resume_button'),
+  // B8: the switch asks first, in both directions.
+  button('service.suspend_confirm', 'SERVICE_ACTIONS', 'bot.service.suspend_confirm_button'),
+  button('service.resume_confirm', 'SERVICE_ACTIONS', 'bot.service.resume_confirm_button'),
+  button('service.toggle_cancel', 'SERVICE_ACTIONS', 'bot.service.toggle_cancel_button'),
   button('service.refund_request', 'SERVICE_ACTIONS', 'bot.service.refund_request_button'),
   button(
     'service.refund_request_confirm',

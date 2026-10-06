@@ -998,6 +998,20 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return rows.length > 0;
   }
 
+  async trackingCodeFor(
+    scope: TenantContext,
+    paymentId: string,
+    tx?: unknown,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ reference: payments.reference })
+      .from(payments)
+      .where(and(eq(payments.tenantId, tenantId), eq(payments.id, paymentId)))
+      .limit(1);
+    return row?.reference ?? null;
+  }
+
   async rejectionReasonFor(
     scope: TenantContext,
     paymentId: string,

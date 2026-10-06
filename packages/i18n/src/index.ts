@@ -341,10 +341,12 @@ export function renderTemplateBody(
   /*
    * A paragraph that consisted only of dropped lines leaves its two separators behind
    * as a triple newline. Collapsed to one blank line — but ONLY when something was
-   * dropped, so a body nothing was removed from renders byte for byte as written.
+   * dropped, so a body nothing was removed from renders byte for byte as written. A
+   * dropped LAST paragraph (B14: «کد پیگیری پرداخت» two blank lines below the sentence)
+   * leaves its separators at the end instead; they go too.
    */
   const joined = rendered.join('\n');
-  return dropped ? joined.replace(/\n{3,}/g, '\n\n') : joined;
+  return dropped ? joined.replace(/\n{3,}/g, '\n\n').replace(/\n+$/u, '') : joined;
 }
 
 export class CatalogueTranslator implements Translator {
