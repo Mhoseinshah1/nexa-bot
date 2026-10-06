@@ -32,7 +32,7 @@ import { buildPng, chunk, gradientBackground, ihdr, pngFromChunks } from '../sup
 
 /**
  * Phase 2 item 4 over the real container, settings and media tables: the QR background slot
- * (migration 0211), `delivery.qr_template` and its guard, the renderer the delivery lane is
+ * (migration 0212), `delivery.qr_template` and its guard, the renderer the delivery lane is
  * wired with, the preview route, and tenant isolation.
  */
 
@@ -128,7 +128,7 @@ describe('the QR background and template (Phase 2 item 4)', () => {
     );
   });
 
-  it('migration 0211: the purpose CHECK admits QR_BACKGROUND and still refuses an unknown slot', async () => {
+  it('migration 0212: the purpose CHECK admits QR_BACKGROUND and still refuses an unknown slot', async () => {
     const defs = await rows<{ def: string }>(
       sql`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
            WHERE conname = 'tenant_media_assets_purpose_check'`,
@@ -221,7 +221,11 @@ describe('the QR background and template (Phase 2 item 4)', () => {
       code: CONTROL_ERROR_CODES.INVALID_VALUE,
     });
     await upload(gradientBackground(500, 500));
-    await expect(setTemplate({ ...TEMPLATE, x: 100, size: 401 })).rejects.toMatchObject({
+    // Each edge on its own: past the right edge, then past the bottom edge.
+    await expect(setTemplate({ ...TEMPLATE, x: 100, y: 0, size: 401 })).rejects.toMatchObject({
+      code: CONTROL_ERROR_CODES.INVALID_VALUE,
+    });
+    await expect(setTemplate({ ...TEMPLATE, x: 0, y: 100, size: 401 })).rejects.toMatchObject({
       code: CONTROL_ERROR_CODES.INVALID_VALUE,
     });
     // Exactly at the edge is inside.

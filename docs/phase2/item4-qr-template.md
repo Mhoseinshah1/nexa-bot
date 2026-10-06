@@ -29,7 +29,7 @@ and precedes the renderer.
 ## Storage and configuration (no parallel system)
 
 - **Background:** the existing tenant media slot table, `tenant_media_assets`, under a new
-  purpose `QR_BACKGROUND` (contract change, then migration `0211_qr_background_media`, which
+  purpose `QR_BACKGROUND` (contract change, then migration `0212_qr_background_media`, which
   only widens the purpose CHECK). Same 1 MiB cap, same magic-number check, same audit
   (`tenant_media.upload` / `tenant_media.clear`, metadata only, never the bytes), same
   idempotency and scope-activity rules as the referral banner. The slot is **PNG only**
@@ -117,3 +117,12 @@ release does not do it.
    sends the plain QR (and the preview says so) rather than refusing the upload.
 4. The preview encodes a sample link of typical length; a much longer real link has more
    modules and may fall back where the sample did not. The preview says so.
+
+## Migration number (coordination)
+
+The migration is `0212_qr_background_media` because Agent D's delivery tutorials (PR #216)
+take 0211. Until #216 merges, this branch's journal entry sits at `idx` 211 (the journal test
+demands consecutive indices) and its snapshot chains from 0210's. When main carries 0211,
+merging it here means: set this entry's `idx` to 212, re-stamp `when` with `Date.now()`, and
+regenerate `meta/0212_snapshot.json` so its `prevId` is 0211's snapshot id (`pnpm db:check`
+must pass). The SQL itself is one self-contained CHECK widen and does not change.
