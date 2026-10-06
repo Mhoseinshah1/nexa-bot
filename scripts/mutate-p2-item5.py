@@ -50,7 +50,7 @@ M=[
  # VIDEO_TEXT's caption is whole-or-nothing (captionWhole dropped).
  ('D5-08',[(SENDER,"      captionWhole: true,\n","")],T_U,'that fits'),
  # Too long: the bare video is still sent before the text.
- ('D5-09',[(SENDER,"      await bareVideo(video.fileId);\n      return { kind: 'SENT', arrangement: 'VIDEO_THEN_TEXT'","      return { kind: 'SENT', arrangement: 'VIDEO_THEN_TEXT'")],T_U,'too long'),
+ ('D5-09',[(SENDER,"      const bare = await bareVideo(video.fileId);\n","      const bare = 'DELIVERED' as string;\n")],T_U,'too long for a caption: the bare video'),
  # Too long: the text follows whole (not dropped).
  ('D5-10',[(SENDER,"arrangement: 'VIDEO_THEN_TEXT', outcome: await asText() };","arrangement: 'VIDEO_THEN_TEXT', outcome: 'DELIVERED' };")],T_U,'too long'),
  # UNKNOWN / RATE_LIMITED are not followed by the text (no retry in another shape).
