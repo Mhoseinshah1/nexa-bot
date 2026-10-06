@@ -308,7 +308,9 @@ export class CachedAppearanceReader implements AppearanceReader {
       if (slot.enabled && slot.customEmojiId !== null)
         customEmoji.set(slot.slot, slot.customEmojiId);
     }
-    return { customEmoji };
+    // Returned to a bot only through `decorationFor`'s eligibility check (or to the probe,
+    // whose whole purpose is to try): so whoever holds it may carry custom emoji.
+    return { customEmoji, eligible: true };
   }
 
   async recordRuntimeRefusal(scope: TenantContext, botInstanceId: BotInstanceId): Promise<void> {

@@ -411,7 +411,12 @@ import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/ce
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
-import type { CategoryColors, FxSource, InlineButtonStyles } from '@nexa/contracts';
+import type {
+  CategoryColors,
+  FxSource,
+  InlineButtonIcons,
+  InlineButtonStyles,
+} from '@nexa/contracts';
 import {
   FX_REFRESH_INTERVAL_MS,
   FxRefreshLoop,
@@ -4556,6 +4561,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // UX Batch 01, item 2: each category's own colour, the tenant's `bot.category_colors`.
       categoryColorsFor: (scope) =>
         settingsResolver.valueOf<CategoryColors>(scope, 'bot.category_colors'),
+      // Phase 2 Item 3: each inline button's optional premium icon, `bot.inline_button_icons`.
+      iconsFor: (scope) =>
+        settingsResolver.valueOf<InlineButtonIcons>(scope, 'bot.inline_button_icons'),
     },
   );
   const appearance = new AppearanceService({

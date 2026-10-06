@@ -1,12 +1,16 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  CUSTOM_EMOJI_ID_PATTERN,
   INLINE_BUTTONS,
   INLINE_BUTTON_GROUPS,
   INLINE_BUTTON_STYLES,
+  inlineButtonIconOf,
+  inlineButtonIconsSchema,
   inlineButtonStyleOf,
   inlineButtonStylesSchema,
   type InlineButtonGroup,
+  type InlineButtonIcons,
   type InlineButtonKey,
   type InlineButtonStyle,
   type InlineButtonStyles,
@@ -41,9 +45,25 @@ import { fill } from './canvas';
  *
  * Separate from «متن دکمه‌ها» below it, which is the REPLY keyboard (the main menu), whose
  * labels are its routes.
+ *
+ * Phase 2 Item 3: each button also takes an OPTIONAL premium ICON — a Telegram custom emoji
+ * id, the `bot.inline_button_icons` setting (its own key, same endpoint, same version rule).
+ * Telegram draws it before the text and only from a bot whose appearance test succeeded; the
+ * preview shows a dashed marker, never a fake of the custom emoji. Empty is "no icon".
  */
 
 export const INLINE_BUTTONS_SETTING = 'bot.inline_buttons';
+
+/** The icons' write failed; `stylesSaved` says whether the styles' write of the SAME click landed. */
+class InlineSaveError extends Error {
+  constructor(
+    override readonly cause: unknown,
+    readonly stylesSaved: boolean,
+  ) {
+    super(cause instanceof Error ? cause.message : 'icons not saved');
+  }
+}
+export const INLINE_BUTTON_ICONS_SETTING = 'bot.inline_button_icons';
 
 const GROUP_TITLE: Readonly<Record<InlineButtonGroup, WebKey>> = {
   NAVIGATION: 'web.ib_group_navigation',
@@ -188,6 +208,42 @@ function sameStyles(a: InlineButtonStyles, b: InlineButtonStyles): boolean {
   return JSON.stringify(canonicalStyles(a)) === JSON.stringify(canonicalStyles(b));
 }
 
+/**
+ * The stored icons, canonical: registry order, and only the buttons with a non-empty id. What
+ * the operator typed is trimmed; validity is the contract's (`CUSTOM_EMOJI_ID_PATTERN`) and
+ * decided by `invalidIcons`, never silently dropped here.
+ */
+export function canonicalIcons(icons: InlineButtonIcons): InlineButtonIcons {
+  const out: Partial<Record<InlineButtonKey, string>> = {};
+  for (const entry of INLINE_BUTTONS) {
+    const typed = icons[entry.key];
+    const icon = typed === undefined ? undefined : asciiDigits(typed).trim();
+    if (icon !== undefined && icon !== '') out[entry.key] = icon;
+  }
+  return out;
+}
+
+/**
+ * Persian (۰-۹) and Arabic-Indic (٠-٩) digits as ASCII — what a Persian keyboard types for an
+ * id. Telegram's id is ASCII digits; anything else is left as it is for `invalidIcons` to name.
+ */
+export function asciiDigits(text: string): string {
+  return text
+    .replace(/[\u06F0-\u06F9]/gu, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/gu, (digit) => String(digit.charCodeAt(0) - 0x0660));
+}
+
+/** The buttons whose typed icon is not a custom emoji id: the save is refused until fixed. */
+export function invalidIcons(icons: InlineButtonIcons): InlineButtonKey[] {
+  return Object.entries(canonicalIcons(icons))
+    .filter(([, icon]) => !CUSTOM_EMOJI_ID_PATTERN.test(icon))
+    .map(([key]) => key as InlineButtonKey);
+}
+
+function sameIcons(a: InlineButtonIcons, b: InlineButtonIcons): boolean {
+  return JSON.stringify(canonicalIcons(a)) === JSON.stringify(canonicalIcons(b));
+}
+
 export function InlineButtonsSection({
   mayEdit,
   denied,
@@ -208,13 +264,23 @@ export function InlineButtonsSection({
 }) {
   const client = useQueryClient();
   const notify = useToast();
+  // One key per setting, each fingerprinted by ITS command: a retry after one write landed
+  // and the other did not replays exactly the write that is still owed (review N1 of #215).
   const submission = useSubmissionKey();
+  const iconSubmission = useSubmissionKey();
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
   const setting = settings.data?.settings.find((one) => one.key === INLINE_BUTTONS_SETTING);
+  const iconSetting = settings.data?.settings.find(
+    (one) => one.key === INLINE_BUTTON_ICONS_SETTING,
+  );
   const stored = useMemo<InlineButtonStyles>(() => {
     const parsed = inlineButtonStylesSchema.safeParse(setting?.value ?? {});
     return parsed.success ? parsed.data : {};
   }, [setting?.value]);
+  const storedIcons = useMemo<InlineButtonIcons>(() => {
+    const parsed = inlineButtonIconsSchema.safeParse(iconSetting?.value ?? {});
+    return parsed.success ? parsed.data : {};
+  }, [iconSetting?.value]);
   /*
    * The draft carries the VERSION it was edited from (Codex 4170910503). A refetch after a
    * local edit advances `setting.version` while the draft is still the older copy; saving
@@ -225,37 +291,94 @@ export function InlineButtonsSection({
    */
   const [draft, setDraft] = useState<{
     readonly styles: InlineButtonStyles;
+    readonly icons: InlineButtonIcons;
     readonly basisVersion: number | null;
+    readonly iconsBasisVersion: number | null;
   } | null>(null);
   const [filter, setFilter] = useState('');
   const current = draft?.styles ?? stored;
+  const currentIcons = draft?.icons ?? storedIcons;
+  const badIcons = invalidIcons(currentIcons);
   /*
    * A stored value this release cannot read (Codex 4170910512) is shown as the defaults, and
    * the row must still be repairable: Save writes what is on screen (the defaults, or the
    * operator's edit) over it, and Reset is offered even with nothing overridden.
    */
   const invalid = setting?.storedValueInvalid === true;
-  const unsaved = draft !== null && (invalid || !sameStyles(draft.styles, stored));
+  const iconsInvalid = iconSetting?.storedValueInvalid === true;
+  const stylesUnsaved = draft !== null && (invalid || !sameStyles(draft.styles, stored));
+  const iconsUnsaved = draft !== null && (iconsInvalid || !sameIcons(draft.icons, storedIcons));
+  const unsaved = stylesUnsaved || iconsUnsaved;
   const changedElsewhere =
-    draft !== null && setting !== undefined && setting.version !== draft.basisVersion;
+    draft !== null &&
+    ((setting !== undefined && setting.version !== draft.basisVersion) ||
+      (iconSetting !== undefined && iconSetting.version !== draft.iconsBasisVersion));
   const overridden = Object.keys(canonicalStyles(current)).length;
+  const iconCount = Object.keys(canonicalIcons(currentIcons)).length;
   const basisVersion = setting?.version ?? null;
-  const edit = (styles: InlineButtonStyles) =>
+  const iconsBasisVersion = iconSetting?.version ?? null;
+  const editBoth = (styles: InlineButtonStyles, icons: InlineButtonIcons) =>
     setDraft((before) => ({
       styles,
+      icons,
       basisVersion: before === null ? basisVersion : before.basisVersion,
+      iconsBasisVersion: before === null ? iconsBasisVersion : before.iconsBasisVersion,
     }));
+  const edit = (styles: InlineButtonStyles) => editBoth(styles, currentIcons);
+  const editIcon = (key: InlineButtonKey, icon: string) => {
+    const next: Partial<Record<InlineButtonKey, string>> = { ...currentIcons };
+    const typed = asciiDigits(icon);
+    if (typed === '') delete next[key];
+    else next[key] = typed;
+    editBoth(current, next);
+  };
   // Codex 4170910519: a leave (sidebar, back, reload, close) asks before dropping an edit.
   useUnsavedChanges(mayEdit && unsaved);
 
+  /*
+   * Two settings, two writes, each with its OWN version and its OWN idempotency key. Only
+   * what changed is written: an edit of a style alone is still ONE settings write, exactly as
+   * before Item 3. When the styles land and the icons do not, the draft adopts the styles'
+   * new version at once — so the next click sends only the icons, and no "changed elsewhere"
+   * is claimed for a change this page made — and the operator is told exactly that.
+   */
   const save = useMutation({
-    mutationFn: (command: {
-      idempotencyKey: string;
-      value: InlineButtonStyles;
-      expectedVersion: number | null;
-    }) => saveSetting({ key: INLINE_BUTTONS_SETTING, ...command }),
+    mutationFn: async (command: {
+      styles: {
+        value: InlineButtonStyles;
+        expectedVersion: number | null;
+        idempotencyKey: string;
+      } | null;
+      icons: {
+        value: InlineButtonIcons;
+        expectedVersion: number | null;
+        idempotencyKey: string;
+      } | null;
+    }) => {
+      let changed = false;
+      let stylesSaved = false;
+      if (command.styles !== null) {
+        const result = await saveSetting({ key: INLINE_BUTTONS_SETTING, ...command.styles });
+        submission.settle();
+        stylesSaved = true;
+        changed ||= result.changed;
+        setDraft((before) =>
+          before === null ? before : { ...before, basisVersion: result.setting.version },
+        );
+      }
+      if (command.icons !== null) {
+        try {
+          const result = await saveSetting({ key: INLINE_BUTTON_ICONS_SETTING, ...command.icons });
+          changed ||= result.changed;
+        } catch (error) {
+          throw new InlineSaveError(error, stylesSaved);
+        }
+      }
+      return { changed };
+    },
     onSuccess: async (result) => {
       submission.settle();
+      iconSubmission.settle();
       setDraft(null);
       notify({
         tone: result.changed ? 'ok' : 'info',
@@ -264,8 +387,16 @@ export function InlineButtonsSection({
       await client.invalidateQueries({ queryKey: ['settings'] });
     },
     onError: (error: unknown) => {
-      submission.settleOn(error);
-      notify({ tone: 'danger', message: t('web.ib_failed') });
+      if (error instanceof InlineSaveError) {
+        iconSubmission.settleOn(error.cause);
+        notify({
+          tone: 'danger',
+          message: t(error.stylesSaved ? 'web.ib_icons_failed_styles_saved' : 'web.ib_failed'),
+        });
+      } else {
+        submission.settleOn(error);
+        notify({ tone: 'danger', message: t('web.ib_failed') });
+      }
       void client.invalidateQueries({ queryKey: ['settings'] });
     },
   });
@@ -285,6 +416,10 @@ export function InlineButtonsSection({
         {setting?.storedValueInvalid === true && (
           <Banner tone="warn">{t('web.ib_stored_invalid')}</Banner>
         )}
+        {iconsInvalid && <Banner tone="warn">{t('web.ib_icons_stored_invalid')}</Banner>}
+        <p className="muted small" data-testid="ib-icon-limits">
+          {t('web.ib_icon_limits')}
+        </p>
         {!mayEdit && <Banner tone="info">{t('web.ib_denied_edit')}</Banner>}
         {!mayViewTemplates && <Banner tone="info">{t('web.ib_labels_denied')}</Banner>}
         <div className="ib-toolbar">
@@ -302,6 +437,9 @@ export function InlineButtonsSection({
           <span className="muted small" data-testid="ib-overridden">
             {fill(t('web.ib_changed_count'), { n: overridden })}
           </span>
+          <span className="muted small" data-testid="ib-icon-count">
+            {fill(t('web.ib_icon_count'), { n: iconCount })}
+          </span>
         </div>
         {INLINE_BUTTON_GROUPS.map((group) => {
           const entries = INLINE_BUTTONS.filter((entry) => entry.group === group && matches(entry));
@@ -312,6 +450,9 @@ export function InlineButtonsSection({
               <ul className="ib-list">
                 {entries.map((entry) => {
                   const style = inlineButtonStyleOf(entry.key, current);
+                  const typedIcon = currentIcons[entry.key] ?? '';
+                  const icon = inlineButtonIconOf(entry.key, canonicalIcons(currentIcons));
+                  const iconBad = badIcons.includes(entry.key);
                   const template = templateOf(entry.label);
                   const name = t(INLINE_BUTTON_NAME[entry.key]);
                   return (
@@ -327,6 +468,16 @@ export function InlineButtonsSection({
                           className={`menu-preview-key ib-preview bb-style-${style}`}
                           data-testid="ib-preview"
                         >
+                          {icon !== null && !iconBad && (
+                            <span
+                              className="bb-icon-mark"
+                              title={t('web.ib_icon_mark_title')}
+                              aria-hidden="true"
+                              data-testid="ib-icon-mark"
+                            >
+                              ✦
+                            </span>
+                          )}
                           {template?.body ?? name}
                         </span>
                       </div>
@@ -351,6 +502,47 @@ export function InlineButtonsSection({
                           ))}
                         </select>
                       </label>
+                      <div className="ib-icon" data-testid="ib-icon">
+                        <label className="muted small" htmlFor={`ib-icon-${entry.key}`}>
+                          {t('web.ib_icon')}{' '}
+                          <span className="muted small">{t('web.bb_optional')}</span>
+                        </label>
+                        <input
+                          id={`ib-icon-${entry.key}`}
+                          type="text"
+                          inputMode="numeric"
+                          dir="ltr"
+                          autoComplete="off"
+                          spellCheck={false}
+                          maxLength={64}
+                          className="input sm mono"
+                          value={typedIcon}
+                          placeholder={t('web.ib_icon_placeholder')}
+                          disabled={!mayEdit || save.isPending}
+                          aria-invalid={iconBad}
+                          aria-label={`${t('web.ib_icon')} — ${name}`}
+                          onChange={(event) => editIcon(entry.key, event.target.value)}
+                        />
+                        {typedIcon !== '' && mayEdit && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={save.isPending}
+                            aria-label={`${t('web.ib_icon_remove')} — ${name}`}
+                            onClick={() => editIcon(entry.key, '')}
+                          >
+                            {t('web.ib_icon_remove')}
+                          </Button>
+                        )}
+                        {typedIcon === '' && (
+                          <span className="muted small">{t('web.ib_icon_none')}</span>
+                        )}
+                        {iconBad && (
+                          <span className="small ib-icon-error" role="alert">
+                            {t('web.ib_icon_invalid')}
+                          </span>
+                        )}
+                      </div>
                       {entry.label === null ? (
                         <p className="muted small ib-note">{t('web.ib_data_label')}</p>
                       ) : (
@@ -389,23 +581,50 @@ export function InlineButtonsSection({
             <Button
               variant="ghost"
               size="sm"
-              disabled={save.isPending || (overridden === 0 && !invalid)}
-              onClick={() => edit({})}
+              disabled={
+                save.isPending || (overridden === 0 && iconCount === 0 && !invalid && !iconsInvalid)
+              }
+              onClick={() => editBoth({}, {})}
             >
               {t('web.ib_reset')}
             </Button>
             <Button
               variant="primary"
               size="sm"
-              disabled={!(unsaved || invalid) || save.isPending || setting === undefined}
+              disabled={
+                !(unsaved || invalid || iconsInvalid) ||
+                badIcons.length > 0 ||
+                save.isPending ||
+                setting === undefined
+              }
               onClick={() => {
-                // Snapshotted at the click, so a retry cannot carry a later edit; the version
+                // Snapshotted at the click, so a retry cannot carry a later edit; each version
                 // is the one the DRAFT was edited from, never a later read's.
-                const command = {
-                  value: canonicalStyles(current),
-                  expectedVersion: draft === null ? basisVersion : draft.basisVersion,
-                };
-                save.mutate({ ...command, idempotencyKey: submission.current(command) });
+                const styles =
+                  stylesUnsaved || invalid
+                    ? {
+                        value: canonicalStyles(current),
+                        expectedVersion: draft === null ? basisVersion : draft.basisVersion,
+                      }
+                    : null;
+                const icons =
+                  iconsUnsaved || iconsInvalid
+                    ? {
+                        value: canonicalIcons(currentIcons),
+                        expectedVersion:
+                          draft === null ? iconsBasisVersion : draft.iconsBasisVersion,
+                      }
+                    : null;
+                save.mutate({
+                  styles:
+                    styles === null
+                      ? null
+                      : { ...styles, idempotencyKey: submission.current(styles) },
+                  icons:
+                    icons === null
+                      ? null
+                      : { ...icons, idempotencyKey: iconSubmission.current(icons) },
+                });
               }}
             >
               {t('web.ib_save')}

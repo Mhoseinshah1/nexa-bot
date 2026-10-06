@@ -793,3 +793,23 @@ Tests: `tests/web/bot-buttons-dnd.test.tsx` (pure) and "the button builder — d
 | QA-6 «published» read for a moment after a restore          | present: a pending restore or reset was not a state, so the page kept the state from before it | **Fixed** — a pending reset or restore reads «saving».                                                                    |
 | F-8 / OQ-T-2 "new button" badge                             | not reachable: no release has added a main-menu button                                         | **Unchanged** — the obligation in `docs/open-questions.md` OQ-T-2 stands for the release that adds one.                   |
 | QA-2 touch on a key's grip                                  | not reproducible through CDP touch emulation (§16.2)                                           | Grip rebuilt as a button; real-phone check stays in R-ACC-9.                                                              |
+
+### 16.4 Superseded on 2026-10-05: the button icon restored (Phase 2 UX wave, Item 3)
+
+The owner's master prompt of 2026-10-05 (Item 3, "premium custom emoji / sticker support for bot
+buttons") is newer than the 2026-10-02 order in §16, and the PO confirmed that it **lifts the
+retirement** of «آیکون دکمه». The retirement of «آیکون معنایی» (`appearanceSlot`) is NOT
+lifted. That field still has no control and no runtime consumer.
+
+| What                        | 2026-10-02 (§16.1)       | Since Phase 2 Item 3                                                                                                                                            |
+| --------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iconSlot` in the schema    | kept, required, nullable | unchanged. No shape changed in either direction.                                                                                                                |
+| `normalizeExplicitMainMenu` | forced `iconSlot: null`  | carries it as given. An icon alone is a change to publish.                                                                                                      |
+| `customerRowsOf` / runtime  | no icon                  | `iconSlot` is drawn. It is resolved per SENDING bot (`replyKeyboardFor`), with the one icon-less retry (owner rule B5) and UNKNOWN never resent, as in §15.     |
+| Inspector                   | no icon control          | «آیکون دکمه» (optional, «بدون آیکون» by default), the per-bot eligibility list, the doubled-emoji warning and the dashed marker in every preview are restored.  |
+| Inline buttons              | no icon                  | NEW: `bot.inline_button_icons`, a custom emoji id per registry key, drawn as `InlineKeyboardButton.icon_custom_emoji_id`. It is gated and retried the same way. |
+
+The rollback consequences are in `OQ-P2-ICON-05`. The Telegram limitations (one icon, before
+the text, no entities in button text) and the acceptance still owed are in `OQ-P2-ICON-01`
+and `-03`, and in `docs/phase2/button-icons.md`. The QA-3 row of §16.3 is live again: the
+doubled-emoji warning is restored with the icon.

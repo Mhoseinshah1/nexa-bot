@@ -1,12 +1,18 @@
 import { useId, useState } from 'react';
 import {
+  APPEARANCE_SLOTS,
+  APPEARANCE_SLOT_FALLBACKS,
   MAIN_MENU_BUTTON_STYLES,
+  type AppearanceSlot,
+  type AppearanceSlotView,
   type ExplicitMainMenu,
   type MainMenuBuilderItem,
   type MainMenuButtonId,
   type MainMenuButtonStyle,
   type MainMenuGate,
+  type MainMenuIconEligibility,
 } from '@nexa/contracts';
+import { APPEARANCE_SLOT_LABEL } from '../../appearance-labels';
 import { t, type WebKey } from '../../i18n/web.fa';
 import { Badge, Banner, Disclosure, Ltr, Switch } from '../../ui/kit';
 import { Icon } from '../../ui/icons';
@@ -26,7 +32,9 @@ import {
   positionOf,
   removeToPool,
   setEnabled,
+  setIconSlot,
   setStyle,
+  startsWithEmoji,
 } from './model';
 
 /** The Persian name of each style. Exactly the contract's four; no custom colour exists. */
@@ -54,6 +62,8 @@ export function Inspector({
   id,
   item,
   editable,
+  iconEligibility,
+  appearanceSlots,
   mayViewTemplates,
   onMove,
   onChange,
@@ -63,6 +73,10 @@ export function Inspector({
   id: MainMenuButtonId | null;
   item: MainMenuBuilderItem | undefined;
   editable: boolean;
+  /** Which bots may carry the icon (their appearance test answered `SENT`) — the server's. */
+  iconEligibility: readonly MainMenuIconEligibility[];
+  /** The tenant's appearance slots, when readable — which slots carry a custom emoji. */
+  appearanceSlots: readonly AppearanceSlotView[] | null;
   mayViewTemplates: boolean;
   /** A placement change: announced with the button's new position. */
   onMove: (id: MainMenuButtonId, op: Op) => void;
@@ -88,6 +102,11 @@ export function Inspector({
   const moves = movesFor(layout, id);
   const rowCount = layout.rows.length;
   const chosenRow = targetRow === 'new' || Number(targetRow) < rowCount ? targetRow : 'new';
+  const eligibleBots = iconEligibility.filter((bot) => bot.eligible);
+  const slotView =
+    config.iconSlot === null
+      ? undefined
+      : appearanceSlots?.find((slot) => slot.slot === config.iconSlot);
   const moveButton = (
     key: WebKey,
     icon: 'arrowUp' | 'arrowDown' | 'chevronRight' | 'chevronLeft' | 'plus',
@@ -244,6 +263,72 @@ export function Inspector({
         </div>
         <p className="muted small">{t('web.bb_style_hint')}</p>
       </fieldset>
+
+      {/* Restored by the owner's 2026-10-05 master prompt (Item 3): optional; no icon is the
+          default (`web.bb_icon_none`), and removing it is choosing no icon again. */}
+      <div className="bb-field" data-testid="bb-icon">
+        <label htmlFor={`${base}-icon`}>{t('web.bb_icon_title')}</label>
+        <span className="muted small">{t('web.bb_optional')}</span>
+        <select
+          id={`${base}-icon`}
+          className="input sm"
+          value={config.iconSlot ?? ''}
+          disabled={!editable}
+          onChange={(event) => {
+            const value = event.target.value;
+            const slot = value === '' ? null : (value as AppearanceSlot);
+            onChange(
+              (l) => setIconSlot(l, id, slot),
+              fill(t('web.bb_announce_icon'), {
+                label,
+                icon: slot === null ? t('web.bb_icon_none') : t(APPEARANCE_SLOT_LABEL[slot]),
+              }),
+            );
+          }}
+        >
+          <option value="">{t('web.bb_icon_none')}</option>
+          {APPEARANCE_SLOTS.map((slot) => (
+            <option key={slot} value={slot}>
+              {APPEARANCE_SLOT_FALLBACKS[slot]} {t(APPEARANCE_SLOT_LABEL[slot])}
+            </option>
+          ))}
+        </select>
+        <p className="muted small">{t('web.bb_icon_hint')}</p>
+        {config.iconSlot !== null && startsWithEmoji(label) && (
+          <Banner tone="warn">
+            <span data-testid="bb-icon-doubled">{t('web.bb_icon_label_has_emoji')}</span>
+          </Banner>
+        )}
+        {config.iconSlot !== null && slotView !== undefined && (
+          <p className="muted small" data-testid="bb-icon-slot-state">
+            {t(
+              slotView.customEmojiId !== null && slotView.enabled
+                ? 'web.bb_icon_slot_configured'
+                : 'web.bb_icon_slot_unconfigured',
+            )}
+          </p>
+        )}
+        <div className="bb-eligibility" data-testid="bb-eligibility">
+          <p className="small">{t('web.bb_icon_eligibility')}</p>
+          {iconEligibility.length === 0 ? (
+            <p className="muted small">{t('web.bot_buttons_no_bots')}</p>
+          ) : (
+            <ul>
+              {iconEligibility.map((bot) => (
+                <li key={bot.botInstanceId}>
+                  <Ltr>@{bot.username}</Ltr>{' '}
+                  <Badge tone={bot.eligible ? 'ok' : 'neutral'}>
+                    {t(bot.eligible ? 'web.bb_icon_eligible' : 'web.bb_icon_not_eligible')}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+          {config.iconSlot !== null && eligibleBots.length === 0 && (
+            <Banner tone="info">{t('web.bb_icon_no_eligible_bot')}</Banner>
+          )}
+        </div>
+      </div>
 
       {item?.gate !== null && item?.gate !== undefined && (
         <div className="bb-field" data-testid="bb-gate">

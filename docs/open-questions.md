@@ -2764,7 +2764,7 @@ button.
 
 ## OQ-T-API-02 — who may use `KeyboardButton.icon_custom_emoji_id`
 
-**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
+**Live again since 2026-10-05.** It was moot from 2026-10-02 (owner order retiring the builder's button icon). That order is **superseded by the owner's master prompt of 2026-10-05** (Phase 2 UX wave, Item 3), which restores the main-menu icon and adds an icon to inline buttons (`docs/round-t-button-builder-audit.md` §16.4, `docs/phase2/button-icons.md`). The text below applies to both kinds of button.
 
 Round T. Confirmed by the owner: `icon_custom_emoji_id` is official Bot API, usable by bots
 able to use custom emoji (bots with purchased Fragment usernames, or in the applicable
@@ -2834,7 +2834,7 @@ route is claimed as accepted before it.
 
 ## OQ-T-API-05 — the exact refusal an ineligible bot gets for `icon_custom_emoji_id`
 
-**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
+**Live again since 2026-10-05.** It was moot from 2026-10-02 (owner order retiring the builder's button icon). That order is **superseded by the owner's master prompt of 2026-10-05** (Phase 2 UX wave, Item 3), which restores the main-menu icon and adds an icon to inline buttons (`docs/round-t-button-builder-audit.md` §16.4, `docs/phase2/button-icons.md`). The text below applies to both kinds of button.
 
 Round T (T2). UNKNOWN, and deliberately not guessed. Owner rule B5 lets only a RELIABLY
 classified eligibility denial switch a bot's shared custom-emoji state off. T2 reuses the
@@ -2903,7 +2903,7 @@ Default in force, accepted by the owner for round T. Copied here by the T4 revie
 
 ## OQ-T-4 — icon eligibility is shared with message decoration
 
-**Moot since 2026-10-02 (owner order):** the builder's button icon is retired and the main menu sends no `icon_custom_emoji_id` (`docs/round-t-button-builder-audit.md` §16). Kept for the record and for the release that might bring keyboard icons back.
+**Live again since 2026-10-05.** It was moot from 2026-10-02 (owner order retiring the builder's button icon). That order is **superseded by the owner's master prompt of 2026-10-05** (Phase 2 UX wave, Item 3), which restores the main-menu icon and adds an icon to inline buttons (`docs/round-t-button-builder-audit.md` §16.4, `docs/phase2/button-icons.md`). The text below applies to both kinds of button.
 
 Round T. DECISION. One custom-emoji eligibility per bot: the appearance test's recorded
 outcome, `SENT` only (`isCustomEmojiEligible`, used by the runtime's decoration and by the
@@ -3507,3 +3507,59 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
   for a receipt review reply sent as a file. The customer sees nothing or the video, and can tap
   the app again. Whether this lane should count toward the bot's send-failure signal is open
   (`docs/pre-support/a4a-falsification.md`).
+
+## OQ-P2-ICON — premium icons on bot buttons (Phase 2 UX wave, Item 3)
+
+**Superseded decision, recorded.** The owner's 2026-10-02 order retired the main-menu button
+icon («آیکون دکمه»; `docs/round-t-button-builder-audit.md` §16). The owner's master prompt of
+2026-10-05, Item 3, asks for premium emoji on bot buttons, and the PO confirmed that it LIFTS
+the retirement. Since this branch the icon is drawn again (§16.4). `OQ-T-API-02`, `OQ-T-API-05`
+and `OQ-T-4` are live again and apply to inline buttons too.
+
+- **OQ-P2-ICON-01: real-bot acceptance owed (UNKNOWN, not guessed).** `core.telegram.org`
+  answers 403 through this sandbox's proxy. The only evidence for
+  `InlineKeyboardButton.icon_custom_emoji_id` (and for `KeyboardButton.icon_custom_emoji_id`
+  beyond the owner's round-T confirmation) is the published type package `@grammyjs/types`
+  (`markup.d.ts`). It describes the field as "Unique identifier of the custom emoji shown before
+  the text of the button", usable by bots that bought additional usernames on Fragment, or in
+  private, group and supergroup chats when the bot's owner has Telegram Premium. The
+  following are NOT verified:
+  - that a real client draws the icon on an inline button;
+  - the exact refusal an ineligible bot gets for it (the same open point as `OQ-T-API-05`);
+  - whether a tap on an iconed inline button behaves the same as on a plain one.
+
+  The tests use a stub and the repository's fake, which can only agree with this code. **Owed:**
+  one eligible bot and one ineligible bot, each sending an iconed reply keyboard and an iconed
+  inline keyboard, then a tap on each. This extends R-ACC-1..3.
+
+- **OQ-P2-ICON-02: decided.** The two kinds of button take their icon from different sources.
+  - The main menu keeps round T's model: an appearance SLOT (`iconSlot`), resolved to the
+    tenant's custom emoji per sending bot. There is no schema change, and rollback is safe.
+  - An inline button stores a raw Telegram custom emoji id (`bot.inline_button_icons`), as
+    the PO instructed.
+
+  Both are validated by `customEmojiIdSchema` (digits only, 1..32), and both are gated by the
+  same per-bot eligibility (`isCustomEmojiEligible`, a recorded `SENT`).
+
+- **OQ-P2-ICON-03: decided, documented as a limitation.** Telegram allows ONE icon per button,
+  shown BEFORE the text, and button text carries no entities. So:
+  - a premium emoji cannot be placed inside or after a label;
+  - a `{icon:slot}` marker typed into a button's label template is still drawn as its plain
+    fallback emoji (`telegram-customer-messenger.ts`, `labelText`).
+- **OQ-P2-ICON-04: deferred.** Operator reordering of INLINE («شیشه‌ای») keyboards is out of
+  scope for this PR, by PO decision. Every inline keyboard is a contextual screen whose rows are
+  a product decision (pagination, back and confirm buttons, and conditional buttons). A
+  generic inline layout system is not built. The PO must name the screens that should become
+  orderable. The Item 1 main-menu builder (round T) already covers the reply keyboard.
+- **OQ-P2-ICON-05: decided, recorded.** A layout published BEFORE 2026-10-02 with icons, and
+  never published since, draws those icons again after this upgrade. The retiring release never
+  rewrote stored rows, by design (expand/contract). Rolling back to the retiring release hides
+  every icon again and makes no layout unreadable.
+  Two more consequences (review N3 of PR #215):
+  - A DRAFT saved between 2026-10-02 and this upgrade was canonicalised by the retiring release,
+    so it carries `iconSlot: null` for every button. If the published layout still carries
+    pre-retirement icons, the builder shows a pending icon REMOVAL the operator did not make;
+    publishing that draft removes them. The publish diff lists it as «آیکون تغییر می‌کند».
+  - Icons published on THIS release are lost if the installation is rolled back and the
+    operator publishes again on the retiring release: its normalisation writes null. A rollback
+    alone (no new publish) only hides them; rolling forward again draws them.

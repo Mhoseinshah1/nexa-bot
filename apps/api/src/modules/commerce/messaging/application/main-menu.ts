@@ -60,10 +60,10 @@ export interface MainMenuSource {
 
 /**
  * One button of the customer keyboard as the bot draws it: the rendered label — which is
- * also exactly the text a tap sends back, so routing is unchanged — its style, and an icon
- * SLOT the transport would resolve per SENDING bot. The main menu always passes null since
- * the owner retired the builder's button icon (2026-10-02, `bot-menu-builder.ts` header);
- * the transport keeps the capability, which its own unit tests drive.
+ * also exactly the text a tap sends back, so routing is unchanged — its style, and its
+ * icon SLOT. The slot is resolved to a custom emoji id per SENDING bot by the transport,
+ * never here: eligibility is a property of a bot, not of a tenant. (Retired 2026-10-02,
+ * restored by the owner's 2026-10-05 master prompt — `bot-menu-builder.ts` header.)
  */
 export interface MainMenuKeyboardButton {
   readonly text: string;
@@ -128,7 +128,7 @@ export interface DescribedMainMenuItem {
  *   feature is off and — since F5 — without the trial button while no panel offers a
  *   trial, labelled by the tenant's own templates, two to a row — or, once the tenant has
  *   published a layout in the button builder (round T), in the operator's own rows, with
- *   their styles (`keyboardFor`). The runtime reads only what was PUBLISHED.
+ *   styles and icon slots (`keyboardFor`). The runtime reads only what was PUBLISHED.
  * - `routesFor` is what the runtime matches a tap against: EVERY declared button's label
  *   as the tenant renders it now, whatever is switched on — so a keyboard already sitting
  *   in a chat still routes after a button is hidden, and a renamed button routes under
@@ -235,7 +235,7 @@ export class MainMenuLayout {
 
   /**
    * The keyboard's rows as structured buttons (round T): what is drawn, row by row, with
-   * each button's style (and no icon: retired on 2026-10-02).
+   * each button's style and icon slot.
    *
    * - LEGACY: the shown buttons packed two to a row (a wide one alone) — exactly the rows
    *   `rowsFor` drew before round T — every style `default`, no icon.
@@ -260,8 +260,7 @@ export class MainMenuLayout {
             row.map(async (one) => ({
               text: await label(mainMenuButton(one.button)),
               style: one.style,
-              // Retired: `customerRowsOf` carries no icon, whatever the snapshot stored.
-              iconSlot: null,
+              iconSlot: one.iconSlot,
             })),
           ),
         ),
@@ -278,7 +277,7 @@ export class MainMenuLayout {
 
   /**
    * The keyboard's rows as rendered labels — the TEXT-ONLY view of `keyboardFor`. The
-   * messenger draws `keyboardFor` itself (with styles, round T, T2); this serves the
+   * messenger draws `keyboardFor` itself (styles and icons, round T, T2); this serves the
    * views that show text only: the operator's `/bot-menu` read (`BotMenuService`) and the
    * builder's `live` rows. Byte for byte the rows the transport drew before round T on the
    * legacy path.

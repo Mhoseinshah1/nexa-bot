@@ -45,7 +45,11 @@ import {
 } from './payment.js';
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
-import { categoryColorsSchema, inlineButtonStylesSchema } from './inline-buttons.js';
+import {
+  categoryColorsSchema,
+  inlineButtonIconsSchema,
+  inlineButtonStylesSchema,
+} from './inline-buttons.js';
 import {
   FX_FRESH_TTL_SECONDS_DEFAULT,
   FX_FRESH_TTL_SECONDS_MAX,
@@ -959,6 +963,31 @@ export const SETTINGS = [
     defaultValue: {},
     configures: null,
     // Empty is not "no buttons": every button is then drawn with its registry default.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * Phase 2 UX wave, Item 3: an optional premium icon per customer INLINE button, edited on
+   * the Web Admin's «دکمه‌های ربات» page, section «دکمه‌های شیشه‌ای ربات», beside the style,
+   * and nowhere else (it is not drawn on the settings page). Its own key, never a widening
+   * of `bot.inline_buttons` (whose value an older release parses strictly).
+   */
+  {
+    key: 'bot.inline_button_icons',
+    description:
+      'An optional premium (custom emoji) icon for each inline (glass) button a customer is ' +
+      'shown, by the button\u2019s registry key: a Telegram custom emoji id, digits only. ' +
+      'Telegram shows it before the button\u2019s text, one per button; the text itself is ' +
+      'unchanged. It is sent only by a bot whose custom-emoji appearance test succeeded; any ' +
+      'other bot draws the button without it, and a message Telegram refuses because of an ' +
+      'icon is sent once more without the icons. A button this value does not name has no ' +
+      'icon. Nothing a customer taps depends on it.',
+    schema: inlineButtonIconsSchema,
+    defaultValue: {},
+    configures: null,
+    // Empty is not "no buttons": every button is then drawn without an icon.
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
