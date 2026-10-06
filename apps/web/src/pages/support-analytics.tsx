@@ -67,6 +67,7 @@ const DEFAULT_RANGE: ReportRange = 'LAST_7_DAYS';
 /** Every automatic outcome in words: the guard that failed, or why nothing was done. */
 export const AUTO_OUTCOME_LABELS: Readonly<Record<SupportAiAutoOutcome, WebKey>> = {
   sent: 'web.sa_auto_sent',
+  sent_clarifying: 'web.sa_auto_sent_clarifying',
   dropped_mode: 'web.sa_auto_dropped_mode',
   dropped_epoch: 'web.sa_auto_dropped_epoch',
   dropped_state: 'web.sa_auto_dropped_state',
@@ -86,6 +87,7 @@ export const AUTO_OUTCOME_LABELS: Readonly<Record<SupportAiAutoOutcome, WebKey>>
   guard_confidence: 'web.sa_auto_guard_confidence',
   guard_reply_bounds: 'web.sa_auto_guard_reply_bounds',
   guard_grounding: 'web.sa_auto_guard_grounding',
+  guard_clarifying_limit: 'web.sa_auto_guard_clarifying_limit',
   handoff_ai_requested: 'web.sa_auto_handoff_ai_requested',
   handoff_output_invalid: 'web.sa_auto_handoff_output_invalid',
   handoff_ai_unavailable: 'web.sa_auto_handoff_ai_unavailable',

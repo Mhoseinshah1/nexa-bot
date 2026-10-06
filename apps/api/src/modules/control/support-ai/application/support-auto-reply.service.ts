@@ -163,7 +163,7 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
 export interface SupportAutoReplyServiceDeps {
   readonly jobs: Pick<
     DrizzleSupportAiJobRepository,
-    'finishAuto' | 'recordImageOutcomes' | 'recordKnowledgeCounts'
+    'finishAuto' | 'recordImageOutcomes' | 'recordKnowledgeCounts' | 'clarifyingStreak'
   >;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
@@ -221,9 +221,13 @@ type ImageWrite = (now: Date, tx: TransactionScope) => Promise<void>;
  *      switched off, drops the job and nothing is spent.
  *   2. Preflight guards (content, blocked customer, loop guard) before any provider cost.
  *   3. The TB4 chain → the strict decision schema → the deterministic guards. Every guard must
- *      pass. Anything else — the model's own HANDOFF, a hard topic, invalid output, a chain
- *      failure, a guard failure — HANDS OFF (TB2 `handOff`, which records the escalation,
- *      opens or links the ticket and signals an operator) and sends nothing.
+ *      pass. A `REPLY` is sent; so is an `ASK_CLARIFYING_QUESTION` (its question is the reply
+ *      text) while the conversation's clarifying streak is below the tenant's limit — decided
+ *      AFTER the provider, because only the decision says whether this is a question at all
+ *      (a REPLY at the limit is welcome, and ends the streak). Anything else — the model's own
+ *      HANDOFF, a hard topic, invalid output, a chain failure, a guard failure — HANDS OFF
+ *      (TB2 `handOff`, which records the escalation, opens or links the ticket and signals an
+ *      operator) and sends nothing.
  *   4. A passing reply is enqueued on the lane as an `AUTO` row under the CAPTURED epoch, in a
  *      transaction that re-checks mode, epoch, state and the job's own state. TB2's final
  *      check at the send stamp supersedes it if a person intervenes after that.
@@ -446,15 +450,23 @@ export class SupportAutoReplyService {
     }
     const decision = parsed.decision;
 
-    // 6. NEXA decides.
+    // 6. NEXA decides. The clarifying streak is read from the rows, never from the model.
+    const grounding = {
+      knownAliases: knownAliases(context),
+      knownKnowledgeAliases: new Set(context.knowledgeAliases?.keys() ?? []),
+    };
     const guards = autoDecisionGuards({
       decision,
       config,
       flags: context.flags,
-      knownAliases: knownAliases(context),
+      ...grounding,
+      clarifyingStreak: await this.deps.jobs.clarifyingStreak(scope, {
+        conversationId: conversation.id,
+        epoch,
+      }),
     });
     if (!guards.pass) return this.handOff(scope, job, guards, decision, produced, images);
-    return this.enqueue(scope, job, decision, produced, knownAliases(context), images);
+    return this.enqueue(scope, job, decision, produced, grounding, images);
   }
 
   /**
@@ -560,9 +572,9 @@ export class SupportAutoReplyService {
    * The reply onto the lane, in ONE transaction that decides again on what is true NOW
    * (substitute review of PR #202, finding 1). Under the conversation's lock: the epoch and the
    * state; then the configuration (the mode, and every guard that reads it — the allowlist, the
-   * confidence, the bounds, the loop limit), the trigger (still the customer's, not deleted),
-   * the loop counts, and the customer's account facts, each read in this transaction. The
-   * deterministic guards run again on them; one that now fails HANDS OFF, in this transaction,
+   * confidence, the bounds, the loop limit, the clarifying limit), the trigger (still the
+   * customer's, not deleted), the loop counts, the clarifying streak, and the customer's account
+   * facts, each read in this transaction. The deterministic guards run again on them; one that now fails HANDS OFF, in this transaction,
    * instead of enqueueing — the provider call can take minutes, and a guard that passed on the
    * facts of before it is not a guard.
    */
@@ -571,7 +583,10 @@ export class SupportAutoReplyService {
     job: SupportAiJobRecord,
     decision: SupportAiDecision,
     produced: { readonly provider: SupportAiProvider; readonly model: string },
-    aliases: ReadonlySet<string>,
+    grounding: {
+      readonly knownAliases: ReadonlySet<string>;
+      readonly knownKnowledgeAliases: ReadonlySet<string>;
+    },
     images?: ImageWrite,
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, async (tx, now) => {
@@ -597,7 +612,17 @@ export class SupportAutoReplyService {
       );
       const recheck: AutoVerdict = !preflight.pass
         ? preflight
-        : autoDecisionGuards({ decision, config, flags, knownAliases: aliases });
+        : autoDecisionGuards({
+            decision,
+            config,
+            flags,
+            ...grounding,
+            clarifyingStreak: await this.deps.jobs.clarifyingStreak(
+              scope,
+              { conversationId: job.conversationId, epoch: job.controlEpoch ?? -1 },
+              tx,
+            ),
+          });
       if (!recheck.pass)
         return this.handOffChecked(scope, job, recheck, decision, produced, now, tx);
       const queued = await this.deps.control.enqueueAutoSend(
@@ -617,12 +642,13 @@ export class SupportAutoReplyService {
           produced,
         });
       }
+      const outcome = decision.decision === 'ASK_CLARIFYING_QUESTION' ? 'sent_clarifying' : 'sent';
       const ok = await this.deps.jobs.finishAuto(
         scope,
         job.id,
         {
           state: 'SENT',
-          outcome: 'sent',
+          outcome,
           decision,
           provider: produced.provider,
           model: produced.model,
@@ -632,7 +658,7 @@ export class SupportAutoReplyService {
         tx,
       );
       if (!ok) throw new JobGone();
-      return 'sent';
+      return outcome;
     });
   }
 

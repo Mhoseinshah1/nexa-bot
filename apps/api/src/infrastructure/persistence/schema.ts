@@ -13715,6 +13715,13 @@ export const supportAiConfigs = pgTable(
     timeoutMs: integer('timeout_ms').notNull(),
     maxOutputChars: integer('max_output_chars').notNull(),
     maxConsecutiveReplies: integer('max_consecutive_replies').notNull(),
+    /**
+     * Hotfix (2026-10-06): sent automatic clarifying questions in a row before a handoff.
+     * Added by 0218 with the contract default, so an existing tenant keeps a working limit.
+     */
+    maxConsecutiveClarifyingQuestions: integer('max_consecutive_clarifying_questions')
+      .notNull()
+      .default(2),
     cooldownSeconds: integer('cooldown_seconds').notNull(),
     settleDelaySeconds: integer('settle_delay_seconds').notNull().default(6),
     toneInstructions: text('tone_instructions').notNull().default(''),
@@ -13756,6 +13763,10 @@ export const supportAiConfigs = pgTable(
     check('support_ai_configs_timeout_check', sql`timeout_ms BETWEEN 5000 AND 120000`),
     check('support_ai_configs_output_check', sql`max_output_chars BETWEEN 200 AND 4000`),
     check('support_ai_configs_replies_check', sql`max_consecutive_replies BETWEEN 1 AND 20`),
+    check(
+      'support_ai_configs_clarifying_check',
+      sql`max_consecutive_clarifying_questions BETWEEN 1 AND 10`,
+    ),
     check('support_ai_configs_cooldown_check', sql`cooldown_seconds BETWEEN 0 AND 3600`),
     check('support_ai_configs_settle_check', sql`settle_delay_seconds BETWEEN 3 AND 30`),
     check('support_ai_configs_tone_check', sql`length(tone_instructions) <= 2000`),

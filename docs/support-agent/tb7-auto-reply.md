@@ -17,12 +17,15 @@ nothing.
   sends nothing, ever. Adding a topic, or lowering `auto_min_confidence` from `HIGH` to
   `MEDIUM`, also needs `support_ai.auto_reply`, in any mode. While the resulting mode is
   `AUTO_REPLY_SAFE`, so does loosening how much and how often it answers: raising
-  `maxConsecutiveReplies` or `maxOutputChars`, or lowering `cooldownSeconds` or
-  `settleDelaySeconds`. Outside AUTO those shape only Assist drafts; entering AUTO is itself
+  `maxConsecutiveReplies`, `maxConsecutiveClarifyingQuestions` or `maxOutputChars`, or
+  lowering `cooldownSeconds` or `settleDelaySeconds`. Outside AUTO those shape only Assist drafts; entering AUTO is itself
   charged, so whoever enters it adopts every bound on the form. Narrowing needs only
   `support_ai.configure`.
 - A client that does not send the two new fields saves the safe values (the schema defaults
   them to `[]` and `HIGH`).
+- `maxConsecutiveClarifyingQuestions` («حداکثر سؤال تکمیلی پیاپی», hotfix 2026-10-06) is 2 by
+  default, 1–10. Migration `0218` added it with that default, so every existing tenant reads 2.
+  See «Clarifying questions» below.
 
 ## The pipeline
 
@@ -35,7 +38,7 @@ nothing.
 | 4b. Vision (TB6)     | `planVision`, `SupportImageSource`, `autoImageGuard`  | The customer's images are fetched as Assist fetches them, outside any transaction. An image the reply would be about (the trigger, or the latest customer message) that no model saw hands off as `UNSUPPORTED_CONTENT`: vision off, no vision step, a fetch or sniff refused, or an answering step that was not given the image. Every image considered gets one `support_ai_image_outcomes` row.                                                                                                                                                                                                         |
 | 5. Preflight guards  | `domain/auto-reply-guards.ts` `autoPreflight`         | The trigger is the customer's readable text; the customer is not blocked; fewer than `maxConsecutiveReplies` AUTO replies since a person last acted (the current epoch); fewer than 10 in the last hour.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 6. Decision          | TB4 chain → `supportAiDecisionSchema`                 | Invalid output or a provider refusal is `AI_OUTPUT_INVALID`; any other chain failure is `AI_UNAVAILABLE`. Both hand off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 7. Decision guards   | `autoDecisionGuards`                                  | Every one must pass: `REPLY`; not a hard-handoff topic; not `HUMAN_REQUESTED`; topic on the allowlist; a general topic for an unlinked customer; no payment under review and no unreconciled service; confidence at least the minimum; reply non-empty and within the bound; every cited fact in the payload.                                                                                                                                                                                                                                                                                              |
+| 7. Decision guards   | `autoDecisionGuards`                                  | Every one must pass: `REPLY` or `ASK_CLARIFYING_QUESTION` (hotfix 2026-10-06); not a hard-handoff topic; not `HUMAN_REQUESTED`; topic on the allowlist; a general topic for an unlinked customer; no payment under review and no unreconciled service; confidence at least the minimum; reply non-empty and within the bound; every cited fact and knowledge entry in the payload; for a question, the clarifying streak below the tenant's limit.                                                                                                                                                         |
 | 8. Enqueue the reply | one transaction                                       | Checks scope activity (stopped: nothing written), re-reads the mode, locks the conversation, then decides AGAIN on what is true now: the configuration, the trigger, the loop counts and the customer's account facts (`autoGuardFlags`), each read in this transaction; `autoPreflight` and `autoDecisionGuards` run again, and a failure HANDS OFF here instead of enqueueing. `enqueueAutoSend` locks the conversation and refuses a moved epoch, a state other than `AI_ACTIVE` or a connection that cannot send; the job moves to `SENT` only from `QUEUED`. The lane row carries the CAPTURED epoch. |
 | 9. The final check   | TB2 lane                                              | `businessOutboundSendable` (equal epoch and `AI_ACTIVE`) and, new in TB7, the mode still `AUTO_REPLY_SAFE`, all under the conversation's lock in the stamp's transaction. This is the authority. An AUTO row still unsent `SUPPORT_AI_AUTO_STALE_SECONDS` after it was enqueued is superseded (`support_ai.reply_stale`) and handed off (`REPLY_STALE`).                                                                                                                                                                                                                                                   |
 
@@ -89,7 +92,7 @@ An ordinary answered question opens no ticket.
 
 Each job ends with one code from `SUPPORT_AI_AUTO_OUTCOMES`, pinned by a CHECK:
 
-- `sent`;
+- `sent` (an answer) or `sent_clarifying` (a question, hotfix 2026-10-06);
 - `dropped_mode`, `_epoch`, `_state`, `_coalesced` or `_connection`;
 - `guard_<guard>`;
 - `handoff_ai_requested`, `handoff_output_invalid`, `handoff_ai_unavailable` or `handoff_stale`.
@@ -100,7 +103,7 @@ the set because the CHECK pins it and older rows carry it.
 A handed-off job also carries its `handoff_reason`. Provider runs are recorded by TB4 under
 the operation `AUTO_DECISION`.
 
-## Schema (migrations `0205`, `0206`)
+## Schema (migrations `0205`, `0206`, `0218`)
 
 - `support_ai_jobs` gains the following columns. A CHECK pins the shape of an automatic job.
   - `trigger_telegram_message_id`, `trigger_content_version`;
@@ -115,8 +118,84 @@ the operation `AUTO_DECISION`.
 - Two existing CHECKs are widened: the ticket system events and the handoff reasons.
 - `0206` (substitute review of PR #202) widens the four CHECKs built from
   `BUSINESS_HANDOFF_REASONS` (+`REPLY_STALE`) and `SUPPORT_AI_AUTO_OUTCOMES` (+`handoff_stale`).
+- `0218` (hotfix 2026-10-06) adds `support_ai_configs.max_consecutive_clarifying_questions`
+  (integer, NOT NULL, DEFAULT 2, CHECK 1–10) and widens the same four CHECKs
+  (+`CLARIFYING_LIMIT`; +`sent_clarifying`, `guard_clarifying_limit`).
 
 No grants are needed (no new permission).
+
+## Clarifying questions (hotfix 2026-10-06)
+
+**Root cause of the report.** `autoDecisionGuards` refused every decision other than `REPLY`
+(`guard_decision`, `DECISION_NOT_REPLY`). A safe, allowlisted, confident
+`ASK_CLARIFYING_QUESTION` on «مشکل در اتصال دارم» was therefore handed off, and a handoff of a
+linked customer opens or links a ticket. A conversation was escalated the moment the AI needed
+one more detail.
+
+**What is sent now.** `ASK_CLARIFYING_QUESTION` is sent automatically, its question being
+`replyText`, when it passes every guard a `REPLY` passes, in the same order, at both checks (after
+the provider, and again in the enqueue transaction under the conversation's lock): not a
+hard-handoff topic, not `HUMAN_REQUESTED`, on the allowlist, identity, account review,
+confidence, bounds (an empty or blank question is never sent), grounding — and the money guard
+and every preflight, lane and final-send check before and after it, unchanged. `NO_ACTION` still
+hands off (`DECISION_NOT_REPLY`) and is never a customer message; `HANDOFF` and
+`CREATE_OR_LINK_TICKET` are unchanged. A question opens no ticket, whatever `ticketAction` it
+carries, exactly like a `REPLY`. It is recorded as `sent_clarifying`.
+
+**The limit.** One more guard, last, for a question only: `clarifying_limit`
+(`guard_clarifying_limit`, `CLARIFYING_LIMIT`, «سؤال‌های تکمیلی پیاپی هوش مصنوعی به سقف رسید»).
+A question when the conversation's clarifying streak has reached
+`maxConsecutiveClarifyingQuestions` hands off and nothing is sent. It is not
+`maxConsecutiveReplies`, which bounds every automatic reply (loop safety) and still applies.
+
+**The streak** is NEXA's count, never the model's (`DrizzleSupportAiJobRepository.clarifyingStreak`,
+`clarifyingStreakOf`): the AUTO lane rows at the job's epoch, joined to the SENT job that
+enqueued each (`sent_outbound_id`), whose recorded `decision` says what it was; walking back from
+the newest, the `ASK_CLARIFYING_QUESTION`s before the first `REPLY`.
+
+- A `REPLY` (a greeting included) ends the streak. A customer message does not: the point is
+  question, answer, question, answer, troubleshooting step.
+- A person's message, a takeover, a return to the AI and every handoff move the epoch: a new
+  streak.
+- A lane row counts while `PENDING` (on its way — fail closed; it stops counting once
+  superseded), `DELIVERED` or `UNCONFIRMED` (Telegram may have shown it; it is never resent).
+  `FAILED` (Telegram refused it) and `SUPERSEDED` never reached the customer and count neither as
+  a question nor as the reply that resets. A DISCARDED or FAILED job has no lane row. One job has
+  at most one row (its idempotency key), so a redelivered message or a repeated lane pass is
+  counted once.
+- The decision was already stored on `support_ai_jobs.decision` (and survives the 30-day text
+  purge); nothing new is stored.
+
+**Why after the provider.** Only the decision says whether this job is a question at all, and a
+`REPLY` at the limit is welcome — it is what the streak was waiting for. Refusing before the
+provider would hand off a conversation the model was about to answer. The limit is therefore a
+decision guard, run with the other guards after the call and again in the enqueue transaction
+(a limit lowered during the call applies).
+
+**Grounding, tightened.** The automatic path checked cited FACT aliases only, so a made-up
+knowledge alias (`K9`) passed. A `knowledgeRefs` alias the payload did not carry is now
+`INSUFFICIENT_GROUNDING` too, for a reply and a question alike.
+
+**The prompt** says a question goes in `replyText` and is never empty, and to give a grounded
+first step when a knowledge entry or fact covers the problem rather than ask, never repeating a
+question already asked (the model reads its own delivered replies since D7). The policy version
+is `sai2-2026-10-06`. Assist reads the same prompt; its handling of a draft is unchanged.
+
+**Review of PR #228.** A save that omits `maxConsecutiveClarifyingQuestions` — an older web
+bundle that does not know it — keeps the STORED value (the default only when nothing is
+stored): the request schema makes the field optional (`supportAiConfigSaveSchema`) while the
+configuration as read always carries it, and the service merges it before the permission and
+version logic, so an absent field is never a widening (N4). A reply or question made only of
+zero-width or invisible marks (U+200B–U+200F, U+2060, U+FEFF) is empty and hands off as
+`REPLY_OUT_OF_BOUNDS`; the trimmed original is what is sent otherwise (N7). Rule 9a of the
+prompt yields to rules 5–7 («Unless rules 5–7 require HANDOFF», policy `sai3-2026-10-06`, N5).
+A question still `PENDING` on the lane counts toward the streak (N1, tested).
+
+**The setting** is in the tenant's Support AI configuration, versioned and idempotent like the
+other fields, drawn on `/support-ai` in the numeric-field pattern with its help text and the
+shared Persian bound error. Raising it while the resulting mode is `AUTO_REPLY_SAFE` is a widening
+charged `support_ai.auto_reply`, like `maxConsecutiveReplies`; lowering it is not, and outside
+AUTO it is ordinary configuration. The page warns about the widening before the save.
 
 ## Decisions made in this package
 
@@ -198,8 +277,14 @@ No grants are needed (no new permission).
     the handoff, the summary purge, superseded rows and the loop guard, Telegram REFUSED, the
     takeover's recovery); the summary gate on `business_chats.view`; the loosened bounds.
 - On TB6, four more integration tests cover a seen photo being answered (PROCESSED), a photo with vision off, a photo that cannot be fetched or read, and a photo the answering step was not given. The unit file gains the photo preflight and `autoImageGuard`.
-- `tests/unit/support-auto-reply-guards.test.ts` (13): the pure evaluator, guard by guard, and
-  the configuration defaults.
+- `tests/unit/support-auto-reply-guards.test.ts`: the pure evaluator, guard by guard, and
+  the configuration defaults; since the hotfix, a question through every guard, the limit, the
+  streak walk, the setting's default and bounds, and short connection phrases the money lexicon
+  must leave to the model.
+- Hotfix 2026-10-06: `describe('hotfix: automatic clarifying questions')` in the integration
+  file (23 cases: the spec's tests 1–16, the enqueue-time recheck, a real Telegram refusal,
+  short connection messages, the transcript, identity and the acceptance flow) and
+  `tests/web/support-ai-clarifying.test.tsx` (8).
 - TB2's and TB5's suites pass unchanged in substance. TB2's lane is built with a mode reader
   that allows AUTO, because its races are about the epoch and the state.
 

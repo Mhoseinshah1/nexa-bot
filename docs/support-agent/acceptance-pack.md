@@ -287,6 +287,43 @@ both.
    - **Expect:** a SUPPORT_ACCOUNTS proposal that names the handle; an FAQ naming a personal
      handle is still excluded (`after.excluded.kinds` contains `USERNAME`).
 
+## M. Clarifying questions (hotfix 2026-10-06) — NOT RUN
+
+Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
+records it. On the TEST tenant under `AUTO_REPLY_SAFE` with `CONNECTION_TROUBLESHOOTING` and
+`GREETING` allowlisted, the confidence floor `HIGH`, «حداکثر سؤال تکمیلی پیاپی» at its default
+2, «بیشترین پاسخ خودکار پیاپی» (`maxConsecutiveReplies`) at **5 or more**, and at least one approved,
+enabled article about Sing-box connection errors. At its default of 4 the loop guard counts
+every automatic reply — the greeting too — so a flow of greeting, two questions and an answer
+uses all four, and any further automatic reply in the same epoch hands off as `LOOP_GUARD`
+(«پاسخ‌های خودکار پشت‌سرهم به سقف رسید»), not as the clarifying limit.
+
+1. **The conversation.** From the customer, one message at a time, waiting for each answer:
+
+   | Customer             | Expect from the business account                                                                                |
+   | -------------------- | --------------------------------------------------------------------------------------------------------------- |
+   | «سلام»               | a greeting                                                                                                      |
+   | «مشکل در اتصال دارم» | a clarifying question, e.g. «حتماً. با چه برنامه‌ای وصل می‌شید و موقع اتصال چه خطایی می‌بینید؟» — **no ticket** |
+   | «Sing-box»           | a second relevant question if one is needed, or already the troubleshooting steps                               |
+   | «خطای اتصال میده»    | troubleshooting steps from the approved knowledge                                                               |
+   - **Expect:** each message answered once; no handoff and no ticket; the conversation stays
+     «هوش مصنوعی فعال».
+   - **Evidence:**
+     `SELECT decision, outcome, handoff_reason, knowledge_sent FROM support_ai_jobs WHERE kind = 'AUTO_DECISION' AND conversation_id = '<id>' ORDER BY created_at;`
+     shows `REPLY/sent`, `ASK_CLARIFYING_QUESTION/sent_clarifying` (once or twice), then
+     `REPLY/sent`; `SELECT count(*) FROM tickets WHERE customer_id = '<customer id>'` is unchanged.
+
+2. **The limit.** Set «حداکثر سؤال تکمیلی پیاپی» to 1 and save. Start a new connection
+   problem and answer the AI's question vaguely («نمی‌دونم») until it would ask again.
+   - **Expect:** at the second question in a row nothing is sent; the conversation is
+     «نیازمند پشتیبان» with «سؤال‌های تکمیلی پیاپی هوش مصنوعی به سقف رسید», and a ticket.
+   - Return it to the AI: the next customer message is answered like a fresh conversation.
+3. **Money still hands off.** «وصل نمیشه، پولمو هم پس بدید» — no automatic reply, `HANDOFF_TOPIC`,
+   no provider call (step L3's evidence query).
+4. **The widening.** As an `admin` without `support_ai.auto_reply`, raise «حداکثر سؤال تکمیلی
+   پیاپی». **Expect:** the warning before saving, and the save refused.
+5. Set the limit back to 2.
+
 ## Results
 
 Mark each step **PASS**, **FAIL** or **NOT RUN**. A step that was not executed is NOT RUN,
@@ -326,6 +363,10 @@ no real provider key and no Telegram Business account (program §0).
 | L7 analytics superseded vs discarded (L1)                 | NOT RUN               |            |          |                                               |
 | L8 Persian payment label (L2)                             | NOT RUN               |            |          |                                               |
 | L9 support accounts in the build (L3)                     | NOT RUN               |            |          |                                               |
+| M1 greeting → question → question → grounded answer       | NOT RUN               |            |          |                                               |
+| M2 clarifying limit hands off, resume starts fresh        | NOT RUN               |            |          |                                               |
+| M3 money still hands off before the provider              | NOT RUN               |            |          |                                               |
+| M4 raising the limit is the owner's widening              | NOT RUN               |            |          |                                               |
 
 Sign-off:
 

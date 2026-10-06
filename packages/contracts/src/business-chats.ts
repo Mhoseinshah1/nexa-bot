@@ -237,7 +237,10 @@ export const BUSINESS_HANDOFF_REASONS = [
   'LOW_CONFIDENCE',
   /** A `REPLY` whose text is empty or outside the configured bound. */
   'REPLY_OUT_OF_BOUNDS',
-  /** The model answered with a clarifying question or no action: nothing it may send alone. */
+  /**
+   * The model answered with no action: nothing it may send alone. (Before the 2026-10-06
+   * hotfix a clarifying question also landed here; one is now sent when every guard passes.)
+   */
   'DECISION_NOT_REPLY',
   /** The provider's output was not a valid decision, or the provider refused. */
   'AI_OUTPUT_INVALID',
@@ -261,6 +264,11 @@ export const BUSINESS_HANDOFF_REASONS = [
    * automatically, so a person answers instead (substitute review of PR #202).
    */
   'REPLY_STALE',
+  /**
+   * The model asked another clarifying question, but the conversation already had the tenant's
+   * `maxConsecutiveClarifyingQuestions` sent in a row: a person continues (hotfix 2026-10-06).
+   */
+  'CLARIFYING_LIMIT',
 ] as const;
 export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
 

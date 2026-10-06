@@ -3,8 +3,10 @@ import {
   SUPPORT_AI_DEFAULT_CONFIG,
   SUPPORT_AI_GENERAL_TOPICS,
   SUPPORT_AI_HANDOFF_TOPICS,
+  SUPPORT_AI_LIMITS,
   SUPPORT_AI_SAFE_TOPICS,
   supportAiConfigInputSchema,
+  supportAiConfigSaveSchema,
   type SupportAiDecision,
 } from '@nexa/contracts';
 import {
@@ -12,6 +14,7 @@ import {
   autoImageGuard,
   autoMoneyGuard,
   autoPreflight,
+  clarifyingStreakOf,
   customerTextsSinceReply,
   foldCustomerText,
   mentionsMoneyTopic,
@@ -44,20 +47,34 @@ const config = {
   autoTopics: [...SUPPORT_AI_SAFE_TOPICS],
   autoMinConfidence: 'HIGH' as 'MEDIUM' | 'HIGH',
   maxOutputChars: 1200,
+  maxConsecutiveClarifyingQuestions: 2,
 };
 const known = new Set(['S1', 'P1']);
+const knownKnowledge = new Set(['K1', 'K2']);
 
 const guards = (over: {
   decision?: Partial<SupportAiDecision>;
   config?: Partial<typeof config>;
   flags?: Partial<AutoContextFlags>;
+  clarifyingStreak?: number;
 }) =>
   autoDecisionGuards({
     decision: { ...decision, ...over.decision },
     config: { ...config, ...over.config },
     flags: { ...flags, ...over.flags },
     knownAliases: known,
+    knownKnowledgeAliases: knownKnowledge,
+    clarifyingStreak: over.clarifyingStreak ?? 0,
   });
+
+/** A safe clarifying question (hotfix 2026-10-06): the question is `replyText`. */
+const ask: Partial<SupportAiDecision> = {
+  decision: 'ASK_CLARIFYING_QUESTION',
+  replyText: 'حتماً. با چه برنامه‌ای وصل می‌شید و موقع اتصال چه خطایی می‌بینید؟',
+  factRefs: [],
+};
+const askWith = (over: Partial<SupportAiDecision>) => ({ ...ask, ...over });
+const INVISIBLE_ONLY = '\u200b\u200c\u200d\u200e\u200f\u2060\ufeff';
 
 const preflight = (over: Partial<Parameters<typeof autoPreflight>[0]> = {}) =>
   autoPreflight({
@@ -134,12 +151,143 @@ describe('automatic-reply guards (TB7)', () => {
     }
   });
 
-  it('only a REPLY is sent; a clarifying question or no action hands off', () => {
-    for (const kind of ['ASK_CLARIFYING_QUESTION', 'NO_ACTION'] as const) {
-      expect(guards({ decision: { decision: kind } })).toMatchObject({
+  it('a safe clarifying question passes; NO_ACTION still hands off (hotfix 2026-10-06)', () => {
+    expect(guards({ decision: ask })).toEqual({ pass: true });
+    // NO_ACTION is never a customer message, whatever replyText it carries.
+    for (const replyText of ['', 'متن']) {
+      expect(guards({ decision: { decision: 'NO_ACTION', replyText } })).toMatchObject({
+        pass: false,
         outcome: 'guard_decision',
         reason: 'DECISION_NOT_REPLY',
       });
+    }
+  });
+
+  it('a clarifying question passes through EVERY guard a REPLY does', () => {
+    // allowlist
+    expect(guards({ decision: ask, config: { autoTopics: ['GREETING'] } })).toMatchObject({
+      outcome: 'guard_topic_allowlist',
+      reason: 'TOPIC_NOT_ALLOWED',
+    });
+    // a hard topic, and a person asked for, whatever the decision kind
+    for (const topic of SUPPORT_AI_HANDOFF_TOPICS) {
+      expect(guards({ decision: askWith({ topic }) }), topic).toMatchObject({
+        pass: false,
+        outcome: topic === 'HUMAN_REQUESTED' ? 'guard_human_requested' : 'guard_handoff_topic',
+      });
+    }
+    // identity: an unlinked customer is asked only on a general topic
+    expect(
+      guards({ decision: askWith({ topic: 'SERVICE_INFO' }), flags: { identityLinked: false } }),
+    ).toMatchObject({ outcome: 'guard_identity', reason: 'IDENTITY_UNVERIFIED' });
+    expect(guards({ decision: ask, flags: { identityLinked: false } })).toEqual({ pass: true });
+    // account review
+    expect(guards({ decision: ask, flags: { hasUnderReviewPayment: true } })).toMatchObject({
+      outcome: 'guard_account_review',
+    });
+    expect(guards({ decision: ask, flags: { hasUnreconciledService: true } })).toMatchObject({
+      outcome: 'guard_account_review',
+    });
+    // confidence
+    expect(guards({ decision: askWith({ confidence: 'MEDIUM' }) })).toMatchObject({
+      outcome: 'guard_confidence',
+      reason: 'LOW_CONFIDENCE',
+    });
+    expect(
+      guards({ decision: askWith({ confidence: 'LOW' }), config: { autoMinConfidence: 'MEDIUM' } }),
+    ).toMatchObject({ outcome: 'guard_confidence' });
+    // bounds: an empty or blank question is never sent; neither is an over-long one
+    for (const replyText of ['', '   ', 'ب'.repeat(1201), INVISIBLE_ONLY]) {
+      expect(guards({ decision: askWith({ replyText }) })).toMatchObject({
+        outcome: 'guard_reply_bounds',
+        reason: 'REPLY_OUT_OF_BOUNDS',
+      });
+    }
+    // grounding: a fact or a knowledge entry the payload did not carry
+    expect(guards({ decision: askWith({ factRefs: ['Z9'] }) })).toMatchObject({
+      outcome: 'guard_grounding',
+      reason: 'INSUFFICIENT_GROUNDING',
+    });
+    expect(guards({ decision: askWith({ knowledgeRefs: ['K9'] }) })).toMatchObject({
+      outcome: 'guard_grounding',
+      reason: 'INSUFFICIENT_GROUNDING',
+    });
+  });
+
+  it('the clarifying limit: a question at the streak limit hands off; a REPLY never does', () => {
+    expect(guards({ decision: ask, clarifyingStreak: 1 })).toEqual({ pass: true });
+    expect(guards({ decision: ask, clarifyingStreak: 2 })).toEqual({
+      pass: false,
+      guard: 'clarifying_limit',
+      outcome: 'guard_clarifying_limit',
+      reason: 'CLARIFYING_LIMIT',
+    });
+    expect(
+      guards({
+        decision: ask,
+        clarifyingStreak: 3,
+        config: { maxConsecutiveClarifyingQuestions: 4 },
+      }),
+    ).toEqual({ pass: true });
+    expect(
+      guards({
+        decision: ask,
+        clarifyingStreak: 4,
+        config: { maxConsecutiveClarifyingQuestions: 4 },
+      }),
+    ).toMatchObject({ outcome: 'guard_clarifying_limit' });
+    // A REPLY at (or past) the limit is the answer the streak was waiting for.
+    expect(guards({ clarifyingStreak: 10 })).toEqual({ pass: true });
+  });
+
+  it('the clarifying streak counts questions back to the newest REPLY, never past it', () => {
+    const q = { decision: 'ASK_CLARIFYING_QUESTION' };
+    const r = { decision: 'REPLY' };
+    expect(clarifyingStreakOf([])).toBe(0);
+    expect(clarifyingStreakOf([q])).toBe(1);
+    expect(clarifyingStreakOf([q, q])).toBe(2);
+    // newest first: ASK, ASK, REPLY, ASK — the REPLY ends the streak
+    expect(clarifyingStreakOf([q, r, q, q])).toBe(1);
+    expect(clarifyingStreakOf([r, q, q])).toBe(0);
+    // a greeting is a REPLY: it never adds to the streak
+    expect(clarifyingStreakOf([r])).toBe(0);
+  });
+
+  it('the clarifying limit is a tenant setting: default 2, bounds 1–10', () => {
+    expect(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions).toEqual({
+      min: 1,
+      max: 10,
+      default: 2,
+    });
+    expect(SUPPORT_AI_DEFAULT_CONFIG.maxConsecutiveClarifyingQuestions).toBe(2);
+    // N4: a configuration always carries it (no schema default to widen a tenant at 1)…
+    const absent = { ...SUPPORT_AI_DEFAULT_CONFIG, maxConsecutiveClarifyingQuestions: undefined };
+    expect(supportAiConfigInputSchema.safeParse(absent).success).toBe(false);
+    // …while a SAVE may omit it, and then carries nothing the service could mistake for a value.
+    const saved = supportAiConfigSaveSchema.parse(absent);
+    expect(saved.maxConsecutiveClarifyingQuestions).toBeUndefined();
+    expect(
+      supportAiConfigSaveSchema.safeParse({
+        ...SUPPORT_AI_DEFAULT_CONFIG,
+        maxConsecutiveClarifyingQuestions: 11,
+      }).success,
+    ).toBe(false);
+    for (const value of [0, 11, 2.5]) {
+      expect(
+        supportAiConfigInputSchema.safeParse({
+          ...SUPPORT_AI_DEFAULT_CONFIG,
+          maxConsecutiveClarifyingQuestions: value,
+        }).success,
+        String(value),
+      ).toBe(false);
+    }
+    for (const value of [1, 10]) {
+      expect(
+        supportAiConfigInputSchema.safeParse({
+          ...SUPPORT_AI_DEFAULT_CONFIG,
+          maxConsecutiveClarifyingQuestions: value,
+        }).success,
+      ).toBe(true);
     }
   });
 
@@ -188,12 +336,44 @@ describe('automatic-reply guards (TB7)', () => {
     expect(guards({ decision: { replyText: 'ب'.repeat(1200) } })).toEqual({ pass: true });
   });
 
+  it('N7: a reply or question of only zero-width or invisible marks is empty, and hands off', () => {
+    for (const replyText of [
+      '\u200b',
+      '\u200c\u200c',
+      '\u200d \u200e\u200f',
+      '\u2060',
+      '\ufeff',
+      ` ${INVISIBLE_ONLY} `,
+    ]) {
+      for (const kind of ['REPLY', 'ASK_CLARIFYING_QUESTION'] as const) {
+        expect(
+          guards({ decision: { decision: kind, replyText } }),
+          `${kind} ${JSON.stringify(replyText)}`,
+        ).toMatchObject({
+          outcome: 'guard_reply_bounds',
+          reason: 'REPLY_OUT_OF_BOUNDS',
+        });
+      }
+    }
+    // A real word joined by a ZWNJ is text, not invisible.
+    expect(guards({ decision: { replyText: 'می\u200cشود' } })).toEqual({ pass: true });
+    expect(guards({ decision: askWith({ replyText: 'چه\u200cبرنامه‌ای؟' }) })).toEqual({
+      pass: true,
+    });
+  });
+
   it('a citation the payload did not contain hands off', () => {
     expect(guards({ decision: { factRefs: ['S1', 'Z9'] } })).toMatchObject({
       outcome: 'guard_grounding',
       reason: 'INSUFFICIENT_GROUNDING',
     });
     expect(guards({ decision: { factRefs: [] } })).toEqual({ pass: true });
+    // A knowledge citation is grounding too: one the payload did not carry is fake.
+    expect(guards({ decision: { knowledgeRefs: ['K1', 'K7'] } })).toMatchObject({
+      outcome: 'guard_grounding',
+      reason: 'INSUFFICIENT_GROUNDING',
+    });
+    expect(guards({ decision: { knowledgeRefs: ['K1', 'K2'] } })).toEqual({ pass: true });
   });
 
   it('preflight: only a customer message with readable text is ever answered', () => {
@@ -329,6 +509,16 @@ describe('automatic-reply money guard (D9)', () => {
     'پسورد وای فای',
     'my app does not connect',
     'how do I update the subscription',
+    // Hotfix item 3: short connection troubleshooting is the model's, never a money handoff.
+    'وصل نمیشه',
+    'مشکل اتصال دارم',
+    'مشکل در اتصال دارم',
+    `کانفیگ کار نمی${ZWNJ}کنه`,
+    'کانفیگ کار نمیکنه',
+    'Sing-box وصل نمیشه',
+    'Sing-box',
+    'sing-box connection error',
+    'خطای اتصال میده',
     null,
   ] as const;
 
