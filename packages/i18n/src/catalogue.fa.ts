@@ -94,7 +94,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.transfer_prompt':
     'سرویس را به چه کاربری می‌خواهید انتقال دهید؟ شناسه کاربری عددی مقصد را ارسال کنید.',
   'bot.service.transfer_confirm':
-    '🔄 انتقال سرویس\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n{icon:identity} آی دی عددی کاربر مقصد: {recipientId}\n{icon:user} نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
+    '🔄 انتقال سرویس\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n{icon:identity} شناسه کاربری مقصد: {recipientId}\n{icon:user} نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
   'bot.service.transfer_confirm_button': '✅ تأیید انتقال سرویس',
   'bot.service.transfer_done': '{icon:success} سرویس با موفقیت به کاربر مقصد منتقل شد.',
   'bot.service.transfer_received':
@@ -1017,7 +1017,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.discount.rejected': 'این کد تخفیف قابل استفاده نیست.',
   'bot.discount.enter_button': '🏷 اعمال کد تخفیف',
   'bot.discount.remove_button': 'حذف کد تخفیف',
-  'bot.discount.ask': 'کد تخفیف خود را در پیام بعدی بفرستید.',
+  'bot.discount.ask': 'کد تخفیف خود را ارسال کنید',
   'bot.discount.no_longer_valid':
     'تخفیف این سفارش دیگر معتبر نیست. هیچ مبلغی کسر نشده است. لطفاً سفارش را دوباره شروع کنید.',
 
@@ -1068,6 +1068,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
   'bot.service.delivered_qr_caption':
     '📷 کد QR لینک اتصال شما. جزئیات سرویس در پیام بعدی آمده است.',
+  'bot.service.link_qr_caption':
+    '📷 کد QR لینک اتصال بالا. می‌توانید آن را در برنامهٔ خود اسکن کنید.',
   'bot.service.tutorial_button': '📚 مشاهده آموزش استفاده',
   'bot.service.connected_button': '🥰 وصل شدم',
   'bot.service.problem_button': '😐 مشکل دارم',
@@ -1192,11 +1194,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_preparing':
     '{icon:time} فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند لحظه صبر کنید؛ لینک پرداخت به‌محض آماده شدن در همین پیام نمایش داده می‌شود.',
   'bot.payment.gateway_invoice':
-    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ: {total}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ: {total}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
   'bot.payment.gateway_invoice_order_fee':
-    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
   'bot.payment.gateway_invoice_topup_fee':
-    '{icon:invoice} فاکتور شارژ آنلاین کیف پول\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+    '{icon:invoice} فاکتور شارژ آنلاین کیف پول\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
   'bot.payment.gateway_pay_button': '💳 پرداخت آنلاین',
   'bot.payment.gateway_check_button': '🔄 بررسی وضعیت پرداخت',
   'bot.payment.gateway_confirmed': '{icon:success} پرداخت شما توسط درگاه تأیید و ثبت شد.',
@@ -1240,7 +1242,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_receipt_too_large':
     'حجم این عکس بیش از ۵ مگابایت است. لطفاً عکس کوچک‌تری از فیش واریزی بفرستید.',
   'bot.wallet.summary':
-    '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} آی دی عددی: {telegramId}\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس های خریداری شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
+    '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: {telegramId}\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس های خریداری شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',
   'bot.wallet.group_customer': 'کاربر عادی',
   'bot.wallet.group_reseller': 'نماینده',

@@ -126,7 +126,10 @@ import { DrizzleReadinessProbes } from './modules/platform/system/infrastructure
 import { DrizzleAuditWriter } from './modules/platform/audit/infrastructure/drizzle-audit-writer.js';
 import { DrizzleBootstrapRecordReader } from './modules/platform/identity/infrastructure/drizzle-bootstrap-record.reader.js';
 import { DrizzleOperationalEventRecorder } from './modules/platform/opslog/infrastructure/drizzle-operational-events.js';
-import { DrizzleIdempotencyStore } from './modules/platform/idempotency/infrastructure/drizzle-idempotency-store.js';
+import {
+  DrizzleIdempotencyStore,
+  hashRequest,
+} from './modules/platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import { PermissionGuard } from './modules/platform/access/application/permission-guard.js';
 import { AdminPermissionResolver } from './modules/platform/access/infrastructure/admin-permission-resolver.js';
 import { ScryptPasswordHasher, scryptParamsFor } from './infrastructure/crypto/password-hasher.js';
@@ -271,7 +274,11 @@ import {
 } from './modules/commerce/bulk-operations/application/bulk-operation-loop.js';
 import { DrizzleBulkOperationRepository } from './modules/commerce/bulk-operations/infrastructure/drizzle-bulk-operation.repository.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
-import { LocationChangePolicy } from './modules/commerce/locations/application/location-change-policy.js';
+import {
+  displayedServiceLocation,
+  initialLocationOf,
+  LocationChangePolicy,
+} from './modules/commerce/locations/application/location-change-policy.js';
 import { LocationChangeService } from './modules/commerce/locations/application/location-change.service.js';
 import { ServiceLocationAdminService } from './modules/commerce/locations/application/service-location-admin.service.js';
 import {
@@ -2090,6 +2097,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * the provisioner, so none of them can read a different answer.
    */
   const serviceLocationRepository = new DrizzleServiceLocationRepository(database.db);
+  /**
+   * Pre-support A6: the operator's label for the initial location of the panel a service
+   * is on NOW — what the card and the delivery card say a never-moved service is in.
+   */
+  const panelInitialLocationLabel = async (
+    scope: TenantContext,
+    panelId: string,
+  ): Promise<string | null> =>
+    initialLocationOf(await serviceLocationRepository.forPanel(scope, panelId))?.label ?? null;
   const locationChangeRepository = new DrizzleLocationChangeRepository(database.db);
   const customerLocationOverrides = new DrizzleCustomerLocationOverrideRepository(database.db);
   const locationChangePolicy = new LocationChangePolicy({
@@ -3492,6 +3508,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const monitorBudgetReserve = monitorBudgetReserveFor(
     config.PANEL_PROBE_TENANT_LIMIT,
     config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
+  );
+  /**
+   * The background floor: the scheduled usage sweep's, and (pre-support A2) a card's
+   * opportunistic read on open. One number on the one bucket, never a second budget.
+   */
+  const usageSyncBackgroundReserve = usageSyncBudgetReserveFor(
+    config.PANEL_PROBE_TENANT_LIMIT,
+    monitorBudgetReserve,
   );
 
   const panelMonitor = new PanelMonitorService(
@@ -5084,8 +5108,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
             : await productRepository.findById(scope, service.productId);
         return {
           productName: order.line.title,
-          // WP-A6: where the service has moved to, when it has; the product's label otherwise.
-          serviceLocation: service.locationLabel ?? product?.display.serviceLocationLabel ?? null,
+          // Pre-support A6: the same precedence the service card uses.
+          serviceLocation: displayedServiceLocation(
+            service.locationLabel,
+            service.locationLabel !== null
+              ? null
+              : await panelInitialLocationLabel(scope, service.panelId),
+            product?.display.serviceLocationLabel ?? null,
+          ),
           durationDays: order.line.specification.durationDays,
           trafficBytes: order.line.specification.trafficBytes,
         };
@@ -5118,6 +5148,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     // Round N (F4): a customer's link change is answered on the card it was asked from.
     cards: operationCardRepository,
+    /*
+     * Pre-support A9: the QR under the link view is claimed by the tap's update key, in the
+     * TELEGRAM namespace and suffixed so it can never meet the turn's own key.
+     */
+    linkQr: {
+      claim: (scope, key, tx) =>
+        idempotency.remember(
+          scope,
+          'TELEGRAM',
+          `${key}:link_qr`,
+          hashRequest({ command: 'service.link_qr' }),
+          { claimed: true },
+          tx,
+        ),
+    },
   });
 
   /**
@@ -5167,10 +5212,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     http: panelHttp,
     urlPolicy,
     probeBudget: probeCore.probeBudget,
-    backgroundBudgetReserve: usageSyncBudgetReserveFor(
-      config.PANEL_PROBE_TENANT_LIMIT,
-      monitorBudgetReserve,
-    ),
+    backgroundBudgetReserve: usageSyncBackgroundReserve,
     uow,
     clock,
     ids,
@@ -6519,7 +6561,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderService,
     antiSpam,
     botRuntime: new BotRuntime({
-      // A10: a best-effort step that failed after its turn's durable write is logged here.
+      // Best-effort steps are logged here: a card's live read on open that failed
+      // unexpectedly (pre-support A2), and a receipt's invoice finalisation that failed
+      // after its turn's durable write (A10).
       logger,
       // WP20: more than 20 interactions in 10 s blocks the customer; fails open.
       antiSpam,
@@ -6575,6 +6619,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       counters: customerCounters,
       routes: paymentGatewayService,
       support: { partsFor: supportScreenParts },
+      panelLocations: { initialLabelFor: panelInitialLocationLabel },
       productDisplay: {
         displayFor: async (scope, productId) => {
           // A custom service (Package D) was bought from no product, so it has no display.
@@ -6642,6 +6687,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         http: panelHttp,
         urlPolicy,
         probeBudget: probeCore.probeBudget,
+        // Pre-support A2: a card being opened reads above the background floor, never from it.
+        backgroundBudgetReserve: usageSyncBackgroundReserve,
         guard,
         scopeActivity: tenants,
         panelPolicy: panelPolicyReader,

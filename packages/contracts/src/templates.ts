@@ -7645,6 +7645,15 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.link_qr_caption',
+    description:
+      'The caption of the QR picture sent under the link view, after «🔗 لینک اشتراک» on the ' +
+      'service card: the QR of the link in the message above. Carries no link and claims no ' +
+      'message follows.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.tutorial_button',
     description: 'Opens the connection guide’s platform choice.',
     format: 'PLAIN_TEXT',
