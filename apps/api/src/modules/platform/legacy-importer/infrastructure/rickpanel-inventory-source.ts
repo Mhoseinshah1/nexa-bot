@@ -7,6 +7,7 @@ import type {
 import { toProviderCredentials } from '../../panels/application/probe-core.js';
 import {
   RickpanelInventoryReader,
+  effectiveInventoryPageSize,
   inventoryIndex,
   readOnlyRickpanelHttp,
 } from '../../providers/infrastructure/rickpanel-inventory.js';
@@ -85,6 +86,10 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
 
   requestCounts(): { readonly reads: number; readonly refusedWrites: number } {
     return { ...this.counts };
+  }
+
+  pageSize(): number {
+    return effectiveInventoryPageSize(this.options.pageSize);
   }
 
   async read(scope: TenantContext, panelId: string): Promise<LegacyInventoryRead> {

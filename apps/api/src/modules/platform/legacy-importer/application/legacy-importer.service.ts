@@ -321,6 +321,8 @@ export class LegacyImporterService {
       panels: prepared.plan.inventories,
       reads: counts.reads,
       refusedWrites: counts.refusedWrites,
+      /** Rows per list page the double walk asked for (clamped as the walk clamps it). */
+      inventoryPageSize: this.deps.inventory.pageSize(),
       /** Sent writes. Zero by construction: the port holds no method that can send one. */
       writes: 0,
     };

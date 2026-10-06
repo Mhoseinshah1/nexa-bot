@@ -44,12 +44,14 @@ legacy-import MODE --tenant T --source SOURCE --target TARGET --panel-map FILE
 | `--panel-map`                                                 | `nexa-legacy-panel-map/v1` JSON (step 10); unknown keys refused                                                                                                                                                                                                                                               |
 | `--evidence-class production`                                 | required for import, resume and report (passed to every mode by `p7`); checked against the source — a SYNTHETIC-marked source can only be `synthetic`                                                                                                                                                         |
 | `--allow-production-target`                                   | with `NEXA_LEGACY_IMPORT_TARGET_ACK=<16 hex>`: the hard guard. `nexa` is production-like, so **every mode** needs both here; the ack is bound to host, port, database and tenant                                                                                                                              |
+| `--inventory-page-size`                                       | omitted = **200** rows per RickPanel list page (the maximum; `importer.md` §1.1). Leave it omitted: the real rehearsal BLOCKED with `TOTAL_CHANGED` at 50 (~500 reads) and passed at 200 (~130)                                                                                                               |
 | `--abort-running`                                             | `resume` only: finish a stuck RUNNING run as ABORTED. An owner decision, never a reflex                                                                                                                                                                                                                       |
 | exit `0`                                                      | done                                                                                                                                                                                                                                                                                                          |
 | exit `3`                                                      | done, but a person must decide: audit `BLOCKED`, import/resume `COMPLETED_WITH_FAILURES` (see its `attention` counts), reconcile `DISCREPANCY`, report with a failed equation                                                                                                                                 |
 | exit `4`                                                      | import interrupted; the run stays RUNNING — use `resume`                                                                                                                                                                                                                                                      |
 | `--expected-fingerprint` / `--expected-panel-map-fingerprint` | import/resume only: the source and panel-map fingerprints the owner approved (audit's `source.fingerprint`, `panelMapping.fingerprint`). A mismatch is refused before any write, exit `65`. Against a production-like target `--expected-fingerprint` is **required** (without it: exit `64`, nothing opened) |
 | exit `64` / `65`                                              | usage or guard refusal / mapping or source refused — nothing was written                                                                                                                                                                                                                                      |
+| exit `73`                                                     | the report was computed and printed to stdout, but `--out` could not be written (path and errno printed). Not an audit failure; the verdict stands. This runbook captures stdout on the host (`tee`), so it uses no `--out`                                                                                   |
 | exit `1`                                                      | anything else, printed as a code                                                                                                                                                                                                                                                                              |
 
 `scripts/legacy-rehearsal.sh` calls the same interface; its contract block names the same
@@ -324,9 +326,16 @@ p7 audit | tee audit.txt; echo "exit ${PIPESTATUS[0]}"
 The acknowledgement arms the guard for this database and tenant. **It is not the owner's
 approval** — that is step 13, and nothing past step 12 runs without it.
 
-Check: exit `0` with verdict `READY_FOR_DRY_RUN`. Exit `3` (`BLOCKED`: an incomplete
+Check: exit `0` with verdict `READY_FOR_DRY_RUN`, and the report's
+`sections.provider.inventoryPageSize` is `200`. Exit `3` (`BLOCKED`: an incomplete
 inventory, a currency other than IRT) stops the cutover here — never proceed on a partial
-walk. The fingerprint is printed and recorded; the plan's totals equal `legacy-source.tsv`;
+walk. A `TOTAL_CHANGED` blocker means the live panel changed during the walk: confirm the
+MAINTENANCE incident's `stop_sales` is active (step 1), then re-run `p7 audit`
+deliberately. A repeat with sales stopped is a finding (something else is writing to the
+panel) to investigate, never a reason to proceed; and never lower the page size to "get
+through" (a smaller page means a longer walk). Reports are captured on the host by `tee`; do not add `--out` inside the
+container (it runs as uid 1000 and cannot write a root-owned host directory — exit 73,
+`importer.md` §1.2). The fingerprint is printed and recorded; the plan's totals equal `legacy-source.tsv`;
 provider writes 0. The audit's Item 1 evidence and its cross-checks (Q1b, Q2b, Q6, Q7
 against the importer's own decisions) agree, or the disagreement is explained.
 

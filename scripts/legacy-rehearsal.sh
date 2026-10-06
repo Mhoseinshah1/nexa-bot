@@ -70,8 +70,11 @@ PROVISION_CLI="$ROOT/apps/api/dist/provision-installation.cli.js"
 # - Exit codes: 0 done; 3 done but a person must decide (audit BLOCKED, reconcile
 #   DISCREPANCY, import/resume with adoption pending P6, report with a failed equation);
 #   4 import interrupted (run left RUNNING); 64 usage or guard refusal; 65 mapping or
-#   source refused; 1 anything else. The harness accepts 0 and 3, and records every 3 as
+#   source refused; 73 report computed but its --out not written (the harness passes no
+#   P7 --out); 1 anything else. The harness accepts 0 and 3, and records every 3 as
 #   PENDING — done, not passed.
+# - --inventory-page-size: omitted, P7 walks RickPanel with 200-row pages (the reader's
+#   maximum, importer.md §1.1). The harness passes none; --importer-arg can.
 LEGACY_IMPORT_CLI="${LEGACY_IMPORT_CLI:-$ROOT/apps/api/dist/legacy-import.cli.js}"
 P7_MODES=(audit dry-run import resume reconcile report)
 P7_EXIT_NEEDS_DECISION=3
