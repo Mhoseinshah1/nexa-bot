@@ -301,6 +301,19 @@ activity read inside the transaction and an audit row.
   interrupted run both proceeded, walked the same rows and deadlocked (40P01). A process
   that dies — `kill -9`, a lost host — loses its connection and so its claim, at once: a
   resume after a crash is never refused by a dead holder, and needs no operator step.
+  If that session ends while the import runs (the backend terminated, the server
+  restarted, a network cut — noticed by TCP keepalive), the claim is LOST: the import
+  stops before its next phase as an interruption, the run stays RUNNING, and `resume`
+  finishes it. **The claim needs a direct PostgreSQL connection.** A session advisory lock
+  lives on one server session; behind a transaction-pooling proxy (PgBouncer in
+  `transaction` or `statement` mode) the lock and the session that should hold it come
+  apart, and two importers could both believe they hold the tenant. Point `DATABASE_URL`
+  of the importer at PostgreSQL itself, or at a pooler in `session` mode. (NEXA's own
+  deployment has no pooler: `deploy/` connects to PostgreSQL directly.)
+- **G10 at apply.** `import` and `resume` re-decide the panel-map completeness with the
+  audit's own predicate before any write, and refuse (exit 65, mapping refused) while a
+  live real `code_panel` is in no list and not declared in `unresolvedPanels` — whatever
+  an earlier audit said.
 - **reconcile** — the latest APPLY run, which must be **COMPLETED** (RUNNING: resume or
   abort it first; ABORTED: there is no finished import), against a fresh snapshot of the
   SAME source fingerprint and the SAME mapping fingerprint (both refused otherwise):
