@@ -76,8 +76,10 @@ categories:
 
 A refused icon reuses Item 3's rule, not a copy of it: the keyboard is "iconed", so a refusal
 is retried ONCE without icons (`withoutButtonIcons`), keeping the text (with its after emoji),
-style and callbacks. Only a definite custom-emoji denial switches the bot's eligibility off
-(owner rule B5). A timeout, an unreadable 2xx, a 5xx or a 429 is never re-sent. An after
+style and callbacks. Because a category's `before` is an operator-typed id that the appearance
+probe never proved, it is a RAW icon (review B1 of PR #215): no refusal of it, not even a
+custom-emoji denial, switches the bot's eligibility off; the operational condition names the
+`catalog.category` button so the operator checks the id. A timeout, an unreadable 2xx, a 5xx or a 429 is never re-sent. An after
 emoji alone never makes a keyboard owe the retry.
 
 ## Web Admin

@@ -548,13 +548,14 @@ describe('the customer purchase flow over Telegram', () => {
       expect(plain?.map((cell) => cell.callback_data)).toStrictEqual(
         iconed?.map((cell) => cell.callback_data),
       );
-      // Owner rule B5: a definite custom-emoji denial switches the bot's eligibility off.
+      // Review B1 of PR #215: an operator-typed icon id proves nothing about the bot, so even a
+      // custom-emoji denial leaves its eligibility as it was.
       const outcome = (
         await api.container.database.db.execute<{ outcome: string | null }>(
           sql`SELECT custom_emoji_test_outcome AS outcome FROM bot_instances WHERE id = ${BOT_A}`,
         )
       ).rows[0]?.outcome;
-      expect(outcome).toBe('REJECTED');
+      expect(outcome).toBe('SENT');
     });
   });
 

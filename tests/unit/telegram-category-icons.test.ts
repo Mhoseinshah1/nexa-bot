@@ -293,7 +293,7 @@ describe('a category button with its decorations', () => {
 });
 
 describe('a refused category icon (owner rule B5, through Item 3’s retry)', () => {
-  it('a custom-emoji DENIAL: ONE retry without the icon; text (after emoji kept) and callbacks unchanged', async () => {
+  it('a custom-emoji DENIAL: ONE retry without the icon, after emoji and callbacks kept, the bot NEVER switched off', async () => {
     const { messenger, calls, events, refused, respondWith } = harness({
       categoryIcons: () => ({ [CAT_A]: { before: ICON, after: '🔥' } }),
     });
@@ -307,8 +307,16 @@ describe('a refused category icon (owner rule B5, through Item 3’s retry)', ()
       callback_data: `cat:${CAT_A}.0`,
     });
     expect(callbacksOf(calls[1]?.body)).toEqual(callbacksOf(calls[0]?.body));
-    expect(refused).toEqual([eligibleBot]);
+    // Review B1 of PR #215: a category's `before` is an operator-typed id, never proven by the
+    // appearance probe, so a refusal of it may only mean a wrong id: the bot stays eligible.
+    expect(refused).toEqual([]);
     expect(events.map((event) => event.code)).toEqual([APPEARANCE_DECORATION_FAILED_CODE]);
+    expect(events[0]?.context).toMatchObject({
+      keyboardIcons: true,
+      iconSource: 'RAW',
+      eligibilityChanged: false,
+      inlineButtons: ['catalog.category'],
+    });
   });
 
   it('an after emoji alone is plain text: a refusal is one call, never an icon-less retry', async () => {
