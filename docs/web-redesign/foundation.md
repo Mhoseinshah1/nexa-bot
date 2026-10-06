@@ -116,6 +116,14 @@ Groups follow the reference's semantic sections, extended to hold every
 surface the product has now: عملیات · فروش · نمایندگی · زیرساخت · ارتباط ·
 پیکربندی · سامانه.
 
+Later the support-AI pages got a group of their own, «هوش مصنوعی پشتیبانی», drawn
+second, between عملیات and فروش. Its six pages, in order, are
+`/business-chats`, `/support-ai`, `/support-knowledge`, `/support-learning`,
+`/knowledge-build` and `/support-analytics`. Their paths and permissions are
+unchanged, and so is where the generic support pages sit (`/tickets` in عملیات,
+`/support` in ارتباط). `tests/web/support-ai-nav.test.tsx` pins this, and the
+sidebar draws no group that holds no link the actor may see.
+
 | Group    | Path                  | Label                   | Icon           | Permission (unchanged)                                                   |
 | -------- | --------------------- | ----------------------- | -------------- | ------------------------------------------------------------------------ |
 | عملیات   | `/`                   | نمای کلی                | `dashboard`    | `null`                                                                   |

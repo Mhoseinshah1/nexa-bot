@@ -104,7 +104,8 @@ Set the mode to `ASSIST_ONLY` on `/support-ai`, with the primary provider from P
 > Only on the tenant from P7. Never on Production without the Product Owner's written approval.
 
 Sign in as `owner` of the TEST tenant. On `/support-ai`, set the mode to `AUTO_REPLY_SAFE`,
-allowlist **only** `CONNECTION_TROUBLESHOOTING`, keep the confidence floor at `HIGH` and the
+allowlist **only** `CONNECTION_TROUBLESHOOTING` (the box «مشکل اتصال» under
+«موضوعات مجاز برای پاسخ خودکار»), keep the confidence floor at `HIGH` («زیاد») and the
 settle delay at 6 s, and save.
 
 1. **A safe topic is answered automatically.** From the customer's account: «اپ وصل نمی‌شود،

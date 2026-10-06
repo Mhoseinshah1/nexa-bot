@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  SUPPORT_AI_AUTO_MIN_CONFIDENCES,
   SUPPORT_AI_LIMITS,
   SUPPORT_AI_MODES,
   SUPPORT_AI_PROVIDERS,
+  SUPPORT_AI_SAFE_TOPICS,
   SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS,
   SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS,
   supportAiConfigInputSchema,
@@ -16,6 +18,7 @@ import {
   type SupportAiOutcomeKind,
   type SupportAiProvider,
   type SupportAiProviderStep,
+  type SupportAiSafeTopic,
   type SupportAiTestResponse,
   type SupportAiUsageResponse,
 } from '@nexa/contracts';
@@ -237,7 +240,34 @@ interface ConfigDraft {
   readonly cooldownSeconds: string;
   readonly settleDelaySeconds: string;
   readonly toneInstructions: string;
+  /**
+   * The automatic-reply allowlist and confidence floor. Carried through the draft so a save
+   * of ANY other field sends them back as they were: a form that omitted them let the
+   * contract's defaults (none, HIGH) silently reset what the owner had configured.
+   */
+  readonly autoTopics: readonly SupportAiSafeTopic[];
+  readonly autoMinConfidence: SupportAiAutoMinConfidence;
 }
+
+type SupportAiAutoMinConfidence = (typeof SUPPORT_AI_AUTO_MIN_CONFIDENCES)[number];
+
+/** One `web.sai_auto_topic_*` label per safe topic: the page never draws the enum. */
+export const SAI_AUTO_TOPIC_LABELS: Readonly<Record<SupportAiSafeTopic, WebKey>> = {
+  CONNECTION_TROUBLESHOOTING: 'web.sai_auto_topic_connection_troubleshooting',
+  APP_SETUP: 'web.sai_auto_topic_app_setup',
+  SUBSCRIPTION_UPDATE: 'web.sai_auto_topic_subscription_update',
+  SERVICE_INFO: 'web.sai_auto_topic_service_info',
+  TRAFFIC_AND_EXPIRY: 'web.sai_auto_topic_traffic_and_expiry',
+  PLAN_INFO: 'web.sai_auto_topic_plan_info',
+  KNOWN_ERROR: 'web.sai_auto_topic_known_error',
+  GREETING: 'web.sai_auto_topic_greeting',
+};
+
+export const SAI_AUTO_MIN_CONFIDENCE_LABELS: Readonly<Record<SupportAiAutoMinConfidence, WebKey>> =
+  {
+    HIGH: 'web.assist_confidence_high',
+    MEDIUM: 'web.assist_confidence_medium',
+  };
 
 type NumericField =
   | 'timeoutMs'
@@ -300,6 +330,11 @@ function toDraft(config: SupportAiConfigInput): ConfigDraft {
     cooldownSeconds: String(config.cooldownSeconds),
     settleDelaySeconds: String(config.settleDelaySeconds),
     toneInstructions: config.toneInstructions,
+    // In the contract's order, whatever order the server stored: the toggle rebuilds the list
+    // in that order, and the dirty check compares arrays, so ticking a box off and on again
+    // must land on exactly what was loaded.
+    autoTopics: SUPPORT_AI_SAFE_TOPICS.filter((topic) => config.autoTopics.includes(topic)),
+    autoMinConfidence: config.autoMinConfidence,
   };
 }
 
@@ -322,6 +357,8 @@ function fromDraft(draft: ConfigDraft): unknown {
     cooldownSeconds: toNumber(draft.cooldownSeconds),
     settleDelaySeconds: toNumber(draft.settleDelaySeconds),
     toneInstructions: draft.toneInstructions,
+    autoTopics: draft.autoTopics,
+    autoMinConfidence: draft.autoMinConfidence,
   };
 }
 
@@ -335,6 +372,7 @@ const ISSUE_LABELS: Readonly<Record<string, WebKey>> = {
   cooldownSeconds: 'web.sai_invalid_bounds',
   settleDelaySeconds: 'web.sai_invalid_bounds',
   toneInstructions: 'web.sai_invalid_tone',
+  autoTopics: 'web.sai_invalid_auto_topics',
 };
 
 function ConfigCard({
@@ -385,6 +423,11 @@ function ConfigCard({
       void queries.invalidateQueries({ queryKey: ['support-ai-config'] });
     },
   });
+  // The server charges `support_ai.auto_reply` for either kind of widening; say so before
+  // the save rather than only after the refusal.
+  const widened =
+    draft.autoTopics.some((topic) => !response.config.autoTopics.includes(topic)) ||
+    (draft.autoMinConfidence === 'MEDIUM' && response.config.autoMinConfidence !== 'MEDIUM');
   const stale = response.version !== baseVersion;
   const reload = () => {
     setDraft(toDraft(response.config));
@@ -488,6 +531,60 @@ function ConfigCard({
           />{' '}
           {t('web.sai_vision')}
         </label>
+
+        <fieldset className="field">
+          <legend className="field-label">{t('web.sai_auto_topics')}</legend>
+          <p className="muted small">{t('web.sai_auto_topics_hint')}</p>
+          <div className="grid-2">
+            {SUPPORT_AI_SAFE_TOPICS.map((topic) => (
+              <label key={topic} className="check">
+                <input
+                  type="checkbox"
+                  name="support-ai-auto-topic"
+                  checked={draft.autoTopics.includes(topic)}
+                  onChange={(event) =>
+                    set(
+                      'autoTopics',
+                      event.target.checked
+                        ? // Kept in the contract's order, so a toggle back and forth is not dirty.
+                          SUPPORT_AI_SAFE_TOPICS.filter(
+                            (each) => each === topic || draft.autoTopics.includes(each),
+                          )
+                        : draft.autoTopics.filter((each) => each !== topic),
+                    )
+                  }
+                />{' '}
+                {t(SAI_AUTO_TOPIC_LABELS[topic])}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <Field
+          label={t('web.sai_auto_min_confidence')}
+          htmlFor="sai-auto-min-confidence"
+          hint={t('web.sai_auto_min_confidence_hint')}
+        >
+          <select
+            id="sai-auto-min-confidence"
+            className="input"
+            value={draft.autoMinConfidence}
+            onChange={(event) =>
+              set('autoMinConfidence', event.target.value as SupportAiAutoMinConfidence)
+            }
+          >
+            {SUPPORT_AI_AUTO_MIN_CONFIDENCES.map((confidence) => (
+              <option key={confidence} value={confidence}>
+                {t(SAI_AUTO_MIN_CONFIDENCE_LABELS[confidence])}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {widened && (
+          <Banner tone="warn" icon="lock">
+            {t(mayAutoReply ? 'web.sai_auto_widen_entering' : 'web.sai_auto_widen_needs_owner')}
+          </Banner>
+        )}
 
         <div className="grid-2">
           {NUMERIC_FIELDS.map(({ field, label, min, max }) => (

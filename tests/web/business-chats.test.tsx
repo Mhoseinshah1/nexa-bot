@@ -256,7 +256,8 @@ describe('the route and the navigation', () => {
     expect(one.title).toBe(t('web.bchat_detail'));
     const entry = NAV.find((item) => item.id === 'business-chats')!;
     expect(entry.path).toBe('/business-chats');
-    expect(entry.group).toBe(NAV.find((item) => item.id === 'tickets')!.group);
+    // Hotfix: under «هوش مصنوعی پشتیبانی» now, beside the other support-AI pages.
+    expect(entry.group).toBe('web.navgroup_support_ai');
     expect(navPermitted(entry, ['business_chats.view'], [])).toBe(true);
     expect(navPermitted(entry, ['tickets.view'], [])).toBe(false);
   });
