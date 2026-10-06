@@ -384,7 +384,9 @@ export class DrizzleSupportAiCredentialStore {
     now: Date,
     cooldownMs: number,
     tx?: unknown,
-  ): Promise<{ readonly claimed: true } | { readonly claimed: false; readonly lastTestedAt: Date | null }> {
+  ): Promise<
+    { readonly claimed: true } | { readonly claimed: false; readonly lastTestedAt: Date | null }
+  > {
     const tenantId = requireTenantId(scope);
     const since = new Date(now.getTime() - cooldownMs);
     const rows = await exec(this.db, tx)

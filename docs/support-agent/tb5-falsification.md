@@ -2,17 +2,17 @@
 
 Driver: `scripts/mutate-tb5.py`. Each mutation reverts one rule, runs the named test, and restores the file. Run on 2026-10-04 against a dedicated integration database.
 
-| ID     | Rule reverted                                           | Test that failed                                                       | Result |
-| ------ | ------------------------------------------------------- | ---------------------------------------------------------------------- | ------ |
-| TB5-01 | An uncited alias is dropped (it was kept as a label)    | produces a draft and sends nothing by itself                           | KILLED |
-| TB5-02 | The strict decision schema (output trusted as-is)       | records a decision with an extra key as FAILED, with its class¹        | KILLED |
-| TB5-03 | `markReady` only from QUEUED                            | a draft discarded while it was being produced is not resurrected       | KILLED |
-| TB5-04 | A newer request discards the open draft                 | a newer request discards the older draft…                              | KILLED |
-| TB5-05 | Mode OFF refuses                                        | refuses a draft while the support AI is OFF                            | KILLED |
-| TB5-06 | The send is an `ASSIST` row                             | sends a draft only by the operator…                                    | KILLED |
-| TB5-07 | Only a READY draft can be sent (both layers, see below) | …a discarded draft cannot be sent                                      | KILLED |
-| TB5-08 | An unlinked customer's prompt (it claimed linkage)      | tells an unlinked customer's model to discuss no account at all        | KILLED |
-| TB5-09 | The reply-length bound                                  | keeps an over-long reply as a READY draft, marked over the limit¹      | KILLED |
+| ID     | Rule reverted                                           | Test that failed                                                  | Result |
+| ------ | ------------------------------------------------------- | ----------------------------------------------------------------- | ------ |
+| TB5-01 | An uncited alias is dropped (it was kept as a label)    | produces a draft and sends nothing by itself                      | KILLED |
+| TB5-02 | The strict decision schema (output trusted as-is)       | records a decision with an extra key as FAILED, with its class¹   | KILLED |
+| TB5-03 | `markReady` only from QUEUED                            | a draft discarded while it was being produced is not resurrected  | KILLED |
+| TB5-04 | A newer request discards the open draft                 | a newer request discards the older draft…                         | KILLED |
+| TB5-05 | Mode OFF refuses                                        | refuses a draft while the support AI is OFF                       | KILLED |
+| TB5-06 | The send is an `ASSIST` row                             | sends a draft only by the operator…                               | KILLED |
+| TB5-07 | Only a READY draft can be sent (both layers, see below) | …a discarded draft cannot be sent                                 | KILLED |
+| TB5-08 | An unlinked customer's prompt (it claimed linkage)      | tells an unlinked customer's model to discuss no account at all   | KILLED |
+| TB5-09 | The reply-length bound                                  | keeps an over-long reply as a READY draft, marked over the limit¹ | KILLED |
 
 **9 of 9 killed.**
 
