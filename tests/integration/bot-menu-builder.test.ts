@@ -80,10 +80,7 @@ const codeOf = async (work: Promise<unknown>): Promise<string> => {
 let keyCounter = 0;
 const key = () => `menu-builder-${String((keyCounter += 1)).padStart(8, '0')}`;
 
-/**
- * Three rows the legacy packing could never draw, with a style — and the RETIRED icon a
- * page of the previous release still sends mid-rollout: accepted, never stored or drawn.
- */
+/** Three rows the legacy packing could never draw, with a style and an icon. */
 function threeAcross(): ExplicitMainMenu {
   return {
     v: 1,
@@ -304,8 +301,9 @@ describe('the button builder (round T, T1)', () => {
       const rows = await keyboard();
       expect(rows).toEqual([
         [
-          // The request named an icon (an older page): retired, so neither drawn nor kept.
-          { text: label('bot.menu.wallet'), style: 'success', iconSlot: null },
+          // The icon (restored 2026-10-05) is stored, published and drawn as a SLOT; the
+          // transport resolves it per sending bot.
+          { text: label('bot.menu.wallet'), style: 'success', iconSlot: 'wallet' },
           { text: label('bot.menu.catalog'), style: 'primary', iconSlot: null },
           { text: label('bot.menu.services'), style: 'default', iconSlot: null },
         ],
@@ -314,7 +312,12 @@ describe('the button builder (round T, T1)', () => {
       const snapshots = await db().execute<{ snapshot: ExplicitMainMenu }>(
         sql`SELECT snapshot FROM main_menu_revisions WHERE tenant_id = ${tenantA.tenantId}`,
       );
-      expect(snapshots.rows[0]?.snapshot.buttons.every((one) => one.iconSlot === null)).toBe(true);
+      expect(
+        snapshots.rows[0]?.snapshot.buttons.find((one) => one.button === 'wallet')?.iconSlot,
+      ).toBe('wallet');
+      expect(
+        snapshots.rows[0]?.snapshot.buttons.filter((one) => one.iconSlot !== null),
+      ).toHaveLength(1);
       // The text-only view the transport draws until T2 is the same rows' labels.
       expect(await container.mainMenu.rowsFor(tenantA)).toEqual(
         rowsOfLabels([['wallet', 'catalog', 'services'], ['help']]),
@@ -672,10 +675,10 @@ describe('the button builder (round T, T1)', () => {
       expect(unchanged.changed).toBe(false);
     });
 
-    it('keeps drawing a layout an earlier release published WITH icons — rows and styles, no icon', async () => {
+    it('draws a layout stored WITH icons (any release) with them, through the view and the revision', async () => {
       await saveDraft(threeAcross(), null);
       await publish(1, null);
-      // What v0.4.x stored: the same layout, its wallet and help carrying icon slots.
+      // What v0.4.x stored (or the retiring release left unrewritten): wallet AND help iconed.
       const withIcons = {
         ...threeAcross(),
         buttons: threeAcross().buttons.map((one) =>
@@ -690,21 +693,51 @@ describe('the button builder (round T, T1)', () => {
       );
       expect(await keyboard()).toEqual([
         [
+          { text: label('bot.menu.wallet'), style: 'success', iconSlot: 'wallet' },
+          { text: label('bot.menu.catalog'), style: 'primary', iconSlot: null },
+          { text: label('bot.menu.services'), style: 'default', iconSlot: null },
+        ],
+        [{ text: label('bot.menu.help'), style: 'default', iconSlot: 'support' }],
+      ]);
+      const view = await builder().view(tenantA, owner);
+      expect(view.source).toBe('EXPLICIT');
+      expect(view.publishedUnreadable).toBe(false);
+      expect(view.published?.layout?.buttons.find((one) => one.button === 'help')?.iconSlot).toBe(
+        'support',
+      );
+      expect(view.draft.differsFromPublished).toBe(false);
+      // The revision written by the publish keeps the icon it was published with.
+      const [revision] = (await builder().revisions(tenantA, owner, {})).revisions;
+      expect(revision?.layout?.buttons.find((one) => one.button === 'wallet')?.iconSlot).toBe(
+        'wallet',
+      );
+    });
+
+    it('removes an icon cleanly: the draft that drops it differs, and its publish draws the label alone', async () => {
+      await saveDraft(threeAcross(), null);
+      const first = await publish(1, null);
+      const removed = {
+        ...threeAcross(),
+        buttons: threeAcross().buttons.map((one) => ({ ...one, iconSlot: null })),
+      };
+      const saved = await saveDraft(removed, first.head.draft.version);
+      expect(saved.changed).toBe(true);
+      expect(saved.head.draft.differsFromPublished).toBe(true);
+      // Nothing published yet: the customer still sees the icon.
+      expect((await keyboard())[0]?.[0]?.iconSlot).toBe('wallet');
+      await publish(saved.head.draft.version ?? 0, first.head.published?.revision ?? null);
+      expect(await keyboard()).toEqual([
+        [
           { text: label('bot.menu.wallet'), style: 'success', iconSlot: null },
           { text: label('bot.menu.catalog'), style: 'primary', iconSlot: null },
           { text: label('bot.menu.services'), style: 'default', iconSlot: null },
         ],
         [{ text: label('bot.menu.help'), style: 'default', iconSlot: null }],
       ]);
-      const view = await builder().view(tenantA, owner);
-      // Readable — never «unreadable» because of an icon — and an icon alone is no change.
-      expect(view.source).toBe('EXPLICIT');
-      expect(view.publishedUnreadable).toBe(false);
-      expect(view.published?.layout?.buttons.every((one) => one.iconSlot === null)).toBe(true);
-      expect(view.draft.layout.buttons.every((one) => one.iconSlot === null)).toBe(true);
-      expect(view.draft.differsFromPublished).toBe(false);
-      const [revision] = (await builder().revisions(tenantA, owner, {})).revisions;
-      expect(revision?.layout?.buttons.every((one) => one.iconSlot === null)).toBe(true);
+      // Rows, styles and every label — what a tap routes by — are unchanged by the removal.
+      expect(await container.mainMenu.rowsFor(tenantA)).toEqual(
+        rowsOfLabels([['wallet', 'catalog', 'services'], ['help']]),
+      );
     });
 
     it('falls back to the setting when the published snapshot is unreadable, says so, and a publish closes it', async () => {

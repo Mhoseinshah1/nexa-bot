@@ -310,6 +310,15 @@ export type TelegramButton = {
    * outside the set is never put on the wire. Presentation only: it changes no route.
    */
   readonly style?: TelegramKeyboardButtonStyle;
+  /**
+   * Phase 2 Item 3: `InlineKeyboardButton.icon_custom_emoji_id` — ONE custom emoji Telegram
+   * shows BEFORE the text. Set only by a caller that resolved it for the SENDING bot's
+   * proven eligibility (the messenger's `labelButtons`); an empty string is never sent. The
+   * text is never altered for it (a button's text carries no entities), and it touches no
+   * route: `callback_data`, `url` and `copy_text` are written exactly as without it. A caller
+   * that sends an iconed keyboard owns the one icon-less retry (`withoutButtonIcons`).
+   */
+  readonly iconCustomEmojiId?: string;
 } & (
   | { readonly data: string; readonly copyText?: undefined; readonly url?: undefined }
   | { readonly copyText: string; readonly data?: undefined; readonly url?: undefined }
@@ -353,11 +362,33 @@ export function telegramButtonMarkup(
     ) {
       cell.style = button.style;
     }
+    if (button.iconCustomEmojiId !== undefined && button.iconCustomEmojiId !== '') {
+      cell.icon_custom_emoji_id = button.iconCustomEmojiId;
+    }
     const existing = rows.get(key);
     if (existing === undefined) rows.set(key, [cell]);
     else existing.push(cell);
   });
   return [...rows.values()];
+}
+
+/** Whether any button carries an icon — what makes a keyboard owe the one icon-less retry. */
+export function buttonsHaveIcons(buttons: readonly TelegramButton[]): boolean {
+  return buttons.some(
+    (button) => button.iconCustomEmojiId !== undefined && button.iconCustomEmojiId !== '',
+  );
+}
+
+/**
+ * The same buttons with every icon removed and everything else — text, row, style and the
+ * route — kept: the keyboard of the one retry a refused iconed message is allowed.
+ */
+export function withoutButtonIcons(buttons: readonly TelegramButton[]): TelegramButton[] {
+  return buttons.map((button) => {
+    if (button.iconCustomEmojiId === undefined) return button;
+    const { iconCustomEmojiId: _dropped, ...rest } = button;
+    return rest as TelegramButton;
+  });
 }
 
 /**

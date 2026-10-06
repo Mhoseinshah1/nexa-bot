@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   customerRowsOf,
   explicitMainMenuSchema,
@@ -15,6 +15,7 @@ import {
 } from '@nexa/contracts';
 import {
   ApiError,
+  fetchAppearance,
   publishBotMenu,
   resetBotMenuDraft,
   restoreBotMenuRevision,
@@ -119,6 +120,7 @@ const CHANGE_LABEL: Readonly<Record<ButtonChange, WebKey>> = {
   enabled: 'web.bb_change_enabled',
   disabled: 'web.bb_change_disabled',
   look: 'web.bb_change_style',
+  icon: 'web.bb_change_icon',
 };
 
 type Mode = 'edit' | 'customer' | 'live';
@@ -154,8 +156,8 @@ function olderThan(read: MainMenuDraftView, held: MainMenuDraftView): boolean {
 }
 
 /**
- * Round T: the button builder — the customer main menu as explicit rows and a style per
- * button (the button icon was retired on 2026-10-02), around a DRAFT that changes nothing a
+ * Round T: the button builder — the customer main menu as explicit rows, a style and an
+ * optional icon per button (retired 2026-10-02, restored 2026-10-05), around a DRAFT that changes nothing a
  * customer sees until it is published. Reads `GET /bot-menu/builder`; writes through the
  * four builder endpoints, each with an idempotency key and the versions it read. Gates are
  * the server's answers (`items[].gateOpen`), passed to the contract's `customerRowsOf` —
@@ -196,6 +198,8 @@ export function MenuBuilder({
     () => new Map<MainMenuButtonId, MainMenuBuilderItem>(view.items.map((item) => [item.id, item])),
     [view.items],
   );
+  // The Inspector's icon control says which slots carry a custom emoji (restored 2026-10-05).
+  const appearance = useQuery({ queryKey: ['appearance'], queryFn: fetchAppearance });
 
   const layout = seed.layout;
   const dirty = !explicitMainMenusEqual(layout, seed.basis.layout);
@@ -521,6 +525,7 @@ export function MenuBuilder({
         key: one.button,
         label: labelOf(one.button, items.get(one.button)),
         look: lookOf(one),
+        iconSlot: one.iconSlot,
       })),
     );
   const customerRows = toPreview(customerRowsOf(layout, gates));
@@ -543,6 +548,7 @@ export function MenuBuilder({
         key: `${String(at)}-${String(index)}`,
         label,
         look: drawn === undefined ? 'default' : lookOf(drawn),
+        iconSlot: drawn?.iconSlot ?? null,
       };
     }),
   );
@@ -550,6 +556,9 @@ export function MenuBuilder({
   const crampedRows = layout.rows
     .map((row, at) => (rowLooksCramped(row, wide) ? at + 1 : null))
     .filter((n): n is number => n !== null);
+  const usesIcons = layout.buttons.some(
+    (config) => config.iconSlot !== null && positionOf(layout, config.button) !== null,
+  );
   const bot =
     view.iconEligibility.find((one) => one.status === 'ACTIVE') ?? view.iconEligibility[0];
   const phoneTitle =
@@ -758,6 +767,7 @@ export function MenuBuilder({
               {fill(t('web.bb_rows_cramped'), { rows: crampedRows.join(t('web.bb_sep')) })}
             </Banner>
           )}
+          {usesIcons && <p className="muted small">{t('web.bb_icon_legend')}</p>}
           <p className="muted small">{t('web.bb_style_legend')}</p>
           {publishBlocker !== null && (
             <p className="muted small" data-testid="bb-publish-blocker">
@@ -771,6 +781,8 @@ export function MenuBuilder({
           id={selected}
           item={selected === null ? undefined : items.get(selected)}
           editable={editable}
+          iconEligibility={view.iconEligibility}
+          appearanceSlots={appearance.data?.slots ?? null}
           mayViewTemplates={mayViewTemplates}
           onMove={onMove}
           onChange={onChange}

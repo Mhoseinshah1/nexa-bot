@@ -1,7 +1,9 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  APPEARANCE_SLOT_FALLBACKS,
   mainMenuButton,
+  type AppearanceSlot,
   type ExplicitMainMenu,
   type MainMenuBuilderItem,
   type MainMenuButtonId,
@@ -37,6 +39,25 @@ export function fill(text: string, values: Readonly<Record<string, string | numb
   );
 }
 
+/**
+ * The icon marker (restored 2026-10-05). NOT the custom emoji: Nexa never draws a Premium
+ * emoji it cannot render honestly. It shows the slot's ordinary fallback inside a dashed
+ * outline, and its name says what it is — an icon a bot will carry, before the text, only
+ * if that bot is eligible.
+ */
+export function IconMark({ slot }: { slot: AppearanceSlot }) {
+  return (
+    <span
+      className="bb-icon-mark"
+      title={t('web.bb_icon_mark_title')}
+      aria-hidden="true"
+      data-icon-slot={slot}
+    >
+      {APPEARANCE_SLOT_FALLBACKS[slot]}
+    </span>
+  );
+}
+
 const STYLE_CLASS: Readonly<Record<MainMenuButtonStyle, string>> = {
   default: 'bb-style-default',
   primary: 'bb-style-primary',
@@ -44,11 +65,12 @@ const STYLE_CLASS: Readonly<Record<MainMenuButtonStyle, string>> = {
   danger: 'bb-style-danger',
 };
 
-/** One key as a customer's keyboard draws it (read-only previews). Text and style only. */
+/** One key as a customer's keyboard draws it (read-only previews): text, style and icon slot. */
 export interface PreviewKey {
   readonly key: string;
   readonly label: string;
   readonly look: MainMenuButtonStyle;
+  readonly iconSlot: AppearanceSlot | null;
 }
 
 /** A read-only keyboard: the customer preview, the live keyboard, a revision, a diff. */
@@ -79,6 +101,7 @@ export function PreviewKeyboard({
               data-key={one.key}
               data-look={one.look}
             >
+              {one.iconSlot !== null && <IconMark slot={one.iconSlot} />}
               {one.label}
             </span>
           ))}
@@ -188,6 +211,7 @@ function Chip({
         onClick={() => context.onSelect(id)}
         onKeyDown={(event) => context.onKey(id, event)}
       >
+        {config.iconSlot !== null && <IconMark slot={config.iconSlot} />}
         <span className="bb-chip-label">{label}</span>
         {!config.enabled && <Badge tone="neutral">{t('web.bb_state_off')}</Badge>}
         {hidden && <Badge tone="warn">{t('web.bb_hidden_now')}</Badge>}

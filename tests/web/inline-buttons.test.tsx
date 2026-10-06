@@ -10,7 +10,9 @@ import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   INLINE_BUTTON_NAME,
   InlineButtonsSection,
+  canonicalIcons,
   canonicalStyles,
+  invalidIcons,
 } from '../../apps/web/src/pages/bot-buttons/inline-buttons';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
@@ -167,7 +169,12 @@ describe('«دکمه‌های شیشه‌ای ربات»', () => {
     const details = sent.querySelector('details') as HTMLDetailsElement;
     details.open = true;
     fireEvent(details, new Event('toggle'));
-    const body = await within(sent).findByRole('textbox');
+    // The template card's body (the row also holds the icon's own text field, Item 3).
+    const body = await waitFor(() => {
+      const found = details.querySelector('textarea');
+      if (found === null) throw new Error('no template body yet');
+      return found;
+    });
     fireEvent.change(body, { target: { value: 'رسید را فرستادم' } });
     fireEvent.click(within(sent).getByRole('button', { name: t('web.save') }));
     await waitFor(() =>
@@ -335,6 +342,315 @@ describe('canonicalStyles', () => {
   it('stores only the buttons whose style differs from the default', () => {
     expect(canonicalStyles({ main_menu: 'default', 'payment.sent': 'danger' })).toEqual({
       'payment.sent': 'danger',
+    });
+  });
+});
+
+/**
+ * Phase 2 UX wave, Item 3: the optional premium icon per inline button — its own setting
+ * (`bot.inline_button_icons`), on the same rows, saved with its own version.
+ */
+describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item 3)', () => {
+  const ICON = '5368324170671202286';
+
+  function iconApi(
+    icons: unknown = {},
+    iconsVersion: number | null = null,
+    extra: { storedValueInvalid?: boolean } = {},
+  ) {
+    return stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            setting({ key: 'bot.inline_buttons', value: {}, version: 2, configures: null }),
+            setting({
+              key: 'bot.inline_button_icons',
+              value: icons,
+              version: iconsVersion,
+              configures: null,
+              ...extra,
+            }),
+          ],
+        },
+      },
+      {
+        url: '/settings/bot.inline_buttons',
+        body: {
+          setting: setting({ key: 'bot.inline_buttons', value: {}, version: 3, configures: null }),
+          changed: true,
+        },
+      },
+      {
+        url: '/settings/bot.inline_button_icons',
+        body: {
+          setting: setting({
+            key: 'bot.inline_button_icons',
+            value: {},
+            version: (iconsVersion ?? 0) + 1,
+            configures: null,
+          }),
+          changed: true,
+        },
+      },
+    ]);
+  }
+  const iconInput = (key: string) =>
+    within(row(key) as HTMLElement).getByRole('textbox', {
+      name: `${t('web.ib_icon')} — ${t(INLINE_BUTTON_NAME[key as 'payment.sent'])}`,
+    }) as HTMLInputElement;
+  const writes = (api: ReturnType<typeof stubApi>, key: string) =>
+    api.calls.filter((call) => call.method === 'POST' && call.url.endsWith(`/settings/${key}`));
+
+  it('shows every button’s icon as optional and empty by default, with Telegram’s limits stated', async () => {
+    iconApi();
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    expect(iconInput('payment.sent').value).toBe('');
+    expect(
+      within(row('payment.sent') as HTMLElement).getByText(t('web.ib_icon_none')),
+    ).toBeTruthy();
+    expect(within(row('payment.sent') as HTMLElement).getByText(t('web.bb_optional'))).toBeTruthy();
+    expect(screen.getByTestId('ib-icon-limits').textContent).toBe(t('web.ib_icon_limits'));
+    expect(document.querySelectorAll('[data-testid="ib-icon"]').length).toBe(INLINE_BUTTONS.length);
+    expect(document.querySelector('[data-testid="ib-icon-mark"]')).toBeNull();
+  });
+
+  it('saves an icon as ONE write of bot.inline_button_icons with ITS version, and no style write', async () => {
+    const api = iconApi({ main_menu: '1' }, 7);
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    fireEvent.change(iconInput('payment.sent'), { target: { value: ICON } });
+    // The preview marks the icon before the label (never a fake of the custom emoji).
+    const preview = within(row('payment.sent') as HTMLElement).getByTestId('ib-preview');
+    expect(preview.querySelector('[data-testid="ib-icon-mark"]')).not.toBeNull();
+    expect(preview.textContent).toBe(`✦${CATALOGUE_FA['bot.payment.sent_button']}`);
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
+    expect(writes(api, 'bot.inline_button_icons')[0]?.body).toMatchObject({
+      value: { main_menu: '1', 'payment.sent': ICON },
+      expectedVersion: 7,
+    });
+    expect(writes(api, 'bot.inline_buttons')).toHaveLength(0);
+  });
+
+  it('refuses to save an id that is not digits, says why, and saves once it is fixed', async () => {
+    const api = iconApi();
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    for (const bad of ['abc', '12a', '💰', '-1', '1'.repeat(33)]) {
+      fireEvent.change(iconInput('payment.sent'), { target: { value: bad } });
+      expect(iconInput('payment.sent').getAttribute('aria-invalid')).toBe('true');
+      expect(within(row('payment.sent') as HTMLElement).getByRole('alert').textContent).toBe(
+        t('web.ib_icon_invalid'),
+      );
+      expect(
+        (screen.getByRole('button', { name: t('web.ib_save') }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    }
+    fireEvent.change(iconInput('payment.sent'), { target: { value: ` ${ICON} ` } });
+    expect(within(row('payment.sent') as HTMLElement).queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
+    // Trimmed, never stored with the spaces.
+    expect(writes(api, 'bot.inline_button_icons')[0]?.body).toMatchObject({
+      value: { 'payment.sent': ICON },
+    });
+  });
+
+  it('removes an icon: the button returns to «بدون آیکون» and the write drops its key', async () => {
+    const api = iconApi({ 'payment.sent': ICON, main_menu: '1' }, 3);
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    expect(iconInput('payment.sent').value).toBe(ICON);
+    fireEvent.click(
+      within(row('payment.sent') as HTMLElement).getByRole('button', {
+        name: `${t('web.ib_icon_remove')} — ${t(INLINE_BUTTON_NAME['payment.sent'])}`,
+      }),
+    );
+    expect(iconInput('payment.sent').value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
+    expect(writes(api, 'bot.inline_button_icons')[0]?.body).toMatchObject({
+      value: { main_menu: '1' },
+      expectedVersion: 3,
+    });
+  });
+
+  it('a style and an icon edited together are two writes, each with its own version and key', async () => {
+    const api = iconApi({}, null);
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    fireEvent.change(within(row('payment.sent') as HTMLElement).getByRole('combobox'), {
+      target: { value: 'success' },
+    });
+    fireEvent.change(iconInput('main_menu'), { target: { value: ICON } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
+    const style = writes(api, 'bot.inline_buttons')[0]?.body as Record<string, unknown>;
+    const icon = writes(api, 'bot.inline_button_icons')[0]?.body as Record<string, unknown>;
+    expect(style).toMatchObject({ value: { 'payment.sent': 'success' }, expectedVersion: 2 });
+    expect(icon).toMatchObject({ value: { main_menu: ICON }, expectedVersion: null });
+    expect(style['idempotencyKey']).not.toBe(icon['idempotencyKey']);
+  });
+
+  it('offers no icon edit without settings.edit', async () => {
+    iconApi({ 'payment.sent': ICON }, 1);
+    renderPage(section({ mayEdit: false }));
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    expect(iconInput('payment.sent').disabled).toBe(true);
+    expect(
+      within(row('payment.sent') as HTMLElement).queryByRole('button', {
+        name: new RegExp(t('web.ib_icon_remove')),
+      }),
+    ).toBeNull();
+  });
+
+  it('an unreadable stored icon value is said, and can be repaired by a save', async () => {
+    const api = iconApi({ 'no.such.button': 'x' }, 4, { storedValueInvalid: true });
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    expect(screen.getByText(t('web.ib_icons_stored_invalid'))).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
+    expect(writes(api, 'bot.inline_button_icons')[0]?.body).toMatchObject({
+      value: {},
+      expectedVersion: 4,
+    });
+  });
+});
+
+describe('«دکمه‌های شیشه‌ای ربات» — review of #215 (N1, N2)', () => {
+  const ICON = '5368324170671202286';
+  const writes = (api: ReturnType<typeof stubApi>, key: string) =>
+    api.calls.filter((call) => call.method === 'POST' && call.url.endsWith(`/settings/${key}`));
+  const iconInput = (key: 'payment.sent' | 'main_menu') =>
+    within(row(key) as HTMLElement).getByRole('textbox', {
+      name: `${t('web.ib_icon')} — ${t(INLINE_BUTTON_NAME[key])}`,
+    }) as HTMLInputElement;
+
+  it('N1: styles saved and icons refused — says so, claims no change elsewhere, and the next click sends only the icons', async () => {
+    const state = { stylesSaved: false };
+    const styles = (saved: boolean) =>
+      setting({
+        key: 'bot.inline_buttons',
+        value: saved ? { 'payment.sent': 'success' } : {},
+        version: saved ? 3 : 2,
+        configures: null,
+      });
+    const api = stubApi([
+      {
+        url: '/settings',
+        get body() {
+          return {
+            settings: [
+              styles(state.stylesSaved),
+              setting({
+                key: 'bot.inline_button_icons',
+                value: {},
+                version: 5,
+                configures: null,
+              }),
+            ],
+          };
+        },
+      },
+      {
+        url: '/settings/bot.inline_buttons',
+        get body() {
+          state.stylesSaved = true;
+          return { setting: styles(true), changed: true };
+        },
+      },
+      {
+        url: '/settings/bot.inline_button_icons',
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'control.version_conflict',
+            message: 'stale',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    fireEvent.change(within(row('payment.sent') as HTMLElement).getByRole('combobox'), {
+      target: { value: 'success' },
+    });
+    fireEvent.change(iconInput('main_menu'), { target: { value: ICON } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    expect(await screen.findByText(t('web.ib_icons_failed_styles_saved'))).toBeTruthy();
+    expect(writes(api, 'bot.inline_buttons')).toHaveLength(1);
+    expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1);
+    // The styles' new version was adopted: nothing "changed elsewhere", the icon edit kept.
+    await waitFor(() =>
+      expect(
+        api.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/settings')),
+      ).toHaveLength(2),
+    );
+    expect(screen.queryByText(t('web.ib_changed_elsewhere'))).toBeNull();
+    expect(iconInput('main_menu').value).toBe(ICON);
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(2));
+    expect(writes(api, 'bot.inline_buttons')).toHaveLength(1);
+    expect(writes(api, 'bot.inline_button_icons')[1]?.body).toMatchObject({
+      value: { main_menu: ICON },
+      expectedVersion: 5,
+    });
+  });
+
+  it('N2: Persian and Arabic-Indic digits are taken as the same id, in ASCII', async () => {
+    const api = stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            setting({ key: 'bot.inline_buttons', value: {}, version: 2, configures: null }),
+            setting({ key: 'bot.inline_button_icons', value: {}, version: 1, configures: null }),
+          ],
+        },
+      },
+      {
+        url: '/settings/bot.inline_button_icons',
+        body: {
+          setting: setting({ key: 'bot.inline_button_icons', value: {}, version: 2 }),
+          changed: true,
+        },
+      },
+    ]);
+    renderPage(section());
+    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    fireEvent.change(iconInput('payment.sent'), { target: { value: '۵۳۶۸۳۲۴۱۷۰۶۷۱۲۰۲۲۸۶' } });
+    expect(iconInput('payment.sent').value).toBe(ICON);
+    fireEvent.change(iconInput('main_menu'), { target: { value: '٥٣٦٨' } });
+    expect(within(row('main_menu') as HTMLElement).queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
+    await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
+    expect(writes(api, 'bot.inline_button_icons')[0]?.body).toMatchObject({
+      value: { main_menu: '5368', 'payment.sent': ICON },
+    });
+  });
+});
+
+describe('canonicalIcons / invalidIcons', () => {
+  it('keeps registry order, trims, drops the empty, and names the invalid', () => {
+    expect(canonicalIcons({ main_menu: ' 12 ', 'payment.sent': '', 'list.close': '3' })).toEqual({
+      main_menu: '12',
+      'list.close': '3',
+    });
+    expect(Object.keys(canonicalIcons({ 'list.close': '3', main_menu: '1' }))).toEqual([
+      'main_menu',
+      'list.close',
+    ]);
+    expect(invalidIcons({ main_menu: '12', 'list.close': 'x1', 'payment.sent': '' })).toEqual([
+      'list.close',
+    ]);
+    expect(canonicalIcons({ main_menu: '۱۲', 'list.close': '٣' })).toEqual({
+      main_menu: '12',
+      'list.close': '3',
     });
   });
 });

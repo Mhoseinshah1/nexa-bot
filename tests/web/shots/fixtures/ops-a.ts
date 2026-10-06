@@ -234,16 +234,15 @@ const MENU_ITEMS: readonly Json[] = MAIN_MENU_BUTTONS.map((button, order) => ({
 
 /**
  * Round T: a SAVED builder draft that differs from what is published — three buttons on
- * the first row, styles, a switched-off button — so a shot shows every state the editor
- * draws. Revision 1 is the default keyboard. No icon: retired on 2026-10-02, and the server
- * answers every icon slot as null.
+ * the first row, styles, an icon slot (restored 2026-10-05), a switched-off button — so a
+ * shot shows every state the editor draws. Revision 1 is the default keyboard.
  */
 const BUILDER_DRAFT: Json = {
   v: 1,
   rows: [['catalog', 'services', 'wallet'], ['help'], ['trial', 'referral'], ['apps'], ['tickets']],
   buttons: DEFAULT_EXPLICIT_MAIN_MENU.buttons.map((config) => ({
     ...config,
-    ...(config.button === 'catalog' ? { style: 'primary' } : {}),
+    ...(config.button === 'catalog' ? { style: 'primary', iconSlot: 'purchase' } : {}),
     ...(config.button === 'wallet' ? { style: 'success' } : {}),
     ...(config.button === 'tickets' ? { enabled: false } : {}),
   })),

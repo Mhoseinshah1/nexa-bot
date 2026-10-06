@@ -57,9 +57,25 @@ export interface CustomEmojiEntity {
  */
 export interface AppearanceDecoration {
   readonly customEmoji: ReadonlyMap<AppearanceSlot, string>;
+  /**
+   * Phase 2 Item 3: whether the bot this decoration is for may carry custom emoji at all —
+   * its appearance test answered `SENT` — even when no slot is configured. What a button
+   * icon that is NOT a slot (`bot.inline_button_icons`) is gated by. Absent is read by
+   * `mayCarryCustomEmoji`: a decoration with any slot was only ever built for such a bot.
+   */
+  readonly eligible?: boolean;
 }
 
-export const NO_DECORATION: AppearanceDecoration = { customEmoji: new Map() };
+export const NO_DECORATION: AppearanceDecoration = { customEmoji: new Map(), eligible: false };
+
+/**
+ * Whether a decoration's bot may carry custom emoji — a raw-id button icon included. Only
+ * the reader's `decorationFor` decides it (`isCustomEmojiEligible`, a recorded `SENT`);
+ * `NO_DECORATION` never may.
+ */
+export function mayCarryCustomEmoji(decoration: AppearanceDecoration): boolean {
+  return decoration.eligible ?? decoration.customEmoji.size > 0;
+}
 
 export interface DecoratedText {
   readonly text: string;

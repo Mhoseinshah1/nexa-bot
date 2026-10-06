@@ -402,6 +402,28 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
             }
           }
         }
+        /*
+         * Phase 2 Item 3: an `InlineKeyboardButton` may carry `icon_custom_emoji_id` too
+         * (`@grammyjs/types` `InlineKeyboardButton`, Bot API 9.4) — honoured, like the reply
+         * keyboard's, only for a bot able to use custom emoji. Only the icon is modelled here;
+         * the rest of an inline keyboard is passed through as before.
+         */
+        if (markup !== undefined && Array.isArray(markup.inline_keyboard)) {
+          for (const row of markup.inline_keyboard as unknown[]) {
+            if (!Array.isArray(row)) return badRequest(FAKE_KEYBOARD_INVALID);
+            for (const cell of row as unknown[]) {
+              const button = (cell ?? {}) as Record<string, unknown>;
+              if (!('icon_custom_emoji_id' in button)) continue;
+              if (
+                typeof button.icon_custom_emoji_id !== 'string' ||
+                !/^[0-9]{1,32}$/u.test(button.icon_custom_emoji_id)
+              ) {
+                return badRequest(FAKE_KEYBOARD_INVALID);
+              }
+              customEmoji = true;
+            }
+          }
+        }
         if (
           Array.isArray(body.entities) &&
           (body.entities as { type?: unknown }[]).some((entity) => entity?.type === 'custom_emoji')

@@ -107,6 +107,8 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   'bot.main_menu',
   // Owner spec §6: the inline buttons' styles, on the same page («دکمه‌های شیشه‌ای ربات»).
   'bot.inline_buttons',
+  // Phase 2 Item 3: the inline buttons' optional premium icons, beside their styles.
+  'bot.inline_button_icons',
   // UX Batch 01, item 2: each category's colour, on «🎨 ظاهر ربات» beside the categories.
   'bot.category_colors',
   // Spec 13.2: the automatic backup schedule is edited on «بکاپ و بازیابی», beside the
@@ -370,6 +372,17 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   'bot.inline_buttons': {
     title: 'web.setting_bot_inline_buttons',
     description: 'web.setting_bot_inline_buttons_desc',
+    group: 'support',
+    control: { kind: 'text' },
+  },
+  /*
+   * Phase 2 Item 3: the inline buttons' optional premium icons. Edited on the «دکمه‌های ربات»
+   * page beside the styles, never here (`SETTINGS_MANAGED_ELSEWHERE`); the entry exists
+   * because this map is total.
+   */
+  'bot.inline_button_icons': {
+    title: 'web.setting_bot_inline_button_icons',
+    description: 'web.setting_bot_inline_button_icons_desc',
     group: 'support',
     control: { kind: 'text' },
   },
