@@ -261,6 +261,28 @@ export const MANAGEMENT_CONDITION_FAILURE_CODES = [
    */
   'backup.run_failed',
   /**
+   * Four more backup conditions, each a way for "the backups are fine" to be
+   * false while `backup.run_failed` stays closed. All four are deduped
+   * installation-wide on their own key, and each is closed by its `_ok` twin
+   * only when it is open, so a healthy installation records nothing.
+   *
+   * - `backup.delivery_failed`: a run SUCCEEDED and its archive did not leave
+   *   the host — a definitive refusal or an `OUTCOME_UNKNOWN`. The run itself
+   *   still records `backup.run_ok`, which is correct about the backup and
+   *   silent about the off-host copy; this is that copy's condition.
+   * - `backup.cleanup_failed`: a run, or the plaintext-debris sweep, left
+   *   plaintext dump bytes or a scratch database behind.
+   * - `backup.disk_threshold_exceeded`: the backup volume has less free space
+   *   than the next run needs (dump, verification copy and archive at once).
+   * - `backup.interval_exceeded`: the schedule is ON and the last VERIFIED
+   *   backup is older than its interval times `BACKUP_OVERDUE_TOLERANCE` — the
+   *   overdue alert, for the scheduler that is not running at all.
+   */
+  'backup.delivery_failed',
+  'backup.cleanup_failed',
+  'backup.disk_threshold_exceeded',
+  'backup.interval_exceeded',
+  /**
    * A recovery failed, at whatever stage.
    *
    * A condition rather than a one-shot for the reason the backup failure is one:
@@ -300,6 +322,11 @@ export const MANAGEMENT_CONDITION_RECOVERY_CODES = [
   'settings.stored_value_valid',
   /** A backup run succeeded, closing `backup.run_failed`. */
   'backup.run_ok',
+  /** The four backup recoveries, each closing the failure of the same stem. */
+  'backup.delivery_ok',
+  'backup.cleanup_ok',
+  'backup.disk_threshold_ok',
+  'backup.interval_ok',
   /**
    * A recovery completed AND the installation reported ready, closing
    * `recovery.run_failed` for that recovery.

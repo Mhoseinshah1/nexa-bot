@@ -13,8 +13,11 @@ import {
  * string bounds and the byte budget. No I/O and no clock; the builder passes `now`.
  */
 
-/** `S1`, `O3`, `P2`: a per-payload name for a row, so the row's id never leaves the server. */
-export function aliasFor(prefix: 'S' | 'O' | 'P', index: number): string {
+/**
+ * `S1`, `O3`, `P2`: a per-payload name for a row, so the row's id never leaves the server.
+ * `K1`…: a knowledge entry's name, which a decision cites in `knowledgeRefs`.
+ */
+export function aliasFor(prefix: 'S' | 'O' | 'P' | 'K', index: number): string {
   return `${prefix}${String(index + 1)}`;
 }
 

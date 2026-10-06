@@ -99,7 +99,19 @@ mistaken for oversights:
 
 - **No backup rotation.** Dumps accumulate in `/var/backups/nexa`. Retention is
   an operator decision and no duration is invented here, exactly as for the
-  notification and operational-event tables.
+  notification and operational-event tables. (This is `botctl backup`'s update
+  safety net only. The DR pipeline's archive FILES under `BACKUP_WORK_DIR` do have
+  a retention policy since Program E5 — `backup.archive_keep_count` /
+  `backup.archive_keep_days`, `docs/backup.md` § Archive retention.)
+- **OQ-E5-OFFHOST: DECISION, OPEN — an off-host copy above 50 MiB.** The DR archive
+  leaves the host only through Telegram, and a bot may send at most 50 MiB; above
+  that the group gets a notice and the only copy is on the server it protects. An
+  S3-compatible (or other object-storage) destination behind `RoutedBackupDelivery`
+  is the likely answer and is NOT built: it needs an ADR (ADR-0011 control 2 says
+  "not in V1"), a decision on who owns the bucket and how its credentials are
+  sealed and rotated, and real credentials to accept it against. Until decided,
+  copying the archive off the host is manual (`docs/backup.md` § What this does
+  NOT do).
 - **No secret rotation tooling.** Rotating the database password or the KEK on
   a live installation has no supported procedure yet; the KEK half of that
   belongs to `BLOCKER-SECRETS-V2` below.
@@ -3166,6 +3178,18 @@ HISTORY_NOT_IMPORTED` (not adopted by registered decision; it expires on the pan
 - **OQ-P7-03 — MySQL 8 parity.** CI runs the source suite on MariaDB 10.11; the production
   archive is MySQL. The first MySQL 8 run is manual acceptance step 1 of
   `docs/legacy-migration/importer.md` §10; a `mysql:8.0` matrix entry should follow it.
+  **Code side addressed, real side still open (WP-D1b, 2026-10-06).** The `legacy-mysql`
+  CI job now runs on `mariadb:10.11` AND `mysql:8.0`, and the rehearsal harness takes
+  `--legacy-engine mysql8`. Locally, on MySQL 8.0.46 (Ubuntu package), with the SYNTHETIC
+  dataset only: the source suite passed 7/7, and a full synthetic rehearsal through the
+  AES zip passed with the same 2 PENDING as MariaDB. It found two defects in
+  `scripts/legacy-rehearsal-source.sql` that MariaDB had hidden — `BINARY … REGEXP`
+  (ERROR 3995 under ICU) and a GROUP BY expression refused by `ONLY_FULL_GROUP_BY`
+  (ERROR 1055) — both fixed, with identical aggregates on both engines. It also showed a
+  genuine `mysqldump` 8.0 of a default-collation schema failing to load into MariaDB
+  (`Unknown collation: 'utf8mb4_0900_ai_ci'`), which is why the inspector refuses that
+  dump on mariadb instead of letting it fail mid-load. What stays open: the REAL archive
+  has never been loaded into MySQL 8 — that is still step 1 of §10.
 - **OQ-P7-04 — inventory reads do not take the tenant probe budget.** The importer is an
   operator-run CLI bounded by page size and `maxPages`; two full walks per production panel
   per mode. Whether a cutover-day run should share the monitor's budget is open.
@@ -3594,3 +3618,55 @@ and `OQ-T-4` are live again and apply to inline buttons too.
 - **OQ-QR-TEMPLATE-02: decided by this release, open to the PO.** The background is PNG only
   (no JPEG decoder dependency), and no built-in branded default ships: the default remains the
   plain QR. See `docs/phase2/item4-qr-template.md`.
+
+## OQ-LC — «آخرین زمان اتصال»: what each panel actually reports (program item C1)
+
+- **OQ-LC-01 — 3X-UI v3.7.0: `lastOnline` on `clients/traffic/:email`. OPEN; the adapter
+  reads nothing (UNSUPPORTED, «در دسترس نیست»).** The evidence conflicts. The adapter used
+  to state that v3.7.0's traffic record has no last-connection field; at the pinned commit
+  `f727d04f6522bb94a8fb52e8352fdcafb51c11e1`, `internal/xray/client_traffic.go` declares
+  `` LastOnline int64 `json:"lastOnline" … gorm:"default:0" example:"1735680000000"` ``, an
+  example in epoch MILLISECONDS. Legacy MirzaBot reads `obj.lastOnline` as milliseconds
+  with `0` = never, but from the v2.x `getClientTraffics` route, and an older MirzaBot read
+  it as seconds. Nothing in this repository shows what WRITES the field in v3.7.0, in which
+  unit, or that `GET panel/api/clients/traffic/:email` serves it. A unit misread by 1000
+  is a fake time, so it is not read. **The check, against a disposable v3.7.0 panel
+  (`docs/real-panel-acceptance.md`), in order:**
+  1. create a client; `GET {base}/panel/api/clients/traffic/{email}` (Bearer token):
+     record whether `obj.lastOnline` is PRESENT and that it is `0` before any use;
+  2. connect a real xray client through that client's link, pass traffic, wait one stats
+     cycle, and read again: record the value and the wall-clock UTC time of the read;
+  3. decide the unit: `value / 1000` within a minute of the read's epoch seconds is
+     MILLISECONDS; `value` itself within a minute is SECONDS; anything else, stop;
+  4. disconnect, wait two cycles, read again: the value must NOT move (it is the last
+     time seen, not "now").
+     Only then: read `lastOnline` in `usageFromClient` (`0` → NEVER, the proven unit → AT,
+     anything else → UNSUPPORTED), serve it from `tests/support/fake-3xui.ts` in the same
+     commit (it already serves the source's field, default 0, through `setLastOnline`), add
+     the case to `tests/acceptance/real-panel-sanaei.test.ts`, and replace the 3X-UI
+     assertion in `tests/unit/provider-last-seen.test.ts` and
+     `tests/integration/customer-ux-services.test.ts` (C1).
+- **OQ-LC-02 — Marzban v0.8.4 and RickPanel: `online_at` on the real wire.**
+  - **Marzban: read; source-evidenced; A9 NOT RUN.** At tag `v0.8.4`:
+    `app/models/user.py` (`online_at: Optional[datetime]`), `app/db/models.py` (a nullable
+    `DateTime` column) and `app/jobs/record_usages.py` (`online_at=datetime.utcnow()`): naive
+    UTC, `null` before first use. Marzban A9 checks presence, `null` on a fresh account,
+    and the naive SHAPE on a used one; its only zone check is that the value is not more
+    than five minutes after now. It does NOT prove the zone the way a wall-clock window
+    would.
+  - **RickPanel: NOT read — the card shows «در دسترس نیست» (lead decision, C1 review).**
+    The only RickPanel evidence is the owner's OpenAPI property list for the **PUT (modify)
+    body** (`provider.ts`, RickPanel descriptor), where every property is typed `"string"`.
+    That says nothing about the GET response or its time zone; a panel writing naive
+    TEHRAN time would put a time three and a half hours in the future on the card. So
+    `RICKPANEL_USAGE` is `NOT_READ` (adapter and inventory). **Settled by** RickPanel A9
+    (`real-panel-rickpanel.test.ts`): `online_at` present and `null` on a fresh account,
+    then, on `NEXA_ACCEPTANCE_RICKPANEL_USED_USER` with a client passing traffic during the
+    run, the value read as UTC within two minutes of the observer's read time (and NOT
+    within two minutes only when read as Asia/Tehran). Enable it by flipping
+    `RICKPANEL_USAGE` to `ONLINE_AT` in the commit that records that run.
+  - Both readers refuse a value that is not an ISO date-time, and the service repository
+    refuses a time more than five minutes after the Clock's read time
+    (`boundedLastSeen`). Either refusal stores nothing, so the card keeps the LAST KNOWN
+    value. If a panel spells it differently, correct `readLastSeen` AND the fake in one
+    commit.

@@ -3,13 +3,15 @@
 **Status: harness aligned with the P7 CLI as built (`importer.md`); no staging rehearsal
 has run.** No staging server, real legacy dump or RickPanel credentials exist here, so no
 staging rehearsal result exists anywhere in this repository. Synthetic runs exercise the
-harness and P7's code only and are never recorded here as results.
+harness and P7's code only; the ones run for WP-D1–D8 are listed, labelled synthetic, in
+[`readiness-record.md`](readiness-record.md) § Synthetic evidence — never as a result here.
 
 `scripts/legacy-rehearsal.sh` runs the whole migration against copies, times it, checks it
 and rolls it back:
 
 ```
-legacy dump ──► throwaway MariaDB (started by the script, 127.0.0.1, SELECT-only reader)
+legacy dump or backup_*.zip ──► scripts/legacy-archive-inspect.mjs (blockers stop here)
+            ──► throwaway MariaDB or MySQL 8.0 (started by the script, 127.0.0.1, SELECT-only reader)
 NEXA backup ──► nexa_rehearsal_<stamp> (real `backup restore`, then migrate forward)
                   │ or: fresh migrate + provision --tenant
                   ▼
@@ -40,6 +42,22 @@ scripts/legacy-rehearsal.sh \
   --out /tmp/rehearsal-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
+Or, asserted (WP-D6) — the same synthetic rehearsal through the fixture's AES-256 zip, then
+`scripts/legacy-rehearsal-synthetic-assert.mjs`, which requires 0 FAIL and EXACTLY the
+fixture's known PENDING checks in every cycle (one more PENDING is a regression as much as
+one FAIL):
+
+```bash
+PGPASSWORD=… pnpm rehearsal:synthetic [--engine mariadb|mysql8] [--mysql-bin-dir DIR] [--out DIR]
+```
+
+CI runs exactly that on MySQL 8.0 in the job `legacy-rehearsal` (about two minutes; part
+of the `test` gate), and keeps `summary.json`, `checks.tsv`, `durations.tsv`,
+`reconciliation.md`, `archive.json` and the logs as an artifact. The known PENDING checks
+are the fixture's deliberate owner-decision cases: `invoice_keys_outside_evidenced_shape`
+(S2, OQ-P4-01), `report_equation_C3` (a user id that is not a Telegram id) and
+`legacy_balance_fractional_users` (W8) — 3 per cycle.
+
 `--synthetic-panels` (synthetic only) runs `tests/support/legacy-rehearsal-synthetic-panels.ts`:
 it stands up the two fake RickPanels the fixture assumes on 127.0.0.2/3, registers them in
 the rehearsal database through the ordinary panel write path and the operator's connection
@@ -48,13 +66,19 @@ map, and on stop reports every request the fakes received after setup — so "pr
 writes = 0" is also checked on the wire (`wire_provider_writes_zero`). Loopback panel
 addresses are allowed for that run only.
 
-On a staging host (isolated PostgreSQL 16 and MariaDB; never the installation's own
-database — the script refuses the compose service names and any URL naming a database):
+On a staging host (isolated PostgreSQL 16, and MySQL 8.0 or MariaDB binaries for the
+throwaway legacy engine; never the installation's own database — the script refuses the
+compose service names and any URL naming a database):
+
+(For a plain dump, replace the two `--legacy-archive*` flags with
+`--legacy-dump <fresh oldbot dump, .sql or .sql.gz>`.)
 
 ```bash
+export LEGACY_ZIP_PASSWORD=…   # only for a MirzaBot zip; typed into the environment, never argv
 scripts/legacy-rehearsal.sh \
   --evidence-class staging \
-  --legacy-dump <fresh oldbot dump, .sql or .sql.gz> \
+  --legacy-archive <MirzaBot backup_YYYY-MM-DD.zip> --legacy-archive-password-env LEGACY_ZIP_PASSWORD \
+  --legacy-engine mysql8 [--mysql-bin-dir <dir with MySQL 8.0 mysqld, mysql, mysqladmin>] \
   --tenant <tenant-slug> \
   --panel-map <the reviewed panel-map.json> \
   --nexa-env <staging config with the production keyring able to open the archive> \
@@ -71,6 +95,27 @@ files and fed to `mariadb` on stdin, never as `-e` arguments.
 
 On INT/TERM the harness stops the running stage's whole process group (each stage runs in
 its own) before its cleanup, so no importer or helper is left running.
+
+### The legacy input and engine (WP-D1a/D1b)
+
+Before the throwaway engine is even started, `scripts/legacy-archive-inspect.mjs` inspects
+the input (`--legacy-dump` or `--legacy-archive`, exactly one) with
+`--engine <the --legacy-engine> --require-class <the evidence class>`. A blocker stops the
+rehearsal with its code: a dump that is truncated, lacks `user`/`invoice`/`product` or a
+required column, carries a stored object, selects another database than `--legacy-schema`,
+or needs another engine (`COLLATION_REQUIRES_MYSQL8`, `ENGINE_MISMATCH`). A zip is decrypted
+into the harness's private scratch directory — removed on exit with the engine's data, never
+under `--out` — and its report is kept as `archive.json` (hashes and shapes, no row
+content). `summary.json` records `legacyArchiveSha256` (the file as given),
+`legacyDumpSha256` (the inner dump: for a `.sql` they are equal; for a `.sql.gz` or a zip
+they are not), `legacyEngine` and `legacyInput`.
+
+`--legacy-engine mysql8` starts MySQL's own `mysqld` 8.0 (`--initialize-insecure` on a
+scratch data directory, `--mysqlx=OFF`, `--secure-file-priv=NULL`, bound to 127.0.0.1);
+`mysqld --version` must say `Ver 8.0.x` and not MariaDB — on many hosts `mysqld` is a
+MariaDB symlink, so pass `--mysql-bin-dir`. MirzaBot's tables declare no collation, so a
+MySQL 8 dump carries `utf8mb4_0900_ai_ci`, which MariaDB does not have: such a dump is
+refused on `mariadb`, never rewritten.
 
 `--check-only` runs every guard and prints the plan without touching anything. `--help`
 lists the rest (`--cycles`, `--kill-after-rows`, `--importer-arg`, `--keep-legacy-copy`).
@@ -131,16 +176,26 @@ Pinned by `tests/unit/legacy-rehearsal-guards.test.ts`.
 
 ## What it records (`--out`)
 
-| file                                 | what                                                                                         |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `summary.json`                       | evidence class (and `notEvidence: true` for synthetic), verdict, every check, every duration |
-| `checks.tsv`                         | cycle, check, PASS/FAIL/PENDING, expected, actual                                            |
-| `durations.tsv`                      | cycle, stage, seconds, exit, load average before/after                                       |
-| `snapshots/*.tsv`                    | the NEXA and legacy aggregate snapshots (the reconciliation inputs)                          |
-| `snapshots/c<N>-pre-import.pgcustom` | the pre-import `pg_dump` the rollback restores (customer data: 0600)                         |
-| `c<N>-report.json`                   | P7's machine-readable report, and `c<N>-report.schema-violations.txt` (empty when valid)     |
-| `synthetic-panel-requests.json`      | synthetic only: requests the fake panels received after setup                                |
-| `logs/`                              | one log per stage                                                                            |
+| file                                 | what                                                                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `summary.json`                       | evidence class (and `notEvidence: true` for synthetic), verdict, every check, every duration; `pendingDecisions[]` (below) |
+| `checks.tsv`                         | cycle, check, PASS/FAIL/PENDING, expected, actual                                                                          |
+| `durations.tsv`                      | cycle, stage, seconds, exit, load average before/after                                                                     |
+| `snapshots/*.tsv`                    | the NEXA and legacy aggregate snapshots (the reconciliation inputs)                                                        |
+| `snapshots/c<N>-pre-import.pgcustom` | the pre-import `pg_dump` the rollback restores (customer data: 0600)                                                       |
+| `c<N>-report.json`                   | P7's machine-readable report, and `c<N>-report.schema-violations.txt` (empty when valid)                                   |
+| `synthetic-panel-requests.json`      | synthetic only: requests the fake panels received after setup                                                              |
+| `reconciliation.md`                  | the reconciliation result table, generated from the checks (WP-D5)                                                         |
+| `archive.json`                       | the archive inspector's report: both sha256 values, format, engine, collations, blockers                                   |
+| `snapshots/c<N>-tables-*.tsv`        | the exact per-table fingerprints (rows and row hashes) the rollback checks compare (WP-D8)                                 |
+| `snapshots/c<N>-panel-state-*.json`  | P4: per production panel, account count and hashes; per-account digests under a deleted key                                |
+| `logs/`                              | one log per stage                                                                                                          |
+
+`summary.json.pendingDecisions[]` lists every PENDING check as `{cycle, check, expected,
+actual, decision: null, decidedBy: null, decidedAt: null}` — the shape G11 accepts one by
+name (`production-gate.md`, `readiness-record.md`). The harness never fills a decision; a
+run whose PENDING checks have not each been accepted by the owner is not a passed
+rehearsal.
 
 The checks, by name: `dry_run_no_business_mutation`, `interrupted_run_left_running`,
 `no_run_left_running`, `one_apply_run_resumed`, `apply_run_completed`,
@@ -161,7 +216,16 @@ owner decision about ids that are not Telegram ids), `wire_provider_writes_zero`
 `wallet_equation_imported_balance`, `openings_one_per_nonzero_user`, `unchanged_*` (sales,
 revenue, payments, top-ups), `adoption_orders_zero_total`, `one_service_per_adoption`,
 `provider_writes_zero`, `adopted_services_without_operations`, `no_customer_messages`,
-`rollback_restores_pre_import`, `repeat_reproduces_cycle_1`. Each maps to an equation in
+`rollback_restores_pre_import`, `repeat_reproduces_cycle_1`, `panel_map_complete` (G10:
+every live real `code_panel` accounted for, WP-D2), `panel_state_unchanged` and
+`panel_state_walk_reads_only` (P4: the production panels walked read-only before the audit
+and after the resume, WP-D4), `customers_created_le_imported` (C2),
+`fractional_balances_never_imported` and `legacy_balance_{fractional,null}_users` (W8; the
+latter PENDING when non-zero), `revenue_view_standard_unchanged`,
+`revenue_view_adoption_zero`, `wallet_window_openings_only` (R3, machine half),
+`orphans_in_customer_missing` (S4), `no_trial_grants` (WP-D5),
+`rollback_restores_pre_import_exact`, `rollback_displaced_exists`,
+`rollback_displaced_preserved` (WP-D8). Each maps to an equation in
 [`reconciliation.md`](reconciliation.md).
 
 ## What it does not cover

@@ -5,6 +5,9 @@ import {
   ADMIN_MENU_BUTTON,
   ADMIN_MENU_COMMAND,
   BACKUP_LEASE_STALE_AFTER_MS,
+  BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT,
+  BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
+  BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_SCHEDULE_SETTING_KEYS,
   PAYMENT_GATEWAY_DESCRIPTORS,
   CAMPAIGN_SCHEDULE_INTERVAL_MS,
@@ -54,6 +57,7 @@ import type {
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { panelUrlPolicy } from './infrastructure/net/installation-policy.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import {
@@ -175,6 +179,7 @@ import { DiagnosticsService } from './modules/platform/system/application/diagno
 import { DrizzleDiagnosticsReader } from './modules/platform/system/infrastructure/drizzle-diagnostics.reader.js';
 import { BackupService } from './modules/platform/backup/application/backup.service.js';
 import { BackupScheduler } from './modules/platform/backup/application/backup-scheduler.js';
+import { BackupHousekeeping } from './modules/platform/backup/application/backup-housekeeping.js';
 import { DrizzleBackupRunRepository } from './modules/platform/backup/infrastructure/drizzle-backup-run.repository.js';
 import { DrizzleRecoveryRequestRepository } from './modules/platform/recovery/infrastructure/drizzle-recovery-request.repository.js';
 import { FilesystemRecoveryWorkspaces } from './modules/platform/recovery/infrastructure/recovery-workspace.js';
@@ -190,7 +195,10 @@ import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure
 import { RoutedBackupDelivery } from './modules/platform/backup/application/routed-backup-delivery.js';
 import { BackupSchedulePolicy } from './modules/platform/backup/application/backup-schedule.js';
 import { OpsGroupBackupTopicAdapter } from './modules/control/ops-group/application/backup-topic.js';
-import { FilesystemBackupWorkspaces } from './modules/platform/backup/infrastructure/workspace.js';
+import {
+  FilesystemBackupDebris,
+  FilesystemBackupWorkspaces,
+} from './modules/platform/backup/infrastructure/workspace.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
 import { IncidentService } from './modules/platform/incidents/application/incident.service.js';
 import { IncidentSchedulerLoop } from './modules/platform/incidents/application/incident-scheduler-loop.js';
@@ -302,8 +310,12 @@ import { LegacyReviewQueueService } from './modules/platform/legacy-import/appli
 import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
 import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store.js';
 import { LegacyImporterService } from './modules/platform/legacy-importer/application/legacy-importer.service.js';
-import type { LegacyAdoptionPort } from './modules/platform/legacy-importer/application/ports.js';
+import type {
+  LegacyAdoptionPort,
+  LegacyInventoryPort,
+} from './modules/platform/legacy-importer/application/ports.js';
 import { DrizzleLegacyImporterRepository } from './modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.js';
+import { PgLegacyImportProcessLock } from './modules/platform/legacy-importer/infrastructure/pg-legacy-import-process-lock.js';
 import { RickpanelInventorySource } from './modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source.js';
 import { DrizzleLegacyImportRepository } from './modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
@@ -773,6 +785,11 @@ export interface Container {
   readonly throttleSweeper: RetentionSweeper;
   readonly sessionSweeper: RetentionSweeper;
   readonly backupRunSweeper: RetentionSweeper;
+  /**
+   * Archive-file retention, the plaintext-debris sweep, and the disk-space and
+   * overdue conditions (E5). Constructed in every role, started in the worker.
+   */
+  readonly backupHousekeeping: BackupHousekeeping;
   readonly recoveryRequestSweeper: RetentionSweeper;
   /** HF-A7: clears support's reply files Telegram never took, after their retention. */
   readonly ticketReplyFileSweeper: RetentionSweeper;
@@ -1242,6 +1259,17 @@ export interface Container {
    */
   readonly backup: BackupService;
   readonly backupScheduler: BackupScheduler;
+  /**
+   * Whether a recovery holds the installation quiesced right now.
+   *
+   * THE predicate every backup trigger asks before it starts — the scheduler, the
+   * CLI's `backup run`, and the backup housekeeping — read from the same row the
+   * write gate and the Web Admin's button read. `backup_runs` writes bypass both
+   * quiesce chokepoints, so a trigger that does not ask dumps a database that is
+   * about to be renamed away. One function, so the callers cannot come to ask
+   * three different questions.
+   */
+  readonly recoveryQuiesced: () => Promise<boolean>;
   /** Disaster recovery: the operator's service, and the destructive executor. */
   readonly recoveryService: RecoveryService;
   readonly backupAdmin: BackupAdminService;
@@ -1278,6 +1306,14 @@ export interface Container {
     readonly adoption?: LegacyAdoptionPort | null;
     readonly inventoryPageSize?: number;
   }) => LegacyImporterService;
+
+  /**
+   * WP-D4: the read-only inventory port alone, for the rehearsal's panel-state walk
+   * (tests/support/legacy-rehearsal-panel-state.ts). Reads only; no surface reaches it.
+   */
+  readonly legacyPanelInventory: (options?: {
+    readonly inventoryPageSize?: number;
+  }) => LegacyInventoryPort;
 
   shutdown(): Promise<void>;
 }
@@ -5781,6 +5817,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const supportAssist = new SupportAssistService({
     jobs: supportAiJobs,
+    runs: supportAiRuns,
     configs: supportAiConfigs,
     chain: supportAiChain,
     context: supportContextSource,
@@ -6146,6 +6183,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ),
   });
   const backupArchiver = new KeyringBackupArchiver(keyring);
+  /**
+   * Whether the installation's backup condition of this code is open — read from
+   * the rows, never from process memory, so a worker that restarts can still
+   * close a condition its predecessor opened.
+   */
+  const backupConditions = new DrizzleOperationalConditionReader(database.db);
+  const backupConditionOpen = async (code: string): Promise<boolean> =>
+    installationTenantId === null
+      ? false
+      : backupConditions.tenantConditionIsOpen(installationTenantId, code);
   /*
    * The automatic schedule (spec §13.2): the Web Admin's registry values on the
    * installation tenant, the environment as the compatible default. One policy, read by
@@ -6229,6 +6276,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     logger,
     leaseOwner,
     retainedArchiveHint: config.BACKUP_WORK_DIR,
+    conditionOpen: backupConditionOpen,
   });
   /*
    * The recovery graph.
@@ -6377,16 +6425,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     logger,
   });
 
+  /*
+   * The same predicate the write gate and the operator's button read, from the
+   * same row. Named once so the scheduler, the CLI and the housekeeping ask the
+   * identical question: a second way to ask would eventually give a third answer.
+   */
+  const recoveryQuiesced = async (): Promise<boolean> => {
+    const lock = await recoveryRequests.installationLock();
+    return lock !== null && lock.quiescing;
+  };
   const backupScheduler = new BackupScheduler({
     service: backup,
     runs: backupRuns,
-    // The same predicate the write gate and the operator's button read, from the
-    // same row. Three readers, one source: a second way to ask would eventually
-    // give a third answer.
-    quiesced: async () => {
-      const lock = await recoveryRequests.installationLock();
-      return lock !== null && lock.quiescing;
-    },
+    quiesced: recoveryQuiesced,
     clock,
     schedule: () => backupSchedule.effective(),
     tickIntervalMs: config.BACKUP_TICK_MS,
@@ -6394,6 +6445,72 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // when another process may reclaim it as abandoned.
     runHeartbeatAt: () => backup.leaseHeartbeatAt(),
     runStaleAfterMs: BACKUP_LEASE_STALE_AFTER_MS,
+    logger,
+  });
+
+  /*
+   * Backup housekeeping (E5): archive retention, the plaintext-debris sweep, and
+   * the disk-space and overdue conditions. In the worker, beside the scheduler,
+   * asking the scheduler's own quiesce predicate and schedule policy.
+   */
+  const backupHousekeeping = new BackupHousekeeping({
+    runs: backupRuns,
+    debris: new FilesystemBackupDebris(config.BACKUP_WORK_DIR),
+    clock,
+    opsLog,
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    conditionOpen: backupConditionOpen,
+    quiesced: recoveryQuiesced,
+    leftoverExists: async (leftover) => {
+      if (leftover.startsWith('/')) {
+        return stat(leftover).then(
+          () => true,
+          (error: unknown) => (error as { code?: unknown }).code !== 'ENOENT',
+        );
+      }
+      if (/^nexa_[a-z0-9_]+$/.test(leftover)) return backupRuns.databaseExists(leftover);
+      return false;
+    },
+    schedule: () => backupSchedule.effective(),
+    retention: async () => {
+      // The registry's defaults apply when nothing is stored, and with no tenant
+      // provisioned yet; the resolver validates a stored value against the schema.
+      const scope =
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null };
+      if (scope === null) {
+        return {
+          keepCount: BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT,
+          keepDays: BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
+        };
+      }
+      return {
+        keepCount: await settingsResolver.valueOf<number>(
+          scope,
+          BACKUP_ARCHIVE_RETENTION_SETTING_KEYS.keepCount,
+        ),
+        keepDays: await settingsResolver.valueOf<number>(
+          scope,
+          BACKUP_ARCHIVE_RETENTION_SETTING_KEYS.keepDays,
+        ),
+      };
+    },
+    protectedByRecovery: () => recoveryRequests.backupIdsInUse(),
+    // Longer than any dump plus any restore can take, plus the lease window: a
+    // file untouched for that long has no live writer.
+    plaintextGraceMs: Math.max(
+      24 * 3_600_000,
+      config.BACKUP_DUMP_TIMEOUT_MS +
+        config.BACKUP_RESTORE_TIMEOUT_MS +
+        BACKUP_LEASE_STALE_AFTER_MS,
+    ),
+    diskFloorBytes: 1024 * 1024 * 1024,
+    tickIntervalMs: 15 * 60_000,
+    initialDelayMs: 90_000,
     logger,
   });
 
@@ -6487,6 +6604,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       }
     },
   };
+
+  /**
+   * The importer's read-only RickPanel inventory port (GETs and the token exchange; it has
+   * no method that could send anything else). The importer reads through it, and so does
+   * the rehearsal's P4 panel-state walk — which is why it is built here, outside the
+   * application service, with no write path of its own.
+   */
+  const legacyInventory = (options: { readonly inventoryPageSize?: number } = {}) =>
+    new RickpanelInventorySource(
+      {
+        panel: async (scope, panelId) => {
+          const view = await panelRepository.find(scope, panelId);
+          return view === null
+            ? null
+            : { baseUrl: view.panel.baseUrl, providerType: view.panel.providerType };
+        },
+        credentials: (scope, panelId) => panelCredentials.read(scope, panelId),
+        http: (baseUrl) => panelHttp.forBase(baseUrl),
+      },
+      options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize },
+      () => clock.now(),
+    );
 
   const container: Container = {
     config,
@@ -6964,6 +7103,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     panelMonitor,
     backup,
     backupScheduler,
+    backupHousekeeping,
+    recoveryQuiesced,
     backupRuns,
     backupArchiver,
     backupTools,
@@ -6976,29 +7117,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     installationKeyLoader,
     installationKeyRepository,
     installationKeys,
+    legacyPanelInventory: (options = {}) => legacyInventory(options),
     legacyImporter: (options = {}) => {
       const importerRepository = new DrizzleLegacyImporterRepository(database.db, (scope) =>
         settingsResolver.valueOf<CurrencyCode>(scope, 'sales.currency'),
       );
       return new LegacyImporterService({
+        processLock: new PgLegacyImportProcessLock(config.DATABASE_URL),
         destination: importerRepository,
         runs: new DrizzleLegacyImportRepository(database.db),
         runInputs: importerRepository,
         customers: importerRepository,
-        inventory: new RickpanelInventorySource(
-          {
-            panel: async (scope, panelId) => {
-              const view = await panelRepository.find(scope, panelId);
-              return view === null
-                ? null
-                : { baseUrl: view.panel.baseUrl, providerType: view.panel.providerType };
-            },
-            credentials: (scope, panelId) => panelCredentials.read(scope, panelId),
-            http: (baseUrl) => panelHttp.forBase(baseUrl),
-          },
-          options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize },
-          () => clock.now(),
-        ),
+        inventory: legacyInventory(options),
         openings: migrationOpeningBalance,
         trials: legacyTrialEligibilityService,
         products: legacyProductService,
@@ -7026,6 +7156,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     async shutdown() {
       installationKeyLoader.stop();
       backupScheduler.stop();
+      backupHousekeeping.stop();
       recoveryExecutor.stop();
       await relay.stop();
       await panelMonitor.stop();

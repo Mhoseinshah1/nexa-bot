@@ -18,7 +18,8 @@ import {
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
-import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
+import { marzbanOnlineAt, startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
+import { CANARY, startFake3xUi } from '../support/fake-3xui';
 import {
   adminActorFor,
   createAdmin,
@@ -1236,6 +1237,120 @@ describe('a customer looks after the services they bought', () => {
       expect(raw).not.toContain('name="reply_markup"');
       expect(of('deleteMessage')).toHaveLength(0);
       expect(of('sendMessage')).toHaveLength(0);
+    });
+  });
+
+  // =========================================================================
+  // C1 — «آخرین زمان اتصال»: the panel's own last connection, or «در دسترس نیست»
+  // =========================================================================
+  describe('the last connection on the card (C1)', () => {
+    const LINE = '📶 آخرین زمان اتصال شما: ';
+    const stale = (id: string) =>
+      ctx.container.database.db.execute(
+        sql`UPDATE services SET usage_synced_at = now() - interval '10 minutes' WHERE id = ${id}`,
+      );
+    const lastSeenRow = async (id: string) => {
+      const row = await services.findById(tenantA, id);
+      return { state: row?.lastSeenState ?? null, at: row?.lastSeenAt?.toISOString() ?? null };
+    };
+
+    it('Marzban: shows the time the panel reported, in Tehran time, from a naive-UTC `online_at`', async () => {
+      const service = await activeService('lc-at');
+      const user = panel.users.get(service.username);
+      if (user === undefined) throw new Error('no panel user');
+      // 08:30 UTC, written as v0.8.4 writes it: no offset at all. A fixed day in the past,
+      // so the five-minute future bound never applies whatever the real clock says.
+      user.onlineAt = marzbanOnlineAt(new Date('2026-09-23T08:30:00.000Z'));
+      expect(user.onlineAt).toBe('2026-09-23T08:30:00');
+      await stale(service.id);
+      sent = [];
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(await lastSeenRow(service.id)).toEqual({
+        state: 'AT',
+        at: '2026-09-23T08:30:00.000Z',
+      });
+      // The card renders the stored instant in the tenant's zone: Tehran is UTC+03:30, so
+      // 12:00 on 1 Mehr 1405. This suite runs with TZ=UTC, so it cannot tell a parser that
+      // reads a zoneless time as UTC from one that reads it as process-local time; that is
+      // `tests/unit/provider-last-seen.test.ts`, which runs the parser in Asia/Tehran.
+      const body = lastText();
+      expect(body).toContain(`${LINE}1405/07/01 12:00`);
+      expect(body).not.toContain('در دسترس نیست');
+      expect(body).not.toContain('متصل نشده');
+    });
+
+    it('Marzban: an account the panel says never connected reads «متصل نشده», not «در دسترس نیست»', async () => {
+      const service = await activeService('lc-never');
+      expect(panel.users.get(service.username)?.onlineAt).toBeNull();
+      await stale(service.id);
+      sent = [];
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(await lastSeenRow(service.id)).toEqual({ state: 'NEVER', at: null });
+      const body = lastText();
+      expect(body).toContain(`${LINE}متصل نشده`);
+      expect(body).not.toContain('در دسترس نیست');
+    });
+
+    it('Marzban: a time more than five minutes after the read is not shown; the last known value stays', async () => {
+      const service = await activeService('lc-future');
+      await stale(service.id);
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(await lastSeenRow(service.id)).toEqual({ state: 'NEVER', at: null });
+
+      const user = panel.users.get(service.username);
+      if (user === undefined) throw new Error('no panel user');
+      const now = ctx.container.clock.now().getTime();
+      // What naive Tehran read as UTC looks like: three and a half hours ahead.
+      user.onlineAt = marzbanOnlineAt(new Date(now + 210 * 60_000));
+      await stale(service.id);
+      sent = [];
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(await lastSeenRow(service.id), 'nothing stored: the last known value stays').toEqual({
+        state: 'NEVER',
+        at: null,
+      });
+      expect(lastText()).toContain(`${LINE}متصل نشده`);
+
+      // A panel clock a minute fast is tolerated.
+      const nearly = new Date(Math.floor((now + 60_000) / 1000) * 1000);
+      user.onlineAt = marzbanOnlineAt(nearly);
+      await stale(service.id);
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(await lastSeenRow(service.id)).toEqual({ state: 'AT', at: nearly.toISOString() });
+    });
+
+    it('3X-UI: «در دسترس نیست», even when the panel’s record carries a `lastOnline`', async () => {
+      const xui = await startFake3xUi({ host: '127.0.0.2' });
+      try {
+        const created = await ctx.container.panels.create(tenantA, owner, {
+          name: '3X-UI A',
+          providerType: 'sanaei',
+          baseUrl: xui.baseUrl,
+          credentials: { username: CANARY.username, password: CANARY.password },
+          activation: { subscriptionDomain: 'sub.example.test', inboundId: 1 },
+          idempotencyKey: 'panel-lc-xui-create',
+        });
+        panelId = created.view.panel.id;
+        await validatePanelConnection(ctx.container, tenantA, panelId);
+        const service = await activeService('lc-xui');
+        expect(xui.clients.has(service.username), 'the fixture provisioned on 3X-UI').toBe(true);
+        xui.setLastOnline(service.username, Date.parse('2026-09-23T08:30:00.000Z'));
+        await stale(service.id);
+        const before = xui.requests.filter((one) => one.path.includes('clients/traffic/')).length;
+        sent = [];
+        expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+        expect(
+          xui.requests.filter((one) => one.path.includes('clients/traffic/')).length - before,
+          'the card did read the panel',
+        ).toBe(1);
+        expect(await lastSeenRow(service.id)).toEqual({ state: null, at: null });
+        const body = lastText();
+        expect(body).toContain(`${LINE}در دسترس نیست`);
+        expect(body).not.toContain('متصل نشده');
+        expect(body).not.toContain('1405/07/01');
+      } finally {
+        await xui.close();
+      }
     });
   });
 

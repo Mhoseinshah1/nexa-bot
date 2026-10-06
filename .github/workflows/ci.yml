@@ -352,23 +352,40 @@ jobs:
   # while this needs only a database server, which a service container provides on every
   # pull request. A rule about the source that only an operator's laptop checks is a rule
   # that rots. The data is SYNTHETIC; the suite is not evidence about the archive.
+  # The legacy source on BOTH engines: MariaDB 10.11 (what the rehearsal has run on) and
+  # MySQL 8.0 — MirzaBot's production engine (OQ-P7-03), whose default collation
+  # utf8mb4_0900_ai_ci MariaDB does not have. Collations are never rewritten: the same
+  # synthetic dataset is loaded into each engine as it is.
   legacy-mysql:
-    name: Legacy MySQL source
+    name: Legacy MySQL source (${{ matrix.engine.label }})
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - label: mariadb-10.11
+            image: mariadb:10.11
+            health: healthcheck.sh --connect --innodb_initialized
+          - label: mysql-8.0
+            image: mysql:8.0
+            health: mysqladmin ping -h 127.0.0.1 -proot
+
     services:
-      mariadb:
-        image: mariadb:10.11
+      legacydb:
+        image: ${{ matrix.engine.image }}
         env:
+          # Each image reads its own name; the other is ignored.
           MARIADB_ROOT_PASSWORD: root
+          MYSQL_ROOT_PASSWORD: root
         ports: ['3306:3306']
         options: >-
-          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-cmd "${{ matrix.engine.health }}"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 20
+          --health-retries 30
 
     env:
       NEXA_LEGACY_MYSQL_ADMIN_DSN: mysql://root:root@127.0.0.1:3306/mysql
@@ -396,6 +413,102 @@ jobs:
         timeout-minutes: 10
         run: pnpm test:legacy-mysql
 
+  # WP-D6: the whole migration rehearsal on the SYNTHETIC fixture, asserted — through the
+  # fixture's AES-256 zip (the archive inspector), on MySQL 8.0 (MirzaBot's engine; the
+  # legacy-mysql job covers MariaDB for the source), against fake RickPanels and a freshly
+  # migrated database: 0 FAIL and EXACTLY the fixture's known PENDING checks
+  # (scripts/legacy-rehearsal-synthetic-assert.mjs). About two minutes. Proves the importer
+  # and the harness on this commit; never evidence about the legacy archive.
+  legacy-rehearsal:
+    name: Legacy rehearsal (synthetic, MySQL 8.0)
+    needs: build
+    # Pinned: the step below downloads Ubuntu 24.04's own packages by name
+    # (mysql-server-core-8.0, libaio1t64, libprotobuf-lite32t64), which a later image
+    # renames or drops.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexa
+          POSTGRES_PASSWORD: nexa
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nexa -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+
+      # Unpacked, not installed: the image's own /usr/sbin/mysqld runs under an AppArmor
+      # profile that confines its data directory, and the harness starts a throwaway one on
+      # a scratch directory. The harness refuses a mysqld that is not MySQL 8.0.
+      - name: MySQL 8.0 binaries for the throwaway legacy engine
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          mkdir -p "$RUNNER_TEMP/mysql8/debs" "$RUNNER_TEMP/mysql8/bin"
+          cd "$RUNNER_TEMP/mysql8/debs"
+          apt-get download mysql-server-core-8.0 mysql-client-core-8.0 \
+            libevent-pthreads-2.1-7t64 libprotobuf-lite32t64 libaio1t64
+          for deb in ./*.deb; do dpkg -x "$deb" "$RUNNER_TEMP/mysql8/root"; done
+          ln -s "$RUNNER_TEMP/mysql8/root/usr/sbin/mysqld" "$RUNNER_TEMP/mysql8/bin/mysqld"
+          ln -s "$RUNNER_TEMP/mysql8/root/usr/bin/mysql" "$RUNNER_TEMP/mysql8/bin/mysql"
+          ln -s "$RUNNER_TEMP/mysql8/root/usr/bin/mysqladmin" "$RUNNER_TEMP/mysql8/bin/mysqladmin"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/mysql8/root/usr/lib/x86_64-linux-gnu" >>"$GITHUB_ENV"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/mysql8/root/usr/lib/x86_64-linux-gnu" \
+            "$RUNNER_TEMP/mysql8/bin/mysqld" --version
+
+      - name: Synthetic rehearsal, asserted
+        timeout-minutes: 15
+        env:
+          PGPASSWORD: nexa
+        run: >-
+          pnpm rehearsal:synthetic --engine mysql8 --mysql-bin-dir "$RUNNER_TEMP/mysql8/bin"
+          --pg-url postgres://nexa@127.0.0.1:5432 --out "$RUNNER_TEMP/rehearsal"
+
+      - name: Keep the rehearsal record
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: legacy-rehearsal-synthetic
+          path: |
+            ${{ runner.temp }}/rehearsal/summary.json
+            ${{ runner.temp }}/rehearsal/checks.tsv
+            ${{ runner.temp }}/rehearsal/durations.tsv
+            ${{ runner.temp }}/rehearsal/reconciliation.md
+            ${{ runner.temp }}/rehearsal/archive.json
+            ${{ runner.temp }}/rehearsal/logs/
+          if-no-files-found: warn
+          retention-days: 7
+
   # The name the single unit-and-integration job used to have, kept as one
   # result: it is green only when the unit suite, the web suite and EVERY
   # integration shard succeeded. `always()` so it reports a failure rather than
@@ -403,7 +516,7 @@ jobs:
   test:
     name: Unit and integration tests
     if: always()
-    needs: [unit, web, integration, legacy-mysql]
+    needs: [unit, web, integration, legacy-mysql, legacy-rehearsal]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -413,10 +526,11 @@ jobs:
           WEB: ${{ needs.web.result }}
           INTEGRATION: ${{ needs.integration.result }}
           LEGACY_MYSQL: ${{ needs.legacy-mysql.result }}
+          LEGACY_REHEARSAL: ${{ needs.legacy-rehearsal.result }}
         run: |
           set -euo pipefail
-          printf 'unit: %s\nweb: %s\nintegration (every shard): %s\nlegacy mysql: %s\n' "$UNIT" "$WEB" "$INTEGRATION" "$LEGACY_MYSQL"
-          [ "$UNIT" = "success" ] && [ "$WEB" = "success" ] && [ "$INTEGRATION" = "success" ] && [ "$LEGACY_MYSQL" = "success" ]
+          printf 'unit: %s\nweb: %s\nintegration (every shard): %s\nlegacy mysql: %s\nlegacy rehearsal: %s\n' "$UNIT" "$WEB" "$INTEGRATION" "$LEGACY_MYSQL" "$LEGACY_REHEARSAL"
+          [ "$UNIT" = "success" ] && [ "$WEB" = "success" ] && [ "$INTEGRATION" = "success" ] && [ "$LEGACY_MYSQL" = "success" ] && [ "$LEGACY_REHEARSAL" = "success" ]
 
   # The deployment logic, against fakes. Split from the live smoke below so the
   # two run side by side: together they were a 20-minute serial job, the

@@ -214,6 +214,7 @@ describe('WP15 provider safety: provenance, propagation and termination', () => 
       expire: 1_900_000_000,
       dataLimit: 1,
       usedTraffic: 7,
+      onlineAt: null,
       proxies: { vless: { id: 'somebody-elses' } },
       subToken: 'foreign00000001',
     };

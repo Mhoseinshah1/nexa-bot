@@ -7,8 +7,10 @@
 -- Run it against the RESTORED final dump, never the live MirzaBot server, as the
 -- SELECT-only account, inside a READ ONLY transaction (both walls of sql-evidence.md):
 --
---   mariadb --user=oldbot_ro --password --database=<restored schema> \
---           --batch --skip-column-names --safe-updates < scripts/legacy-rehearsal-source.sql
+--   mysql --user=oldbot_ro --password --database=<restored schema> \
+--         --batch --skip-column-names --safe-updates < scripts/legacy-rehearsal-source.sql
+--
+-- (MySQL 8.0 — the production engine — or MariaDB 10.11; the rehearsal runs it on both.)
 --
 -- Output: one `metric<TAB>value` line per figure. No `id`, username, phone,
 -- secret_code, config link or card is selected, and none may be added: this output goes
@@ -86,10 +88,14 @@ UNION ALL
 -- Live invoices whose `id_invoice` falls outside the evidenced key shape (OQ-P4-01): the
 -- map cannot record a decision for them, so a non-zero figure breaks the service closure
 -- and needs a forward migration decided from the archive, never a widened guess.
+-- Case-sensitive through utf8mb4_bin, NOT `BINARY … REGEXP`: MySQL 8's ICU regexp refuses
+-- a binary subject against a character-set pattern (ERROR 3995), and MySQL 8 is the
+-- production engine. Same answer on MariaDB 10.11 (both checked by the rehearsal).
 SELECT 'live_invoices_key_unmappable', CAST(COUNT(*) AS CHAR) FROM invoice
 WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume')
   AND (id_invoice IS NULL
-       OR NOT (BINARY CAST(id_invoice AS CHAR) REGEXP '^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$'))
+       OR NOT (CONVERT(id_invoice USING utf8mb4) COLLATE utf8mb4_bin
+               REGEXP '^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$'))
 UNION ALL
 SELECT 'live_real_orphan', CAST(COUNT(*) AS CHAR) FROM invoice i LEFT JOIN user u ON u.id = i.id_user
 WHERE i.Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume') AND i.is_test = 0
@@ -101,9 +107,11 @@ SELECT CONCAT('live_real_by_status:', Status), COUNT(*) FROM invoice
 WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume') AND is_test = 0
 GROUP BY Status ORDER BY Status;
 
-SELECT CONCAT('live_real_by_code_panel:', COALESCE(NULLIF(code_panel, ''), '<none>')), COUNT(*)
-FROM invoice
-WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume') AND is_test = 0
-GROUP BY COALESCE(NULLIF(code_panel, ''), '<none>') ORDER BY 1;
+-- Grouped by a derived column, not by the expression: MySQL 8's default ONLY_FULL_GROUP_BY
+-- refuses a SELECT expression it cannot prove equal to the GROUP BY one (ERROR 1055).
+SELECT CONCAT('live_real_by_code_panel:', code), COUNT(*)
+FROM (SELECT COALESCE(NULLIF(code_panel, ''), '<none>') AS code FROM invoice
+      WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume') AND is_test = 0) live
+GROUP BY code ORDER BY code;
 
 ROLLBACK;

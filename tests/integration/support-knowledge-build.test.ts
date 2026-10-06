@@ -186,6 +186,7 @@ describe('the knowledge build (TB9)', () => {
     const faqEntries = payload.knowledge.filter((k) => k.question === 'چطور وصل شوم؟');
     expect(faqEntries).toEqual([
       {
+        alias: expect.stringMatching(/^K[1-9]/u),
         source: 'KNOWLEDGE',
         question: 'چطور وصل شوم؟',
         answer: 'برنامه را باز کنید و لینک را وارد کنید.',

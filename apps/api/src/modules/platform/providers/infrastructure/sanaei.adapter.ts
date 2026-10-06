@@ -447,9 +447,13 @@ function usageFromClient(obj: unknown): ProviderUsage | null {
     usedBytes: BigInt(Math.trunc(up)) + BigInt(Math.trunc(down)),
     totalBytes,
     expiresAt,
-    // v3.7.0's client traffic record carries no last-connection timestamp. Null rather
-    // than a guess: `bot.service.detail` renders an "as of", and inventing one is how
-    // the legacy reports came to disagree with each other.
+    // NOT read, deliberately (C1). v3.7.0's `xray.ClientTraffic` at the pinned commit
+    // declares `lastOnline int64` (`internal/xray/client_traffic.go`, example value in
+    // epoch MILLISECONDS), and legacy MirzaBot read it as ms with 0 meaning never — but
+    // what writes it, in which unit, and whether `clients/traffic/:email` serves it has
+    // not been read off a real v3.7.0 panel. A field misread by a factor of 1000 is a
+    // fake time, so this stays UNSUPPORTED («در دسترس نیست») until the check in
+    // `docs/open-questions.md` OQ-LC-01 is run, and the fake is corrected with it.
     lastSeen: { kind: 'UNSUPPORTED' },
   };
 }

@@ -104,6 +104,15 @@ export interface BackupServiceDeps {
    * group knows where to look. It is a path on their own server, not a secret.
    */
   readonly retainedArchiveHint: string;
+  /**
+   * Whether the installation's condition of this code is open now (E5).
+   *
+   * Asked before a RECOVERY is recorded, because the recorder always inserts one:
+   * without the question every healthy run would add a "delivery is fine" row.
+   * Absent means "cannot tell", and nothing is closed — an open alert that stays
+   * open is recoverable, a closed one that should not be is not.
+   */
+  readonly conditionOpen?: (code: string) => Promise<boolean>;
 }
 
 /**
@@ -116,6 +125,10 @@ export interface BackupServiceDeps {
  * and one recovery when it is fixed.
  */
 const BACKUP_CONDITION_KEY = 'backup.run';
+/** The delivery condition's key: one for the installation, like the run's. */
+const DELIVERY_CONDITION_KEY = 'backup.delivery';
+/** The cleanup condition's key, shared with the debris sweep that also opens it. */
+const CLEANUP_CONDITION_KEY = 'backup.cleanup';
 
 export type BackupOutcome =
   | { readonly kind: 'BUSY'; readonly holder: BackupRunRow }
@@ -371,6 +384,8 @@ export class BackupService {
         recoversCode: 'backup.run_failed',
         recoversDedupeKey: BACKUP_CONDITION_KEY,
       });
+      await this.reportDelivery(id, deliveryState);
+      if (!cleanupOk) await this.reportCleanup(id, 'SUCCEEDED', leftovers.length);
 
       // Inside the `try`, so a rejection here is caught below and re-finished as
       // FAILED with a condition — the row does not stay RUNNING holding the
@@ -442,6 +457,7 @@ export class BackupService {
         ...(workspace === null ? [] : await workspace.discardAll()),
         ...this.deps.tools.leaked,
       ];
+      if (leftovers.length > 0) await this.reportCleanup(id, 'FAILED', leftovers.length);
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,
@@ -656,6 +672,79 @@ export class BackupService {
   }
 
   /**
+   * The off-host copy's own condition (E5).
+   *
+   * A run whose archive was verified and did not leave the host is a SUCCEEDED
+   * run — `backup.run_ok` is right about the backup — and, until this, nothing
+   * said that the copy an operator relies on for a dead server was not made.
+   * `OUTCOME_UNKNOWN` opens it too: nothing resends, so an unknown is a copy
+   * nobody can vouch for until somebody looks.
+   *
+   * Closed by a run that delivered, or that had no destination to deliver to —
+   * the latter is a configuration the status card already shows, not a failure.
+   */
+  private async reportDelivery(id: string, state: BackupDeliveryState): Promise<void> {
+    if (state === 'FAILED_DEFINITIVE' || state === 'OUTCOME_UNKNOWN') {
+      await this.report({
+        code: 'backup.delivery_failed',
+        severity: 'WARN',
+        message:
+          `Backup ${id} was verified and its archive did not leave this server ` +
+          `(delivery ${state}). It is retained here.`,
+        context: { backupId: id, delivery: state },
+        dedupeKey: DELIVERY_CONDITION_KEY,
+      });
+      return;
+    }
+    if (await this.isOpen('backup.delivery_failed')) {
+      await this.report({
+        code: 'backup.delivery_ok',
+        severity: 'INFO',
+        message: `Backup ${id} delivery ${state === 'SUCCEEDED' ? 'succeeded' : 'was not configured'}.`,
+        context: { backupId: id, delivery: state },
+        recoversCode: 'backup.delivery_failed',
+        recoversDedupeKey: DELIVERY_CONDITION_KEY,
+      });
+    }
+  }
+
+  /**
+   * A run left plaintext or a scratch database behind (E5).
+   *
+   * Until this, a log line and a column. The message carries a COUNT, never the
+   * paths: `message` is projected to the Telegram report group, and the paths
+   * name plaintext database dumps on this host. Closed by the debris sweep once
+   * the host is clean, not by the next run — a later run that cleaned up after
+   * itself says nothing about the files this one left.
+   */
+  private async reportCleanup(
+    id: string,
+    state: 'SUCCEEDED' | 'FAILED',
+    left: number,
+  ): Promise<void> {
+    await this.report({
+      code: 'backup.cleanup_failed',
+      severity: 'ERROR',
+      message: `Backup ${id} (${state}) left ${String(left)} artifact(s) on this host after cleanup.`,
+      context: { backupId: id, state, leftovers: left },
+      dedupeKey: CLEANUP_CONDITION_KEY,
+    });
+  }
+
+  private async isOpen(code: string): Promise<boolean> {
+    if (this.deps.conditionOpen === undefined) return false;
+    try {
+      return await this.deps.conditionOpen(code);
+    } catch (error) {
+      this.deps.logger.warn(
+        { code, reason: error instanceof Error ? error.message : String(error) },
+        'could not read whether a backup condition is open; leaving it as it is',
+      );
+      return false;
+    }
+  }
+
+  /**
    * Records a backup condition, if there is anybody to record it for.
    *
    * Never throws into the pipeline. A run that succeeded and could not be
@@ -666,7 +755,7 @@ export class BackupService {
    */
   private async report(event: {
     code: string;
-    severity: 'INFO' | 'ERROR';
+    severity: 'INFO' | 'WARN' | 'ERROR';
     message: string;
     context: Record<string, unknown>;
     dedupeKey?: string;

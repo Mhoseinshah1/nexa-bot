@@ -23,9 +23,14 @@ export class TbSupportContextSource implements SupportContextSource {
         `${payment.method} ${payment.amount.amountMinor} ${payment.amount.currency}`,
       );
     }
+    // Knowledge is cited apart from the facts (`knowledgeRefs`), and labelled by its question.
+    const knowledgeAliases = new Map<string, string>(
+      payload.knowledge.map((entry) => [entry.alias, entry.question]),
+    );
     return {
       json: JSON.stringify(payload),
       aliases,
+      knowledgeAliases,
       linked: payload.flags.identityLinked,
       flags: payload.flags,
     };

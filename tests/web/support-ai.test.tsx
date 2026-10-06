@@ -34,6 +34,78 @@ const CHAT_ID = '019400ab-cdef-7012-8345-6789abcdef01';
 const DRAFT_ID = '019460ab-cdef-7012-8345-6789abcdef01';
 const SECRET = 'sk-test-THIS-MUST-NEVER-RENDER-1234567890';
 
+/** A capability test whose model can be listed but rejects strict structured output. */
+const TEST_ANSWER = {
+  outcome: 'INVALID_OUTPUT',
+  code: 'openai.http_400',
+  failureClass: 'unsupported_capability',
+  latencyMs: 420,
+  checks: [
+    {
+      check: 'MODEL_ACCESS',
+      result: 'PASS',
+      outcome: 'OK',
+      failureClass: null,
+      code: null,
+      httpStatus: null,
+      providerErrorCode: null,
+      providerErrorType: null,
+      providerErrorParam: null,
+      issuePath: null,
+      issueCode: null,
+      latencyMs: 120,
+    },
+    {
+      check: 'STRUCTURED_GENERATION',
+      result: 'FAIL',
+      outcome: 'INVALID_OUTPUT',
+      failureClass: 'unsupported_capability',
+      code: 'openai.http_400',
+      httpStatus: 400,
+      providerErrorCode: null,
+      providerErrorType: 'invalid_request_error',
+      providerErrorParam: 'response_format',
+      issuePath: null,
+      issueCode: null,
+      latencyMs: 300,
+    },
+    ...(['DECISION_SCHEMA', 'VISION'] as const).map((check) => ({
+      check,
+      result: 'NOT_TESTED',
+      outcome: null,
+      failureClass: null,
+      code: null,
+      httpStatus: null,
+      providerErrorCode: null,
+      providerErrorType: null,
+      providerErrorParam: null,
+      issuePath: null,
+      issueCode: null,
+      latencyMs: null,
+    })),
+  ],
+};
+
+const diagnostic = (overrides: Record<string, unknown> = {}) => ({
+  failureClass: 'schema_invalid',
+  operation: null,
+  provider: null,
+  model: null,
+  attemptIndex: null,
+  outcome: null,
+  httpStatus: null,
+  providerErrorCode: null,
+  providerErrorType: null,
+  providerErrorParam: null,
+  issuePath: null,
+  issueCode: null,
+  latencyMs: null,
+  inputTokens: null,
+  outputTokens: null,
+  at: null,
+  ...overrides,
+});
+
 const credential = (overrides: Record<string, unknown> = {}) => ({
   provider: 'OPENAI',
   configured: true,
@@ -41,6 +113,7 @@ const credential = (overrides: Record<string, unknown> = {}) => ({
   region: null,
   trippedUntil: null,
   lastTestOutcome: 'OK',
+  lastTestFailureClass: null,
   lastTestedAt: '2026-10-01T09:05:00.000Z',
   // TB10: the provider's health, as the server derived it.
   breaker: 'CLOSED',
@@ -116,7 +189,7 @@ function settings(extra: Routes = [], mayAutoReply = false) {
     {
       url: '/test',
       method: 'POST',
-      body: { outcome: 'OK', code: null, latencyMs: 420 },
+      body: TEST_ANSWER,
     },
   ]);
   const view = renderPage(<SupportAiPage denied={false} mayAutoReply={mayAutoReply} />);
@@ -274,8 +347,23 @@ describe('the support AI settings page', () => {
     await waitFor(() => expect(calls(api, 'POST', '/credentials/OPENAI/test')).toHaveLength(1));
     expect(calls(api, 'POST', '/credentials/OPENAI/test')[0]!.body).toEqual({
       model: 'gpt-test-1',
+      idempotencyKey: expect.stringMatching(/^.{8,}$/u),
     });
     expect(await openai.findByText(new RegExp(t('web.sai_test_result')))).toBeTruthy();
+    // Program §11: every check, by name, with its own result — never one generic «OK».
+    const checks = openai.getByRole('list', { name: t('web.sai_test_check') });
+    expect(within(checks).getByText(new RegExp(t('web.sai_test_check_model_access')))).toBeTruthy();
+    const generation = checks.querySelector('[data-check="STRUCTURED_GENERATION"]')!;
+    expect(generation.getAttribute('data-result')).toBe('FAIL');
+    expect(generation.textContent).toContain(t('web.sai_failure_unsupported_capability'));
+    expect(generation.textContent).toContain('response_format');
+    expect(generation.textContent).toContain('400');
+    expect(checks.querySelector('[data-check="MODEL_ACCESS"]')!.textContent).toContain(
+      t('web.sai_test_result_pass'),
+    );
+    expect(checks.querySelector('[data-check="DECISION_SCHEMA"]')!.textContent).toContain(
+      t('web.sai_test_result_not_tested'),
+    );
     // No test for a provider with no key.
     const anthropic = await providerBlock('ANTHROPIC');
     expect(anthropic.queryByRole('button', { name: t('web.sai_test') })).toBeNull();
@@ -317,6 +405,8 @@ const draft = (overrides: Record<string, unknown> = {}) => ({
   imagesSeen: 0,
   imagesUnseen: 0,
   unseenImageHandoff: null,
+  failure: null,
+  replyOverLimit: false,
   ...overrides,
 });
 
@@ -412,6 +502,7 @@ describe('the Assist panel', () => {
         id: '019460ab-cdef-7012-8345-6789abcdef02',
         state: 'FAILED',
         failureCode: 'support_ai.no_usable_provider',
+        failure: diagnostic({ failureClass: 'no_provider' }),
         decision: null,
         topic: null,
         confidence: null,
@@ -425,7 +516,9 @@ describe('the Assist panel', () => {
     ]);
     const list = await screen.findByRole('list', { name: t('web.assist_drafts') });
     expect(within(list).getByText(t('web.assist_failed'))).toBeTruthy();
+    // The internal code is not shown; the reason is, in words (program §12).
     expect(list.textContent).not.toContain('support_ai.no_usable_provider');
+    expect(list.textContent).toContain(t('web.sai_failure_no_provider'));
     expect(within(list).getByText(t('web.assist_state_sent'))).toBeTruthy();
     expect(within(list).getByText(t('web.assist_state_discarded'))).toBeTruthy();
     // Nothing editable and nothing to send for a draft that is not READY.
@@ -463,6 +556,82 @@ describe('the Assist panel', () => {
   });
 });
 
+describe('the Assist panel says why the AI produced no draft (program §12)', () => {
+  it('shows the class and the deciding call’s safe particulars, never a prompt or reply', async () => {
+    assist([
+      draft({
+        state: 'FAILED',
+        failureCode: 'chain.openai.http_400',
+        failure: diagnostic({
+          failureClass: 'unsupported_capability',
+          operation: 'ASSIST_DRAFT',
+          provider: 'OPENAI',
+          model: 'gpt-test-1',
+          attemptIndex: 0,
+          outcome: 'INVALID_OUTPUT',
+          httpStatus: 400,
+          providerErrorType: 'invalid_request_error',
+          providerErrorParam: 'response_format',
+          latencyMs: 812,
+          at: '2026-10-01T10:10:05.000Z',
+        }),
+        decision: null,
+        topic: null,
+        confidence: null,
+        summary: null,
+        intent: null,
+        suggestedReply: null,
+        factLabels: [],
+      }),
+    ]);
+    const list = await screen.findByRole('list', { name: t('web.assist_drafts') });
+    const failure = list.querySelector('[data-failure-class]')!;
+    expect(failure.getAttribute('data-failure-class')).toBe('unsupported_capability');
+    expect(failure.textContent).toContain(t('web.sai_failure_unsupported_capability'));
+    expect(failure.textContent).toContain('response_format');
+    expect(failure.textContent).toContain('invalid_request_error');
+    expect(list.textContent).not.toContain('chain.openai.http_400');
+  });
+
+  it('names the decision field that failed NEXA’s schema', async () => {
+    assist([
+      draft({
+        state: 'FAILED',
+        failureCode: 'decision.invalid',
+        failure: diagnostic({
+          failureClass: 'schema_invalid',
+          issuePath: 'factRefs.0',
+          issueCode: 'invalid_format',
+        }),
+        suggestedReply: null,
+      }),
+    ]);
+    const list = await screen.findByRole('list', { name: t('web.assist_drafts') });
+    expect(list.textContent).toContain(t('web.sai_failure_schema_invalid'));
+    expect(list.textContent).toContain('factRefs.0 (invalid_format)');
+  });
+
+  // Agent audit D10: an over-long Assist draft is shown, with a warning, not thrown away.
+  it('shows an over-long draft with a warning, still editable', async () => {
+    assist([draft({ replyOverLimit: true })]);
+    expect(await screen.findByText(t('web.assist_reply_over_limit'))).toBeTruthy();
+    expect(screen.getByLabelText(t('web.assist_reply_label'))).toBeTruthy();
+  });
+
+  it('shows what images the model saw, and the fail-closed image handoff', async () => {
+    assist([
+      draft({
+        imagesSeen: 1,
+        imagesUnseen: 2,
+        decision: 'HANDOFF',
+        unseenImageHandoff: 'TOO_LARGE',
+      }),
+    ]);
+    expect(await screen.findByText(t('web.assist_unseen_image_handoff'))).toBeTruthy();
+    expect(screen.getByText(t('web.assist_images'))).toBeTruthy();
+  });
+});
+
 // PR #200 review, finding 6: the server fails a draft nothing claimed; the screen's wait is
 // bounded by the same number, so it neither polls for ever nor keeps re-request disabled.
 describe('the Assist panel and a draft nothing claims', () => {
@@ -490,6 +659,8 @@ describe('the Assist panel and a draft nothing claims', () => {
     assist([draft({ state: 'FAILED', failureCode: 'job.unclaimed', suggestedReply: null })]);
     expect(await screen.findByText(t('web.assist_failed'))).toBeTruthy();
     expect(screen.queryByText('job.unclaimed')).toBeNull();
+    // Agent audit D4: «the assistant is not running» is told apart from a provider failure.
+    expect(screen.getByText(t('web.assist_failed_unclaimed'))).toBeTruthy();
     expect(
       (screen.getByRole('button', { name: t('web.assist_request') }) as HTMLButtonElement).disabled,
     ).toBe(false);

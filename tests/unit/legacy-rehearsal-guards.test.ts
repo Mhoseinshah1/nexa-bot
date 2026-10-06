@@ -18,6 +18,8 @@ const SCRIPT = join(__dirname, '../../scripts/legacy-rehearsal.sh');
 let dir: string;
 let dump: string;
 let fixtureDump: string;
+let archive: string;
+let fixtureArchive: string;
 let panelMap: string;
 let nexaEnv: string;
 
@@ -28,6 +30,10 @@ beforeAll(() => {
   mkdirSync(join(dir, 'tests/fixtures/legacy'), { recursive: true });
   fixtureDump = join(dir, 'tests/fixtures/legacy/synthetic.sql');
   writeFileSync(fixtureDump, '-- synthetic\n');
+  archive = join(dir, 'backup_2026-01-01.zip');
+  writeFileSync(archive, 'PK\u0003\u0004');
+  fixtureArchive = join(dir, 'tests/fixtures/legacy/backup_2026-01-01.zip');
+  writeFileSync(fixtureArchive, 'PK\u0003\u0004');
   panelMap = join(dir, 'panel-map.json');
   writeFileSync(panelMap, '{}\n');
   nexaEnv = join(dir, 'nexa.env');
@@ -183,6 +189,80 @@ describe('legacy-rehearsal.sh guards', () => {
     const { status, output } = run({ '--out': dir }, ['--check-only']);
     expect(status).toBe(1);
     expect(output).toContain('already exists');
+  });
+
+  describe('WP-D1b: the legacy archive and the legacy engine', () => {
+    const zip = (extra: Record<string, string | null> = {}) => ({
+      '--legacy-dump': null,
+      '--legacy-archive': archive,
+      ...extra,
+    });
+
+    it('takes a MirzaBot zip instead of a dump, with its password in the environment', () => {
+      const { status, output } = run(
+        zip(),
+        ['--check-only', '--legacy-archive-password-env', 'LEGACY_ZIP_PASSWORD'],
+        { LEGACY_ZIP_PASSWORD: 'zip-secret-for-the-test' },
+      );
+      expect(status).toBe(0);
+      expect(output).toContain('--legacy-archive; inspected, then loaded into a throwaway mariadb');
+      expect(output).not.toContain('zip-secret-for-the-test');
+    });
+
+    it('refuses both, and neither, of --legacy-dump and --legacy-archive', () => {
+      const both = run({ '--legacy-archive': archive }, ['--check-only']);
+      expect(both.status).toBe(1);
+      expect(both.output).toContain('--legacy-dump OR --legacy-archive, not both');
+      const neither = run({ '--legacy-dump': null }, ['--check-only']);
+      expect(neither.status).toBe(1);
+      expect(neither.output).toContain('--legacy-dump PATH or --legacy-archive PATH is required');
+    });
+
+    it('refuses a password on argv in any spelling, without echoing it', () => {
+      for (const extra of [
+        ['--legacy-archive-password', 'hunter2-argv'],
+        ['--legacy-archive-password=hunter2-argv'],
+        ['--password', 'hunter2-argv'],
+      ]) {
+        const { status, output } = run(zip(), ['--check-only', ...extra]);
+        expect(status).toBe(1);
+        expect(output).toContain('never accepted on the command line');
+        expect(output).not.toContain('hunter2-argv');
+      }
+    });
+
+    it('refuses an unset password variable, a malformed name, and one beside a plain dump', () => {
+      const unset = run(zip(), ['--check-only', '--legacy-archive-password-env', 'NO_SUCH_VAR']);
+      expect(unset.status).toBe(1);
+      expect(unset.output).toContain('NO_SUCH_VAR: that environment variable is not set');
+      const bad = run(zip(), ['--check-only', '--legacy-archive-password-env', 'lower-case']);
+      expect(bad.status).toBe(1);
+      expect(bad.output).toContain('must name an environment variable');
+      const dumpToo = run({}, ['--check-only', '--legacy-archive-password-env', 'HOME']);
+      expect(dumpToo.status).toBe(1);
+      expect(dumpToo.output).toContain('a plain dump carries no password');
+    });
+
+    it('refuses to call a fixture ARCHIVE staging evidence', () => {
+      const { status, output } = run(zip({ '--legacy-archive': fixtureArchive }), ['--check-only']);
+      expect(status).toBe(1);
+      expect(output).toContain('SYNTHETIC data');
+      expect(
+        run(zip({ '--legacy-archive': fixtureArchive, '--evidence-class': 'synthetic' }), [
+          '--check-only',
+        ]).status,
+      ).toBe(0);
+    });
+
+    it('takes mariadb or mysql8 and nothing else; --mysql-bin-dir is for mysql8', () => {
+      expect(run({}, ['--check-only', '--legacy-engine', 'mysql8']).status).toBe(0);
+      const odd = run({}, ['--check-only', '--legacy-engine', 'mysql5']);
+      expect(odd.status).toBe(1);
+      expect(odd.output).toContain('--legacy-engine must be mariadb or mysql8');
+      const binDir = run({}, ['--check-only', '--mysql-bin-dir', dir]);
+      expect(binDir.status).toBe(1);
+      expect(binDir.output).toContain('--mysql-bin-dir is for --legacy-engine mysql8');
+    });
   });
 
   it('fails precisely, before touching anything, when the P7 CLI is absent', () => {

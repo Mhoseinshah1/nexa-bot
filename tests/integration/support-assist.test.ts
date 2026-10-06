@@ -24,7 +24,10 @@ import {
 } from '../../apps/api/src/modules/control/support-ai/application/assistant-loop';
 import { BUSINESS_CHAT_ERROR_CODES } from '../../apps/api/src/modules/commerce/business-chats/application/business-conversation.service';
 import { DrizzleSupportAiJobRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository';
-import { DrizzleSupportAiConfigRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
+import {
+  DrizzleSupportAiConfigRepository,
+  DrizzleSupportAiRunRecorder,
+} from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
 import {
   DrizzleBusinessConversationRepository,
   DrizzleBusinessMessageRepository,
@@ -122,6 +125,7 @@ describe('Assist Mode (TB5)', () => {
     build = (overrides = {}) =>
       new SupportAssistService({
         jobs,
+        runs: new DrizzleSupportAiRunRecorder(c.database.db),
         configs: new DrizzleSupportAiConfigRepository(c.database.db),
         chain: {
           generate: async (_scope, input) => {
@@ -272,23 +276,112 @@ describe('Assist Mode (TB5)', () => {
     });
   });
 
-  // Shapes no database CHECK would refuse: only the decision schema and the reply bound do.
-  it('records an over-long reply, or a decision with an extra key, as FAILED', async () => {
-    for (const output of [
-      { ...valid, replyText: 'ب'.repeat(SUPPORT_AI_DEFAULT_CONFIG.maxOutputChars + 1) },
-      { ...valid, refund: true },
-    ]) {
-      next = { outcome: 'OK', output, usage: { inputTokens: 1, outputTokens: 1 }, model: 'm' };
-      const job = await service.request(scopeA, operator, {
-        conversationId,
-        idempotencyKey: key('draft'),
-      });
-      await loop.tick();
-      expect(await jobs.findById(scopeA, job.id)).toMatchObject({
-        state: 'FAILED',
-        failureCode: 'decision.invalid',
-      });
-    }
+  // Shapes no database CHECK would refuse: only the decision schema does.
+  it('records a decision with an extra key as FAILED, with its class', async () => {
+    next = {
+      outcome: 'OK',
+      output: { ...valid, refund: true },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
+    await loop.tick();
+    expect(await jobs.findById(scopeA, job.id)).toMatchObject({
+      state: 'FAILED',
+      failureCode: 'decision.invalid',
+      failureClass: 'schema_invalid',
+    });
+  });
+
+  // Agent audit D10: a person edits an Assist draft before sending it, so a reply over the
+  // tenant's limit is SHOWN with a warning, not thrown away. (Auto Reply still refuses it.)
+  it('keeps an over-long reply as a READY draft, marked over the limit', async () => {
+    const long = 'ب'.repeat(SUPPORT_AI_DEFAULT_CONFIG.maxOutputChars + 1);
+    next = {
+      outcome: 'OK',
+      output: { ...valid, replyText: long },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
+    await loop.tick();
+    expect(await jobs.findById(scopeA, job.id)).toMatchObject({
+      state: 'READY',
+      suggestedReply: long,
+      failureClass: null,
+    });
+    const [shown] = await service.drafts(scopeA, operator, conversationId);
+    expect(shown).toMatchObject({ id: job.id, replyOverLimit: true, failure: null });
+  });
+
+  // Regression: a correct answer whose operator-only intent ran long, or that cited knowledge
+  // the only way it could before knowledge had aliases, was thrown away whole.
+  it('keeps a correct answer with an over-long intent or a non-alias knowledge citation', async () => {
+    next = {
+      outcome: 'OK',
+      output: {
+        ...valid,
+        intent: 'مشتری می‌گوید سرویس وصل نمی‌شود و ' + 'ا'.repeat(150),
+        knowledgeRefs: ['FAQ'],
+        factRefs: ['S1', 'سرویس'],
+      },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
+    await loop.tick();
+    const ready = await jobs.findById(scopeA, job.id);
+    expect(ready).toMatchObject({ state: 'READY', factLabels: ['سرویس user123'] });
+    expect(ready?.intent?.length).toBe(120);
+  });
+
+  it('labels a knowledge citation by the entry’s question', async () => {
+    service = build({
+      context: {
+        build: async () => ({
+          json: '{}',
+          aliases: new Map([['S1', 'سرویس user123']]),
+          knowledgeAliases: new Map([['K1', 'سرویس وصل نمی‌شود']]),
+          linked: true,
+          flags: {
+            identityLinked: true,
+            customerBlocked: false,
+            hasUnderReviewPayment: false,
+            hasUnreconciledService: false,
+          },
+        }),
+      },
+    });
+    loop = new AssistantLoop(service, {
+      scope: () => scopeA,
+      intervalMs: 1000,
+      now: () => ctx.container.clock.now(),
+      logger: ctx.container.logger,
+    });
+    next = {
+      outcome: 'OK',
+      output: { ...valid, factRefs: ['S1'], knowledgeRefs: ['K1', 'K9'] },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
+    await loop.tick();
+    expect((await jobs.findById(scopeA, job.id))?.factLabels).toEqual([
+      'سرویس user123',
+      'سرویس وصل نمی‌شود',
+    ]);
   });
 
   it('records a chain failure as FAILED', async () => {
@@ -298,7 +391,100 @@ describe('Assist Mode (TB5)', () => {
       idempotencyKey: key('draft'),
     });
     await loop.tick();
-    expect((await jobs.findById(scopeA, job.id))?.state).toBe('FAILED');
+    expect(await jobs.findById(scopeA, job.id)).toMatchObject({
+      state: 'FAILED',
+      failureCode: 'chain.openai.refusal',
+      failureClass: 'refused',
+    });
+  });
+
+  // Program §12: an operator reads WHY a draft failed — the class and the deciding call.
+  it('shows a failed draft’s class and the deciding call’s safe telemetry', async () => {
+    const runs = new DrizzleSupportAiRunRecorder(ctx.container.database.db);
+    next = {
+      outcome: 'INVALID_OUTPUT',
+      code: 'openai.http_400',
+      detail: {
+        failureClass: 'unsupported_capability',
+        httpStatus: 400,
+        providerErrorCode: null,
+        providerErrorType: 'invalid_request_error',
+        providerErrorParam: 'response_format',
+      },
+    };
+    duringCall = async () => {
+      // What the real chain records for this call (its own unit test pins that it does).
+      const [queued] = await jobs.recentForConversation(scopeA, conversationId, 1);
+      await runs.record(scopeA, {
+        id: ctx.container.ids.uuid(),
+        conversationId,
+        jobId: queued!.id,
+        operation: 'ASSIST_DRAFT',
+        provider: 'OPENAI',
+        model: 'gpt-5.5',
+        attemptIndex: 0,
+        latencyMs: 640,
+        inputTokens: null,
+        outputTokens: null,
+        outcome: 'INVALID_OUTPUT',
+        failureCode: 'openai.http_400',
+        failure: next.outcome === 'OK' ? null : (next.detail ?? null),
+        now: new Date(),
+      });
+    };
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
+    await loop.tick();
+    const [shown] = await service.drafts(scopeA, operator, conversationId);
+    expect(shown).toMatchObject({
+      id: job.id,
+      state: 'FAILED',
+      failureClass: 'unsupported_capability',
+      failure: {
+        failureClass: 'unsupported_capability',
+        operation: 'ASSIST_DRAFT',
+        provider: 'OPENAI',
+        model: 'gpt-5.5',
+        attemptIndex: 0,
+        httpStatus: 400,
+        providerErrorType: 'invalid_request_error',
+        providerErrorParam: 'response_format',
+        latencyMs: 640,
+      },
+    });
+  });
+
+  it('a chain with nothing to call fails the draft as no_provider', async () => {
+    service = build({
+      chain: {
+        generate: async () => ({
+          outcome: { outcome: 'TEMPORARY', code: 'support_ai.no_usable_provider' },
+          step: null,
+          attempts: 0,
+          exhausted: 'NO_USABLE_PROVIDER',
+          imagesSent: 0,
+          sight: { seen: [], unseen: new Map() },
+        }),
+        visionStepConfigured: () => false,
+      },
+    });
+    loop = new AssistantLoop(service, {
+      scope: () => scopeA,
+      intervalMs: 1000,
+      now: () => ctx.container.clock.now(),
+      logger: ctx.container.logger,
+    });
+    const job = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('draft'),
+    });
+    await loop.tick();
+    expect(await jobs.findById(scopeA, job.id)).toMatchObject({
+      state: 'FAILED',
+      failureClass: 'no_provider',
+    });
   });
 
   it('sends a draft only by the operator, edited, through the lane — and that takes the conversation', async () => {

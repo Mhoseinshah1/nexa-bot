@@ -5,7 +5,7 @@ import type {
   ProviderTarget,
   ProviderUsage,
 } from '@nexa/contracts';
-import { readRecordUsage } from './provider-numbers.js';
+import { RICKPANEL_USAGE, readRecordUsage } from './provider-numbers.js';
 import {
   TOKEN_PATH,
   USER_PATH,
@@ -292,7 +292,7 @@ function accountFrom(record: Record<string, unknown>): RickpanelInventoryAccount
     status !== 'UNKNOWN'
       ? (status as RickpanelAccountState)
       : 'UNKNOWN';
-  const usage = readRecordUsage(record);
+  const usage = readRecordUsage(record, RICKPANEL_USAGE);
   return {
     username,
     providerUsername: raw,

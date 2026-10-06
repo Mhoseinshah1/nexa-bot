@@ -11,7 +11,11 @@ import { sha256Hex } from './source-snapshot.js';
  *
  * - no inbound id (the matcher never reads one, and the strict schema refuses the key);
  * - no pattern, prefix or "default" panel;
- * - a code is in AT MOST one of `panels`, `testPanels`, `missingPanels`;
+ * - a code is in AT MOST one of `panels`, `testPanels`, `missingPanels`, `unresolvedPanels`;
+ * - a code nobody has decided yet is DECLARED, with a closed reason, in `unresolvedPanels`
+ *   (WP-D2): its invoices stay `PANEL_UNMAPPED` manual review exactly as before, but the
+ *   audit can now tell "the owner knows and has deferred it" from "the map forgot it" —
+ *   and an audit with a forgotten code is BLOCKED (`panelMappingCompleteness`);
  * - every panel it names is checked against the tenant's panels before any run — it
  *   exists, in THIS tenant, is a RickPanel, is ACTIVE and not archived — and every mapped
  *   panel is also a production panel (the set a missing `code_panel` is searched across).
@@ -22,6 +26,21 @@ import { sha256Hex } from './source-snapshot.js';
  */
 
 export const PANEL_MAPPING_FORMAT = 'nexa-legacy-panel-map/v1';
+
+/**
+ * Why a live `code_panel` is deliberately left unresolved. Closed: a free-text reason is
+ * where a guess would hide. None of them maps, searches or skips anything — every invoice
+ * on such a code stays `PANEL_UNMAPPED` manual review.
+ */
+export const UNRESOLVED_PANEL_REASONS = [
+  /** The owner has seen the code and will decide after the evidence (G10). */
+  'OWNER_DECIDES_LATER',
+  /** A panel that no longer exists; its accounts are reviewed one by one. */
+  'DECOMMISSIONED_PANEL',
+  /** Nobody can say which machine the code named. */
+  'UNKNOWN_ORIGIN',
+] as const;
+export type UnresolvedPanelReason = (typeof UNRESOLVED_PANEL_REASONS)[number];
 
 const codePanel = z
   .string()
@@ -42,6 +61,14 @@ const mappingSchema = z
     panels: z.array(z.object({ codePanel, panelId: uuid }).strict()),
     testPanels: z.array(codePanel),
     missingPanels: z.array(codePanel),
+    /**
+     * WP-D2: codes deliberately left unresolved. Optional, and part of the fingerprint only
+     * when non-empty — so every map written before it keeps its fingerprint, and an
+     * approval bound to one still holds.
+     */
+    unresolvedPanels: z
+      .array(z.object({ codePanel, reason: z.enum(UNRESOLVED_PANEL_REASONS) }).strict())
+      .optional(),
     productionPanels: z.array(uuid).min(1),
     /**
      * P6 ask 2: the owner's explicit map from a legacy `code_product` to the NEXA product
@@ -75,6 +102,8 @@ export interface PanelMapping {
   readonly policy: LegacyPanelPolicy;
   /** Legacy `code_product` → NEXA product id, exactly as the owner listed it. */
   readonly products: ReadonlyMap<string, string>;
+  /** Codes declared unresolved, with their reason. NOT in `policy`: they match nothing. */
+  readonly unresolved: ReadonlyMap<string, UnresolvedPanelReason>;
 }
 
 export class PanelMappingRefused extends Error {
@@ -86,6 +115,7 @@ export class PanelMappingRefused extends Error {
 /** The canonical content the fingerprint is taken over. */
 export function canonicalPanelMapping(file: PanelMappingFile): string {
   const sorted = (xs: readonly string[]) => [...xs].sort();
+  const unresolved = file.unresolvedPanels ?? [];
   return JSON.stringify({
     format: file.format,
     tenantId: file.tenantId,
@@ -98,6 +128,15 @@ export function canonicalPanelMapping(file: PanelMappingFile): string {
     products: [...file.products]
       .map((p) => [p.codeProduct, p.productId])
       .sort((a, b) => ((a[0] as string) < (b[0] as string) ? -1 : 1)),
+    // Last, and only when there is one: a v1 map without it canonicalises byte for byte
+    // as it did before the key existed.
+    ...(unresolved.length === 0
+      ? {}
+      : {
+          unresolvedPanels: unresolved
+            .map((p) => [p.codePanel, p.reason])
+            .sort((a, b) => ((a[0] as string) < (b[0] as string) ? -1 : 1)),
+        }),
   });
 }
 
@@ -135,6 +174,7 @@ export function parsePanelMapping(text: string, tenantId: string): PanelMapping 
   for (const p of file.panels) claim(p.codePanel, 'panels');
   for (const c of file.testPanels) claim(c, 'testPanels');
   for (const c of file.missingPanels) claim(c, 'missingPanels');
+  for (const u of file.unresolvedPanels ?? []) claim(u.codePanel, 'unresolvedPanels');
 
   const production = new Set(file.productionPanels);
   if (production.size !== file.productionPanels.length) {
@@ -166,6 +206,7 @@ export function parsePanelMapping(text: string, tenantId: string): PanelMapping 
       productionPanelIds: [...production].sort(),
     },
     products: new Map(file.products.map((p) => [p.codeProduct, p.productId])),
+    unresolved: new Map((file.unresolvedPanels ?? []).map((u) => [u.codePanel, u.reason])),
   };
 }
 
@@ -234,6 +275,78 @@ export function unmappedCodePanels(
 
 /** The report key that counts source `code_panel` values no mapping file could name. */
 export const INVALID_CODE_PANEL_KEY = '(invalid code_panel)';
+
+/**
+ * WP-D2 — is every live panel code accounted for? (`production-gate.md` G10.)
+ *
+ * - `unmapped`: live REAL invoices' codes in no list at all, with counts. Non-empty
+ *   blocks the audit: a code the map forgot is indistinguishable from one it means to
+ *   import, and its invoices would land in review with nobody having decided anything.
+ * - `declaredUnresolved`: live real invoices on codes the owner deliberately deferred, by
+ *   code, with the reason. Counted, NOT blocking.
+ * - `stale`: codes the map names (any list) that no live invoice carries — a typo or a
+ *   panel retired since the map was written. Reported, not blocking.
+ * - `productionPanelsUnreferenced`: production panels no `panels` entry with a live real
+ *   invoice points at. Reported: such a panel may still serve the missing-panel search.
+ */
+export interface PanelMappingCompleteness {
+  readonly complete: boolean;
+  readonly unmapped: Readonly<Record<string, number>>;
+  readonly declaredUnresolved: Readonly<
+    Record<string, { readonly reason: UnresolvedPanelReason; readonly liveRealInvoices: number }>
+  >;
+  readonly stale: readonly string[];
+  readonly productionPanelsUnreferenced: readonly string[];
+}
+
+export function panelMappingCompleteness(
+  liveInvoices: readonly { readonly codePanel: string | null; readonly isTest: string | null }[],
+  mapping: PanelMapping,
+): PanelMappingCompleteness {
+  const real = liveInvoices.filter((i) => i.isTest?.trim() === '0');
+  const realCodes = real.map((i) => i.codePanel);
+  const unmappedAll = unmappedCodePanels(realCodes, mapping);
+  const unmapped: Record<string, number> = {};
+  const declared: Record<string, { reason: UnresolvedPanelReason; liveRealInvoices: number }> = {};
+  for (const [code, n] of [...unmappedAll].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    const reason = mapping.unresolved.get(code);
+    if (reason === undefined) unmapped[code] = n;
+    else declared[code] = { reason, liveRealInvoices: n };
+  }
+  for (const [code, reason] of mapping.unresolved) {
+    declared[code] ??= { reason, liveRealInvoices: 0 };
+  }
+  // A live value no file could name is present under its placeholder, as `unmapped` keys it.
+  const liveCodes = new Set(
+    liveInvoices
+      .map((i) => i.codePanel?.trim() ?? '')
+      .filter(Boolean)
+      .map((c) => (codePanel.safeParse(c).success ? c : INVALID_CODE_PANEL_KEY)),
+  );
+  const named = [
+    ...mapping.file.panels.map((p) => p.codePanel),
+    ...mapping.file.testPanels,
+    ...mapping.file.missingPanels,
+    ...mapping.unresolved.keys(),
+  ];
+  const stale = [...new Set(named.filter((c) => !liveCodes.has(c)))].sort();
+  const realCodeSet = new Set(realCodes.map((c) => c?.trim() ?? '').filter(Boolean));
+  const referenced = new Set(
+    mapping.file.panels.filter((p) => realCodeSet.has(p.codePanel)).map((p) => p.panelId),
+  );
+  const productionPanelsUnreferenced = mapping.policy.productionPanelIds.filter(
+    (id) => !referenced.has(id),
+  );
+  return {
+    complete: Object.keys(unmapped).length === 0,
+    unmapped,
+    declaredUnresolved: Object.fromEntries(
+      Object.entries(declared).sort(([a], [b]) => (a < b ? -1 : 1)),
+    ),
+    stale,
+    productionPanelsUnreferenced,
+  };
+}
 
 /**
  * Every product the file maps a legacy `code_product` to must be a product of THIS tenant.

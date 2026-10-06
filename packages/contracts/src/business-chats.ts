@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { supportAiFailureDiagnosticSchema } from './support-ai.js';
 
 /**
  * TB1 — Telegram Business connections and the classification of a business message.
@@ -498,6 +499,12 @@ export const businessEscalationViewSchema = z.object({
   ticketId: z.string().nullable(),
   ticketOutcome: z.enum(BUSINESS_ESCALATION_TICKET_OUTCOMES),
   createdAt: z.string(),
+  /**
+   * When an automatic job handed off because the AI failed (`AI_OUTPUT_INVALID`,
+   * `AI_UNAVAILABLE`), WHY — the job's failure class and the deciding provider call's safe
+   * telemetry. Null for every other handoff. The customer was told nothing different.
+   */
+  aiFailure: supportAiFailureDiagnosticSchema.nullable(),
 });
 export type BusinessEscalationView = z.infer<typeof businessEscalationViewSchema>;
 

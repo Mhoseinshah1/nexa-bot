@@ -266,6 +266,18 @@ a provider for a write only through a `provisioning_operations` row, so:
   and after the import window agrees within the drift a live panel allows, and no account's
   expiry, limit or status changed because of NEXA. P7 `reconcile` reports the per-panel
   comparison; spot-check two adopted accounts by hand in the panel UI.
+  **Machine check (WP-D4):** the rehearsal walks every `productionPanels` panel through the
+  importer's own read-only inventory port before the audit and after the resume
+  (`tests/support/legacy-rehearsal-panel-state.ts`) and records `panel_state_unchanged`:
+  per panel, the account count and a hash over every account's admin-controlled facts —
+  lower(username), data limit, expiry, sha256 of the subscription link — must be equal;
+  added / removed / changed accounts are counted on failure. State and used bytes move on
+  a live panel by themselves, so they are hashed separately and never compared. Nothing
+  under `--out` names an account: per-account digests are HMACs under a per-run key that
+  is deleted on exit. **Not detected:** a `sub_updated_at` bump that leaves the link
+  unchanged (the read-only inventory does not expose the field), and on staging any write
+  MirzaBot itself makes during the window — run it frozen (cutover step 7), or read the
+  counts. Also `panel_state_walk_reads_only`: the walk's guard refused no write.
 
 Also: `delta(customer_notifications) = 0` — the import sends no customer message;
 reminder thresholds already passed are **seeded**, not sent (Item 8,
@@ -285,6 +297,22 @@ burst (cutover runbook, observation step).
 - `delta(trial_grants) = 0` — no migrated customer was given a trial by the import.
 
 ## Result table (filled per run; aggregates only)
+
+**Generated, not transcribed (WP-D5).** `scripts/legacy-rehearsal-reconciliation.mjs`
+turns a rehearsal's `summary.json` into this table — each equation with the harness checks
+that evidence it and a state: `HOLDS` (every mapped check PASSED in every cycle), `FAILS`
+(naming the failed checks), `PENDING` (an owner decision, never a pass) or `MISSING` (a
+mapped check was never recorded). The harness writes it to `--out/reconciliation.md` at the
+end of every run; paste the staging run's states here as their own commit. R3 and P4 also
+carry a manual half, marked NOT RUN until a person has done it. Since WP-D5 every equation
+has a machine check: C2 `customers_created_le_imported`; W8
+`fractional_balances_never_imported` (a fractional balance is held for review, never
+rounded) plus `legacy_balance_{fractional,null}_users` (PENDING when non-zero: the owner
+decides the population); R3 `revenue_view_standard_unchanged`,
+`revenue_view_adoption_zero`, `wallet_window_openings_only`; S2 is recorded as a PASS when
+zero; S4 `orphans_in_customer_missing` (exact: the legacy orphans are compared invoice by
+invoice with the CUSTOMER_MISSING review rows, in the throwaway engine's scratch schema);
+§5's `delta(trial_grants) = 0` as `no_trial_grants`.
 
 | equation | staging rehearsal | production | notes |
 | -------- | ----------------- | ---------- | ----- |
