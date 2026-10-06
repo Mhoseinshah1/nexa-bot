@@ -220,7 +220,9 @@ describe('recovery and backup failure drills (E4)', () => {
       await maintenance(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`).catch(() => undefined);
     }
     for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
-  });
+    // DROP ... WITH (FORCE) waits for the cluster's other sessions; on a loaded
+    // shared cluster that has exceeded the default 60 s hook budget.
+  }, 300_000);
 
   // ---------------------------------------------------------------------------
   // Backup while a recovery quiesces
