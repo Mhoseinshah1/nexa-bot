@@ -404,6 +404,17 @@ export interface BusinessMessageRepository {
     input: { readonly conversationId: string; readonly messageId: string },
   ): Promise<BusinessPhotoReference | null>;
 
+  /**
+   * D8: one message of a conversation by its row id, read by the tenant, the conversation AND
+   * the id together — another conversation's or tenant's message is null.
+   */
+  findById(
+    scope: ScopeContext,
+    conversationId: string,
+    id: string,
+    tx?: unknown,
+  ): Promise<BusinessMessageRecord | null>;
+
   /** TB7: one message of a conversation by Telegram's id (the AUTO job's trigger). */
   findByTelegramId(
     scope: ScopeContext,

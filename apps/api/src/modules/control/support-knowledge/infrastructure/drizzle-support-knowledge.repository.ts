@@ -81,11 +81,17 @@ export interface KnowledgeRevisionRecord {
   readonly createdAt: Date;
 }
 
-export interface LearningSourceRef {
+/**
+ * One reply a lesson was proposed from: a delivered outbound row (`outboundId`), or — D8 — a
+ * message the business owner typed in the Telegram app (`messageId`). Exactly one of the two.
+ */
+export type LearningSourceRef = {
   readonly conversationId: string;
-  readonly outboundId: string;
   readonly at: string;
-}
+} & (
+  | { readonly outboundId: string; readonly messageId?: undefined }
+  | { readonly messageId: string; readonly outboundId?: undefined }
+);
 
 export interface LearningCandidateRecord {
   readonly id: string;
@@ -101,7 +107,9 @@ export interface LearningCandidateRecord {
   readonly rejectReason: SupportLearningRejectReason | null;
   readonly sensitiveKinds: readonly SupportLearningSensitiveKind[];
   readonly conversationId: string;
-  readonly sourceOutboundId: string;
+  readonly sourceOutboundId: string | null;
+  /** D8: the first source when it was a message the owner typed. */
+  readonly sourceMessageId: string | null;
   readonly sourceRefs: readonly LearningSourceRef[];
   readonly sourceCount: number;
   readonly jobId: string;
@@ -117,7 +125,9 @@ export interface LearningCandidateRecord {
 export interface LearningJobRecord {
   readonly id: string;
   readonly conversationId: string;
-  readonly sourceOutboundId: string;
+  /** The reply learned from: a delivered outbound row, or (D8) a message the owner typed. */
+  readonly sourceOutboundId: string | null;
+  readonly sourceMessageId: string | null;
   readonly trigger: SupportLearningJobTrigger;
   readonly requestedByAdminId: string | null;
   readonly idempotencyKey: string;
@@ -173,6 +183,7 @@ function candidate(row: CandidateRow): LearningCandidateRecord {
     sensitiveKinds: row.sensitiveKinds as SupportLearningSensitiveKind[],
     conversationId: row.conversationId,
     sourceOutboundId: row.sourceOutboundId,
+    sourceMessageId: row.sourceMessageId,
     sourceRefs: Array.isArray(row.sourceRefs) ? (row.sourceRefs as LearningSourceRef[]) : [],
     sourceCount: row.sourceCount,
     jobId: row.jobId,
@@ -191,6 +202,7 @@ function job(row: JobRow): LearningJobRecord {
     id: row.id,
     conversationId: row.conversationId,
     sourceOutboundId: row.sourceOutboundId,
+    sourceMessageId: row.sourceMessageId,
     trigger: row.trigger as SupportLearningJobTrigger,
     requestedByAdminId: row.requestedByAdminId,
     idempotencyKey: row.idempotencyKey,
@@ -578,7 +590,8 @@ export class DrizzleSupportKnowledgeRepository {
         rejectReason: row.rejectReason,
         sensitiveKinds: [...row.sensitiveKinds],
         conversationId: row.source.conversationId,
-        sourceOutboundId: row.source.outboundId,
+        sourceOutboundId: row.source.outboundId ?? null,
+        sourceMessageId: row.source.messageId ?? null,
         sourceRefs: [row.source],
         sourceCount: 1,
         jobId: row.jobId,
@@ -768,7 +781,9 @@ export class DrizzleSupportKnowledgeRepository {
     row: {
       readonly id: string;
       readonly conversationId: string;
-      readonly sourceOutboundId: string;
+      /** Exactly one of the two (D8; the table's CHECK). */
+      readonly sourceOutboundId: string | null;
+      readonly sourceMessageId: string | null;
       readonly trigger: SupportLearningJobTrigger;
       readonly requestedByAdminId: string | null;
       readonly idempotencyKey: string;
@@ -784,6 +799,7 @@ export class DrizzleSupportKnowledgeRepository {
         tenantId,
         conversationId: row.conversationId,
         sourceOutboundId: row.sourceOutboundId,
+        sourceMessageId: row.sourceMessageId,
         trigger: row.trigger,
         requestedByAdminId: row.requestedByAdminId,
         idempotencyKey: row.idempotencyKey,

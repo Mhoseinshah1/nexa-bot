@@ -14127,8 +14127,13 @@ export const supportLearningCandidates = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     conversationId: uuid('conversation_id').notNull(),
-    sourceOutboundId: uuid('source_outbound_id').notNull(),
-    /** Every source reply that proposed this lesson: `[{conversationId, outboundId, at}]`. */
+    /** The first source: a delivered reply (`outbound`) or, D8, a message the owner typed. */
+    sourceOutboundId: uuid('source_outbound_id'),
+    sourceMessageId: uuid('source_message_id'),
+    /**
+     * Every source reply that proposed this lesson: `[{conversationId, outboundId, at}]`, or
+     * `messageId` instead of `outboundId` for a message the owner typed (D8).
+     */
     sourceRefs: jsonb('source_refs')
       .notNull()
       .default(sql`'[]'::jsonb`),
@@ -14180,6 +14185,10 @@ export const supportLearningCandidates = pgTable(
     check(
       'support_learning_candidates_state_check',
       enumCheck('state', SUPPORT_LEARNING_CANDIDATE_STATES),
+    ),
+    check(
+      'support_learning_candidates_source_check',
+      sql`num_nonnulls(source_outbound_id, source_message_id) = 1`,
     ),
     check(
       'support_learning_candidates_category_check',
@@ -14434,7 +14443,9 @@ export const supportLearningJobs = pgTable(
       .notNull()
       .references(() => tenants.id),
     conversationId: uuid('conversation_id').notNull(),
-    sourceOutboundId: uuid('source_outbound_id').notNull(),
+    /** The reply learned from: a delivered outbound row, or (D8) a message the owner typed. */
+    sourceOutboundId: uuid('source_outbound_id'),
+    sourceMessageId: uuid('source_message_id'),
     trigger: text('trigger').notNull(),
     requestedByAdminId: uuid('requested_by_admin_id'),
     idempotencyKey: text('idempotency_key').notNull(),
@@ -14468,6 +14479,16 @@ export const supportLearningJobs = pgTable(
       foreignColumns: [businessOutboundMessages.tenantId, businessOutboundMessages.id],
       name: 'support_learning_jobs_outbound_fk',
     }),
+    foreignKey({
+      columns: [table.tenantId, table.sourceMessageId],
+      foreignColumns: [businessMessages.tenantId, businessMessages.id],
+      name: 'support_learning_jobs_message_fk',
+    }),
+    // D8: exactly one source — a delivered reply, or a message the owner typed.
+    check(
+      'support_learning_jobs_source_check',
+      sql`num_nonnulls(source_outbound_id, source_message_id) = 1`,
+    ),
     foreignKey({
       columns: [table.tenantId, table.requestedByAdminId],
       foreignColumns: [admins.tenantId, admins.id],

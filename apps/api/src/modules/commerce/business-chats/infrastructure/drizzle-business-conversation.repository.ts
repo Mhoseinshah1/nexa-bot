@@ -615,6 +615,27 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
     return row === undefined ? null : photoOf(row);
   }
 
+  async findById(
+    scope: ScopeContext,
+    conversationId: string,
+    id: string,
+    tx?: unknown,
+  ): Promise<BusinessMessageRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .select()
+      .from(businessMessages)
+      .where(
+        and(
+          eq(businessMessages.tenantId, tenantId),
+          eq(businessMessages.conversationId, conversationId),
+          eq(businessMessages.id, id),
+        ),
+      )
+      .limit(1);
+    return row ? toMessage(row) : null;
+  }
+
   async findByTelegramId(
     scope: ScopeContext,
     conversationId: string,

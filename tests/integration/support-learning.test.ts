@@ -1301,6 +1301,124 @@ describe('controlled learning (TB8)', () => {
     }
   });
 
+  /** D8: a conversation where the customer asked and the OWNER answered from the phone. */
+  async function conversationWithOwnerTyping(chat: string, typed: string) {
+    const c = ctx.container;
+    const { conversationId } = await conversationWithReply(scopeA, BOT, support, chat, 'x');
+    const record = (messageId: number, from: string, text: string) =>
+      c.businessConversations.recordMessage(scopeA, system(), {
+        idempotencyKey: key('msg'),
+        botInstanceId: BOT,
+        edited: false,
+        message: {
+          connectionId: `conn-${BOT}`,
+          chatId: chat,
+          chatType: 'private',
+          messageId,
+          fromUserId: from,
+          senderBusinessBotId: null,
+          isFromOffline: false,
+          sentAt: new Date(),
+          editedAt: null,
+          kind: 'TEXT',
+          text,
+          photo: null,
+        },
+      });
+    await record(31, chat, 'هنوز وصل نمی‌شود');
+    await record(32, '5000001', typed); // the business owner, typing in the Telegram app
+    const rows = await c.database.db.execute(
+      sql`SELECT id, origin FROM business_messages
+          WHERE conversation_id = ${conversationId} AND telegram_message_id IN (31, 32)
+          ORDER BY telegram_message_id`,
+    );
+    const [customer, human] = rows.rows as { id: string; origin: string }[];
+    expect(customer?.origin).toBe('INBOUND');
+    expect(human?.origin).toBe('HUMAN');
+    return { conversationId, customerMessageId: customer!.id, ownerMessageId: human!.id };
+  }
+
+  it('D8: a reply the owner typed on the phone can be proposed, scrubbed and reviewed', async () => {
+    const { conversationId, ownerMessageId } = await conversationWithOwnerTyping(
+      '7000031',
+      'سلام. برنامه را ببندید و دوباره باز کنید؛ اگر نشد با ۰۹۱۲۱۲۳۴۵۶۷ تماس بگیرید.',
+    );
+    const job = await learning.propose(tenantA, owner, conversationId, {
+      idempotencyKey: key('p'),
+      messageId: ownerMessageId,
+    });
+    expect(job).toMatchObject({
+      sourceMessageId: ownerMessageId,
+      sourceOutboundId: null,
+      trigger: 'OPERATOR_PROPOSAL',
+      idempotencyKey: `learning:message:${ownerMessageId}`,
+    });
+    await loop.tick();
+    // The same scrub as any reply: the provider never reads the phone in what the owner typed.
+    expect(requests).toHaveLength(1);
+    const text = JSON.stringify(requests[0]);
+    expect(text).not.toMatch(/0912|۰۹۱۲|1234567|۱۲۳۴۵۶۷/u);
+    expect(text).toContain('برنامه را ببندید');
+    // A candidate for a reviewer, never knowledge by itself.
+    const [candidate] = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(candidate).toMatchObject({ state: 'PENDING', sourceCount: 1 });
+    expect(await knowledgeInContext(tenantA as never)).toEqual([]);
+    const stored = await ctx.container.database.db.execute(
+      sql`SELECT source_message_id, source_outbound_id, source_refs FROM support_learning_candidates`,
+    );
+    expect(stored.rows[0]).toMatchObject({
+      source_message_id: ownerMessageId,
+      source_outbound_id: null,
+    });
+    // Audited like any proposal, naming the message.
+    const audit = await ctx.container.database.db.execute(
+      sql`SELECT after::text AS after FROM audit_logs
+          WHERE action = 'support_knowledge.propose' AND result = 'SUCCESS'`,
+    );
+    expect((audit.rows[0] as { after: string }).after).toContain(ownerMessageId);
+  });
+
+  it('D8: a customer message is never a source, and an owner message needs the review permission', async () => {
+    const { conversationId, customerMessageId, ownerMessageId } = await conversationWithOwnerTyping(
+      '7000032',
+      'برنامه را دوباره نصب کنید.',
+    );
+    // The customer's own words: refused, whoever asks.
+    await expectCode(
+      learning.propose(tenantA, owner, conversationId, {
+        idempotencyKey: key('p'),
+        messageId: customerMessageId,
+      }),
+      'support_knowledge.source_not_eligible',
+    );
+    // Another conversation's message id is not this conversation's.
+    const other = await conversationWithOwnerTyping('7000033', 'پاسخ دیگر.');
+    await expectCode(
+      learning.propose(tenantA, owner, conversationId, {
+        idempotencyKey: key('p'),
+        messageId: other.ownerMessageId,
+      }),
+      'support_knowledge.source_not_eligible',
+    );
+    // No administrator wrote what the owner typed: proposing it is a reviewer's act.
+    await expectCode(
+      learning.propose(tenantA, support, conversationId, {
+        idempotencyKey: key('p'),
+        messageId: ownerMessageId,
+      }),
+      'platform.permission_denied',
+    );
+    // Both ids at once, or neither, is not a proposal.
+    await expect(
+      learning.propose(tenantA, owner, conversationId, {
+        idempotencyKey: key('p'),
+        messageId: ownerMessageId,
+        outboundId: ownerMessageId,
+      }),
+    ).rejects.toThrow();
+    expect(await jobCount()).toBe(0);
+  });
+
   it('nit: an operator proposes only their own reply; another person’s needs the review permission', async () => {
     // The owner wrote this reply; support may not propose it.
     const { conversationId, outboundId } = await conversationWithReply(

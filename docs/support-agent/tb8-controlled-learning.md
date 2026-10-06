@@ -46,7 +46,17 @@ the two meet.
 ## Learning jobs
 
 `support_learning_jobs` (`0207`). A job names ONE human reply: a `business_outbound_messages` row
-of origin `OPERATOR` or `ASSIST`, `DELIVERED`, with its text still held, in that conversation.
+of origin `OPERATOR` or `ASSIST`, `DELIVERED`, with its text still held, in that conversation —
+or, since D8, a `business_messages` row of origin `HUMAN` (a reply the business owner TYPED in
+the Telegram app), text, not deleted, in that conversation (`source_message_id`, key
+`learning:message:<id>`; the table's CHECK holds exactly one source). A customer's message
+(`INBOUND`), our own echo, an away message and another bot's are never a source.
+
+D8 adds the button, not a trigger: «پیشنهاد به‌عنوان دانش» on a `HUMAN` transcript row. No
+administrator wrote it, so proposing it always needs `support_knowledge.review` (as for another
+person's reply), and it is scrubbed, extracted and reviewed exactly like any other proposal.
+A handback still learns only from Web Admin replies: what the owner types on the phone is sent
+to a provider only when a reviewer chose it.
 
 | Trigger             | When                                                                                                                                                                                                                                          |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
