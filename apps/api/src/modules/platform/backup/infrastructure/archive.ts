@@ -459,12 +459,12 @@ export async function openArchive(input: {
       // whatever WROTE the archive, and a restore that ignored it would report
       // one backup id while restoring another.
       //
-      // NOT FALSIFIABLE TODAY, and the record says so rather than claiming a
-      // test: `sealArchive` derives the header's id from the manifest, so this
-      // installation cannot produce an archive where they disagree, and an
-      // archive that authenticates is by definition one we wrote. It becomes
+      // `sealArchive` derives the header's id from the manifest, so this
+      // installation cannot produce an archive where they disagree. It becomes
       // reachable the moment a second writer exists — another implementation, a
       // future format version, a migration tool — which is the case it is for.
+      // Falsified by `tests/unit/backup-archive-manifest.test.ts`, which
+      // assembles such an archive by hand with the documented primitives.
       throw archiveMalformed('the manifest and the header name different backups');
     }
 
