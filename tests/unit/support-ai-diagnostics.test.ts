@@ -210,6 +210,20 @@ describe('Anthropic and Z.AI failures, the same classes', () => {
     expect(JSON.stringify(outcome)).not.toContain('maximum');
   });
 
+  // Review N6: Anthropic's `error.type` becomes part of the stored code; prose never does.
+  it('Anthropic: an error type that is not a short token never reaches the code', async () => {
+    const prose = 'the key sk-ant-SECRET was revoked by an administrator';
+    for (const status of [401, 503]) {
+      const fetch = answering(status, { type: 'error', error: { type: prose, message: 'x' } });
+      const outcome = await new AnthropicAdapter({ fetch }).generate(credential, request);
+      expect(JSON.stringify(outcome)).not.toContain('SECRET');
+      expect('code' in outcome && outcome.code).toBe(`anthropic.${status}`);
+    }
+    const typed = answering(401, { type: 'error', error: { type: 'authentication_error' } });
+    const outcome = await new AnthropicAdapter({ fetch: typed }).generate(credential, request);
+    expect('code' in outcome && outcome.code).toBe('anthropic.authentication_error');
+  });
+
   it.each([
     [{ stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"de' }] }, 'truncated'],
     [{ stop_reason: 'refusal', content: [] }, 'refused'],

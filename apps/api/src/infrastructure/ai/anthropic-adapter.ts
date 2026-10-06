@@ -1,4 +1,8 @@
-import { SUPPORT_AI_IMAGE_MEDIA_TYPES, type SupportAiOutcome } from '@nexa/contracts';
+import {
+  SUPPORT_AI_IMAGE_MEDIA_TYPES,
+  safeProviderToken,
+  type SupportAiOutcome,
+} from '@nexa/contracts';
 import type {
   SupportAiAdapter,
   SupportAiCredential,
@@ -118,7 +122,9 @@ export function readMessage(result: AiHttpResult, nowMs: number): SupportAiOutco
     const error = (
       body?.error !== null && typeof body?.error === 'object' ? body.error : null
     ) as Record<string, unknown> | null;
-    const type = typeof error?.type === 'string' ? error.type : '';
+    // The provider's own type goes into our `code`, which is stored and shown: only as a
+    // short machine token (`safeProviderToken`), never arbitrary text from the body.
+    const type = safeProviderToken(error?.type) ?? '';
     const from = { httpStatus: status, error };
     if (status === 402 || type === 'billing_error') {
       const detail = failureDetail('quota', from);
