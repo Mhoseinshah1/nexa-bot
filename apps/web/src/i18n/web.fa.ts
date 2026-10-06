@@ -3789,6 +3789,9 @@ export const WEB_FA = {
   'web.setting_bot_inline_buttons': 'سبک دکمه‌های شیشه‌ای ربات',
   'web.setting_bot_inline_buttons_desc':
     'رنگ (سبک) هر دکمهٔ شیشه‌ای مشتری؛ در صفحهٔ «دکمه‌های ربات»، بخش «دکمه‌های شیشه‌ای ربات» ویرایش می‌شود.',
+  'web.setting_bot_inline_button_icons': 'آیکون پریمیوم دکمه‌های شیشه‌ای ربات',
+  'web.setting_bot_inline_button_icons_desc':
+    'شناسهٔ شکلک سفارشی (پریمیوم) تلگرام برای هر دکمهٔ شیشه‌ای، اختیاری؛ در صفحهٔ «دکمه‌های ربات» تنظیم می‌شود.',
   'web.setting_bot_category_colors': 'رنگ دکمهٔ دسته‌بندی‌ها',
   'web.setting_bot_category_colors_desc':
     'رنگ دکمهٔ هر دسته‌بندی محصول در فروشگاه ربات؛ در صفحهٔ «🎨 ظاهر ربات»، بخش «رنگ دسته‌بندی‌ها» ویرایش می‌شود.',
