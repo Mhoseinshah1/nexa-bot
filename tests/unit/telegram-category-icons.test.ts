@@ -228,7 +228,7 @@ describe('a category button with its decorations', () => {
     expect(callbacksOf(calls[0]?.body)).toEqual([`cat:${CAT_A}.0`, `cat:${CAT_B}.0`, 'catp:1']);
   });
 
-  it("the category's own icon wins over the generic category icon; others keep the generic", async () => {
+  it("the category's own icon wins over the generic category icon, and the others keep the generic", async () => {
     const { messenger, calls, respondWith } = harness({
       categoryIcons: () => ({ [CAT_A]: { before: ICON } }),
       inlineIcons: { 'catalog.category': GENERIC_ICON },

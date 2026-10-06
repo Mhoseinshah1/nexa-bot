@@ -479,7 +479,7 @@ describe('the customer purchase flow over Telegram', () => {
     };
     const catalogueCells = () => buttonsOf(lastMessage()) as unknown as Cell[];
 
-    it('draws the premium icon before and the emoji after on an ELIGIBLE bot; callbacks unchanged', async () => {
+    it('draws the premium icon before and the emoji after on an ELIGIBLE bot, callbacks unchanged', async () => {
       const { fresh, set } = await setup(true);
       await command('/catalog');
       const legacy = catalogueCells();
@@ -518,7 +518,7 @@ describe('the customer purchase flow over Telegram', () => {
       );
     });
 
-    it('a refused icon is sent once more without it; the after emoji and callbacks are kept', async () => {
+    it('a refused icon is sent once more without it, keeping the after emoji and callbacks', async () => {
       const { set } = await setup(true);
       await set('bot.category_icons', { [SEEDED_CATEGORY()]: { before: ICON, after: '🔥' } });
       reply = (_request, response) => {

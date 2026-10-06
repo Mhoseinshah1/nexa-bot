@@ -115,6 +115,7 @@ const RECORDS = [
   'docs/tonpays-telegram-falsification.md',
   'docs/recovery-kit-falsification.md',
   'docs/phase2/button-icons-falsification.md',
+  'docs/phase2/category-icons-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -165,8 +166,10 @@ const RECORDS = [
  * 2026-10-05 master prompt). R-01 of the T3 record now cites the ONE test that pins the
  * reversed rule instead of the two that pinned the retirement (−1), and
  * `docs/phase2/button-icons-falsification.md` adds 31 rows, 42 citations (+42).
+ * 2704 → 2745: Phase 2 UX wave, Item 2 (category premium icon before, ordinary emoji after),
+ * `docs/phase2/category-icons-falsification.md` — 30 rows, 41 citations.
  */
-const EXPECTED = 2704;
+const EXPECTED = 2745;
 /**
  * A table whose last column is one of these is making citations.
  *

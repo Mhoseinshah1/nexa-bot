@@ -106,7 +106,7 @@ export function ProductCategoriesPage({
 }: {
   denied: boolean;
   mayEdit: boolean;
-  /** `settings.view`: draws «آیکون دسته‌بندی‌ها» (Phase 2 Item 2) under the list. */
+  /** `settings.view`: draws the category icons section (Phase 2 Item 2) under the list. */
   maySettingsView?: boolean;
   /** `settings.edit`: the decorations may be changed. */
   maySettingsEdit?: boolean;

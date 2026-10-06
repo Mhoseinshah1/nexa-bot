@@ -3555,3 +3555,18 @@ and `OQ-T-4` are live again and apply to inline buttons too.
   never published since, draws those icons again after this upgrade. The retiring release never
   rewrote stored rows, by design (expand/contract). Rolling back to the retiring release hides
   every icon again and makes no layout unreadable.
+
+## OQ-P2-CAT — category decorations (Phase 2 UX wave, Item 2)
+
+- **OQ-P2-CAT-01: decided, documented as a limitation; PO confirmation invited.** The owner's
+  Item 2 asks for a premium emoji BEFORE and AFTER a category's name. A category's only
+  customer surface is its INLINE button, and Telegram allows one premium icon per button, before
+  the text, with no entities in the text (`OQ-P2-ICON-03`). So `bot.category_icons.before` is
+  the button's premium icon, and `after` is an ORDINARY Unicode emoji appended to the name (the
+  closest correct representation; never rendered or labelled as premium). If the PO wants
+  something else for "after" (for example nothing at all rather than a plain emoji), it is a
+  one-field change. `docs/phase2/category-icons.md`.
+- **OQ-P2-CAT-02: decided.** A category's own `before` takes precedence over the generic
+  `catalog.category` icon of `bot.inline_button_icons` (Item 3), the same precedence a
+  category's own colour has over the generic style. The real-bot acceptance of the inline icon
+  is `OQ-P2-ICON-01`, which covers this button too.
