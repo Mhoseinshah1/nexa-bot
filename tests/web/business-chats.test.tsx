@@ -339,8 +339,8 @@ describe('one business conversation', () => {
                 providerErrorCode: null,
                 providerErrorType: null,
                 providerErrorParam: null,
-                issuePath: 'knowledgeRefs.0',
-                issueCode: 'invalid_format',
+                issuePath: 'intent',
+                issueCode: 'too_big',
                 latencyMs: 900,
                 inputTokens: 2100,
                 outputTokens: 180,
@@ -359,7 +359,7 @@ describe('one business conversation', () => {
     expect(screen.getAllByText(t('web.bchat_escalation_no_customer')).length).toBeGreaterThan(0);
     const failure = document.querySelector('[data-failure-class="schema_invalid"]')!;
     expect(failure.textContent).toContain(t('web.sai_failure_schema_invalid'));
-    expect(failure.textContent).toContain('knowledgeRefs.0 (invalid_format)');
+    expect(failure.textContent).toContain('intent (too_big)');
     expect(screen.getAllByText(t('web.bchat_handoff_topic')).length).toBeGreaterThan(0);
     expect(screen.getByText(t('web.bchat_handoff_identity'))).toBeTruthy();
   });

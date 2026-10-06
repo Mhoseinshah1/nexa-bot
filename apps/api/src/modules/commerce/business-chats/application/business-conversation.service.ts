@@ -482,12 +482,6 @@ export class BusinessConversationService {
   }
 
   /**
-   * TB7 — the AI's reply onto the lane, in the caller's transaction, under the conversation's
-   * lock and the epoch the job CAPTURED when it was enqueued. Refused (nothing written) when the
-   * epoch moved, the conversation is no longer AI_ACTIVE, or the connection cannot send. This is
-   * the producer's check; TB2's final check at the send stamp remains the authority.
-   */
-  /**
    * Whether an automatic reply to this conversation could be sent at all right now: its
    * connection is `ACTIVE` — enabled, with the `can_reply` right (the projected status). Read
    * by the producer BEFORE a provider is paid and given the transcript; a courtesy, unlocked —
@@ -500,6 +494,12 @@ export class BusinessConversationService {
     return connection !== null && connection.status === 'ACTIVE';
   }
 
+  /**
+   * TB7 — the AI's reply onto the lane, in the caller's transaction, under the conversation's
+   * lock and the epoch the job CAPTURED when it was enqueued. Refused (nothing written) when the
+   * epoch moved, the conversation is no longer AI_ACTIVE, or the connection cannot send. This is
+   * the producer's check; TB2's final check at the send stamp remains the authority.
+   */
   async enqueueAutoSend(
     scope: ScopeContext,
     input: {
