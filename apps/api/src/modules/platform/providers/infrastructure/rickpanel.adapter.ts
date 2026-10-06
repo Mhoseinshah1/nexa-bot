@@ -22,7 +22,7 @@ import {
   type ProviderUserOutcome,
   type ProviderUserRef,
 } from '@nexa/contracts';
-import { planApplied, readRecordUsage } from './provider-numbers.js';
+import { RICKPANEL_USAGE, planApplied, readRecordUsage } from './provider-numbers.js';
 import { parseSubscriptionFiles, retryAfterMs } from './subscription-files.js';
 import {
   TOKEN_PATH,
@@ -169,7 +169,7 @@ function safeVersion(value: unknown): string | null {
  * `readRecordUsage`, shared with Marzban (WP15 G5).
  */
 function usageFromUser(record: Record<string, unknown>): ProviderUsage | null {
-  const read = readRecordUsage(record);
+  const read = readRecordUsage(record, RICKPANEL_USAGE);
   return read.ok ? read.usage : null;
 }
 
@@ -566,7 +566,7 @@ export class RickpanelAdapter implements ProviderAdapter {
 
     // The record is THERE and its usage cannot be read: a different fact from "not
     // found", and the detail is what lets an operator tell the two apart (G5).
-    const usage = readRecordUsage(read.record);
+    const usage = readRecordUsage(read.record, RICKPANEL_USAGE);
     if (!usage.ok) {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: null, detail: usage.detail };
     }

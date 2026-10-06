@@ -63,14 +63,35 @@ export function readProviderNumber(value: unknown, max: bigint = SAFE_MAX): Prov
  * account is not there". `data_limit` and `expire` absent or zero are "no limit", as the
  * panels themselves fold them. `expire` is epoch SECONDS.
  *
- * `online_at` is read by `readLastSeen` and is telemetry: whatever it holds, it never
- * fails the usage read.
+ * `online_at` is read by `readLastSeen` ONLY when the caller says its provider's spelling
+ * of it is evidenced (`lastSeen: 'ONLINE_AT'`); otherwise the record's `online_at` is not
+ * looked at and the answer is UNSUPPORTED. Marzban passes `ONLINE_AT` (v0.8.4's source);
+ * RickPanel passes `NOT_READ` until its real-panel A9 runs (OQ-LC-02). Either way it is
+ * telemetry and never fails the usage read.
  */
+export interface RecordUsageOptions {
+  readonly lastSeen: 'ONLINE_AT' | 'NOT_READ';
+}
+
+/** Marzban v0.8.4: `online_at` is read (source-evidenced naive UTC; A9 NOT RUN). */
+export const MARZBAN_USAGE: RecordUsageOptions = { lastSeen: 'ONLINE_AT' };
+
+/**
+ * RickPanel: `online_at` is NOT read (lead decision, C1 review). The document lists it only
+ * in the modify body, untyped, and a panel writing naive TEHRAN time would put a time
+ * three and a half hours in the future on the card. Flip to `ONLINE_AT` in the commit that
+ * records a passing real-panel A9 (`docs/open-questions.md` OQ-LC-02).
+ */
+export const RICKPANEL_USAGE: RecordUsageOptions = { lastSeen: 'NOT_READ' };
+
 export type RecordUsage =
   | { readonly ok: true; readonly usage: ProviderUsage }
   | { readonly ok: false; readonly detail: ProviderFailureDetail };
 
-export function readRecordUsage(record: Readonly<Record<string, unknown>>): RecordUsage {
+export function readRecordUsage(
+  record: Readonly<Record<string, unknown>>,
+  options: RecordUsageOptions,
+): RecordUsage {
   const used = readProviderNumber(record['used_traffic']);
   if (used.kind === 'ABSENT') return { ok: false, detail: 'USAGE_FIELD_MISSING' };
   if (used.kind === 'MALFORMED') return { ok: false, detail: 'VALUE_MALFORMED' };
@@ -86,7 +107,7 @@ export function readRecordUsage(record: Readonly<Record<string, unknown>>): Reco
       totalBytes: limit.kind === 'VALUE' && limit.value > 0n ? limit.value : null,
       expiresAt:
         expire.kind === 'VALUE' && expire.value > 0n ? new Date(Number(expire.value) * 1000) : null,
-      lastSeen: readLastSeen(record),
+      lastSeen: options.lastSeen === 'ONLINE_AT' ? readLastSeen(record) : { kind: 'UNSUPPORTED' },
     },
   };
 }
@@ -99,9 +120,15 @@ export function readRecordUsage(record: Readonly<Record<string, unknown>>): Reco
  * `DateTime` column (`app/db/models.py`) that `app/jobs/record_usages.py` sets to
  * `datetime.utcnow()` — a NAIVE UTC time — whenever xray reports traffic for the user. So
  * the panel emits it as `2026-10-06T08:30:00` or `2026-10-06T08:30:00.123456`, with no
- * offset, and never wrote one at all for an account nobody has used: `null`. RickPanel is
- * Marzban-derived and its owner's document names `online_at` among the user's properties.
- * Neither has been read off a real panel yet (`docs/real-panel-acceptance.md`, NOT RUN).
+ * offset, and never wrote one at all for an account nobody has used: `null`. Not yet read
+ * off a real panel (`docs/real-panel-acceptance.md`, A9 NOT RUN). RickPanel's only
+ * evidence is the owner's OpenAPI property list for the PUT (modify) BODY, every property
+ * typed `"string"` — nothing about the GET response or its time zone — so RickPanel does
+ * not call this yet (OQ-LC-02).
+ *
+ * A time later than the read is not refused here, because this layer has no clock: the
+ * service repository refuses one more than five minutes after the Clock's read time
+ * (`boundedLastSeen`).
  *
  * - key ABSENT → `UNSUPPORTED`: this panel does not say, which is a different fact from
  *   "never" and renders «در دسترس نیست»;

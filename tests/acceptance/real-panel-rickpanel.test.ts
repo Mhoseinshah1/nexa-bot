@@ -138,14 +138,15 @@ describe('RickPanel acceptance', () => {
   }, 120_000);
 
   /**
-   * A9 (C1) — «آخرین زمان اتصال»: `online_at` is on the read, and the adapter agrees.
+   * A9 (C1) — «آخرین زمان اتصال»: what `online_at` is on the READ, and in which zone.
    *
-   * NOT RUN (`docs/open-questions.md` OQ-C1-02). The owner's document lists `online_at`
-   * among the user's properties and types it `"string"`; this is what says whether
-   * `GET /api/user/{username}` carries it, and how a time is spelled. A1's account has
-   * passed no traffic, so it should read as never connected.
+   * NOT RUN (`docs/open-questions.md` OQ-LC-02). The owner's document lists `online_at`
+   * only in the PUT (modify) body's property list, typed `"string"`; nothing documents the
+   * GET response or its time zone. So the adapter does NOT read it (`RICKPANEL_USAGE`),
+   * and these two cases are the evidence that would let it: presence and type on a fresh
+   * account, then the ZONE on an account a client is using right now.
    */
-  it('A9: carries `online_at` (null before first use) and the adapter reads it', async () => {
+  it('A9: carries `online_at` on the read (null before first use); the adapter does not read it yet', async () => {
     const username = nameFor('a1');
     const record = await observeUser(panel, observer, username);
     expect(record, 'A1 must have created the account').not.toBeNull();
@@ -154,23 +155,52 @@ describe('RickPanel acceptance', () => {
       Object.prototype.hasOwnProperty.call(record, 'online_at'),
       '`online_at` is not on GET /api/user/{username}',
     ).toBe(true);
-    const raw = record['online_at'];
-    expect(raw === null || typeof raw === 'string', `online_at is ${JSON.stringify(raw)}`).toBe(
+    // A1's account has passed no traffic.
+    expect(record['online_at'], `online_at is ${JSON.stringify(record['online_at'])}`).toBeNull();
+    const usage = await adapter.readUsage(target(), http(), refFor(username));
+    expect(usage.ok).toBe(true);
+    if (!usage.ok) return;
+    // Gated until this suite passes: flip `RICKPANEL_USAGE` in the commit recording it.
+    expect(usage.usage.lastSeen).toEqual({ kind: 'UNSUPPORTED' });
+  }, 60_000);
+
+  /**
+   * A9 (C1) — the zone, by wall clock, the way OQ-LC-01 step 3 decides 3X-UI's unit.
+   *
+   * Needs `NEXA_ACCEPTANCE_RICKPANEL_USED_USER`: an account on the disposable panel that a
+   * real client is passing traffic through WHILE this runs (so the panel's `online_at` is
+   * within a couple of minutes of now). Read as UTC, the value must land within two
+   * minutes of the observer's own read time. If it instead lands within two minutes when
+   * read as Asia/Tehran (UTC+03:30), the panel writes Tehran local time and the reader
+   * must NOT be enabled as it is. Fails rather than skips without the variable.
+   */
+  it('A9: a used account’s `online_at`, read as UTC, is within two minutes of now', async () => {
+    const used = process.env['NEXA_ACCEPTANCE_RICKPANEL_USED_USER'];
+    expect(used, 'NEXA_ACCEPTANCE_RICKPANEL_USED_USER is not set').toBeTruthy();
+    if (used === undefined || used === '') return;
+    const before = Date.now();
+    const record = await observeUser(panel, observer, used);
+    const after = Date.now();
+    expect(record, `${used} is not on the panel`).not.toBeNull();
+    const raw = record?.['online_at'];
+    expect(typeof raw, `online_at is ${JSON.stringify(raw)}; is a client connected?`).toBe(
+      'string',
+    );
+    if (typeof raw !== 'string') return;
+    const naive = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?$/.test(raw);
+    // A naive value read as UTC; an explicit zone is taken as written.
+    const asUtc = Date.parse(naive ? `${raw.slice(0, 23)}Z` : raw);
+    expect(Number.isNaN(asUtc), `online_at ${raw} is not a time`).toBe(false);
+    const window = 2 * 60_000;
+    const tehranOffset = 210 * 60_000;
+    const nearNow = (at: number) => at >= before - window && at <= after + window;
+    expect(
+      nearNow(asUtc - tehranOffset) && !nearNow(asUtc),
+      `online_at ${raw} is Tehran local time, not UTC — do NOT enable RickPanel last-seen as is`,
+    ).toBe(false);
+    expect(nearNow(asUtc), `online_at ${raw} read as UTC is not within 2 min of the read`).toBe(
       true,
     );
-    const usage = await adapter.readUsage(target(), http(), refFor(username));
-    expect(
-      usage.ok,
-      JSON.stringify(usage, (_k, v: unknown) => (typeof v === 'bigint' ? String(v) : v)),
-    ).toBe(true);
-    if (!usage.ok) return;
-    if (raw === null) {
-      expect(usage.usage.lastSeen).toEqual({ kind: 'NEVER' });
-    } else {
-      // A spelling `readLastSeen` does not accept would read UNSUPPORTED: record it in
-      // OQ-C1-02 and correct the reader and the fake together.
-      expect(usage.usage.lastSeen.kind, `online_at spelled ${String(raw)}`).toBe('AT');
-    }
   }, 60_000);
 
   /**

@@ -210,7 +210,7 @@ export interface Fake3xUi {
   /**
    * C1: what `clients/traffic/:email` reports as `lastOnline` for this client, in epoch
    * milliseconds as the source's example spells it. Unverified on a real panel
-   * (OQ-C1-01); here so a test can show the adapter ignores it.
+   * (OQ-LC-01); here so a test can show the adapter ignores it.
    */
   setLastOnline(email: string, epochMs: number): void;
   /**
@@ -668,7 +668,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
             // `xray.ClientTraffic.LastOnline` at the pinned commit
             // (`internal/xray/client_traffic.go`, gorm default 0; the source's example is
             // epoch MILLISECONDS). Served so a test can prove the adapter does NOT read
-            // it while OQ-C1-01 is open; its real presence and unit are unverified.
+            // it while OQ-LC-01 is open; its real presence and unit are unverified.
             lastOnline: lastOnline.get(client.email) ?? 0,
           }),
         );

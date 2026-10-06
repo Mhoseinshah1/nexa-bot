@@ -453,7 +453,7 @@ function usageFromClient(obj: unknown): ProviderUsage | null {
     // what writes it, in which unit, and whether `clients/traffic/:email` serves it has
     // not been read off a real v3.7.0 panel. A field misread by a factor of 1000 is a
     // fake time, so this stays UNSUPPORTED («در دسترس نیست») until the check in
-    // `docs/open-questions.md` OQ-C1-01 is run, and the fake is corrected with it.
+    // `docs/open-questions.md` OQ-LC-01 is run, and the fake is corrected with it.
     lastSeen: { kind: 'UNSUPPORTED' },
   };
 }

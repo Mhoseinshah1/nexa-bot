@@ -21,7 +21,7 @@ import {
   type ProviderUserOutcome,
   type ProviderUserRef,
 } from '@nexa/contracts';
-import { planApplied, readRecordUsage } from './provider-numbers.js';
+import { MARZBAN_USAGE, planApplied, readRecordUsage } from './provider-numbers.js';
 
 /**
  * Marzban.
@@ -173,7 +173,7 @@ type MarzbanAuth = { readonly ok: true; readonly token: string } | ProviderFailu
 function usageFromUser(record: Record<string, unknown>): ProviderUsage | null {
   // Numbers or canonical numeric strings, `used_traffic` required, `expire` in SECONDS:
   // one reading shared with RickPanel (WP15 G5).
-  const read = readRecordUsage(record);
+  const read = readRecordUsage(record, MARZBAN_USAGE);
   return read.ok ? read.usage : null;
 }
 
@@ -423,7 +423,7 @@ export class MarzbanAdapter implements ProviderAdapter {
     }
     // The record is THERE and its usage cannot be read: a different fact from "not
     // found", and the detail is what lets an operator tell the two apart (G5).
-    const usage = readRecordUsage(record);
+    const usage = readRecordUsage(record, MARZBAN_USAGE);
     if (!usage.ok) {
       return {
         ok: false,
