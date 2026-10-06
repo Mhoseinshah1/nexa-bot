@@ -602,6 +602,12 @@ import {
   type TicketStatus,
   // R1: the per-panel trial configuration.
   PANEL_TRIAL_ROUTES,
+  DELIVERY_TUTORIAL_ROUTES,
+  deliveryTutorialResponseSchema,
+  updateDeliveryTutorialResponseSchema,
+  type DeliveryTutorialResponse,
+  type UpdateDeliveryTutorialRequest,
+  type UpdateDeliveryTutorialResponse,
   panelTrialOverviewResponseSchema,
   panelTrialResponseSchema,
   updatePanelTrialResponseSchema,
@@ -3098,6 +3104,23 @@ export function savePanelTrial(
   body: UpdatePanelTrialRequest,
 ): Promise<UpdatePanelTrialResponse> {
   return post(PANEL_TRIAL_ROUTES.trial(panelId), body, updatePanelTrialResponseSchema);
+}
+
+/** Phase 2 item 5: one panel's post-delivery tutorial, and the apps its video may come from. */
+export function fetchDeliveryTutorial(panelId: string): Promise<DeliveryTutorialResponse> {
+  return authedGet(DELIVERY_TUTORIAL_ROUTES.tutorial(panelId), deliveryTutorialResponseSchema);
+}
+
+/** Whole, with the revision the form was drawn from; a stale one is refused, not merged. */
+export function saveDeliveryTutorial(
+  panelId: string,
+  body: UpdateDeliveryTutorialRequest,
+): Promise<UpdateDeliveryTutorialResponse> {
+  return post(
+    DELIVERY_TUTORIAL_ROUTES.tutorial(panelId),
+    body,
+    updateDeliveryTutorialResponseSchema,
+  );
 }
 
 export function fetchTrialPanels(): Promise<PanelTrialOverviewResponse> {
