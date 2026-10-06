@@ -273,6 +273,18 @@ describe('a panel’s tutorial after delivery', () => {
         appliesToTrial: true,
       }),
     ).rejects.toMatchObject({ code: PANEL_ERROR_CODES.DELIVERY_TUTORIAL_STALE });
+    // Stale even when it would change nothing: the form was drawn from a superseded row.
+    await expect(
+      ctx.container.deliveryTutorials.update(tenantA, owner, panelId, {
+        idempotencyKey: randomUUID(),
+        expectedRevision: 1,
+        mode: 'DISABLED',
+        text: TEXT,
+        videoClientAppId: null,
+        appliesToPurchase: true,
+        appliesToTrial: true,
+      }),
+    ).rejects.toMatchObject({ code: PANEL_ERROR_CODES.DELIVERY_TUTORIAL_STALE });
   });
 
   it('refuses a video app that is not this tenant’s, and markup in the text', async () => {

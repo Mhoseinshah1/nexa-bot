@@ -27,8 +27,14 @@ T_I=('integration','tests/integration/delivery-tutorial.test.ts')
 T_W=('web','tests/web/delivery-tutorial.test.tsx')
 
 M=[
- # DISABLED sends nothing.
- ('D5-01',[(SENDER,"if (tutorial === null || tutorial.mode === 'DISABLED') return { kind: 'NONE' };","if (tutorial === null) return { kind: 'NONE' };")],T_U,'DISABLED tutorial'),
+ # DISABLED sends nothing, though it keeps its text: the mode gate removed AND the kept text
+ # treated as sendable. (The gate alone is defence in depth: removing only it is an
+ # equivalent mutant, because DISABLED sends neither text nor video — see the record.)
+ ('D5-01',[(SENDER,"if (tutorial === null || tutorial.mode === 'DISABLED') return { kind: 'NONE' };","if (tutorial === null) return { kind: 'NONE' };"),
+           (SENDER,"      deliveryTutorialSendsText(tutorial.mode) && tutorial.text !== null","      (tutorial.mode === 'DISABLED' || deliveryTutorialSendsText(tutorial.mode)) &&\n      tutorial.text !== null")],T_U,'DISABLED tutorial'),
+ # The same, end to end: a tutorial switched off after it had text sends nothing.
+ ('D5-31',[(SENDER,"if (tutorial === null || tutorial.mode === 'DISABLED') return { kind: 'NONE' };","if (tutorial === null) return { kind: 'NONE' };"),
+           (SENDER,"      deliveryTutorialSendsText(tutorial.mode) && tutorial.text !== null","      (tutorial.mode === 'DISABLED' || deliveryTutorialSendsText(tutorial.mode)) &&\n      tutorial.text !== null")],T_I,'DISABLED tutorial'),
  # A purchase-only tutorial is not sent for a trial (applicability ignored).
  ('D5-02',[(SENDER,"    if (!(service.isTrial ? tutorial.appliesToTrial : tutorial.appliesToPurchase)) {\n      return { kind: 'NONE' };\n    }\n","")],T_U,'purchase-only'),
  # Trial and purchase are not swapped.
