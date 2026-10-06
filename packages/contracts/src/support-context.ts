@@ -205,7 +205,10 @@ export const supportContextFlagsSchema = z
   .object({
     /** Any of the customer's payments is under review — over ALL of them, not the five shown. */
     hasUnderReviewPayment: z.boolean(),
-    /** Any service in the payload is UNRECONCILED. */
+    /**
+     * Any of the customer's services is UNRECONCILED — over ALL of them, not the ten shown (L4),
+     * like `hasUnderReviewPayment`.
+     */
     hasUnreconciledService: z.boolean(),
     /** The conversation resolved to a customer of this tenant. False: public support only. */
     identityLinked: z.boolean(),
