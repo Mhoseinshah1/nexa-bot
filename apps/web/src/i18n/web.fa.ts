@@ -3795,6 +3795,9 @@ export const WEB_FA = {
   'web.setting_bot_category_colors': 'رنگ دکمهٔ دسته‌بندی‌ها',
   'web.setting_bot_category_colors_desc':
     'رنگ دکمهٔ هر دسته‌بندی محصول در فروشگاه ربات؛ در صفحهٔ «🎨 ظاهر ربات»، بخش «رنگ دسته‌بندی‌ها» ویرایش می‌شود.',
+  'web.setting_bot_category_icons': 'آیکون دسته‌بندی‌ها',
+  'web.setting_bot_category_icons_desc':
+    'آیکون پریمیوم قبل از نام و ایموجی معمولی بعد از نام هر دسته‌بندی؛ در صفحهٔ «دسته‌بندی‌ها» ویرایش می‌شود.',
   // UX Batch 01, item 2: «رنگ دسته‌بندی‌ها» on the appearance page.
   'web.cc_title': 'رنگ دسته‌بندی‌ها',
   'web.cc_hint':

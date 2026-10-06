@@ -111,6 +111,8 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   'bot.inline_button_icons',
   // UX Batch 01, item 2: each category's colour, on «🎨 ظاهر ربات» beside the categories.
   'bot.category_colors',
+  // Phase 2 Item 2: each category's premium icon and after-emoji, on «دسته‌بندی‌ها».
+  'bot.category_icons',
   // Spec 13.2: the automatic backup schedule is edited on «بکاپ و بازیابی», beside the
   // backups it schedules, as a switch and an interval with a unit — never raw minutes.
   BACKUP_SCHEDULE_SETTING_KEYS.enabled,
@@ -393,6 +395,16 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   'bot.category_colors': {
     title: 'web.setting_bot_category_colors',
     description: 'web.setting_bot_category_colors_desc',
+    group: 'support',
+    control: { kind: 'text' },
+  },
+  /*
+   * Phase 2 Item 2: each category's decorations. Edited on «دسته‌بندی‌ها», never here
+   * (`SETTINGS_MANAGED_ELSEWHERE`); the entry exists because this map is total.
+   */
+  'bot.category_icons': {
+    title: 'web.setting_bot_category_icons',
+    description: 'web.setting_bot_category_icons_desc',
     group: 'support',
     control: { kind: 'text' },
   },

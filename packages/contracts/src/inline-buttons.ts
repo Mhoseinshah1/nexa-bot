@@ -363,3 +363,127 @@ export function categoryButtonStyleOf(
   }
   return inlineButtonStyleOf('catalog.category', styles);
 }
+
+// ---------------------------------------------------------------------------
+// Per-category decorations (Phase 2 UX wave, Item 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The longest "after" emoji, in code points: the bound `product_categories.emoji` already
+ * uses (`PRODUCT_CATEGORY_EMOJI_MAX_CODE_POINTS`), so the two decorations of one button are
+ * held to the same size. A ZWJ family (7) or a subdivision flag (7) fits; a sentence does not.
+ */
+export const CATEGORY_AFTER_EMOJI_MAX_CODE_POINTS = 8;
+
+/**
+ * One code point an "after" emoji may contain: a pictograph, a skin-tone modifier, a
+ * regional indicator (flags), a ZWJ, VS16, the keycap combiner, a tag character (subdivision
+ * flags) or the three keycap bases `#`, `*` and a digit. Nothing else — no letter, no space,
+ * no `<`, `&` or control character — so the value can never carry markup or a line break.
+ */
+const AFTER_EMOJI_CODE_POINT =
+  /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}#*0-9]|\u200D|\uFE0F|\u20E3|[\u{E0020}-\u{E007F}])$/u;
+/** At least one code point that IS an emoji, so `#`, `12` or a lone ZWJ are refused. */
+const AFTER_EMOJI_ANCHOR = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20E3]/u;
+
+/**
+ * Whether `value` is an ordinary Unicode emoji fit to follow a category's name on its button.
+ *
+ * Unlike `isValidCategoryEmoji` (deliberately any short text), this IS an emoji check: the
+ * owner's Item 2 asks for an emoji after the name and nothing else, and the button's text is
+ * tenant data on the wire. `Extended_Pictographic` reserves the unassigned code points of the
+ * emoji blocks too, so an emoji newer than this runtime's tables is still accepted.
+ */
+export function isValidCategoryAfterEmoji(value: string): boolean {
+  const points = [...value];
+  if (points.length === 0 || points.length > CATEGORY_AFTER_EMOJI_MAX_CODE_POINTS) return false;
+  if (!points.every((point) => AFTER_EMOJI_CODE_POINT.test(point))) return false;
+  return AFTER_EMOJI_ANCHOR.test(value);
+}
+
+export const categoryAfterEmojiSchema = z.string().refine(isValidCategoryAfterEmoji, {
+  message: `an ordinary emoji, at most ${String(CATEGORY_AFTER_EMOJI_MAX_CODE_POINTS)} code points, nothing else`,
+});
+
+/**
+ * One category's decorations. Both optional and independent; an entry with neither is
+ * refused (removing both is removing the key), so a stored value has one spelling.
+ *
+ * - `before`: a Telegram custom emoji id (`customEmojiIdSchema`, digits only), drawn as the
+ *   button's `icon_custom_emoji_id` — Telegram's ONE premium icon per button, shown BEFORE the
+ *   text, and only from a bot whose appearance test succeeded.
+ * - `after`: an ORDINARY Unicode emoji appended to the text. Telegram has no premium "after"
+ *   on a button (its text carries no entities), so this is the closest correct
+ *   representation, and it is never drawn as, or called, a premium emoji.
+ */
+export const categoryIconSchema = z
+  .object({
+    before: customEmojiIdSchema.optional(),
+    after: categoryAfterEmojiSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.before !== undefined || value.after !== undefined, {
+    message: 'a category entry carries before, after or both',
+  });
+export type CategoryIcon = { readonly before?: string; readonly after?: string };
+
+/**
+ * The value of the `bot.category_icons` setting: each product category's decorations, keyed
+ * by the category's ID (the `bot.category_colors` key rule and bound). A category absent
+ * from the value is drawn exactly as before Item 2. An id naming a category since deleted is
+ * harmless: no button is drawn for it.
+ */
+export const categoryIconsSchema = z
+  .record(
+    z.string().regex(CATEGORY_COLOR_KEY_PATTERN, { message: 'a category id in lower case' }),
+    categoryIconSchema,
+  )
+  .refine((value) => Object.keys(value).length <= CATEGORY_COLORS_MAX, {
+    message: `at most ${String(CATEGORY_COLORS_MAX)} categories carry their own icons`,
+  });
+export type CategoryIcons = Readonly<Record<string, CategoryIcon>>;
+
+/** One category's own decorations, each null when absent. */
+export function categoryIconOf(
+  categoryId: string,
+  icons: CategoryIcons,
+): { readonly before: string | null; readonly after: string | null } {
+  const id = categoryId.toLowerCase();
+  const own = Object.prototype.hasOwnProperty.call(icons, id) ? icons[id] : undefined;
+  const before = own?.before;
+  const after = own?.after;
+  return {
+    before: before === undefined || before === '' ? null : before,
+    after: after === undefined || after === '' ? null : after,
+  };
+}
+
+/**
+ * The premium icon one category's button carries — the ONE rule, shared by the bot and the
+ * Web Admin's preview, and the icon twin of `categoryButtonStyleOf`:
+ *
+ *  1. the category's own `before` (`bot.category_icons`), when it has one;
+ *  2. otherwise the generic category button's icon (`catalog.category` in
+ *     `bot.inline_button_icons`, Item 3);
+ *  3. otherwise none.
+ *
+ * Eligibility is NOT decided here: a caller draws the result only from a bot that may carry
+ * custom emoji.
+ */
+export function categoryButtonIconOf(
+  categoryId: string,
+  icons: CategoryIcons,
+  inlineIcons: InlineButtonIcons,
+): string | null {
+  return (
+    categoryIconOf(categoryId, icons).before ?? inlineButtonIconOf('catalog.category', inlineIcons)
+  );
+}
+
+/**
+ * A category button's text with its `after` emoji: the label, one space, the emoji. With no
+ * `after` it is the label, unchanged byte for byte.
+ */
+export function categoryButtonText(label: string, after: string | null): string {
+  return after === null ? label : `${label} ${after}`;
+}
