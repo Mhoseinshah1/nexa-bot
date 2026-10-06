@@ -381,10 +381,15 @@ describe('a customer rotating their own subscription link', () => {
       String(one.body['text'] ?? one.body['caption'] ?? one.body['unparseable'] ?? '');
     const announcement = sent.find((one) => textOf(one).includes(after.subscriptionUrl ?? '-'));
     expect(announcement, 'the new link was sent').toBeDefined();
-    // Round N (F4): ON the same card — an edit of the message the change was asked from.
-    expect(announcement!.url.endsWith('/editMessageText')).toBe(true);
-    expect(announcement!.body['message_id']).toBe(cardMessageId);
-    expect(JSON.stringify(announcement!.body['reply_markup'])).toContain(`sv:${service.id}`);
+    // B9/C3: the card asked for it, and the answer is ONE photo — the QR, this text as its
+    // caption, the card's buttons with the way back — replacing the «working» card, which
+    // is deleted (a text message cannot be edited into a photo).
+    expect(announcement!.url.endsWith('/sendPhoto')).toBe(true);
+    expect(textOf(announcement!)).toContain(`sv:${service.id}`);
+    expect(
+      sent.filter((one) => one.url.endsWith('/deleteMessage')).map((one) => one.body['message_id']),
+    ).toEqual([cardMessageId]);
+    expect(sent.filter((one) => one.url.endsWith('/editMessageText'))).toHaveLength(0);
     expect(textOf(announcement!)).toContain(
       `لینک اشتراک سرویس ${service.providerUsername} با موفقیت تغییر کرد`,
     );
@@ -547,9 +552,11 @@ describe('a customer rotating their own subscription link', () => {
     panel.forgetFileReads();
     sent = [];
     await ctx.container.provisionerLoop.tick();
-    const card = sent.find((one) => one.url.endsWith('/editMessageText'));
+    const card = sent.find((one) => one.url.endsWith('/sendPhoto'));
     expect(card?.url).toContain('seed-token-acme-2');
-    expect(card?.body['message_id']).toBe(83_001);
+    const removed = sent.find((one) => one.url.endsWith('/deleteMessage'));
+    expect(removed?.url).toContain('seed-token-acme-2');
+    expect(removed?.body['message_id']).toBe(83_001);
     const albums = sent.filter((one) => one.url.endsWith('/sendMediaGroup'));
     expect(albums).toHaveLength(1);
     expect(albums[0]?.url, 'the files go through the card’s bot').toContain('seed-token-acme-2');

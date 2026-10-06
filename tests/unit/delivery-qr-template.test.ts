@@ -716,14 +716,15 @@ describe('the three delivery sites draw the configured template', () => {
     expect(h.files[0]?.caption?.templateKey).toBe('bot.service.link_rotated');
   });
 
-  it('the QR under the link view sends the templated QR', async () => {
+  it('the link photo of «🔗 لینک اشتراک» sends the templated QR', async () => {
     const h = harness();
     await h.delivery.redeliver(A, service, 'customer-1' as never, '5150', BOT, {
       card: { chatId: '5150', messageId: 77, botInstanceId: BOT } as never,
       linkQrKey: 'tap-1',
     });
     expectTemplated(h.files);
-    expect(h.files[0]?.caption?.templateKey).toBe('bot.service.link_qr_caption');
+    // B9/C3: the one photo carries the link as its caption.
+    expect(h.files[0]?.caption?.templateKey).toBe('bot.service.subscription');
   });
 });
 

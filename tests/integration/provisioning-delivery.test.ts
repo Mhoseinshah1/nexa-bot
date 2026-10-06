@@ -2251,12 +2251,13 @@ describe('a provisioned service announces itself', () => {
     await ctx.container.provisionerLoop.tick();
     const service = await services.findByOrderId(tenantA, orderId);
     expect(service?.deliveryState, 'the automatic announcement already ran').toBe('DELIVERED');
-    // Round N (F4): «🔗 لینک اشتراک» turns the card it was tapped on into the link — an
-    // edit of that message, never a new one.
+    // B9/C3: «🔗 لینک اشتراک» is answered by ONE photo — the QR, the link as its caption and
+    // the way back under the same message — and the text card it replaced is deleted.
     const edits = () => sent.filter((one) => one.url.includes('/editMessageText'));
-    const before = edits().length;
+    const photosNow = () => sent.filter((one) => one.url.endsWith('/sendPhoto'));
+    const editsBefore = edits().length;
     const messagesBefore = sent.filter((one) => one.url.endsWith('/sendMessage')).length;
-    const photosBefore = sent.filter((one) => one.url.endsWith('/sendPhoto')).length;
+    const photosBefore = photosNow().length;
 
     const update = tapUpdate(`r:${service?.id ?? ''}`);
     const result = await runtime().handle(tenantA, systemActor('bot'), update);
@@ -2272,39 +2273,32 @@ describe('a provisioned service announces itself', () => {
      */
     expect(result.intent).toBe('SERVICE_RESEND');
     expect(result.replyKey).toBeNull();
-    expect(edits().length, 'and the subscription really went out').toBe(before + 1);
-    const resent = edits()[edits().length - 1];
-    expect(JSON.stringify(resent)).toContain(service?.subscriptionRef ?? 'MISSING');
-    const tapped = (update.update as { callback_query: { message: { message_id: number } } })
-      .callback_query.message.message_id;
-    expect(resent?.body['message_id'], 'the card the tap came from').toBe(tapped);
-    // Back restores the same card, in place.
-    expect(JSON.stringify(resent?.body['reply_markup'])).toContain(`sv:${service?.id ?? ''}`);
+    const photos = photosNow().slice(photosBefore);
+    expect(photos, 'and the subscription really went out, as ONE photo').toHaveLength(1);
+    const raw = String(photos[0]?.body['unparseable']);
+    expect(raw, 'the link is the caption').toContain(
+      `<code>${service?.subscriptionUrl ?? 'MISSING'}</code>`,
+    );
+    // Back restores the card; it is on the photo itself.
+    expect(raw).toContain(`sv:${service?.id ?? ''}`);
+    expect(edits().length, 'the card is not edited').toBe(editsBefore);
     expect(
       sent.filter((one) => one.url.endsWith('/sendMessage')).length,
       'no separate link message',
     ).toBe(messagesBefore);
-    // Pre-support A9: ONE QR photo of the same link beneath the view, and nothing else.
-    const photos = sent.filter((one) => one.url.endsWith('/sendPhoto')).slice(photosBefore);
-    expect(photos).toHaveLength(1);
-    expect(JSON.stringify(photos[0]?.body), 'not the link again in text').not.toContain(
-      service?.subscriptionRef ?? 'MISSING',
+    const tapped = (update.update as { callback_query: { message: { message_id: number } } })
+      .callback_query.message.message_id;
+    const deleted = sent.filter((one) => one.url.endsWith('/deleteMessage'));
+    expect(deleted.at(-1)?.body['message_id'], 'the card the tap came from is removed').toBe(
+      tapped,
     );
 
-    // Telegram redelivering the SAME tap shows the link again and sends no second QR.
+    // Telegram redelivering the SAME tap sends nothing.
     await runtime().handle(tenantA, systemActor('bot'), update);
-    expect(
-      sent.filter((one) => one.url.endsWith('/sendPhoto')).slice(photosBefore),
-      'a replay sends no second QR',
-    ).toHaveLength(1);
-    const caption = JSON.stringify(photos[0]?.body);
-    expect(caption, 'captioned as the QR of the link above').toContain('کد QR لینک اتصال بالا');
-    expect(caption, 'never claims the details follow').not.toContain('پیام بعدی');
-    // A NEW tap is a new request, and is answered with its own QR.
+    expect(photosNow().slice(photosBefore), 'a replay sends no second photo').toHaveLength(1);
+    // A NEW tap is a new request, and is answered with its own photo.
     await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`r:${service?.id ?? ''}`));
-    expect(sent.filter((one) => one.url.endsWith('/sendPhoto')).slice(photosBefore)).toHaveLength(
-      2,
-    );
+    expect(photosNow().slice(photosBefore)).toHaveLength(2);
 
     const after = await services.findByOrderId(tenantA, orderId);
     expect(after?.deliveryAttempts, 'the attempt is accounted for').toBeGreaterThan(
