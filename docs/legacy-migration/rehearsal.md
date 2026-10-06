@@ -3,7 +3,8 @@
 **Status: harness aligned with the P7 CLI as built (`importer.md`); no staging rehearsal
 has run.** No staging server, real legacy dump or RickPanel credentials exist here, so no
 staging rehearsal result exists anywhere in this repository. Synthetic runs exercise the
-harness and P7's code only and are never recorded here as results.
+harness and P7's code only; the ones run for WP-D1–D8 are listed, labelled synthetic, in
+[`readiness-record.md`](readiness-record.md) § Synthetic evidence — never as a result here.
 
 `scripts/legacy-rehearsal.sh` runs the whole migration against copies, times it, checks it
 and rolls it back:
@@ -186,6 +187,7 @@ Pinned by `tests/unit/legacy-rehearsal-guards.test.ts`.
 | `synthetic-panel-requests.json`      | synthetic only: requests the fake panels received after setup                                                              |
 | `reconciliation.md`                  | the reconciliation result table, generated from the checks (WP-D5)                                                         |
 | `archive.json`                       | the archive inspector's report: both sha256 values, format, engine, collations, blockers                                   |
+| `snapshots/c<N>-tables-*.tsv`        | the exact per-table fingerprints (rows and row hashes) the rollback checks compare (WP-D8)                                 |
 | `snapshots/c<N>-panel-state-*.json`  | P4: per production panel, account count and hashes; per-account digests under a deleted key                                |
 | `logs/`                              | one log per stage                                                                                                          |
 
@@ -221,7 +223,9 @@ and after the resume, WP-D4), `customers_created_le_imported` (C2),
 `fractional_balances_never_imported` and `legacy_balance_{fractional,null}_users` (W8; the
 latter PENDING when non-zero), `revenue_view_standard_unchanged`,
 `revenue_view_adoption_zero`, `wallet_window_openings_only` (R3, machine half),
-`orphans_in_customer_missing` (S4), `no_trial_grants` (WP-D5). Each maps to an equation in
+`orphans_in_customer_missing` (S4), `no_trial_grants` (WP-D5),
+`rollback_restores_pre_import_exact`, `rollback_displaced_exists`,
+`rollback_displaced_preserved` (WP-D8). Each maps to an equation in
 [`reconciliation.md`](reconciliation.md).
 
 ## What it does not cover
