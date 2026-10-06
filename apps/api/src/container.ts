@@ -3509,6 +3509,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     config.PANEL_PROBE_TENANT_LIMIT,
     config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
   );
+  /**
+   * The background floor: the scheduled usage sweep's, and (pre-support A2) a card's
+   * opportunistic read on open. One number on the one bucket, never a second budget.
+   */
+  const usageSyncBackgroundReserve = usageSyncBudgetReserveFor(
+    config.PANEL_PROBE_TENANT_LIMIT,
+    monitorBudgetReserve,
+  );
 
   const panelMonitor = new PanelMonitorService(
     {
@@ -5204,10 +5212,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     http: panelHttp,
     urlPolicy,
     probeBudget: probeCore.probeBudget,
-    backgroundBudgetReserve: usageSyncBudgetReserveFor(
-      config.PANEL_PROBE_TENANT_LIMIT,
-      monitorBudgetReserve,
-    ),
+    backgroundBudgetReserve: usageSyncBackgroundReserve,
     uow,
     clock,
     ids,
@@ -6556,6 +6561,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderService,
     antiSpam,
     botRuntime: new BotRuntime({
+      // Pre-support A2: a card's live read on open that failed unexpectedly is logged here.
+      logger,
       // WP20: more than 20 interactions in 10 s blocks the customer; fails open.
       antiSpam,
       // Package B: the REQUIRED channels, enforced before any business action; fails open.
@@ -6678,6 +6685,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         http: panelHttp,
         urlPolicy,
         probeBudget: probeCore.probeBudget,
+        // Pre-support A2: a card being opened reads above the background floor, never from it.
+        backgroundBudgetReserve: usageSyncBackgroundReserve,
         guard,
         scopeActivity: tenants,
         panelPolicy: panelPolicyReader,

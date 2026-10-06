@@ -163,7 +163,10 @@ import {
 import type { CustomerCaptureService } from '../../modules/commerce/customers/application/customer-capture.service.js';
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { SubscriptionFileService } from '../../modules/commerce/provisioning/application/subscription-file.service.js';
-import type { ServiceRefreshService } from '../../modules/commerce/provisioning/application/service-refresh.service.js';
+import type {
+  ServiceRefreshResult,
+  ServiceRefreshService,
+} from '../../modules/commerce/provisioning/application/service-refresh.service.js';
 import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
 import type { ServiceTransferService } from '../../modules/commerce/provisioning/application/service-transfer.service.js';
 import type { CustomerCountersReader } from '../../modules/commerce/customers/application/customer-counters-ports.js';
@@ -3858,6 +3861,15 @@ export interface CustomServiceSurface {
 }
 
 export interface BotRuntimeDeps {
+  /**
+   * Where a BEST-EFFORT step that failed is reported without costing the customer the
+   * screen it was helping draw: the live read a service card makes on open (pre-support
+   * A2). Optional for the fixtures that build a runtime without it; the composition root
+   * always supplies the process logger.
+   */
+  readonly logger?: {
+    readonly error: (context: Record<string, unknown>, message: string) => void;
+  };
   readonly customers: CustomerService;
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
@@ -4960,6 +4972,22 @@ export function refusalValuesFor(key: TemplateKey): TemplateValues {
 /** Whether `refusal` answers this error with a sentence, rather than rethrowing it. */
 function hasRefusalReply(error: unknown): boolean {
   return isNexaError(error) && REFUSAL_REPLIES[error.code] !== undefined;
+}
+
+/**
+ * Pre-support A2: what a card's opportunistic read on open may be refused with SILENTLY —
+ * a typed refusal the open did not ask about: the installation is
+ * quiesced for a recovery, the actor may not read (`PERMISSION_DENIED`), or a failure the
+ * taxonomy marks retryable. Anything else (an untyped error, a non-retryable internal one
+ * such as an undecryptable credential) still draws the stored card, and is reported.
+ */
+function isExpectedRefreshRefusal(error: unknown): boolean {
+  if (!isNexaError(error)) return false;
+  return (
+    error.code === PLATFORM_ERROR_CODES.RECOVERY_QUIESCED ||
+    error.kind === 'PERMISSION_DENIED' ||
+    error.retryable
+  );
 }
 
 function refusal(error: unknown): PendingReply {
@@ -10204,7 +10232,7 @@ export class BotRuntime {
       return this.serviceRefresh(scope, actor, customer, command.targetId, input.idempotencyKey);
     }
     if (command.intent === 'SERVICE_CARD' && command.targetId !== null) {
-      const card = await this.serviceDetail(scope, actor, customer, command.targetId);
+      const card = await this.openServiceCard(scope, actor, customer, command.targetId);
       /*
        * Owner spec §2.3: a stale tap — a service transferred, refunded or never theirs —
        * still edits the list's message, and keeps the way back to the list on it, so the
@@ -10478,7 +10506,7 @@ export class BotRuntime {
       return { ...(await this.services(scope, customer, command.page ?? 1)), edit: true };
     }
     if (command.intent === 'SERVICE' && command.targetId !== null) {
-      return this.serviceDetail(scope, actor, customer, command.targetId);
+      return this.openServiceCard(scope, actor, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_RESEND' && command.targetId !== null) {
       return this.serviceResend(scope, customer, command.targetId, input);
@@ -11997,6 +12025,76 @@ export class BotRuntime {
       buttons: [backToListButton()],
       orderId: null,
     };
+  }
+
+  /**
+   * Pre-support A2: opening a card (`s:` and `sv:`) makes the bounded live read the «♻️»
+   * button makes, before the card is drawn — so an opened card shows what the panel says,
+   * not what the last scheduled sync wrote.
+   *
+   * It is `ServiceRefreshService.refresh` in its `onOpen` mode, so every bound the button
+   * has holds here too — the minimum interval (`RECENT` dials nothing), the
+   * one-read-in-flight reservation (a held one dials nothing), the panel client's timeout
+   * — and two more that only an unasked-for read needs: a panel the monitor has confirmed
+   * unusable is not dialled, and the token comes from above the background floor of the
+   * tenant's ONE bucket, never from it.
+   *
+   * The open is a read of the card; the refresh is opportunistic. So only `NOT_FOUND` is
+   * an answer — the card is not theirs (or not there), told exactly as the stored card
+   * would tell it. `FAILED` (panel down, budget spent, tenant stopped), `RECENT` and
+   * `NOT_READ` draw the stored card with no toast: the failure notice belongs to the button
+   * the customer pressed to ask for a read. Anything the refresh throws draws the stored
+   * card too: an expected refusal (`isExpectedRefreshRefusal`) silently, anything else
+   * reported through `logger`.
+   *
+   * Not for the «working» card: a service with a change still being applied is drawn
+   * «working» from its operation rows, and its usage is not what the customer is waiting
+   * on — the read is skipped and the card drawn as it stands.
+   */
+  private async openServiceCard(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    const refresh = this.deps.serviceRefresh;
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (
+      refresh !== undefined &&
+      service !== null &&
+      !(await this.deps.services.changeInProgress(scope, service))
+    ) {
+      let outcome: ServiceRefreshResult['outcome'] | null;
+      try {
+        outcome = (
+          await refresh.refresh(
+            scope,
+            actor,
+            { customerId: customer.id, serviceId },
+            {
+              onOpen: true,
+            },
+          )
+        ).outcome;
+      } catch (error) {
+        /*
+         * An opportunistic read never costs the customer the card: whatever it threw, the
+         * stored card is drawn below. An expected refusal is silent; anything else is a
+         * defect somebody must see (an unreadable credential, say), so it is reported.
+         */
+        if (!isExpectedRefreshRefusal(error)) {
+          this.deps.logger?.error(
+            { err: error, serviceId, tenantId: scope.tenantId },
+            'the live read on opening a service card failed; the stored card was drawn',
+          );
+        }
+        outcome = null;
+      }
+      if (outcome === 'NOT_FOUND') {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+    }
+    return this.serviceDetail(scope, actor, customer, serviceId);
   }
 
   private async serviceRefresh(
