@@ -28,7 +28,7 @@ export function capturingLane(ctx: TestContext) {
     paymentCredits: wallet,
     // The rejection's reason (File 01 §7): the production reader over the real payment row.
     rejectionReasons: payments,
-    // B14: the approved-receipt credit's tracking code, from the payment's own row.
+    // B14: the wallet credit's tracking code (receipt or gateway), from the payment's own row.
     paymentReferences: payments,
     reminderSnapshots: new DrizzleServiceReminderSnapshotReader(ctx.container.database.db),
     contacts: {

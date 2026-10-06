@@ -547,8 +547,9 @@ export interface PaymentRepository {
 
   /**
    * B14: the payment's tracking code — its own `reference`, NOT NULL, unique per tenant and
-   * never rewritten — for the approved-receipt credit messages to quote. Null only for a
-   * payment this tenant does not have.
+   * never rewritten — for the wallet-credit messages to quote: an approved receipt or a
+   * gateway top-up (both `WALLET_TOPUP_CREDITED`) and a receipt credited to the wallet.
+   * Null only for a payment this tenant does not have.
    */
   trackingCodeFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
 

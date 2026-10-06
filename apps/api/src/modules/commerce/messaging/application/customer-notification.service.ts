@@ -186,9 +186,14 @@ export const PAYMENT_CREDIT_FIGURES: Readonly<
 };
 
 /**
- * B14: the approved-receipt success messages, which end with the payment's tracking code
- * (`{reference}`, two blank lines below the sentence). The gift's sentence is the second
- * message of the same payment and does not repeat it.
+ * B14: the wallet-credit success messages, which end with the payment's tracking code
+ * (`{reference}`, two blank lines below the sentence). Asked for on the approved receipt,
+ * and deliberately not limited to it: `WALLET_TOPUP_CREDITED` is the one top-up credit
+ * sentence for EVERY rail — a reviewed card-to-card receipt and an external gateway's
+ * confirmation (`PaymentService`'s generic confirm path) alike — so a gateway top-up quotes
+ * its reference too, the same code the Web payment search finds. `RECEIPT_CREDITED_TO_WALLET`
+ * is the reviewer crediting a receipt instead. The gift's sentence is a second message of
+ * the same payment and does not repeat it.
  */
 const PAYMENT_TRACKED_KINDS: ReadonlySet<CustomerNotificationKind> = new Set([
   'WALLET_TOPUP_CREDITED',
@@ -293,7 +298,8 @@ export interface CustomerNotificationDeps {
     ) => Promise<Money | null>;
   };
   /**
-   * B14: the tracking code an approved-receipt credit message ends with — the payment's own
+   * B14: the tracking code a wallet-credit message ends with (an approved receipt, a
+   * gateway top-up, a receipt credited to the wallet) — the payment's own
    * stable `payments.reference`, read at send time from the payment the notification names.
    * A reader, not a payload (ADR 0030 §1), the same shape as `drizzle-renewal-facts.reader`'s
    * `{reference}`: a replayed or re-dispatched notification reads the same row and renders

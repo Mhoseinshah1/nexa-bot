@@ -1028,9 +1028,10 @@ describe('a customer topping up their wallet', () => {
     });
 
     /*
-     * B14: the approved receipt's success message ends, after TWO blank lines, with
+     * B14: the top-up's success message ends, after TWO blank lines, with
      * «کد پیگیری پرداخت: …» — the payment's own stable `payments.reference`, read at send
-     * time. A replayed dispatch reads the same row and renders the same code.
+     * time. Here an approved receipt; a gateway top-up is the same kind and shows the same
+     * line. A replayed dispatch reads the same row and renders the same code.
      */
     it('ends the approved top-up message with the payment’s tracking code after two blank lines, the same on a replay', async () => {
       const { payment } = await topup(500_000n, 'b14');

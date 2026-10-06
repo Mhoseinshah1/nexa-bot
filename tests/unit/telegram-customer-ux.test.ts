@@ -66,9 +66,9 @@ describe('§2.2 the wallet-credit message', () => {
   );
 
   /*
-   * B14: the approved-receipt success message ends with the payment's tracking code, after
-   * exactly two blank lines — and without a code (an override, a reader not wired) it is the
-   * two lines alone, with no blank line left behind.
+   * B14: the wallet-credit success message (an approved receipt, or a gateway top-up) ends
+   * with the payment's tracking code, after exactly two blank lines — and without a code (an
+   * override, a reader not wired) it is the two lines alone, with no blank line left behind.
    */
   it.each(['bot.wallet.topup_credited', 'bot.payment.receipt_credited_to_wallet'] as const)(
     '%s ends with «کد پیگیری پرداخت: …» after two blank lines',
