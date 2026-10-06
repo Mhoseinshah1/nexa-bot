@@ -228,6 +228,11 @@ export const deliveryQrPreviewSchema = z.object({
   fallback: z.enum(QR_TEMPLATE_FALLBACK_REASONS).nullable(),
   /** Pixels per module of the sample code, in the image returned. */
   moduleScale: z.number().int(),
+  /**
+   * The stored background's dimensions, read from its header; null when none is stored or
+   * its header cannot be read. What the form validates a draft region against before saving.
+   */
+  background: z.object({ width: z.number().int(), height: z.number().int() }).nullable(),
 });
 export type DeliveryQrPreviewResponse = z.infer<typeof deliveryQrPreviewSchema>;
 
