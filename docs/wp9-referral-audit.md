@@ -259,6 +259,15 @@ ID", with no internal code in the customer's link (pre-support brief item 7; mas
   `<digits>` (MirzaBot's legacy `?start=<from_id>`, so links an imported customer already
   shared attribute). An eight-digit `ref-` payload matches both of the first two; the code
   is looked up first.
+- **The eight-digit ambiguity, and why it is negligible.** A Telegram user id of exactly
+  eight digits (`ref-12345678`) also fits the old code shape, because the base32 alphabet
+  contains the ten digits. It is misattributed only if some customer of the SAME tenant
+  has a recorded code made of those very eight digits: a code is all-digit with
+  probability (10/32)^8 ≈ 9 × 10^-5, and must then equal one particular eight-digit
+  string out of 10^8 — about 9 × 10^-13 per recorded code. Codes are recorded only for
+  customers who opened their invite before B7, and links handed out since B7 never carry a
+  code. Real ids are mostly nine digits or more, so an eight-digit id is itself rare. The
+  order (code first) keeps every pre-B7 link exactly as it was.
 - **Every F2/F11 rule holds unchanged.** Attribution is made only on the update that
   creates the referee and never changed afterwards. A numeric id is resolved inside the
   tenant (`findTelegramIdOwner`), so another tenant's customer, or nobody, is
