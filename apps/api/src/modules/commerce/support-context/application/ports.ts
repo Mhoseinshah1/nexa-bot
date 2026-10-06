@@ -42,6 +42,12 @@ export interface SupportContextReader {
   ): Promise<{ readonly items: readonly SupportPaymentFact[]; readonly anyUnderReview: boolean }>;
 
   /**
+   * L4: whether ANY of the customer's services is UNRECONCILED — over all of them, not the page
+   * the payload shows (`hasUnreconciledService`).
+   */
+  anyUnreconciledService(scope: TenantContext, customerId: UserId): Promise<boolean>;
+
+  /**
    * ACTIVE incidents with a customer message that reach this customer under the notice
    * audience's own rule (`IncidentRepository.audience`): a live service on the incident's
    * scope, or any live service when the incident names no panel, location or product.
@@ -114,6 +120,8 @@ export interface SupportKnowledgeReader {
     readonly {
       readonly title: string;
       readonly body: string;
+      /** D2: the reviewer's tags, which the relevance score reads. */
+      readonly tags: readonly string[];
       /** TB9: the source a NEXA_BUILD article was built from; null for any other article. */
       readonly sourceType: string | null;
       readonly sourceKey: string | null;

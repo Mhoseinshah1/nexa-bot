@@ -277,6 +277,7 @@ describe('the support notifications', () => {
     expect(support.map((rule) => rule.code).sort()).toEqual([
       'support.ai_provider.credential_rejected',
       'support.ai_provider.unavailable',
+      'support.assistant.stalled',
       'support.business_connection.unusable',
       'support.handoff_required',
     ]);

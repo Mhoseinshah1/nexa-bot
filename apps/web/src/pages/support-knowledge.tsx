@@ -902,15 +902,23 @@ const PROPOSE_FAULTS: Readonly<Record<string, WebKey>> = {
 export function ProposeKnowledgeButton({
   conversationId,
   outboundId,
+  messageId,
 }: {
   conversationId: string;
-  outboundId: string;
-}) {
+} & (
+  | { outboundId: string; messageId?: undefined }
+  /** D8: a reply the owner typed in the Telegram app. */
+  | { messageId: string; outboundId?: undefined }
+)) {
   const notify = useToast();
   const propose = useMutation({
     // One key per CLICK, passed as the variable, so a retry reuses it.
     mutationFn: (idempotencyKey: string) =>
-      proposeAsKnowledge({ conversationId, outboundId, idempotencyKey }),
+      proposeAsKnowledge(
+        outboundId !== undefined
+          ? { conversationId, outboundId, idempotencyKey }
+          : { conversationId, messageId: messageId ?? '', idempotencyKey },
+      ),
     onSuccess: () => notify({ tone: 'ok', message: t('web.sk_proposed') }),
   });
   const fault = propose.error instanceof ApiError ? PROPOSE_FAULTS[propose.error.code] : undefined;

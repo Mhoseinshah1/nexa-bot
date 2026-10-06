@@ -122,8 +122,13 @@ export const supportAnalyticsResponseSchema = z.object({
     requested: count,
     /** Sent by an operator, edited or not (`SENT`). */
     sent: count,
-    /** Thrown away, or replaced by a newer draft (`DISCARDED`). */
+    /** Thrown away by an operator (`DISCARDED` by «کنار گذاشتن»). */
     discarded: count,
+    /**
+     * L1: replaced by a newer request for the same conversation (`DISCARDED` by the re-request,
+     * never by a person). Counted apart, so «کنار گذاشته شد» is what operators threw away.
+     */
+    superseded: count,
     /** No draft: the chain could not answer (`FAILED`). */
     failed: count,
     /** A draft exists and nobody acted on it yet (`READY`), or it is still queued. */

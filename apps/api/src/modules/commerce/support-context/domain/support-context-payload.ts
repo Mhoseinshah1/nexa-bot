@@ -1,5 +1,6 @@
 import {
   SUPPORT_CONTEXT_GUIDE_MAX_CHARS,
+  SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES,
   SUPPORT_CONTEXT_MAX_BYTES,
   SUPPORT_CONTEXT_TRUNCATION_ORDER,
   UNLIMITED_TRAFFIC_BYTES,
@@ -65,22 +66,41 @@ export function payloadBytes(payload: SupportContextPayload): number {
   return new TextEncoder().encode(JSON.stringify(payload)).length;
 }
 
+/** UTF-8 bytes of one family's JSON: how much of the budget it holds. */
+function familyBytes(entries: readonly unknown[]): number {
+  return new TextEncoder().encode(JSON.stringify(entries)).length;
+}
+
 /**
  * The payload cut to `maxBytes` by dropping whole entries from the TAIL of each family,
  * family by family in `SUPPORT_CONTEXT_TRUNCATION_ORDER` — never a field from inside an
  * entry, so nothing that remains is a half-fact. Flags, the customer and the support
  * accounts are never cut; every family can be emptied, so the result always fits.
+ *
+ * D2: knowledge, in its turn, is cut only down to `knowledgeReserve` bytes — and never below
+ * its first entry, the most relevant one. What is left of it gives way only after every other
+ * family is empty.
  */
 export function fitPayload(
   payload: SupportContextPayload,
   maxBytes: number = SUPPORT_CONTEXT_MAX_BYTES,
+  knowledgeReserve: number = SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES,
 ): SupportContextPayload {
   let current = payload;
+  const fits = () => payloadBytes(current) <= maxBytes;
   for (const family of SUPPORT_CONTEXT_TRUNCATION_ORDER) {
-    while (current[family].length > 0 && payloadBytes(current) > maxBytes) {
+    const keep =
+      family === 'knowledge'
+        ? () => current.knowledge.length <= 1 || familyBytes(current.knowledge) <= knowledgeReserve
+        : () => current[family].length === 0;
+    while (!keep() && !fits()) {
       current = { ...current, [family]: current[family].slice(0, -1) };
     }
-    if (payloadBytes(current) <= maxBytes) return current;
+    if (fits()) return current;
+  }
+  // The last resort: the knowledge reserve itself.
+  while (current.knowledge.length > 0 && !fits()) {
+    current = { ...current, knowledge: current.knowledge.slice(0, -1) };
   }
   return current;
 }

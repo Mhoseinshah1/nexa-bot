@@ -95,6 +95,10 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   let transport: ScriptedTransport;
   let next: SupportAiOutcome;
   let calls: number;
+  /** D7: the transcript each provider call was given, as role and text. */
+  let requests: { role: string; text: string }[][];
+  /** D2: the query the context was built with, last call. */
+  let contextQuery: string | null | undefined;
   let duringCall: (() => Promise<void>) | null;
   let flags: AutoContextFlags;
   let offset: number;
@@ -258,6 +262,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       model: 'gpt-5.5',
     };
     calls = 0;
+    requests = [];
     duringCall = null;
     visionStep = true;
     modelSees = true;
@@ -284,6 +289,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       chain: {
         generate: async (_scope, input) => {
           calls += 1;
+          requests.push(input.request.messages.map((m) => ({ role: m.role, text: m.text })));
           if (duringCall !== null) await duringCall();
           // The step is given every image of the variant, or (modelSees = false) none of them,
           // as TB6's `stepSight` reports it.
@@ -315,12 +321,16 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       },
       ids: c.ids,
       context: {
-        build: async () => ({
-          json: '{"services":[{"alias":"S1"}]}',
-          aliases: new Map([['S1', 'سرویس user123']]),
-          linked: flags.identityLinked,
-          flags,
-        }),
+        build: async (_scope, _customer, options) => {
+          contextQuery = options?.query;
+          return {
+            json: '{"services":[{"alias":"S1"}]}',
+            aliases: new Map([['S1', 'سرویس user123']]),
+            linked: flags.identityLinked,
+            flags,
+            knowledge: { sent: 3, available: 4 },
+          };
+        },
       },
       conversations,
       messages: new DrizzleBusinessMessageRepository(c.database.db),
@@ -379,7 +389,45 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     await deliver();
     expect(transport.sent).toEqual([{ chatId: CUSTOMER, text: grounded.replyText }]);
     expect(await count('tickets')).toBe(0); // an ordinary answered question opens no ticket
+    // D2: the knowledge is chosen by the customer's own words.
+    expect(contextQuery).toBe('سلام، اینترنتم وصل نمی‌شود');
+    // D2 telemetry, recorded with the job's result.
+    const telemetry = await db().execute(
+      sql`SELECT knowledge_sent, knowledge_available FROM support_ai_jobs
+          WHERE conversation_id = ${first.conversationId}`,
+    );
+    expect(telemetry.rows).toEqual([{ knowledge_sent: 3, knowledge_available: 4 }]);
     expect(await count('business_conversation_escalations')).toBe(0);
+  });
+
+  it('D9: «وصل نمیشه، پولمو پس بدید» never auto-replies, whatever topic the model picks', async () => {
+    // The model would label it a safe, confident, grounded connection answer.
+    const first = await record(message({ text: 'وصل نمیشه، پولمو پس بدید' }));
+    await tick();
+    await deliver();
+    expect(calls).toBe(0); // decided before any provider is asked
+    expect(await autoJobs(first.conversationId)).toMatchObject([
+      { state: 'FAILED', outcome: 'guard_handoff_topic', handoff_reason: 'HANDOFF_TOPIC' },
+    ]);
+    expect(await conversation(first.conversationId)).toMatchObject({
+      state: 'HANDOFF_REQUIRED',
+      handoffReason: 'HANDOFF_TOPIC',
+    });
+    expect(await autoRows(first.conversationId)).toEqual([]);
+    expect(transport.sent).toEqual([]);
+    expect(await count('tickets')).toBe(1); // the refund path: escalation and ticket
+  });
+
+  it('D9: an earlier refund line still counts when a newer message is the trigger', async () => {
+    await record(message({ text: 'پول‌مو پس بدین' }));
+    const second = await record(message({ text: 'سرویسم هم وصل نمیشه' }));
+    await tick();
+    expect(calls).toBe(0);
+    expect((await autoJobs(second.conversationId)).at(-1)).toMatchObject({
+      state: 'FAILED',
+      outcome: 'guard_handoff_topic',
+    });
+    expect(await autoRows(second.conversationId)).toEqual([]);
   });
 
   it('waits the settle delay: a job is not claimed before it is due', async () => {
@@ -571,6 +619,54 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     await record(message({ fromUserId: OWNER, isFromOffline: true, text: 'در دسترس نیستیم' }));
     expect(await autoJobs(first.conversationId)).toHaveLength(1);
     expect((await conversation(first.conversationId)).state).toBe('AI_ACTIVE');
+  });
+
+  // --- D7: the model reads its own delivered replies ------------------------------------
+
+  it('D7: with NO echo from Telegram, the next call still reads the reply it sent', async () => {
+    const first = await record(message({ text: 'سلام، سرویسم وصل نمیشه' }));
+    await tick();
+    await deliver();
+    expect(transport.sent).toHaveLength(1);
+    // Telegram does not echo the bot's own send: nothing is recorded for it.
+    await record(message({ text: 'باز کردم، هنوز وصل نمیشه' }));
+    await tick();
+    expect(calls).toBe(2);
+    expect(requests[1]).toEqual([
+      { role: 'user', text: 'سلام، سرویسم وصل نمیشه' },
+      { role: 'assistant', text: grounded.replyText },
+      { role: 'user', text: 'باز کردم، هنوز وصل نمیشه' },
+    ]);
+    expect((await autoJobs(first.conversationId))[1]).toMatchObject({ outcome: 'sent' });
+  });
+
+  it('D7: WITH the echo, the reply is read once, not twice', async () => {
+    const first = await record(message({ text: 'سلام، سرویسم وصل نمیشه' }));
+    await tick();
+    await deliver();
+    const [row] = await autoRows(first.conversationId);
+    const sentId = (
+      await db().execute(
+        sql`SELECT telegram_message_id FROM business_outbound_messages WHERE id = ${row!.id}`,
+      )
+    ).rows[0] as { telegram_message_id: number };
+    // Telegram echoes the bot's own send back; it is recorded as ours.
+    await record(
+      message({
+        messageId: Number(sentId.telegram_message_id),
+        fromUserId: OWNER,
+        senderBusinessBotId: OUR_BOT,
+        text: grounded.replyText,
+      }),
+    );
+    await record(message({ text: 'باز کردم، هنوز وصل نمیشه' }));
+    await tick();
+    expect(calls).toBe(2);
+    expect(requests[1]).toEqual([
+      { role: 'user', text: 'سلام، سرویسم وصل نمیشه' },
+      { role: 'assistant', text: grounded.replyText },
+      { role: 'user', text: 'باز کردم، هنوز وصل نمیشه' },
+    ]);
   });
 
   // --- the loop guard ----------------------------------------------------------------------
@@ -990,7 +1086,9 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       usage: { inputTokens: 1, outputTokens: 1 },
       model: 'm',
     };
-    const first = await record(message({ text: 'پولم را پس بدهید' }));
+    // Not money in the customer's words (D9 would hand off before the model and leave no AI
+    // note): the MODEL's topic is what hands this one off.
+    const first = await record(message({ text: 'سرویسم رو نمی‌خوام، لغوش کنید' }));
     await tick();
     const handed = await conversation(first.conversationId);
     expect(handed.state).toBe('HANDOFF_REQUIRED');

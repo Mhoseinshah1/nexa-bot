@@ -172,14 +172,36 @@ it, `fitPayload` drops **whole entries from the tail** of each family, family by
 `SUPPORT_CONTEXT_TRUNCATION_ORDER`:
 
 ```
-knowledge → clientApps → orders → payments → services → incidents
+clientApps → knowledge (down to its reserve) → orders → payments → services → incidents
+→ the knowledge reserve
 ```
 
-Public knowledge and app guides give way first. They are long and can be retrieved again.
-An incident affecting this customer gives way last. The `customer`, the `flags` and the
-`supportAccounts` are never cut, and flags are computed before any cut. Every family can be
-emptied, so the result always fits. The worst case for 20 FAQs at the stored maxima is about
-90 KB of Persian, which is why the cut exists.
+D2 (2026-10-06) changed this. Knowledge used to give way **first**, "retrievable again", but
+nothing retrieved it: with six apps and twenty articles no article reached the model at all.
+Now:
+
+- **Relevance.** The knowledge entries are the `SUPPORT_CONTEXT_LIMITS.knowledge` most relevant
+  of every approved article and live FAQ entry, ranked by a deterministic lexical score
+  (`support-context/domain/knowledge-relevance.ts`) over the title (weight 3), tags (2) and body
+  (1), each term weighted by its rarity among the candidates. The query is the customer's latest
+  three messages (`latestCustomerWords`). Persian is folded first: Arabic `ي`/`ك`, ZWNJ and the
+  zero-width joiners, diacritics, digits, a few verb prefixes and suffixes. No embedding service.
+  Ties, and an empty query, keep the reader's order: approved articles newest first, then the
+  FAQ. The candidates are read up to the per-tenant article bound (1000).
+- **Client apps first.** They are long, and an app whose guide a SELECTED knowledge article
+  already carries (a NEXA_BUILD `CLIENT_APP` article) is sent with an empty `guide`, so the same
+  text is not counted twice.
+- **A knowledge reserve.** In its turn knowledge is cut only down to
+  `SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES` (6 KiB of its own JSON), and never below its first,
+  most relevant entry. The rest of it gives way only after every other family is empty.
+- **Telemetry.** `support_ai_jobs.knowledge_sent` and `.knowledge_available` record, with the
+  job's result, how many entries the request carried and how many there were to choose from
+  (null when no provider was asked).
+
+An incident affecting this customer gives way last among the account facts. The `customer`, the
+`flags` and the `supportAccounts` are never cut, and flags are computed before any cut. Every
+family can be emptied, so the result always fits. The worst case for 20 FAQs at the stored maxima
+is about 90 KB of Persian, which is why the cut exists.
 
 ## Tests
 

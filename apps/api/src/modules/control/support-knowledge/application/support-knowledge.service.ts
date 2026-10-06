@@ -33,6 +33,7 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { detectSensitive, scrubSensitive } from '../domain/scrubber.js';
+import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import type {
   DrizzleSupportKnowledgeRepository,
   KnowledgeArticleRecord,
@@ -58,6 +59,8 @@ export interface SupportKnowledgeServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** L3: the `support.accounts` handles, which knowledge may name. */
+  readonly settings: Pick<SettingsResolver, 'valueOf'>;
 }
 
 interface Remembered {
@@ -162,7 +165,7 @@ export class SupportKnowledgeService {
       },
       (rid) => this.articleOrNull(scope, rid),
       async (tx, now) => {
-        assertClean(command.content);
+        assertClean(command.content, await this.supportHandles(scope));
         if (
           (await this.deps.repository.countArticles(scope, tx)) >= SUPPORT_KNOWLEDGE_LIMITS.articles
         ) {
@@ -226,7 +229,7 @@ export class SupportKnowledgeService {
         if (before.state === 'RETIRED') throw notInState(before.state);
         // Whatever the article's source: a LEARNED article edited after its approval is
         // republished, and a MANUAL one is repeated to every customer just the same.
-        assertClean(command.content);
+        assertClean(command.content, await this.supportHandles(scope));
         const publish = before.state === 'APPROVED';
         const after = await this.deps.repository.rewrite(
           scope,
@@ -352,7 +355,7 @@ export class SupportKnowledgeService {
         assertVersion(before.version, command.expectedVersion);
         const content = command.edit ?? asProposed(before);
         // The last line before knowledge: whatever is approved, edited or not, is scrubbed.
-        assertClean(content);
+        assertClean(content, await this.supportHandles(scope));
         if (
           (await this.deps.repository.countArticles(scope, tx)) >= SUPPORT_KNOWLEDGE_LIMITS.articles
         ) {
@@ -471,6 +474,14 @@ export class SupportKnowledgeService {
 
   // -------------------------------------------------------------------------------
 
+  /**
+   * L3: the installation's own support handles (`support.accounts`): text naming one of them is
+   * the business pointing customers at itself, not personal data, so the scrubber lets it be.
+   */
+  private async supportHandles(scope: ScopeContext): Promise<readonly string[]> {
+    return this.deps.settings.valueOf<readonly string[]>(scope, 'support.accounts');
+  }
+
   private async transition(
     scope: ScopeContext,
     actor: ActorContext,
@@ -501,7 +512,7 @@ export class SupportKnowledgeService {
         assertVersion(before.version, command.expectedVersion);
         // What is published is scrubbed as it is published, whoever wrote the draft and
         // whenever: the draft may predate a scrubber rule.
-        if (spec.publish) assertClean(before);
+        if (spec.publish) assertClean(before, await this.supportHandles(scope));
         const after = await this.deps.repository.rewrite(
           scope,
           articleId,
@@ -705,12 +716,18 @@ function asProposed(candidate: LearningCandidateRecord): SupportKnowledgeContent
  * customer, so a support phone or an official link belongs in a template or a setting, not
  * here. Fail closed: a false positive costs the reviewer an edit.
  */
-export function assertClean(content: {
-  readonly title: string;
-  readonly body: string;
-  readonly tags: readonly string[];
-}): void {
-  const kinds = detectSensitive([content.title, content.body, content.tags.join(' ')].join('\n'));
+export function assertClean(
+  content: {
+    readonly title: string;
+    readonly body: string;
+    readonly tags: readonly string[];
+  },
+  /** L3: the installation's own support handles (`support.accounts`), which are not PII. */
+  allowedHandles: readonly string[] = [],
+): void {
+  const kinds = detectSensitive([content.title, content.body, content.tags.join(' ')].join('\n'), {
+    allowedHandles,
+  });
   if (kinds.length > 0) {
     throw errors.conflict(
       SUPPORT_KNOWLEDGE_ERROR_CODES.SENSITIVE_CONTENT,

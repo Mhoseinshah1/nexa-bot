@@ -32,6 +32,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type {
   BusinessConversationRecord,
   BusinessConversationRepository,
+  BusinessMessageRecord,
   BusinessMessageRepository,
   BusinessOutboundRecord,
   BusinessOutboundRepository,
@@ -43,6 +44,7 @@ import { findDuplicate, normalizeTitle } from '../domain/dedupe.js';
 import { learningSystemPrompt, learningUserMessage } from '../domain/learning-prompt.js';
 import { scrubSensitive } from '../domain/scrubber.js';
 import { SUPPORT_KNOWLEDGE_REVIEW_PERMISSION } from './support-knowledge.service.js';
+import { readSupportTranscript } from '../../support-ai/application/support-transcript.js';
 import type {
   DrizzleSupportKnowledgeRepository,
   LearningJobRecord,
@@ -68,8 +70,9 @@ export interface SupportLearningServiceDeps {
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly chain: Pick<SupportAiChain, 'generate'>;
   readonly conversations: Pick<BusinessConversationRepository, 'findById'>;
-  readonly messages: Pick<BusinessMessageRepository, 'recent'>;
-  readonly outbound: Pick<BusinessOutboundRepository, 'findById' | 'recent'>;
+  /** The transcript, and (D8) a message the owner typed, proposed as a source. */
+  readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findById'>;
+  readonly outbound: Pick<BusinessOutboundRepository, 'findById' | 'recent' | 'deliveredSince'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -92,9 +95,62 @@ export function isEligibleReply(row: BusinessOutboundRecord, conversationId: str
   );
 }
 
+/**
+ * D8 — a message the business OWNER typed in the Telegram app (origin `HUMAN`): a person's
+ * reply, with its text still held. A customer's message (`INBOUND`), our own echo, an away
+ * message and another bot's are never a source.
+ */
+export function isEligibleOwnerMessage(
+  row: BusinessMessageRecord,
+  conversationId: string,
+): boolean {
+  return (
+    row.conversationId === conversationId &&
+    row.origin === 'HUMAN' &&
+    row.kind === 'TEXT' &&
+    row.deletedAt === null &&
+    row.text !== null &&
+    row.text.trim().length > 0
+  );
+}
+
 /** One learning job per reply, whatever triggered it: a handback and a proposal coincide. */
 export function learningJobKey(outboundId: string): string {
   return `learning:outbound:${outboundId}`;
+}
+
+/** D8: one learning job per message the owner typed. */
+export function learningMessageJobKey(messageId: string): string {
+  return `learning:message:${messageId}`;
+}
+
+/** Which reply a lesson is proposed from: a delivered outbound row, or a typed message (D8). */
+type LearningSourceRefInput =
+  | { readonly kind: 'OUTBOUND'; readonly id: string }
+  | { readonly kind: 'MESSAGE'; readonly id: string };
+
+/** An eligible source, as learning reads it. */
+interface LearningSource {
+  readonly kind: 'OUTBOUND' | 'MESSAGE';
+  readonly id: string;
+  readonly conversationId: string;
+  readonly text: string;
+  /** The administrator who wrote it; null for a message typed in the Telegram app. */
+  readonly authorAdminId: string | null;
+}
+
+function keyOf(source: Pick<LearningSource, 'kind' | 'id'>): string {
+  return source.kind === 'OUTBOUND' ? learningJobKey(source.id) : learningMessageJobKey(source.id);
+}
+
+function replySource(row: BusinessOutboundRecord): LearningSource {
+  return {
+    kind: 'OUTBOUND',
+    id: row.id,
+    conversationId: row.conversationId,
+    text: row.body ?? '',
+    authorAdminId: row.createdByAdminId,
+  };
 }
 
 /** Thrown inside a transaction to roll it back when the job was resolved by someone else. */
@@ -136,7 +192,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
     if (latest === undefined) return;
     await this.enqueue(
       scope,
-      { reply: latest, trigger: 'HANDBACK', adminId: null, now: input.now },
+      { source: replySource(latest), trigger: 'HANDBACK', adminId: null, now: input.now },
       tx,
     );
   }
@@ -181,11 +237,16 @@ export class SupportLearningService implements HandbackLearningTrigger {
       );
     }
     const adminId = actor.id;
-    const requestHash = hashRequest({
-      action: 'support_knowledge.propose',
-      conversationId,
-      outboundId: command.outboundId,
-    });
+    const ref: LearningSourceRefInput =
+      'outboundId' in command
+        ? { kind: 'OUTBOUND', id: command.outboundId }
+        : { kind: 'MESSAGE', id: command.messageId };
+    // The reply's hash is the one it always was, so a replay from before D8 still matches.
+    const requestHash = hashRequest(
+      ref.kind === 'OUTBOUND'
+        ? { action: 'support_knowledge.propose', conversationId, outboundId: ref.id }
+        : { action: 'support_knowledge.propose', conversationId, messageId: ref.id },
+    );
     // Throws IDEMPOTENCY_PAYLOAD_MISMATCH when this key was used for another reply.
     const found = await this.deps.idempotency.find<{ readonly id: string }>(
       scope,
@@ -197,7 +258,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
       const replayed = await this.deps.repository.findJob(scope, found.result.id);
       if (replayed !== null) return replayed;
     }
-    const key = learningJobKey(command.outboundId);
+    const key = keyOf(ref);
     const { config } = await this.deps.configs.get(scope);
     try {
       return await runAuthorizedMutation(
@@ -213,16 +274,18 @@ export class SupportLearningService implements HandbackLearningTrigger {
               'This installation has stopped accepting work.',
             );
           }
-          const reply = await this.deps.outbound.findById(scope, command.outboundId, tx);
-          if (reply === null || !isEligibleReply(reply, conversationId)) {
+          const source = await this.loadSource(scope, conversationId, ref, tx);
+          if (source === null) {
             throw errors.conflict(
               SUPPORT_KNOWLEDGE_ERROR_CODES.SOURCE_NOT_ELIGIBLE,
-              'Only a delivered reply an operator wrote in this conversation can be proposed.',
+              'Only a delivered reply an operator wrote, or a reply the owner typed, in this conversation can be proposed.',
             );
           }
-          // «your own replies»: another person's reply is a reviewer's to propose. The guard
-          // throws the review permission's denial, recorded below once the transaction unwinds.
-          if (reply.createdByAdminId !== adminId) {
+          // «your own replies»: another person's reply is a reviewer's to propose — and a reply
+          // typed in the Telegram app (D8) has no administrator as its author, so it always is.
+          // The guard throws the review permission's denial, recorded below once the
+          // transaction unwinds.
+          if (source.authorAdminId !== adminId) {
             await this.deps.guard.check(scope, actor, SUPPORT_KNOWLEDGE_REVIEW_PERMISSION, tx);
           }
           const remember = (job: LearningJobRecord) =>
@@ -250,7 +313,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
           const now = this.deps.clock.now();
           const decision = await this.enqueue(
             scope,
-            { reply, trigger: 'OPERATOR_PROPOSAL', adminId, now },
+            { source, trigger: 'OPERATOR_PROPOSAL', adminId, now },
             tx,
           );
           if (decision !== 'QUEUED' && decision !== 'EXISTS') {
@@ -271,7 +334,10 @@ export class SupportLearningService implements HandbackLearningTrigger {
                 entityType: 'BusinessConversation',
                 entityId: conversationId,
                 before: null,
-                after: { jobId: job.id, outboundId: reply.id },
+                after:
+                  source.kind === 'OUTBOUND'
+                    ? { jobId: job.id, outboundId: source.id }
+                    : { jobId: job.id, messageId: source.id },
                 result: 'SUCCESS',
               },
               tx,
@@ -308,7 +374,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
   private async enqueue(
     scope: ScopeContext,
     input: {
-      readonly reply: BusinessOutboundRecord;
+      readonly source: LearningSource;
       readonly trigger: SupportLearningJobTrigger;
       readonly adminId: string | null;
       readonly now: Date;
@@ -316,7 +382,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
     tx: unknown,
   ): Promise<'QUEUED' | 'EXISTS' | 'CONVERSATION' | 'TENANT'> {
     await this.deps.repository.lockLearningEnqueue(scope, tx);
-    const key = learningJobKey(input.reply.id);
+    const key = keyOf(input.source);
     if ((await this.deps.repository.findJobByKey(scope, key, tx)) !== null) return 'EXISTS';
     const windowStart = new Date(
       input.now.getTime() - SUPPORT_LEARNING_CONVERSATION_WINDOW_HOURS * 3_600_000,
@@ -325,7 +391,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
       (await this.deps.repository.countJobsSince(
         scope,
         windowStart,
-        input.reply.conversationId,
+        input.source.conversationId,
         tx,
       )) > 0
     ) {
@@ -342,8 +408,9 @@ export class SupportLearningService implements HandbackLearningTrigger {
       scope,
       {
         id: this.deps.ids.uuid(),
-        conversationId: input.reply.conversationId,
-        sourceOutboundId: input.reply.id,
+        conversationId: input.source.conversationId,
+        sourceOutboundId: input.source.kind === 'OUTBOUND' ? input.source.id : null,
+        sourceMessageId: input.source.kind === 'MESSAGE' ? input.source.id : null,
         trigger: input.trigger,
         requestedByAdminId: input.adminId,
         idempotencyKey: key,
@@ -398,23 +465,27 @@ export class SupportLearningService implements HandbackLearningTrigger {
     const { config } = await this.deps.configs.get(scope);
     if (config.mode === 'OFF') return this.finish(scope, job.id, 'DONE', 'dropped_mode');
 
-    const reply = await this.deps.outbound.findById(scope, job.sourceOutboundId);
-    if (reply === null || !isEligibleReply(reply, job.conversationId) || reply.body === null) {
-      return this.finish(scope, job.id, 'DONE', 'dropped_source');
-    }
+    const reply = await this.loadSource(
+      scope,
+      job.conversationId,
+      job.sourceMessageId !== null
+        ? { kind: 'MESSAGE', id: job.sourceMessageId }
+        : { kind: 'OUTBOUND', id: job.sourceOutboundId ?? '' },
+    );
+    if (reply === null) return this.finish(scope, job.id, 'DONE', 'dropped_source');
     // The decision to send a transcript to a provider is business work: checked in a
     // transaction first, and a stopped tenant's job is left untouched.
     const active = await this.deps.uow.run(scope, (tx) =>
       this.deps.scopeActivity.scopeIsActive(scope, tx),
     );
     if (!active) return 'inactive';
-    const transcript = await this.deps.messages.recent(scope, job.conversationId, 40);
+    const transcript = await readSupportTranscript(this.deps, scope, job.conversationId);
     const message = learningUserMessage({
       transcript: transcript.map((line) => ({
         side: line.origin === 'INBOUND' ? 'customer' : 'support',
         text: line.text,
       })),
-      reply: reply.body,
+      reply: reply.text,
     });
     const result = await this.deps.chain.generate(scope, {
       operation: 'LEARNING_EXTRACT',
@@ -454,11 +525,11 @@ export class SupportLearningService implements HandbackLearningTrigger {
     const normalizedTitle = normalizeTitle(title.text);
     if (normalizedTitle.length === 0) return this.finish(scope, job.id, 'FAILED', 'output_invalid');
 
-    const source: LearningSourceRef = {
-      conversationId: job.conversationId,
-      outboundId: reply.id,
-      at: this.deps.clock.now().toISOString(),
-    };
+    const at = this.deps.clock.now().toISOString();
+    const source: LearningSourceRef =
+      reply.kind === 'OUTBOUND'
+        ? { conversationId: job.conversationId, outboundId: reply.id, at }
+        : { conversationId: job.conversationId, messageId: reply.id, at };
     const recent = await this.deps.repository.recentTitles(scope, SUPPORT_LEARNING_DEDUPE_WINDOW);
     const duplicate = findDuplicate(normalizedTitle, recent);
     try {
@@ -559,6 +630,32 @@ export class SupportLearningService implements HandbackLearningTrigger {
       );
       return ok ? outcome : 'gone';
     });
+  }
+
+  /**
+   * The source a lesson may be learned from, read by the tenant and the conversation, or null
+   * when it is not eligible: a delivered reply an operator wrote (`isEligibleReply`), or a
+   * message the owner typed (`isEligibleOwnerMessage`). A customer's message is never one.
+   */
+  private async loadSource(
+    scope: ScopeContext,
+    conversationId: string,
+    ref: LearningSourceRefInput,
+    tx?: unknown,
+  ): Promise<LearningSource | null> {
+    if (ref.kind === 'OUTBOUND') {
+      const reply = await this.deps.outbound.findById(scope, ref.id, tx);
+      return reply === null || !isEligibleReply(reply, conversationId) ? null : replySource(reply);
+    }
+    const message = await this.deps.messages.findById(scope, conversationId, ref.id, tx);
+    if (message === null || !isEligibleOwnerMessage(message, conversationId)) return null;
+    return {
+      kind: 'MESSAGE',
+      id: message.id,
+      conversationId: message.conversationId,
+      text: message.text ?? '',
+      authorAdminId: null,
+    };
   }
 
   private mutationDeps() {

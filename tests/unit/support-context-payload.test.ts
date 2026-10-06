@@ -327,8 +327,8 @@ describe('TB3 support context — pure helpers', () => {
 
   it('truncation drops whole entries from the tail, family by family, in the documented order', () => {
     expect([...SUPPORT_CONTEXT_TRUNCATION_ORDER]).toEqual([
-      'knowledge',
       'clientApps',
+      'knowledge',
       'orders',
       'payments',
       'services',
@@ -345,11 +345,11 @@ describe('TB3 support context — pure helpers', () => {
     expect(payloadBytes(big)).toBeGreaterThan(16 * 1024);
     const fitted = fitPayload(big);
     expect(payloadBytes(fitted)).toBeLessThanOrEqual(16 * 1024);
-    // Only knowledge gave way, and from the tail: the first entries survive.
+    // The client apps gave way first, then knowledge, from the tail: the first entries survive.
+    expect(fitted.clientApps).toEqual([]);
     expect(fitted.knowledge.length).toBeGreaterThan(0);
     expect(fitted.knowledge.length).toBeLessThan(20);
     expect(fitted.knowledge[0]?.question).toBe('q0');
-    expect(fitted.clientApps).toEqual(big.clientApps);
     expect(fitted.services).toEqual(big.services);
     expect(fitted.flags).toEqual(big.flags);
   });
@@ -446,6 +446,7 @@ describe('TB3 support context — the builder over fakes', () => {
         recentOrders: async () => [],
         recentPayments: async () => ({ items: [], anyUnderReview: true }),
         activeIncidentNotices: async () => [],
+        anyUnreconciledService: async () => false,
         serviceCardFacts: async (_s, _c, refs) =>
           refs.map(() => ({ title: 'Plan', productLocationLabel: 'DE' })),
       },
@@ -503,6 +504,7 @@ describe('TB3 support context — the builder over fakes', () => {
           recentPayments: async () => (asked.push('payments'), { items: [], anyUnderReview: true }),
           activeIncidentNotices: async () => (asked.push('incidents'), []),
           serviceCardFacts: async () => (asked.push('cards'), []),
+          anyUnreconciledService: async () => (asked.push('unreconciled'), false),
         },
       }),
     ).build(scope, null);

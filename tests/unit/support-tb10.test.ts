@@ -228,12 +228,21 @@ describe('assembling the analytics', () => {
       jobs: [
         { kind: 'ASSIST_DRAFT', state: 'SENT', outcome: null, count: 6 },
         { kind: 'ASSIST_DRAFT', state: 'DISCARDED', outcome: null, count: 2 },
+        // L1: replaced by a newer request — not an operator's discard.
+        { kind: 'ASSIST_DRAFT', state: 'DISCARDED', outcome: null, superseded: true, count: 5 },
         { kind: 'ASSIST_DRAFT', state: 'FAILED', outcome: null, count: 1 },
         { kind: 'ASSIST_DRAFT', state: 'READY', outcome: null, count: 3 },
         { kind: 'ASSIST_DRAFT', state: 'QUEUED', outcome: null, count: 1 },
       ],
     });
-    expect(result.assist).toEqual({ requested: 13, sent: 6, discarded: 2, failed: 1, open: 4 });
+    expect(result.assist).toEqual({
+      requested: 18,
+      sent: 6,
+      discarded: 2,
+      superseded: 5,
+      failed: 1,
+      open: 4,
+    });
     expect(result.auto).toMatchObject({ sent: 0, handedOff: 0, dropped: 0, pending: 0 });
   });
 
@@ -267,6 +276,8 @@ describe('the support notifications', () => {
       'SUPPORT_AI',
     );
     expect(notificationRuleFor('support.ai_provider.unavailable')?.category).toBe('SUPPORT_AI');
+    // D5: a stalled assistant reaches whoever configures the support AI.
+    expect(notificationRuleFor('support.assistant.stalled')?.category).toBe('SUPPORT_AI');
     expect(NOTIFICATION_CATEGORY_PERMISSIONS.SUPPORT).toBe('business_chats.view');
     expect(NOTIFICATION_CATEGORY_PERMISSIONS.SUPPORT_AI).toBe('support_ai.configure');
   });
@@ -277,6 +288,7 @@ describe('the support notifications', () => {
       'support.business_connection.usable',
       'support.ai_provider.credential_accepted',
       'support.ai_provider.available',
+      'support.assistant.running',
       'support.something_new',
     ]) {
       expect(notificationRuleFor(code), code).toBeNull();

@@ -31,6 +31,7 @@ import type { BusinessConversationService } from '../../../commerce/business-cha
 import type {
   BusinessConversationRepository,
   BusinessMessageRepository,
+  BusinessOutboundRepository,
 } from '../../../commerce/business-chats/application/ports.js';
 import type { AutoContextFlags } from '../domain/auto-reply-guards.js';
 import {
@@ -41,6 +42,7 @@ import {
   type TranscriptLine,
 } from '../domain/prompt.js';
 import { planVision } from '../domain/vision.js';
+import { latestCustomerWords } from '../domain/transcript.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import type {
   DrizzleSupportAiConfigRepository,
@@ -56,6 +58,8 @@ import {
   type SupportAiVisionVariant,
 } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
+import { readSupportTranscript } from './support-transcript.js';
+import { withKnowledgeCounts, type KnowledgeCounts } from './knowledge-telemetry.js';
 
 /** TB6: one customer image fetched for this request, and its size (telemetry). */
 interface LoadedImage {
@@ -81,6 +85,8 @@ export interface SupportContextSource {
   build(
     scope: ScopeContext,
     customerId: string | null,
+    /** D2: the customer's latest words, which choose the knowledge sent. */
+    options?: { readonly query?: string | null },
   ): Promise<{
     readonly json: string;
     /** The FACT aliases (`S…`, `O…`, `P…`) — the only ones a fact ref may name. */
@@ -94,6 +100,8 @@ export interface SupportContextSource {
     readonly linked: boolean;
     /** TB7: the payload's flags, which the automatic-reply guards read. */
     readonly flags: AutoContextFlags;
+    /** D2 telemetry: knowledge entries sent, and how many there were to choose from. */
+    readonly knowledge?: KnowledgeCounts;
   }>;
 }
 
@@ -102,6 +110,24 @@ export type SupportAssistProduceResult = 'READY' | 'FAILED' | 'GONE' | 'INACTIVE
 
 /** TB6: the per-image outcome rows of one request, written inside the result's transaction. */
 type ImageWrite = (now: Date, tx: TransactionScope) => Promise<void>;
+
+/**
+ * D3 — a draft's knowledge citations as the operator reads them: each `K…` the payload carried,
+ * by its title, once, in the order cited. A citation the payload did not carry is dropped — it
+ * is not evidence of anything — and a source with no knowledge aliases resolves nothing.
+ */
+export function resolveKnowledgeLabels(
+  refs: readonly string[],
+  aliases: ReadonlyMap<string, string> | undefined,
+): string[] {
+  if (aliases === undefined) return [];
+  const labels: string[] = [];
+  for (const ref of refs) {
+    const label = aliases.get(ref);
+    if (label !== undefined && !labels.includes(label)) labels.push(label);
+  }
+  return labels;
+}
 
 /** The instant before which a QUEUED job with no live lease counts as unclaimed. */
 export function unclaimedCutoff(now: Date): Date {
@@ -162,6 +188,8 @@ export interface SupportAssistServiceDeps {
   readonly context: SupportContextSource;
   readonly conversations: Pick<BusinessConversationRepository, 'findById'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent'>;
+  /** D7: NEXA's delivered replies, which the transcript carries whether or not they echoed. */
+  readonly outbound: Pick<BusinessOutboundRepository, 'deliveredSince'>;
   readonly sender: Pick<BusinessConversationService, 'enqueueHumanSend'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -345,11 +373,13 @@ export class SupportAssistService {
     if (!active) return 'INACTIVE';
     const conversation = await this.deps.conversations.findById(scope, job.conversationId);
     if (conversation === null) return this.fail(scope, job, 'conversation.missing');
-    const [{ config }, transcript, context] = await Promise.all([
+    const [{ config }, transcript] = await Promise.all([
       this.deps.configs.get(scope),
-      this.deps.messages.recent(scope, conversation.id, 40),
-      this.deps.context.build(scope, conversation.customerId),
+      readSupportTranscript(this.deps, scope, conversation.id),
     ]);
+    const context = await this.deps.context.build(scope, conversation.customerId, {
+      query: latestCustomerWords(transcript),
+    });
 
     /*
      * TB6 — vision. Which customer images may go with this request, fetched OUTSIDE any
@@ -470,12 +500,19 @@ export class SupportAssistService {
     // The per-image telemetry is written in the SAME transaction as the job's result, under
     // the same activity check: a scope stopped during the call records neither. A loaded image
     // is PROCESSED only when the step that ANSWERED was given it.
-    const images = this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
-      seenIds.has(messageId)
-        ? null
-        : answered
-          ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
-          : 'NOT_ANSWERED',
+    // D2: the knowledge counts go with the job's result, in its transaction.
+    const images = withKnowledgeCounts(
+      this.deps.jobs,
+      scope,
+      job.id,
+      context.knowledge,
+      this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
+        seenIds.has(messageId)
+          ? null
+          : answered
+            ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
+            : 'NOT_ANSWERED',
+      ),
     );
     if (result.outcome.outcome !== 'OK' || result.step === null) {
       const failureClass = chainFailureClass(result);
@@ -494,18 +531,16 @@ export class SupportAssistService {
       return this.fail(scope, job, 'decision.invalid', images, parsed.failure.failureClass);
     }
     const decision = parsed.decision;
-    // A citation the payload did not contain is dropped: it is not evidence of anything. A
-    // knowledge citation is shown after the facts, by the entry's question.
-    const factLabels = [
-      ...decision.factRefs.flatMap((ref) => {
-        const label = context.aliases.get(ref);
-        return label === undefined ? [] : [label];
-      }),
-      ...decision.knowledgeRefs.flatMap((ref) => {
-        const label = context.knowledgeAliases?.get(ref);
-        return label === undefined ? [] : [label];
-      }),
-    ];
+    // A citation the payload did not contain is dropped: it is not evidence of anything.
+    const factLabels = decision.factRefs.flatMap((ref) => {
+      const label = context.aliases.get(ref);
+      return label === undefined ? [] : [label];
+    });
+    // D3: the knowledge it cited, by the entry's title, kept apart from the facts.
+    const knowledgeLabels = resolveKnowledgeLabels(
+      decision.knowledgeRefs,
+      context.knowledgeAliases,
+    );
     const step = result.step;
     const model = result.outcome.model;
     return this.record(
@@ -518,6 +553,7 @@ export class SupportAssistService {
           {
             decision,
             factLabels,
+            knowledgeLabels,
             provider: step.provider,
             model,
             imagesSeen: seen,

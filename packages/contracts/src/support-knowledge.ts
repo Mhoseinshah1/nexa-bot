@@ -242,10 +242,16 @@ export const supportLearningRejectRequestSchema = z
   })
   .strict();
 
-/** «پیشنهاد به‌عنوان دانش» on one of the operator's delivered replies. */
-export const supportLearningProposeRequestSchema = z
-  .object({ idempotencyKey: idempotencyKeySchema, outboundId: z.uuid() })
-  .strict();
+/**
+ * «پیشنهاد به‌عنوان دانش» on one of the operator's delivered replies (`outboundId`), or — D8 — on
+ * a reply the business owner TYPED in the Telegram app (`messageId`, a `business_messages` row
+ * of origin `HUMAN`). Exactly one of the two: a body naming both, or neither, is refused. A
+ * customer's own message is never a source; the server decides that, not this shape.
+ */
+export const supportLearningProposeRequestSchema = z.union([
+  z.object({ idempotencyKey: idempotencyKeySchema, outboundId: z.uuid() }).strict(),
+  z.object({ idempotencyKey: idempotencyKeySchema, messageId: z.uuid() }).strict(),
+]);
 
 export const supportKnowledgeArticleViewSchema = z.object({
   id: z.string(),

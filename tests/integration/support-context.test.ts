@@ -763,6 +763,27 @@ describe('TB3 — support context', () => {
     expect(built.payload.services.slice(1).every((s) => s.state === 'TERMINATED')).toBe(true);
   });
 
+  it('L4: an UNRECONCILED service beyond the ten shown still sets the flag', async () => {
+    const panel = await fx.panel();
+    const me = await customer('900270');
+    const hidden = await liveService(me, panel);
+    await run(
+      sql`UPDATE services SET state = 'UNRECONCILED', provisioned_at = NULL,
+                              created_at = now() - interval '30 days'
+           WHERE id = ${hidden}`,
+    );
+    for (let i = 0; i < 11; i += 1) await liveService(me, panel);
+    const built = await ctx.container.supportContext.build(tenantA, me);
+    expect(built.payload.services).toHaveLength(10);
+    expect([...built.references.services.values()]).not.toContain(hidden);
+    expect(built.payload.services.some((s) => s.unreconciled)).toBe(false);
+    expect(built.payload.flags.hasUnreconciledService).toBe(true);
+    // The reader is tenant-scoped like every other.
+    const reader = new DrizzleSupportContextReader(ctx.container.database.db);
+    expect(await reader.anyUnreconciledService(tenantA, me)).toBe(true);
+    expect(await reader.anyUnreconciledService(tenantB, me)).toBe(false);
+  });
+
   it('measures one full build: statements and wall time (recorded in the TB3 doc, not asserted)', async () => {
     const panel = await fx.panel();
     const me = await customer('900100');

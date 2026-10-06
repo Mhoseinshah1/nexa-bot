@@ -9,6 +9,10 @@ import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress
 import type { SupportAssistService } from './support-assist.service.js';
 import type { SupportAutoReplyService } from './support-auto-reply.service.js';
 import type { SupportLearningService } from '../../support-knowledge/application/support-learning.service.js';
+import {
+  SUPPORT_ASSISTANT_WATCH_INTERVAL_MS,
+  type SupportAssistantLiveness,
+} from './assistant-watch.js';
 
 export const ASSISTANT_INTERVAL_MS = 2_000;
 /** The bounds a job's worst case is derived from. */
@@ -73,6 +77,7 @@ export class AssistantLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private lastRetentionAt = 0;
+  private lastAliveAt = 0;
   private reportedNoScope = false;
   private readonly progress: LoopProgress;
 
@@ -86,6 +91,8 @@ export class AssistantLoop {
       readonly auto?: Pick<SupportAutoReplyService, 'produce' | 'giveUp'>;
       /** TB8: the producer of learning jobs. Without it, no learning job is ever claimed. */
       readonly learning?: Pick<SupportLearningService, 'runDue' | 'purge'>;
+      /** D5: closes the worker's "assistant stalled" condition once a pass completes. */
+      readonly liveness?: Pick<SupportAssistantLiveness, 'alive'>;
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
       readonly now: () => Date;
@@ -203,6 +210,17 @@ export class AssistantLoop {
       }
       if (claimed > 0 || learned > 0)
         this.options.logger.info({ claimed, ...counts }, 'assistant pass');
+      // D5: a completed pass is the proof the worker cannot see — at most every watch interval.
+      const liveness = this.options.liveness;
+      if (
+        liveness !== undefined &&
+        now.getTime() - this.lastAliveAt >= SUPPORT_ASSISTANT_WATCH_INTERVAL_MS
+      ) {
+        if (await liveness.alive(scope)) {
+          this.options.logger.info({}, 'assistant: running again; the stalled condition closed');
+        }
+        this.lastAliveAt = now.getTime();
+      }
       this.progress.record(this.options.now().getTime());
     } catch (error: unknown) {
       this.options.logger.error({ err: error }, 'assistant pass failed');

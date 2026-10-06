@@ -155,9 +155,16 @@ the current text beside the proposed one, a `RETIRE` with its own label, explana
    - an app's official and help URLs are never copied; the article says the links are in the
      bot's app list (the TB3 context already gives the agent the normalised links, live);
    - any other item the scrubber matches — an FAQ answer with a link or a phone, payment
-     instructions with a card or an account, the `support.accounts` handles — is EXCLUDED from
+     instructions with a card or an account, somebody's personal `@handle` — is EXCLUDED from
      the change-set. Only the count and the kinds are recorded, in the run's audit row
      (`after.excluded`), never the text;
+   - L3 (2026-10-06): the installation's OWN support handles (the `support.accounts` setting)
+     are not personal data. The scrubber is given them as `allowedHandles` here, at apply, and
+     in every knowledge write (`assertClean`), and leaves exactly those handles as they are —
+     `@name` or `t.me/name`, case-insensitively, never a longer handle that starts with one.
+     So the `SUPPORT_ACCOUNTS` item, until then excluded on every run, is proposed; every other
+     handle, and every other kind, is still scrubbed. The learning scrub (customer
+     conversations) is unchanged;
    - apply and «TAKE_BUILD» call `assertClean` again as a backstop, so a proposal that is not
      clean is refused (`support_knowledge.sensitive_content`) and publishes nothing.
      What this loses is OQ-TB-66.

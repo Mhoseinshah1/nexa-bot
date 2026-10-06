@@ -404,6 +404,17 @@ export interface BusinessMessageRepository {
     input: { readonly conversationId: string; readonly messageId: string },
   ): Promise<BusinessPhotoReference | null>;
 
+  /**
+   * D8: one message of a conversation by its row id, read by the tenant, the conversation AND
+   * the id together — another conversation's or tenant's message is null.
+   */
+  findById(
+    scope: ScopeContext,
+    conversationId: string,
+    id: string,
+    tx?: unknown,
+  ): Promise<BusinessMessageRecord | null>;
+
   /** TB7: one message of a conversation by Telegram's id (the AUTO job's trigger). */
   findByTelegramId(
     scope: ScopeContext,
@@ -468,6 +479,17 @@ export interface BusinessOutboundRepository {
     scope: ScopeContext,
     conversationId: string,
     limit: number,
+  ): Promise<readonly BusinessOutboundRecord[]>;
+
+  /**
+   * D7: the conversation's DELIVERED rows that still hold text, newest first then returned
+   * oldest first, sent at or after `since` when it is given — the window the AI transcript's
+   * messages cover. Pending, failed or superseded rows never fill the bound.
+   */
+  deliveredSince(
+    scope: ScopeContext,
+    conversationId: string,
+    input: { readonly since: Date | null; readonly limit: number },
   ): Promise<readonly BusinessOutboundRecord[]>;
 
   /** Whether this bot sent `telegramMessageId` in this conversation (echo proof). */

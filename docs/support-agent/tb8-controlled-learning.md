@@ -34,7 +34,9 @@ draft, a retired article, a disabled article and a learning candidate are unreac
 The TB3 payload keeps its shape: `knowledge: [{ source, question, answer }]`. `source` was widened
 from `FAQ` to `FAQ | KNOWLEDGE` (a contract commit). Approved articles come first (`question` =
 title, `answer` = body), then the live ACTIVE FAQ, together bounded by `SUPPORT_CONTEXT_LIMITS
-.knowledge` (20). Truncation drops from the tail, so the FAQ gives way before reviewed knowledge.
+.knowledge` (20). Since D2 the twenty are the most RELEVANT to the customer's latest messages
+(`tb3-support-context.md`, "Byte budget and truncation"); on a tie, reviewed knowledge comes
+before the FAQ, and truncation drops from the tail.
 
 The FAQ is still read live, as before TB8. It remains the customer FAQ screen's own data — the
 bot shows it — and is not a second knowledge store: the agent sees exactly what the customer's
@@ -44,7 +46,17 @@ the two meet.
 ## Learning jobs
 
 `support_learning_jobs` (`0207`). A job names ONE human reply: a `business_outbound_messages` row
-of origin `OPERATOR` or `ASSIST`, `DELIVERED`, with its text still held, in that conversation.
+of origin `OPERATOR` or `ASSIST`, `DELIVERED`, with its text still held, in that conversation —
+or, since D8, a `business_messages` row of origin `HUMAN` (a reply the business owner TYPED in
+the Telegram app), text, not deleted, in that conversation (`source_message_id`, key
+`learning:message:<id>`; the table's CHECK holds exactly one source). A customer's message
+(`INBOUND`), our own echo, an away message and another bot's are never a source.
+
+D8 adds the button, not a trigger: «پیشنهاد به‌عنوان دانش» on a `HUMAN` transcript row. No
+administrator wrote it, so proposing it always needs `support_knowledge.review` (as for another
+person's reply), and it is scrubbed, extracted and reviewed exactly like any other proposal.
+A handback still learns only from Web Admin replies: what the owner types on the phone is sent
+to a provider only when a reviewer chose it.
 
 | Trigger             | When                                                                                                                                                                                                                                          |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

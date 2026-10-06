@@ -31,6 +31,7 @@ import {
 import {
   DrizzleBusinessConversationRepository,
   DrizzleBusinessMessageRepository,
+  DrizzleBusinessOutboundRepository,
 } from '../../apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository';
 import type { ParsedBusinessMessage } from '../../apps/api/src/modules/commerce/business-chats/domain/telegram-business';
 import {
@@ -318,6 +319,7 @@ describe('Vision in Assist Mode (TB6)', () => {
       },
       conversations,
       messages,
+      outbound: new DrizzleBusinessOutboundRepository(c.database.db),
       sender: c.businessConversations,
       guard: c.guard,
       uow: c.uow,

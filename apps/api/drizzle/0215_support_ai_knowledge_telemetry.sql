@@ -1,0 +1,3 @@
+ALTER TABLE "support_ai_jobs" ADD COLUMN "knowledge_sent" integer;--> statement-breakpoint
+ALTER TABLE "support_ai_jobs" ADD COLUMN "knowledge_available" integer;--> statement-breakpoint
+ALTER TABLE "support_ai_jobs" ADD CONSTRAINT "support_ai_jobs_knowledge_check" CHECK ((knowledge_sent IS NULL) = (knowledge_available IS NULL) AND (knowledge_sent IS NULL OR knowledge_sent BETWEEN 0 AND knowledge_available));

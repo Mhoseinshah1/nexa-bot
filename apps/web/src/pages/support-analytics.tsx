@@ -215,6 +215,8 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
               [t('web.sa_assist_requested'), <Num key="r" value={data.assist.requested} />],
               [t('web.sa_assist_sent'), <Num key="s" value={data.assist.sent} />],
               [t('web.sa_assist_discarded'), <Num key="d" value={data.assist.discarded} />],
+              // L1: replaced by a newer request, counted apart from what operators discarded.
+              [t('web.sa_assist_superseded'), <Num key="x" value={data.assist.superseded} />],
               [t('web.sa_assist_failed'), <Num key="f" value={data.assist.failed} />],
               [t('web.sa_assist_open'), <Num key="o" value={data.assist.open} />],
             ]}

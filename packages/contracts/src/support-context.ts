@@ -47,17 +47,31 @@ export const SUPPORT_CONTEXT_GUIDE_MAX_CHARS = 1500;
 export const SUPPORT_CONTEXT_MAX_BYTES = 16 * 1024;
 
 /**
- * Which family gives way first. Public knowledge and app guides go before account facts
- * (they are retrievable again and long); an incident affecting this customer goes last.
+ * Which family gives way first (D2). Client apps first: they are long, and an app whose guide
+ * is also an approved knowledge article carries no guide of its own. Knowledge next, but only
+ * down to `SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES`; then the account facts; an incident
+ * affecting this customer last; and the knowledge reserve only after everything else is gone.
+ *
+ * Knowledge used to give way FIRST, on the grounds that it was "retrievable again" — nothing
+ * retrieved it, and in a realistic installation (six apps, twenty articles) no article reached
+ * the model at all.
  */
 export const SUPPORT_CONTEXT_TRUNCATION_ORDER = [
-  'knowledge',
   'clientApps',
+  'knowledge',
   'orders',
   'payments',
   'services',
   'incidents',
 ] as const;
+
+/**
+ * The knowledge entries' own share of `SUPPORT_CONTEXT_MAX_BYTES` (D2), as the UTF-8 bytes of
+ * the knowledge array's JSON. Knowledge is cut in its turn only down to this, and never below
+ * its first (most relevant) entry; the rest of it gives way only once every other family is
+ * empty. About two full Persian articles.
+ */
+export const SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES = 6 * 1024;
 export type SupportContextFamily = (typeof SUPPORT_CONTEXT_TRUNCATION_ORDER)[number];
 
 /**
@@ -174,6 +188,10 @@ export const supportContextIncidentSchema = z
  * `FAQ` — an ACTIVE entry of the customer's FAQ screen, read live. `KNOWLEDGE` (TB8) — an
  * APPROVED and enabled support knowledge article (ADR-0035 §1): reviewed text, never a draft,
  * a candidate or a retired article.
+ *
+ * D2: the entries are the most RELEVANT to the customer's latest messages (a deterministic
+ * lexical score over title, tags and body), most relevant first, so the byte budget, which cuts
+ * from the tail, drops the least relevant.
  */
 export const SUPPORT_CONTEXT_KNOWLEDGE_SOURCES = ['FAQ', 'KNOWLEDGE'] as const;
 export const supportContextKnowledgeSchema = z
@@ -196,7 +214,10 @@ export const supportContextFlagsSchema = z
   .object({
     /** Any of the customer's payments is under review — over ALL of them, not the five shown. */
     hasUnderReviewPayment: z.boolean(),
-    /** Any service in the payload is UNRECONCILED. */
+    /**
+     * Any of the customer's services is UNRECONCILED — over ALL of them, not the ten shown (L4),
+     * like `hasUnderReviewPayment`.
+     */
     hasUnreconciledService: z.boolean(),
     /** The conversation resolved to a customer of this tenant. False: public support only. */
     identityLinked: z.boolean(),

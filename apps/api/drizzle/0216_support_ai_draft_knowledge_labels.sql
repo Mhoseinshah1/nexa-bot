@@ -1,0 +1,1 @@
+ALTER TABLE "support_ai_jobs" ADD COLUMN "knowledge_labels" text[] DEFAULT '{}'::text[] NOT NULL;

@@ -350,17 +350,36 @@ function DraftFacts({ draft }: { draft: SupportAiDraftView }) {
       />
       <div>
         <span className="small">{t('web.assist_based_on')}</span>{' '}
-        {draft.factLabels.length === 0 ? (
+        {draft.factLabels.length === 0 && draft.knowledgeLabels.length === 0 ? (
           <span className="muted small">{t('web.assist_based_on_none')}</span>
         ) : (
-          <ul className="plain chips" aria-label={t('web.assist_based_on')}>
-            {draft.factLabels.map((label, index) => (
-              // The labels are the server's and may repeat; position is their identity.
-              <li key={index}>
-                <Badge outline>{label}</Badge>
-              </li>
-            ))}
-          </ul>
+          <>
+            {draft.factLabels.length > 0 && (
+              <ul className="plain chips" aria-label={t('web.assist_based_on')}>
+                {draft.factLabels.map((label, index) => (
+                  // The labels are the server's and may repeat; position is their identity.
+                  <li key={index}>
+                    <Badge outline>{label}</Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {/* D3: approved knowledge the draft cited, apart from the customer's own facts. */}
+            {draft.knowledgeLabels.length > 0 && (
+              <ul className="plain chips" aria-label={t('web.assist_based_on_knowledge')}>
+                <li>
+                  <span className="small muted">{t('web.assist_based_on_knowledge')}</span>
+                </li>
+                {draft.knowledgeLabels.map((label, index) => (
+                  <li key={index}>
+                    <Badge tone="info" outline>
+                      {label}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </div>
     </>

@@ -7,6 +7,7 @@ import {
 import {
   detectSensitive,
   foldDigits,
+  handleKey,
   scrubSensitive,
 } from '../../apps/api/src/modules/control/support-knowledge/domain/scrubber';
 import {
@@ -306,5 +307,28 @@ describe('duplicate detection', () => {
     );
     expect(findDuplicate(near, rows)?.id).toBe('a');
     expect(findDuplicate(normalizeTitle('آموزش نصب روی آیفون'), rows)).toBeNull();
+  });
+});
+
+describe("L3 — the installation's own support handles", () => {
+  it('a configured support handle is not personal data; any other handle still is', () => {
+    const allowedHandles = ['@Nexa_Support', 'https://t.me/nexa_help'];
+    expect(detectSensitive('پیام دهید به @nexa_support', { allowedHandles })).toEqual([]);
+    expect(detectSensitive('t.me/Nexa_Help را باز کنید', { allowedHandles })).toEqual([]);
+    expect(detectSensitive('به @ali_customer_99 پیام دهید', { allowedHandles })).toEqual([
+      'USERNAME',
+    ]);
+    // Nothing but the handle itself is allowed: a phone beside it is still a phone.
+    expect(detectSensitive('@nexa_support یا 09121234567', { allowedHandles })).toEqual(['PHONE']);
+    // Without the option, every handle is a hit, as before.
+    expect(detectSensitive('پیام دهید به @nexa_support')).toEqual(['USERNAME']);
+    expect(handleKey('@Nexa_Support')).toBe('nexa_support');
+    expect(handleKey('https://telegram.me/Nexa_Support')).toBe('nexa_support');
+  });
+
+  it('a longer handle that merely starts with the support handle is still scrubbed', () => {
+    expect(
+      scrubSensitive('@nexa_support_fake', { allowedHandles: ['@nexa_support'] }).kinds,
+    ).toEqual(['USERNAME']);
   });
 });

@@ -10,7 +10,11 @@ import {
 import {
   autoDecisionGuards,
   autoImageGuard,
+  autoMoneyGuard,
   autoPreflight,
+  customerTextsSinceReply,
+  foldCustomerText,
+  mentionsMoneyTopic,
   type AutoContextFlags,
 } from '../../apps/api/src/modules/control/support-ai/domain/auto-reply-guards';
 
@@ -245,5 +249,158 @@ describe('automatic-reply guards (TB7)', () => {
       reason: 'LOOP_GUARD',
     });
     expect(preflight({ autoInWindow: 9 })).toEqual({ pass: true });
+  });
+});
+
+/**
+ * D9 — the deterministic money guard over what the customer wrote. A table, so a term that
+ * stops matching (or a troubleshooting phrase that starts to) fails one named row.
+ */
+describe('automatic-reply money guard (D9)', () => {
+  const ZWNJ = '\u200c';
+  const money: readonly string[] = [
+    'وصل نمیشه، پولمو پس بدید',
+    'پولم رو پس بدید',
+    'پول‌مو پس بدین',
+    'پولامو برگردونید',
+    'میخوام پولم برگرده',
+    'پسش بدید لطفا',
+    `پس${ZWNJ}بدید`,
+    'پس بدهید',
+    'می‌خوام پس بگیرم',
+    'درخواست بازپرداخت دارم',
+    'بازگشت وجه',
+    'برگشت هزینه',
+    'استرداد وجه',
+    'عودت مبلغ',
+    'ریفاند می‌خوام',
+    'رفاند کنید',
+    'ریفند',
+    'رفند بزنید',
+    'پرداخت کردم ولی سرویس نیومد',
+    'پرداختم انجام نشد',
+    'واریز کردم',
+    'تراکنش ناموفق بود',
+    'کارت به کارت کردم',
+    'فیش واریزی رو فرستادم',
+    'پول از حسابم کسر شد',
+    'از کارتم برداشت شد',
+    'موجودی کیف پولم چقدره',
+    'کیف پول',
+    'كيف پول', // Arabic kaf and yeh
+    'شارژ حساب',
+    'وجهم رو برگردونید',
+    'I want a refund',
+    'REFUND please',
+    'give my money back',
+    'I paid twice',
+    'payment failed',
+    'my wallet balance',
+    'chargeback',
+    'transaction declined',
+    'poolamo pas bedid',
+    'pardakht kardam',
+    // B2: ZWNJ compounds.
+    `کیف${ZWNJ}پولم خالی شد`,
+    `کیف${ZWNJ}پولم`,
+    `پول${ZWNJ}مو`,
+    `پس${ZWNJ}بدید`,
+    // Review item 3: currency, money taken from the account, a top-up, Finglish, accents.
+    'صد تومن کم شد',
+    '۵۰ هزار تومان',
+    'ریال',
+    'از حسابم کم شد',
+    'شارژ کردم ولی نیومد',
+    'pulamo bedid',
+    're fund',
+    'réfund please',
+  ];
+  const safe: readonly (string | null)[] = [
+    'سلام، سرویس من وصل نمیشه',
+    'سلام، اینترنتم وصل نمی‌شود',
+    'پس چرا وصل نمیشه؟',
+    'پس بدونید که من اندرویدم',
+    'پس بد شد',
+    'اپ رو آپدیت کردم',
+    'ترفند اتصال چیه؟',
+    'لینک اشتراک رو بفرستید',
+    'حجمم چقدر مونده؟',
+    'به هیچ وجه وصل نمیشه',
+    'پسورد وای فای',
+    'my app does not connect',
+    'how do I update the subscription',
+    null,
+  ] as const;
+
+  it.each(money)('hands off «%s»', (text) => {
+    expect(mentionsMoneyTopic(text)).toBe(true);
+    const verdict = autoMoneyGuard([text]);
+    expect(verdict).toEqual({
+      pass: false,
+      guard: 'handoff_topic',
+      outcome: 'guard_handoff_topic',
+      reason: 'HANDOFF_TOPIC',
+    });
+  });
+
+  it.each(safe)('leaves «%s» to the model', (text) => {
+    expect(mentionsMoneyTopic(text)).toBe(false);
+    expect(autoMoneyGuard([text]).pass).toBe(true);
+  });
+
+  it('any one of the customer texts is enough', () => {
+    expect(autoMoneyGuard(['سلام', 'وصل نمیشه', 'پولمو پس بدید']).pass).toBe(false);
+    expect(autoMoneyGuard([]).pass).toBe(true);
+  });
+
+  it('B1: an away message (OFFLINE) is not a reply; the walk goes past it', () => {
+    const lines = [
+      { origin: 'OWN_ECHO' as const, text: 'پاسخ قبلی' },
+      { origin: 'INBOUND' as const, text: 'پولمو پس بدید' },
+      { origin: 'OFFLINE' as const, text: 'در ساعت کاری پاسخ می‌دهیم' },
+      { origin: 'INBOUND' as const, text: 'وصل نمیشه' },
+    ];
+    expect(customerTextsSinceReply(lines, 'وصل نمیشه')).toContain('پولمو پس بدید');
+    expect(autoMoneyGuard(customerTextsSinceReply(lines, 'وصل نمیشه')).pass).toBe(false);
+    // A real reply (the owner, or another bot) still ends it.
+    for (const origin of ['HUMAN', 'OTHER_BOT'] as const) {
+      const replied = [lines[1]!, { origin, text: 'پاسخ' }, lines[3]!];
+      expect(autoMoneyGuard(customerTextsSinceReply(replied, 'وصل نمیشه')).pass).toBe(true);
+    }
+  });
+
+  it('item 4: a customer line in the same second as the reply counts as after it', () => {
+    const at = (ms: number) => new Date(Date.UTC(2026, 9, 6, 10, 0, 0) + ms);
+    const lines = [
+      // Telegram's whole second, which sorts before our reply's 10:00:00.400.
+      { origin: 'INBOUND' as const, text: 'پولمو پس بدید', sentAt: at(0) },
+      { origin: 'OWN_ECHO' as const, text: 'پاسخ', sentAt: at(400) },
+      { origin: 'INBOUND' as const, text: 'وصل نمیشه', sentAt: at(5_000) },
+    ];
+    expect(autoMoneyGuard(customerTextsSinceReply(lines, 'وصل نمیشه')).pass).toBe(false);
+    // A line a whole second earlier was answered by that reply.
+    const older = [{ ...lines[0]!, sentAt: at(-1_000) }, lines[1]!, lines[2]!];
+    expect(autoMoneyGuard(customerTextsSinceReply(older, 'وصل نمیشه')).pass).toBe(true);
+  });
+
+  it('reads the trigger and every customer line after the business last spoke', () => {
+    const lines = [
+      { origin: 'INBOUND' as const, text: 'قبلی' },
+      { origin: 'OWN_ECHO' as const, text: 'پاسخ ما' },
+      { origin: 'INBOUND' as const, text: 'پولمو پس بدید' },
+      { origin: 'INBOUND' as const, text: 'وصل نمیشه' },
+    ];
+    expect(customerTextsSinceReply(lines, 'وصل نمیشه')).toEqual([
+      'وصل نمیشه',
+      'وصل نمیشه',
+      'پولمو پس بدید',
+    ]);
+    expect(autoMoneyGuard(customerTextsSinceReply(lines, 'وصل نمیشه')).pass).toBe(false);
+  });
+
+  it('folds Arabic letters, joiners and diacritics', () => {
+    // B2: a ZWNJ is a word boundary inside a compound, so it folds to a space.
+    expect(foldCustomerText(`كيف${ZWNJ}پولِ`)).toBe('کیف پول');
+    expect(foldCustomerText('réfund')).toBe('refund');
   });
 });

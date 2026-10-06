@@ -32,6 +32,8 @@ export interface SupportAnalyticsFacts {
     readonly kind: SupportAiJobKind;
     readonly state: SupportAiJobState;
     readonly outcome: SupportAiAutoOutcome | null;
+    /** L1: a draft a newer request replaced (`job.superseded`), never an operator's discard. */
+    readonly superseded?: boolean;
     readonly count: number;
   }[];
   readonly runs: readonly {
@@ -92,7 +94,7 @@ export function assembleSupportAnalytics(
 
   const auto = { sent: 0, handedOff: 0, dropped: 0, pending: 0 };
   const autoByOutcome = new Map<SupportAiAutoOutcome, number>();
-  const assist = { requested: 0, sent: 0, discarded: 0, failed: 0, open: 0 };
+  const assist = { requested: 0, sent: 0, discarded: 0, superseded: 0, failed: 0, open: 0 };
   for (const job of facts.jobs) {
     if (job.kind === 'AUTO_DECISION') {
       if (job.outcome === null) {
@@ -119,7 +121,9 @@ export function assembleSupportAnalytics(
         assist.sent += job.count;
         break;
       case 'DISCARDED':
-        assist.discarded += job.count;
+        // L1: what a re-request replaced is not what an operator threw away.
+        if (job.superseded === true) assist.superseded += job.count;
+        else assist.discarded += job.count;
         break;
       case 'FAILED':
         assist.failed += job.count;

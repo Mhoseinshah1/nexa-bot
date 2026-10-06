@@ -292,6 +292,13 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
     link: 'SUPPORT_AI',
     minSeverity: 'WARN',
   },
+  // D5: the assistant role is not claiming due AI work (raised by the worker).
+  {
+    code: 'support.assistant.stalled',
+    category: 'SUPPORT_AI',
+    link: 'SUPPORT_AI',
+    minSeverity: 'WARN',
+  },
 ];
 
 const SEVERITY_RANK = new Map<string, number>(

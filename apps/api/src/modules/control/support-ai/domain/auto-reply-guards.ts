@@ -159,3 +159,118 @@ export function autoDecisionGuards(input: {
   }
   return PASS;
 }
+
+/**
+ * D9 — the money guard: a deterministic look at what the CUSTOMER wrote, before any provider is
+ * asked. The topic guard above trusts the model's `topic`, and a model can label «وصل نمیشه،
+ * پولمو پس بدید» `CONNECTION_TROUBLESHOOTING` and answer the half it likes. Anything that
+ * mentions money coming back, a payment, a wallet or a balance is a person's to answer, so a
+ * match hands off as a hard topic (`HANDOFF_TOPIC`, which opens or links the ticket) and no
+ * automatic reply is ever produced for it.
+ *
+ * Fail closed by design: a false positive (a customer asking how to pay) costs a handoff, never
+ * a wrong answer about money. The text is folded first — Arabic `ي`/`ك` to Persian, a ZWNJ to a
+ * space, the other zero-width marks, diacritics, accents and tatweel dropped, lower case — so
+ * «پول‌مو», «پولمو», «کیف‌پولم», «پس‌بدید» and «پس بدید» all match.
+ */
+const MONEY_TERMS: readonly RegExp[] = [
+  // Money itself, an amount, and the wallet («کیف پول»): پول, پولم, پولمو, پولامو, مبلغ …
+  /(?<!\p{L})(?:پول|مبلغ)/u,
+  // «وجه» alone is also «به هیچ وجه» (by no means): only the possessive forms are money.
+  /(?<!\p{L})وجه(?:م|مو|مون|مان|تان|ش)(?!\p{L})/u,
+  // Money coming back: refund in every common spelling, and «پس بدید / پسش بدید / پس بگیرم».
+  /(?<!\p{L})(?:ری?فا?ند|ریفند|عودت|استرداد)/u,
+  /(?<!\p{L})(?:باز|بر)گشت\s*(?:وجه|هزینه)/u,
+  /(?<!\p{L})پس\S{0,3}\s*(?:بده|بدید|بدهید|بدین|بدن|بدیم|بگیر\S*|گرفتن)(?!\p{L})/u,
+  // Payment, deposit, transaction, a deduction, the balance.
+  /پرداخت|واریز|تراکنش|کارت\s*به\s*کارت|(?<!\p{L})فیش|کسر\s*(?:شد|شده|کرد)|برداشت\s*(?:شد|شده|کرد)|موجودی|شارژ\s*(?:حساب|کیف)/u,
+  // A currency, money taken from the account, a top-up.
+  /(?<!\p{L})(?:تومن|تومان|ریال)/u,
+  /حساب\S{0,3}\s*کم\s*(?:شد|شده|کرد|کردن|کردید)(?!\p{L})/u,
+  /شارژ\s*(?:کردم|کرده|کردیم)/u,
+  // The same in English and in Latin-letter Persian (Finglish).
+  /\b(?:refund\w*|reimburs\w*|money\s*back|charge\s*back|chargeback|wallet|payments?|paid|pay|deducted|transactions?|balance|my\s+money|pool\w*|pul\w*|pardakht\w*|variz\w*|kife?\s*pool|re\s+fund\w*|toman|tomen|rial)\b/u,
+];
+
+/** The text a customer typed, folded so a spelling or joiner variant matches the same term. */
+export function foldCustomerText(text: string): string {
+  return (
+    text
+      // NFKD then no combining marks: Persian diacritics and a Latin accent («réfund») alike.
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
+      .normalize('NFC')
+      .toLowerCase()
+      .replace(/[\u064A\u0649]/gu, '\u06CC')
+      .replace(/\u0643/gu, '\u06A9')
+      .replace(/\u0629/gu, '\u0647')
+      .replace(/[\u0623\u0625\u0671]/gu, '\u0627')
+      .replace(/\u0640/gu, '')
+      // B2: a ZWNJ separates the parts of a compound («کیف‌پولم», «پس‌بدید»): it becomes a space,
+      // so a term at the start of a part still starts a word. Other zero-width marks go.
+      .replace(/\u200C/gu, ' ')
+      .replace(/[\u200B\u200D-\u200F\u2060\uFEFF]/gu, '')
+      .replace(/\s+/gu, ' ')
+  );
+}
+
+/** Whether a customer's text mentions a refund, money, a payment, a wallet or a balance. */
+export function mentionsMoneyTopic(text: string | null): boolean {
+  if (text === null) return false;
+  const folded = foldCustomerText(text);
+  return MONEY_TERMS.some((term) => term.test(folded));
+}
+
+/**
+ * Before the provider call: every customer text the reply would answer (the trigger and the
+ * customer's messages since the business last spoke). A money mention in any of them hands off.
+ */
+export function autoMoneyGuard(customerTexts: readonly (string | null)[]): AutoVerdict {
+  return customerTexts.some(mentionsMoneyTopic) ? fail('handoff_topic', 'HANDOFF_TOPIC') : PASS;
+}
+
+/** The origins that mean the business answered: a walk back for the customer's lines stops there. */
+const REPLY_ORIGINS: ReadonlySet<BusinessMessageOrigin> = new Set([
+  'OWN_ECHO',
+  'HUMAN',
+  'OTHER_BOT',
+]);
+
+/**
+ * What the reply would answer: the trigger's text and every customer message after the business
+ * last REPLIED (a customer who writes «پولمو پس بدید» and then «وصل نمیشه» is answered once, on
+ * the newer trigger, and the older line is still theirs to be answered about).
+ *
+ * Fail closed in two ways (review B1, item 4): an away or greeting message (`OFFLINE`) is not a
+ * reply, so the walk goes past it; and a customer line in the SAME second as the reply that ends
+ * the walk counts as after it — a message's time is Telegram's, in whole seconds, and a reply's
+ * is ours, in milliseconds, so the order inside one second is not known.
+ */
+export function customerTextsSinceReply(
+  lines: readonly {
+    readonly origin: BusinessMessageOrigin;
+    readonly text: string | null;
+    readonly sentAt?: Date;
+  }[],
+  triggerText: string | null,
+): readonly (string | null)[] {
+  const texts: (string | null)[] = [triggerText];
+  let index = lines.length - 1;
+  for (; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line === undefined) continue;
+    if (REPLY_ORIGINS.has(line.origin)) break;
+    if (line.origin === 'INBOUND') texts.push(line.text);
+  }
+  const reply = index >= 0 ? lines[index] : undefined;
+  const second = (at: Date) => Math.floor(at.getTime() / 1000);
+  if (reply?.sentAt !== undefined) {
+    const replySecond = second(reply.sentAt);
+    for (let earlier = index - 1; earlier >= 0; earlier -= 1) {
+      const line = lines[earlier];
+      if (line?.sentAt === undefined || second(line.sentAt) !== replySecond) break;
+      if (line.origin === 'INBOUND') texts.push(line.text);
+    }
+  }
+  return texts;
+}

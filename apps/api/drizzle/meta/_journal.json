@@ -1506,6 +1506,27 @@
       "when": 1791293906857,
       "tag": "0214_support_ai_failure_diagnostics",
       "breakpoints": true
+    },
+    {
+      "idx": 215,
+      "version": "7",
+      "when": 1791295941979,
+      "tag": "0215_support_ai_knowledge_telemetry",
+      "breakpoints": true
+    },
+    {
+      "idx": 216,
+      "version": "7",
+      "when": 1791295946655,
+      "tag": "0216_support_ai_draft_knowledge_labels",
+      "breakpoints": true
+    },
+    {
+      "idx": 217,
+      "version": "7",
+      "when": 1791295951082,
+      "tag": "0217_support_learning_owner_messages",
+      "breakpoints": true
     }
   ]
 }

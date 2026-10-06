@@ -534,7 +534,7 @@ export function BusinessChatDetailPage({
         {data !== undefined && (
           <div className="two-col bchat-layout">
             <div className="stack">
-              <TranscriptCard detail={data} />
+              <TranscriptCard detail={data} mayPropose={mayPropose} />
               {mayAssist && (
                 <AssistCard
                   conversationId={data.conversation.id}
@@ -722,7 +722,14 @@ function ControlCard({
   );
 }
 
-function TranscriptCard({ detail }: { detail: BusinessChatDetailResponse }) {
+function TranscriptCard({
+  detail,
+  mayPropose = false,
+}: {
+  detail: BusinessChatDetailResponse;
+  /** D8: draws "propose as knowledge" on what the owner typed. Courtesy only. */
+  mayPropose?: boolean;
+}) {
   // Oldest first, as a chat reads; ties by id so two polls draw the same order.
   const messages = [...detail.messages].sort((a, b) =>
     a.sentAt === b.sentAt ? a.id.localeCompare(b.id) : a.sentAt.localeCompare(b.sentAt),
@@ -749,6 +756,17 @@ function TranscriptCard({ detail }: { detail: BusinessChatDetailResponse }) {
                 {message.deleted && <Badge tone="danger">{t('web.bchat_deleted')}</Badge>}
               </div>
               <MessageBody text={message.text} kind={message.kind} />
+              {/* D8: a reply the owner typed on the phone can feed learning; a customer's never. */}
+              {mayPropose &&
+                message.origin === 'HUMAN' &&
+                message.kind === 'TEXT' &&
+                !message.deleted &&
+                message.text !== null && (
+                  <ProposeKnowledgeButton
+                    conversationId={detail.conversation.id}
+                    messageId={message.id}
+                  />
+                )}
             </li>
           ))}
         </ol>

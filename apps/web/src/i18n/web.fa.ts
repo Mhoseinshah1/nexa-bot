@@ -6923,6 +6923,7 @@ export const WEB_FA = {
   'web.nc_t_support_connection': 'اتصال تلگرام بیزینس نمی‌تواند پیام بفرستد',
   'web.nc_t_support_key_rejected': 'کلید یک سرویس هوش مصنوعی رد شد',
   'web.nc_t_support_ai_unavailable': 'هیچ سرویس هوش مصنوعی پاسخ نمی‌دهد',
+  'web.nc_t_support_assistant_stalled': 'دستیار هوشمند پشتیبانی اجرا نمی‌شود',
   'web.nc_t_admin_sessions': 'نشست‌های یک مدیر لغو شد',
   'web.nc_t_incident': 'به‌روزرسانی رخداد یا نگهداری',
   // --- Phase D2: the administrator's own account and its security section ------------
@@ -7722,6 +7723,7 @@ export const WEB_FA = {
   'web.sa_assist_requested': 'پیش‌نویس درخواست‌شده',
   'web.sa_assist_sent': 'فرستاده شد',
   'web.sa_assist_discarded': 'کنار گذاشته شد',
+  'web.sa_assist_superseded': 'جایگزین با درخواست تازه',
   'web.sa_assist_failed': 'بدون پیش‌نویس',
   'web.sa_assist_open': 'بی‌پاسخ مانده',
   'web.sa_runs_title': 'فراخوانی سرویس‌های هوش مصنوعی',
@@ -7896,6 +7898,7 @@ export const WEB_FA = {
   'web.assist_summary': 'خلاصه',
   'web.assist_based_on': 'بر پایهٔ:',
   'web.assist_based_on_none': 'هیچ داده‌ای از حساب مشتری استفاده نشد.',
+  'web.assist_based_on_knowledge': 'دانش پشتیبان:',
   'web.assist_reply_label': 'پیش‌نویس پاسخ (قابل ویرایش)',
   'web.assist_reply_hint': 'آنچه در این کادر است همان چیزی است که با «ارسال» فرستاده می‌شود.',
   'web.assist_send': 'ارسال برای مشتری',

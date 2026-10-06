@@ -23,6 +23,7 @@ import {
   AssistantLoop,
 } from '../../apps/api/src/modules/control/support-ai/application/assistant-loop';
 import { BUSINESS_CHAT_ERROR_CODES } from '../../apps/api/src/modules/commerce/business-chats/application/business-conversation.service';
+import { TbSupportContextSource } from '../../apps/api/src/modules/control/support-ai/infrastructure/support-context-source';
 import { DrizzleSupportAiJobRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository';
 import {
   DrizzleSupportAiConfigRepository,
@@ -31,6 +32,7 @@ import {
 import {
   DrizzleBusinessConversationRepository,
   DrizzleBusinessMessageRepository,
+  DrizzleBusinessOutboundRepository,
 } from '../../apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository';
 import {
   SEED_IDS,
@@ -74,6 +76,8 @@ describe('Assist Mode (TB5)', () => {
   let conversationId: string;
   /** Every provider call the chain was asked for, by conversation. */
   let chainCalls: string[];
+  /** D7: the transcript each call was given, as role and text. */
+  let chainTurns: { role: string; text: string }[][];
   /** Runs inside the fake provider call, before it answers. */
   let duringCall: ((conversationId: string) => Promise<void>) | null;
   let build: (overrides?: Partial<SupportAssistServiceDeps>) => SupportAssistService;
@@ -114,6 +118,7 @@ describe('Assist Mode (TB5)', () => {
     });
     conversationId = await newConversation('7000001');
     chainCalls = [];
+    chainTurns = [];
     duringCall = null;
     next = {
       outcome: 'OK',
@@ -130,6 +135,7 @@ describe('Assist Mode (TB5)', () => {
         chain: {
           generate: async (_scope, input) => {
             chainCalls.push(input.conversationId ?? '');
+            chainTurns.push(input.request.messages.map((m) => ({ role: m.role, text: m.text })));
             if (duringCall !== null) await duringCall(input.conversationId ?? '');
             return {
               outcome: next,
@@ -151,6 +157,10 @@ describe('Assist Mode (TB5)', () => {
           build: async () => ({
             json: '{"services":[{"alias":"S1"}]}',
             aliases: new Map([['S1', 'سرویس user123']]),
+            knowledgeAliases: new Map([
+              ['K1', 'سرویس وصل نمی‌شود'],
+              ['K2', 'نصب روی آیفون'],
+            ]),
             linked: true,
             flags: {
               identityLinked: true,
@@ -158,10 +168,12 @@ describe('Assist Mode (TB5)', () => {
               hasUnderReviewPayment: false,
               hasUnreconciledService: false,
             },
+            knowledge: { sent: 2, available: 9 },
           }),
         },
         conversations: new DrizzleBusinessConversationRepository(c.database.db),
         messages: new DrizzleBusinessMessageRepository(c.database.db),
+        outbound: new DrizzleBusinessOutboundRepository(c.database.db),
         sender: c.businessConversations,
         guard: c.guard,
         uow: c.uow,
@@ -254,7 +266,112 @@ describe('Assist Mode (TB5)', () => {
     });
     // The citation the facts contained is resolved; the one they did not (Z9) is dropped.
     expect(ready?.factLabels).toEqual(['سرویس user123']);
+    // D2 telemetry: the knowledge the request carried, with the result.
+    expect(ready).toMatchObject({ knowledgeSent: 2, knowledgeAvailable: 9 });
     expect(await outboundCount()).toBe(0);
+  });
+
+  it('D7: the next draft reads the reply the operator sent, with or without an echo', async () => {
+    const first = await readyDraft();
+    const sent = await service.send(scopeA, operator, first.id, {
+      idempotencyKey: key('s'),
+      text: 'متن ویرایش‌شده',
+    });
+    // Delivered, and Telegram did not echo it back: no business_messages row for it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE business_outbound_messages
+             SET state = 'DELIVERED', telegram_message_id = 4242,
+                 send_started_at = now(), resolved_at = now()
+           WHERE id = ${sent.outboundId}`,
+    );
+    await readyDraft();
+    expect(chainTurns.at(-1)).toEqual([
+      { role: 'user', text: 'سلام، اینترنتم وصل نمی‌شود' },
+      { role: 'assistant', text: 'متن ویرایش‌شده' },
+    ]);
+  });
+
+  it('D3: the knowledge a draft cited is stored by title, apart from the facts', async () => {
+    next = {
+      outcome: 'OK',
+      // K1 twice, an unknown K9, and a fact: the knowledge labels are K1's title, once.
+      output: { ...valid, knowledgeRefs: ['K1', 'K9', 'K1'] },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const job = await readyDraft();
+    const ready = await jobs.findById(scopeA, job.id);
+    expect(ready?.knowledgeLabels).toEqual(['سرویس وصل نمی‌شود']);
+    expect(ready?.factLabels).toEqual(['سرویس user123']);
+  });
+
+  it('D3 end to end: a draft citing K1 shows the approved article’s title, through the real context', async () => {
+    const c = ctx.container;
+    const owner = adminActorFor(
+      await createAdmin(c, tenantA, { username: 'owner-d3', roleKeys: ['owner'] }),
+    );
+    await c.supportKnowledge.createArticle(tenantA, owner, {
+      idempotencyKey: key('article'),
+      content: {
+        title: 'اینترنت وصل نمی‌شود',
+        body: 'برنامه را ببندید، اینترنت گوشی را خاموش و روشن کنید و دوباره وصل شوید.',
+        category: 'CONNECTION',
+        tags: ['اتصال'],
+      },
+      publish: true,
+    });
+    next = {
+      outcome: 'OK',
+      output: { ...valid, factRefs: [], knowledgeRefs: ['K1'] },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const real = build({ context: new TbSupportContextSource(c.supportContext) });
+    const realLoop = new AssistantLoop(real, {
+      scope: () => scopeA,
+      intervalMs: 1000,
+      now: () => c.clock.now(),
+      logger: c.logger,
+    });
+    const job = await real.request(scopeA, operator, { conversationId, idempotencyKey: key('d') });
+    await realLoop.tick();
+    expect(await jobs.findById(scopeA, job.id)).toMatchObject({
+      state: 'READY',
+      knowledgeLabels: ['اینترنت وصل نمی‌شود'],
+      factLabels: [],
+      knowledgeSent: 1,
+      knowledgeAvailable: 1,
+    });
+  });
+
+  it('review item 6: newer undelivered rows never push a delivered reply out of the transcript', async () => {
+    const first = await readyDraft();
+    const sent = await service.send(scopeA, operator, first.id, {
+      idempotencyKey: key('s'),
+      text: 'متن تحویل‌شده',
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE business_outbound_messages
+             SET state = 'DELIVERED', telegram_message_id = 4243,
+                 send_started_at = now(), resolved_at = now()
+           WHERE id = ${sent.outboundId}`,
+    );
+    // Forty-five newer rows that were never delivered (a failing lane).
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO business_outbound_messages (id, tenant_id, conversation_id, origin, body,
+            created_by_admin_id, control_epoch, idempotency_key, request_hash, state, attempts,
+            resolved_at, created_at, updated_at)
+          SELECT gen_random_uuid(), tenant_id, conversation_id, origin, 'نرسید',
+                 created_by_admin_id, control_epoch, 'failed-' || g, request_hash, 'FAILED', 1,
+                 now(), now() + (g || ' seconds')::interval, now()
+            FROM business_outbound_messages, generate_series(1, 45) AS g
+           WHERE id = ${sent.outboundId}`,
+    );
+    await readyDraft();
+    expect(chainTurns.at(-1)).toEqual([
+      { role: 'user', text: 'سلام، اینترنتم وصل نمی‌شود' },
+      { role: 'assistant', text: 'متن تحویل‌شده' },
+    ]);
   });
 
   it('records an invalid decision as FAILED, never as advice', async () => {
@@ -378,10 +495,10 @@ describe('Assist Mode (TB5)', () => {
       idempotencyKey: key('draft'),
     });
     await loop.tick();
-    expect((await jobs.findById(scopeA, job.id))?.factLabels).toEqual([
-      'سرویس user123',
-      'سرویس وصل نمی‌شود',
-    ]);
+    // D3: the knowledge citation is labelled apart from the facts; the unknown K9 is dropped.
+    const ready = await jobs.findById(scopeA, job.id);
+    expect(ready?.factLabels).toEqual(['سرویس user123']);
+    expect(ready?.knowledgeLabels).toEqual(['سرویس وصل نمی‌شود']);
   });
 
   it('records a chain failure as FAILED', async () => {
@@ -543,6 +660,33 @@ describe('Assist Mode (TB5)', () => {
     await service.discard(scopeA, operator, job.id);
     expect(await service.produce(scopeA, claimed!)).toBe('GONE');
     expect((await jobs.findById(scopeA, job.id))?.state).toBe('DISCARDED');
+  });
+
+  it("L1: a draft a re-request replaced is counted apart from an operator's discard", async () => {
+    const first = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('d'),
+    });
+    const second = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('d'),
+    });
+    expect(await jobs.findById(scopeA, first.id)).toMatchObject({
+      state: 'DISCARDED',
+      failureCode: 'job.superseded',
+    });
+    await service.discard(scopeA, operator, second.id);
+    expect(await jobs.findById(scopeA, second.id)).toMatchObject({
+      state: 'DISCARDED',
+      failureCode: null,
+    });
+    const owner = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'owner-l1', roleKeys: ['owner'] }),
+    );
+    const figures = await ctx.container.supportAnalytics.analytics(tenantA as never, owner, {
+      range: 'TODAY',
+    });
+    expect(figures.assist).toMatchObject({ requested: 2, discarded: 1, superseded: 1 });
   });
 
   it('refuses a draft while the support AI is OFF', async () => {

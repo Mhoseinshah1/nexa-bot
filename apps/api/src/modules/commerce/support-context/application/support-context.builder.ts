@@ -3,6 +3,7 @@ import {
   normalizeClientAppUrl,
   renderClientAppGuide,
   SUPPORT_CONTEXT_LIMITS,
+  SUPPORT_KNOWLEDGE_LIMITS,
   supportContextPayloadSchema,
   type Clock,
   type PaymentGatewayProvider,
@@ -36,6 +37,7 @@ import {
   moneyOf,
   remainingTrafficBytes,
 } from '../domain/support-context-payload.js';
+import { selectRelevantKnowledge } from '../domain/knowledge-relevance.js';
 import type {
   SupportContextReader,
   SupportKnowledgeReader,
@@ -64,6 +66,12 @@ export interface SupportContextBuilderDeps {
  */
 export interface SupportContextBuild {
   readonly payload: SupportContextPayload;
+  /**
+   * D2 telemetry: how many knowledge entries (approved articles and live FAQ entries, a built
+   * FAQ counted once) this tenant had to choose from. `payload.knowledge.length` is how many
+   * were sent.
+   */
+  readonly knowledgeAvailable: number;
   readonly references: {
     readonly services: ReadonlyMap<string, string>;
     readonly orders: ReadonlyMap<string, string>;
@@ -100,47 +108,29 @@ export interface SupportContextBuild {
 export class SupportContextBuilder {
   constructor(private readonly deps: SupportContextBuilderDeps) {}
 
-  async build(scope: TenantContext, customerId: string | null): Promise<SupportContextBuild> {
+  async build(
+    scope: TenantContext,
+    customerId: string | null,
+    /** D2: the customer's latest words, which the knowledge is chosen by. */
+    options: { readonly query?: string | null } = {},
+  ): Promise<SupportContextBuild> {
     const now = this.deps.clock.now();
     const [articles, faqRows, accounts, appRows, customer] = await Promise.all([
-      this.deps.knowledge.activeForContext(scope, SUPPORT_CONTEXT_LIMITS.knowledge),
+      // Every approved article is a candidate (bounded by the per-tenant article limit): the
+      // relevant one is not necessarily among the most recently edited.
+      this.deps.knowledge.activeForContext(scope, SUPPORT_KNOWLEDGE_LIMITS.articles),
       this.deps.faqs.list(scope, { status: 'ACTIVE' }),
       this.deps.settings.valueOf<readonly string[]>(scope, 'support.accounts'),
       this.deps.clientApps.list(scope, { status: 'ENABLED' }),
       customerId === null ? null : this.deps.customers.findById(scope, customerId as UserId),
     ]);
-    /*
-     * TB8: reviewed knowledge first, then the live FAQ, together bounded by the family limit.
-     * Truncation drops from the TAIL, so under pressure the FAQ gives way before an article
-     * a reviewer approved for the agent.
-     */
-    const knowledge = [
-      ...articles.map((row): Omit<SupportContextKnowledge, 'alias'> => ({
-        source: 'KNOWLEDGE',
-        question: clip(row.title, 512),
-        answer: clip(row.body, 4096),
-      })),
-      /*
-       * TB9: an FAQ entry the build brought into knowledge, approved and enabled, is read as
-       * that article — the reviewed text — and not a second time from the live FAQ.
-       */
-      ...faqRows
-        .filter(
-          (row) =>
-            !articles.some(
-              (article) => article.sourceType === 'FAQ' && article.sourceKey === row.id,
-            ),
-        )
-        .map((row): Omit<SupportContextKnowledge, 'alias'> => ({
-          source: 'FAQ',
-          question: clip(row.question, 512),
-          answer: clip(row.answer, 4096),
-        })),
-    ]
-      .slice(0, SUPPORT_CONTEXT_LIMITS.knowledge)
-      // By position, after the cut: `K1` is the first entry the model reads. The byte budget
-      // drops from the tail, so a surviving entry keeps its alias.
-      .map((entry, index): SupportContextKnowledge => ({ alias: aliasFor('K', index), ...entry }));
+    const selected = selectKnowledge(articles, faqRows, options.query ?? '');
+    // By position, after the selection: `K1` is the most relevant entry the model reads. The
+    // byte budget drops from the tail, so a surviving entry keeps its alias.
+    const knowledge = selected.entries.map((entry, index): SupportContextKnowledge => ({
+      alias: aliasFor('K', index),
+      ...entry,
+    }));
     const supportAccounts = accounts.slice(0, 10).map((handle) => clip(handle, 64));
 
     if (customer === null) {
@@ -151,7 +141,7 @@ export class SupportContextBuilder {
           services: [],
           orders: [],
           payments: [],
-          clientApps: clientAppsFor(appRows, []),
+          clientApps: clientAppsFor(appRows, [], selected.builtAppIds),
           incidents: [],
           knowledge,
           supportAccounts,
@@ -163,10 +153,11 @@ export class SupportContextBuilder {
           },
         },
         { services: [], orders: [], payments: [] },
+        selected.available,
       );
     }
 
-    const [services, orders, payments, incidents] = await Promise.all([
+    const [services, orders, payments, incidents, anyUnreconciled] = await Promise.all([
       this.deps.services.supportServicesForCustomer(
         scope,
         customer.id,
@@ -175,6 +166,8 @@ export class SupportContextBuilder {
       this.deps.reader.recentOrders(scope, customer.id, SUPPORT_CONTEXT_LIMITS.orders),
       this.deps.reader.recentPayments(scope, customer.id, SUPPORT_CONTEXT_LIMITS.payments),
       this.deps.reader.activeIncidentNotices(scope, customer.id, SUPPORT_CONTEXT_LIMITS.incidents),
+      // L4: over ALL of the customer's services, not the page shown.
+      this.deps.reader.anyUnreconciledService(scope, customer.id),
     ]);
     const [cards, appFacts] = await Promise.all([
       services.length === 0
@@ -202,7 +195,7 @@ export class SupportContextBuilder {
         services: serviceEntries,
         orders: orderFacts.map(orderEntry),
         payments: paymentFacts.map(paymentEntry),
-        clientApps: clientAppsFor(appRows, appFacts),
+        clientApps: clientAppsFor(appRows, appFacts, selected.builtAppIds),
         incidents: incidents.slice(0, SUPPORT_CONTEXT_LIMITS.incidents).map((incident) => ({
           customerMessage: clip(incident.customerMessage, 2000),
           startedAt: incident.startedAt.toISOString(),
@@ -212,7 +205,8 @@ export class SupportContextBuilder {
         supportAccounts,
         flags: {
           hasUnderReviewPayment: payments.anyUnderReview,
-          hasUnreconciledService: serviceEntries.some((entry) => entry.unreconciled),
+          hasUnreconciledService:
+            anyUnreconciled || serviceEntries.some((entry) => entry.unreconciled),
           identityLinked: true,
           customerBlocked: customer.status === 'BLOCKED',
         },
@@ -222,6 +216,7 @@ export class SupportContextBuilder {
         orders: orderFacts.map((order) => order.id),
         payments: paymentFacts.map((payment) => payment.id),
       },
+      selected.available,
     );
   }
 
@@ -232,6 +227,7 @@ export class SupportContextBuilder {
       readonly orders: readonly string[];
       readonly payments: readonly string[];
     },
+    knowledgeAvailable: number,
   ): SupportContextBuild {
     // Strict: a key outside the allowlist, or a value outside its bound, fails HERE.
     const parsed = supportContextPayloadSchema.parse(fitPayload(payload));
@@ -241,6 +237,7 @@ export class SupportContextBuilder {
      */
     return {
       payload: parsed,
+      knowledgeAvailable,
       references: {
         services: survivingReferences('S', ids.services, parsed.services),
         orders: survivingReferences('O', ids.orders, parsed.orders),
@@ -261,6 +258,67 @@ function survivingReferences(
       .map((id, index) => [aliasFor(prefix, index), id] as const)
       .filter(([alias]) => aliases.has(alias)),
   );
+}
+
+/** The candidates `selectKnowledge` reads: approved articles as the reader returns them. */
+type KnowledgeArticleFact = Awaited<ReturnType<SupportKnowledgeReader['activeForContext']>>[number];
+
+/**
+ * D2 — the knowledge a request carries: every approved article and every live FAQ entry (an FAQ
+ * entry the build brought into knowledge is read as that reviewed article, once — TB9), ranked
+ * by relevance to `query`, the most relevant `SUPPORT_CONTEXT_LIMITS.knowledge`. Ties keep the
+ * reader's order: reviewed articles newest first, then the FAQ.
+ *
+ * `builtAppIds`: the client apps whose guide a SELECTED article already carries (a NEXA_BUILD
+ * `CLIENT_APP` article), so the app's own entry goes without its guide and the same text is not
+ * sent twice. Selection only — aliases, if any, are assigned to the result afterwards.
+ */
+export function selectKnowledge(
+  articles: readonly KnowledgeArticleFact[],
+  faqRows: readonly { readonly id: string; readonly question: string; readonly answer: string }[],
+  query: string,
+): {
+  readonly entries: Omit<SupportContextKnowledge, 'alias'>[];
+  readonly builtAppIds: ReadonlySet<string>;
+  readonly available: number;
+} {
+  const candidates = [
+    ...articles.map((row) => ({
+      title: row.title,
+      body: row.body,
+      tags: row.tags,
+      entry: {
+        source: 'KNOWLEDGE',
+        question: clip(row.title, 512),
+        answer: clip(row.body, 4096),
+      } satisfies Omit<SupportContextKnowledge, 'alias'>,
+      appId: row.sourceType === 'CLIENT_APP' ? row.sourceKey : null,
+    })),
+    ...faqRows
+      .filter(
+        (row) =>
+          !articles.some((article) => article.sourceType === 'FAQ' && article.sourceKey === row.id),
+      )
+      .map((row) => ({
+        title: row.question,
+        body: row.answer,
+        tags: [] as readonly string[],
+        entry: {
+          source: 'FAQ',
+          question: clip(row.question, 512),
+          answer: clip(row.answer, 4096),
+        } satisfies Omit<SupportContextKnowledge, 'alias'>,
+        appId: null,
+      })),
+  ];
+  const chosen = selectRelevantKnowledge(candidates, query, SUPPORT_CONTEXT_LIMITS.knowledge);
+  return {
+    entries: chosen.map((candidate) => candidate.entry),
+    builtAppIds: new Set(
+      chosen.flatMap((candidate) => (candidate.appId === null ? [] : [candidate.appId])),
+    ),
+    available: candidates.length,
+  };
 }
 
 /** The customer, minus everything the allowlist leaves out (phone, Telegram id, block reason). */
@@ -361,6 +419,8 @@ function routeLabelKeyOf(payment: SupportPaymentFact): TemplateKey | null {
 function clientAppsFor(
   rows: readonly ClientAppRecord[],
   facts: readonly CustomerServiceFact[],
+  /** D2: apps whose guide a selected knowledge article already carries: sent without it. */
+  builtAppIds: ReadonlySet<string> = new Set(),
 ): SupportContextClientApp[] {
   return rows
     .filter((row) => row.status === 'ENABLED' && isClientAppRelevant(row, facts))
@@ -369,7 +429,7 @@ function clientAppsFor(
       platform: row.platform,
       name: clip(neutralizeClientAppBareLinks(row.name), 128),
       description: clip(neutralizeClientAppBareLinks(row.description), 512),
-      guide: clipGuide(renderClientAppGuide(row.guide)),
+      guide: builtAppIds.has(row.id) ? '' : clipGuide(renderClientAppGuide(row.guide)),
       helpUrl: row.helpUrl === null ? null : normalizeClientAppUrl(row.helpUrl),
       officialUrl: normalizeClientAppUrl(row.officialUrl),
     }));

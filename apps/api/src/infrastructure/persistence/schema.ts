@@ -13973,6 +13973,11 @@ export const supportAiJobs = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
+    /** D3: the knowledge entries the draft cited, resolved to their titles. */
+    knowledgeLabels: text('knowledge_labels')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     provider: text('provider'),
     model: text('model'),
     sentOutboundId: uuid('sent_outbound_id'),
@@ -14002,6 +14007,13 @@ export const supportAiJobs = pgTable(
      * the deciding call's particulars are its `support_ai_runs` row (`job_id`).
      */
     failureClass: text('failure_class'),
+    /**
+     * D2 telemetry: how many knowledge entries the request that produced this job's result
+     * carried to the provider, and how many the tenant had to choose from. Null when no
+     * provider was asked (a guard, a drop, a job from before this column).
+     */
+    knowledgeSent: integer('knowledge_sent'),
+    knowledgeAvailable: integer('knowledge_available'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -14072,6 +14084,10 @@ export const supportAiJobs = pgTable(
     check(
       'support_ai_jobs_failure_class_check',
       nullableEnumCheck('failure_class', SUPPORT_AI_FAILURE_CLASSES),
+    ),
+    check(
+      'support_ai_jobs_knowledge_check',
+      sql`(knowledge_sent IS NULL) = (knowledge_available IS NULL) AND (knowledge_sent IS NULL OR knowledge_sent BETWEEN 0 AND knowledge_available)`,
     ),
     check(
       'support_ai_jobs_handoff_reason_check',
@@ -14190,8 +14206,13 @@ export const supportLearningCandidates = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     conversationId: uuid('conversation_id').notNull(),
-    sourceOutboundId: uuid('source_outbound_id').notNull(),
-    /** Every source reply that proposed this lesson: `[{conversationId, outboundId, at}]`. */
+    /** The first source: a delivered reply (`outbound`) or, D8, a message the owner typed. */
+    sourceOutboundId: uuid('source_outbound_id'),
+    sourceMessageId: uuid('source_message_id'),
+    /**
+     * Every source reply that proposed this lesson: `[{conversationId, outboundId, at}]`, or
+     * `messageId` instead of `outboundId` for a message the owner typed (D8).
+     */
     sourceRefs: jsonb('source_refs')
       .notNull()
       .default(sql`'[]'::jsonb`),
@@ -14243,6 +14264,10 @@ export const supportLearningCandidates = pgTable(
     check(
       'support_learning_candidates_state_check',
       enumCheck('state', SUPPORT_LEARNING_CANDIDATE_STATES),
+    ),
+    check(
+      'support_learning_candidates_source_check',
+      sql`num_nonnulls(source_outbound_id, source_message_id) = 1`,
     ),
     check(
       'support_learning_candidates_category_check',
@@ -14497,7 +14522,9 @@ export const supportLearningJobs = pgTable(
       .notNull()
       .references(() => tenants.id),
     conversationId: uuid('conversation_id').notNull(),
-    sourceOutboundId: uuid('source_outbound_id').notNull(),
+    /** The reply learned from: a delivered outbound row, or (D8) a message the owner typed. */
+    sourceOutboundId: uuid('source_outbound_id'),
+    sourceMessageId: uuid('source_message_id'),
     trigger: text('trigger').notNull(),
     requestedByAdminId: uuid('requested_by_admin_id'),
     idempotencyKey: text('idempotency_key').notNull(),
@@ -14531,6 +14558,16 @@ export const supportLearningJobs = pgTable(
       foreignColumns: [businessOutboundMessages.tenantId, businessOutboundMessages.id],
       name: 'support_learning_jobs_outbound_fk',
     }),
+    foreignKey({
+      columns: [table.tenantId, table.sourceMessageId],
+      foreignColumns: [businessMessages.tenantId, businessMessages.id],
+      name: 'support_learning_jobs_message_fk',
+    }),
+    // D8: exactly one source — a delivered reply, or a message the owner typed.
+    check(
+      'support_learning_jobs_source_check',
+      sql`num_nonnulls(source_outbound_id, source_message_id) = 1`,
+    ),
     foreignKey({
       columns: [table.tenantId, table.requestedByAdminId],
       foreignColumns: [admins.tenantId, admins.id],

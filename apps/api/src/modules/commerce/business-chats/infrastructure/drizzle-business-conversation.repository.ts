@@ -615,6 +615,27 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
     return row === undefined ? null : photoOf(row);
   }
 
+  async findById(
+    scope: ScopeContext,
+    conversationId: string,
+    id: string,
+    tx?: unknown,
+  ): Promise<BusinessMessageRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .select()
+      .from(businessMessages)
+      .where(
+        and(
+          eq(businessMessages.tenantId, tenantId),
+          eq(businessMessages.conversationId, conversationId),
+          eq(businessMessages.id, id),
+        ),
+      )
+      .limit(1);
+    return row ? toMessage(row) : null;
+  }
+
   async findByTelegramId(
     scope: ScopeContext,
     conversationId: string,
@@ -753,6 +774,32 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
       )
       .orderBy(desc(businessOutboundMessages.createdAt), desc(businessOutboundMessages.id))
       .limit(limit);
+    return rows.map(toOutbound).reverse();
+  }
+
+  async deliveredSince(
+    scope: ScopeContext,
+    conversationId: string,
+    input: { readonly since: Date | null; readonly limit: number },
+  ): Promise<readonly BusinessOutboundRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const at = sql`coalesce(${businessOutboundMessages.sendStartedAt}, ${businessOutboundMessages.resolvedAt}, ${businessOutboundMessages.createdAt})`;
+    const rows = await this.db
+      .select()
+      .from(businessOutboundMessages)
+      .where(
+        and(
+          eq(businessOutboundMessages.tenantId, tenantId),
+          eq(businessOutboundMessages.conversationId, conversationId),
+          eq(businessOutboundMessages.state, 'DELIVERED'),
+          isNotNull(businessOutboundMessages.body),
+          input.since === null
+            ? undefined
+            : sql`${at} >= ${input.since.toISOString()}::timestamptz`,
+        ),
+      )
+      .orderBy(desc(businessOutboundMessages.createdAt), desc(businessOutboundMessages.id))
+      .limit(input.limit);
     return rows.map(toOutbound).reverse();
   }
 

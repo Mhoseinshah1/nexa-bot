@@ -43,6 +43,7 @@ import {
   articleAudit,
   assertClean,
 } from './support-knowledge.service.js';
+import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 
 /**
  * The allowlisted sources, behind a port (ADR-0035 §5). The one implementation reads each
@@ -75,6 +76,8 @@ export interface SupportKnowledgeBuildServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** L3: the `support.accounts` handles, which a built article may name. */
+  readonly settings: Pick<SettingsResolver, 'valueOf'>;
 }
 
 export interface KnowledgeBuildDetail {
@@ -165,9 +168,12 @@ export class SupportKnowledgeBuildService {
     // instructions — is EXCLUDED from the change-set rather than proposed and refused at
     // apply. Only the count and the kinds are recorded, never the text (OQ-TB-66).
     const excludedKinds = new Set<string>();
+    // L3: the installation's own support handles are not personal data; every other handle is.
+    const allowedHandles = await this.supportHandles(scope);
     const items = collected.filter((item) => {
       const kinds = detectSensitive(
         [item.content.title, item.content.body, item.content.tags.join(' ')].join('\n'),
+        { allowedHandles },
       );
       for (const kind of kinds) excludedKinds.add(kind);
       return kinds.length === 0;
@@ -426,7 +432,7 @@ export class SupportKnowledgeBuildService {
           throw errors.internal('support_knowledge.conflict_shape', 'A conflict names no article.');
         }
         if (command.choice === 'TAKE_BUILD') {
-          assertClean(proposal.content);
+          assertClean(proposal.content, await this.supportHandles(scope));
           const after = await this.deps.repository.rewriteBuilt(
             scope,
             articleId,
@@ -523,7 +529,7 @@ export class SupportKnowledgeBuildService {
     // A concurrent apply of the same build took it: that one answers for it.
     if (!claimed) return 'NONE';
     // The backstop: no write path puts unclean text in an article, the build's included.
-    assertClean(target.content);
+    assertClean(target.content, await this.supportHandles(scope));
     const article = await this.deps.repository.insertArticle(
       scope,
       {
@@ -556,7 +562,7 @@ export class SupportKnowledgeBuildService {
     tx: TransactionScope,
   ): Promise<ApplyOutcome> {
     if (target.articleId === null || target.baseRevision === null) return 'NONE';
-    assertClean(target.content);
+    assertClean(target.content, await this.supportHandles(scope));
     const after = await this.deps.repository.rewriteBuilt(
       scope,
       target.articleId,
@@ -723,6 +729,14 @@ export class SupportKnowledgeBuildService {
         'This installation has stopped accepting work.',
       );
     }
+  }
+
+  /**
+   * L3: the installation's own support handles (`support.accounts`): text naming one of them is
+   * the business pointing customers at itself, not personal data, so the scrubber lets it be.
+   */
+  private async supportHandles(scope: ScopeContext): Promise<readonly string[]> {
+    return this.deps.settings.valueOf<readonly string[]>(scope, 'support.accounts');
   }
 
   private mutationDeps() {

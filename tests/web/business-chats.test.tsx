@@ -364,6 +364,45 @@ describe('one business conversation', () => {
     expect(screen.getByText(t('web.bchat_handoff_identity'))).toBeTruthy();
   });
 
+  it('D8: proposes a reply the owner typed on the phone, never a customer message', async () => {
+    const api = stubApi([
+      { url: `/business-chats/${CHAT_ID}`, body: detail() },
+      { url: '/knowledge-proposals', method: 'POST', body: { jobId: 'j1', state: 'QUEUED' } },
+    ]);
+    renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply={false} mayPropose />);
+    const thread = await screen.findByRole('list', { name: t('web.bchat_transcript') });
+    const items = within(thread).getAllByRole('listitem');
+    const byOrigin = (origin: string) =>
+      items.find((item) => item.getAttribute('data-origin') === origin)!;
+    // Only the owner's own typed reply carries the button.
+    expect(
+      within(byOrigin('INBOUND')).queryByRole('button', { name: t('web.sk_propose') }),
+    ).toBeNull();
+    expect(
+      within(byOrigin('OWN_ECHO')).queryByRole('button', { name: t('web.sk_propose') }),
+    ).toBeNull();
+    expect(
+      within(byOrigin('OFFLINE')).queryByRole('button', { name: t('web.sk_propose') }),
+    ).toBeNull();
+    fireEvent.click(within(byOrigin('HUMAN')).getByRole('button', { name: t('web.sk_propose') }));
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.url.endsWith('/knowledge-proposals'))).toHaveLength(1),
+    );
+    const body = api.calls.find((c) => c.url.endsWith('/knowledge-proposals'))!.body as Record<
+      string,
+      string
+    >;
+    expect(body['messageId']).toBe('019420ab-cdef-7012-8345-6789abcdef02');
+    expect(body['outboundId']).toBeUndefined();
+  });
+
+  it('D8: draws no propose button on the transcript without the permission', async () => {
+    stubApi([{ url: `/business-chats/${CHAT_ID}`, body: detail() }]);
+    renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply={false} />);
+    const thread = await screen.findByRole('list', { name: t('web.bchat_transcript') });
+    expect(within(thread).queryByRole('button', { name: t('web.sk_propose') })).toBeNull();
+  });
+
   it('names every origin in words, oldest first, with edited, deleted and purged markers', async () => {
     page({}, false);
     const thread = await screen.findByRole('list', { name: t('web.bchat_transcript') });

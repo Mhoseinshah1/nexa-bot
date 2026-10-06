@@ -400,6 +400,7 @@ const draft = (overrides: Record<string, unknown> = {}) => ({
   suggestedReply: 'لطفاً برنامه را به‌روزرسانی کنید.',
   ticketAction: 'NONE',
   factLabels: ['سرویس فعال', 'حجم باقی‌مانده'],
+  knowledgeLabels: [],
   provider: 'OPENAI',
   model: 'gpt-test-1',
   imagesSeen: 0,
@@ -461,6 +462,24 @@ describe('the Assist panel', () => {
     const basedOn = within(list).getByRole('list', { name: t('web.assist_based_on') });
     expect(within(basedOn).getByText('سرویس فعال')).toBeTruthy();
     expect(within(basedOn).getByText('حجم باقی‌مانده')).toBeTruthy();
+  });
+
+  it('D3: shows the approved knowledge a draft cited, apart from the customer facts', async () => {
+    assist([draft({ factLabels: [], knowledgeLabels: ['سرویس وصل نمی‌شود'] })]);
+    const list = await screen.findByRole('list', { name: t('web.assist_drafts') });
+    const knowledge = within(list).getByRole('list', {
+      name: t('web.assist_based_on_knowledge'),
+    });
+    expect(within(knowledge).getByText('سرویس وصل نمی‌شود')).toBeTruthy();
+    // Grounded on knowledge is NOT "nothing was used".
+    expect(within(list).queryByText(t('web.assist_based_on_none'))).toBeNull();
+    expect(within(list).queryByRole('list', { name: t('web.assist_based_on') })).toBeNull();
+  });
+
+  it('D3: a draft citing nothing still says so', async () => {
+    assist([draft({ factLabels: [], knowledgeLabels: [] })]);
+    const list = await screen.findByRole('list', { name: t('web.assist_drafts') });
+    expect(within(list).getByText(t('web.assist_based_on_none'))).toBeTruthy();
   });
 
   it('sends the operator’s EDITED text, not the suggestion', async () => {

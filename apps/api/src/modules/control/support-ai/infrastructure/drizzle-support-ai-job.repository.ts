@@ -15,6 +15,7 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import {
   supportAiImageOutcomes,
   supportAiJobs,
+  supportLearningJobs,
 } from '../../../../infrastructure/persistence/schema.js';
 import {
   requireTenantId,
@@ -44,11 +45,16 @@ export interface SupportAiJobRecord {
   readonly intent: string | null;
   readonly suggestedReply: string | null;
   readonly factLabels: readonly string[];
+  /** D3: the knowledge entries the draft cited, by title; empty for none. */
+  readonly knowledgeLabels: readonly string[];
   readonly provider: SupportAiProvider | null;
   readonly model: string | null;
   readonly sentOutboundId: string | null;
   readonly imagesSeen: number;
   readonly imagesUnseen: number;
+  /** D2: knowledge entries the request carried, and the candidates; null when none was asked. */
+  readonly knowledgeSent: number | null;
+  readonly knowledgeAvailable: number | null;
   readonly unseenImageHandoff: SupportAiImageSkipReason | null;
   /** TB7 (AUTO_DECISION only). */
   readonly triggerTelegramMessageId: number | null;
@@ -90,11 +96,14 @@ function toRecord(row: Row): SupportAiJobRecord {
     intent: row.intent,
     suggestedReply: row.suggestedReply,
     factLabels: row.factLabels ?? [],
+    knowledgeLabels: row.knowledgeLabels ?? [],
     provider: row.provider as SupportAiProvider | null,
     model: row.model,
     sentOutboundId: row.sentOutboundId,
     imagesSeen: row.imagesSeen,
     imagesUnseen: row.imagesUnseen,
+    knowledgeSent: row.knowledgeSent,
+    knowledgeAvailable: row.knowledgeAvailable,
     unseenImageHandoff: row.unseenImageHandoff as SupportAiImageSkipReason | null,
     triggerTelegramMessageId: row.triggerTelegramMessageId,
     triggerContentVersion: row.triggerContentVersion,
@@ -105,6 +114,9 @@ function toRecord(row: Row): SupportAiJobRecord {
     createdAt: row.createdAt,
   };
 }
+
+/** L1: the mark of a draft a newer request replaced — a DISCARDED job no person discarded. */
+export const SUPPORT_AI_DRAFT_SUPERSEDED_CODE = 'job.superseded';
 
 function exec(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -199,7 +211,10 @@ export class DrizzleSupportAiJobRepository {
     return rows.map(toRecord);
   }
 
-  /** Newer draft requested: every older QUEUED or READY draft of the conversation is discarded. */
+  /**
+   * Newer draft requested: every older QUEUED or READY draft of the conversation is discarded,
+   * marked `job.superseded` (L1) so the analytics tell it from an operator's discard.
+   */
   async discardOpen(
     scope: ScopeContext,
     conversationId: string,
@@ -209,7 +224,12 @@ export class DrizzleSupportAiJobRepository {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
       .update(supportAiJobs)
-      .set({ state: 'DISCARDED', claimedUntil: null, updatedAt: now })
+      .set({
+        state: 'DISCARDED',
+        failureCode: SUPPORT_AI_DRAFT_SUPERSEDED_CODE,
+        claimedUntil: null,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(supportAiJobs.tenantId, tenantId),
@@ -446,6 +466,8 @@ export class DrizzleSupportAiJobRepository {
     result: {
       readonly decision: SupportAiDecision;
       readonly factLabels: readonly string[];
+      /** D3: resolved knowledge citations; omitted is none. */
+      readonly knowledgeLabels?: readonly string[];
       readonly provider: SupportAiProvider;
       readonly model: string;
       /** TB6: images the answering model was given, and images it did not see. */
@@ -471,6 +493,7 @@ export class DrizzleSupportAiJobRepository {
         suggestedReply: result.decision.replyText,
         factRefs: [...result.decision.factRefs],
         factLabels: [...result.factLabels],
+        knowledgeLabels: [...(result.knowledgeLabels ?? [])],
         provider: result.provider,
         model: result.model.slice(0, 128),
         imagesSeen: result.imagesSeen,
@@ -519,6 +542,7 @@ export class DrizzleSupportAiJobRepository {
         suggestedReply: '',
         factRefs: [],
         factLabels: [],
+        knowledgeLabels: [],
         provider: null,
         model: null,
         imagesSeen: 0,
@@ -535,6 +559,75 @@ export class DrizzleSupportAiJobRepository {
       )
       .returning({ id: supportAiJobs.id });
     return rows.length > 0;
+  }
+
+  /**
+   * D5 — what the worker's watch reads to tell a stalled assistant from a busy one: the Assist
+   * drafts and automatic jobs QUEUED and due since `dueBefore` with no live lease (nobody is
+   * producing them), and how many QUEUED jobs — learning jobs included — hold a live lease
+   * (somebody is). One statement.
+   */
+  async assistantBacklog(
+    scope: ScopeContext,
+    now: Date,
+    dueBefore: Date,
+    tx?: unknown,
+  ): Promise<{
+    readonly overdue: number;
+    readonly oldestDueAt: Date | null;
+    readonly leased: number;
+  }> {
+    const tenantId = requireTenantId(scope);
+    const at = sql`${now.toISOString()}::timestamptz`;
+    const before = sql`${dueBefore.toISOString()}::timestamptz`;
+    const due = sql`coalesce(${supportAiJobs.dueAt}, ${supportAiJobs.createdAt})`;
+    const unleased = sql`(${supportAiJobs.claimedUntil} IS NULL OR ${supportAiJobs.claimedUntil} <= ${at})`;
+    const [row] = await exec(this.db, tx)
+      .select({
+        overdue: sql<number>`count(*) FILTER (WHERE ${due} <= ${before} AND ${unleased})::int`,
+        oldestDueAt: sql<
+          string | Date | null
+        >`min(${due}) FILTER (WHERE ${due} <= ${before} AND ${unleased})`,
+        // Review item 5: a learning job the assistant is extracting holds a lease too — a busy
+        // assistant, not a dead one.
+        leased: sql<number>`(count(*) FILTER (WHERE ${supportAiJobs.claimedUntil} > ${at})
+          + (SELECT count(*) FROM ${supportLearningJobs}
+              WHERE ${supportLearningJobs.tenantId} = ${tenantId}
+                AND ${supportLearningJobs.state} = 'QUEUED'
+                AND ${supportLearningJobs.claimedUntil} > ${at}))::int`,
+      })
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.state, 'QUEUED'),
+          inArray(supportAiJobs.kind, ['ASSIST_DRAFT', 'AUTO_DECISION']),
+        ),
+      );
+    const oldest = row?.oldestDueAt ?? null;
+    return {
+      overdue: Number(row?.overdue ?? 0),
+      oldestDueAt: oldest === null ? null : new Date(oldest),
+      leased: Number(row?.leased ?? 0),
+    };
+  }
+
+  /**
+   * D2 telemetry — how many knowledge entries the job's request carried, and how many there
+   * were to choose from. Written in the job's result transaction (`withKnowledgeCounts`).
+   */
+  async recordKnowledgeCounts(
+    scope: ScopeContext,
+    jobId: string,
+    counts: { readonly sent: number; readonly available: number },
+    now: Date,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await exec(this.db, tx)
+      .update(supportAiJobs)
+      .set({ knowledgeSent: counts.sent, knowledgeAvailable: counts.available, updatedAt: now })
+      .where(and(eq(supportAiJobs.tenantId, tenantId), eq(supportAiJobs.id, jobId)));
   }
 
   /** TB6 — the per-image telemetry of one draft's request. */
@@ -703,6 +796,7 @@ export class DrizzleSupportAiJobRepository {
         intent: null,
         suggestedReply: null,
         factLabels: [],
+        knowledgeLabels: [],
         textPurgedAt: now,
         updatedAt: now,
       })

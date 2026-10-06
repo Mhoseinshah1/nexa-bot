@@ -4537,15 +4537,21 @@ export function rejectLearningCandidate(input: {
   return post(SUPPORT_KNOWLEDGE_ROUTES.reject(id), body, supportLearningCandidateViewSchema);
 }
 
-/** "Propose as knowledge" on one delivered reply. Creates a learning job, never knowledge. */
-export function proposeAsKnowledge(input: {
-  readonly conversationId: string;
-  readonly outboundId: string;
-  readonly idempotencyKey: string;
-}): Promise<{ jobId: string }> {
+/**
+ * "Propose as knowledge" on one delivered reply (`outboundId`), or — D8 — on a reply the owner
+ * typed in the Telegram app (`messageId`). Creates a learning job, never knowledge.
+ */
+export function proposeAsKnowledge(
+  input: {
+    readonly conversationId: string;
+    readonly idempotencyKey: string;
+  } & ({ readonly outboundId: string } | { readonly messageId: string }),
+): Promise<{ jobId: string }> {
   return post(
     SUPPORT_KNOWLEDGE_ROUTES.propose(input.conversationId),
-    { idempotencyKey: input.idempotencyKey, outboundId: input.outboundId },
+    'outboundId' in input
+      ? { idempotencyKey: input.idempotencyKey, outboundId: input.outboundId }
+      : { idempotencyKey: input.idempotencyKey, messageId: input.messageId },
     oneField('jobId', 'string'),
   );
 }
