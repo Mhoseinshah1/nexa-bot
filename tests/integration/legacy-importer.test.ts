@@ -1658,14 +1658,12 @@ describe('Migration P7: the legacy importer', () => {
   it('WP-D4 (P4): the import leaves every production panel account as it was; a panel write would show', async () => {
     const key = Buffer.alloc(32, 9);
     const walk = async (): Promise<PanelStateSnapshot> => {
-      const real = ctx.container.legacyImporter({ inventoryPageSize: 3 });
+      const inventory = ctx.container.legacyPanelInventory({ inventoryPageSize: 3 });
       const panels = [];
-      let requests = { reads: 0, refusedWrites: 0 };
       for (const id of [panelAId, panelBId]) {
-        const result = await real.readPanelInventory(tenantA, id);
-        panels.push(panelState(id, result.read, key));
-        requests = result.requests;
+        panels.push(panelState(id, await inventory.read(tenantA, id), key));
       }
+      const requests = inventory.requestCounts();
       expect(requests.refusedWrites).toBe(0);
       expect(requests.reads).toBeGreaterThan(0);
       return { schema: PANEL_STATE_SCHEMA, panels, requests };

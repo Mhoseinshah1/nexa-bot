@@ -9,7 +9,7 @@
  *   (DATABASE_URL and the application configuration come from the environment)
  *
  * `snapshot` walks each `productionPanels` panel of the map through the importer's OWN
- * read-only inventory port (`LegacyImporterService.readPanelInventory`: GETs and the token
+ * read-only inventory port (`container.legacyPanelInventory()`: GETs and the token
  * exchange, nothing else can be sent) and writes, per panel, aggregates only:
  *
  * - `controlHash` over every account's ADMIN-CONTROLLED facts — lower(username), data
@@ -177,14 +177,12 @@ async function snapshot(): Promise<void> {
     const tenantId = found.rows[0]?.id;
     if (tenantId === undefined) throw new Error(`no tenant ${tenantSlug}`);
     const scope = { tenantId: tenantId as never, botInstanceId: null };
-    const importer = container.legacyImporter({});
+    const inventory = container.legacyPanelInventory({});
     const panels: PanelState[] = [];
-    let requests = { reads: 0, refusedWrites: 0 };
     for (const panelId of [...(panelIds as string[])].sort()) {
-      const result = await importer.readPanelInventory(scope, panelId);
-      panels.push(panelState(panelId, result.read, key));
-      requests = result.requests;
+      panels.push(panelState(panelId, await inventory.read(scope, panelId), key));
     }
+    const requests = inventory.requestCounts();
     const doc: PanelStateSnapshot = { schema: PANEL_STATE_SCHEMA, panels, requests };
     writeFileSync(out, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
   } finally {
