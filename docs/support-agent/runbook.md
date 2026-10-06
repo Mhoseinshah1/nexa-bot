@@ -20,7 +20,9 @@ Conventions used below:
 
 - **Who may act.** Changing the mode, the chain or a key needs `support_ai.configure`
   (owner and admin). Entering `AUTO_REPLY_SAFE`, adding an automatic topic or lowering the
-  confidence floor needs `support_ai.auto_reply` (owner only). Taking a conversation over or
+  confidence floor needs `support_ai.auto_reply` (owner only), and so does raising a limit
+  under `AUTO_REPLY_SAFE` — «بیشترین پاسخ خودکار پیاپی», «حداکثر سؤال تکمیلی پیاپی», the reply
+  length — or shortening its delays. Taking a conversation over or
   replying needs `business_chats.reply`.
 
 ## 0. What the alerts mean
@@ -387,3 +389,31 @@ SELECT j.id, j.outcome, j.handoff_reason, j.failure_class,
 
 A run recorded before this release has no class (`failure_class` is null); its
 `failure_code` (`openai.http_400`, `openai.truncated`, …) still says roughly the same thing.
+
+## 12. Clarifying questions and their limit (hotfix 2026-10-06)
+
+Under `AUTO_REPLY_SAFE` the AI may ask the customer a clarifying question on an allowlisted
+topic («با چه برنامه‌ای وصل می‌شید؟») instead of handing off, when every guard passes. A
+question is shown in «آمار پشتیبانی» as «سؤال تکمیلی فرستاده شد» (`sent_clarifying`), apart
+from an answer («فرستاده شد», `sent`), and opens no ticket.
+
+- **The limit.** «حداکثر سؤال تکمیلی پیاپی» on `/support-ai` (default 2, 1–10) is how many
+  questions in a row the AI may send before a person continues. The count runs from the AI's
+  last automatic answer; a customer's reply does not reset it, an AI answer does, and a
+  takeover or «سپردن دوباره به هوش مصنوعی» starts a new count. A refused or superseded send is
+  never counted.
+- **At the limit** the conversation is handed off with «سؤال‌های تکمیلی پیاپی هوش مصنوعی به سقف
+  رسید» (`CLARIFYING_LIMIT`, outcome `guard_clarifying_limit`) and a ticket, like any handoff.
+  Nothing more is sent to the customer automatically.
+- **If customers are handed off at the limit too often**, read the conversations first: a model
+  that keeps asking where an approved article answers needs better knowledge (TB8/TB9), not a
+  higher limit. Raising the limit under `AUTO_REPLY_SAFE` needs `support_ai.auto_reply`.
+- **From the database (read-only)**, a conversation's automatic decisions in order:
+
+  ```sql
+  SELECT j.created_at, j.decision, j.outcome, j.handoff_reason, o.state AS lane_state, o.control_epoch
+    FROM support_ai_jobs j
+    LEFT JOIN business_outbound_messages o ON o.tenant_id = j.tenant_id AND o.id = j.sent_outbound_id
+   WHERE j.kind = 'AUTO_DECISION' AND j.conversation_id = '<conversation id>'
+   ORDER BY j.created_at;
+  ```
