@@ -345,6 +345,23 @@ describe('B9/C3 — a link change answered on the card is the QR photo too', () 
     expect(h.removed).toHaveLength(0);
   });
 
+  /*
+   * PR #225 review: an ambiguous photo (a timeout, a 5xx) may already be on the customer's
+   * screen. It is answered UNKNOWN as it is — the «working» card is NOT deleted (the photo
+   * may not be there) and NOT edited into the text link (that would be a second answer if
+   * the photo did land), and nothing more is sent.
+   */
+  it('an UNKNOWN photo is left as it is: the card is neither deleted nor edited, nothing else is sent', async () => {
+    const h = harness({ rotationCard: true, photo: { outcome: 'UNKNOWN' } });
+    const record = await rotate(h);
+    expect(h.files).toHaveLength(1);
+    expect(h.removed, 'the card stays').toHaveLength(0);
+    expect(h.edits, 'no fallback edit').toHaveLength(0);
+    expect(h.texts).toHaveLength(0);
+    expect(h.released).toHaveLength(0);
+    expect(record.sentTo).toEqual({ chatId: CARD.chatId, botInstanceId: BOT });
+  });
+
   it('a CARD_TEXT panel keeps the text edit, with no photo', async () => {
     const h = harness({ rotationCard: true, mode: 'CARD_TEXT' });
     await rotate(h);
