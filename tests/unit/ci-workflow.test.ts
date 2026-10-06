@@ -275,6 +275,18 @@ describe('the CI workflow', () => {
     expect(job['timeout-minutes']).toBeGreaterThan(0);
   });
 
+  it('pins the image of every job that downloads release-specific Ubuntu packages', () => {
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      const downloads = job.steps.some((s) => /apt-get download/u.test(s.run ?? ''));
+      if (downloads) {
+        expect((job as unknown as { 'runs-on'?: string })['runs-on'], name).toBe('ubuntu-24.04');
+      }
+    }
+    expect(
+      workflow.jobs['legacy-rehearsal']!.steps.some((s) => /apt-get download/u.test(s.run ?? '')),
+    ).toBe(true);
+  });
+
   it('builds once and hands every test job the same compiled output', () => {
     const upload = workflow.jobs.build!.steps.find((s) =>
       s.uses?.startsWith('actions/upload-artifact'),

@@ -422,7 +422,10 @@ jobs:
   legacy-rehearsal:
     name: Legacy rehearsal (synthetic, MySQL 8.0)
     needs: build
-    runs-on: ubuntu-latest
+    # Pinned: the step below downloads Ubuntu 24.04's own packages by name
+    # (mysql-server-core-8.0, libaio1t64, libprotobuf-lite32t64), which a later image
+    # renames or drops.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
 
     services:
