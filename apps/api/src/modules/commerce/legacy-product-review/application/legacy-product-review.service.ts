@@ -666,18 +666,18 @@ export class LegacyProductReviewService {
     if (spec.catalogEdit) await this.deps.products.authorizeCreate(scope, actor);
 
     const requestHash = hashRequest({ action: spec.action, reviewId: id, ...spec.request });
-    const found = await this.deps.idempotency.find<{ readonly id: string }>(
+    // The FIRST response, as stored with the write — never today's row. A retry of a key
+    // whose decision was since reopened or superseded answers exactly what it answered
+    // then, and writes nothing (the review queue's and the role editor's rule).
+    const found = await this.deps.idempotency.find<StoredReviewItem>(
       scope,
       actor.surface,
       spec.idempotencyKey,
       requestHash,
     );
-    if (found !== null) {
-      const replayed = await this.deps.repository.findById(scope, found.result.id);
-      if (replayed !== null) return this.itemOf(scope, replayed);
-    }
+    if (found !== null) return reviveItem(found.result);
 
-    const after = await runAuthorizedMutation(
+    return runAuthorizedMutation(
       this.mutationDeps(),
       scope,
       actor,
@@ -702,19 +702,24 @@ export class LegacyProductReviewService {
           },
           tx,
         );
+        // The response, read inside this transaction (the approved product's title
+        // included), is what the key answers for ever.
+        const item = (await this.deps.repository.findItem(scope, decided.id, tx)) ?? {
+          review: decided,
+          approvedProductTitle: null,
+        };
         await rememberOnce(
           this.deps.idempotency,
           scope,
           actor.surface,
           spec.idempotencyKey,
           requestHash,
-          { id: decided.id },
+          storeItem(item),
           tx,
         );
-        return decided;
+        return item;
       },
     );
-    return this.itemOf(scope, after);
   }
 
   /** A decision: from PENDING_REVIEW or SOURCE_CHANGED, bound to the facts the operator saw. */
@@ -807,6 +812,55 @@ export class LegacyProductReviewService {
       clock: this.deps.clock,
     };
   }
+}
+
+/**
+ * A decision's response as the idempotency store keeps it: JSON-safe (bigints and instants as
+ * strings), revived exactly on a replay.
+ */
+interface StoredReviewItem {
+  readonly review: Omit<
+    LegacyProductReviewRecord,
+    'trafficBytes' | 'historicalPriceMinor' | 'decidedAt' | 'createdAt' | 'updatedAt'
+  > & {
+    readonly trafficBytes: string | null;
+    readonly historicalPriceMinor: string | null;
+    readonly decidedAt: string | null;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  };
+  readonly approvedProductTitle: string | null;
+}
+
+export function storeItem(item: LegacyProductReviewListItem): StoredReviewItem {
+  const r = item.review;
+  return {
+    review: {
+      ...r,
+      trafficBytes: r.trafficBytes === null ? null : r.trafficBytes.toString(),
+      historicalPriceMinor:
+        r.historicalPriceMinor === null ? null : r.historicalPriceMinor.toString(),
+      decidedAt: r.decidedAt === null ? null : r.decidedAt.toISOString(),
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+    },
+    approvedProductTitle: item.approvedProductTitle,
+  };
+}
+
+export function reviveItem(stored: StoredReviewItem): LegacyProductReviewListItem {
+  const r = stored.review;
+  return {
+    review: {
+      ...r,
+      trafficBytes: r.trafficBytes === null ? null : BigInt(r.trafficBytes),
+      historicalPriceMinor: r.historicalPriceMinor === null ? null : BigInt(r.historicalPriceMinor),
+      decidedAt: r.decidedAt === null ? null : new Date(r.decidedAt),
+      createdAt: new Date(r.createdAt),
+      updatedAt: new Date(r.updatedAt),
+    },
+    approvedProductTitle: stored.approvedProductTitle,
+  };
 }
 
 /**
