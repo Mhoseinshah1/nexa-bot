@@ -50,6 +50,10 @@ import {
   broadcastRecipientListResponseSchema,
   broadcastFailureReasonsResponseSchema,
   type BroadcastFailureReasonsResponse,
+  broadcastBotDeliveryResponseSchema,
+  type BroadcastBotDeliveryResponse,
+  broadcastHistoryResponseSchema,
+  type BroadcastHistoryResponse,
   broadcastResponseSchema,
   broadcastTestResponseSchema,
   bulkItemListResponseSchema,
@@ -4647,6 +4651,16 @@ export function fetchBroadcastRecipients(
 /** Broadcast V2 (program §19): failures grouped by state and transport code. */
 export function fetchBroadcastFailures(id: string): Promise<BroadcastFailureReasonsResponse> {
   return authedGet(BROADCAST_ROUTES.failures(id), broadcastFailureReasonsResponseSchema);
+}
+
+/** Roadmap C2: the delivery per bot (each recipient's frozen bot). */
+export function fetchBroadcastBots(id: string): Promise<BroadcastBotDeliveryResponse> {
+  return authedGet(BROADCAST_ROUTES.bots(id), broadcastBotDeliveryResponseSchema);
+}
+
+/** Roadmap C2: the broadcast's own history — tests, launch, steers, re-queues. */
+export function fetchBroadcastHistory(id: string): Promise<BroadcastHistoryResponse> {
+  return authedGet(BROADCAST_ROUTES.history(id), broadcastHistoryResponseSchema);
 }
 
 export interface BroadcastContentWire {

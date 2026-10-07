@@ -4963,6 +4963,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     // Broadcast V2: the preview's opted-out estimate only; the stamp still decides.
     marketingOptOut: marketingOptOutPolicy,
+    // Roadmap C2: the broadcast's own history card.
+    auditHistory: new DrizzleAuditHistoryReader(database.db),
   });
   const broadcastDispatcher = new BroadcastDispatcher({
     repository: broadcastRepository,
