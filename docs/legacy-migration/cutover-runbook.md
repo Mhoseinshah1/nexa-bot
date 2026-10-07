@@ -1,13 +1,22 @@
 # Legacy migration — production cutover runbook (Item 14)
 
 **Status: written, NOT RUN.** Production cutover is **not allowed** until the Product Owner
-has approved it in writing at step 13. Nothing in this repository runs any step of it; an
+has approved it at step 13 — in the Web Admin (`/legacy-cutover`), where the approval is
+RECORDED in the database bound to seven exact values, and the import refuses without it
+(Mirza PR6). Nothing in this repository runs any step of it; an
 operator runs it, on the production host, in this order. The readiness gate that must be
 green before step 1 is even scheduled is [`production-gate.md`](production-gate.md).
 
 Companion documents: [`rollback-runbook.md`](rollback-runbook.md) (keep it open from step
 6 onward), [`reconciliation.md`](reconciliation.md), [`manual-acceptance.md`](manual-acceptance.md),
-[`final-report-template.md`](final-report-template.md).
+[`final-report-template.md`](final-report-template.md), and the whole program's ordered
+staging-to-cutover command list, [`mirza-full-migration.md`](mirza-full-migration.md).
+
+**The staging snapshot is HISTORICAL** (owner constraints 1–4). Every count it produced —
+users, invoices, products, RickPanel accounts, dry-run categories — is a dated baseline for
+explaining differences at step 12, never a limit, an expected value or a test oracle. This
+runbook imports a NEW, frozen snapshot; anything that changes a fingerprint after the owner's
+approval voids it.
 
 ## Conventions — read before copying anything
 
@@ -36,23 +45,27 @@ legacy-import MODE --tenant T --source SOURCE --target TARGET --panel-map FILE
               [--source-password-env NAME] [--allow-production-target]
 ```
 
-| Flag / exit                                                   | Meaning here                                                                                                                                                                                                                                                                                                  |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MODE`                                                        | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report` (first word, or `--mode`)                                                                                                                                                                                                                       |
-| `--source env:LEGACY_SOURCE_DSN`                              | the `mysql://` DSN in that variable. A password on argv — in a DSN or a `--…password` flag — is **refused**                                                                                                                                                                                                   |
-| `--target nexa`                                               | a bare name must equal the database `DATABASE_URL` names (the api container's own)                                                                                                                                                                                                                            |
-| `--panel-map`                                                 | `nexa-legacy-panel-map/v1` JSON (step 10); unknown keys refused                                                                                                                                                                                                                                               |
-| `--evidence-class production`                                 | required for import, resume and report (passed to every mode by `p7`); checked against the source — a SYNTHETIC-marked source can only be `synthetic`                                                                                                                                                         |
-| `--allow-production-target`                                   | with `NEXA_LEGACY_IMPORT_TARGET_ACK=<16 hex>`: the hard guard. `nexa` is production-like, so **every mode** needs both here; the ack is bound to host, port, database and tenant                                                                                                                              |
-| `--inventory-page-size`                                       | omitted = **200** rows per RickPanel list page (the maximum; `importer.md` §1.1). Leave it omitted: the real rehearsal BLOCKED with `TOTAL_CHANGED` at 50 (~500 reads) and passed at 200 (~130)                                                                                                               |
-| `--abort-running`                                             | `resume` only: finish a stuck RUNNING run as ABORTED. An owner decision, never a reflex                                                                                                                                                                                                                       |
-| exit `0`                                                      | done                                                                                                                                                                                                                                                                                                          |
-| exit `3`                                                      | done, but a person must decide: audit `BLOCKED`, import/resume `COMPLETED_WITH_FAILURES` (see its `attention` counts), reconcile `DISCREPANCY`, report with a failed equation                                                                                                                                 |
-| exit `4`                                                      | import interrupted; the run stays RUNNING — use `resume`                                                                                                                                                                                                                                                      |
-| `--expected-fingerprint` / `--expected-panel-map-fingerprint` | import/resume only: the source and panel-map fingerprints the owner approved (audit's `source.fingerprint`, `panelMapping.fingerprint`). A mismatch is refused before any write, exit `65`. Against a production-like target `--expected-fingerprint` is **required** (without it: exit `64`, nothing opened) |
-| exit `64` / `65`                                              | usage or guard refusal / mapping or source refused — nothing was written                                                                                                                                                                                                                                      |
-| exit `73`                                                     | the report was computed and printed to stdout, but `--out` could not be written (path and errno printed). Not an audit failure; the verdict stands. This runbook captures stdout on the host (`tee`), so it uses no `--out`                                                                                   |
-| exit `1`                                                      | anything else, printed as a code                                                                                                                                                                                                                                                                              |
+| Flag / exit                                                                                                                                                                       | Meaning here                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MODE`                                                                                                                                                                            | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report` (first word, or `--mode`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `--source env:LEGACY_SOURCE_DSN`                                                                                                                                                  | the `mysql://` DSN in that variable. A password on argv — in a DSN or a `--…password` flag — is **refused**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--target nexa`                                                                                                                                                                   | a bare name must equal the database `DATABASE_URL` names (the api container's own)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `--panel-map`                                                                                                                                                                     | `nexa-legacy-panel-map/v1` JSON (step 10); unknown keys refused                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `--evidence-class production`                                                                                                                                                     | required for import, resume and report (passed to every mode by `p7`); checked against the source — a SYNTHETIC-marked source can only be `synthetic`                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `--allow-production-target`                                                                                                                                                       | with `NEXA_LEGACY_IMPORT_TARGET_ACK=<16 hex>`: the hard guard. `nexa` is production-like, so **every mode** needs both here; the ack is bound to host, port, database and tenant                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `--inventory-page-size`                                                                                                                                                           | omitted = **200** rows per RickPanel list page (the maximum; `importer.md` §1.1). Leave it omitted: the real rehearsal BLOCKED with `TOTAL_CHANGED` at 50 (~500 reads) and passed at 200 (~130)                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `--abort-running`                                                                                                                                                                 | `resume` only: finish a stuck RUNNING run as ABORTED. An owner decision, never a reflex                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| exit `0`                                                                                                                                                                          | done                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| exit `3`                                                                                                                                                                          | done, but a person must decide: audit `BLOCKED`, import/resume `COMPLETED_WITH_FAILURES` (see its `attention` counts), reconcile `DISCREPANCY`, report with a failed equation                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| exit `4`                                                                                                                                                                          | import interrupted; the run stays RUNNING — use `resume`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `--expected-fingerprint` / `--expected-panel-map-fingerprint`                                                                                                                     | import/resume only: the source and panel-map fingerprints the owner approved (audit's `source.fingerprint`, `panelMapping.fingerprint`). A mismatch is refused before any write, exit `65`. Against a production-like target `--expected-fingerprint` is **required** (without it: exit `64`, nothing opened)                                                                                                                                                                                                                                                                                    |
+| `--expected-inventory-fingerprint`, `--expected-products-fingerprint`, `--expected-invoice-archive-fingerprint`, `--expected-freeze-proof-sha256`, `--expected-final-dump-sha256` | import/resume only (Mirza PR6): the other five values of the owner's recorded approval. Against a production-like target the **cutover gate** applies: all seven are required (else `EXPECTATION_INCOMPLETE`, exit `65`, nothing read), the three read sets are re-read and must equal their values with no UNCLASSIFIED table (`TABLES_UNCLASSIFIED`), an unrevoked approval must match all seven (`APPROVAL_MISSING`, `APPROVAL_SYNTHETIC`), and an earlier finished import of another source needs the owner's re-run acknowledgement (`SOURCE_SUPERSEDED`) — each exit `65`, nothing written |
+| `--cutover-gate`                                                                                                                                                                  | import/resume: apply the cutover gate on a target that is NOT production-like (to rehearse it on staging)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `--report-schema 1\|2`                                                                                                                                                            | report only: `--format json` prints the final report version 2 by default (v1 unchanged inside it as `core`); `1` prints the v1 document alone                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `cutover-gate` subcommand                                                                                                                                                         | the final gate (step 15b): read-only, every step in order, exit `0` `CUTOVER_READY` / `3` `REFUSED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| exit `64` / `65`                                                                                                                                                                  | usage or guard refusal / mapping or source refused — nothing was written                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| exit `73`                                                                                                                                                                         | the report was computed and printed to stdout, but `--out` could not be written (path and errno printed). Not an audit failure; the verdict stands. This runbook captures stdout on the host (`tee`), so it uses no `--out`                                                                                                                                                                                                                                                                                                                                                                      |
+| exit `1`                                                                                                                                                                          | anything else, printed as a code                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 `scripts/legacy-rehearsal.sh` calls the same interface; its contract block names the same
 flags and exit codes.
@@ -230,6 +243,13 @@ nothing reads, so a write to any of them between the freeze and the switch is no
 it), and runs under `read_only`/`super_read_only`. `legacy-import inventory` prints the same
 table list.
 
+**This file is the freeze proof the owner's approval binds.** Record its SHA-256 now; it is
+the `freezeProofSha256` of step 13 and the `--expected-freeze-proof-sha256` of step 14:
+
+```bash
+sha256sum freeze-checksum-step7.tsv | tee freeze-checksum-step7.tsv.sha256
+```
+
 Check: a customer pressing a button in MirzaBot gets no response; a test write as an
 ordinary account fails with a read-only error. MirzaBot stays frozen from here on — it is
 never unfrozen for writes (step 17).
@@ -381,8 +401,30 @@ sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm
 ```
 
 Check: every table is classified (verdict `COMPLETE`, exit 0). An `UNCLASSIFIED_TABLES`
-verdict stops the cutover until a reviewed commit classifies the table. The freeze
-statement it prints lists the same tables as `freeze-checksum-step7.tsv`.
+verdict stops the cutover until a reviewed commit classifies the table — and the gated import
+(step 14) and the cutover gate (step 15b) refuse it on their own (`TABLES_UNCLASSIFIED`). The
+freeze statement it prints lists the same tables as `freeze-checksum-step7.tsv`. Record the
+inventory read-set fingerprint it printed (`inventoryFingerprint` of step 13).
+
+**Area E — classifying the real tables (done on STAGING, before this window; NOT RUN).** The
+repository classifies only the tables it proves (`user`, `invoice`, `product` and its own
+synthetic marker); every other table of the real MirzaBot database is UNCLASSIFIED until a
+reviewed commit says otherwise. On the staging copy of the historical dump:
+
+1. run `inventory` as above (bound to that snapshot's audit fingerprint) and keep its output;
+2. fill [`table-inventory.md`](table-inventory.md) from it: one row per table — name,
+   columns, exact row count, charset — values never;
+3. classify EVERY table in its own reviewed commit to `packages/contracts/src/legacy-inventory.ts`
+   (`LEGACY_TABLE_CLASSIFICATION`) as `SUPPORTED`, `ARCHIVE`, `SECRETS_MANUAL` or
+   `OWNER_DECISION`, each with its reason and evidence; an unknown meaning is an
+   `docs/open-questions.md` entry and `OWNER_DECISION`, never a guess;
+4. secrets — payment gateway keys, panel passwords, bot tokens, card numbers, subscription
+   links — are NEVER imported: their tables are `SECRETS_MANUAL`, read for names and counts
+   only, and listed in `table-inventory.md` § Manual reconfiguration for a person to set up
+   again in NEXA by hand.
+
+A newer snapshot with a table the commit did not classify is UNCLASSIFIED again: the cutover
+refuses until it is classified too.
 
 Then the legacy product review (`importer.md` §Products subcommands;
 `legacy-product-review-design.md` §13). The decisions themselves are taken in staging
@@ -408,7 +450,8 @@ sudo --preserve-env=NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
   --panel-map /etc/nexa/legacy/panel-map.json > panel-map.next.json
 ```
 
-Check: `products-read.md` says `INGESTED`; the export's stderr lists what is NOT exported
+Check: `products-read.md` says `INGESTED`; record its products fingerprint (`productsFingerprint`
+of step 13); the export's stderr lists what is NOT exported
 and why. If `panel-map.next.json` differs from the installed map, its fingerprint (stderr)
 is a new value: install the reviewed file, re-run `p7 audit`, and take the new
 `panelMapping.fingerprint` to step 13. The products fingerprint goes to step 13 too. The
@@ -434,7 +477,9 @@ sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm
 
 Check: `invoices-read.md` says `ARCHIVED`; its two closure lines hold
 (`new + new revisions + unchanged = invoices read`, and `archived invoices = invoices read +
-no longer in this snapshot`); `columns never read` lists `user_info, uuid, bottype`. A run
+no longer in this snapshot`); `columns never read` lists `user_info, uuid, bottype`. Record
+its invoice-archive fingerprint (`invoiceArchiveFingerprint` of step 13). Because the cutover
+gate binds it, run it BEFORE step 13 at cutover. A run
 on the staging snapshot earlier is fine: the final read appends revisions for changed
 invoices and writes nothing for identical ones. The invoice-archive fingerprint goes to
 step 13.
@@ -501,9 +546,39 @@ the owner exactly this packet, aggregates only, and waits:
 | the rollback plan, its trigger list and who decides                                                                                                                                                   | `rollback-runbook.md`   |
 | the expected duration (from the staging rehearsal's `durations.tsv`) and the window remaining                                                                                                         | Item 11                 |
 
-The approval is recorded in the report as: who, when (UTC), and the **backup id and source
-fingerprint it names**. An approval that does not name both is not an approval of this run.
-If the source fingerprint changes after approval (somebody re-dumped), approval is void.
+**The approval is recorded in the database (Mirza PR6), by the owner, in the Web Admin.** The
+owner signs in and opens `/legacy-cutover` (permission `legacy.cutover.approve`, CRITICAL,
+owner-only), checks the recorded read sets listed there against the packet, and records ONE
+approval of kind **CUTOVER** with exactly these seven values (64 lowercase hex characters
+each, pasted, never retyped):
+
+| value                       | from                                            |
+| --------------------------- | ----------------------------------------------- |
+| source fingerprint          | step 10, `audit.txt` `source.fingerprint`       |
+| panel-map fingerprint       | step 10, `audit.txt` `panelMapping.fingerprint` |
+| inventory fingerprint       | step 10, `inventory.md`                         |
+| products fingerprint        | step 10, `products-read.md`                     |
+| invoice-archive fingerprint | step 10, `invoices-read.md`                     |
+| freeze proof SHA-256        | step 7, `freeze-checksum-step7.tsv.sha256`      |
+| final dump SHA-256          | step 8, `oldbot-final-<STAMP>.sql.sha256`       |
+
+NEXA refuses an approval naming a read set it never recorded for that source, and records
+WHO (the authenticated owner's admin id) and WHEN (UTC) itself — it is never a typed name.
+The row is append-only; a mistaken approval is REVOKED there (a second append-only record),
+never edited. Any value that changes afterwards (a re-dump, a new map, a re-read) voids it:
+the import and the gate match all seven exactly.
+
+**If this tenant already holds an import of another snapshot** (a historical one applied
+here by mistake, or a planned re-run): the import refuses with `SOURCE_SUPERSEDED`. A re-run
+over a prior import happens only if the owner ALSO records a **RERUN_OVER_PRIOR_IMPORT**
+acknowledgement with the same seven values and that prior source fingerprint (`/legacy-cutover`
+lists the APPLY runs and their sources). Even then it is a re-run, never a merge: unchanged
+rows are skipped, a changed row is `SOURCE_CHANGED` and reported, nothing is applied twice,
+and no balance delta is ever applied (OQ-LWD-02). The default answer is to roll this tenant
+back to its pre-import backup instead.
+
+Record in the report: the approval id, who, when, and the backup id the packet named. The
+backup id is not one of the seven values (the rollback point is checked separately below).
 
 ## Step 14 — production import
 
@@ -516,12 +591,28 @@ approved values **before any write**, and refuse a mismatch with exit `65`. Agai
 ```bash
 export APPROVED_FINGERPRINT=<the source fingerprint named in the owner's approval>
 export APPROVED_PANEL_MAP_FINGERPRINT=<the panel-map fingerprint named in the owner's approval>
-export APPROVED_BACKUP_ID=<the backup id named in the owner's approval>
+export APPROVED_INVENTORY=<inventory fingerprint>  APPROVED_PRODUCTS=<products fingerprint>
+export APPROVED_ARCHIVE=<invoice-archive fingerprint>
+export APPROVED_FREEZE=<freeze proof sha256>  APPROVED_DUMP=<final dump sha256>
+export APPROVED_BACKUP_ID=<the backup id named in the owner's packet>
+approved() {   # the seven values, exactly as recorded in the approval
+  printf -- '%s\n' --expected-fingerprint "$APPROVED_FINGERPRINT" \
+    --expected-panel-map-fingerprint "$APPROVED_PANEL_MAP_FINGERPRINT" \
+    --expected-inventory-fingerprint "$APPROVED_INVENTORY" \
+    --expected-products-fingerprint "$APPROVED_PRODUCTS" \
+    --expected-invoice-archive-fingerprint "$APPROVED_ARCHIVE" \
+    --expected-freeze-proof-sha256 "$APPROVED_FREEZE" --expected-final-dump-sha256 "$APPROVED_DUMP"
+}
+mapfile -t APPROVED_ARGS < <(approved)
 date -u +%FT%TZ | tee import-start.txt
-p7 import --expected-fingerprint "$APPROVED_FINGERPRINT" \
-  --expected-panel-map-fingerprint "$APPROVED_PANEL_MAP_FINGERPRINT" | tee import.txt; echo "exit ${PIPESTATUS[0]}"
+p7 import "${APPROVED_ARGS[@]}" | tee import.txt; echo "exit ${PIPESTATUS[0]}"
 date -u +%FT%TZ | tee import-end.txt
 ```
+
+Before writing anything the import re-reads the inventory, products and invoice-archive read
+sets (every table classified, each fingerprint as approved) and, inside its start
+transaction, requires an unrevoked approval matching all seven values; its run-start audit
+row names the approval id it ran under.
 
 **After the import, before anything else — the approval check.** What ran must be what was
 approved; a mismatch is a rollback trigger (T3), whatever the import's exit code:
@@ -537,9 +628,11 @@ sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -v ON_ERROR_STOP=1 -c "
   || echo "STOP: the rollback point is not the approved backup"
 ```
 
-Exit `0`: `COMPLETED`. Exit `65`: the source or the panel map is not the approved one —
-**STOP**: nothing was written; the approval is void (cutover step 13), and nothing is
-re-run against a different source without a new approval. Exit `4`: interrupted — `resume`
+Exit `0`: `COMPLETED`. Exit `65`: the source, the panel map or a read set is not the
+approved one, or the gate refused (`EXPECTATION_INCOMPLETE`, `TABLES_UNCLASSIFIED`,
+`APPROVAL_MISSING`, `APPROVAL_SYNTHETIC`, `SOURCE_SUPERSEDED` — the first word of the
+message) — **STOP**: nothing was written; the approval is void (cutover step 13), and nothing
+is re-run against a different source without a new approval. Exit `4`: interrupted — `resume`
 below. Exit `3`: read the verdict at the top of `import.txt`:
 
 - **`COMPLETED_WITH_FAILURES` — STOP and decide, with the owner, before step 15.** The run
@@ -576,8 +669,8 @@ sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -c "
 ```
 
 **If the import is interrupted** (process killed, host restarted, connection lost): the
-run stays `RUNNING`. Run `p7 resume --expected-fingerprint "$APPROVED_FINGERPRINT"
---expected-panel-map-fingerprint "$APPROVED_PANEL_MAP_FINGERPRINT"` — it continues the same run (same run id) for the
+run stays `RUNNING`. Run `p7 resume "${APPROVED_ARGS[@]}"` (the same seven values; the gate
+applies to a resume too) — it continues the same run (same run id) for the
 same source fingerprint and the same panel map and skips what was already imported (no duplicate
 customer, opening, order, service or product; the map and the unique indexes enforce it).
 Never start a second `import`; never edit run or map rows by hand. A resume that refuses
@@ -620,6 +713,38 @@ aggregates only) in the report. The debts are now listed in the Web Admin
 pace; none of them blocks unfreezing, and none is ever collected. On the cutover snapshot
 `usersWallets.sourceChanged.users` must be 0 (the target was restored clean before the
 import); anything else means an earlier snapshot was applied to this target — stop.
+
+## Step 15b — the cutover gate (Mirza PR6)
+
+One read-only command proves the whole checklist, IN ORDER, and stops at the first step that
+fails: NEXA `stop_sales` is active (an ACTIVE MAINTENANCE incident with `stop_sales`, every
+active panel drained, every gateway disabled) → PR1's freeze checker found step 7's and step
+9's proofs EQUAL, and step 7's file is the approved one → a fresh read gives the approved
+source, panel-map, inventory, products and invoice-archive fingerprints → no table is
+UNCLASSIFIED → an unrevoked owner approval matches all seven values → no earlier import is
+superseded unacknowledged → the import ran (latest APPLY run COMPLETED, this source and map)
+→ reconcile is RECONCILED → the final report v2 holds. It writes nothing.
+
+```bash
+# The freeze files and PR1's checker, readable by the container's uid 1000 (read-only mounts).
+sudo install -o 1000 -g 1000 -m 0400 freeze-checksum-step7.tsv freeze-checksum-step9.tsv /etc/nexa/legacy/
+sudo install -o 1000 -g 1000 -m 0500 <checkout>/scripts/legacy-freeze-checksum-verify.sh /etc/nexa/legacy/
+sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
+  -e LEGACY_SOURCE_DSN -e NEXA_LEGACY_IMPORT_TARGET_ACK -v /etc/nexa/legacy:/legacy:ro \
+  --entrypoint node api dist/legacy-import.cli.js cutover-gate \
+  --tenant "$NEXA_TENANT" --source env:LEGACY_SOURCE_DSN --target nexa --allow-production-target \
+  --panel-map /legacy/panel-map.json --evidence-class production "${APPROVED_ARGS[@]}" \
+  --freeze-proof /legacy/freeze-checksum-step7.tsv \
+  --freeze-proof-restored /legacy/freeze-checksum-step9.tsv \
+  --freeze-checker /legacy/legacy-freeze-checksum-verify.sh | tee cutover-gate.md; echo "exit ${PIPESTATUS[0]}"
+```
+
+Check: exit `0`, verdict `CUTOVER_READY`, every one of the nine steps `PASS`. The checker
+is pinned by its SHA-256: a script other than the release's own `legacy-freeze-checksum-verify.sh`
+is refused. Exit `3` names the failed step and why; every later step is `NOT_REACHED`. A
+failure at or after `IMPORT_COMPLETED` is a rollback trigger to decide now (T1–T3); a failure
+before it means the approval no longer describes what is in the database — stop and decide
+with the owner. Attach `cutover-gate.md` to the report.
 
 ## Step 16 — manual acceptance
 
@@ -681,17 +806,27 @@ What to look for:
 ## Step 19 — final report
 
 Fill [`final-report-template.md`](final-report-template.md) and attach P7's machine-readable
-report (validated against [`final-report.schema.json`](final-report.schema.json)):
+report, schema version 2 (validated against [`final-report-v2.schema.json`](final-report-v2.schema.json),
+which validates the unchanged v1 document inside it as `core` with
+[`final-report.schema.json`](final-report.schema.json)):
 
 ```bash
-p7 report --format json > final-report.json; echo "exit ${PIPESTATUS[0]}"   # 3 = an equation failed
+p7 report --format json > final-report.json; echo "exit ${PIPESTATUS[0]}"   # 3 = the v2 verdict does not hold
 node <checkout>/scripts/legacy-rehearsal-report-check.mjs validate \
-  <checkout>/docs/legacy-migration/final-report.schema.json final-report.json && echo "schema-valid"
+  <checkout>/docs/legacy-migration/final-report-v2.schema.json final-report.json && echo "schema-valid"
+node <checkout>/scripts/legacy-rehearsal-report-check.mjs get final-report.json verdict
 ```
 
 The report is aggregates only. Its `evidenceClass` is `production` (the `--evidence-class`
-P7 was given and checked against the source); its `reconciliation` array holds P7's own C1,
-C3, W1, W4, W5, S3 and P3.
+P7 was given and checked against the source). Its `verdict.holds` is the AND of every section
+— `core` (v1: C1, C3, W1, W4, W5, S3, P3), `inventory`, `products`, `invoiceArchive`,
+`usersWallets`, `serviceOutcomes`, `cutover`, `applyRun` — and of the seven invariants
+(`USERS_ACCOUNTED`, `INVOICES_ACCOUNTED`, `PRODUCTS_ACCOUNTED`, `WALLETS_RECONCILED`,
+`SERVICES_ONE_OUTCOME`, `UNRESOLVED_RETAINED`, `RERUN_NO_DUPLICATES`); `failedSections` and
+`failedInvariants` name whatever did not hold. `applyRun` carries the run's recorded
+`serviceApprovals.withdrawnDuringRun` and `attention.approvalUnconfirmed`
+(ADOPTION_UNCONFIRMED). `--report-schema 1` prints the v1 document alone, for a consumer of
+version 1.
 
 ### The review queue, after the import (terminal only)
 

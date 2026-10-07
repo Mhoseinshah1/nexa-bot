@@ -428,6 +428,31 @@ it read. Aggregates only — never an invoice key, a username or a Telegram id.
   `ADOPTED` through an explicit approval (owner decision 8); the count is a dated baseline,
   never an expected value.
 
+## 8. The final report v2 — seven invariants over every section (Mirza PR6)
+
+`legacy-import report --format json` prints schema version 2
+([`final-report-v2.schema.json`](final-report-v2.schema.json)): the v1 document unchanged as
+`core`, and the sections of PR1–PR6 — `inventory`, `products`, `invoiceArchive`,
+`usersWallets`, `serviceOutcomes`, `cutover`, `applyRun` — each with its version. Its verdict
+is the AND of every section and of these invariants, each an AND of checks the sections
+already carry:
+
+| invariant              | holds when                                                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `USERS_ACCOUNTED`      | v1 C1 and PR4 U1: every source user row is in exactly one outcome                                                                                                                           |
+| `INVOICES_ACCOUNTED`   | A1 the latest COMPLETED archive run of this source read exactly the snapshot's invoice rows; A2 promoted = source rows; A3 archived = source rows + no longer in snapshot                   |
+| `PRODUCTS_ACCOUNTED`   | PR1 a products read set recorded for this source; PR2 every distinct source code has a present review row; PR3 no present row names a code the source lacks                                 |
+| `WALLETS_RECONCILED`   | v1 W1, W4, W5 and PR4 U2–U8 — debts (count, Σ), conflicts and source-changed users are REPORTED in its evidence, never netted                                                               |
+| `SERVICES_ONE_OUTCOME` | PR5's closure and v1 S3                                                                                                                                                                     |
+| `UNRESOLVED_RETAINED`  | A5 nothing archived was removed; every unadopted candidate linked to its archive revision; one debt recorded per negative user                                                              |
+| `RERUN_NO_DUPLICATES`  | at most one opening, one debt per customer; one customer per Telegram id; one invoice per adopted service; adoption orders = mapped services; no archive revision repeats the one before it |
+
+The `applyRun` section holds only when the run's leftovers were RECORDED with its finish
+(PR5's `withdrawnDuringRun`, `unconfirmed` and every attention count) and no adoption is
+ADOPTION_UNCONFIRMED; `cutover` holds only when no earlier source is superseded
+unacknowledged. `tests/unit/legacy-final-report-v2.test.ts` flips the verdict through every
+invariant and every section, one fact at a time.
+
 ## Result table (filled per run; aggregates only)
 
 **Generated, not transcribed (WP-D5).** `scripts/legacy-rehearsal-reconciliation.mjs`

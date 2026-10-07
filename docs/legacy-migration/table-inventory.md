@@ -97,6 +97,35 @@ the cutover snapshot is newer.
 | product | SUPPORTED         | SUPPORTED                            |         |                   |                |        |                     |          |                                 | OQ-LPR-01     |
 | …       | UNCLASSIFIED      |                                      |         |                   |                |        |                     |          |                                 | OQ-MZ-INV-…   |
 
+## Classifying every table (Area E — the operator's step, NOT RUN)
+
+The cutover refuses while any table is UNCLASSIFIED: the gated import (`TABLES_UNCLASSIFIED`,
+exit 65), the cutover gate (step `TABLES_CLASSIFIED`) and the final report v2 (`inventory`
+section, check I2) all read a FRESH inventory. So, on the staging copy of the real dump,
+before any cutover is scheduled:
+
+1. run `legacy-import inventory --expected-fingerprint <audit source.fingerprint>` and
+   keep its output (`--format json` for the column list hashes; `scripts/legacy-archive-inspect.mjs
+--columns` for the column NAMES from the dump itself, before any load);
+2. fill the table above: one row per table, names, counts and hashes, never a value;
+3. classify EVERY table in its own reviewed commit to `packages/contracts/src/legacy-inventory.ts`
+   (`LEGACY_TABLE_CLASSIFICATION`), with its reason and its evidence: `SUPPORTED` (a read set
+   reads it), `ARCHIVE` (kept as history, an explicit column allowlist), `SECRETS_MANUAL`
+   (holds or may hold a credential: never read beyond names and counts) or `OWNER_DECISION`
+   (meaning or fate unknown: an entry in `docs/open-questions.md`, never a guess);
+4. list every `SECRETS_MANUAL` table below. **Secrets are never imported**: payment gateway
+   keys, panel passwords, bot tokens, card numbers, subscription links are set up again in
+   NEXA by a person, by hand, through NEXA's own surfaces.
+
+A newer snapshot with a table that commit did not name is UNCLASSIFIED again, and the
+cutover refuses until a reviewed commit classifies it too.
+
+### Manual reconfiguration (secrets never imported) — NOT RUN
+
+| legacy table | what it holds (by column NAME, never a value) | reconfigured in NEXA where, by whom | done (date UTC) |
+| ------------ | --------------------------------------------- | ----------------------------------- | --------------- |
+| NOT RUN      |                                               |                                     |                 |
+
 ## Freeze proof
 
 The cutover's freeze proof (`cutover-runbook.md` steps 7 and 9) is
@@ -111,6 +140,9 @@ table list here once it is filled:
 | ---------------------------- | -------------- | --------------------- |
 | freeze (step 7, legacy host) | NOT RUN        | NOT RUN               |
 | restored copy (step 9)       | NOT RUN        | NOT RUN               |
+
+The step 7 file's SHA-256 is the `freezeProofSha256` the owner's cutover approval binds
+(Mirza PR6), and the cutover gate runs this checker over both files (`FREEZE_PROOF_VERIFIED`).
 
 ## The synthetic fixture (NOT evidence)
 

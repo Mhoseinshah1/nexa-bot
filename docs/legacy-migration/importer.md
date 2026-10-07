@@ -18,26 +18,33 @@ pnpm legacy-import MODE --tenant TENANT --source SOURCE --target TARGET --panel-
   [--format md|json] [--out DIR] [--inventory-page-size N] [--abort-running] \
   [--source-password-env NAME] [--allow-production-target] \
   [--evidence-class synthetic|staging|production] \
-  [--expected-fingerprint HEX] [--expected-panel-map-fingerprint HEX]
+  [--expected-fingerprint HEX] [--expected-panel-map-fingerprint HEX] \
+  [--expected-inventory-fingerprint HEX] [--expected-products-fingerprint HEX] \
+  [--expected-invoice-archive-fingerprint HEX] [--expected-freeze-proof-sha256 HEX] \
+  [--expected-final-dump-sha256 HEX] [--cutover-gate] [--report-schema 1|2]
+pnpm legacy-import cutover-gate …   # the final cutover gate, §2.2 (read-only)
 # --evidence-class: required for import, resume, report
 # --expected-*-fingerprint: import and resume; --expected-fingerprint is required on a production-like target
 # from source: pnpm legacy-import:dev …   (MODE may also be given as --mode MODE)
 ```
 
-| argument                           | meaning                                                                                                                                                          |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MODE`                             | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report`. Required.                                                                                         |
-| `--tenant`                         | tenant uuid or slug. Required; resolved in the target, refused when it matches nothing.                                                                          |
-| `--source`                         | `env:NAME` (a `mysql://` DSN in that variable), `mysql://USER@HOST:PORT/DB[?socket=…]` (no password), or `fixture:PATH` (a SYNTHETIC dataset). Required.         |
-| `--source-password-env`            | the variable holding the password for a literal `mysql://` source.                                                                                               |
-| `--target`                         | `env:NAME`, `postgres://USER@HOST:PORT/DB` (no password; `PGPASSWORD` honoured), or a bare database NAME that must equal the one `DATABASE_URL` names. Required. |
-| `--panel-map`                      | the explicit panel mapping file (§4). Required.                                                                                                                  |
-| `--format`                         | `md` (default) or `json`. `report --format json` prints exactly the Item 16 document (§7) on stdout.                                                             |
-| `--out`                            | also write `<mode>-<time>.{json,md}` there (mode 0600), AFTER the report is printed. A failure to write is exit 73 (§1.2), never an audit failure.               |
-| `--inventory-page-size`            | rows per RickPanel list page, 1–200. **Default here: 200**, the reader's maximum (`INVENTORY_MAX_PAGE_SIZE`); see §1.1. The library default (50) is unchanged.   |
-| `--abort-running`                  | with `resume`: finish the tenant's RUNNING run as ABORTED instead (the exit from a stuck run).                                                                   |
-| `--expected-fingerprint`           | `import`/`resume`: the source fingerprint the owner approved (64 lowercase hex, as `audit` prints it). **Required against a production-like target** (§2.1).     |
-| `--expected-panel-map-fingerprint` | `import`/`resume`: the same, for the panel mapping file's fingerprint (as `audit` prints it). Optional.                                                          |
+| argument                                                                                                                                                                          | meaning                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MODE`                                                                                                                                                                            | `audit`, `dry-run`, `import`, `resume`, `reconcile`, `report`. Required.                                                                                         |
+| `--tenant`                                                                                                                                                                        | tenant uuid or slug. Required; resolved in the target, refused when it matches nothing.                                                                          |
+| `--source`                                                                                                                                                                        | `env:NAME` (a `mysql://` DSN in that variable), `mysql://USER@HOST:PORT/DB[?socket=…]` (no password), or `fixture:PATH` (a SYNTHETIC dataset). Required.         |
+| `--source-password-env`                                                                                                                                                           | the variable holding the password for a literal `mysql://` source.                                                                                               |
+| `--target`                                                                                                                                                                        | `env:NAME`, `postgres://USER@HOST:PORT/DB` (no password; `PGPASSWORD` honoured), or a bare database NAME that must equal the one `DATABASE_URL` names. Required. |
+| `--panel-map`                                                                                                                                                                     | the explicit panel mapping file (§4). Required.                                                                                                                  |
+| `--format`                                                                                                                                                                        | `md` (default) or `json`. `report --format json` prints exactly the Item 16 document (§7) on stdout.                                                             |
+| `--out`                                                                                                                                                                           | also write `<mode>-<time>.{json,md}` there (mode 0600), AFTER the report is printed. A failure to write is exit 73 (§1.2), never an audit failure.               |
+| `--inventory-page-size`                                                                                                                                                           | rows per RickPanel list page, 1–200. **Default here: 200**, the reader's maximum (`INVENTORY_MAX_PAGE_SIZE`); see §1.1. The library default (50) is unchanged.   |
+| `--abort-running`                                                                                                                                                                 | with `resume`: finish the tenant's RUNNING run as ABORTED instead (the exit from a stuck run).                                                                   |
+| `--expected-fingerprint`                                                                                                                                                          | `import`/`resume`: the source fingerprint the owner approved (64 lowercase hex, as `audit` prints it). **Required against a production-like target** (§2.1).     |
+| `--expected-panel-map-fingerprint`                                                                                                                                                | `import`/`resume`: the same, for the panel mapping file's fingerprint (as `audit` prints it). Optional.                                                          |
+| `--expected-inventory-fingerprint`, `--expected-products-fingerprint`, `--expected-invoice-archive-fingerprint`, `--expected-freeze-proof-sha256`, `--expected-final-dump-sha256` | `import`/`resume` (Mirza PR6): the other five values a cutover approval binds. Required, with the two above, wherever the cutover gate applies (§2.2).           |
+| `--cutover-gate`                                                                                                                                                                  | `import`/`resume`: apply the cutover gate on a target that is not production-like (a staging rehearsal of it). A production-like target is always gated.         |
+| `--report-schema`                                                                                                                                                                 | `report`: `2` (default) prints the final report version 2 with `--format json`; `1` prints the closed v1 document alone (§7).                                    |
 
 Nothing that decides what is imported defaults (the page size is a walk-length knob, §1.1). **No password is accepted on the command line** — argv is world-readable
 in `/proc` and lands in shell history; a DSN with a password is refused, and so is any
@@ -649,6 +656,60 @@ status filters compare exactly as typed (a legacy id `padded` keeps its spaces);
 and product codes, stored trimmed, are trimmed. The keyset cursor is sized for the longest
 archivable key (1000 code points).
 
+### 2.2 The cutover gate: the owner's approval in the database (Mirza PR6)
+
+Owner constraint 3: the final cutover needs a fresh source fingerprint, explicit owner
+approval bound to it, financial reconciliation and a controlled write freeze. The approval
+is a ROW (`legacy_cutover_approvals`, migrations 0232–0234), recorded by the authenticated
+owner in the Web Admin (`/legacy-cutover`; `legacy.cutover.view` MEDIUM to read,
+`legacy.cutover.approve` CRITICAL and owner-only to record or revoke). Why the Web Admin and
+not a CLI flag: the production-target acknowledgement (§2) is a statement about WHERE the
+CLI writes, so an env/flag pair fits it; an approval is a statement about WHO consented, and
+the CLI's `SYSTEM_JOB` actor could only type a name. PR5's ADOPT approval set the pattern:
+the owner records it in the Web Admin; the importer reads it under `maintenance.run`.
+
+An approval binds SEVEN exact values — source, panel map, the inventory, products and
+invoice-archive read sets, the freeze proof file's SHA-256 and the final dump's SHA-256 —
+and is refused unless each read set is RECORDED in `legacy_read_set_runs` for that source
+(their evidence class becomes the approval's `synthetic`). It is append-only (no UPDATE,
+no DELETE, any role) and is withdrawn by an append-only revocation. Idempotent: a replay
+returns the original answer; an identical unrevoked approval is `ALREADY_APPROVED`. Audited,
+DENIED too; fingerprints only.
+
+**Where the gate applies** — `import`/`resume` against a production-like target, always
+(`cutoverGateOf`: an explicit `productionLikeTarget: true` with no expectation is refused as
+incomplete, never skipped), and anywhere with `--cutover-gate`. There, before any write:
+
+1. every one of the seven `--expected-*` values was given (`EXPECTATION_INCOMPLETE`, checked
+   before the source is opened);
+2. the inventory, products and invoice-archive read sets are re-read by sessions bound to
+   the source: no table is UNCLASSIFIED (`TABLES_UNCLASSIFIED`) and each fingerprint is the
+   expected one (`APPROVAL_MISSING`);
+3. inside the run's START transaction, the one evaluator (`decideCutoverImport`): an
+   unrevoked CUTOVER approval matches all seven values (`APPROVAL_MISSING`); a synthetic
+   approval never opens a production-like target, and on any target its evidence class is
+   the snapshot's (`APPROVAL_SYNTHETIC`); each read set it names is still recorded for the
+   source;
+4. **`SOURCE_SUPERSEDED`** — every DIFFERENT source fingerprint of a finished (COMPLETED,
+   ABORTED or FAILED — a failed run may have written customers and openings) APPLY run of
+   the tenant needs an unrevoked `RERUN_OVER_PRIOR_IMPORT` acknowledgement with the same
+   seven values and that prior source. Even acknowledged it is a re-run, never a merge:
+   unchanged rows SKIP, a changed row is `SOURCE_CHANGED` and reported, nothing is applied
+   twice, no balance delta is ever applied (OQ-LWD-02 stays open).
+
+Each refusal is a `LegacyCutoverRefused`, exit **65**, nothing written. The run-start audit
+row names the approval (and re-run acknowledgements) it ran under.
+
+**`legacy-import cutover-gate`** proves the cutover checklist IN ORDER and stops at the first
+failure (`LEGACY_CUTOVER_GATE_STEPS`): `STOP_SALES_ACTIVE` (an ACTIVE MAINTENANCE incident
+with `stop_sales`; every ACTIVE panel drained; every gateway disabled — the existing
+incident mechanism, not a new flag) → `FREEZE_PROOF_VERIFIED` (PR1's
+`scripts/legacy-freeze-checksum-verify.sh`, pinned by its SHA-256, run with `bash` over the
+frozen and the restored proof: exit 0 and `EQUAL`; and the frozen file's SHA-256 is the
+approved one) → `FRESH_FINGERPRINTS` → `TABLES_CLASSIFIED` → `APPROVAL_MATCHES` →
+`SOURCE_NOT_SUPERSEDED` → `IMPORT_COMPLETED` → `RECONCILED` → `REPORT_V2_HOLDS`. It is
+read-only on every database; exit 0 `CUTOVER_READY`, 3 `REFUSED`.
+
 ### Actors
 
 The CLI acts as `SYSTEM_JOB` (`legacy-import:<mode>`), which holds `maintenance.run` only.
@@ -714,8 +775,8 @@ activity read inside the transaction and an audit row.
 - **report** — Item 16 (§7), for the latest APPLY run, refused unless the snapshot and the
   mapping are the ones that run was made from (it may describe a RUNNING or ABORTED run,
   and its verdict says which). The markdown also renders the `usersWallets` section after
-  the v1 document; `--format json` prints the closed v1 document exactly, as before (PR6
-  folds the section into schema version 2). The verdict reads the section too: any failed
+  the v1 document; `--format json` prints the final report version 2 (§7; `--report-schema
+1` prints the closed v1 document exactly, as before). The verdict reads the section too: any failed
   U-check (U8 — a synthetic debt beside a real snapshot — among them) makes it
   `<status>_WITH_DISCREPANCY`, exit 3, as a failed v1 equation does. `reconcile` already
   carries it as the `users_wallets.section` check.
@@ -731,6 +792,32 @@ lists them with an aggregate and records the per-customer decision (`ACKNOWLEDGE
 `WAIVED`, reopen). No decision moves money and nothing collects a debt.
 
 ## 7. The report
+
+**Version 2 (Mirza PR6, the default of `report --format json`).**
+[`final-report-v2.schema.json`](final-report-v2.schema.json) carries the closed v1 document
+UNCHANGED as `core` (validated by v1's own schema, whose bytes a unit test pins) and folds
+in every later section with its own version: `inventory` (`nexa-legacy-inventory/v1`, a
+FRESH inventory the report's own session — bound to this snapshot's source — read; without
+one the section says `read: false` and does not hold), `products`
+(`nexa-legacy-products/v1`: PR2 defined no section, so this PII-free one counts review rows
+by state, present/absent, codes missing from the review or not in the source, and export
+readiness, with the products read set fingerprint), `invoiceArchive`
+(`nexa-legacy-invoice-archive/v1`: PR3's closure equations A1–A6 for the latest COMPLETED
+archive run of THIS source), `usersWallets` and `serviceOutcomes` (PR4/PR5, unchanged),
+`cutover` (`nexa-legacy-cutover/v1`: this source's approvals, every APPLY run and its
+source, each superseded source and whether it was acknowledged, the duplicate-effect
+counters) and `applyRun` (`nexa-legacy-apply-run/v1`: what the reported run left for a
+person, read back from its finish audit row — PR5's approval counters, `withdrawnDuringRun`
+and `unconfirmed` among them, and every attention count, `approvalUnconfirmed`
+(ADOPTION_UNCONFIRMED) among them; it holds only when recorded and no adoption is
+unconfirmed). The seven invariants (`USERS_ACCOUNTED`, `INVOICES_ACCOUNTED`,
+`PRODUCTS_ACCOUNTED`, `WALLETS_RECONCILED`, `SERVICES_ONE_OUTCOME`, `UNRESOLVED_RETAINED`,
+`RERUN_NO_DUPLICATES`) each name the checks they AND; the verdict is the AND of every section
+and every invariant, `failedSections` and `failedInvariants` say what failed, and the report's
+own verdict is `<status>_WITH_DISCREPANCY` (exit 3) unless it holds. Each section lists only
+facts that were READ. A unit test flips the verdict through every invariant and section.
+
+**Version 1:**
 
 Every mode prints a markdown report (aggregates only; `SYNTHETIC SOURCE — NOT EVIDENCE`
 first when the source is a fixture). `report --format json` prints the document of
