@@ -288,6 +288,17 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    // Mirza migration PR6 (owner constraint 3): the owner's approval of ONE frozen legacy
+    // snapshot for import, bound to seven exact values. Its own MEDIUM view permission;
+    // approving is CRITICAL and owner-only.
+    id: 'legacy-cutover',
+    path: '/legacy-cutover',
+    label: 'web.nav_legacy_cutover',
+    icon: 'shield',
+    permission: 'legacy.cutover.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'custom-service',
     path: '/custom-service',
     label: 'web.nav_custom_service',

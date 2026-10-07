@@ -50,6 +50,7 @@ import { LegacyProductsPage } from './pages/legacy-products';
 import { LegacyInvoicesPage } from './pages/legacy-invoices';
 import { LegacyDebtsPage } from './pages/legacy-debts';
 import { LegacyServicesPage } from './pages/legacy-services';
+import { LegacyCutoverPage } from './pages/legacy-cutover';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -187,6 +188,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/legacy-debts',
   // Mirza PR5: legacy service candidates — one outcome each — and their review.
   '/legacy-services',
+  // Mirza PR6: the owner's cutover approval of one legacy snapshot.
+  '/legacy-cutover',
   '/extra-devices',
   '/service-locations',
   '/orders',
@@ -472,6 +475,19 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.lsr_title') }],
       title: t('web.lsr_title'),
+    };
+  }
+  // Mirza PR6: the owner's cutover approval (an approval imports nothing; the import reads it).
+  if (route.path === '/legacy-cutover') {
+    return {
+      element: (
+        <LegacyCutoverPage
+          denied={!may('legacy.cutover.view')}
+          mayApprove={may('legacy.cutover.approve')}
+        />
+      ),
+      crumbs: [{ label: t('web.lco_title') }],
+      title: t('web.lco_title'),
     };
   }
   if (route.path === '/product-categories') {

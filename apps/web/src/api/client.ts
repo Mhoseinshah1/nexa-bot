@@ -709,6 +709,19 @@ import {
   type LegacyWalletDebtState,
   type LegacyWalletDebtSummaryResponse,
 } from '@nexa/contracts';
+import {
+  LEGACY_CUTOVER_ROUTES,
+  legacyCutoverApplyRunListResponseSchema,
+  legacyCutoverApprovalListResponseSchema,
+  legacyCutoverApprovalResponseSchema,
+  legacyCutoverReadSetListResponseSchema,
+  type LegacyCutoverApplyRunListResponse,
+  type LegacyCutoverApprovalListResponse,
+  type LegacyCutoverApprovalResponse,
+  type LegacyCutoverApproveRequest,
+  type LegacyCutoverReadSetListResponse,
+  type LegacyCutoverRevokeRequest,
+} from '@nexa/contracts';
 // Mirza PR5: legacy service candidates (one outcome each) and their review.
 import {
   LEGACY_SERVICE_REVIEW_ROUTES,
@@ -5434,4 +5447,58 @@ export function reopenLegacyService(
 ): Promise<LegacyServiceCandidateResponse> {
   const { id, ...body } = input;
   return post(LEGACY_SERVICE_REVIEW_ROUTES.reopen(id), body, legacyServiceCandidateResponseSchema);
+}
+
+// --- Mirza PR6: the owner's cutover approval (owner constraint 3) --------------------------
+
+function pageOf(route: string, after?: string): string {
+  return after === undefined ? route : `${route}?after=${encodeURIComponent(after)}`;
+}
+
+/** One page of cutover approvals (`legacy.cutover.view`). Fingerprints and digests only. */
+export function fetchLegacyCutoverApprovals(
+  after?: string,
+): Promise<LegacyCutoverApprovalListResponse> {
+  return authedGet(
+    pageOf(LEGACY_CUTOVER_ROUTES.approvals, after),
+    legacyCutoverApprovalListResponseSchema,
+  );
+}
+
+/** One page of the recorded read set observations an approval can bind to. */
+export function fetchLegacyCutoverReadSets(
+  after?: string,
+): Promise<LegacyCutoverReadSetListResponse> {
+  return authedGet(
+    pageOf(LEGACY_CUTOVER_ROUTES.readSets, after),
+    legacyCutoverReadSetListResponseSchema,
+  );
+}
+
+/** One page of this tenant's APPLY runs (what a re-run acknowledgement names as prior). */
+export function fetchLegacyCutoverApplyRuns(
+  after?: string,
+): Promise<LegacyCutoverApplyRunListResponse> {
+  return authedGet(
+    pageOf(LEGACY_CUTOVER_ROUTES.applyRuns, after),
+    legacyCutoverApplyRunListResponseSchema,
+  );
+}
+
+/**
+ * Record an approval (`legacy.cutover.approve`, CRITICAL). Every value is sent EXACTLY as
+ * typed: a fingerprint is never trimmed or case-folded on its way to the server.
+ */
+export function approveLegacyCutover(
+  body: LegacyCutoverApproveRequest,
+): Promise<LegacyCutoverApprovalResponse> {
+  return post(LEGACY_CUTOVER_ROUTES.approvals, body, legacyCutoverApprovalResponseSchema);
+}
+
+/** Withdraw an approval, once, for good (`legacy.cutover.approve`). */
+export function revokeLegacyCutover(
+  input: LegacyCutoverRevokeRequest & { readonly id: string },
+): Promise<LegacyCutoverApprovalResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_CUTOVER_ROUTES.revoke(id), body, legacyCutoverApprovalResponseSchema);
 }
