@@ -247,6 +247,8 @@ import {
   LEGACY_WALLET_DEBT_CURRENCY,
   LEGACY_WALLET_DEBT_STATES,
   LEGACY_SERVICE_OUTCOMES,
+  LEGACY_CUTOVER_APPROVAL_KINDS,
+  LEGACY_CUTOVER_REASON_MAX_LENGTH,
   LEGACY_SERVICE_REVIEW_STATES,
   LEGACY_INVOICE_ARCHIVE_RUN_FAILURES,
   LEGACY_INVOICE_ARCHIVE_RUN_STATES,
@@ -13946,6 +13948,108 @@ export const legacyServiceCandidates = pgTable(
     check(
       'legacy_service_candidates_hashes_check',
       sql`source_fingerprint ~ '^[0-9a-f]{64}$' AND invoice_checksum ~ '^[0-9a-f]{64}$' AND evidence_hash ~ '^[0-9a-f]{64}$' AND (approved_checksum IS NULL OR approved_checksum ~ '^[0-9a-f]{64}$')`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR6 — the owner's approval of ONE legacy snapshot for import (owner
+ * constraint 3; `docs/legacy-migration/cutover-runbook.md` §Owner approval).
+ *
+ * Bound to seven exact values: the v1 source fingerprint, the panel-map fingerprint, the
+ * three read-set fingerprints (each recorded in `legacy_read_set_runs` for that source when
+ * the approval was made), the freeze proof file's SHA-256 and the final dump's SHA-256. A
+ * production-like import refuses without an UNREVOKED row matching every value it is given
+ * — so a changed value is no approval at all. `RERUN_OVER_PRIOR_IMPORT` additionally names
+ * the earlier source a re-run goes over (SOURCE_SUPERSEDED otherwise).
+ *
+ * Who and when are the authenticated owner and the Clock — never a typed name. Append-only
+ * (`0233`): a row is never edited or deleted; it is withdrawn by a row in
+ * `legacy_cutover_approval_revocations`. Fingerprints and digests only — no legacy row.
+ */
+export const legacyCutoverApprovals = pgTable(
+  'legacy_cutover_approvals',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    kind: text('kind').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    panelMapFingerprint: text('panel_map_fingerprint').notNull(),
+    inventoryFingerprint: text('inventory_fingerprint').notNull(),
+    productsFingerprint: text('products_fingerprint').notNull(),
+    invoiceArchiveFingerprint: text('invoice_archive_fingerprint').notNull(),
+    freezeProofSha256: text('freeze_proof_sha256').notNull(),
+    finalDumpSha256: text('final_dump_sha256').notNull(),
+    /** RERUN_OVER_PRIOR_IMPORT only: the earlier source this re-run goes over. */
+    priorSourceFingerprint: text('prior_source_fingerprint'),
+    /** The read sets it binds were read from a SYNTHETIC-marked source. */
+    synthetic: boolean('synthetic').notNull(),
+    reason: text('reason').notNull(),
+    approvedByAdminId: uuid('approved_by_admin_id').notNull(),
+    approvedAt: timestamptz('approved_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_cutover_approvals_tenant_id_key').on(table.tenantId, table.id),
+    index('legacy_cutover_approvals_tenant_source_idx').on(
+      table.tenantId,
+      table.sourceFingerprint,
+      table.id,
+    ),
+    foreignKey({
+      name: 'legacy_cutover_approvals_tenant_admin_fk',
+      columns: [table.tenantId, table.approvedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('legacy_cutover_approvals_kind_check', enumCheck('kind', LEGACY_CUTOVER_APPROVAL_KINDS)),
+    check(
+      'legacy_cutover_approvals_hashes_check',
+      sql`source_fingerprint ~ '^[0-9a-f]{64}$' AND panel_map_fingerprint ~ '^[0-9a-f]{64}$' AND inventory_fingerprint ~ '^[0-9a-f]{64}$' AND products_fingerprint ~ '^[0-9a-f]{64}$' AND invoice_archive_fingerprint ~ '^[0-9a-f]{64}$' AND freeze_proof_sha256 ~ '^[0-9a-f]{64}$' AND final_dump_sha256 ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_cutover_approvals_prior_check',
+      sql`CASE kind WHEN 'CUTOVER' THEN prior_source_fingerprint IS NULL ELSE prior_source_fingerprint ~ '^[0-9a-f]{64}$' AND prior_source_fingerprint <> source_fingerprint END`,
+    ),
+    check(
+      'legacy_cutover_approvals_reason_check',
+      sql`char_length(reason) BETWEEN 1 AND ${sql.raw(String(LEGACY_CUTOVER_REASON_MAX_LENGTH))}`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR6 — the withdrawal of one cutover approval: at most one per approval,
+ * by the authenticated owner. Append-only (`0233`), so a withdrawn approval stays on the
+ * record as withdrawn and can never be un-withdrawn; a new approval is a new row.
+ */
+export const legacyCutoverApprovalRevocations = pgTable(
+  'legacy_cutover_approval_revocations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    approvalId: uuid('approval_id').notNull(),
+    reason: text('reason').notNull(),
+    revokedByAdminId: uuid('revoked_by_admin_id').notNull(),
+    revokedAt: timestamptz('revoked_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_cutover_approval_revocations_approval_key').on(table.tenantId, table.approvalId),
+    foreignKey({
+      name: 'legacy_cutover_approval_revocations_approval_fk',
+      columns: [table.tenantId, table.approvalId],
+      foreignColumns: [legacyCutoverApprovals.tenantId, legacyCutoverApprovals.id],
+    }),
+    foreignKey({
+      name: 'legacy_cutover_approval_revocations_tenant_admin_fk',
+      columns: [table.tenantId, table.revokedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check(
+      'legacy_cutover_approval_revocations_reason_check',
+      sql`char_length(reason) BETWEEN 1 AND ${sql.raw(String(LEGACY_CUTOVER_REASON_MAX_LENGTH))}`,
     ),
   ],
 );

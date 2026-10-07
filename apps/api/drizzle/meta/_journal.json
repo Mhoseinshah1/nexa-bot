@@ -1625,6 +1625,27 @@
       "when": 1791388872675,
       "tag": "0231_legacy_service_review_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 232,
+      "version": "7",
+      "when": 1791396123373,
+      "tag": "0232_legacy_cutover_approvals",
+      "breakpoints": true
+    },
+    {
+      "idx": 233,
+      "version": "7",
+      "when": 1791396137320,
+      "tag": "0233_legacy_cutover_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 234,
+      "version": "7",
+      "when": 1791396137321,
+      "tag": "0234_legacy_cutover_grants",
+      "breakpoints": true
     }
   ]
 }
