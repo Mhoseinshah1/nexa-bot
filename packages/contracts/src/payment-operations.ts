@@ -33,6 +33,13 @@ import { REPORT_RANGES, reportLocalDateSchema } from './reporting.js';
  *   code (cleared by the next good answer).
  * - `REFUND_RELATED` — at least one refund row exists against the payment, automatic or an
  *   operator's, in any refund state.
+ * - `NEEDS_ACTION` — roadmap E1/E2 (`docs/payments-under-review-ux.md`): the payments a PERSON
+ *   must act on for them to move on — exactly `PAYMENT_SITUATIONS_NEEDING_ACTION` of
+ *   `paymentSituationOf`, in SQL: a manual transfer the customer says they sent, still
+ *   PENDING; every UNKNOWN; a late completion or a partial payment on a payment that is not
+ *   CONFIRMED; and a CONFIRMED payment with a refund still open. Listed oldest first, like
+ *   every queue, which is the attention order: the oldest unresolved is the most at risk.
+ *   An integration test holds the SQL and the classifier to the same answer.
  */
 export const PAYMENT_OPS_QUEUES = [
   'PENDING',
@@ -43,6 +50,7 @@ export const PAYMENT_OPS_QUEUES = [
   'LATE_COMPLETION',
   'PROVIDER_ERROR',
   'REFUND_RELATED',
+  'NEEDS_ACTION',
 ] as const;
 export type PaymentOpsQueue = (typeof PAYMENT_OPS_QUEUES)[number];
 export const paymentOpsQueueSchema = z.enum(PAYMENT_OPS_QUEUES);

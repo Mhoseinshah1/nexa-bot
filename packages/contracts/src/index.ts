@@ -127,6 +127,8 @@ export * from './rbac.js';
 export * from './reporting.js';
 // Program §10: the Payment Operations Center's queues and the shared attention read model.
 export * from './payment-operations.js';
+/** Roadmap E1: the under-review UX — one situation classifier over recorded payment facts. */
+export * from './payment-situations.js';
 // Program §11: gateway health, and the typed signal the Notification Center consumes.
 export * from './gateway-health.js';
 /** Round W: the Web Admin dashboard and sidebar counters, over the reports above. */
