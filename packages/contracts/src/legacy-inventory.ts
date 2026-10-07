@@ -66,9 +66,10 @@ export const LEGACY_TABLE_CLASSIFICATION: Readonly<
   }),
   invoice: Object.freeze({
     class: 'SUPPORTED',
-    reason: 'Read by the v1 import read set: the service candidates and the trial evidence.',
+    reason:
+      'Read by the v1 import read set (the service candidates and the trial evidence) and by the invoice-archive read set (an explicit column allowlist that leaves out user_info, uuid and bottype — a subscription link, an account UUID and a bot token in the public sources).',
     evidence:
-      'IMPORT_READ_SET_V1 (legacy-importer/application/source-port.ts); sql-evidence.md Q1–Q7',
+      'IMPORT_READ_SET_V1 (legacy-importer/application/source-port.ts); INVOICE_ARCHIVE_READ_SET (legacy-importer/application/invoice-archive-read-set.ts); sql-evidence.md Q1–Q7',
   }),
   product: Object.freeze({
     class: 'SUPPORTED',
@@ -116,8 +117,14 @@ export function isLegacyTableRowReadable(name: string): boolean {
  * - `products` — the legacy `product` table's rows, from an explicit column allowlist, read
  *   into the legacy product review (`legacy_product_reviews`, Mirza PR2,
  *   `docs/legacy-product-review-design.md`). Never a price, a panel or a sale in NEXA.
+ * - `invoice-archive` — the legacy `invoice` table's rows from an explicit column allowlist
+ *   (no subscription link, account UUID or bot token), with the `user` ids and `product`
+ *   codes the archive's source-derived classification needs, read into the append-only
+ *   legacy invoice archive (`legacy_invoice_archive`, Mirza PR3,
+ *   `docs/legacy-migration/importer.md` §Invoice archive). History only: never an order, a
+ *   payment, a ledger entry, a service or revenue.
  */
-export const LEGACY_READ_SET_NAMES = ['inventory', 'products'] as const;
+export const LEGACY_READ_SET_NAMES = ['inventory', 'products', 'invoice-archive'] as const;
 export type LegacyReadSetName = (typeof LEGACY_READ_SET_NAMES)[number];
 
 /** `legacy-read-set:<name>:v<version>`: a read set fingerprint's version string. */
