@@ -720,3 +720,108 @@ describe('the recovery page', () => {
     expect(text).toContain('nexa_pre_restore_01a05e35c9ad');
   });
 });
+
+/**
+ * The idempotency key's lifecycle on «تهیه بکاپ جدید» (roadmap B3).
+ *
+ * The page minted the key INSIDE `mutationFn`, so the client's own automatic retry of a 5xx
+ * (`query-client.ts`, `mutations.retry`) re-ran it and sent a FRESH key: a backup request
+ * whose answer was lost behind a 502 could start a second run. Rendered under the app's
+ * real query client, because the default test client turns retries off.
+ */
+describe('the backup run key', () => {
+  function sequencedRun(statuses: number[]): { keys: string[] } {
+    const base = stubApi(routes());
+    const answer = globalThis.fetch;
+    const keys: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) => {
+        if (String(input).includes(BACKUP_ROUTES.run) && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body)) as { idempotencyKey: string };
+          keys.push(body.idempotencyKey);
+          const status = statuses[keys.length - 1] ?? 200;
+          const payload =
+            status === 200
+              ? { outcome: 'COMPLETED', run: run() }
+              : {
+                  error: {
+                    kind: status >= 500 ? 'internal' : 'conflict',
+                    code: status >= 500 ? 'internal.unhandled' : 'backup.refused',
+                    message: 'x',
+                    correlationId: 't',
+                  },
+                };
+          return Promise.resolve(
+            new Response(JSON.stringify(payload), {
+              status,
+              headers: { 'content-type': 'application/json' },
+            }),
+          );
+        }
+        return (answer as typeof fetch)(input as RequestInfo, init);
+      }),
+    );
+    void base;
+    return { keys };
+  }
+
+  async function renderWithAppClient(): Promise<void> {
+    const { createQueryClient } = await import('../../apps/web/src/query-client');
+    const { QueryClientProvider } = await import('@tanstack/react-query');
+    const { ToastProvider } = await import('../../apps/web/src/ui/kit');
+    const { render } = await import('@testing-library/react');
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ToastProvider>
+          <RecoveryPage route={route} permissions={['backup.view', 'backup.run']} />
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('keeps the key across the automatic retry of a 5xx', async () => {
+    const sent = sequencedRun([503, 200]);
+    await renderWithAppClient();
+    fireEvent.click(await screen.findByRole('button', { name: 'تهیه بکاپ جدید' }));
+    await waitFor(() => expect(sent.keys).toHaveLength(2), { timeout: 3000 });
+    expect(sent.keys[1]).toBe(sent.keys[0]);
+  });
+
+  it('keeps the key when the operator presses again after an unanswered failure', async () => {
+    const sent = sequencedRun([503, 503, 200]);
+    await renderWithAppClient();
+    const button = await screen.findByRole('button', { name: 'تهیه بکاپ جدید' });
+    fireEvent.click(button);
+    await waitFor(() => expect(sent.keys).toHaveLength(2), { timeout: 3000 });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+    await waitFor(() => expect(sent.keys).toHaveLength(3), { timeout: 3000 });
+    expect(new Set(sent.keys).size).toBe(1);
+  });
+
+  it('mints a new key once the server has answered, refusal included', async () => {
+    const sent = sequencedRun([409, 200]);
+    await renderWithAppClient();
+    const button = await screen.findByRole('button', { name: 'تهیه بکاپ جدید' });
+    fireEvent.click(button);
+    await waitFor(() => expect(sent.keys).toHaveLength(1));
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+    await waitFor(() => expect(sent.keys).toHaveLength(2));
+    expect(sent.keys[1]).not.toBe(sent.keys[0]);
+  });
+
+  it('mints a new key for the next backup once one has succeeded', async () => {
+    const sent = sequencedRun([200, 200]);
+    await renderWithAppClient();
+    const button = await screen.findByRole('button', { name: 'تهیه بکاپ جدید' });
+    fireEvent.click(button);
+    await waitFor(() => expect(sent.keys).toHaveLength(1));
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+    await waitFor(() => expect(sent.keys).toHaveLength(2));
+    // The same key would be answered from the stored response: no second backup at all.
+    expect(sent.keys[1]).not.toBe(sent.keys[0]);
+  });
+});

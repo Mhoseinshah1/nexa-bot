@@ -10,7 +10,8 @@ import {
   type ResolvedSettingResponse,
   type PermissionKey,
 } from '@nexa/contracts';
-import { ApiError, fetchSettings, newIdempotencyKey, saveSetting } from '../api/client';
+import { ApiError, fetchSettings, saveSetting } from '../api/client';
+import { useSubmissionKey } from '../submission-key';
 import {
   BACKUP_INTERVAL_PRESETS,
   BACKUP_INTERVAL_UNITS,
@@ -128,6 +129,7 @@ export function BackupScheduleCard({
 
   // The whole command is the mutation's variable, so a retry carries its own key and
   // its own payload (the settings page's reasoning, `settings.tsx`).
+  const submission = useSubmissionKey();
   const save = useMutation({
     mutationFn: (command: {
       key: string;
@@ -135,17 +137,19 @@ export function BackupScheduleCard({
       expectedVersion: number | null;
       idempotencyKey: string;
     }) => saveSetting(command),
+    onSuccess: () => submission.settle(),
+    onError: (error) => submission.settleOn(error),
     onSettled: refresh,
   });
 
+  /*
+   * One key per logical attempt (`useSubmissionKey`): a re-press after a lost answer is the
+   * same command with the same key, and any other value or version is a new one.
+   */
   const write = (row: ResolvedSettingResponse | undefined, value: boolean | number | null) => {
     if (row === undefined) return;
-    save.mutate({
-      key: row.key,
-      value,
-      expectedVersion: row.version,
-      idempotencyKey: newIdempotencyKey(),
-    });
+    const command = { key: row.key, value, expectedVersion: row.version };
+    save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
   const parsed =

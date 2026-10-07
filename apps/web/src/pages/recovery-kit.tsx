@@ -13,10 +13,10 @@ import {
   exportRecoveryKit,
   fetchInstallationKeys,
   importRecoveryKit,
-  newIdempotencyKey,
   removeInstallationKey,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import {
   Badge,
@@ -212,17 +212,34 @@ function ImportForm({ onImported }: { onImported: () => void }) {
   const [code, setCode] = useState('');
   const [result, setResult] = useState<ImportRecoveryKitResponse | null>(null);
 
+  /*
+   * The key follows the FILE, never the secrets: the fingerprint `useSubmissionKey` holds
+   * must not keep a passphrase in memory, and the same archive pressed again after a lost
+   * answer is the same command. Minting inside `mutationFn` gave the client's automatic
+   * 5xx retry a fresh key.
+   */
+  const importKey = useSubmissionKey();
   const importer = useMutation({
     mutationFn: (input: {
       file: File;
       passphrase: string;
       accountPassword: string;
       code?: string;
-    }) => importRecoveryKit({ ...input, idempotencyKey: newIdempotencyKey() }),
+    }) =>
+      importRecoveryKit({
+        ...input,
+        idempotencyKey: importKey.current({
+          name: input.file.name,
+          size: input.file.size,
+          lastModified: input.file.lastModified,
+        }),
+      }),
     onSuccess: (response) => {
+      importKey.settle();
       setResult(response);
       onImported();
     },
+    onError: (error) => importKey.settleOn(error),
     onSettled: () => {
       setPassphrase('');
       setAccountPassword('');
@@ -421,10 +438,19 @@ function RemoveKey({
   onCancel: () => void;
 }) {
   const [typed, setTyped] = useState('');
+  const removeKey = useSubmissionKey();
   const remover = useMutation({
     mutationFn: () =>
-      removeInstallationKey({ keyId, confirmation: typed, idempotencyKey: newIdempotencyKey() }),
-    onSuccess: onDone,
+      removeInstallationKey({
+        keyId,
+        confirmation: typed,
+        idempotencyKey: removeKey.current({ keyId, typed }),
+      }),
+    onSuccess: () => {
+      removeKey.settle();
+      onDone();
+    },
+    onError: (error) => removeKey.settleOn(error),
   });
   return (
     <div className="stack inset danger-zone">

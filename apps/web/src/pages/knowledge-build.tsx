@@ -10,11 +10,11 @@ import {
   ApiError,
   applyKnowledgeBuild,
   fetchKnowledgeBuild,
-  newIdempotencyKey,
   resolveKnowledgeProposal,
   runKnowledgeBuild,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
@@ -94,10 +94,18 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
     void queries.invalidateQueries({ queryKey: ['support-knowledge'] });
   };
 
-  // One key per CLICK, passed as the variable, so a retry reuses it.
+  /*
+   * One key per logical attempt, passed as the variable so the automatic retry reuses it,
+   * and held by `useSubmissionKey` so a re-press after a lost answer reuses it too.
+   */
+  const runKey = useSubmissionKey();
+  const applyKey = useSubmissionKey();
+  const resolveKey = useSubmissionKey();
   const run = useMutation({
     mutationFn: (idempotencyKey: string) => runKnowledgeBuild(idempotencyKey),
+    onError: (error) => runKey.settleOn(error),
     onSuccess: () => {
+      runKey.settle();
       notify({ tone: 'ok', message: t('web.kb_ran') });
       refresh();
     },
@@ -109,6 +117,7 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
       proposalIds: string[] | null;
     }) => applyKnowledgeBuild(input),
     onSuccess: (result) => {
+      applyKey.settle();
       notify({
         tone: result.conflicted > 0 || result.skipped > 0 ? 'warn' : 'ok',
         message:
@@ -120,7 +129,10 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
       });
       refresh();
     },
-    onError: refresh,
+    onError: (error) => {
+      applyKey.settleOn(error);
+      refresh();
+    },
   });
   const resolve = useMutation({
     mutationFn: (input: {
@@ -129,10 +141,14 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
       choice: SupportKnowledgeConflictChoice;
     }) => resolveKnowledgeProposal(input),
     onSuccess: () => {
+      resolveKey.settle();
       notify({ tone: 'ok', message: t('web.kb_resolved') });
       refresh();
     },
-    onError: refresh,
+    onError: (error) => {
+      resolveKey.settleOn(error);
+      refresh();
+    },
   });
   const busy = run.isPending || apply.isPending || resolve.isPending;
   const error = run.error ?? apply.error ?? resolve.error;
@@ -153,7 +169,7 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
               type="button"
               className="btn primary sm"
               disabled={busy}
-              onClick={() => run.mutate(newIdempotencyKey())}
+              onClick={() => run.mutate(runKey.current('run'))}
             >
               <Icon name="refresh" />
               {t('web.kb_run')}
@@ -183,21 +199,21 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
             pendingApplicable={pendingApplicable}
             onApplyAll={() =>
               apply.mutate({
-                idempotencyKey: newIdempotencyKey(),
+                idempotencyKey: applyKey.current({ buildId: build.id, proposalIds: null }),
                 buildId: build.id,
                 proposalIds: null,
               })
             }
             onApplyOne={(proposal) =>
               apply.mutate({
-                idempotencyKey: newIdempotencyKey(),
+                idempotencyKey: applyKey.current({ buildId: build.id, proposalIds: [proposal.id] }),
                 buildId: build.id,
                 proposalIds: [proposal.id],
               })
             }
             onResolve={(proposal, choice) =>
               resolve.mutate({
-                idempotencyKey: newIdempotencyKey(),
+                idempotencyKey: resolveKey.current({ proposalId: proposal.id, choice }),
                 proposalId: proposal.id,
                 choice,
               })
