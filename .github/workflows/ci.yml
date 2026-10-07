@@ -417,7 +417,9 @@ jobs:
   # fixture's AES-256 zip (the archive inspector), on MySQL 8.0 (MirzaBot's engine; the
   # legacy-mysql job covers MariaDB for the source), against fake RickPanels and a freshly
   # migrated database: 0 FAIL and EXACTLY the fixture's known PENDING checks
-  # (scripts/legacy-rehearsal-synthetic-assert.mjs). About two minutes. Proves the importer
+  # (scripts/legacy-rehearsal-synthetic-assert.mjs), and since Mirza PR6 the whole migration
+  # program once more (cycle 9: read sets, gated import, SOURCE_SUPERSEDED, the re-run, the
+  # final report v2, the cutover gate). About three minutes. Proves the importer
   # and the harness on this commit; never evidence about the legacy archive.
   legacy-rehearsal:
     name: Legacy rehearsal (synthetic, MySQL 8.0)
@@ -505,6 +507,8 @@ jobs:
             ${{ runner.temp }}/rehearsal/durations.tsv
             ${{ runner.temp }}/rehearsal/reconciliation.md
             ${{ runner.temp }}/rehearsal/archive.json
+            ${{ runner.temp }}/rehearsal/final-report-v2.json
+            ${{ runner.temp }}/rehearsal/cutover-gate.json
             ${{ runner.temp }}/rehearsal/logs/
           if-no-files-found: warn
           retention-days: 7

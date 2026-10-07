@@ -99,6 +99,45 @@ export const EXPECTED_PASS_EVERY_CYCLE = [
 /** Cycle 2 (and later) also proves the repeat. */
 export const EXPECTED_PASS_LATER_CYCLES = ['repeat_reproduces_cycle_1'];
 
+/**
+ * Recorded once, as cycle 9 (Mirza PR6): the whole migration program on two snapshots — the
+ * read sets, the gated import's refusals, the owner's approvals, the acknowledged re-run with
+ * no duplicate effect, reconcile, the final report v2 and the cutover gate. No PENDING there:
+ * the program phase is all closures over the fixture.
+ */
+export const PROGRAM_CYCLE = 9;
+export const EXPECTED_PASS_PROGRAM = [
+  'a_products_ingested',
+  'a_invoices_archived',
+  'a_inventory_unclassified',
+  'a_gated_import_unclassified_refused',
+  'a_historical_import_completed',
+  'b_snapshot_changes',
+  'b_freeze_proof_equal',
+  'b_products_ingested',
+  'b_invoices_archived',
+  'b_inventory_complete',
+  'b_source_is_new',
+  'b_gated_import_without_approval_refused',
+  'b_approval_recorded',
+  'b_source_superseded_refused',
+  'b_superseded_wrote_nothing',
+  'b_rerun_acknowledged',
+  'b_rerun_import_completed',
+  'b_rerun_one_new_customer',
+  'b_rerun_one_new_opening',
+  'b_rerun_no_new_debt',
+  'b_rerun_no_new_service',
+  'b_rerun_one_new_map_row',
+  'b_second_rerun_writes_nothing',
+  'b_reconciled',
+  'b_report_v2_schema_valid',
+  'b_report_v2_holds',
+  'b_report_v2_rerun_acknowledged',
+  'b_cutover_gate_ready',
+  'b_cutover_gate_changed_dump_refused',
+];
+
 /** Recorded once, as cycle 0: what the fake panels received on the wire. */
 export const EXPECTED_PASS_CYCLE_0 = ['wire_provider_reads_seen', 'wire_provider_writes_zero'];
 
@@ -130,7 +169,10 @@ export function assertSynthetic(summary) {
   const passed = new Set(
     (summary.checks ?? []).filter((c) => c.result === 'PASS').map((c) => `${c.cycle}:${c.check}`),
   );
-  const wantPass = EXPECTED_PASS_CYCLE_0.map((n) => `0:${n}`);
+  const wantPass = [
+    ...EXPECTED_PASS_CYCLE_0.map((n) => `0:${n}`),
+    ...EXPECTED_PASS_PROGRAM.map((n) => `${PROGRAM_CYCLE}:${n}`),
+  ];
   for (let cycle = 1; cycle <= cycles; cycle += 1) {
     for (const n of EXPECTED_PASS_EVERY_CYCLE) wantPass.push(`${cycle}:${n}`);
     if (cycle > 1) for (const n of EXPECTED_PASS_LATER_CYCLES) wantPass.push(`${cycle}:${n}`);
