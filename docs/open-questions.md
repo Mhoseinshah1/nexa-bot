@@ -3571,7 +3571,8 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
 - **OQ-TB-76 — the manual acceptance has not been run.** `docs/support-agent/acceptance-pack.md`
   is written and unrun. `OQ-TB-02`, `-03`, `-05`, `-19`, `-20`, `-22`, `-32` and `-47` are
   settled only by running it.
-- **OQ-SAI2-01 — an automatic decision does not record the knowledge it cited (A8).** The
+- **OQ-SAI2-01 — CLOSED by the PR #236 review (N2): `finishAuto` now records the cited titles.**
+  Kept for the record: an automatic decision did not record the knowledge it cited (A8). The
   knowledge query reads "the titles cited before" from `support_ai_jobs.knowledge_labels`, which
   only Assist drafts fill; `finishAuto` stores `fact_refs` alone, and a `K…` alias is positional
   per build, so it cannot be resolved later. An automatic decision still contributes its intent

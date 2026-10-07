@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SupportContextBuild } from '../../apps/api/src/modules/commerce/support-context/application/support-context.builder';
 import {
   KNOWLEDGE_QUERY_MAX_TERMS,
+  KNOWLEDGE_QUERY_RESERVED_TERMS,
   knowledgeScores,
   matchTerms,
   selectRelevantKnowledge,
@@ -81,7 +82,11 @@ describe('A8 — the weighted query', () => {
       { text: 'باز هم نشد', weight: KNOWLEDGE_QUERY_WEIGHTS.latestCustomer },
       { text: 'اتصال سرویس روی آیفون', weight: KNOWLEDGE_QUERY_WEIGHTS.intent },
       { text: 'نصب روی ویندوز\nتمدید سرویس', weight: KNOWLEDGE_QUERY_WEIGHTS.citedTitles },
-      { text: TOPIC_QUERY_TERMS.APP_SETUP, weight: KNOWLEDGE_QUERY_WEIGHTS.topic },
+      {
+        text: TOPIC_QUERY_TERMS.APP_SETUP,
+        weight: KNOWLEDGE_QUERY_WEIGHTS.topic,
+        titleAndTagsOnly: true,
+      },
     ]);
   });
 
@@ -139,6 +144,46 @@ describe('A8 — the weighted query', () => {
     expect(total).toBeLessThanOrEqual(4_500 + 160 + 1_200 + 3_000 + 200);
     expect(KNOWLEDGE_QUERY_PRIOR_JOBS).toBe(3);
     expect(KNOWLEDGE_QUERY_EPISODE_MESSAGES).toBe(6);
+  });
+});
+
+describe('A8 — PR #236 review: memory survives a long message, generic topic words stay weak', () => {
+  it('N3: a long customer message leaves terms for the intent, the titles cited and the topic', () => {
+    const words = Array.from({ length: 100 }, (_, i) => `خطای${String(i)}x`).join(' ');
+    const parts = knowledgeQueryFor(
+      [customer(words)],
+      [prior({ intent: 'نصب برنامه آیفون', knowledgeLabels: ['به‌روزرسانی لینک اشتراک'] })],
+    );
+    const terms = weightedQueryTerms(parts);
+    expect(terms.size).toBe(KNOWLEDGE_QUERY_MAX_TERMS);
+    const term = (word: string) => [...matchTerms(word)][0] ?? '';
+    expect(terms.get(term('آیفون'))).toBe(KNOWLEDGE_QUERY_WEIGHTS.intent);
+    expect(terms.get(term('اشتراک'))).toBe(KNOWLEDGE_QUERY_WEIGHTS.citedTitles);
+    expect(terms.get(term('اتصال'))).toBe(KNOWLEDGE_QUERY_WEIGHTS.topic);
+    // The customer's own words still hold most of the budget, and take back what is unused.
+    expect([...terms.values()].filter((w) => w === 1).length).toBeGreaterThanOrEqual(
+      KNOWLEDGE_QUERY_MAX_TERMS - KNOWLEDGE_QUERY_RESERVED_TERMS,
+    );
+  });
+
+  it('N4: after a vague «باز هم نشد», a topic word matches a title, never a body', () => {
+    const articles = [
+      { title: 'تمدید سرویس', body: 'از منوی ربات اقدام کنید.', tags: [] },
+      { title: 'قوانین استفاده', body: 'این سرویس فقط برای استفاده شخصی است.', tags: [] },
+      { title: 'زمان پشتیبانی', body: 'هر روز.', tags: ['سرویس'] },
+    ];
+    const query = knowledgeQueryFor(
+      [customer('باز هم نشد')],
+      [prior({ decision: 'REPLY', topic: 'SERVICE_INFO', intent: null, knowledgeLabels: [] })],
+    );
+    expect(selectRelevantKnowledge(articles, query, 8).map((a) => a.title)).toEqual([
+      'تمدید سرویس',
+      'زمان پشتیبانی',
+    ]);
+    // The same word from the CUSTOMER still counts in a body.
+    expect(selectRelevantKnowledge(articles, 'سرویس', 8).map((a) => a.title)).toContain(
+      'قوانین استفاده',
+    );
   });
 });
 
@@ -348,7 +393,7 @@ describe('A8 — the context source builds the query', () => {
       [
         { text: 'وصل نمیشه', weight: 1 },
         { text: 'اتصال', weight: KNOWLEDGE_QUERY_WEIGHTS.intent },
-        { text: TOPIC_QUERY_TERMS.CONNECTION_TROUBLESHOOTING, weight: 0.4 },
+        { text: TOPIC_QUERY_TERMS.CONNECTION_TROUBLESHOOTING, weight: 0.4, titleAndTagsOnly: true },
       ],
     ]);
   });

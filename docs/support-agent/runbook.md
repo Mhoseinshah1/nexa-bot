@@ -448,3 +448,12 @@ from an answer («فرستاده شد», `sent`), and opens no ticket.
 
 - **Policy version.** Telemetry records `sai4m-2026-10-07` (or later) for requests built with
   these rules.
+- **Prompt size and cost.** The transcript the model reads doubled (20 → 40 lines) and the
+  context grew (16 → 24 KiB). The bounds, in the worst case: the transcript is at most 24,000
+  characters of line text plus NEXA's markers (about 48 KB of Persian UTF-8; 40 × 1,500 would
+  have been 60,000), and the context 24 KiB, so a request carries at most about 75 KB besides the
+  fixed policy (about 9 KB) and any images. A typical conversation is far smaller: the transcript
+  is what was actually said. Expect the input tokens per request to rise roughly in proportion
+  to how much longer conversations now reach the model — about double for long ones, unchanged
+  for short ones. `support_ai_runs` records the tokens of every call (`GET /support-ai/usage`):
+  compare a week before and after to see the real change. No price is computed (`OQ-TB-07`).

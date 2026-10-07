@@ -35,7 +35,7 @@ import type {
 } from '../../../commerce/business-chats/application/ports.js';
 import type { AutoContextFlags } from '../domain/auto-reply-guards.js';
 import {
-  SUPPORT_AI_TRANSCRIPT_MESSAGES,
+  promptWindow,
   supportSystemPrompt,
   transcriptMessages,
   type TranscriptImage,
@@ -424,9 +424,10 @@ export class SupportAssistService {
     if (turns.length === 0) return this.fail(scope, job, 'transcript.empty');
     // The CUSTOMER's images only: the business's own photos are never fetched, so they are not
     // images the draft failed to see (PR #201 review, N5).
-    const imagesInWindow = transcript
-      .slice(-SUPPORT_AI_TRANSCRIPT_MESSAGES)
-      .filter((m) => m.origin === 'INBOUND' && m.kind === 'PHOTO').length;
+    // The window the model is shown (A7, PR #236 review N6): the same one `planVision` reads.
+    const imagesInWindow = promptWindow(transcript).filter(
+      (m) => m.origin === 'INBOUND' && m.kind === 'PHOTO',
+    ).length;
 
     /*
      * FAIL CLOSED (program §28): the customer's latest message is an image nobody could

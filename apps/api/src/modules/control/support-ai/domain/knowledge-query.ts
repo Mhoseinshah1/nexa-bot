@@ -167,6 +167,9 @@ export function knowledgeQueryFor(
   }
   const topicTerms =
     last === undefined || last.topic === null ? undefined : TOPIC_QUERY_TERMS[last.topic];
-  if (topicTerms !== undefined) add(topicTerms, 200, KNOWLEDGE_QUERY_WEIGHTS.topic);
+  // N4: generic topic words count only in a title or a tag, never in a body.
+  if (topicTerms !== undefined) {
+    parts.push({ text: topicTerms, weight: KNOWLEDGE_QUERY_WEIGHTS.topic, titleAndTagsOnly: true });
+  }
   return parts;
 }

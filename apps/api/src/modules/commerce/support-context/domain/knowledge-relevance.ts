@@ -17,11 +17,14 @@
 
 /**
  * A8 — one part of a weighted query: its text and how much a term of it counts. A term in two
- * parts counts at the higher weight, once.
+ * parts counts at the higher weight, once. `titleAndTagsOnly` (PR #236 review, N4): the part's
+ * terms count only where they match an entry's title or tags, never its body — for generic
+ * vocabulary («سرویس», «خطا») that half the bodies contain.
  */
 export interface KnowledgeQueryPart {
   readonly text: string;
   readonly weight: number;
+  readonly titleAndTagsOnly?: boolean;
 }
 
 /** A query: plain text (every term weight 1), or weighted parts in priority order. */
@@ -32,20 +35,54 @@ export type KnowledgeQuery = string | readonly KnowledgeQueryPart[];
  * scoring a thousand candidates stays bounded whatever the transcript holds.
  */
 export const KNOWLEDGE_QUERY_MAX_TERMS = 64;
+/**
+ * PR #236 review, N3: of those, the first part (the customer's words) takes at most
+ * `MAX - RESERVED` before every later part has had `KNOWLEDGE_QUERY_TERMS_PER_PART` of its own,
+ * so a long pasted log cannot switch the conversation's memory off.
+ */
+export const KNOWLEDGE_QUERY_RESERVED_TERMS = 16;
+export const KNOWLEDGE_QUERY_TERMS_PER_PART = 4;
+
+interface QueryTerm {
+  weight: number;
+  /** Whether a part that may match bodies contributed it. */
+  body: boolean;
+}
+
+/** Each distinct term of `query`, its weight and where it may match, bounded. */
+function queryTerms(query: KnowledgeQuery): ReadonlyMap<string, QueryTerm> {
+  const parts = (typeof query === 'string' ? [{ text: query, weight: 1 }] : query)
+    .filter((part) => part.weight > 0)
+    .map((part) => ({
+      weight: part.weight,
+      body: part.titleAndTagsOnly !== true,
+      terms: [...matchTerms(part.text)],
+    }));
+  const terms = new Map<string, QueryTerm>();
+  const take = (part: (typeof parts)[number], limit: number) => {
+    let added = 0;
+    for (const term of part.terms) {
+      const known = terms.get(term);
+      if (known !== undefined) {
+        known.weight = Math.max(known.weight, part.weight);
+        known.body ||= part.body;
+        continue;
+      }
+      if (added >= limit || terms.size >= KNOWLEDGE_QUERY_MAX_TERMS) continue;
+      terms.set(term, { weight: part.weight, body: part.body });
+      added += 1;
+    }
+  };
+  const [first, ...rest] = parts;
+  if (first !== undefined) take(first, KNOWLEDGE_QUERY_MAX_TERMS - KNOWLEDGE_QUERY_RESERVED_TERMS);
+  for (const part of rest) take(part, KNOWLEDGE_QUERY_TERMS_PER_PART);
+  for (const part of parts) take(part, KNOWLEDGE_QUERY_MAX_TERMS);
+  return terms;
+}
 
 /** Each distinct term of `query` and its weight, in priority order, bounded. */
 export function weightedQueryTerms(query: KnowledgeQuery): ReadonlyMap<string, number> {
-  const parts = typeof query === 'string' ? [{ text: query, weight: 1 }] : query;
-  const weights = new Map<string, number>();
-  for (const part of parts) {
-    if (!(part.weight > 0)) continue;
-    for (const term of matchTerms(part.text)) {
-      const known = weights.get(term);
-      if (known === undefined && weights.size >= KNOWLEDGE_QUERY_MAX_TERMS) continue;
-      weights.set(term, Math.max(known ?? 0, part.weight));
-    }
-  }
-  return weights;
+  return new Map([...queryTerms(query)].map(([term, { weight }]) => [term, weight]));
 }
 
 export interface KnowledgeRankInput {
@@ -236,16 +273,16 @@ export function knowledgeScores(
   entries: readonly KnowledgeRankInput[],
   query: KnowledgeQuery,
 ): readonly number[] {
-  const termWeights = weightedQueryTerms(query);
-  const queryTerms = [...termWeights.keys()];
-  if (queryTerms.length === 0 || entries.length === 0) return entries.map(() => 0);
+  const terms = queryTerms(query);
+  const words = [...terms.keys()];
+  if (words.length === 0 || entries.length === 0) return entries.map(() => 0);
   const indexed = entries.map((entry) => ({
     title: matchTerms(entry.title),
     tags: matchTerms(entry.tags.join(' ')),
     body: matchTerms(entry.body),
   }));
   const rarity = new Map<string, number>();
-  for (const term of queryTerms) {
+  for (const term of words) {
     const df = indexed.filter(
       (entry) =>
         termMatches(term, entry.title) ||
@@ -256,12 +293,13 @@ export function knowledgeScores(
   }
   return indexed.map((entry) => {
     let score = 0;
-    for (const term of queryTerms) {
-      const weight =
+    for (const term of words) {
+      const { weight: termWeight, body } = terms.get(term) ?? { weight: 0, body: false };
+      const where =
         (termMatches(term, entry.title) ? WEIGHT.title : 0) +
         (termMatches(term, entry.tags) ? WEIGHT.tags : 0) +
-        (termMatches(term, entry.body) ? WEIGHT.body : 0);
-      score += weight * (termWeights.get(term) ?? 0) * (rarity.get(term) ?? 0);
+        (body && termMatches(term, entry.body) ? WEIGHT.body : 0);
+      score += where * termWeight * (rarity.get(term) ?? 0);
     }
     return score;
   });

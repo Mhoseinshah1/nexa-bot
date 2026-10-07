@@ -107,16 +107,34 @@ describe('A7/A8 — the policy for authors and knowledge', () => {
   });
 
   /*
-   * Telemetry records the policy version, so the text may not change without it. The digest is
-   * of the policy at fixed inputs: a changed rule fails here until the version is bumped and
-   * the digest restated in the same commit.
+   * Telemetry records the policy version, so the text may not change without it (PR #236 review,
+   * N1). The table is APPEND-ONLY: one digest per version ever shipped. The current version must
+   * map to the current digest, and no OTHER version may — so changed text under an unchanged
+   * version fails, and so does a bumped version over unchanged text. The digest covers both
+   * identity branches and a non-empty tone, so rule 6's unlinked wording and the style block are
+   * pinned too.
    */
-  it('pins the policy text to its version', () => {
-    const digest = createHash('sha256').update(supportSystemPrompt(base)).digest('hex');
-    expect({ version: SUPPORT_AI_POLICY_VERSION, digest }).toEqual({
-      version: 'sai4m-2026-10-07',
-      digest: 'd0439f950cf30531299087529ba33198c55d0fcbf9b8b9b3fd9ebc33e937c965',
-    });
+  const POLICY_DIGESTS: Readonly<Record<string, string>> = {
+    'sai3-2026-10-06': '6804f713868a449a35dbfee13ca9a19a7954d19577f36e51d3e8c27b236e964f',
+    'sai4m-2026-10-07': '3dc8a68be32e72b2a95ed81590f65497a340f599844d67f08a1da259d3aef11e',
+  };
+
+  it('pins the policy text to its version, in both directions', () => {
+    const variants = [
+      { ...base, contextJson: '{"services":[]}' },
+      { ...base, contextJson: '{"services":[]}', identityLinked: false },
+      { ...base, contextJson: '{"services":[]}', businessToneInstructions: 'لحن رسمی و کوتاه.' },
+    ];
+    const digest = createHash('sha256')
+      .update(variants.map((variant) => supportSystemPrompt(variant)).join('\u0000'))
+      .digest('hex');
+    expect(POLICY_DIGESTS[SUPPORT_AI_POLICY_VERSION]).toBe(digest);
+    expect(
+      Object.entries(POLICY_DIGESTS)
+        .filter(([, known]) => known === digest)
+        .map(([version]) => version),
+    ).toEqual([SUPPORT_AI_POLICY_VERSION]);
+    expect(new Set(Object.values(POLICY_DIGESTS)).size).toBe(Object.keys(POLICY_DIGESTS).length);
   });
 });
 

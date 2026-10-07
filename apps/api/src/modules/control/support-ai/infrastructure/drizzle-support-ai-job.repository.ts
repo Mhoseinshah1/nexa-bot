@@ -410,6 +410,8 @@ export class DrizzleSupportAiJobRepository {
       readonly sentOutboundId?: string | null;
       /** A handoff because the AI failed: why (`AI_OUTPUT_INVALID` / `AI_UNAVAILABLE`). */
       readonly failureClass?: SupportAiFailureClass | null;
+      /** A8 review N2: the titles the decision cited (`resolveKnowledgeLabels`), as Assist records. */
+      readonly knowledgeLabels?: readonly string[];
       readonly now: Date;
     },
     tx?: unknown,
@@ -435,6 +437,7 @@ export class DrizzleSupportAiJobRepository {
               intent: decision.intent,
               suggestedReply: decision.replyText,
               factRefs: [...decision.factRefs],
+              knowledgeLabels: [...(result.knowledgeLabels ?? [])],
             }),
         provider: result.provider ?? null,
         model: result.model?.slice(0, 128) ?? null,

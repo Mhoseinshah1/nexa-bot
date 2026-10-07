@@ -48,7 +48,7 @@ import type {
   DrizzleSupportAiJobRepository,
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
-import type { SupportContextSource } from './support-assist.service.js';
+import { resolveKnowledgeLabels, type SupportContextSource } from './support-assist.service.js';
 import {
   chainFailureClass,
   type SupportAiChain,
@@ -468,7 +468,12 @@ export class SupportAutoReplyService {
       }),
     });
     if (!guards.pass) return this.handOff(scope, job, guards, decision, produced, images);
-    return this.enqueue(scope, job, decision, produced, grounding, images);
+    // A8 review N2: the titles it cited, so the next request's knowledge query can read them.
+    const knowledgeLabels = resolveKnowledgeLabels(
+      decision.knowledgeRefs,
+      context.knowledgeAliases,
+    );
+    return this.enqueue(scope, job, decision, produced, grounding, images, knowledgeLabels);
   }
 
   /**
@@ -590,6 +595,7 @@ export class SupportAutoReplyService {
       readonly knownKnowledgeAliases: ReadonlySet<string>;
     },
     images?: ImageWrite,
+    knowledgeLabels: readonly string[] = [],
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, async (tx, now) => {
       const { config } = await this.deps.configs.get(scope, tx);
@@ -655,6 +661,7 @@ export class SupportAutoReplyService {
           provider: produced.provider,
           model: produced.model,
           sentOutboundId: queued.row.id,
+          knowledgeLabels,
           now,
         },
         tx,
