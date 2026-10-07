@@ -31,6 +31,16 @@ export interface LegacyImporterDestination {
   ): Promise<ReadonlyMap<string, string>>;
   /** Telegram id → the SIGNED amount of the migration opening already posted. */
   openingsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, bigint>>;
+  /** Mirza PR4: Telegram id → the magnitude of the legacy debt already recorded. */
+  debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, bigint>>;
+  /** Mirza PR4: count and Σ owed of the recorded legacy debts, in total and by state. */
+  debtAggregates(scope: TenantContext): Promise<{
+    readonly count: number;
+    readonly sumMinor: bigint;
+    readonly byState: Readonly<
+      Record<string, { readonly count: number; readonly sumMinor: bigint }>
+    >;
+  }>;
   /** Customer id → override limit, for the customers that hold one. */
   trialOverrides(
     scope: TenantContext,

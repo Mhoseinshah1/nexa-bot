@@ -150,6 +150,40 @@ export class DrizzleLegacyImporterRepository
     return out;
   }
 
+  /**
+   * Mirza PR4: Telegram id → the magnitude of the legacy debt recorded for it (owner decision
+   * 6). Read here for the plan and the reconciliation only; no balance query reads the table.
+   */
+  async debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, bigint>> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{ legacy_user_id: string; amount_minor: string }>(sql`
+      SELECT legacy_user_id, amount_minor::text AS amount_minor
+        FROM legacy_wallet_debts
+       WHERE tenant_id = ${tenantId}
+    `);
+    return new Map(result.rows.map((r) => [r.legacy_user_id, BigInt(r.amount_minor)]));
+  }
+
+  /** Mirza PR4: count and Σ of recorded legacy debts, in total and per owner-decision state. */
+  async debtAggregates(scope: TenantContext) {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{ state: string; n: number; total: string }>(sql`
+      SELECT state, count(*)::int AS n, COALESCE(sum(amount_minor), 0)::text AS total
+        FROM legacy_wallet_debts
+       WHERE tenant_id = ${tenantId}
+       GROUP BY state ORDER BY state
+    `);
+    const byState: Record<string, { count: number; sumMinor: bigint }> = {};
+    let count = 0;
+    let sumMinor = 0n;
+    for (const row of result.rows) {
+      byState[row.state] = { count: row.n, sumMinor: BigInt(row.total) };
+      count += row.n;
+      sumMinor += BigInt(row.total);
+    }
+    return { count, sumMinor, byState };
+  }
+
   async trialOverrides(
     scope: TenantContext,
     customerIds: readonly string[],

@@ -60,7 +60,12 @@ export type LegacyUserDecision =
   /** The identity is fine; a money fact is not readable. Nothing is written for the user. */
   | {
       readonly kind: 'MANUAL_REVIEW';
-      readonly reason: 'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE';
+      /**
+       * `DUPLICATE_SOURCE_ID` (Mirza PR4): the id is on more than one source row. Which
+       * row's balance is the customer's is unknowable, so none is imported: one review row
+       * (`INVALID_SOURCE_ROW`) stands for all of them, decided by the plan.
+       */
+      readonly reason: 'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE' | 'DUPLICATE_SOURCE_ID';
       readonly mapReason: LegacyImportReasonCode;
     }
   | {
@@ -70,7 +75,10 @@ export type LegacyUserDecision =
       readonly openingKind: LegacyOpeningKind;
       /** Signed legacy `Balance`, Toman = IRT minor units. */
       readonly balanceMinor: bigint;
-      /** The map row's warning, if any: `EXISTING_CUSTOMER`, else `NEGATIVE_BALANCE`. */
+      /**
+       * The map row's warning, if any: `EXISTING_CUSTOMER`, else `NEGATIVE_BALANCE` (the
+       * balance is held as a legacy debt, never a ledger entry — owner decision 6).
+       */
       readonly mapReason: LegacyImportReasonCode | null;
     };
 
@@ -130,7 +138,12 @@ export function legacyProfileUsername(raw: string | null): string | null {
   return /^[A-Za-z][A-Za-z0-9_]{4,31}$/u.test(text) ? text : null;
 }
 
-/** Whether the legacy user was an agent (reseller). Reported only: resellers are out of Phase 1. */
+/**
+ * Whether the legacy user was an agent (reseller). Reported only, never granted: an agent is
+ * imported as an ordinary customer — no reseller row, no tier, and never credit (there is
+ * no reseller credit in NEXA). Making a legacy agent a NEXA reseller is the owner's
+ * decision (`OQ-LWD-03`).
+ */
 export function legacyIsAgent(raw: string | null): boolean {
   if (raw === null) return false;
   const text = raw.trim().toLowerCase();

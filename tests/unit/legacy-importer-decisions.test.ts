@@ -126,9 +126,21 @@ describe('customers and balances', () => {
     expect(openingPlanFor(5n, undefined)).toBe('POST');
     expect(openingPlanFor(0n, undefined)).toBe('ZERO_NO_ENTRY');
     expect(openingPlanFor(5n, 5n)).toBe('ALREADY_POSTED');
-    expect(openingPlanFor(-5n, -5n)).toBe('ALREADY_POSTED');
     expect(openingPlanFor(6n, 5n)).toBe('CONFLICT');
     expect(openingPlanFor(0n, 5n)).toBe('CONFLICT');
+  });
+
+  it('plans a NEGATIVE balance as a legacy debt, never a ledger entry (owner decision 6)', () => {
+    expect(openingPlanFor(-5n, undefined)).toBe('RECORD_DEBT');
+    expect(openingPlanFor(-5n, undefined, 5n)).toBe('DEBT_ALREADY_RECORDED');
+    // A different figure, in amount or in kind, is a conflict — never re-applied.
+    expect(openingPlanFor(-6n, undefined, 5n)).toBe('CONFLICT');
+    expect(openingPlanFor(5n, undefined, 5n)).toBe('CONFLICT');
+    expect(openingPlanFor(0n, undefined, 5n)).toBe('CONFLICT');
+    expect(openingPlanFor(-5n, 5n)).toBe('CONFLICT');
+    // A DEBIT opening the code before the decision wrote: left alone, never doubled.
+    expect(openingPlanFor(-5n, -5n)).toBe('PRIOR_DEBIT_OPENING');
+    expect(openingPlanFor(-6n, -5n)).toBe('CONFLICT');
   });
 });
 
@@ -336,12 +348,17 @@ describe('the plan over the SYNTHETIC dataset', () => {
     expect(tallies.wallet.positive.count).toBe(u.opening.POSITIVE);
     expect(tallies.wallet.zero).toBe(u.opening.ZERO);
     expect(tallies.wallet.negative.count).toBe(u.opening.NEGATIVE);
+    // Owner decision 6: the negative balance is a legacy debt, not a sixth posted entry.
     expect(tallies.wallet.openings).toEqual({
-      POST: 6,
+      POST: u.opening.POSITIVE,
       ALREADY_POSTED: 0,
       ZERO_NO_ENTRY: 2,
       CONFLICT: 0,
+      RECORD_DEBT: u.opening.NEGATIVE,
+      DEBT_ALREADY_RECORDED: 0,
+      PRIOR_DEBIT_OPENING: 0,
     });
+    expect(tallies.customers.duplicateSourceIds).toEqual({ ids: 0, rows: 0 });
     expect(tallies.trials).toMatchObject(u.trial);
     expect(tallies.services.candidates).toBe(SYNTHETIC_EXPECTED.services.candidates);
     expect(tallies.services.categories).toEqual(SYNTHETIC_EXPECTED.services.categories);
