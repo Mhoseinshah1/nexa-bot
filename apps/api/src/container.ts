@@ -5801,7 +5801,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     escalations: businessEscalationRepository,
     learning: supportLearning,
   });
-  const supportContextSource = new TbSupportContextSource(supportContext);
+  // A8: the knowledge query also reads the conversation's earlier decisions.
+  const supportContextSource = new TbSupportContextSource(supportContext, supportAiJobs);
   const supportImages = new TelegramSupportImageSource({
     conversations: businessConversationRepository,
     messages: businessMessageRepository,

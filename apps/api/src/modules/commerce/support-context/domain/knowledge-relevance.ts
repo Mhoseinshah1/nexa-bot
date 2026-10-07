@@ -15,6 +15,39 @@
  * simple rule can make them.
  */
 
+/**
+ * A8 — one part of a weighted query: its text and how much a term of it counts. A term in two
+ * parts counts at the higher weight, once.
+ */
+export interface KnowledgeQueryPart {
+  readonly text: string;
+  readonly weight: number;
+}
+
+/** A query: plain text (every term weight 1), or weighted parts in priority order. */
+export type KnowledgeQuery = string | readonly KnowledgeQueryPart[];
+
+/**
+ * A8: at most this many distinct query terms are scored, the highest-priority part's first, so
+ * scoring a thousand candidates stays bounded whatever the transcript holds.
+ */
+export const KNOWLEDGE_QUERY_MAX_TERMS = 64;
+
+/** Each distinct term of `query` and its weight, in priority order, bounded. */
+export function weightedQueryTerms(query: KnowledgeQuery): ReadonlyMap<string, number> {
+  const parts = typeof query === 'string' ? [{ text: query, weight: 1 }] : query;
+  const weights = new Map<string, number>();
+  for (const part of parts) {
+    if (!(part.weight > 0)) continue;
+    for (const term of matchTerms(part.text)) {
+      const known = weights.get(term);
+      if (known === undefined && weights.size >= KNOWLEDGE_QUERY_MAX_TERMS) continue;
+      weights.set(term, Math.max(known ?? 0, part.weight));
+    }
+  }
+  return weights;
+}
+
 export interface KnowledgeRankInput {
   readonly title: string;
   readonly body: string;
@@ -197,13 +230,14 @@ const WEIGHT = { title: 3, tags: 2, body: 1 } as const;
 
 /**
  * Each entry's score for `query` (0 when nothing matched, and for an empty query), aligned
- * with `entries`.
+ * with `entries`. A8: a term counts at its part's weight (`weightedQueryTerms`).
  */
 export function knowledgeScores(
   entries: readonly KnowledgeRankInput[],
-  query: string,
+  query: KnowledgeQuery,
 ): readonly number[] {
-  const queryTerms = [...matchTerms(query)];
+  const termWeights = weightedQueryTerms(query);
+  const queryTerms = [...termWeights.keys()];
   if (queryTerms.length === 0 || entries.length === 0) return entries.map(() => 0);
   const indexed = entries.map((entry) => ({
     title: matchTerms(entry.title),
@@ -227,25 +261,28 @@ export function knowledgeScores(
         (termMatches(term, entry.title) ? WEIGHT.title : 0) +
         (termMatches(term, entry.tags) ? WEIGHT.tags : 0) +
         (termMatches(term, entry.body) ? WEIGHT.body : 0);
-      score += weight * (rarity.get(term) ?? 0);
+      score += weight * (termWeights.get(term) ?? 0) * (rarity.get(term) ?? 0);
     }
     return score;
   });
 }
 
 /**
- * `entries` most relevant first, at most `limit`. Ties — every entry, for an empty query or a
- * question nothing matches — keep the order they were given in (the caller's: approved articles
- * newest first, then the FAQ), so the selection is a pure function of the rows and the query.
+ * `entries` most relevant first, at most `limit`, and ONLY entries the query matched (A8): an
+ * entry scoring zero is never sent, so an empty query or a question nothing matches selects
+ * nothing rather than the newest articles. Ties keep the order they were given in (the
+ * caller's: approved articles newest first, then the FAQ), so the selection is a pure function
+ * of the rows and the query.
  */
 export function selectRelevantKnowledge<T extends KnowledgeRankInput>(
   entries: readonly T[],
-  query: string,
+  query: KnowledgeQuery,
   limit: number,
 ): T[] {
   const scores = knowledgeScores(entries, query);
   return entries
     .map((entry, index) => ({ entry, index, score: scores[index] ?? 0 }))
+    .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, Math.max(0, limit))
     .map(({ entry }) => entry);

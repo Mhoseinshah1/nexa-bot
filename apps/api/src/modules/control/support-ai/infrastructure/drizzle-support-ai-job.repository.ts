@@ -20,6 +20,7 @@ import {
   supportLearningJobs,
 } from '../../../../infrastructure/persistence/schema.js';
 import { clarifyingStreakOf } from '../domain/auto-reply-guards.js';
+import type { PriorDecisionFact } from '../domain/knowledge-query.js';
 import {
   requireTenantId,
   type TransactionScope,
@@ -212,6 +213,45 @@ export class DrizzleSupportAiJobRepository {
       .orderBy(desc(supportAiJobs.createdAt), desc(supportAiJobs.id))
       .limit(limit);
     return rows.map(toRecord);
+  }
+
+  /**
+   * A8 — the conversation's latest DECIDED jobs, newest first, as the knowledge query reads
+   * them: an Assist draft or an automatic decision that carries a decision, and was not thrown
+   * away (`DISCARDED` — an operator's rejection, a superseded draft, a dropped or handed-off
+   * automatic job — and `FAILED` say nothing reliable about what the conversation is about).
+   * Tenant- and conversation-scoped; bounded by `limit`; `support_ai_jobs_conversation_idx`.
+   */
+  async priorDecisions(
+    scope: ScopeContext,
+    conversationId: string,
+    limit: number,
+  ): Promise<readonly PriorDecisionFact[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select({
+        decision: supportAiJobs.decision,
+        topic: supportAiJobs.topic,
+        intent: supportAiJobs.intent,
+        knowledgeLabels: supportAiJobs.knowledgeLabels,
+      })
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, conversationId),
+          isNotNull(supportAiJobs.decision),
+          inArray(supportAiJobs.state, ['READY', 'SENT']),
+        ),
+      )
+      .orderBy(desc(supportAiJobs.createdAt), desc(supportAiJobs.id))
+      .limit(Math.max(0, limit));
+    return rows.map((row) => ({
+      decision: row.decision as PriorDecisionFact['decision'],
+      topic: row.topic as PriorDecisionFact['topic'],
+      intent: row.intent,
+      knowledgeLabels: row.knowledgeLabels ?? [],
+    }));
   }
 
   /**

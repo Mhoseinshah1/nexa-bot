@@ -36,7 +36,6 @@ import {
   type AutoVerdict,
 } from '../domain/auto-reply-guards.js';
 import { planVision } from '../domain/vision.js';
-import { latestCustomerWords } from '../domain/transcript.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import {
   supportSystemPrompt,
@@ -259,7 +258,8 @@ export class SupportAutoReplyService {
     // latest words choose the knowledge the context carries (D2).
     const transcript = await readSupportTranscript(this.deps, scope, conversation.id);
     const context = await this.deps.context.build(scope, conversation.customerId, {
-      query: latestCustomerWords(transcript),
+      conversationId: conversation.id,
+      transcript,
     });
     const { verdict: preflight, trigger } = await this.preflight(
       scope,
@@ -323,6 +323,7 @@ export class SupportAutoReplyService {
     }
     const lines: TranscriptLine[] = transcript.map((m) => ({
       origin: m.origin,
+      author: m.author,
       text: m.text,
       kind: m.kind,
       image: loaded.get(m.id)?.image ?? null,
@@ -357,6 +358,7 @@ export class SupportAutoReplyService {
               transcriptMessages(
                 transcript.map((m) => ({
                   origin: m.origin,
+                  author: m.author,
                   text: m.text,
                   kind: m.kind,
                   image: seen.has(m.id) ? (loaded.get(m.id)?.image ?? null) : null,
