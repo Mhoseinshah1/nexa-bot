@@ -48,6 +48,7 @@ M=[
  ('SAI-M17',[(SOURCE,"      this.prior === null || options.conversationId === undefined","      true")],K,'reads the conversation'),
  ('SAI-M18',[(JOBS,"          inArray(supportAiJobs.state, ['READY', 'SENT']),","          inArray(supportAiJobs.state, ['READY', 'SENT', 'DISCARDED', 'FAILED']),")],I,'A8: priorDecisions'),
  ('SAI-M19',[(JOBS,"          eq(supportAiJobs.tenantId, tenantId),\n          eq(supportAiJobs.conversationId, conversationId),\n          isNotNull(supportAiJobs.decision),","          eq(supportAiJobs.conversationId, conversationId),\n          isNotNull(supportAiJobs.decision),")],I,'A8: priorDecisions'),
+ ('SAI-M21',[(QUERY,"  return messages.map((message) => message.slice(0, share)).join('\\n');","  return messages.join('\\n');")],K,'three long messages never push'),
  ('SAI-M20',[(SOURCE,"    return knowledgeQueryFor(options.transcript, prior);","    return knowledgeQueryFor(options.transcript, prior.slice(0, 0));")],I,'A8 end to end'),
 ]
 

@@ -12,6 +12,7 @@ import {
   KNOWLEDGE_QUERY_PRIOR_JOBS,
   KNOWLEDGE_QUERY_WEIGHTS,
   TOPIC_QUERY_TERMS,
+  joinBounded,
   knowledgeQueryFor,
   troubleshootingState,
   type PriorDecisionFact,
@@ -138,6 +139,44 @@ describe('A8 — the weighted query', () => {
     expect(total).toBeLessThanOrEqual(4_500 + 160 + 1_200 + 3_000 + 200);
     expect(KNOWLEDGE_QUERY_PRIOR_JOBS).toBe(3);
     expect(KNOWLEDGE_QUERY_EPISODE_MESSAGES).toBe(6);
+  });
+});
+
+describe('A8 — the latest question always survives the bound (PR #236 review)', () => {
+  it('three long messages never push the newest one out of the customer part', () => {
+    const long = 'ب'.repeat(5_000);
+    const parts = knowledgeQueryFor(
+      [customer(long), customer(long), customer('آیفون وصل نمیشه')],
+      [],
+    );
+    const latest = parts[0];
+    expect(latest?.weight).toBe(KNOWLEDGE_QUERY_WEIGHTS.latestCustomer);
+    expect(latest?.text.endsWith('آیفون وصل نمیشه')).toBe(true);
+    expect(latest?.text.length).toBeLessThanOrEqual(4_500);
+    // And it is what the selection is decided by.
+    expect(selectRelevantKnowledge(ARTICLES, parts, 8)[0]?.title).toBe('وصل نمی‌شود روی آیفون');
+  });
+
+  it('every message keeps an equal share; a short one is kept whole', () => {
+    expect(joinBounded(['aaaa', 'bb', 'c'], 8)).toBe('aa\nbb\nc');
+    expect(joinBounded([], 10)).toBe('');
+    expect(joinBounded(['x'.repeat(50)], 10)).toBe('x'.repeat(10));
+  });
+
+  it('the troubleshooting episode is bounded the same way', () => {
+    const long = 'پ'.repeat(5_000);
+    const transcript = [
+      customer('روی ویندوز نصب کردم'),
+      customer(long),
+      customer('a1'),
+      customer('a2'),
+      customer('a3'),
+    ];
+    const episode = knowledgeQueryFor(transcript, [prior()]).find(
+      (part) => part.weight === KNOWLEDGE_QUERY_WEIGHTS.troubleshooting,
+    );
+    expect(episode?.text.startsWith('روی ویندوز نصب کردم')).toBe(true);
+    expect(episode?.text.length).toBeLessThanOrEqual(3_000);
   });
 });
 
