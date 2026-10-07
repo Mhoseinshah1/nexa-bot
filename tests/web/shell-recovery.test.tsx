@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../apps/web/src/app';
+import { navigate, rememberedHref } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, sidebarLink, stubApi } from './harness';
 
@@ -617,6 +618,39 @@ describe('the shell in the states a pure function cannot see', () => {
       screen.queryByText('ali_tehran'),
       "the previous operator's customer username is still readable",
     ).toBeNull();
+  });
+
+  /**
+   * Review of #235, B2: the breadcrumbs' remembered list filters are this session's. A
+   * search typed by one operator (a customer's phone number) must not ride into the next
+   * operator's breadcrumb on the same shared machine.
+   */
+  it('forgets the remembered list searches on sign-out', async () => {
+    stubApi(SIGNED_IN);
+    renderShell();
+    await screen.findByText('مدیر اصلی');
+    act(() => navigate('/payments?q=09121234567&state=PENDING&cursor=abc'));
+    expect(rememberedHref('/payments')).toBe('/payments?q=09121234567&state=PENDING');
+
+    stubApi([
+      { url: '/auth/logout', body: { ok: true } },
+      {
+        url: '/auth/session',
+        status: 401,
+        body: {
+          error: {
+            kind: 'UNAUTHENTICATED',
+            code: 'auth.no_session',
+            message: 'no',
+            correlationId: 'c1',
+          },
+        },
+      },
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'حساب کاربری' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'خروج' }));
+    await screen.findByLabelText('گذرواژه');
+    expect(rememberedHref('/payments')).toBe('/payments');
   });
 
   /**
