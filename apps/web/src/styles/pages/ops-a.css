@@ -969,10 +969,26 @@
   .bb-chip-main {
     min-height: var(--ctl-h);
   }
-  /* The drag grips are a finger's handle too. */
+  /* The drag grips are a finger's handle too: 44px tall, and 44px wide as hit. */
   .bb-row-grip,
   .bb-grip {
-    min-width: var(--ctl-h);
     min-height: var(--ctl-h);
+  }
+  .bb-row-grip {
+    min-width: var(--ctl-h);
+  }
+  /*
+   * A key's own grip keeps a 28px box, or three keys in a phone-width row squeeze their
+   * labels to 33px; its HIT area is widened to 44px by the ::before, into the key's own
+   * padding rather than past the key's edge into its neighbour. (A box of 44 made the
+   * labels unreadable at 390px — measured.)
+   */
+  .bb-grip {
+    width: 28px;
+  }
+  .bb-grip::before {
+    inset-block: 0;
+    inset-inline-start: -2px;
+    inset-inline-end: -14px;
   }
 }
