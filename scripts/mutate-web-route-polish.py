@@ -14,6 +14,9 @@ REC=W+'pages/recovery.tsx'
 BSC=W+'pages/backup-schedule.tsx'
 T_REC='tests/web/recovery.test.tsx'
 T_MC='tests/web/mutation-consistency.test.tsx'
+FOC=W+'ui/focusable.ts'
+OVL=W+'ui/overlays.tsx'
+T_KIT='tests/web/kit.test.tsx'
 
 M=[
  # --- B3: one idempotency key per logical attempt -------------------------------------------
@@ -22,6 +25,12 @@ M=[
  ('WRP-03',[(REC,"    onSuccess: () => {\n      runNowKey.settle();","    onSuccess: () => {\n")],T_REC,'once one has succeeded'),
  ('WRP-04',[(BSC,"save.mutate({ ...command, idempotencyKey: submission.current(command) });","save.mutate({ ...command, idempotencyKey: newIdempotencyKey() });")],T_MC,'never from newIdempotencyKey'),
  ('WRP-05',[(BSC,"    }) => saveSetting(command),","    }) => saveSetting({ ...command, idempotencyKey: newIdempotencyKey() }),")],T_MC,'never minted inside a mutationFn'),
+ # --- B7: focus traps stack, and only reachable controls count --------------------------------
+ ('WRP-06',[(FOC,"  return traps[traps.length - 1] === token;","  return traps.includes(token);")],T_KIT,'innermost trap answer Escape'),
+ ('WRP-07',[(FOC,"  return traps[traps.length - 1] === token;","  return traps.includes(token);")],T_KIT,'keeps Tab inside the innermost'),
+ ('WRP-08',[(FOC,"  if (element.closest('[hidden], [inert], fieldset[disabled]') !== null) return false;\n","")],T_KIT,'hidden] toolbar that ends'),
+ ('WRP-09',[(FOC,"  if (details !== null && details !== undefined && !details.open) {","  if (details !== null && details !== undefined && details.open) {")],T_KIT,'skipping hidden and collapsed'),
+ ('WRP-10',[(OVL,"if (!isTopTrap(token) || event.defaultPrevented) return;","if (!isTopTrap(token)) return;")],T_KIT,'inside a menu in a dialog'),
 ]
 
 only=sys.argv[1:]

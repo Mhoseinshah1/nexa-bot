@@ -10,6 +10,7 @@ import {
   DetailHead,
   Disclosure,
   Donut,
+  Drawer,
   FilterChip,
   LeaveGuardHost,
   LineChart,
@@ -134,6 +135,110 @@ describe('Modal', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(opener);
+  });
+});
+
+/**
+ * Focus traps stack and only reachable controls count (roadmap B7).
+ *
+ * A dialog opened from a drawer let BOTH traps' document listeners run: one Escape closed
+ * both, and the drawer's trap pulled Tab focus back out of the dialog. And a control the
+ * trap counted but Tab could never reach — inside a `[hidden]` toolbar or a closed
+ * `<details>` — as the last match let Tab leave the dialog for the page behind it.
+ */
+describe('focus traps', () => {
+  function Nested() {
+    const [drawer, setDrawer] = useState(true);
+    const [modal, setModal] = useState(false);
+    return (
+      <Drawer open={drawer} onClose={() => setDrawer(false)} title="کشو">
+        <button type="button" onClick={() => setModal(true)}>
+          گفتگو
+        </button>
+        <Modal open={modal} onClose={() => setModal(false)} title="درونی">
+          <input aria-label="اول" />
+          <input aria-label="دوم" />
+        </Modal>
+      </Drawer>
+    );
+  }
+
+  it('lets only the innermost trap answer Escape', () => {
+    renderPage(<Nested />);
+    fireEvent.click(screen.getByRole('button', { name: 'گفتگو' }));
+    expect(screen.getByRole('dialog', { name: 'درونی' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'درونی' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'کشو' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'کشو' })).toBeNull();
+  });
+
+  it('keeps Tab inside the innermost trap', () => {
+    renderPage(<Nested />);
+    fireEvent.click(screen.getByRole('button', { name: 'گفتگو' }));
+    const inner = screen.getByRole('dialog', { name: 'درونی' });
+    const last = within(inner).getByRole('textbox', { name: 'دوم' });
+    last.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    // Wrapped to the dialog's first control (its close button), not pulled into the drawer.
+    expect(inner.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(within(inner).getAllByRole('button')[0]);
+  });
+
+  it('wraps from the last REACHABLE control, skipping hidden and collapsed ones', () => {
+    function Hidden() {
+      return (
+        <Modal open onClose={() => undefined} title="پنهان">
+          <input aria-label="پیدا" />
+          <div hidden>
+            <button type="button">نادیدنی</button>
+          </div>
+          <details>
+            <summary>بیشتر</summary>
+            <button type="button">درون جمع‌شده</button>
+          </details>
+        </Modal>
+      );
+    }
+    renderPage(<Hidden />);
+    const dialog = screen.getByRole('dialog', { name: 'پنهان' });
+    const summary = within(dialog).getByText('بیشتر');
+    summary.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(within(dialog).getAllByRole('button')[0]);
+  });
+
+  it('wraps past a [hidden] toolbar that ends the dialog', () => {
+    renderPage(
+      <Modal open onClose={() => undefined} title="نوار پنهان">
+        <input aria-label="آخرین" />
+        <div hidden>
+          <button type="button">پنهان</button>
+        </div>
+      </Modal>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'نوار پنهان' });
+    within(dialog).getByRole('textbox', { name: 'آخرین' }).focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(within(dialog).getAllByRole('button')[0]);
+  });
+
+  it('closes only the menu when Escape is pressed inside a menu in a dialog', () => {
+    const closed = vi.fn();
+    renderPage(
+      <Modal open onClose={closed} title="با منو">
+        <Menu
+          label="گزینه‌ها"
+          trigger="گزینه‌ها"
+          items={[{ key: 'a', label: 'یک', onSelect: () => undefined }]}
+        />
+      </Modal>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'گزینه‌ها' }));
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(closed).not.toHaveBeenCalled();
   });
 });
 
