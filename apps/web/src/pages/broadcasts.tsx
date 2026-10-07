@@ -836,6 +836,10 @@ function LaunchCard({
       // A test that reached the operator verified a FORWARD/COPY source: read it back.
       void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
     },
+    // Every test — sent, not sent, or refused — is a row of the broadcast's history.
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ['broadcast-history', record.id] });
+    },
   });
   const large = preview !== null && preview.customers >= BROADCAST_LARGE_AUDIENCE;
   const launch = useMutation({
@@ -1370,9 +1374,18 @@ const HISTORY_LABELS: Readonly<Record<BroadcastHistoryAction, WebKey>> = {
  * launch, every pause, resume and cancel, and every re-queue with how many it put back. A
  * refused attempt is listed as refused. Read from the broadcast's own audit rows.
  */
-function HistoryCard({ id, broadcastState }: { id: string; broadcastState: BroadcastState }) {
+function HistoryCard({
+  id,
+  broadcastState,
+  version,
+}: {
+  id: string;
+  broadcastState: BroadcastState;
+  /** A saved edit or a media change bumps it: each is a history row of its own. */
+  version: number;
+}) {
   const history = useQuery({
-    queryKey: ['broadcast-history', id, broadcastState],
+    queryKey: ['broadcast-history', id, broadcastState, version],
     queryFn: () => fetchBroadcastHistory(id),
   });
   const rows = history.data?.entries ?? [];
@@ -1646,7 +1659,7 @@ export function BroadcastDetailPage({
                 </>
               )}
               {summary}
-              <HistoryCard id={record.id} broadcastState={record.state} />
+              <HistoryCard id={record.id} broadcastState={record.state} version={record.version} />
             </>
           ) : (
             <TwoColumn
@@ -1661,7 +1674,11 @@ export function BroadcastDetailPage({
               side={
                 <>
                   {summary}
-                  <HistoryCard id={record.id} broadcastState={record.state} />
+                  <HistoryCard
+                    id={record.id}
+                    broadcastState={record.state}
+                    version={record.version}
+                  />
                 </>
               }
             />

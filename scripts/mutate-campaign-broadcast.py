@@ -52,6 +52,8 @@ M=[
  # Web: the test and the count never read a draft with unsaved edits.
  ('CB-09',[(PAGE,"          disabled={blocked || test.isPending}","          disabled={test.isPending}")],T_W,'withholds the test and the count'),
  # Web: a re-queue is asked first.
+ # Web: a test send is a history row; the history is read again after it (Codex P2, PR #237).
+ ('CB-17',[(PAGE,"      void client.invalidateQueries({ queryKey: ['broadcast-history', record.id] });\n    },\n  });\n  const large","    },\n  });\n  const large")],T_W,'reads the history again after a test'),
  ('CB-10',[(PAGE,"              onClick={() => setRetryAsked(true)}","              onClick={() => steer.mutate('retryFailed')}")],T_W,'asks before a re-queue'),
 ]
 
