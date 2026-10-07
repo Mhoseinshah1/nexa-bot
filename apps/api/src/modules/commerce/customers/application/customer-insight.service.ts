@@ -260,21 +260,25 @@ export class CustomerInsightService {
     const cap = CUSTOMER_WORKSPACE_COUNT_CAP;
     const limit = CUSTOMER_WORKSPACE_LATEST_LIMIT;
 
-    const [tickets, businessHandoffs, unknown, latestPayments, unreconciled, latestOrders] =
-      await Promise.all([
-        may('tickets') ? reader.tickets(scope, customerId, cap) : null,
-        may('businessHandoffs') ? reader.businessHandoffs(scope, customerId, cap) : null,
-        may('payments') ? reader.unknownPayments(scope, customerId, cap) : null,
-        may('payments') ? reader.latestPayments(scope, customerId, limit) : null,
-        may('services') ? reader.unreconciledServices(scope, customerId, cap) : null,
-        may('orders') ? reader.latestOrders(scope, customerId, limit) : null,
-      ]);
+    // ONE gate per section: a section whose reads were gated separately could be half
+    // computed, and its null would then depend on which half a later edit left gated.
+    const [tickets, businessHandoffs, payments, unreconciled, latestOrders] = await Promise.all([
+      may('tickets') ? reader.tickets(scope, customerId, cap) : null,
+      may('businessHandoffs') ? reader.businessHandoffs(scope, customerId, cap) : null,
+      may('payments')
+        ? Promise.all([
+            reader.unknownPayments(scope, customerId, cap),
+            reader.latestPayments(scope, customerId, limit),
+          ])
+        : null,
+      may('services') ? reader.unreconciledServices(scope, customerId, cap) : null,
+      may('orders') ? reader.latestOrders(scope, customerId, limit) : null,
+    ]);
 
     return {
       tickets,
       businessHandoffs,
-      payments:
-        unknown === null || latestPayments === null ? null : { unknown, latest: latestPayments },
+      payments: payments === null ? null : { unknown: payments[0], latest: payments[1] },
       services: unreconciled === null ? null : { unreconciled },
       orders: latestOrders === null ? null : { latest: latestOrders },
     };
