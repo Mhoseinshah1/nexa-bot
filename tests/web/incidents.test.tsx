@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { focusManager } from '@tanstack/react-query';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import {
   IncidentBanner,
@@ -146,6 +147,131 @@ describe('the incident detail', () => {
     expect((second?.body as { idempotencyKey: string }).idempotencyKey).toBe(
       (first?.body as { idempotencyKey: string }).idempotencyKey,
     );
+  });
+
+  /**
+   * Roadmap B3: a 409 means the incident moved on. The modal used to keep the version it read,
+   * so every further press was refused the same way until the operator left the page. Now the
+   * conflict re-reads the incident and the next press carries the fresh version and a new key.
+   */
+  it('re-reads the incident on a version conflict, and acts on the fresh version next', async () => {
+    const page = detail();
+    const api = stubApi([
+      page,
+      {
+        url: `/incidents/${ID}/resolve`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'incident.version_conflict',
+            message: 'x',
+            correlationId: 'c',
+          },
+        },
+      },
+    ]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage mayNotify={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.inc_resolve') }));
+    const confirm = () =>
+      screen
+        .getAllByRole('button', { name: t('web.inc_resolve') })
+        .find((button) => button.closest('[role="dialog"]') !== null) as HTMLElement;
+    const reads = () =>
+      api.calls.filter((c) => c.method === 'GET' && c.url.endsWith(`/incidents/${ID}`));
+    expect(reads()).toHaveLength(1);
+    // Somebody else moved it to version 4 meanwhile.
+    (page.body.incident as { version: number }).version = 4;
+    fireEvent.click(confirm());
+    expect(await screen.findByText(t('web.inc_error_version'))).toBeInTheDocument();
+    await waitFor(() => expect(reads().length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(confirm()).not.toBeDisabled());
+    fireEvent.click(confirm());
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.url.endsWith('/resolve'))).toHaveLength(2),
+    );
+    const [first, second] = api.calls.filter((c) => c.url.endsWith('/resolve'));
+    expect((first?.body as { expectedVersion: number }).expectedVersion).toBe(3);
+    expect((second?.body as { expectedVersion: number }).expectedVersion).toBe(4);
+    expect((second?.body as { idempotencyKey: string }).idempotencyKey).not.toBe(
+      (first?.body as { idempotencyKey: string }).idempotencyKey,
+    );
+  });
+
+  /**
+   * Review of #235, B1: after a 409 the edit form must not send its STALE fields under the
+   * FRESH version — that passes the server's check and reverts the other operator's change
+   * (here, their stop-sales). The form is refilled from the incident as it is now, the
+   * operator is told, and the next Save carries the fresh fields with the fresh version.
+   */
+  it('refills the edit form after a version conflict and never resends its stale fields', async () => {
+    const page = detail({ stopSales: false });
+    const api = stubApi([
+      page,
+      {
+        url: `/incidents/${ID}/edit`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'incident.version_conflict',
+            message: 'x',
+            correlationId: 'c',
+          },
+        },
+      },
+    ]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage mayNotify={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.inc_edit') }));
+    const title = await screen.findByLabelText(new RegExp(t('web.inc_col_title')));
+    fireEvent.change(title, { target: { value: 'my stale edit' } });
+    // Another operator turns stop-sales on and retitles it: version 4.
+    const fresh = page.body.incident as Record<string, unknown>;
+    fresh.version = 4;
+    fresh.stopSales = true;
+    fresh.title = 'their title';
+    const saves = () => api.calls.filter((c) => c.url.endsWith(`/incidents/${ID}/edit`));
+    const save = () => screen.getByRole('button', { name: t('web.inc_save') });
+    fireEvent.click(save());
+    await waitFor(() => expect(saves()).toHaveLength(1));
+    expect(await screen.findByText(t('web.inc_form_reloaded'))).toBeInTheDocument();
+    await waitFor(() => expect(save()).not.toBeDisabled());
+    expect(
+      (screen.getByLabelText(new RegExp(t('web.inc_col_title'))) as HTMLInputElement).value,
+    ).toBe('their title');
+    fireEvent.click(save());
+    await waitFor(() => expect(saves()).toHaveLength(2));
+    const [first, second] = saves().map((c) => c.body as Record<string, unknown>);
+    expect(first?.expectedVersion).toBe(3);
+    expect(first?.stopSales).toBe(false);
+    expect(second?.expectedVersion).toBe(4);
+    expect(second?.stopSales).toBe(true);
+    expect(second?.title).toBe('their title');
+  });
+
+  it('sends the version the edit form was filled from, not one re-read since', async () => {
+    const page = detail();
+    const api = stubApi([page, { url: `/incidents/${ID}/edit`, body: { incident: incident() } }]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage mayNotify={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.inc_edit') }));
+    await screen.findByLabelText(new RegExp(t('web.inc_col_title')));
+    // The page re-reads version 4 in the background while the form holds version 3's fields.
+    (page.body.incident as Record<string, unknown>).version = 4;
+    const reads = () =>
+      api.calls.filter((c) => c.method === 'GET' && c.url.endsWith(`/incidents/${ID}`));
+    // The window regains focus: react-query re-reads the stale detail query.
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await waitFor(() => expect(reads().length).toBeGreaterThanOrEqual(2));
+    fireEvent.click(screen.getByRole('button', { name: t('web.inc_save') }));
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.url.endsWith(`/incidents/${ID}/edit`))).toHaveLength(1),
+    );
+    const sent = api.calls.find((c) => c.url.endsWith(`/incidents/${ID}/edit`));
+    expect((sent?.body as { expectedVersion: number }).expectedVersion).toBe(3);
+    focusManager.setFocused(undefined);
   });
 
   it('sends the notice with exactly the previewed count', async () => {
