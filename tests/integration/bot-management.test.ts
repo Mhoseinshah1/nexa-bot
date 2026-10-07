@@ -569,7 +569,24 @@ describe('WP13 bot management', () => {
       ).toBe(BOT_ERROR_CODES.BOT_TELEGRAM_UNREACHABLE);
 
       expect(await api.container.botInstances.resolveToken(scope as never, BOT_A1)).toBe(before);
-      expect(await auditCount('bot_instance.token_replace', BOT_A1)).toBe(0);
+      /*
+       * Nothing SUCCEEDED — and, since hardening 2026-10-07 (incident A), each attempt is
+       * still attributable afterwards: one FAILED row per attempt, naming the step it stopped
+       * at and the code, never the token. Before, these three left no trace at all.
+       */
+      const rows = (
+        await db().execute<{ result: string; after: Record<string, unknown> }>(sql`
+          SELECT result, after FROM audit_logs
+           WHERE action = 'bot_instance.token_replace' AND entity_id = ${BOT_A1}
+           ORDER BY occurred_at, id`)
+      ).rows;
+      expect(rows.map((row) => row.result)).toEqual(['FAILED', 'FAILED', 'FAILED']);
+      expect(rows.map((row) => [row.after['stage'], row.after['errorCode']])).toEqual([
+        ['GET_ME', BOT_ERROR_CODES.BOT_TOKEN_DIFFERENT_BOT],
+        ['GET_ME', BOT_ERROR_CODES.BOT_TOKEN_REJECTED],
+        ['GET_ME', BOT_ERROR_CODES.BOT_TELEGRAM_UNREACHABLE],
+      ]);
+      expect(JSON.stringify(rows)).not.toContain(tokenFor(TELEGRAM_ID, 'e').split(':')[1]);
     });
 
     // The four Telegram calls a replacement makes, in order (R4): identity, the prior

@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { isNexaError, type TenantContext } from '@nexa/contracts';
-import type { BotBootstrapStatus } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
+import type {
+  BotBootstrapStatus,
+  BotWebhookStatusDetail,
+} from './modules/platform/tenancy/application/bot-bootstrap.service.js';
 import { bootstrapRemedy } from './telegram-bootstrap-remedy.js';
 import { Prompter, PromptInputError } from './infrastructure/tty/prompt.js';
 import { createContainer } from './container.js';
@@ -216,6 +219,52 @@ export async function tokenForRun(
   return state === 'none' ? prompt() : null;
 }
 
+/**
+ * The local and the remote half of `--status`, one fact per line, for the operator.
+ *
+ * STDERR only: stdout stays the one word `install.sh`, `botctl update` and the smoke test
+ * compare. Nothing here can carry a credential — the detail has no token, secret or
+ * fingerprint field, the remote URL is already cut to its origin when it is not ours, and
+ * Telegram's error text is already redacted (`BotBootstrapService.remoteDetail`).
+ */
+export function statusDetailLines(detail: BotWebhookStatusDetail): string[] {
+  const yesNo = (value: boolean | null): string =>
+    value === null ? 'unknown' : value ? 'yes' : 'no';
+  const { local, remote } = detail;
+  const lines = [
+    `bot instance           ${detail.botInstanceId}`,
+    `expected webhook URL   ${detail.expectedUrl}`,
+    `local registration     ${
+      local.registered
+        ? `current (registered ${local.registeredAt?.toISOString() ?? 'at an unknown time'})`
+        : local.registeredAt === null
+          ? 'none recorded'
+          : local.recordedUrl !== detail.expectedUrl
+            ? 'recorded for a different URL'
+            : `stale (webhook secret ${local.secret.toLowerCase()})`
+    }`,
+    `remote (Telegram)      ${remote.outcome}`,
+  ];
+  if (remote.outcome === 'READ') {
+    lines.push(
+      `remote webhook URL     ${remote.url ?? '(none set)'}`,
+      `remote matches         ${yesNo(remote.matchesExpected)}`,
+      `update types narrowed  ${yesNo(remote.updatesNarrowed)}`,
+      `pending updates        ${remote.pendingUpdateCount ?? 'unknown'}`,
+    );
+    if (remote.lastErrorAt !== null || remote.lastErrorMessage !== null) {
+      lines.push(
+        `last delivery error    ${remote.lastErrorAt?.toISOString() ?? 'unknown time'}: ${
+          remote.lastErrorMessage ?? '(no message)'
+        }`,
+      );
+    }
+  }
+  if (detail.problems.length > 0)
+    lines.push(`problems               ${detail.problems.join(', ')}`);
+  return lines;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const config = loadConfig();
@@ -244,7 +293,10 @@ async function main(): Promise<void> {
     const publicBaseUrl = requirePublicBaseUrl(args.publicBaseUrl);
 
     if (args.status) {
-      const { state, reason } = await container.bootstrapBot.statusWithReason(scope, publicBaseUrl);
+      const { state, reason, detail } = await container.bootstrapBot.statusWithReason(
+        scope,
+        publicBaseUrl,
+      );
       // The ONLY thing on stdout, so a shell can read it without parsing prose.
       // Every other line this CLI writes goes to stderr.
       process.stdout.write(`${state}\n`);
@@ -262,6 +314,18 @@ async function main(): Promise<void> {
        * stdout would break every caller that compares it.
        */
       if (reason !== null) console.warn(reason);
+      /*
+       * And BOTH halves, on stderr, so the operator sees what the word was decided from
+       * (incident A, 2026-10-07): the local marker said registered while Telegram held no
+       * URL and 22 queued updates, and one word could not show the disagreement.
+       */
+      if (detail !== null) {
+        for (const line of statusDetailLines(detail)) console.warn(line);
+      }
+      if (detail?.remote.tokenErrorCode != null) {
+        const remedy = bootstrapRemedy(detail.remote.tokenErrorCode);
+        if (remedy !== null) console.warn(remedy);
+      }
       return;
     }
 

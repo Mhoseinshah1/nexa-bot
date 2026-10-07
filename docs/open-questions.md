@@ -1132,6 +1132,12 @@ Telegram what it actually has (`getWebhookInfo`) and recording that rather than
 what was requested. Neither is worth doing before something other than an
 installer reconciles a webhook.
 
+**2026-10-07 note.** For a token of the SAME bot this is no longer true in practice: R4's
+Web Admin replacement validates a new token, registers and reads back the webhook keeping
+queued updates, and only then stores it, and `botctl telegram register` now says so when
+Telegram rejects the stored token instead of "no supported recovery". Changing the bot an
+installation serves (a different bot) remains unbuilt by design.
+
 ## OQ-TG-01 addendum — what a revoked token actually leaves an operator
 
 Recorded because the installer told them otherwise for one commit.
@@ -2451,6 +2457,50 @@ it, and a `botctl telegram register` rerun asks Telegram rather than trusting it
 marker (`docs/wp13-bots-management-audit.md` §7). The question stays open as a fact about
 Telegram; the fake in `tests/support/fake-telegram-bot-api.ts` makes every caller of its
 `revoke` state the answer rather than assume one.
+
+**Incident A (2026-10-07 hardening):** after a server move, `getWebhookInfo` read with a
+valid token showed `url: ""` and `pending_update_count: 22` while `botctl telegram status`
+said `ready` (it answered from the local marker alone — fixed: it now asks Telegram). The
+stored token was also stale (`telegram.rejected.401`). This is consistent with a revocation
+dropping the webhook and still does not establish it: the token change and the server move
+happened together, and either could explain an empty registration. Still OPEN as a fact
+about Telegram; nothing in the code depends on the answer any more.
+
+## OQ-TG-05 — why the owner's Web Admin token replacements before incident A did not restore service
+
+Status: OPEN. Cannot be determined from the code; what the code PROVES is below.
+
+1. **No attempt before the manual `setWebhook` succeeded.** The replacement writes the token
+   only in its activating transaction, after `setWebhook` and an exact `getWebhookInfo`
+   read-back (`BotManagementService.replaceUnderClaim`); nothing caches a token in a
+   process (`bot-token-replacement.test.ts` pins that a repository built before the
+   replacement reads the new token). Had one activated, the stored token would have been
+   valid and the later `telegram.rejected.401` could not have happened (unless that new token
+   was itself revoked in between).
+2. **The attempts' only state-dependent difference from the one that worked afterwards is
+   compensation.** Before the manual `setWebhook` Telegram held no URL (`prior = NONE`);
+   after it, this installation's URL (`THIS_INSTALLATION`). Every other input — the recorded
+   URL, the secret, the bot identity — was the same. `prior` changes ONLY what compensation
+   does after a failure. So the earlier attempts failed at some step, and the later one did
+   not; the difference was in conditions at that moment (Telegram reachability from the
+   host, Telegram's acceptance of the URL, a held claim, the token pasted) — not in a code
+   path that the manual `setWebhook` unlocked.
+3. **A failure after `setWebhook`, with `prior = NONE`, REMOVES the webhook again**
+   (`compensate`: `deleteWebhook` with `drop_pending_updates: false`, then read back), by
+   design: a bot whose stored token cannot answer is better held at Telegram than delivered
+   to. So a series of failed attempts reproduces exactly `url: ""` with the queue intact.
+4. **Which step failed was not recorded** for most outcomes: only a failure after
+   `setWebhook` opened `bot.token_replacement_incomplete`; a refusal at `getMe`, at the
+   first `getWebhookInfo`, a `setWebhook` Telegram REFUSED, a precondition, or a held claim
+   left only the browser's error. Fixed: every failed attempt now writes an audit row
+   `bot_instance.token_replace` / `FAILED` with `after.stage` and the error code.
+
+**Where the evidence of the original attempts may still be:** `operational_events` rows with
+`code = 'bot.token_replacement_incomplete'` (context: stage, compensation) around the time
+of the attempts, and the api container's log, which logs every 5xx as `Unhandled failure`
+with the error message (a `bot.telegram_unreachable` there is an outbound failure).
+**Trigger to resolve:** the owner reads those, or the next occurrence, whose `FAILED` audit
+rows name the step.
 
 ## OQ-WP14-01 — should the server require an acknowledgement before suspending a reseller who owes?
 

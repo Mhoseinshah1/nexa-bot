@@ -1,11 +1,15 @@
 import {
+  BOT_WEBHOOK_ERROR_MESSAGE_MAX,
   errors,
+  isNexaError,
   NexaError,
   PLATFORM_ERROR_CODES,
   systemJobActor,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
+  type BotLiveProblem,
+  type BotWebhookSecretState,
   type Clock,
   type CorrelationId,
   type IdGenerator,
@@ -14,19 +18,27 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { redactSecretText } from '../../../../infrastructure/redaction.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type {
   BotBootstrapRepository,
   BotBootstrapTelegram,
   BotBootstrapView,
+  BotIdentityProbe,
   BotInstanceRepository,
   TokenReplacementClaims,
   WebhookRegistration,
 } from './ports.js';
+import type { BotWebhookRead } from './bot-management-ports.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
 import type { CommandMenu } from './command-menu.js';
 import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
-import { allowedUpdatesNarrowed, telegramWebhookUrl } from '../domain/webhook-url.js';
+import { liveProblems } from '../domain/bot-readiness.js';
+import {
+  allowedUpdatesNarrowed,
+  shownWebhookUrl,
+  telegramWebhookUrl,
+} from '../domain/webhook-url.js';
 
 /** The identity `getMe` reported, once the probe outcome has been unwrapped. */
 interface BotIdentity {
@@ -43,7 +55,11 @@ interface BotIdentity {
  *                   prompt, the token is already stored.
  *  - `ready`      — the bot exists, is ACTIVE, and Telegram is delivering to
  *                   this installation's own webhook URL with the secret this
- *                   installation currently holds. Nothing to do.
+ *                   installation currently holds. Nothing to do. From
+ *                   `statusWithReason` this is BOTH halves: the local marker AND
+ *                   Telegram's own `getWebhookInfo`, read with the stored token
+ *                   (incident A, 2026-10-07). From `status` it is the marker only,
+ *                   which is why only the installer's prompt decision reads that.
  *  - `unavailable` — the bot exists and something OTHER than a missing
  *                   registration stops it receiving updates. Three causes, and
  *                   each is a state in which registering a webhook would point
@@ -64,6 +80,66 @@ interface BotIdentity {
  * an operator on the wrong one.
  */
 export type BotBootstrapStatus = 'none' | 'incomplete' | 'ready' | 'unavailable';
+
+/**
+ * What `getMe` + `getWebhookInfo` said when `statusWithReason` asked Telegram (hardening
+ * batch 2026-10-07, incident A).
+ *
+ *  - `READ`             — the stored token is THIS bot's and the registration was read.
+ *  - `TOKEN_REJECTED`   — Telegram refused the stored token (a revoked one answers 401).
+ *  - `NOT_TELEGRAM`     — the configured API base answered with something that is not a bot.
+ *  - `DIFFERENT_BOT`    — the stored token now names another bot than the one bound here.
+ *  - `UNREACHABLE`      — Telegram could not be asked (timeout, network, 5xx, 429). UNKNOWN,
+ *                         never "fine".
+ *  - `TOKEN_UNREADABLE` — the stored token could not be decrypted, so nothing was asked.
+ */
+export type BotRemoteWebhookOutcome =
+  'READ' | 'TOKEN_REJECTED' | 'NOT_TELEGRAM' | 'DIFFERENT_BOT' | 'UNREACHABLE' | 'TOKEN_UNREADABLE';
+
+/**
+ * The two halves `botctl telegram status` reports, side by side, and never one standing in
+ * for the other.
+ *
+ * The incident this exists for: the LOCAL marker said registered, `status` answered `ready`
+ * from it alone, and Telegram held `url: ""` with 22 updates queued. Nothing here carries a
+ * credential: no token, no webhook secret and no fingerprint value. The remote URL is shown
+ * through `shownWebhookUrl`, so a foreign registration (whose path can carry a token) is cut
+ * to its origin; Telegram's own error text is redacted and bounded.
+ */
+export interface BotWebhookStatusDetail {
+  readonly botInstanceId: BotInstanceId;
+  /** The one URL this installation registers for this bot, from the origin it was given. */
+  readonly expectedUrl: string;
+  readonly local: {
+    /** The marker is current: registered, at `expectedUrl`, with the secret held now. */
+    readonly registered: boolean;
+    readonly recordedUrl: string | null;
+    readonly registeredAt: Date | null;
+    readonly secret: Exclude<BotWebhookSecretState, 'NOT_CONFIGURED'>;
+  };
+  readonly remote: {
+    readonly outcome: BotRemoteWebhookOutcome;
+    /** The URL Telegram delivers to, as it may be shown; null when none is set or unread. */
+    readonly url: string | null;
+    /** Null when the registration could not be read. */
+    readonly matchesExpected: boolean | null;
+    readonly updatesNarrowed: boolean | null;
+    readonly pendingUpdateCount: number | null;
+    readonly lastErrorAt: Date | null;
+    readonly lastErrorMessage: string | null;
+    /** The error CODE a token that could not be decrypted failed with; never a message. */
+    readonly tokenErrorCode: string | null;
+  };
+  /** `liveProblems` — the Web Admin live check's verdict, so "ready" means one thing. */
+  readonly problems: readonly BotLiveProblem[];
+}
+
+export interface BotBootstrapStatusReport {
+  readonly state: BotBootstrapStatus;
+  readonly reason: string | null;
+  /** Null when there is no bot to look at, or a scope-level cause stopped the check first. */
+  readonly detail: BotWebhookStatusDetail | null;
+}
 
 export interface BotBootstrapInput {
   /**
@@ -172,35 +248,66 @@ export class BotBootstrapService {
   constructor(private readonly deps: BotBootstrapDeps) {}
 
   /**
-   * Read-only, and the thing that stops the installer prompting twice.
+   * The LOCAL answer, and only the one decision it is fit for: whether the installer must
+   * ask for a token (`none`) or may resume from the stored one (anything else).
    *
-   * It creates nothing and it is not a way in. The question it answers is not
-   * "is there a bot" but "can that bot receive an update", which is the only
-   * version an installer may act on.
+   * Read-only and makes no Telegram call. It is NOT what `botctl telegram status` reports
+   * — that is `statusWithReason`, which asks Telegram — because a `ready` read from the
+   * local marker alone is exactly how an installation whose webhook Telegram had dropped
+   * (`url: ""`, 22 updates queued) was reported as receiving updates (incident A,
+   * 2026-10-07). Its `ready` means "the marker is current", nothing more.
    */
   async status(scope: TenantContext, publicBaseUrl: string): Promise<BotBootstrapStatus> {
-    return (await this.statusWithReason(scope, publicBaseUrl)).state;
+    return (await this.localStatus(scope, publicBaseUrl)).state;
   }
 
   /**
-   * The state, AND the sentence that says why when the state is `unavailable`.
+   * What `botctl telegram status` prints: the state, the sentence that says why, and the
+   * local and remote facts side by side.
    *
-   * `OQ-TG-04` item 9. `unavailableReason` has always computed a cause-specific,
-   * actionable sentence for each of its three causes, and `status` collapsed all
-   * three to one word — so `botctl telegram status` could report that a bot is
-   * held back and not which of three things is holding it, and the
-   * `--skip-telegram` text sent operators there to find out.
+   * `ready` ONLY when both agree: the local marker is current AND Telegram, asked with the
+   * stored token, reports exactly this installation's URL with its full update set, for
+   * THIS bot. Everything else is a different word with a reason, and the word keeps the
+   * remedy it has always named (the installer and `botctl update` read it):
    *
-   * Two returns rather than a second lookup: asking twice would run the
-   * activity read again and could answer about a different moment.
+   *  - `incomplete`  — registering would fix it: the marker is not current, or Telegram
+   *                    holds no URL, another URL, or a narrowed update set.
+   *                    `botctl telegram register` re-registers keeping queued updates.
+   *  - `unavailable` — registering cannot fix it: the three local causes as before, AND
+   *                    now a token Telegram rejects (replace it in the Web Admin), an API
+   *                    base that is not Telegram, a token naming another bot, a token that
+   *                    cannot be decrypted, or Telegram that could not be asked at all —
+   *                    an UNKNOWN remote state is never reported as `ready`.
    *
-   * `reason` is NULL for every other state, including `none` — there is nothing
-   * to explain about an installation that has not been configured yet.
+   * Two Telegram READS (`getMe`, `getWebhookInfo`), outside any transaction, each bounded
+   * by the gateway's call timeout (`NOTIFICATION_SEND_TIMEOUT_MS`). Nothing is written.
    */
   async statusWithReason(
     scope: TenantContext,
     publicBaseUrl: string,
-  ): Promise<{ readonly state: BotBootstrapStatus; readonly reason: string | null }> {
+  ): Promise<BotBootstrapStatusReport> {
+    const local = await this.localStatus(scope, publicBaseUrl);
+    if (local.view === null || local.url === null) {
+      return { state: local.state, reason: local.reason, detail: null };
+    }
+    const detail = await this.remoteDetail(scope, local.view, local.url);
+    const verdict = this.verdict(detail);
+    return { ...verdict, detail };
+  }
+
+  /**
+   * The local half: the scope-level causes, the row, and whether the marker is current.
+   * `view` and `url` are present only for an ACTIVE bot in an active scope.
+   */
+  private async localStatus(
+    scope: TenantContext,
+    publicBaseUrl: string,
+  ): Promise<{
+    readonly state: BotBootstrapStatus;
+    readonly reason: string | null;
+    readonly view: BotBootstrapView | null;
+    readonly url: string | null;
+  }> {
     /*
      * The two SCOPE-level causes are checked before the row is looked up, and
      * that ordering is `OQ-TG-04` item 11 rather than tidiness.
@@ -215,23 +322,251 @@ export class BotBootstrapService {
      * and there is no row here to have one.
      */
     const scopeReason = await this.unavailableScopeReason(scope);
-    if (scopeReason !== null) return { state: 'unavailable', reason: scopeReason };
+    if (scopeReason !== null) {
+      return { state: 'unavailable', reason: scopeReason, view: null, url: null };
+    }
 
     const existing = await this.deps.bots.findBootstrapTarget(scope);
-    if (existing === null) return { state: 'none', reason: null };
+    if (existing === null) return { state: 'none', reason: null, view: null, url: null };
     // Not a bootstrap state to converge out of — see `unavailableReason`.
     if (existing.status !== 'ACTIVE') {
-      return { state: 'unavailable', reason: this.botNotActiveReason(existing.status) };
+      return {
+        state: 'unavailable',
+        reason: this.botNotActiveReason(existing.status),
+        view: null,
+        url: null,
+      };
     }
     // Normalised through the SAME function `execute` uses, so a trailing slash
     // in the configured origin cannot make `status` report `incomplete` for a
-    // webhook `execute` would then find already registered — an installer that
-    // re-registers on every rerun, discarding queued updates each time.
+    // webhook `execute` would then find already registered.
     const url = this.webhookUrlFor(this.requireOrigin(publicBaseUrl), existing.id);
     return {
       state: this.registrationIsCurrent(existing, url) ? 'ready' : 'incomplete',
       reason: null,
+      view: existing,
+      url,
     };
+  }
+
+  /**
+   * The remote half: `getMe`, then `getWebhookInfo`, with the STORED token — the one every
+   * reply this installation sends is made with, so a token Telegram rejects is found here
+   * rather than on the first customer message (`telegram.rejected.401`, incident A).
+   *
+   * Reads only. The token is decrypted through the one path every outbound use takes
+   * (`resolveToken`), lives in this frame, and appears in nothing returned: Telegram's error
+   * text is stripped of it and redacted by content, and a foreign URL is cut to its origin.
+   */
+  private async remoteDetail(
+    scope: TenantContext,
+    view: BotBootstrapView,
+    url: string,
+  ): Promise<BotWebhookStatusDetail> {
+    const local = {
+      registered: this.registrationIsCurrent(view, url),
+      recordedUrl: view.webhookUrl,
+      registeredAt: view.webhookRegisteredAt,
+      secret: this.localSecretState(view),
+    };
+    const unread = {
+      url: null,
+      matchesExpected: null,
+      updatesNarrowed: null,
+      pendingUpdateCount: null,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+      tokenErrorCode: null,
+    };
+    const result = (
+      remote: BotWebhookStatusDetail['remote'],
+      probe: BotIdentityProbe | null,
+      read: Extract<BotWebhookRead, { outcome: 'READ' }> | null,
+    ): BotWebhookStatusDetail => {
+      const identified = probe !== null && probe.outcome === 'IDENTIFIED' ? probe : null;
+      return {
+        botInstanceId: view.id,
+        expectedUrl: url,
+        local,
+        remote,
+        problems: liveProblems({
+          // The three local causes were refused before this was reached.
+          webhookRouteEnabled: true,
+          tenantActive: true,
+          botStatus: view.status,
+          secret: local.secret,
+          identified: identified !== null,
+          isBot: identified?.isBot ?? null,
+          sameBot:
+            identified === null || view.telegramBotId === null
+              ? null
+              : identified.botId === view.telegramBotId,
+          webhook:
+            read === null
+              ? null
+              : { url: read.url, narrowed: allowedUpdatesNarrowed(read.allowedUpdates) },
+          expectedUrl: url,
+        }),
+      };
+    };
+
+    let token: string;
+    try {
+      token = await this.deps.bots.resolveToken(scope, view.id);
+    } catch (error) {
+      // The CODE only: a decryption error's message is not this report's to repeat.
+      return result(
+        {
+          outcome: 'TOKEN_UNREADABLE',
+          ...unread,
+          tokenErrorCode: isNexaError(error) ? error.code : 'unknown',
+        },
+        null,
+        null,
+      );
+    }
+
+    const probe = await this.deps.telegram.identify(token);
+    if (probe.outcome !== 'IDENTIFIED') {
+      const outcome: BotRemoteWebhookOutcome =
+        probe.outcome === 'REJECTED'
+          ? 'TOKEN_REJECTED'
+          : probe.outcome === 'NOT_TELEGRAM'
+            ? 'NOT_TELEGRAM'
+            : 'UNREACHABLE';
+      return result({ outcome, ...unread }, probe, null);
+    }
+    if (probe.isBot === false) return result({ outcome: 'NOT_TELEGRAM', ...unread }, probe, null);
+    if (view.telegramBotId !== null && probe.botId !== view.telegramBotId) {
+      return result({ outcome: 'DIFFERENT_BOT', ...unread }, probe, null);
+    }
+
+    const held = await this.deps.telegram.readWebhook(token);
+    if (held.outcome !== 'READ') {
+      return result(
+        { outcome: held.outcome === 'REJECTED' ? 'TOKEN_REJECTED' : 'UNREACHABLE', ...unread },
+        probe,
+        null,
+      );
+    }
+    return result(
+      {
+        outcome: 'READ',
+        url: shownWebhookUrl(held.url, view.webhookUrl, url),
+        matchesExpected: held.url === url,
+        updatesNarrowed: allowedUpdatesNarrowed(held.allowedUpdates),
+        pendingUpdateCount: held.pendingUpdateCount,
+        lastErrorAt: held.lastErrorAt,
+        lastErrorMessage:
+          held.lastErrorMessage === null ? null : this.telegramText(held.lastErrorMessage, token),
+        tokenErrorCode: null,
+      },
+      probe,
+      held,
+    );
+  }
+
+  /** The word and the sentence, from both halves. `ready` only when both agree. */
+  private verdict(detail: BotWebhookStatusDetail): {
+    readonly state: BotBootstrapStatus;
+    readonly reason: string | null;
+  } {
+    const { remote } = detail;
+    switch (remote.outcome) {
+      case 'TOKEN_REJECTED':
+        return {
+          state: 'unavailable',
+          reason:
+            'Telegram REJECTED the bot token this installation has stored (a token revoked or ' +
+            'reissued in BotFather answers 401), so no reply this bot sends can be delivered. ' +
+            '`botctl telegram register` cannot fix this: it never replaces a stored token. ' +
+            "Replace the token on the bot's page in the Web Admin — that validates the new " +
+            "token with Telegram, registers this installation's webhook keeping queued updates, " +
+            'reads it back, and only then stores the token. Then run `botctl telegram status` ' +
+            'again.',
+        };
+      case 'NOT_TELEGRAM':
+        return {
+          state: 'unavailable',
+          reason:
+            'The configured Telegram API base answered, and what came back does not describe a ' +
+            'bot. TELEGRAM_API_BASE_URL is pointing at something that is not Telegram; the bot ' +
+            'token is not the problem. Correct that variable, restart, and run this again.',
+        };
+      case 'DIFFERENT_BOT':
+        return {
+          state: 'unavailable',
+          reason:
+            'The stored token now belongs to a different bot than the one this installation is ' +
+            'bound to. Nothing is repointed automatically: every stored Telegram user and chat ' +
+            "belongs to the bound bot. Replace the token on the bot's page in the Web Admin with " +
+            "the bound bot's current token.",
+        };
+      case 'TOKEN_UNREADABLE':
+        return {
+          state: 'unavailable',
+          reason:
+            `The stored bot token could not be decrypted (${remote.tokenErrorCode ?? 'unknown'}), ` +
+            'so Telegram was not asked anything. `botctl secrets status` shows the keys this ' +
+            'installation holds.',
+        };
+      case 'UNREACHABLE':
+        return {
+          state: 'unavailable',
+          reason:
+            'Telegram could not be asked from this host (a timeout, a network failure, a 5xx or a ' +
+            '429 on an OUTBOUND call to the Telegram API), so whether Telegram still delivers ' +
+            'updates here is UNKNOWN — and unknown is not ready. Check egress from this host to ' +
+            'the Telegram API (and TELEGRAM_API_BASE_URL), then run this again.',
+        };
+      case 'READ':
+        break;
+    }
+    if (detail.local.registered && detail.problems.length === 0) {
+      return { state: 'ready', reason: null };
+    }
+    const pending =
+      remote.pendingUpdateCount === null
+        ? ''
+        : ` Telegram is holding ${remote.pendingUpdateCount} queued update(s); registering keeps them.`;
+    const what = !remote.matchesExpected
+      ? remote.url === null
+        ? 'Telegram holds NO webhook URL for this bot, so updates are queued at Telegram and ' +
+          'reach nothing'
+        : 'Telegram delivers this bot to a DIFFERENT URL than this installation registers'
+      : remote.updatesNarrowed
+        ? "Telegram's registration leaves out update types this bot handles"
+        : !detail.local.registered
+          ? 'Telegram delivers here, but this installation has no current record of registering ' +
+            'it with the webhook secret it holds now'
+          : 'The registration does not match this installation';
+    return {
+      state: 'incomplete',
+      reason:
+        `${what}.${pending} Run \`botctl telegram register\`: it reads Telegram first, ` +
+        're-registers only what differs (never dropping queued updates), and reads it back.',
+    };
+  }
+
+  /** Whether the marker's secret fingerprint is the one held now. */
+  private localSecretState(
+    view: BotBootstrapView,
+  ): Exclude<BotWebhookSecretState, 'NOT_CONFIGURED'> {
+    if (view.webhookSecretFingerprint === null) return 'UNKNOWN';
+    return view.webhookSecretFingerprint === webhookSecretFingerprint(this.requireWebhookSecret())
+      ? 'MATCHES'
+      : 'DIFFERS';
+  }
+
+  /**
+   * Telegram's own text, as far as it may be shown: without the token or the webhook
+   * secret (should either ever be echoed), redacted by content, bounded.
+   */
+  private telegramText(text: string, token: string): string {
+    let scrubbed = text.split(token).join('[redacted]');
+    const secret = this.deps.webhookSecret();
+    if (secret !== '') scrubbed = scrubbed.split(secret).join('[redacted]');
+    return redactSecretText(scrubbed).slice(0, BOT_WEBHOOK_ERROR_MESSAGE_MAX);
   }
 
   /**
@@ -396,12 +731,27 @@ export class BotBootstrapService {
      * make `drop_pending_updates` discard whatever Telegram had queued for a
      * RUNNING installation — updates belonging to real customers, thrown away by
      * an installer somebody ran to fix something unrelated.
+     *
+     * "Pointed here" is BOTH halves: the marker, AND Telegram's own answer read
+     * first. A registration that cannot be read is neither: nothing is changed and
+     * the run FAILS rather than printing "already configured and receiving
+     * updates" about a state nobody could see (incident A, 2026-10-07).
      */
-    if (
-      !ensured.createdNow &&
-      this.registrationIsCurrent(view, url) &&
-      (await this.telegramStillHolds(token, url))
-    ) {
+    const holds =
+      !ensured.createdNow && this.registrationIsCurrent(view, url)
+        ? await this.telegramHolds(token, url)
+        : 'DIFFERS';
+    if (holds === 'UNKNOWN') {
+      throw new NexaError({
+        kind: 'UPSTREAM_UNAVAILABLE',
+        code: PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_UNREACHABLE,
+        message:
+          "Telegram accepted this bot's token, but its webhook registration could not be read " +
+          'back, so whether it still delivers here is unknown. Nothing was changed. Run this ' +
+          'again; if it keeps failing, check egress from this host to the Telegram API.',
+      });
+    }
+    if (holds === 'HOLDS') {
       /*
        * The menu is reconciled even here, and THIS is `OQ-4H-02`.
        *
@@ -467,6 +817,7 @@ export class BotBootstrapService {
      * released whatever happens. A replacement in flight is refused with a remedy.
      */
     const claimId = await this.claimRegistration(scope, view.id);
+    const dropPendingUpdates = ensured.createdNow;
     try {
       const registered = await this.deps.telegram.registerWebhook({
         token,
@@ -484,11 +835,11 @@ export class BotBootstrapService {
          * confirmation and no record. `docs/conventions.md` calls that shape out
          * by name.
          */
-        dropPendingUpdates: ensured.createdNow,
+        dropPendingUpdates,
         /*
          * R4: Telegram's default update set, on a create and a reconcile alike. The Bot API
          * KEEPS the previous `allowed_updates` when the field is omitted, so without this a
-         * rerun that `telegramStillHolds` sent here BECAUSE the list was narrowed would
+         * rerun that `telegramHolds` sent here BECAUSE the list was narrowed would
          * re-register and leave it narrowed — on every rerun. An empty list is the default
          * set, so a fresh install registers exactly what it always did.
          */
@@ -504,7 +855,44 @@ export class BotBootstrapService {
          * keeps answering `incomplete`, and the rerun resumes from the stored
          * token without asking for it.
          */
-        throw this.webhookFailure(registered);
+        await this.recordRegistrationFailure(scope, view, {
+          stage: 'SET_WEBHOOK',
+          outcome: registered.outcome,
+          expectedUrl: url,
+          remoteUrl: null,
+          telegramReason: this.telegramText(registered.detail, token),
+          dropPendingUpdates,
+        });
+        throw this.webhookFailure(registered, token);
+      }
+
+      /*
+       * READ IT BACK before anything is recorded (incident A, 2026-10-07).
+       *
+       * Telegram's `true` says it took the request; only the registration it now reports
+       * says where updates will go. The marker below is what `status` and every later
+       * rerun trust, so it is written only for a registration Telegram was SEEN to hold:
+       * exactly this URL, with its full update set. Anything else — including a read that
+       * could not be made — fails the run with the marker unwritten, so `status` keeps
+       * answering `incomplete` and a rerun re-registers (keeping the queue) instead of
+       * reporting a bot that receives nothing as configured.
+       */
+      const after = await this.deps.telegram.readWebhook(token);
+      if (
+        after.outcome !== 'READ' ||
+        after.url !== url ||
+        allowedUpdatesNarrowed(after.allowedUpdates)
+      ) {
+        await this.recordRegistrationFailure(scope, view, {
+          stage: 'VERIFY_WEBHOOK',
+          outcome: after.outcome,
+          expectedUrl: url,
+          remoteUrl:
+            after.outcome === 'READ' ? shownWebhookUrl(after.url, view.webhookUrl, url) : null,
+          telegramReason: null,
+          dropPendingUpdates,
+        });
+        throw this.verificationFailure(after, url, view.webhookUrl);
       }
 
       const now = this.deps.clock.now();
@@ -527,7 +915,15 @@ export class BotBootstrapService {
             entityType: 'BotInstance',
             entityId: view.id,
             before: { webhookUrl: view.webhookUrl },
-            after: { webhookUrl: url },
+            // What was proved, never a credential: the URL Telegram was SEEN to hold, how
+            // many updates it was holding, and whether the queue was kept (a reconcile
+            // always keeps it; only a first registration discards what predates it).
+            after: {
+              webhookUrl: url,
+              verifiedBy: ['setWebhook', 'getWebhookInfo'],
+              pendingUpdateCount: after.pendingUpdateCount,
+              dropPendingUpdates,
+            },
             reason: 'Installation bootstrap: Telegram webhook registration.',
             result: 'SUCCESS',
           },
@@ -693,17 +1089,21 @@ export class BotBootstrapService {
    * or a narrowed update set, sends the rerun on to re-register — with the queue kept,
    * because this is a running installation.
    *
-   * An answer that could not be OBTAINED changes nothing: `getMe` has just succeeded, and
+   * An answer that could not be OBTAINED changes nothing — `getMe` has just succeeded, and
    * turning a flaky read into a re-registration on every rerun is what the early return
-   * exists to prevent. A REJECTED read is an answer, not a flake, and re-registers.
+   * exists to prevent — but it is no longer read as "holds" either: that is the claim
+   * `ALREADY_COMPLETE` prints, and an unread registration cannot support it (incident A).
+   * `UNKNOWN` makes the caller fail with nothing changed. A REJECTED read is an answer,
+   * not a flake, and re-registers (which then fails with the clear error).
    */
-  private async telegramStillHolds(token: string, url: string): Promise<boolean> {
+  private async telegramHolds(
+    token: string,
+    url: string,
+  ): Promise<'HOLDS' | 'DIFFERS' | 'UNKNOWN'> {
     const held = await this.deps.telegram.readWebhook(token);
-    // Only an UNREACHABLE read leaves the marker standing. A REJECTED one is Telegram
-    // refusing this token; the rerun goes on to register, which fails with the clear error.
-    if (held.outcome === 'UNREACHABLE') return true;
-    if (held.outcome === 'REJECTED') return false;
-    return held.url === url && !allowedUpdatesNarrowed(held.allowedUpdates);
+    if (held.outcome === 'UNREACHABLE') return 'UNKNOWN';
+    if (held.outcome === 'REJECTED') return 'DIFFERS';
+    return held.url === url && !allowedUpdatesNarrowed(held.allowedUpdates) ? 'HOLDS' : 'DIFFERS';
   }
 
   /** Takes the bot's token-replacement claim for this registration, or refuses. */
@@ -861,21 +1261,29 @@ export class BotBootstrapService {
       if (existing === null) {
         throw errors.configuration(
           PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED,
-          `Telegram rejected the bot token: ${probe.detail}. Nothing was stored: the token is ` +
+          `Telegram rejected the bot token: ${this.telegramText(probe.detail, token)}. Nothing was stored: the token is ` +
             'validated with Telegram before anything is written, so there is no credential here ' +
             'to repair and nothing to undo. Check the token in BotFather and run this again with ' +
             'a corrected one.',
         );
       }
+      /*
+       * The STORED token was refused — the incident-A state (`telegram.rejected.401`).
+       *
+       * This used to say no supported recovery existed (`OQ-TG-01`). Since R4 one does: the
+       * Web Admin's token replacement validates a new token for the SAME bot, registers and
+       * reads back the webhook keeping queued updates, and only then stores it. Telling an
+       * operator standing at a revoked token that nothing can be done sent them to raw Bot
+       * API calls instead. This command still never replaces a stored token itself.
+       */
       throw errors.configuration(
         PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED,
-        `Telegram rejected the bot token: ${probe.detail}. ` +
-          'The installer does not replace a stored token by itself, and this release ships no ' +
-          'command that does: changing the bot a running installation serves is deliberate work ' +
-          'that has not been built yet (docs/open-questions.md, OQ-TG-01). There is no supported ' +
-          'recovery for a revoked token in this release — a revoked one cannot be restored in ' +
-          'BotFather, and a newly issued one is not used, because the registration always reads ' +
-          'the credential already stored.',
+        `Telegram rejected the bot token this installation has stored: ${this.telegramText(probe.detail, token)}. ` +
+          'Nothing was changed. This command never replaces a stored token, so rerunning it ' +
+          "cannot help. Issue the bot's current token in BotFather and replace it on the bot's " +
+          'page in the Web Admin: that checks it is the same bot, registers and verifies the ' +
+          'webhook keeping queued updates, and only then stores it. `botctl telegram status` ' +
+          'then shows both sides.',
       );
     }
     /*
@@ -893,7 +1301,7 @@ export class BotBootstrapService {
     if (probe.outcome === 'NOT_TELEGRAM') {
       throw errors.configuration(
         PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_API_BASE_INVALID,
-        `The configured Telegram API base answered, and what came back does not describe a bot: ${probe.detail}. ` +
+        `The configured Telegram API base answered, and what came back does not describe a bot: ${this.telegramText(probe.detail, token)}. ` +
           'TELEGRAM_API_BASE_URL is pointing at something that is not Telegram. The bot token is ' +
           'not the problem and does not need reissuing in BotFather; correct that variable and run ' +
           'this again.',
@@ -918,7 +1326,7 @@ export class BotBootstrapService {
         kind: 'UPSTREAM_UNAVAILABLE',
         code: PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_UNREACHABLE,
         message:
-          `Telegram could not be reached: ${probe.detail}. This is OUTBOUND: a call from this ` +
+          `Telegram could not be reached: ${this.telegramText(probe.detail, token)}. This is OUTBOUND: a call from this ` +
           'host to the Telegram API, made before any webhook is registered — so DNS for your own ' +
           'domain and your certificate are not involved and nothing was asked of them. Rerun the ' +
           'installer; if it keeps failing, check egress from this host to the Telegram API.',
@@ -1054,6 +1462,74 @@ export class BotBootstrapService {
   }
 
   /**
+   * The audit row a registration that did not complete leaves behind: WHICH stage, what
+   * Telegram answered (its outcome word and its redacted reason), the URL expected and the
+   * one seen, and whether the queue would have been kept. Never the token or the secret.
+   *
+   * So the next failure is attributable after the fact: before this, a `botctl telegram
+   * register` that Telegram refused or that read back wrong left nothing but the terminal
+   * it printed to. Best effort and outside any transaction, like
+   * `BotManagementService.recordIncomplete`: the caller is about to throw the failure the
+   * operator must see, and a failed audit write must not replace it with another.
+   */
+  private async recordRegistrationFailure(
+    scope: TenantContext,
+    view: BotBootstrapView,
+    failure: {
+      readonly stage: 'SET_WEBHOOK' | 'VERIFY_WEBHOOK';
+      readonly outcome: string;
+      readonly expectedUrl: string;
+      readonly remoteUrl: string | null;
+      readonly telegramReason: string | null;
+      readonly dropPendingUpdates: boolean;
+    },
+  ): Promise<void> {
+    try {
+      await this.deps.audit.record(scope, this.systemActor(), {
+        action: 'bot_instance.webhook_registered',
+        entityType: 'BotInstance',
+        entityId: view.id,
+        before: { webhookUrl: view.webhookUrl },
+        after: { ...failure },
+        reason: 'Installation bootstrap: Telegram webhook registration did not complete.',
+        result: 'FAILED',
+      });
+    } catch (error) {
+      // Deliberately not rethrown — see the docblock.
+      void error;
+    }
+  }
+
+  /** A registration Telegram accepted and then did not show holding. */
+  private verificationFailure(
+    after: BotWebhookRead,
+    url: string,
+    recorded: string | null,
+  ): NexaError {
+    const intact =
+      'The bot instance and its encrypted token are stored and correct; nothing was undone, ' +
+      'and nothing was recorded as registered.';
+    const seen =
+      after.outcome === 'READ'
+        ? after.url === url
+          ? 'it holds this URL but leaves out update types this bot handles'
+          : after.url === null
+            ? 'it holds no webhook URL at all'
+            : `it holds ${shownWebhookUrl(after.url, recorded, url) ?? 'another URL'}`
+        : after.outcome === 'REJECTED'
+          ? 'it refused the token when asked'
+          : 'it could not be asked';
+    return new NexaError({
+      kind: 'UPSTREAM_UNAVAILABLE',
+      code: PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED,
+      message:
+        `Telegram accepted the webhook ${url}, but reading it back showed that ${seen}. ` +
+        `${intact} Run \`botctl telegram status\` to see both sides, then run this again; ` +
+        'it keeps queued updates.',
+    });
+  }
+
+  /**
    * Why the registration did not happen, and what that means for the operator.
    *
    * TWO codes and two sentences, and the split is `OQ-TG-04` item 8. This built
@@ -1069,7 +1545,12 @@ export class BotBootstrapService {
    * true of both and is the first thing somebody standing at a failed install
    * wants to know.
    */
-  private webhookFailure(outcome: Exclude<WebhookRegistration, { outcome: 'REGISTERED' }>): Error {
+  private webhookFailure(
+    registration: Exclude<WebhookRegistration, { outcome: 'REGISTERED' }>,
+    token: string,
+  ): Error {
+    // Telegram's text, without the token should it ever be echoed, redacted and bounded.
+    const outcome = { ...registration, detail: this.telegramText(registration.detail, token) };
     const intact =
       'The bot instance and its encrypted token are stored and correct; nothing was undone.';
     if (outcome.outcome === 'REFUSED') {
