@@ -123,6 +123,11 @@ export const LEGACY_CUTOVER_GATE_STEPS = [
   'STOP_SALES_ACTIVE',
   /** PR1's checker accepted the freeze proof and the restored copy's, and found them EQUAL. */
   'FREEZE_PROOF_VERIFIED',
+  /**
+   * The final dump FILE, streamed through SHA-256, is the one the owner approved. The approved
+   * hash alone proves nothing: the gate hashes the bytes it is pointed at.
+   */
+  'FINAL_DUMP_VERIFIED',
   /** A fresh read of the source: v1, inventory, products, invoice-archive fingerprints as expected. */
   'FRESH_FINGERPRINTS',
   /** The fresh inventory has no UNCLASSIFIED table (Area E). */
@@ -137,6 +142,11 @@ export const LEGACY_CUTOVER_GATE_STEPS = [
   'RECONCILED',
   /** The final report, schema version 2, holds. */
   'REPORT_V2_HOLDS',
+  /**
+   * stop_sales is sampled AGAIN, last: it is mutable state, and an operator who resumed sales
+   * while the gate ran must not get CUTOVER_READY on the strength of the first sample.
+   */
+  'STOP_SALES_STILL_ACTIVE',
 ] as const;
 export type LegacyCutoverGateStep = (typeof LEGACY_CUTOVER_GATE_STEPS)[number];
 
