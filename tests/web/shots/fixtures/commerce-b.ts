@@ -22,7 +22,9 @@ import {
   audienceOptionsResponseSchema,
   broadcastListResponseSchema,
   broadcastRecipientListResponseSchema,
+  broadcastBotDeliveryResponseSchema,
   broadcastFailureReasonsResponseSchema,
+  broadcastHistoryResponseSchema,
   broadcastResponseSchema,
   bulkItemListResponseSchema,
   bulkOperationListResponseSchema,
@@ -535,6 +537,7 @@ const RECIPIENTS: readonly Json[] = RECIPIENT_STATES.map((state, index) => ({
   resolvedAt: state === 'PENDING' ? null : ago(70 - index),
   pinState: state === 'SENT' ? 'PINNED' : null,
   pinErrorCode: null,
+  nextAttemptAt: null,
 }));
 
 function bulk(index: number, over: Json = {}): Json {
@@ -1369,6 +1372,70 @@ export const COMMERCE_B: readonly ShotFixture[] = [
   }),
   fixture('/broadcasts/:id/failures', broadcastFailureReasonsResponseSchema, {
     reasons: [{ state: 'UNREACHABLE', errorCode: 'telegram.rejected.403', count: 3 }],
+  }),
+  fixture('/broadcasts/:id/bots', broadcastBotDeliveryResponseSchema, {
+    bots: [
+      {
+        botInstanceId: '0192c0de-0000-7000-8000-000000000a01',
+        botUsername: 'nexa_shop_bot',
+        botStatus: 'ACTIVE',
+        counts: {
+          ...EMPTY_COUNTS,
+          total: 1800,
+          sent: 1640,
+          pending: 140,
+          failed: 8,
+          unreachable: 12,
+        },
+        waitingRetry: 20,
+        heldUntil: null,
+      },
+      {
+        botInstanceId: '0192c0de-0000-7000-8000-000000000a02',
+        botUsername: 'nexa_support_bot',
+        botStatus: 'ACTIVE',
+        counts: { ...EMPTY_COUNTS, total: 340, sent: 300, pending: 40 },
+        waitingRetry: 40,
+        heldUntil: ago(-1),
+      },
+    ],
+  }),
+  fixture('/broadcasts/:id/history', broadcastHistoryResponseSchema, {
+    entries: [
+      {
+        id: '0192c0de-0000-7000-8000-000000000b03',
+        action: 'broadcast.retry_failed',
+        result: 'SUCCESS',
+        actorLabel: 'owner',
+        occurredAt: ago(5),
+        testOutcome: null,
+        requeued: 14,
+        fromState: 'SENDING',
+        toState: null,
+      },
+      {
+        id: '0192c0de-0000-7000-8000-000000000b02',
+        action: 'broadcast.launch',
+        result: 'SUCCESS',
+        actorLabel: 'owner',
+        occurredAt: ago(60),
+        testOutcome: null,
+        requeued: null,
+        fromState: 'DRAFT',
+        toState: 'SENDING',
+      },
+      {
+        id: '0192c0de-0000-7000-8000-000000000b01',
+        action: 'broadcast.test',
+        result: 'SUCCESS',
+        actorLabel: 'owner',
+        occurredAt: ago(70),
+        testOutcome: 'SENT',
+        requeued: null,
+        fromState: null,
+        toState: null,
+      },
+    ],
   }),
   fixture('/bulk-operations', bulkOperationListResponseSchema, {
     operations: BULK_OPERATIONS,
