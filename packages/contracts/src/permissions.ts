@@ -542,6 +542,28 @@ export const PERMISSIONS = [
     'Approve, reject or reopen a legacy product review row (the mapping the importer is given)',
     'HIGH',
   ),
+  /*
+   * Mirza migration PR3 — the legacy invoice archive (`docs/legacy-migration/importer.md`
+   * §Invoice archive). An archive row is one legacy `invoice` row kept as read-only history:
+   * never an order, a payment, a ledger entry or revenue. Two keys, because the blast radius
+   * differs:
+   *
+   * - VIEW (MEDIUM, never auto-granted to `observer` with the LOW keys) reads the archive
+   *   with its personal cells REDACTED: the invoice id, status, panel and product codes,
+   *   the historical price, the classification and the provenance.
+   * - PII (HIGH) additionally reveals the legacy owner's Telegram id, the legacy account
+   *   username, the referrer id and the free-text note, and is what a search BY those
+   *   values needs. Each reveal and each such search is audited (names, never values).
+   *
+   * Owner-only by default. Neither is a SYSTEM_JOB permission; the CLI ingest stays on
+   * maintenance.run.
+   */
+  p('legacy.invoices.view', 'View the legacy invoice archive (personal data redacted)', 'MEDIUM'),
+  p(
+    'legacy.invoices.pii.view',
+    "View and search the legacy invoice archive's personal data (Telegram ids, usernames)",
+    'HIGH',
+  ),
 
   // Platform
   p('tenant.cross_read', 'Read data across tenants', 'CRITICAL'),
@@ -963,6 +985,8 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
    * decision binds to — which `legacy.products.view` reads.
    */
   'legacy.products.decide': 'legacy.products.view',
+  /* Mirza PR3. Personal data is revealed ON the archive rows `legacy.invoices.view` reads. */
+  'legacy.invoices.pii.view': 'legacy.invoices.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass
