@@ -189,7 +189,7 @@ for mid, edits, (project, test), filt in M + C:
         if not ANCHORS_ONLY:
             open(f, 'w').write(cur.replace(a, b))
     if ok and not ANCHORS_ONLY:
-        contract = any(f == CONTRACT for f, _, _ in edits)
+        contract = any(f.startswith('packages/contracts/') for f, _, _ in edits)
         try:
             if contract:
                 build_contracts()
