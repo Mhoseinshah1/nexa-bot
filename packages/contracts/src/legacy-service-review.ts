@@ -167,6 +167,11 @@ export const LEGACY_SERVICE_APPROVAL_REFUSALS = [
   'PANEL_NOT_MAPPED',
   /** The invoice's code maps to another panel: an explicit mapping is never overridden. */
   'PANEL_CONFLICTS_WITH_MAP',
+  /**
+   * The adoption answered "adopted" but the map does not hold the invoice as a service: a
+   * broken invariant, surfaced (attention), never recorded as adopted — and never left claimed.
+   */
+  'ADOPTION_UNCONFIRMED',
   ...LEGACY_SERVICE_OUTCOMES.filter(
     (o) => o !== 'ADOPTED' && o !== 'ALREADY_ADOPTED' && o !== 'ADOPTION_ELIGIBLE',
   ),
