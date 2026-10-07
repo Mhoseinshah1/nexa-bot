@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   LEGACY_WALLET_DEBT_STATES,
@@ -180,7 +180,7 @@ export function LegacyDebtsPage({
               />
             </dd>
             {LEGACY_WALLET_DEBT_STATES.map((state) => (
-              <span key={state} style={{ display: 'contents' }}>
+              <Fragment key={state}>
                 <dt>{t(LEGACY_DEBT_STATE_LABELS[state])}</dt>
                 <dd>
                   <Num value={summary.data.byState[state].count} /> ·{' '}
@@ -191,7 +191,7 @@ export function LegacyDebtsPage({
                     }}
                   />
                 </dd>
-              </span>
+              </Fragment>
             ))}
           </dl>
         </Card>
