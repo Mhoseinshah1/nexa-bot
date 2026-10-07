@@ -498,7 +498,12 @@ reads the archive recomputes v1 first. Without `--expected-invoice-archive-finge
 command prints that fingerprint for the owner and writes NOTHING (exit 3). With it, PR1's
 verified delivery refuses another fingerprint before any row is delivered (exit 65, nothing
 written — not even a run row). A SYNTHETIC source is refused against a production-like
-target before any write.
+target before any write — and so is a SYNTHETIC run left open in the target (a restored or
+promoted staging database): it would otherwise be resumed from what it stored, without the
+source. It is neither promoted nor discarded there (`SYNTHETIC_RUN_ON_PRODUCTION_TARGET`,
+exit 65, nothing written, the source not opened); a person investigates how it got there.
+The report lists the `invoice` columns the read actually delivered (its table evidence),
+never the allowlist; a run finished without reading claims none.
 
 **All-or-nothing without one transaction, in bounded memory (the STAGING design).** The
 MySQL source refuses to run inside a PostgreSQL transaction, and a read may still fail after
@@ -592,8 +597,13 @@ asks the planner at 200,000 synthetic rows); a detail with the raw cells, every 
 the importer outcome and the provenance; a summary of counts by class and the recent runs
 (no id or username). `legacy.invoices.view` (MEDIUM; never an observer's) redacts
 `id_user`, `username`, `refral` and `note`; `legacy.invoices.pii.view` (HIGH) shows them and
-is required to SEARCH by them — each reveal and each such search is audited by filter NAME,
-never by value, and a refused one is audited `DENIED`. Owner-only by default (0225).
+is required to SEARCH by them. Every reveal is audited (`legacy.invoice_archive.pii_view`):
+an unredacted detail, and every unredacted LIST page (its row ids, count and filter NAMES —
+never a value); a search by personal data is also audited (`pii_search`, filter names), and a
+refused one `DENIED`. Owner-only by default (0225). The invoice id, owner id, username and
+status filters compare exactly as typed (a legacy id `padded` keeps its spaces); the panel
+and product codes, stored trimmed, are trimmed. The keyset cursor is sized for the longest
+archivable key (1000 code points).
 
 ### Actors
 
