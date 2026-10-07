@@ -488,7 +488,7 @@ describe('Assist Mode (TB5)', () => {
       idempotencyKey: key('article'),
       content: {
         title: 'اینترنت وصل نمی‌شود',
-        body: 'برنامه را ببندید و دوباره باز کنید.',
+        body: 'برنامه را ببندید، اینترنت گوشی را خاموش و روشن کنید.',
         category: 'CONNECTION',
         tags: ['اتصال'],
       },
