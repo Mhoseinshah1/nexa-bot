@@ -514,6 +514,12 @@ export const customerWorkspaceSchema = z.object({
   tickets: z.object({ awaitingSupport: workspaceCount, open: workspaceCount }).nullable(),
   /** Business conversations with this customer in `HANDOFF_REQUIRED`. */
   businessHandoffs: workspaceCount.nullable(),
+  /**
+   * The newest of those conversations' id, so a single handoff links to the conversation
+   * itself rather than to the tenant's inbox (review N2). Null when there is none, or when
+   * the section is withheld (`businessHandoffs` is then null too).
+   */
+  businessHandoffConversationId: z.string().nullable(),
   payments: z
     .object({
       /** `state = 'UNKNOWN'`: no outcome; only a reconciliation decides. */
