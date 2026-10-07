@@ -3299,6 +3299,50 @@ values.
   `ARCHIVE`-safe in a reviewed commit, and every column it leaves out is excluded on
   purpose.
 
+## OQ-LPR — the legacy product review (Mirza PR2, `docs/legacy-product-review-design.md`)
+
+The review is built and fails closed on every item below: a cell is kept verbatim, a field
+the grammar cannot read is null with a closed parse note, and nothing is mapped, priced or
+sold without an operator's decision. Each item is settled from the real staging copy
+(WP G, NOT RUN) or by the owner — never by guessing. Counts from the historical staging
+snapshot (64 product rows) are dated baselines, never expected values.
+
+- **OQ-LPR-01 — UNKNOWN: the real `product` columns** (= OQ-MZ-INV-09). The `products`
+  read set reads `id`, `code_product` and, when present, the public `botmirzapanel`
+  columns plus the public `mirza_pro` fork's (`agent`, `note`, `data_limit_reset`,
+  `one_buy_status`, `category`, `hide_panel`). A real column outside that list is not read;
+  adding one is `legacy-read-set:products:v2` in a reviewed commit with the inventory's
+  evidence. `inbounds`/`proxies` stay unread until OQ-MZ-INV-02 says they hold no secret.
+- **OQ-LPR-02 — UNKNOWN: units of `Volume_constraint` and `Service_time`, and what `0`
+  means.** The review proposes GB (1 GiB) and whole days — the grammar the hidden-shape key
+  already applies to invoice `Volume`/`Service_time` — and a `0` is `ZERO_MEANING_UNKNOWN`,
+  never "unlimited". The operator types the draft's figures; nothing is inferred.
+- **OQ-LPR-03 — PARTLY DECIDED: `price_product`.** The owner decided the unit is Toman
+  (IRT, 2026-10-07). Still unknown: whether the real cells are ever non-integer, grouped
+  (`150,000`) or in Persian digits. Those are `NOT_A_NUMBER` and stay raw; the figure is
+  metadata in every case.
+- **OQ-LPR-04 — UNKNOWN: `Location`** — a panel name, a `code_panel`, a list, or free text?
+  Shown verbatim; never resolved to a panel.
+- **OQ-LPR-05 — DECISION: duplicate `code_product` rows.** Interim (fail closed): one review
+  row holding every legacy row, `CODE_DUPLICATED`, nothing parsed, approval refused (only
+  reject). The owner decides whether a duplicated code is ever mappable, and how.
+- **OQ-LPR-06 — DECISION: renew-only or sellable.** An approved-as-new draft is INACTIVE,
+  HIDDEN, unpriced, uncategorised and panel-less. Whether it becomes renew-only (ACTIVE +
+  HIDDEN with a current price) or public is the owner's later product edit; the review
+  never decides.
+- **OQ-LPR-07 — DECISION: reseller (`agent`) products.** They are review rows like any
+  other, `agent` kept verbatim (`f`, `n`, `n2` in the public fork). Whether an agent product
+  may be mapped at all (resellers were out of Phase 1 of the migration) is the owner's call;
+  the review does not filter them.
+- **OQ-LPR-08 — UNKNOWN: what "disabled" and "test" mean for a legacy product.** Neither
+  public source has a status or test column. The fork's `hide_panel` (per-panel hiding),
+  `one_buy_status`, `note` and `data_limit_reset` are kept verbatim and shown; none of them
+  changes a decision. If the real archive has a status column, it joins the read set in a
+  reviewed commit.
+- **OQ-LPR-09 — UNKNOWN: whether the real `product` table is utf8mb4.** A latin1 table
+  holding UTF-8 bytes would reach the facts and their checksum as mojibake (OQ-MZ-INV-03);
+  the inventory reports `NOT_UTF8MB4`.
+
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 
 Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.
