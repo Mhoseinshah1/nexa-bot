@@ -1562,6 +1562,27 @@
       "when": 1791372732561,
       "tag": "0222_legacy_product_review_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 223,
+      "version": "7",
+      "when": 1791377995528,
+      "tag": "0223_legacy_invoice_archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 224,
+      "version": "7",
+      "when": 1791378016433,
+      "tag": "0224_legacy_invoice_archive_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 225,
+      "version": "7",
+      "when": 1791378017433,
+      "tag": "0225_legacy_invoice_archive_grants",
+      "breakpoints": true
     }
   ]
 }
