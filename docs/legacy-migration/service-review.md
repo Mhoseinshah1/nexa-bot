@@ -227,5 +227,16 @@ exactly; ownership; both KEPT layers; every gate branch; adopted precedence and 
 confirmation; the request's panel and outcome rules; review-state and version rules; the
 service's version, scope, view permission, invoice lock, map refusal, tenancy and stored
 replay; the claim; the closure, its reconcile check and the report verdict; both 0230
-triggers). Run on 2026-10-07 against a private database: 33 of 33 killed (the first run's
+triggers). Run on 2026-10-07 against a private database: 33 of 33 killed, and the Codex #234 fixes' I-20..I-22 3 of 3 (the first run's
 one survivor, the report verdict, became the pure `reportHolds` and its unit test).
+
+### Codex #234: no claim outlives its run
+
+Every exit of a claimed approval settles it: adopted → ADOPTED; any other answer → OPEN with
+its code (`ADOPTION_UNCONFIRMED` when P6 said "adopted" and the map does not confirm it —
+attention, `COMPLETED_WITH_FAILURES`); an invoice no longer decided → OPEN / `NOT_LIVE`; a run
+without the adoption step, or a gate that leaves the approval, releases an existing claim to
+ADOPT_APPROVED (`approval_released`). A crash between claim and settle leaves ADOPTING until the
+next `resume` or `import`, which executes or settles it. A settle that loses to a person's
+reopen is counted `approvals.withdrawnDuringRun`, never as a refusal. Mutations I-20..I-22: 3 of 3
+killed.
