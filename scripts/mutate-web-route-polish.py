@@ -31,6 +31,9 @@ ORD=W+'pages/orders.tsx'
 REF=W+'pages/referrals.tsx'
 T_LP='tests/web/list-polish.test.tsx'
 T_RB='tests/web/referral-banner.test.tsx'
+TOK=W+'styles/tokens.css'
+KCSS=W+'styles/kit.css'
+T_CON='tests/unit/web-token-contrast.test.ts'
 
 M=[
  # --- B3: one idempotency key per logical attempt -------------------------------------------
@@ -72,6 +75,10 @@ M=[
  ('WRP-27',[(LS,"[...keys, 'cursor'].map","[...keys].map")],T_LP,'cursor together'),
  ('WRP-28',[(ORD,"          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).\n          autoApply\n","")],T_LP,'applies itself'),
  ('WRP-29',[(REF,"onClick={() => setConfirmingClear(true)}","onClick={() => clear.mutate()}")],T_RB,'after asking'),
+ # --- B7: token contrast --------------------------------------------------------------------
+ ('WRP-30',[(TOK,"  --fg-3: #8c94a0;","  --fg-3: #6f7784;")],T_CON,'fg-3'),
+ ('WRP-31',[(TOK,"  --fg-3: #646d7b;","  --fg-3: #8b94a3;")],T_CON,'fg-3'),
+ ('WRP-32',[(TOK,"  --on-danger: #0b1220;","  --on-danger: #ffffff;")],T_CON,'solid fills'),
 ]
 
 def run_one(mid,edits,test,filt):
@@ -83,7 +90,8 @@ def run_one(mid,edits,test,filt):
       if cur.count(a)!=1:
         print(mid,'ANCHOR MISSING in',f,cur.count(a),flush=True); return None
       open(f,'w',encoding='utf-8').write(cur.replace(a,b))
-    r=subprocess.run(['pnpm','exec','vitest','run','--project','web',test,'-t',filt],capture_output=True,text=True)
+    project='unit' if test.startswith('tests/unit/') else 'web'
+    r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
     out=r.stdout+r.stderr
     failed=[l.strip() for l in out.splitlines() if '×' in l]
     summ=[l.strip() for l in out.splitlines() if 'Tests ' in l]
