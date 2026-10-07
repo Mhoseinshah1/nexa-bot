@@ -286,7 +286,14 @@ export const navCountersResponseSchema = z.object({
     unreconciledServices: counter,
     refundRequestsAwaiting: counter,
     paymentsUnknown: counter,
-    businessHandoffs: counter,
+    /*
+     * OPTIONAL on the wire, read as `null` when absent (roadmap B6). An API released before
+     * this counter sends six keys; during a rolling update a new bundle's poll can reach
+     * such a replica, and a required key would make that answer unparseable — which
+     * `pollUnlessFinal` treats as final, freezing every sidebar badge until a reload.
+     * Absent means "not counted", which is already what `null` means.
+     */
+    businessHandoffs: counter.optional().transform((value) => value ?? null),
   }),
 });
 export type NavCountersResponse = z.infer<typeof navCountersResponseSchema>;

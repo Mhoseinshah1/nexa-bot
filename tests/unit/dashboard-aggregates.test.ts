@@ -13,6 +13,7 @@ import {
   dashboardSaleKindOf,
   isPermissionKey,
   isRegisteredMetric,
+  navCountersResponseSchema,
   orderPurposeIsSale,
   type OrderPurpose,
 } from '@nexa/contracts';
@@ -183,5 +184,47 @@ describe('the unreconciled-services figure', () => {
     });
     const counters = await service.navCounters(scope, actor);
     expect(counters.counters.unreconciledServices).toBe(COUNTER_CAP);
+  });
+});
+
+/*
+ * Roadmap B6, review B1: a new bundle reading an API released before `businessHandoffs`.
+ * During a rolling update a poll can reach an old replica; a required key would make its
+ * six-key answer unparseable, which polling treats as final and never asks again.
+ */
+describe('the sidebar counters across a rolling update', () => {
+  it('parses an old API’s six-key answer, reading the missing counter as not counted', () => {
+    const old = navCountersResponseSchema.parse({
+      generatedAt: '2026-10-07T10:00:00.000Z',
+      counters: {
+        openConditions: 1,
+        ticketsAwaitingSupport: 2,
+        unhealthyPanels: null,
+        unreconciledServices: 0,
+        refundRequestsAwaiting: null,
+        paymentsUnknown: 3,
+      },
+    });
+    expect(old.counters.businessHandoffs).toBeNull();
+    expect(old.counters.paymentsUnknown).toBe(3);
+  });
+
+  it('still reads the counter when the API sends it, and still refuses a malformed one', () => {
+    const base = {
+      openConditions: null,
+      ticketsAwaitingSupport: null,
+      unhealthyPanels: null,
+      unreconciledServices: null,
+      refundRequestsAwaiting: null,
+      paymentsUnknown: null,
+    };
+    const parse = (businessHandoffs: unknown) =>
+      navCountersResponseSchema.safeParse({
+        generatedAt: '2026-10-07T10:00:00.000Z',
+        counters: { ...base, businessHandoffs },
+      });
+    const sent = parse(4);
+    expect(sent.success && sent.data.counters.businessHandoffs).toBe(4);
+    expect(parse(-1).success).toBe(false);
   });
 });
