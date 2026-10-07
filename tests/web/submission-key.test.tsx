@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { ApiError } from '../../apps/web/src/api/client';
-import { useSubmissionKey } from '../../apps/web/src/submission-key';
+import { RUN_KEY_HELD_MS, useSubmissionKey } from '../../apps/web/src/submission-key';
 
 /**
  * The idempotency key a write carries, and when it is allowed to change.
@@ -64,5 +64,57 @@ describe('the submission key', () => {
     const first = result.current.current(payload);
     act(() => result.current.settleOn(new TypeError('Failed to fetch')));
     expect(result.current.current(payload)).toBe(first);
+  });
+
+  it('asks the caller to refresh on a 409, and on nothing else', () => {
+    const { result } = renderHook(() => useSubmissionKey());
+    const onConflict = vi.fn();
+    for (const error of [
+      new ApiError(403, 'access.denied', 'no'),
+      new ApiError(422, 'validation.failed', 'no'),
+      new ApiError(503, 'internal.unhandled', 'boom'),
+      new TypeError('Failed to fetch'),
+    ]) {
+      act(() => result.current.settleOn(error, { onConflict }));
+    }
+    expect(onConflict).not.toHaveBeenCalled();
+    const first = result.current.current(payload);
+    act(() =>
+      result.current.settleOn(new ApiError(409, 'control.version_conflict', 'stale'), {
+        onConflict,
+      }),
+    );
+    expect(onConflict).toHaveBeenCalledOnce();
+    // A conflict is an answer: the next press is a new question.
+    expect(result.current.current(payload)).not.toBe(first);
+  });
+
+  it('lets a held key expire after heldForMs, so a much later press is a new command', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T10:00:00Z'));
+      const { result } = renderHook(() => useSubmissionKey({ heldForMs: RUN_KEY_HELD_MS }));
+      const first = result.current.current('run-now');
+      act(() => result.current.settleOn(new ApiError(502, 'gateway', 'lost')));
+      vi.setSystemTime(new Date(Date.now() + RUN_KEY_HELD_MS - 1000));
+      expect(result.current.current('run-now')).toBe(first);
+      vi.setSystemTime(new Date(Date.now() + RUN_KEY_HELD_MS + 1000));
+      expect(result.current.current('run-now')).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('holds a key without heldForMs however long it waits', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T10:00:00Z'));
+      const { result } = renderHook(() => useSubmissionKey());
+      const first = result.current.current(payload);
+      vi.setSystemTime(new Date(Date.now() + 24 * 3_600_000));
+      expect(result.current.current(payload)).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

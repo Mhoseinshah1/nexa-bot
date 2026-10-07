@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { tabbable } from './focusable';
 
 /**
  * How many confirmation dialogs are open right now: zero or one.
@@ -14,10 +15,6 @@ let openDialogs = 0;
 export function confirmDialogOpen(): boolean {
   return openDialogs > 0;
 }
-
-const FOCUSABLE =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), ' +
-  'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * A plain yes/cancel confirmation, drawn over the page.
@@ -85,7 +82,7 @@ export function ConfirmDialog({
       if (event.key !== 'Tab') return;
       const dialog = dialogRef.current;
       if (dialog === null) return;
-      const controls = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+      const controls = tabbable(dialog);
       const first = controls[0];
       const last = controls[controls.length - 1];
       if (first === undefined || last === undefined) return;

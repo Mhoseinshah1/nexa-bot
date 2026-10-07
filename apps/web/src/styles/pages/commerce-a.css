@@ -581,3 +581,12 @@
 .filter-row .filter-select select {
   max-inline-size: 220px;
 }
+
+/* Touch: a link in a detail page's row list is a 44px target (tokens.css). */
+@media (pointer: coarse) and (hover: none) {
+  .ca-rows a:not(.btn) {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--ctl-h);
+  }
+}

@@ -23,7 +23,6 @@ import {
   fetchLearningCandidates,
   fetchSupportKnowledge,
   fetchSupportKnowledgeRevisions,
-  newIdempotencyKey,
   proposeAsKnowledge,
   rejectLearningCandidate,
   setSupportKnowledgeEnabled,
@@ -911,15 +910,23 @@ export function ProposeKnowledgeButton({
   | { messageId: string; outboundId?: undefined }
 )) {
   const notify = useToast();
+  /*
+   * One key per logical attempt, passed as the variable so the automatic retry reuses it,
+   * and held so a re-press after a lost answer is the same proposal, not a second one.
+   */
+  const proposeKey = useSubmissionKey();
   const propose = useMutation({
-    // One key per CLICK, passed as the variable, so a retry reuses it.
     mutationFn: (idempotencyKey: string) =>
       proposeAsKnowledge(
         outboundId !== undefined
           ? { conversationId, outboundId, idempotencyKey }
           : { conversationId, messageId: messageId ?? '', idempotencyKey },
       ),
-    onSuccess: () => notify({ tone: 'ok', message: t('web.sk_proposed') }),
+    onSuccess: () => {
+      proposeKey.settle();
+      notify({ tone: 'ok', message: t('web.sk_proposed') });
+    },
+    onError: (error) => proposeKey.settleOn(error),
   });
   const fault = propose.error instanceof ApiError ? PROPOSE_FAULTS[propose.error.code] : undefined;
   return (
@@ -928,7 +935,9 @@ export function ProposeKnowledgeButton({
         type="button"
         className="btn ghost sm"
         disabled={propose.isPending || propose.isSuccess}
-        onClick={() => propose.mutate(newIdempotencyKey())}
+        onClick={() =>
+          propose.mutate(proposeKey.current({ conversationId, outboundId, messageId }))
+        }
       >
         {t('web.sk_propose')}
       </button>
