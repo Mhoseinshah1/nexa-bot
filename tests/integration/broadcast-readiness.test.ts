@@ -2,7 +2,9 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   BROADCAST_ERROR_CODES,
+  BROADCAST_HISTORY_MAX,
   BROADCAST_LEASE_MS,
+  BROADCAST_SENDS_PER_SECOND,
   type ActorContext,
   type Clock,
   type CorrelationId,
@@ -352,7 +354,7 @@ describe('broadcast readiness (roadmap C1)', () => {
       for (const chat of ['660900', '661001', '661002']) expect(transport.sentTo(chat)).toBe(1);
 
       // The history shows the test, the launch and the re-queue with its count.
-      const history = await broadcasts.history(tenantA, owner, record.id);
+      const history = (await broadcasts.history(tenantA, owner, record.id)).entries;
       const retry = history.find((row) => row.action === 'broadcast.retry_failed');
       expect(retry).toMatchObject({ result: 'SUCCESS', requeued: 2, fromState: 'COMPLETED' });
       expect(history.find((row) => row.action === 'broadcast.test')?.testOutcome).toBe('SENT');
@@ -364,6 +366,14 @@ describe('broadcast readiness (roadmap C1)', () => {
 
     it('a 429 holds the bot that got it and no other; the waiting recipient shows when it is due', async () => {
       const ids = await twoBotAudience();
+      // More bot-2 customers than one pass claims for a bot (its per-second budget), so some
+      // are still PENDING with no answer on record when the 429 lands.
+      for (let i = 0; i < BROADCAST_SENDS_PER_SECOND; i += 1) {
+        await fixtures.customer({
+          telegramUserId: String(663000 + i),
+          botInstanceId: BOT_2,
+        });
+      }
       const record = await composed();
       await launch(record.id);
       transport.script('662001', { outcome: 'RATE_LIMITED', retryAfterMs: 30_000 });
@@ -373,7 +383,10 @@ describe('broadcast readiness (roadmap C1)', () => {
       const two = perBot.find((row) => row.botInstanceId === BOT_2);
       const one = perBot.find((row) => row.botInstanceId === BOT_1);
       expect(two?.heldUntil).not.toBeNull();
-      expect(two?.waitingRetry).toBeGreaterThanOrEqual(1);
+      // Exactly the deferred one (PR #237 review N2): bot 2's recipients that no pass has
+      // claimed yet are PENDING with no answer on record, and are not "waiting for a retry".
+      expect(two?.waitingRetry).toBe(1);
+      expect(two?.counts.pending).toBeGreaterThan(1);
       expect(one?.heldUntil).toBeNull();
       expect(one?.counts.sent).toBe(3);
       const waiting = await broadcasts.recipients(tenantA, owner, record.id, {
@@ -479,7 +492,9 @@ describe('broadcast readiness (roadmap C1)', () => {
       await expect(broadcasts.retryFailed(tenantA, owner, record.id)).rejects.toMatchObject({
         code: BROADCAST_ERROR_CODES.STATE_CONFLICT,
       });
-      const history = (await broadcasts.history(tenantA, owner, record.id)).map((r) => r.action);
+      const history = (await broadcasts.history(tenantA, owner, record.id)).entries.map(
+        (r) => r.action,
+      );
       expect(history).toEqual(
         expect.arrayContaining(['broadcast.pause', 'broadcast.resume', 'broadcast.cancel']),
       );
@@ -528,7 +543,7 @@ describe('broadcast readiness (roadmap C1)', () => {
       expect(transport.sentTo('661001')).toBe(0);
       expect((await states(record.id))['661002']).toBe('SENT');
       // Exactly one re-queue moved anything, and the history says it moved one.
-      const retries = (await broadcasts.history(tenantA, owner, record.id)).filter(
+      const retries = (await broadcasts.history(tenantA, owner, record.id)).entries.filter(
         (row) => row.action === 'broadcast.retry_failed',
       );
       expect(retries).toHaveLength(1);
@@ -611,6 +626,64 @@ describe('broadcast readiness (roadmap C1)', () => {
       });
     });
 
+    it('without audit.view, shows the successful facts only and nobody’s name (review N1)', async () => {
+      await twoBotAudience();
+      const record = await composed();
+      await launch(record.id);
+      const support = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'support-n1',
+          roleKeys: ['support'],
+        }),
+      );
+      await expect(broadcasts.pause(tenantA, support, record.id)).rejects.toBeDefined();
+      // A custom role that reads broadcasts and does not hold audit.view.
+      const roleId = ctx.container.ids.uuid();
+      const db = ctx.container.database.db;
+      await db.execute(sql`INSERT INTO roles (id, tenant_id, key, name, is_system)
+        VALUES (${roleId}::uuid, ${tenantA.tenantId}::uuid, 'marketing_n1', 'Marketing', false)`);
+      await db.execute(sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+        VALUES (${tenantA.tenantId}::uuid, ${roleId}::uuid, 'broadcasts.view')`);
+      const marketer = await createAdmin(ctx.container, tenantA, { username: 'marketer-n1' });
+      await db.execute(sql`INSERT INTO admin_roles (tenant_id, admin_id, role_id)
+        VALUES (${tenantA.tenantId}::uuid, ${marketer.id}::uuid, ${roleId}::uuid)`);
+      const reader = adminActorFor(marketer);
+
+      const seen = (await broadcasts.history(tenantA, reader, record.id)).entries;
+      expect(seen.map((row) => row.action)).toEqual(
+        expect.arrayContaining(['broadcast.create', 'broadcast.launch']),
+      );
+      expect(seen.every((row) => row.result === 'SUCCESS')).toBe(true);
+      expect(seen.every((row) => row.actorLabel === null)).toBe(true);
+      // The owner, who holds audit.view, sees the refusal and who did what.
+      const full = (await broadcasts.history(tenantA, owner, record.id)).entries;
+      expect(full.find((row) => row.action === 'broadcast.pause')?.result).toBe('DENIED');
+      expect(full.find((row) => row.action === 'broadcast.launch')?.actorLabel).not.toBeNull();
+    });
+
+    it('says when older history rows exist beyond the cap (review N4)', async () => {
+      await twoBotAudience();
+      const record = await composed();
+      expect((await broadcasts.history(tenantA, owner, record.id)).truncated).toBe(false);
+      let version = record.version;
+      for (let i = 0; i < BROADCAST_HISTORY_MAX; i += 1) {
+        const saved = await broadcasts.update(tenantA, owner, record.id, {
+          expectedVersion: version,
+          title: `readiness ${String(i)}`,
+          contentKind: 'TEXT',
+          body: 'سلام',
+          buttons: [],
+          audience: { version: 1 },
+        });
+        version = saved.version;
+      }
+      const history = await broadcasts.history(tenantA, owner, record.id);
+      expect(history.entries).toHaveLength(BROADCAST_HISTORY_MAX);
+      expect(history.truncated).toBe(true);
+      // The newest are the ones shown; the create row is the one beyond the cap.
+      expect(history.entries.some((row) => row.action === 'broadcast.create')).toBe(false);
+    });
+
     it('lists a refused steer as refused, and carries no raw audit payload', async () => {
       await twoBotAudience();
       const record = await composed();
@@ -622,7 +695,7 @@ describe('broadcast readiness (roadmap C1)', () => {
         }),
       );
       await expect(broadcasts.pause(tenantA, support, record.id)).rejects.toBeDefined();
-      const history = await broadcasts.history(tenantA, owner, record.id);
+      const history = (await broadcasts.history(tenantA, owner, record.id)).entries;
       const denied = history.find((row) => row.action === 'broadcast.pause');
       expect(denied?.result).toBe('DENIED');
       for (const row of history) {

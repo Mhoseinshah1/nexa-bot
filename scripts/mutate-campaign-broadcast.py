@@ -54,6 +54,13 @@ M=[
  # Web: a re-queue is asked first.
  # Web: a test send is a history row; the history is read again after it (Codex P2, PR #237).
  ('CB-17',[(PAGE,"      void client.invalidateQueries({ queryKey: ['broadcast-history', record.id] });\n    },\n  });\n  const large","    },\n  });\n  const large")],T_W,'reads the history again after a test'),
+ # Review N2: "waiting for a retry" is a PENDING row with an answer on record, not every PENDING.
+ ('CB-19',[(REPO,"count(*) FILTER (WHERE r.state = 'PENDING' AND r.error_code IS NOT NULL)::int","count(*) FILTER (WHERE r.state = 'PENDING')::int")],T_R,'a 429 holds the bot that got it'),
+ # Review N1: without audit.view, no refused rows and no operator identity.
+ ('CB-20',[(SVC,"      if (!audited && row.result !== 'SUCCESS') continue;\n","")],T_R,'without audit.view'),
+ ('CB-21',[(SVC,"        actorLabel: audited ? row.actorLabel : null,","        actorLabel: row.actorLabel,")],T_R,'without audit.view'),
+ # Review N4: the history says when older rows exist.
+ ('CB-22',[(SVC,"    const truncated = rows.length > BROADCAST_HISTORY_MAX;","    const truncated = false;")],T_R,'beyond the cap'),
  ('CB-10',[(PAGE,"              onClick={() => setRetryAsked(true)}","              onClick={() => steer.mutate('retryFailed')}")],T_W,'asks before a re-queue'),
 ]
 

@@ -301,9 +301,10 @@ export class BroadcastsController {
     @Param('id') id: string,
   ): Promise<BroadcastHistoryResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const rows = await this.container.broadcasts.history(scope, actor, id);
+    const { entries, truncated } = await this.container.broadcasts.history(scope, actor, id);
     return {
-      entries: rows.map((row) => ({
+      truncated,
+      entries: entries.map((row) => ({
         id: row.id,
         action: row.action,
         result: row.result,

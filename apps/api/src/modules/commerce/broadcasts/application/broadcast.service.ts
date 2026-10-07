@@ -58,7 +58,10 @@ import {
   type AudienceService,
 } from '../../audience/application/audience.service.js';
 import type { FrozenAudienceRecord } from '../../audience/application/ports.js';
-import type { AuditHistoryReader } from '../../../platform/audit/application/ports.js';
+import {
+  AUDIT_VIEW_PERMISSION,
+  type AuditHistoryReader,
+} from '../../../platform/audit/application/ports.js';
 import type {
   BotDeliveryRow,
   BroadcastRecord,
@@ -261,25 +264,32 @@ export class BroadcastService {
 
   /**
    * Roadmap C2: what was done to this broadcast — its own `broadcast.*` audit rows, newest
-   * first, reduced to the contract's closed facts. `broadcasts.view`: the page already names
-   * who created and launched it; the raw `before`/`after` never leave.
+   * first, reduced to the contract's closed facts; the raw `before`/`after` never leave.
+   *
+   * `broadcasts.view` reads the card. Who did what, and the attempts that were REFUSED, are
+   * audit signals (PR #237 review N1, the reseller-history precedent), so without
+   * `audit.view` the card carries the successful facts only and no operator identity.
+   * At most `BROADCAST_HISTORY_MAX` rows; `truncated` says older ones exist (N4).
    */
   async history(
     scope: TenantContext,
     actor: ActorContext,
     id: string,
-  ): Promise<readonly BroadcastHistoryRecord[]> {
+  ): Promise<{ readonly entries: readonly BroadcastHistoryRecord[]; readonly truncated: boolean }> {
     await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
     await this.require(scope, id);
-    if (this.deps.auditHistory === undefined) return [];
+    if (this.deps.auditHistory === undefined) return { entries: [], truncated: false };
+    const audited = await this.deps.guard.has(scope, actor, AUDIT_VIEW_PERMISSION);
     const rows = await this.deps.auditHistory.entityHistory(
       scope,
       { entityType: 'Broadcast', entityId: id, actionPrefix: 'broadcast.' },
-      BROADCAST_HISTORY_MAX,
+      BROADCAST_HISTORY_MAX + 1,
     );
+    const truncated = rows.length > BROADCAST_HISTORY_MAX;
     const entries: BroadcastHistoryRecord[] = [];
-    for (const row of rows) {
+    for (const row of rows.slice(0, BROADCAST_HISTORY_MAX)) {
       if (!isHistoryAction(row.action)) continue;
+      if (!audited && row.result !== 'SUCCESS') continue;
       const after = row.after ?? {};
       const before = row.before ?? {};
       const outcome = after['outcome'];
@@ -288,7 +298,7 @@ export class BroadcastService {
         id: row.id,
         action: row.action,
         result: row.result,
-        actorLabel: row.actorLabel,
+        actorLabel: audited ? row.actorLabel : null,
         occurredAt: row.occurredAt,
         testOutcome:
           row.action === 'broadcast.test' &&
@@ -307,7 +317,7 @@ export class BroadcastService {
         toState: stateOf(after['state']),
       });
     }
-    return entries;
+    return { entries, truncated };
   }
 
   // --- composing -----------------------------------------------------------------------
