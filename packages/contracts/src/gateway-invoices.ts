@@ -124,6 +124,105 @@ export const GATEWAY_PROVIDER_URL_MAX_LENGTH = 2048;
 export const GATEWAY_ERROR_CODE_MAX_LENGTH = 64;
 
 /**
+ * Where an attempt's conversion rate came from (roadmap E5, `docs/payment-fees-fx.md`) — ONE
+ * shape for every policy, so an operator reads "which authority priced this, at what, when"
+ * the same way for a TonPays, a Stars and a NOWPayments attempt.
+ *
+ * - `NONE` — `SAME_UNIT`: the provider bills in the sales currency; nothing was converted.
+ * - `OPERATOR` — `FIXED_RATE`: the route's operator-set rate, frozen on the attempt.
+ * - `MARKET` — `CENTRAL_FX`: the central quote (source, book time, fetch time, state, id),
+ *   frozen on the attempt.
+ *
+ * Every member is the attempt's OWN snapshot (`gateway_invoices`, frozen by
+ * `nexa_gateway_invoices_snapshot_guard`), never today's rate: a historical settled rate is
+ * kept with its evidence, and a newer quote changes nothing here. `rate` is the effective
+ * sales-currency figure per provider unit as decimal text, rendered by the server.
+ */
+export const GATEWAY_RATE_AUTHORITIES = ['NONE', 'OPERATOR', 'MARKET'] as const;
+export type GatewayRateAuthority = (typeof GATEWAY_RATE_AUTHORITIES)[number];
+
+export const gatewayRateProvenanceSchema = z.object({
+  authority: z.enum(GATEWAY_RATE_AUTHORITIES),
+  policy: gatewayConversionPolicySchema,
+  /** Sales-currency minor units per ONE provider unit, as decimal text; null for NONE. */
+  rate: z.string().nullable(),
+  /** The market source; null unless MARKET. */
+  source: fxSourceSchema.nullable(),
+  /** The quote's identity and policy version; null unless MARKET. */
+  quoteId: z.string().nullable(),
+  policyVersion: z.number().int().nullable(),
+  /** The provider's own book time, when it gave one; null unless MARKET. */
+  quotedAt: z.iso.datetime().nullable(),
+  /** When this installation read the quote; null unless MARKET. */
+  fetchedAt: z.iso.datetime().nullable(),
+  /** FRESH or STALE_ALLOWED at the moment it priced the attempt; null unless MARKET. */
+  quoteState: z.enum(FX_USABLE_QUOTE_STATES).nullable(),
+  /** When the rate was frozen onto the attempt: the attempt's creation. */
+  frozenAt: z.iso.datetime(),
+});
+export type GatewayRateProvenance = z.infer<typeof gatewayRateProvenanceSchema>;
+
+/** The facts the provenance is read from: the attempt's own snapshot, nothing live. */
+export interface GatewayRateProvenanceInput {
+  readonly policy: (typeof gatewayConversionPolicySchema)['options'][number];
+  /** A FIXED_RATE attempt's frozen rate, sales-currency minor units per provider unit. */
+  readonly fixedRateMinor: bigint | null;
+  readonly fx: {
+    readonly source: (typeof fxSourceSchema)['options'][number];
+    readonly quoteId: string;
+    readonly policyVersion: number;
+    readonly sourceAt: Date | null;
+    readonly fetchedAt: Date;
+    readonly quoteState: (typeof FX_USABLE_QUOTE_STATES)[number];
+    /** The effective figure per provider unit, already rendered by the FX contract. */
+    readonly effectiveRateText: string;
+  } | null;
+  readonly createdAt: Date;
+}
+
+/**
+ * The ONE provenance reading. Fails closed: a policy whose snapshot is missing reports no
+ * rate rather than borrowing another policy's (`gateway_invoices_fx_snapshot_check` makes
+ * that row impossible; this is the same rule for a reader).
+ */
+export function gatewayRateProvenanceOf(input: GatewayRateProvenanceInput): GatewayRateProvenance {
+  const frozenAt = input.createdAt.toISOString();
+  const none = {
+    source: null,
+    quoteId: null,
+    policyVersion: null,
+    quotedAt: null,
+    fetchedAt: null,
+    quoteState: null,
+    frozenAt,
+  };
+  if (input.policy === 'CENTRAL_FX') {
+    if (input.fx === null) return { authority: 'MARKET', policy: input.policy, rate: null, ...none };
+    return {
+      authority: 'MARKET',
+      policy: input.policy,
+      rate: input.fx.effectiveRateText,
+      source: input.fx.source,
+      quoteId: input.fx.quoteId,
+      policyVersion: input.fx.policyVersion,
+      quotedAt: input.fx.sourceAt === null ? null : input.fx.sourceAt.toISOString(),
+      fetchedAt: input.fx.fetchedAt.toISOString(),
+      quoteState: input.fx.quoteState,
+      frozenAt,
+    };
+  }
+  if (input.policy === 'FIXED_RATE') {
+    return {
+      authority: 'OPERATOR',
+      policy: input.policy,
+      rate: input.fixedRateMinor === null ? null : input.fixedRateMinor.toString(),
+      ...none,
+    };
+  }
+  return { authority: 'NONE', policy: input.policy, rate: null, ...none };
+}
+
+/**
  * The gateway side of one payment, for the Web Admin's payment detail.
  *
  * The provider amounts are decimal STRINGS in the provider's own unit and are labelled
@@ -167,6 +266,12 @@ const gatewayInvoiceViewShape = z.object({
    * priced. Never recomputed from a newer quote. Null for any other policy.
    */
   fx: fxSnapshotViewSchema.nullable().default(null),
+  /**
+   * Roadmap E5: where the rate came from, in one shape for every policy
+   * (`gatewayRateProvenanceOf`, server-derived from the snapshot). Defaulted on parse so a
+   * response from the previous release reads "not said".
+   */
+  rateProvenance: gatewayRateProvenanceSchema.nullable().default(null),
   /**
    * The provider's charge id: recorded from a pushed payment (Stars), or the `referenceId` a
    * CentralPay verify reported, bound write-once and unique per tenant and provider so one
