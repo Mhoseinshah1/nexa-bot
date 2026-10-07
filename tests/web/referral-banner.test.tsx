@@ -113,11 +113,20 @@ describe('the referral banner card', () => {
     expect(posts(api, '/media/REFERRAL_BANNER')).toHaveLength(0);
   });
 
-  it('clears through the clear route', async () => {
+  it('clears through the clear route, after asking', async () => {
     const api = stubApi(routes(banner()));
     render();
     const section = await card();
     fireEvent.click(await within(section).findByRole('button', { name: 'حذف بنر' }));
+    // Roadmap B1: the bytes are gone after this, so the page asks first.
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'انصراف' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(posts(api, '/media/REFERRAL_BANNER/clear')).toHaveLength(0);
+    fireEvent.click(within(section).getByRole('button', { name: 'حذف بنر' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'حذف بنر' }),
+    );
     await waitFor(() => expect(posts(api, '/media/REFERRAL_BANNER/clear')).toHaveLength(1));
     const body = posts(api, '/media/REFERRAL_BANNER/clear')[0]?.body as Record<string, unknown>;
     expect(Object.keys(body)).toEqual(['idempotencyKey']);

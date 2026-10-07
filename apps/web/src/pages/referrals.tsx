@@ -33,6 +33,7 @@ import {
   Badge,
   Banner,
   Card,
+  ConfirmDialog,
   CursorPager,
   DataTable,
   Empty,
@@ -656,18 +657,22 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
     onError: (error) => submission.settleOn(error),
   });
 
+  // Its own key holder: an upload's success must not retire the key a held clear carries.
+  const clearKey = useSubmissionKey();
+  /** Removing the banner cannot be undone from here (the bytes are gone): it is asked first. */
+  const [confirmingClear, setConfirmingClear] = useState(false);
   const clear = useMutation({
     mutationFn: () =>
       clearTenantMedia({
         purpose: 'REFERRAL_BANNER',
-        idempotencyKey: submission.current({ clear: media.data?.media?.version ?? null }),
+        idempotencyKey: clearKey.current({ clear: media.data?.media?.version ?? null }),
       }),
     onSuccess: () => {
-      submission.settle();
+      clearKey.settle();
       notify({ tone: 'ok', message: t('web.referral_banner_cleared') });
       refresh();
     },
-    onError: (error) => submission.settleOn(error),
+    onError: (error) => clearKey.settleOn(error),
   });
 
   const onPick = (event: ChangeEvent<HTMLInputElement>) => {
@@ -734,10 +739,23 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
                 variant="danger"
                 icon="trash"
                 disabled={busy}
-                onClick={() => clear.mutate()}
+                onClick={() => setConfirmingClear(true)}
               >
                 {t('web.referral_banner_clear')}
               </Button>
+            )}
+            {confirmingClear && (
+              <ConfirmDialog
+                title={t('web.referral_banner_clear')}
+                question={t('web.referral_banner_clear_question')}
+                confirmLabel={t('web.referral_banner_clear')}
+                cancelLabel={t('web.user_action_cancel')}
+                onConfirm={() => {
+                  setConfirmingClear(false);
+                  clear.mutate();
+                }}
+                onCancel={() => setConfirmingClear(false)}
+              />
             )}
           </div>
           {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
