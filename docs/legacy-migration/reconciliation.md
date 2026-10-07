@@ -248,8 +248,8 @@ shape `^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$`, MAP-REVIEW's contract chang
 | already mapped         | — (P7 reports 0; a rerun's unchanged rows stay in their category)            | `IMPORTED`, unchanged                                                   |
 | test skipped           | `TEST_INVOICE_SKIPPED`, `TEST_PANEL_SKIPPED`, P6 `SKIPPED`                   | `SKIPPED`                                                               |
 | provider missing       | `PROVIDER_MISSING`                                                           | `MANUAL_REVIEW:PROVIDER_MISSING`                                        |
-| ambiguous              | `AMBIGUOUS_PANEL`, `USERNAME_CASE_COLLISION`                                 | `MANUAL_REVIEW:<same>`                                                  |
-| missing mapping        | `PANEL_UNMAPPED`                                                             | `MANUAL_REVIEW:PANEL_UNMAPPED`                                          |
+| ambiguous              | `AMBIGUOUS_PANEL`, `USERNAME_CASE_COLLISION`, `AMBIGUOUS_OWNERSHIP` (PR5)    | `MANUAL_REVIEW:<same>`; ownership: `CONFLICTING_EXISTING_ENTITY`        |
+| missing mapping        | `PANEL_UNMAPPED`, `NO_PANEL` (PR5, owner decision 8)                         | `MANUAL_REVIEW:PANEL_UNMAPPED`                                          |
 | product unresolved     | `PRODUCT_UNRESOLVED` (a `code_product` not in the products map)              | `MANUAL_REVIEW:PRODUCT_MAPPING_UNRESOLVED`                              |
 | unsupported            | `UNSUPPORTED_SHAPE`, `INVALID_USERNAME`, `INVALID_SOURCE_ROW`                | `MANUAL_REVIEW:<closed reason>`                                         |
 | manual review (other)  | `ORPHAN`, `CUSTOMER_NOT_IMPORTED`, P6 `MANUAL_REVIEW`, `INVOICE_KEY_INVALID` | `MANUAL_REVIEW:<closed reason>`; key-invalid rows can never be recorded |
@@ -407,6 +407,26 @@ ticket). Applying a changed balance would need a new ledger reason and an owner 
 (`OQ-LWD-02`). The top-level reconcile checks (`wallet.*`) still compare the NEW snapshot's
 balances with the ledger and so report `DISCREPANCY` on a changed snapshot — honestly; the
 section is what explains the difference, to the Toman.
+
+## 7. Service outcomes — the `serviceOutcomes` section (Mirza PR5)
+
+Every live invoice has exactly ONE outcome per APPLY run on `legacy_service_candidates`
+([`service-review.md`](service-review.md)). `reconcile` prints the section
+`nexa-legacy-service-outcomes/v1` and checks it; `report` prints it beside the closed v1
+document. It reads the candidate rows of the snapshot's live invoices and asserts only what
+it read. Aggregates only — never an invoice key, a username or a Telegram id.
+
+- **O1** (`services.outcomes.closure`, a reconcile check — `DISCREPANCY` when it fails):
+  `candidates = recorded`, `Σ outcomes = candidates`, every row decided by the latest APPLY
+  run (`decidedByAnotherRun = 0`) from this source (`fromAnotherSource = 0`) and this row
+  (`checksumDiffers = 0`), and no key the table cannot hold (`unrecordable = 0`).
+- **O2** `adopted = outcomes.ADOPTED + outcomes.ALREADY_ADOPTED` = the adopted services the
+  map names (S5).
+- **O3** `archivedHistory.notAdopted = candidates − adopted`; `notLinkedToArchive = 0` when
+  `invoices-read` ran before the import (every invoice not adopted is archived history).
+- **O4** `outcomes.NO_PANEL` invoices are never services unless their review state is
+  `ADOPTED` through an explicit approval (owner decision 8); the count is a dated baseline,
+  never an expected value.
 
 ## Result table (filled per run; aggregates only)
 

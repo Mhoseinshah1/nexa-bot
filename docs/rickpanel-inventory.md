@@ -94,11 +94,15 @@ record whose name folds to a different key.
 | ------------------------------------------------------------ | ---------------------------------------------------------- | -------------------------------------------------------------- |
 | a declared test panel (checked FIRST, whatever the username) | —                                                          | `SKIPPED TEST_PANEL`                                           |
 | in the explicit `code_panel → NEXA panel` map                | `lower(username)` in THAT panel's complete inventory       | `ELIGIBLE` / `MANUAL_REVIEW PROVIDER_MISSING`                  |
-| null, or declared missing                                    | exact lowercase username across every production RickPanel | 1 → `ELIGIBLE`; 0 → `PROVIDER_MISSING`; >1 → `AMBIGUOUS_PANEL` |
+| null or empty (owner decision 8, Mirza PR5)                  | **never searched**                                         | `NO_PANEL` (review; adopted only by an explicit approval)      |
+| declared missing (the map's `missingPanels`)                 | exact lowercase username across every production RickPanel | 1 → `ELIGIBLE`; 0 → `PROVIDER_MISSING`; >1 → `AMBIGUOUS_PANEL` |
 | anything else                                                | not searched                                               | `MANUAL_REVIEW PANEL_UNMAPPED`                                 |
 
 A panel the decision depends on without a COMPLETE inventory gives `UNDECIDABLE`, never
-`PROVIDER_MISSING` — zero matches in a partial walk is not absence. For a missing panel the
+`PROVIDER_MISSING` — zero matches in a partial walk is not absence. A row with NO panel is
+never searched since Mirza PR5 (owner decision 8, `docs/legacy-migration/service-review.md`):
+an operator's explicit approval naming a mapped panel is the only way it is matched
+(`matchOnPanel`, the mapped-code rules on that one panel). For a declared-missing panel the
 available inventories are scanned first: two known holders are `AMBIGUOUS_PANEL` whatever an
 unavailable panel might add; only while zero or one holder is known does an unavailable
 inventory make it `UNDECIDABLE`. A key that folds to two or more spellings on the holding
