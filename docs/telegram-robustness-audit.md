@@ -10,9 +10,14 @@ Branch `roadmap/telegram-hardening`. No contract change, no migration.
 ## The rule, and where it lives
 
 `CLAUDE.md` already states it: a 429 is not an unknown outcome and a timeout is not a rate
-limit, and an UNKNOWN outcome is never retried and never queued again. There is ONE call
-core, `telegramCall` in `apps/api/src/infrastructure/telegram/send-message.ts`, and it
-produces three things:
+limit, and an UNKNOWN outcome is never retried and never queued again. Every Bot API call
+of the product's send lanes goes through ONE call core, `telegramCall` in
+`apps/api/src/infrastructure/telegram/send-message.ts`. Two other files call `fetch`
+themselves, deliberately: the backup delivery (`telegram-backup-delivery.ts`, its own
+three-way `SUCCEEDED / FAILED_DEFINITIVE / OUTCOME_UNKNOWN`, ADR-0025) and the file download
+(`fetch-file.ts`, a read whose second leg is bytes, not a Bot API envelope). The backup copy
+had the same unreadable-2xx defect and is fixed in this branch (PR #238 review N4). The call
+core produces three things:
 
 | Telegram's answer                                                                                         | call core                                                                      | meaning                                                 |
 | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------- |
@@ -110,12 +115,28 @@ Added:
   (`BotBootstrapRepository.reconcileUsername`: same `telegram_bot_id`, row lock, a
   conditional UPDATE that refuses a name another row holds), audited
   `bot_instance.username_reconciled` SUCCESS, or FAILED with nothing changed. Never fatal to
-  the registration. `status` shows it read-only as a `username` line on stderr
-  (`usernameDrift`).
-- **A revoked token in the customer lane** is now named: the send-failure condition's reason
-  is `TOKEN_REJECTED` for Telegram's 401, with a sentence pointing at the Web Admin
-  replacement — before, it read as "Telegram refused a customer reply", which sent operators
-  to look at chats.
+  the registration: a `23505` from a concurrent writer of the same name (another tenant's
+  lock does not serialise with this one) is the same TAKEN, and any other failure is
+  UNRESOLVED and logged (review N2). The run's result carries `usernameReconcile`
+  (`UPDATED` / `TAKEN` / `UNRESOLVED`) and the STORED username, so the CLI says "the stored
+  username is now …" or warns that the name was kept — never "Nothing was changed" after a
+  change (Codex P2, review N1). `status` shows the drift read-only as a `username` line on
+  stderr (`usernameDrift`), and when another bot row holds the new name it says so instead of
+  prescribing `register`, which could not help.
+- **A revoked token in the customer lane** is now named: a refusal with Telegram's 401 (or
+  404, a token path Telegram does not recognise — `OQ-TG-07`) opens the condition
+  `telegram.customer_send_failed` under its OWN key, `…:<bot>:token`, whose sentence points
+  at the Web Admin replacement. Its own row because the recorder rewrites `context` but
+  never `message` on a repeat, and `message` is what the dashboard shows: on the shared row
+  the remedy was either never shown or stuck to every later refusal (review B1, both orders
+  pinned against the real recorder). A delivered send recovers both rows. Same code, a new
+  key — no code was split or renamed.
+- **The failure record is best effort** (Codex P1): a condition write that throws used to
+  replace an UNKNOWN with an exception, and a lane that had stamped `markSendStarted` would
+  reclaim and resend. Telegram's outcome now always reaches the caller.
+- **`getMe` answered by a JSON 2xx with no `ok`** is `NOT_TELEGRAM` (wrong
+  `TELEGRAM_API_BASE_URL`), not UNREACHABLE; a body that did not parse at all stays
+  UNREACHABLE (review N5). The call core marks the first with `notBotApiAnswer`.
 - Webhook state, the command menu refresh (`bot-command-sync`, max(wait, own back-off)) and
   connection status were audited and are unchanged.
 
@@ -133,10 +154,13 @@ Audited; the gates were already in place and are pinned by existing tests
   answer never earns that retry (it used to, for the latter);
 - an operator-typed inline icon never switches the bot off.
 
-Added (D4, "icon eligibility never breaks a critical flow"): the decoration and icon READS
-before a send fall back to no decoration when they fail, and the bookkeeping AFTER a
-delivered send (recording the refusal, the recovery) is best effort — a delivered message is
-never turned into an exception by the ops log or the eligibility store.
+Added (D4, "icon eligibility never breaks a critical flow"): the decoration, icon, style and
+category-colour READS before a send fall back to none when they fail (styles and colours:
+Codex P2), and the bookkeeping AFTER a delivered send (recording the refusal, the recovery)
+is best effort — a delivered message is never turned into an exception by the ops log or the
+eligibility store. The eligibility write runs FIRST and on its own, so an ops log that cannot
+be written does not leave the bot decorating (review N3); a swallowed failure is logged with
+the bot id and its SQLSTATE.
 
 ## D5 — media
 
@@ -162,27 +186,36 @@ Size bounds and magic-byte rules are untouched.
 ## Mutation checks
 
 `scripts/mutate-telegram-robustness.py` — each mutation reverts one rule, runs the named
-suite and restores the file. Results on `nexa_test_tg2`:
+suite and restores the file. Results on `nexa_test_tg2` (25/25 KILLED, including the PR #238
+review fixes B1, P1, N1–N5):
 
 | #   | reverted rule                                                               | suite       | result |
 | --- | --------------------------------------------------------------------------- | ----------- | ------ |
-| M1  | a 2xx without `ok` is a definite refusal again                              | unit        | KILLED |
-| M2  | `retry_after` read unchecked (`NaN` reaches the lanes)                      | unit        | KILLED |
-| M3  | `retry_after` ceiling removed                                               | unit        | KILLED |
-| M4  | `retry_after` rounded down (shorter than asked)                             | unit        | KILLED |
-| M5  | a negative `retry_after` accepted                                           | unit        | KILLED |
-| M6  | the decorated retry on ANY failure (blind retry of an unknown)              | unit        | KILLED |
-| M7  | a 429 collapsed into UNKNOWN                                                | unit        | KILLED |
-| M8  | a 401 not named `TOKEN_REJECTED`                                            | unit        | KILLED |
+| M1  | 2xx without ok is a definite refusal again                                  | unit        | KILLED |
+| M2  | retry_after read unchecked (NaN reaches the lanes)                          | unit        | KILLED |
+| M3  | retry_after ceiling removed                                                 | unit        | KILLED |
+| M4  | retry_after rounded down (shorter than asked)                               | unit        | KILLED |
+| M5  | negative retry_after accepted                                               | unit        | KILLED |
+| M6  | decorated retry on ANY failure (blind retry of an unknown)                  | unit        | KILLED |
+| M7  | 429 collapsed into UNKNOWN                                                  | unit        | KILLED |
+| M8  | 401 not named TOKEN_REJECTED                                                | unit        | KILLED |
 | M9  | a STOPPED bot still sends                                                   | integration | KILLED |
 | M10 | another tenant's bot resolves                                               | integration | KILLED |
-| M11 | a customer reply from the tenant's first bot, not the one written to        | integration | KILLED |
-| M12 | an ops message ignores the bot it names                                     | integration | KILLED |
-| M13 | a rename never reconciled                                                   | unit        | KILLED |
-| M14 | a rename overwrites a name another row holds                                | integration | KILLED |
-| M15 | `status` reports no drift                                                   | unit        | KILLED |
-| M16 | best-effort bookkeeping rethrows (a delivered message becomes an exception) | unit        | KILLED |
-| M17 | an unreadable decoration fails the send                                     | unit        | KILLED |
+| M11 | customer reply from the tenant's first bot, not the one written to          | integration | KILLED |
+| M12 | ops message ignores the bot it names                                        | integration | KILLED |
+| M13 | rename never reconciled                                                     | unit        | KILLED |
+| M14 | rename overwrites a name another row holds                                  | integration | KILLED |
+| M15 | status reports no drift                                                     | unit        | KILLED |
+| M16 | N1: status never says the name is held elsewhere                            | unit        | KILLED |
+| M17 | best-effort bookkeeping rethrows (a delivered message becomes an exception) | unit        | KILLED |
+| M18 | B1: the token condition shares the generic row (its sentence goes stale)    | unit        | KILLED |
+| M19 | B1 (integration): the token condition shares the generic row                | integration | KILLED |
+| M20 | P1: the failure record can throw over an UNKNOWN                            | unit        | KILLED |
+| M21 | N3: the eligibility write is skipped                                        | unit        | KILLED |
+| M22 | N4: backup delivery files a 2xx without ok as definitive                    | unit        | KILLED |
+| M23 | N2: a 23505 during the rename is UNRESOLVED, not TAKEN                      | unit        | KILLED |
+| M24 | N5: a not-Bot-API 2xx from getMe is UNREACHABLE                             | unit        | KILLED |
+| M25 | an unreadable decoration fails the send                                     | unit        | KILLED |
 
 ## Manual acceptance — NOT RUN
 

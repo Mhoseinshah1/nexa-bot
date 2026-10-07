@@ -1694,6 +1694,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
     telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+    // Roadmap D3 (PR #238 review N2): a rename that could not be recorded is logged.
+    logger,
   });
 
   /*

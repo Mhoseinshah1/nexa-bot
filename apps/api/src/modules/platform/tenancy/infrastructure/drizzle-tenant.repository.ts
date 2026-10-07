@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import {
   isSystemContext,
   asId,
@@ -525,6 +525,20 @@ export class DrizzleBotInstanceRepository
     } catch (error: unknown) {
       rethrowAlreadyBound(error, input.telegramBotId, input.username, 'LEGACY_IDENTITY_FILL');
     }
+  }
+
+  async usernameHeldByAnotherRow(
+    _scope: ScopeContext,
+    id: BotInstanceId,
+    username: string,
+  ): Promise<boolean> {
+    // Installation-wide on purpose, like `bot_instances_username_key`: a name is a name.
+    const [row] = await this.db
+      .select({ id: botInstances.id })
+      .from(botInstances)
+      .where(and(eq(botInstances.username, username), ne(botInstances.id, id)))
+      .limit(1);
+    return row !== undefined;
   }
 
   async reconcileUsername(

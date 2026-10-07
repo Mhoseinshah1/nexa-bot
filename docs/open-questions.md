@@ -3740,3 +3740,15 @@ values that are not a documented contract, and filing a delivered message as "no
 the one mistake that duplicates a customer message. **Decide** whether to add a fourth code
 (`telegram.not_sent`, retryable) for an allow-list of pre-connect causes, with a real-network
 acceptance proving each cause, before any lane treats it as safe to repeat.
+
+## OQ-TG-07 — is every Bot API 404 a token problem?
+
+Status: OPEN, decided provisionally (PR #238 review N6, `docs/telegram-robustness-audit.md`).
+
+The customer messenger now names a 404 `TOKEN_REJECTED`, beside the 401. Evidence for it:
+the Bot API answers `/bot<token>/<method>` with 404 "Not Found" when the path is not a bot it
+knows (a malformed token) and for an unknown method; every method the messenger calls exists,
+so the second cannot occur from it, and the broadcast lane already reads 401 and 404 alike
+as `BOT_UNAVAILABLE`. Not evidenced: whether Telegram ever answers 404 for anything else on a
+valid token (it is not documented either way). If a real run shows a 404 that is not about
+the token, narrow the messenger back to 401 and record the sentence Telegram used.

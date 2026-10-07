@@ -55,6 +55,12 @@ export type TelegramSendOutcome =
       readonly errorCode: string;
       readonly errorMessage: string;
       readonly retryAfterMs?: number;
+      /**
+       * PR #238 review N5: set only with `telegram.unreadable_response` when the 2xx body DID
+       * parse as JSON and is not a Bot API answer (no `ok`). Still unknown for a send; a
+       * READ such as `getMe` may conclude from it that the API base is not Telegram.
+       */
+      readonly notBotApiAnswer?: true;
     }
   | {
       readonly outcome: 'FAILED_PERMANENT';
@@ -290,10 +296,12 @@ async function telegramCall(request: TelegramRequest): Promise<TelegramCallOutco
       return {
         outcome: 'FAILED_RETRYABLE',
         errorCode: 'telegram.unreadable_response',
-        errorMessage:
-          payload === null
-            ? `HTTP ${response.status} with a body that could not be parsed.`
-            : `HTTP ${response.status} with a body that is not a Bot API answer.`,
+        ...(payload === null
+          ? { errorMessage: `HTTP ${response.status} with a body that could not be parsed.` }
+          : {
+              errorMessage: `HTTP ${response.status} with a body that is not a Bot API answer.`,
+              notBotApiAnswer: true as const,
+            }),
       };
     }
 

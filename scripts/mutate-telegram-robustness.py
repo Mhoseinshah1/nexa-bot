@@ -52,7 +52,7 @@ M = [
      "if (false) {\n      return {\n        sent: {", UNIT),
     # D3 — a revoked token is named.
     ('401 not named TOKEN_REJECTED', MSG,
-     "        : worst.errorCode === TELEGRAM_TOKEN_REJECTED_CODE\n",
+     "        : worst.errorCode !== null && TELEGRAM_TOKEN_REJECTED_CODES.includes(worst.errorCode)\n",
      "        : false\n", UNIT),
     # D2 — the right bot.
     ('a STOPPED bot still sends', REPO,
@@ -72,18 +72,47 @@ M = [
      "        false\n          ? await this.bots.tokenForBotInstance(", INT),
     # D3 — a BotFather rename.
     ('rename never reconciled', BOOT,
-     "      if (identity.username !== existing.username) {\n        await this.reconcileRenamedUsername(scope, existing, identity);\n      }\n",
-     "", UNIT),
+     "      if (identity.username !== existing.username) {\n        const usernameReconcile",
+     "      if (false) {\n        const usernameReconcile", UNIT),
     ('rename overwrites a name another row holds', REPO,
      "          sql`NOT EXISTS (\n            SELECT 1 FROM ${botInstances} AS other\n             WHERE other.username = ${input.username} AND other.id <> ${id}\n          )`,\n",
      "", INT),
-    ('status writes nothing about the drift', BOOT,
-     "        ...(renamed\n          ? { usernameDrift: { stored: view.username, reported: identified.username } }\n          : {}),\n",
-     "", UNIT),
+    ('status reports no drift', BOOT,
+     "        ...(renamed\n          ? {\n              usernameDrift: {",
+     "        ...(false\n          ? {\n              usernameDrift: {", UNIT),
+    ('N1: status never says the name is held elsewhere', BOOT,
+     "    return { ...detail, usernameDrift: { ...drift, heldByAnotherRow } };",
+     "    return { ...detail, usernameDrift: { ...drift, heldByAnotherRow: false } };", UNIT),
     # D4 — icon eligibility and decoration bookkeeping never break a send.
     ('best-effort bookkeeping rethrows (a delivered message becomes an exception)', MSG,
      "      return fallback;\n",
      "      throw error;\n", UNIT),
+    # PR #238 review fixes.
+    ('B1: the token condition shares the generic row (its sentence goes stale)', MSG,
+     "            reason === 'TOKEN_REJECTED'\n"
+     "              ? customerTokenConditionKey(message.botInstanceId)\n",
+     "            reason === 'TOKEN_REJECTED'\n"
+     "              ? customerSendConditionKey(message.botInstanceId)\n", UNIT),
+    ('B1 (integration): the token condition shares the generic row', MSG,
+     "            reason === 'TOKEN_REJECTED'\n"
+     "              ? customerTokenConditionKey(message.botInstanceId)\n",
+     "            reason === 'TOKEN_REJECTED'\n"
+     "              ? customerSendConditionKey(message.botInstanceId)\n", INT),
+    ('P1: the failure record can throw over an UNKNOWN', MSG,
+     "    await this.bestEffort(\n      'record the send-failure condition',",
+     "    await (async (_w: string, _f: undefined, work: () => Promise<unknown>) => { await work(); })(\n      'record the send-failure condition',", UNIT),
+    ('N3: the eligibility write is skipped', MSG,
+     "    if (denied && appearance !== undefined) {",
+     "    if (false) {", UNIT),
+    ('N4: backup delivery files a 2xx without ok as definitive', 'apps/api/src/modules/platform/backup/infrastructure/telegram-backup-delivery.ts',
+     "      if (response.ok && (payload as { ok?: unknown }).ok !== false) {",
+     "      if (false) {", ['npx', 'vitest', 'run', '--project', 'unit', 'tests/unit/backup-delivery.test.ts']),
+    ('N2: a 23505 during the rename is UNRESOLVED, not TAKEN', BOOT,
+     "code === '23505' ? 'TAKEN' : 'UNRESOLVED'",
+     "'UNRESOLVED' as BotUsernameReconcile", UNIT),
+    ('N5: a not-Bot-API 2xx from getMe is UNREACHABLE', 'apps/api/src/modules/platform/tenancy/infrastructure/telegram-bot-bootstrap.gateway.ts',
+     "        return outcome.notBotApiAnswer === true",
+     "        return false", ['npx', 'vitest', 'run', '--project', 'unit', 'tests/unit/telegram-bootstrap-gateway.test.ts']),
     ('an unreadable decoration fails the send', MSG,
      "    return this.bestEffort('read the bot\\u2019s decoration', NO_DECORATION, () =>\n"
      "      appearance.decorationFor(scope, botInstanceId),\n    );",

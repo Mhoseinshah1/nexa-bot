@@ -73,6 +73,24 @@ describe('the Telegram bootstrap gateway — identify', () => {
     expect((await gateway.identify('t')).outcome).toBe('NOT_TELEGRAM');
   });
 
+  // PR #238 review N5: a JSON 2xx with no `ok` is a host that is not Telegram, deterministically.
+  it('reports a 2xx that is not a Bot API answer as NOT_TELEGRAM, and a garbled one UNREACHABLE', async () => {
+    respond(200, {});
+    expect((await gateway.identify('t')).outcome).toBe('NOT_TELEGRAM');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected end of JSON input');
+        },
+      })),
+    );
+    // A truncated body from Telegram itself is not evidence of a wrong host.
+    expect((await gateway.identify('t')).outcome).toBe('UNREACHABLE');
+  });
+
   it('keeps a rate limit UNREACHABLE rather than filing it as a bad token', async () => {
     respond(429, { ok: false, description: 'Too Many Requests', parameters: { retry_after: 3 } });
     expect((await gateway.identify('t')).outcome).toBe('UNREACHABLE');

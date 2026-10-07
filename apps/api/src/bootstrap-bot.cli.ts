@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { isNexaError, type TenantContext } from '@nexa/contracts';
 import type {
+  BotBootstrapResult,
   BotBootstrapStatus,
   BotWebhookStatusDetail,
 } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
@@ -262,13 +263,73 @@ export function statusDetailLines(detail: BotWebhookStatusDetail): string[] {
   }
   if (detail.usernameDrift !== undefined) {
     // D3: a BotFather rename. Usernames are public; nothing here is a credential.
+    const drift = detail.usernameDrift;
     lines.push(
-      `username               @${detail.usernameDrift.reported} at Telegram, stored as ` +
-        `@${detail.usernameDrift.stored} — run \`botctl telegram register\` to record it`,
+      `username               @${drift.reported} at Telegram, stored as @${drift.stored} — ` +
+        (drift.heldByAnotherRow
+          ? // PR #238 review N1: register cannot record it, so it is not prescribed.
+            'another bot row on this installation still holds that name, so ' +
+            '`botctl telegram register` cannot record it; free the name on that row first'
+          : 'run `botctl telegram register` to record it'),
     );
   }
   if (detail.problems.length > 0)
     lines.push(`problems               ${detail.problems.join(', ')}`);
+  return lines;
+}
+
+/**
+ * What a register/install run reports, one line each (stderr). Pure, for the unit tests.
+ *
+ * PR #238 (Codex P2, review N1): a run that recorded a BotFather rename is not "Nothing was
+ * changed", and one that could NOT record it says so instead of naming a username the
+ * database does not hold.
+ */
+export function executeResultLines(result: BotBootstrapResult, tenantSlug: string): string[] {
+  const lines: string[] = [];
+  switch (result.kind) {
+    case 'CREATED':
+      lines.push(
+        `Telegram bot @${result.username} (${result.telegramBotId}) configured for tenant ` +
+          `"${tenantSlug}". Updates will arrive at ${result.webhookUrl}.`,
+      );
+      break;
+    case 'RECONCILED':
+      lines.push(`Telegram webhook registered for @${result.username} at ${result.webhookUrl}.`);
+      break;
+    case 'ALREADY_COMPLETE':
+      lines.push(
+        `Telegram bot @${result.username} is already configured and receiving updates at ` +
+          `${result.webhookUrl}.` +
+          (result.usernameReconcile === 'UPDATED'
+            ? ' The webhook needed nothing.'
+            : ' Nothing was changed.'),
+      );
+      break;
+  }
+  switch (result.usernameReconcile) {
+    case 'UPDATED':
+      lines.push(
+        `The bot was renamed in BotFather; the stored username is now @${result.username} ` +
+          '(audited as bot_instance.username_reconciled).',
+      );
+      break;
+    case 'TAKEN':
+      lines.push(
+        `WARNING: Telegram reports this bot under a new username, but another bot row on this ` +
+          `installation still holds that name, so @${result.username} was kept. Rerunning will ` +
+          'not change this; free the name on the other row first.',
+      );
+      break;
+    case 'UNRESOLVED':
+      lines.push(
+        `WARNING: Telegram reports this bot under a new username, but it could not be recorded ` +
+          `(see the log); @${result.username} was kept. The webhook is unaffected; rerun later.`,
+      );
+      break;
+    case undefined:
+      break;
+  }
   return lines;
 }
 
@@ -342,25 +403,7 @@ async function main(): Promise<void> {
 
     const result = await container.bootstrapBot.execute(scope, { token, publicBaseUrl });
 
-    switch (result.kind) {
-      case 'CREATED':
-        console.warn(
-          `Telegram bot @${result.username} (${result.telegramBotId}) configured for tenant ` +
-            `"${tenant.slug}". Updates will arrive at ${result.webhookUrl}.`,
-        );
-        break;
-      case 'RECONCILED':
-        console.warn(
-          `Telegram webhook registered for @${result.username} at ${result.webhookUrl}.`,
-        );
-        break;
-      case 'ALREADY_COMPLETE':
-        console.warn(
-          `Telegram bot @${result.username} is already configured and receiving updates at ` +
-            `${result.webhookUrl}. Nothing was changed.`,
-        );
-        break;
-    }
+    for (const line of executeResultLines(result, tenant.slug)) console.warn(line);
   } finally {
     await container.shutdown();
   }

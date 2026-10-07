@@ -312,7 +312,7 @@ describe('the customer messenger never sends one message twice', () => {
   const PLAIN_KEY = 'bot.admin.receipt' as const;
 
   function messenger(decorated: boolean) {
-    const events: { code: string; context?: Record<string, unknown> }[] = [];
+    const events: { code: string; dedupeKey?: string; context?: Record<string, unknown> }[] = [];
     const appearance: AppearanceReader = {
       decorationFor: async () => ({
         customEmoji: decorated ? new Map([['payment', '5368324170671202286']]) : new Map(),
@@ -390,12 +390,20 @@ describe('the customer messenger never sends one message twice', () => {
     expect(revoked.events).toEqual([
       expect.objectContaining({
         code: CUSTOMER_SEND_FAILED_CODE,
+        // Review B1: its own row, so the row's sentence is always the token's.
+        dedupeKey: `telegram.customer_send_failed:${BOT}:token`,
         context: expect.objectContaining({
           reason: 'TOKEN_REJECTED',
           errorCode: 'telegram.rejected.401',
         }),
       }),
     ]);
+
+    // Review N6: a 404 is a token path Telegram does not recognise — the same remedy.
+    const malformed = messenger(false);
+    stubFetch([{ status: 404, body: { ok: false, error_code: 404, description: 'Not Found' } }]);
+    expect(await malformed.send()).toEqual({ outcome: 'REFUSED' });
+    expect(malformed.events[0]?.context).toMatchObject({ reason: 'TOKEN_REJECTED' });
 
     const refused = messenger(false);
     stubFetch([
@@ -405,7 +413,10 @@ describe('the customer messenger never sends one message twice', () => {
       },
     ]);
     expect(await refused.send()).toEqual({ outcome: 'REFUSED' });
-    expect(refused.events[0]?.context).toMatchObject({ reason: 'REFUSED' });
+    expect(refused.events[0]).toMatchObject({
+      dedupeKey: `telegram.customer_send_failed:${BOT}`,
+      context: { reason: 'REFUSED' },
+    });
   });
 });
 
@@ -428,8 +439,10 @@ describe('premium decoration never breaks a send', () => {
     opsLogThrows?: boolean;
     conditionThrows?: boolean;
     iconsThrow?: boolean;
+    stylesThrow?: boolean;
   }) {
     const warnings: string[] = [];
+    const refusals: string[] = [];
     const instance = new TelegramCustomerMessenger(
       { render: async () => 'پرداخت {icon:payment} انجام شد' } as never,
       { tokenForBotInstance: async () => 'test-token' } as never,
@@ -454,10 +467,15 @@ describe('premium decoration never breaks a send', () => {
           return { customEmoji: new Map([['payment', ID]]) };
         },
         configuredDecoration: async () => ({ customEmoji: new Map() }),
-        recordRuntimeRefusal: async () => undefined,
+        recordRuntimeRefusal: async (_scope: unknown, bot: string) => {
+          refusals.push(bot);
+        },
       } as never,
       {
-        stylesFor: async () => ({}),
+        stylesFor: async () => {
+          if (options.stylesThrow) throw new Error('setting unreadable');
+          return {};
+        },
         iconsFor: async () => {
           if (options.iconsThrow) throw new Error('setting unreadable');
           return { 'services.page': ID };
@@ -465,7 +483,7 @@ describe('premium decoration never breaks a send', () => {
       } as never,
       { warn: (_context: Record<string, unknown>, message: string) => warnings.push(message) },
     );
-    return { instance, warnings };
+    return { instance, warnings, refusals };
   }
   const message = {
     chatId: '42',
@@ -512,6 +530,48 @@ describe('premium decoration never breaks a send', () => {
     expect((await instance.send(scope, message)).outcome).toBe('DELIVERED');
     expect(seen).toHaveLength(2);
     expect(warnings.join(' ')).toContain('refused decoration');
+  });
+
+  it('review N3: the eligibility write still runs when the ops log cannot be written', async () => {
+    const { instance, refusals } = build({ opsLogThrows: true });
+    stubFetch([
+      {
+        status: 400,
+        body: { ok: false, error_code: 400, description: 'Bad Request: CUSTOM_EMOJI_INVALID' },
+      },
+      OK,
+    ]);
+    expect((await instance.send(scope, message)).outcome).toBe('DELIVERED');
+    // Text decoration refused and the plain copy accepted: this bot is switched off.
+    expect(refusals).toEqual([BOT]);
+  });
+
+  it('Codex P2: a style or colour setting that cannot be read still sends the keyboard', async () => {
+    const { instance } = build({ stylesThrow: true });
+    const seen = stubFetch([OK]);
+    const sent = await instance.send(scope, {
+      ...message,
+      buttons: [
+        { label: { kind: 'TEXT', text: 'خرید' }, data: 'buy:1', inline: 'services.page' },
+      ] as never,
+    });
+    expect(sent.outcome).toBe('DELIVERED');
+    const cell = (
+      seen[0]?.body as { reply_markup: { inline_keyboard: Record<string, unknown>[][] } }
+    ).reply_markup.inline_keyboard[0]?.[0];
+    expect(cell).toMatchObject({ text: 'خرید', callback_data: 'buy:1' });
+    expect(cell).not.toHaveProperty('style');
+  });
+
+  it('Codex P1: an UNKNOWN outcome reaches the caller even when its condition cannot be recorded', async () => {
+    const { instance, warnings } = build({ opsLogThrows: true });
+    const seen = stubFetch([{ status: 200, body: { description: 'not a Bot API answer' } }]);
+    expect(await instance.send(scope, message)).toEqual({ outcome: 'UNKNOWN' });
+    expect(seen).toHaveLength(1);
+    expect(warnings.join(' ')).toContain('send-failure condition');
+    // ...and a refusal, and a missing bot, the same way.
+    stubFetch([{ status: 403, body: { ok: false, error_code: 403, description: 'Forbidden' } }]);
+    expect(await instance.send(scope, message)).toEqual({ outcome: 'REFUSED' });
   });
 
   it('a delivered message stays DELIVERED when the recovery bookkeeping fails', async () => {

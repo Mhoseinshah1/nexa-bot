@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   parseArgs,
+  executeResultLines,
   statusDetailLines,
   suppliedToken,
   tokenForRun,
@@ -267,11 +268,50 @@ describe('statusDetailLines', () => {
   it('names a username drift and the command that records it', () => {
     const text = statusDetailLines({
       ...detail,
-      usernameDrift: { stored: 'acme_bot', reported: 'acme_renamed_bot' },
+      usernameDrift: { stored: 'acme_bot', reported: 'acme_renamed_bot', heldByAnotherRow: false },
     }).join('\n');
     expect(text).toMatch(
       /username\s+@acme_renamed_bot at Telegram, stored as @acme_bot — run `botctl telegram register`/,
     );
     expect(statusDetailLines(detail).join('\n')).not.toMatch(/^username/m);
+  });
+
+  // PR #238 review N1: register cannot help, so it is not prescribed.
+  it('does not prescribe register when another row holds the new name', () => {
+    const text = statusDetailLines({
+      ...detail,
+      usernameDrift: { stored: 'acme_bot', reported: 'acme_renamed_bot', heldByAnotherRow: true },
+    }).join('\n');
+    expect(text).toMatch(/another bot row on this installation still holds that name/);
+    expect(text).not.toMatch(/run `botctl telegram register` to record it/);
+  });
+});
+
+describe('executeResultLines (Codex P2 / review N1 on PR #238)', () => {
+  const base = {
+    kind: 'ALREADY_COMPLETE' as const,
+    botInstanceId: 'b' as never,
+    username: 'acme_bot',
+    telegramBotId: '1',
+    webhookUrl: 'https://bot.example.com/telegram/webhook/b',
+  };
+
+  it('says nothing was changed only when nothing was', () => {
+    expect(executeResultLines(base, 't').join('\n')).toContain('Nothing was changed.');
+    const updated = executeResultLines(
+      { ...base, username: 'acme_renamed_bot', usernameReconcile: 'UPDATED' },
+      't',
+    ).join('\n');
+    expect(updated).not.toContain('Nothing was changed.');
+    expect(updated).toContain('the stored username is now @acme_renamed_bot');
+  });
+
+  it('warns, naming the KEPT name, when a rename could not be recorded', () => {
+    expect(executeResultLines({ ...base, usernameReconcile: 'TAKEN' }, 't').join('\n')).toMatch(
+      /WARNING: .*another bot row .*@acme_bot was kept/s,
+    );
+    expect(
+      executeResultLines({ ...base, usernameReconcile: 'UNRESOLVED' }, 't').join('\n'),
+    ).toMatch(/WARNING: .*could not be recorded.*@acme_bot was kept/s);
   });
 });

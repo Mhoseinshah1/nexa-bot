@@ -209,6 +209,15 @@ export interface BotBootstrapRepository {
    * which row keeps a name is not this statement's call. `before` is the name the row held,
    * read under the row's lock in the same transaction.
    */
+  /**
+   * PR #238 review N1: whether a bot row OTHER than `id` holds `username` (installation-wide,
+   * as the unique index is). A read, for `status`.
+   */
+  usernameHeldByAnotherRow(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    username: string,
+  ): Promise<boolean>;
   reconcileUsername(
     scope: ScopeContext,
     id: BotInstanceId,

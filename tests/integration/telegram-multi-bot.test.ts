@@ -273,6 +273,52 @@ describe('roadmap D1–D3 — the right bot for every send, and no blind retry',
     ]);
   });
 
+  // ------------------- PR #238 review B1: the row the operator reads says the right thing
+
+  /** The bot's condition rows as the dashboard shows them: sentence, key, open or not. */
+  const conditionRows = async () =>
+    (
+      await db().execute<{ message: string; dedupe_key: string; open: boolean }>(sql`
+        SELECT message, dedupe_key, resolved_at IS NULL AS open FROM operational_events
+         WHERE code = 'telegram.customer_send_failed' ORDER BY dedupe_key`)
+    ).rows;
+  const GENERIC = `telegram.customer_send_failed:${BOT_A1}`;
+  const TOKEN = `${GENERIC}:token`;
+  const REFUSED_SENTENCE = 'Telegram refused a customer reply.';
+
+  it('B1 step order 1: a refusal, a recovery, then a revoked token — the token remedy IS shown', async () => {
+    telegram.failNext('sendMessage', {
+      kind: 'refuse',
+      description: 'Bad Request: chat not found',
+    });
+    expect(await send(BOT_A1, '1011')).toEqual({ outcome: 'REFUSED' });
+    expect(await send(BOT_A1, '1011')).toMatchObject({ outcome: 'DELIVERED' });
+    telegram.revoke(TG_A1, { keepWebhook: true });
+    expect(await send(BOT_A1, '1011')).toEqual({ outcome: 'REFUSED' });
+
+    const rows = await conditionRows();
+    expect(rows).toEqual([
+      { message: REFUSED_SENTENCE, dedupe_key: GENERIC, open: false },
+      { message: expect.stringContaining('Replace the token'), dedupe_key: TOKEN, open: true },
+    ]);
+  });
+
+  it('B1 step order 2: a revoked token, a replacement, then a refusal — no stale token remedy', async () => {
+    const replacement = telegram.revoke(TG_A1, { keepWebhook: true });
+    expect(await send(BOT_A1, '1012')).toEqual({ outcome: 'REFUSED' });
+    await storeToken(SEED_IDS.tenantA, BOT_A1, replacement);
+    expect(await send(BOT_A1, '1012')).toMatchObject({ outcome: 'DELIVERED' });
+    telegram.failNext('sendMessage', { kind: 'refuse', description: 'Forbidden: bot was blocked' });
+    expect(await send(BOT_A1, '1012')).toEqual({ outcome: 'REFUSED' });
+
+    const rows = await conditionRows();
+    // The open row says what is true NOW; the token row was closed by the delivery.
+    expect(rows).toEqual([
+      { message: REFUSED_SENTENCE, dedupe_key: GENERIC, open: true },
+      { message: expect.stringContaining('Replace the token'), dedupe_key: TOKEN, open: false },
+    ]);
+  });
+
   // ----------------------------------------------------- D3: a BotFather rename
 
   it('register records a BotFather rename of the SAME bot, audited; status shows it first', async () => {
@@ -292,13 +338,18 @@ describe('roadmap D1–D3 — the right bot for every send, and no blind retry',
     expect(status.detail?.usernameDrift).toEqual({
       stored: 'acme_store_bot',
       reported: 'acme_renamed_bot',
+      heldByAnotherRow: false,
     });
 
     const result = await api.container.bootstrapBot.execute(tenantScope, {
       token: null,
       publicBaseUrl: ORIGIN,
     });
-    expect(result).toMatchObject({ kind: 'ALREADY_COMPLETE', username: 'acme_renamed_bot' });
+    expect(result).toMatchObject({
+      kind: 'ALREADY_COMPLETE',
+      username: 'acme_renamed_bot',
+      usernameReconcile: 'UPDATED',
+    });
     const rows = await db().execute<{ username: string; telegram_bot_id: string }>(sql`
       SELECT username, telegram_bot_id FROM bot_instances WHERE id = ${BOT_A1}`);
     expect(rows.rows[0]).toEqual({
@@ -336,7 +387,13 @@ describe('roadmap D1–D3 — the right bot for every send, and no blind retry',
       token: null,
       publicBaseUrl: ORIGIN,
     });
-    expect(result.kind).toBe('ALREADY_COMPLETE');
+    expect(result).toMatchObject({
+      kind: 'ALREADY_COMPLETE',
+      username: 'acme_store_bot',
+      usernameReconcile: 'TAKEN',
+    });
+    const status = await api.container.bootstrapBot.statusWithReason(tenantScope, ORIGIN);
+    expect(status.detail?.usernameDrift).toMatchObject({ heldByAnotherRow: true });
     const rows = await db().execute<{ id: string; username: string }>(sql`
       SELECT id, username FROM bot_instances WHERE tenant_id = ${SEED_IDS.tenantA} ORDER BY id`);
     expect(rows.rows).toEqual([
