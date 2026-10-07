@@ -151,7 +151,7 @@ export class LegacyServiceReviewService {
     scope: TenantContext,
     actor: ActorContext,
   ): Promise<{
-    readonly total: number;
+    readonly candidateCount: number;
     readonly byOutcome: Readonly<Record<LegacyServiceOutcome, number>>;
     readonly byReviewState: Readonly<Record<LegacyServiceReviewState, number>>;
   }> {
@@ -163,8 +163,8 @@ export class LegacyServiceReviewService {
     const byReviewState = Object.fromEntries(
       LEGACY_SERVICE_REVIEW_STATES.map((s) => [s, stored.byReviewState[s] ?? 0]),
     ) as Record<LegacyServiceReviewState, number>;
-    const total = Object.values(byOutcome).reduce((a, b) => a + b, 0);
-    return { total, byOutcome, byReviewState };
+    const candidateCount = Object.values(byOutcome).reduce((a, b) => a + b, 0);
+    return { candidateCount, byOutcome, byReviewState };
   }
 
   /** ACKNOWLEDGE (from OPEN) or KEEP_AS_HISTORY (from OPEN or ACKNOWLEDGED). */

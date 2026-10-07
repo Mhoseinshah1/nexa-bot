@@ -59,7 +59,7 @@ const candidate = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const summary = {
-  total: 1,
+  candidateCount: 1,
   byOutcome: Object.fromEntries(LEGACY_SERVICE_OUTCOMES.map((o) => [o, o === 'NO_PANEL' ? 1 : 0])),
   byReviewState: Object.fromEntries(
     LEGACY_SERVICE_REVIEW_STATES.map((s) => [s, s === 'OPEN' ? 1 : 0]),

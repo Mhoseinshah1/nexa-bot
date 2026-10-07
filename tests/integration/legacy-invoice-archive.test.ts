@@ -722,11 +722,13 @@ describe('Mirza PR3: the legacy invoice archive', () => {
       'legacy_invoice_archive_staging->legacy_invoice_archive_runs',
       'legacy_invoice_archive_staging->tenants',
     ]);
-    // ... and nothing references the archive.
-    const inbound = await q<{ n: number }>(sql`
-      SELECT count(*)::int AS n FROM pg_constraint
+    // ... and nothing references the archive but the PR5 service candidates, which name the
+    // revision an invoice that was not adopted is kept in (history, one way: the archive
+    // still references no order, payment, wallet or service).
+    const inbound = await q<{ source: string }>(sql`
+      SELECT conrelid::regclass::text AS source FROM pg_constraint
        WHERE contype = 'f' AND confrelid = 'legacy_invoice_archive'::regclass`);
-    expect(inbound[0]?.n).toBe(0);
+    expect(inbound.map((r) => r.source)).toEqual(['legacy_service_candidates']);
   });
 
   it('backfills the two keys into existing owner roles only, idempotently', async () => {

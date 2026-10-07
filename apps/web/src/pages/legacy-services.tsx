@@ -311,7 +311,7 @@ export function LegacyServicesPage({
           <dl className="kv">
             <dt>{t('web.lsr_summary_total')}</dt>
             <dd>
-              <Num value={summary.data.total} />
+              <Num value={summary.data.candidateCount} />
             </dd>
             {LEGACY_SERVICE_OUTCOMES.filter((o) => summary.data.byOutcome[o] > 0).map((o) => (
               <Fragment key={o}>

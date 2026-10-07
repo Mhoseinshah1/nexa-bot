@@ -520,7 +520,10 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     const audits = await db().execute<{ action: string; actor_type: string }>(
       sql`SELECT action, actor_type FROM audit_logs WHERE entity_id = ${before.id} ORDER BY occurred_at, action`,
     );
+    // The approval, the reopen and re-approval (the replay check above), then the run's execution.
     expect(audits.rows.map((r) => r.action)).toEqual([
+      'legacy.service_candidate.approve_adoption',
+      'legacy.service_candidate.reopen',
       'legacy.service_candidate.approve_adoption',
       'legacy.service_candidate.approval_executed',
     ]);
@@ -1017,7 +1020,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     const summary = legacyServiceCandidateSummaryResponseSchema.parse(
       await controller.summary(request('GET')),
     );
-    expect(summary.total).toBe(SYNTHETIC_EXPECTED.services.candidates);
+    expect(summary.candidateCount).toBe(SYNTHETIC_EXPECTED.services.candidates);
     expect(Object.keys(summary.byOutcome).sort()).toEqual([...LEGACY_SERVICE_OUTCOMES].sort());
     const target = noPanel.candidates.find((c) => c.evidence.holders.length === 1);
     if (target === undefined) throw new Error('no single-holder candidate');
