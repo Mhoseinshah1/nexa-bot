@@ -122,6 +122,8 @@ describe('customers and balances', () => {
     expect(legacyIsAgent('n2')).toBe(true);
   });
 
+  const real = (amountMinor: bigint) => ({ amountMinor, synthetic: false });
+
   it('plans an opening against what is already posted', () => {
     expect(openingPlanFor(5n, undefined)).toBe('POST');
     expect(openingPlanFor(0n, undefined)).toBe('ZERO_NO_ENTRY');
@@ -132,15 +134,23 @@ describe('customers and balances', () => {
 
   it('plans a NEGATIVE balance as a legacy debt, never a ledger entry (owner decision 6)', () => {
     expect(openingPlanFor(-5n, undefined)).toBe('RECORD_DEBT');
-    expect(openingPlanFor(-5n, undefined, 5n)).toBe('DEBT_ALREADY_RECORDED');
+    expect(openingPlanFor(-5n, undefined, real(5n))).toBe('DEBT_ALREADY_RECORDED');
     // A different figure, in amount or in kind, is a conflict — never re-applied.
-    expect(openingPlanFor(-6n, undefined, 5n)).toBe('CONFLICT');
-    expect(openingPlanFor(5n, undefined, 5n)).toBe('CONFLICT');
-    expect(openingPlanFor(0n, undefined, 5n)).toBe('CONFLICT');
+    expect(openingPlanFor(-6n, undefined, real(5n))).toBe('CONFLICT');
+    expect(openingPlanFor(5n, undefined, real(5n))).toBe('CONFLICT');
+    expect(openingPlanFor(0n, undefined, real(5n))).toBe('CONFLICT');
     expect(openingPlanFor(-5n, 5n)).toBe('CONFLICT');
     // A DEBIT opening the code before the decision wrote: left alone, never doubled.
     expect(openingPlanFor(-5n, -5n)).toBe('PRIOR_DEBIT_OPENING');
     expect(openingPlanFor(-6n, -5n)).toBe('CONFLICT');
+  });
+
+  it('plans a debt of another evidence class as a CONFLICT, as APPLY refuses it (Codex on #233)', () => {
+    const synthetic = { amountMinor: 5n, synthetic: true };
+    // A real snapshot meeting a synthetic debt of the same magnitude, and the reverse.
+    expect(openingPlanFor(-5n, undefined, synthetic, false)).toBe('CONFLICT');
+    expect(openingPlanFor(-5n, undefined, real(5n), true)).toBe('CONFLICT');
+    expect(openingPlanFor(-5n, undefined, synthetic, true)).toBe('DEBT_ALREADY_RECORDED');
   });
 });
 

@@ -2232,4 +2232,56 @@ describe('Migration P7: the legacy importer', () => {
     expect(await count('legacy_wallet_debts')).toBe(2);
     expect(await walletTotal()).toBe(totalAfterA);
   });
+
+  it('PR4 (Codex on #233): a leftover synthetic debt is a CONFLICT in the plan and in APPLY, and the report is never COMPLETED', async () => {
+    // A synthetic import leaves a synthetic debt (100000003, −20 000). The same rows then
+    // arrive as a REAL snapshot — modelled by clearing the snapshot's synthetic flag (the
+    // fixture connector refuses an unmarked dataset by design). The invalid id is dropped
+    // so C3 holds and only the users-and-wallets section can decide the verdict.
+    const base = buildSyntheticLegacyDataset();
+    const dataset = {
+      ...base,
+      tables: {
+        ...base.tables,
+        user: base.tables.user.filter((u) => u['id'] !== 'not-a-telegram-id'),
+      },
+    };
+    const synthetic = await snapshot(dataset);
+    await importer().apply({ ...input('import-synthetic', synthetic), mode: 'IMPORT' });
+    expect(await count('legacy_wallet_debts', 'synthetic')).toBe(1);
+
+    const real = { ...synthetic, synthetic: false };
+    const audit = (
+      await importer().audit({
+        ...input('audit-real', real),
+        evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+      })
+    ).sections as Record<string, any>;
+    const applied = (
+      (await importer().apply({ ...input('import-real', real), mode: 'IMPORT' }))
+        .sections as Record<string, any>
+    )['applied'];
+    // The plan says what APPLY does: the debt of the other evidence class is a CONFLICT.
+    expect(audit['plan'].wallet.openings.CONFLICT).toBe(1);
+    expect(audit['plan'].wallet.openings.DEBT_ALREADY_RECORDED).toBe(0);
+    expect(applied.openings.CONFLICT).toBe(audit['plan'].wallet.openings.CONFLICT);
+    expect(applied.openings.DEBT_ALREADY_RECORDED).toBe(0);
+    expect(await count('legacy_wallet_debts')).toBe(1);
+
+    const report = await importer().finalReport({
+      ...input('report-real', real),
+      evidenceClass: 'staging',
+    });
+    const final = report.final as Record<string, any>;
+    // Every v1 equation holds; only U8 does not — and that alone keeps it from COMPLETED.
+    expect((final['reconciliation'] as { holds: boolean }[]).every((r) => r.holds)).toBe(true);
+    const uw = report.usersWallets as Record<string, any>;
+    expect(
+      uw.checks.filter((c: { holds: boolean }) => !c.holds).map((c: { id: string }) => c.id),
+    ).toEqual(['U8']);
+    expect(report.verdict).toBe('COMPLETED_WITH_DISCREPANCY');
+    expect(exitCodeFor(report)).toBe(3);
+    const reconcile = await importer().reconcile(input('reconcile-real', real));
+    expect(reconcile.verdict).toBe('DISCREPANCY');
+  });
 });
