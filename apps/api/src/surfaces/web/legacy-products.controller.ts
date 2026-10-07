@@ -22,7 +22,7 @@ import type { LegacyProductReviewListItem } from '../../modules/commerce/legacy-
  *
  * Its OWN service, `LegacyProductReviewService`: a review row carries no Telegram id,
  * username or balance, unlike the importer's terminal-only Manual Review Queue, which no
- * surface may reach (`tests/unit/legacy-review-queue-boundary.test.ts`). Nothing here
+ * surface may reach (the review queue boundary test forbids even naming it). Nothing here
  * decides anything: the service charges `legacy.products.view` to read and
  * `legacy.products.decide` (plus `catalog.edit` for approve-as-new) to decide, inside its
  * transaction, and every decision binds to the facts checksum the operator saw.
