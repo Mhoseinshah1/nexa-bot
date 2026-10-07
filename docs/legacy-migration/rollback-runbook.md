@@ -35,6 +35,11 @@ database: written at cutover step 10, which is after the step 6 backup, so a res
 removes it with everything else, and `nexa_pre_restore_<id>` keeps it. Nothing drops it on
 its own — there is no separate delete path.
 
+The legacy invoice archive (`legacy_invoice_archive`, its runs and staging, Mirza PR3) is
+the same: written at cutover step 10, after the step 6 backup, so a restore removes it and
+`nexa_pre_restore_<id>` keeps it. Its rows are append-only (UPDATE and DELETE refused by
+trigger) and nothing else drops them; a later re-read appends revisions, never rewrites.
+
 ## When — triggers
 
 Roll back when any of these holds and the owner (or the operator the owner named for the

@@ -3343,6 +3343,55 @@ snapshot (64 product rows) are dated baselines, never expected values.
   holding UTF-8 bytes would reach the facts and their checksum as mojibake (OQ-MZ-INV-03);
   the inventory reports `NOT_UTF8MB4`.
 
+## OQ-LIA — the legacy invoice archive (Mirza PR3, `docs/legacy-migration/importer.md` §Invoice archive)
+
+The archive is built and fails closed on every item below: every cell is kept verbatim, a
+field its rule cannot read is NULL with a closed note, and nothing in it becomes an order,
+a payment, a wallet entry, a service or revenue. Counts from the historical staging snapshot
+(127,611 invoices) are dated baselines, never expected values. Each item is settled from the
+real staging copy (NOT RUN) or by the owner — never by guessing.
+
+- **OQ-LIA-01 — UNKNOWN: the deployed fork's real `invoice` columns** (OQ-MZ-INV-11). The
+  read set reads the v1 columns plus the public sources' `Service_location`, `time_sell`,
+  `name_product`, `note`, `refral`, `time_cron`, `notifctions` when present. It NEVER reads
+  `user_info` (a subscription link in the fork), `uuid` or `bottype` (a sub-bot token in the
+  fork). A real column outside the list is not read; adding one is
+  `legacy-read-set:invoice-archive:v2` in a reviewed commit, after the inventory's column
+  list and an owner review say it holds no secret.
+- **OQ-LIA-02 — DECISION (PR5): empty `code_panel`.** Owner decision 8 says such an invoice
+  is never adopted automatically; the archive classifies it `NO_PANEL`. The importer TODAY
+  still searches every production panel for a NULL/blank (and a declared-missing) code and
+  can adopt on a unique hit (`legacy-service-matching.ts`). PR5 must make that path an
+  explicit, audited operator review action, or stop it.
+- **OQ-LIA-03 — PARTLY EVIDENCED: `time_sell`.** Both public sources write `time()` (unix
+  seconds) before every `INSERT … time_sell`; the deployed fork is unproven. The archive
+  parses ASCII digits within [2015-01-01, 2100-01-01) UTC as unix seconds and nothing else
+  (`FORMAT_UNKNOWN` / `OUT_OF_RANGE`, raw kept). If the real data is a `DATETIME`, Jalali or
+  millisecond text, the rule is a new normalisation version — the stored raw cell makes
+  that possible without a re-read; an archived row is never rewritten.
+- **OQ-LIA-04 — PARTLY DECIDED: `price_product`.** The owner decided Toman (IRT) (decision
+  7). Whether real cells are ever grouped, decimal or in Persian digits is unknown; those
+  stay raw (`NOT_A_NUMBER`). The figure is metadata: never summed, never a price.
+- **OQ-LIA-05 — UNKNOWN: duplicate `id_invoice` values.** Both public sources declare
+  `id_invoice` the primary key, so the engine refuses duplicates. Should a real table lack
+  that key, the run FAILS `SOURCE_KEY_DUPLICATED` and archives nothing until a person
+  decides how two rows with one id are kept (the archive is keyed by the id).
+- **OQ-LIA-06 — UNKNOWN: cells PostgreSQL cannot hold verbatim.** A NUL character, or an
+  id / user id / username / status / panel / product cell over 1000 characters (every
+  public source declares them varchar(200)–(300)), fails the run `CELL_UNREPRESENTABLE`
+  rather than being altered. The command names the column, never the value.
+- **OQ-LIA-07 — UNKNOWN: the non-live statuses and `is_test` spellings** (OQ-MZ-INV-05).
+  The class compares `Status` exactly with the importer's live statuses (`end_of_time`,
+  `sendedwarn`, `send_on_hold`, `unpaid` … are NOT live there) and `is_test` as 1/0 only.
+  Whether the importer's live set is complete is the importer's question, not the archive's.
+- **OQ-LIA-08 — DECISION: retention and who sees personal data.** The archive keeps the
+  legacy owner's Telegram id, account username, referrer id and note for ever (append-only),
+  visible only with `legacy.invoices.pii.view` (owner-only by default). Whether those cells
+  should be kept at all after the migration, and for how long, is the owner's call.
+- **OQ-LIA-09 — UNKNOWN: charset.** A latin1 `invoice` table holding UTF-8 bytes would
+  reach the archive and its checksums as mojibake (OQ-MZ-INV-03); the inventory reports
+  `NOT_UTF8MB4`.
+
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 
 Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.

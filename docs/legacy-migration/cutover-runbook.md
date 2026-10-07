@@ -415,6 +415,30 @@ is a new value: install the reviewed file, re-run `p7 audit`, and take the new
 product table is part of the freeze proof (`freeze-checksum-step7.tsv` checksums every base
 table), so a product edited after step 7 is caught there.
 
+Then the legacy invoice archive (`importer.md` §Invoice archive): EVERY legacy invoice of
+the FINAL snapshot, as read-only history. It never creates an order, a payment, a wallet
+entry or a service, and it is independent of the import itself (it neither feeds nor
+blocks step 14), so it may also run after the import, inside the window or after it.
+
+```bash
+# 1. Digest only, bound to the audit's source fingerprint. Writes nothing (exit 3).
+sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
+  -e LEGACY_SOURCE_DSN -e NEXA_LEGACY_IMPORT_TARGET_ACK \
+  --entrypoint node api dist/legacy-import.cli.js invoices-read \
+  --tenant "$NEXA_TENANT" --source env:LEGACY_SOURCE_DSN --target nexa --allow-production-target \
+  --expected-fingerprint <audit source.fingerprint> | tee invoices-read-digest.md
+# 2. The owner approves the invoice-archive fingerprint it printed; then the same with
+#    --expected-invoice-archive-fingerprint <that value> | tee invoices-read.md   (exit 0)
+#    Interrupted? Run step 2 again: a STAGING run is discarded, a VERIFIED one finished.
+```
+
+Check: `invoices-read.md` says `ARCHIVED`; its two closure lines hold
+(`new + new revisions + unchanged = invoices read`, and `archived invoices = invoices read +
+no longer in this snapshot`); `columns never read` lists `user_info, uuid, bottype`. A run
+on the staging snapshot earlier is fine: the final read appends revisions for changed
+invoices and writes nothing for identical ones. The invoice-archive fingerprint goes to
+step 13.
+
 ## Step 11 — production dry-run
 
 ```bash
@@ -470,6 +494,7 @@ the owner exactly this packet, aggregates only, and waits:
 | the pre-import backup id, its SHA-256, `verified`, and that the encrypted archive and Recovery Kit are off-host                                                                                       | step 6, `backup-id.txt` |
 | the legacy freeze proof: `CHECKSUM TABLE` before and on the restored copy, dump SHA-256, the audit's source fingerprint (`source.fingerprint`) and panel-map fingerprint (`panelMapping.fingerprint`) | steps 7–10              |
 | the products read set fingerprint (`products-read.md`) and the review: approved, rejected, still pending, `SOURCE_CHANGED`, not exported and why (aggregates)                                         | step 10                 |
+| the invoice-archive read set fingerprint (`invoices-read.md`) and its closure: read, new, new revisions, unchanged, no longer in the snapshot (aggregates, no id)                                     | step 10                 |
 | the release: version, commit, digest                                                                                                                                                                  | step 2                  |
 | the readiness gate is green, with its evidence                                                                                                                                                        | `production-gate.md`    |
 | the rollback plan, its trigger list and who decides                                                                                                                                                   | `rollback-runbook.md`   |
