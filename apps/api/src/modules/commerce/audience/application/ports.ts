@@ -1,6 +1,7 @@
 import type {
   AudienceDefinition,
   AudienceSampleCustomer,
+  BotInstanceStatus,
   FrozenAudienceGrantKind,
   FrozenAudienceKind,
   TenantContext,
@@ -38,6 +39,12 @@ export interface AudienceOptions {
     readonly id: string;
     readonly label: string;
     readonly archived: boolean;
+  }[];
+  /** Roadmap C3: the tenant's bots — the bot a customer is reached through. */
+  readonly bots: readonly {
+    readonly id: string;
+    readonly username: string;
+    readonly status: BotInstanceStatus;
   }[];
 }
 

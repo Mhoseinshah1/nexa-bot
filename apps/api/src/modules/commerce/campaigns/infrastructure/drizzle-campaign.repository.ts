@@ -33,6 +33,7 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
   CampaignActionConfig,
+  AnnouncementAttribution,
   CampaignActionRecord,
   CampaignLaunchBindingRecord,
   CampaignCursor,
@@ -563,6 +564,56 @@ export class DrizzleCampaignRepository implements CampaignRepository {
         amount: BigInt(row.amount),
         currency: row.currency as CurrencyCode,
       })),
+    };
+  }
+
+  async announcementAttribution(
+    scope: TenantContext,
+    input: { readonly broadcastId: string; readonly discountId: string },
+  ): Promise<AnnouncementAttribution> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Roadmap C3. Persisted rows only: the announcement's recipient rows ARE the audience it
+     * froze at launch (never released, unlike frozen_audience_members), and a redemption is
+     * counted once its order is PAID. Distinct customers on both sides, so a customer with
+     * two redeemed orders is one redeemer. Nothing here says a purchase was CAUSED.
+     */
+    const result = await this.db.execute<{
+      told: number;
+      delivered: number;
+      redeemers_told: number;
+      redeemers_delivered: number;
+      redeemers_not_told: number;
+    }>(sql`
+      WITH told AS (
+        SELECT customer_id, state FROM broadcast_recipients
+         WHERE tenant_id = ${tenantId}::uuid AND broadcast_id = ${input.broadcastId}::uuid
+      ), redeemers AS (
+        SELECT DISTINCT dr.customer_id
+          FROM discount_redemptions dr
+          JOIN orders o ON o.tenant_id = dr.tenant_id AND o.id = dr.order_id
+         WHERE dr.tenant_id = ${tenantId}::uuid AND dr.discount_id = ${input.discountId}::uuid
+           AND o.state = 'PAID'
+      )
+      SELECT (SELECT count(*) FROM told)::int AS told,
+             (SELECT count(*) FROM told WHERE state = 'SENT')::int AS delivered,
+             (SELECT count(*) FROM redeemers r
+               WHERE EXISTS (SELECT 1 FROM told t WHERE t.customer_id = r.customer_id))::int
+               AS redeemers_told,
+             (SELECT count(*) FROM redeemers r
+               WHERE EXISTS (SELECT 1 FROM told t
+                              WHERE t.customer_id = r.customer_id AND t.state = 'SENT'))::int
+               AS redeemers_delivered,
+             (SELECT count(*) FROM redeemers r
+               WHERE NOT EXISTS (SELECT 1 FROM told t WHERE t.customer_id = r.customer_id))::int
+               AS redeemers_not_told`);
+    const row = result.rows[0];
+    return {
+      told: row?.told ?? 0,
+      delivered: row?.delivered ?? 0,
+      redeemersTold: row?.redeemers_told ?? 0,
+      redeemersDelivered: row?.redeemers_delivered ?? 0,
+      redeemersNotTold: row?.redeemers_not_told ?? 0,
     };
   }
 

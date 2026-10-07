@@ -4468,7 +4468,6 @@ export const WEB_FA = {
   'web.campaign_announcement_hint':
     'پیام با ارسال همگانی و در زمان شروع کمپین فرستاده می‌شود. شکست ارسال پیام هیچ اقدام مالی را برنمی‌گرداند.',
   'web.campaign_announcement_body': 'متن پیام',
-  'web.campaign_announcement_purpose': 'نوع پیام',
   'web.campaign_placeholders': 'متغیرهای مجاز: {firstName}، {username}، {walletBalance}',
   'web.campaign_button_label': 'متن دکمه',
   'web.campaign_button_url': 'پیوند دکمه',
@@ -8157,6 +8156,22 @@ export const WEB_FA = {
   'web.bcx_h_retry_failed': 'ارسال دوباره به ناموفق‌ها',
   'web.bcx_h_requeued': '{count} گیرنده دوباره در صف',
   'web.bcx_h_refused': 'رد شد',
+  // --- Roadmap C3/C4: audience by bot, attribution, the announcement's purpose --------
+  'web.aud_bots': 'ربات',
+  'web.aud_bots_hint':
+    'مشتریانی که از این ربات‌ها پیام می‌گیرند (رباتی که اول به آن پیام داده‌اند). هیچ‌کدام انتخاب نشود یعنی همهٔ ربات‌ها.',
+  'web.campaign_error_purpose_promotional':
+    'اطلاعیهٔ کمپین همیشه تبلیغاتی است تا انصراف مشتریان رعایت شود. برای اطلاع‌رسانی خدماتی، یک «ارسال همگانی» جدا با هدف اطلاع‌رسانی خدمات بسازید.',
+  'web.campaign_purpose_promotional_hint':
+    'اطلاعیهٔ کمپین تبلیغاتی است و به مشتریانی که از پیام تبلیغاتی انصراف داده‌اند نمی‌رسد. برای اطلاع‌رسانی خدماتی (مثلاً جبران قطعی) یک «ارسال همگانی» جدا بسازید.',
+  'web.campaign_attr_title': 'گیرندگان اطلاعیه و استفاده از تخفیف',
+  'web.campaign_attr_told': 'گیرندگان اطلاعیه:',
+  'web.campaign_attr_delivered': 'تحویل‌شده:',
+  'web.campaign_attr_redeemers_told': 'از گیرندگان، تخفیف را در سفارش پرداخت‌شده استفاده کردند:',
+  'web.campaign_attr_redeemers_delivered': 'از آن‌ها، اطلاعیه به دستشان رسیده بود:',
+  'web.campaign_attr_redeemers_not_told': 'استفاده‌کنندگانی که گیرندهٔ اطلاعیه نبودند:',
+  'web.campaign_attr_note':
+    'شمارش افراد از ردیف‌های ثبت‌شده است، نه علت خرید: این اعداد نمی‌گویند اطلاعیه باعث خرید شده است.',
   // --- end roadmap C2 block -----------------------------------------------------------
 } as const;
 

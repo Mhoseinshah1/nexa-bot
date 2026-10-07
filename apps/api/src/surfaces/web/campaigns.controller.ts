@@ -256,6 +256,7 @@ export class CampaignsController {
             },
       trafficGift: results.trafficGift === null ? null : { counts: results.trafficGift.counts },
       timeGift: results.timeGift === null ? null : { counts: results.timeGift.counts },
+      audienceAttribution: results.audienceAttribution,
     };
   }
 

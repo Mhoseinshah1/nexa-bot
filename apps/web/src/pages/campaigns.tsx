@@ -1,7 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  type BroadcastPurpose,
   BROADCAST_BUTTONS_MAX,
   CAMPAIGN_DESCRIPTION_MAX_LENGTH,
   CAMPAIGN_NAME_MAX_LENGTH,
@@ -208,6 +207,8 @@ const CAMPAIGN_ERROR_MESSAGES: Readonly<Record<string, WebKey>> = {
   'audience.definition_invalid': 'web.campaign_error_audience',
   'commerce.discount_code_taken': 'web.campaign_error_code_taken',
   'broadcast.body_invalid': 'web.campaign_error_body',
+  // Roadmap C4: a discount or cashback campaign is announced as promotion.
+  'campaign.announcement_purpose_invalid': 'web.campaign_error_purpose_promotional',
 };
 
 // ---------------------------------------------------------------------------
@@ -409,7 +410,6 @@ interface FormState {
   announcementOn: boolean;
   announcementBody: string;
   /** Round N close (§D): MARKETING leaves out opted-out customers; a service notice does not. */
-  announcementPurpose: BroadcastPurpose;
   buttons: readonly { label: string; url: string }[];
 }
 
@@ -452,7 +452,6 @@ const EMPTY_FORM: FormState = {
   timeNotify: true,
   announcementOn: false,
   announcementBody: '',
-  announcementPurpose: 'MARKETING',
   buttons: [],
 };
 
@@ -573,7 +572,8 @@ export function campaignBodyOf(
     if (state.announcementBody.trim() === '') return { problem: 'web.campaign_problem_body' };
     actions.announcement = {
       body: state.announcementBody,
-      purpose: state.announcementPurpose,
+      // Roadmap C4: always promotional (`campaign.announcement_purpose_invalid` otherwise).
+      purpose: 'MARKETING',
       buttons: state.buttons
         .filter((b) => b.label.trim() !== '' || b.url.trim() !== '')
         .map((b) => ({ label: b.label.trim(), url: b.url.trim() })),
@@ -663,8 +663,6 @@ function formStateOf(campaign: CampaignDetail): FormState {
         Object.assign(state, {
           announcementOn: true,
           announcementBody: String(terms['body'] ?? ''),
-          announcementPurpose:
-            terms['purpose'] === 'SERVICE_ANNOUNCEMENT' ? 'SERVICE_ANNOUNCEMENT' : 'MARKETING',
           buttons: (terms['buttons'] as { label: string; url: string }[] | undefined) ?? [],
         });
         break;
@@ -1303,22 +1301,9 @@ function CampaignForm({
                   onChange={(event) => set('announcementBody', event.target.value)}
                 />
               </Field>
-              <Field
-                label={t('web.campaign_announcement_purpose')}
-                htmlFor="campaign-announcement-purpose"
-                hint={t('web.bc_purpose_hint')}
-              >
-                <select
-                  id="campaign-announcement-purpose"
-                  value={state.announcementPurpose}
-                  onChange={(event) =>
-                    set('announcementPurpose', event.target.value as BroadcastPurpose)
-                  }
-                >
-                  <option value="MARKETING">{t('web.bc_purpose_marketing')}</option>
-                  <option value="SERVICE_ANNOUNCEMENT">{t('web.bc_purpose_service')}</option>
-                </select>
-              </Field>
+              {/* Roadmap C4: a campaign's announcement is promotional; the customer's
+                  opt-out decides who hears of it. A service fact is a Broadcast of its own. */}
+              <p className="muted small">{t('web.campaign_purpose_promotional_hint')}</p>
               {state.buttons.map((button, index) => (
                 <div className="grid-2" key={index}>
                   <Field
@@ -2094,6 +2079,31 @@ function ResultsCard({ id }: { id: string }) {
                     [
                       t('web.campaign_results_redemptions'),
                       <TallyList key="d" rows={r.discountRedemptions} />,
+                    ],
+                  ] as [ReactNode, ReactNode][])),
+              ...(r.audienceAttribution === null
+                ? []
+                : ([
+                    [
+                      t('web.campaign_attr_title'),
+                      <ul key="attr" className="plain">
+                        <li>
+                          {t('web.campaign_attr_told')} <Num value={r.audienceAttribution.told} /> ·{' '}
+                          {t('web.campaign_attr_delivered')}{' '}
+                          <Num value={r.audienceAttribution.delivered} />
+                        </li>
+                        <li>
+                          {t('web.campaign_attr_redeemers_told')}{' '}
+                          <Num value={r.audienceAttribution.redeemersTold} /> ·{' '}
+                          {t('web.campaign_attr_redeemers_delivered')}{' '}
+                          <Num value={r.audienceAttribution.redeemersDelivered} />
+                        </li>
+                        <li>
+                          {t('web.campaign_attr_redeemers_not_told')}{' '}
+                          <Num value={r.audienceAttribution.redeemersNotTold} />
+                        </li>
+                        <li className="muted small">{t('web.campaign_attr_note')}</li>
+                      </ul>,
                     ],
                   ] as [ReactNode, ReactNode][])),
               ...(r.cashback === null

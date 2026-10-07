@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   AUDIENCE_ERROR_CODES,
+  CAMPAIGN_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
   errors,
   isNexaError,
@@ -33,6 +34,10 @@ import { DrizzleCampaignRepository } from '../../apps/api/src/modules/commerce/c
 import { IntlCampaignCalendar } from '../../apps/api/src/modules/commerce/campaigns/infrastructure/intl-campaign-calendar';
 import { DrizzleDiscountRepository } from '../../apps/api/src/modules/commerce/pricing/infrastructure/drizzle-discount.repository';
 import { DrizzleCashbackRuleRepository } from '../../apps/api/src/modules/commerce/pricing/infrastructure/drizzle-cashback.repository';
+import { BroadcastDispatcher } from '../../apps/api/src/modules/commerce/broadcasts/application/broadcast-dispatcher';
+import { DrizzleBroadcastRepository } from '../../apps/api/src/modules/commerce/broadcasts/infrastructure/drizzle-broadcast.repository';
+import { DrizzleRecipientFactsReader } from '../../apps/api/src/modules/commerce/broadcasts/infrastructure/drizzle-recipient-facts.reader';
+import type { BroadcastTransport } from '../../apps/api/src/modules/commerce/broadcasts/application/ports';
 import { CachedTenantPresentationReader } from '../../apps/api/src/modules/control/templates/infrastructure/cached-tenant-presentation.reader';
 import {
   SEED_IDS,
@@ -681,6 +686,7 @@ describe('campaigns', () => {
       // No field beyond what a row persists: no revenue caused, no conversion.
       expect(Object.keys(results).sort()).toEqual([
         'announcement',
+        'audienceAttribution',
         'cashback',
         'discount',
         'targeted',
@@ -696,6 +702,8 @@ describe('campaigns', () => {
         results.trafficGift,
         results.timeGift,
       ]).toEqual([null, null, null, null]);
+      // Roadmap C3: with no announcement there is no frozen recipient set to compare against.
+      expect(results.audienceAttribution).toBeNull();
       expect(results.discount?.byOrderState).toEqual([
         { state: 'AWAITING_PAYMENT', count: 1, amount: 20_000n, currency: 'IRT' },
         { state: 'PAID', count: 1, amount: 20_000n, currency: 'IRT' },
@@ -1162,6 +1170,237 @@ describe('campaigns', () => {
         ),
       ).toBe('platform.permission_denied');
       expect(await count(sql`SELECT count(*)::int AS n FROM bulk_operations`)).toBe(0);
+    });
+  });
+  // -------------------------------------------------------------------------
+  // Roadmap C3 / C4 (`docs/campaign-broadcast-readiness.md`)
+  // -------------------------------------------------------------------------
+
+  describe('roadmap C3: attribution from persisted effects and the frozen announcement', () => {
+    /** Telegram, scripted per chat: every chat SENT unless told otherwise. */
+    const transportFor = (refused: readonly string[]): BroadcastTransport => ({
+      render: async (_scope, request) => ({
+        ok: true,
+        rendered: {
+          contentKind: request.contentKind,
+          text: request.body,
+          buttons: request.buttons,
+          source: request.source,
+        },
+      }),
+      deliver: async (_scope, request) =>
+        refused.includes(request.chatId)
+          ? { outcome: 'REFUSED', errorCode: 'telegram.rejected.400' }
+          : { outcome: 'SENT', messageId: 1 },
+      pin: async () => ({ outcome: 'PINNED' }),
+    });
+
+    const dispatcherWith = (refused: readonly string[]) =>
+      new BroadcastDispatcher({
+        repository: new DrizzleBroadcastRepository(ctx.container.database.db),
+        transport: transportFor(refused),
+        facts: new DrizzleRecipientFactsReader(ctx.container.database.db, async () => 'IRT'),
+        outbox: ctx.container.outbox,
+        uow: ctx.container.uow,
+        clock,
+        ids: ctx.container.ids,
+        scopeIsActive: async () => true,
+        logger: { info: () => undefined, error: () => undefined },
+      });
+
+    async function customerOf(telegramUserId: string): Promise<UserId> {
+      const { customer } = await ctx.container.customers.resolveFromUpdate(
+        tenantA,
+        customerActor(`resolve-${telegramUserId}`),
+        {
+          idempotencyKey: `resolve-${telegramUserId}`,
+          telegramUserId,
+          from: { id: Number(telegramUserId), first_name: 'مشتری' },
+          botInstanceId: BOT_A,
+        },
+      );
+      return customer.id;
+    }
+
+    async function buyAs(customerId: UserId, pay: boolean): Promise<void> {
+      const draft = await ctx.container.orders.createDraft(tenantA, customerActor(key()), {
+        idempotencyKey: key(),
+        customerId,
+        productId: await product(100_000n),
+      });
+      const order = await ctx.container.orders.confirm(tenantA, customerActor(key()), {
+        idempotencyKey: key(),
+        customerId,
+        orderId: draft.id,
+      });
+      if (!pay) return;
+      await ctx.container.wallet.adjust(tenantA, owner, customerId, {
+        idempotencyKey: key(),
+        direction: 'CREDIT',
+        amountMinor: order.totals.total.amountMinor,
+        currency: 'IRT',
+        note: 'موجودی آزمون',
+      });
+      await ctx.container.payments.settleFromWallet(tenantA, customerActor(key()), customerId, {
+        idempotencyKey: key(),
+        orderId: order.id,
+      });
+    }
+
+    it('sets the discount’s PAID redeemers against who was told and who was delivered, and counts the rest apart', async () => {
+      const customerB = await customerOf('930002');
+      const customerD = await customerOf('930004');
+      const id = await draftCampaign([
+        { kind: 'DISCOUNT', terms: TWENTY_PERCENT },
+        {
+          kind: 'ANNOUNCEMENT',
+          terms: { body: 'جشنواره', buttons: [], purpose: 'MARKETING' },
+        },
+      ]);
+      await schedule(id);
+      await loop.runOnce(tenantA);
+      // A delivered, B refused by Telegram, D delivered but never buys.
+      await dispatcherWith(['930002']).pass(tenantA);
+      // C registers after the confirmation: never told, and the rule's scope still lets them
+      // redeem (the audience decides who is told, not who is eligible — OQ-C1-01).
+      const customerC = await customerOf('930003');
+
+      await buyAs(customerA, true);
+      await buyAs(customerA, true); // a second paid order: still one redeemer
+      await buyAs(customerB, true);
+      await buyAs(customerC, true);
+      await buyAs(customerD, false); // confirmed, never paid: not a PAID redeemer
+
+      const results = await service.results(tenantA, owner, id);
+      expect(results.audienceAttribution).toEqual({
+        told: 3,
+        delivered: 2,
+        redeemersTold: 2,
+        redeemersDelivered: 1,
+        redeemersNotTold: 1,
+      });
+      // The persisted redemptions behind it are the ones the discount tally already shows.
+      expect(results.discount?.byOrderState.find((row) => row.state === 'PAID')?.count).toBe(4);
+    });
+  });
+
+  describe('roadmap C4: the promotional opt-out stays authoritative', () => {
+    const SERVICE_NOTICE = {
+      kind: 'ANNOUNCEMENT' as const,
+      terms: { body: 'اطلاعیه', buttons: [], purpose: 'SERVICE_ANNOUNCEMENT' as const },
+    };
+
+    it('refuses a campaign announcement called a service announcement, whatever the campaign offers', async () => {
+      for (const action of [
+        { kind: 'DISCOUNT' as const, terms: TWENTY_PERCENT },
+        { kind: 'CASHBACK' as const, terms: TEN_PERCENT_BACK },
+        {
+          kind: 'WALLET_GIFT' as const,
+          terms: { amountMinor: '10000', currency: 'IRT' as const, notify: false },
+        },
+      ]) {
+        expect(await refusal(draftCampaign([action, SERVICE_NOTICE]))).toBe(
+          CAMPAIGN_ERROR_CODES.CAMPAIGN_ANNOUNCEMENT_PURPOSE_INVALID,
+        );
+      }
+      expect(await count(sql`SELECT count(*)::int AS n FROM campaigns`)).toBe(0);
+
+      // An edit that turns a MARKETING announcement into a service one is refused the same way.
+      const id = await draftCampaign([
+        { kind: 'DISCOUNT', terms: TWENTY_PERCENT },
+        { kind: 'ANNOUNCEMENT', terms: { body: 'جشنواره', buttons: [], purpose: 'MARKETING' } },
+      ]);
+      expect(
+        await refusal(
+          service.updateDraft(tenantA, owner, {
+            idempotencyKey: key(),
+            campaignId: id,
+            draft: {
+              name: 'جشنواره',
+              description: '',
+              ...(await window(-HOUR, DAY)),
+              audience: { version: 1 },
+              actions: [{ kind: 'DISCOUNT', terms: TWENTY_PERCENT }, SERVICE_NOTICE],
+            },
+          }),
+        ),
+      ).toBe(CAMPAIGN_ERROR_CODES.CAMPAIGN_ANNOUNCEMENT_PURPOSE_INVALID);
+    });
+
+    it('sends the announcement as MARKETING, so an opted-out customer is SKIPPED and keeps their preference', async () => {
+      const k = key();
+      await ctx.container.customers.setMarketingOptOut(tenantA, customerActor(k), {
+        idempotencyKey: k,
+        customerId: customerA,
+        optedOut: true,
+      });
+      const id = await draftCampaign([
+        { kind: 'DISCOUNT', terms: TWENTY_PERCENT },
+        { kind: 'ANNOUNCEMENT', terms: { body: 'جشنواره', buttons: [], purpose: 'MARKETING' } },
+      ]);
+      await schedule(id);
+      await loop.runOnce(tenantA);
+      const sent: string[] = [];
+      await new BroadcastDispatcher({
+        repository: new DrizzleBroadcastRepository(ctx.container.database.db),
+        transport: {
+          render: async (_scope, request) => ({
+            ok: true,
+            rendered: {
+              contentKind: request.contentKind,
+              text: request.body,
+              buttons: request.buttons,
+              source: request.source,
+            },
+          }),
+          deliver: async (_scope, request) => {
+            sent.push(request.chatId);
+            return { outcome: 'SENT', messageId: 1 };
+          },
+          pin: async () => ({ outcome: 'PINNED' }),
+        },
+        facts: new DrizzleRecipientFactsReader(ctx.container.database.db, async () => 'IRT'),
+        outbox: ctx.container.outbox,
+        uow: ctx.container.uow,
+        clock,
+        ids: ctx.container.ids,
+        scopeIsActive: async () => true,
+        logger: { info: () => undefined, error: () => undefined },
+        marketingOptOut: {
+          honoured: (scope, tx) =>
+            ctx.container.featureFlagResolver.isEnabled(scope, 'customer_marketing_opt_out', tx),
+        },
+      }).pass(tenantA);
+      expect(sent).toEqual([]);
+      const recipients = await rows<{ state: string; error_code: string | null; purpose: string }>(
+        sql`SELECT r.state, r.error_code, b.purpose FROM broadcast_recipients r
+              JOIN broadcasts b ON b.id = r.broadcast_id`,
+      );
+      expect(recipients).toEqual([
+        { state: 'SKIPPED', error_code: 'broadcast.marketing_opted_out', purpose: 'MARKETING' },
+      ]);
+      const pref = await rows<{ at: unknown }>(
+        sql`SELECT marketing_opt_out_at AS at FROM customers WHERE id = ${customerA}`,
+      );
+      expect(pref[0]?.at).not.toBeNull();
+    });
+
+    it('refuses to schedule a draft saved before the rule, and writes no rule or broadcast', async () => {
+      const id = await draftCampaign([
+        { kind: 'DISCOUNT', terms: TWENTY_PERCENT },
+        { kind: 'ANNOUNCEMENT', terms: { body: 'جشنواره', buttons: [], purpose: 'MARKETING' } },
+      ]);
+      // As the previous release could have stored it.
+      await ctx.container.database.db.execute(sql`
+        UPDATE campaign_actions
+           SET config = jsonb_set(config, '{purpose}', '"SERVICE_ANNOUNCEMENT"')
+         WHERE campaign_id = ${id} AND kind = 'ANNOUNCEMENT'`);
+      expect(await refusal(schedule(id))).toBe(
+        CAMPAIGN_ERROR_CODES.CAMPAIGN_ANNOUNCEMENT_PURPOSE_INVALID,
+      );
+      expect(await stateOf(id)).toBe('DRAFT');
+      expect(await count(sql`SELECT count(*)::int AS n FROM discounts`)).toBe(0);
+      expect(await count(sql`SELECT count(*)::int AS n FROM broadcasts`)).toBe(0);
     });
   });
 });

@@ -69,6 +69,7 @@ import type {
   DiscountRuleWrite,
 } from '../../pricing/application/ports.js';
 import type {
+  AnnouncementAttribution,
   CampaignActionConfig,
   CampaignActionRecord,
   CampaignGiftConfig,
@@ -157,6 +158,11 @@ export interface CampaignResults {
   readonly walletGift: CampaignGiftOutcome | null;
   readonly trafficGift: CampaignGiftOutcome | null;
   readonly timeGift: CampaignGiftOutcome | null;
+  /**
+   * Roadmap C3: the discount's PAID redeemers against the announcement's frozen recipients.
+   * Null unless the campaign has both, and the announcement has been launched.
+   */
+  readonly audienceAttribution: AnnouncementAttribution | null;
 }
 
 /** A gift's own engine counts, read through, and what the ledger holds for a wallet gift. */
@@ -329,6 +335,10 @@ export class CampaignService {
       walletGift: await bulkOf('WALLET_GIFT'),
       trafficGift: await bulkOf('TRAFFIC_GIFT'),
       timeGift: await bulkOf('TIME_GIFT'),
+      audienceAttribution:
+        broadcastId === null || discountId === null
+          ? null
+          : await this.deps.campaigns.announcementAttribution(scope, { broadcastId, discountId }),
     };
   }
 
@@ -646,6 +656,8 @@ export class CampaignService {
             'A campaign needs at least one action before it is scheduled.',
           );
         }
+        // Roadmap C4: a draft saved by the release before this rule is refused here too.
+        assertAnnouncementPurpose(actions.map((a) => a.config));
         await this.checkActionPermissions(scope, actor, actions, tx);
         await this.assertActionReferences(
           scope,
@@ -929,7 +941,8 @@ export class CampaignService {
         body: config.terms.body,
         buttons: config.terms.buttons,
         audience: campaign.audience,
-        purpose: config.terms.purpose,
+        // Roadmap C4: a campaign is promotional; the opt-out decides at the send.
+        purpose: 'MARKETING',
         frozenAudienceId,
       });
       // A retry after a launch that committed: the broadcast is already past DRAFT.
@@ -1696,7 +1709,7 @@ export class CampaignService {
         const frozen = freezeAudience(draft.audience);
         return { audience: frozen.definition, audienceHash: frozen.hash };
       })(),
-      actions: draft.actions,
+      actions: assertAnnouncementPurpose(draft.actions),
     };
   }
 
@@ -1966,4 +1979,30 @@ async function readableOrNull<T>(work: Promise<T>): Promise<T | null> {
     if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') return null;
     throw error;
   }
+}
+
+/**
+ * Roadmap C4 — the promotional opt-out stays authoritative. A campaign is promotional by what
+ * it is: its announcement exists to tell people about an offer or a gift. Sent as a
+ * SERVICE_ANNOUNCEMENT it would reach every customer who opted out of promotions, with no
+ * reason given and nothing on the customer's side changed — the silent override C4 rules out.
+ * So a campaign's announcement is MARKETING, and the opt-out decides at the send.
+ *
+ * No release ever persisted the purpose (the repository's `configToJson` drops it), so every
+ * campaign announcement sent so far went as MARKETING: this makes the screen and the API say
+ * what the lane already did, rather than accept a choice and silently ignore it. A service
+ * fact — compensation after an outage — is a Broadcast of its own, composed and confirmed
+ * as a service announcement on the Broadcast page.
+ */
+export function assertAnnouncementPurpose<T extends readonly CampaignActionConfig[]>(
+  actions: T,
+): T {
+  const announcement = actions.find((a) => a.kind === 'ANNOUNCEMENT');
+  if (announcement?.kind === 'ANNOUNCEMENT' && announcement.terms.purpose !== 'MARKETING') {
+    throw errors.validation(
+      CAMPAIGN_ERROR_CODES.CAMPAIGN_ANNOUNCEMENT_PURPOSE_INVALID,
+      'A campaign announces itself as a promotional message; a service fact is a broadcast of its own.',
+    );
+  }
+  return actions;
 }

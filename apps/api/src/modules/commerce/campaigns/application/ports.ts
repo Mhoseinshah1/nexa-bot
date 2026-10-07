@@ -310,6 +310,24 @@ export interface CampaignRepository {
   discountOutcome(scope: TenantContext, discountId: string): Promise<DiscountOutcome>;
 
   cashbackOutcome(scope: TenantContext, cashbackRuleId: string): Promise<CashbackOutcome>;
+
+  /**
+   * Roadmap C3: the campaign discount's PAID redeemers set against the announcement's frozen
+   * recipient rows (`broadcast_recipients`, never released). Distinct customers.
+   */
+  announcementAttribution(
+    scope: TenantContext,
+    input: { readonly broadcastId: string; readonly discountId: string },
+  ): Promise<AnnouncementAttribution>;
+}
+
+/** Roadmap C3: who was told, who was delivered to, and who of each redeemed. */
+export interface AnnouncementAttribution {
+  readonly told: number;
+  readonly delivered: number;
+  readonly redeemersTold: number;
+  readonly redeemersDelivered: number;
+  readonly redeemersNotTold: number;
 }
 
 /** The tenant's own calendar and zone, and the one conversion a campaign window needs. */

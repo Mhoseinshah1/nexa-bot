@@ -18,7 +18,7 @@ import {
 import { ApiError, fetchAudienceOptions, previewAudience } from '../api/client';
 import { currencyLabel, formatNumber } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { Banner, Field, Metric } from '../ui/kit';
+import { Banner, Field, Ltr, Metric } from '../ui/kit';
 import { Icon } from '../ui/icons';
 
 /**
@@ -60,6 +60,8 @@ export interface AudienceDraft {
   tags: { anyOf: string[]; noneOf: string[] } | null;
   /** Broadcast V2: has / has no service active now. */
   activeService: AudienceActiveServiceFilter;
+  /** Roadmap C3: the bots the customer is reached through; null means every bot. */
+  botInstanceIds: string[] | null;
 }
 
 export const EMPTY_AUDIENCE: AudienceDraft = {
@@ -81,6 +83,7 @@ export const EMPTY_AUDIENCE: AudienceDraft = {
   service: null,
   tags: null,
   activeService: 'ANY',
+  botInstanceIds: null,
 };
 
 /** A stored canonical definition, back into the builder's shape (every key is present). */
@@ -263,6 +266,31 @@ export function AudienceBuilder({
           />
         </Field>
       </div>
+
+      {/* Roadmap C3: only where there is a choice — a tenant with one bot reaches everyone
+          through it. None ticked means every bot. */}
+      {(opts?.bots.length ?? 0) > 1 && (
+        <div className="aud-section">
+          <h4 className="field-group-head">{t('web.aud_bots')}</h4>
+          <p className="muted small">{t('web.aud_bots_hint')}</p>
+          <div className="checks aud-segments">
+            {(opts?.bots ?? []).map((bot) => (
+              <label className="aud-segment" key={bot.id}>
+                <input
+                  type="checkbox"
+                  disabled={disabled}
+                  checked={(value.botInstanceIds ?? []).includes(bot.id)}
+                  onChange={() => {
+                    const next = toggle(value.botInstanceIds ?? [], bot.id);
+                    set({ botInstanceIds: next.length === 0 ? null : next });
+                  }}
+                />{' '}
+                <Ltr>@{bot.username}</Ltr>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
 
       {(opts?.tags.length ?? 0) > 0 && (
         <div className="aud-section">
@@ -640,6 +668,9 @@ export function describeAudience(definition: unknown): string[] {
     lines.push(`${t('web.aud_referral')}: ${t(REFERRAL_LABELS[d.referral])}`);
   if (d.activeService !== 'ANY') {
     lines.push(`${t('web.aud_active_service')}: ${t(ACTIVE_SERVICE_LABELS[d.activeService])}`);
+  }
+  if (d.botInstanceIds !== null) {
+    lines.push(`${t('web.aud_bots')}: ${formatNumber(d.botInstanceIds.length)}`);
   }
   if (d.tags !== null) {
     const bits = [

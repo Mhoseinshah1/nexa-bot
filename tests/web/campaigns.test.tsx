@@ -547,3 +547,84 @@ describe('the campaign editor', () => {
     }
   });
 });
+
+describe('roadmap C3/C4 on the campaign page', () => {
+  const pickers = [
+    {
+      url: '/audience/options',
+      body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
+    },
+    { url: '/products', body: { products: [], nextCursor: null } },
+    { url: '/product-categories', body: { categories: [] } },
+    listWithPresentation,
+  ];
+
+  it('offers no service-announcement purpose: a campaign’s announcement is promotional, and says so', async () => {
+    const api = stubApi([...pickers, { url: '/campaigns', body: detail() }]);
+    renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
+    await screen.findByText('چه کسانی');
+    const section = document.getElementById('campaign-section-announcement') as HTMLElement;
+    fireEvent.click(within(section).getByLabelText(t('web.campaign_action_on')));
+    expect(within(section).queryByRole('combobox')).toBeNull();
+    expect(within(section).queryByText(t('web.bc_purpose_service'))).toBeNull();
+    expect(
+      within(section).getByText(t('web.campaign_purpose_promotional_hint')),
+    ).toBeInTheDocument();
+
+    const inputs = screen.getAllByRole('textbox');
+    fireEvent.change(inputs[0] as HTMLElement, { target: { value: 'جشنواره' } });
+    fireEvent.change(screen.getByPlaceholderText('1405-07-10'), {
+      target: { value: '1405-07-10' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('1405-07-20'), {
+      target: { value: '1405-07-20' },
+    });
+    fireEvent.change(within(section).getByLabelText(t('web.campaign_announcement_body')), {
+      target: { value: 'سلام' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ پیش‌نویس' }));
+    await waitFor(() => expect(posts(api, '/campaigns')).toHaveLength(1));
+    const body = posts(api, '/campaigns')[0]?.body as { actions: Record<string, unknown> };
+    expect(body.actions['announcement']).toMatchObject({ purpose: 'MARKETING' });
+  });
+
+  it('sets the redeemers against who was told, and says it is not a cause', async () => {
+    stubApi([
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/results`,
+        body: {
+          ...results(),
+          audienceAttribution: {
+            told: 120,
+            delivered: 97,
+            redeemersTold: 14,
+            redeemersDelivered: 11,
+            redeemersNotTold: 3,
+          },
+        },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} may={ALL} />);
+    const card = (await screen.findByText('نتایج')).closest('section') as HTMLElement;
+    await waitFor(() => expect(card.textContent).toContain(t('web.campaign_attr_title')));
+    expect(card.textContent).toContain(`${t('web.campaign_attr_told')} 120`);
+    expect(card.textContent).toContain(`${t('web.campaign_attr_redeemers_delivered')} 11`);
+    expect(card.textContent).toContain(`${t('web.campaign_attr_redeemers_not_told')} 3`);
+    expect(card.textContent).toContain(t('web.campaign_attr_note'));
+    expect(card.textContent).not.toMatch(/درآمد کمپین|نرخ تبدیل/);
+  });
+
+  it('draws no attribution where the server gives none (an older server omits it)', async () => {
+    const older: Record<string, unknown> = { ...results() };
+    delete older['audienceAttribution'];
+    stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/results`, body: older },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} may={ALL} />);
+    const card = (await screen.findByText('نتایج')).closest('section') as HTMLElement;
+    await waitFor(() => expect(card.textContent).toContain('مبلغ واریزشده'));
+    expect(card.textContent).not.toContain(t('web.campaign_attr_title'));
+  });
+});
