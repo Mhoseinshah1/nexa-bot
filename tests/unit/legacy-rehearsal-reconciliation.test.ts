@@ -30,10 +30,10 @@ const passing = (cycles = [1, 2]): Check[] =>
   );
 
 describe('the equation table is the document’s', () => {
-  it('has exactly the 23 equations of the result table, in its order', () => {
+  it('has exactly the 25 equations of the result table, in its order', () => {
     const table = DOC.slice(DOC.indexOf('## Result table'));
-    const ids = [...table.matchAll(/^\| ([CWRSP][0-9]) +\|/gmu)].map((m) => m[1]);
-    expect(ids).toHaveLength(23);
+    const ids = [...table.matchAll(/^\| ([CWRSP][0-9]{1,2}) +\|/gmu)].map((m) => m[1]);
+    expect(ids).toHaveLength(25);
     expect(EQUATIONS.map(([id]) => id)).toEqual(ids);
   });
 
@@ -115,6 +115,6 @@ describe('the CLI', () => {
     writeFileSync(file, JSON.stringify({ evidenceClass: 'synthetic', checks: passing([1]) }));
     const result = spawnSync(process.execPath, [TOOL, file], { encoding: 'utf8' });
     expect(result.status).toBe(0);
-    expect(result.stdout.match(/^\| [CWRSP][0-9] \| HOLDS \|/gmu)).toHaveLength(23);
+    expect(result.stdout.match(/^\| [CWRSP][0-9]{1,2} +\| HOLDS \|/gmu)).toHaveLength(25);
   });
 });

@@ -42,6 +42,9 @@ export const EQUATIONS = [
     ],
     null,
   ],
+  // Mirza PR4 (owner decision 6): no ledger DEBIT opening; one debt per negative balance.
+  ['W9', ['no_debit_openings'], null],
+  ['W10', ['legacy_debts_one_per_negative_user', 'legacy_debts_equal_negative_magnitude'], null],
   [
     'R1',
     [

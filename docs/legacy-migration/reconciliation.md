@@ -441,7 +441,6 @@ invoice with the CUSTOMER_MISSING review rows, in the throwaway engine's scratch
 | W8       |                   |            |       |
 | W9       |                   |            |       |
 | W10      |                   |            |       |
-| U1–U8    |                   |            |       |
 | R1       |                   |            |       |
 | R2       |                   |            |       |
 | R3       |                   |            |       |
