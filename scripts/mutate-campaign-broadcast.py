@@ -72,6 +72,13 @@ M=[
  ('CB-17',[(PAGE,"      void client.invalidateQueries({ queryKey: ['broadcast-history', record.id] });\n    },\n  });\n  const large","    },\n  });\n  const large")],T_W,'reads the history again after a test'),
  # D2-F1: on a forward/copy, "chat not found" may name the SOURCE: a refusal, not unreachable.
  ('CB-18',[(TRANSPORT,"  if (request.sourced && AMBIGUOUS_ON_SOURCED_SEND.test(outcome.errorMessage)) {","  if (false && AMBIGUOUS_ON_SOURCED_SEND.test(outcome.errorMessage)) {")],T_U,'D2-F1|may name the source chat'),
+ # Review N2: "waiting for a retry" is a PENDING row with an answer on record, not every PENDING.
+ ('CB-19',[(REPO,"count(*) FILTER (WHERE r.state = 'PENDING' AND r.error_code IS NOT NULL)::int","count(*) FILTER (WHERE r.state = 'PENDING')::int")],T_R,'a 429 holds the bot that got it'),
+ # Review N1: without audit.view, no refused rows and no operator identity.
+ ('CB-20',[(SVC,"      if (!audited && row.result !== 'SUCCESS') continue;\n","")],T_R,'without audit.view'),
+ ('CB-21',[(SVC,"        actorLabel: audited ? row.actorLabel : null,","        actorLabel: row.actorLabel,")],T_R,'without audit.view'),
+ # Review N4: the history says when older rows exist.
+ ('CB-22',[(SVC,"    const truncated = rows.length > BROADCAST_HISTORY_MAX;","    const truncated = false;")],T_R,'beyond the cap'),
  ('CB-10',[(PAGE,"              onClick={() => setRetryAsked(true)}","              onClick={() => steer.mutate('retryFailed')}")],T_W,'asks before a re-queue'),
 ]
 

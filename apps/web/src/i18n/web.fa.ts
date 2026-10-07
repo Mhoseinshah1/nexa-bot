@@ -6529,7 +6529,7 @@ export const WEB_FA = {
   'web.bc_r_unconfirmed': 'نامشخص (شاید رسیده باشد)',
   'web.bc_r_failed': 'ناموفق',
   'web.bc_r_unreachable': 'ربات را مسدود کرده یا در دسترس نیست',
-  'web.bc_r_skipped': 'رد شده پیش از ارسال (مسدود یا انصراف از پیام تبلیغاتی)',
+  'web.bc_r_skipped': 'کنار گذاشته شد (مسدود یا انصراف از پیام تبلیغاتی)',
   'web.bc_r_cancelled': 'لغو شده (ارسال نشده)',
   'web.bc_paused_bot':
     'ارسال متوقف شد چون ربات این گیرندگان در دسترس نیست. پس از رفع مشکل ربات، ادامه دهید.',
@@ -8125,7 +8125,7 @@ export const WEB_FA = {
   'web.bcx_no_bot_hint': 'در شمارش هستند و همان لحظه «در دسترس نیست» ثبت می‌شوند.',
   'web.bcx_retry_question': '{count} گیرندهٔ ناموفق دوباره در صف ارسال قرار بگیرند؟',
   'web.bcx_retry_detail':
-    'فقط گیرندگانی که تلگرام پیامشان را رد کرده دوباره فرستاده می‌شوند. «نامشخص»ها (شاید رسیده باشند)، تحویل‌شده‌ها و رد‌شده‌ها هرگز دوباره فرستاده نمی‌شوند.',
+    'فقط گیرندگان «ناموفق» (تلگرام پیامشان را نپذیرفته) دوباره فرستاده می‌شوند. «نامشخص»ها (شاید رسیده باشند)، تحویل‌شده‌ها، نرسیده‌ها و کنارگذاشته‌شده‌ها (مسدود یا انصراف) هرگز دوباره فرستاده نمی‌شوند.',
   'web.bcx_retry_confirm': 'بله، دوباره در صف بگذار',
   'web.bcx_next_attempt': 'تلاش بعدی:',
   'web.bcx_bots_title': 'تحویل به تفکیک ربات',
@@ -8139,11 +8139,13 @@ export const WEB_FA = {
   'web.bcx_bot_disabled': 'غیرفعال',
   'web.bcx_waiting_retry': 'در انتظار تلاش دوباره',
   'web.bcx_unconfirmed_short': 'نامشخص',
-  'web.bcx_unreachable_short': 'نرسید / رد شده',
+  'web.bcx_unreachable_short': 'نرسید / کنار گذاشته شد',
   'web.bcx_held': 'توقف تلگرام',
   'web.bcx_held_until': 'تا',
   'web.bcx_history_title': 'تاریخچهٔ این ارسال',
   'web.bcx_history_empty': 'هنوز کاری ثبت نشده است.',
+  'web.bcx_history_truncated':
+    'فقط تازه‌ترین موارد نشان داده شده است؛ موارد قدیمی‌تر در گزارش رویدادها (Audit log) هست.',
   'web.bcx_h_create': 'ساخت پیش‌نویس',
   'web.bcx_h_update': 'ویرایش پیش‌نویس',
   'web.bcx_h_media_set': 'بارگذاری رسانه',
@@ -8155,7 +8157,7 @@ export const WEB_FA = {
   'web.bcx_h_cancel': 'لغو',
   'web.bcx_h_retry_failed': 'ارسال دوباره به ناموفق‌ها',
   'web.bcx_h_requeued': '{count} گیرنده دوباره در صف',
-  'web.bcx_h_refused': 'رد شد',
+  'web.bcx_h_refused': 'اجازه داده نشد',
   // --- Roadmap C3/C4: audience by bot, attribution, the announcement's purpose --------
   'web.aud_bots': 'ربات',
   'web.aud_bots_hint':

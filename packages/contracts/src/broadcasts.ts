@@ -562,7 +562,9 @@ export const broadcastRecipientSchema = z.object({
    * Roadmap C2 (retry visibility): when a PENDING recipient that was already answered once —
    * a 429 deferral or a bot that could not send — is next due. Null for every other row.
    */
-  nextAttemptAt: z.iso.datetime().nullable(),
+  // Optional (PR #237 review B1): a row from an API replica before this field — met during
+  // a rolling update — must still parse, or the whole recipients card fails.
+  nextAttemptAt: z.iso.datetime().nullable().optional(),
 });
 export type BroadcastRecipientRow = z.infer<typeof broadcastRecipientSchema>;
 
@@ -702,6 +704,12 @@ export type BroadcastHistoryEntry = z.infer<typeof broadcastHistoryEntrySchema>;
 
 export const broadcastHistoryResponseSchema = z.object({
   entries: z.array(broadcastHistoryEntrySchema),
+  /**
+   * PR #237 review N4: older rows exist beyond `BROADCAST_HISTORY_MAX` (the newest are
+   * shown). The page says so and points to the audit log, rather than imply the list is
+   * the whole story. Defaults to false for a response that predates it.
+   */
+  truncated: z.boolean().default(false),
 });
 export type BroadcastHistoryResponse = z.infer<typeof broadcastHistoryResponseSchema>;
 

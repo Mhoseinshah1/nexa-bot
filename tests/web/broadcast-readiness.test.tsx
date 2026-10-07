@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { broadcastRecipientListResponseSchema } from '@nexa/contracts';
 import { BroadcastDetailPage, broadcastReasonLabel } from '../../apps/web/src/pages/broadcasts';
 import { renderPage, stubApi } from './harness';
 
@@ -190,7 +191,7 @@ describe('the broadcast’s own history', () => {
     ]);
     renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
     expect(await screen.findByText(/4 گیرنده دوباره در صف/)).toBeInTheDocument();
-    expect(screen.getByText('رد شد')).toBeInTheDocument();
+    expect(screen.getByText('اجازه داده نشد')).toBeInTheDocument();
     expect(screen.getByText('تأیید و شروع')).toBeInTheDocument();
     expect(screen.getByText(/پاسخ تلگرام نامشخص بود/)).toBeInTheDocument();
   });
@@ -409,5 +410,48 @@ describe('failures and retries', () => {
     await waitFor(() =>
       expect(api.calls.filter((call) => call.url.includes('/pause')).length).toBe(1),
     );
+  });
+
+  it('keeps the recipients card working against an older API replica (review B1)', async () => {
+    // A row as the release before this one answers it: no nextAttemptAt at all.
+    const oldRow = {
+      customerId: '019280ab-cdef-7012-8345-00000000d002',
+      firstName: 'Old',
+      username: null,
+      state: 'PENDING',
+      attempts: 0,
+      errorCode: null,
+      resolvedAt: null,
+      pinState: null,
+      pinErrorCode: null,
+    };
+    expect(
+      broadcastRecipientListResponseSchema.safeParse({ recipients: [oldRow], nextCursor: null })
+        .success,
+    ).toBe(true);
+    stubApi([
+      { url: `/broadcasts/${ID}`, body: { broadcast: sending({ total: 1, pending: 1 }) } },
+      { url: `/broadcasts/${ID}/failures`, body: { reasons: [] } },
+      { url: `/broadcasts/${ID}/recipients`, body: { recipients: [oldRow], nextCursor: null } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const recipients = await screen.findByRole('table', { name: 'گیرندگان' });
+    expect(await within(recipients).findByText('Old')).toBeInTheDocument();
+    expect(within(recipients).queryByText(/تلاش بعدی:/)).toBeNull();
+  });
+
+  it('says when older history rows exist beyond the ones shown (review N4)', async () => {
+    stubApi([
+      { url: `/broadcasts/${ID}`, body: { broadcast: sending({ total: 1, sent: 1 }) } },
+      { url: `/broadcasts/${ID}/recipients`, body: { recipients: [], nextCursor: null } },
+      { url: `/broadcasts/${ID}/failures`, body: { reasons: [] } },
+      { url: `/broadcasts/${ID}/bots`, body: { bots: [] } },
+      {
+        url: `/broadcasts/${ID}/history`,
+        body: { entries: [historyEntry({ action: 'broadcast.launch' })], truncated: true },
+      },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    expect(await screen.findByText(/فقط تازه‌ترین موارد نشان داده شده است/)).toBeInTheDocument();
   });
 });

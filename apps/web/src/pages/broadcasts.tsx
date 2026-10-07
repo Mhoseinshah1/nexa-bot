@@ -1389,31 +1389,37 @@ function HistoryCard({
     queryFn: () => fetchBroadcastHistory(id),
   });
   const rows = history.data?.entries ?? [];
+  const truncated = history.data?.truncated === true;
   return (
     <Card title={t('web.bcx_history_title')}>
       <StateSwitch query={history}>
         {rows.length === 0 ? (
           <Empty variant="compact" title={t('web.bcx_history_empty')} />
         ) : (
-          <ul className="bcx-history small">
-            {rows.map((row) => (
-              <li key={row.id}>
-                <span className="num">{formatTimestamp(row.occurredAt)}</span>{' '}
-                <strong>{t(HISTORY_LABELS[row.action])}</strong>
-                {row.actorLabel !== null && <> · {row.actorLabel}</>}
-                {row.testOutcome !== null && <> · {t(TEST_OUTCOME_LABELS[row.testOutcome])}</>}
-                {row.requeued !== null && (
-                  <> · {t('web.bcx_h_requeued').replace('{count}', formatNumber(row.requeued))}</>
-                )}
-                {row.result !== 'SUCCESS' && (
-                  <>
-                    {' '}
-                    <Badge tone="danger">{t('web.bcx_h_refused')}</Badge>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
+          <>
+            {' '}
+            <ul className="bcx-history small">
+              {rows.map((row) => (
+                <li key={row.id}>
+                  <span className="num">{formatTimestamp(row.occurredAt)}</span>{' '}
+                  <strong>{t(HISTORY_LABELS[row.action])}</strong>
+                  {row.actorLabel !== null && <> · {row.actorLabel}</>}
+                  {row.testOutcome !== null && <> · {t(TEST_OUTCOME_LABELS[row.testOutcome])}</>}
+                  {row.requeued !== null && (
+                    <> · {t('web.bcx_h_requeued').replace('{count}', formatNumber(row.requeued))}</>
+                  )}
+                  {row.result !== 'SUCCESS' && (
+                    <>
+                      {' '}
+                      <Badge tone="danger">{t('web.bcx_h_refused')}</Badge>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {/* Review N4: the newest rows are shown; say so when older ones exist. */}
+            {truncated && <p className="muted small">{t('web.bcx_history_truncated')}</p>}
+          </>
         )}
       </StateSwitch>
     </Card>
@@ -1501,12 +1507,14 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
                   key: 'at',
                   header: t('web.bc_resolved_at'),
                   // Roadmap C2: a deferred or retried recipient says when it is due again.
-                  render: (row) =>
-                    row.resolvedAt !== null
-                      ? formatTimestamp(row.resolvedAt)
-                      : row.nextAttemptAt !== null
-                        ? `${t('web.bcx_next_attempt')} ${formatTimestamp(row.nextAttemptAt)}`
-                        : '—',
+                  // Absent from an older API replica during an update: no next attempt shown.
+                  render: (row) => {
+                    if (row.resolvedAt !== null) return formatTimestamp(row.resolvedAt);
+                    const next = row.nextAttemptAt ?? null;
+                    return next === null
+                      ? '—'
+                      : `${t('web.bcx_next_attempt')} ${formatTimestamp(next)}`;
+                  },
                 },
                 {
                   key: 'pin',
