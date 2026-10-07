@@ -12,7 +12,7 @@
  * the page sees a coarse pointer as a real phone or tablet does. On each it measures:
  *
  * - horizontal overflow of the page (the page itself must never scroll sideways);
- * - every visible control — buttons, links drawn as controls, fields, tabs, switches,
+ * - every visible control (its hit area: a positioned ::before laid over it counts) — buttons, links drawn as controls, fields, tabs, switches,
  *   summaries — against the 44px touch target (`responsive-policy.mjs`; inline links in
  *   running text are exempt);
  * - controls cut off at the viewport edge with no scrolling container to reach them.
@@ -84,7 +84,7 @@ const SCENARIOS = [
     name: 'phone modal (customer tags)',
     device: 'phone',
     route: '/users',
-    clicks: ['.page-head .btn'],
+    clicks: ['.page-head .btn:not(.icon)'],
     dialog: true,
   },
   {
@@ -185,6 +185,19 @@ const MEASURE = `(() => {
       else if (el.labels && el.labels.length > 0) kind = 'labelled-box';
     }
     if (seen.has(node)) continue;
+    // A ::before laid over the control widens what a finger hits (the bot builder's grips).
+    const pseudo = getComputedStyle(node, '::before');
+    if (pseudo.content !== 'none' && pseudo.position === 'absolute') {
+      const out = (v) => Math.max(0, -(parseFloat(v) || 0));
+      box = {
+        left: box.left - out(pseudo.left),
+        right: box.right + out(pseudo.right),
+        top: box.top - out(pseudo.top),
+        bottom: box.bottom + out(pseudo.bottom),
+        width: box.width + out(pseudo.left) + out(pseudo.right),
+        height: box.height + out(pseudo.top) + out(pseudo.bottom),
+      };
+    }
     seen.add(node);
     const style = getComputedStyle(node);
     if (style.visibility === 'hidden' || style.display === 'none') continue;
