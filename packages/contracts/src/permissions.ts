@@ -614,6 +614,37 @@ export const PERMISSIONS = [
     'Review a legacy service candidate (acknowledge, keep as history, reopen, approve an adoption)',
     'HIGH',
   ),
+  /*
+   * Mirza migration PR6 — the final cutover approval (owner constraint 3; `docs/legacy-
+   * migration/cutover-runbook.md` §Owner approval). An approval is the owner's record, in
+   * the database, that ONE frozen legacy snapshot may be imported into this installation:
+   * it names the v1 source fingerprint, the panel-map fingerprint, the inventory, products
+   * and invoice-archive read-set fingerprints, the freeze proof file's SHA-256 and the final
+   * dump's SHA-256. A production-like import refuses without one matching every value it is
+   * given; any changed value voids it. A second kind, RERUN_OVER_PRIOR_IMPORT, is the
+   * owner's explicit acknowledgement that a newer snapshot is imported over an earlier
+   * import (SOURCE_SUPERSEDED otherwise).
+   *
+   * - VIEW (MEDIUM, never auto-granted to `observer` with the LOW keys) lists the approvals,
+   *   their revocations and the recorded read sets they can bind to. Fingerprints and
+   *   digests only — no legacy row.
+   * - APPROVE (CRITICAL) records or revokes one. It is what lets real legacy money and
+   *   accounts into the installation, the same blast radius as `recovery.restore`, so it is
+   *   CRITICAL and owner-only. Made by the authenticated owner in the Web Admin — never by
+   *   the CLI, whose SYSTEM_JOB actor could only TYPE a name — and read by the importer.
+   *
+   * Neither is a SYSTEM_JOB permission; the importer reads approvals under maintenance.run.
+   */
+  p(
+    'legacy.cutover.view',
+    'View the legacy cutover approvals and the read sets they bind',
+    'MEDIUM',
+  ),
+  p(
+    'legacy.cutover.approve',
+    'Record or revoke the owner approval of a legacy import snapshot (the final cutover)',
+    'CRITICAL',
+  ),
 
   // Platform
   p('tenant.cross_read', 'Read data across tenants', 'CRITICAL'),
@@ -1041,6 +1072,8 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'legacy.debts.decide': 'legacy.debts.view',
   /* Mirza PR5. A decision is made FROM the candidate `legacy.services.view` reads. */
   'legacy.services.decide': 'legacy.services.view',
+  /* Mirza PR6. An approval is recorded FROM the read sets `legacy.cutover.view` lists. */
+  'legacy.cutover.approve': 'legacy.cutover.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass
