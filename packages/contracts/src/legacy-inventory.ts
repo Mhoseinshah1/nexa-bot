@@ -72,8 +72,10 @@ export const LEGACY_TABLE_CLASSIFICATION: Readonly<
   }),
   product: Object.freeze({
     class: 'SUPPORTED',
-    reason: 'Read by the v1 import read set (id, code_product; agent when present).',
-    evidence: 'IMPORT_READ_SET_V1 (legacy-importer/application/source-port.ts)',
+    reason:
+      'Read by the v1 import read set (id, code_product; agent when present) and by the products read set (an explicit column allowlist, for the legacy product review).',
+    evidence:
+      'IMPORT_READ_SET_V1 (legacy-importer/application/source-port.ts); PRODUCTS_READ_SET (legacy-importer/application/products-read-set.ts)',
   }),
   nexa_synthetic_fixture: Object.freeze({
     class: 'SUPPORTED',
@@ -111,8 +113,11 @@ export function isLegacyTableRowReadable(name: string): boolean {
  *
  * - `inventory` — every table's name, class-free shape (column names and types), exact
  *   `COUNT(*)`, charset and collation. No row values.
+ * - `products` — the legacy `product` table's rows, from an explicit column allowlist, read
+ *   into the legacy product review (`legacy_product_reviews`, Mirza PR2,
+ *   `docs/legacy-product-review-design.md`). Never a price, a panel or a sale in NEXA.
  */
-export const LEGACY_READ_SET_NAMES = ['inventory'] as const;
+export const LEGACY_READ_SET_NAMES = ['inventory', 'products'] as const;
 export type LegacyReadSetName = (typeof LEGACY_READ_SET_NAMES)[number];
 
 /** `legacy-read-set:<name>:v<version>`: a read set fingerprint's version string. */
