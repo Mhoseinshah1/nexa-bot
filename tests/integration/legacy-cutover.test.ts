@@ -425,6 +425,29 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     expect(again.id).not.toBe(approval.id);
   });
 
+  it('two concurrent requests under ONE idempotency key: one approval, both get its original answer', async () => {
+    const fp = await recordReadSets(cleanDataset());
+    const body = approveBody(fp);
+    const both = await Promise.all([
+      cutover().approve(tenantA, owner, body),
+      cutover().approve(tenantA, owner, body),
+    ]);
+    // Never ALREADY_APPROVED: the second waited on the tenant lock, then found the first's
+    // stored answer and returned it.
+    expect(both[1]).toEqual(both[0]);
+    expect(await count('legacy_cutover_approvals')).toBe(1);
+    const approval = both[0];
+
+    const revokeBody = { idempotencyKey: key(), reason: 'withdrawn' };
+    const revoked = await Promise.all([
+      cutover().revoke(tenantA, owner, approval.id, revokeBody),
+      cutover().revoke(tenantA, owner, approval.id, revokeBody),
+    ]);
+    expect(revoked[1]).toEqual(revoked[0]);
+    expect(revoked[0].revocation).not.toBeNull();
+    expect(await count('legacy_cutover_approval_revocations')).toBe(1);
+  });
+
   it('approval is CRITICAL and owner-only: DENIED is audited; another tenant sees and revokes nothing', async () => {
     const fp = await recordReadSets(cleanDataset());
     const operator = adminActorFor(

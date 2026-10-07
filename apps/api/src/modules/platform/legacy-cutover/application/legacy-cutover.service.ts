@@ -167,6 +167,10 @@ export class LegacyCutoverService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.deps.repository.lockTenantApprovals(scope, tx);
+        // Asked again UNDER the lock: a concurrent request with this key that committed while
+        // this one waited is a replay, and gets its stored answer — not ALREADY_APPROVED.
+        const committed = await replay();
+        if (committed !== null) return reviveApproval(committed.result);
         const binding = {
           sourceFingerprint: command.sourceFingerprint,
           panelMapFingerprint: command.panelMapFingerprint,
@@ -310,6 +314,10 @@ export class LegacyCutoverService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.deps.repository.lockTenantApprovals(scope, tx);
+        // Under the lock, as in approve: a concurrent same-key revoke that committed first is
+        // a replay with its stored answer, not ALREADY_REVOKED.
+        const committed = await replay();
+        if (committed !== null) return reviveApproval(committed.result);
         const before = await this.deps.repository.findApproval(scope, id, tx);
         if (before === null) throw notFound();
         if (before.revocation !== null) {
