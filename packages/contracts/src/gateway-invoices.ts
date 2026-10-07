@@ -197,7 +197,8 @@ export function gatewayRateProvenanceOf(input: GatewayRateProvenanceInput): Gate
     frozenAt,
   };
   if (input.policy === 'CENTRAL_FX') {
-    if (input.fx === null) return { authority: 'MARKET', policy: input.policy, rate: null, ...none };
+    if (input.fx === null)
+      return { authority: 'MARKET', policy: input.policy, rate: null, ...none };
     return {
       authority: 'MARKET',
       policy: input.policy,
