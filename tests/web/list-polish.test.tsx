@@ -50,7 +50,12 @@ describe('how fresh a list is', () => {
     expect(new URL(orderReads(api.calls).at(-1)!.url, 'http://x').search).toBe('');
   });
 
-  it('draws nothing before the first answer, and nothing when the list is refused', async () => {
+  it('draws nothing before the first answer, and is withdrawn once the list is refused', async () => {
+    stubApi(ordersList);
+    renderPage(<LiveOrders />);
+    expect(screen.queryByRole('button', { name: t('web.list_refresh') })).toBeNull();
+    const refresh = await screen.findByRole('button', { name: t('web.list_refresh') });
+    // The permission is withdrawn: the next read is refused, and a refresh would ask again.
     stubApi([
       {
         url: '/orders',
@@ -60,10 +65,10 @@ describe('how fresh a list is', () => {
         },
       },
     ]);
-    renderPage(<LiveOrders />);
-    expect(screen.queryByRole('button', { name: t('web.list_refresh') })).toBeNull();
-    await waitFor(() => expect(document.querySelector('.empty')).not.toBeNull());
-    expect(screen.queryByRole('button', { name: t('web.list_refresh') })).toBeNull();
+    fireEvent.click(refresh);
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: t('web.list_refresh') })).toBeNull(),
+    );
   });
 });
 

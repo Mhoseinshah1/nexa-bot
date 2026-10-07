@@ -26,6 +26,11 @@ APP=W+'app.tsx'
 T_RTR='tests/web/router.test.tsx'
 RKT=W+'pages/recovery-kit.tsx'
 T_SHELL='tests/web/shell-recovery.test.tsx'
+LS=W+'ui/list-search.tsx'
+ORD=W+'pages/orders.tsx'
+REF=W+'pages/referrals.tsx'
+T_LP='tests/web/list-polish.test.tsx'
+T_RB='tests/web/referral-banner.test.tsx'
 
 M=[
  # --- B3: one idempotency key per logical attempt -------------------------------------------
@@ -61,6 +66,12 @@ M=[
  # Codex: the import key follows the File object; N2: a held run key expires.
  ('WRP-23',[(RKT,"idempotencyKey: importKey.current({ file: tokenOf(input.file) }),","idempotencyKey: importKey.current({\n          name: input.file.name,\n          size: input.file.size,\n          lastModified: input.file.lastModified,\n        }),")],T_REC,'import key for the same file'),
  ('WRP-24',[(SUB,"        options.heldForMs !== undefined &&","        options.heldForMs === -1 &&")],T_SUB,'expire after heldForMs'),
+ # --- list polish (RP) ---------------------------------------------------------------------
+ ('WRP-25',[(LS,"onClick={() => void query.refetch()}","onClick={() => undefined}")],T_LP,'reads them again on request'),
+ ('WRP-26',[(LS,"if (hidden || query.dataUpdatedAt === 0) return null;","if (query.dataUpdatedAt === 0) return null;")],T_LP,'withdrawn once the list is refused'),
+ ('WRP-27',[(LS,"[...keys, 'cursor'].map","[...keys].map")],T_LP,'cursor together'),
+ ('WRP-28',[(ORD,"          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).\n          autoApply\n","")],T_LP,'applies itself'),
+ ('WRP-29',[(REF,"onClick={() => setConfirmingClear(true)}","onClick={() => clear.mutate()}")],T_RB,'after asking'),
 ]
 
 def run_one(mid,edits,test,filt):
