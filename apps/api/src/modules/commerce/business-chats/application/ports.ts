@@ -438,6 +438,8 @@ export interface BusinessOutboundRecord {
   readonly conversationId: string;
   readonly origin: BusinessOutboundOrigin;
   readonly body: string | null;
+  /** Roadmap A4: a `HANDOFF_NOTICE` row's template, rendered at the send; null otherwise. */
+  readonly templateKey: string | null;
   readonly createdByAdminId: string | null;
   readonly controlEpoch: number;
   readonly idempotencyKey: string;
@@ -459,7 +461,9 @@ export interface BusinessOutboundRepository {
       readonly id: string;
       readonly conversationId: string;
       readonly origin: BusinessOutboundOrigin;
-      readonly body: string;
+      /** Null exactly for a `HANDOFF_NOTICE`, which names its `templateKey` instead. */
+      readonly body: string | null;
+      readonly templateKey?: string | null;
       readonly createdByAdminId: string | null;
       readonly controlEpoch: number;
       readonly idempotencyKey: string;
@@ -633,6 +637,36 @@ export interface AutoReplyModeReader {
 export interface HandoffDetail {
   readonly summary: string | null;
   readonly jobId: string | null;
+  /** Roadmap A5: the deciding AI decision's topic and intent, when the handoff had one. */
+  readonly topic?: string | null;
+  readonly intent?: string | null;
+}
+
+/**
+ * Roadmap A5 — the safe operator context of a handoff, from what the support AI already
+ * recorded about this conversation: its latest decision's summary, topic and intent, and how
+ * many automatic replies the customer received in the session that is ending (the steps
+ * tried). Never the customer's words. Implemented in `control/support-ai`; read inside the
+ * handoff's transaction so a handoff decided before any provider call still tells the person
+ * picking it up where things stood.
+ */
+export interface HandoffContext {
+  readonly summary: string | null;
+  readonly topic: string | null;
+  readonly intent: string | null;
+  readonly stepsTried: number | null;
+}
+export interface HandoffContextSource {
+  contextOf(
+    scope: ScopeContext,
+    input: {
+      readonly conversationId: string;
+      /** The epoch the handoff ENDED (the conversation's epoch before the bump). */
+      readonly epoch: number;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<HandoffContext>;
 }
 
 /**
@@ -673,6 +707,9 @@ export interface BusinessEscalationRecord {
   readonly controlEpoch: number;
   readonly reason: BusinessHandoffReason;
   readonly summary: string | null;
+  readonly topic: string | null;
+  readonly intent: string | null;
+  readonly stepsTried: number | null;
   readonly ticketId: string | null;
   readonly ticketOutcome: BusinessEscalationTicketOutcome;
   readonly jobId: string | null;
@@ -689,6 +726,9 @@ export interface BusinessEscalationRepository {
       readonly controlEpoch: number;
       readonly reason: BusinessHandoffReason;
       readonly summary: string | null;
+      readonly topic: string | null;
+      readonly intent: string | null;
+      readonly stepsTried: number | null;
       readonly ticketId: string | null;
       readonly ticketOutcome: BusinessEscalationTicketOutcome;
       readonly jobId: string | null;

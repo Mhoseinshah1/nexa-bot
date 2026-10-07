@@ -51,6 +51,7 @@ import {
 import { formatTimestamp, splitBytes } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { HandoffContextView } from './handoff-context';
 import { HANDOFF_LABELS } from './handoff-labels';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
@@ -951,6 +952,11 @@ function TicketEscalationsCard({ detail }: { detail: TicketDetailResponse }) {
             <strong>{t(HANDOFF_LABELS[escalation.reason])}</strong>{' '}
             <span className="muted small">{formatTimestamp(escalation.createdAt)}</span>
             {escalation.summary !== null && <p className="muted small">{escalation.summary}</p>}
+            <HandoffContextView
+              topic={escalation.topic}
+              intent={escalation.intent}
+              stepsTried={escalation.stepsTried}
+            />
             <a
               href={`/business-chats/${encodeURIComponent(escalation.conversationId)}`}
               onClick={onLink}

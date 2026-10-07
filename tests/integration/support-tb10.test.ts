@@ -346,6 +346,7 @@ describe('TB10 — support polish against the database', () => {
             sendText: async () => ({ outcome: 'DELIVERED', messageId: 9001, sentAt: telegramAt }),
           },
           autoMode: { autoReplyEnabled: async () => true },
+          templates: c.templateResolver,
           escalations: new DrizzleBusinessEscalationRepository(c.database.db),
           uow: c.uow,
           scopeActivity: c.tenants,

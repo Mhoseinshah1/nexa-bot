@@ -41,6 +41,10 @@ const CUSTOMER = '7000001';
 const OUR_BOT = '9000001';
 const scopeA = { ...tenantA, botInstanceId: BOT } as never;
 
+/** Roadmap A4: the one message a handoff sends the customer (template `bot.support.handoff_notice`). */
+const HANDOFF_NOTICE =
+  'پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد. لطفاً همین‌جا ادامه بده؛ نیازی به ارسال دوباره نیست.';
+
 class ScriptedTransport {
   sent: { chatId: string; text: string }[] = [];
   next: BusinessSendOutcome[] = [];
@@ -165,6 +169,7 @@ describe('Telegram Business conversations (TB2)', () => {
       transport,
       // TB7: these races are about the epoch and the state, under a mode that allows AUTO.
       autoMode: { autoReplyEnabled: async () => true },
+      templates: c.templateResolver,
       escalations: new DrizzleBusinessEscalationRepository(c.database.db),
       uow: c.uow,
       scopeActivity: c.tenants,
@@ -434,7 +439,8 @@ describe('Telegram Business conversations (TB2)', () => {
       handoffReason: 'SEND_OUTCOME_UNKNOWN',
     });
     await lane.deliverDue(scopeA);
-    expect(transport.sent).toHaveLength(1);
+    // The AUTO row is never resent; the only later send is the handoff's own notice (A4).
+    expect(transport.sent.map((sent) => sent.text)).toEqual(['پاسخ پیشنهادی هوش مصنوعی', HANDOFF_NOTICE]);
   });
 
   it('a 429 requeues the row without spending an attempt, and it sends later', async () => {
@@ -463,7 +469,8 @@ describe('Telegram Business conversations (TB2)', () => {
     const report = await lane.deliverDue(scopeA);
     expect(report.stranded).toBe(1);
     expect(await laneState(row.id)).toBe('UNCONFIRMED');
-    expect(transport.sent).toEqual([]);
+    // Never resent; the handoff's notice (A4) is the only send.
+    expect(transport.sent.map((sent) => sent.text)).toEqual([HANDOFF_NOTICE]);
     expect((await conversation(found.id)).state).toBe('HANDOFF_REQUIRED');
   });
 

@@ -782,14 +782,21 @@ export class TicketService {
     ]);
     // TB7: the AI's note is a summary of the customer's Telegram Business conversation, so it is
     // the conversation's to show: `tickets.view` alone sees that a handoff happened and why,
-    // never what the AI wrote about the chat (substitute review of PR #202, finding 5).
+    // never what the AI wrote about the chat (substitute review of PR #202, finding 5). Roadmap
+    // A5: the topic, intent and steps tried are the same note's, and gated with it.
     return {
       item,
       messages,
       customer,
       escalations: seesChats
         ? escalations
-        : escalations.map((escalation) => ({ ...escalation, summary: null })),
+        : escalations.map((escalation) => ({
+            ...escalation,
+            summary: null,
+            topic: null,
+            intent: null,
+            stepsTried: null,
+          })),
     };
   }
 

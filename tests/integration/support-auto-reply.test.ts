@@ -69,11 +69,29 @@ const grounded = {
   intent: 'اتصال',
 };
 
+/** Roadmap A4: the one message a handoff sends the customer (template `bot.support.handoff_notice`). */
+const HANDOFF_NOTICE =
+  'پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد. لطفاً همین‌جا ادامه بده؛ نیازی به ارسال دوباره نیست.';
+
+/**
+ * Telegram, scripted. Roadmap A4: the handoff notice is recorded apart (`notices`) and answered
+ * from its own script (`nextNotice`), so the cases about the AI's replies read `sent` as before
+ * and the notice is asserted where it is the subject.
+ */
 class ScriptedTransport {
   sent: { chatId: string; text: string }[] = [];
+  notices: { chatId: string; text: string }[] = [];
   next: BusinessSendOutcome[] = [];
+  nextNotice: BusinessSendOutcome[] = [];
   nextMessageId = 900;
   async sendText(_scope: unknown, _actor: unknown, input: { chatId: string; text: string }) {
+    if (input.text === HANDOFF_NOTICE) {
+      this.notices.push({ chatId: input.chatId, text: input.text });
+      const scripted = this.nextNotice.shift();
+      if (scripted !== undefined) return scripted;
+      this.nextMessageId += 1;
+      return { outcome: 'DELIVERED' as const, messageId: this.nextMessageId, sentAt: null };
+    }
     this.sent.push({ chatId: input.chatId, text: input.text });
     const scripted = this.next.shift();
     if (scripted !== undefined) return scripted;
@@ -385,6 +403,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       control: c.businessConversations,
       transport,
       autoMode: new SupportAutoEnqueuer({ configs, jobs, ids: c.ids }),
+      templates: c.templateResolver,
       escalations: new DrizzleBusinessEscalationRepository(c.database.db),
       uow: c.uow,
       scopeActivity: c.tenants,
@@ -655,7 +674,12 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     await tick();
     await deliver();
     expect(transport.sent).toHaveLength(1);
-    // Telegram does not echo the bot's own send: nothing is recorded for it.
+    // Telegram does not echo the bot's own send: nothing is recorded for it. (A different next
+    // step: roadmap A3 refuses advice the customer already received.)
+    next = {
+      ...next,
+      output: { ...grounded, replyText: 'پروتکل را روی TCP بگذارید.' },
+    } as SupportAiOutcome;
     await record(message({ text: 'باز کردم، هنوز وصل نمیشه' }));
     await tick();
     expect(calls).toBe(2);
@@ -1649,6 +1673,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
             jobs,
             ids: c.ids,
           }),
+          templates: c.templateResolver,
           escalations: new DrizzleBusinessEscalationRepository(c.database.db),
           uow: c.uow,
           scopeActivity: c.tenants,
@@ -2548,9 +2573,26 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   // inactivity and never counts a GREETING; a configurable hourly limit; clarifying default 3.
   // ===========================================================================================
   describe('roadmap A1/A2: session budget, hourly limit, clarifying default', () => {
+    /**
+     * Roadmap A3 refuses advice the customer already received, so each scripted answer here is a
+     * different step unless a case names its text.
+     */
+    const VARIANTS = [
+      'لطفاً برنامه را کامل ببندید و دوباره باز کنید.',
+      'از تنظیمات برنامه، پروتکل را روی TCP بگذارید.',
+      'لینک اشتراک را از ربات دوباره دریافت و جایگزین کنید.',
+      'سرور دیگری از فهرست انتخاب کنید و دوباره وصل شوید.',
+      'تاریخ و ساعت گوشی را روی خودکار بگذارید.',
+      'برنامه را به آخرین نسخه به‌روز کنید.',
+      'حالت هواپیما را یک بار روشن و خاموش کنید.',
+      'اگر وای‌فای دارید، یک بار با اینترنت همراه امتحان کنید.',
+      'در برنامه، گزینهٔ تست پینگ را بزنید و نتیجه را بگویید.',
+      'کش برنامه را از تنظیمات گوشی پاک کنید.',
+    ];
+    let variant = 0;
     const scripted = (output: Record<string, unknown>): SupportAiOutcome => ({
       outcome: 'OK',
-      output: { ...grounded, ...output },
+      output: { ...grounded, replyText: VARIANTS[variant++ % VARIANTS.length], ...output },
       usage: { inputTokens: 1, outputTokens: 1 },
       model: 'gpt-5.5',
     });
@@ -2656,8 +2698,14 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       for (let i = 1; i <= 6; i += 1) id = await turn(`سلام ${i}`, greeting);
       expect(await outcomes(id)).toEqual(Array(6).fill('sent'));
       expect(await session(id)).toBe(0);
+      // Roadmap A3: more than eight customer messages in a minute is a flood. These greetings
+      // happened two minutes ago (still this hour, still this session).
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = sent_at - interval '2 minutes'
+            WHERE conversation_id = ${id}`,
+      );
       // Five troubleshooting replies spend it; greetings in between change nothing.
-      for (let i = 1; i <= 4; i += 1) await turn(`وصل نمیشه ${i}`, scripted({}));
+      for (let i = 1; i <= 4; i += 1) await turn(`سؤال اتصال شمارهٔ ${i}`, scripted({}));
       expect(await session(id)).toBe(4);
       // The hour now holds ten automatic replies: the eleventh, even a greeting, is refused.
       await turn('سلام دوباره', greeting);
@@ -2827,6 +2875,448 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         'sent_clarifying',
         'sent_clarifying',
       ]);
+    });
+  });
+
+  // ===========================================================================================
+  // Roadmap A3–A6 (2026-10-07) — the progress guards, the handoff notice, the handoff's operator
+  // context, and the silent NO_ACTION, each through the real AUTO path.
+  // ===========================================================================================
+  describe('roadmap A3–A6: progress guards, handoff notice and context, NO_ACTION', () => {
+    const scripted = (output: Record<string, unknown>): SupportAiOutcome => ({
+      outcome: 'OK',
+      output: { ...grounded, ...output },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'gpt-5.5',
+    });
+    /** A troubleshooting step, different each time (repeated advice is its own guard). */
+    const step = (n: number, over: Record<string, unknown> = {}) =>
+      scripted({
+        replyText: [
+          'لطفاً برنامه را کامل ببندید و دوباره باز کنید.',
+          'از تنظیمات برنامه، پروتکل را روی TCP بگذارید.',
+          'لینک اشتراک را از ربات دوباره دریافت و جایگزین کنید.',
+          'سرور دیگری از فهرست انتخاب کنید و دوباره وصل شوید.',
+          'تاریخ و ساعت گوشی را روی خودکار بگذارید.',
+          'برنامه را به آخرین نسخه به‌روز کنید.',
+        ][n % 6],
+        summary: `گام ${n} اتصال پیشنهاد شد.`,
+        intent: 'رفع مشکل اتصال',
+        ...over,
+      });
+    const turn = async (text: string, output: SupportAiOutcome = next) => {
+      next = output;
+      const recorded = await record(message({ text }));
+      await tick();
+      await deliver();
+      return recorded.conversationId;
+    };
+    const outcomes = async (conversationId: string) =>
+      (await autoJobs(conversationId)).map((j) => j.outcome);
+    const escalations = async (conversationId: string) =>
+      (
+        await db().execute(
+          sql`SELECT reason, summary, topic, intent, steps_tried FROM business_conversation_escalations
+              WHERE conversation_id = ${conversationId} ORDER BY created_at`,
+        )
+      ).rows as {
+        reason: string;
+        summary: string | null;
+        topic: string | null;
+        intent: string | null;
+        steps_tried: number | null;
+      }[];
+    const noticeRows = async (conversationId: string) =>
+      (
+        await db().execute(
+          sql`SELECT state, body, template_key, control_epoch, failure_code FROM business_outbound_messages
+              WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = ${conversationId}
+              ORDER BY created_at`,
+        )
+      ).rows as {
+        state: string;
+        body: string | null;
+        template_key: string | null;
+        control_epoch: number;
+        failure_code: string | null;
+      }[];
+    const takeOver = (conversationId: string) =>
+      ctx.container.businessConversations.takeOver(scopeA, operator, {
+        conversationId,
+        idempotencyKey: key('take'),
+      });
+
+    // --- A3: no progress ----------------------------------------------------------------
+
+    it('A3: three «it did not work» after the AI’s advice hand off before a fourth provider call', async () => {
+      const id = await turn('اینترنتم وصل نمیشه، کمک کنید', step(0));
+      await turn('نشد', step(1));
+      await turn('هنوز وصل نمیشه', step(2));
+      expect(calls).toBe(3);
+      await turn('بازم همونه', step(3));
+      expect(calls).toBe(3); // decided before any provider cost
+      expect(await outcomes(id)).toEqual(['sent', 'sent', 'sent', 'guard_no_progress']);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'NO_PROGRESS',
+      });
+      expect(transport.sent).toHaveLength(3);
+      // A5: the person picking it up sees where things stood, from what NEXA recorded.
+      expect(await escalations(id)).toEqual([
+        {
+          reason: 'NO_PROGRESS',
+          summary: 'گام 2 اتصال پیشنهاد شد.',
+          topic: 'CONNECTION_TROUBLESHOOTING',
+          intent: 'رفع مشکل اتصال',
+          steps_tried: 3,
+        },
+      ]);
+      // A4: and the customer is told, once.
+      expect(transport.notices.map((n) => n.text)).toEqual([HANDOFF_NOTICE]);
+    });
+
+    it('A3: Finglish feedback counts; any other message ends the run; a resume starts again', async () => {
+      const id = await turn('vasl nemisham', step(0));
+      await turn('nashod', step(1));
+      await turn('ba Sing-box hastam', step(2)); // not feedback: the run restarts
+      await turn('javab nadad', step(3));
+      await turn('hanooz vasl nemishe', step(4));
+      expect(await outcomes(id)).toEqual(['sent', 'sent', 'sent', 'sent', 'sent']);
+      await turn('bazam hamoone', step(5));
+      expect((await outcomes(id)).at(-1)).toBe('guard_no_progress');
+      // A person returns it to the AI: the earlier feedback belongs to the old epoch.
+      await resume(id);
+      await turn('نشد', step(0, { replyText: 'یک راه تازه: حالت هواپیما را روشن و خاموش کنید.' }));
+      expect((await outcomes(id)).at(-1)).toBe('sent');
+    });
+
+    // --- A3: repeated advice --------------------------------------------------------------
+
+    it('A3: a reply the customer already received is not sent again; a person continues', async () => {
+      const advice = 'لطفاً برنامه را کامل ببندید، لینک اشتراک را به‌روز کنید و دوباره وصل شوید.';
+      const id = await turn('وصل نمیشم', scripted({ replyText: advice }));
+      // The model, asked again, says nearly the same thing (Arabic letters, no joiner).
+      await turn(
+        'با Sing-box هستم',
+        scripted({
+          replyText: 'لطفا برنامه را کامل ببنديد، لينک اشتراک را بهروز کنيد و دوباره وصل شويد',
+        }),
+      );
+      expect(calls).toBe(2);
+      expect(await outcomes(id)).toEqual(['sent', 'guard_repeated_advice']);
+      expect(transport.sent.map((m) => m.text)).toEqual([advice]);
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'REPEATED_ADVICE' });
+      expect(await escalations(id)).toMatchObject([
+        { reason: 'REPEATED_ADVICE', topic: 'CONNECTION_TROUBLESHOOTING', steps_tried: 1 },
+      ]);
+    });
+
+    it('A3: the same greeting twice is courtesy, not repeated advice', async () => {
+      const hello = scripted({
+        topic: 'GREETING',
+        replyText: 'سلام! چطور کمکتون کنم؟',
+        factRefs: [],
+      });
+      const id = await turn('سلام', hello);
+      await turn('سلام وقت بخیر', hello);
+      expect(await outcomes(id)).toEqual(['sent', 'sent']);
+    });
+
+    // --- A3: inbound flood ----------------------------------------------------------------
+
+    it('A3: the same message three times hands off instead of asking the provider again', async () => {
+      const id = await turn('کسی هست؟', step(0));
+      await turn('کسی هست ؟', step(1));
+      expect(calls).toBe(2);
+      await turn('كسي هست؟', step(2)); // Arabic letters: the same message
+      expect(calls).toBe(2);
+      expect((await outcomes(id)).at(-1)).toBe('guard_inbound_flood');
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'INBOUND_FLOOD' });
+    });
+
+    it('A3: more than eight messages in a minute hand off with no provider call', async () => {
+      let id = '';
+      for (let i = 1; i <= 9; i += 1) {
+        id = (await record(message({ text: `پیام ${i}: کمک می‌خوام` }))).conversationId;
+      }
+      await tick();
+      expect(calls).toBe(0);
+      expect(await outcomes(id)).toContain('guard_inbound_flood');
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'INBOUND_FLOOD' });
+    });
+
+    // --- A4: the handoff notice -------------------------------------------------------------
+
+    it('A4: a handoff sends exactly one template notice, never AI text, never twice', async () => {
+      const id = await turn('وصل نمیشه، پولمو پس بدید', step(0));
+      expect(calls).toBe(0);
+      const [row] = await noticeRows(id);
+      expect(row).toMatchObject({
+        state: 'DELIVERED',
+        body: null, // the text is the template's, rendered at the send and never stored
+        template_key: 'bot.support.handoff_notice',
+        control_epoch: (await conversation(id)).controlEpoch,
+      });
+      expect(transport.notices).toEqual([{ chatId: CUSTOMER, text: HANDOFF_NOTICE }]);
+      // More lane passes, and more customer messages while handed off, add nothing.
+      await deliver();
+      await record(message({ text: 'کسی هست؟' }));
+      await tick();
+      await deliver();
+      expect(transport.notices).toHaveLength(1);
+      expect(await noticeRows(id)).toHaveLength(1);
+      expect(transport.sent).toEqual([]);
+    });
+
+    it('A4: a person who took over before the lane sent it means no notice', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick(); // handed off; the notice is queued
+      expect(await noticeRows(id)).toMatchObject([{ state: 'PENDING' }]);
+      await takeOver(id);
+      await deliver();
+      expect(transport.notices).toEqual([]);
+      expect(await noticeRows(id)).toMatchObject([{ state: 'SUPERSEDED' }]);
+    });
+
+    it('A4: an unknown send of the notice is UNCONFIRMED, never retried, and hands nothing off again', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      transport.nextNotice.push({ outcome: 'UNKNOWN', errorCode: 'telegram.unreachable' });
+      await deliver();
+      await deliver();
+      expect(transport.notices).toHaveLength(1);
+      expect(await noticeRows(id)).toMatchObject([{ state: 'UNCONFIRMED' }]);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'HANDOFF_TOPIC',
+      });
+      expect(await escalations(id)).toHaveLength(1);
+    });
+
+    it('A4: a refused notice is FAILED once and hands nothing off again', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      transport.nextNotice.push({
+        outcome: 'REFUSED',
+        reason: 'TELEGRAM_REJECTED',
+        errorCode: 'telegram.400',
+        connectionStatus: null,
+      });
+      await deliver();
+      await deliver();
+      expect(await noticeRows(id)).toMatchObject([{ state: 'FAILED' }]);
+      expect(await escalations(id)).toHaveLength(1);
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'HANDOFF_TOPIC' });
+    });
+
+    it('A4: switching the mode OFF silences a queued notice', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await configure({ mode: 'ASSIST_ONLY' });
+      await deliver();
+      expect(transport.notices).toEqual([]);
+      expect(await noticeRows(id)).toMatchObject([
+        { state: 'SUPERSEDED', failure_code: 'support_ai.mode_off' },
+      ]);
+    });
+
+    it('A4: each handoff epoch gets its own one notice; a return to the AI and a second handoff send one more', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      await resume(id);
+      next = step(1, { topic: 'WALLET' });
+      await record(message({ text: 'یک سؤال دیگر' }));
+      await tick();
+      await deliver();
+      expect(transport.notices).toHaveLength(2);
+      const rows = await noticeRows(id);
+      expect(rows.map((r) => r.state)).toEqual(['DELIVERED', 'DELIVERED']);
+      expect(new Set(rows.map((r) => r.control_epoch)).size).toBe(2);
+    });
+
+    it('A4: the notice is customer text from a template — an owner override is what is sent', async () => {
+      await db().execute(sql`
+        INSERT INTO template_overrides (id, tenant_id, template_key, locale, body, revision, updated_by_admin_id)
+        VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, 'bot.support.handoff_notice', 'fa',
+                'یک همکار به‌زودی پاسخ می‌دهد.', 1, ${owner.id})`);
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      // Not the default text: the tenant's own body, rendered at the send.
+      expect(transport.notices).toEqual([]);
+      expect(transport.sent).toEqual([{ chatId: CUSTOMER, text: 'یک همکار به‌زودی پاسخ می‌دهد.' }]);
+      expect(await noticeRows(id)).toMatchObject([{ state: 'DELIVERED', body: null }]);
+    });
+
+    // --- A5: the handoff's operator context ----------------------------------------------
+
+    it('A5: a handoff decided before the provider (money) carries the last summary, topic, intent and steps', async () => {
+      const id = await turn('وصل نمیشم', step(0, { summary: 'مشتری با Sing-box وصل نمی‌شود.' }));
+      await turn('پولمو پس بدید', step(1));
+      expect(calls).toBe(1);
+      expect(await escalations(id)).toEqual([
+        {
+          reason: 'HANDOFF_TOPIC',
+          summary: 'مشتری با Sing-box وصل نمی‌شود.',
+          topic: 'CONNECTION_TROUBLESHOOTING',
+          intent: 'رفع مشکل اتصال',
+          steps_tried: 1,
+        },
+      ]);
+    });
+
+    it('A5: provider unavailable, an unseen image and the loop guard carry it too; a first message has none', async () => {
+      // Provider unavailable on the first message: nothing recorded yet, steps 0.
+      next = { outcome: 'TEMPORARY', code: 'overloaded' } as SupportAiOutcome;
+      const a = (await record(message({ text: 'سلام', chatId: '7000101', fromUserId: '7000101' })))
+        .conversationId;
+      await tick();
+      expect(await escalations(a)).toEqual([
+        { reason: 'AI_UNAVAILABLE', summary: null, topic: null, intent: null, steps_tried: 0 },
+      ]);
+      // An answered turn, then an image no model can see.
+      visionStep = false;
+      const id = await turn('وصل نمیشم', step(0));
+      await record(message({ kind: 'PHOTO', text: null }));
+      await tick();
+      expect(await escalations(id)).toMatchObject([
+        { reason: 'UNSUPPORTED_CONTENT', topic: 'CONNECTION_TROUBLESHOOTING', steps_tried: 1 },
+      ]);
+    });
+
+    it('A5: the context is the conversation’s to show — tickets.view alone sees none of it', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await turn('پولمو پس بدید', step(1));
+      const ticketId = (await conversation(id)).ticketId!;
+      const roleId = ctx.container.ids.uuid();
+      await db().execute(
+        sql`INSERT INTO roles (id, tenant_id, key, name) VALUES (${roleId}, ${SEED_IDS.tenantA}, 'ticket_reader2', 'Ticket reader')`,
+      );
+      await db().execute(
+        sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+            VALUES (${SEED_IDS.tenantA}, ${roleId}, 'tickets.view')`,
+      );
+      const reader = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'reader2',
+          roleKeys: ['ticket_reader2'],
+        }),
+      );
+      const seen = await ctx.container.tickets.detail(tenantA as never, reader, ticketId);
+      expect(seen.escalations).toMatchObject([
+        { reason: 'HANDOFF_TOPIC', summary: null, topic: null, intent: null, stepsTried: null },
+      ]);
+      const full = await ctx.container.tickets.detail(tenantA as never, owner, ticketId);
+      expect(full.escalations).toMatchObject([
+        { reason: 'HANDOFF_TOPIC', topic: 'CONNECTION_TROUBLESHOOTING', stepsTried: 1 },
+      ]);
+    });
+
+    it('A5: the intent is purged with the summary after 30 days', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await turn('پولمو پس بدید', step(1));
+      // The lane purges at most every ten minutes, and this test's lane already ran: the rule is
+      // the repository's, asked directly (R8 covers the lane calling it).
+      const purged = await new DrizzleBusinessEscalationRepository(db()).purgeText(
+        scopeA,
+        new Date(Date.now() - 30 * 86_400_000),
+        new Date(),
+        500,
+        undefined,
+      );
+      expect(purged).toBe(0); // nothing is old enough yet
+      await db().execute(
+        sql`UPDATE business_conversation_escalations SET created_at = now() - interval '31 days'
+            WHERE conversation_id = ${id}`,
+      );
+      await new DrizzleBusinessEscalationRepository(db()).purgeText(
+        scopeA,
+        new Date(Date.now() - 30 * 86_400_000),
+        new Date(),
+        500,
+        undefined,
+      );
+      expect(await escalations(id)).toMatchObject([
+        { summary: null, intent: null, topic: 'CONNECTION_TROUBLESHOOTING', steps_tried: 1 },
+      ]);
+    });
+
+    // --- A6: NO_ACTION --------------------------------------------------------------------
+
+    const closing = (over: Record<string, unknown> = {}) =>
+      scripted({
+        decision: 'NO_ACTION',
+        replyText: '',
+        factRefs: [],
+        summary: 'مشکل حل شد.',
+        intent: 'تشکر',
+        ...over,
+      });
+
+    it('A6: «مرسی، حل شد» ends silently — no reply, no handoff, no ticket — and the chat goes on', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await turn('مرسی، حل شد', closing());
+      expect(await autoJobs(id)).toMatchObject([
+        { state: 'SENT', outcome: 'sent' },
+        { state: 'DISCARDED', outcome: 'no_action', handoff_reason: null },
+      ]);
+      expect(await conversation(id)).toMatchObject({ state: 'AI_ACTIVE', handoffReason: null });
+      expect(await count('tickets')).toBe(0);
+      expect(await count('business_conversation_escalations')).toBe(0);
+      expect(transport.sent).toHaveLength(1);
+      expect(transport.notices).toEqual([]);
+      // The decision is kept on the job, for the analytics.
+      const decided = await db().execute(
+        sql`SELECT decision FROM support_ai_jobs WHERE conversation_id = ${id} ORDER BY created_at`,
+      );
+      expect(decided.rows.at(-1)).toEqual({ decision: 'NO_ACTION' });
+      // The conversation is still the AI's: the next message is answered.
+      await turn(
+        'یه سؤال دیگه: چطور تمدید کنم؟',
+        step(1, { topic: 'SERVICE_INFO', factRefs: ['S1'] }),
+      );
+      expect((await outcomes(id)).at(-1)).toBe('sent');
+    });
+
+    it('A6: «اوکی درست شد» and «ممنون» end silently too', async () => {
+      for (const [index, text] of ['اوکی درست شد', 'ممنون'].entries()) {
+        const chat = `70002${index}`;
+        next = closing();
+        const id = (await record(message({ text, chatId: chat, fromUserId: chat }))).conversationId;
+        await tick();
+        expect((await outcomes(id)).at(-1), text).toBe('no_action');
+      }
+    });
+
+    it('A6: NO_ACTION on anything else still hands off as before', async () => {
+      const cases: { text: string; output: SupportAiOutcome; reason: string }[] = [
+        // not a closing message
+        { text: 'یه سؤال دیگه دارم', output: closing(), reason: 'DECISION_NOT_REPLY' },
+        // closing, but a topic off the allowlist
+        { text: 'مرسی', output: closing({ topic: 'PLAN_INFO' }), reason: 'DECISION_NOT_REPLY' },
+        // closing, but a hard topic
+        { text: 'مرسی', output: closing({ topic: 'REFUND' }), reason: 'HANDOFF_TOPIC' },
+        // closing, but low confidence
+        { text: 'مرسی', output: closing({ confidence: 'MEDIUM' }), reason: 'DECISION_NOT_REPLY' },
+      ];
+      for (const [index, item] of cases.entries()) {
+        const chat = `70003${index}`;
+        next = item.output;
+        const id = (await record(message({ text: item.text, chatId: chat, fromUserId: chat })))
+          .conversationId;
+        await tick();
+        expect(await conversation(id), item.text).toMatchObject({
+          state: 'HANDOFF_REQUIRED',
+          handoffReason: item.reason,
+        });
+      }
     });
   });
 });

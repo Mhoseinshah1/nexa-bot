@@ -155,6 +155,10 @@ export interface TicketEscalationReader {
       readonly conversationId: string;
       readonly reason: BusinessHandoffReason;
       readonly summary: string | null;
+      /** Roadmap A5: the rest of the safe operator context; gated with the summary. */
+      readonly topic: string | null;
+      readonly intent: string | null;
+      readonly stepsTried: number | null;
       readonly createdAt: Date;
     }[]
   >;

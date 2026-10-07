@@ -13,6 +13,7 @@ import {
 } from '@nexa/contracts';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { TemplateResolver } from '../../../control/templates/application/template-resolver.js';
 import type { BusinessConversationService } from './business-conversation.service.js';
 import type { BusinessTransport } from './business-transport.js';
 import type {
@@ -44,6 +45,11 @@ export interface BusinessOutboundServiceDeps {
    * read inside the stamp's transaction — leaving AUTO_REPLY_SAFE silences what is queued.
    */
   readonly autoMode: AutoReplyModeReader;
+  /**
+   * Roadmap A4: a `HANDOFF_NOTICE` row carries a template key, never a body; its text is
+   * rendered here, in the stamp's transaction, and never stored.
+   */
+  readonly templates: Pick<TemplateResolver, 'render'>;
   /** TB7: the AI's escalation notes are purged with the transcript. */
   readonly escalations: Pick<BusinessEscalationRepository, 'purgeText'>;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -190,13 +196,14 @@ export class BusinessOutboundService {
       const now = this.deps.clock.now();
       const conversation = await this.deps.conversations.lockById(scope, row.conversationId, tx);
       const active = await this.deps.scopeActivity.scopeIsActive(scope, tx);
-      const modeAllows =
-        row.origin !== 'AUTO' || (await this.deps.autoMode.autoReplyEnabled(scope, tx));
+      // A4: the handoff notice is automatic too — OFF silences it like an AUTO reply.
+      const automatic = row.origin === 'AUTO' || row.origin === 'HANDOFF_NOTICE';
+      const modeAllows = !automatic || (await this.deps.autoMode.autoReplyEnabled(scope, tx));
       const sendable =
         conversation !== null &&
         active &&
         modeAllows &&
-        row.body !== null &&
+        (row.body !== null || row.templateKey !== null) &&
         businessOutboundSendable({
           origin: row.origin,
           rowEpoch: row.controlEpoch,
@@ -244,6 +251,38 @@ export class BusinessOutboundService {
         );
         return null;
       }
+      // A4: the notice's text is the template's, rendered now and held in memory only. An
+      // override that cannot render (an operator's bad edit) fails the row, unsent, once — it
+      // never stalls the lane by throwing on every pass.
+      let text = row.body ?? '';
+      if (row.templateKey !== null) {
+        try {
+          text = await this.deps.templates.render(
+            scope,
+            row.templateKey as Parameters<TemplateResolver['render']>[1],
+            {},
+            undefined,
+            tx,
+          );
+        } catch {
+          text = '';
+        }
+        if (text.trim() === '') {
+          await this.deps.outbound.resolve(
+            scope,
+            row.id,
+            {
+              state: 'FAILED',
+              fromStamped: false,
+              failureCode: 'business.notice_template',
+              attempted: false,
+              now,
+            },
+            tx,
+          );
+          return null;
+        }
+      }
       const stamped = await this.deps.outbound.markSendStarted(
         scope,
         row.id,
@@ -251,18 +290,22 @@ export class BusinessOutboundService {
         now,
         tx,
       );
-      return stamped ? conversation : null;
+      return stamped ? { conversation, text } : null;
     });
     if (decision === null) {
       const current = await this.deps.outbound.findById(scope, row.id);
-      return current?.state === 'SUPERSEDED' ? 'superseded' : 'lost';
+      return current?.state === 'SUPERSEDED'
+        ? 'superseded'
+        : current?.state === 'FAILED'
+          ? 'failed'
+          : 'lost';
     }
 
     const actor = systemJobActor(`business-outbound:${row.id}`, row.id as CorrelationId);
     const sent = await this.deps.transport.sendText(scope, actor, {
-      connectionRowId: decision.connectionRowId,
-      chatId: decision.chatId,
-      text: row.body ?? '',
+      connectionRowId: decision.conversation.connectionRowId,
+      chatId: decision.conversation.chatId,
+      text: decision.text,
     });
 
     return this.deps.uow.run(scope, async (tx): Promise<Outcome> => {
@@ -307,7 +350,10 @@ export class BusinessOutboundService {
             row.conversationId,
             row.origin === 'AUTO'
               ? { lastMessageAt: repliedAt, lastAiAt: repliedAt, now }
-              : { lastMessageAt: repliedAt, lastHumanAt: repliedAt, now },
+              : row.origin === 'HANDOFF_NOTICE'
+                ? // A4: the notice is neither the AI's answer nor a person's.
+                  { lastMessageAt: repliedAt, now }
+                : { lastMessageAt: repliedAt, lastHumanAt: repliedAt, now },
             tx,
           );
           return 'delivered';

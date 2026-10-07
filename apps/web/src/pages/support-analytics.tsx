@@ -92,6 +92,10 @@ export const AUTO_OUTCOME_LABELS: Readonly<Record<SupportAiAutoOutcome, WebKey>>
   handoff_output_invalid: 'web.sa_auto_handoff_output_invalid',
   handoff_ai_unavailable: 'web.sa_auto_handoff_ai_unavailable',
   handoff_stale: 'web.sa_auto_handoff_stale',
+  guard_no_progress: 'web.sa_auto_guard_no_progress',
+  guard_repeated_advice: 'web.sa_auto_guard_repeated_advice',
+  guard_inbound_flood: 'web.sa_auto_guard_inbound_flood',
+  no_action: 'web.sa_auto_no_action',
 };
 
 export function SupportAnalyticsPage({ route, denied }: { route: Route; denied: boolean }) {

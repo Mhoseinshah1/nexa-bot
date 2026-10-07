@@ -638,6 +638,7 @@ import {
   SupportAutoEnqueuer,
   SupportAutoReplyService,
 } from './modules/control/support-ai/application/support-auto-reply.service.js';
+import { SupportHandoffContext } from './modules/control/support-ai/application/support-handoff-context.js';
 import { BusinessEscalationService } from './modules/commerce/business-chats/application/business-escalation.service.js';
 import {
   AssistantLoop,
@@ -5717,6 +5718,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     escalations: businessEscalationRepository,
     conversations: businessConversationRepository,
     tickets: ticketService,
+    // Roadmap A5: every handoff's safe operator context, from the support AI's records.
+    context: new SupportHandoffContext({ jobs: supportAiJobs }),
     opsLog,
     ids,
   });
@@ -5894,6 +5897,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       control: businessConversations,
       transport: businessTransport,
       autoMode: supportAutoEnqueuer,
+      // Roadmap A4: the handoff notice is a template, rendered at the send.
+      templates: templateResolver,
       escalations: businessEscalationRepository,
       uow,
       scopeActivity: tenants,

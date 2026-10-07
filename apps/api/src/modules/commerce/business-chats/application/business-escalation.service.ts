@@ -11,6 +11,7 @@ import type {
   BusinessConversationRecord,
   BusinessConversationRepository,
   BusinessEscalationRepository,
+  HandoffContextSource,
   HandoffDetail,
   HandoffEscalation,
   TicketEscalationPort,
@@ -20,6 +21,8 @@ export interface BusinessEscalationServiceDeps {
   readonly escalations: Pick<BusinessEscalationRepository, 'insertIfAbsent'>;
   readonly conversations: Pick<BusinessConversationRepository, 'setTicket'>;
   readonly tickets: TicketEscalationPort;
+  /** Roadmap A5: what the support AI recorded about the conversation, for the person. */
+  readonly context: HandoffContextSource;
   readonly opsLog: OperationalEventRecorder;
   readonly ids: IdGenerator;
 }
@@ -75,6 +78,14 @@ export class BusinessEscalationService implements HandoffEscalation {
         await this.deps.conversations.setTicket(scope, conversation.id, ticketId, input.now, tx);
       }
     }
+    // Roadmap A5: every handoff carries the safe context — the deciding decision's own summary,
+    // topic and intent when there was one, else the latest the AI recorded in this conversation,
+    // and the automatic replies of the session that ended (the epoch before the bump).
+    const context = await this.deps.context.contextOf(
+      scope,
+      { conversationId: conversation.id, epoch: conversation.controlEpoch - 1, now: input.now },
+      tx,
+    );
     await this.deps.escalations.insertIfAbsent(
       scope,
       {
@@ -82,7 +93,10 @@ export class BusinessEscalationService implements HandoffEscalation {
         conversationId: conversation.id,
         controlEpoch: conversation.controlEpoch,
         reason: input.reason,
-        summary: input.detail.summary,
+        summary: input.detail.summary ?? context.summary,
+        topic: input.detail.topic ?? context.topic,
+        intent: input.detail.intent ?? context.intent,
+        stepsTried: context.stepsTried,
         ticketId,
         ticketOutcome: outcome,
         jobId: input.detail.jobId,

@@ -22,4 +22,7 @@ export const HANDOFF_LABELS: Readonly<Record<BusinessHandoffReason, WebKey>> = {
   UNSUPPORTED_CONTENT: 'web.bchat_handoff_unsupported',
   REPLY_STALE: 'web.bchat_handoff_stale',
   CLARIFYING_LIMIT: 'web.bchat_handoff_clarifying_limit',
+  NO_PROGRESS: 'web.bchat_handoff_no_progress',
+  REPEATED_ADVICE: 'web.bchat_handoff_repeated_advice',
+  INBOUND_FLOOD: 'web.bchat_handoff_inbound_flood',
 };

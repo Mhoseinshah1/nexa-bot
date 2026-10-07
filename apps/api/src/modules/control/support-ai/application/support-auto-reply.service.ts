@@ -29,8 +29,12 @@ import type {
 import {
   autoDecisionGuards,
   autoImageGuard,
+  autoInboundFloodGuard,
   autoMoneyGuard,
+  autoNoActionAllowed,
+  autoNoProgressGuard,
   autoPreflight,
+  autoRepeatedAdviceGuard,
   customerTextsSinceReply,
   type AutoContextFlags,
   type AutoVerdict,
@@ -168,6 +172,7 @@ export interface SupportAutoReplyServiceDeps {
     | 'recordKnowledgeCounts'
     | 'clarifyingStreak'
     | 'sessionReplyCount'
+    | 'epochStartedAt'
   >;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
@@ -290,8 +295,20 @@ export class SupportAutoReplyService {
       return this.drop(scope, job, 'dropped_connection');
     }
     // 3c. D9: money in what the customer wrote is a person's, whatever topic a model would pick.
-    const money = autoMoneyGuard(customerTextsSinceReply(transcript, trigger?.text ?? null));
+    const customerTexts = customerTextsSinceReply(transcript, trigger?.text ?? null);
+    const money = autoMoneyGuard(customerTexts);
     if (!money.pass) return this.handOff(scope, job, money, null, null);
+    // 3d. Roadmap A3 — the progress guards, deterministic and before any provider cost, on the
+    // transcript since the AI's part in this epoch began: three «نشد» in a row after its advice,
+    // or a customer repeating one message or flooding the chat, go to a person.
+    const since = await this.deps.jobs.epochStartedAt(scope, {
+      conversationId: conversation.id,
+      epoch,
+    });
+    const progress = autoNoProgressGuard(transcript, since);
+    if (!progress.pass) return this.handOff(scope, job, progress, null, null);
+    const flood = autoInboundFloodGuard(transcript, since);
+    if (!flood.pass) return this.handOff(scope, job, flood, null, null);
     // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
     // transaction through the tenant-scoped source.
     const plan = planVision(transcript, {
@@ -454,6 +471,15 @@ export class SupportAutoReplyService {
     }
     const decision = parsed.decision;
 
+    // 5b. Roadmap A6 — «مرسی», «حل شد»: a NO_ACTION on an allowlisted, non-sensitive topic, when
+    // every customer line it would answer only thanks or says it is solved, ends the job
+    // silently. No reply, no handoff, no ticket; the conversation stays with the AI.
+    if (autoNoActionAllowed({ decision, config, flags: context.flags, customerTexts })) {
+      return this.inJobTransaction(scope, job, images, (tx, now) =>
+        this.finish(scope, job, 'no_action', now, tx, { decision, produced }),
+      );
+    }
+
     // 6. NEXA decides. The clarifying streak is read from the rows, never from the model.
     const grounding = {
       knownAliases: knownAliases(context),
@@ -470,6 +496,9 @@ export class SupportAutoReplyService {
       }),
     });
     if (!guards.pass) return this.handOff(scope, job, guards, decision, produced, images);
+    // 6b. Roadmap A3 — advice the customer already received in this epoch is not sent again.
+    const repeated = autoRepeatedAdviceGuard(decision, transcript, since);
+    if (!repeated.pass) return this.handOff(scope, job, repeated, decision, produced, images);
     return this.enqueue(scope, job, decision, produced, grounding, images);
   }
 
@@ -711,6 +740,10 @@ export class SupportAutoReplyService {
       await this.deps.control.handOff(scope, conversation.id, failed.reason, now, tx, {
         summary: decision?.summary.trim() === '' ? null : (decision?.summary ?? null),
         jobId: job.id,
+        // Roadmap A5: the deciding decision's own topic and intent; without one, the
+        // escalation reads the latest the AI recorded (`SupportHandoffContext`).
+        topic: decision?.topic ?? null,
+        intent: decision === null || decision.intent.trim() === '' ? null : decision.intent,
       });
       const ok = await this.deps.jobs.finishAuto(
         scope,
