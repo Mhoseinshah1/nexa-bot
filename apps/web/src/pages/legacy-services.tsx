@@ -558,7 +558,7 @@ export function CandidateDetail({
           {e.incompletePanels.length > 0 && (
             <>
               <dt>{t('web.lsr_incomplete_panels')}</dt>
-              <dd>{e.incompletePanels.map(panelName).join('، ')}</dd>
+              <dd>{e.incompletePanels.map(panelName).join(', ')}</dd>
             </>
           )}
           <dt>{t('web.lsr_product')}</dt>
