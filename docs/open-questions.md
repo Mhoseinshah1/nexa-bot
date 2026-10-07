@@ -3731,3 +3731,10 @@ and `OQ-T-4` are live again and apply to inline buttons too.
   out of `NEEDS_ACTION` (which must drain) and visible in its own facets until `OQ-WP11A-03`
   decides between "credit by hand" and "nothing"; a domain resolution, if decided, joins the
   queue with its exit.
+- **OQ-E4-01 — merchant net.** No provider adapter records what a provider kept; the money
+  card names merchant net as not recorded. A merchant-net line needs the provider's own
+  settlement report read as evidence, per provider, with its own acceptance
+  (`docs/payment-fees-fx.md` §5).
+- **OQ-E3-01 — provider refunds and wallet withdrawals.** Neither exists as a domain
+  operation; the refund ledger names the refusal and no control is offered. The domain
+  requirements are in `docs/refund-audit.md` §2.
