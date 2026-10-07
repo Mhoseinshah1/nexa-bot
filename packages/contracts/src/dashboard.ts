@@ -237,6 +237,7 @@ export const NAV_COUNTER_KEYS = [
   'unreconciledServices',
   'refundRequestsAwaiting',
   'paymentsUnknown',
+  'businessHandoffs',
 ] as const;
 export type NavCounterKey = (typeof NAV_COUNTER_KEYS)[number];
 
@@ -253,6 +254,11 @@ export const NAV_COUNTER_PERMISSIONS: Readonly<Record<NavCounterKey, PermissionK
   refundRequestsAwaiting: 'refunds.view',
   /** `/payments`: payments in state UNKNOWN, awaiting reconciliation. */
   paymentsUnknown: 'payments.view',
+  /**
+   * `/business-chats`: Telegram Business conversations in `HANDOFF_REQUIRED` — the support
+   * agent stood down and a person must answer (roadmap B6, "support handoffs").
+   */
+  businessHandoffs: 'business_chats.view',
 };
 
 /** A ticket whose next word is support's: nobody has answered yet, or the customer has. */
@@ -280,6 +286,7 @@ export const navCountersResponseSchema = z.object({
     unreconciledServices: counter,
     refundRequestsAwaiting: counter,
     paymentsUnknown: counter,
+    businessHandoffs: counter,
   }),
 });
 export type NavCountersResponse = z.infer<typeof navCountersResponseSchema>;
