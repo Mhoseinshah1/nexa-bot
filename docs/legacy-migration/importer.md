@@ -310,8 +310,28 @@ username kept only when it is a Telegram username, event `CustomerImported`, no 
 **The phone is never written**: `customers.phone_number` means "verified by an operator",
 which a legacy column is not; it is classified ABSENT/VALID/INVALID for the report only.
 
-Openings: `MigrationOpeningBalanceService.post` — positive, zero (no entry), negative
-(debt). Trials: `LegacyTrialEligibilityService.preserveForImport`. Products: the hidden
+Duplicate source ids (Mirza PR4): a Telegram id on more than one `user` row is
+`DUPLICATE_SOURCE_ID` — which row's balance is the customer's is unknowable, so none is
+imported: no customer, no opening, no debt, and ONE manual-review row (`INVALID_SOURCE_ROW`)
+whose checksum is order-free over every row of that id, so a rerun with the rows in another
+order writes nothing. The legacy `user.id` PK makes this impossible in a sane dump; the plan
+fails closed anyway. The final report's C1 adds the extra rows back (`duplicateSourceIds`).
+
+Legacy agents (`user.agent`): counted (`plan.customers.agents`, `usersWallets.users.agents`)
+and imported as ORDINARY customers — never a reseller row, a tier or credit (there is no
+reseller credit). Whether a legacy agent becomes a NEXA reseller is the owner's
+(`OQ-LWD-03`). The agent value itself is not persisted per customer (it is in the source
+dump and the v1 user digest); the v1 read set is frozen, so no other `user` column is read.
+
+Openings: `MigrationOpeningBalanceService.post` — positive (one CREDIT), zero (no entry),
+negative: **a legacy debt, never a ledger entry** (owner decision 6, Mirza PR4;
+`docs/migration-opening-balance.md` §Negative balances). The importer passes the run, the
+v1 fingerprint, the row checksum and the synthetic flag as the debt's provenance. The plan
+reads both the openings and the debts already recorded: `POST`, `ALREADY_POSTED`,
+`ZERO_NO_ENTRY`, `RECORD_DEBT`, `DEBT_ALREADY_RECORDED`, `PRIOR_DEBIT_OPENING` (a DEBIT
+the code before the decision wrote — never rewritten, never doubled; counted in
+`attention.priorDebitOpening`, so the verdict is `COMPLETED_WITH_FAILURES`) or `CONFLICT`
+(a figure other than the recorded one, in amount, sign or evidence class). Trials: `LegacyTrialEligibilityService.preserveForImport`. Products: the hidden
 legacy product of each distinct shape among live real invoices that are productless, name
 a product the legacy table lacks, or are custom — `ensureShapeForImport` then
 `resolveTariffMatchForImport` (MATCH only; stating a tariff is an operator's decision).
@@ -659,14 +679,29 @@ activity read inside the transaction and an audit row.
 - **reconcile** — the latest APPLY run, which must be **COMPLETED** (RUNNING: resume or
   abort it first; ABORTED: there is no finished import), against a fresh snapshot of the
   SAME source fingerprint and the SAME mapping fingerprint (both refused otherwise):
-  wallet equation, openings sum/count/no duplicate, customers present, trial decisions,
-  category closure, provider writes = 0, inventories complete. `RECONCILED`/`DISCREPANCY`.
+  wallet equation (positive balances only), openings sum/count/no duplicate, no DEBIT
+  opening, legacy debts sum/count, customers present, trial decisions, category closure,
+  provider writes = 0, inventories complete, and the `usersWallets` section
+  (`reconciliation.md` §6: every source user accounted for, the money per user, changed
+  users since the imported snapshot). `RECONCILED`/`DISCREPANCY`.
   Wallet movement is the non-opening total now minus the recorded pre-import non-opening
   total — one predicate, one boundary, so an entry committed between that measurement and
   the run start is movement, never in neither figure.
 - **report** — Item 16 (§7), for the latest APPLY run, refused unless the snapshot and the
   mapping are the ones that run was made from (it may describe a RUNNING or ABORTED run,
-  and its verdict says which).
+  and its verdict says which). The markdown also renders the `usersWallets` section after
+  the v1 document; `--format json` prints the closed v1 document exactly, as before (PR6
+  folds the section into schema version 2).
+
+### Legacy wallet debts (Mirza PR4)
+
+A negative legacy balance is a row of `legacy_wallet_debts`, held for the owner. No CLI
+flag was added: owner decision 6 holds every negative for review, so there is nothing for
+an operator to accept at import time (the audit's earlier proposal of an
+`--accept-negative-openings` binding is superseded). The Web Admin page `/legacy-debts`
+(`legacy.debts.view` MEDIUM; decisions `legacy.debts.decide` HIGH, owner-only by default)
+lists them with an aggregate and records the per-customer decision (`ACKNOWLEDGED`,
+`WAIVED`, reopen). No decision moves money and nothing collects a debt.
 
 ## 7. The report
 
