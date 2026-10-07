@@ -1088,7 +1088,13 @@ message names this entry rather than implying a command that ships.
 
 ## OQ-TG-02 — a BotFather rename is not picked up after the first bootstrap
 
-Status: OPEN, and small.
+Status: RESOLVED by roadmap D3 (`docs/telegram-robustness-audit.md` §D3). `botctl telegram
+register` and an installer rerun now record the username `getMe` reports for the SAME bot id
+(audited `bot_instance.username_reconciled`; a name another row still holds is left alone
+and audited FAILED), and `botctl telegram status` shows the drift on stderr without writing
+it. The Web Admin token replacement already refreshed it. The original entry follows.
+
+Status (original): OPEN, and small.
 
 `bot_instances.username` is written from `getMe` when the row is created, and
 refreshed only on the path that fills a NULL `telegram_bot_id` — a row that
@@ -3720,3 +3726,17 @@ and `OQ-T-4` are live again and apply to inline buttons too.
     (`boundedLastSeen`). Either refusal stores nothing, so the card keeps the LAST KNOWN
     value. If a panel spells it differently, correct `readLastSeen` AND the fake in one
     commit.
+
+## OQ-TG-06 — a network error that certainly sent nothing is still filed UNKNOWN
+
+Status: OPEN, deliberately conservative (roadmap D1, `docs/telegram-robustness-audit.md`).
+
+`telegramCall` files every thrown `fetch` as `telegram.unreachable`, which every customer
+lane reads as UNKNOWN and never re-sends. Some of those certainly sent nothing — a DNS
+failure, a refused connection before the TLS handshake — and re-sending them would be safe;
+others (a reset after the body was written, the abort timer) may have been delivered. The
+code does not split them because undici reports the difference through `error.cause.code`
+values that are not a documented contract, and filing a delivered message as "not sent" is
+the one mistake that duplicates a customer message. **Decide** whether to add a fourth code
+(`telegram.not_sent`, retryable) for an allow-list of pre-connect causes, with a real-network
+acceptance proving each cause, before any lane treats it as safe to repeat.
