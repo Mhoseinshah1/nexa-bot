@@ -42,7 +42,8 @@ async function main(): Promise<void> {
       SELECT a.tenant_id, a.id FROM admins a JOIN tenants t ON t.id = a.tenant_id
        WHERE t.slug = ${arg('--tenant')} AND a.username = 'rehearsal-owner'`);
     const row = found.rows[0];
-    if (row === undefined) throw new Error('no rehearsal-owner admin (run with --synthetic-panels)');
+    if (row === undefined)
+      throw new Error('no rehearsal-owner admin (run with --synthetic-panels)');
     const scope = { tenantId: row.tenant_id as never, botInstanceId: null };
     const owner = adminActorFor({ id: row.id as never, username: 'rehearsal-owner', password: '' });
     const kind = arg('--kind');
