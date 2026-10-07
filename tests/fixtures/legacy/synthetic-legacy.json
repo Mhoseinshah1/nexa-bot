@@ -1,6 +1,9 @@
 {
   "synthetic": true,
   "label": "SYNTHETIC legacy fixture v1 (not evidence)",
+  "storageEngine": "InnoDB",
+  "tableCharset": "utf8mb4",
+  "tableCollation": "utf8mb4_bin",
   "schema": [
     {
       "table": "user",
@@ -181,6 +184,24 @@
       "column": "agent",
       "dataType": "varchar",
       "ordinal": 7
+    },
+    {
+      "table": "nexa_synthetic_unclassified",
+      "column": "id",
+      "dataType": "int",
+      "ordinal": 1
+    },
+    {
+      "table": "nexa_synthetic_unclassified",
+      "column": "note",
+      "dataType": "varchar",
+      "ordinal": 2
+    },
+    {
+      "table": "nexa_synthetic_fixture",
+      "column": "label",
+      "dataType": "varchar",
+      "ordinal": 1
     }
   ],
   "tables": {
@@ -673,6 +694,25 @@
         "Volume_constraint": "50",
         "Service_time": "30",
         "agent": "n"
+      }
+    ],
+    "nexa_synthetic_unclassified": [
+      {
+        "id": "1",
+        "note": "synthetic"
+      },
+      {
+        "id": "2",
+        "note": null
+      },
+      {
+        "id": "10",
+        "note": "synthetic"
+      }
+    ],
+    "nexa_synthetic_fixture": [
+      {
+        "label": "SYNTHETIC legacy fixture v1 (not evidence)"
       }
     ]
   }

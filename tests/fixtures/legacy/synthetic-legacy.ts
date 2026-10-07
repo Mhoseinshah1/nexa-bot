@@ -75,18 +75,56 @@ export const SYNTHETIC_SCHEMA: Readonly<
   ],
 };
 
+/**
+ * Tables beside the three the importer reads, so the table INVENTORY has more than the
+ * import read set to see (Mirza migration PR1):
+ *
+ * - `nexa_synthetic_fixture` — the marker every synthetic load carries (its single-line
+ *   DDL is written by `syntheticLegacySql` below, unchanged); described here so the
+ *   fixture source reports its columns like an engine does;
+ * - `nexa_synthetic_unclassified` — a table NO catalogue entry names, standing in for every
+ *   Mirza table nobody has classified yet. Its presence makes the synthetic inventory's
+ *   verdict `UNCLASSIFIED_TABLES`, which is the fail-closed path the CI matrix proves on
+ *   both engines. It holds no value of any meaning.
+ *
+ * Neither is part of the v1 import read set, so neither changes the v1 fingerprint
+ * (`tests/unit/legacy-import-read-set-v1.test.ts` pins it).
+ */
+export const SYNTHETIC_MARKER_COLUMNS: readonly SyntheticColumn[] = [
+  { name: 'label', ddl: 'varchar(200) NOT NULL', dataType: 'varchar' },
+];
+export const SYNTHETIC_UNCLASSIFIED_TABLE = 'nexa_synthetic_unclassified';
+export const SYNTHETIC_UNCLASSIFIED_COLUMNS: readonly SyntheticColumn[] = [
+  { name: 'id', ddl: 'int(10) unsigned NOT NULL PRIMARY KEY', dataType: 'int' },
+  { name: 'note', ddl: 'varchar(200) NULL', dataType: 'varchar' },
+];
+/** What `syntheticLegacySql` declares for every table. */
+export const SYNTHETIC_TABLE_OPTIONS = {
+  storageEngine: 'InnoDB',
+  tableCharset: 'utf8mb4',
+  tableCollation: 'utf8mb4_bin',
+} as const;
+
 export type SyntheticRow = Readonly<Record<string, string | null>>;
 
 export interface SyntheticLegacyDataset {
   readonly synthetic: true;
   readonly label: string;
+  readonly storageEngine: string;
+  readonly tableCharset: string;
+  readonly tableCollation: string;
   readonly schema: readonly {
     readonly table: string;
     readonly column: string;
     readonly dataType: string;
     readonly ordinal: number;
   }[];
-  readonly tables: Readonly<Record<'user' | 'invoice' | 'product', readonly SyntheticRow[]>>;
+  readonly tables: Readonly<
+    Record<
+      'user' | 'invoice' | 'product' | 'nexa_synthetic_fixture' | 'nexa_synthetic_unclassified',
+      readonly SyntheticRow[]
+    >
+  >;
 }
 
 /** The legacy panel codes the dataset uses, and what the example mapping says of each. */
@@ -337,8 +375,15 @@ export function buildSyntheticLegacyDataset(
     users.push(user(String(200_000_000 + i), String(((i * 7919) % 100_000) + 1), '1'));
   }
 
-  const schema = (['user', 'invoice', 'product'] as const).flatMap((table) =>
-    SYNTHETIC_SCHEMA[table].map((c, index) => ({
+  const described: readonly (readonly [string, readonly SyntheticColumn[]])[] = [
+    ['user', SYNTHETIC_SCHEMA.user],
+    ['invoice', SYNTHETIC_SCHEMA.invoice],
+    ['product', SYNTHETIC_SCHEMA.product],
+    [SYNTHETIC_UNCLASSIFIED_TABLE, SYNTHETIC_UNCLASSIFIED_COLUMNS],
+    ['nexa_synthetic_fixture', SYNTHETIC_MARKER_COLUMNS],
+  ];
+  const schema = described.flatMap(([table, columns]) =>
+    columns.map((c, index) => ({
       table,
       column: c.name,
       dataType: c.dataType,
@@ -348,8 +393,19 @@ export function buildSyntheticLegacyDataset(
   return {
     synthetic: true,
     label: SYNTHETIC_LABEL,
+    ...SYNTHETIC_TABLE_OPTIONS,
     schema,
-    tables: { user: users, invoice: invoices, product: products },
+    tables: {
+      user: users,
+      invoice: invoices,
+      product: products,
+      nexa_synthetic_unclassified: [
+        { id: '1', note: 'synthetic' },
+        { id: '2', note: null },
+        { id: '10', note: 'synthetic' },
+      ],
+      nexa_synthetic_fixture: [{ label: SYNTHETIC_LABEL }],
+    },
   };
 }
 
@@ -379,6 +435,21 @@ export function syntheticLegacySql(dataset: SyntheticLegacyDataset): string {
           .join(', ')});`,
       );
     }
+  }
+  // A table no catalogue entry names: the inventory must report it UNCLASSIFIED.
+  out.push(`DROP TABLE IF EXISTS \`${SYNTHETIC_UNCLASSIFIED_TABLE}\`;`);
+  out.push(
+    `CREATE TABLE \`${SYNTHETIC_UNCLASSIFIED_TABLE}\` (\n  ${SYNTHETIC_UNCLASSIFIED_COLUMNS.map(
+      (c) => `\`${c.name}\` ${c.ddl}`,
+    ).join(',\n  ')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;`,
+  );
+  for (const row of dataset.tables[SYNTHETIC_UNCLASSIFIED_TABLE]) {
+    const columns = SYNTHETIC_UNCLASSIFIED_COLUMNS.map((c) => c.name);
+    out.push(
+      `INSERT INTO \`${SYNTHETIC_UNCLASSIFIED_TABLE}\` (${columns.map((c) => `\`${c}\``).join(', ')}) VALUES (${columns
+        .map((c) => sqlLiteral(row[c] ?? null))
+        .join(', ')});`,
+    );
   }
   // The marker every synthetic load carries: the importer reads it, forces the evidence
   // class to `synthetic` and refuses a production-like target (`importer.md` §Evidence class).
