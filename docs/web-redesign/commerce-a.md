@@ -1190,3 +1190,43 @@ service `019250ab-…`, order `019230ab-…`, payment `019240ab-…` (same suffi
   desk width, as the inventory requires every column.
 - **No kit change.** A disclosure (`<details>`) for technical sections is page-level here
   (`.ca-tech`); if other families need it, it belongs in the kit.
+
+---
+
+## 15. Roadmap B5 — Customer 360 as the operator's workspace
+
+`/users/:id` gained what an operator answering a customer still had to leave the page for.
+Everything else on the page (§2, §14) is unchanged.
+
+| Section (anchor)                                         | Source                                                                                       | Gate (route prop ← permission)                                                                                                                                                                                | Deep links                                                                                                                                  |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| نیازمند رسیدگی (`#c360-attention`), first under the head | **`GET /users/:id/workspace` (new)**                                                         | `users.view` charged; each row null without its page's permission (server)                                                                                                                                    | `/services?q=<id>&state=UNRECONCILED`, `/payments?q=<id>&queue=UNKNOWN`, `/business-chats?state=HANDOFF_REQUIRED`, `/tickets?customer=<id>` |
+| آخرین سفارش‌ها و پرداخت‌ها (`#c360-latest`)              | the same workspace: newest five of each, newest first                                        | each half null without `orders.view` / `payments.view` → the existing denial sentence, no "all" link                                                                                                          | `/orders/:id`, `/payments/:id`, `/orders?q=<id>`, `/payments?q=<id>`                                                                        |
+| تیکت‌های پشتیبانی (`#c360-support`)                      | `GET /tickets?customer=<id>&limit=5` (the inbox's own endpoint) + the workspace's open count | `mayViewTickets` ← `tickets.view`; without it the denial sentence and NO request                                                                                                                              | `/tickets/:id`, `/tickets?customer=<id>`                                                                                                    |
+| میان‌برهای اپراتور (side, first)                         | none — links only                                                                            | each link only under its list's permission (`orders.view`, `services.view`, `payments.view` ← `mayViewPayments`, `tickets.view`, `users.view` for the wallet, `business_chats.view` ← `mayViewBusinessChats`) | the lists, filtered by the filter each already has                                                                                          |
+
+Why a new endpoint: `/orders` and `/payments` page OLDEST first (the owner's decision recorded
+in §2), so "latest" had no read, and nothing counted one customer's tickets or handoffs. The
+workspace is read-only, tenant-scoped by the session, charged `users.view` through the guard (a
+refusal is the recorded 403 every customer read gives), and computes each section only under
+the permission of the page it links to — `CUSTOMER_WORKSPACE_PERMISSIONS` — answering `null`
+otherwise with no recorded denial (the financial summary's rule). Counts are the sidebar's
+predicates narrowed to the customer, each `count(*)` over a LIMITed subquery (`COUNTER_CAP`);
+the lists are bounded by `CUSTOMER_WORKSPACE_LATEST_LIMIT` = 5 and tie-broken on id. A glance
+is not a history: the keyset-paged lists stay where they are, one link away, and the paged
+orders card below is untouched.
+
+Nothing is computed in the browser: the balance is still the wallet read, the counts are the
+server's, a capped count is drawn as a floor, and a withheld section is said to be withheld
+(«بخش‌هایی که مجوز صفحهٔ آن‌ها را ندارید…»), never drawn as zero. The status/block controls
+(§2) and the existing commerce, wallet, reseller and referral cards are unchanged.
+
+Borrowed, not copied: `payments.tsx` now exports its `STATE_LABELS`, `STATE_TONES`,
+`METHOD_LABELS`, and `tickets.tsx` its `STATUS_TONES`, so the workspace draws a payment or a
+ticket exactly as those pages do.
+
+Tests: `tests/integration/customer-workspace.test.ts` (7), `tests/web/customer-workspace.test.tsx`
+(14: rows and exact hrefs, zero/withheld, the "nothing waits" state, caps, the latest card and
+its denials, the tickets card's request and its absence, the shortcuts, and the ROUTE deriving
+each new prop from its own key — an actor with only `users.view` sees none of them). Mutation
+record: `docs/web-redesign/dashboard.md` §8.

@@ -100,7 +100,7 @@ import {
  * that it is neither a success nor a failure until somebody establishes which.
  */
 
-const STATE_LABELS: Readonly<Record<PaymentState, WebKey>> = {
+export const STATE_LABELS: Readonly<Record<PaymentState, WebKey>> = {
   PENDING: 'web.payment_state_pending',
   CONFIRMED: 'web.payment_state_confirmed',
   FAILED: 'web.payment_state_failed',
@@ -109,7 +109,7 @@ const STATE_LABELS: Readonly<Record<PaymentState, WebKey>> = {
   UNKNOWN: 'web.payment_state_unknown',
 };
 
-const STATE_TONES: Readonly<Record<PaymentState, Tone>> = {
+export const STATE_TONES: Readonly<Record<PaymentState, Tone>> = {
   PENDING: 'warn',
   CONFIRMED: 'ok',
   FAILED: 'danger',
@@ -120,7 +120,7 @@ const STATE_TONES: Readonly<Record<PaymentState, Tone>> = {
   UNKNOWN: 'warn',
 };
 
-const METHOD_LABELS: Readonly<Record<PaymentMethod, WebKey>> = {
+export const METHOD_LABELS: Readonly<Record<PaymentMethod, WebKey>> = {
   WALLET: 'web.payment_method_wallet',
   MANUAL_TRANSFER: 'web.payment_method_manual',
   GATEWAY: 'web.payment_method_gateway',

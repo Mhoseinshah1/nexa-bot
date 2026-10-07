@@ -104,7 +104,7 @@ export const TICKET_STATUS_LABELS: Readonly<Record<TicketStatus, WebKey>> = {
   CLOSED: 'web.ticket_status_closed',
 };
 
-const STATUS_TONES: Readonly<Record<TicketStatus, Tone>> = {
+export const STATUS_TONES: Readonly<Record<TicketStatus, Tone>> = {
   OPEN: 'warn',
   WAITING_FOR_CUSTOMER: 'info',
   WAITING_FOR_SUPPORT: 'danger',
