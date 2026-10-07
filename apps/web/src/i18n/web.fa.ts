@@ -6530,7 +6530,7 @@ export const WEB_FA = {
   'web.bc_r_unconfirmed': 'نامشخص (شاید رسیده باشد)',
   'web.bc_r_failed': 'ناموفق',
   'web.bc_r_unreachable': 'ربات را مسدود کرده یا در دسترس نیست',
-  'web.bc_r_skipped': 'رد شده (کاربر مسدود است)',
+  'web.bc_r_skipped': 'کنار گذاشته شد (مسدود یا انصراف از پیام تبلیغاتی)',
   'web.bc_r_cancelled': 'لغو شده (ارسال نشده)',
   'web.bc_paused_bot':
     'ارسال متوقف شد چون ربات این گیرندگان در دسترس نیست. پس از رفع مشکل ربات، ادامه دهید.',
@@ -8110,6 +8110,65 @@ export const WEB_FA = {
   'web.list_refreshing': 'در حال خواندن…',
   'web.referral_banner_clear_question':
     'بنر معرفی حذف شود؟ فایل آن از این نصب پاک می‌شود و برای برگرداندنش باید دوباره بارگذاری شود.',
+  // --- Roadmap C2: broadcast operator UX (campaign & broadcast workstream) ---------------
+  'web.bcx_reason_blocked_bot': 'کاربر ربات را مسدود کرده است',
+  'web.bcx_reason_bad_request':
+    'تلگرام درخواست را نپذیرفت (مثلاً ربات این گیرنده به پیام مبدأ دسترسی ندارد)',
+  'web.bcx_reason_bot_token': 'توکن ربات معتبر نیست',
+  'web.bcx_reason_rate_limited': 'محدودیت سرعت تلگرام؛ بعداً دوباره تلاش می‌شود',
+  'web.bcx_reason_unknown_outcome': 'نتیجه نامشخص؛ دوباره فرستاده نمی‌شود',
+  'web.bcx_reason_bot_unavailable': 'ربات این گیرنده در دسترس نیست',
+  'web.bcx_reason_no_bot_recorded': 'این مشتری هرگز به رباتی پیام نداده است',
+  'web.bcx_reason_customer_blocked': 'مشتری توسط اپراتور مسدود شده است',
+  'web.bcx_reason_opted_out': 'مشتری از پیام‌های تبلیغاتی انصراف داده است',
+  'web.bcx_reason_media_unavailable': 'فایل رسانه دیگر نگه‌داری نمی‌شود',
+  'web.bcx_test_unconfirmed':
+    'پاسخ تلگرام نامشخص بود؛ شاید پیام رسیده باشد. تلگرام خود را ببینید — مبدأ تأیید نشد.',
+  'web.bcx_test_rate_limited':
+    'تلگرام فعلاً اجازهٔ ارسال نداد (محدودیت سرعت). کمی بعد دوباره امتحان کنید.',
+  'web.bcx_test_last': 'نتیجهٔ آخرین ارسال آزمایشی',
+  'web.bcx_save_before_test':
+    'تغییرات ذخیره‌نشده دارید. ارسال آزمایشی و شمارش، پیش‌نویس ذخیره‌شده را می‌خوانند؛ اول ذخیره کنید.',
+  'web.bcx_source_per_bot':
+    'آزمایش از رباتی انجام می‌شود که شما به آن پیام داده‌اید. هر گیرنده از ربات خودش پیام می‌گیرد؛ اگر ربات دیگری به مبدأ دسترسی نداشته باشد، فقط گیرندگان همان ربات «ناموفق» می‌شوند و در جدول «تحویل به تفکیک ربات» دیده می‌شوند و می‌توان دوباره در صفشان گذاشت.',
+  'web.bcx_no_bot': 'بدون ربات (نمی‌رسد)',
+  'web.bcx_no_bot_hint': 'در شمارش هستند و همان لحظه «در دسترس نیست» ثبت می‌شوند.',
+  'web.bcx_retry_question': '{count} گیرندهٔ ناموفق دوباره در صف ارسال قرار بگیرند؟',
+  'web.bcx_retry_detail':
+    'فقط گیرندگان «ناموفق» (تلگرام پیامشان را نپذیرفته) دوباره فرستاده می‌شوند. «نامشخص»ها (شاید رسیده باشند)، تحویل‌شده‌ها، نرسیده‌ها و کنارگذاشته‌شده‌ها (مسدود یا انصراف) هرگز دوباره فرستاده نمی‌شوند.',
+  'web.bcx_retry_confirm': 'بله، دوباره در صف بگذار',
+  'web.bcx_next_attempt': 'تلاش بعدی:',
+  'web.bcx_bots_title': 'تحویل به تفکیک ربات',
+  'web.bcx_bots_hint':
+    'هر گیرنده از رباتی پیام می‌گیرد که اول به آن پیام داده است. سرعت و توقف ۴۲۹ برای هر ربات جداست.',
+  'web.bcx_bots_empty': 'هنوز گیرنده‌ای ثبت نشده است.',
+  'web.bcx_bot': 'ربات',
+  'web.bcx_bot_none': 'بدون ربات ثبت‌شده',
+  'web.bcx_bot_active': 'فعال',
+  'web.bcx_bot_stopped': 'متوقف',
+  'web.bcx_bot_disabled': 'غیرفعال',
+  'web.bcx_waiting_retry': 'در انتظار تلاش دوباره',
+  'web.bcx_unconfirmed_short': 'نامشخص',
+  'web.bcx_unreachable_short': 'نرسید / کنار گذاشته شد',
+  'web.bcx_held': 'توقف تلگرام',
+  'web.bcx_held_until': 'تا',
+  'web.bcx_history_title': 'تاریخچهٔ این ارسال',
+  'web.bcx_history_empty': 'هنوز کاری ثبت نشده است.',
+  'web.bcx_history_truncated':
+    'فقط تازه‌ترین موارد نشان داده شده است؛ موارد قدیمی‌تر در گزارش رویدادها (Audit log) هست.',
+  'web.bcx_h_create': 'ساخت پیش‌نویس',
+  'web.bcx_h_update': 'ویرایش پیش‌نویس',
+  'web.bcx_h_media_set': 'بارگذاری رسانه',
+  'web.bcx_h_media_remove': 'حذف رسانه',
+  'web.bcx_h_test': 'ارسال آزمایشی',
+  'web.bcx_h_launch': 'تأیید و شروع',
+  'web.bcx_h_pause': 'توقف موقت',
+  'web.bcx_h_resume': 'ادامه',
+  'web.bcx_h_cancel': 'لغو',
+  'web.bcx_h_retry_failed': 'ارسال دوباره به ناموفق‌ها',
+  'web.bcx_h_requeued': '{count} گیرنده دوباره در صف',
+  'web.bcx_h_refused': 'اجازه داده نشد',
+  // --- end roadmap C2 block -----------------------------------------------------------
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

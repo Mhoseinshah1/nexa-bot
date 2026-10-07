@@ -237,8 +237,11 @@ describe('the broadcast page, Broadcast V2', () => {
       expect.stringContaining('telegram.rejected.403'),
       expect.stringContaining('broadcast.marketing_opted_out'),
     ]);
-    // Retrying is offered for the refusals; nothing offers to resend an unconfirmed one.
-    expect(screen.getByRole('button', { name: 'ارسال دوباره به ناموفق‌ها' })).toBeInTheDocument();
+    // Retrying is offered for the refusals, with how many; nothing offers to resend an
+    // unconfirmed one.
+    expect(
+      screen.getByRole('button', { name: 'ارسال دوباره به ناموفق‌ها (2)' }),
+    ).toBeInTheDocument();
   });
 
   it('asks the failure reasons again after a retry on a paused broadcast', async () => {
@@ -263,7 +266,9 @@ describe('the broadcast page, Broadcast V2', () => {
     await screen.findByRole('table', { name: 'علت‌های نرسیدن' });
     const asked = () => api.calls.filter((c) => c.url.includes('/failures')).length;
     const before = asked();
-    fireEvent.click(screen.getByRole('button', { name: 'ارسال دوباره به ناموفق‌ها' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ارسال دوباره به ناموفق‌ها (2)' }));
+    // Roadmap C2: a re-queue is asked first, saying what is and is never re-sent.
+    fireEvent.click(await screen.findByRole('button', { name: 'بله، دوباره در صف بگذار' }));
     await waitFor(() => expect(asked()).toBeGreaterThan(before));
   });
 
