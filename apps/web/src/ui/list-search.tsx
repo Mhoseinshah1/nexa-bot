@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { LIST_SEARCH_MAX_LENGTH, classifyListSearch, type ListSearchKind } from '@nexa/contracts';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, type Route } from '../router';
-import { Button, Field, Input } from './kit';
+import { formatTimestamp } from '../format';
+import { Button, Field, IconButton, Input } from './kit';
 
 /**
  * The ONE free-text search box a list page draws (spec §10).
@@ -172,5 +173,78 @@ export function ListSearchBox({
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * «پاک کردن همهٔ فیلترها»: one press back to the unfiltered list (roadmap B4).
+ *
+ * Drawn only while one of `keys` is in the URL — a reset with nothing to reset is noise. A
+ * list's filters live in the URL beside its search, so clearing is one navigation: every
+ * key (and any `cursor` the page keeps there) goes in the same `setQueries`, never one
+ * `setQuery` per key (`router.ts` says why). The page passes the keys it filters on,
+ * the search's `q` included.
+ */
+export function ClearFiltersButton({
+  route,
+  keys,
+  hidden = false,
+}: {
+  route: Route;
+  keys: readonly string[];
+  hidden?: boolean;
+}) {
+  const active = keys.some((key) => (route.query.get(key) ?? '') !== '');
+  if (!active || hidden) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      icon="x"
+      onClick={() =>
+        setQueries(
+          route,
+          [...keys, 'cursor'].map((key) => [key, null] as const),
+        )
+      }
+    >
+      {t('web.list_filters_clear')}
+    </Button>
+  );
+}
+
+/**
+ * How fresh a list is, and a way to ask again (roadmap B1, data freshness).
+ *
+ * The queue lists do not poll and do not refetch on window focus, so an operator who left
+ * /tickets open read a list of unknown age with nothing saying so. This states when the
+ * rows were read (the query's own `dataUpdatedAt`) and offers a refresh that re-reads the
+ * same page under the same filters. While a read is running the button is disabled and
+ * says so; nothing is drawn before the first answer.
+ */
+export function ListFreshness({
+  query,
+  hidden = false,
+}: {
+  query: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown };
+  hidden?: boolean;
+}) {
+  if (hidden || query.dataUpdatedAt === 0) return null;
+  return (
+    <span className="list-freshness">
+      <span className="muted small" aria-live="polite">
+        {t('web.list_read_at').replace(
+          '{time}',
+          formatTimestamp(new Date(query.dataUpdatedAt).toISOString()),
+        )}
+      </span>
+      <IconButton
+        icon="refresh"
+        size="sm"
+        label={query.isFetching ? t('web.list_refreshing') : t('web.list_refresh')}
+        disabled={query.isFetching}
+        onClick={() => void query.refetch()}
+      />
+    </span>
   );
 }

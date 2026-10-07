@@ -6,7 +6,12 @@ import { formatTimestamp } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
-import { ListSearchBox, appliedListSearch } from '../ui/list-search';
+import {
+  ClearFiltersButton,
+  ListFreshness,
+  ListSearchBox,
+  appliedListSearch,
+} from '../ui/list-search';
 import { ChipGroup } from './commerce-parts';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
 import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
@@ -102,6 +107,9 @@ export function customersFirstScreen(): readonly PageQuery[] {
     tagCatalogueQuery(),
   ];
 }
+
+/** Every URL key the customer list filters on, its search included (`ClearFiltersButton`). */
+const USER_FILTER_KEYS = ['q', 'status', 'tag'] as const;
 
 export function UsersPage({
   route,
@@ -246,15 +254,16 @@ export function UsersPage({
       <PageHead
         title={t('web.users_title')}
         subtitle={t('web.users_intro')}
-        {...(mayManageTags
-          ? {
-              actions: (
-                <Button size="sm" icon="tag" onClick={() => setManagingTags(true)}>
-                  {t('web.crm_tags_manage')}
-                </Button>
-              ),
-            }
-          : {})}
+        actions={
+          <>
+            <ListFreshness query={customers} hidden={toolbarHidden} />
+            {mayManageTags && (
+              <Button size="sm" icon="tag" onClick={() => setManagingTags(true)}>
+                {t('web.crm_tags_manage')}
+              </Button>
+            )}
+          </>
+        }
       />
       <TagCatalogueModal
         open={mayManageTags && managingTags}
@@ -321,6 +330,7 @@ export function UsersPage({
               </Select>
             </label>
           )}
+          <ClearFiltersButton route={route} keys={USER_FILTER_KEYS} />
         </div>
 
         <StateSwitch

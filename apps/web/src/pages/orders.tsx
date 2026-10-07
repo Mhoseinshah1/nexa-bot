@@ -26,7 +26,12 @@ import { currencyLabel, formatTimestamp, formatTrafficGbText } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
-import { ListSearchBox, appliedListSearch } from '../ui/list-search';
+import {
+  ClearFiltersButton,
+  ListFreshness,
+  ListSearchBox,
+  appliedListSearch,
+} from '../ui/list-search';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 /*
  * The SERVICES page's vocabularies, borrowed rather than copied — the same rule
@@ -178,6 +183,9 @@ function Duration({ days }: { days: number }) {
 // List
 // ---------------------------------------------------------------------------
 
+/** Every URL key the order list filters on, its search included (`ClearFiltersButton`). */
+const ORDER_FILTER_KEYS = ['q', 'state'] as const;
+
 export function OrdersPage({ route, denied }: { route: Route; denied: boolean }) {
   const onLink = useLinkHandler();
 
@@ -272,12 +280,18 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
 
   return (
     <>
-      <PageHead title={t('web.orders_title')} subtitle={t('web.orders_intro')} />
+      <PageHead
+        title={t('web.orders_title')}
+        subtitle={t('web.orders_intro')}
+        actions={<ListFreshness query={orders} hidden={toolbarHidden} />}
+      />
 
       <Card className="ca-list">
         <ListSearchBox
           route={route}
           id="orders-search"
+          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
+          autoApply
           hint={t('web.orders_search_hint')}
           hidden={toolbarHidden}
         />
@@ -292,6 +306,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
               ...ORDER_STATES.map((state) => ({ id: state, label: t(STATE_LABELS[state]) })),
             ]}
           />
+          <ClearFiltersButton route={route} keys={ORDER_FILTER_KEYS} />
         </div>
 
         <StateSwitch
