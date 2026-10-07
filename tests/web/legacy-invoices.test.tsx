@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { LegacyInvoicesPage } from '../../apps/web/src/pages/legacy-invoices';
+import { LegacyInvoicesPage, NO_FILTERS, queryOf } from '../../apps/web/src/pages/legacy-invoices';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
@@ -210,6 +210,17 @@ describe('the legacy invoice archive page', () => {
     });
     await waitFor(() => expect(calls(api, 'GET', 'status=active')).toHaveLength(1));
     expect(api.calls.some((call) => /legacyUserId|username=/u.test(call.url))).toBe(false);
+  });
+
+  it('never puts a PII filter in a query without the PII key, whatever the state holds', () => {
+    const filters = { ...NO_FILTERS, legacyUserId: '100000001', username: 'svc', status: 'active' };
+    expect(queryOf(filters, false, undefined)).toEqual({ status: 'active' });
+    expect(queryOf(filters, true, 'kx')).toEqual({
+      legacyUserId: '100000001',
+      username: 'svc',
+      status: 'active',
+      after: 'kx',
+    });
   });
 
   it('the detail shows raw cells, revisions, the importer outcome and provenance', async () => {

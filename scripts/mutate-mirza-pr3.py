@@ -83,7 +83,7 @@ M = [
     # `refral` is personal data.
     ('C-02', [(ARCH, "export const LEGACY_INVOICE_PII_COLUMNS = ['id_user', 'username', 'refral', 'note'] as const;", "export const LEGACY_INVOICE_PII_COLUMNS = ['id_user', 'username', 'note'] as const;")], T_DOM, 'redaction'),
     # The page never sends a PII search for a reader without the key.
-    ('W-01', [(PAGE, "  if (mayViewPii) {", "  if (true) {")], T_WEB, 'PII search disabled'),
+    ('W-01', [(PAGE, "  if (mayViewPii) {", "  if (true) {")], T_WEB, 'never puts a PII filter'),
     ('W-02', [(NAV, "    permission: 'legacy.invoices.view',\n    group: 'web.navgroup_sales',", "    permission: ['orders.view', 'legacy.invoices.view'],\n    group: 'web.navgroup_sales',")], T_WEB, 'gated'),
 ]
 
@@ -165,5 +165,9 @@ for mid, broken, restore, (project, test), filt in S:
             killed += 1
         print(mid, 'KILLED' if code != 0 else 'SURVIVED', summ, flush=True)
     finally:
+        # A mutated run may have left rows the restored guard would refuse: this is YOUR
+        # test database (see the docstring), and the suite truncates it before every test.
+        psql('TRUNCATE legacy_invoice_archive, legacy_invoice_archive_staging, '
+             'legacy_invoice_archive_runs CASCADE')
         psql(restore)
 print(f'{killed} of {ran} killed', flush=True)

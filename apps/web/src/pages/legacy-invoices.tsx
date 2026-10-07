@@ -160,7 +160,7 @@ function SoldAt({ row }: { row: LegacyInvoiceArchiveRowView }) {
 
 type TestFilter = 'ALL' | 'true' | 'false';
 
-interface Filters {
+export interface Filters {
   readonly invoiceId: string;
   readonly legacyUserId: string;
   readonly username: string;
@@ -171,7 +171,7 @@ interface Filters {
   readonly test: TestFilter;
 }
 
-const NO_FILTERS: Filters = {
+export const NO_FILTERS: Filters = {
   invoiceId: '',
   legacyUserId: '',
   username: '',
@@ -182,7 +182,8 @@ const NO_FILTERS: Filters = {
   test: 'ALL',
 };
 
-function queryOf(filters: Filters, mayViewPii: boolean, after: string | undefined) {
+/** The query a filter state sends. Exported so a test pins that PII filters need the key. */
+export function queryOf(filters: Filters, mayViewPii: boolean, after: string | undefined) {
   const query: Record<string, string> = {};
   const text = (name: keyof Filters) => {
     const value = (filters[name] as string).trim();
