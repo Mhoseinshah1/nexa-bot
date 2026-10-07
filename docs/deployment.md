@@ -1784,6 +1784,25 @@ Before rolling back past round N close: pause sending FORWARD/COPY broadcasts, r
 cancel paused mass operations, and know that opted-out customers are not excluded until the
 roll-forward.
 
+### What an update and a rollback change: broadcast operator UX (roadmap C1/C2)
+
+There is no migration. These are reads and a page:
+
+- delivery per bot (`GET /broadcasts/:id/bots`);
+- the broadcast's own history (`GET /broadcasts/:id/history`);
+- a waiting recipient's `nextAttemptAt`.
+
+**During the update itself**, the new Web Admin can meet an old API replica.
+
+- The delivery-per-bot and history cards answer an error, because the old replica has neither
+  route.
+- The recipients card keeps working. `nextAttemptAt` is optional in the contract, so a row from
+  the old replica parses and shows no next attempt.
+- A reload after the update answers both cards.
+
+**A rollback** removes the two cards and the next-attempt time. Nothing is stored by them, so
+nothing is stranded.
+
 ### What a rollback leaves as text: appearance markers (round P, Premium UI)
 
 The Premium UI release puts `{icon:…}` markers into the DEFAULT bodies of about forty
