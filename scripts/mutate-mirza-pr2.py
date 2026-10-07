@@ -72,6 +72,8 @@ M = [
     # Codex #231 P2: the picker reaches the whole catalogue, not its first page.
     ('W-03', [(PAGE, "        return { items: page.products, nextCursor: page.nextCursor };", "        return { items: page.products, nextCursor: null };")], T_WEB, 'past the first page'),
     ('W-02', [(PAGE, "        idempotencyKey,\n        expectedVersion: row.version,\n        reason: reason.trim(),", "        idempotencyKey,\n        expectedVersion: 1,\n        reason: reason.trim(),")], T_WEB, 'reopen names the version'),
+    # PR4 review: a retried key answers its FIRST response, never the row as it is now.
+    ('R-01', [(SVC, "    if (found !== null) return reviveItem(found.result);", "    if (found !== null) {\n      const now = await this.deps.repository.findById(scope, id);\n      if (now !== null) return this.itemOf(scope, now);\n    }")], T_INT, 'FIRST response'),
     # The permission is MEDIUM: a LOW key is handed to every observer.
     ('C-01', [(PERMS, "  p('legacy.products.view', 'View the legacy product review', 'MEDIUM'),", "  p('legacy.products.view', 'View the legacy product review', 'LOW'),")], T_INT, 'permissions'),
     # The nav entry is gated on its own key.
