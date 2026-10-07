@@ -714,6 +714,14 @@ export class CustomerNotificationService {
     return values === null ? null : { values, buttons: this.deps.buttonsFor?.(row.kind, {}) ?? [] };
   }
 
+  /** The payment's tracking code (`payments.reference`), or null when it cannot be read. */
+  private async paymentTrackingCode(
+    scope: TenantContext,
+    paymentId: string,
+  ): Promise<string | null> {
+    return (await this.deps.paymentReferences?.trackingCodeFor(scope, paymentId)) ?? null;
+  }
+
   /**
    * The values a reminder's template needs, or `null` when its subject has vanished.
    *
@@ -778,7 +786,19 @@ export class CustomerNotificationService {
      */
     if (row.kind === 'PAYMENT_REJECTED') {
       const reason = await this.deps.rejectionReasons.rejectionReasonFor(scope, row.subjectId);
-      return { reason: reason ?? '\u2014' };
+      const reference = await this.paymentTrackingCode(scope, row.subjectId);
+      return reference === null
+        ? { reason: reason ?? '\u2014' }
+        : { reason: reason ?? '\u2014', reference };
+    }
+    /*
+     * Roadmap E6: the expiry and the claim's lane fallback quote the payment's tracking code,
+     * read from the payment the notification names — the same reader the credits use. Absent,
+     * the template's optional line is dropped rather than drawn empty.
+     */
+    if (row.kind === 'PAYMENT_EXPIRED' || row.kind === 'PAYMENT_TRANSFER_RECORDED') {
+      const reference = await this.paymentTrackingCode(scope, row.subjectId);
+      return reference === null ? {} : { reference };
     }
     const creditReason = PAYMENT_CREDIT_FIGURES[row.kind];
     if (creditReason !== undefined) {
@@ -789,7 +809,7 @@ export class CustomerNotificationService {
       );
       if (amount === null) return null;
       const reference = PAYMENT_TRACKED_KINDS.has(row.kind)
-        ? ((await this.deps.paymentReferences?.trackingCodeFor(scope, row.subjectId)) ?? null)
+        ? await this.paymentTrackingCode(scope, row.subjectId)
         : null;
       return reference === null ? { amount } : { amount, reference };
     }

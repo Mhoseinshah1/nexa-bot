@@ -269,9 +269,24 @@ export class ReceiptService {
           );
         }
         if (open.expiresAt.getTime() <= now.getTime()) {
+          /*
+           * Roadmap E6: the refusal names the payment and whether a new window can still be
+           * opened for it — PENDING and inside its own deadline, exactly what
+           * `signalTransferSent` will open one for — so the surface can put the "send receipt"
+           * button under the sentence that tells the customer to press it. The prompt edited
+           * the invoice's own button away; without this the remedy named a button that was
+           * nowhere. A read, not a lock: the tap that follows decides again.
+           */
+          const expiredFor = await this.deps.payments.findById(scope, open.paymentId, tx);
+          const reopenable =
+            expiredFor !== null &&
+            expiredFor.customerId === customerId &&
+            expiredFor.state === 'PENDING' &&
+            (expiredFor.expiresAt === null || expiredFor.expiresAt.getTime() > now.getTime());
           throw errors.conflict(
             COMMERCE_ERROR_CODES.RECEIPT_WINDOW_EXPIRED,
             'The window to send this receipt has closed.',
+            { paymentId: open.paymentId, reopenable },
           );
         }
 
@@ -568,6 +583,23 @@ export class ReceiptService {
     const payment = await this.deps.payments.findById(scope, paymentId);
     if (payment === null || payment.customerId !== customerId) return false;
     return (await this.deps.receipts.countForPayment(scope, paymentId, undefined)) > 0;
+  }
+
+  /**
+   * Roadmap E6: the tracking code of the customer's OWN payment — its `reference`, the one
+   * code they quote — for the bot to keep on the invoice it edits into its final state.
+   * Charged the permission the customer files with; another customer's payment is `null`.
+   */
+  async trackingCodeForCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    paymentId: PaymentId,
+  ): Promise<string | null> {
+    await this.deps.guard.check(scope, actor, RECEIPT_SUBMIT_PERMISSION);
+    const payment = await this.deps.payments.findById(scope, paymentId);
+    if (payment === null || payment.customerId !== customerId) return null;
+    return payment.reference;
   }
 
   async listForPayment(
