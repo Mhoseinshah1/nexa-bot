@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   money,
   type CurrencyCode,
+  type LegacyReadSetName,
   type ProductAudience,
   type ProductCategoryStatus,
   type ProductStatus,
@@ -18,6 +19,8 @@ import type {
   LegacyCustomerInsert,
   LegacyCustomerWriter,
   LegacyImporterDestination,
+  LegacyReadSetRun,
+  LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
 } from '../application/ports.js';
@@ -49,7 +52,11 @@ function list(values: readonly string[]): SQL {
 }
 
 export class DrizzleLegacyImporterRepository
-  implements LegacyImporterDestination, LegacyRunInputsRepository, LegacyCustomerWriter
+  implements
+    LegacyImporterDestination,
+    LegacyRunInputsRepository,
+    LegacyCustomerWriter,
+    LegacyReadSetRunRepository
 {
   constructor(
     private readonly db: Database,
@@ -421,6 +428,73 @@ export class DrizzleLegacyImporterRepository
       preImportWalletTotalMinor: BigInt(row.pre),
       preImportCustomers: row.pre_import_customers,
       recordedAt: new Date(row.recorded_at),
+    };
+  }
+
+  // --- read set runs (Mirza migration PR1) -------------------------------------------------
+
+  async recordReadSetRun(
+    scope: TenantContext,
+    run: LegacyReadSetRun,
+    tx: TransactionScope,
+  ): Promise<{ readonly run: LegacyReadSetRun; readonly created: boolean }> {
+    const tenantId = requireTenantId(scope);
+    const inserted = await this.exec(tx).execute<{ id: string }>(sql`
+      INSERT INTO legacy_read_set_runs (
+        id, tenant_id, read_set, read_set_version, fingerprint_version, read_set_fingerprint,
+        source_fingerprint, source_schema_hash, source_engine, synthetic, table_count,
+        row_count, code_version, recorded_at)
+      VALUES (${run.id}, ${tenantId}, ${run.readSet}, ${run.readSetVersion},
+              ${run.fingerprintVersion}, ${run.readSetFingerprint}, ${run.sourceFingerprint},
+              ${run.sourceSchemaHash}, ${run.sourceEngine}, ${run.synthetic}, ${run.tableCount},
+              ${run.rowCount.toString()}::bigint, ${run.codeVersion},
+              ${run.recordedAt.toISOString()}::timestamptz)
+      ON CONFLICT ON CONSTRAINT legacy_read_set_runs_observation_key DO NOTHING
+      RETURNING id
+    `);
+    const result = await this.exec(tx).execute<{
+      id: string;
+      read_set: string;
+      read_set_version: number;
+      fingerprint_version: string;
+      read_set_fingerprint: string;
+      source_fingerprint: string;
+      source_schema_hash: string;
+      source_engine: string;
+      synthetic: boolean;
+      table_count: number;
+      row_count: string;
+      code_version: string | null;
+      recorded_at: Date | string;
+    }>(sql`
+      SELECT id, read_set, read_set_version, fingerprint_version, read_set_fingerprint,
+             source_fingerprint, source_schema_hash, source_engine, synthetic, table_count,
+             row_count::text AS row_count, code_version, recorded_at
+        FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = ${run.readSet}
+         AND read_set_version = ${run.readSetVersion}
+         AND read_set_fingerprint = ${run.readSetFingerprint}
+         AND source_fingerprint = ${run.sourceFingerprint}
+    `);
+    const row = result.rows[0];
+    if (row === undefined) throw new Error('the read set run row was not written');
+    return {
+      created: inserted.rows.length === 1,
+      run: {
+        id: row.id,
+        readSet: row.read_set as LegacyReadSetName,
+        readSetVersion: row.read_set_version,
+        fingerprintVersion: row.fingerprint_version,
+        readSetFingerprint: row.read_set_fingerprint,
+        sourceFingerprint: row.source_fingerprint,
+        sourceSchemaHash: row.source_schema_hash,
+        sourceEngine: row.source_engine as LegacySourceEngine,
+        synthetic: row.synthetic,
+        tableCount: row.table_count,
+        rowCount: BigInt(row.row_count),
+        codeVersion: row.code_version,
+        recordedAt: new Date(row.recorded_at),
+      },
     };
   }
 

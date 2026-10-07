@@ -14,6 +14,17 @@ import {
   isPasswordFlag,
 } from './legacy-import-argv.js';
 import {
+  INVENTORY_USAGE,
+  InventoryUsageError,
+  inventoryExitCode,
+  parseInventoryArgs,
+  runInventory,
+} from './legacy-import-inventory.js';
+import {
+  inventoryJson,
+  inventoryMarkdown,
+} from './modules/platform/legacy-importer/application/legacy-inventory.js';
+import {
   REVIEW_USAGE,
   ReviewUsageError,
   parseReviewArgs,
@@ -99,6 +110,7 @@ export const USAGE = [
   '           DBNAME                   the database DATABASE_URL names, typed out to confirm it',
   '',
   '  Review queue (terminal only): legacy-import review counts|list|resolve|reopen …',
+  '  Table inventory (read-only):   legacy-import inventory --tenant … --source … --target …',
   '',
   `  --inventory-page-size N             rows per RickPanel list page, 1-${String(INVENTORY_MAX_PAGE_SIZE)}. Default here:`,
   `                                      ${String(INVENTORY_MAX_PAGE_SIZE)}, the reader's maximum (fewest provider reads, shortest`,
@@ -375,7 +387,10 @@ export function guardTarget(
   return { ...identity, productionLike: verdict.productionLike };
 }
 
-async function sourceConnector(args: Args, env: NodeJS.ProcessEnv): Promise<LegacySourceConnector> {
+async function sourceConnector(
+  args: Pick<Args, 'source' | 'sourcePasswordEnv'>,
+  env: NodeJS.ProcessEnv,
+): Promise<LegacySourceConnector> {
   if (args.source.startsWith('fixture:')) {
     return new FixtureLegacySourceConnector(
       await loadFixtureDataset(args.source.slice('fixture:'.length)),
@@ -657,6 +672,43 @@ async function reviewMain(argv: readonly string[]): Promise<void> {
   }
 }
 
+/**
+ * `legacy-import inventory …`: every legacy table, classified and counted, no values
+ * (`legacy-import-inventory.ts`). Returns the exit code.
+ */
+async function inventoryMain(argv: readonly string[]): Promise<number> {
+  const args = parseInventoryArgs(argv);
+  const env = process.env;
+  const targetUrl = resolveTarget(args.target, env);
+  const target = guardTarget(args, targetUrl, env);
+  const connector = await sourceConnector(args, env);
+  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  try {
+    const importer = container.legacyImporter();
+    const tenantId = await importer.resolveTenant(args.tenant);
+    if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
+    const outcome = await runInventory(importer, connector, args, {
+      scope: { tenantId: tenantId as never, botInstanceId: null },
+      actor: systemJobActor('legacy-import:inventory', container.ids.uuid() as CorrelationId),
+      productionLikeTarget: target.productionLike,
+    });
+    process.stdout.write(
+      args.format === 'json'
+        ? inventoryJson(outcome.inventory)
+        : inventoryMarkdown(outcome.inventory),
+    );
+    process.stderr.write(
+      outcome.recorded === null
+        ? 'inventory NOT recorded: no --expected-fingerprint, so it is not bound to an approved source.\n'
+        : `inventory recorded in legacy_read_set_runs: ${outcome.recorded.run.id}` +
+            `${outcome.recorded.created ? '' : ' (already recorded; nothing new written)'}\n`,
+    );
+    return inventoryExitCode(outcome.inventory);
+  } finally {
+    await container.shutdown();
+  }
+}
+
 /** `--help` / `-h` anywhere: the usage on stdout and exit 0 (a usage ERROR stays 64 on stderr). */
 export function wantsHelp(argv: readonly string[]): boolean {
   return argv.includes('--help') || argv.includes('-h');
@@ -686,7 +738,11 @@ export async function exitAfterDrain(code: number): Promise<never> {
 
 /** The exit code for an error that escaped `main`, after printing what may be printed. */
 export function exitCodeForError(error: unknown): number {
-  if (error instanceof UsageError || error instanceof ReviewUsageError) {
+  if (
+    error instanceof UsageError ||
+    error instanceof ReviewUsageError ||
+    error instanceof InventoryUsageError
+  ) {
     console.error(error.message);
     return 64;
   }
@@ -727,9 +783,16 @@ export function exitCodeForError(error: unknown): number {
  */
 async function main(): Promise<number> {
   if (wantsHelp(process.argv.slice(2))) {
-    process.stdout.write(`${process.argv[2] === 'review' ? REVIEW_USAGE : USAGE}\n`);
+    const usage =
+      process.argv[2] === 'review'
+        ? REVIEW_USAGE
+        : process.argv[2] === 'inventory'
+          ? INVENTORY_USAGE
+          : USAGE;
+    process.stdout.write(`${usage}\n`);
     return 0;
   }
+  if (process.argv[2] === 'inventory') return inventoryMain(process.argv.slice(3));
   if (process.argv[2] === 'review') {
     await reviewMain(process.argv.slice(3));
     return 0;

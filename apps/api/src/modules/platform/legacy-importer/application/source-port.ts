@@ -131,6 +131,26 @@ export interface LegacySchemaColumn {
   readonly ordinal: number;
 }
 
+/**
+ * One table of the legacy database, as `information_schema.TABLES` describes it — metadata
+ * only. Read by the inventory (`legacy-inventory.ts`) for EVERY table, classified or not.
+ */
+export interface LegacyTableInfo {
+  readonly name: string;
+  /** `BASE TABLE`, `VIEW`, `SYSTEM VIEW`, … as the engine reports it. */
+  readonly tableType: string;
+  /** `InnoDB`, `MyISAM`, …; null for a view. Only InnoDB is read under the snapshot. */
+  readonly storageEngine: string | null;
+  /** The table's default character set, from its collation; null when unknown. */
+  readonly charset: string | null;
+  readonly collation: string | null;
+}
+
+/** A column of ANY table, with its own character set (null for a non-text column). */
+export interface LegacyCatalogColumn extends LegacySchemaColumn {
+  readonly charset: string | null;
+}
+
 export interface LegacySourceDescriptor {
   readonly engine: LegacySourceEngine;
   /** The server's version string; for a fixture, the fixture's own label. */
@@ -155,6 +175,33 @@ export interface LegacySourceSession {
    */
   rows(
     table: LegacySourceTableName,
+    columns: readonly string[],
+  ): AsyncIterable<readonly LegacyCell[]>;
+  /**
+   * Every table of the source database, metadata only (no row is read). Inside the same
+   * READ ONLY snapshot as everything else the session reads.
+   */
+  tables(): Promise<readonly LegacyTableInfo[]>;
+  /**
+   * Every column of every table of the source database. A separate method from `columns()`
+   * on purpose: `columns()` is an input of the v1 fingerprint and stays exactly what it is.
+   */
+  catalogColumns(): Promise<readonly LegacyCatalogColumn[]>;
+  /**
+   * The EXACT row count of one table `tables()` lists — `COUNT(*)` inside the snapshot,
+   * never `information_schema.TABLES.TABLE_ROWS`, which InnoDB only estimates.
+   */
+  countRows(table: string): Promise<number>;
+  /**
+   * The rows of one table of a READ SET (`read-set.ts`), projected onto `columns`, every
+   * value as text, in the same canonical order as `rows` (primary key bytes ascending).
+   * The adapter refuses a table the catalogue does not let a read set read
+   * (`isLegacyTableRowReadable`) and a name that is not a plain identifier; the read set
+   * definition is what restricts the columns. Streamed: never the whole table in memory.
+   */
+  readSetRows(
+    table: string,
+    primaryKey: string,
     columns: readonly string[],
   ): AsyncIterable<readonly LegacyCell[]>;
   /**
@@ -192,6 +239,8 @@ export class LegacySourceRefused extends Error {
       | 'SOURCE_SCHEMA_MISSING_TABLE'
       | 'SOURCE_SCHEMA_MISSING_COLUMN'
       | 'SOURCE_UNREADABLE'
+      /** A read set asked for rows the table catalogue does not let it read. */
+      | 'SOURCE_TABLE_NOT_READABLE'
       /** The snapshot is not the source the operator approved (`--expected-fingerprint`). */
       | 'SOURCE_FINGERPRINT_MISMATCH',
     readonly detail: string,
@@ -204,3 +253,6 @@ export class LegacySourceRefused extends Error {
 export function compareKeyBytes(a: string, b: string): number {
   return Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
 }
+
+/** A table or column name a read set or the inventory may put into a statement. */
+export const LEGACY_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u;

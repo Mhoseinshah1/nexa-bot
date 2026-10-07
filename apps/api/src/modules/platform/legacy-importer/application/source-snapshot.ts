@@ -140,15 +140,27 @@ export function presentColumns(
   ];
 }
 
-class TableDigest {
+/**
+ * A table's digest: SHA-256 of the fingerprinted columns' JSON header line, then one JSON
+ * line per row, in the order the rows arrive (the session's canonical order). Shared by
+ * the v1 import read set and every versioned read set (`read-set.ts`), so "the same rows,
+ * the same digest" is one implementation. `excluded` names `table.column`s read but kept
+ * out; v1's is `IMPORT_READ_SET_V1.notFingerprinted`, a read set's is empty (its allowlist
+ * IS what it fingerprints).
+ */
+export class TableDigest {
   private readonly hash = createHash('sha256');
   private count = 0;
   private readonly keep: readonly number[];
   readonly fingerprintColumns: readonly string[];
 
-  constructor(table: LegacySourceTableName, columns: readonly string[]) {
+  constructor(
+    table: string,
+    columns: readonly string[],
+    excluded: ReadonlySet<string> = NOT_FINGERPRINTED,
+  ) {
     this.keep = columns
-      .map((c, i) => (NOT_FINGERPRINTED.has(`${table}.${c}`) ? -1 : i))
+      .map((c, i) => (excluded.has(`${table}.${c}`) ? -1 : i))
       .filter((i) => i >= 0);
     this.fingerprintColumns = this.keep.map((i) => columns[i] as string);
     this.hash.update(`${JSON.stringify(this.fingerprintColumns)}\n`);
@@ -166,6 +178,21 @@ class TableDigest {
       digest: this.hash.digest('hex'),
     };
   }
+}
+
+/** Streams one v1 table through its digest, handing each row to `onRow` as it passes. */
+async function digestV1Table(
+  session: LegacySourceSession,
+  table: LegacySourceTableName,
+  columns: readonly string[],
+  onRow: (row: readonly LegacyCell[]) => void = () => undefined,
+): Promise<LegacyTableEvidence> {
+  const digest = new TableDigest(table, columns);
+  for await (const row of session.rows(table, columns)) {
+    digest.add(row);
+    onRow(row);
+  }
+  return digest.done();
 }
 
 export function legacyFingerprint(
@@ -223,11 +250,9 @@ export async function readFromSession(
   const productColumns = presentColumns(schema, 'product');
 
   const users: LegacyUserRow[] = [];
-  const userDigest = new TableDigest('user', userColumns);
-  for await (const row of session.rows('user', userColumns)) {
-    userDigest.add(row);
+  const userEvidence = await digestV1Table(session, 'user', userColumns, (row) => {
     const id = cellOf(userColumns, row, 'id');
-    if (id === null) continue; // a NULL primary key cannot exist; counted in the digest anyway
+    if (id === null) return; // a NULL primary key cannot exist; counted in the digest anyway
     const balance = cellOf(userColumns, row, 'Balance');
     const limitUsertest = cellOf(userColumns, row, 'limit_usertest');
     const agent = cellOf(userColumns, row, 'agent');
@@ -241,19 +266,17 @@ export async function readFromSession(
       phone: classifyLegacyPhone(cellOf(userColumns, row, 'number')),
       checksum: '',
     });
-  }
+  });
 
   const trialUsers = new Set<string>();
   const liveInvoices: LegacyInvoiceRow[] = [];
-  const invoiceDigest = new TableDigest('invoice', invoiceColumns);
-  for await (const row of session.rows('invoice', invoiceColumns)) {
-    invoiceDigest.add(row);
+  const invoiceEvidence = await digestV1Table(session, 'invoice', invoiceColumns, (row) => {
     const cell = (name: string) => cellOf(invoiceColumns, row, name);
     const idUser = cell('id_user');
     const isTest = cell('is_test');
     if (idUser !== null && isTest !== null && isTest.trim() === '1') trialUsers.add(idUser);
     const status = cell('Status');
-    if (status === null || !LIVE.has(status)) continue;
+    if (status === null || !LIVE.has(status)) return;
     const facts = [
       cell('id_invoice'),
       idUser,
@@ -281,15 +304,13 @@ export async function readFromSession(
       isCustom: cell('is_custom'),
       checksum: legacyRowChecksum('invoice:v1', facts),
     });
-  }
+  });
 
   const productCodes = new Set<string>();
-  const productDigest = new TableDigest('product', productColumns);
-  for await (const row of session.rows('product', productColumns)) {
-    productDigest.add(row);
+  const productEvidence = await digestV1Table(session, 'product', productColumns, (row) => {
     const code = cellOf(productColumns, row, 'code_product');
     if (code !== null && code.trim() !== '') productCodes.add(code.trim());
-  }
+  });
 
   // The user checksum needs had_trial, which is known only after the invoice scan.
   const withChecksums = users.map((u) => ({
@@ -303,11 +324,7 @@ export async function readFromSession(
     ]),
   }));
 
-  const tables = {
-    user: userDigest.done(),
-    invoice: invoiceDigest.done(),
-    product: productDigest.done(),
-  };
+  const tables = { user: userEvidence, invoice: invoiceEvidence, product: productEvidence };
   return {
     label,
     descriptor: session.descriptor,
@@ -322,5 +339,43 @@ export async function readFromSession(
     productCodes,
     balanceColumnType:
       schema.find((c) => c.table === 'user' && c.column === 'Balance')?.dataType ?? null,
+  };
+}
+
+/**
+ * The v1 IDENTITY of the source the session reads — its fingerprint, schema hash and
+ * per-table evidence — and nothing else. The same walk as `readFromSession` (same columns,
+ * same digests, same order, same synthetic flag), keeping no row: the three tables stream
+ * through their digests and are dropped. What a read set session recomputes, in its own
+ * snapshot, to prove it reads the source the owner approved (`read-set.ts`).
+ */
+export interface LegacyImportV1Identity {
+  readonly fingerprint: string;
+  readonly schemaHash: string;
+  readonly tables: Readonly<Record<LegacySourceTableName, LegacyTableEvidence>>;
+  readonly synthetic: boolean;
+  readonly engine: LegacySourceDescriptor['engine'];
+}
+
+export async function readImportV1Identity(
+  session: LegacySourceSession,
+): Promise<LegacyImportV1Identity> {
+  const schema = await session.columns();
+  const syntheticLabel = await session.syntheticMarker();
+  const schemaHash = legacySchemaHash(schema);
+  const userColumns = presentColumns(schema, 'user');
+  const invoiceColumns = presentColumns(schema, 'invoice');
+  const productColumns = presentColumns(schema, 'product');
+  const tables = {
+    user: await digestV1Table(session, 'user', userColumns),
+    invoice: await digestV1Table(session, 'invoice', invoiceColumns),
+    product: await digestV1Table(session, 'product', productColumns),
+  };
+  return {
+    fingerprint: legacyFingerprint(schemaHash, tables, syntheticLabel !== null),
+    schemaHash,
+    tables,
+    synthetic: syntheticLabel !== null,
+    engine: session.descriptor.engine,
   };
 }

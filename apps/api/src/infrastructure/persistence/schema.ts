@@ -239,6 +239,7 @@ import {
   LEGACY_IMPORT_REASON_CODES,
   LEGACY_IMPORT_RUN_FAILURE_CODES,
   LEGACY_IMPORT_RUN_MODES,
+  LEGACY_READ_SET_NAMES,
   LEGACY_IMPORT_RUN_STATUSES,
   LEGACY_IMPORT_SOURCE_TABLES,
   LEGACY_REVIEW_REASON_CODES,
@@ -13268,6 +13269,71 @@ export const legacyImportRunInputs = pgTable(
     ),
     check('legacy_import_run_inputs_currency_check', sql`wallet_currency ~ '^[A-Z]{3}$'`),
     check('legacy_import_run_inputs_customers_check', sql`pre_import_customers >= 0`),
+  ],
+);
+
+/**
+ * Mirza migration PR1 — one versioned READ SET of the legacy source, as a run observed it
+ * (`docs/legacy-migration/importer.md` §Read sets). Separate from
+ * `legacy_import_run_inputs`, which is per APPLY run and compared on resume: a read set is
+ * read by its own read-only session, and what binds it to the approved source is
+ * `source_fingerprint` — the v1 import fingerprint that SAME session recomputed and found
+ * equal to `--expected-fingerprint`.
+ *
+ * Fingerprints, counts, an engine name and a version — never a row, a table name list or
+ * a value. One row per (tenant, read set, version, read-set fingerprint, source
+ * fingerprint): observing the same thing again records nothing new. Append-only (0220).
+ */
+export const legacyReadSetRuns = pgTable(
+  'legacy_read_set_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    readSet: text('read_set').notNull(),
+    readSetVersion: integer('read_set_version').notNull(),
+    /** `legacy-read-set:<read_set>:v<read_set_version>`, stored so a reader needs no code. */
+    fingerprintVersion: text('fingerprint_version').notNull(),
+    readSetFingerprint: text('read_set_fingerprint').notNull(),
+    /** The v1 import fingerprint the same session recomputed: the approved source. */
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    sourceSchemaHash: text('source_schema_hash').notNull(),
+    sourceEngine: text('source_engine').notNull(),
+    synthetic: boolean('synthetic').notNull(),
+    tableCount: integer('table_count').notNull(),
+    rowCount: bigint('row_count', { mode: 'bigint' }).notNull(),
+    codeVersion: text('code_version'),
+    recordedAt: timestamptz('recorded_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_read_set_runs_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_read_set_runs_observation_key').on(
+      table.tenantId,
+      table.readSet,
+      table.readSetVersion,
+      table.readSetFingerprint,
+      table.sourceFingerprint,
+    ),
+    index('legacy_read_set_runs_tenant_recorded_idx').on(table.tenantId, table.recordedAt),
+    check('legacy_read_set_runs_read_set_check', enumCheck('read_set', LEGACY_READ_SET_NAMES)),
+    check(
+      'legacy_read_set_runs_version_check',
+      sql`read_set_version BETWEEN 1 AND 9999 AND fingerprint_version = 'legacy-read-set:' || read_set || ':v' || read_set_version::text`,
+    ),
+    check(
+      'legacy_read_set_runs_hashes_check',
+      sql`read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND source_schema_hash ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_read_set_runs_engine_check',
+      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')`,
+    ),
+    check('legacy_read_set_runs_counts_check', sql`table_count >= 0 AND row_count >= 0`),
+    check(
+      'legacy_read_set_runs_code_version_check',
+      sql`code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'`,
+    ),
   ],
 );
 
