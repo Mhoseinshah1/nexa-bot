@@ -92,9 +92,20 @@ export type BotBootstrapStatus = 'none' | 'incomplete' | 'ready' | 'unavailable'
  *  - `UNREACHABLE`      — Telegram could not be asked (timeout, network, 5xx, 429). UNKNOWN,
  *                         never "fine".
  *  - `TOKEN_UNREADABLE` — the stored token could not be decrypted, so nothing was asked.
+ *  - `WEBHOOK_READ_REFUSED` — `getMe` ACCEPTED the token, and `getWebhookInfo` then failed
+ *                         permanently (refused, or answered with something that is not a
+ *                         WebhookInfo). The token was just proved, so this is never filed
+ *                         as `TOKEN_REJECTED`: that would send the operator to replace a
+ *                         token that works.
  */
 export type BotRemoteWebhookOutcome =
-  'READ' | 'TOKEN_REJECTED' | 'NOT_TELEGRAM' | 'DIFFERENT_BOT' | 'UNREACHABLE' | 'TOKEN_UNREADABLE';
+  | 'READ'
+  | 'TOKEN_REJECTED'
+  | 'NOT_TELEGRAM'
+  | 'DIFFERENT_BOT'
+  | 'UNREACHABLE'
+  | 'TOKEN_UNREADABLE'
+  | 'WEBHOOK_READ_REFUSED';
 
 /**
  * The two halves `botctl telegram status` reports, side by side, and never one standing in
@@ -248,8 +259,10 @@ export class BotBootstrapService {
   constructor(private readonly deps: BotBootstrapDeps) {}
 
   /**
-   * The LOCAL answer, and only the one decision it is fit for: whether the installer must
-   * ask for a token (`none`) or may resume from the stored one (anything else).
+   * The LOCAL answer, and only the one decision it is fit for: whether the bootstrap CLI
+   * must ask for a token (`none`) or may resume from the stored one (anything else). Its
+   * one reader is `bootstrap-bot.cli.ts` → `tokenForRun`; `install.sh` reads the
+   * remote-aware `--status` (`statusWithReason`), not this.
    *
    * Read-only and makes no Telegram call. It is NOT what `botctl telegram status` reports
    * — that is `statusWithReason`, which asks Telegram — because a `ready` read from the
@@ -444,7 +457,11 @@ export class BotBootstrapService {
     const held = await this.deps.telegram.readWebhook(token);
     if (held.outcome !== 'READ') {
       return result(
-        { outcome: held.outcome === 'REJECTED' ? 'TOKEN_REJECTED' : 'UNREACHABLE', ...unread },
+        {
+          // `getMe` just accepted this token, so a permanent failure HERE is not the token.
+          outcome: held.outcome === 'REJECTED' ? 'WEBHOOK_READ_REFUSED' : 'UNREACHABLE',
+          ...unread,
+        },
         probe,
         null,
       );
@@ -509,6 +526,16 @@ export class BotBootstrapService {
             `The stored bot token could not be decrypted (${remote.tokenErrorCode ?? 'unknown'}), ` +
             'so Telegram was not asked anything. `botctl secrets status` shows the keys this ' +
             'installation holds.',
+        };
+      case 'WEBHOOK_READ_REFUSED':
+        return {
+          state: 'unavailable',
+          reason:
+            'Telegram ACCEPTED the stored token (getMe answered for this bot), but getWebhookInfo ' +
+            'then failed permanently — refused, or answered with something that is not a ' +
+            'WebhookInfo — so whether Telegram delivers updates here is UNKNOWN. The token is not ' +
+            'the problem and does not need replacing. Check TELEGRAM_API_BASE_URL (a proxy that ' +
+            'serves getMe but not getWebhookInfo), then run this again.',
         };
       case 'UNREACHABLE':
         return {

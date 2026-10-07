@@ -1751,12 +1751,18 @@ describe('bot bootstrap — status asks Telegram, and ready means BOTH halves ag
     expect(built.telegram.webhookCalls).toHaveLength(1);
   });
 
-  it('a webhook read Telegram REJECTS after getMe is the token too', async () => {
+  // Review 2026-10-07: getMe has just PROVED the token, so a permanent getWebhookInfo
+  // failure must not send the operator to replace it.
+  it('a webhook read that fails permanently AFTER getMe accepted the token is not blamed on the token', async () => {
     const built = await installed();
     built.telegram.held = { outcome: 'REJECTED' };
     const report = await built.service.statusWithReason(scope, ORIGIN);
     expect(report.state).toBe('unavailable');
-    expect(report.detail?.remote.outcome).toBe('TOKEN_REJECTED');
+    expect(report.detail?.remote.outcome).toBe('WEBHOOK_READ_REFUSED');
+    expect(report.reason).toContain('getWebhookInfo');
+    expect(report.reason).toContain('TELEGRAM_API_BASE_URL');
+    expect(report.reason).toContain('does not need replacing');
+    expect(report.reason).not.toContain('Replace the token');
   });
 
   it('Telegram that cannot be asked is UNKNOWN, and unknown is not ready', async () => {
@@ -1931,6 +1937,26 @@ describe('bot bootstrap — register is the safe reconcile for the incident stat
         { state: 'ready' },
       );
     }
+  });
+
+  it("an audit writer that fails does not replace the registration's own error", async () => {
+    const built = await installed();
+    const brokenAudit = new BotBootstrapService({
+      ...serviceDeps(built),
+      audit: {
+        record: async (_s, _a, entry) => {
+          if (entry.result === 'FAILED') throw new Error('audit store unavailable');
+          built.audit.push(entry);
+        },
+      },
+    });
+    built.bots.rows[0]!.webhookSecretFingerprint = null;
+    built.telegram.heldAfterRegister = webhookRead(null);
+
+    expect(
+      await codeThrownBy(() => brokenAudit.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED);
+    expect(built.bots.claim).toBeNull();
   });
 
   it('audits a registration Telegram refused, with its reason redacted and no token', async () => {

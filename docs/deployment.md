@@ -293,12 +293,12 @@ pending updates        22
 problems               WEBHOOK_NOT_SET
 ```
 
-| word          | when                                                                                                                                                                                                                                                                                                         | remedy                           |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
-| `none`        | no bot instance                                                                                                                                                                                                                                                                                              | rerun the installer with a token |
-| `ready`       | the marker is current **and** Telegram reports exactly the expected URL, its full update set, for this bot                                                                                                                                                                                                   | nothing                          |
-| `incomplete`  | the marker is not current, **or** Telegram holds no URL, another URL, or a narrowed update set                                                                                                                                                                                                               | `botctl telegram register`       |
-| `unavailable` | something registering cannot fix: the route disabled, the tenant stopped, the bot not ACTIVE — **or** Telegram rejected the stored token (`TOKEN_REJECTED`), the API base is not Telegram, the token names another bot, the token cannot be decrypted, or Telegram could not be asked at all (`UNREACHABLE`) | the reason on stderr names it    |
+| word          | when                                                                                                                                                                                                                                                                                                                                                                                                                                                     | remedy                           |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `none`        | no bot instance                                                                                                                                                                                                                                                                                                                                                                                                                                          | rerun the installer with a token |
+| `ready`       | the marker is current **and** Telegram reports exactly the expected URL, its full update set, for this bot                                                                                                                                                                                                                                                                                                                                               | nothing                          |
+| `incomplete`  | the marker is not current, **or** Telegram holds no URL, another URL, or a narrowed update set                                                                                                                                                                                                                                                                                                                                                           | `botctl telegram register`       |
+| `unavailable` | something registering cannot fix: the route disabled, the tenant stopped, the bot not ACTIVE — **or** Telegram rejected the stored token (`TOKEN_REJECTED`), the API base is not Telegram, the token names another bot, the token cannot be decrypted, `getMe` accepted the token but `getWebhookInfo` failed permanently (`WEBHOOK_READ_REFUSED` — check `TELEGRAM_API_BASE_URL`, not the token), or Telegram could not be asked at all (`UNREACHABLE`) | the reason on stderr names it    |
 
 `ready` is **never** answered from the local marker alone. That is the incident
 this exists for: after a server move `status` printed `ready` from the marker
@@ -332,7 +332,8 @@ It never asks for a token and never replaces one. It:
    so `status` keeps saying `incomplete`.
 
 Both outcomes leave an audit row `bot_instance.webhook_registered`: `SUCCESS`
-with the URL, `verifiedBy`, the pending count and `dropPendingUpdates: false`, or
+with the URL, `verifiedBy`, the pending count and `dropPendingUpdates` (`false` on
+every reconcile, `true` only on the first registration of a brand-new bot row), or
 `FAILED` with the stage (`SET_WEBHOOK` / `VERIFY_WEBHOOK`), Telegram's outcome and
 its redacted reason. It is idempotent and takes the installation lock.
 
@@ -340,6 +341,21 @@ Only the **first** registration of a brand-new bot row drops queued updates
 (ADR-0029: those predate the installation and belong to whatever the token served
 before). A restored or migrated installation already has its row, so it is
 always a reconcile.
+
+#### Operator notes
+
+- `botctl telegram register`, and an installer rerun on a configured bot, now
+  **fail with nothing changed** when Telegram's webhook cannot be read (before,
+  they reported "already configured"). Rerun later; nothing needs undoing.
+- If `setWebhook` succeeded but the read-back could not be made, the run fails and
+  the marker stays unwritten — yet the webhook **may already be live** at Telegram.
+  That is safe: because the marker is unwritten, a rerun registers the same URL
+  again (a replacing `setWebhook`, so nothing duplicates), keeps the queue
+  (`drop_pending_updates: false`), and reads it back.
+- With Telegram unreachable, `botctl update` and `rollback` spend up to about
+  2 × `NOTIFICATION_SEND_TIMEOUT_MS` in the status check (one `getMe`, one
+  `getWebhookInfo`, each bounded by it), then only **warn**; the release itself is
+  not failed.
 
 #### Recovering a bot that stopped answering (preserving queued updates)
 

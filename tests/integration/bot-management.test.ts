@@ -11,6 +11,7 @@ import {
   TELEGRAM_SECRET_TOKEN_HEADER,
   botListResponseSchema,
   botMutationResponseSchema,
+  errors,
   isNexaError,
   type ActorContext,
   type BotInstanceId,
@@ -587,6 +588,111 @@ describe('WP13 bot management', () => {
         ['GET_ME', BOT_ERROR_CODES.BOT_TELEGRAM_UNREACHABLE],
       ]);
       expect(JSON.stringify(rows)).not.toContain(tokenFor(TELEGRAM_ID, 'e').split(':')[1]);
+    });
+
+    // -----------------------------------------------------------------------
+    // Hardening 2026-10-07 review: the failure audit's three unpinned rules.
+    // -----------------------------------------------------------------------
+    const replacementAudit = async () =>
+      (
+        await db().execute<{ result: string; after: Record<string, unknown> }>(sql`
+          SELECT result, after FROM audit_logs
+           WHERE action = 'bot_instance.token_replace' AND entity_id = ${BOT_A1}
+           ORDER BY occurred_at, id`)
+      ).rows;
+
+    it('a permission withdrawn mid-replacement is ONE denied row, never also a failed one', async () => {
+      // The early check passes; the guard inside the claim's transaction refuses — the
+      // owner's role changed between the two. `recordMutationDenial` writes the DENIED row;
+      // a FAILED row beside it would count one refusal twice.
+      const denying = new BotManagementService({
+        ...deps,
+        guard: {
+          check: async (
+            s: TenantContext,
+            a: ActorContext,
+            permission: Parameters<typeof api.container.guard.check>[2],
+            tx?: unknown,
+          ) => {
+            if (tx !== undefined) {
+              throw errors.permissionDenied(
+                PLATFORM_ERROR_CODES.PERMISSION_DENIED,
+                `Missing permission "${permission}".`,
+                { permission },
+              );
+            }
+            return api.container.guard.check(s, a, permission, tx);
+          },
+          denialEvent: (a: ActorContext, permission: string) =>
+            api.container.guard.denialEvent(a, permission),
+        } as never,
+      });
+      const code = await refusal(
+        denying.replaceToken(scope, owner, {
+          idempotencyKey: 'denied-mid-flight',
+          botId: BOT_A1,
+          token: tokenFor(TELEGRAM_ID, 'denied'),
+        }),
+      );
+      expect(code).toBe(PLATFORM_ERROR_CODES.PERMISSION_DENIED);
+      expect((await replacementAudit()).map((row) => row.result)).toEqual(['DENIED']);
+      expect(calls).toEqual([]);
+    });
+
+    it("an audit writer that fails does not replace the replacement's own error", async () => {
+      identity = { outcome: 'REJECTED', detail: 'Unauthorized' };
+      const brokenAudit = new BotManagementService({
+        ...deps,
+        audit: {
+          record: async (s, a, entry, tx) => {
+            if (entry.result === 'FAILED') throw new Error('audit store unavailable');
+            return api.container.audit.record(s, a, entry, tx as never);
+          },
+        },
+      });
+      expect(
+        await refusal(
+          brokenAudit.replaceToken(scope, owner, {
+            idempotencyKey: 'audit-down',
+            botId: BOT_A1,
+            token: tokenFor(TELEGRAM_ID, 'auditdown'),
+          }),
+        ),
+      ).toBe(BOT_ERROR_CODES.BOT_TOKEN_REJECTED);
+    });
+
+    it('records a failure that is not a NexaError by the code the error filter answers it with', async () => {
+      // A ZodError: the token's shape, parsed after the permission.
+      await expect(
+        service.replaceToken(scope, owner, {
+          idempotencyKey: 'not-a-string',
+          botId: BOT_A1,
+          token: 12345,
+        }),
+      ).rejects.toBeTruthy();
+      // A bug: the port throws something that is not a NexaError at all.
+      const throwing = new BotManagementService({
+        ...deps,
+        telegram: {
+          ...deps.telegram,
+          identify: async () => {
+            throw new TypeError('boom');
+          },
+        },
+      });
+      await expect(
+        throwing.replaceToken(scope, owner, {
+          idempotencyKey: 'bug',
+          botId: BOT_A1,
+          token: tokenFor(TELEGRAM_ID, 'bug'),
+        }),
+      ).rejects.toThrow('boom');
+      expect((await replacementAudit()).map((row) => [row.result, row.after['errorCode']])).toEqual(
+        [
+          ['FAILED', 'request.invalid'],
+          ['FAILED', 'internal.unhandled'],
+        ],
+      );
     });
 
     // The four Telegram calls a replacement makes, in order (R4): identity, the prior

@@ -26,6 +26,7 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { ZodError } from 'zod';
 import { redactSecretText } from '../../../../infrastructure/redaction.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
@@ -105,6 +106,18 @@ interface ReplacementProgress {
     | 'SET_WEBHOOK'
     | 'VERIFY_WEBHOOK'
     | 'ACTIVATE';
+}
+
+/**
+ * The code a failed replacement's audit row records. A NexaError's own code; otherwise the
+ * code the HTTP error filter (`surfaces/web/error.filter.ts`) answers the same failure with —
+ * `request.invalid` for a ZodError (the token's shape, parsed after the permission), and
+ * `internal.unhandled` for anything else. Never a guess like "validation" for a bug.
+ */
+function replacementErrorCode(error: unknown): string {
+  if (isNexaError(error)) return error.code;
+  if (error instanceof ZodError) return 'request.invalid';
+  return 'internal.unhandled';
 }
 
 /** What Telegram held before a replacement touched it — what a compensation restores. */
@@ -887,7 +900,7 @@ export class BotManagementService {
         before: null,
         after: {
           stage,
-          errorCode: isNexaError(error) ? error.code : 'validation',
+          errorCode: replacementErrorCode(error),
           compensation: detail('compensation'),
           telegramReason: detail('telegramReason'),
         },
