@@ -451,6 +451,35 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     expect((await cutover().listApprovals(tenantA, owner, {})).items.map((a) => a.id)).toEqual([
       approval.id,
     ]);
+
+    // A tenant that stopped accepting work records and revokes nothing (read inside the tx).
+    await db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`);
+    await expect(
+      cutover().revoke(tenantA, owner, approval.id, { idempotencyKey: key(), reason: 'x' }),
+    ).rejects.toMatchObject({ code: LEGACY_CUTOVER_ERROR_CODES.SCOPE_STOPPED });
+    await expect(
+      cutover().approve(tenantA, owner, { ...approveBody(fp), finalDumpSha256: 'e'.repeat(64) }),
+    ).rejects.toMatchObject({ code: LEGACY_CUTOVER_ERROR_CODES.SCOPE_STOPPED });
+  });
+
+  it('backfills the two keys into existing owner roles only, idempotently', async () => {
+    await db().execute(
+      sql`DELETE FROM role_permissions WHERE permission_key LIKE 'legacy.cutover.%'`,
+    );
+    const migration = readFileSync('apps/api/drizzle/0234_legacy_cutover_grants.sql', 'utf8');
+    const backfill = migration.slice(migration.indexOf('INSERT INTO "role_permissions"'));
+    await db().execute(sql.raw(backfill));
+    await db().execute(sql.raw(backfill));
+    const rows = await db().execute<{ role_key: string; permission_key: string }>(
+      sql`SELECT r.key AS role_key, rp.permission_key FROM role_permissions rp
+            JOIN roles r ON r.id = rp.role_id
+           WHERE rp.permission_key LIKE 'legacy.cutover.%' AND r.tenant_id = ${tenantA.tenantId}
+           ORDER BY 2`,
+    );
+    expect(rows.rows).toEqual([
+      { role_key: 'owner', permission_key: 'legacy.cutover.approve' },
+      { role_key: 'owner', permission_key: 'legacy.cutover.view' },
+    ]);
   });
 
   // --- the gated import -----------------------------------------------------------------------
@@ -510,6 +539,14 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
         )
       ).code,
     ).toBe('APPROVAL_MISSING');
+    // The approval binds what is IMPORTED: another snapshot under this approval's values is
+    // refused by the service itself, whatever the caller typed.
+    const other = await snapshotOf(newerSnapshot(ds));
+    const wrongSnapshot = await refusal(
+      apply('other-snapshot', other, { gate: expectationOf(fp) }),
+    );
+    expect(wrongSnapshot.code).toBe('APPROVAL_MISSING');
+    expect(wrongSnapshot.message).toContain(other.fingerprint);
     // A synthetic approval never opens a production-like target (PR3's stored-state lesson).
     expect(
       (
