@@ -8,6 +8,7 @@ CREATE TABLE "legacy_wallet_debts" (
 	"source_fingerprint" text NOT NULL,
 	"row_checksum" text NOT NULL,
 	"run_id" uuid NOT NULL,
+	"synthetic" boolean NOT NULL,
 	"state" text NOT NULL,
 	"decision_reason" text,
 	"decided_by_admin_id" uuid,

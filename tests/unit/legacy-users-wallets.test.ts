@@ -138,6 +138,7 @@ describe('the users-and-wallets section', () => {
     );
     const section = buildUsersWalletsSection({
       sourceFingerprint: C(42),
+      synthetic: false,
       currency: 'IRT',
       users,
       mapRows: maps,
@@ -156,6 +157,7 @@ describe('the users-and-wallets section', () => {
         count: 3,
         sumMinor: 450n,
         byState: { PENDING_REVIEW: { count: 3, sumMinor: 450n } },
+        synthetic: 0,
       },
     });
     expect(section.version).toBe(LEGACY_USERS_WALLETS_SECTION_VERSION);
@@ -206,16 +208,45 @@ describe('the users-and-wallets section', () => {
     const maps = new Map(users.map((u) => [u.row.id, mapRow(u.row.id, u.row.checksum)]));
     const section = buildUsersWalletsSection({
       sourceFingerprint: C(1),
+      synthetic: false,
       currency: 'IRT',
       users,
       mapRows: maps,
       openings: new Map([['301', -300n]]),
       debts: new Map(),
       openingTotals: { count: 1, sumMinor: -300n, negative: 1 },
-      debtTotals: { count: 0, sumMinor: 0n, byState: {} },
+      debtTotals: { count: 0, sumMinor: 0n, byState: {}, synthetic: 0 },
     });
     const failed = section.checks.filter((c) => !c.holds).map((c) => c.id);
     expect(failed).toEqual(['U2', 'U3', 'U4', 'U5', 'U6', 'U7']);
     expect(section.wallet.perUser).toMatchObject({ priorDebitOpening: 1, missingDebt: 1 });
+  });
+
+  it('U8: a real snapshot never reconciles while a debt from a synthetic source is recorded', () => {
+    const users = [planned('401', '-10')];
+    const maps = new Map(users.map((u) => [u.row.id, mapRow(u.row.id, u.row.checksum)]));
+    const build = (synthetic: boolean) =>
+      buildUsersWalletsSection({
+        sourceFingerprint: C(2),
+        synthetic,
+        currency: 'IRT',
+        users,
+        mapRows: maps,
+        openings: new Map(),
+        debts: new Map([['401', 10n]]),
+        openingTotals: { count: 0, sumMinor: 0n, negative: 0 },
+        debtTotals: {
+          count: 1,
+          sumMinor: 10n,
+          byState: { PENDING_REVIEW: { count: 1, sumMinor: 10n } },
+          synthetic: 1,
+        },
+      });
+    expect(
+      build(false)
+        .checks.filter((c) => !c.holds)
+        .map((c) => c.id),
+    ).toEqual(['U8']);
+    expect(build(true).holds).toBe(true);
   });
 });

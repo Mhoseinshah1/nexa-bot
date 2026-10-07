@@ -1995,12 +1995,14 @@ describe('Migration P7: the legacy importer', () => {
         run_id: string;
         row_checksum: string;
         state: string;
-      }>(sql`SELECT run_id, row_checksum, state FROM legacy_wallet_debts`)
+      }>(sql`SELECT run_id, row_checksum, state, synthetic FROM legacy_wallet_debts`)
     ).rows;
     expect(debt).toEqual({
       run_id: run.id,
       row_checksum: snap.users.find((u) => u.id === '100000003')?.checksum,
       state: 'PENDING_REVIEW',
+      // The fixture carries the synthetic marker, and the debt says so.
+      synthetic: true,
     });
     // No ledger entry of any kind for that customer: the NEXA balance is 0.
     expect(

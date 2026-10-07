@@ -16,6 +16,8 @@ export interface LegacyWalletDebtRecord {
   readonly sourceFingerprint: string;
   readonly rowChecksum: string;
   readonly runId: string;
+  /** The source carried the synthetic-fixture marker: test data, never a real debt. */
+  readonly synthetic: boolean;
   readonly state: LegacyWalletDebtState;
   readonly decisionReason: string | null;
   readonly decidedByAdminId: string | null;
@@ -36,6 +38,7 @@ export type LegacyWalletDebtFacts = Pick<
   | 'sourceFingerprint'
   | 'rowChecksum'
   | 'runId'
+  | 'synthetic'
   | 'recordedAt'
 >;
 

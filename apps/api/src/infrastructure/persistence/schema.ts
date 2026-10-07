@@ -13784,6 +13784,8 @@ export const legacyWalletDebts = pgTable(
     rowChecksum: text('row_checksum').notNull(),
     /** The APPLY run that recorded it. */
     runId: uuid('run_id').notNull(),
+    /** The source carried the synthetic-fixture marker: test data, never a real debt. */
+    synthetic: boolean('synthetic').notNull(),
     state: text('state').notNull(),
     decisionReason: text('decision_reason'),
     decidedByAdminId: uuid('decided_by_admin_id'),

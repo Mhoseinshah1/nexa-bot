@@ -119,7 +119,12 @@ describe('Migration P2: the legacy opening balance', () => {
       telegramUserId,
       legacyBalanceMinor,
       currency: 'IRT',
-      provenance: { runId: await runFor(scope), sourceFingerprint: FP, rowChecksum: ROW },
+      provenance: {
+        runId: await runFor(scope),
+        sourceFingerprint: FP,
+        rowChecksum: ROW,
+        synthetic: false,
+      },
       ...overrides,
     });
 

@@ -118,6 +118,7 @@ export function toView(r: LegacyWalletDebtRecord): LegacyWalletDebtView {
     sourceFingerprint: r.sourceFingerprint,
     rowChecksum: r.rowChecksum,
     runId: r.runId,
+    synthetic: r.synthetic,
     decisionReason: r.decisionReason,
     decidedByAdminId: r.decidedByAdminId,
     decidedAt: r.decidedAt === null ? null : r.decidedAt.toISOString(),

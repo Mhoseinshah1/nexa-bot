@@ -3,7 +3,8 @@
 --
 -- A legacy wallet debt records what the legacy system said a customer owed, read from one
 -- snapshot. Those facts are evidence: the amount, its currency, the legacy user, the
--- customer, the source fingerprint, the row checksum, the run and the time it was recorded
+-- customer, the source fingerprint, the row checksum, the run, whether the source was
+-- synthetic, and the time it was recorded
 -- are never rewritten — a later snapshot with a different figure is reported, never
 -- applied (owner constraint 4). Only the owner's decision moves (state, reason, who, when,
 -- version), by a conditional UPDATE naming its from-state. The row is never deleted, so a
@@ -25,6 +26,7 @@ BEGIN
      OR NEW.source_fingerprint IS DISTINCT FROM OLD.source_fingerprint
      OR NEW.row_checksum IS DISTINCT FROM OLD.row_checksum
      OR NEW.run_id IS DISTINCT FROM OLD.run_id
+     OR NEW.synthetic IS DISTINCT FROM OLD.synthetic
      OR NEW.recorded_at IS DISTINCT FROM OLD.recorded_at THEN
     RAISE EXCEPTION
       'legacy wallet debt % records a legacy fact; only its decision may change', OLD.id

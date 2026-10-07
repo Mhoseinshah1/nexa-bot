@@ -97,6 +97,8 @@ export interface MigrationOpeningProvenance {
   readonly sourceFingerprint: string;
   /** The legacy user row's `user:v1` checksum in that snapshot. */
   readonly rowChecksum: string;
+  /** The snapshot carried the synthetic-fixture marker. */
+  readonly synthetic: boolean;
 }
 
 /**
@@ -384,7 +386,13 @@ export class MigrationOpeningBalanceService {
     if (input.debt !== null) {
       return {
         kind: 'DEBT_ALREADY_RECORDED',
-        debt: sameDebt(input.debt, input.customerId, input.telegramUserId, input.magnitude),
+        debt: sameDebt(
+          input.debt,
+          input.customerId,
+          input.telegramUserId,
+          input.magnitude,
+          input.provenance,
+        ),
       };
     }
     const provenance = input.provenance;
@@ -406,6 +414,7 @@ export class MigrationOpeningBalanceService {
         sourceFingerprint: provenance.sourceFingerprint,
         rowChecksum: provenance.rowChecksum,
         runId: provenance.runId,
+        synthetic: provenance.synthetic,
         recordedAt: this.deps.clock.now(),
       },
       tx,
@@ -413,7 +422,7 @@ export class MigrationOpeningBalanceService {
     if (!inserted) {
       return {
         kind: 'DEBT_ALREADY_RECORDED',
-        debt: sameDebt(debt, input.customerId, input.telegramUserId, input.magnitude),
+        debt: sameDebt(debt, input.customerId, input.telegramUserId, input.magnitude, provenance),
       };
     }
     await this.deps.audit.record(
@@ -431,6 +440,7 @@ export class MigrationOpeningBalanceService {
           currency: debt.currency,
           sourceFingerprint: debt.sourceFingerprint,
           runId: debt.runId,
+          synthetic: debt.synthetic,
           ledgerEntry: null,
         },
         result: 'SUCCESS',
@@ -504,18 +514,26 @@ function payloadMismatch(): Error {
   );
 }
 
-/** The debt already recorded, if it is the SAME one; otherwise a refusal. */
+/**
+ * The debt already recorded, if it is the SAME one; otherwise a refusal. "Same" includes
+ * the evidence class (PR3's review lesson on #232): a debt recorded from a SYNTHETIC source
+ * is test data and is never taken for the real one — nor a real one for a fixture's — so a
+ * mismatch is refused (counted CONFLICT by the importer) and nothing is written.
+ */
 function sameDebt(
   debt: LegacyWalletDebtRecord,
   customerId: UserId,
   telegramUserId: string,
   magnitude: bigint,
+  provenance: MigrationOpeningProvenance | undefined,
 ): LegacyWalletDebtRecord {
   const same =
     debt.customerId === customerId &&
     debt.legacyUserId === telegramUserId &&
     debt.amountMinor === magnitude &&
-    debt.currency === LEGACY_WALLET_DEBT_CURRENCY;
+    debt.currency === LEGACY_WALLET_DEBT_CURRENCY &&
+    provenance !== undefined &&
+    debt.synthetic === provenance.synthetic;
   if (!same) throw payloadMismatch();
   return debt;
 }
@@ -528,6 +546,7 @@ function validProvenance(p: MigrationOpeningProvenance | undefined): boolean {
     p !== undefined &&
     UUID.test(p.runId) &&
     SHA256.test(p.sourceFingerprint) &&
-    SHA256.test(p.rowChecksum)
+    SHA256.test(p.rowChecksum) &&
+    typeof p.synthetic === 'boolean'
   );
 }

@@ -34,6 +34,8 @@ import type { PlannedUser } from './plan.js';
 
 export interface UsersWalletsInput {
   readonly sourceFingerprint: string;
+  /** The snapshot carried the synthetic-fixture marker. */
+  readonly synthetic: boolean;
   readonly currency: string;
   readonly users: readonly PlannedUser[];
   /** The `user` map rows, by legacy id. */
@@ -55,6 +57,8 @@ export interface UsersWalletsInput {
     readonly byState: Readonly<
       Record<string, { readonly count: number; readonly sumMinor: bigint }>
     >;
+    /** Recorded from a synthetic source. */
+    readonly synthetic: number;
   };
 }
 
@@ -310,6 +314,16 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
       expected: String(positive.users + negative.users + zero),
       actual: String(perUser.matching),
     },
+    {
+      id: 'U8',
+      // PR3's review lesson (#232): recorded state is re-checked for its evidence class. A
+      // debt read from a synthetic fixture is test data; a real snapshot's reconciliation
+      // never holds while one is recorded beside real ones.
+      what: 'no legacy debt recorded from a synthetic source, unless this snapshot is synthetic',
+      holds: input.synthetic || input.debtTotals.synthetic === 0,
+      expected: input.synthetic ? 'any' : '0',
+      actual: String(input.debtTotals.synthetic),
+    },
   ];
 
   return {
@@ -340,6 +354,7 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
         recorded: input.debtTotals.count,
         recordedSumMinor: minor(input.debtTotals.sumMinor),
         byState: debtByState,
+        synthetic: input.debtTotals.synthetic,
       },
       ledgerDebitOpenings: input.openingTotals.negative,
       perUser,

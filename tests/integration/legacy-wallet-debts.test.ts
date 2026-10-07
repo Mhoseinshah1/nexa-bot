@@ -117,13 +117,19 @@ describe('Mirza PR4: legacy wallet debts', () => {
     customerId: UserId,
     telegramUserId: string,
     legacyBalanceMinor: bigint,
+    synthetic = false,
   ) =>
     ctx.container.migrationOpeningBalance.post(scope, IMPORTER, {
       customerId,
       telegramUserId,
       legacyBalanceMinor,
       currency: 'IRT',
-      provenance: { runId: await runFor(scope), sourceFingerprint: FP, rowChecksum: ROW },
+      provenance: {
+        runId: await runFor(scope),
+        sourceFingerprint: FP,
+        rowChecksum: ROW,
+        synthetic,
+      },
     });
 
   const balance = async (scope: TenantContext, customerId: UserId) =>
@@ -181,6 +187,20 @@ describe('Mirza PR4: legacy wallet debts', () => {
     expect(
       await q(sql`SELECT 1 FROM wallet_entries WHERE customer_id = ${customerId}`),
     ).toHaveLength(0);
+  });
+
+  it('never takes a debt recorded from a SYNTHETIC source for a real one, nor the reverse', async () => {
+    const c = await customer(tenantA, '800260');
+    const first = await post(tenantA, c, '800260', -45_000n, true);
+    expect(first.kind === 'DEBT_RECORDED' && first.debt.synthetic).toBe(true);
+    await expect(post(tenantA, c, '800260', -45_000n, false)).rejects.toMatchObject({
+      code: PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
+    });
+    expect((await post(tenantA, c, '800260', -45_000n, true)).kind).toBe('DEBT_ALREADY_RECORDED');
+    const d = await debtFor(tenantA, '800261');
+    await expect(post(tenantA, d.customerId, '800261', -45_000n, true)).rejects.toMatchObject({
+      code: PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
+    });
   });
 
   it('refuses a negative balance without its provenance', async () => {
@@ -401,6 +421,7 @@ describe('Mirza PR4: legacy wallet debts', () => {
     for (const statement of [
       sql`UPDATE legacy_wallet_debts SET amount_minor = 1 WHERE id = ${debt.id}`,
       sql`UPDATE legacy_wallet_debts SET legacy_user_id = '1' WHERE id = ${debt.id}`,
+      sql`UPDATE legacy_wallet_debts SET synthetic = true WHERE id = ${debt.id}`,
       sql`UPDATE legacy_wallet_debts SET source_fingerprint = ${'0'.repeat(64)} WHERE id = ${debt.id}`,
       sql`DELETE FROM legacy_wallet_debts WHERE id = ${debt.id}`,
     ]) {
@@ -411,9 +432,9 @@ describe('Mirza PR4: legacy wallet debts', () => {
     await expect(
       db().execute(sql`
         INSERT INTO legacy_wallet_debts (id, tenant_id, customer_id, legacy_user_id, amount_minor,
-          currency, source_fingerprint, row_checksum, run_id, state, recorded_at, updated_at)
+          currency, source_fingerprint, row_checksum, run_id, synthetic, state, recorded_at, updated_at)
         VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${c}, '800901', -5, 'IRT',
-          ${FP}, ${ROW}, ${await runFor(tenantA)}, 'PENDING_REVIEW', now(), now())`),
+          ${FP}, ${ROW}, ${await runFor(tenantA)}, false, 'PENDING_REVIEW', now(), now())`),
     ).rejects.toThrow();
     // No foreign key ties a debt to a wallet entry, an order or a payment.
     const fks = await q<{ target: string }>(sql`

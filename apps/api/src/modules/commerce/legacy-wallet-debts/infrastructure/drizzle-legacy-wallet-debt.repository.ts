@@ -27,6 +27,7 @@ function toRecord(row: Row): LegacyWalletDebtRecord {
     sourceFingerprint: row.sourceFingerprint,
     rowChecksum: row.rowChecksum,
     runId: row.runId,
+    synthetic: row.synthetic,
     state: row.state as LegacyWalletDebtState,
     decisionReason: row.decisionReason,
     decidedByAdminId: row.decidedByAdminId,

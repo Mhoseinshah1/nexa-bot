@@ -167,8 +167,14 @@ export class DrizzleLegacyImporterRepository
   /** Mirza PR4: count and Σ of recorded legacy debts, in total and per owner-decision state. */
   async debtAggregates(scope: TenantContext) {
     const tenantId = requireTenantId(scope);
-    const result = await this.db.execute<{ state: string; n: number; total: string }>(sql`
-      SELECT state, count(*)::int AS n, COALESCE(sum(amount_minor), 0)::text AS total
+    const result = await this.db.execute<{
+      state: string;
+      n: number;
+      total: string;
+      synthetic: number;
+    }>(sql`
+      SELECT state, count(*)::int AS n, COALESCE(sum(amount_minor), 0)::text AS total,
+             count(*) FILTER (WHERE synthetic)::int AS synthetic
         FROM legacy_wallet_debts
        WHERE tenant_id = ${tenantId}
        GROUP BY state ORDER BY state
@@ -176,12 +182,14 @@ export class DrizzleLegacyImporterRepository
     const byState: Record<string, { count: number; sumMinor: bigint }> = {};
     let count = 0;
     let sumMinor = 0n;
+    let synthetic = 0;
     for (const row of result.rows) {
+      synthetic += row.synthetic;
       byState[row.state] = { count: row.n, sumMinor: BigInt(row.total) };
       count += row.n;
       sumMinor += BigInt(row.total);
     }
-    return { count, sumMinor, byState };
+    return { count, sumMinor, byState, synthetic };
   }
 
   async trialOverrides(

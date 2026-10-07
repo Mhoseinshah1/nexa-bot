@@ -274,6 +274,7 @@ export function DebtDetail({ row, mayDecide }: { row: LegacyWalletDebtView; mayD
     <div className="stack">
       <Badge tone={STATE_TONES[row.state]}>{t(LEGACY_DEBT_STATE_LABELS[row.state])}</Badge>
       <Banner tone="info">{t('web.lwd_never_collected')}</Banner>
+      {row.synthetic && <Banner tone="warn">{t('web.lwd_synthetic')}</Banner>}
       <Card title={t('web.lwd_recorded_title')}>
         <dl className="kv">
           <dt>{t('web.lwd_col_legacy_user')}</dt>

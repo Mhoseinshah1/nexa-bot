@@ -1,5 +1,5 @@
 {
-  "id": "d809c9ef-ebd8-443e-a858-f5ac0fd6bf76",
+  "id": "88267d8b-0a5a-4715-ac74-666f80681f44",
   "prevId": "db2bc44b-294a-4cba-be23-1809203c1663",
   "version": "7",
   "dialect": "postgresql",
@@ -15878,6 +15878,12 @@
         "run_id": {
           "name": "run_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "synthetic": {
+          "name": "synthetic",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true
         },

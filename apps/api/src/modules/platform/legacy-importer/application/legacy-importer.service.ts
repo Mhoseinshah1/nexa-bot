@@ -1032,6 +1032,7 @@ export class LegacyImporterService {
             runId,
             sourceFingerprint: snapshot.fingerprint,
             rowChecksum: planned.row.checksum,
+            synthetic: snapshot.synthetic,
           },
         });
         tallies.openings[outcome.kind] += 1;
@@ -1523,6 +1524,7 @@ export class LegacyImporterService {
     ]);
     return buildUsersWalletsSection({
       sourceFingerprint: snapshot.fingerprint,
+      synthetic: snapshot.synthetic,
       currency,
       users: prepared.plan.users,
       mapRows,

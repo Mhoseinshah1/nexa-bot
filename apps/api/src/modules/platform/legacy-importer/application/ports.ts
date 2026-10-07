@@ -40,6 +40,8 @@ export interface LegacyImporterDestination {
     readonly byState: Readonly<
       Record<string, { readonly count: number; readonly sumMinor: bigint }>
     >;
+    /** Debts recorded from a source carrying the synthetic-fixture marker. */
+    readonly synthetic: number;
   }>;
   /** Customer id → override limit, for the customers that hold one. */
   trialOverrides(

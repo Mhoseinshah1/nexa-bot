@@ -27,6 +27,7 @@ const debt = (overrides: Record<string, unknown> = {}) => ({
   sourceFingerprint: 'b'.repeat(64),
   rowChecksum: 'c'.repeat(64),
   runId: '019600ab-cdef-7012-8345-6789abcd0199',
+  synthetic: false,
   decisionReason: null,
   decidedByAdminId: null,
   decidedAt: null,
