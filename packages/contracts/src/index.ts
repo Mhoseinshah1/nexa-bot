@@ -142,6 +142,8 @@ export * from './incidents.js';
 export * from './legacy-migration.js';
 /** Migration P4: legacy import run and map metadata (codes only, never source rows). */
 export * from './legacy-import.js';
+/** Mirza migration PR1: legacy table classes and read set names (codes only, never rows). */
+export * from './legacy-inventory.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */
 export * from './business-chats.js';
 /** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */
