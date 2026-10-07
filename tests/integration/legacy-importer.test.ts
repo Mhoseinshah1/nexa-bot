@@ -2019,6 +2019,17 @@ describe('Migration P7: the legacy importer', () => {
         "legacy_table = 'user' AND legacy_id = '100000003' AND status = 'IMPORTED' AND reason_code = 'NEGATIVE_BALANCE'",
       ),
     ).toBe(1);
+    // Legacy agents (100000007 'n', 100000009 'n2') are ordinary customers: no reseller row,
+    // so no tier, no discount and never credit (CLAUDE.md: there is no reseller credit).
+    expect(await count('customers', "telegram_user_id IN ('100000007', '100000009')")).toBe(2);
+    expect(await count('resellers')).toBe(0);
+    // The legacy identity is kept: one map row per user id, naming its customer.
+    expect(
+      await count(
+        'legacy_import_map',
+        "legacy_table = 'user' AND legacy_id IN ('100000007', '100000009') AND entity_type = 'CUSTOMER'",
+      ),
+    ).toBe(2);
     // The debt's audit row names no Telegram id.
     expect(await count('audit_logs', "action = 'legacy.wallet_debt.recorded'")).toBe(1);
     expect(
