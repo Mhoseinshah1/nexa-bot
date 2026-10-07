@@ -54,10 +54,20 @@ it is fixed here (CB-07, CB-08).
   - That failure is visible per bot and can be re-queued.
   - Recording which bot verified would need a column. It is not added: no migration where none
     is needed.
-- **The history is read on `broadcasts.view`, not `audit.view`.** It is this broadcast's own
-  rows, reduced to closed facts: action, result, actor label, time, test outcome, re-queued
-  count, and from/to state. The page already shows `createdBy`/`launchedBy` on the same key.
-  The raw `before`/`after` never leave (pinned by «carries no raw audit payload»).
+- **The history is read on `broadcasts.view`; who did what needs `audit.view` too** (PR #237
+  review N1).
+  - With `audit.view`, the card shows refused attempts and operator names. Without it, it shows
+    successful facts only and no names. Who did it, and who was refused, are audit signals,
+    which is the reseller-history precedent.
+  - The card stays useful to a role that only reads broadcasts.
+  - The facts are always closed: action, result, time, test outcome, re-queued count, and
+    from/to state. The raw `before`/`after` never leave (pinned by «carries no raw audit
+    payload»).
+  - The card shows the newest 50 rows and says when older ones exist (`truncated`, review N4).
+    The full trail is in the audit log.
+- **Rolling update** (review B1). `nextAttemptAt` is optional in the contract, so the
+  recipients card still reads an older API replica's rows. The two new cards answer an error
+  until the update completes (`docs/deployment.md`).
 
 ## C2 — operator UX
 
@@ -99,6 +109,10 @@ named test, and restores the file from the copy it read. Every mutant below was 
 | CB-10 | re-queue without asking                                                    | web: asks before a re-queue                              |
 | CB-11 | the launch's count/fingerprint comparison removed (frozen audience)        | broadcasts.test: freezes exactly the previewed audience  |
 | CB-17 | a test send no longer refreshes the history (Codex P2 on PR #237)          | web: reads the history again after a test                |
+| CB-19 | "waiting for a retry" counts every PENDING row (review N2)                 | a 429 holds the bot that got it and no other             |
+| CB-20 | refused rows shown without `audit.view` (review N1)                        | without audit.view, shows the successful facts only      |
+| CB-21 | operator names shown without `audit.view` (review N1)                      | the same                                                 |
+| CB-22 | the history never says it is truncated (review N4)                         | says when older history rows exist beyond the cap        |
 
 ## Manual acceptance — NOT RUN
 
