@@ -85,6 +85,13 @@ export interface InvoicesReadOutcome {
   readonly synthetic: boolean;
   /** The read's exact row counts (from the read, or from the finished run). */
   readonly rows: { readonly invoice: number; readonly user: number; readonly product: number };
+  /**
+   * The `invoice` columns this read actually delivered and fingerprinted (the read's table
+   * evidence: the required ones, then the optional ones the source HAS). Null when the outcome
+   * finished an earlier run's promotion without reading: that run did not keep the list, and
+   * the allowlist is not a claim about what the source had.
+   */
+  readonly invoiceColumnsRead: readonly string[] | null;
   /** A STAGING run an earlier process left behind, failed as ABANDONED before this read. */
   readonly abandonedRunId: string | null;
   /** A VERIFIED run an earlier process left behind, completed before this read. */
@@ -114,7 +121,7 @@ export interface InvoicesReadDeps {
 /** Why the archive refused a verified read. Carries a code, never data. */
 export class InvoiceArchiveRefused extends Error {
   constructor(
-    readonly code: 'STAGED_COUNT_MISMATCH',
+    readonly code: 'STAGED_COUNT_MISMATCH' | 'SYNTHETIC_RUN_ON_PRODUCTION_TARGET',
     detail: string,
   ) {
     super(`${code}: ${detail}`);
@@ -147,6 +154,7 @@ export async function readLegacyInvoiceArchive(
           schemaHash: digest.schemaHash,
           synthetic: digest.synthetic,
           rows: rowsOf(digest.tables),
+          invoiceColumnsRead: digest.tables['invoice']?.columns ?? [],
           abandonedRunId: null,
           finishedEarlierRun: null,
           written: null,
@@ -198,6 +206,11 @@ export async function readLegacyInvoiceArchive(
     let abandonedRunId: string | null = null;
     let finishedEarlierRun: LegacyInvoiceArchiveRun | null = null;
     const open = await deps.archive.openRun(scope, actor);
+    // A run left open is resumed (VERIFIED) or discarded (STAGING) from what it STORED, without
+    // the source — so the evidence-class rule every write obeys is applied to the stored run
+    // first: a SYNTHETIC run (a restored or promoted staging database) is never promoted,
+    // completed or touched on a production-like target.
+    if (open !== null) refuseSyntheticOnProduction(open, input.productionLikeTarget);
     if (open?.state === 'STAGING') {
       await deps.archive.failRun(scope, actor, open.id, 'ABANDONED');
       abandonedRunId = open.id;
@@ -220,6 +233,7 @@ export async function readLegacyInvoiceArchive(
             user: Number(finishedEarlierRun.sourceUserRows ?? 0n),
             product: Number(finishedEarlierRun.sourceProductRows ?? 0n),
           },
+          invoiceColumnsRead: null,
           abandonedRunId,
           finishedEarlierRun: null,
           written: { run: finishedEarlierRun, recorded },
@@ -297,12 +311,32 @@ export async function readLegacyInvoiceArchive(
       schemaHash: read.result.schemaHash,
       synthetic: read.result.synthetic,
       rows,
+      invoiceColumnsRead: read.result.tables['invoice']?.columns ?? [],
       abandonedRunId,
       finishedEarlierRun,
       written: { run: completed, recorded },
     };
   } finally {
     await lease.release();
+  }
+}
+
+/**
+ * The evidence-class rule for a STORED run: a run whose read was SYNTHETIC is refused on a
+ * production-like target before anything resumes it — the same refusal a synthetic SOURCE
+ * gets (`decideEvidenceClass`), applied where no source is opened.
+ */
+export function refuseSyntheticOnProduction(
+  run: Pick<LegacyInvoiceArchiveRun, 'id' | 'synthetic'>,
+  productionLikeTarget: boolean,
+): void {
+  if (run.synthetic && productionLikeTarget) {
+    throw new InvoiceArchiveRefused(
+      'SYNTHETIC_RUN_ON_PRODUCTION_TARGET',
+      `open invoice archive run ${run.id} was read from a SYNTHETIC source, and this target is ` +
+        'production-like: it is neither resumed nor discarded here. Nothing was written. ' +
+        'Investigate how a synthetic run reached this database before going on.',
+    );
   }
 }
 

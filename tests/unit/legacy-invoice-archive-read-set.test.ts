@@ -5,7 +5,9 @@ import {
   digestInvoiceArchiveReadSet,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/invoice-archive-read-set';
 import {
+  InvoiceArchiveRefused,
   failureFor,
+  refuseSyntheticOnProduction,
   type InvoicesReadOutcome,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/invoice-archive-ingest';
 import { InvoiceArchiveStagingRefused } from '../../apps/api/src/modules/platform/legacy-invoice-archive/application/legacy-invoice-archive.service';
@@ -134,6 +136,17 @@ describe('the invoice-archive read set', () => {
     await session.close();
   });
 
+  it('refuses a stored SYNTHETIC run on a production-like target, and only there', () => {
+    expect(() => refuseSyntheticOnProduction({ id: 'r', synthetic: true }, true)).toThrow(
+      InvoiceArchiveRefused,
+    );
+    expect(() => refuseSyntheticOnProduction({ id: 'r', synthetic: true }, true)).toThrow(
+      /SYNTHETIC_RUN_ON_PRODUCTION_TARGET/u,
+    );
+    expect(() => refuseSyntheticOnProduction({ id: 'r', synthetic: true }, false)).not.toThrow();
+    expect(() => refuseSyntheticOnProduction({ id: 'r', synthetic: false }, true)).not.toThrow();
+  });
+
   it('maps an error during the read to the run failure it stands for', () => {
     expect(failureFor(new LegacySourceRefused('READ_SET_SNAPSHOT_DIVERGED', 'x'))).toBe(
       'SNAPSHOT_DIVERGED',
@@ -225,6 +238,7 @@ describe('legacy-import invoices-read: the command line', () => {
       schemaHash: 'd'.repeat(64),
       synthetic: true,
       rows: { invoice: 10, user: 5, product: 2 },
+      invoiceColumnsRead: ['id_invoice', 'Status', 'time_sell'],
       abandonedRunId: null,
       finishedEarlierRun: null,
       written: null,
@@ -233,6 +247,12 @@ describe('legacy-import invoices-read: the command line', () => {
     const text = invoicesReadReport(outcome, 'md') + invoicesReadReport(outcome, 'json');
     expect(text).toContain('c'.repeat(64));
     expect(text).toContain('user_info, uuid, bottype');
+    // The columns THIS read delivered — not the allowlist's optional ones it did not have.
+    expect(text).toContain('invoice columns read: id_invoice, Status, time_sell');
+    expect(JSON.parse(invoicesReadReport(outcome, 'json'))).toMatchObject({
+      columnsRead: ['id_invoice', 'Status', 'time_sell'],
+    });
+    expect(text).not.toContain('notifctions');
     for (const secret of Object.values(SYNTHETIC_ARCHIVE_SECRETS))
       expect(text).not.toContain(secret);
   });

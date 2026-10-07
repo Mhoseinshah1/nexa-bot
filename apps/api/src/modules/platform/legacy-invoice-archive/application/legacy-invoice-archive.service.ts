@@ -210,6 +210,28 @@ export class LegacyInvoiceArchiveService {
     const records = await this.deps.repository.list(scope, filter, after, limit + 1);
     const page = records.slice(0, limit);
     const last = page[page.length - 1];
+    if (pii && page.length > 0) {
+      /*
+       * Every UNREDACTED page is a reveal, so it is audited like an unredacted detail — not
+       * only a search BY personal data. Chosen over "list redacted, reveal per detail": a PII
+       * reader works the list (an owner's invoices by user id) and a per-row detail request
+       * would audit the same reveal N times. The row records the page's archive row ids, its
+       * count and the NAMES of the filters used — never an id, a username or a note.
+       */
+      await this.deps.audit.record(scope, actor, {
+        action: LEGACY_INVOICE_ARCHIVE_AUDIT_ACTIONS.piiView,
+        entityType: ROW_ENTITY,
+        entityId: null,
+        before: null,
+        after: {
+          list: true,
+          count: page.length,
+          filters: Object.keys(filter).sort(),
+          rowIds: page.map((record) => record.id),
+        },
+        result: 'SUCCESS',
+      });
+    }
     return {
       rows: page.map((record) => ({
         record: pii ? record : redactRecord(record),
