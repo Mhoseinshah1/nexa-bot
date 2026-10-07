@@ -179,6 +179,12 @@ export const legacyWalletDebtViewSchema = z.object({
   rowChecksum: z.string(),
   /** The import run that recorded it. */
   runId: z.string(),
+  /**
+   * The source carried the synthetic-fixture marker. A synthetic debt is test data: it is
+   * never taken for a real one (the importer refuses to match it against a real snapshot,
+   * and reconciliation of a real snapshot fails while one exists).
+   */
+  synthetic: z.boolean(),
   decisionReason: z.string().nullable(),
   decidedByAdminId: z.string().nullable(),
   decidedAt: z.iso.datetime().nullable(),
