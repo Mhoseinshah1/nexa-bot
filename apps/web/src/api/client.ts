@@ -685,6 +685,17 @@ import {
   type LegacyProductReviewResponse,
   type LegacyProductReviewState,
 } from '@nexa/contracts';
+// Mirza PR3: the legacy invoice archive.
+import {
+  LEGACY_INVOICE_ARCHIVE_ROUTES,
+  legacyInvoiceArchiveDetailResponseSchema,
+  legacyInvoiceArchiveListResponseSchema,
+  legacyInvoiceArchiveSummaryResponseSchema,
+  type LegacyInvoiceArchiveClass,
+  type LegacyInvoiceArchiveDetailResponse,
+  type LegacyInvoiceArchiveListResponse,
+  type LegacyInvoiceArchiveSummaryResponse,
+} from '@nexa/contracts';
 // Phase A2: a direct message from Customer 360.
 import {
   DIRECT_MESSAGE_ROUTES,
@@ -5213,4 +5224,54 @@ export function reopenLegacyProduct(
 ): Promise<LegacyProductReviewResponse> {
   const { id, ...body } = input;
   return post(LEGACY_PRODUCT_REVIEW_ROUTES.reopen(id), body, legacyProductReviewResponseSchema);
+}
+
+// --- Mirza PR3: the legacy invoice archive (read-only) ------------------------------------
+
+/** The archive's filters; every one optional. `legacyUserId`/`username` need PII. */
+export interface LegacyInvoiceArchiveQuery {
+  readonly invoiceId?: string;
+  readonly legacyUserId?: string;
+  readonly username?: string;
+  readonly status?: string;
+  readonly panelCode?: string;
+  readonly productCode?: string;
+  readonly classification?: LegacyInvoiceArchiveClass;
+  readonly test?: 'true' | 'false';
+  readonly after?: string;
+}
+
+/**
+ * One page of archived legacy invoices — the latest visible revision of each
+ * (`legacy.invoices.view`). Personal cells come back null unless the reader holds
+ * `legacy.invoices.pii.view`; `after` is the opaque cursor of the page before.
+ */
+export function fetchLegacyInvoices(
+  query: LegacyInvoiceArchiveQuery = {},
+): Promise<LegacyInvoiceArchiveListResponse> {
+  const params = new URLSearchParams();
+  for (const [name, value] of Object.entries(query)) {
+    if (typeof value === 'string' && value.trim() !== '') params.set(name, value.trim());
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${LEGACY_INVOICE_ARCHIVE_ROUTES.list}?${suffix}` : LEGACY_INVOICE_ARCHIVE_ROUTES.list,
+    legacyInvoiceArchiveListResponseSchema,
+  );
+}
+
+/** Aggregates only: counts by class and the recent ingest runs. */
+export function fetchLegacyInvoiceSummary(): Promise<LegacyInvoiceArchiveSummaryResponse> {
+  return authedGet(
+    LEGACY_INVOICE_ARCHIVE_ROUTES.summary,
+    legacyInvoiceArchiveSummaryResponseSchema,
+  );
+}
+
+/** One archived revision with its raw cells, its revisions and the importer's outcome. */
+export function fetchLegacyInvoice(id: string): Promise<LegacyInvoiceArchiveDetailResponse> {
+  return authedGet(
+    LEGACY_INVOICE_ARCHIVE_ROUTES.detail(id),
+    legacyInvoiceArchiveDetailResponseSchema,
+  );
 }
