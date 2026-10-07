@@ -16,16 +16,19 @@ import {
 import {
   money,
   PAYMENT_GATEWAY_PROVIDERS,
+  PAYMENT_OPS_QUEUES,
   PROVIDER_REVIEW_GATEWAY_PROVIDERS,
   type ListSearchTerm,
 } from '@nexa/contracts';
 import type {
   CurrencyCode,
+  GatewayInvoiceCreationState,
   OrderId,
   PaymentEvidenceKind,
   PaymentGatewayProvider,
   PaymentId,
   PaymentMethod,
+  PaymentOpsQueue,
   PaymentResolvedState,
   PaymentState,
   ReceiptDisposition,
@@ -48,7 +51,11 @@ import {
   payments,
   receiptCredits,
 } from '../../../../infrastructure/persistence/schema.js';
-import { paymentOpsQueueCondition } from './payment-ops-queue-sql.js';
+import {
+  completedRefundCondition,
+  openRefundCondition,
+  paymentOpsQueueCondition,
+} from './payment-ops-queue-sql.js';
 import type {
   PaymentConfirmation,
   PaymentCustomerIdentity,
@@ -58,6 +65,7 @@ import type {
   PaymentPage,
   PaymentRecord,
   PaymentRepository,
+  PaymentSituationFactsRecord,
   PaymentResolution,
   PaymentSearch,
 } from '../application/ports.js';
@@ -742,6 +750,52 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         ),
       );
     for (const { paymentId, ...signal } of rows) found.set(paymentId as PaymentId, signal);
+    return found;
+  }
+
+  /**
+   * Roadmap E1: every queue predicate, the two refund facts and the invoice's creation state,
+   * as booleans of ONE statement over the page — the same predicates the queue list and the
+   * counts run, so a situation and the queue it lists under cannot disagree.
+   */
+  async situationFacts(
+    scope: TenantContext,
+    paymentIds: readonly PaymentId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<PaymentId, PaymentSituationFactsRecord>> {
+    const tenantId = requireTenantId(scope);
+    const found = new Map<PaymentId, PaymentSituationFactsRecord>();
+    if (paymentIds.length === 0) return found;
+    const flags = Object.fromEntries(
+      PAYMENT_OPS_QUEUES.map((queue) => [
+        `q_${queue}`,
+        sql<boolean>`(${paymentOpsQueueCondition(queue)})`,
+      ]),
+    ) as Record<string, SQL<boolean>>;
+    const rows = (await this.exec(tx)
+      .select({
+        id: payments.id,
+        ...flags,
+        refundOpen: sql<boolean>`(${openRefundCondition()})`,
+        refundCompleted: sql<boolean>`(${completedRefundCondition()})`,
+        invoiceCreation: sql<string | null>`(
+          SELECT gi.creation_state FROM gateway_invoices gi
+           WHERE gi.tenant_id = ${payments.tenantId} AND gi.payment_id = ${payments.id})`,
+      })
+      .from(payments)
+      .where(
+        and(eq(payments.tenantId, tenantId), inArray(payments.id, [...new Set(paymentIds)])),
+      )) as unknown as readonly Record<string, unknown>[];
+    for (const row of rows) {
+      found.set(row['id'] as PaymentId, {
+        queues: PAYMENT_OPS_QUEUES.filter(
+          (queue): queue is PaymentOpsQueue => row[`q_${queue}`] === true,
+        ),
+        refundOpen: row['refundOpen'] === true,
+        refundCompleted: row['refundCompleted'] === true,
+        invoiceCreation: (row['invoiceCreation'] ?? null) as GatewayInvoiceCreationState | null,
+      });
+    }
     return found;
   }
 

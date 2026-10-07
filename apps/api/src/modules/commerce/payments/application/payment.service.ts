@@ -21,6 +21,9 @@ import {
   nextState,
   orderIdSchema,
   paymentIdSchema,
+  paymentSituationOf,
+  type PaymentOpsQueue,
+  type PaymentSituationGuide,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
@@ -577,6 +580,12 @@ export interface TransferSignalResult {
   readonly receiptWindow: ReceiptWindow | null;
 }
 
+/** Roadmap E1: one payment's situation guide, and the queues it was derived beside. */
+export interface PaymentSituationRead {
+  readonly guide: PaymentSituationGuide;
+  readonly queues: readonly PaymentOpsQueue[];
+}
+
 export interface ReceiptWindow {
   readonly expiresAt: Date;
   /** What the customer is told, so the sentence and the deadline cannot disagree. */
@@ -737,6 +746,47 @@ export class PaymentService {
       scope,
       payments.filter((payment) => payment.method === 'GATEWAY').map((payment) => payment.id),
     );
+  }
+
+  /**
+   * Roadmap E1 (`docs/payments-under-review-ux.md`): each payment's situation, from the ONE
+   * classifier (`paymentSituationOf`) over the record, its receipt disposition and the facts
+   * the queue predicates read — plus the queues themselves. `payments.view`; read-only. The
+   * dispositions are the caller's, already read for the same page.
+   */
+  async situations(
+    scope: TenantContext,
+    actor: ActorContext,
+    records: readonly PaymentRecord[],
+    dispositions: ReadonlyMap<PaymentId, ReceiptDisposition>,
+  ): Promise<ReadonlyMap<PaymentId, PaymentSituationRead>> {
+    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
+    const facts = await this.deps.repository.situationFacts(
+      scope,
+      records.map((record) => record.id),
+    );
+    const found = new Map<PaymentId, PaymentSituationRead>();
+    for (const record of records) {
+      const recorded = facts.get(record.id);
+      if (recorded === undefined) continue;
+      found.set(record.id, {
+        guide: paymentSituationOf({
+          state: record.state,
+          method: record.method,
+          topup: record.orderId === null,
+          customerSignalled: record.customerSignalledAt !== null,
+          providerReviewOpened: record.providerReviewUntil !== null,
+          resolvedByAdmin: record.resolvedByAdminId !== null,
+          receiptDisposition: dispositions.get(record.id) ?? null,
+          invoiceCreation: recorded.invoiceCreation,
+          queues: recorded.queues,
+          refundOpen: recorded.refundOpen,
+          refundCompleted: recorded.refundCompleted,
+        }),
+        queues: recorded.queues,
+      });
+    }
+    return found;
   }
 
   async get(scope: TenantContext, actor: ActorContext, id: string): Promise<PaymentRecord> {

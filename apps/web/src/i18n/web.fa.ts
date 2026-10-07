@@ -2084,6 +2084,121 @@ export const WEB_FA = {
   'web.payment_ops_queue_hint_provider_error':
     'ساخت فاکتور رد شد یا پاسخش گم شد، یا آخرین استعلام با خطا تمام شد.',
   'web.payment_ops_queue_hint_refund_related': 'پرداخت‌هایی که دست‌کم یک بازپرداخت دارند.',
+  // --- roadmap E1/E2 (Agent 5, payments): the situation guide and the NEEDS_ACTION queue ---
+  'web.payment_ops_queue_needs_action': 'نیازمند اقدام',
+  'web.payment_ops_queue_hint_needs_action':
+    'پرداخت‌هایی که تا کسی اقدام نکند جلو نمی‌روند؛ قدیمی‌ترین اول نمایش داده می‌شود.',
+  'web.payment_situation_column': 'وضعیت عملیاتی',
+  'web.payment_situation_card': 'چه شده و چه باید کرد',
+  'web.payment_situation_what': 'چه شده',
+  'web.payment_situation_money': 'پول',
+  'web.payment_situation_customer': 'مشتری باید',
+  'web.payment_situation_actions': 'اقدام‌های موجود برای اپراتور',
+  'web.payment_situation_no_action': 'اقدامی لازم نیست.',
+  'web.payment_situation_safe': 'کار امن',
+  'web.payment_situation_needs_action': 'نیازمند اقدام',
+  'web.payment_situation_state_note':
+    'این راهنما از رویدادهای ثبت‌شده استخراج می‌شود و جای وضعیت حسابداری پرداخت را نمی‌گیرد.',
+  'web.payment_situation_awaiting_payment': 'در انتظار پرداخت مشتری',
+  'web.payment_situation_invoice_not_issued': 'فاکتور درگاه صادر نشد',
+  'web.payment_situation_customer_signalled': 'مشتری اعلام واریز کرده است',
+  'web.payment_situation_provider_review': 'در بررسی درگاه',
+  'web.payment_situation_outcome_unknown': 'نتیجه نامعلوم',
+  'web.payment_situation_mismatch': 'مغایرت',
+  'web.payment_situation_partial': 'پرداخت ناقص',
+  'web.payment_situation_late_completion': 'تأیید دیرهنگام درگاه',
+  'web.payment_situation_confirmed': 'تأییدشده',
+  'web.payment_situation_refund_in_progress': 'بازپرداخت در جریان',
+  'web.payment_situation_refunded': 'بازپرداخت‌شده',
+  'web.payment_situation_credited_to_wallet': 'واریز به کیف پول',
+  'web.payment_situation_rejected': 'ردشده توسط بازبین',
+  'web.payment_situation_failed': 'ناموفق',
+  'web.payment_situation_expired': 'منقضی‌شده',
+  'web.payment_situation_cancelled': 'لغوشده',
+  'web.payment_situation_what_awaiting_payment':
+    'دستورالعمل یا لینک پرداخت برای مشتری فرستاده شده و مشتری هنوز چیزی اعلام نکرده است.',
+  'web.payment_situation_what_invoice_not_issued':
+    'درگاه ساخت فاکتور را رد کرد یا پاسخ آن دریافت نشد؛ لینکی به مشتری داده نشده است.',
+  'web.payment_situation_what_customer_signalled':
+    'مشتری می‌گوید مبلغ را واریز کرده است. این ادعای مشتری است و هنوز کسی آن را بررسی نکرده است.',
+  'web.payment_situation_what_provider_review':
+    'درگاه رسید مشتری را دریافت کرده و پرداخت در مهلت بررسی خود درگاه است.',
+  'web.payment_situation_what_outcome_unknown':
+    'ممکن است درگاه پول را گرفته باشد و این سامانه نمی‌تواند بگوید. تا تطبیق، نه موفق است نه ناموفق.',
+  'web.payment_situation_what_mismatch':
+    'پاسخ درگاه با این پرداخت جور نبود (مبلغ، مشتری یا شناسهٔ دیگر) و سامانه آن را برای بررسی نگه داشت.',
+  'web.payment_situation_what_partial':
+    'درگاه پرداخت ناقص ثبت کرده است. هیچ تسویه‌ای انجام نشده است.',
+  'web.payment_situation_what_late_completion':
+    'درگاه پس از پایان مهلت پرداخت را تأیید کرد. پول نزد درگاه است و در این سامانه چیزی تسویه نشده است.',
+  'web.payment_situation_what_confirmed':
+    'پول با شواهدی که این سامانه به آن اعتماد دارد تأیید شده است.',
+  'web.payment_situation_what_refund_in_progress':
+    'پرداخت تأیید شده است و یک بازپرداخت هنوز باز است.',
+  'web.payment_situation_what_refunded':
+    'پرداخت تأیید شده است و تمام یا بخشی از آن بازپرداخت شده است.',
+  'web.payment_situation_what_credited_to_wallet':
+    'بازبین رسید را بررسی کرد و مبلغی را که دید به کیف پول مشتری واریز کرد؛ سفارش با این پرداخت پرداخت نشد.',
+  'web.payment_situation_what_rejected': 'بازبین رسید را بررسی کرد و آن را نپذیرفت.',
+  'web.payment_situation_what_failed':
+    'درگاه پرداخت را ناموفق اعلام کرد یا پرداخت با تطبیق ناموفق بسته شد.',
+  'web.payment_situation_what_expired': 'مهلت پرداخت تمام شد و چیزی تأیید نشد.',
+  'web.payment_situation_what_cancelled': 'پرداخت پیش از تأیید پس گرفته شد.',
+  'web.payment_situation_safe_awaiting_payment':
+    'کاری لازم نیست؛ سامانه پرداخت را در پایان مهلت خودش می‌بندد.',
+  'web.payment_situation_safe_invoice_not_issued':
+    'از اینجا نمی‌توان فاکتور را دوباره ساخت؛ مشتری می‌تواند پرداخت تازه‌ای آغاز کند.',
+  'web.payment_situation_safe_customer_signalled':
+    'پیش از تأیید، واریز را در صورت‌حساب بانک ببینید. تأیید، رد یا واریز به کیف پول فقط در تلگرام انجام می‌شود.',
+  'web.payment_situation_safe_provider_review':
+    'تا پایان مهلت بررسی درگاه منتظر بمانید و پرداخت را دستی تأیید یا رد نکنید.',
+  'web.payment_situation_safe_outcome_unknown':
+    'بازپرداخت یا واریز دستی نکنید. ابتدا از درگاه دوباره بپرسید و فقط بر پایهٔ پاسخ ثبت‌شده تطبیق دهید.',
+  'web.payment_situation_safe_mismatch':
+    'تا پاسخ ثبت‌شدهٔ درگاه تطبیق را پشتیبانی نکند کاری نکنید، و پول دیگری را به این پرداخت نسبت ندهید.',
+  'web.payment_situation_safe_partial':
+    'سامانه پرداخت ناقص را تسویه نمی‌کند. در پنل درگاه بررسی کنید؛ اگر پرداخت دیگر «نامعلوم» نیست، واریز دستی به کیف پول تنها راه موجود است و سیاست آن هنوز تصمیم‌گیری نشده است.',
+  'web.payment_situation_safe_late_completion':
+    'هیچ‌چیز خودکار تسویه نمی‌شود. در پنل درگاه بررسی کنید؛ اگر پرداخت هنوز «نامعلوم» است با تطبیق، وگرنه تنها با واریز دستی به کیف پول که سیاست آن هنوز تصمیم‌گیری نشده است.',
+  'web.payment_situation_safe_confirmed':
+    'هر بازپرداخت از سقف همین پرداخت کم می‌شود؛ کارمزد درگاه بازپرداخت‌پذیر نیست.',
+  'web.payment_situation_safe_refund_in_progress':
+    'بازپرداخت دستی را فقط پس از انجام واقعی انتقال «تکمیل» کنید.',
+  'web.payment_situation_safe_refunded':
+    'باقی‌ماندهٔ قابل بازپرداخت را سرور حساب می‌کند، نه این صفحه.',
+  'web.payment_situation_safe_credited_to_wallet':
+    'این یک رد نیست؛ پول به کیف پول رسیده است. دوباره واریز نکنید.',
+  'web.payment_situation_safe_rejected':
+    'مبلغی را دستی جابه‌جا نکنید؛ مشتری می‌تواند تا پایان مهلت سفارش دوباره پرداخت کند.',
+  'web.payment_situation_safe_failed': 'مشتری می‌تواند دوباره پرداخت کند.',
+  'web.payment_situation_safe_expired':
+    'اگر پس از این پولی از درگاه برسد، به‌صورت «تأیید دیرهنگام» نشان داده می‌شود.',
+  'web.payment_situation_safe_cancelled': 'کاری لازم نیست.',
+  'web.payment_money_not_yet': 'هنوز پرداخت نشده است',
+  'web.payment_money_no': 'پولی دریافت نشده است',
+  'web.payment_money_claimed': 'مشتری ادعای واریز دارد (تأییدنشده)',
+  'web.payment_money_possibly': 'شاید پول جابه‌جا شده باشد',
+  'web.payment_money_partially': 'بخشی از مبلغ نزد درگاه است',
+  'web.payment_money_at_provider': 'پول نزد درگاه است، نه در این سامانه',
+  'web.payment_money_yes': 'پول دریافت شده است',
+  'web.payment_money_to_wallet': 'به کیف پول مشتری واریز شد',
+  'web.payment_money_returning': 'بازپرداخت در جریان است',
+  'web.payment_money_returned': 'تمام یا بخشی بازپرداخت شد',
+  'web.payment_customer_guidance_pay_within_window': 'تا پایان مهلت پرداخت کند',
+  'web.payment_customer_guidance_start_again': 'می‌تواند پرداخت تازه‌ای آغاز کند',
+  'web.payment_customer_guidance_wait_do_not_pay_again': 'منتظر بماند و دوباره پرداخت نکند',
+  'web.payment_customer_guidance_may_pay_again': 'در صورت تمایل دوباره پرداخت کند',
+  'web.payment_customer_guidance_nothing': 'کاری لازم نیست',
+  'web.payment_operator_action_review_receipt_in_telegram':
+    'بررسی رسید (تأیید، رد یا واریز به کیف پول) — فقط در تلگرام',
+  'web.payment_operator_action_ask_provider_again': 'پرسش دوباره از درگاه — کارت تطبیق',
+  'web.payment_operator_action_reconcile': 'تطبیق از روی پاسخ ثبت‌شدهٔ درگاه — کارت تطبیق',
+  'web.payment_operator_action_verify_at_provider': 'بررسی در پنل خود درگاه',
+  'web.payment_operator_action_manual_wallet_adjustment':
+    'واریز دستی به کیف پول از صفحهٔ مشتری — سیاست آن تصمیم‌گیری نشده است',
+  'web.payment_operator_action_issue_refund': 'بازپرداخت — کارت بازپرداخت‌ها',
+  'web.payment_operator_action_settle_refund': 'تکمیل یا لغو بازپرداخت باز — کارت بازپرداخت‌ها',
+  // --- end roadmap E1/E2 block ---
   'web.payment_ops_gateway_all': 'همهٔ درگاه‌ها',
   'web.payment_ops_range': 'بازهٔ ایجاد',
   'web.payment_ops_range_all': 'همهٔ زمان‌ها',

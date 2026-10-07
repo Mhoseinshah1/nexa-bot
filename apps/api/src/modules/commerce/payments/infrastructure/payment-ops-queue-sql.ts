@@ -51,7 +51,56 @@ export function paymentOpsQueueCondition(queue: PaymentOpsQueue): SQL {
         SELECT 1 FROM refunds r
          WHERE r.tenant_id = ${payments.tenantId}
            AND r.payment_id = ${payments.id})`;
+    case 'NEEDS_ACTION':
+      return needsActionCondition();
   }
+}
+
+/**
+ * A refund still open against the payment: REQUESTED or AWAITING_EXTERNAL. The classifier's
+ * `refundOpen` fact, and the `REFUND_IN_PROGRESS` arm of `NEEDS_ACTION`.
+ */
+export function openRefundCondition(): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM refunds r
+     WHERE r.tenant_id = ${payments.tenantId}
+       AND r.payment_id = ${payments.id}
+       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL'))`;
+}
+
+/** A refund COMPLETED against the payment: the classifier's `refundCompleted` fact. */
+export function completedRefundCondition(): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM refunds r
+     WHERE r.tenant_id = ${payments.tenantId}
+       AND r.payment_id = ${payments.id}
+       AND r.state = 'COMPLETED')`;
+}
+
+/**
+ * `paymentNeedsAction` of `paymentSituationOf` (contracts, `payment-situations.ts`) in SQL,
+ * arm by arm, each one a payment with an existing command as its exit:
+ *
+ * - `CUSTOMER_SIGNALLED`: a PENDING manual transfer the customer says they sent, outside a
+ *   provider review and not a partial — the classifier's precedence for PENDING;
+ * - every UNKNOWN (reconciliation);
+ * - `REFUND_IN_PROGRESS`: CONFIRMED with a refund still open.
+ *
+ * Late or partial money on a payment that already ended is deliberately absent: nothing in
+ * the domain resolves it (`OQ-WP11A-03`), so here it would never leave. It stays in its own
+ * facet. `payment-situations.test.ts` (integration) holds this and the classifier to the same
+ * answer over every arm.
+ */
+function needsActionCondition(): SQL {
+  return sql`(
+    (${payments.state} = 'PENDING'
+      AND ${payments.method} = 'MANUAL_TRANSFER'
+      AND ${payments.customerSignalledAt} IS NOT NULL
+      AND ${payments.providerReviewUntil} IS NULL
+      AND NOT ${paymentOpsQueueCondition('PARTIAL')})
+    OR ${payments.state} = 'UNKNOWN'
+    OR (${payments.state} = 'CONFIRMED' AND ${openRefundCondition()})
+  )`;
 }
 
 /** The payment's own `gateway_invoices` row satisfies `condition` (aliased `gi`). */
