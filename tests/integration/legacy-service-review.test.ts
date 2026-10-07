@@ -664,6 +664,118 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     expectOnlyReads();
   });
 
+  it('Codex #234: an adoption the map does not confirm settles the claim OPEN (ADOPTION_UNCONFIRMED), never stuck ADOPTING', async () => {
+    const snap = await snapshot();
+    await apply('import', snap);
+    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    await approve(c, panelBId);
+    const real = ctx.container.legacyAdoption;
+    const lying: LegacyAdoptionPort = {
+      adopt: (scope, actor, cand) =>
+        cand.legacyInvoiceId === c.invoiceKey
+          ? Promise.resolve({
+              kind: 'ADOPTED',
+              serviceId: ctx.container.ids.uuid(),
+              orderId: ctx.container.ids.uuid(),
+              customerId: cand.customerId,
+              panelId: cand.panelId,
+              state: 'ACTIVE',
+              capacity: { maxServices: null, usedAfter: 0, overCap: false },
+              remindersSeeded: [],
+            })
+          : real.adoptCandidate(scope, actor, cand),
+    };
+    const run = await apply('lying', snap, { adoption: lying });
+    expect(run.verdict).toBe('COMPLETED_WITH_FAILURES');
+    const sections = run.sections as Record<string, any>;
+    expect(sections['attention'].approvalUnconfirmed).toBe(1);
+    expect(sections['applied'].services.approvals).toMatchObject({
+      executed: 0,
+      unconfirmed: 1,
+      refused: { ADOPTION_UNCONFIRMED: 1 },
+    });
+    const after = await candidate(c.invoiceKey);
+    expect(after).toMatchObject({
+      reviewState: 'OPEN',
+      lastApprovalRefusal: 'ADOPTION_UNCONFIRMED',
+      serviceId: null,
+      approvedPanelId: null,
+    });
+    // Not stuck: a person can decide on it again.
+    await review().decide(tenantA, owner, after.id, {
+      idempotencyKey: key(),
+      expectedVersion: after.version,
+      decision: 'ACKNOWLEDGE',
+      reason: 'seen',
+    });
+    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
+  });
+
+  it('Codex #234: a claim no run can execute is released to ADOPT_APPROVED (no adoption step), never left ADOPTING', async () => {
+    const snap = await snapshot();
+    await apply('import', snap);
+    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    await approve(c, panelBId);
+    const dying: LegacyAdoptionPort = {
+      adopt: (_scope, _actor, cand) =>
+        cand.legacyInvoiceId === c.invoiceKey
+          ? Promise.reject(new Error('process killed'))
+          : ctx.container.legacyAdoption.adoptCandidate(_scope, _actor, cand),
+    };
+    await expect(apply('dies', snap, { adoption: dying })).rejects.toBeInstanceOf(
+      LegacyImportInterrupted,
+    );
+    expect((await candidate(c.invoiceKey)).reviewState).toBe('ADOPTING');
+    const run = await apply('no-adoption', snap, { adoption: null, mode: 'RESUME' });
+    expect((run.sections as Record<string, any>)['applied'].services.approvals).toMatchObject({
+      released: 1,
+    });
+    const released = await candidate(c.invoiceKey);
+    expect(released).toMatchObject({ reviewState: 'ADOPT_APPROVED', approvedPanelId: panelBId });
+    // A person may reopen it now.
+    await review().reopen(tenantA, owner, released.id, {
+      idempotencyKey: key(),
+      expectedVersion: released.version,
+      reason: 'later',
+    });
+    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
+  });
+
+  it('Codex #234: a refusal a person withdrew mid-run is not counted as a refusal', async () => {
+    const snap = await snapshot();
+    await apply('import', snap);
+    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const approved = await approve(c, panelBId);
+    const base = buildSyntheticLegacyDataset();
+    const changed = {
+      ...base,
+      tables: {
+        ...base.tables,
+        invoice: base.tables.invoice.map((r) =>
+          r['username'] === 'svc_nullmatch' ? { ...r, Volume: '31' } : r,
+        ),
+      },
+    } as SyntheticLegacyDataset;
+    const run = await apply('withdrawn', await snapshot(changed), {
+      afterPhase: async (phase) => {
+        if (phase !== 'customers') return;
+        await review().reopen(tenantA, owner, c.id, {
+          idempotencyKey: key(),
+          expectedVersion: approved.version,
+          reason: 'withdrawn',
+        });
+      },
+    });
+    expect((run.sections as Record<string, any>)['applied'].services.approvals).toMatchObject({
+      refused: {},
+      withdrawnDuringRun: 1,
+    });
+    expect(await candidate(c.invoiceKey)).toMatchObject({
+      reviewState: 'OPEN',
+      lastApprovalRefusal: null,
+    });
+  });
+
   // --- concurrency ---------------------------------------------------------------------------
 
   it('two operators approving the same candidate at once: exactly one wins; the other is refused, never applied', async () => {

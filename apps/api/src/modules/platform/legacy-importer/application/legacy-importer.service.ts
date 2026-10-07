@@ -312,6 +312,15 @@ export interface ApplyTallies {
       left: Record<string, number>;
       /** Reopened by a person between the run's read and its claim: not executed. */
       claimLost: number;
+      /**
+       * A refusal the run decided but did not record: a person reopened the approval first
+       * (the version-guarded settle lost). Never counted as a refusal.
+       */
+      withdrawnDuringRun: number;
+      /** P6 said "adopted" and the map does not hold the service: settled OPEN, attention. */
+      unconfirmed: number;
+      /** A claim (ADOPTING) this run could not execute, released back to ADOPT_APPROVED. */
+      released: number;
     };
   };
 }
@@ -338,6 +347,7 @@ export function applyAttention(tallies: ApplyTallies) {
     candidateSourceClassMismatch: tallies.services.candidates.sourceClassMismatch,
     candidateUnrecordable: tallies.services.candidates.unrecordable,
     approvalLeft: Object.values(tallies.services.approvals.left).reduce((a, b) => a + b, 0),
+    approvalUnconfirmed: tallies.services.approvals.unconfirmed,
   };
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return { ...counts, total };
@@ -801,7 +811,15 @@ export class LegacyImporterService {
           sourceClassMismatch: 0,
           unrecordable: 0,
         },
-        approvals: { executed: 0, refused: {}, left: {}, claimLost: 0 },
+        approvals: {
+          executed: 0,
+          refused: {},
+          left: {},
+          claimLost: 0,
+          withdrawnDuringRun: 0,
+          unconfirmed: 0,
+          released: 0,
+        },
       },
     };
     let phase: ApplyPhase = 'customers';
@@ -1300,13 +1318,29 @@ export class LegacyImporterService {
     // crashed run left ADOPTING is executed again: the adoption is idempotent per invoice.
     const executing = new Map<string, LegacyServiceCandidateRecord>();
     const operatorPanels = new Map<string, string>();
-    if (this.deps.adoption !== null) {
+    if (this.deps.adoption === null) {
+      // No adoption step: nothing can be executed. A claim an earlier run left ADOPTING is
+      // released back to ADOPT_APPROVED, so it is never stuck where no person can reopen it.
+      for (const approval of review.approvals) {
+        if (approval.reviewState !== 'ADOPTING') continue;
+        if (await this.releaseClaim(scope, actor, runId, approval, 'ADOPTION_NOT_WIRED')) {
+          tallies.services.approvals.released += 1;
+        }
+      }
+    } else {
       for (const approval of review.approvals) {
         const gate = review.gates.get(approval.id);
         if (gate === undefined) continue;
         if (gate.kind === 'LEAVE') {
           tallies.services.approvals.left[gate.why] =
             (tallies.services.approvals.left[gate.why] ?? 0) + 1;
+          // Not executed — and a claim an earlier run left is released, never stuck.
+          if (
+            approval.reviewState === 'ADOPTING' &&
+            (await this.releaseClaim(scope, actor, runId, approval, gate.why))
+          ) {
+            tallies.services.approvals.released += 1;
+          }
           await this.mutate(scope, actor, 'legacy_import.service_approval', runId, (tx) =>
             this.auditApproval(
               scope,
@@ -1320,9 +1354,12 @@ export class LegacyImporterService {
           continue;
         }
         if (gate.kind === 'REFUSE') {
-          await this.settleApproval(scope, actor, runId, approval, { refusal: gate.refusal });
-          tallies.services.approvals.refused[gate.refusal] =
-            (tallies.services.approvals.refused[gate.refusal] ?? 0) + 1;
+          if (await this.settleApproval(scope, actor, runId, approval, { refusal: gate.refusal })) {
+            tallies.services.approvals.refused[gate.refusal] =
+              (tallies.services.approvals.refused[gate.refusal] ?? 0) + 1;
+          } else {
+            tallies.services.approvals.withdrawnDuringRun += 1;
+          }
           continue;
         }
         const claimed =
@@ -1521,17 +1558,34 @@ export class LegacyImporterService {
     // the outcome that refused it. Never left claimed by a run that finished.
     for (const [key, claimed] of executing) {
       const o = outcomes.get(key);
-      if (o === undefined) continue;
-      if (isAdoptedOutcome(o.outcome) && o.serviceId !== null) {
-        await this.settleApproval(scope, actor, runId, claimed, {
-          adopted: { outcome: o.outcome, serviceId: o.serviceId },
-        });
-        tallies.services.approvals.executed += 1;
-      } else if (o.outcome !== 'ADOPTION_ELIGIBLE') {
-        const refusal = o.outcome as LegacyServiceApprovalRefusal;
-        await this.settleApproval(scope, actor, runId, claimed, { refusal });
+      if (o !== undefined && isAdoptedOutcome(o.outcome) && o.serviceId !== null) {
+        if (
+          await this.settleApproval(scope, actor, runId, claimed, {
+            adopted: { outcome: o.outcome, serviceId: o.serviceId },
+          })
+        ) {
+          tallies.services.approvals.executed += 1;
+        } else {
+          tallies.services.approvals.withdrawnDuringRun += 1;
+        }
+        continue;
+      }
+      // Every other answer settles back to OPEN with an explicit code — no claimed approval
+      // outlives the run that claimed it. ADOPTION_ELIGIBLE here can only mean P6 said
+      // "adopted" and the map does not confirm it (the adoption step is wired, and a claimed
+      // approval is never kept as history): a broken invariant, counted as attention.
+      const refusal: LegacyServiceApprovalRefusal =
+        o === undefined
+          ? 'NOT_LIVE'
+          : o.outcome === 'ADOPTION_ELIGIBLE' || isAdoptedOutcome(o.outcome)
+            ? 'ADOPTION_UNCONFIRMED'
+            : (o.outcome as LegacyServiceApprovalRefusal);
+      if (refusal === 'ADOPTION_UNCONFIRMED') tallies.services.approvals.unconfirmed += 1;
+      if (await this.settleApproval(scope, actor, runId, claimed, { refusal })) {
         tallies.services.approvals.refused[refusal] =
           (tallies.services.approvals.refused[refusal] ?? 0) + 1;
+      } else {
+        tallies.services.approvals.withdrawnDuringRun += 1;
       }
     }
 
@@ -1698,8 +1752,8 @@ export class LegacyImporterService {
             readonly serviceId: string;
           };
         },
-  ): Promise<void> {
-    await this.mutate(scope, actor, 'legacy_import.service_approval', runId, async (tx) => {
+  ): Promise<boolean> {
+    return this.mutate(scope, actor, 'legacy_import.service_approval', runId, async (tx) => {
       const now = this.deps.clock.now();
       const cleared = { approvedPanelId: null, approvedChecksum: null, approvedOutcome: null };
       const settled = await this.deps.serviceCandidates.transition(
@@ -1724,7 +1778,8 @@ export class LegacyImporterService {
             },
         tx,
       );
-      if (settled === null) return;
+      // A person moved it first (a reopen): their decision stands; nothing is recorded here.
+      if (settled === null) return false;
       await this.auditApproval(
         scope,
         actor,
@@ -1737,6 +1792,39 @@ export class LegacyImporterService {
           : { runId, refusal: result.refusal },
         tx,
       );
+      return true;
+    });
+  }
+
+  /**
+   * A claim (ADOPTING) this run will not execute goes back to ADOPT_APPROVED: the operator's
+   * approval still stands, a later run may execute it, and a person may reopen it meanwhile.
+   */
+  private async releaseClaim(
+    scope: TenantContext,
+    actor: ActorContext,
+    runId: string,
+    approval: LegacyServiceCandidateRecord,
+    why: string,
+  ): Promise<boolean> {
+    return this.mutate(scope, actor, 'legacy_import.service_approval', runId, async (tx) => {
+      const released = await this.deps.serviceCandidates.transition(
+        scope,
+        approval.id,
+        { from: ['ADOPTING'], version: approval.version },
+        { reviewState: 'ADOPT_APPROVED', updatedAt: this.deps.clock.now() },
+        tx,
+      );
+      if (released === null) return false;
+      await this.auditApproval(
+        scope,
+        actor,
+        LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS.approvalReleased,
+        approval,
+        { runId, why },
+        tx,
+      );
+      return true;
     });
   }
 
