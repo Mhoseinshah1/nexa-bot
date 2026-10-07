@@ -240,6 +240,43 @@ describe('the legacy service candidates page', () => {
     expect(screen.queryByRole('button', { name: t('web.lsr_adopt') })).toBeNull();
   });
 
+  it('Codex #234: an approved AMBIGUOUS_PANEL candidate shows the approved panel by name, the reason, who and when', async () => {
+    page({
+      row: {
+        outcome: 'AMBIGUOUS_PANEL',
+        blocker: 'AMBIGUOUS_PANEL',
+        panelCode: 'gone',
+        reviewState: 'ADOPT_APPROVED',
+        approvedPanelId: PANEL_B,
+        approvedChecksum: 'c'.repeat(64),
+        approvedOutcome: 'AMBIGUOUS_PANEL',
+        decisionReason: 'حساب درست روی پنل B است',
+        decidedByAdminId: '019600ab-cdef-7012-8345-6789abcd0aaa',
+        decidedAt: '2026-10-07T10:00:00.000Z',
+        evidence: {
+          panelCodeClass: 'DECLARED_MISSING',
+          mappedPanelId: null,
+          customer: 'IMPORTED',
+          holders: [
+            { panelId: PANEL_A, mapped: true, spellings: 1, state: 'active' },
+            { panelId: PANEL_B, mapped: true, spellings: 1, state: 'active' },
+          ],
+          incompletePanels: [],
+          product: { path: 'HIDDEN_SHAPE', productId: null, resolved: true },
+          claims: 1,
+        },
+      },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lsr_open') }));
+    expect(await screen.findByText(t('web.lsr_approval_title'))).toBeInTheDocument();
+    const panelRow = screen.getByText(t('web.lsr_approval_panel')).nextElementSibling;
+    expect(panelRow?.textContent).toBe('Panel B (page 2)');
+    expect(screen.getByText(/چند پنل بود/u)).toBeInTheDocument();
+    expect(screen.getByText('حساب درست روی پنل B است')).toBeInTheDocument();
+    expect(screen.getByText('019600ab-cdef-7012-8345-6789abcd0aaa')).toBeInTheDocument();
+    expect(screen.getByText(t('web.lsr_decided_at'))).toBeInTheDocument();
+  });
+
   it('without legacy.services.decide nothing on the page writes', async () => {
     const api = page({ mayDecide: false });
     fireEvent.click(await screen.findByRole('button', { name: t('web.lsr_open') }));

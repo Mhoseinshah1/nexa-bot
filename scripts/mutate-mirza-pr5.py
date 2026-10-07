@@ -88,6 +88,13 @@ M = [
                "    if (found !== null) {\n      const now = await this.deps.repository.findById(scope, id);\n      if (now !== null) return now;\n    }")], T_INT, 'explicit ADOPT'),
     # The claim: a person's reopen in between wins.
     ('I-16', [(IMP, "        if (claimed === null) {\n          tallies.services.approvals.claimLost += 1;\n          continue;\n        }\n", "")], T_INT, 'reopening an approval mid-run'),
+    # Codex #234: no claim outlives its run; a withdrawn refusal is not a refusal.
+    ('I-20', [(IMP, "      const refusal: LegacyServiceApprovalRefusal =",
+               "      if (o?.outcome === 'ADOPTION_ELIGIBLE') continue;\n      const refusal: LegacyServiceApprovalRefusal =")], T_INT, 'map does not confirm'),
+    ('I-21', [(IMP, "        if (await this.releaseClaim(scope, actor, runId, approval, 'ADOPTION_NOT_WIRED')) {",
+               "        if (false) {")], T_INT, 'claim no run can execute'),
+    ('I-22', [(IMP, "if (await this.settleApproval(scope, actor, runId, approval, { refusal: gate.refusal })) {",
+               "if ((await this.settleApproval(scope, actor, runId, approval, { refusal: gate.refusal })) || true) {")], T_INT, 'withdrew mid-run'),
     # The section: the closure, and its reconcile check.
     ('U-12', [(OUT, "        decidedByAnotherRun === 0 &&\n", "")], T_RULES, 'the closure'),
     ('U-13', [(IMP, "    usersWallets.holds &&\n    serviceOutcomes.invariant.holds\n", "    usersWallets.holds\n")], T_RULES, 'report verdict'),
