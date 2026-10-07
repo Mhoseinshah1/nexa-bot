@@ -963,3 +963,10 @@
   border-inline-start: 1px solid var(--line);
   padding-inline-start: 8px;
 }
+
+/* Touch: a main-menu chip is a 44px target (tokens.css). */
+@media (pointer: coarse) {
+  .bb-chip-main {
+    min-height: var(--ctl-h);
+  }
+}
