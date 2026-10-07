@@ -215,6 +215,8 @@ export const LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS = {
    * it (`maintenance.run`). Nothing changed; a person investigates.
    */
   approvalSyntheticRefused: 'legacy.service_candidate.approval_synthetic_refused',
+  /** A claim (ADOPTING) a run could not execute went back to ADOPT_APPROVED (`maintenance.run`). */
+  approvalReleased: 'legacy.service_candidate.approval_released',
 } as const;
 
 export const LEGACY_SERVICE_REVIEW_REASON_MAX_LENGTH = 500;
