@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import {
   COUNTER_CAP,
@@ -118,7 +118,8 @@ describe('the attention queue', () => {
       '/payments?queue=NEEDS_RECONCILIATION',
       '/services',
       '/business-chats?state=HANDOFF_REQUIRED',
-      '/tickets',
+      // Review N1: the list filtered by the predicate the count uses.
+      '/tickets?awaiting=support',
       '/alerts',
     ]);
     // Stalled = LEASE_EXPIRED + UNANNOUNCED (disjoint reasons): 3.
@@ -133,7 +134,10 @@ describe('the attention queue', () => {
       <AttentionQueueCard permissions={['tickets.view', 'business_chats.view', 'users.view']} />,
     );
     const list = await queue();
-    expect(hrefs(list)).toEqual(['/business-chats?state=HANDOFF_REQUIRED', '/tickets']);
+    expect(hrefs(list)).toEqual([
+      '/business-chats?state=HANDOFF_REQUIRED',
+      '/tickets?awaiting=support',
+    ]);
     // `opslog.view` and `payments.view` are not held: neither source was asked, so no 403
     // is recorded on every poll.
     expect(api.calls.some((call) => call.url.includes('/system/diagnostics'))).toBe(false);
@@ -146,6 +150,37 @@ describe('the attention queue', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(container.textContent).toBe('');
     expect(api.calls).toHaveLength(0);
+  });
+
+  /*
+   * Review B1: during a rolling update a poll can reach an API released before the handoff
+   * counter. Its six-key answer must parse — a parse failure is final for polling, and the
+   * queue and every sidebar badge would stay frozen until a reload.
+   */
+  it('reads an old API’s six-key counters, drawing no handoff row', async () => {
+    const old = {
+      generatedAt: '2026-10-07T10:00:00.000Z',
+      counters: {
+        openConditions: null,
+        ticketsAwaitingSupport: 2,
+        unhealthyPanels: null,
+        unreconciledServices: null,
+        refundRequestsAwaiting: null,
+        paymentsUnknown: null,
+      },
+    };
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([{ url: '/nav-counters', body: old }]);
+    renderPage(<AttentionQueueCard permissions={['tickets.view', 'business_chats.view']} />);
+    const list = await queue();
+    expect(hrefs(list)).toEqual(['/tickets?awaiting=support']);
+    expect(screen.queryByText(t('web.dash_attn_partial'))).toBeNull();
+    // And the poll goes on: the next minute asks again, so the queue (and the sidebar, which
+    // shares the query) catches up by itself once the update has finished.
+    const asked = () => api.calls.filter((call) => call.url.includes('/nav-counters')).length;
+    const first = asked();
+    await vi.advanceTimersByTimeAsync(61_000);
+    await waitFor(() => expect(asked()).toBeGreaterThan(first));
   });
 
   it('says the queue is empty only when every source asked has answered', async () => {

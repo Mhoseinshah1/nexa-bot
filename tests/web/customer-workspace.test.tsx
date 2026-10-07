@@ -37,6 +37,7 @@ const OFF = {
 const ORDER_ID = '019210ab-cdef-7012-8345-6789abcd0001';
 const PAYMENT_ID = '019210ab-cdef-7012-8345-6789abcd0002';
 const TICKET_ID = '019210ab-cdef-7012-8345-6789abcd0003';
+const CONVERSATION_ID = '019210ab-cdef-7012-8345-6789abcd0005';
 
 const workspace = (
   overrides: Partial<CustomerWorkspaceResponse> = {},
@@ -45,6 +46,7 @@ const workspace = (
     generatedAt: '2026-10-07T10:00:00.000Z',
     tickets: { awaitingSupport: 2, open: 3 },
     businessHandoffs: 1,
+    businessHandoffConversationId: CONVERSATION_ID,
     payments: {
       unknown: 1,
       latest: [
@@ -123,12 +125,21 @@ describe('Customer 360 workspace — what waits for a person', () => {
     expect(rows.map((row) => row.getAttribute('href'))).toEqual([
       `/services?q=${ID}&state=UNRECONCILED`,
       `/payments?q=${ID}&queue=UNKNOWN`,
-      '/business-chats?state=HANDOFF_REQUIRED',
-      `/tickets?customer=${ID}`,
+      // Review N2: one handoff opens the conversation itself.
+      `/business-chats/${CONVERSATION_ID}`,
+      // Review N1: the list filtered by the predicate the count uses.
+      `/tickets?customer=${ID}&awaiting=support`,
     ]);
     expect(within(list).getByText('تیکت در انتظار پاسخ پشتیبانی')).toBeTruthy();
     // Every section was held: no "withheld" note.
     expect(screen.queryByText(/مجوز صفحهٔ آن‌ها را ندارید/u)).toBeNull();
+  });
+
+  it('opens the inbox filtered to handoffs when the customer has more than one', () => {
+    const items = customerAttentionItems(ID, workspace({ businessHandoffs: 3 }).workspace);
+    expect(items.find((item) => item.key === 'businessHandoffs')?.href).toBe(
+      '/business-chats?state=HANDOFF_REQUIRED',
+    );
   });
 
   it('draws no row for a zero or a withheld count, and says when sections were withheld', async () => {
@@ -149,6 +160,54 @@ describe('Customer 360 workspace — what waits for a person', () => {
         .map((row) => row.getAttribute('href')),
     ).toEqual([`/payments?q=${ID}&queue=UNKNOWN`]);
     expect(screen.getByText(/مجوز صفحهٔ آن‌ها را ندارید/u)).toBeTruthy();
+  });
+
+  /*
+   * Review N3. "Nothing waits" over a section that was not counted is a claim about rows
+   * nobody read. With a counting section withheld and every counted one at zero, only the
+   * withheld note is drawn — and with all four withheld, the same.
+   */
+  it('never says nothing waits while a counting section was withheld', async () => {
+    stubApi(
+      routes(
+        workspace({
+          tickets: null,
+          businessHandoffs: 0,
+          services: { unreconciled: 0 },
+          payments: { unknown: 0, latest: [] },
+        }),
+      ),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    await screen.findByText(/مجوز صفحهٔ آن‌ها را ندارید/u);
+    expect(screen.queryByText('برای این مشتری چیزی در انتظار رسیدگی نیست.')).toBeNull();
+  });
+
+  it('draws only the withheld note when no counting section was counted', async () => {
+    stubApi(
+      routes(workspace({ tickets: null, businessHandoffs: null, services: null, payments: null })),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    await screen.findByText(/مجوز صفحهٔ آن‌ها را ندارید/u);
+    expect(screen.queryByText('برای این مشتری چیزی در انتظار رسیدگی نیست.')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'نیازمند رسیدگی' })).toBeNull();
+  });
+
+  it('does not report the latest orders, which add no row, as a withheld count', async () => {
+    stubApi(
+      routes(
+        workspace({
+          orders: null,
+          tickets: { awaitingSupport: 0, open: 0 },
+          businessHandoffs: 0,
+          services: { unreconciled: 0 },
+          payments: { unknown: 0, latest: [] },
+        }),
+      ),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    await screen.findByText('برای این مشتری چیزی در انتظار رسیدگی نیست.');
+    expect(screen.queryByText(/مجوز صفحهٔ آن‌ها را ندارید/u)).toBeNull();
   });
 
   it('says nothing waits only when nothing does', async () => {
@@ -178,7 +237,9 @@ describe('Customer 360 workspace — what waits for a person', () => {
 
   it('knows a withheld section from a zero', () => {
     expect(workspaceWithheld(workspace().workspace)).toBe(false);
-    expect(workspaceWithheld(workspace({ orders: null }).workspace)).toBe(true);
+    // `orders` counts nothing for this card; only the four counting sections are reported.
+    expect(workspaceWithheld(workspace({ orders: null }).workspace)).toBe(false);
+    expect(workspaceWithheld(workspace({ services: null }).workspace)).toBe(true);
     expect(
       workspaceWithheld(workspace({ tickets: { awaitingSupport: 0, open: 0 } }).workspace),
     ).toBe(false);

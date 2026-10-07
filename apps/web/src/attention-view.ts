@@ -152,7 +152,8 @@ export function dashboardAttentionItems(sources: AttentionSources): AttentionIte
     'web.dash_attn_tickets',
     c?.ticketsAwaitingSupport,
     'info',
-    '/tickets',
+    // Review N1: the list filtered by the SAME predicate the count uses.
+    '/tickets?awaiting=support',
     COUNTER_CAP,
   );
   add(
@@ -204,32 +205,42 @@ export function customerAttentionItems(
     'warn',
     `/payments?q=${q}&queue=UNKNOWN`,
   );
-  // The inbox has no customer filter; it orders HANDOFF_REQUIRED first, so the filter by
-  // state is the narrowest honest link.
+  // Review N2: one handoff opens that conversation; more open the inbox filtered to the
+  // state (it has no customer filter, and it orders HANDOFF_REQUIRED first).
+  const handoffs = workspace.businessHandoffs;
+  const conversation = workspace.businessHandoffConversationId;
   add(
     'businessHandoffs',
     'web.c360ws_handoffs',
-    workspace.businessHandoffs,
+    handoffs,
     'warn',
-    '/business-chats?state=HANDOFF_REQUIRED',
+    handoffs === 1 && conversation !== null
+      ? `/business-chats/${encodeURIComponent(conversation)}`
+      : '/business-chats?state=HANDOFF_REQUIRED',
   );
   add(
     'ticketsAwaitingSupport',
     'web.c360ws_tickets_awaiting',
     workspace.tickets?.awaitingSupport,
     'info',
-    `/tickets?customer=${q}`,
+    `/tickets?customer=${q}&awaiting=support`,
   );
   return items;
 }
 
-/** Whether a workspace withheld any section from this viewer. */
+/*
+ * The four sections that COUNT something for the attention card. `orders` adds no row (it is
+ * the latest list), so withholding it changes nothing here and is never reported here.
+ */
+type CountingSection = 'tickets' | 'businessHandoffs' | 'payments' | 'services';
+const COUNTING_SECTIONS: readonly CountingSection[] = [
+  'tickets',
+  'businessHandoffs',
+  'payments',
+  'services',
+];
+
+/** Whether the workspace withheld any COUNTING section from this viewer. */
 export function workspaceWithheld(workspace: CustomerWorkspaceResponse): boolean {
-  return (
-    workspace.tickets === null ||
-    workspace.businessHandoffs === null ||
-    workspace.payments === null ||
-    workspace.services === null ||
-    workspace.orders === null
-  );
+  return COUNTING_SECTIONS.some((section) => workspace[section] === null);
 }

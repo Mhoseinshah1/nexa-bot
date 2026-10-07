@@ -24,11 +24,11 @@ import {
 import { AttentionClear, AttentionList } from './attention-list';
 import { STATE_LABELS as ORDER_STATE_LABELS, STATE_TONES as ORDER_STATE_TONES } from './orders';
 import {
-  METHOD_LABELS as PAYMENT_METHOD_LABELS,
-  STATE_LABELS as PAYMENT_STATE_LABELS,
-  STATE_TONES as PAYMENT_STATE_TONES,
-} from './payments';
-import { STATUS_TONES as TICKET_STATUS_TONES, TICKET_STATUS_LABELS } from './tickets';
+  PAYMENT_METHOD_LABELS,
+  PAYMENT_STATE_LABELS,
+  PAYMENT_STATE_TONES,
+} from '../payment-labels';
+import { TICKET_STATUS_LABELS, TICKET_STATUS_TONES } from '../ticket-labels';
 
 /*
  * Customer 360 as an operator's workspace (roadmap B5).
@@ -66,10 +66,17 @@ export function CustomerAttentionCard({ customerId }: { customerId: string }) {
       <StateSwitch query={workspace}>
         {data === undefined ? null : (
           <>
+            {/*
+              "Nothing waits" is said only when every counting section was counted: over a
+              withheld one the list is empty because nothing was asked there, so only the
+              withheld note is drawn (review N3).
+            */}
             <AttentionList
               items={customerAttentionItems(customerId, data)}
               label={t('web.c360ws_attention_title')}
-              empty={<AttentionClear title={t('web.c360ws_nothing')} />}
+              empty={
+                workspaceWithheld(data) ? null : <AttentionClear title={t('web.c360ws_nothing')} />
+              }
             />
             {workspaceWithheld(data) && <p className="muted small">{t('web.c360ws_withheld')}</p>}
           </>
@@ -162,7 +169,7 @@ export function CustomerLatestCard({ customerId }: { customerId: string }) {
       <StateSwitch query={workspace}>
         {data === undefined ? null : (
           <div className="stack">
-            <section aria-label={t('web.c360ws_latest_orders')} className="c360ws-half">
+            <section aria-label={t('web.c360ws_latest_orders')}>
               <div className="c360ws-half-head">
                 <h3>{t('web.c360ws_latest_orders')}</h3>
                 {data.orders !== null && (
@@ -185,7 +192,7 @@ export function CustomerLatestCard({ customerId }: { customerId: string }) {
                 />
               )}
             </section>
-            <section aria-label={t('web.c360ws_latest_payments')} className="c360ws-half">
+            <section aria-label={t('web.c360ws_latest_payments')}>
               <div className="c360ws-half-head">
                 <h3>{t('web.c360ws_latest_payments')}</h3>
                 {data.payments !== null && (

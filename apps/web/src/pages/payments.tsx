@@ -77,6 +77,15 @@ import {
   type Tone,
   Num,
 } from '../ui/kit';
+import {
+  PAYMENT_METHOD_LABELS as METHOD_LABELS,
+  PAYMENT_STATE_LABELS as STATE_LABELS,
+  PAYMENT_STATE_TONES as STATE_TONES,
+} from '../payment-labels';
+
+// Review N8: the vocabulary moved to `payment-labels.ts`; these names stay importable from
+// here under their old spelling, so a workstream that reads them from this page still builds.
+export { STATE_LABELS, STATE_TONES, METHOD_LABELS };
 
 /**
  * Payments — the money, and where it came from.
@@ -99,32 +108,6 @@ import {
  * it non-terminal precisely so reconciliation is legal, and the banner tells an operator
  * that it is neither a success nor a failure until somebody establishes which.
  */
-
-export const STATE_LABELS: Readonly<Record<PaymentState, WebKey>> = {
-  PENDING: 'web.payment_state_pending',
-  CONFIRMED: 'web.payment_state_confirmed',
-  FAILED: 'web.payment_state_failed',
-  CANCELLED: 'web.payment_state_cancelled',
-  EXPIRED: 'web.payment_state_expired',
-  UNKNOWN: 'web.payment_state_unknown',
-};
-
-export const STATE_TONES: Readonly<Record<PaymentState, Tone>> = {
-  PENDING: 'warn',
-  CONFIRMED: 'ok',
-  FAILED: 'danger',
-  CANCELLED: 'neutral',
-  EXPIRED: 'neutral',
-  // Not danger and not ok: it is neither, and a tone that implied either would be
-  // this page taking a position the system explicitly does not hold.
-  UNKNOWN: 'warn',
-};
-
-export const METHOD_LABELS: Readonly<Record<PaymentMethod, WebKey>> = {
-  WALLET: 'web.payment_method_wallet',
-  MANUAL_TRANSFER: 'web.payment_method_manual',
-  GATEWAY: 'web.payment_method_gateway',
-};
 
 /** Package FX: how a gateway invoice's provider figure was derived from the payable. */
 const CONVERSION_POLICY_LABELS: Readonly<Record<GatewayConversionPolicy, WebKey>> = {

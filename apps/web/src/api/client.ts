@@ -4046,6 +4046,8 @@ export function testAppearance(input: {
 /** The inbox's filters, as the page holds them; each is optional and sent only when set. */
 export interface TicketFilters {
   readonly status?: TicketStatus;
+  /** Review N1: only the tickets whose next word is support's (OPEN, WAITING_FOR_SUPPORT). */
+  readonly awaiting?: 'support';
   readonly categoryId?: string;
   /** A customer's id, numeric Telegram id or username — whatever the operator holds. */
   readonly customer?: string;
@@ -4062,6 +4064,7 @@ export interface TicketFilters {
 export function fetchTickets(filters: TicketFilters = {}): Promise<TicketListResponse> {
   const params = new URLSearchParams();
   if (filters.status !== undefined) params.set('status', filters.status);
+  if (filters.awaiting !== undefined) params.set('awaiting', filters.awaiting);
   if (filters.categoryId !== undefined) params.set('categoryId', filters.categoryId);
   if (filters.customer !== undefined) params.set('customer', filters.customer);
   if (filters.assigned !== undefined) params.set('assigned', filters.assigned);

@@ -8157,6 +8157,7 @@ export const WEB_FA = {
   'web.dash_attn_conditions': 'هشدار مدیریتی باز',
   'web.dash_attn_partial':
     'بخشی از صف خوانده نشد؛ موارد آن بخش در این فهرست نیامده‌اند و «خالی» بودن صف قطعی نیست.',
+  'web.ticket_filter_awaiting_support': 'در انتظار پشتیبانی',
   // --- end Roadmap B5/B6 (Agent 2b) ---
 } as const;
 
