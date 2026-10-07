@@ -4,6 +4,7 @@ import type {
   BroadcastContentKind,
   BroadcastCounts,
   BroadcastFailureReason,
+  BotInstanceStatus,
   BroadcastMediaMimeType,
   BroadcastPauseReason,
   BroadcastPinState,
@@ -154,6 +155,20 @@ export interface RecipientPageRow {
   readonly resolvedAt: Date | null;
   readonly pinState: BroadcastPinState | null;
   readonly pinErrorCode: string | null;
+  /** Roadmap C2: when a PENDING row already answered once is next due; null otherwise. */
+  readonly nextAttemptAt: Date | null;
+}
+
+/** Roadmap C2: one bot's share of a broadcast, counted from the recipient rows. */
+export interface BotDeliveryRow {
+  /** Null for the recipients recorded with no bot to reach them through. */
+  readonly botInstanceId: string | null;
+  readonly botUsername: string | null;
+  readonly botStatus: BotInstanceStatus | null;
+  readonly counts: BroadcastCounts;
+  readonly waitingRetry: number;
+  /** The bot's 429 hold, only while it is still in force at `now`. */
+  readonly heldUntil: Date | null;
 }
 
 export interface BroadcastRepository {
@@ -287,6 +302,11 @@ export interface BroadcastRepository {
    * transport error code, from the rows themselves — so each state's sum is that state's count.
    */
   failureReasons(scope: TenantContext, id: string): Promise<readonly BroadcastFailureReason[]>;
+  /**
+   * Roadmap C2: the delivery per bot, from the recipient rows, with each bot's live 429 hold
+   * at `now`. Rows sum to the broadcast's counts.
+   */
+  botDelivery(scope: TenantContext, id: string, now: Date): Promise<readonly BotDeliveryRow[]>;
 
   /**
    * Where an operator's test send goes: the customer this tenant knows by the operator's own

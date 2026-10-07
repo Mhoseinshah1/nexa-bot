@@ -1961,22 +1961,42 @@ function CommandsCard({ campaign }: { campaign: CampaignDetail }) {
       <p className="muted small">{t('web.campaign_frozen_note')}</p>
       <div className="form-actions">
         {campaign.state === 'ACTIVE' && (
-          <Button size="sm" icon="pause" onClick={() => run.mutate('pause')}>
+          <Button
+            size="sm"
+            icon="pause"
+            disabled={run.isPending}
+            onClick={() => run.mutate('pause')}
+          >
             {t('web.campaign_pause')}
           </Button>
         )}
         {campaign.state === 'PAUSED' && (
-          <Button size="sm" icon="play" onClick={() => run.mutate('resume')}>
+          <Button
+            size="sm"
+            icon="play"
+            disabled={run.isPending}
+            onClick={() => run.mutate('resume')}
+          >
             {t('web.campaign_resume')}
           </Button>
         )}
         {live && pendingLaunch && (
-          <Button size="sm" icon="send" onClick={() => run.mutate('launch')}>
+          <Button
+            size="sm"
+            icon="send"
+            disabled={run.isPending}
+            onClick={() => run.mutate('launch')}
+          >
             {t('web.campaign_launch_pending')}
           </Button>
         )}
         {cancellable && (
-          <Button size="sm" variant="danger" onClick={() => setConfirming(true)}>
+          <Button
+            size="sm"
+            variant="danger"
+            disabled={run.isPending}
+            onClick={() => setConfirming(true)}
+          >
             {t('web.campaign_cancel')}
           </Button>
         )}

@@ -1403,3 +1403,11 @@ form.set-row > * + * {
   padding: 12px;
   min-inline-size: 0;
 }
+
+/* Touch: the section navigation is a column of 44px targets (tokens.css). */
+@media (pointer: coarse) and (hover: none) {
+  .ob-secnav button,
+  .tcat-chip {
+    min-height: var(--ctl-h);
+  }
+}

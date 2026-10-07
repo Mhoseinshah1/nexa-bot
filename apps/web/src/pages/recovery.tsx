@@ -14,7 +14,6 @@ import {
   fetchBackupStatus,
   fetchRecoveries,
   fetchRecoveryCapabilities,
-  newIdempotencyKey,
   runBackupNow,
   uploadRecoveryArchive,
   verifyRecovery,
@@ -23,6 +22,7 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
+import { RUN_KEY_HELD_MS, useSubmissionKey } from '../submission-key';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import {
   Badge,
@@ -118,9 +118,20 @@ export function RecoveryPage({
     void client.invalidateQueries({ queryKey: ['recoveries'] });
   };
 
+  /*
+   * One key per press, kept across the automatic retry and a re-press after an ambiguous
+   * failure (`useSubmissionKey`). Minting it inside `mutationFn` gave the client's own
+   * 5xx retry a FRESH key, so a lost answer could start a second backup run.
+   */
+  // A lost answer is re-asked for a few minutes; after that a press is a new backup.
+  const runNowKey = useSubmissionKey({ heldForMs: RUN_KEY_HELD_MS });
   const runNow = useMutation({
-    mutationFn: () => runBackupNow({ idempotencyKey: newIdempotencyKey() }),
-    onSuccess: refreshAll,
+    mutationFn: () => runBackupNow({ idempotencyKey: runNowKey.current('run-now') }),
+    onSuccess: () => {
+      runNowKey.settle();
+      refreshAll();
+    },
+    onError: (error) => runNowKey.settleOn(error),
   });
 
   const runs = history.data?.runs ?? [];
@@ -458,18 +469,18 @@ function RecoveryOperations({
       onChanged();
     },
   });
+  const confirmKey = useSubmissionKey();
   const confirm = useMutation({
-    mutationFn: (input: { id: string; checksum: string }) =>
-      confirmRecovery({
-        id: input.id,
-        phrase,
-        artifactChecksum: input.checksum,
-        idempotencyKey: newIdempotencyKey(),
-      }),
+    mutationFn: (input: { id: string; checksum: string }) => {
+      const body = { id: input.id, phrase, artifactChecksum: input.checksum };
+      return confirmRecovery({ ...body, idempotencyKey: confirmKey.current(body) });
+    },
     onSuccess: (result) => {
+      confirmKey.settle();
       setCurrent(result.recovery);
       onChanged();
     },
+    onError: (error) => confirmKey.settleOn(error),
   });
 
   if (!uploadEnabled) {
