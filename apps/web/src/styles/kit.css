@@ -2460,10 +2460,11 @@ textarea.input,
 }
 
 /*
- * Touch (a phone, a tablet): the kit controls whose size is not the control
+ * Touch (a phone, a tablet — a coarse primary pointer that cannot hover; a touch
+ * laptop or an iPad with a trackpad stays dense): the kit controls whose size is not the control
  * token grow to the 44px target too (tokens.css). A mouse keeps them dense.
  */
-@media (pointer: coarse) {
+@media (pointer: coarse) and (hover: none) {
   .input.sm {
     height: var(--ctl-h-sm);
   }
@@ -2535,6 +2536,17 @@ textarea.input,
   }
   .switch[aria-checked='true']::after {
     transform: translateX(-18px);
+  }
+  /*
+   * The focus ring belongs on the TRACK, not around the 44px hit box the transparent
+   * borders make: an inset ring at the track's edge, with a contrasting inner line so it
+   * reads on the accent-filled (on) track too.
+   */
+  .switch:focus-visible {
+    outline: none;
+    box-shadow:
+      inset 0 0 0 2px var(--accent),
+      inset 0 0 0 4px var(--bg-0);
   }
   /* A square icon button keeps its square when its row is tight (a copyable value). */
   .btn.icon {

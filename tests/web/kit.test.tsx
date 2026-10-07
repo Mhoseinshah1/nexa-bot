@@ -224,6 +224,66 @@ describe('focus traps', () => {
     expect(document.activeElement).toBe(within(dialog).getAllByRole('button')[0]);
   });
 
+  it('ranks a dialog above the drawer it sits in when both open in the same commit', () => {
+    function Both() {
+      const [drawer, setDrawer] = useState(true);
+      const [modal, setModal] = useState(true);
+      return (
+        <Drawer open={drawer} onClose={() => setDrawer(false)} title="کشوی هم‌زمان">
+          <Modal open={modal} onClose={() => setModal(false)} title="گفتگوی هم‌زمان">
+            <input aria-label="درون گفتگو" />
+          </Modal>
+        </Drawer>
+      );
+    }
+    renderPage(<Both />);
+    const inner = screen.getByRole('dialog', { name: 'گفتگوی هم‌زمان' });
+    expect(inner.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'گفتگوی هم‌زمان' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'کشوی هم‌زمان' })).toBeInTheDocument();
+  });
+
+  it('wraps past a tail control hidden by CSS', () => {
+    const style = document.createElement('style');
+    style.textContent = '.css-gone { display: none } .css-unseen { visibility: hidden }';
+    document.head.append(style);
+    try {
+      renderPage(
+        <Modal open onClose={() => undefined} title="پنهان با سبک">
+          <input aria-label="آخرِ دیدنی" />
+          <div className="css-gone">
+            <button type="button">پنهان با کلاس</button>
+          </div>
+          <button type="button" className="css-unseen">
+            نادیده
+          </button>
+        </Modal>,
+      );
+      const dialog = screen.getByRole('dialog', { name: 'پنهان با سبک' });
+      within(dialog).getByRole('textbox', { name: 'آخرِ دیدنی' }).focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+      expect(document.activeElement).toBe(within(dialog).getAllByRole('button')[0]);
+    } finally {
+      style.remove();
+    }
+  });
+
+  it('wraps past an inert tail', () => {
+    renderPage(
+      <Modal open onClose={() => undefined} title="بی‌اثر">
+        <input aria-label="آخرِ فعال" />
+        <div inert>
+          <button type="button">بی‌اثر</button>
+        </div>
+      </Modal>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'بی‌اثر' });
+    within(dialog).getByRole('textbox', { name: 'آخرِ فعال' }).focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(within(dialog).getAllByRole('button')[0]);
+  });
+
   it('closes only the menu when Escape is pressed inside a menu in a dialog', () => {
     const closed = vi.fn();
     renderPage(

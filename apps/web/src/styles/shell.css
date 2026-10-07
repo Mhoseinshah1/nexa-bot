@@ -635,7 +635,7 @@
  * Touch: the rail, the topbar's icon-only search and every sidebar entry are a
  * finger's target (44px, tokens.css), whether the sidebar is a drawer or a rail.
  */
-@media (pointer: coarse) {
+@media (pointer: coarse) and (hover: none) {
   .nav a,
   .nav-group-head {
     min-height: var(--ctl-h);

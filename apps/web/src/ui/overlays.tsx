@@ -11,7 +11,7 @@ import { createPortal } from 'react-dom';
 import { Icon, type IconName } from './icons';
 import { t } from '../i18n/web.fa';
 import { confirmDialogOpen } from './confirm-dialog';
-import { isTopTrap, pushTrap, tabbable } from './focusable';
+import { isTopTrap, nextTrapRank, pushTrap, tabbable } from './focusable';
 
 /**
  * Overlays: a modal dialog, a side drawer and a menu.
@@ -42,16 +42,24 @@ export function useFocusTrap(
   useLayoutEffect(() => {
     escape.current = onEscape;
   });
+  // Ranked in RENDER (parent-first) when the trap turns active; see `isTopTrap`.
+  const rank = useRef<{ active: boolean; value: number }>({ active: false, value: 0 });
+  if (active && !rank.current.active) rank.current = { active: true, value: nextTrapRank() };
+  else if (!active && rank.current.active) rank.current = { active: false, value: 0 };
 
   useEffect(() => {
     if (!active) return undefined;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const container = ref.current;
-    const first =
-      initial?.current ?? (container === null ? null : (tabbable(container)[0] ?? container));
-    first?.focus();
     const token = {};
-    const release = pushTrap(token);
+    const release = pushTrap(token, rank.current.value);
+    // A trap opened beneath one already on top (a drawer whose dialog activated in the same
+    // commit) leaves focus where the top one put it.
+    if (isTopTrap(token)) {
+      const first =
+        initial?.current ?? (container === null ? null : (tabbable(container)[0] ?? container));
+      first?.focus();
+    }
 
     const onKey = (event: KeyboardEvent) => {
       // A confirmation is always the topmost layer, and it owns the keyboard:

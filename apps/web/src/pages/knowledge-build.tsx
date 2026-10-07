@@ -14,7 +14,7 @@ import {
   runKnowledgeBuild,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { useSubmissionKey } from '../submission-key';
+import { RUN_KEY_HELD_MS, useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
@@ -98,7 +98,8 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
    * One key per logical attempt, passed as the variable so the automatic retry reuses it,
    * and held by `useSubmissionKey` so a re-press after a lost answer reuses it too.
    */
-  const runKey = useSubmissionKey();
+  // A lost answer is re-asked for a few minutes; after that a press is a new build.
+  const runKey = useSubmissionKey({ heldForMs: RUN_KEY_HELD_MS });
   const applyKey = useSubmissionKey();
   const resolveKey = useSubmissionKey();
   const run = useMutation({

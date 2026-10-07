@@ -22,7 +22,7 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
-import { useSubmissionKey } from '../submission-key';
+import { RUN_KEY_HELD_MS, useSubmissionKey } from '../submission-key';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import {
   Badge,
@@ -123,7 +123,8 @@ export function RecoveryPage({
    * failure (`useSubmissionKey`). Minting it inside `mutationFn` gave the client's own
    * 5xx retry a FRESH key, so a lost answer could start a second backup run.
    */
-  const runNowKey = useSubmissionKey();
+  // A lost answer is re-asked for a few minutes; after that a press is a new backup.
+  const runNowKey = useSubmissionKey({ heldForMs: RUN_KEY_HELD_MS });
   const runNow = useMutation({
     mutationFn: () => runBackupNow({ idempotencyKey: runNowKey.current('run-now') }),
     onSuccess: () => {

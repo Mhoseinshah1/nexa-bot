@@ -1405,7 +1405,7 @@ form.set-row > * + * {
 }
 
 /* Touch: the section navigation is a column of 44px targets (tokens.css). */
-@media (pointer: coarse) {
+@media (pointer: coarse) and (hover: none) {
   .ob-secnav button,
   .tcat-chip {
     min-height: var(--ctl-h);

@@ -1,7 +1,14 @@
 import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen } from '@testing-library/react';
-import { match, navigate, rememberedHref, setQueries, setQuery } from '../../apps/web/src/router';
+import {
+  forgetRememberedQueries,
+  match,
+  navigate,
+  rememberedHref,
+  setQueries,
+  setQuery,
+} from '../../apps/web/src/router';
 import { resolve } from '../../apps/web/src/app';
 import { PERMISSION_KEYS } from '@nexa/contracts';
 import { panel as panelBase, renderPage, stubApi } from './harness';
@@ -314,8 +321,8 @@ describe('a filter change is not a place the operator navigated to', () => {
 describe('the breadcrumb back to a list', () => {
   const ORDER = '019230ab-cdef-7012-8345-6789abcdef01';
 
-  it('carries the filters, search and page the list was last shown with', () => {
-    navigate('/orders?state=PAID&q=ali');
+  it('carries the filters and search the list was last shown with, never its cursor', () => {
+    navigate('/orders?state=PAID&q=ali&cursor=c2');
     navigate(`/orders/${ORDER}`);
     expect(rememberedHref('/orders')).toBe('/orders?state=PAID&q=ali');
     const detail = resolve({ path: `/orders/${ORDER}`, query: new URLSearchParams() }, [
@@ -343,5 +350,13 @@ describe('the breadcrumb back to a list', () => {
 
   it('is the bare path for a list never visited', () => {
     expect(rememberedHref('/never-visited')).toBe('/never-visited');
+  });
+
+  it('forgets everything at a session boundary', () => {
+    navigate('/users?q=0912');
+    navigate('/orders?state=PAID');
+    forgetRememberedQueries();
+    expect(rememberedHref('/users')).toBe('/users');
+    expect(rememberedHref('/orders')).toBe('/orders');
   });
 });

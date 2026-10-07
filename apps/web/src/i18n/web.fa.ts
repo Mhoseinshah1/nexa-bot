@@ -8101,6 +8101,9 @@ export const WEB_FA = {
   'web.kb_fault_base_moved': 'مطلب پس از اجرای ساخت تغییر کرده است. ساخت را دوباره اجرا کنید.',
   'web.kb_fault_not_conflict': 'این پیشنهاد تعارض در انتظار انتخاب نیست.',
   'web.kb_fault_not_found': 'این ساخت پیدا نشد.',
+  // --- roadmap web-route-polish (Agent 2a) ---
+  'web.inc_form_reloaded':
+    'رخداد در این فاصله تغییر کرده بود. فرم با مقادیر کنونی دوباره پر شد و تغییرهای شما ذخیره نشد؛ بررسی کنید و دوباره ذخیره کنید.',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

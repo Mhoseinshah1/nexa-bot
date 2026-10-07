@@ -411,6 +411,53 @@ describe('the recovery page', () => {
       vi.unstubAllGlobals();
     });
 
+    /**
+     * Review of #235: the import key follows the chosen File OBJECT. The same file pressed
+     * again after an unanswered failure is the same command; a newly chosen file with the
+     * same name, size and date is a different kit and must not reuse the key (the server
+     * would refuse it as a payload mismatch).
+     */
+    it('keeps the import key for the same file and mints one for a newly chosen file', async () => {
+      const api = stubApi([
+        ...routes(),
+        {
+          url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.import}`,
+          status: 503,
+          body: {
+            error: { kind: 'unavailable', code: 'x', message: 'x', correlationId: 'c1' },
+          },
+        },
+      ]);
+      renderPage(<RecoveryPage route={route} permissions={ALL} />);
+      const picker = await screen.findByLabelText('فایل کیت بازیابی (.nxkit)');
+      const importButton = screen.getByRole('button', { name: 'وارد کردن کیت' });
+      const press = async (count: number) => {
+        fireEvent.change(screen.getByLabelText('رمز کیت'), { target: { value: 'a passphrase' } });
+        const passwords = screen.getAllByLabelText('رمز ورود حساب شما');
+        fireEvent.change(passwords[passwords.length - 1]!, { target: { value: 'my-password' } });
+        await waitFor(() => expect(importButton).toBeEnabled());
+        fireEvent.click(importButton);
+        await waitFor(() =>
+          expect(api.calls.filter((c) => c.url.includes(RECOVERY_KIT_ROUTES.import))).toHaveLength(
+            count,
+          ),
+        );
+      };
+      const at = 1_700_000_000_000;
+      const first = new File([new Uint8Array([1, 2, 3])], 'kit.nxkit', { lastModified: at });
+      fireEvent.change(picker, { target: { files: [first] } });
+      await press(1);
+      await press(2);
+      const other = new File([new Uint8Array([9, 9, 9])], 'kit.nxkit', { lastModified: at });
+      fireEvent.change(picker, { target: { files: [other] } });
+      await press(3);
+      const keys = api.calls
+        .filter((c) => c.url.includes(RECOVERY_KIT_ROUTES.import))
+        .map((c) => (c.body as { idempotencyKey: string }).idempotencyKey);
+      expect(keys[1]).toBe(keys[0]);
+      expect(keys[2]).not.toBe(keys[0]);
+    });
+
     it('says in Persian why a kit did not open', async () => {
       stubApi([
         ...routes(),
