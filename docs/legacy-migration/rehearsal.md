@@ -162,7 +162,9 @@ the copy is not the audited source.
 
 Copy the table into `table-inventory.md`, and open an `OQ-MZ-INV` entry for every
 UNCLASSIFIED table. The freeze statement it prints is the one
-`scripts/legacy-freeze-checksum.sql` runs, and the cutover compares it at steps 7 and 9.
+`scripts/legacy-freeze-checksum.sql` runs, and the cutover compares it at steps 7 and 9
+with `scripts/legacy-freeze-checksum-verify.sh`, which refuses an empty or partial output
+file (a failed client) instead of letting two of them compare equal.
 **NOT RUN on real data.**
 
 ### Exit codes

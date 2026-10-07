@@ -205,19 +205,29 @@ Owner-operated on the legacy host (its commands are outside this repository):
    `super_read_only` where the server supports it). This is a server setting, not a data
    change.
 3. Record a read-only content checksum of EVERY table, as the SELECT-only account, with
-   the repository's script (copy it to the legacy host; it is plain SQL):
+   the repository's script and its checker (copy both to the legacy host; plain SQL and
+   bash):
 
 ```bash
 mysql --user=oldbot_ro --password --batch oldbot \
-  < legacy-freeze-checksum.sql | tee freeze-checksum-step7.tsv   # read-only; record the time (UTC)
+  < legacy-freeze-checksum.sql | tee freeze-checksum-step7.tsv; echo "exit ${PIPESTATUS[0]}"   # read-only; record the time (UTC)
+bash legacy-freeze-checksum-verify.sh freeze-checksum-step7.tsv; echo "verify exit $?"
 ```
+
+Both must print `exit 0`: the first is the mysql client's own status, not `tee`'s (step 0
+sets no `pipefail`), and the second is the checker accepting the file. A failed
+connection, a missing grant or a failed statement leaves an empty or partial file, and two
+such files `diff` as equal; that is no freeze proof. The checker accepts a file only when
+it is the `base_tables` count followed by exactly that many `Table`/`Checksum` lines, each
+a number and none NULL. Anything else: stop, fix the cause, run both again.
 
 `scripts/legacy-freeze-checksum.sql` builds one `CHECKSUM TABLE` over every base table of
 the database, in name byte order. That covers `user`, `invoice` and `product`, and every
 table any read set reads or will read (products, the invoice archive), plus the ones
 nothing reads, so a write to any of them between the freeze and the switch is noticed.
-(Before Mirza PR1 this step covered `user, invoice` only.) It needs SELECT and nothing else,
-and runs under `read_only`/`super_read_only`. `legacy-import inventory` prints the same
+(Before Mirza PR1 this step covered `user, invoice` only.) It needs SELECT on `oldbot.*` and nothing else
+(a narrower grant hides tables from `information_schema`, so the count would shrink with
+it), and runs under `read_only`/`super_read_only`. `legacy-import inventory` prints the same
 table list.
 
 Check: a customer pressing a button in MirzaBot gets no response; a test write as an
@@ -274,15 +284,18 @@ export LEGACY_SOURCE_DSN="mysql://oldbot_ro:${LEGACY_RO_PW}@nexa-legacy-src:3306
 Then confirm the restored copy IS the frozen source, and record the fingerprint:
 
 ```bash
-legacy_ro oldbot --batch < <checkout>/scripts/legacy-freeze-checksum.sql | tee freeze-checksum-step9.tsv
+legacy_ro oldbot --batch < <checkout>/scripts/legacy-freeze-checksum.sql | tee freeze-checksum-step9.tsv; echo "exit ${PIPESTATUS[0]}"
+bash <checkout>/scripts/legacy-freeze-checksum-verify.sh freeze-checksum-step7.tsv freeze-checksum-step9.tsv; echo "verify exit $?"
 legacy_ro oldbot --batch --skip-column-names --safe-updates \
   < <checkout>/scripts/legacy-rehearsal-source.sql | tee legacy-source.tsv
 ```
 
-Check: `diff freeze-checksum-step7.tsv freeze-checksum-step9.tsv` is empty: the same tables,
-each with the same value as step 7's. The `Table` column carries the database name; if the
-restored copy's database is named differently from the legacy host's, compare after
-removing that `<db>.` prefix. Compare values only
+Check: the client printed `exit 0`, and the checker printed `EQUAL` and `verify exit 0`:
+both files are well-formed (step 7's file was accepted at step 7; it is checked again
+here), with the same tables, each with the same value as step 7's. Never compare the two
+files with a bare `diff`: two empty files are "equal". The checker compares by table name
+after removing the `<db>.` prefix the `Table` column carries, so a restored copy under
+another database name compares correctly. Compare values only
 between servers of the same engine and major version; that is why the throwaway server
 uses the legacy major version. All values equal step 7's (the copy is the frozen database,
 byte for byte at the row level). P7 `audit` (next step) prints the **source fingerprint**

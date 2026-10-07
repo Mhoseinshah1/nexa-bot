@@ -209,10 +209,26 @@ Any other read of the legacy database is a **versioned read set** (`read-set.ts`
   `sha256(JSON{v, [synthetic], schema, tables:{…}})`. `schema` covers every column of the
   read set's tables, and each digest is v1's `TableDigest` over the allowlisted columns,
   read in v1's `ORDER BY CAST(pk AS BINARY)` order.
-- `readLegacyReadSet(session, def, { batchSize, onBatch })` streams rows to `onBatch` at
-  most `batchSize` at a time (default 1000, maximum 5000). It awaits each batch before
-  reading on and keeps no rows itself. A test proves that no row is read ahead of the batch
-  being handed over.
+- `readLegacyReadSet(session, def)` is the digest-only read: one pass, no row delivered,
+  the read set fingerprint to approve. With `{ expectedFingerprint }` it also refuses
+  (`READ_SET_FINGERPRINT_MISMATCH`) unless the result equals it.
+- `readLegacyReadSet(session, def, { expectedFingerprint, onBatch, batchSize })` delivers
+  rows, and verification precedes every side effect. `expectedFingerprint` (the operator's
+  `--expected-<set>-fingerprint`) is REQUIRED with `onBatch`; without it the call is
+  refused before any read. In the same session (the same READ ONLY snapshot) it:
+  1. runs a digest-only pass and compares it with `expectedFingerprint`; a mismatch is
+     refused with `READ_SET_FINGERPRINT_MISMATCH` and `onBatch` is never called;
+  2. runs the delivery pass, streaming rows to `onBatch` at most `batchSize` at a time
+     (default 1000, maximum 5000), and recomputes the digest as it goes. If the result
+     differs from pass 1, the call fails with `READ_SET_SNAPSHOT_DIVERGED` after the last
+     batch. So a consumer that writes must do it in a transaction that this error rolls
+     back.
+
+  Each pass awaits each batch before reading on and keeps no rows itself. A test proves
+  that no row is read ahead of the batch being handed over. The v1 binding below does not
+  cover a read set's own tables and columns, which is why delivery needs the read set's
+  own approved value as well.
+
 - `withBoundReadSetSession(connector, approvedV1, work)` opens one READ ONLY session and
   recomputes the v1 fingerprint in it (`readImportV1Identity`, the same walk as
   `readFromSession`, with no row kept). It refuses with `SOURCE_FINGERPRINT_MISMATCH` unless
@@ -533,7 +549,14 @@ every user) against the importer's own decisions. A disagreement is reported, no
   - engine and fixture inventories agree, and so do read-set fingerprints;
   - the adapter refuses unclassified rows;
   - `scripts/legacy-freeze-checksum.sql` covers every base table and notices a write to
-    `product` and to the unclassified table.
+    `product` and to the unclassified table;
+  - a read set's delivery pass on the engine delivers every row only after the verifying
+    pass matched, and a mismatch delivers none.
+
+  `tests/unit/legacy-inventory.test.ts` runs `scripts/legacy-freeze-checksum-verify.sh`
+  over a well-formed file, an empty one, a header-only one, a short one, a NULL checksum
+  and a duplicated table, and pins that the runbooks capture the client's own exit status
+  and compare through the checker.
 
 - Mutation-checked: the acknowledgement requirement, the READ ONLY transaction, the
   resume's mapping check, the rerun keeping a created customer's own map reason, the

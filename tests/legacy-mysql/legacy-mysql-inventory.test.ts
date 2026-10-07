@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import mysql from 'mysql2/promise';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { LEGACY_TABLE_CLASSIFICATION } from '@nexa/contracts';
 import {
   readLegacyInventoryTables,
@@ -237,6 +237,38 @@ describe('read sets on the engine', () => {
     expect(fromEngine.tables).toEqual(fromMemory.tables);
     expect(fromEngine.schemaHash).toBe(fromMemory.schemaHash);
     expect(fromEngine.fingerprint).toBe(fromMemory.fingerprint);
+  });
+
+  it('deliver rows only after the verifying pass matched, in the same session', async () => {
+    const approved = (await readImportV1Identity(await fixture().open())).fingerprint;
+    const expected = (await readLegacyReadSet(await fixture().open(), PROBE)).fingerprint;
+    const mismatch = vi.fn();
+    await expect(
+      withBoundReadSetSession(connector(RO), approved, (session) =>
+        readLegacyReadSet(session, PROBE, {
+          batchSize: 3,
+          expectedFingerprint: 'e'.repeat(64),
+          onBatch: mismatch,
+        }),
+      ),
+    ).rejects.toThrow(/READ_SET_FINGERPRINT_MISMATCH/u);
+    expect(mismatch).not.toHaveBeenCalled();
+
+    let delivered = 0;
+    const result = await withBoundReadSetSession(connector(RO), approved, (session) =>
+      readLegacyReadSet(session, PROBE, {
+        batchSize: 3,
+        expectedFingerprint: expected,
+        onBatch: (batch) => {
+          expect(batch.rows.length).toBeLessThanOrEqual(3);
+          delivered += batch.rows.length;
+        },
+      }),
+    );
+    expect(result.fingerprint).toBe(expected);
+    expect(delivered).toBe(
+      Object.values(result.tables).reduce((sum, table) => sum + table.rows, 0),
+    );
   });
 
   it('the engine adapter refuses rows of an UNCLASSIFIED table', async () => {
