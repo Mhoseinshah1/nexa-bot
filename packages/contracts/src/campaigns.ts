@@ -177,6 +177,14 @@ export const CAMPAIGN_ERROR_CODES = {
   CAMPAIGN_CONFIRMATION_REQUIRED: 'campaign.confirmation_required',
   /** A launched action's binding (count, set or liability) is missing or does not match. */
   CAMPAIGN_BINDING_INVALID: 'campaign.binding_invalid',
+  /**
+   * Roadmap C4: a campaign is promotional by what it is, so its announcement is MARKETING.
+   * Called a service announcement it would reach every customer who opted out of promotions —
+   * the silent override the opt-out forbids. (No release ever stored a campaign
+   * announcement's purpose, so every one sent so far was MARKETING already.) A service fact
+   * is a Broadcast of its own, composed and confirmed as one.
+   */
+  CAMPAIGN_ANNOUNCEMENT_PURPOSE_INVALID: 'campaign.announcement_purpose_invalid',
 } as const;
 export type CampaignErrorCode = (typeof CAMPAIGN_ERROR_CODES)[keyof typeof CAMPAIGN_ERROR_CODES];
 
@@ -387,8 +395,9 @@ export const campaignAnnouncementTermsSchema = z
     body: z.string().trim().min(1).max(BROADCAST_TEXT_MAX_LENGTH),
     buttons: z.array(broadcastButtonSchema).max(BROADCAST_BUTTONS_MAX).default([]),
     /**
-     * Round N close (§D): a campaign's announcement is promotional unless the operator says
-     * it is a service announcement; Broadcast excludes opted-out customers from MARKETING.
+     * Round N close (§D) named a purpose here. Roadmap C4: a campaign's announcement is
+     * MARKETING, and `SERVICE_ANNOUNCEMENT` is refused (`CAMPAIGN_ANNOUNCEMENT_PURPOSE_INVALID`).
+     * The field stays so a client that sends it is not refused for the key.
      */
     purpose: z.enum(BROADCAST_PURPOSES).default('MARKETING'),
   })
@@ -572,6 +581,25 @@ export const campaignResultsResponseSchema = z.object({
     .nullable(),
   trafficGift: z.object({ counts: bulkCountsSchema }).nullable(),
   timeGift: z.object({ counts: bulkCountsSchema }).nullable(),
+  /**
+   * Roadmap C3: the campaign's discount redemptions set against the announcement's FROZEN
+   * recipients — who was told, and who was delivered to — counted from persisted rows only.
+   * Distinct customers whose redemption's order is PAID. A redeemer who was told is not a
+   * purchase CAUSED by the announcement, and the page never says it is; the rule's scope is
+   * not the audience (OQ-C1-01), so a redeemer who was never told is counted apart. Null
+   * unless the campaign has both an announcement and a discount. Optional: an older server
+   * omits it.
+   */
+  audienceAttribution: z
+    .object({
+      told: z.number().int().nonnegative(),
+      delivered: z.number().int().nonnegative(),
+      redeemersTold: z.number().int().nonnegative(),
+      redeemersDelivered: z.number().int().nonnegative(),
+      redeemersNotTold: z.number().int().nonnegative(),
+    })
+    .nullable()
+    .default(null),
 });
 export type CampaignResultsResponse = z.infer<typeof campaignResultsResponseSchema>;
 
