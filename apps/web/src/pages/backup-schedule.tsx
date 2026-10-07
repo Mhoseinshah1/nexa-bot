@@ -129,7 +129,11 @@ export function BackupScheduleCard({
 
   // The whole command is the mutation's variable, so a retry carries its own key and
   // its own payload (the settings page's reasoning, `settings.tsx`).
-  const submission = useSubmissionKey();
+  // One key per ROW: a success on one setting must not retire the key another holds.
+  const enabledKey = useSubmissionKey();
+  const intervalKey = useSubmissionKey();
+  const keyFor = (settingKey: string) =>
+    settingKey === BACKUP_SCHEDULE_SETTING_KEYS.enabled ? enabledKey : intervalKey;
   const save = useMutation({
     mutationFn: (command: {
       key: string;
@@ -137,8 +141,8 @@ export function BackupScheduleCard({
       expectedVersion: number | null;
       idempotencyKey: string;
     }) => saveSetting(command),
-    onSuccess: () => submission.settle(),
-    onError: (error) => submission.settleOn(error),
+    onSuccess: (_result, command) => keyFor(command.key).settle(),
+    onError: (error, command) => keyFor(command.key).settleOn(error),
     onSettled: refresh,
   });
 
@@ -149,7 +153,7 @@ export function BackupScheduleCard({
   const write = (row: ResolvedSettingResponse | undefined, value: boolean | number | null) => {
     if (row === undefined) return;
     const command = { key: row.key, value, expectedVersion: row.version };
-    save.mutate({ ...command, idempotencyKey: submission.current(command) });
+    save.mutate({ ...command, idempotencyKey: keyFor(row.key).current(command) });
   };
 
   const parsed =
