@@ -20,6 +20,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 WEB_TESTS = [
     'tests/web/customer-workspace.test.tsx',
+    'tests/web/tickets.test.tsx',
+    'tests/unit/dashboard-aggregates.test.ts',
     'tests/web/dashboard-attention.test.tsx',
     'tests/web/dashboard.test.tsx',
 ]
@@ -54,8 +56,14 @@ MUTATIONS = [
      "AND k.status = ANY(${textArray(TICKET_AWAITING_SUPPORT_STATUSES)})",
      "AND k.status <> 'CLOSED'"),
     ('A6 handoffs not scoped to the customer', 'api', READER,
-     "WHERE c.tenant_id = ${tenantId} AND (c.state = 'HANDOFF_REQUIRED')\n               AND c.customer_id = ${customerId}",
-     "WHERE c.tenant_id = ${tenantId} AND (c.state = 'HANDOFF_REQUIRED')"),
+     "WHERE c.tenant_id = ${tenantId} AND c.customer_id = ${customerId}\n                 AND c.state = 'HANDOFF_REQUIRED'`,",
+     "WHERE c.tenant_id = ${tenantId}\n                 AND c.state = 'HANDOFF_REQUIRED'`,"),
+    ('A11 the named handoff is the oldest, not the newest', 'api', READER,
+     "ORDER BY COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC",
+     "ORDER BY COALESCE(c.last_message_at, c.created_at) ASC, c.id ASC"),
+    ('A12 the awaiting-support facet ignored by the ticket list', 'api',
+     'apps/api/src/surfaces/web/tickets.controller.ts',
+     "      ...(input.awaiting === 'support' ? { awaitingSupport: true } : {}),\n", ""),
     ('A7 latest orders oldest first', 'api', READER,
      "      FROM orders\n      WHERE tenant_id = ${tenantId} AND customer_id = ${customerId}\n      ORDER BY created_at DESC, id DESC",
      "      FROM orders\n      WHERE tenant_id = ${tenantId} AND customer_id = ${customerId}\n      ORDER BY created_at ASC, id ASC"),
@@ -99,10 +107,41 @@ MUTATIONS = [
      "mayViewBusinessChats={may('business_chats.view')}", "mayViewBusinessChats={may('users.view')}"),
     ('W13 sidebar drops the handoff badge', 'web', NAV,
      "  one('business-chats', c.businessHandoffs, 'warn');\n", ""),
+    ('W15 B1: the handoff counter required on the wire again', 'web',
+     'packages/contracts/src/dashboard.ts',
+     "businessHandoffs: counter.optional().transform((value) => value ?? null),",
+     "businessHandoffs: counter,"),
+    ('W16 N3: "nothing waits" drawn over a withheld counting section', 'web', WORKSPACE,
+     "workspaceWithheld(data) ? null : <AttentionClear", "false ? null : <AttentionClear"),
+    ('W17 N3: the latest orders reported as a withheld count', 'web', VIEW,
+     "const COUNTING_SECTIONS: readonly CountingSection[] = [\n  'tickets',",
+     "const COUNTING_SECTIONS: readonly (CountingSection | 'orders')[] = [\n  'orders',\n  'tickets',"),
+    ('W18 N1: the tickets row links to every status', 'web', VIEW,
+     "    '/tickets?awaiting=support',", "    '/tickets',"),
+    ('W19 N2: a single handoff links to the tenant inbox', 'web', VIEW,
+     "handoffs === 1 && conversation !== null", "false"),
+    ('W20 N1: the inbox drops the awaiting facet', 'web', 'apps/web/src/pages/tickets.tsx',
+     "    ...(awaiting === null ? {} : { awaiting }),\n", ""),
+    ('W21 N5: the sidebar counters asked one after another', 'web',
+     'apps/api/src/modules/commerce/reporting/application/operations-overview.service.ts',
+     "    const values = await Promise.all(\n      NAV_COUNTER_KEYS.map((key) =>\n"
+     "        held.has(NAV_COUNTER_PERMISSIONS[key])\n"
+     "          ? this.deps.repository.navCounter(scope, key, this.deps.counterCap)\n"
+     "          : null,\n      ),\n    );",
+     "    const values: (number | null)[] = [];\n    for (const key of NAV_COUNTER_KEYS) {\n"
+     "      values.push(held.has(NAV_COUNTER_PERMISSIONS[key])\n"
+     "        ? await this.deps.repository.navCounter(scope, key, this.deps.counterCap)\n"
+     "        : null);\n    }"),
     ('W14 the latest card links a withheld half to its list', 'web', WORKSPACE,
      "                {data.payments !== null && (\n                  <a href={`/payments?q=${q}`}",
      "                {(\n                  <a href={`/payments?q=${q}`}"),
 ]
+
+
+def build_contracts(env):
+    # Tests import `@nexa/contracts` from its dist, so a contract mutant needs a rebuild.
+    subprocess.run(['pnpm', '--filter', '@nexa/contracts', 'build'], cwd=ROOT, env=env,
+                   capture_output=True, text=True, check=True)
 
 
 def run(tests, env):
@@ -127,11 +166,16 @@ def main():
             print(f'SKIP?  {name}: anchor found {original.count(before)} times in {path}')
             survived.append(name)
             continue
+        contract = path.startswith('packages/contracts/')
         try:
             open(full, 'w', encoding='utf-8').write(original.replace(before, after, 1))
+            if contract:
+                build_contracts(env)
             code = run(API_TESTS if kind == 'api' else WEB_TESTS, env)
         finally:
             open(full, 'w', encoding='utf-8').write(original)
+            if contract:
+                build_contracts(env)
         verdict = 'KILLED' if code != 0 else 'SURVIVED'
         print(f'{verdict:8} {name}', flush=True)
         if code == 0:

@@ -392,6 +392,28 @@ tenant B, and bounds the counter.
 Mutation driver: `scripts/mutate-customer360-dashboard.py` (`--api` adds the database
 mutations). Record in §8.
 
+### Review round (PR #240)
+
+- **B1 — rolling-update skew.** `businessHandoffs` is optional on the wire and read as `null`,
+  so an old API's six-key `/nav-counters` parses (unit test on the old shape; web test that the
+  queue still draws AND that the next minute's poll is still asked — the recovery itself). `polling.ts` is unchanged: it still treats a parse failure as final,
+  which is right for the case it was written for (an OLD bundle reading a NEW API, cured only
+  by a reload) and which this contract change keeps from arising in the opposite direction.
+  Whether a parse failure should drop to the slow lane instead is a shared-primitive decision
+  for the lead, not this PR's. `docs/deployment.md` carries the update-window note.
+- **N1.** `GET /tickets` gained a read-only `awaiting=support` facet
+  (`TICKET_AWAITING_SUPPORT_STATUSES`, ANDed with `status`); the inbox has a «در انتظار
+  پشتیبانی» chip, and both "awaiting support" rows link to it. Count and list are one set
+  (integration test).
+- **N4.** The per-customer counts now read one customer's rows: payments and services through
+  the existing `(customer_id, created_at, id)` indexes (EXPLAIN ANALYZE on 20 000 customers,
+  `scripts/explain-customer360-counts.sql`, result recorded in its header),
+  business handoffs through a new ONLINE index `business_conversations_tenant_customer_handoff_idx`
+  `(tenant_id, customer_id) WHERE state = 'HANDOFF_REQUIRED'` — no migration.
+- **N5.** The sidebar counters run concurrently: each was already its own pool statement in no
+  transaction, so no answer changes.
+- **N7.** Left as is: `paymentsReconcilable` is a subset of `paymentsUnknown`.
+
 ## 8. Roadmap B5/B6 mutation record
 
 `python3 scripts/mutate-customer360-dashboard.py --api` on the agent's own database: each rule
