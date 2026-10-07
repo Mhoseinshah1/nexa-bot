@@ -389,7 +389,7 @@ export type LegacyServiceCandidateListResponse = z.infer<
 
 /** Counts by outcome and by review state. Aggregates only. */
 export const legacyServiceCandidateSummaryResponseSchema = z.object({
-  total: z.number().int().nonnegative(),
+  candidateCount: z.number().int().nonnegative(),
   byOutcome: z.record(legacyServiceOutcomeSchema, z.number().int().nonnegative()),
   byReviewState: z.record(legacyServiceReviewStateSchema, z.number().int().nonnegative()),
 });
