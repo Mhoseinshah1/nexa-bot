@@ -331,6 +331,20 @@ export const SUPPORT_AI_LIMITS = {
  */
 export const SUPPORT_AI_SESSION_INACTIVITY_SECONDS = 21_600;
 
+/**
+ * Review of PR #241 (N3) — a `GREETING` reply is free (it does not spend the session budget)
+ * only while its text is at most this long. The topic is the model's own label; a "greeting"
+ * longer than a greeting is an answer and counts. A purged body counts too (fail closed).
+ */
+export const SUPPORT_AI_FREE_GREETING_MAX_CHARS = 200;
+
+/**
+ * Review of PR #241 — the value the retired `maxConsecutiveReplies` column defaults to, and that
+ * the configuration response still carries for a compatibility window (an older web bundle
+ * requires the field when it reads the configuration). Never read or enforced by this release.
+ */
+export const SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT = 4;
+
 /** Roadmap A1 — the session reply budget's bounds. */
 const sessionBudgetSchema = z
   .number()
@@ -586,8 +600,28 @@ export const supportAiCredentialViewSchema = z.object({
 });
 export type SupportAiCredentialView = z.infer<typeof supportAiCredentialViewSchema>;
 
+/**
+ * The configuration as READ (review of PR #241). Two rolling-deploy directions:
+ *
+ * - an older web bundle reading a new replica requires `maxConsecutiveReplies` (1–20): the new
+ *   replica still projects the retired column into the response, and ignores it on a save
+ *   (the save schema strips unknown keys);
+ * - a newer web bundle reading an older replica gets no `sessionReplyBudget` or
+ *   `maxAutoRepliesPerHour`: both are optional HERE (a new replica always sends them), and the
+ *   page leaves an absent field out of its save, so the server keeps what it stores.
+ */
+export const supportAiConfigReadSchema = supportAiConfigShape
+  .extend({
+    sessionReplyBudget: sessionBudgetSchema.optional(),
+    maxAutoRepliesPerHour: hourlyLimitSchema.optional(),
+    /** Retired by roadmap A1: projected for older bundles, never enforced, never written. */
+    maxConsecutiveReplies: z.number().int().min(1).max(20).optional(),
+  })
+  .superRefine(refineSupportAiConfig);
+export type SupportAiConfigRead = z.infer<typeof supportAiConfigReadSchema>;
+
 export const supportAiConfigResponseSchema = z.object({
-  config: supportAiConfigInputSchema,
+  config: supportAiConfigReadSchema,
   version: z.number().int(),
   credentials: z.array(supportAiCredentialViewSchema),
   capabilities: z.record(
