@@ -1245,9 +1245,18 @@ textarea.input,
 .input-group {
   display: flex;
 }
+/*
+ * Only a DIRECT child grows along the row. A field nested in the group (label
+ * over input) is a column, where `flex: 1`'s zero basis squeezed the input to
+ * 24px tall; the field grows instead and its input keeps the control height.
+ */
+.input-group > .input,
+.input-group > input,
+.input-group > .field {
+  flex: 1;
+}
 .input-group .input,
 .input-group > input {
-  flex: 1;
   border-start-end-radius: 0;
   border-end-end-radius: 0;
 }
