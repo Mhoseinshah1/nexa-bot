@@ -583,7 +583,7 @@
 }
 
 /* Touch: a link in a detail page's row list is a 44px target (tokens.css). */
-@media (pointer: coarse) {
+@media (pointer: coarse) and (hover: none) {
   .ca-rows a:not(.btn) {
     display: inline-flex;
     align-items: center;
