@@ -2,14 +2,22 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   matchLegacyService,
+  matchOnPanel,
   type LegacyPanelPolicy,
   type PanelInventoryIndex,
 } from '../../apps/api/src/modules/platform/legacy-import/application/legacy-service-matching';
 
 /**
  * Migration P5's matching rule (§11, §19): known panel → explicit map + lower(username);
- * missing panel → exact lowercase username across configured RickPanels, 1 → eligible,
- * 0 → PROVIDER_MISSING, >1 → AMBIGUOUS_PANEL. No other guessing, never the inbound id.
+ * a panel the operator DECLARED missing → exact lowercase username across configured
+ * RickPanels, 1 → eligible, 0 → PROVIDER_MISSING, >1 → AMBIGUOUS_PANEL. No other guessing,
+ * never the inbound id.
+ *
+ * Mirza PR5 (owner decision 8, 2026-10-07): a row with NO panel (`code_panel` empty or NULL)
+ * is no longer searched — it is `NO_PANEL` whatever the inventories hold, and only an
+ * operator's explicit approval naming a mapped panel (`matchOnPanel`) may adopt it. The
+ * "panel missing" cases below were rewritten deliberately: before PR5 they pinned the search
+ * for a NULL code too; now they pin it for a declared-missing code only.
  */
 
 const P1 = '00000000-0000-4000-8000-0000000000a1';
@@ -77,20 +85,91 @@ describe('panel known', () => {
   });
 });
 
-describe('panel missing', () => {
-  it('exactly one configured panel holds the name: eligible there', () => {
-    for (const codePanel of [null, 'old-netherlands']) {
-      expect(matchLegacyService({ codePanel, username: 'Carol' }, policy, inventories)).toEqual({
-        kind: 'ELIGIBLE',
-        panelId: P3,
-        username: 'carol',
-        providerUsername: 'carol',
-      });
+const MISSING = 'old-netherlands';
+
+describe('no panel (owner decision 8)', () => {
+  it('a NULL code_panel is NO_PANEL whatever the inventories hold — never searched', () => {
+    // A unique holder (carol), none (zed), two (shared), a collision, an incomplete walk:
+    // before PR5 these were ELIGIBLE / PROVIDER_MISSING / AMBIGUOUS / … ; now all NO_PANEL.
+    const partial = new Map(inventories);
+    partial.delete(P2);
+    for (const username of ['Carol', 'zed', 'shared']) {
+      for (const inv of [inventories, partial]) {
+        expect(matchLegacyService({ codePanel: null, username }, policy, inv)).toEqual({
+          kind: 'NO_PANEL',
+        });
+      }
     }
   });
 
+  it('a test code is still skipped first, and an uncomparable name is still INVALID', () => {
+    expect(
+      matchLegacyService({ codePanel: null, username: 'with space' }, policy, inventories),
+    ).toEqual({
+      kind: 'INVALID',
+      reason: 'INVALID_SOURCE_ROW',
+    });
+  });
+});
+
+describe('an explicit operator panel (matchOnPanel)', () => {
+  it('matches on the named panel only, with the mapped-code rules', () => {
+    expect(matchOnPanel({ codePanel: null, username: 'CAROL' }, P3, policy, inventories)).toEqual({
+      kind: 'ELIGIBLE',
+      panelId: P3,
+      username: 'carol',
+      providerUsername: 'carol',
+    });
+    // The account is on another panel: missing on the one named — never moved there.
+    expect(matchOnPanel({ codePanel: null, username: 'carol' }, P1, policy, inventories)).toEqual({
+      kind: 'MANUAL_REVIEW',
+      reason: 'PROVIDER_MISSING',
+      candidatePanels: 0,
+    });
+    const partial = new Map(inventories);
+    partial.delete(P3);
+    expect(matchOnPanel({ codePanel: null, username: 'carol' }, P3, policy, partial)).toEqual({
+      kind: 'UNDECIDABLE',
+      reason: 'INVENTORY_INCOMPLETE',
+    });
+    const colliding = new Map(inventories);
+    colliding.set(P3, index(P3, ['Erin', 'erin']));
+    expect(matchOnPanel({ codePanel: null, username: 'erin' }, P3, policy, colliding)).toEqual({
+      kind: 'MANUAL_REVIEW',
+      reason: 'USERNAME_CASE_COLLISION',
+      candidatePanels: 1,
+    });
+    expect(
+      matchOnPanel(
+        { codePanel: 'TEST_MARZBAN_RICKPANEL', username: 'carol' },
+        P3,
+        policy,
+        inventories,
+      ),
+    ).toEqual({ kind: 'SKIPPED', reason: 'TEST_PANEL' });
+    expect(matchOnPanel({ codePanel: null, username: '' }, P3, policy, inventories)).toEqual({
+      kind: 'INVALID',
+      reason: 'INVALID_SOURCE_ROW',
+    });
+  });
+});
+
+describe('panel declared missing', () => {
+  it('exactly one configured panel holds the name: eligible there', () => {
+    expect(
+      matchLegacyService({ codePanel: MISSING, username: 'Carol' }, policy, inventories),
+    ).toEqual({
+      kind: 'ELIGIBLE',
+      panelId: P3,
+      username: 'carol',
+      providerUsername: 'carol',
+    });
+  });
+
   it('no panel holds it: PROVIDER_MISSING', () => {
-    expect(matchLegacyService({ codePanel: null, username: 'zed' }, policy, inventories)).toEqual({
+    expect(
+      matchLegacyService({ codePanel: MISSING, username: 'zed' }, policy, inventories),
+    ).toEqual({
       kind: 'MANUAL_REVIEW',
       reason: 'PROVIDER_MISSING',
       candidatePanels: 0,
@@ -99,7 +178,7 @@ describe('panel missing', () => {
 
   it('several panels hold it: AMBIGUOUS_PANEL, never a pick', () => {
     expect(
-      matchLegacyService({ codePanel: null, username: 'shared' }, policy, inventories),
+      matchLegacyService({ codePanel: MISSING, username: 'shared' }, policy, inventories),
     ).toEqual({
       kind: 'MANUAL_REVIEW',
       reason: 'AMBIGUOUS_PANEL',
@@ -110,7 +189,7 @@ describe('panel missing', () => {
   it('any production panel without a complete inventory makes it UNDECIDABLE', () => {
     const partial = new Map(inventories);
     partial.delete(P2);
-    expect(matchLegacyService({ codePanel: null, username: 'carol' }, policy, partial)).toEqual({
+    expect(matchLegacyService({ codePanel: MISSING, username: 'carol' }, policy, partial)).toEqual({
       kind: 'UNDECIDABLE',
       reason: 'INVENTORY_INCOMPLETE',
     });
@@ -119,7 +198,7 @@ describe('panel missing', () => {
   it('a panel listed twice is searched once', () => {
     const twice = { ...policy, productionPanelIds: [P3, P3] };
     expect(
-      matchLegacyService({ codePanel: null, username: 'carol' }, twice, inventories),
+      matchLegacyService({ codePanel: MISSING, username: 'carol' }, twice, inventories),
     ).toMatchObject({
       kind: 'ELIGIBLE',
     });
@@ -138,17 +217,19 @@ describe('Codex review of #169', () => {
   it('P2: two known holders are AMBIGUOUS even while a third panel is unavailable', () => {
     const partial = new Map(inventories);
     partial.delete(P3);
-    expect(matchLegacyService({ codePanel: null, username: 'shared' }, policy, partial)).toEqual({
-      kind: 'MANUAL_REVIEW',
-      reason: 'AMBIGUOUS_PANEL',
-      candidatePanels: 2,
-    });
+    expect(matchLegacyService({ codePanel: MISSING, username: 'shared' }, policy, partial)).toEqual(
+      {
+        kind: 'MANUAL_REVIEW',
+        reason: 'AMBIGUOUS_PANEL',
+        candidatePanels: 2,
+      },
+    );
   });
 
   it('P2: one known holder plus an unavailable panel is still UNDECIDABLE', () => {
     const partial = new Map(inventories);
     partial.delete(P2);
-    expect(matchLegacyService({ codePanel: null, username: 'carol' }, policy, partial)).toEqual({
+    expect(matchLegacyService({ codePanel: MISSING, username: 'carol' }, policy, partial)).toEqual({
       kind: 'UNDECIDABLE',
       reason: 'INVENTORY_INCOMPLETE',
     });
@@ -161,11 +242,13 @@ describe('Codex review of #169', () => {
     expect(
       matchLegacyService({ codePanel: 'germany', username: 'dora' }, policy, colliding),
     ).toEqual({ kind: 'MANUAL_REVIEW', reason: 'USERNAME_CASE_COLLISION', candidatePanels: 1 });
-    expect(matchLegacyService({ codePanel: null, username: 'ERIN' }, policy, colliding)).toEqual({
-      kind: 'MANUAL_REVIEW',
-      reason: 'USERNAME_CASE_COLLISION',
-      candidatePanels: 1,
-    });
+    expect(matchLegacyService({ codePanel: MISSING, username: 'ERIN' }, policy, colliding)).toEqual(
+      {
+        kind: 'MANUAL_REVIEW',
+        reason: 'USERNAME_CASE_COLLISION',
+        candidatePanels: 1,
+      },
+    );
   });
 });
 

@@ -652,7 +652,15 @@ export async function runMode(
         `${args.expectedFingerprint}: this is not the source that was approved. Nothing was written.`,
     );
   }
-  const input = { scope, actor, snapshot, mapping };
+  // Mirza PR5: the target's class travels with the input, so a stored approval's synthetic
+  // flag is checked against it before any run acts on it.
+  const input = {
+    scope,
+    actor,
+    snapshot,
+    mapping,
+    productionLikeTarget: context.productionLikeTarget,
+  };
   switch (args.mode) {
     case 'audit':
       return importer.audit({

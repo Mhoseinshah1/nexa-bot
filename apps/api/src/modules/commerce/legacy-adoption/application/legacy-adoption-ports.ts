@@ -193,6 +193,11 @@ export type LegacyAdoptionOutcome =
    * DISMISSED, or RESOLVED other than RETRY_AFTER_FIX). Nothing is written; reopen it first.
    */
   | { readonly kind: 'REVIEW_CLOSED'; readonly reason: LegacyReviewReasonCode | null }
+  /**
+   * Mirza PR5: a person kept the invoice's service candidate as history in the Web Admin.
+   * Nothing is written; reopen the candidate first.
+   */
+  | { readonly kind: 'KEPT_AS_HISTORY' }
   | {
       readonly kind: 'MANUAL_REVIEW';
       readonly reason: LegacyAdoptionReviewReason;
@@ -258,6 +263,15 @@ export interface AdoptionInsert {
 export interface LegacyAdoptionStore {
   /** Serialises every adoption of one invoice for the rest of the transaction. */
   lockInvoice(scope: TenantContext, legacyInvoiceKey: string, tx: TransactionScope): Promise<void>;
+  /**
+   * Mirza PR5: a person kept the invoice's service candidate as history (Web Admin review).
+   * Read under the invoice lock; such an invoice is never adopted until it is reopened.
+   */
+  keptAsHistory(
+    scope: TenantContext,
+    legacyInvoiceKey: string,
+    tx: TransactionScope,
+  ): Promise<boolean>;
   findCustomerByTelegramId(
     scope: TenantContext,
     telegramUserId: string,

@@ -9,6 +9,7 @@ import {
 import { decideLegacyTrial } from '../../../commerce/trials/application/legacy-trial-eligibility.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
 import {
+  INVOICE_MAP_DECISIONS,
   SERVICE_CANDIDATE_CATEGORIES,
   decideLegacyUser,
   decideServiceCandidate,
@@ -161,6 +162,8 @@ export interface PlanInput {
   >;
   readonly tariffCandidates: readonly TariffCandidate[];
   readonly inventories: ReadonlyMap<string, LegacyInventoryRead>;
+  /** Mirza PR5: the operator's review, as the run accepted it (`ServiceReviewInputs`). */
+  readonly review?: ServiceReviewInputs;
 }
 
 const TRIAL_PLANS: readonly TrialPlan[] = [
@@ -229,12 +232,28 @@ export function duplicateSourceIds(
  * which calls it again AFTER the products phase with the tariffs as they now are and the
  * users the customers phase actually imported.
  */
+/**
+ * Mirza PR5 — what the operator's review says about candidates, as the plan may use it.
+ *
+ * - `operatorPanels`: invoice key → the panel an explicit ADOPT approval names, ONLY for
+ *   approvals the run accepted (`approvalGate`: not synthetic on a production-like target,
+ *   bound to this very source row, the panel mapped explicitly). Matched on that panel with
+ *   every other rule unchanged.
+ * - `keptAsHistory`: invoice keys a person kept as history. They are still decided (and
+ *   reported), but they are no claim on an account: the ownership rule ignores them.
+ */
+export interface ServiceReviewInputs {
+  readonly operatorPanels?: ReadonlyMap<string, string>;
+  readonly keptAsHistory?: ReadonlySet<string>;
+}
+
 export function decideAllServices(
   snapshot: LegacySnapshot,
   mapping: PanelMapping,
   indexes: ReadonlyMap<string, PanelInventoryIndex>,
   importedUsers: ReadonlyMap<string, string>,
   tariffOf: (shapeKey: string) => 'RESOLVED' | 'UNRESOLVED',
+  review: ServiceReviewInputs = {},
 ): {
   readonly services: readonly PlannedService[];
   readonly categories: Readonly<Record<ServiceCandidateCategory, number>>;
@@ -242,25 +261,67 @@ export function decideAllServices(
 } {
   const userIds = new Set(snapshot.users.map((u) => u.id));
   const categories = zeroes<ServiceCandidateCategory>(SERVICE_CANDIDATE_CATEGORIES);
-  const services: PlannedService[] = [];
-  let namedProductCandidates = 0;
+  const decided: PlannedService[] = [];
   for (const invoice of snapshot.liveInvoices) {
-    const decision = decideServiceCandidate(invoice, {
-      userIds,
-      importedUsers,
-      policy: mapping.policy,
-      inventories: indexes,
-      productCodes: snapshot.productCodes,
-      productMap: mapping.products,
-      tariffOf,
-    });
+    const panelId = review.operatorPanels?.get(invoice.idInvoice);
+    const decision = decideServiceCandidate(
+      invoice,
+      {
+        userIds,
+        importedUsers,
+        policy: mapping.policy,
+        inventories: indexes,
+        productCodes: snapshot.productCodes,
+        productMap: mapping.products,
+        tariffOf,
+      },
+      panelId === undefined ? null : { panelId },
+    );
+    decided.push({ invoice, decision });
+  }
+  const services = withOwnershipRule(decided, review.keptAsHistory ?? new Set());
+  let namedProductCandidates = 0;
+  for (const { decision } of services) {
     categories[decision.category] += 1;
     if (decision.category === 'ADOPTION_ELIGIBLE' && decision.product.kind === 'NAMED_PRODUCT') {
       namedProductCandidates += 1;
     }
-    services.push({ invoice, decision });
   }
   return { services, categories, namedProductCandidates };
+}
+
+/**
+ * Mirza PR5 — the customer must be identified with confidence. When live invoices of two or
+ * more DIFFERENT legacy owners would adopt the same account (the same panel and lowercase
+ * name), every one of them is `AMBIGUOUS_OWNERSHIP`: which customer holds the account is a
+ * guess, and the first in key order is not an answer. An invoice a person kept as history is
+ * no claim. Invoices of ONE owner naming one account keep the P6 rule (the first adopts; the
+ * rest find the name taken, which P6 reports as a conflicting existing entity).
+ */
+export function withOwnershipRule(
+  services: readonly PlannedService[],
+  keptAsHistory: ReadonlySet<string>,
+): readonly PlannedService[] {
+  const owners = new Map<string, Set<string>>();
+  const accountOf = (s: PlannedService): string | null =>
+    s.decision.category === 'ADOPTION_ELIGIBLE' && !keptAsHistory.has(s.invoice.idInvoice)
+      ? JSON.stringify([s.decision.panelId, s.decision.providerUsername.toLowerCase()])
+      : null;
+  for (const s of services) {
+    const account = accountOf(s);
+    if (account === null || s.decision.category !== 'ADOPTION_ELIGIBLE') continue;
+    const set = owners.get(account) ?? new Set<string>();
+    set.add(s.decision.telegramUserId);
+    owners.set(account, set);
+  }
+  return services.map((s) => {
+    const account = accountOf(s);
+    if (account === null || (owners.get(account)?.size ?? 0) < 2) return s;
+    return {
+      invoice: s.invoice,
+      decision: { category: 'AMBIGUOUS_OWNERSHIP', map: INVOICE_MAP_DECISIONS.AMBIGUOUS_OWNERSHIP },
+    };
+  });
 }
 
 /** The complete indexes of the production panels whose inventory read is complete. */
@@ -444,6 +505,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     indexes,
     importedUsers,
     tariffOf,
+    input.review,
   );
   const realLive = snapshot.liveInvoices.filter((i) => i.isTest?.trim() === '0');
 

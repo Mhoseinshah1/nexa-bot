@@ -197,8 +197,19 @@ describe('service candidates', () => {
     expect(decideServiceCandidate({ ...base, username: 'nobody' }, ctx()).category).toBe(
       'PROVIDER_MISSING',
     );
+    // Owner decision 8 (Mirza PR5): no panel is never searched — NO_PANEL, whoever holds it.
+    for (const codePanel of [null, '', '   ']) {
+      for (const username of ['svc_shared', 'svc_nullmatch', 'nobody']) {
+        expect(decideServiceCandidate({ ...base, codePanel, username }, ctx())).toEqual({
+          category: 'NO_PANEL',
+          map: { status: 'MANUAL_REVIEW', reasonCode: 'PANEL_UNMAPPED' },
+        });
+      }
+    }
+    // A code the operator DECLARED missing is still searched: two holders are ambiguous.
     expect(
-      decideServiceCandidate({ ...base, codePanel: null, username: 'svc_shared' }, ctx()).category,
+      decideServiceCandidate({ ...base, codePanel: 'gone', username: 'svc_shared' }, ctx())
+        .category,
     ).toBe('AMBIGUOUS_PANEL');
     expect(decideServiceCandidate({ ...base, username: 'case_x' }, ctx()).category).toBe(
       'USERNAME_CASE_COLLISION',
@@ -216,8 +227,11 @@ describe('service candidates', () => {
   });
 
   it('an eligible candidate carries the panel, the exact provider spelling and the product path', () => {
+    // Only an operator's explicit panel adopts a no-panel invoice — matched on THAT panel.
     expect(
-      decideServiceCandidate({ ...base, codePanel: null, username: 'SVC_NULLMATCH' }, ctx()),
+      decideServiceCandidate({ ...base, codePanel: null, username: 'SVC_NULLMATCH' }, ctx(), {
+        panelId: PANEL_B,
+      }),
     ).toMatchObject({
       category: 'ADOPTION_ELIGIBLE',
       panelId: PANEL_B,
@@ -225,6 +239,16 @@ describe('service candidates', () => {
       telegramUserId: '1',
       product: { kind: 'HIDDEN_SHAPE', custom: false },
     });
+    // …and never onto a panel that does not hold the account.
+    expect(
+      decideServiceCandidate({ ...base, codePanel: null, username: 'SVC_NULLMATCH' }, ctx(), {
+        panelId: PANEL_A,
+      }).category,
+    ).toBe('PROVIDER_MISSING');
+    // The declared-missing search still finds a unique holder.
+    expect(
+      decideServiceCandidate({ ...base, codePanel: 'gone', username: 'SVC_NULLMATCH' }, ctx()),
+    ).toMatchObject({ category: 'ADOPTION_ELIGIBLE', panelId: PANEL_B });
     expect(decideServiceCandidate({ ...base, codeProduct: 'p1' }, ctx())).toMatchObject({
       category: 'ADOPTION_ELIGIBLE',
       product: { kind: 'NAMED_PRODUCT', codeProduct: 'p1', productId: 'prod-p1' },
@@ -533,7 +557,9 @@ describe('the invoice key and what the map records', () => {
         [{ username: '' }, {}, 'MANUAL_REVIEW', 'INVALID_SOURCE_ROW'],
         [{}, { inventories: new Map() }, 'MANUAL_REVIEW', 'INVENTORY_INCOMPLETE'],
         [{ username: 'nobody' }, {}, 'MANUAL_REVIEW', 'PROVIDER_MISSING'],
-        [{ codePanel: null, username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'AMBIGUOUS_PANEL'],
+        // Owner decision 8: no panel is review, PANEL_UNMAPPED on the map (outcome NO_PANEL).
+        [{ codePanel: null, username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'PANEL_UNMAPPED'],
+        [{ codePanel: 'gone', username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'AMBIGUOUS_PANEL'],
         [{ codePanel: 'zzz' }, {}, 'MANUAL_REVIEW', 'PANEL_UNMAPPED'],
         [{ username: 'case_x' }, {}, 'MANUAL_REVIEW', 'USERNAME_CASE_COLLISION'],
         [{ timeUnit: 'month' }, {}, 'MANUAL_REVIEW', 'UNSUPPORTED_SHAPE'],

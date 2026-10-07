@@ -322,6 +322,16 @@ export interface LegacyImportRepository {
 
 export const LEGACY_IMPORT_REVIEW_PAGE_MAX = 500;
 
+/**
+ * The name of the transaction-scoped advisory lock that serialises everything decided about
+ * ONE legacy invoice: P6's adoption takes it first, and (Mirza PR5) so does every operator
+ * decision on the invoice's service candidate — so a "keep as history" and an adoption of the
+ * same invoice can never both win. One spelling, here, so the two can never drift apart.
+ */
+export function legacyInvoiceLockName(tenantId: string, legacyInvoiceKey: string): string {
+  return `legacy-adoption:${tenantId}:invoice:${legacyInvoiceKey}`;
+}
+
 // --- pure rules ----------------------------------------------------------------------------
 
 /** The review fields a rule reads; absent means "no review" (a record without Item 9 fields). */

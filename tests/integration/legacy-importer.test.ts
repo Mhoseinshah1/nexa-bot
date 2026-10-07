@@ -375,7 +375,8 @@ describe('Migration P7: the legacy importer', () => {
     });
     expect(applied.products).toMatchObject({ created: 6, existing: 0 });
     expect(applied.services.categories).toEqual(SYNTHETIC_EXPECTED.services.categories);
-    expect(applied.services.adoption).toMatchObject({ wired: false, PENDING: 4, ADOPTED: 0 });
+    // Mirza PR5: 3, not 4 — the NULL-code invoice the search used to find is NO_PANEL now.
+    expect(applied.services.adoption).toMatchObject({ wired: false, PENDING: 3, ADOPTED: 0 });
 
     // NEXA now holds exactly that.
     expect(await count('customers')).toBe(1 + users.newCustomers);
@@ -396,19 +397,23 @@ describe('Migration P7: the legacy importer', () => {
     ).toBe(2);
     expect(
       await count('legacy_import_map', "legacy_table = 'invoice' AND status = 'MANUAL_REVIEW'"),
-    ).toBe(12);
+      // Mirza PR5: 13, not 12 — the NULL-code invoice is review (NO_PANEL), never adopted.
+    ).toBe(13);
     // Every review row carries its closed review reason and enters review OPEN.
     expect(
       await count(
         'legacy_import_map',
         "legacy_table = 'invoice' AND status = 'MANUAL_REVIEW' AND review_state = 'OPEN'",
       ),
-    ).toBe(12);
+    ).toBe(13);
     for (const [reason, n] of [
       ['CUSTOMER_MISSING', 2],
       ['UNSUPPORTED_SHAPE', 2],
       ['PRODUCT_MAPPING_UNRESOLVED', 1],
-      ['PROVIDER_MISSING', 2],
+      // Mirza PR5: the empty-code invoice is no longer searched (it was PROVIDER_MISSING).
+      ['PROVIDER_MISSING', 1],
+      // The forgotten code, and the three empty/NULL codes (owner decision 8).
+      ['PANEL_UNMAPPED', 4],
       ['INVALID_SOURCE_ROW', 2],
     ] as const) {
       expect(
@@ -420,10 +425,14 @@ describe('Migration P7: the legacy importer', () => {
       await count('legacy_import_map', "legacy_table = 'invoice' AND status = 'IMPORTED'"),
     ).toBe(0);
     expect(applied.services.map).toMatchObject({
-      INSERTED: 14,
+      INSERTED: 15,
       keyInvalid: 1,
       reviewClosed: 0,
     });
+    // Mirza PR5: every live invoice has exactly ONE candidate row, with its outcome.
+    expect(await count('legacy_service_candidates')).toBe(SYNTHETIC_EXPECTED.services.candidates);
+    expect(await count('legacy_service_candidates', "outcome = 'NO_PANEL'")).toBe(3);
+    expect(applied.services.outcomes).toMatchObject({ NO_PANEL: 3, ADOPTION_ELIGIBLE: 3 });
     expect(await count('legacy_product_shapes')).toBe(6);
     expect(await count('legacy_product_shapes', "tariff_status = 'RESOLVED'")).toBe(5);
     expect(await count('outbox_messages', "event_type = 'CustomerImported'")).toBe(
@@ -462,7 +471,7 @@ describe('Migration P7: the legacy importer', () => {
     });
     expect(again.trials).toMatchObject({ APPLIED: 0, REPLAYED: users.imported });
     expect(again.products).toMatchObject({ created: 0, existing: 6 });
-    expect(again.services.map).toMatchObject({ INSERTED: 0, UNCHANGED: 14, REFUSED: 0 });
+    expect(again.services.map).toMatchObject({ INSERTED: 0, UNCHANGED: 15, REFUSED: 0 });
     expect(await count('wallet_entries')).toBe(5);
     expect(await count('legacy_wallet_debts')).toBe(1);
     expect(await count('customers')).toBe(1 + users.newCustomers);
@@ -549,11 +558,13 @@ describe('Migration P7: the legacy importer', () => {
       candidates: 19,
       adopted: 0,
       testSkipped: 2,
-      ambiguous: 2,
-      mappingMissing: 1,
+      // Mirza PR5: the AMBIGUOUS_PANEL invoice (a NULL code) is NO_PANEL, a missing mapping,
+      // with the other two empty/NULL codes: v1's closed fields still add up (S3).
+      ambiguous: 1,
+      mappingMissing: 4,
     });
     expect(final['manualReview'].byReason).toMatchObject({
-      ADOPTION_PENDING_P6: 4,
+      ADOPTION_PENDING_P6: 3,
       INVOICE_KEY_INVALID: 1,
     });
     const failed = (final['reconciliation'] as { id: string; holds: boolean }[])
@@ -1050,7 +1061,9 @@ describe('Migration P7: the legacy importer', () => {
         (line) => lines.push(line),
       );
     await run(['counts']);
-    expect(lines[0]).toMatch(/^review rows 14 {2}open 14 /u);
+    // Mirza PR5: 15, not 14 — the NULL-code invoice the search used to adopt is a review row
+    // now (MANUAL_REVIEW / PANEL_UNMAPPED; its candidate outcome is NO_PANEL).
+    expect(lines[0]).toMatch(/^review rows 15 {2}open 15 /u);
     lines.length = 0;
     await run(['list', '--limit', '5']);
     expect(lines[0]).toBe('table\tlegacy_id\treason\tstate\tresolution\tattempts\tupdated_at');
@@ -1060,7 +1073,7 @@ describe('Migration P7: the legacy importer', () => {
     lines.length = 0;
     await run(['list', '--limit', '500', '--after', next]);
     expect(lines.at(-1)).toBe('(last page)');
-    expect(lines).toHaveLength(1 + 9 + 1);
+    expect(lines).toHaveLength(1 + 10 + 1);
     lines.length = 0;
     await run([
       'resolve',
@@ -1314,7 +1327,15 @@ describe('Migration P7: the legacy importer', () => {
     const runs = new DrizzleLegacyImportRepository(ctx.container.database.db);
     const runId = ctx.container.ids.uuid();
     const snap = await snapshot();
-    const first = snap.liveInvoices[0];
+    // The first ELIGIBLE invoice in key order (Mirza PR5: no longer the NULL-code one, which
+    // sorts first and is NO_PANEL now — never handed to P6 at all).
+    const first = snap.liveInvoices.find(
+      (i) =>
+        i.username === 'svc_a1' &&
+        i.idUser === '100000001' &&
+        i.isTest === '0' &&
+        /^[0-9a-f]{8}$/u.test(i.idInvoice),
+    );
     if (first === undefined) throw new Error('no invoice');
     await ctx.container.uow.run(tenantA, async (tx) => {
       const now = ctx.container.clock.now();
@@ -1353,7 +1374,7 @@ describe('Migration P7: the legacy importer', () => {
     };
     const report = await importer(adoption).apply({ ...input('adopt', snap), mode: 'IMPORT' });
     const adopted = (report.sections as Record<string, any>)['applied'].services.adoption;
-    expect(adopted).toMatchObject({ REVIEW_CLOSED: 1, ADOPTED: 3 });
+    expect(adopted).toMatchObject({ REVIEW_CLOSED: 1, ADOPTED: 2 });
     expect(seen).not.toContain(first.idInvoice);
   });
 
@@ -1533,12 +1554,7 @@ describe('Migration P7: the legacy importer', () => {
       if (candidate.product.kind === 'HIDDEN_SHAPE')
         expect(candidate.product.shapeId).toMatch(/^[0-9a-f-]{36}$/u);
     }
-    expect(seen.map((c) => c.providerUsername).sort()).toEqual([
-      'svc_a1',
-      'svc_a2',
-      'svc_a3',
-      'svc_nullmatch',
-    ]);
+    expect(seen.map((c) => c.providerUsername).sort()).toEqual(['svc_a1', 'svc_a2', 'svc_a3']);
     expect(seen.filter((c) => c.product.kind === 'NAMED_PRODUCT')).toHaveLength(1);
     expectOnlyReads();
   });
