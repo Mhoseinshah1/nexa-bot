@@ -69,6 +69,16 @@ M = [
     ('D-02', [(SVC, "        if (before.version !== spec.expectedVersion) {", "        if (false) {")], T_DEBTS, 'stale version'),
     ('D-03', [(SVC, "        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {", "        if (false) {")], T_DEBTS, 'stopped accepting'),
     ('D-04', [(REPO, "      .where(and(eq(legacyWalletDebts.tenantId, tenantId), where))", "      .where(where)")], T_DEBTS, 'keeps tenants apart'),
+    # Codex on #233 — the report's verdict reads the users-and-wallets checks (U8 among them).
+    ('V-01', [(SERVICE, "    const holds = final.reconciliation.every((r) => r.holds) && usersWallets.holds;",
+               "    const holds = final.reconciliation.every((r) => r.holds);")], T_IMP, 'Codex on #233'),
+    # ... the plan decides "the same debt" with its evidence class, as APPLY does ...
+    ('P-03', [(PLAN, " && existingDebt.synthetic === synthetic", "")], T_DEC, 'another evidence class'),
+    ('P-04', [(PLAN, " && existingDebt.synthetic === synthetic", "")], T_IMP, 'Codex on #233'),
+    # ... and a replayed decision answers with the stored original, never today's row.
+    ('D-05', [(SVC, "    if (found !== null) return reviveDebt(found.result);",
+               "    if (found !== null) {\n      const now = await this.deps.repository.findById(scope, id);\n      if (now !== null) return now;\n    }")],
+     T_DEBTS, 'ORIGINAL response'),
 ]
 
 FACTS_TRIGGER = ('CREATE TRIGGER legacy_wallet_debts_facts_immutable BEFORE UPDATE ON legacy_wallet_debts '
