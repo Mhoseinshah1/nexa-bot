@@ -219,3 +219,13 @@ tallies: `applied.services.outcomes` (Σ = live invoices), `candidates`
 - [ ] One explicit ADOPT of a real `NO_PANEL` invoice on staging, executed by a `resume`; the
       service's panel and username checked in the RickPanel UI (read only); no provider write in the
       panel's own logs.
+
+## 8. Mutation check
+
+`scripts/mutate-mirza-pr5.py` reverts one rule at a time (decision 8's search restored
+exactly; ownership; both KEPT layers; every gate branch; adopted precedence and map
+confirmation; the request's panel and outcome rules; review-state and version rules; the
+service's version, scope, view permission, invoice lock, map refusal, tenancy and stored
+replay; the claim; the closure, its reconcile check and the report verdict; both 0230
+triggers). Run on 2026-10-07 against a private database: 33 of 33 killed (the first run's
+one survivor, the report verdict, became the pure `reportHolds` and its unit test).
