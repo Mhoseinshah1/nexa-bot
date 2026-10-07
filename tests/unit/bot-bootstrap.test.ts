@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isNexaError,
+  NexaError,
   PLATFORM_ERROR_CODES,
   type AuditEntry,
   type TenantContext,
@@ -199,6 +200,23 @@ class FakeBots implements BotBootstrapRepository {
   }
 }
 
+/** A `getWebhookInfo` answer holding `url` (null: no webhook), as Telegram reports one. */
+function webhookRead(
+  url: string | null,
+  extra: Partial<Extract<BotWebhookRead, { outcome: 'READ' }>> = {},
+): Extract<BotWebhookRead, { outcome: 'READ' }> {
+  return {
+    outcome: 'READ',
+    url,
+    pendingUpdateCount: 0,
+    lastErrorAt: null,
+    lastErrorMessage: null,
+    maxConnections: 40,
+    allowedUpdates: null,
+    ...extra,
+  };
+}
+
 class FakeTelegram implements BotBootstrapTelegram {
   identifyCalls: string[] = [];
   webhookCalls: {
@@ -208,7 +226,12 @@ class FakeTelegram implements BotBootstrapTelegram {
     dropPendingUpdates: boolean;
     resetAllowedUpdates?: boolean;
   }[] = [];
-  probe: BotIdentityProbe = { outcome: 'IDENTIFIED', botId: '8123456789', username: 'acme_bot' };
+  probe: BotIdentityProbe = {
+    outcome: 'IDENTIFIED',
+    botId: '8123456789',
+    username: 'acme_bot',
+    isBot: true,
+  };
   registration: WebhookRegistration = { outcome: 'REGISTERED' };
   /** Thrown instead of answering, to simulate the process dying mid-call. */
   crashOnWebhook: Error | null = null;
@@ -253,14 +276,32 @@ class FakeTelegram implements BotBootstrapTelegram {
     expect(currentTransactionLabel()).toBeUndefined();
     this.webhookCalls.push({ ...input });
     if (this.crashOnWebhook !== null) throw this.crashOnWebhook;
+    if (this.registration.outcome === 'REGISTERED') {
+      // What the Bot API does: the registration is REPLACED, `allowed_updates` reset only
+      // when sent, and the queue dropped only on `drop_pending_updates: true`.
+      const previous = this.held.outcome === 'READ' ? this.held : webhookRead(null);
+      this.held = this.heldAfterRegister ?? {
+        ...previous,
+        url: input.url,
+        allowedUpdates: input.resetAllowedUpdates === true ? null : previous.allowedUpdates,
+        pendingUpdateCount: input.dropPendingUpdates ? 0 : previous.pendingUpdateCount,
+      };
+    }
     return this.registration;
   }
 
   /**
-   * What `getWebhookInfo` answers (R4). UNREACHABLE by default, which a rerun reads as
-   * "no evidence against the marker" — the behaviour every case above was written for.
+   * What `getWebhookInfo` answers: Telegram's STATE, which an accepted `setWebhook`
+   * replaces (above). Starts with no webhook. A test may set a failure answer
+   * (`REJECTED`, `UNREACHABLE`) or a foreign registration directly.
+   *
+   * Hardening 2026-10-07: this was a constant UNREACHABLE, which the bootstrap read as "no
+   * evidence against the marker". Since the registration is now READ BACK, and an unread
+   * registration is no longer ALREADY_COMPLETE, the fake has to hold state like Telegram.
    */
-  held: BotWebhookRead = { outcome: 'UNREACHABLE' };
+  held: BotWebhookRead = webhookRead(null);
+  /** Set to make Telegram ACCEPT a `setWebhook` and then report this instead. */
+  heldAfterRegister: BotWebhookRead | null = null;
   readWebhookCalls = 0;
 
   async readWebhook(): Promise<BotWebhookRead> {
@@ -778,9 +819,10 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       allowedUpdates: null,
     };
 
+    const reads = telegram.readWebhookCalls;
     const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
     expect(result.kind).toBe('ALREADY_COMPLETE');
-    expect(telegram.readWebhookCalls).toBe(1);
+    expect(telegram.readWebhookCalls).toBe(reads + 1);
     expect(telegram.webhookCalls).toHaveLength(before);
   });
 
@@ -851,12 +893,18 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     expect(result.kind).toBe('RECONCILED');
     expect(telegram.webhookCalls).toHaveLength(2);
 
-    // UNREACHABLE is still no evidence either way.
+    // UNREACHABLE is still no evidence either way — so it changes nothing, AND (hardening
+    // 2026-10-07) it is no longer reported as ALREADY_COMPLETE: that answer prints "already
+    // configured and receiving updates", which an unread registration cannot support.
     const quiet = await installed();
     quiet.telegram.held = { outcome: 'UNREACHABLE' };
-    expect((await quiet.service.execute(scope, { token: null, publicBaseUrl: ORIGIN })).kind).toBe(
-      'ALREADY_COMPLETE',
-    );
+    const calls = quiet.telegram.webhookCalls.length;
+    expect(
+      await codeThrownBy(() =>
+        quiet.service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+      ),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_UNREACHABLE);
+    expect(quiet.telegram.webhookCalls).toHaveLength(calls);
   });
 
   // Codex F6: the registration takes the same claim a Web Admin replacement holds.
@@ -900,7 +948,13 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
    * operator to rerun with a reissued token would be the invented remedy the
    * fresh-install branch exists to stop giving to somebody else.
    */
-  it('still says a STORED token has no supported replacement in this release', async () => {
+  /*
+   * Hardening 2026-10-07 (incident A). This pinned "no supported recovery … OQ-TG-01", which
+   * stopped being true when R4 shipped the Web Admin replacement — and is the sentence an
+   * operator with a revoked token (`telegram.rejected.401`) was handed. It now names the
+   * recovery that exists, and still says rerunning this command cannot help.
+   */
+  it('sends a STORED token Telegram rejects to the Web Admin replacement, not to a rerun', async () => {
     const { service, telegram } = await installed();
     telegram.probe = { outcome: 'REJECTED', detail: 'Unauthorized' };
 
@@ -908,8 +962,9 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
     );
 
-    expect(message).toMatch(/no supported recovery/);
-    expect(message).toMatch(/OQ-TG-01/);
+    expect(message).toMatch(/Web Admin/);
+    expect(message).toMatch(/cannot help/);
+    expect(message).not.toMatch(/no supported recovery/);
     expect(message).not.toMatch(/Nothing was stored/);
   });
 
@@ -1433,10 +1488,11 @@ describe('bot bootstrap — the rules the review found untested', () => {
     await expect(service.statusWithReason(scope, ORIGIN)).resolves.toEqual({
       state: 'none',
       reason: null,
+      detail: null,
     });
 
     const ready = await installed();
-    await expect(ready.service.statusWithReason(scope, ORIGIN)).resolves.toEqual({
+    await expect(ready.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
       state: 'ready',
       reason: null,
     });
@@ -1592,5 +1648,333 @@ describe('bot bootstrap — status', () => {
     expect(bots.locks).toBe(0);
     expect(telegram.identifyCalls).toHaveLength(0);
     expect(telegram.webhookCalls).toHaveLength(0);
+  });
+});
+
+/*
+ * Hardening batch 2026-10-07, incident A.
+ *
+ * After a server move `botctl telegram status` printed `ready` from the LOCAL marker alone
+ * while Telegram's own `getWebhookInfo` said `url: ""` with 22 updates queued; replies then
+ * failed with `telegram.rejected.401` because the stored token had been revoked. Each case
+ * below is one half of that disagreement, and the word `status` must not paper over it.
+ */
+describe('bot bootstrap — status asks Telegram, and ready means BOTH halves agree', () => {
+  async function installed(): Promise<ReturnType<typeof build>> {
+    const built = build();
+    await built.service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
+    return built;
+  }
+  const expectedUrlOf = (built: ReturnType<typeof build>): string =>
+    built.telegram.webhookCalls[0]?.url ?? '';
+
+  it('local marker registered, Telegram holding NO url → NOT ready, with the queue counted', async () => {
+    const built = await installed();
+    built.telegram.held = webhookRead(null, { pendingUpdateCount: 22 });
+
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+
+    expect(report.state).toBe('incomplete');
+    expect(report.detail?.local.registered).toBe(true);
+    expect(report.detail?.remote).toMatchObject({
+      outcome: 'READ',
+      url: null,
+      matchesExpected: false,
+      pendingUpdateCount: 22,
+    });
+    expect(report.detail?.problems).toContain('WEBHOOK_NOT_SET');
+    expect(report.reason).toContain('NO webhook URL');
+    expect(report.reason).toContain('22 queued update(s)');
+    expect(report.reason).toContain('botctl telegram register');
+  });
+
+  it('local marker registered, Telegram delivering ELSEWHERE → NOT ready, foreign URL cut', async () => {
+    const built = await installed();
+    built.telegram.held = webhookRead(`https://elsewhere.example.test/${TOKEN}`);
+
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+
+    expect(report.state).toBe('incomplete');
+    expect(report.detail?.remote.matchesExpected).toBe(false);
+    // A foreign URL's path can carry a token; only its origin is shown.
+    expect(report.detail?.remote.url).toBe('https://elsewhere.example.test/…');
+    expect(report.detail?.problems).toContain('WEBHOOK_ELSEWHERE');
+    expect(JSON.stringify(report)).not.toContain(TOKEN);
+  });
+
+  it('a narrowed update set is NOT ready either', async () => {
+    const built = await installed();
+    built.telegram.held = webhookRead(expectedUrlOf(built), { allowedUpdates: ['message'] });
+
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+    expect(report.state).toBe('incomplete');
+    expect(report.detail?.remote.updatesNarrowed).toBe(true);
+  });
+
+  it('Telegram holding exactly this URL, with the marker current → ready, and both halves shown', async () => {
+    const built = await installed();
+    const url = expectedUrlOf(built);
+    built.telegram.held = webhookRead(url, { pendingUpdateCount: 3 });
+
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+
+    expect(report).toMatchObject({ state: 'ready', reason: null });
+    expect(report.detail).toMatchObject({
+      expectedUrl: url,
+      local: { registered: true, recordedUrl: url, secret: 'MATCHES' },
+      remote: { outcome: 'READ', url, matchesExpected: true, pendingUpdateCount: 3 },
+      problems: [],
+    });
+  });
+
+  it('Telegram holding this URL but the LOCAL marker not current → NOT ready', async () => {
+    const built = await installed();
+    built.bots.rows[0]!.webhookSecretFingerprint = null;
+
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+    expect(report.state).toBe('incomplete');
+    expect(report.detail?.local).toMatchObject({ registered: false, secret: 'UNKNOWN' });
+    expect(report.detail?.remote.matchesExpected).toBe(true);
+  });
+
+  it('a stored token Telegram REJECTS is unavailable — not ready, not "register" — and names the Web Admin', async () => {
+    const built = await installed();
+    built.telegram.probe = { outcome: 'REJECTED', detail: 'Unauthorized' };
+
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+
+    expect(report.state).toBe('unavailable');
+    expect(report.detail?.remote.outcome).toBe('TOKEN_REJECTED');
+    expect(report.reason).toContain('Web Admin');
+    expect(report.reason).toContain('cannot fix this');
+    // Asked once; nothing else was tried with a token Telegram refused.
+    expect(built.telegram.webhookCalls).toHaveLength(1);
+  });
+
+  // Review 2026-10-07: getMe has just PROVED the token, so a permanent getWebhookInfo
+  // failure must not send the operator to replace it.
+  it('a webhook read that fails permanently AFTER getMe accepted the token is not blamed on the token', async () => {
+    const built = await installed();
+    built.telegram.held = { outcome: 'REJECTED' };
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+    expect(report.state).toBe('unavailable');
+    expect(report.detail?.remote.outcome).toBe('WEBHOOK_READ_REFUSED');
+    expect(report.reason).toContain('getWebhookInfo');
+    expect(report.reason).toContain('TELEGRAM_API_BASE_URL');
+    expect(report.reason).toContain('does not need replacing');
+    expect(report.reason).not.toContain('Replace the token');
+  });
+
+  it('Telegram that cannot be asked is UNKNOWN, and unknown is not ready', async () => {
+    for (const unreachable of ['getMe', 'getWebhookInfo'] as const) {
+      const built = await installed();
+      if (unreachable === 'getMe') {
+        built.telegram.probe = { outcome: 'UNREACHABLE', detail: 'socket hang up' };
+      } else {
+        built.telegram.held = { outcome: 'UNREACHABLE' };
+      }
+      const report = await built.service.statusWithReason(scope, ORIGIN);
+      expect(report.state, unreachable).toBe('unavailable');
+      expect(report.detail?.remote.outcome, unreachable).toBe('UNREACHABLE');
+      expect(report.reason, unreachable).toContain('UNKNOWN');
+    }
+  });
+
+  it('an API base that is not Telegram, a token for ANOTHER bot, and an undecryptable token are each unavailable', async () => {
+    const notTelegram = await installed();
+    notTelegram.telegram.probe = { outcome: 'NOT_TELEGRAM', detail: 'not a bot' };
+    await expect(notTelegram.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      state: 'unavailable',
+      detail: { remote: { outcome: 'NOT_TELEGRAM' } },
+    });
+
+    const other = await installed();
+    other.telegram.probe = {
+      outcome: 'IDENTIFIED',
+      botId: '9999999999',
+      username: 'other',
+      isBot: true,
+    };
+    const otherReport = await other.service.statusWithReason(scope, ORIGIN);
+    expect(otherReport).toMatchObject({
+      state: 'unavailable',
+      detail: { remote: { outcome: 'DIFFERENT_BOT' } },
+    });
+    expect(otherReport.detail?.problems).toContain('DIFFERENT_BOT');
+
+    const sealed = await installed();
+    sealed.bots.resolveToken = async () => {
+      throw new NexaError({
+        kind: 'CONFIGURATION',
+        code: 'platform.secret_key_unknown',
+        message: `key for ${TOKEN} not loaded`,
+      });
+    };
+    const report = await sealed.service.statusWithReason(scope, ORIGIN);
+    expect(report.state).toBe('unavailable');
+    expect(report.detail?.remote).toMatchObject({
+      outcome: 'TOKEN_UNREADABLE',
+      tokenErrorCode: 'platform.secret_key_unknown',
+    });
+    // The code, never the error's message.
+    expect(JSON.stringify(report)).not.toContain(TOKEN);
+    expect(sealed.telegram.identifyCalls).toHaveLength(1); // the install's, none from status
+  });
+
+  it('is read-only: no registration, no marker, no audit row, no claim', async () => {
+    const built = await installed();
+    built.telegram.held = webhookRead(null, { pendingUpdateCount: 22 });
+    const calls = built.telegram.webhookCalls.length;
+    const marks = built.bots.webhookMarks.length;
+    const audits = built.audit.length;
+    const claims = built.bots.claimCalls;
+
+    await built.service.statusWithReason(scope, ORIGIN);
+
+    expect(built.telegram.webhookCalls).toHaveLength(calls);
+    expect(built.bots.webhookMarks).toHaveLength(marks);
+    expect(built.audit).toHaveLength(audits);
+    expect(built.bots.claimCalls).toBe(claims);
+  });
+
+  it('never returns the token or the webhook secret, whatever Telegram says', async () => {
+    const built = await installed();
+    built.telegram.held = webhookRead(expectedUrlOf(built), {
+      pendingUpdateCount: 1,
+      lastErrorAt: new Date('2026-10-06T10:00:00Z'),
+      // Telegram echoing a request URL, the shape `redaction.ts` records.
+      lastErrorMessage: `Wrong response from https://api.telegram.org/bot${TOKEN}/x ${SECRET}`,
+    });
+
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+    const text = JSON.stringify(report);
+    expect(text).not.toContain(TOKEN);
+    expect(text).not.toContain(TOKEN.split(':')[1]);
+    expect(text).not.toContain(SECRET);
+    expect(report.detail?.remote.lastErrorMessage).toContain('Wrong response');
+  });
+});
+
+describe('bot bootstrap — register is the safe reconcile for the incident state', () => {
+  async function installed(): Promise<ReturnType<typeof build>> {
+    const built = build();
+    await built.service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
+    return built;
+  }
+
+  it('re-registers a webhook Telegram dropped, KEEPS the 22 queued updates, reads it back, and is then ready', async () => {
+    const built = await installed();
+    const url = built.telegram.webhookCalls[0]?.url ?? '';
+    // What a BotFather revocation / server move left: marker current, Telegram empty.
+    built.telegram.held = webhookRead(null, { pendingUpdateCount: 22 });
+    const reads = built.telegram.readWebhookCalls;
+
+    const result = await built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('RECONCILED');
+    // Read FIRST, then register, then read BACK.
+    expect(built.telegram.readWebhookCalls).toBe(reads + 2);
+    expect(built.telegram.webhookCalls).toHaveLength(2);
+    // Every registration a reconcile issues keeps the queue; the port has no deleteWebhook,
+    // so nothing else could drop it.
+    for (const call of built.telegram.webhookCalls.slice(1)) {
+      expect(call).toMatchObject({ url, dropPendingUpdates: false, resetAllowedUpdates: true });
+    }
+    expect(built.telegram.held).toMatchObject({ url, pendingUpdateCount: 22 });
+    // The success audit says what was proved, and no credential.
+    const row = built.audit.at(-1);
+    expect(row).toMatchObject({
+      action: 'bot_instance.webhook_registered',
+      result: 'SUCCESS',
+      after: {
+        webhookUrl: url,
+        verifiedBy: ['setWebhook', 'getWebhookInfo'],
+        pendingUpdateCount: 22,
+        dropPendingUpdates: false,
+      },
+    });
+    expect(JSON.stringify(built.audit)).not.toContain(TOKEN);
+    expect(JSON.stringify(built.audit)).not.toContain(SECRET);
+
+    await expect(built.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      state: 'ready',
+    });
+
+    // Idempotent: a second run changes nothing.
+    const again = await built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(again.kind).toBe('ALREADY_COMPLETE');
+    expect(built.telegram.webhookCalls).toHaveLength(2);
+  });
+
+  it('fails EXPLICITLY, writes no marker, and audits the stage when the read-back does not show this URL', async () => {
+    for (const [label, after] of [
+      ['empty', webhookRead(null)],
+      ['elsewhere', webhookRead('https://elsewhere.example.test/hook')],
+      ['unreadable', { outcome: 'UNREACHABLE' } as BotWebhookRead],
+    ] as const) {
+      const built = await installed();
+      built.telegram.held = webhookRead(null, { pendingUpdateCount: 22 });
+      built.telegram.heldAfterRegister = after;
+      const marks = built.bots.webhookMarks.length;
+      const markedAt = built.bots.rows[0]!.webhookRegisteredAt;
+      built.bots.rows[0]!.webhookSecretFingerprint = null; // force a re-registration
+
+      const message = await messageThrownBy(() =>
+        built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+      );
+      expect(message, label).toContain('reading it back');
+      expect(message, label).not.toContain(TOKEN);
+      expect(built.bots.webhookMarks, label).toHaveLength(marks);
+      expect(built.bots.rows[0]!.webhookRegisteredAt, label).toBe(markedAt);
+      expect(built.audit.at(-1), label).toMatchObject({
+        action: 'bot_instance.webhook_registered',
+        result: 'FAILED',
+        after: { stage: 'VERIFY_WEBHOOK', dropPendingUpdates: false },
+      });
+      // The claim is released, so the next rerun is not refused.
+      expect(built.bots.claim, label).toBeNull();
+      await expect(built.service.statusWithReason(scope, ORIGIN), label).resolves.not.toMatchObject(
+        { state: 'ready' },
+      );
+    }
+  });
+
+  it("an audit writer that fails does not replace the registration's own error", async () => {
+    const built = await installed();
+    const brokenAudit = new BotBootstrapService({
+      ...serviceDeps(built),
+      audit: {
+        record: async (_s, _a, entry) => {
+          if (entry.result === 'FAILED') throw new Error('audit store unavailable');
+          built.audit.push(entry);
+        },
+      },
+    });
+    built.bots.rows[0]!.webhookSecretFingerprint = null;
+    built.telegram.heldAfterRegister = webhookRead(null);
+
+    expect(
+      await codeThrownBy(() => brokenAudit.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED);
+    expect(built.bots.claim).toBeNull();
+  });
+
+  it('audits a registration Telegram refused, with its reason redacted and no token', async () => {
+    const built = await installed();
+    built.bots.rows[0]!.webhookSecretFingerprint = null;
+    built.telegram.registration = {
+      outcome: 'REFUSED',
+      detail: `Bad Request: bad webhook for bot${TOKEN}`,
+    };
+
+    const message = await messageThrownBy(() =>
+      built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+    );
+    expect(message).not.toContain(TOKEN);
+    expect(built.audit.at(-1)).toMatchObject({
+      result: 'FAILED',
+      after: { stage: 'SET_WEBHOOK', outcome: 'REFUSED' },
+    });
+    expect(JSON.stringify(built.audit)).not.toContain(TOKEN);
   });
 });

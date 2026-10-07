@@ -172,6 +172,12 @@ export interface LegacyInventoryPort {
   read(scope: TenantContext, panelId: string): Promise<LegacyInventoryRead>;
   /** Requests sent (reads) and requests refused before sending (any non-read). */
   requestCounts(): { readonly reads: number; readonly refusedWrites: number };
+  /**
+   * The rows asked for per list page, as the walk applies it (clamped to the reader's
+   * bounds). Reported, never a correctness input: a complete inventory is the same index
+   * at any page size; a larger page only shortens the double walk.
+   */
+  pageSize(): number;
 }
 
 // --- P6 adoption seam ---------------------------------------------------------------------

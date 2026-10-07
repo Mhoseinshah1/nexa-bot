@@ -692,4 +692,122 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     expect((await ping(902)).statusCode).toBeLessThan(300);
     expect(await handled(902)).toBe(1);
   });
+  // -------------------------------------------------------------------------
+  // Hardening 2026-10-07, incident A: after a server move `botctl telegram status` said
+  // `ready` (local marker) while Telegram held `url: ""` with 22 updates queued, replies
+  // failed `telegram.rejected.401`, and several panel replacements did not bring it back.
+  // The real gateway, call core and repository below; only Telegram is the HTTP fake.
+  // -------------------------------------------------------------------------
+
+  const ORIGIN_OF_EXPECTED = 'https://bot.example.test';
+  const bootstrapStatus = () =>
+    api.container.bootstrapBot.statusWithReason(
+      { tenantId: tenantA.tenantId, botInstanceId: null } as TenantContext,
+      ORIGIN_OF_EXPECTED,
+    );
+  const webhookBodies = () =>
+    telegram.calls
+      .filter((call) => call.method === 'setWebhook' || call.method === 'deleteWebhook')
+      .map((call) => call.body);
+
+  it('status: ready only when the marker AND Telegram agree; a revoked stored token is unavailable, not ready', async () => {
+    // As the installer left it: marker current, Telegram holding EXPECTED_URL.
+    const ready = await bootstrapStatus();
+    expect(ready).toMatchObject({ state: 'ready', reason: null });
+    expect(ready.detail?.remote).toMatchObject({ outcome: 'READ', url: EXPECTED_URL });
+
+    // The incident: BotFather revoked the token and the webhook went with it. The MARKER is
+    // unchanged, and that is exactly what the old status answered from.
+    const newToken = telegram.revoke(TELEGRAM_ID, { keepWebhook: false });
+    telegram.setPending(TELEGRAM_ID, 22);
+    const revoked = await bootstrapStatus();
+    expect(revoked.state).toBe('unavailable');
+    expect(revoked.detail?.local.registered).toBe(true);
+    expect(revoked.detail?.remote.outcome).toBe('TOKEN_REJECTED');
+    expect(revoked.reason).toContain('Web Admin');
+    const text = JSON.stringify(revoked);
+    expect(text).not.toContain(oldToken);
+    expect(text).not.toContain(newToken);
+    expect(text).not.toContain(WEBHOOK_SECRET);
+    // Status is read-only: no registration was attempted.
+    expect(webhookBodies()).toEqual([]);
+  });
+
+  it('register reconciles a webhook Telegram dropped: reads first, keeps all 22 queued updates, reads back', async () => {
+    telegram.setWebhookDirectly(TELEGRAM_ID, null);
+    telegram.setPending(TELEGRAM_ID, 22);
+    const before = await bootstrapStatus();
+    expect(before.state).toBe('incomplete');
+    expect(before.detail?.remote).toMatchObject({ url: null, pendingUpdateCount: 22 });
+    telegram.calls.length = 0;
+
+    const result = await api.container.bootstrapBot.execute(
+      { tenantId: tenantA.tenantId, botInstanceId: null } as TenantContext,
+      { token: null, publicBaseUrl: ORIGIN_OF_EXPECTED },
+    );
+    expect(result.kind).toBe('RECONCILED');
+    expect(telegramMethods().slice(0, 4)).toEqual([
+      'getMe',
+      'getWebhookInfo',
+      'setWebhook',
+      'getWebhookInfo',
+    ]);
+    for (const body of webhookBodies()) expect(body['drop_pending_updates']).toBe(false);
+    expect(telegram.registration(TELEGRAM_ID)).toMatchObject({
+      url: EXPECTED_URL,
+      secretToken: WEBHOOK_SECRET,
+    });
+    const after = await bootstrapStatus();
+    expect(after.state).toBe('ready');
+    expect(after.detail?.remote.pendingUpdateCount).toBe(22);
+  });
+
+  it('a replacement that cannot register fails EXPLICITLY and is attributable; the queue survives every attempt', async () => {
+    const newToken = telegram.revoke(TELEGRAM_ID, { keepWebhook: false });
+    telegram.setPending(TELEGRAM_ID, 22);
+    const cookie = await ownerCookie();
+
+    // 1. Telegram refuses the URL: nothing changed at Telegram, nothing stored.
+    telegram.failNext('setWebhook', { kind: 'refuse', description: 'Bad Request: bad webhook' });
+    expect((await replace(cookie, newToken, 'incident-1')).statusCode).toBe(412);
+    // 2. The registration lands and its answer is lost: compensation REMOVES it again,
+    //    which is how a failed attempt leaves exactly `url: ""` behind.
+    telegram.failNext('setWebhook', { kind: 'apply_then_drop' });
+    expect((await replace(cookie, newToken, 'incident-2')).statusCode).toBe(409);
+    expect(telegram.registration(TELEGRAM_ID)).toBeNull();
+    // 3. Telegram cannot be asked at all.
+    telegram.failNext('getMe', { kind: 'server_error' });
+    expect((await replace(cookie, newToken, 'incident-3')).statusCode).toBeGreaterThanOrEqual(500);
+
+    expect(await storedToken()).toBe(oldToken);
+    // Every attempt is in the audit log with the step it stopped at — none of the token.
+    const failed = (
+      await db().execute<{ after: Record<string, unknown> }>(sql`
+        SELECT after FROM audit_logs
+         WHERE action = 'bot_instance.token_replace' AND result = 'FAILED'
+         ORDER BY occurred_at, id`)
+    ).rows.map((row) => row.after);
+    expect(failed.map((after) => after['stage'])).toEqual(['SET_WEBHOOK', 'SET_WEBHOOK', 'GET_ME']);
+    expect(failed[0]).toMatchObject({
+      errorCode: BOT_ERROR_CODES.BOT_WEBHOOK_REFUSED,
+      compensation: 'NOT_NEEDED',
+      telegramReason: expect.stringContaining('bad webhook'),
+    });
+    expect(failed[1]).toMatchObject({
+      errorCode: BOT_ERROR_CODES.BOT_WEBHOOK_SETUP_FAILED,
+      compensation: 'RESTORED',
+    });
+    expect(failed[2]).toMatchObject({ errorCode: BOT_ERROR_CODES.BOT_TELEGRAM_UNREACHABLE });
+    expect(JSON.stringify(failed)).not.toContain(newToken);
+
+    // 4. The same token once Telegram behaves: verified, stored, queue intact.
+    const done = await replace(cookie, newToken, 'incident-4');
+    expect(done.statusCode).toBe(201);
+    expect(await storedToken()).toBe(newToken);
+    for (const body of webhookBodies()) expect(body['drop_pending_updates']).toBe(false);
+    expect(
+      botTokenReplacementResponseSchema.parse(done.json()).verification?.webhook,
+    ).toMatchObject({ url: EXPECTED_URL, matchesExpected: true, pendingUpdateCount: 22 });
+    await expect(bootstrapStatus()).resolves.toMatchObject({ state: 'ready' });
+  });
 });

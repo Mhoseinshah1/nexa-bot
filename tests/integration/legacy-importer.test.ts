@@ -15,6 +15,7 @@ import {
 import {
   exitCodeFor,
   exitCodeForError,
+  importerOptions,
   parseArgs,
   runMode,
 } from '../../apps/api/src/legacy-import.cli';
@@ -765,6 +766,94 @@ describe('Migration P7: the legacy importer', () => {
         evidenceClass: 'staging',
       }),
     ).rejects.toThrow(/SYNTHETIC marker/u);
+    expectOnlyReads();
+  });
+
+  /** The list pages a fake was asked for, as `offset/limit` pairs. */
+  function listPages(fake: FakeRickpanel, since = 0): string[] {
+    return fake.requests
+      .slice(since)
+      .filter((r) => r.method === 'GET' && r.path.split('?')[0] === '/api/users')
+      .map((r) => {
+        const query = new URLSearchParams(r.path.split('?')[1] ?? '');
+        return `${query.get('offset') ?? '?'}/${query.get('limit') ?? '?'}`;
+      });
+  }
+
+  const CLI_BASE = [
+    'audit',
+    '--tenant',
+    'acme',
+    '--source',
+    'fixture:tests/fixtures/legacy/synthetic-legacy.json',
+    '--target',
+    'nexa_p4_import',
+    '--panel-map',
+    'unused.json',
+  ];
+
+  it('hardening 2026-10-07: the CLI walks RickPanel with 200-row pages unless the operator says otherwise', async () => {
+    const defaulted = ctx.container.legacyImporter({
+      adoption: null,
+      ...importerOptions(parseArgs(CLI_BASE)),
+    });
+    const report = await defaulted.audit({
+      ...input('audit-200', await snapshot()),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    expect(report.verdict).toBe('READY_FOR_DRY_RUN');
+    const provider = (report.sections as Record<string, any>)['provider'];
+    expect(provider).toMatchObject({ inventoryPageSize: 200, writes: 0, refusedWrites: 0 });
+    // Every list page the provider saw asked for 200 rows: two walks of one page each.
+    expect(listPages(panelA)).toEqual(['0/200', '0/200']);
+    expectOnlyReads();
+
+    const since = panelA.requests.length;
+    const explicit = ctx.container.legacyImporter({
+      adoption: null,
+      ...importerOptions(parseArgs([...CLI_BASE, '--inventory-page-size', '3'])),
+    });
+    const smaller = await explicit.audit({
+      ...input('audit-3', await snapshot()),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    expect((smaller.sections as Record<string, any>)['provider'].inventoryPageSize).toBe(3);
+    expect(listPages(panelA, since).every((page) => page.endsWith('/3'))).toBe(true);
+    expect(listPages(panelA, since).length).toBeGreaterThan(2);
+    expectOnlyReads();
+  });
+
+  it('hardening 2026-10-07: at the CLI default, a panel that changes mid-walk still BLOCKS the audit (TOTAL_CHANGED), once, with no retry', async () => {
+    // More accounts than one 200-row page, so the walk has a second page to change under.
+    for (let i = 0; i < 230; i += 1) panelA.seedUser(`bulk${String(i).padStart(3, '0')}`);
+    const since = panelA.requests.length;
+    let changed = false;
+    panelA.beforeListPage = (offset) => {
+      if (offset > 0 && !changed) {
+        changed = true;
+        panelA.seedUser('arrivedmidwalk');
+      }
+    };
+    const everything = await databaseFingerprint(ctx.container.database.db);
+    const report = await ctx.container
+      .legacyImporter({ adoption: null, ...importerOptions(parseArgs(CLI_BASE)) })
+      .audit({
+        ...input('audit-total-changed', await snapshot()),
+        evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+      });
+    panelA.beforeListPage = null;
+    expect(report.verdict).toBe('BLOCKED');
+    expect(exitCodeFor(report)).toBe(3);
+    const sections = report.sections as Record<string, any>;
+    expect(sections['blockers']).toContain(
+      `inventory of panel ${panelAId} is incomplete (TOTAL_CHANGED)`,
+    );
+    expect(sections['provider'].inventoryPageSize).toBe(200);
+    // Fail closed on the FIRST walk: two pages, then stop. No second walk, no retry.
+    expect(listPages(panelA, since)).toEqual(['0/200', '200/200']);
+    expect(changedTables(everything, await databaseFingerprint(ctx.container.database.db))).toEqual(
+      {},
+    );
     expectOnlyReads();
   });
 

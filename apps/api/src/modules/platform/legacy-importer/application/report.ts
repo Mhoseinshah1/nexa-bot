@@ -24,10 +24,24 @@ export interface LegacyImportReport {
   /** An overall verdict where the mode has one (reconcile, import). */
   readonly verdict: string | null;
   /**
+   * How the CLI was invoked, where it shapes the run without deciding what is imported.
+   * Optional and additive: set by `legacy-import.cli.ts`, absent for any other caller, and
+   * never part of a fingerprint (the source and panel-map fingerprints are computed from
+   * the snapshot and the mapping file, not from this report).
+   */
+  readonly invocation?: LegacyReportInvocation;
+  /**
    * `report` mode only: the Item 16 document in the shape of
    * `docs/legacy-migration/final-report.schema.json`; `--format json` prints exactly it.
    */
   readonly final?: unknown;
+}
+
+export interface LegacyReportInvocation {
+  /** Rows per RickPanel list page the inventory walk asked for. */
+  readonly inventoryPageSize: number;
+  /** `CLI_DEFAULT` when `--inventory-page-size` was omitted, `OPERATOR` when it was typed. */
+  readonly inventoryPageSizeSource: 'CLI_DEFAULT' | 'OPERATOR';
 }
 
 /** JSON with bigints as decimal strings. */
@@ -121,8 +135,13 @@ export function reportMarkdown(report: LegacyImportReport): string {
     `| tenant | ${report.tenantId} |`,
     `| code version | ${report.codeVersion ?? '—'} |`,
     `| verdict | ${report.verdict ?? '—'} |`,
-    '',
   );
+  if (report.invocation !== undefined) {
+    out.push(
+      `| inventory page size | ${String(report.invocation.inventoryPageSize)} (${report.invocation.inventoryPageSizeSource}) |`,
+    );
+  }
+  out.push('');
   for (const [name, value] of Object.entries(report.sections)) renderValue(name, value, 0, out);
   return `${out.join('\n').replace(/\n{3,}/gu, '\n\n')}\n`;
 }

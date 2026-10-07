@@ -5621,9 +5621,17 @@ assert_equals 'a bot-less installation produced more than the status call' \
 assert_equals 'a bot-less installation was reported as a failure' '' "$menu_none_out"
 
 : >"${NEXA_ROOT}/menu-unavailable-calls"
-reconcile_calls_for '1' 'unavailable' "${NEXA_ROOT}/menu-unavailable-calls" >/dev/null
+menu_unavailable_out="$(reconcile_calls_for '1' 'unavailable' "${NEXA_ROOT}/menu-unavailable-calls")"
 assert_equals 'a stopped tenant produced more than the status call' \
   1 "$(grep -c 'bootstrap-bot.cli.js' "${NEXA_ROOT}/menu-unavailable-calls")"
+# Hardening 2026-10-07 (incident A): `unavailable` now also means Telegram REJECTED the
+# stored token or could not be asked. A release must not finish silently over a bot that
+# answers nobody — and must name `status` (which says why), never `register` (which cannot
+# fix it: the one-command-that-cannot-work defect `OQ-TG-04` item 2 names).
+assert_contains 'an unavailable bot was passed over in silence' \
+  "$menu_unavailable_out" "botctl telegram status"
+assert_not_contains 'an unavailable bot was sent to register, which cannot fix it' \
+  "$menu_unavailable_out" "run 'botctl telegram register'"
 
 : >"${NEXA_ROOT}/menu-off-calls"
 reconcile_calls_for 'false' 'ready' "${NEXA_ROOT}/menu-off-calls" >/dev/null

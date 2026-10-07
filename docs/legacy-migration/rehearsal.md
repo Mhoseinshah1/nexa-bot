@@ -143,8 +143,9 @@ passes `--allow-production-target`.
 
 ### Exit codes
 
-P7: `0` done; `3` done but a person must decide; `4` interrupted; `64`/`65` refused; `1`
-other. The harness accepts `0` and `3` from P7 and records every `3` as a **PENDING**
+P7: `0` done; `3` done but a person must decide; `4` interrupted; `64`/`65` refused; `73`
+report computed but its `--out` not written (the harness captures stdout and passes no P7
+`--out`); `1` other. The harness accepts `0` and `3` from P7 and records every `3` as a **PENDING**
 check; anything else stops it.
 
 The harness itself: **`0`** every check PASSED; **`3`** nothing FAILED but some checks are
@@ -156,6 +157,10 @@ failed or a stage broke.
 
 The restored NEXA copy is real customer data and holds real panel credentials: P7 reads
 RickPanel through them (read-only — the importer holds only the inventory surface of #169).
+P7 walks each panel with **200-row pages** unless `--importer-arg --inventory-page-size --importer-arg N`
+says otherwise — leave it at the default for a real rehearsal: the real Mirza rehearsal
+was BLOCKED (`TOTAL_CHANGED`, ~500 reads) at the old 50-row default and READY at 200 (~130
+reads); `importer.md` §1.1.
 The harness never runs the worker, so nothing is delivered from the copy; it also never
 runs `backup run` on it, because a restored database's operations group would receive the
 archive.

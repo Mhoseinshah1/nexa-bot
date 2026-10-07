@@ -59,6 +59,7 @@ import {
   MysqlLegacySourceConnector,
   parseMysqlDsn,
 } from './modules/platform/legacy-importer/infrastructure/mysql-legacy-source.js';
+import { INVENTORY_MAX_PAGE_SIZE } from './modules/platform/providers/infrastructure/rickpanel-inventory.js';
 
 /**
  * `legacy-import` — the P7 legacy importer (`docs/legacy-migration/importer.md`).
@@ -99,12 +100,18 @@ export const USAGE = [
   '',
   '  Review queue (terminal only): legacy-import review counts|list|resolve|reopen …',
   '',
+  `  --inventory-page-size N             rows per RickPanel list page, 1-${String(INVENTORY_MAX_PAGE_SIZE)}. Default here:`,
+  `                                      ${String(INVENTORY_MAX_PAGE_SIZE)}, the reader's maximum (fewest provider reads, shortest`,
+  '                                      double walk). The walk still fails closed on any change.',
+  '  --out DIR                           also write the report there. A failure to write it',
+  '                                      (after the report was computed) exits 73.',
+  '',
   '  --expected-fingerprint HEX          import/resume: the source fingerprint the owner',
   '                                      approved (from audit); anything else is refused, exit 65.',
   '                                      REQUIRED against a production-like target.',
   '  --expected-panel-map-fingerprint HEX  import/resume: the same for the panel mapping file.',
   '',
-  '  Nothing defaults. A production-like target also needs',
+  '  Nothing that decides WHAT is imported defaults. A production-like target also needs',
   `  ${ALLOW_PRODUCTION_FLAG} AND ${TARGET_ACK_ENV}=<ack printed by the refusal>.`,
 ].join('\n');
 
@@ -119,7 +126,10 @@ export interface Args {
   readonly out: string | null;
   readonly allowProductionTarget: boolean;
   readonly abortRunning: boolean;
-  readonly inventoryPageSize: number | null;
+  /** Rows per RickPanel list page: the operator's value, or the CLI default. */
+  readonly inventoryPageSize: number;
+  /** Whether `inventoryPageSize` was typed by the operator or is the CLI default. */
+  readonly inventoryPageSizeSource: InventoryPageSizeSource;
   readonly format: 'md' | 'json';
   /** Required for import, resume and report; checked against the source's marker. */
   readonly evidenceClass: EvidenceClass | null;
@@ -131,6 +141,22 @@ export interface Args {
   /** import/resume: the same, for the panel mapping file's fingerprint. Optional. */
   readonly expectedPanelMapFingerprint: string | null;
 }
+
+/**
+ * The CLI's inventory page size when `--inventory-page-size` is omitted: the reader's own
+ * maximum, so the bound and the default can never drift apart. The LIBRARY default
+ * (`INVENTORY_DEFAULT_PAGE_SIZE`, 50) is unchanged for every other caller.
+ *
+ * Why the maximum here: a migration walks the whole live inventory TWICE and requires the
+ * two walks to agree (`listAll`, fail-closed `TOTAL_CHANGED`). The longer the walk, the
+ * likelier a live panel changes under it. In the real Mirza rehearsal, 50-row pages took
+ * ~500 provider reads and ended BLOCKED with TOTAL_CHANGED; 200-row pages took ~130 and
+ * reached READY_FOR_DRY_RUN. Fewer reads is also less exposure of the live provider. The
+ * consistency check itself is untouched: a panel that changes mid-walk still blocks.
+ */
+export const LEGACY_IMPORT_DEFAULT_INVENTORY_PAGE_SIZE = INVENTORY_MAX_PAGE_SIZE;
+export type InventoryPageSizeSource = 'CLI_DEFAULT' | 'OPERATOR';
+const POSITIVE_INTEGER = /^[1-9][0-9]{0,8}$/u;
 
 export const EXPECTED_FINGERPRINT_FLAG = '--expected-fingerprint';
 export const EXPECTED_PANEL_MAP_FINGERPRINT_FLAG = '--expected-panel-map-fingerprint';
@@ -239,12 +265,21 @@ export function parseArgs(argv: readonly string[]): Args {
   if (abortRunning && mode !== 'resume')
     throw new UsageError('--abort-running applies to --mode resume only.');
   const rawPage = values.get('--inventory-page-size');
-  const inventoryPageSize = rawPage === undefined ? null : Number.parseInt(rawPage, 10);
+  // Digits only: `parseInt` would read `50abc` as 50 and `1e3` as 1.
+  const inventoryPageSize =
+    rawPage === undefined
+      ? LEGACY_IMPORT_DEFAULT_INVENTORY_PAGE_SIZE
+      : POSITIVE_INTEGER.test(rawPage)
+        ? Number(rawPage)
+        : Number.NaN;
   if (
-    inventoryPageSize !== null &&
-    (!Number.isInteger(inventoryPageSize) || inventoryPageSize < 1 || inventoryPageSize > 200)
+    !Number.isInteger(inventoryPageSize) ||
+    inventoryPageSize < 1 ||
+    inventoryPageSize > INVENTORY_MAX_PAGE_SIZE
   ) {
-    throw new UsageError('--inventory-page-size must be between 1 and 200.');
+    throw new UsageError(
+      `--inventory-page-size must be a whole number between 1 and ${String(INVENTORY_MAX_PAGE_SIZE)}.`,
+    );
   }
   const expected = (flag: string): string | null => {
     const value = values.get(flag) ?? null;
@@ -274,6 +309,7 @@ export function parseArgs(argv: readonly string[]): Args {
     allowProductionTarget: flags.has(ALLOW_PRODUCTION_FLAG),
     abortRunning,
     inventoryPageSize,
+    inventoryPageSizeSource: rawPage === undefined ? 'CLI_DEFAULT' : 'OPERATOR',
     format,
     evidenceClass: evidenceClass as EvidenceClass | null,
   };
@@ -352,23 +388,162 @@ async function sourceConnector(args: Args, env: NodeJS.ProcessEnv): Promise<Lega
   return new MysqlLegacySourceConnector({ ...options, password });
 }
 
-async function emit(
+/** The report's metadata about this invocation (`LegacyImportReport.invocation`). */
+export function withInvocation(
+  report: LegacyImportReport,
+  args: Pick<Args, 'inventoryPageSize' | 'inventoryPageSizeSource'>,
+): LegacyImportReport {
+  return {
+    ...report,
+    invocation: {
+      inventoryPageSize: args.inventoryPageSize,
+      inventoryPageSizeSource: args.inventoryPageSizeSource,
+    },
+  };
+}
+
+/** What the CLI hands `container.legacyImporter`: always an explicit page size. */
+export function importerOptions(args: Pick<Args, 'inventoryPageSize'>): {
+  readonly inventoryPageSize: number;
+} {
+  return { inventoryPageSize: args.inventoryPageSize };
+}
+
+/**
+ * Exit code for a report that was COMPUTED but could not be written to `--out`
+ * (sysexits `EX_CANTCREAT`). Distinct from 1 and 65 on purpose: the source, the target and
+ * the verdict are not in question — only the file.
+ */
+export const REPORT_NOT_WRITTEN_EXIT = 73;
+/** The uid the NEXA image runs as (`Dockerfile`: `USER node`, uid 1000). */
+export const IMAGE_UID = 1000;
+
+/** `--out` could not be written after the report was computed and printed. */
+export class ReportNotWritten extends Error {
+  override readonly name = 'ReportNotWritten';
+  constructor(
+    readonly mode: string,
+    readonly verdict: string | null,
+    readonly path: string,
+    /** The errno code (`EACCES`, `EROFS`, …), or `UNKNOWN`. Never the driver's message. */
+    readonly code: string,
+    readonly written: readonly string[],
+    readonly uid: number | null,
+  ) {
+    super(reportNotWrittenMessage(mode, verdict, path, code, written, uid));
+  }
+}
+
+const ERRNO_CODE = /^E[A-Z0-9]{1,15}$/u;
+const ERRNO_MEANING: Readonly<Record<string, string>> = {
+  EACCES: 'permission denied',
+  EPERM: 'operation not permitted',
+  EROFS: 'read-only file system',
+  ENOENT: 'no such file or directory',
+  ENOTDIR: 'a component of the path is not a directory',
+  EEXIST: 'a file is in the way',
+  EISDIR: 'the path is a directory',
+  ENOSPC: 'no space left on the device',
+  EDQUOT: 'disk quota exceeded',
+};
+
+export function reportNotWrittenMessage(
+  mode: string,
+  verdict: string | null,
+  path: string,
+  code: string,
+  written: readonly string[],
+  uid: number | null,
+): string {
+  const meaning = ERRNO_MEANING[code];
+  const who = uid === null ? 'this process' : `this process (uid ${String(uid)})`;
+  return [
+    `REPORT NOT WRITTEN (exit ${String(REPORT_NOT_WRITTEN_EXIT)}). The ${mode} report WAS computed — ` +
+      `verdict ${verdict ?? '(none for this mode)'} — and printed to stdout, but it ` +
+      `could not be written to --out.`,
+    `  path:  ${path}`,
+    `  error: ${code}${meaning === undefined ? '' : ` (${meaning})`}`,
+    ...(written.length === 0 ? [] : [`  already written: ${written.join(', ')}`]),
+    'This is a failure to SAVE the report, not a failure of the source, the target or the ' +
+      'audit: the verdict above stands.',
+    `Remedy (${who} could not write there; the NEXA image runs as uid ${String(IMAGE_UID)}, ` +
+      '`node`, and must not be run as root to work around it):',
+    '  - capture stdout on the HOST instead of --out:  … --format json > /host/writable/audit.json',
+    `  - or mount a host directory owned by uid ${String(IMAGE_UID)}:  ` +
+      `sudo install -d -o ${String(IMAGE_UID)} -g ${String(IMAGE_UID)} -m 700 /srv/nexa-legacy-reports, ` +
+      'then -v /srv/nexa-legacy-reports:/results and --out /results',
+  ].join('\n');
+}
+
+/** What `emit` touches. The CLI uses the process and `node:fs`; a test injects a failure. */
+export interface ReportIo {
+  stdout(text: string): void;
+  stderr(text: string): void;
+  mkdir(path: string): Promise<unknown>;
+  writeFile(path: string, data: string): Promise<void>;
+  /** The effective uid, for the remedy; null where the platform has none. */
+  readonly uid: number | null;
+}
+
+const PROCESS_IO: ReportIo = {
+  stdout: (text) => void process.stdout.write(text),
+  stderr: (text) => void process.stderr.write(text),
+  mkdir: (path) => mkdir(path, { recursive: true }),
+  writeFile: (path, data) => writeFile(path, data, { mode: 0o600 }),
+  uid: typeof process.getuid === 'function' ? process.getuid() : null,
+};
+
+function errnoCode(error: unknown): string {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
+  return ERRNO_CODE.test(code) ? code : 'UNKNOWN';
+}
+
+/**
+ * Prints the report, then — with `--out` — writes it. The report is on stdout BEFORE any
+ * file is attempted, so a failure to write cannot lose it; that failure is a
+ * `ReportNotWritten` naming the path and the errno code, never a bare `Error EACCES`
+ * that reads like the audit failed.
+ */
+export async function emit(
   report: LegacyImportReport,
   out: string | null,
   format: 'md' | 'json',
+  io: ReportIo = PROCESS_IO,
 ): Promise<void> {
   const markdown = reportMarkdown(report);
   // `report --format json` prints the Item 16 document alone, so a harness can parse
   // stdout; every other mode prints its own report.
   const json =
     report.final === undefined ? reportJson(report) : `${JSON.stringify(report.final, null, 2)}\n`;
-  process.stdout.write(format === 'json' ? json : markdown);
+  io.stdout(format === 'json' ? json : markdown);
   if (out === null) return;
-  await mkdir(out, { recursive: true });
   const stem = `legacy-import-${report.mode.toLowerCase()}-${report.generatedAt.replace(/[:.]/gu, '-')}`;
-  await writeFile(join(out, `${stem}.json`), json, { mode: 0o600 });
-  await writeFile(join(out, `${stem}.md`), markdown, { mode: 0o600 });
-  process.stderr.write(`report written to ${join(out, stem)}.{json,md}\n`);
+  const written: string[] = [];
+  let path = out;
+  try {
+    await io.mkdir(out);
+    for (const [file, text] of [
+      [join(out, `${stem}.json`), json],
+      [join(out, `${stem}.md`), markdown],
+    ] as const) {
+      path = file;
+      await io.writeFile(file, text);
+      written.push(file);
+    }
+  } catch (error) {
+    throw new ReportNotWritten(
+      report.mode,
+      report.verdict,
+      path,
+      errnoCode(error),
+      written,
+      io.uid,
+    );
+  }
+  io.stderr(`report written to ${join(out, stem)}.{json,md}\n`);
 }
 
 /** Exit code for a finished mode: 0 clean, 3 finished with something a person must decide. */
@@ -519,6 +694,10 @@ export function exitCodeForError(error: unknown): number {
     console.error(error.message);
     return 65;
   }
+  if (error instanceof ReportNotWritten) {
+    console.error(error.message);
+    return REPORT_NOT_WRITTEN_EXIT;
+  }
   if (error instanceof LegacyImportInterrupted) {
     console.error(error.message);
     const cause = error.cause;
@@ -566,9 +745,7 @@ async function main(): Promise<number> {
 
   const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
   try {
-    const importer = container.legacyImporter(
-      args.inventoryPageSize === null ? {} : { inventoryPageSize: args.inventoryPageSize },
-    );
+    const importer = container.legacyImporter(importerOptions(args));
     const tenantId = await importer.resolveTenant(args.tenant);
     if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
     // Parsed before the source is opened: a malformed mapping costs no legacy read.
@@ -593,8 +770,9 @@ async function main(): Promise<number> {
       productionLikeTarget: target.productionLike,
     });
     if (report === null) return 0;
-    await emit(report, args.out, args.format);
-    return exitCodeFor(report);
+    const reported = withInvocation(report, args);
+    await emit(reported, args.out, args.format);
+    return exitCodeFor(reported);
   } finally {
     await container.shutdown();
   }
