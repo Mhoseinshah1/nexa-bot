@@ -715,7 +715,10 @@ activity read inside the transaction and an audit row.
   mapping are the ones that run was made from (it may describe a RUNNING or ABORTED run,
   and its verdict says which). The markdown also renders the `usersWallets` section after
   the v1 document; `--format json` prints the closed v1 document exactly, as before (PR6
-  folds the section into schema version 2).
+  folds the section into schema version 2). The verdict reads the section too: any failed
+  U-check (U8 — a synthetic debt beside a real snapshot — among them) makes it
+  `<status>_WITH_DISCREPANCY`, exit 3, as a failed v1 equation does. `reconcile` already
+  carries it as the `users_wallets.section` check.
 
 ### Legacy wallet debts (Mirza PR4)
 

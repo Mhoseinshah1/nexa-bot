@@ -17,6 +17,13 @@ import type { LegacySourceEngine } from './source-port.js';
  * the caller's transaction.
  */
 
+/** Mirza PR4: a legacy debt as the plan compares it — what makes two debts "the same". */
+export interface RecordedDebt {
+  readonly amountMinor: bigint;
+  /** Recorded from a source carrying the synthetic-fixture marker. */
+  readonly synthetic: boolean;
+}
+
 export interface LegacyImporterDestination {
   /** The tenant exists (any status); activity is read inside each write's transaction. */
   tenantExists(scope: TenantContext): Promise<boolean>;
@@ -31,8 +38,8 @@ export interface LegacyImporterDestination {
   ): Promise<ReadonlyMap<string, string>>;
   /** Telegram id → the SIGNED amount of the migration opening already posted. */
   openingsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, bigint>>;
-  /** Mirza PR4: Telegram id → the magnitude of the legacy debt already recorded. */
-  debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, bigint>>;
+  /** Mirza PR4: Telegram id → the legacy debt already recorded (magnitude and evidence class). */
+  debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, RecordedDebt>>;
   /** Mirza PR4: count and Σ owed of the recorded legacy debts, in total and by state. */
   debtAggregates(scope: TenantContext): Promise<{
     readonly count: number;

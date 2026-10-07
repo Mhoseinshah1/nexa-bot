@@ -128,7 +128,11 @@ export interface LegacyProductReviewRepository {
     filter: LegacyProductReviewListFilter,
   ): Promise<readonly LegacyProductReviewListItem[]>;
   /** One row with its approved product's title. */
-  findItem(scope: TenantContext, id: string): Promise<LegacyProductReviewListItem | null>;
+  findItem(
+    scope: TenantContext,
+    id: string,
+    tx?: TransactionScope,
+  ): Promise<LegacyProductReviewListItem | null>;
   /** Every row of the tenant, by code. The legacy catalogue is small; the export reads it whole. */
   all(scope: TenantContext): Promise<readonly LegacyProductReviewRecord[]>;
   /** Whether the product exists in this tenant (approve-existing). */

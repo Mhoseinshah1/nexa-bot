@@ -23,6 +23,7 @@ import type {
   LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
+  RecordedDebt,
 } from '../application/ports.js';
 import type { LegacySourceEngine } from '../application/source-port.js';
 
@@ -151,17 +152,28 @@ export class DrizzleLegacyImporterRepository
   }
 
   /**
-   * Mirza PR4: Telegram id → the magnitude of the legacy debt recorded for it (owner decision
-   * 6). Read here for the plan and the reconciliation only; no balance query reads the table.
+   * Mirza PR4: Telegram id → the legacy debt recorded for it — its magnitude AND its
+   * evidence class (owner decision 6; Codex on #233: the plan must decide "the same debt"
+   * exactly as the opening service does). Read here for the plan and the reconciliation
+   * only; no balance query reads the table.
    */
-  async debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, bigint>> {
+  async debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, RecordedDebt>> {
     const tenantId = requireTenantId(scope);
-    const result = await this.db.execute<{ legacy_user_id: string; amount_minor: string }>(sql`
-      SELECT legacy_user_id, amount_minor::text AS amount_minor
+    const result = await this.db.execute<{
+      legacy_user_id: string;
+      amount_minor: string;
+      synthetic: boolean;
+    }>(sql`
+      SELECT legacy_user_id, amount_minor::text AS amount_minor, synthetic
         FROM legacy_wallet_debts
        WHERE tenant_id = ${tenantId}
     `);
-    return new Map(result.rows.map((r) => [r.legacy_user_id, BigInt(r.amount_minor)]));
+    return new Map(
+      result.rows.map((r) => [
+        r.legacy_user_id,
+        { amountMinor: BigInt(r.amount_minor), synthetic: r.synthetic },
+      ]),
+    );
   }
 
   /** Mirza PR4: count and Σ of recorded legacy debts, in total and per owner-decision state. */

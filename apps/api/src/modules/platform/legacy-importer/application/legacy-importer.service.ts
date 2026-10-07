@@ -77,6 +77,7 @@ import type {
   LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
+  RecordedDebt,
 } from './ports.js';
 import { buildFinalReport } from './final-report.js';
 import { decideEvidenceClass, type EvidenceClass } from './production-guard.js';
@@ -227,7 +228,7 @@ interface Prepared {
   readonly salesCurrency: string;
   /** What NEXA had recorded when the plan was made: signed openings, debt magnitudes. */
   readonly existingOpenings: ReadonlyMap<string, bigint>;
-  readonly existingDebts: ReadonlyMap<string, bigint>;
+  readonly existingDebts: ReadonlyMap<string, RecordedDebt>;
 }
 
 export interface ApplyTallies {
@@ -2002,12 +2003,18 @@ export class LegacyImporterService {
         inventoriesComplete: prepared.plan.inventories.every((p) => p.complete),
       },
     });
-    const holds = final.reconciliation.every((r) => r.holds);
     // Mirza PR4: beside the closed v1 final report, never inside it (its schema is closed);
-    // PR6 folds this section into schema version 2.
+    // PR6 folds this section into schema version 2. Its checks (U1–U8) are part of the
+    // verdict (Codex on #233): a failed U-check — a synthetic debt beside a real snapshot,
+    // a DEBIT opening, a per-user mismatch — is a discrepancy, never COMPLETED.
     const usersWallets = await this.usersWalletsSection(scope, snapshot, prepared, currency);
-    // Mirza PR5: beside the closed v1 report too; PR6 folds it into schema version 2.
+    // Mirza PR5: beside the closed v1 report too; PR6 folds it into schema version 2. Its
+    // closure is part of the verdict, as the users-and-wallets checks are.
     const serviceOutcomes = this.serviceOutcomesSection(snapshot, run.id, prepared);
+    const holds =
+      final.reconciliation.every((r) => r.holds) &&
+      usersWallets.holds &&
+      serviceOutcomes.invariant.holds;
     return {
       ...this.report('REPORT', scope, snapshot, startedAt, final, run.status),
       verdict: `${run.status}${holds ? '' : '_WITH_DISCREPANCY'}`,
@@ -2061,7 +2068,7 @@ export class LegacyImporterService {
       users: prepared.plan.users,
       mapRows,
       openings: prepared.existingOpenings,
-      debts: prepared.existingDebts,
+      debts: new Map([...prepared.existingDebts].map(([id, d]) => [id, d.amountMinor])),
       openingTotals,
       debtTotals,
     });

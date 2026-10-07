@@ -187,9 +187,13 @@ export class DrizzleLegacyProductReviewRepository implements LegacyProductReview
     return rows.map(toRecord);
   }
 
-  async findItem(scope: TenantContext, id: string): Promise<LegacyProductReviewListItem | null> {
+  async findItem(
+    scope: TenantContext,
+    id: string,
+    tx?: TransactionScope,
+  ): Promise<LegacyProductReviewListItem | null> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.withTitle()
+    const rows = await this.withTitle(tx)
       .where(and(eq(legacyProductReviews.tenantId, tenantId), eq(legacyProductReviews.id, id)))
       .limit(1);
     const row = rows[0];
@@ -198,8 +202,8 @@ export class DrizzleLegacyProductReviewRepository implements LegacyProductReview
       : { review: toRecord(row.review), approvedProductTitle: row.productTitle ?? null };
   }
 
-  private withTitle() {
-    return this.db
+  private withTitle(tx?: TransactionScope) {
+    return this.exec(tx)
       .select({ review: legacyProductReviews, productTitle: products.title })
       .from(legacyProductReviews)
       .leftJoin(

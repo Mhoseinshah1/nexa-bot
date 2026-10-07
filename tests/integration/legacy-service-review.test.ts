@@ -340,6 +340,15 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       holds: false,
       checksumDiffers: 1,
     });
+    const reported = await importer().finalReport({
+      scope: tenantA,
+      actor: job('report'),
+      snapshot: snap,
+      mapping,
+      productionLikeTarget: false,
+      evidenceClass: 'synthetic',
+    });
+    expect(reported.verdict).toMatch(/_WITH_DISCREPANCY$/u);
     expectOnlyReads();
   });
 

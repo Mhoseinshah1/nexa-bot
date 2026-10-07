@@ -22,7 +22,7 @@ import {
   type ServiceCandidateDecision,
 } from './decisions.js';
 import { unmappedCodePanels, type PanelMapping } from './panel-mapping.js';
-import type { LegacyInventoryRead } from './ports.js';
+import type { LegacyInventoryRead, RecordedDebt } from './ports.js';
 import {
   sha256Hex,
   type LegacyInvoiceRow,
@@ -152,8 +152,8 @@ export interface PlanInput {
   readonly salesCurrency: string;
   readonly existingCustomers: ReadonlyMap<string, string>;
   readonly existingOpenings: ReadonlyMap<string, bigint>;
-  /** Mirza PR4: Telegram id → the magnitude of the legacy debt already recorded. */
-  readonly existingDebts?: ReadonlyMap<string, bigint>;
+  /** Mirza PR4: Telegram id → the legacy debt already recorded (magnitude, evidence class). */
+  readonly existingDebts?: ReadonlyMap<string, RecordedDebt>;
   readonly trialOverrides: ReadonlyMap<string, number>;
   readonly trialDecided: ReadonlySet<string>;
   readonly existingShapes: ReadonlyMap<
@@ -180,20 +180,24 @@ function zeroes<K extends string>(keys: readonly K[]): Record<K, number> {
 }
 
 /**
- * `existing` is the SIGNED ledger opening already posted; `existingDebt` the magnitude of the
- * legacy debt already recorded. A figure that differs from what is recorded, in amount or
- * in kind, is a CONFLICT — never re-applied.
+ * `existing` is the SIGNED ledger opening already posted; `existingDebt` the legacy debt
+ * already recorded. A figure that differs from what is recorded — in amount, in kind, or in
+ * evidence class (a synthetic debt met by a real snapshot, or the reverse) — is a CONFLICT,
+ * never re-applied: exactly the opening service's own "same debt" (Codex on #233).
  */
 export function openingPlanFor(
   balanceMinor: bigint,
   existing: bigint | undefined,
-  existingDebt?: bigint,
+  existingDebt?: RecordedDebt,
+  synthetic = false,
 ): OpeningPlan {
   if (balanceMinor < 0n) {
     if (existing !== undefined)
       return existing === balanceMinor ? 'PRIOR_DEBIT_OPENING' : 'CONFLICT';
     if (existingDebt !== undefined) {
-      return existingDebt === -balanceMinor ? 'DEBT_ALREADY_RECORDED' : 'CONFLICT';
+      return existingDebt.amountMinor === -balanceMinor && existingDebt.synthetic === synthetic
+        ? 'DEBT_ALREADY_RECORDED'
+        : 'CONFLICT';
     }
     return 'RECORD_DEBT';
   }
@@ -408,6 +412,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
       decision.balanceMinor,
       input.existingOpenings.get(decision.telegramUserId),
       input.existingDebts?.get(decision.telegramUserId),
+      snapshot.synthetic,
     );
     wallet.openings[opening] += 1;
 

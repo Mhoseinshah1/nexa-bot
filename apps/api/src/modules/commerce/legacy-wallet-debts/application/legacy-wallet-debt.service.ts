@@ -197,16 +197,16 @@ export class LegacyWalletDebtService {
     }
 
     const requestHash = hashRequest({ action: spec.action, debtId: id, ...spec.request });
-    const found = await this.deps.idempotency.find<{ readonly id: string }>(
+    const found = await this.deps.idempotency.find<StoredDebt>(
       scope,
       actor.surface,
       spec.idempotencyKey,
       requestHash,
     );
-    if (found !== null) {
-      const replayed = await this.deps.repository.findById(scope, found.result.id);
-      if (replayed !== null) return replayed;
-    }
+    // The ORIGINAL answer, exactly as first returned — never the debt as it stands now,
+    // which a reopen or another decision may have moved since (Codex on #233; the review
+    // queue's rule, Codex P2 on #179).
+    if (found !== null) return reviveDebt(found.result);
 
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -269,7 +269,7 @@ export class LegacyWalletDebtService {
           actor.surface,
           spec.idempotencyKey,
           requestHash,
-          { id: after.id },
+          storeDebt(after),
           tx,
         );
         return after;
@@ -322,5 +322,39 @@ function decisionView(row: LegacyWalletDebtRecord): Record<string, unknown> {
     sourceFingerprint: row.sourceFingerprint,
     decisionReason: row.decisionReason,
     version: row.version,
+  };
+}
+
+/**
+ * A decision's response as the idempotency store keeps it: JSON-safe (the amount and the
+ * instants as strings), revived exactly on a replay.
+ */
+interface StoredDebt extends Omit<
+  LegacyWalletDebtRecord,
+  'amountMinor' | 'decidedAt' | 'recordedAt' | 'updatedAt'
+> {
+  readonly amountMinor: string;
+  readonly decidedAt: string | null;
+  readonly recordedAt: string;
+  readonly updatedAt: string;
+}
+
+function storeDebt(row: LegacyWalletDebtRecord): StoredDebt {
+  return {
+    ...row,
+    amountMinor: row.amountMinor.toString(),
+    decidedAt: row.decidedAt === null ? null : row.decidedAt.toISOString(),
+    recordedAt: row.recordedAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function reviveDebt(stored: StoredDebt): LegacyWalletDebtRecord {
+  return {
+    ...stored,
+    amountMinor: BigInt(stored.amountMinor),
+    decidedAt: stored.decidedAt === null ? null : new Date(stored.decidedAt),
+    recordedAt: new Date(stored.recordedAt),
+    updatedAt: new Date(stored.updatedAt),
   };
 }

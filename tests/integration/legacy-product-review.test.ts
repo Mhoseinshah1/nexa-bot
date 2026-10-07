@@ -400,6 +400,67 @@ describe('Mirza PR2: legacy product review', () => {
     expect(rejected.review.state).toBe('REJECTED');
   });
 
+  it('a retried key answers its FIRST response after later decisions, and writes nothing', async () => {
+    await read('A');
+    const target = await activeProduct();
+    const p3 = await rowByCode('p3');
+    const newBody = {
+      idempotencyKey: key(),
+      expectedFactsChecksum: p3.factsChecksum,
+      expectedVersion: p3.version,
+      title: 'twin',
+      durationDays: 30,
+      trafficBytes: String(p3.trafficBytes),
+      reason: null,
+    };
+    const approvedNew = await service().approveNew(tenantA, owner, p3.id, newBody);
+    const reopen1 = {
+      idempotencyKey: key(),
+      expectedVersion: approvedNew.review.version,
+      reason: 'r1',
+    };
+    const reopened1 = await service().reopen(tenantA, owner, p3.id, reopen1);
+    const rejectBody = {
+      idempotencyKey: key(),
+      expectedFactsChecksum: p3.factsChecksum,
+      expectedVersion: reopened1.review.version,
+      reason: 'no',
+    };
+    const rejected = await service().reject(tenantA, owner, p3.id, rejectBody);
+    const reopen2 = {
+      idempotencyKey: key(),
+      expectedVersion: rejected.review.version,
+      reason: 'r2',
+    };
+    const reopened2 = await service().reopen(tenantA, owner, p3.id, reopen2);
+    const existingBody = {
+      idempotencyKey: key(),
+      expectedFactsChecksum: p3.factsChecksum,
+      expectedVersion: reopened2.review.version,
+      productId: target,
+      reason: null,
+    };
+    const approvedExisting = await service().approveExisting(tenantA, owner, p3.id, existingBody);
+    expect(approvedExisting.review.state).toBe('APPROVED_EXISTING');
+
+    const before = await databaseFingerprint(db());
+    // Every key, retried now that the row has moved on: exactly what it answered then.
+    expect(await service().approveNew(tenantA, owner, p3.id, newBody)).toEqual(approvedNew);
+    expect(await service().reopen(tenantA, owner, p3.id, reopen1)).toEqual(reopened1);
+    expect(await service().reject(tenantA, owner, p3.id, rejectBody)).toEqual(rejected);
+    expect(await service().reopen(tenantA, owner, p3.id, reopen2)).toEqual(reopened2);
+    expect(await service().approveExisting(tenantA, owner, p3.id, existingBody)).toEqual(
+      approvedExisting,
+    );
+    expect(approvedNew.review.state).toBe('APPROVED_NEW');
+    expect(approvedNew.approvedProductTitle).toBe('twin');
+    expect(changedTables(before, await databaseFingerprint(db()))).toEqual({});
+    // One draft only: the approve-new replay created none.
+    const drafts = await db().execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM products
+      WHERE tenant_id = ${tenantA.tenantId} AND audience = 'HIDDEN'`);
+    expect(drafts.rows[0]?.n).toBe(1);
+  });
+
   it('two operators on one row: the second decision and a stale reopen are refused', async () => {
     await read('A');
     const target = await activeProduct();
