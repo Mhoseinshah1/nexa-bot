@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  IMPORT_READ_SET_V1,
   LEGACY_LIVE_STATUSES,
   LEGACY_OPTIONAL_COLUMNS,
   LEGACY_REQUIRED_COLUMNS,
@@ -38,10 +39,10 @@ import { classifyLegacyPhone, type LegacyPhoneClass } from './decisions.js';
  * counts and hashes only — no id, no username, no phone, no balance.
  */
 
-export const LEGACY_FINGERPRINT_VERSION = 'legacy-source-fingerprint:v1';
+export const LEGACY_FINGERPRINT_VERSION = IMPORT_READ_SET_V1.fingerprintVersion;
 
 /** Columns read for decisions but kept out of the fingerprint (and of every report). */
-const NOT_FINGERPRINTED: ReadonlySet<string> = new Set(['user.number']);
+const NOT_FINGERPRINTED: ReadonlySet<string> = new Set(IMPORT_READ_SET_V1.notFingerprinted);
 
 export interface LegacyUserRow {
   readonly id: string;

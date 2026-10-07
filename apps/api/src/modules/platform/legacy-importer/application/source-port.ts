@@ -19,53 +19,95 @@
  * column lists below are the vocabulary.
  */
 
-export const LEGACY_SOURCE_TABLES = ['user', 'invoice', 'product'] as const;
+/**
+ * The import read set, FROZEN as v1 (`legacy-source-fingerprint:v1`).
+ *
+ * Every value below is an input to the source fingerprint the owner approves
+ * (`source-snapshot.ts`): the tables, their primary keys, the columns read, the column kept
+ * out. Adding a column, a table or an exclusion here changes the fingerprint of EVERY
+ * source — an approval would silently stop matching. So nothing here moves: a new read of
+ * the legacy database is a separate, versioned read set (`read-set.ts`,
+ * `legacy-read-set:<name>:v<n>`) with its own allowlist and its own fingerprint, and
+ * `tests/unit/legacy-import-read-set-v1.test.ts` pins this object and the synthetic v1
+ * fingerprint literally, so an edit fails CI rather than an approval in production.
+ *
+ * Deep-frozen: a caller that mutates an array at run time throws instead of changing v1.
+ */
+export const IMPORT_READ_SET_V1 = deepFreeze({
+  fingerprintVersion: 'legacy-source-fingerprint:v1',
+  tables: ['user', 'invoice', 'product'],
+  /** Each table's primary key — the canonical row order is its bytes. */
+  primaryKeys: {
+    user: 'id',
+    invoice: 'id_invoice',
+    product: 'id',
+  },
+  /**
+   * Columns the importer cannot decide without. A source missing one is refused before any
+   * row is read (`SOURCE_SCHEMA_MISSING_COLUMN`), never read around.
+   *
+   * Evidence: the program's queries (`docs/legacy-migration/sql-evidence.md` Q1–Q7) name
+   * every one of these; `id_invoice` and `product.id` are the primary keys of the public
+   * MirzaBot source (`mahdiMGF2/botmirzapanel` @ 92c0ed06, `table.php`).
+   */
+  requiredColumns: {
+    user: ['id', 'Balance', 'limit_usertest'],
+    invoice: [
+      'id_invoice',
+      'id_user',
+      'username',
+      'Status',
+      'is_test',
+      'code_panel',
+      'code_product',
+      'Volume',
+      'Service_time',
+      'time_unit',
+      'is_custom',
+      'price_product',
+    ],
+    product: ['id', 'code_product'],
+  },
+  /**
+   * Columns read when present and null when absent. None of them decides money, identity,
+   * a panel or a trial: `agent` is reported (resellers are out of Phase 1), `number` is
+   * classified and never written, `username` is profile metadata.
+   */
+  optionalColumns: {
+    user: ['agent', 'number', 'username'],
+    invoice: [],
+    product: ['agent'],
+  },
+  /** Columns read for decisions but kept out of the fingerprint (and of every report). */
+  notFingerprinted: ['user.number'],
+} as const);
+
+export const LEGACY_SOURCE_TABLES = IMPORT_READ_SET_V1.tables;
 export type LegacySourceTableName = (typeof LEGACY_SOURCE_TABLES)[number];
 
 /** Each table's primary key — the canonical row order is its bytes. */
-export const LEGACY_PRIMARY_KEYS: Readonly<Record<LegacySourceTableName, string>> = {
-  user: 'id',
-  invoice: 'id_invoice',
-  product: 'id',
-};
+export const LEGACY_PRIMARY_KEYS: Readonly<Record<LegacySourceTableName, string>> =
+  IMPORT_READ_SET_V1.primaryKeys;
 
-/**
- * Columns the importer cannot decide without. A source missing one is refused before any
- * row is read (`SOURCE_SCHEMA_MISSING_COLUMN`), never read around.
- *
- * Evidence: the program's queries (`docs/legacy-migration/sql-evidence.md` Q1–Q7) name
- * every one of these; `id_invoice` and `product.id` are the primary keys of the public
- * MirzaBot source (`mahdiMGF2/botmirzapanel` @ 92c0ed06, `table.php`).
- */
-export const LEGACY_REQUIRED_COLUMNS: Readonly<Record<LegacySourceTableName, readonly string[]>> = {
-  user: ['id', 'Balance', 'limit_usertest'],
-  invoice: [
-    'id_invoice',
-    'id_user',
-    'username',
-    'Status',
-    'is_test',
-    'code_panel',
-    'code_product',
-    'Volume',
-    'Service_time',
-    'time_unit',
-    'is_custom',
-    'price_product',
-  ],
-  product: ['id', 'code_product'],
-};
+/** The v1 required columns (`IMPORT_READ_SET_V1.requiredColumns`). */
+export const LEGACY_REQUIRED_COLUMNS: Readonly<Record<LegacySourceTableName, readonly string[]>> =
+  IMPORT_READ_SET_V1.requiredColumns;
 
-/**
- * Columns read when present and null when absent. None of them decides money, identity,
- * a panel or a trial: `agent` is reported (resellers are out of Phase 1), `number` is
- * classified and never written, `username` is profile metadata.
- */
-export const LEGACY_OPTIONAL_COLUMNS: Readonly<Record<LegacySourceTableName, readonly string[]>> = {
-  user: ['agent', 'number', 'username'],
-  invoice: [],
-  product: ['agent'],
-};
+/** The v1 optional columns (`IMPORT_READ_SET_V1.optionalColumns`). */
+export const LEGACY_OPTIONAL_COLUMNS: Readonly<Record<LegacySourceTableName, readonly string[]>> =
+  IMPORT_READ_SET_V1.optionalColumns;
+
+type DeepReadonly<T> = T extends readonly unknown[] | Record<string, unknown>
+  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+  : T;
+
+function deepFreeze<T>(value: T): DeepReadonly<T> {
+  if (value !== null && typeof value === 'object') {
+    for (const inner of Object.values(value)) deepFreeze(inner);
+    Object.freeze(value);
+  }
+  return value as DeepReadonly<T>;
+}
 
 /** The invoice statuses the program calls live (Q1, Q6, Q7). Compared exactly. */
 export const LEGACY_LIVE_STATUSES = [
