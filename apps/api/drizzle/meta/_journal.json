@@ -1541,6 +1541,13 @@
       "when": 1791401305405,
       "tag": "0219_support_ai_session_budget",
       "breakpoints": true
+    },
+    {
+      "idx": 220,
+      "version": "7",
+      "when": 1791406164078,
+      "tag": "0220_support_ai_progress_handoff",
+      "breakpoints": true
     }
   ]
 }
