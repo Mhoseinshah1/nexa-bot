@@ -577,6 +577,30 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     });
   });
 
+  it("a gated import re-checks the approval's read sets at import time: one no longer recorded refuses it", async () => {
+    // Defence in depth: `legacy_read_set_runs` is append-only (0220), so this state is reachable
+    // only by bypassing that guard — which is exactly what this test does, as the table owner.
+    // The approval was valid when it was recorded; the import must still refuse it.
+    const ds = cleanDataset();
+    const fp = await recordReadSets(ds);
+    const snap = await snapshotOf(ds);
+    await cutover().approve(tenantA, owner, approveBody(fp));
+    await db().transaction(async (tx) => {
+      await tx.execute(
+        sql`ALTER TABLE legacy_read_set_runs DISABLE TRIGGER legacy_read_set_runs_no_delete`,
+      );
+      await tx.execute(sql`DELETE FROM legacy_read_set_runs WHERE read_set = 'products'`);
+      await tx.execute(
+        sql`ALTER TABLE legacy_read_set_runs ENABLE TRIGGER legacy_read_set_runs_no_delete`,
+      );
+    });
+    const before = await businessWrites();
+    const refused = await refusal(apply('read-set-gone', snap, { gate: expectationOf(fp) }));
+    expect(refused.code).toBe('APPROVAL_MISSING');
+    expect(refused.message).toContain('products read set');
+    expect(await businessWrites()).toEqual(before);
+  });
+
   it('the CLI: every value is required, an UNCLASSIFIED table blocks the cutover, both refusals exit 65 with nothing written', async () => {
     // The default fixture keeps its UNCLASSIFIED table: the inventory records it, the owner can
     // even approve it, and the gated import still refuses — nothing reads past an unknown table.
