@@ -25,6 +25,7 @@ import {
   type SupportAiTestCheckView,
   type SupportAiTestResponse,
   type UnitOfWork,
+  SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -175,7 +176,13 @@ export class SupportAiConfigService {
     const now = this.deps.clock.now();
     const byProvider = new Map(states.map((state) => [state.provider, state]));
     return {
-      config: stored.config,
+      // Review of PR #241: an older web bundle requires the retired `maxConsecutiveReplies` when
+      // it reads the configuration; it is projected here, and ignored on every save.
+      config: {
+        ...stored.config,
+        maxConsecutiveReplies:
+          stored.retiredMaxConsecutiveReplies ?? SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
+      },
       version: stored.version,
       credentials: SUPPORT_AI_PROVIDERS.map((provider) => {
         const state = byProvider.get(provider);

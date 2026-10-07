@@ -8,9 +8,10 @@ import {
   SUPPORT_AI_SAFE_TOPICS,
   SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS,
   SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS,
-  supportAiConfigInputSchema,
+  supportAiConfigSaveSchema,
   type SupportAiBreakerState,
-  type SupportAiConfigInput,
+  type SupportAiConfigRead,
+  type SupportAiConfigSave,
   type SupportAiConfigResponse,
   type SupportAiCredentialView,
   type SupportAiMode,
@@ -257,6 +258,14 @@ interface ConfigDraft {
    */
   readonly autoTopics: readonly SupportAiSafeTopic[];
   readonly autoMinConfidence: SupportAiAutoMinConfidence;
+  /**
+   * Review of PR #241 (rolling deploy): the A1 limits an OLDER replica did not send. Drawn
+   * empty rather than as "undefined", and left out of the save while still empty, so the
+   * server keeps what it stores. A newer replica always sends both.
+   */
+  readonly absent: readonly ('sessionReplyBudget' | 'maxAutoRepliesPerHour')[];
+  /** The retired per-epoch limit an older replica requires on a save, echoed back unchanged. */
+  readonly retiredMaxConsecutiveReplies: number | null;
 }
 
 type SupportAiAutoMinConfidence = (typeof SUPPORT_AI_AUTO_MIN_CONFIDENCES)[number];
@@ -347,7 +356,7 @@ function toStepDraft(step: SupportAiProviderStep | null): StepDraft {
   return step === null ? { provider: '', model: '' } : { ...step };
 }
 
-function toDraft(config: SupportAiConfigInput): ConfigDraft {
+function toDraft(config: SupportAiConfigRead): ConfigDraft {
   return {
     mode: config.mode,
     primary: toStepDraft(config.primary),
@@ -355,8 +364,10 @@ function toDraft(config: SupportAiConfigInput): ConfigDraft {
     visionEnabled: config.visionEnabled,
     timeoutMs: String(config.timeoutMs),
     maxOutputChars: String(config.maxOutputChars),
-    sessionReplyBudget: String(config.sessionReplyBudget),
-    maxAutoRepliesPerHour: String(config.maxAutoRepliesPerHour),
+    sessionReplyBudget:
+      config.sessionReplyBudget === undefined ? '' : String(config.sessionReplyBudget),
+    maxAutoRepliesPerHour:
+      config.maxAutoRepliesPerHour === undefined ? '' : String(config.maxAutoRepliesPerHour),
     maxConsecutiveClarifyingQuestions: String(config.maxConsecutiveClarifyingQuestions),
     cooldownSeconds: String(config.cooldownSeconds),
     settleDelaySeconds: String(config.settleDelaySeconds),
@@ -366,11 +377,22 @@ function toDraft(config: SupportAiConfigInput): ConfigDraft {
     // must land on exactly what was loaded.
     autoTopics: SUPPORT_AI_SAFE_TOPICS.filter((topic) => config.autoTopics.includes(topic)),
     autoMinConfidence: config.autoMinConfidence,
+    absent: (['sessionReplyBudget', 'maxAutoRepliesPerHour'] as const).filter(
+      (field) => config[field] === undefined,
+    ),
+    retiredMaxConsecutiveReplies: config.maxConsecutiveReplies ?? null,
   };
 }
 
 function toNumber(raw: string): number {
   return /^\d+$/u.test(raw.trim()) ? Number(raw.trim()) : Number.NaN;
+}
+
+/** An A1 limit the server did not send, still untouched, is not sent back (rolling deploy). */
+function omitIfAbsent(draft: ConfigDraft, field: ConfigDraft['absent'][number]) {
+  return draft.absent.includes(field) && draft[field].trim() === ''
+    ? {}
+    : { [field]: toNumber(draft[field]) };
 }
 
 /** What the form would send. The contract's own schema judges it before anything leaves. */
@@ -384,8 +406,8 @@ function fromDraft(draft: ConfigDraft): unknown {
     visionEnabled: draft.visionEnabled,
     timeoutMs: toNumber(draft.timeoutMs),
     maxOutputChars: toNumber(draft.maxOutputChars),
-    sessionReplyBudget: toNumber(draft.sessionReplyBudget),
-    maxAutoRepliesPerHour: toNumber(draft.maxAutoRepliesPerHour),
+    ...omitIfAbsent(draft, 'sessionReplyBudget'),
+    ...omitIfAbsent(draft, 'maxAutoRepliesPerHour'),
     maxConsecutiveClarifyingQuestions: toNumber(draft.maxConsecutiveClarifyingQuestions),
     cooldownSeconds: toNumber(draft.cooldownSeconds),
     settleDelaySeconds: toNumber(draft.settleDelaySeconds),
@@ -426,7 +448,7 @@ function ConfigCard({
   const [baseVersion, setBaseVersion] = useState(response.version);
   const set = <K extends keyof ConfigDraft>(key: K, value: ConfigDraft[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));
-  const parsed = supportAiConfigInputSchema.safeParse(fromDraft(draft));
+  const parsed = supportAiConfigSaveSchema.safeParse(fromDraft(draft));
   const dirty =
     JSON.stringify(fromDraft(draft)) !== JSON.stringify(fromDraft(toDraft(response.config)));
   useUnsavedChanges(dirty);
@@ -441,12 +463,18 @@ function ConfigCard({
       ];
 
   const save = useMutation({
-    mutationFn: (config: SupportAiConfigInput) =>
-      saveSupportAiConfig({
+    mutationFn: (parsedConfig: SupportAiConfigSave) => {
+      // An older replica requires the retired limit; echo what it sent. A newer one ignores it.
+      const config =
+        draft.retiredMaxConsecutiveReplies === null
+          ? parsedConfig
+          : { ...parsedConfig, maxConsecutiveReplies: draft.retiredMaxConsecutiveReplies };
+      return saveSupportAiConfig({
         idempotencyKey: submission.current({ version: baseVersion, config }),
         expectedVersion: baseVersion,
         config,
-      }),
+      });
+    },
     onSuccess: (result) => {
       submission.settle();
       setBaseVersion(result.version);
@@ -468,8 +496,10 @@ function ConfigCard({
     (draft.mode === 'AUTO_REPLY_SAFE' &&
       (toNumber(draft.maxConsecutiveClarifyingQuestions) >
         response.config.maxConsecutiveClarifyingQuestions ||
-        toNumber(draft.sessionReplyBudget) > response.config.sessionReplyBudget ||
-        toNumber(draft.maxAutoRepliesPerHour) > response.config.maxAutoRepliesPerHour));
+        toNumber(draft.sessionReplyBudget) >
+          (response.config.sessionReplyBudget ?? Number.POSITIVE_INFINITY) ||
+        toNumber(draft.maxAutoRepliesPerHour) >
+          (response.config.maxAutoRepliesPerHour ?? Number.POSITIVE_INFINITY)));
   const stale = response.version !== baseVersion;
   const reload = () => {
     setDraft(toDraft(response.config));
@@ -762,7 +792,10 @@ function StepFields({
 // ---------------------------------------------------------------------------------------
 
 /** The model a test should use by default: the one the chain names for this provider. */
-function chainModelFor(config: SupportAiConfigInput, provider: SupportAiProvider): string {
+function chainModelFor(
+  config: Pick<SupportAiConfigRead, 'primary' | 'fallbacks'>,
+  provider: SupportAiProvider,
+): string {
   const steps = [config.primary, ...config.fallbacks];
   return steps.find((step) => step?.provider === provider)?.model ?? '';
 }
