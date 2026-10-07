@@ -417,3 +417,34 @@ from an answer («فرستاده شد», `sent`), and opens no ticket.
    WHERE j.kind = 'AUTO_DECISION' AND j.conversation_id = '<conversation id>'
    ORDER BY j.created_at;
   ```
+
+## 14. Conversation memory and knowledge selection (A7, A8 — 2026-10-07)
+
+- **What the AI reads.** The latest 40 lines of the conversation (60 are read so every reply in
+  the window is placed), each cut to 1,500 characters. Every support-side line is marked with who
+  wrote it — a person, an automatic AI reply, an AI draft a person sent, an automatic message —
+  so the AI does not repeat its own earlier step as if it were new, and does not contradict what
+  a person on the team said. Nothing new is stored: the transcript is read from the messages each
+  time, and follows their 30-day retention.
+- **Which knowledge goes with a request.** At most eight approved, enabled articles (and live FAQ
+  entries) that MATCH the conversation: the customer's latest words, the last intent and topic,
+  the titles an earlier draft cited, and — while a troubleshooting episode is open — the
+  customer's earlier description of the problem. An article that matches nothing is never sent,
+  so a greeting carries no knowledge at all.
+- **If the AI keeps missing an article that exists**, look at its title and tags first: the
+  match is lexical (Persian spelling variants and a few inflections are folded, no embeddings). A
+  title in the words customers actually write («وصل نمی‌شود», «قطعی») is found; a title like
+  «راهنمای شماره ۳» is not. `knowledge_sent` on the job says how many entries went with the request:
+
+  ```sql
+  SELECT created_at, kind, decision, topic, knowledge_sent, knowledge_available, knowledge_labels
+    FROM support_ai_jobs
+   WHERE conversation_id = '<conversation id>'
+   ORDER BY created_at;
+  ```
+
+  `knowledge_sent = 0` with `knowledge_available > 0` means nothing matched — rewrite the
+  article's title or tags (TB8 review), never widen anything in configuration.
+
+- **Policy version.** Telemetry records `sai4m-2026-10-07` (or later) for requests built with
+  these rules.

@@ -143,9 +143,10 @@ describe('A8 — the weighted query', () => {
 
 describe('A8 — scoring and selection', () => {
   it('a term counts once, at the highest weight of the parts it appears in', () => {
+    // The higher weight comes FIRST, so a last-write-wins rule would lower it.
     const weights = weightedQueryTerms([
-      { text: 'اتصال آیفون', weight: 0.4 },
       { text: 'آیفون', weight: 1 },
+      { text: 'اتصال آیفون', weight: 0.4 },
     ]);
     const term = (word: string) => [...matchTerms(word)][0] ?? '';
     expect(weights.get(term('آیفون'))).toBe(1);
@@ -196,18 +197,35 @@ describe('A8 — scoring and selection', () => {
     );
   });
 
+  it('THE EPISODE: the earlier description, not the topic alone, picks the article', () => {
+    const transcript = [
+      customer('برنامه ویندوز رو نصب کردم ولی خطا میده'),
+      support('برنامه را ببندید و دوباره باز کنید'),
+      customer('بستم'),
+      customer('انجام دادم'),
+      customer('باز هم نشد'),
+    ];
+    const last = prior({ topic: 'KNOWN_ERROR', intent: null, knowledgeLabels: [] });
+    // Without the episode only the topic's word («خطا») is left, and no article has it.
+    const topicOnly = knowledgeQueryFor(transcript, [last]).filter(
+      (part) => part.weight !== KNOWLEDGE_QUERY_WEIGHTS.troubleshooting,
+    );
+    expect(selectRelevantKnowledge(ARTICLES, topicOnly, 8)).toEqual([]);
+    expect(
+      selectRelevantKnowledge(ARTICLES, knowledgeQueryFor(transcript, [last]), 8)[0]?.title,
+    ).toBe('نصب روی ویندوز');
+  });
+
   it('CONTINUITY: the article cited before stays ahead when the customer only answers «yes»', () => {
+    // No topic vocabulary and no intent: only the title cited before can find it.
     const query = knowledgeQueryFor(
       [customer('بله')],
-      [
-        prior({
-          topic: 'SUBSCRIPTION_UPDATE',
-          intent: null,
-          knowledgeLabels: ['به‌روزرسانی لینک اشتراک'],
-        }),
-      ],
+      [prior({ topic: null, intent: null, knowledgeLabels: ['به‌روزرسانی لینک اشتراک'] })],
     );
     expect(selectRelevantKnowledge(ARTICLES, query, 8)[0]?.title).toBe('به‌روزرسانی لینک اشتراک');
+    expect(selectRelevantKnowledge(ARTICLES, knowledgeQueryFor([customer('بله')], []), 8)).toEqual(
+      [],
+    );
   });
 
   it('the customer’s own new subject outranks the memory of the old one', () => {
