@@ -439,6 +439,22 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     );
     expect(denied.rows).toHaveLength(1);
     expect(await count('legacy_cutover_approvals')).toBe(0);
+    // The permission is checked BEFORE the untrusted body is parsed: a caller without it gets
+    // PERMISSION_DENIED (never a validation error describing a valid body) and a DENIED row.
+    await expect(
+      cutover().approve(tenantA, operator, { kind: 'NOT_A_KIND', sourceFingerprint: 'x' }),
+    ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+    await expect(
+      cutover().revoke(tenantA, operator, '0190aaaa-0000-7000-8000-000000000001', { reason: 7 }),
+    ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+    const deniedAfter = await db().execute<{ action: string; entity_id: string | null }>(
+      sql`SELECT action, entity_id FROM audit_logs WHERE action LIKE 'legacy.cutover.%' AND result = 'DENIED' ORDER BY occurred_at, id`,
+    );
+    expect(deniedAfter.rows.map((r) => r.action)).toEqual([
+      'legacy.cutover.approve',
+      'legacy.cutover.approve',
+      'legacy.cutover.revoke',
+    ]);
 
     const approval = await cutover().approve(tenantA, owner, approveBody(fp));
     const otherOwner = adminActorFor(

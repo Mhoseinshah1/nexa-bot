@@ -143,19 +143,18 @@ export class LegacyCutoverService {
     actor: ActorContext,
     body: unknown,
   ): Promise<LegacyCutoverApprovalRecord> {
-    const command = legacyCutoverApproveRequestSchema.parse(body);
     const action = LEGACY_CUTOVER_AUDIT_ACTIONS.approve;
+    // The permission FIRST: a caller without it is audited DENIED and learns nothing about
+    // what a valid body looks like (the other audited services do the same).
     await this.requireApprove(scope, actor, action, null);
+    const command = legacyCutoverApproveRequestSchema.parse(body);
     const { idempotencyKey, ...request } = command;
     const requestHash = hashRequest({ action, ...request });
-    const found = await this.deps.idempotency.find<StoredApproval>(
-      scope,
-      actor.surface,
-      idempotencyKey,
-      requestHash,
-    );
     // The ORIGINAL answer, exactly as first returned — never the approval as it stands now,
     // which a revocation may have changed since.
+    const replay = () =>
+      this.deps.idempotency.find<StoredApproval>(scope, actor.surface, idempotencyKey, requestHash);
+    const found = await replay();
     if (found !== null) return reviveApproval(found.result);
 
     const id = this.deps.ids.uuid();
@@ -288,16 +287,18 @@ export class LegacyCutoverService {
     id: string,
     body: unknown,
   ): Promise<LegacyCutoverApprovalRecord> {
-    const command = legacyCutoverRevokeRequestSchema.parse(body);
     const action = LEGACY_CUTOVER_AUDIT_ACTIONS.revoke;
     await this.requireApprove(scope, actor, action, id);
+    const command = legacyCutoverRevokeRequestSchema.parse(body);
     const requestHash = hashRequest({ action, approvalId: id, reason: command.reason });
-    const found = await this.deps.idempotency.find<StoredApproval>(
-      scope,
-      actor.surface,
-      command.idempotencyKey,
-      requestHash,
-    );
+    const replay = () =>
+      this.deps.idempotency.find<StoredApproval>(
+        scope,
+        actor.surface,
+        command.idempotencyKey,
+        requestHash,
+      );
+    const found = await replay();
     if (found !== null) return reviveApproval(found.result);
 
     return runAuthorizedMutation(
