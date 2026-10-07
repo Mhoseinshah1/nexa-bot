@@ -198,6 +198,15 @@ describe('the legacy invoice archive page', () => {
     await waitFor(() => expect(calls(api, 'GET', 'after=kYWIwMDAwMDE')).toHaveLength(1));
   });
 
+  it('sends a verbatim invoice id with its spaces, never trimmed', async () => {
+    const api = page();
+    await screen.findByText('svc_archive');
+    fireEvent.change(screen.getByLabelText(t('web.lia_filter_invoice')), {
+      target: { value: ' padded ' },
+    });
+    await waitFor(() => expect(calls(api, 'GET', 'invoiceId=+padded+')).toHaveLength(1));
+  });
+
   it('without the PII key: personal cells hidden, PII search disabled and never sent', async () => {
     const api = page({ pii: false });
     expect(await screen.findByText(t('web.lia_pii_banner'))).toBeInTheDocument();
@@ -215,6 +224,20 @@ describe('the legacy invoice archive page', () => {
   it('never puts a PII filter in a query without the PII key, whatever the state holds', () => {
     const filters = { ...NO_FILTERS, legacyUserId: '100000001', username: 'svc', status: 'active' };
     expect(queryOf(filters, false, undefined)).toEqual({ status: 'active' });
+    // Verbatim fields go exactly as typed; the trimmed-stored codes are trimmed; empty is none.
+    expect(
+      queryOf(
+        {
+          ...NO_FILTERS,
+          invoiceId: ' padded ',
+          status: ' active',
+          panelCode: ' rp1 ',
+          productCode: '',
+        },
+        false,
+        undefined,
+      ),
+    ).toEqual({ invoiceId: ' padded ', status: ' active', panelCode: 'rp1' });
     expect(queryOf(filters, true, 'kx')).toEqual({
       legacyUserId: '100000001',
       username: 'svc',
