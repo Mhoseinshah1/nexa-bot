@@ -151,8 +151,46 @@ describe('the legacy product review page', () => {
     await waitFor(() => expect(calls(api, 'POST', '/reject')).toHaveLength(1));
     expect(calls(api, 'POST', '/reject')[0]!.body).toMatchObject({
       expectedFactsChecksum: CHECKSUM,
+      expectedVersion: 1,
       reason: 'نه',
     });
+  });
+
+  it('a reopen names the version shown; a stale one is refused in words (Codex #231)', async () => {
+    const decided = review({
+      state: 'APPROVED_EXISTING',
+      approvedProductId: PRODUCT_ID,
+      version: 4,
+    });
+    const api = stubApi([
+      { url: '/legacy-products', method: 'GET', body: { reviews: [decided], nextCursor: null } },
+      {
+        url: `/legacy-products/${ID}/reopen`,
+        method: 'POST',
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'legacy_product_review.version_conflict',
+            message: 'stale',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<LegacyProductsPage denied={false} mayDecide mayCreateProduct mayPickProduct />);
+    await screen.findByText('synthetic 30GB');
+    fireEvent.click(screen.getByRole('button', { name: t('web.lpr_open') }));
+    fireEvent.change(await screen.findByLabelText(t('web.lpr_reason')), {
+      target: { value: 'دوباره' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.lpr_reopen') }));
+    await waitFor(() => expect(calls(api, 'POST', '/reopen')).toHaveLength(1));
+    expect(calls(api, 'POST', '/reopen')[0]!.body).toMatchObject({
+      expectedVersion: 4,
+      reason: 'دوباره',
+    });
+    expect(await screen.findByText(t('web.lpr_fault_version'))).toBeInTheDocument();
   });
 
   it('without decide, the detail is read-only; without catalog.edit, no draft form', async () => {

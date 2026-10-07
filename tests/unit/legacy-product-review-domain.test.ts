@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   LEGACY_PRODUCT_REVIEW_STATES,
   legacyProductApproveNewRequestSchema,
+  legacyProductRejectRequestSchema,
+  legacyProductReopenRequestSchema,
   type LegacyProductReviewState,
 } from '@nexa/contracts';
 import {
@@ -270,6 +272,27 @@ describe('approve-as-new: a draft nobody can buy', () => {
         false,
       );
     }
+  });
+
+  it('every decision and every reopen names the version it was made on', () => {
+    expect(
+      legacyProductReopenRequestSchema.safeParse({ idempotencyKey: 'k'.repeat(16), reason: 'x' })
+        .success,
+    ).toBe(false);
+    expect(
+      legacyProductReopenRequestSchema.safeParse({
+        idempotencyKey: 'k'.repeat(16),
+        expectedVersion: 3,
+        reason: 'x',
+      }).success,
+    ).toBe(true);
+    expect(
+      legacyProductRejectRequestSchema.safeParse({
+        idempotencyKey: 'k'.repeat(16),
+        expectedFactsChecksum: F(1),
+        reason: 'x',
+      }).success,
+    ).toBe(false);
   });
 
   it('is refused by the order rule four ways over, starting with NOT_PURCHASABLE', () => {

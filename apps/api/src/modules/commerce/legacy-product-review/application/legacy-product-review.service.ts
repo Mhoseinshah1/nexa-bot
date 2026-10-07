@@ -345,7 +345,7 @@ export class LegacyProductReviewService {
       request: { ...command, idempotencyKey: undefined },
       catalogEdit: false,
       apply: async (before, tx, now) => {
-        assertApprovable(before, command.expectedFactsChecksum);
+        assertApprovable(before, command.expectedFactsChecksum, command.expectedVersion);
         if (!(await this.deps.repository.productExists(scope, command.productId, tx))) {
           throw errors.notFound(
             LEGACY_PRODUCT_REVIEW_ERROR_CODES.PRODUCT_NOT_FOUND,
@@ -392,7 +392,7 @@ export class LegacyProductReviewService {
       request: { ...command, idempotencyKey: undefined },
       catalogEdit: true,
       apply: async (before, tx, now) => {
-        assertApprovable(before, command.expectedFactsChecksum);
+        assertApprovable(before, command.expectedFactsChecksum, command.expectedVersion);
         const draft = legacyDraftProduct({
           title: command.title,
           durationDays: command.durationDays,
@@ -432,7 +432,7 @@ export class LegacyProductReviewService {
       request: { ...command, idempotencyKey: undefined },
       catalogEdit: false,
       apply: async (before, tx, now) => {
-        assertDecidable(before, command.expectedFactsChecksum);
+        assertDecidable(before, command.expectedFactsChecksum, command.expectedVersion);
         return this.transition(
           scope,
           before,
@@ -470,6 +470,7 @@ export class LegacyProductReviewService {
         if (!(LEGACY_PRODUCT_REVIEW_DECIDED_STATES as readonly string[]).includes(before.state)) {
           throw notInState(before.state);
         }
+        assertVersion(before, command.expectedVersion);
         const after = await this.deps.repository.update(
           scope,
           before.id,
@@ -860,7 +861,26 @@ function sourceFieldsOf(
   };
 }
 
-function assertDecidable(row: LegacyProductReviewRecord, expectedFactsChecksum: string): void {
+/**
+ * The row is at the version the operator saw. The facts checksum alone does not say so: a
+ * reopen and a new decision on UNCHANGED facts leave the checksum as it was, and a stale
+ * decision or reopen would then overwrite the newer one (Codex review of #231).
+ */
+function assertVersion(row: LegacyProductReviewRecord, expectedVersion: number): void {
+  if (row.version !== expectedVersion) {
+    throw errors.conflict(
+      LEGACY_PRODUCT_REVIEW_ERROR_CODES.VERSION_CONFLICT,
+      'This legacy product changed since you opened it. Reload it and decide again.',
+      { version: row.version },
+    );
+  }
+}
+
+function assertDecidable(
+  row: LegacyProductReviewRecord,
+  expectedFactsChecksum: string,
+  expectedVersion: number,
+): void {
   if (!(LEGACY_PRODUCT_REVIEW_DECIDABLE_STATES as readonly string[]).includes(row.state)) {
     throw notInState(row.state);
   }
@@ -870,11 +890,16 @@ function assertDecidable(row: LegacyProductReviewRecord, expectedFactsChecksum: 
       'The legacy facts of this product changed since you opened it. Review them again.',
     );
   }
+  assertVersion(row, expectedVersion);
 }
 
 /** A decision that MAPS the code: the source must be one clean row, present in the latest read. */
-function assertApprovable(row: LegacyProductReviewRecord, expectedFactsChecksum: string): void {
-  assertDecidable(row, expectedFactsChecksum);
+function assertApprovable(
+  row: LegacyProductReviewRecord,
+  expectedFactsChecksum: string,
+  expectedVersion: number,
+): void {
+  assertDecidable(row, expectedFactsChecksum, expectedVersion);
   if (row.missingSinceReadFingerprint !== null) {
     throw errors.conflict(
       LEGACY_PRODUCT_REVIEW_ERROR_CODES.SOURCE_ABSENT,

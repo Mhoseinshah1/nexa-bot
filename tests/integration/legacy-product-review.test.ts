@@ -381,6 +381,16 @@ describe('Mirza PR2: legacy product review', () => {
         expectedFactsChecksum: 'a'.repeat(64),
       }),
     ).rejects.toMatchObject({ code: 'legacy_product_review.facts_changed' });
+    // A decision made on the row as it was BEFORE the approve-and-reopen is stale, although
+    // the facts are the same: refused by version, never applied over the newer history.
+    await expect(
+      service().reject(tenantA, owner, p1.id, {
+        idempotencyKey: key(),
+        expectedFactsChecksum: p1.factsChecksum,
+        expectedVersion: p1.version,
+        reason: 'stale',
+      }),
+    ).rejects.toMatchObject({ code: 'legacy_product_review.version_conflict' });
     const rejected = await service().reject(tenantA, owner, p1.id, {
       idempotencyKey: key(),
       expectedFactsChecksum: p1.factsChecksum,
@@ -388,6 +398,80 @@ describe('Mirza PR2: legacy product review', () => {
       reason: 'not migrating it',
     });
     expect(rejected.review.state).toBe('REJECTED');
+  });
+
+  it('two operators on one row: the second decision and a stale reopen are refused', async () => {
+    await read('A');
+    const target = await activeProduct();
+    const seen = await rowByCode('p1'); // both operators opened the row at this version
+    // Operator A approves.
+    const a = await service().approveExisting(tenantA, owner, seen.id, {
+      idempotencyKey: key(),
+      expectedFactsChecksum: seen.factsChecksum,
+      expectedVersion: seen.version,
+      productId: target,
+      reason: null,
+    });
+    // Operator B, on the same view, reopens A's decision before seeing it — then A reopens
+    // and decides again (reject); B's late reopen from the old view must not undo it.
+    const aReopen = await service().reopen(tenantA, owner, seen.id, {
+      idempotencyKey: key(),
+      expectedVersion: a.review.version,
+      reason: 'A reconsiders',
+    });
+    const aReject = await service().reject(tenantA, owner, seen.id, {
+      idempotencyKey: key(),
+      expectedFactsChecksum: seen.factsChecksum,
+      expectedVersion: aReopen.review.version,
+      reason: 'A decides no',
+    });
+    await expect(
+      service().reopen(tenantA, owner, seen.id, {
+        idempotencyKey: key(),
+        expectedVersion: a.review.version,
+        reason: 'B from an old view',
+      }),
+    ).rejects.toMatchObject({ code: 'legacy_product_review.version_conflict' });
+    // B's approval from the first view is stale too, though the facts are the same.
+    await expect(
+      service().approveExisting(tenantA, owner, seen.id, {
+        idempotencyKey: key(),
+        expectedFactsChecksum: seen.factsChecksum,
+        expectedVersion: seen.version,
+        productId: target,
+        reason: null,
+      }),
+    ).rejects.toMatchObject({ code: 'legacy_product_review.not_in_state' });
+    const now = await rowByCode('p1');
+    expect(now).toMatchObject({ state: 'REJECTED', version: aReject.review.version });
+    // Two concurrent decisions from the same view: exactly one applies.
+    await service().reopen(tenantA, owner, seen.id, {
+      idempotencyKey: key(),
+      expectedVersion: now.version,
+      reason: 'again',
+    });
+    const fresh = await rowByCode('p1');
+    const results = await Promise.allSettled([
+      service().reject(tenantA, owner, fresh.id, {
+        idempotencyKey: key(),
+        expectedFactsChecksum: fresh.factsChecksum,
+        expectedVersion: fresh.version,
+        reason: 'one',
+      }),
+      service().approveExisting(tenantA, owner, fresh.id, {
+        idempotencyKey: key(),
+        expectedFactsChecksum: fresh.factsChecksum,
+        expectedVersion: fresh.version,
+        productId: target,
+        reason: null,
+      }),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const loser = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect([
+      'legacy_product_review.not_in_state',
+      'legacy_product_review.version_conflict',
+    ]).toContain((loser.reason as { code?: string }).code);
   });
 
   it('a duplicated code cannot be approved, only rejected; an unknown product is refused', async () => {

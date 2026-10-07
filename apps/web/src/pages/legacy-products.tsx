@@ -98,6 +98,7 @@ const FIELD_LABELS: Readonly<Record<LegacyProductParsedField, WebKey>> = {
 
 const FAULTS: Readonly<Record<string, WebKey>> = {
   'legacy_product_review.facts_changed': 'web.lpr_fault_facts_changed',
+  'legacy_product_review.version_conflict': 'web.lpr_fault_version',
   'legacy_product_review.not_in_state': 'web.lpr_fault_state',
   'legacy_product_review.source_absent': 'web.lpr_fault_absent',
   'legacy_product_review.source_conflict': 'web.lpr_fault_conflict',
@@ -556,12 +557,18 @@ function Decisions({
         | { kind: 'reject' }
         | { kind: 'reopen' },
     ) => {
-      const idempotencyKey = submission.current({ id: row.id, command, reason: reasonOrNull });
+      const idempotencyKey = submission.current({
+        id: row.id,
+        version: row.version,
+        command,
+        reason: reasonOrNull,
+      });
       if (command.kind === 'existing') {
         return approveLegacyProductExisting({
           id: row.id,
           idempotencyKey,
           expectedFactsChecksum: row.factsChecksum,
+          expectedVersion: row.version,
           productId: command.productId,
           reason: reasonOrNull,
         });
@@ -571,6 +578,7 @@ function Decisions({
           id: row.id,
           idempotencyKey,
           expectedFactsChecksum: row.factsChecksum,
+          expectedVersion: row.version,
           title: command.title,
           durationDays: command.durationDays,
           trafficBytes: command.trafficBytes,
@@ -582,10 +590,16 @@ function Decisions({
           id: row.id,
           idempotencyKey,
           expectedFactsChecksum: row.factsChecksum,
+          expectedVersion: row.version,
           reason: reason.trim(),
         });
       }
-      return reopenLegacyProduct({ id: row.id, idempotencyKey, reason: reason.trim() });
+      return reopenLegacyProduct({
+        id: row.id,
+        idempotencyKey,
+        expectedVersion: row.version,
+        reason: reason.trim(),
+      });
     },
     onSuccess: done,
     onError: failed,
