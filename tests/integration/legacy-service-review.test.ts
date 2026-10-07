@@ -609,22 +609,26 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     expectOnlyReads();
   });
 
-  it('a SYNTHETIC approval is never executed against a production-like target; it is left, audited, and attention', async () => {
+  it('a SYNTHETIC approval never reaches a production-like target: the cutover gate refuses the run first, touching nothing', async () => {
+    // Mirza PR6: an import against a production-like target is gated (owner constraint 3), and
+    // a synthetic snapshot can carry no approval a production-like target accepts — so the run
+    // is refused before it reads a candidate, and the approval is left exactly as it was. The
+    // run-level rule (a synthetic ADOPT approval is left and audited on a production-like
+    // target) stays as defence in depth and is pinned by
+    // tests/unit/legacy-service-review-rules.test.ts ('a synthetic approval is never acted on').
     const snap = await snapshot();
     await apply('import', snap);
     const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
     const approved = await approve(nullmatch, panelBId);
-    const report = await apply('prod-like', snap, { productionLikeTarget: true });
-    expect(report.verdict).toBe('COMPLETED_WITH_FAILURES');
-    expect((report.sections as Record<string, any>)['attention'].approvalLeft).toBe(1);
+    const runs = await count('legacy_import_runs');
+    await expect(apply('prod-like', snap, { productionLikeTarget: true })).rejects.toMatchObject({
+      code: 'EXPECTATION_INCOMPLETE',
+    });
+    expect(await count('legacy_import_runs')).toBe(runs);
     const after = await candidate(nullmatch.invoiceKey);
     expect(after).toMatchObject({ reviewState: 'ADOPT_APPROVED', approvedPanelId: panelBId });
-    expect(after.version).toBeGreaterThanOrEqual(approved.version);
+    expect(after.version).toBe(approved.version);
     expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
-    const left = await db().execute(
-      sql`SELECT 1 FROM audit_logs WHERE action = 'legacy.service_candidate.approval_synthetic_refused' AND entity_id = ${nullmatch.id}`,
-    );
-    expect(left.rows).toHaveLength(1);
     expectOnlyReads();
   });
 

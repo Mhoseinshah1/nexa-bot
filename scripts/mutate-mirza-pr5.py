@@ -56,7 +56,8 @@ M = [
                "    if (false) {")], T_INT, 'alongside a running import'),
     # The approval gate: synthetic on production, the bound row, the mapped panel.
     ('U-02', [(OUT, "  if (approval.synthetic && context.productionLikeTarget) {", "  if (false) {")], T_RULES, 'synthetic approval'),
-    ('I-05', [(OUT, "  if (approval.synthetic && context.productionLikeTarget) {", "  if (false) {")], T_INT, 'SYNTHETIC approval'),
+    # I-05 (the same rule, end to end) is gone since Mirza PR6: a production-like import is
+    # refused by the cutover gate before any approval is read, so U-02 is the rule's test.
     ('U-03', [(OUT, "  if (invoice.checksum !== approval.approvedChecksum) {", "  if (false) {")], T_RULES, 'bound to the very row'),
     ('I-06', [(OUT, "  if (invoice.checksum !== approval.approvedChecksum) {", "  if (false) {")], T_INT, 'checks fail at execution'),
     ('U-04', [(OUT, "  if (!mappedPanelIds(context.mapping).has(panelId)) {", "  if (false) {")], T_RULES, 'bound to the very row'),

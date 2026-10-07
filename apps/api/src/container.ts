@@ -255,6 +255,8 @@ import { LegacyWalletDebtService } from './modules/commerce/legacy-wallet-debts/
 import { DrizzleLegacyWalletDebtRepository } from './modules/commerce/legacy-wallet-debts/infrastructure/drizzle-legacy-wallet-debt.repository.js';
 import { LegacyServiceReviewService } from './modules/platform/legacy-service-review/application/legacy-service-review.service.js';
 import { DrizzleLegacyServiceCandidateRepository } from './modules/platform/legacy-service-review/infrastructure/drizzle-legacy-service-candidate.repository.js';
+import { LegacyCutoverService } from './modules/platform/legacy-cutover/application/legacy-cutover.service.js';
+import { DrizzleLegacyCutoverRepository } from './modules/platform/legacy-cutover/infrastructure/drizzle-legacy-cutover.repository.js';
 import { DrizzleLegacyProductReviewRepository } from './modules/commerce/legacy-product-review/infrastructure/drizzle-legacy-product-review.repository.js';
 import { LegacyInvoiceArchiveService } from './modules/platform/legacy-invoice-archive/application/legacy-invoice-archive.service.js';
 import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy-invoice-archive/infrastructure/drizzle-legacy-invoice-archive.repository.js';
@@ -968,6 +970,13 @@ export interface Container {
    * and executes approvals through P6, never through this.
    */
   readonly legacyServiceReview: LegacyServiceReviewService;
+  /**
+   * Mirza PR6 (owner constraint 3): the owner's cutover approval of one legacy snapshot,
+   * bound to seven exact values, and its revocation. Reads under `legacy.cutover.view`,
+   * approvals under the CRITICAL `legacy.cutover.approve`. The importer reads it inside its
+   * start transaction and refuses a gated import without a matching approval.
+   */
+  readonly legacyCutover: LegacyCutoverService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   /** Discount rules, as an operator manages them (WP8). */
@@ -2323,6 +2332,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     scopeActivity: tenants,
     clock,
+  });
+  const legacyCutover = new LegacyCutoverService({
+    repository: new DrizzleLegacyCutoverRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
   });
   const migrationOpeningBalance = new MigrationOpeningBalanceService({
     repository: walletRepository,
@@ -6885,6 +6906,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     migrationOpeningBalance,
     legacyWalletDebts,
     legacyServiceReview,
+    legacyCutover,
     legacyReviewQueue,
     legacyAdoption,
     payments: paymentService,
@@ -7268,6 +7290,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
               }
             : options.adoption,
         serviceCandidates: legacyServiceCandidateRepository,
+        cutover: legacyCutover,
         guard,
         uow,
         audit,

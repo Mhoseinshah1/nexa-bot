@@ -5,7 +5,8 @@
  *   node scripts/legacy-rehearsal-report-check.mjs validate SCHEMA.json REPORT.json
  *   node scripts/legacy-rehearsal-report-check.mjs get REPORT.json dotted.path
  *
- * `validate` checks the report against docs/legacy-migration/final-report.schema.json and
+ * `validate` checks the report against docs/legacy-migration/final-report.schema.json (or
+ * final-report-v2.schema.json, which carries version 1 by a `$ref` to that file) and
  * prints one line per violation (exit 1 if any). It implements exactly the JSON Schema
  * keywords that schema uses — type, const, enum, pattern, maxLength, minimum, required,
  * properties, additionalProperties, propertyNames, items, uniqueItems, oneOf, $ref — and
@@ -15,6 +16,7 @@
  * `get` prints one value (`absent` when the path does not exist), for the harness's checks.
  */
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const KNOWN = new Set([
   '$schema',
@@ -51,24 +53,35 @@ function typeMatches(want, value) {
   return want === got || (want === 'number' && got === 'integer');
 }
 
-/** Every violation of `schema` (a sub-schema of `root`, by default `root` itself). */
-export function validate(root, value, schema = root) {
+/**
+ * Every violation of `schema` (a sub-schema of `root`, by default `root` itself). A `$ref`
+ * is either `#/$defs/NAME` inside the schema being walked, or the FILE NAME of a sibling
+ * schema given in `refs` (`final-report-v2.schema.json` carries version 1 as `core` that
+ * way); inside a referenced file its own `$defs` apply.
+ */
+export function validate(root, value, schema = root, refs = {}) {
   const errors = [];
-  const resolve = (schema) => {
-    if (schema.$ref === undefined) return schema;
-    const name = schema.$ref.replace(/^#\/\$defs\//u, '');
-    const target = root.$defs?.[name];
-    if (target === undefined) throw new Error(`unresolvable $ref ${schema.$ref}`);
-    return resolve(target);
+  const resolve = (schema, at) => {
+    if (schema.$ref === undefined) return [schema, at];
+    if (schema.$ref.startsWith('#/$defs/')) {
+      const name = schema.$ref.slice('#/$defs/'.length);
+      const target = at.$defs?.[name];
+      if (target === undefined) throw new Error(`unresolvable $ref ${schema.$ref}`);
+      return resolve(target, at);
+    }
+    if (schema.$ref.startsWith('#')) throw new Error(`unsupported $ref ${schema.$ref}`);
+    const external = refs[schema.$ref];
+    if (external === undefined) throw new Error(`unresolvable $ref ${schema.$ref}`);
+    return resolve(external, external);
   };
-  const walk = (raw, v, path) => {
-    const s = resolve(raw);
+  const walk = (raw, v, path, at) => {
+    const [s, base] = resolve(raw, at);
     for (const key of Object.keys(s)) {
       if (!KNOWN.has(key)) throw new Error(`schema keyword "${key}" at ${path} is not supported`);
     }
     const fail = (why) => errors.push(`${path || '<root>'}: ${why}`);
     if (s.oneOf !== undefined) {
-      const ok = s.oneOf.filter((option) => validate(root, v, option).length === 0).length;
+      const ok = s.oneOf.filter((option) => validate(base, v, option, refs).length === 0).length;
       if (ok !== 1) fail(`matches ${String(ok)} of the oneOf options, not exactly one`);
       return;
     }
@@ -91,26 +104,48 @@ export function validate(root, value, schema = root) {
     if (Array.isArray(v)) {
       if (s.uniqueItems === true && new Set(v.map((x) => JSON.stringify(x))).size !== v.length)
         fail('items are not unique');
-      if (s.items !== undefined) v.forEach((item, i) => walk(s.items, item, `${path}[${i}]`));
+      if (s.items !== undefined) v.forEach((item, i) => walk(s.items, item, `${path}[${i}]`, base));
     }
     if (typeOf(v) === 'object') {
       for (const key of s.required ?? []) if (!(key in v)) fail(`missing required "${key}"`);
       for (const [key, child] of Object.entries(v)) {
-        const at = path ? `${path}.${key}` : key;
+        const at2 = path ? `${path}.${key}` : key;
         if (
           s.propertyNames?.pattern !== undefined &&
           !new RegExp(s.propertyNames.pattern, 'u').test(key)
         )
           fail(`property name "${key}" does not match ${s.propertyNames.pattern}`);
-        if (s.properties?.[key] !== undefined) walk(s.properties[key], child, at);
+        if (s.properties?.[key] !== undefined) walk(s.properties[key], child, at2, base);
         else if (s.additionalProperties === false) fail(`unexpected property "${key}"`);
         else if (typeof s.additionalProperties === 'object')
-          walk(s.additionalProperties, child, at);
+          walk(s.additionalProperties, child, at2, base);
       }
     }
   };
-  walk(schema, value, '');
+  walk(schema, value, '', root);
   return errors;
+}
+
+/** Every external `$ref` of a schema file, loaded from the schema's own directory. */
+export function loadRefs(schemaPath, schema, refs = {}) {
+  const visit = (node) => {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    const ref = node.$ref;
+    if (typeof ref === 'string' && !ref.startsWith('#') && refs[ref] === undefined) {
+      if (!/^[a-z0-9][a-z0-9.-]{0,127}\.json$/u.test(ref))
+        throw new Error(`unsupported $ref ${ref}`);
+      const path = join(dirname(schemaPath), ref);
+      refs[ref] = JSON.parse(readFileSync(path, 'utf8'));
+      loadRefs(path, refs[ref], refs);
+    }
+    for (const child of Object.values(node)) visit(child);
+  };
+  visit(schema);
+  return refs;
 }
 
 function get(value, path) {
@@ -125,9 +160,12 @@ function get(value, path) {
 function main(argv) {
   const [command, a, b] = argv;
   if (command === 'validate' && a && b) {
+    const schema = JSON.parse(readFileSync(a, 'utf8'));
     const errors = validate(
-      JSON.parse(readFileSync(a, 'utf8')),
+      schema,
       JSON.parse(readFileSync(b, 'utf8')),
+      schema,
+      loadRefs(a, schema),
     );
     for (const error of errors) process.stdout.write(`${error}\n`);
     return errors.length === 0 ? 0 : 1;
