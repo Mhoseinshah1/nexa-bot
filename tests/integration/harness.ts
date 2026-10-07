@@ -164,6 +164,9 @@ export async function resetDatabase(db: Database): Promise<void> {
        trial_limit_overrides, resellers,
        -- WP11A, before the payments they reference.
        gateway_invoices, payment_gateway_credentials, payment_gateway_call_budgets,
+       -- Mirza PR5: legacy service candidates, before the services, runs, archive, panels
+       -- and admins they name.
+       legacy_service_candidates,
        -- Mirza PR2: the legacy product review, before the products and admins it names.
        legacy_product_reviews,
        provisioning_operations, services, payments, orders, discounts, products,

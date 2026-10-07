@@ -1604,6 +1604,27 @@
       "when": 1791385061256,
       "tag": "0228_legacy_wallet_debt_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 229,
+      "version": "7",
+      "when": 1791388852667,
+      "tag": "0229_legacy_service_candidates",
+      "breakpoints": true
+    },
+    {
+      "idx": 230,
+      "version": "7",
+      "when": 1791388872674,
+      "tag": "0230_legacy_service_candidates_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 231,
+      "version": "7",
+      "when": 1791388872675,
+      "tag": "0231_legacy_service_review_grants",
+      "breakpoints": true
     }
   ]
 }

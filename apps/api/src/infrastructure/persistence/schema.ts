@@ -246,6 +246,8 @@ import {
   LEGACY_INVOICE_ARCHIVE_CLASSES,
   LEGACY_WALLET_DEBT_CURRENCY,
   LEGACY_WALLET_DEBT_STATES,
+  LEGACY_SERVICE_OUTCOMES,
+  LEGACY_SERVICE_REVIEW_STATES,
   LEGACY_INVOICE_ARCHIVE_RUN_FAILURES,
   LEGACY_INVOICE_ARCHIVE_RUN_STATES,
   LEGACY_INVOICE_PARSE_NOTES,
@@ -13826,6 +13828,124 @@ export const legacyWalletDebts = pgTable(
     check(
       'legacy_wallet_debts_decision_check',
       sql`(state = 'PENDING_REVIEW' OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500) AND version >= 1`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR5 — one live legacy invoice considered as a service, with the ONE
+ * outcome the latest import run that decided it gave it, the evidence behind that outcome,
+ * and the operator's review (`docs/legacy-migration/service-review.md`).
+ *
+ * The importer writes the outcome and evidence on every APPLY run (insert, or a conditional
+ * update of this invoice's row — never a second row: `(tenant_id, invoice_key)` is unique).
+ * The operator writes only the review columns, bound to `version`. An invoice that was not
+ * adopted is history: `archive_id` names the invoice archive revision (PR3) it is kept in.
+ * Codes, NEXA ids, counts and hashes only — never a legacy username, a Telegram id or a
+ * subscription link (those stay in the archive, behind its own permission).
+ */
+export const legacyServiceCandidates = pgTable(
+  'legacy_service_candidates',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** `invoice.id_invoice` as read (the archive's bound; any shape — a bad key is an outcome). */
+    invoiceKey: text('invoice_key').notNull(),
+    /** The APPLY run that last decided it. */
+    runId: uuid('run_id').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    /** The source carried the synthetic-fixture marker. Never acted on in production. */
+    synthetic: boolean('synthetic').notNull(),
+    /** The importer's `invoice:v1` checksum of the source row that run decided from. */
+    invoiceChecksum: text('invoice_checksum').notNull(),
+    outcome: text('outcome').notNull(),
+    /** The raw map or adoption reason behind the outcome, when there is one. */
+    blocker: text('blocker'),
+    /** `LegacyServiceEvidence` (codes, NEXA ids, counts). */
+    evidence: jsonb('evidence').notNull(),
+    /** sha256 of the canonical evidence: a change of evidence is a new version. */
+    evidenceHash: text('evidence_hash').notNull(),
+    /** The legacy `code_panel` / `code_product`, trimmed as the importer reads them. */
+    panelCode: text('panel_code'),
+    productCode: text('product_code'),
+    /** The invoice archive revision this candidate is history in (null: not archived yet). */
+    archiveId: uuid('archive_id'),
+    /** The adopted NEXA service: exactly when the outcome is ADOPTED or ALREADY_ADOPTED. */
+    serviceId: uuid('service_id'),
+    reviewState: text('review_state').notNull(),
+    /** An ADOPT approval: the panel named (null: the map's), and what it was bound to. */
+    approvedPanelId: uuid('approved_panel_id'),
+    approvedChecksum: text('approved_checksum'),
+    approvedOutcome: text('approved_outcome'),
+    /** Why the last approval was not executed (an outcome or an approval refusal code). */
+    lastApprovalRefusal: text('last_approval_refusal'),
+    decisionReason: text('decision_reason'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    decidedAt: timestamptz('decided_at'),
+    /** When the inventory walk that decided it finished; null when no inventory was read. */
+    observedAt: timestamptz('observed_at'),
+    version: integer('version').notNull().default(1),
+    firstDecidedAt: timestamptz('first_decided_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_service_candidates_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_service_candidates_tenant_invoice_key').on(table.tenantId, table.invoiceKey),
+    index('legacy_service_candidates_outcome_idx').on(table.tenantId, table.outcome, table.id),
+    index('legacy_service_candidates_review_idx').on(table.tenantId, table.reviewState, table.id),
+    index('legacy_service_candidates_panel_idx').on(table.tenantId, table.panelCode, table.id),
+    index('legacy_service_candidates_product_idx').on(table.tenantId, table.productCode, table.id),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_run_fk',
+      columns: [table.tenantId, table.runId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+    }),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_archive_fk',
+      columns: [table.tenantId, table.archiveId],
+      foreignColumns: [legacyInvoiceArchive.tenantId, legacyInvoiceArchive.id],
+    }),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_service_fk',
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+    }),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_panel_fk',
+      columns: [table.tenantId, table.approvedPanelId],
+      foreignColumns: [panels.tenantId, panels.id],
+    }),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_admin_fk',
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('legacy_service_candidates_outcome_check', enumCheck('outcome', LEGACY_SERVICE_OUTCOMES)),
+    check(
+      'legacy_service_candidates_review_state_check',
+      enumCheck('review_state', LEGACY_SERVICE_REVIEW_STATES),
+    ),
+    check(
+      'legacy_service_candidates_adopted_check',
+      sql`((service_id IS NOT NULL) = (outcome IN ('ADOPTED', 'ALREADY_ADOPTED'))) AND ((review_state = 'ADOPTED') = (outcome IN ('ADOPTED', 'ALREADY_ADOPTED')))`,
+    ),
+    check(
+      'legacy_service_candidates_approval_check',
+      sql`((approved_checksum IS NOT NULL) = (review_state IN ('ADOPT_APPROVED', 'ADOPTING'))) AND ((approved_outcome IS NOT NULL) = (approved_checksum IS NOT NULL)) AND (approved_panel_id IS NULL OR approved_checksum IS NOT NULL) AND (approved_outcome IS NULL OR approved_outcome IN (${sql.raw(LEGACY_SERVICE_OUTCOMES.map((o) => `'${o}'`).join(', '))}))`,
+    ),
+    check(
+      'legacy_service_candidates_decision_check',
+      sql`(review_state NOT IN ('ACKNOWLEDGED', 'KEPT_AS_HISTORY', 'ADOPT_APPROVED', 'ADOPTING') OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL AND decision_reason IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500) AND version >= 1`,
+    ),
+    check(
+      'legacy_service_candidates_shape_check',
+      sql`char_length(invoice_key) BETWEEN 1 AND 1000 AND (panel_code IS NULL OR (panel_code <> '' AND panel_code = btrim(panel_code) AND char_length(panel_code) <= 1000)) AND (product_code IS NULL OR (product_code <> '' AND product_code = btrim(product_code) AND char_length(product_code) <= 1000)) AND jsonb_typeof(evidence) = 'object' AND (blocker IS NULL OR blocker ~ '^[A-Z_]{1,64}$') AND (last_approval_refusal IS NULL OR last_approval_refusal ~ '^[A-Z_]{1,64}$')`,
+    ),
+    check(
+      'legacy_service_candidates_hashes_check',
+      sql`source_fingerprint ~ '^[0-9a-f]{64}$' AND invoice_checksum ~ '^[0-9a-f]{64}$' AND evidence_hash ~ '^[0-9a-f]{64}$' AND (approved_checksum IS NULL OR approved_checksum ~ '^[0-9a-f]{64}$')`,
     ),
   ],
 );
