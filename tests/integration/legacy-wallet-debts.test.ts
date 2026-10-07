@@ -340,6 +340,29 @@ describe('Mirza PR4: legacy wallet debts', () => {
     ).rejects.toThrow();
   });
 
+  it('a retried decision returns the ORIGINAL response, even after a reopen (Codex on #233)', async () => {
+    const { debt } = await debtFor(tenantA, '800550');
+    const body = {
+      idempotencyKey: key(),
+      expectedVersion: 1,
+      decision: 'WAIVED',
+      reason: 'first',
+    };
+    const first = await service().decide(tenantA, owner, debt.id, body);
+    expect(first).toMatchObject({ state: 'WAIVED', version: 2 });
+    await service().reopen(tenantA, owner, debt.id, {
+      idempotencyKey: key(),
+      expectedVersion: 2,
+      reason: 'again',
+    });
+    expect((await service().get(tenantA, owner, debt.id)).version).toBe(3);
+    // The retry of the first key answers with what the first call answered — v2, WAIVED —
+    // not the row as it stands now (v3, PENDING_REVIEW), and writes nothing.
+    const replay = await service().decide(tenantA, owner, debt.id, body);
+    expect(replay).toEqual(first);
+    expect((await service().get(tenantA, owner, debt.id)).state).toBe('PENDING_REVIEW');
+  });
+
   it('is permission-gated: an observer cannot view, a support admin cannot decide; denials audited', async () => {
     const { debt } = await debtFor(tenantA, '800600');
     const observer = adminActorFor(
