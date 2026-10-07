@@ -564,6 +564,27 @@ export const PERMISSIONS = [
     "View and search the legacy invoice archive's personal data (Telegram ids, usernames)",
     'HIGH',
   ),
+  /*
+   * Mirza migration PR4 — legacy wallet debts (owner decision 6, 2026-10-07). A negative
+   * legacy `user.Balance` is no longer a ledger DEBIT: it is recorded as a debt beside the
+   * ledger, the customer's NEXA balance starts at 0, and the debt is NEVER collected. A row
+   * names the legacy user (a Telegram id) and an exact amount owed, so:
+   *
+   * - VIEW (MEDIUM, never auto-granted to `observer` with the LOW keys) lists the debts and
+   *   their aggregate.
+   * - DECIDE (HIGH) records the owner's per-customer decision: ACKNOWLEDGED, WAIVED, or back
+   *   to PENDING_REVIEW. No decision moves money — collecting would need a new ledger reason
+   *   and an explicit owner instruction, and neither exists.
+   *
+   * Owner-only by default. Neither is a SYSTEM_JOB permission; the importer records a debt
+   * under maintenance.run, as it posts an opening.
+   */
+  p('legacy.debts.view', 'View the legacy wallet debts held for review', 'MEDIUM'),
+  p(
+    'legacy.debts.decide',
+    'Record the owner decision on a legacy wallet debt (acknowledge, waive, reopen; never collects)',
+    'HIGH',
+  ),
 
   // Platform
   p('tenant.cross_read', 'Read data across tenants', 'CRITICAL'),
@@ -987,6 +1008,8 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'legacy.products.decide': 'legacy.products.view',
   /* Mirza PR3. Personal data is revealed ON the archive rows `legacy.invoices.view` reads. */
   'legacy.invoices.pii.view': 'legacy.invoices.view',
+  /* Mirza PR4. A decision is made FROM the debt row `legacy.debts.view` reads. */
+  'legacy.debts.decide': 'legacy.debts.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass
