@@ -144,6 +144,8 @@ export * from './legacy-migration.js';
 export * from './legacy-import.js';
 /** Mirza migration PR1: legacy table classes and read set names (codes only, never rows). */
 export * from './legacy-inventory.js';
+/** Mirza migration PR2: the legacy product review (states, parse notes, HTTP shapes). */
+export * from './legacy-product-review.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */
 export * from './business-chats.js';
 /** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */
