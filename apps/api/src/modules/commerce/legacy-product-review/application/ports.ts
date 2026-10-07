@@ -113,7 +113,10 @@ export interface LegacyProductReviewRepository {
     change: LegacyProductReviewChange,
     tx: TransactionScope,
   ): Promise<LegacyProductReviewRecord | null>;
-  /** Rows a completed read did not see: present until now, and last read by another read. */
+  /**
+   * Rows a completed read did not see and has not yet acknowledged: last read by another read,
+   * and either never marked absent or marked by an EARLIER read.
+   */
   absentFrom(
     scope: TenantContext,
     readFingerprint: string,

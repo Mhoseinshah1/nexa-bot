@@ -233,7 +233,7 @@ price_product, Volume_constraint, Location, Service_time, Category`; the importe
 | Draft creation          | `ProductService.createWithin` — the product service's own create body inside the decision's transaction                                                                                                                                                                                                                                                                                  |
 | Export                  | `LegacyProductReviewService.exportMapping`, CLI `legacy-import products-export [--panel-map FILE]`                                                                                                                                                                                                                                                                                       |
 | Web                     | `LegacyProductsController` (`/api/v1/legacy-products…`), page `/legacy-products` in the sales/catalogue nav group                                                                                                                                                                                                                                                                        |
-| Tests                   | `tests/unit/legacy-product-review-domain.test.ts`, `legacy-products-read-set.test.ts`, `legacy-import-products-cli.test.ts`, `legacy-products-boundary.test.ts` (extended); `tests/integration/legacy-product-review.test.ts`; `tests/legacy-mysql/legacy-mysql-products.test.ts`; `tests/web/legacy-products.test.tsx`; mutation driver `scripts/mutate-mirza-pr2.py` (22 of 22 killed) |
+| Tests                   | `tests/unit/legacy-product-review-domain.test.ts`, `legacy-products-read-set.test.ts`, `legacy-import-products-cli.test.ts`, `legacy-products-boundary.test.ts` (extended); `tests/integration/legacy-product-review.test.ts`; `tests/legacy-mysql/legacy-mysql-products.test.ts`; `tests/web/legacy-products.test.tsx`; mutation driver `scripts/mutate-mirza-pr2.py` (28 of 28 killed) |
 
 ### Commands, routes and permissions (for later PRs and the runbook)
 
@@ -255,14 +255,14 @@ source (`SOURCE_FINGERPRINT_MISMATCH`, `READ_SET_FINGERPRINT_MISMATCH`,
 refused map (`PanelMappingRefused`); 1 anything else (a `legacy_product_review.*` refusal
 included).
 
-| Route (`/api/v1`)                                                                                                            | Permission                                |
-| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `GET /legacy-products?state=&attention=true&q=&after=&limit=`                                                                | `legacy.products.view`                    |
-| `GET /legacy-products/:id`                                                                                                   | `legacy.products.view`                    |
-| `POST /legacy-products/:id/approve-existing` `{idempotencyKey, expectedFactsChecksum, productId, reason}`                    | `legacy.products.decide`                  |
-| `POST /legacy-products/:id/approve-new` `{idempotencyKey, expectedFactsChecksum, title, durationDays, trafficBytes, reason}` | `legacy.products.decide` + `catalog.edit` |
-| `POST /legacy-products/:id/reject` `{idempotencyKey, expectedFactsChecksum, reason}`                                         | `legacy.products.decide`                  |
-| `POST /legacy-products/:id/reopen` `{idempotencyKey, reason}`                                                                | `legacy.products.decide`                  |
+| Route (`/api/v1`)                                                                                                                             | Permission                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `GET /legacy-products?state=&attention=true&q=&after=&limit=`                                                                                 | `legacy.products.view`                    |
+| `GET /legacy-products/:id`                                                                                                                    | `legacy.products.view`                    |
+| `POST /legacy-products/:id/approve-existing` `{idempotencyKey, expectedFactsChecksum, expectedVersion, productId, reason}`                    | `legacy.products.decide`                  |
+| `POST /legacy-products/:id/approve-new` `{idempotencyKey, expectedFactsChecksum, expectedVersion, title, durationDays, trafficBytes, reason}` | `legacy.products.decide` + `catalog.edit` |
+| `POST /legacy-products/:id/reject` `{idempotencyKey, expectedFactsChecksum, expectedVersion, reason}`                                         | `legacy.products.decide`                  |
+| `POST /legacy-products/:id/reopen` `{idempotencyKey, expectedVersion, reason}`                                                                | `legacy.products.decide`                  |
 
 The CLI ingest and export run as `SYSTEM_JOB` under `maintenance.run`. Audit actions:
 `legacy.product_review.read`, `.source_changed`, `.approve_existing`, `.approve_new`,
@@ -296,8 +296,11 @@ refusal of a decision is a `DENIED` row.
    parsed, and it can only be rejected. This is the fail-closed interim answer; the owner's
    answer to OQ-LPR-05 is still open.
 5. **Absent codes.** A complete read that no longer has a code sets
-   `missing_since_read_fingerprint`; a decided row also moves to `SOURCE_CHANGED`. An
-   absent code cannot be approved, only rejected.
+   `missing_since_read_fingerprint` to ITS fingerprint; a decided row also moves to
+   `SOURCE_CHANGED` at its first absence. Every later read that still lacks the code
+   re-acknowledges it (the column is the LATEST read without the code; the first one is in
+   the audit trail), so the export of that later read is not blocked by an earlier one
+   (Codex review of #231). An absent code cannot be approved, only rejected.
 6. **`SOURCE_CHANGED` remembers the decision it invalidated**: `prior_state` (CHECK: set
    iff `SOURCE_CHANGED`), and an approved row keeps its `approved_product_id` and
    `approved_facts_checksum` for the operator to see. It still never exports: an export
@@ -325,9 +328,12 @@ refusal of a decision is a `DENIED` row.
     count: a keyset over a count that changes on every read skips or repeats rows. The count
     is a column. The default view is the rows that want a decision (PENDING_REVIEW and
     SOURCE_CHANGED).
-11. **A decision binds to the facts checksum the operator saw** (`expectedFactsChecksum`)
-    and to the row's version under its row lock; a different checksum is
-    `legacy_product_review.facts_changed`, never an approval of facts nobody saw.
+11. **A decision binds to the facts checksum AND the version the operator saw**
+    (`expectedFactsChecksum`, `expectedVersion`), checked under the row lock; so does a
+    reopen (version). A different checksum is `legacy_product_review.facts_changed`; a
+    different version is `legacy_product_review.version_conflict`. The checksum alone is
+    not enough: a reopen and a new decision on unchanged facts leave it as it was, and a
+    stale decision or reopen would overwrite the newer one (Codex review of #231).
 
 ### Not run (needs the real dump; WP G)
 

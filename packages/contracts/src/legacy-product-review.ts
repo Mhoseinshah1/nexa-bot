@@ -107,6 +107,11 @@ export const LEGACY_PRODUCT_REVIEW_ERROR_CODES = {
   NOT_IN_STATE: 'legacy_product_review.not_in_state',
   /** The facts are not the ones the operator saw (`expectedFactsChecksum`). */
   FACTS_CHANGED: 'legacy_product_review.facts_changed',
+  /**
+   * The row is not at the version the operator saw (`expectedVersion`): another decision, a
+   * reopen or a read moved it since. Refused, never applied over the newer state.
+   */
+  VERSION_CONFLICT: 'legacy_product_review.version_conflict',
   /** The latest read has no row for this code: it cannot be approved. */
   SOURCE_ABSENT: 'legacy_product_review.source_absent',
   /** The code has more than one legacy row: it cannot be approved. */
@@ -146,6 +151,8 @@ export const LEGACY_PRODUCT_REVIEW_ROUTES = {
 
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/u, 'a SHA-256 as 64 lowercase hex characters');
 const idempotencyKey = z.string().min(8).max(255);
+/** The row's `version` as the operator saw it: every decision and every reopen binds to it. */
+const expectedVersion = z.number().int().min(1);
 const reason = z
   .string()
   .trim()
@@ -188,7 +195,10 @@ export const legacyProductReviewViewSchema = z.object({
   decidedAt: z.iso.datetime().nullable(),
   readFingerprint: z.string(),
   sourceFingerprint: z.string(),
-  /** The read set fingerprint of the first read that no longer had this code; null while present. */
+  /**
+   * The products read fingerprint of the LATEST completed read that did not have this code
+   * (every such read re-acknowledges it); null while the code is present.
+   */
   missingSinceReadFingerprint: z.string().nullable(),
   /** Whether `products-export` exports it under its current read fingerprint. */
   exportable: z.boolean(),
@@ -231,6 +241,7 @@ export const legacyProductApproveExistingRequestSchema = z
     idempotencyKey,
     /** The facts the operator decided on. A different checksum is refused, never approved. */
     expectedFactsChecksum: sha256Hex,
+    expectedVersion,
     productId: uuidV7Schema,
     reason: reason.nullable().default(null),
   })
@@ -249,6 +260,7 @@ export const legacyProductApproveNewRequestSchema = z
   .object({
     idempotencyKey,
     expectedFactsChecksum: sha256Hex,
+    expectedVersion,
     title: z.string().trim().min(1).max(PRODUCT_TITLE_MAX_LENGTH),
     durationDays: z.number().int().min(0).max(MAX_DURATION_DAYS),
     /** Bytes, as a decimal string. */
@@ -264,9 +276,11 @@ export const legacyProductApproveNewRequestSchema = z
 export type LegacyProductApproveNewRequest = z.infer<typeof legacyProductApproveNewRequestSchema>;
 
 export const legacyProductRejectRequestSchema = z
-  .object({ idempotencyKey, expectedFactsChecksum: sha256Hex, reason })
+  .object({ idempotencyKey, expectedFactsChecksum: sha256Hex, expectedVersion, reason })
   .strict();
 export type LegacyProductRejectRequest = z.infer<typeof legacyProductRejectRequestSchema>;
 
-export const legacyProductReopenRequestSchema = z.object({ idempotencyKey, reason }).strict();
+export const legacyProductReopenRequestSchema = z
+  .object({ idempotencyKey, expectedVersion, reason })
+  .strict();
 export type LegacyProductReopenRequest = z.infer<typeof legacyProductReopenRequestSchema>;

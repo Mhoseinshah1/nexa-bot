@@ -151,8 +151,46 @@ describe('the legacy product review page', () => {
     await waitFor(() => expect(calls(api, 'POST', '/reject')).toHaveLength(1));
     expect(calls(api, 'POST', '/reject')[0]!.body).toMatchObject({
       expectedFactsChecksum: CHECKSUM,
+      expectedVersion: 1,
       reason: 'نه',
     });
+  });
+
+  it('a reopen names the version shown; a stale one is refused in words (Codex #231)', async () => {
+    const decided = review({
+      state: 'APPROVED_EXISTING',
+      approvedProductId: PRODUCT_ID,
+      version: 4,
+    });
+    const api = stubApi([
+      { url: '/legacy-products', method: 'GET', body: { reviews: [decided], nextCursor: null } },
+      {
+        url: `/legacy-products/${ID}/reopen`,
+        method: 'POST',
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'legacy_product_review.version_conflict',
+            message: 'stale',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<LegacyProductsPage denied={false} mayDecide mayCreateProduct mayPickProduct />);
+    await screen.findByText('synthetic 30GB');
+    fireEvent.click(screen.getByRole('button', { name: t('web.lpr_open') }));
+    fireEvent.change(await screen.findByLabelText(t('web.lpr_reason')), {
+      target: { value: 'دوباره' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.lpr_reopen') }));
+    await waitFor(() => expect(calls(api, 'POST', '/reopen')).toHaveLength(1));
+    expect(calls(api, 'POST', '/reopen')[0]!.body).toMatchObject({
+      expectedVersion: 4,
+      reason: 'دوباره',
+    });
+    expect(await screen.findByText(t('web.lpr_fault_version'))).toBeInTheDocument();
   });
 
   it('without decide, the detail is read-only; without catalog.edit, no draft form', async () => {
@@ -186,6 +224,53 @@ describe('the legacy product review page', () => {
     expect(
       within(document.body).getByText(t('web.lpr_note_conflict'), { exact: false }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('the approve-existing product picker', () => {
+  const product = (n: number) => ({
+    id: `019600ab-cdef-7012-8345-${String(n).padStart(12, '0')}`,
+    title: `plan ${String(n)}`,
+    description: null,
+    status: 'ACTIVE',
+    audience: 'EVERYONE',
+    sortOrder: n,
+    panelId: null,
+    categoryId: null,
+    durationDays: 30,
+    trafficBytes: '1',
+    deviceLimit: null,
+    priceAmount: null,
+    priceCurrency: null,
+    displayLocations: [],
+    displayFeatures: [],
+    serviceLocationLabel: null,
+    createdAt: '2026-10-07T09:00:00.000Z',
+    updatedAt: '2026-10-07T09:00:00.000Z',
+  });
+
+  it('offers every product, past the first page of 100 (Codex #231)', async () => {
+    const first = Array.from({ length: 100 }, (_, i) => product(i + 1));
+    const second = Array.from({ length: 5 }, (_, i) => product(101 + i));
+    const api = stubApi([
+      { url: '/legacy-products', method: 'GET', body: { reviews: [review()], nextCursor: null } },
+      { url: '/products?limit=100', method: 'GET', body: { products: first, nextCursor: 'c1' } },
+      {
+        url: '/products?limit=100&cursor=c1',
+        method: 'GET',
+        body: { products: second, nextCursor: null },
+      },
+    ]);
+    renderPage(<LegacyProductsPage denied={false} mayDecide mayCreateProduct mayPickProduct />);
+    await screen.findByText('synthetic 30GB');
+    fireEvent.click(screen.getByRole('button', { name: t('web.lpr_open') }));
+    const picker = await screen.findByLabelText(t('web.lpr_pick_product'));
+    await waitFor(() =>
+      expect(within(picker).getByRole('option', { name: 'plan 105' })).toBeInTheDocument(),
+    );
+    // "—" plus all 105.
+    expect(within(picker).getAllByRole('option')).toHaveLength(106);
+    expect(calls(api, 'GET', 'cursor=c1')).toHaveLength(1);
   });
 });
 

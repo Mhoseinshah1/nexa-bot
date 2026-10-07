@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   LEGACY_PRODUCT_REVIEW_STATES,
   legacyProductApproveNewRequestSchema,
+  legacyProductRejectRequestSchema,
+  legacyProductReopenRequestSchema,
   type LegacyProductReviewState,
 } from '@nexa/contracts';
 import {
@@ -186,19 +188,31 @@ describe('what a read does to a row', () => {
     expect(decideIngest(held('SOURCE_CHANGED'), changed)).toEqual({ kind: 'FACTS_UPDATED' });
   });
 
-  it('a vanished decided code is SOURCE_CHANGED; an undecided one is marked; once only', () => {
-    expect(decideAbsence(held('APPROVED_NEW'))).toEqual({
+  it('a vanished decided code is SOURCE_CHANGED; an undecided one is marked; once per read', () => {
+    const B = F(12);
+    expect(decideAbsence(held('APPROVED_NEW'), B)).toEqual({
       kind: 'SOURCE_CHANGED',
       prior: 'APPROVED_NEW',
     });
-    expect(decideAbsence(held('REJECTED'))).toEqual({ kind: 'SOURCE_CHANGED', prior: 'REJECTED' });
-    expect(decideAbsence(held('PENDING_REVIEW'))).toEqual({ kind: 'MARK_MISSING' });
-    expect(decideAbsence(held('SOURCE_CHANGED'))).toEqual({ kind: 'MARK_MISSING' });
-    expect(
-      decideAbsence(held('APPROVED_EXISTING', { missingSinceReadFingerprint: F(12) })),
-    ).toEqual({
+    expect(decideAbsence(held('REJECTED'), B)).toEqual({
+      kind: 'SOURCE_CHANGED',
+      prior: 'REJECTED',
+    });
+    expect(decideAbsence(held('PENDING_REVIEW'), B)).toEqual({ kind: 'MARK_MISSING' });
+    expect(decideAbsence(held('SOURCE_CHANGED'), B)).toEqual({ kind: 'MARK_MISSING' });
+    // Already acknowledged by THIS read: nothing.
+    expect(decideAbsence(held('SOURCE_CHANGED', { missingSinceReadFingerprint: B }), B)).toEqual({
       kind: 'NONE',
     });
+  });
+
+  it('a code still absent in a LATER read is acknowledged by that read too (Codex #231 P1)', () => {
+    for (const state of LEGACY_PRODUCT_REVIEW_STATES) {
+      expect(
+        decideAbsence(held(state, { missingSinceReadFingerprint: F(12) }), F(13)),
+        state,
+      ).toEqual({ kind: 'STILL_ABSENT' });
+    }
   });
 });
 
@@ -241,6 +255,7 @@ describe('approve-as-new: a draft nobody can buy', () => {
     const body = {
       idempotencyKey: 'k'.repeat(16),
       expectedFactsChecksum: F(1),
+      expectedVersion: 1,
       title: 'x',
       durationDays: 30,
       trafficBytes: '1',
@@ -257,6 +272,27 @@ describe('approve-as-new: a draft nobody can buy', () => {
         false,
       );
     }
+  });
+
+  it('every decision and every reopen names the version it was made on', () => {
+    expect(
+      legacyProductReopenRequestSchema.safeParse({ idempotencyKey: 'k'.repeat(16), reason: 'x' })
+        .success,
+    ).toBe(false);
+    expect(
+      legacyProductReopenRequestSchema.safeParse({
+        idempotencyKey: 'k'.repeat(16),
+        expectedVersion: 3,
+        reason: 'x',
+      }).success,
+    ).toBe(true);
+    expect(
+      legacyProductRejectRequestSchema.safeParse({
+        idempotencyKey: 'k'.repeat(16),
+        expectedFactsChecksum: F(1),
+        reason: 'x',
+      }).success,
+    ).toBe(false);
   });
 
   it('is refused by the order rule four ways over, starting with NOT_PURCHASABLE', () => {
