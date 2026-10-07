@@ -98,6 +98,7 @@ named test, and restores the file from the copy it read. Every mutant below was 
 | CB-09 | test enabled with unsaved edits                                            | web: withholds the test and the count                    |
 | CB-10 | re-queue without asking                                                    | web: asks before a re-queue                              |
 | CB-11 | the launch's count/fingerprint comparison removed (frozen audience)        | broadcasts.test: freezes exactly the previewed audience  |
+| CB-17 | a test send no longer refreshes the history (Codex P2 on PR #237)          | web: reads the history again after a test                |
 
 ## Manual acceptance — NOT RUN
 

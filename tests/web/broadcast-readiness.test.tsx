@@ -212,6 +212,25 @@ describe('the composer’s test and count', () => {
     expect(status.textContent).not.toContain(T_SENT);
   });
 
+  it('reads the history again after a test, so the test shows up without a reload', async () => {
+    const api = stubApi([
+      OPTIONS,
+      { url: `/broadcasts/${ID}`, body: { broadcast: broadcast() } },
+      { url: `/broadcasts/${ID}/history`, body: { entries: [] } },
+      { url: `/broadcasts/${ID}/test`, body: { outcome: 'NOT_SENT' } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    fireEvent.click(await screen.findByRole('button', { name: 'ارسال آزمایشی به تلگرام من' }));
+    await screen.findByText(/نتیجهٔ آخرین ارسال آزمایشی/);
+    // Even a test that did not reach the operator is a row: the history is read after it.
+    await waitFor(() =>
+      expect(
+        api.calls.findIndex((call) => call.url.includes('/test')) <
+          api.calls.map((call) => call.url.includes('/history')).lastIndexOf(true),
+      ).toBe(true),
+    );
+  });
+
   it('withholds the test and the count while the composer holds unsaved edits', async () => {
     const api = stubApi([
       OPTIONS,

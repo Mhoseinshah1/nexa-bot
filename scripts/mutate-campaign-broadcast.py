@@ -66,6 +66,8 @@ M=[
  # C3 attribution: only PAID redemptions, and "delivered" means the announcement was SENT.
  ('CB-15',[(CREPO,"           AND o.state = 'PAID'\n","")],T_C,'PAID redeemers against who was told'),
  ('CB-16',[(CREPO,"WHERE t.customer_id = r.customer_id AND t.state = 'SENT'))::int","WHERE t.customer_id = r.customer_id))::int")],T_C,'PAID redeemers against who was told'),
+ # Web: a test send is a history row; the history is read again after it (Codex P2, PR #237).
+ ('CB-17',[(PAGE,"      void client.invalidateQueries({ queryKey: ['broadcast-history', record.id] });\n    },\n  });\n  const large","    },\n  });\n  const large")],T_W,'reads the history again after a test'),
  ('CB-10',[(PAGE,"              onClick={() => setRetryAsked(true)}","              onClick={() => steer.mutate('retryFailed')}")],T_W,'asks before a re-queue'),
 ]
 
