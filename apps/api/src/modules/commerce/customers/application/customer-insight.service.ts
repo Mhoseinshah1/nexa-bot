@@ -82,8 +82,10 @@ export interface WorkspacePaymentRow {
 }
 
 /**
- * Customer 360's workspace reads (roadmap B5). Every count reads at most `cap` rows — the
- * work is bounded, not only the answer — and every list is newest first, at most `limit`.
+ * Customer 360's workspace reads (roadmap B5). Every count answers at most `cap` (a LIMIT
+ * bounds the rows that match; the work is bounded by reaching one customer's rows through a
+ * customer-leading index, which the adapter names per count), and every list is newest
+ * first, at most `limit`.
  * Each is the predicate the page it deep-links to filters by, narrowed to one customer.
  */
 export interface CustomerWorkspaceReader {
@@ -93,8 +95,12 @@ export interface CustomerWorkspaceReader {
     customerId: UserId,
     cap: number,
   ): Promise<{ readonly awaitingSupport: number; readonly open: number }>;
-  /** Business conversations with this customer in HANDOFF_REQUIRED. */
-  businessHandoffs(scope: TenantContext, customerId: UserId, cap: number): Promise<number>;
+  /** Business conversations with this customer in HANDOFF_REQUIRED, and the newest one's id. */
+  businessHandoffs(
+    scope: TenantContext,
+    customerId: UserId,
+    cap: number,
+  ): Promise<{ readonly count: number; readonly newestId: string | null }>;
   unknownPayments(scope: TenantContext, customerId: UserId, cap: number): Promise<number>;
   unreconciledServices(scope: TenantContext, customerId: UserId, cap: number): Promise<number>;
   latestOrders(
@@ -112,6 +118,7 @@ export interface CustomerWorkspaceReader {
 export interface CustomerWorkspace {
   readonly tickets: { readonly awaitingSupport: number; readonly open: number } | null;
   readonly businessHandoffs: number | null;
+  readonly businessHandoffConversationId: string | null;
   readonly payments: {
     readonly unknown: number;
     readonly latest: readonly WorkspacePaymentRow[];
@@ -277,7 +284,8 @@ export class CustomerInsightService {
 
     return {
       tickets,
-      businessHandoffs,
+      businessHandoffs: businessHandoffs?.count ?? null,
+      businessHandoffConversationId: businessHandoffs?.newestId ?? null,
       payments: payments === null ? null : { unknown: payments[0], latest: payments[1] },
       services: unreconciled === null ? null : { unreconciled },
       orders: latestOrders === null ? null : { latest: latestOrders },

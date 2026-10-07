@@ -167,8 +167,10 @@ describe('Customer 360 workspace', () => {
     tenantId: string,
     customerId: string | null,
     state: 'HANDOFF_REQUIRED' | 'AI_ACTIVE',
-  ): Promise<void> {
+    lastMessageAt: string | null = null,
+  ): Promise<string> {
     n += 1;
+    const id = uuid();
     const bot = tenantId === tenantA.tenantId ? SEED_IDS.botA1 : SEED_IDS.botB1;
     const connectionRowId = uuid();
     await run(sql`INSERT INTO telegram_business_connections
@@ -179,10 +181,13 @@ describe('Customer 360 workspace', () => {
     const chat = String(7_300_000 + n);
     await run(sql`INSERT INTO business_conversations
         (id, tenant_id, bot_instance_id, owner_telegram_user_id, chat_id, connection_row_id,
-         peer_telegram_user_id, customer_id, state, control_epoch, handoff_reason)
-      VALUES (${uuid()}, ${tenantId}, ${bot}, '5000009', ${chat}, ${connectionRowId}, ${chat},
-              ${customerId}, ${state}, 1, ${state === 'HANDOFF_REQUIRED' ? 'HANDOFF_TOPIC' : null})`);
+         peer_telegram_user_id, customer_id, state, control_epoch, handoff_reason, last_message_at)
+      VALUES (${id}, ${tenantId}, ${bot}, '5000009', ${chat}, ${connectionRowId}, ${chat},
+              ${customerId}, ${state}, 1, ${state === 'HANDOFF_REQUIRED' ? 'HANDOFF_TOPIC' : null},
+              ${lastMessageAt}::timestamptz)`);
+    return id;
   }
+  let xHandoff = '';
 
   beforeEach(async () => {
     await resetDatabase(api.container.database.db);
@@ -229,8 +234,8 @@ describe('Customer 360 workspace', () => {
     await ticket(tenantB.tenantId, ids.z, 'OPEN');
     category = categoryB;
 
-    await conversation(tenantA.tenantId, ids.x, 'HANDOFF_REQUIRED');
-    await conversation(tenantA.tenantId, ids.x, 'AI_ACTIVE');
+    xHandoff = await conversation(tenantA.tenantId, ids.x, 'HANDOFF_REQUIRED', at(30));
+    await conversation(tenantA.tenantId, ids.x, 'AI_ACTIVE', at(90));
     await conversation(tenantA.tenantId, ids.y, 'HANDOFF_REQUIRED');
     await conversation(tenantA.tenantId, null, 'HANDOFF_REQUIRED');
     await conversation(tenantB.tenantId, ids.z, 'HANDOFF_REQUIRED');
@@ -292,8 +297,44 @@ describe('Customer 360 workspace', () => {
     expect(workspace.tickets).toEqual({ awaitingSupport: 2, open: 3 });
     // X's HANDOFF_REQUIRED conversation; not the AI's, not Y's, not the unlinked one, not B's.
     expect(workspace.businessHandoffs).toBe(1);
+    // Review N2: the one handoff is named, so the page links to it rather than the inbox.
+    expect(workspace.businessHandoffConversationId).toBe(xHandoff);
     expect(workspace.payments?.unknown).toBe(2);
     expect(workspace.services).toEqual({ unreconciled: 1 });
+  });
+
+  it('counts awaiting support by the predicate the ticket list it links to filters by', async () => {
+    // Review N1: the count and `/tickets?customer=…&awaiting=support` must be one set.
+    const workspace = await workspaceAs('owner', ids.x);
+    const listed = await get(`/tickets?customer=${ids.x}&awaiting=support`, cookies.owner ?? null);
+    expect(listed.statusCode, listed.body).toBe(200);
+    const statuses = (listed.json() as { tickets: { status: string }[] }).tickets
+      .map((row) => row.status)
+      .sort();
+    expect(statuses).toEqual(['OPEN', 'WAITING_FOR_SUPPORT']);
+    expect(statuses).toHaveLength(workspace.tickets?.awaitingSupport ?? -1);
+    // ANDed with a status, and refused when malformed.
+    const narrowed = await get(
+      `/tickets?customer=${ids.x}&awaiting=support&status=OPEN`,
+      cookies.owner ?? null,
+    );
+    expect((narrowed.json() as { tickets: unknown[] }).tickets).toHaveLength(1);
+    const outside = await get(
+      `/tickets?customer=${ids.x}&awaiting=support&status=CLOSED`,
+      cookies.owner ?? null,
+    );
+    expect((outside.json() as { tickets: unknown[] }).tickets).toHaveLength(0);
+    expect((await get('/tickets?awaiting=customer', cookies.owner ?? null)).statusCode).toBe(400);
+  });
+
+  it('names the NEWEST handoff conversation when the customer has several', async () => {
+    const newer = await conversation(tenantA.tenantId, ids.x, 'HANDOFF_REQUIRED', at(45));
+    const workspace = await workspaceAs('owner', ids.x);
+    expect(workspace.businessHandoffs).toBe(2);
+    expect(workspace.businessHandoffConversationId).toBe(newer);
+    // Withheld with its count.
+    const finance = await workspaceAs('finance', ids.x);
+    expect(finance.businessHandoffConversationId).toBeNull();
   });
 
   it('lists the newest orders and payments, newest first, at most the limit', async () => {
@@ -369,8 +410,8 @@ describe('Customer 360 workspace', () => {
     expect(await reader.unknownPayments(tenantA, x, 1)).toBe(1);
     expect(await reader.unknownPayments(tenantA, x, 10)).toBe(2);
     await conversation(tenantA.tenantId, ids.x, 'HANDOFF_REQUIRED');
-    expect(await reader.businessHandoffs(tenantA, x, 10)).toBe(2);
-    expect(await reader.businessHandoffs(tenantA, x, 1)).toBe(1);
+    expect((await reader.businessHandoffs(tenantA, x, 10)).count).toBe(2);
+    expect((await reader.businessHandoffs(tenantA, x, 1)).count).toBe(1);
     await service(tenantA.tenantId, ids.x, 'UNRECONCILED');
     expect(await reader.unreconciledServices(tenantA, x, 1)).toBe(1);
     expect(await reader.unreconciledServices(tenantA, x, 10)).toBe(2);

@@ -108,16 +108,25 @@ export class DrizzleCustomerInsightReader
 
   // --- Workspace (roadmap B5) -----------------------------------------------------------
   //
-  // Each count is `count(*)` over at most `cap` rows (`capped`), so the work is bounded and
-  // not only the answer; each is the predicate of the page it links to, narrowed to the
-  // customer, through an index that leads with the tenant or the customer:
+  // Each count is `count(*)` over a subquery LIMITed to `cap`: the ANSWER is bounded by the
+  // cap, and the WORK by the index the planner walks — which is why each one names an index
+  // that leads with the customer (or with the tenant AND the customer), so a count reads one
+  // customer's rows and never the tenant's whole backlog in that state (review N4, checked
+  // with EXPLAIN ANALYZE on 20 000 customers × 6 payments, 20 000 UNRECONCILED services and
+  // 10 000 HANDOFF_REQUIRED conversations: `scripts/explain-customer360-counts.sql`):
   //
   //   tickets                 `tickets_tenant_customer_idx` (tenant, customer, status)
-  //   business_conversations  `business_conversations_inbox_priority_idx`'s leading
-  //                           (tenant, state = 'HANDOFF_REQUIRED'), then the customer
-  //   payments                `payments_customer_created_idx` (customer, created_at, id)
-  //   services                `services_unreconciled_idx` (partial)
-  //   orders                  the `(customer_id, created_at, id)` index, walked backwards
+  //   business_conversations  `business_conversations_tenant_customer_handoff_idx`
+  //                           (tenant, customer) WHERE HANDOFF_REQUIRED — an online index
+  //   payments                `payments_customer_created_idx` (customer, created_at, id):
+  //                           the customer's own payments, the state filtered on them
+  //   services                `services_customer_created_idx` (customer, created_at, id),
+  //                           likewise
+  //   orders                  `orders_customer_created_idx`, walked backwards
+  //
+  // The tenant-leading partial indexes (`payments_unknown_idx`, `services_unreconciled_idx`)
+  // remain the planner's choice only where the tenant's backlog in that state is smaller than
+  // the customer's history, which bounds the work just the same.
 
   async tickets(
     scope: TenantContext,
@@ -146,16 +155,31 @@ export class DrizzleCustomerInsightReader
     return { awaitingSupport, open };
   }
 
-  async businessHandoffs(scope: TenantContext, customerId: UserId, cap: number): Promise<number> {
+  async businessHandoffs(
+    scope: TenantContext,
+    customerId: UserId,
+    cap: number,
+  ): Promise<{ readonly count: number; readonly newestId: string | null }> {
     const tenantId = requireTenantId(scope);
-    return this.count(
-      capped(
-        sql`SELECT 1 FROM business_conversations c
-             WHERE c.tenant_id = ${tenantId} AND (c.state = 'HANDOFF_REQUIRED')
-               AND c.customer_id = ${customerId}`,
-        cap,
+    const [count, newest] = await Promise.all([
+      this.count(
+        capped(
+          sql`SELECT 1 FROM business_conversations c
+               WHERE c.tenant_id = ${tenantId} AND c.customer_id = ${customerId}
+                 AND c.state = 'HANDOFF_REQUIRED'`,
+          cap,
+        ),
       ),
-    );
+      // The newest by the inbox's own activity order, so a single handoff links to it.
+      this.db.execute(sql`
+        SELECT c.id FROM business_conversations c
+         WHERE c.tenant_id = ${tenantId} AND c.customer_id = ${customerId}
+           AND c.state = 'HANDOFF_REQUIRED'
+         ORDER BY COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC
+         LIMIT 1`),
+    ]);
+    const [row] = newest.rows as { id?: unknown }[];
+    return { count, newestId: row?.id === undefined ? null : String(row.id) };
   }
 
   async unknownPayments(scope: TenantContext, customerId: UserId, cap: number): Promise<number> {
@@ -246,7 +270,11 @@ function textArray(values: readonly string[]): SQL {
   return sql`${sql.param([...values])}::text[]`;
 }
 
-/** `count(*)` over at most `cap` rows of `rows`: the work is bounded, not only the answer. */
+/**
+ * `count(*)` over at most `cap` rows of `rows`. The LIMIT bounds the rows that MATCH, not the
+ * rows scanned: what bounds the work is the index the predicate reaches (see the workspace
+ * comment above), never this cap.
+ */
 function capped(rows: SQL, cap: number): SQL {
   return sql`SELECT count(*)::int AS n FROM (${rows} LIMIT ${cap}) capped`;
 }

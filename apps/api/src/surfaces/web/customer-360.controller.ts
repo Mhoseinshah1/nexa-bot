@@ -217,6 +217,7 @@ export class Customer360Controller {
         generatedAt: this.container.clock.now().toISOString(),
         tickets: found.tickets === null ? null : { ...found.tickets },
         businessHandoffs: found.businessHandoffs,
+        businessHandoffConversationId: found.businessHandoffConversationId,
         payments:
           found.payments === null
             ? null
