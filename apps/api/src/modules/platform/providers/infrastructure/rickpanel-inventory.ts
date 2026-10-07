@@ -61,6 +61,17 @@ export const USERS_LIST_PATH = 'api/users';
 /** The page size requested. Small enough to stay under the client's response cap. */
 export const INVENTORY_DEFAULT_PAGE_SIZE = 50;
 export const INVENTORY_MAX_PAGE_SIZE = 200;
+/**
+ * The page size a walk actually asks for: the requested one clamped to
+ * `[1, INVENTORY_MAX_PAGE_SIZE]`, or the library default when none is requested. Exported
+ * so a caller can REPORT the size it walked with, from the same rule the walk applies.
+ */
+export function effectiveInventoryPageSize(requested?: number): number {
+  return Math.min(
+    Math.max(1, Math.trunc(requested ?? INVENTORY_DEFAULT_PAGE_SIZE)),
+    INVENTORY_MAX_PAGE_SIZE,
+  );
+}
 /** An absolute bound on requests, whatever the panel claims its total is. */
 export const INVENTORY_DEFAULT_MAX_PAGES = 5_000;
 
@@ -390,10 +401,7 @@ export class RickpanelInventoryReader {
     http: RickpanelReadOnlyHttp,
     options: RickpanelInventoryOptions = {},
   ): Promise<RickpanelInventoryWalk> {
-    const pageSize = Math.min(
-      Math.max(1, Math.trunc(options.pageSize ?? INVENTORY_DEFAULT_PAGE_SIZE)),
-      INVENTORY_MAX_PAGE_SIZE,
-    );
+    const pageSize = effectiveInventoryPageSize(options.pageSize);
     const maxPages = Math.max(1, Math.trunc(options.maxPages ?? INVENTORY_DEFAULT_MAX_PAGES));
 
     const auth = await exchangeRickpanelToken(target, (form) => http.exchangeToken(form));

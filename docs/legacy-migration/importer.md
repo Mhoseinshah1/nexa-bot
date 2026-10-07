@@ -33,12 +33,13 @@ pnpm legacy-import MODE --tenant TENANT --source SOURCE --target TARGET --panel-
 | `--target`                         | `env:NAME`, `postgres://USER@HOST:PORT/DB` (no password; `PGPASSWORD` honoured), or a bare database NAME that must equal the one `DATABASE_URL` names. Required. |
 | `--panel-map`                      | the explicit panel mapping file (§4). Required.                                                                                                                  |
 | `--format`                         | `md` (default) or `json`. `report --format json` prints exactly the Item 16 document (§7) on stdout.                                                             |
-| `--out`                            | also write `<mode>-<time>.{json,md}` there (mode 0600).                                                                                                          |
+| `--out`                            | also write `<mode>-<time>.{json,md}` there (mode 0600), AFTER the report is printed. A failure to write is exit 73 (§1.2), never an audit failure.               |
+| `--inventory-page-size`            | rows per RickPanel list page, 1–200. **Default here: 200**, the reader's maximum (`INVENTORY_MAX_PAGE_SIZE`); see §1.1. The library default (50) is unchanged.   |
 | `--abort-running`                  | with `resume`: finish the tenant's RUNNING run as ABORTED instead (the exit from a stuck run).                                                                   |
 | `--expected-fingerprint`           | `import`/`resume`: the source fingerprint the owner approved (64 lowercase hex, as `audit` prints it). **Required against a production-like target** (§2.1).     |
 | `--expected-panel-map-fingerprint` | `import`/`resume`: the same, for the panel mapping file's fingerprint (as `audit` prints it). Optional.                                                          |
 
-Nothing defaults. **No password is accepted on the command line** — argv is world-readable
+Nothing that decides what is imported defaults (the page size is a walk-length knob, §1.1). **No password is accepted on the command line** — argv is world-readable
 in `/proc` and lands in shell history; a DSN with a password is refused, and so is any
 `--…password` flag — in the `review` subcommand too (`legacy-import-argv.ts`, one rule).
 Exit codes: 0 done; 3 done but a person must decide (audit BLOCKED, reconcile DISCREPANCY,
@@ -46,11 +47,72 @@ import/resume `COMPLETED_WITH_FAILURES` — anything unapplied, failed or in con
 import with adoption pending — only an importer built without P6 —, report with a failed
 equation); 4 an
 import interrupted (the run stays RUNNING: use `resume`); 64 usage/guard refusal; 65 the
-mapping or the source refused; 1 anything else (printed as a code, never a driver message
+mapping or the source refused; 73 the report was computed and printed but `--out` could not
+be written (§1.2); 1 anything else (printed as a code, never a driver message
 that could quote a row). The process exits in ONE place, after stdout and stderr have
 drained (`exitAfterDrain`): `main` returns its code, so the container is always shut down,
 and a large report piped to a slow reader arrives whole (tested; a bare `process.exit()`
 cut it at 64 KiB).
+
+### 1.1 Inventory page size (hardening 2026-10-07)
+
+Every production panel is read with TWO consecutive full walks that must agree
+(`RickpanelInventoryReader.listAll`); a walk during which the panel's reported total moves
+is `TOTAL_CHANGED`, the inventory is incomplete, and audit is **BLOCKED** (exit 3). That
+fail-closed rule is unchanged, and nothing retries it: the walk stops at the first
+inconsistency and the operator re-runs deliberately.
+
+What changed is how long the walk takes. On a large LIVE panel, a long walk is likelier to
+see a change. The real Mirza rehearsal (staging copy, real RickPanel, read-only) measured:
+
+| `--inventory-page-size` | provider reads | audit verdict               |
+| ----------------------- | -------------- | --------------------------- |
+| 50 (old default)        | ~500           | `BLOCKED` (`TOTAL_CHANGED`) |
+| 200                     | ~130           | `READY_FOR_DRY_RUN`         |
+
+So the CLI now asks for **200 rows per page when the flag is omitted** — the reader's own
+maximum, imported as `INVENTORY_MAX_PAGE_SIZE`, so the default and the bound cannot drift.
+An explicit `--inventory-page-size N` (digits only, 1–200) still overrides; anything else is
+a usage error (exit 64). The generic reader's default (50) is unchanged for every other
+caller (discovery, the rehearsal's panel-state walk).
+
+The size walked is recorded in every mode's report: `sections.provider.inventoryPageSize`
+(what the walk asked for, from the adapter), and `invocation.inventoryPageSize` with
+`invocation.inventoryPageSizeSource` = `CLI_DEFAULT` | `OPERATOR` (also a row in the
+markdown header). It is deliberately NOT a run input and NOT in any fingerprint: a complete
+inventory is the same index at any page size, so a resume after a different page size is
+not a different import. The `report` mode's Item 16 document (§7) has a closed schema and is
+unchanged.
+
+**For a real rehearsal or cutover, use 200** (omit the flag). A smaller value is only for
+diagnosing a panel that refuses large pages (`PAGE_TOO_LONG`, or a response over the
+client's cap).
+
+### 1.2 Writing reports from a container
+
+The report is printed to stdout FIRST; `--out` is attempted only afterwards. If writing
+there fails (EACCES, EPERM, EROFS, ENOENT, ENOSPC …), the CLI prints `REPORT NOT WRITTEN
+(exit 73)` with the mode, the verdict that WAS computed, the path, the errno code (never the
+driver's message), any file already written, and the remedy — and exits **73**, distinct
+from a source, mapping or audit failure. The verdict stands; only the file is missing.
+
+The image runs as `node` (**uid 1000**, `Dockerfile` `USER node`) and must not be run as
+root to get around this. Two container-safe patterns:
+
+```bash
+# 1. Preferred: no --out at all; capture stdout ON THE HOST (the shell redirect runs as you).
+docker run --rm … IMAGE node /app/dist/legacy-import.cli.js audit … --format json \
+  > /host/writable/path/audit.json
+# (the cutover runbook's `p7 audit | tee audit.txt` is the same pattern)
+
+# 2. A host directory owned by uid 1000, mounted, and named with --out.
+sudo install -d -o 1000 -g 1000 -m 700 /srv/nexa-legacy-reports
+docker run --rm … -v /srv/nexa-legacy-reports:/results IMAGE \
+  node /app/dist/legacy-import.cli.js audit … --format json --out /results
+```
+
+A plain `-v /some/root-owned/dir:/results` fails with EACCES: the directory is owned by
+root and the process is uid 1000.
 
 ## 2. The hard production guard
 
