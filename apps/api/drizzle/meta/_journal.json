@@ -1534,6 +1534,13 @@
       "when": 1791311053764,
       "tag": "0218_support_ai_clarifying_limit",
       "breakpoints": true
+    },
+    {
+      "idx": 219,
+      "version": "7",
+      "when": 1791401305405,
+      "tag": "0219_support_ai_session_budget",
+      "breakpoints": true
     }
   ]
 }
