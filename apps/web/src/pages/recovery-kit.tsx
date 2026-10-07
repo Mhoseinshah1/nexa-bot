@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PLATFORM_ERROR_CODES,
@@ -213,12 +213,23 @@ function ImportForm({ onImported }: { onImported: () => void }) {
   const [result, setResult] = useState<ImportRecoveryKitResponse | null>(null);
 
   /*
-   * The key follows the FILE, never the secrets: the fingerprint `useSubmissionKey` holds
-   * must not keep a passphrase in memory, and the same archive pressed again after a lost
-   * answer is the same command. Minting inside `mutationFn` gave the client's automatic
-   * 5xx retry a fresh key.
+   * The key follows the chosen FILE OBJECT, never the secrets: the fingerprint
+   * `useSubmissionKey` holds must not keep a passphrase in memory, and the same archive
+   * pressed again after a lost answer is the same command. A newly chosen file is a new
+   * command even with the same name, size and date — another kit with those would
+   * otherwise reuse the key and be refused as a payload mismatch. Each File object gets
+   * its own token; minting inside `mutationFn` gave the automatic 5xx retry a fresh key.
    */
   const importKey = useSubmissionKey();
+  const fileTokens = useRef(new WeakMap<File, string>());
+  const tokenOf = (chosen: File): string => {
+    let token = fileTokens.current.get(chosen);
+    if (token === undefined) {
+      token = crypto.randomUUID();
+      fileTokens.current.set(chosen, token);
+    }
+    return token;
+  };
   const importer = useMutation({
     mutationFn: (input: {
       file: File;
@@ -228,11 +239,7 @@ function ImportForm({ onImported }: { onImported: () => void }) {
     }) =>
       importRecoveryKit({
         ...input,
-        idempotencyKey: importKey.current({
-          name: input.file.name,
-          size: input.file.size,
-          lastModified: input.file.lastModified,
-        }),
+        idempotencyKey: importKey.current({ file: tokenOf(input.file) }),
       }),
     onSuccess: (response) => {
       importKey.settle();
