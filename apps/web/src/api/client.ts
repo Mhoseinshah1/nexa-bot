@@ -5263,8 +5263,10 @@ export function fetchLegacyInvoices(
   query: LegacyInvoiceArchiveQuery = {},
 ): Promise<LegacyInvoiceArchiveListResponse> {
   const params = new URLSearchParams();
+  // Sent exactly as given: the verbatim fields (invoice id, owner id, username, status) are
+  // compared as typed, spaces included (`queryOf` decides what is trimmed). Empty is no filter.
   for (const [name, value] of Object.entries(query)) {
-    if (typeof value === 'string' && value.trim() !== '') params.set(name, value.trim());
+    if (typeof value === 'string' && value !== '') params.set(name, value);
   }
   const suffix = params.toString();
   return authedGet(

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   SESSION_COOKIE_NAME,
   legacyInvoiceArchiveDetailResponseSchema,
+  legacyInvoiceArchiveListQuerySchema,
   legacyInvoiceArchiveListResponseSchema,
   legacyInvoiceArchiveSummaryResponseSchema,
   systemJobActor,
@@ -247,6 +248,19 @@ describe('Mirza PR3: the legacy invoice archive', () => {
     }
   });
 
+  it('reports the invoice columns the read actually delivered, never the allowlist', async () => {
+    const plain = buildSyntheticLegacyDataset();
+    const outcome = await read(plain, await fingerprintsOf(plain));
+    expect(outcome.invoiceColumnsRead).toContain('time_sell');
+    for (const absent of ['note', 'refral', 'time_cron', 'notifctions']) {
+      expect(outcome.invoiceColumnsRead).not.toContain(absent);
+    }
+    const report = JSON.parse(invoicesReadReport(outcome, 'json')) as { columnsRead: string[] };
+    expect(report.columnsRead).toEqual([...(outcome.invoiceColumnsRead ?? [])]);
+    const withFork = await readSnapshot('A');
+    expect(withFork.invoiceColumnsRead).toEqual(expect.arrayContaining(['note', 'notifctions']));
+  });
+
   it('never stores, logs or reports the columns it must not read', async () => {
     const outcome = await readSnapshot('A');
     const report = invoicesReadReport(outcome, 'json') + invoicesReadReport(outcome, 'md');
@@ -479,7 +493,11 @@ describe('Mirza PR3: the legacy invoice archive', () => {
       completeRun: (...a) => real.completeRun(...a),
     };
   }
-  const ingestWith = (archive: InvoiceArchiveIngest, connector: LegacySourceConnector) =>
+  const ingestWith = (
+    archive: InvoiceArchiveIngest,
+    connector: LegacySourceConnector,
+    productionLikeTarget = false,
+  ) =>
     readLegacyInvoiceArchive(
       {
         processLock: freeLock,
@@ -494,7 +512,7 @@ describe('Mirza PR3: the legacy invoice archive', () => {
         expectedFingerprint: fp.A.v1,
         expectedInvoiceArchiveFingerprint: fp.A.archive,
         batchSize: 4,
-        productionLikeTarget: false,
+        productionLikeTarget,
       },
     );
 
@@ -539,6 +557,10 @@ describe('Mirza PR3: the legacy invoice archive', () => {
     };
     const outcome = await ingestWith(ctx.container.legacyInvoiceArchive, unreadable);
     expect(outcome.written?.run.state).toBe('COMPLETED');
+    // Finished without reading: the columns this run read are not claimed.
+    expect(outcome.invoiceColumnsRead).toBeNull();
+    expect(invoicesReadReport(outcome, 'md')).toContain('invoice columns read: not known');
+    expect(JSON.parse(invoicesReadReport(outcome, 'json'))).toMatchObject({ columnsRead: null });
     const rows = await archiveRows();
     expect(rows).toHaveLength(datasetOf('A').tables.invoice.length);
     expect(new Set(rows.map((r) => r.revision))).toEqual(new Set([1]));
@@ -554,6 +576,40 @@ describe('Mirza PR3: the legacy invoice archive', () => {
     expect(await runs()).toEqual([
       { state: 'FAILED', failure_code: 'STAGED_COUNT_MISMATCH', n: 0 },
     ]);
+  });
+
+  it('an open SYNTHETIC run is never resumed or discarded on a production-like target', async () => {
+    // A VERIFIED synthetic run left open (e.g. a restored or promoted staging database) ...
+    await expect(
+      ingestWith(dyingArchive({ promote: 2 }), connectorOf(datasetOf('A'))),
+    ).rejects.toThrow(/mid-promotion/u);
+    const opened: string[] = [];
+    const watched: LegacySourceConnector = {
+      label: 'watched',
+      open: () => {
+        opened.push('opened');
+        return connectorOf(datasetOf('A')).open();
+      },
+    };
+    const before = await databaseFingerprint(db());
+    // ... is refused BEFORE it is promoted, completed or the source opened.
+    await expect(
+      ingestWith(ctx.container.legacyInvoiceArchive, watched, true),
+    ).rejects.toMatchObject({ code: 'SYNTHETIC_RUN_ON_PRODUCTION_TARGET' });
+    expect(opened).toEqual([]);
+    expect(changedTables(before, await databaseFingerprint(db()))).toEqual({});
+    expect((await runs())[0]?.state).toBe('VERIFIED');
+    // A STAGING one is not even discarded there.
+    await ctx.reset();
+    await expect(
+      ingestWith(dyingArchive({ stage: 2 }), connectorOf(datasetOf('A'))),
+    ).rejects.toThrow(/mid-staging/u);
+    const staging = await databaseFingerprint(db());
+    await expect(
+      ingestWith(ctx.container.legacyInvoiceArchive, watched, true),
+    ).rejects.toMatchObject({ code: 'SYNTHETIC_RUN_ON_PRODUCTION_TARGET' });
+    expect(changedTables(staging, await databaseFingerprint(db()))).toEqual({});
+    expect(opened).toEqual([]);
   });
 
   it('a read whose delivery diverges from its verified pass archives NOTHING', async () => {
@@ -735,6 +791,54 @@ describe('Mirza PR3: the legacy invoice archive', () => {
     expect(await filtered({ invoiceId: 'ab%' })).toEqual([]);
   });
 
+  it('finds a verbatim key exactly as typed, spaces included, and pages past the longest key', async () => {
+    const base = datasetOf('A');
+    const longKey = '\u{1F600}'.repeat(500); // 500 four-byte characters: a 2000-byte key
+    const template = base.tables.invoice.find(
+      (r) => r['id_invoice'] === 'ab000001',
+    ) as SyntheticRow;
+    const dataset = {
+      ...base,
+      tables: {
+        ...base.tables,
+        invoice: [
+          ...base.tables.invoice,
+          { ...template, id_invoice: longKey },
+          { ...template, id_invoice: `${longKey}z` },
+        ],
+      },
+    } as SyntheticLegacyDataset;
+    await read(dataset, await fingerprintsOf(dataset));
+    const parse = (query: Record<string, unknown>) =>
+      legacyInvoiceArchiveListQuerySchema.parse(query);
+    // ` padded ` is found by itself; `padded` (no leading space) is a different key.
+    expect(
+      (await service().list(tenantA, owner, parse({ invoiceId: ' padded ' }))).rows.map(
+        (r) => r.record.invoiceKey,
+      ),
+    ).toEqual([' padded ']);
+    expect((await service().list(tenantA, owner, parse({ invoiceId: 'padded' }))).rows).toEqual([]);
+    expect(() => parse({ invoiceId: '' })).toThrow();
+    // Walk one row per page: the page that ENDS on the longest key has a cursor the contract
+    // accepts, and the next page is the key after it.
+    const keys: string[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const page = await service().list(
+        tenantA,
+        owner,
+        parse({ limit: '1', ...(after === undefined ? {} : { after }) }),
+      );
+      keys.push(...page.rows.map((r) => r.record.invoiceKey));
+      if (page.nextCursor === null) break;
+      after = page.nextCursor;
+    }
+    const at = keys.indexOf(longKey);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(keys[at + 1]).toBe(`${longKey}z`);
+    expect(keys).toHaveLength(dataset.tables.invoice.length);
+  }, 120_000);
+
   it('redacts personal data without the PII key; a PII search is refused and audited', async () => {
     await readSnapshot('A');
     const viewer = await createAdmin(ctx.container, tenantA, { username: 'viewer-lia' });
@@ -764,8 +868,26 @@ describe('Mirza PR3: the legacy invoice archive', () => {
     expect(full.piiRedacted).toBe(false);
     expect(full.raw).toMatchObject({ id_user: '100000001', note: 'my config' });
     await service().list(tenantA, owner, { legacyUserId: '100000001' });
-    expect(await auditCount('legacy.invoice_archive.pii_view')).toBe(1);
+    // The detail, and the unredacted list page the PII search returned.
+    expect(await auditCount('legacy.invoice_archive.pii_view')).toBe(2);
     expect(await auditCount('legacy.invoice_archive.pii_search')).toBe(1);
+    // An unredacted list WITHOUT a PII filter is a reveal too: audited, ids and counts only.
+    const plain = await service().list(tenantA, owner, { invoiceId: 'ab00000', limit: 4 });
+    expect(plain.rows[0]?.piiRedacted).toBe(false);
+    expect(await auditCount('legacy.invoice_archive.pii_view')).toBe(3);
+    const [listed] = await q<{ after: Record<string, unknown> }>(
+      sql`SELECT after FROM audit_logs WHERE action = 'legacy.invoice_archive.pii_view'
+           ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+    );
+    expect(listed?.after).toEqual({
+      list: true,
+      count: 4,
+      filters: ['invoiceIdPrefix'],
+      rowIds: plain.rows.map((r) => r.record.id),
+    });
+    // A redacted reader's list reveals nothing and audits nothing.
+    await service().list(tenantA, actor, {});
+    expect(await auditCount('legacy.invoice_archive.pii_view')).toBe(3);
     const audits = await q<{ t: string }>(
       sql`SELECT row_to_json(a)::text AS t FROM audit_logs a WHERE action LIKE 'legacy.invoice_archive.pii%'`,
     );

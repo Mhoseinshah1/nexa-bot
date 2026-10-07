@@ -85,6 +85,18 @@ M = [
     # The page never sends a PII search for a reader without the key.
     ('W-01', [(PAGE, "  if (mayViewPii) {", "  if (true) {")], T_WEB, 'never puts a PII filter'),
     ('W-02', [(NAV, "    permission: 'legacy.invoices.view',\n    group: 'web.navgroup_sales',", "    permission: ['orders.view', 'legacy.invoices.view'],\n    group: 'web.navgroup_sales',")], T_WEB, 'gated'),
+    # Codex on #232 (2026-10-07): each fix, reverted.
+    # 1. A stored SYNTHETIC run is never resumed on a production-like target.
+    ('X-01', [(INGEST, "    if (open !== null) refuseSyntheticOnProduction(open, input.productionLikeTarget);\n", "")], T_INT, 'open SYNTHETIC run'),
+    # 2. Every unredacted list page is audited, not only a PII search.
+    ('X-02', [(SVC, "    if (pii && page.length > 0) {", "    if (false) {")], T_INT, 'redacts'),
+    # 3. The cursor fits the longest archivable key.
+    ('X-03', [(ARCH, "    .max(LEGACY_INVOICE_ARCHIVE_CURSOR_MAX)", "    .max(2000)")], T_INT, 'longest key'),
+    # 4. The report names the columns the read delivered, not the allowlist.
+    ('X-04', [(INGEST, "      invoiceColumnsRead: read.result.tables['invoice']?.columns ?? [],", "      invoiceColumnsRead: [\n        ...(INVOICE_ARCHIVE_READ_SET.tables[0]?.columns ?? []),\n        ...(INVOICE_ARCHIVE_READ_SET.tables[0]?.optionalColumns ?? []),\n      ],")], T_INT, 'actually delivered'),
+    # 5. Verbatim filters are never trimmed — in the contract, and in the page.
+    ('X-05', [(ARCH, "const verbatimTerm = z\n  .string()\n  .min(1)", "const verbatimTerm = z\n  .string()\n  .trim()\n  .min(1)")], T_INT, 'verbatim key'),
+    ('X-06', [(PAGE, "  verbatim('invoiceId');", "  trimmed('invoiceId');")], T_WEB, 'verbatim'),
 ]
 
 # Database guards: (id, break SQL, restore SQL, test, filter).

@@ -185,19 +185,25 @@ export const NO_FILTERS: Filters = {
 /** The query a filter state sends. Exported so a test pins that PII filters need the key. */
 export function queryOf(filters: Filters, mayViewPii: boolean, after: string | undefined) {
   const query: Record<string, string> = {};
-  const text = (name: keyof Filters) => {
+  // Verbatim fields are sent exactly as typed (a legacy id may be ` padded `); the panel and
+  // product codes are stored trimmed, so their terms are trimmed too. Empty is no filter.
+  const verbatim = (name: keyof Filters) => {
+    const value = filters[name] as string;
+    if (value !== '') query[name] = value;
+  };
+  const trimmed = (name: keyof Filters) => {
     const value = (filters[name] as string).trim();
     if (value !== '') query[name] = value;
   };
-  text('invoiceId');
+  verbatim('invoiceId');
   // A search by personal data is offered to a PII reader only; never sent otherwise.
   if (mayViewPii) {
-    text('legacyUserId');
-    text('username');
+    verbatim('legacyUserId');
+    verbatim('username');
   }
-  text('status');
-  text('panelCode');
-  text('productCode');
+  verbatim('status');
+  trimmed('panelCode');
+  trimmed('productCode');
   if (filters.classification !== 'ALL') query['classification'] = filters.classification;
   if (filters.test !== 'ALL') query['test'] = filters.test;
   if (after !== undefined) query['after'] = after;

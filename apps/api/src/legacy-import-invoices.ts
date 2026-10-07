@@ -6,10 +6,7 @@ import {
   isPasswordFlag,
 } from './legacy-import-argv.js';
 import type { LegacyImporterService } from './modules/platform/legacy-importer/application/legacy-importer.service.js';
-import {
-  INVOICE_ARCHIVE_EXCLUDED_COLUMNS,
-  INVOICE_ARCHIVE_READ_SET,
-} from './modules/platform/legacy-importer/application/invoice-archive-read-set.js';
+import { INVOICE_ARCHIVE_EXCLUDED_COLUMNS } from './modules/platform/legacy-importer/application/invoice-archive-read-set.js';
 import type { InvoicesReadOutcome } from './modules/platform/legacy-importer/application/invoice-archive-ingest.js';
 import { READ_SET_MAX_BATCH } from './modules/platform/legacy-importer/application/read-set.js';
 import type { LegacySourceConnector } from './modules/platform/legacy-importer/application/source-port.js';
@@ -214,10 +211,10 @@ export function invoicesReadReport(outcome: InvoicesReadOutcome, format: 'md' | 
     fingerprintVersion: outcome.fingerprintVersion,
     invoiceArchiveFingerprint: outcome.fingerprint,
     invoiceArchiveSchemaHash: outcome.schemaHash,
-    columnsRead: [
-      ...(INVOICE_ARCHIVE_READ_SET.tables[0]?.columns ?? []),
-      ...(INVOICE_ARCHIVE_READ_SET.tables[0]?.optionalColumns ?? []),
-    ],
+    // What THIS read delivered and fingerprinted (its table evidence), never the allowlist:
+    // an optional column the source lacks was not read. Null when an interrupted promotion was
+    // finished without reading — that run did not keep the list.
+    columnsRead: outcome.invoiceColumnsRead === null ? null : [...outcome.invoiceColumnsRead],
     columnsNeverRead: [...INVOICE_ARCHIVE_EXCLUDED_COLUMNS],
     rows: outcome.rows,
     verdict: outcome.written === null ? 'NOT_APPROVED_NOTHING_WRITTEN' : 'ARCHIVED',
@@ -248,6 +245,11 @@ export function invoicesReadReport(outcome: InvoicesReadOutcome, format: 'md' | 
     `- source fingerprint (v1, approved): \`${body.sourceFingerprint ?? '—'}\``,
     `- invoice-archive fingerprint (${body.fingerprintVersion}): \`${body.invoiceArchiveFingerprint}\``,
     `- rows in the snapshot: invoice ${String(outcome.rows.invoice)}, user ${String(outcome.rows.user)}, product ${String(outcome.rows.product)}`,
+    `- invoice columns read: ${
+      body.columnsRead === null
+        ? 'not known (an interrupted promotion was finished without reading the source)'
+        : body.columnsRead.join(', ')
+    }`,
     `- columns never read: ${body.columnsNeverRead.join(', ')}`,
     `- verdict: **${body.verdict}**`,
   ];
