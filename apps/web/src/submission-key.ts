@@ -47,8 +47,13 @@ export function useSubmissionKey(): {
   /**
    * Retires the key only when the outcome is KNOWN — a 4xx the server
    * authored. A 5xx or a transport failure keeps it.
+   *
+   * `onConflict` runs for a 409: the row the write was based on is stale, so
+   * the caller refreshes it (an invalidation) and the next press is a new
+   * question against the fresh version. Without it a page kept submitting the
+   * version it last read and was refused the same way on every press.
    */
-  settleOn: (error: unknown) => void;
+  settleOn: (error: unknown, handlers?: { readonly onConflict?: () => void }) => void;
 } {
   const held = useRef<{ key: string; payload: string } | null>(null);
   const settle = () => {
@@ -63,7 +68,7 @@ export function useSubmissionKey(): {
       return held.current.key;
     },
     settle,
-    settleOn: (error: unknown) => {
+    settleOn: (error: unknown, handlers?: { readonly onConflict?: () => void }) => {
       // A 4xx is an ANSWER: the server considered the command and refused it,
       // so the next press is a new question and deserves a new key.
       //
@@ -80,6 +85,7 @@ export function useSubmissionKey(): {
       // that saw nothing at all. The retry then carries the key its first
       // attempt used, and the server recognises the same command.
       if (error instanceof ApiError && error.status < 500) settle();
+      if (error instanceof ApiError && error.status === 409) handlers?.onConflict?.();
     },
   };
 }

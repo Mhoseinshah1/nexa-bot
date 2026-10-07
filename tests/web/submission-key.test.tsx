@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { ApiError } from '../../apps/web/src/api/client';
 import { useSubmissionKey } from '../../apps/web/src/submission-key';
@@ -64,5 +64,28 @@ describe('the submission key', () => {
     const first = result.current.current(payload);
     act(() => result.current.settleOn(new TypeError('Failed to fetch')));
     expect(result.current.current(payload)).toBe(first);
+  });
+
+  it('asks the caller to refresh on a 409, and on nothing else', () => {
+    const { result } = renderHook(() => useSubmissionKey());
+    const onConflict = vi.fn();
+    for (const error of [
+      new ApiError(403, 'access.denied', 'no'),
+      new ApiError(422, 'validation.failed', 'no'),
+      new ApiError(503, 'internal.unhandled', 'boom'),
+      new TypeError('Failed to fetch'),
+    ]) {
+      act(() => result.current.settleOn(error, { onConflict }));
+    }
+    expect(onConflict).not.toHaveBeenCalled();
+    const first = result.current.current(payload);
+    act(() =>
+      result.current.settleOn(new ApiError(409, 'control.version_conflict', 'stale'), {
+        onConflict,
+      }),
+    );
+    expect(onConflict).toHaveBeenCalledOnce();
+    // A conflict is an answer: the next press is a new question.
+    expect(result.current.current(payload)).not.toBe(first);
   });
 });

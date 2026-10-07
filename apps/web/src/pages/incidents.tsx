@@ -670,7 +670,9 @@ function ActionModal({
       await refresh(queries, incident.id);
       onClose();
     },
-    onError: (error: unknown) => submission.settleOn(error),
+    // A 409 means the incident moved on: re-read it, so the next press acts on what is there now.
+    onError: (error: unknown) =>
+      submission.settleOn(error, { onConflict: () => void refresh(queries, incident.id) }),
   });
   const close = () => {
     if (!run.isPending) onClose();
@@ -887,7 +889,14 @@ function IncidentFormModal({
       onSaved(result.incident);
       onClose();
     },
-    onError: (error: unknown) => submission.settleOn(error),
+    // A 409 means the incident changed since it was read: re-read it and keep the typing, so
+    // the next save carries the fresh version instead of being refused the same way again.
+    onError: (error: unknown) =>
+      submission.settleOn(error, {
+        onConflict: () => {
+          if (incident !== null) void refresh(queries, incident.id);
+        },
+      }),
   });
   const close = () => {
     if (!save.isPending) onClose();

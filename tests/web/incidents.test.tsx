@@ -148,6 +148,55 @@ describe('the incident detail', () => {
     );
   });
 
+  /**
+   * Roadmap B3: a 409 means the incident moved on. The modal used to keep the version it read,
+   * so every further press was refused the same way until the operator left the page. Now the
+   * conflict re-reads the incident and the next press carries the fresh version and a new key.
+   */
+  it('re-reads the incident on a version conflict, and acts on the fresh version next', async () => {
+    const page = detail();
+    const api = stubApi([
+      page,
+      {
+        url: `/incidents/${ID}/resolve`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'incident.version_conflict',
+            message: 'x',
+            correlationId: 'c',
+          },
+        },
+      },
+    ]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage mayNotify={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.inc_resolve') }));
+    const confirm = () =>
+      screen
+        .getAllByRole('button', { name: t('web.inc_resolve') })
+        .find((button) => button.closest('[role="dialog"]') !== null) as HTMLElement;
+    const reads = () =>
+      api.calls.filter((c) => c.method === 'GET' && c.url.endsWith(`/incidents/${ID}`));
+    expect(reads()).toHaveLength(1);
+    // Somebody else moved it to version 4 meanwhile.
+    (page.body.incident as { version: number }).version = 4;
+    fireEvent.click(confirm());
+    expect(await screen.findByText(t('web.inc_error_version'))).toBeInTheDocument();
+    await waitFor(() => expect(reads().length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(confirm()).not.toBeDisabled());
+    fireEvent.click(confirm());
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.url.endsWith('/resolve'))).toHaveLength(2),
+    );
+    const [first, second] = api.calls.filter((c) => c.url.endsWith('/resolve'));
+    expect((first?.body as { expectedVersion: number }).expectedVersion).toBe(3);
+    expect((second?.body as { expectedVersion: number }).expectedVersion).toBe(4);
+    expect((second?.body as { idempotencyKey: string }).idempotencyKey).not.toBe(
+      (first?.body as { idempotencyKey: string }).idempotencyKey,
+    );
+  });
+
   it('sends the notice with exactly the previewed count', async () => {
     const api = stubApi([
       detail(),

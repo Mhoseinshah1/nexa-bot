@@ -17,6 +17,10 @@ T_MC='tests/web/mutation-consistency.test.tsx'
 FOC=W+'ui/focusable.ts'
 OVL=W+'ui/overlays.tsx'
 T_KIT='tests/web/kit.test.tsx'
+SUB=W+'submission-key.ts'
+INC=W+'pages/incidents.tsx'
+T_SUB='tests/web/submission-key.test.tsx'
+T_INC='tests/web/incidents.test.tsx'
 
 M=[
  # --- B3: one idempotency key per logical attempt -------------------------------------------
@@ -31,6 +35,10 @@ M=[
  ('WRP-08',[(FOC,"  if (element.closest('[hidden], [inert], fieldset[disabled]') !== null) return false;\n","")],T_KIT,'hidden] toolbar that ends'),
  ('WRP-09',[(FOC,"  if (details !== null && details !== undefined && !details.open) {","  if (details !== null && details !== undefined && details.open) {")],T_KIT,'skipping hidden and collapsed'),
  ('WRP-10',[(OVL,"if (!isTopTrap(token) || event.defaultPrevented) return;","if (!isTopTrap(token)) return;")],T_KIT,'inside a menu in a dialog'),
+ # --- B3: a 409 refreshes the stale row ------------------------------------------------------
+ ('WRP-11',[(SUB,"if (error instanceof ApiError && error.status === 409) handlers?.onConflict?.();","if (error instanceof ApiError && error.status >= 400) handlers?.onConflict?.();")],T_SUB,'on a 409, and on nothing else'),
+ ('WRP-12',[(SUB,"if (error instanceof ApiError && error.status === 409) handlers?.onConflict?.();","")],T_INC,'re-reads the incident on a version conflict'),
+ ('WRP-13',[(INC,"submission.settleOn(error, { onConflict: () => void refresh(queries, incident.id) }),","submission.settleOn(error),")],T_INC,'re-reads the incident on a version conflict'),
 ]
 
 only=sys.argv[1:]
