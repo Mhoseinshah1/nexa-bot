@@ -69,6 +69,8 @@ M = [
     # Codex #231 P2: decisions and reopens bind to the version the operator saw.
     ('V-01', [(SVC, "  if (row.version !== expectedVersion) {", "  if (false) {")], T_INT, 'two operators'),
     ('V-02', [(SVC, "        assertVersion(before, command.expectedVersion);\n", "")], T_INT, 'two operators'),
+    # Codex #231 P2: the picker reaches the whole catalogue, not its first page.
+    ('W-03', [(PAGE, "        return { items: page.products, nextCursor: page.nextCursor };", "        return { items: page.products, nextCursor: null };")], T_WEB, 'past the first page'),
     ('W-02', [(PAGE, "        idempotencyKey,\n        expectedVersion: row.version,\n        reason: reason.trim(),", "        idempotencyKey,\n        expectedVersion: 1,\n        reason: reason.trim(),")], T_WEB, 'reopen names the version'),
     # The permission is MEDIUM: a LOW key is handed to every observer.
     ('C-01', [(PERMS, "  p('legacy.products.view', 'View the legacy product review', 'MEDIUM'),", "  p('legacy.products.view', 'View the legacy product review', 'LOW'),")], T_INT, 'permissions'),

@@ -27,6 +27,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
+import { everyPage } from './extra-devices';
 import { messageFor } from './settings';
 import {
   Badge,
@@ -534,7 +535,13 @@ function Decisions({
   );
   const products = useQuery({
     queryKey: ['legacy-products-picker'],
-    queryFn: () => fetchProducts({ limit: 100 }),
+    // Every page, not the first (Codex review of #231): a product past the hundredth would
+    // never be offered. The same walk the other product pickers use (`everyPage`).
+    queryFn: () =>
+      everyPage(async (cursor) => {
+        const page = await fetchProducts({ limit: 100, ...(cursor === null ? {} : { cursor }) });
+        return { items: page.products, nextCursor: page.nextCursor };
+      }),
     enabled: mayPickProduct && decidable(row.state),
   });
 
@@ -635,7 +642,7 @@ function Decisions({
                   onChange={(event) => setProductId(event.target.value)}
                 >
                   <option value="">—</option>
-                  {(products.data?.products ?? []).map((product) => (
+                  {(products.data ?? []).map((product) => (
                     <option key={product.id} value={product.id}>
                       {product.title}
                     </option>
