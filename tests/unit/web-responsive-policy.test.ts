@@ -43,11 +43,12 @@ describe('a clipped control', () => {
 });
 
 describe('what a measurement reports', () => {
+  const target = { kind: 'button', desc: 'b', w: 44, h: 44, left: 0, right: 44, inScroller: false };
   const clean = {
     coarse: true,
     width: 390,
     horizontalOverflow: 0,
-    targets: [{ kind: 'button', desc: 'b', w: 44, h: 44, left: 0, right: 44, inScroller: false }],
+    targets: [target],
     dialog: null,
     errors: [],
     unfixtured: [],
@@ -63,13 +64,13 @@ describe('what a measurement reports', () => {
     expect(
       responsiveProblems({
         ...clean,
-        targets: [{ ...clean.targets[0], w: 30 }],
+        targets: [{ ...target, w: 30 }],
       })[0],
     ).toMatch(/1 touch target/);
     expect(
       responsiveProblems({
         ...clean,
-        targets: [{ ...clean.targets[0], left: 380, right: 424 }],
+        targets: [{ ...target, left: 380, right: 424 }],
       })[0],
     ).toMatch(/cut off/);
   });
