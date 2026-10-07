@@ -14,7 +14,7 @@ import {
   USERNAME_TEMPLATE_MAX_LENGTH,
 } from './service-username.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
-import { refundChannelSchema, refundStateSchema } from './refunds.js';
+import { REFUND_REFUSAL_REASONS, refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
   serviceRefundRequestStateSchema,
   serviceRefundRequestOriginSchema,
@@ -5038,6 +5038,14 @@ export const refundListResponseSchema = z.object({
   refundableMinor: z.string(),
   currency: z.enum(CURRENCY_CODES),
   refundable: z.boolean(),
+  /**
+   * Roadmap E3 (`docs/refund-audit.md`): WHY `refundable` is false — the same reason the
+   * write path refuses with (`REFUND_NOT_PERMITTED`'s `reason`), from the one decision
+   * (`RefundService.refusalFor`). Null when the payment can be refunded. A surface names the
+   * reason and what exists instead, rather than a sentence listing every possibility.
+   * Defaulted on parse, so a reader holding the previous release's response reads "not said".
+   */
+  refusalReason: z.enum(REFUND_REFUSAL_REASONS).nullable().default(null),
 });
 export type RefundListResponse = z.infer<typeof refundListResponseSchema>;
 
