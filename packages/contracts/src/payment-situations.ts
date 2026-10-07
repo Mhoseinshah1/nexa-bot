@@ -173,7 +173,7 @@ export interface PaymentSituationGuide {
   readonly money: PaymentMoneySignal;
   readonly customer: PaymentCustomerGuidance;
   readonly actions: readonly PaymentOperatorAction[];
-  /** A person must act for this payment to move on. What the `NEEDS_ACTION` queue lists. */
+  /** A person must act for this payment to move on (`paymentNeedsAction`). */
   readonly needsAction: boolean;
 }
 
@@ -259,15 +259,26 @@ const CUSTOMER: Readonly<Record<PaymentSituation, PaymentCustomerGuidance>> = {
   CANCELLED: 'NOTHING',
 };
 
-/** The situations a person must act on. The `NEEDS_ACTION` queue is this set in SQL. */
-export const PAYMENT_SITUATIONS_NEEDING_ACTION: readonly PaymentSituation[] = [
-  'CUSTOMER_SIGNALLED',
-  'OUTCOME_UNKNOWN',
-  'MISMATCH',
-  'PARTIAL',
-  'LATE_COMPLETION',
-  'REFUND_IN_PROGRESS',
-];
+/**
+ * Whether a person must act for the payment to move on — what the `NEEDS_ACTION` queue lists,
+ * in SQL. TRUE only where an existing command is the exit, so the queue drains:
+ *
+ * - every `UNKNOWN` (reconciliation, `payments.reconcile`);
+ * - `CUSTOMER_SIGNALLED` (the receipt review in Telegram, or the payment's own expiry);
+ * - `REFUND_IN_PROGRESS` (complete or fail the refund, `refunds.issue`).
+ *
+ * NOT a late completion or a partial payment on a payment that already ended (FAILED,
+ * EXPIRED, CANCELLED): the domain has no operation that resolves one (`OQ-WP11A-03`), so in
+ * a queue of work it would sit for ever — the list that only grows, which the money rules
+ * name as the defect. Those stay visible in their own `LATE_COMPLETION` and `PARTIAL` facets,
+ * and their guide still names what exists (`VERIFY_AT_PROVIDER`, `MANUAL_WALLET_ADJUSTMENT`).
+ * Nor a PENDING partial: the gateway lane moves it on by itself.
+ */
+export function paymentNeedsAction(situation: PaymentSituation, state: PaymentState): boolean {
+  return (
+    state === 'UNKNOWN' || situation === 'CUSTOMER_SIGNALLED' || situation === 'REFUND_IN_PROGRESS'
+  );
+}
 
 function actionsFor(
   situation: PaymentSituation,
@@ -310,7 +321,7 @@ export function paymentSituationOf(facts: PaymentSituationFacts): PaymentSituati
     money: MONEY[situation],
     customer: CUSTOMER[situation],
     actions: actionsFor(situation, facts),
-    needsAction: PAYMENT_SITUATIONS_NEEDING_ACTION.includes(situation),
+    needsAction: paymentNeedsAction(situation, facts.state),
   };
 }
 

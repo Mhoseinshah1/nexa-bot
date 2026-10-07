@@ -34,12 +34,13 @@ import { REPORT_RANGES, reportLocalDateSchema } from './reporting.js';
  * - `REFUND_RELATED` — at least one refund row exists against the payment, automatic or an
  *   operator's, in any refund state.
  * - `NEEDS_ACTION` — roadmap E1/E2 (`docs/payments-under-review-ux.md`): the payments a PERSON
- *   must act on for them to move on — exactly `PAYMENT_SITUATIONS_NEEDING_ACTION` of
- *   `paymentSituationOf`, in SQL: a manual transfer the customer says they sent, still
- *   PENDING; every UNKNOWN; a late completion or a partial payment on a payment that is not
- *   CONFIRMED; and a CONFIRMED payment with a refund still open. Listed oldest first, like
- *   every queue, which is the attention order: the oldest unresolved is the most at risk.
- *   An integration test holds the SQL and the classifier to the same answer.
+ *   must act on for them to move on — exactly `paymentNeedsAction` of `paymentSituationOf`, in
+ *   SQL: a manual transfer the customer says they sent, still PENDING; every UNKNOWN; and a
+ *   CONFIRMED payment with a refund still open. Each has an existing command as its exit, so
+ *   the queue drains; late or partial money on a payment that already ended has none
+ *   (`OQ-WP11A-03`) and stays in its own facet. Listed oldest first, like every queue, which
+ *   is the attention order: the oldest unresolved is the most at risk. An integration test
+ *   holds the SQL and the classifier to the same answer.
  */
 export const PAYMENT_OPS_QUEUES = [
   'PENDING',
