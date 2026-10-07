@@ -162,6 +162,18 @@ export const LEGACY_INVOICE_ARCHIVE_PAGE_DEFAULT = 50;
 export const LEGACY_INVOICE_ARCHIVE_PAGE_MAX = 100;
 /** The longest search term a filter accepts (the legacy columns are varchar(200)–(300)). */
 export const LEGACY_INVOICE_ARCHIVE_SEARCH_MAX = 300;
+/**
+ * The longest invoice key the archive holds, in code points (`legacy_invoice_archive_shape_check`;
+ * a longer one fails its run `CELL_UNREPRESENTABLE`).
+ */
+export const LEGACY_INVOICE_ARCHIVE_KEY_MAX = 1000;
+/**
+ * The longest keyset cursor: `k` and the base64url of the longest key's UTF-8 bytes (four per
+ * code point at most, no padding). Sized from the key bound, so a page after ANY archivable key
+ * is reachable.
+ */
+export const LEGACY_INVOICE_ARCHIVE_CURSOR_MAX =
+  1 + Math.ceil((LEGACY_INVOICE_ARCHIVE_KEY_MAX * 4 * 4) / 3);
 
 // --- HTTP ---------------------------------------------------------------------------------
 
@@ -231,10 +243,11 @@ export const legacyInvoiceArchiveListQuerySchema = z.object({
   classification: legacyInvoiceArchiveClassSchema.optional(),
   test: z.enum(['true', 'false']).optional(),
   limit: z.coerce.number().int().positive().max(LEGACY_INVOICE_ARCHIVE_PAGE_MAX).optional(),
-  /** The `nextCursor` of the page before: opaque. */
+  /** The `nextCursor` of the page before: opaque, `k` + base64url. */
   after: z
     .string()
-    .regex(/^[A-Za-z0-9_-]{1,2000}$/u)
+    .max(LEGACY_INVOICE_ARCHIVE_CURSOR_MAX)
+    .regex(/^k[A-Za-z0-9_-]*$/u)
     .optional(),
 });
 export type LegacyInvoiceArchiveListQuery = z.infer<typeof legacyInvoiceArchiveListQuerySchema>;
