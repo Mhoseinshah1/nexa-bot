@@ -204,11 +204,21 @@ Owner-operated on the legacy host (its commands are outside this repository):
 2. Make the legacy MySQL refuse writes (for example `SET GLOBAL read_only = ON`, and
    `super_read_only` where the server supports it). This is a server setting, not a data
    change.
-3. Record a read-only content checksum, as the SELECT-only account:
+3. Record a read-only content checksum of EVERY table, as the SELECT-only account, with
+   the repository's script (copy it to the legacy host; it is plain SQL):
 
-```sql
-CHECKSUM TABLE user, invoice;   -- read-only; record both values and the time (UTC)
+```bash
+mysql --user=oldbot_ro --password --batch oldbot \
+  < legacy-freeze-checksum.sql | tee freeze-checksum-step7.tsv   # read-only; record the time (UTC)
 ```
+
+`scripts/legacy-freeze-checksum.sql` builds one `CHECKSUM TABLE` over every base table of
+the database, in name byte order. That covers `user`, `invoice` and `product`, and every
+table any read set reads or will read (products, the invoice archive), plus the ones
+nothing reads, so a write to any of them between the freeze and the switch is noticed.
+(Before Mirza PR1 this step covered `user, invoice` only.) It needs SELECT and nothing else,
+and runs under `read_only`/`super_read_only`. `legacy-import inventory` prints the same
+table list.
 
 Check: a customer pressing a button in MirzaBot gets no response; a test write as an
 ordinary account fails with a read-only error. MirzaBot stays frozen from here on — it is
@@ -264,12 +274,17 @@ export LEGACY_SOURCE_DSN="mysql://oldbot_ro:${LEGACY_RO_PW}@nexa-legacy-src:3306
 Then confirm the restored copy IS the frozen source, and record the fingerprint:
 
 ```bash
-legacy_ro oldbot -e "CHECKSUM TABLE user, invoice"
+legacy_ro oldbot --batch < <checkout>/scripts/legacy-freeze-checksum.sql | tee freeze-checksum-step9.tsv
 legacy_ro oldbot --batch --skip-column-names --safe-updates \
   < <checkout>/scripts/legacy-rehearsal-source.sql | tee legacy-source.tsv
 ```
 
-Check: both `CHECKSUM TABLE` values equal step 7's (the copy is the frozen database,
+Check: `diff freeze-checksum-step7.tsv freeze-checksum-step9.tsv` is empty: the same tables,
+each with the same value as step 7's. The `Table` column carries the database name; if the
+restored copy's database is named differently from the legacy host's, compare after
+removing that `<db>.` prefix. Compare values only
+between servers of the same engine and major version; that is why the throwaway server
+uses the legacy major version. All values equal step 7's (the copy is the frozen database,
 byte for byte at the row level). P7 `audit` (next step) prints the **source fingerprint**
 (SHA-256 of the snapshot's identity) — record it; every later P7 run must report the same
 one, and `resume` refuses a different one. (P7's report carries its own per-table digests
@@ -338,6 +353,23 @@ container (it runs as uid 1000 and cannot write a root-owned host directory — 
 `importer.md` §1.2). The fingerprint is printed and recorded; the plan's totals equal `legacy-source.tsv`;
 provider writes 0. The audit's Item 1 evidence and its cross-checks (Q1b, Q2b, Q6, Q7
 against the importer's own decisions) agree, or the disagreement is explained.
+
+Then take the table inventory of the same copy, bound to the fingerprint the audit printed.
+It is read-only on the copy and writes only its `legacy_read_set_runs` row
+(`table-inventory.md`):
+
+```bash
+# Not through p7(): inventory takes no --panel-map and no --evidence-class.
+sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
+  -e LEGACY_SOURCE_DSN -e NEXA_LEGACY_IMPORT_TARGET_ACK \
+  --entrypoint node api dist/legacy-import.cli.js inventory \
+  --tenant "$NEXA_TENANT" --source env:LEGACY_SOURCE_DSN --target nexa --allow-production-target \
+  --expected-fingerprint <audit source.fingerprint> | tee inventory.md
+```
+
+Check: every table is classified (verdict `COMPLETE`, exit 0). An `UNCLASSIFIED_TABLES`
+verdict stops the cutover until a reviewed commit classifies the table. The freeze
+statement it prints lists the same tables as `freeze-checksum-step7.tsv`.
 
 ## Step 11 — production dry-run
 

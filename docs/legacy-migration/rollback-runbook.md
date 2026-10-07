@@ -262,7 +262,8 @@ longer hold; the owner settles them one by one.
 Only after R4 passes and the owner decides to give customers back to MirzaBot:
 
 1. Confirm the legacy database is unchanged since the freeze — the same SELECT-only
-   `CHECKSUM TABLE user, invoice` as cutover step 7, equal to the recorded values. (It was
+   `scripts/legacy-freeze-checksum.sql` (every table) as cutover step 7, equal to the
+   recorded values. (It was
    read-only; this proves it.)
 2. Owner-operated on the legacy host: lift `read_only` / `super_read_only`, restart MirzaBot
    and its cron/webhook.

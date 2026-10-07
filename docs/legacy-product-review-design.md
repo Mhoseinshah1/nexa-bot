@@ -17,9 +17,10 @@ it to a NEXA product by itself.
 > NEXA, then decide what stays/changes/activates, rather than manually pre-mapping every
 > historical code before I can see them.
 
-Real rehearsal facts: NEXA sells two public products (30 GB / 30 d / 145 000 IRT and
-30 GB / 60 d / 175 000 IRT); the legacy `product` table has 64 rows and many historical
-`code_product` values.
+Real rehearsal facts — from the HISTORICAL staging snapshot, dated baselines and never
+expected values (the cutover snapshot is newer, owner constraint 2026-10-07): NEXA sells two
+public products (30 GB / 30 d / 145 000 IRT and 30 GB / 60 d / 175 000 IRT); the legacy
+`product` table had 64 rows and many historical `code_product` values.
 
 ## 2. What exists today (file references)
 
@@ -117,7 +118,10 @@ Every transition is a conditional UPDATE naming its `from` states (the ADR-0028 
 
 The import snapshot's fingerprint covers the columns it reads. Adding product columns to
 `LEGACY_REQUIRED_COLUMNS` would change the fingerprint of the SAME source and invalidate
-the fingerprint the owner approved (`685a9d52…` in the real rehearsal). So:
+the fingerprint the owner approved (`685a9d52…` in the historical staging rehearsal — that
+snapshot's value, not the cutover's). The import read set is now FROZEN as
+`IMPORT_READ_SET_V1` and pinned by a golden test, and a later read is a versioned read set
+(`docs/legacy-migration/importer.md` §3.1). So:
 
 - a NEW CLI mode, `legacy-import products-read`, reads the `product` table (and the
   per-code live-invoice count) in its own `START TRANSACTION READ ONLY` session, with its
@@ -192,7 +196,7 @@ intended order of events.
 | D   | Service: upsert-by-code, transitions as conditional UPDATEs, approve-existing, create-draft (via `ProductService`), reject, reopen, `SOURCE_CHANGED`; audit, idempotency, scope activity | M      |
 | E   | Web API (controller, guard permissions) + Admin page + Persian i18n keys + web tests                                                                                                     | M–L    |
 | F   | `products-export`, audit per-code aggregates, optional prepare consistency check, docs (`importer.md`, runbook)                                                                          | S–M    |
-| G   | Manual acceptance against the real Mirza dump (staging only): units, columns, 64 rows                                                                                                    | manual |
+| G   | Manual acceptance against the real Mirza dump (staging only): units, columns, row count                                                                                                  | manual |
 
 Order: A → B → C/D (parallel) → F → E → G. Integration tests per WP; mutation-check each
 rule (unapproved code never exported; `SOURCE_CHANGED` drops the export; draft product is
