@@ -18,6 +18,11 @@ T_R=('integration','tests/integration/broadcast-readiness.test.ts')
 T_B=('integration','tests/integration/broadcasts.test.ts')
 T_W=('web','tests/web/broadcast-readiness.test.tsx')
 T_CW=('web','tests/web/campaigns.test.tsx')
+AUD='apps/api/src/modules/commerce/audience/infrastructure/audience-sql.ts'
+CSVC='apps/api/src/modules/commerce/campaigns/application/campaign.service.ts'
+CREPO='apps/api/src/modules/commerce/campaigns/infrastructure/drizzle-campaign.repository.ts'
+T_AB=('integration','tests/integration/audience-bots.test.ts')
+T_C=('integration','tests/integration/campaigns.test.ts')
 
 M=[
  # Opt-out authority: the stamp re-reads the preference in its own transaction, so a refused
@@ -52,6 +57,15 @@ M=[
  # Web: the test and the count never read a draft with unsaved edits.
  ('CB-09',[(PAGE,"          disabled={blocked || test.isPending}","          disabled={test.isPending}")],T_W,'withholds the test and the count'),
  # Web: a re-queue is asked first.
+ # C3: the bot dimension narrows the ONE audience builder.
+ ('CB-12',[(AUD,"    parts.push(sql`${c}.first_bot_instance_id = ANY(${uuids(bots)})`);","    void bots;")],T_AB,'selects the customers of the named bots only'),
+ # C4: a campaign announcement is never a service announcement...
+ ('CB-13',[(CSVC,"announcement.terms.purpose !== 'MARKETING') {","announcement.terms.purpose === 'NEVER') {")],T_C,'refuses a campaign announcement called a service announcement'),
+ # ...and a draft stored before the rule is refused at the confirmation.
+ ('CB-14',[(CSVC,"        assertAnnouncementPurpose(actions.map((a) => a.config));\n","")],T_C,'refuses to schedule a draft saved before the rule'),
+ # C3 attribution: only PAID redemptions, and "delivered" means the announcement was SENT.
+ ('CB-15',[(CREPO,"           AND o.state = 'PAID'\n","")],T_C,'PAID redeemers against who was told'),
+ ('CB-16',[(CREPO,"WHERE t.customer_id = r.customer_id AND t.state = 'SENT'))::int","WHERE t.customer_id = r.customer_id))::int")],T_C,'PAID redeemers against who was told'),
  ('CB-10',[(PAGE,"              onClick={() => setRetryAsked(true)}","              onClick={() => steer.mutate('retryFailed')}")],T_W,'asks before a re-queue'),
 ]
 
