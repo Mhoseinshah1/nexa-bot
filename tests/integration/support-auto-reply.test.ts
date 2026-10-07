@@ -195,6 +195,29 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     }[];
   }
 
+  /**
+   * Roadmap A1 — `n` AUTO lane rows at `epoch`, `ago` before now, with no job (a row whose
+   * topic is unknown counts toward the session budget: fail closed).
+   */
+  async function seedAuto(
+    conversationId: string,
+    epoch: number,
+    n: number,
+    ago = "interval '1 minute'",
+    state = 'DELIVERED',
+  ) {
+    for (let i = 0; i < n; i += 1) {
+      await db().execute(
+        sql`INSERT INTO business_outbound_messages
+              (id, tenant_id, conversation_id, origin, body, control_epoch, idempotency_key,
+               request_hash, state, resolved_at, created_at, updated_at)
+            VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, ${conversationId}, 'AUTO',
+                    'x', ${epoch}, ${key('seed')}, 'h', ${state}, now(),
+                    now() - ${sql.raw(ago)}, now() - ${sql.raw(ago)})`,
+      );
+    }
+  }
+
   /** The whole AUTO job row, to prove a stopped scope left it untouched. */
   async function jobRow(conversationId: string) {
     const rows = await db().execute(
@@ -675,12 +698,15 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
 
   // --- the loop guard ----------------------------------------------------------------------
 
-  it('stops after N consecutive automatic replies with no person, before any provider cost', async () => {
-    await configure({ maxConsecutiveReplies: 1 });
+  it('stops when the session budget is spent, before any provider cost', async () => {
+    await configure({ sessionReplyBudget: 5 });
     const first = await record(message());
     await tick();
     await deliver();
     expect(transport.sent).toHaveLength(1);
+    // Four more in this session (seeded at the epoch, a minute ago): five in all.
+    const convo = await conversation(first.conversationId);
+    await seedAuto(convo.id, convo.controlEpoch, 4);
     await record(message({ text: 'باز هم وصل نشد' }));
     await tick();
     expect(calls).toBe(1);
@@ -701,6 +727,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   });
 
   it('caps automatic replies per window whatever the epoch', async () => {
+    await configure({ maxAutoRepliesPerHour: 10 });
     const first = await record(message());
     const convo = await conversation(first.conversationId);
     // Ten AUTO replies in the last hour, all under OLDER epochs (a person resumed in between).
@@ -1836,9 +1863,11 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('R10: a SUPERSEDED automatic reply never counts toward the loop guard', async () => {
-      await configure({ maxConsecutiveReplies: 1 });
+      await configure({ sessionReplyBudget: 5 });
       const first = await record(message());
       const convo = await conversation(first.conversationId);
+      // Four that count, at the current epoch; the fifth, superseded, does not.
+      await seedAuto(convo.id, convo.controlEpoch, 4);
       await db().execute(
         sql`INSERT INTO business_outbound_messages
               (id, tenant_id, conversation_id, origin, body, control_epoch, idempotency_key, request_hash, state, resolved_at)
@@ -1909,7 +1938,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       );
       const current = (await ctx.container.supportAiConfig.view(tenantA as never, owner)).config;
       for (const change of [
-        { maxConsecutiveReplies: current.maxConsecutiveReplies + 1 },
+        { sessionReplyBudget: current.sessionReplyBudget + 1 },
+        { maxAutoRepliesPerHour: current.maxAutoRepliesPerHour + 1 },
         { maxOutputChars: current.maxOutputChars + 100 },
         { cooldownSeconds: current.cooldownSeconds - 1 },
         { settleDelaySeconds: current.settleDelaySeconds - 1 },
@@ -1919,7 +1949,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         );
       }
       // Tightening is ordinary configuration.
-      await configure({ maxConsecutiveReplies: current.maxConsecutiveReplies - 1 }, admin);
+      await configure({ sessionReplyBudget: current.sessionReplyBudget - 1 }, admin);
+      await configure({ maxAutoRepliesPerHour: current.maxAutoRepliesPerHour - 1 }, admin);
       // Outside AUTO these shape only Assist drafts: ordinary configuration too.
       await configure({ mode: 'ASSIST_ONLY' });
       await configure({ maxOutputChars: current.maxOutputChars + 100 }, admin);
@@ -1955,6 +1986,12 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     };
     const outcomes = async (conversationId: string) =>
       (await autoJobs(conversationId)).map((j) => j.outcome);
+
+    // These cases were written at the hotfix's default of 2; roadmap A2 raised the default to 3
+    // and left stored values alone, so they run as a tenant still stored at 2 does.
+    beforeEach(async () => {
+      await configure({ maxConsecutiveClarifyingQuestions: 2 });
+    });
     const streak = async (conversationId: string) =>
       jobs.clarifyingStreak(scopeA, {
         conversationId,
@@ -2041,26 +2078,48 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       expect(transport.sent).toEqual([]);
     });
 
-    it('7: the clarifying limit defaults to 2, also for a row written before the column', async () => {
+    it('7 (A2): the clarifying limit defaults to 3, also for a row written before the column', async () => {
       const bOwner = adminActorFor(
         await createAdmin(ctx.container, tenantB, { username: 'bowner2', roleKeys: ['owner'] }),
       );
       // A fresh tenant: the contract default.
       expect(
-        (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config
-          .maxConsecutiveClarifyingQuestions,
-      ).toBe(2);
-      // A row written by a writer that does not know the column (an existing tenant's row as
-      // migration 0218 found it): the column's default.
+        (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config,
+      ).toMatchObject({
+        maxConsecutiveClarifyingQuestions: 3,
+        sessionReplyBudget: 20,
+        maxAutoRepliesPerHour: 30,
+      });
+      // A row written by a writer that knows none of these columns: the columns' defaults
+      // (0219: 3 for the clarifying limit, 20 and 30 for the two A1 limits).
       await db().execute(
         sql`INSERT INTO support_ai_configs (tenant_id, mode, timeout_ms, max_output_chars,
-              max_consecutive_replies, cooldown_seconds)
-            VALUES (${SEED_IDS.tenantB}, 'OFF', 30000, 1200, 4, 20)`,
+              cooldown_seconds)
+            VALUES (${SEED_IDS.tenantB}, 'OFF', 30000, 1200, 20)`,
+      );
+      expect(
+        (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config,
+      ).toMatchObject({
+        maxConsecutiveClarifyingQuestions: 3,
+        sessionReplyBudget: 20,
+        maxAutoRepliesPerHour: 30,
+      });
+      // A2: a value STORED before 0219 (the old default, 2) is not rewritten — the migration
+      // changes the column default only. Read back exactly as stored.
+      await db().execute(
+        sql`UPDATE support_ai_configs SET max_consecutive_clarifying_questions = 2
+            WHERE tenant_id = ${SEED_IDS.tenantB}`,
       );
       expect(
         (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config
           .maxConsecutiveClarifyingQuestions,
       ).toBe(2);
+      const column = await db().execute(
+        sql`SELECT column_default FROM information_schema.columns
+            WHERE table_name = 'support_ai_configs'
+              AND column_name = 'max_consecutive_clarifying_questions'`,
+      );
+      expect(column.rows).toEqual([{ column_default: '3' }]);
     });
 
     it('8: the setting round-trips, and saving another field preserves it', async () => {
@@ -2148,7 +2207,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('11: a higher limit (4) sends four clarifying questions and hands off the fifth', async () => {
-      await configure({ maxConsecutiveClarifyingQuestions: 4, maxConsecutiveReplies: 10 });
+      await configure({ maxConsecutiveClarifyingQuestions: 4, sessionReplyBudget: 10 });
       let id = '';
       for (let i = 1; i <= 5; i += 1) id = await turn(`پاسخ ${i}`, askOut(`سؤال ${i}؟`));
       expect(await outcomes(id)).toEqual([
@@ -2162,7 +2221,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('12/6: a REPLY resets the streak: ASK, ASK, REPLY, ASK, ASK are sent; the next ASK is not', async () => {
-      await configure({ maxConsecutiveReplies: 10 });
+      await configure({ sessionReplyBudget: 10 });
       const id = await turn('مشکل در اتصال دارم', askOut('سؤال ۱؟'));
       await turn('Sing-box', askOut('سؤال ۲؟'));
       expect(await streak(id)).toBe(2);
@@ -2279,7 +2338,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('13: a refused, superseded or failed reply, and a discarded job, never count', async () => {
-      await configure({ maxConsecutiveClarifyingQuestions: 1, maxConsecutiveReplies: 10 });
+      await configure({ maxConsecutiveClarifyingQuestions: 1, sessionReplyBudget: 10 });
       const id = await turn('مشکل در اتصال دارم', askOut('سؤال ۱؟'));
       expect(await streak(id)).toBe(1);
       const epoch = (await conversation(id)).controlEpoch;
@@ -2448,7 +2507,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('item 20: the acceptance flow — greeting, two questions, a grounded answer', async () => {
-      await configure({ maxConsecutiveReplies: 10 });
+      await configure({ sessionReplyBudget: 10 });
       const id = await turn(
         'سلام',
         replyOut({ topic: 'GREETING', replyText: 'سلام! چطور کمکتون کنم؟', factRefs: [] }),
@@ -2481,6 +2540,293 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       expect(await conversation(id)).toMatchObject({ state: 'AI_ACTIVE' });
       expect(await count('tickets')).toBe(0);
       expect(await count('business_conversation_escalations')).toBe(0);
+    });
+  });
+
+  // ===========================================================================================
+  // Roadmap A1/A2 (2026-10-07) — a session reply budget that resets after six hours of
+  // inactivity and never counts a GREETING; a configurable hourly limit; clarifying default 3.
+  // ===========================================================================================
+  describe('roadmap A1/A2: session budget, hourly limit, clarifying default', () => {
+    const scripted = (output: Record<string, unknown>): SupportAiOutcome => ({
+      outcome: 'OK',
+      output: { ...grounded, ...output },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'gpt-5.5',
+    });
+    const greeting = scripted({
+      topic: 'GREETING',
+      replyText: 'سلام! چطور کمکتون کنم؟',
+      factRefs: [],
+    });
+    const ask = (replyText: string) =>
+      scripted({ decision: 'ASK_CLARIFYING_QUESTION', replyText, factRefs: [] });
+    const turn = async (text: string, output: SupportAiOutcome = next) => {
+      next = output;
+      const recorded = await record(message({ text }));
+      await tick();
+      await deliver();
+      return recorded.conversationId;
+    };
+    const outcomes = async (conversationId: string) =>
+      (await autoJobs(conversationId)).map((j) => j.outcome);
+    const session = async (conversationId: string) =>
+      jobs.sessionReplyCount(scopeA, {
+        conversationId,
+        epoch: (await conversation(conversationId)).controlEpoch,
+        now: new Date(),
+      });
+    /** Moves every recorded message and lane row of the conversation `hours` into the past. */
+    const age = async (conversationId: string, hours: number) => {
+      const by = sql.raw(`interval '${hours} hours'`);
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = sent_at - ${by}
+            WHERE conversation_id = ${conversationId}`,
+      );
+      await db().execute(
+        sql`UPDATE business_outbound_messages SET created_at = created_at - ${by}
+            WHERE conversation_id = ${conversationId}`,
+      );
+    };
+
+    it('A1: a budget of 5 sends five replies in a session and hands off the sixth', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      let id = '';
+      for (let i = 1; i <= 6; i += 1) id = await turn(`هنوز مشکل دارم ${i}`, scripted({}));
+      expect(await outcomes(id)).toEqual([
+        'sent',
+        'sent',
+        'sent',
+        'sent',
+        'sent',
+        'guard_consecutive',
+      ]);
+      expect(calls).toBe(5); // the sixth is refused before any provider cost
+      expect(transport.sent).toHaveLength(5);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'LOOP_GUARD',
+      });
+    });
+
+    it('A1: six hours of inactivity start a new session; five hours do not', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      // Five automatic replies, all spent, five hours ago; the conversation silent since.
+      await seedAuto(convo.id, convo.controlEpoch, 5, "interval '5 hours'");
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = now() - interval '5 hours'
+            WHERE conversation_id = ${convo.id}`,
+      );
+      expect(await session(convo.id)).toBe(5);
+      // Five hours and fifty-nine minutes of silence is still the same session.
+      await age(convo.id, 0.98);
+      expect(await session(convo.id)).toBe(5);
+      // One more minute: six hours without a message either way — a new session.
+      await age(convo.id, 0.02);
+      expect(await session(convo.id)).toBe(0);
+      // The customer comes back: answered, from a fresh budget (same epoch, nobody intervened).
+      await turn('سلام دوباره، باز وصل نمیشه', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ state: 'SENT', outcome: 'sent' });
+      expect(await session(convo.id)).toBe(1);
+      expect((await conversation(convo.id)).controlEpoch).toBe(convo.controlEpoch);
+    });
+
+    it('A1: the same five spent replies five hours ago, then a message: still one session, handed off', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await seedAuto(convo.id, convo.controlEpoch, 5, "interval '5 hours'");
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = now() - interval '5 hours'
+            WHERE conversation_id = ${convo.id}`,
+      );
+      await turn('باز وصل نمیشه', scripted({}));
+      expect(calls).toBe(0);
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({
+        outcome: 'guard_consecutive',
+        handoff_reason: 'LOOP_GUARD',
+      });
+    });
+
+    it('A1: GREETING replies never spend the session budget, but count toward the hour', async () => {
+      await configure({ sessionReplyBudget: 5, maxAutoRepliesPerHour: 10 });
+      let id = '';
+      for (let i = 1; i <= 6; i += 1) id = await turn(`سلام ${i}`, greeting);
+      expect(await outcomes(id)).toEqual(Array(6).fill('sent'));
+      expect(await session(id)).toBe(0);
+      // Five troubleshooting replies spend it; greetings in between change nothing.
+      for (let i = 1; i <= 4; i += 1) await turn(`وصل نمیشه ${i}`, scripted({}));
+      expect(await session(id)).toBe(4);
+      // The hour now holds ten automatic replies: the eleventh, even a greeting, is refused.
+      await turn('سلام دوباره', greeting);
+      expect((await autoJobs(id)).at(-1)).toMatchObject({
+        outcome: 'guard_window',
+        handoff_reason: 'LOOP_GUARD',
+      });
+      expect(transport.sent).toHaveLength(10);
+    });
+
+    it('A1: a greeting job with no recorded topic counts (fail closed)', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const id = await turn('سلام', greeting);
+      expect(await session(id)).toBe(0);
+      await db().execute(
+        sql`UPDATE support_ai_jobs SET topic = NULL WHERE conversation_id = ${id}`,
+      );
+      expect(await session(id)).toBe(1);
+    });
+
+    it('A1: a takeover and return to the AI start a new session at once', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await seedAuto(convo.id, convo.controlEpoch, 5);
+      await tick();
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'guard_consecutive' });
+      await resume(convo.id);
+      await turn('ممنون، یک سؤال دیگه', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'sent' });
+    });
+
+    it('A1: the hourly limit is the tenant’s and counts every epoch in the last hour only', async () => {
+      await configure({ maxAutoRepliesPerHour: 10 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      // Nine in the hour at an older epoch, and twenty more than an hour ago.
+      // (UNCONFIRMED: they count, and the transcript — DELIVERED replies only — stays readable.)
+      await seedAuto(convo.id, convo.controlEpoch + 100, 9, "interval '10 minutes'", 'UNCONFIRMED');
+      await seedAuto(
+        convo.id,
+        convo.controlEpoch + 100,
+        20,
+        "interval '61 minutes'",
+        'UNCONFIRMED',
+      );
+      await tick();
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'sent' });
+      // That made ten in the hour: the next is refused.
+      await turn('باز هم', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({
+        outcome: 'guard_window',
+        handoff_reason: 'LOOP_GUARD',
+      });
+    });
+
+    it('A1: the default limits are 20 per session and 30 per hour', async () => {
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await seedAuto(convo.id, convo.controlEpoch, 19);
+      await tick();
+      await deliver();
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'sent' });
+      await turn('باز هم', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'guard_consecutive' });
+      await resume(convo.id);
+      // A new epoch: the session is fresh, but the hour holds 20; nine more make 29, one fits.
+      await seedAuto(convo.id, convo.controlEpoch + 100, 9);
+      await turn('سؤال تازه', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'sent' });
+      await turn('یکی دیگه', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'guard_window' });
+    });
+
+    it('A1: the budget is decided again in the enqueue transaction', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await seedAuto(convo.id, convo.controlEpoch, 4);
+      // While the provider is thinking, a fifth reply lands in the session.
+      duringCall = () => seedAuto(convo.id, convo.controlEpoch, 1);
+      await tick();
+      expect(calls).toBe(1);
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({
+        state: 'FAILED',
+        outcome: 'guard_consecutive',
+      });
+      expect(transport.sent).toEqual([]);
+    });
+
+    it('A1: a save without the new fields (an older client) keeps the stored values', async () => {
+      await configure({ sessionReplyBudget: 7, maxAutoRepliesPerHour: 12 });
+      const current = await ctx.container.supportAiConfig.view(tenantA as never, owner);
+      const { sessionReplyBudget: _s, maxAutoRepliesPerHour: _h, ...older } = current.config;
+      await ctx.container.supportAiConfig.update(tenantA as never, owner, {
+        idempotencyKey: key('cfg-old'),
+        expectedVersion: current.version,
+        config: { ...older, cooldownSeconds: 25 } as never,
+      });
+      expect(
+        (await ctx.container.supportAiConfig.view(tenantA as never, owner)).config,
+      ).toMatchObject({ sessionReplyBudget: 7, maxAutoRepliesPerHour: 12, cooldownSeconds: 25 });
+    });
+
+    it('A1: the bounds are refused by the service and by the CHECKs', async () => {
+      for (const change of [
+        { sessionReplyBudget: 4 },
+        { sessionReplyBudget: 41 },
+        { maxAutoRepliesPerHour: 9 },
+        { maxAutoRepliesPerHour: 61 },
+      ]) {
+        await expect(configure(change), JSON.stringify(change)).rejects.toThrow();
+      }
+      for (const column of [sql`session_reply_budget = 41`, sql`max_auto_replies_per_hour = 9`]) {
+        await expect(
+          db().execute(
+            sql`UPDATE support_ai_configs SET ${column} WHERE tenant_id = ${SEED_IDS.tenantA}`,
+          ),
+        ).rejects.toThrow();
+      }
+    });
+
+    it('A2: with the default (3), three questions in a row are sent and the fourth hands off', async () => {
+      // A tenant that never set the limit: delete the row's value back to the column default.
+      await db().execute(
+        sql`UPDATE support_ai_configs SET max_consecutive_clarifying_questions = DEFAULT
+            WHERE tenant_id = ${SEED_IDS.tenantA}`,
+      );
+      let id = '';
+      for (let i = 1; i <= 4; i += 1) id = await turn(`پاسخ ${i}`, ask(`سؤال ${i}؟`));
+      expect(await outcomes(id)).toEqual([
+        'sent_clarifying',
+        'sent_clarifying',
+        'sent_clarifying',
+        'guard_clarifying_limit',
+      ]);
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'CLARIFYING_LIMIT' });
+    });
+
+    it('A2: a GREETING reply between questions does not reset the streak; a real REPLY does', async () => {
+      await configure({ maxConsecutiveClarifyingQuestions: 2 });
+      const id = await turn('مشکل دارم', ask('سؤال ۱؟'));
+      await turn('سلام', greeting);
+      await turn('Sing-box', ask('سؤال ۲؟'));
+      expect(
+        await jobs.clarifyingStreak(scopeA, {
+          conversationId: id,
+          epoch: (await conversation(id)).controlEpoch,
+        }),
+      ).toBe(2);
+      await turn('خطا میده', ask('سؤال ۳؟'));
+      expect(await outcomes(id)).toEqual([
+        'sent_clarifying',
+        'sent',
+        'sent_clarifying',
+        'guard_clarifying_limit',
+      ]);
+      // After a person returns it to the AI, a real REPLY then resets as before.
+      await resume(id);
+      await turn('ادامه', ask('سؤال ۴؟'));
+      await turn('باشه', scripted({}));
+      await turn('یک چیز دیگه', ask('سؤال ۵؟'));
+      await turn('و', ask('سؤال ۶؟'));
+      expect((await outcomes(id)).slice(-4)).toEqual([
+        'sent_clarifying',
+        'sent',
+        'sent_clarifying',
+        'sent_clarifying',
+      ]);
     });
   });
 });

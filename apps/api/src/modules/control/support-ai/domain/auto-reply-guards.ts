@@ -59,11 +59,16 @@ export function autoPreflight(input: {
     readonly deleted: boolean;
   } | null;
   readonly customerBlocked: boolean;
-  /** AUTO replies since a person last acted (at the current epoch). */
-  readonly autoAtEpoch: number;
-  /** AUTO replies in the window, whatever the epoch. */
+  /**
+   * Roadmap A1 — AUTO replies in this session (`sessionReplyCount`): at the current epoch,
+   * since the conversation's last six-hour silence, GREETING replies not counted.
+   */
+  readonly sessionReplies: number;
+  /** AUTO replies in the window, whatever the epoch and the topic. */
   readonly autoInWindow: number;
-  readonly maxConsecutiveReplies: number;
+  /** The tenant's `sessionReplyBudget`. */
+  readonly sessionReplyBudget: number;
+  /** The tenant's `maxAutoRepliesPerHour`. */
   readonly maxPerWindow: number;
 }): AutoVerdict {
   const trigger = input.trigger;
@@ -81,7 +86,7 @@ export function autoPreflight(input: {
     return fail('content', 'UNSUPPORTED_CONTENT');
   }
   if (input.customerBlocked) return fail('customer_blocked', 'CUSTOMER_BLOCKED');
-  if (input.autoAtEpoch >= input.maxConsecutiveReplies) return fail('consecutive', 'LOOP_GUARD');
+  if (input.sessionReplies >= input.sessionReplyBudget) return fail('consecutive', 'LOOP_GUARD');
   if (input.autoInWindow >= input.maxPerWindow) return fail('window', 'LOOP_GUARD');
   return PASS;
 }
@@ -194,16 +199,18 @@ export function autoDecisionGuards(input: {
 
 /**
  * The clarifying streak: walking back from the newest, the automatic replies that count (see
- * the repository), how many are `ASK_CLARIFYING_QUESTION` before the first `REPLY`. A REPLY
- * ends the streak; a customer message does not (the point is a question, an answer, a question).
+ * the repository), how many are `ASK_CLARIFYING_QUESTION` before the first real `REPLY`. A
+ * REPLY ends the streak; a customer message does not (the point is a question, an answer, a
+ * question). Roadmap A2: a REPLY whose topic is `GREETING` is not a real answer — a «سلام» in
+ * the middle of the questions neither counts nor resets, so it cannot launder a streak.
  */
 export function clarifyingStreakOf(
-  newestFirst: readonly { readonly decision: string | null }[],
+  newestFirst: readonly { readonly decision: string | null; readonly topic?: string | null }[],
 ): number {
   let streak = 0;
   for (const row of newestFirst) {
     if (row.decision === 'ASK_CLARIFYING_QUESTION') streak += 1;
-    else if (row.decision === 'REPLY') break;
+    else if (row.decision === 'REPLY' && row.topic !== 'GREETING') break;
   }
   return streak;
 }

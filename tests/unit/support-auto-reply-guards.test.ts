@@ -5,6 +5,8 @@ import {
   SUPPORT_AI_HANDOFF_TOPICS,
   SUPPORT_AI_LIMITS,
   SUPPORT_AI_SAFE_TOPICS,
+  SUPPORT_AI_SESSION_INACTIVITY_SECONDS,
+  SUPPORT_AI_AUTO_WINDOW,
   supportAiConfigInputSchema,
   supportAiConfigSaveSchema,
   type SupportAiDecision,
@@ -80,10 +82,10 @@ const preflight = (over: Partial<Parameters<typeof autoPreflight>[0]> = {}) =>
   autoPreflight({
     trigger: { origin: 'INBOUND', kind: 'TEXT', text: 'سلام', deleted: false },
     customerBlocked: false,
-    autoAtEpoch: 0,
+    sessionReplies: 0,
     autoInWindow: 0,
-    maxConsecutiveReplies: 4,
-    maxPerWindow: 10,
+    sessionReplyBudget: 20,
+    maxPerWindow: 30,
     ...over,
   });
 
@@ -251,15 +253,29 @@ describe('automatic-reply guards (TB7)', () => {
     expect(clarifyingStreakOf([r, q, q])).toBe(0);
     // a greeting is a REPLY: it never adds to the streak
     expect(clarifyingStreakOf([r])).toBe(0);
+    // a REPLY with any topic but GREETING is real, and resets
+    expect(clarifyingStreakOf([q, { decision: 'REPLY', topic: 'APP_SETUP' }, q])).toBe(1);
   });
 
-  it('the clarifying limit is a tenant setting: default 2, bounds 1–10', () => {
+  it('A2: a GREETING reply neither counts nor resets the clarifying streak', () => {
+    const q = { decision: 'ASK_CLARIFYING_QUESTION', topic: 'CONNECTION_TROUBLESHOOTING' };
+    const hello = { decision: 'REPLY', topic: 'GREETING' };
+    const real = { decision: 'REPLY', topic: 'CONNECTION_TROUBLESHOOTING' };
+    // newest first: ASK, GREETING, ASK — the greeting is walked past
+    expect(clarifyingStreakOf([q, hello, q])).toBe(2);
+    expect(clarifyingStreakOf([hello])).toBe(0);
+    expect(clarifyingStreakOf([hello, q, q])).toBe(2);
+    // a real REPLY still ends it, with a greeting on either side
+    expect(clarifyingStreakOf([q, hello, real, q, q])).toBe(1);
+  });
+
+  it('the clarifying limit is a tenant setting: default 3 (A2), bounds 1–10', () => {
     expect(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions).toEqual({
       min: 1,
       max: 10,
-      default: 2,
+      default: 3,
     });
-    expect(SUPPORT_AI_DEFAULT_CONFIG.maxConsecutiveClarifyingQuestions).toBe(2);
+    expect(SUPPORT_AI_DEFAULT_CONFIG.maxConsecutiveClarifyingQuestions).toBe(3);
     // N4: a configuration always carries it (no schema default to widen a tenant at 1)…
     const absent = { ...SUPPORT_AI_DEFAULT_CONFIG, maxConsecutiveClarifyingQuestions: undefined };
     expect(supportAiConfigInputSchema.safeParse(absent).success).toBe(false);
@@ -419,16 +435,59 @@ describe('automatic-reply guards (TB7)', () => {
       outcome: 'guard_customer_blocked',
       reason: 'CUSTOMER_BLOCKED',
     });
-    expect(preflight({ autoAtEpoch: 4 })).toMatchObject({
+    expect(preflight({ sessionReplies: 20 })).toMatchObject({
       outcome: 'guard_consecutive',
       reason: 'LOOP_GUARD',
     });
-    expect(preflight({ autoAtEpoch: 3 })).toEqual({ pass: true });
-    expect(preflight({ autoInWindow: 10 })).toMatchObject({
+    expect(preflight({ sessionReplies: 19 })).toEqual({ pass: true });
+    expect(preflight({ autoInWindow: 30 })).toMatchObject({
       outcome: 'guard_window',
       reason: 'LOOP_GUARD',
     });
-    expect(preflight({ autoInWindow: 9 })).toEqual({ pass: true });
+    expect(preflight({ autoInWindow: 29 })).toEqual({ pass: true });
+    // each limit is the tenant's, not a constant
+    expect(preflight({ sessionReplies: 5, sessionReplyBudget: 5 })).toMatchObject({
+      outcome: 'guard_consecutive',
+    });
+    expect(preflight({ autoInWindow: 10, maxPerWindow: 10 })).toMatchObject({
+      outcome: 'guard_window',
+    });
+    expect(preflight({ sessionReplies: 39, sessionReplyBudget: 40 })).toEqual({ pass: true });
+  });
+
+  it('A1: the session budget and the hourly limit are tenant settings with their bounds', () => {
+    expect(SUPPORT_AI_LIMITS.sessionReplyBudget).toEqual({ min: 5, max: 40, default: 20 });
+    expect(SUPPORT_AI_LIMITS.maxAutoRepliesPerHour).toEqual({ min: 10, max: 60, default: 30 });
+    expect(SUPPORT_AI_DEFAULT_CONFIG.sessionReplyBudget).toBe(20);
+    expect(SUPPORT_AI_DEFAULT_CONFIG.maxAutoRepliesPerHour).toBe(30);
+    expect(SUPPORT_AI_SESSION_INACTIVITY_SECONDS).toBe(6 * 3600);
+    expect(SUPPORT_AI_AUTO_WINDOW.windowSeconds).toBe(3600);
+    const cases: [keyof typeof SUPPORT_AI_DEFAULT_CONFIG, number[], number[]][] = [
+      ['sessionReplyBudget', [4, 41, 0, 20.5], [5, 40]],
+      ['maxAutoRepliesPerHour', [9, 61, 0, 30.5], [10, 60]],
+    ];
+    for (const [field, bad, good] of cases) {
+      for (const value of bad) {
+        expect(
+          supportAiConfigInputSchema.safeParse({ ...SUPPORT_AI_DEFAULT_CONFIG, [field]: value })
+            .success,
+          `${field}=${value}`,
+        ).toBe(false);
+      }
+      for (const value of good) {
+        expect(
+          supportAiConfigInputSchema.safeParse({ ...SUPPORT_AI_DEFAULT_CONFIG, [field]: value })
+            .success,
+          `${field}=${value}`,
+        ).toBe(true);
+      }
+      // A configuration always carries it; a SAVE may omit it (the stored value is kept).
+      const absent = { ...SUPPORT_AI_DEFAULT_CONFIG, [field]: undefined };
+      expect(supportAiConfigInputSchema.safeParse(absent).success).toBe(false);
+      expect(supportAiConfigSaveSchema.parse(absent)[field]).toBeUndefined();
+    }
+    // The retired per-epoch limit is no longer part of the configuration.
+    expect('maxConsecutiveReplies' in SUPPORT_AI_DEFAULT_CONFIG).toBe(false);
   });
 });
 

@@ -244,7 +244,8 @@ interface ConfigDraft {
   readonly visionEnabled: boolean;
   readonly timeoutMs: string;
   readonly maxOutputChars: string;
-  readonly maxConsecutiveReplies: string;
+  readonly sessionReplyBudget: string;
+  readonly maxAutoRepliesPerHour: string;
   readonly maxConsecutiveClarifyingQuestions: string;
   readonly cooldownSeconds: string;
   readonly settleDelaySeconds: string;
@@ -281,7 +282,8 @@ export const SAI_AUTO_MIN_CONFIDENCE_LABELS: Readonly<Record<SupportAiAutoMinCon
 type NumericField =
   | 'timeoutMs'
   | 'maxOutputChars'
-  | 'maxConsecutiveReplies'
+  | 'sessionReplyBudget'
+  | 'maxAutoRepliesPerHour'
   | 'maxConsecutiveClarifyingQuestions'
   | 'cooldownSeconds'
   | 'settleDelaySeconds';
@@ -307,10 +309,18 @@ const NUMERIC_FIELDS: readonly {
     max: SUPPORT_AI_LIMITS.maxOutputChars.max,
   },
   {
-    field: 'maxConsecutiveReplies',
-    label: 'web.sai_max_consecutive_replies',
-    min: SUPPORT_AI_LIMITS.maxConsecutiveReplies.min,
-    max: SUPPORT_AI_LIMITS.maxConsecutiveReplies.max,
+    field: 'sessionReplyBudget',
+    label: 'web.sai_session_reply_budget',
+    help: 'web.sai_session_reply_budget_hint',
+    min: SUPPORT_AI_LIMITS.sessionReplyBudget.min,
+    max: SUPPORT_AI_LIMITS.sessionReplyBudget.max,
+  },
+  {
+    field: 'maxAutoRepliesPerHour',
+    label: 'web.sai_max_auto_replies_per_hour',
+    help: 'web.sai_max_auto_replies_per_hour_hint',
+    min: SUPPORT_AI_LIMITS.maxAutoRepliesPerHour.min,
+    max: SUPPORT_AI_LIMITS.maxAutoRepliesPerHour.max,
   },
   {
     field: 'maxConsecutiveClarifyingQuestions',
@@ -345,7 +355,8 @@ function toDraft(config: SupportAiConfigInput): ConfigDraft {
     visionEnabled: config.visionEnabled,
     timeoutMs: String(config.timeoutMs),
     maxOutputChars: String(config.maxOutputChars),
-    maxConsecutiveReplies: String(config.maxConsecutiveReplies),
+    sessionReplyBudget: String(config.sessionReplyBudget),
+    maxAutoRepliesPerHour: String(config.maxAutoRepliesPerHour),
     maxConsecutiveClarifyingQuestions: String(config.maxConsecutiveClarifyingQuestions),
     cooldownSeconds: String(config.cooldownSeconds),
     settleDelaySeconds: String(config.settleDelaySeconds),
@@ -373,7 +384,8 @@ function fromDraft(draft: ConfigDraft): unknown {
     visionEnabled: draft.visionEnabled,
     timeoutMs: toNumber(draft.timeoutMs),
     maxOutputChars: toNumber(draft.maxOutputChars),
-    maxConsecutiveReplies: toNumber(draft.maxConsecutiveReplies),
+    sessionReplyBudget: toNumber(draft.sessionReplyBudget),
+    maxAutoRepliesPerHour: toNumber(draft.maxAutoRepliesPerHour),
     maxConsecutiveClarifyingQuestions: toNumber(draft.maxConsecutiveClarifyingQuestions),
     cooldownSeconds: toNumber(draft.cooldownSeconds),
     settleDelaySeconds: toNumber(draft.settleDelaySeconds),
@@ -389,7 +401,8 @@ const ISSUE_LABELS: Readonly<Record<string, WebKey>> = {
   fallbacks: 'web.sai_invalid_fallbacks',
   timeoutMs: 'web.sai_invalid_bounds',
   maxOutputChars: 'web.sai_invalid_bounds',
-  maxConsecutiveReplies: 'web.sai_invalid_bounds',
+  sessionReplyBudget: 'web.sai_invalid_bounds',
+  maxAutoRepliesPerHour: 'web.sai_invalid_bounds',
   maxConsecutiveClarifyingQuestions: 'web.sai_invalid_bounds',
   cooldownSeconds: 'web.sai_invalid_bounds',
   settleDelaySeconds: 'web.sai_invalid_bounds',
@@ -450,10 +463,13 @@ function ConfigCard({
   const widened =
     draft.autoTopics.some((topic) => !response.config.autoTopics.includes(topic)) ||
     (draft.autoMinConfidence === 'MEDIUM' && response.config.autoMinConfidence !== 'MEDIUM') ||
-    // Hotfix: more clarifying questions in a row is a widening while AUTO_REPLY_SAFE.
+    // Hotfix: more clarifying questions in a row is a widening while AUTO_REPLY_SAFE; so is a
+    // larger session reply budget or hourly limit (roadmap A1).
     (draft.mode === 'AUTO_REPLY_SAFE' &&
-      toNumber(draft.maxConsecutiveClarifyingQuestions) >
-        response.config.maxConsecutiveClarifyingQuestions);
+      (toNumber(draft.maxConsecutiveClarifyingQuestions) >
+        response.config.maxConsecutiveClarifyingQuestions ||
+        toNumber(draft.sessionReplyBudget) > response.config.sessionReplyBudget ||
+        toNumber(draft.maxAutoRepliesPerHour) > response.config.maxAutoRepliesPerHour));
   const stale = response.version !== baseVersion;
   const reload = () => {
     setDraft(toDraft(response.config));

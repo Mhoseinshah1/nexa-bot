@@ -163,7 +163,11 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
 export interface SupportAutoReplyServiceDeps {
   readonly jobs: Pick<
     DrizzleSupportAiJobRepository,
-    'finishAuto' | 'recordImageOutcomes' | 'recordKnowledgeCounts' | 'clarifyingStreak'
+    | 'finishAuto'
+    | 'recordImageOutcomes'
+    | 'recordKnowledgeCounts'
+    | 'clarifyingStreak'
+    | 'sessionReplyCount'
   >;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
@@ -478,13 +482,13 @@ export class SupportAutoReplyService {
     scope: ScopeContext,
     job: SupportAiJobRecord,
     conversationId: string,
-    config: { readonly maxConsecutiveReplies: number },
+    config: { readonly sessionReplyBudget: number; readonly maxAutoRepliesPerHour: number },
     customerBlocked: boolean,
     now: Date,
     tx?: unknown,
   ): Promise<{ readonly verdict: AutoVerdict; readonly trigger: BusinessMessageRecord | null }> {
     const epoch = job.controlEpoch ?? -1;
-    const [trigger, counts] = await Promise.all([
+    const [trigger, counts, sessionReplies] = await Promise.all([
       this.deps.messages.findByTelegramId(
         scope,
         conversationId,
@@ -500,6 +504,7 @@ export class SupportAutoReplyService {
         },
         tx,
       ),
+      this.deps.jobs.sessionReplyCount(scope, { conversationId, epoch, now }, tx),
     ]);
     const verdict = autoPreflight({
       trigger:
@@ -512,10 +517,10 @@ export class SupportAutoReplyService {
               deleted: trigger.deletedAt !== null,
             },
       customerBlocked,
-      autoAtEpoch: counts.atEpoch,
+      sessionReplies,
       autoInWindow: counts.inWindow,
-      maxConsecutiveReplies: config.maxConsecutiveReplies,
-      maxPerWindow: SUPPORT_AI_AUTO_WINDOW.maxPerWindow,
+      sessionReplyBudget: config.sessionReplyBudget,
+      maxPerWindow: config.maxAutoRepliesPerHour,
     });
     return { verdict, trigger };
   }
