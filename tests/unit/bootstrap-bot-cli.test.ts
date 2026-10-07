@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   parseArgs,
+  statusDetailLines,
   suppliedToken,
   tokenForRun,
   tokenFromFile,
 } from '../../apps/api/src/bootstrap-bot.cli';
+import type { BotWebhookStatusDetail } from '../../apps/api/src/modules/platform/tenancy/application/bot-bootstrap.service';
 
 /**
  * The half of the bootstrap CLI that decides where a bot token comes from.
@@ -205,5 +207,59 @@ describe('bootstrap-bot CLI token decision', () => {
       await expect(tokenForRun(null, state, ask), `state ${state}`).resolves.toBeNull();
     }
     expect(asked, 'a rerun asked for a token').toBe(1);
+  });
+});
+
+/*
+ * Hardening 2026-10-07 (incident A): `--status` prints BOTH halves on stderr beside the one
+ * word on stdout. The lines are built from a detail that has no credential field, and this
+ * pins that the rendering adds none and shows the disagreement the incident needed to see.
+ */
+describe('statusDetailLines', () => {
+  const TOKEN = '8123456789:AAH0ffbeefcafe0ffbeefcafe0ffbeefcaf';
+  const SECRET = 'a-webhook-secret-long-enough';
+  const url = 'https://bot.example.com/telegram/webhook/01890000-0000-7000-8000-0000000000b1';
+  const detail: BotWebhookStatusDetail = {
+    botInstanceId:
+      '01890000-0000-7000-8000-0000000000b1' as BotWebhookStatusDetail['botInstanceId'],
+    expectedUrl: url,
+    local: {
+      registered: true,
+      recordedUrl: url,
+      registeredAt: new Date('2026-09-01T10:00:00Z'),
+      secret: 'MATCHES',
+    },
+    remote: {
+      outcome: 'READ',
+      url: null,
+      matchesExpected: false,
+      updatesNarrowed: false,
+      pendingUpdateCount: 22,
+      lastErrorAt: new Date('2026-10-06T09:00:00Z'),
+      lastErrorMessage: 'Connection refused',
+      tokenErrorCode: null,
+    },
+    problems: ['WEBHOOK_NOT_SET'],
+  };
+
+  it('shows the local marker and the remote registration side by side', () => {
+    const text = statusDetailLines(detail).join('\n');
+    expect(text).toMatch(/local registration\s+current/);
+    expect(text).toMatch(/remote webhook URL\s+\(none set\)/);
+    expect(text).toMatch(/remote matches\s+no/);
+    expect(text).toMatch(/pending updates\s+22/);
+    expect(text).toMatch(/last delivery error\s+2026-10-06T09:00:00.000Z: Connection refused/);
+    expect(text).toMatch(/problems\s+WEBHOOK_NOT_SET/);
+    expect(text).not.toContain(TOKEN);
+    expect(text).not.toContain(SECRET);
+  });
+
+  it('prints no remote URL lines when Telegram could not be read', () => {
+    const text = statusDetailLines({
+      ...detail,
+      remote: { ...detail.remote, outcome: 'TOKEN_REJECTED', url: null, pendingUpdateCount: null },
+    }).join('\n');
+    expect(text).toMatch(/remote \(Telegram\)\s+TOKEN_REJECTED/);
+    expect(text).not.toContain('pending updates');
   });
 });

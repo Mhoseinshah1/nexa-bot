@@ -33,6 +33,8 @@ describe('a Telegram bot belongs to one tenant', () => {
   const SAME_BOT = '8123456789';
   /** R4: run while `setWebhook` is in flight, to take the claim over mid-registration. */
   let onRegister: (() => Promise<void>) | null = null;
+  /** The URL the stand-in Telegram last accepted; null until one is registered. */
+  let registeredUrl: string | null = null;
 
   /** The service with Telegram faked and everything below it real. */
   const bootstrap = (username: string): BotBootstrapService => bootstrapFor(SAME_BOT, username);
@@ -74,13 +76,24 @@ describe('a Telegram bot belongs to one tenant', () => {
         // `identify` answers with the SAME numeric id and a DIFFERENT username —
         // the post-rename state, which is what slips past the username index.
         identify: async () => ({ outcome: 'IDENTIFIED', botId, username }) as never,
-        registerWebhook: async () => {
+        registerWebhook: async (input: { readonly url: string }) => {
           if (onRegister !== null) await onRegister();
+          registeredUrl = input.url;
           return { outcome: 'REGISTERED' } as never;
         },
-        // R4: a rerun asks whether Telegram still holds the registration. Unreadable here,
-        // which leaves the marker's answer standing — nothing in this file is about it.
-        readWebhook: async () => ({ outcome: 'UNREACHABLE' }) as never,
+        // What Telegram holds: the last URL it accepted. The bootstrap reads it before an
+        // ALREADY_COMPLETE and reads it BACK after registering (hardening 2026-10-07), and
+        // nothing in this file is about either, so it answers as Telegram would.
+        readWebhook: async () =>
+          ({
+            outcome: 'READ',
+            url: registeredUrl,
+            pendingUpdateCount: 0,
+            lastErrorAt: null,
+            lastErrorMessage: null,
+            maxConnections: 40,
+            allowedUpdates: null,
+          }) as never,
         // The command menu. Answering REGISTERED is the ordinary case; the bootstrap
         // service's own unit test covers a refusal, which must not fail an install.
         registerCommands: async () => ({ outcome: 'REGISTERED' }),
@@ -99,6 +112,7 @@ describe('a Telegram bot belongs to one tenant', () => {
 
   beforeEach(async () => {
     onRegister = null;
+    registeredUrl = null;
     ctx ??= await createTestContext();
     await ctx.reset();
     // The seed gives both tenants a bot instance already, and this is about the

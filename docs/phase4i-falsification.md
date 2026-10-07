@@ -89,8 +89,9 @@ on the FRESH-INSTALL path. Both are statements about a stored credential, and
 that path has none. So the suite made the false sentence mandatory in the one
 state where it is false, and a change that removed it — the correct change —
 would have failed a green suite for being right. The assertions were moved to
-`still says a STORED token has no supported replacement in this release`, where
-they are true, and the fresh-install case now pins the sentence that belongs to
+the stored-token case (since 2026-10-07 `sends a STORED token Telegram rejects to the Web Admin replacement, not to a rerun`,
+after R4's Web Admin replacement made "no supported recovery" false there too), where
+they were true, and the fresh-install case now pins the sentence that belongs to
 it. Recorded rather than quietly rewritten, because a test asserting a defect is
 evidence about how the surrounding tests were written.
 

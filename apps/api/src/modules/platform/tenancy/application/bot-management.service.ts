@@ -46,7 +46,11 @@ import {
   webhookSecretState,
 } from '../domain/bot-readiness.js';
 import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
-import { allowedUpdatesNarrowed, expectedWebhookUrl } from '../domain/webhook-url.js';
+import {
+  allowedUpdatesNarrowed,
+  expectedWebhookUrl,
+  shownWebhookUrl,
+} from '../domain/webhook-url.js';
 import type {
   BotManagementRecord,
   BotManagementRepository,
@@ -85,6 +89,23 @@ const WEBHOOK_SECRET_MIN_LENGTH = 16;
 
 const incompleteKey = (botId: BotInstanceId): string =>
   `${TOKEN_REPLACEMENT_INCOMPLETE_CODE}:${botId}`;
+
+/**
+ * Where a token replacement is, for the audit row a failure leaves (hardening 2026-10-07).
+ * Wider than the contract's `BotReplacementStage`, which names only the three stages after
+ * Telegram was asked to change and is pinned by the response schema; this is audit `after`
+ * content and names every step.
+ */
+interface ReplacementProgress {
+  stage:
+    | 'VALIDATE'
+    | 'CLAIM'
+    | 'GET_ME'
+    | 'READ_WEBHOOK'
+    | 'SET_WEBHOOK'
+    | 'VERIFY_WEBHOOK'
+    | 'ACTIVATE';
+}
 
 /** What Telegram held before a replacement touched it — what a compensation restores. */
 type PriorRegistration = 'NONE' | 'THIS_INSTALLATION' | 'ELSEWHERE';
@@ -358,6 +379,37 @@ export class BotManagementService {
     };
     await this.authorize(scope, actor, BOTS_TOKEN_PERMISSION, denial);
 
+    /*
+     * Hardening 2026-10-07 (incident A): EVERY replacement that does not complete leaves an
+     * audit row naming the step it stopped at. The owner replaced the token in the panel
+     * several times and service did not come back; the operational event below covers
+     * only a replacement that had already asked Telegram to change, so an attempt refused
+     * at `getMe`, at the first `getWebhookInfo` or by Telegram's refusal of the URL left
+     * nothing but the browser's toast — and after the fact could not be attributed.
+     */
+    const progress: ReplacementProgress = { stage: 'VALIDATE' };
+    try {
+      return await this.replaceTokenTracked(scope, actor, input, botId, progress);
+    } catch (error) {
+      await this.recordReplacementFailure(scope, actor, botId, progress.stage, error);
+      throw error;
+    }
+  }
+
+  /** `replaceToken` after its permission check, advancing `progress` as it goes. */
+  private async replaceTokenTracked(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly idempotencyKey: string; readonly botId: string; readonly token: unknown },
+    botId: BotInstanceId,
+    progress: ReplacementProgress,
+  ): Promise<BotTokenReplacementOutcome> {
+    const denial = {
+      action: 'bot_instance.token_replace',
+      entityType: 'BotInstance',
+      entityId: botId as string,
+    };
+
     // The token is validated only NOW, after the permission: the surface hands it over
     // unparsed, so a caller who may not replace a credential is refused (and the refusal
     // recorded) before anything about the value is judged — even its length.
@@ -426,6 +478,7 @@ export class BotManagementService {
 
     // Step 4 — the per-bot claim. Its own short transaction, under the same session,
     // permission and scope checks as every write on this path.
+    progress.stage = 'CLAIM';
     const now = this.deps.clock.now();
     const claimId = this.deps.ids.uuid();
     await runAuthorizedMutation(
@@ -470,6 +523,7 @@ export class BotManagementService {
         expectedUrl,
         claimId,
         previous: record,
+        progress,
       });
     } finally {
       // A no-op after a successful activation, which released the claim in its own
@@ -502,11 +556,13 @@ export class BotManagementService {
       readonly expectedUrl: string;
       readonly claimId: string;
       readonly previous: BotManagementRecord;
+      readonly progress: ReplacementProgress;
     },
   ): Promise<BotTokenReplacementOutcome> {
-    const { botId, token, identity, secret, expectedUrl } = input;
+    const { botId, token, identity, secret, expectedUrl, progress } = input;
 
     // Step 5 — valid, a bot, and THIS bot. Nothing has been changed anywhere yet.
+    progress.stage = 'GET_ME';
     const probe = await this.deps.telegram.identify(token);
     switch (probe.outcome) {
       case 'IDENTIFIED':
@@ -527,6 +583,7 @@ export class BotManagementService {
     }
 
     // Step 6 — what Telegram holds now, which is what a compensation puts back.
+    progress.stage = 'READ_WEBHOOK';
     const prior = await this.deps.telegram.readWebhook(token);
     if (prior.outcome === 'REJECTED') {
       throw errors.validation(
@@ -540,6 +597,7 @@ export class BotManagementService {
 
     // Step 7 — register. `dropPendingUpdates: false`: whatever Telegram queued while the
     // bot was silent is real customers' messages, and they are delivered, not discarded.
+    progress.stage = 'SET_WEBHOOK';
     const registered = await this.deps.telegram.registerWebhook({
       token,
       url: expectedUrl,
@@ -584,6 +642,7 @@ export class BotManagementService {
 
     // Step 8 — read it back. Telegram's acceptance says it took the request; only the
     // registration it now reports says where updates will go.
+    progress.stage = 'VERIFY_WEBHOOK';
     const after = await this.deps.telegram.readWebhook(token);
     const verified =
       after.outcome === 'READ' &&
@@ -609,6 +668,7 @@ export class BotManagementService {
     }
 
     // Step 9 — activate. One transaction; everything above is proved.
+    progress.stage = 'ACTIVATE';
     const now = this.deps.clock.now();
     try {
       return await runAuthorizedMutation(
@@ -793,6 +853,50 @@ export class BotManagementService {
     // No answer may still have landed: ask rather than assume either way.
     const check = await this.deps.telegram.readWebhook(token);
     return check.outcome === 'READ' && check.url === null ? restoredAs : 'FAILED';
+  }
+
+  /**
+   * The audit row a replacement that did not complete leaves, whatever step it stopped at
+   * (hardening 2026-10-07): who tried, the step, the error CODE, and — when the failure
+   * carries them — what compensation did and Telegram's own (already redacted) reason.
+   * Never the token, never a URL that is not this installation's.
+   *
+   * Not for a permission refusal: `authorize` / `runAuthorizedMutation` already wrote that
+   * one as DENIED, and a second row would count one refusal twice. Best effort and outside
+   * any transaction, for the reason `recordIncomplete` gives: the failure being thrown is
+   * what the operator must see.
+   */
+  private async recordReplacementFailure(
+    scope: TenantContext,
+    actor: ActorContext,
+    botId: BotInstanceId,
+    stage: ReplacementProgress['stage'],
+    error: unknown,
+  ): Promise<void> {
+    if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') return;
+    const details = isNexaError(error) ? error.details : {};
+    const detail = (key: string): string | null => {
+      const value = (details as Record<string, unknown>)[key];
+      return typeof value === 'string' ? value : null;
+    };
+    try {
+      await this.deps.audit.record(scope, actor, {
+        action: 'bot_instance.token_replace',
+        entityType: 'BotInstance',
+        entityId: botId,
+        before: null,
+        after: {
+          stage,
+          errorCode: isNexaError(error) ? error.code : 'validation',
+          compensation: detail('compensation'),
+          telegramReason: detail('telegramReason'),
+        },
+        result: 'FAILED',
+      });
+    } catch (recordError) {
+      // Deliberately not rethrown — see the docblock.
+      void recordError;
+    }
   }
 
   /**
@@ -1273,27 +1377,7 @@ export class BotManagementService {
 }
 
 /**
- * The webhook URL Telegram holds, as far as it may be shown.
- *
- * In full only when it is the one this installation recorded registering, or the one it
- * would register now (R4's `expected`) — those URLs are ours and carry no secret. Anything
- * else is somebody else's registration (a legacy install, another system, a bot pointed
- * elsewhere), and the common shapes of those put the bot token or a webhook secret in the
- * PATH: `https://host/<token>`. The check is open to `settings.edit`, which may not read a
- * token, so a foreign URL is cut to its origin.
+ * Moved to `domain/webhook-url.ts` so `botctl telegram status` (the bootstrap service) shows
+ * a remote URL by the same rule; re-exported here for the callers that import it from here.
  */
-export function shownWebhookUrl(
-  held: string | null,
-  recorded: string | null,
-  expected: string | null = null,
-): string | null {
-  if (held === null) return null;
-  if (recorded !== null && held === recorded) return held;
-  if (expected !== null && held === expected) return held;
-  try {
-    const origin = new URL(held).origin;
-    return origin === 'null' ? null : `${origin}/…`;
-  } catch {
-    return null;
-  }
-}
+export { shownWebhookUrl } from '../domain/webhook-url.js';

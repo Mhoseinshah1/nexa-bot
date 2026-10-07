@@ -70,3 +70,29 @@ export function allowedUpdatesNarrowed(allowed: readonly string[] | null): boole
   if (allowed === null || allowed.length === 0) return false;
   return TELEGRAM_HANDLED_UPDATE_TYPES.some((type) => !allowed.includes(type));
 }
+
+/**
+ * The webhook URL Telegram holds, as far as it may be shown.
+ *
+ * In full only when it is the one this installation recorded registering, or the one it
+ * would register now (R4's `expected`) — those URLs are ours and carry no secret. Anything
+ * else is somebody else's registration (a legacy install, another system, a bot pointed
+ * elsewhere), and the common shapes of those put the bot token or a webhook secret in the
+ * PATH: `https://host/<token>`. The check is open to `settings.edit`, which may not read a
+ * token, so a foreign URL is cut to its origin.
+ */
+export function shownWebhookUrl(
+  held: string | null,
+  recorded: string | null,
+  expected: string | null = null,
+): string | null {
+  if (held === null) return null;
+  if (recorded !== null && held === recorded) return held;
+  if (expected !== null && held === expected) return held;
+  try {
+    const origin = new URL(held).origin;
+    return origin === 'null' ? null : `${origin}/…`;
+  } catch {
+    return null;
+  }
+}

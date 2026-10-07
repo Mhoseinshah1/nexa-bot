@@ -102,8 +102,8 @@ botctl — operate a Nexa installation
   botctl logs [SERVICE]      follow logs
   botctl restart             restart the stack
 
-  botctl telegram status     whether the bot is configured and receiving updates
-  botctl telegram register   register the webhook with Telegram, or retry it
+  botctl telegram status     the local registration AND Telegram's own webhook state
+  botctl telegram register   reconcile the webhook with Telegram (keeps queued updates)
 
   botctl secrets status                    configuration, envelope versions and key ids in use
   botctl secrets rewrap [--batch N] [--max N]
@@ -127,11 +127,16 @@ strand ciphertext. It never edits the configuration, and it is not permission to
 DESTROY the key material: backups taken before the re-encryption still contain
 ciphertext under that key.
 
+`telegram status` prints one word (none, incomplete, ready, unavailable) and,
+beside it, both halves: what this installation recorded and what Telegram itself
+reports (URL, pending updates, last delivery error). `ready` only when they agree.
+
 `telegram register` never asks for a token and never replaces a stored one. It
-resumes from the encrypted token the install already holds and retries the
-registration with Telegram — which is the command to run after fixing DNS or
-waiting for a certificate. Changing the bot itself is a separate, deliberate act
-and is not this command.
+resumes from the encrypted token the install already holds, reads Telegram's
+webhook first, re-registers only when it differs — never dropping queued
+updates — and reads it back. It is the command to run after fixing DNS, waiting
+for a certificate, or finding Telegram's webhook empty. A token Telegram REJECTS
+is replaced on the bot's page in the Web Admin, not here.
 
 `admin reset-2fa` is the way back for an administrator who lost both their
 authenticator and their backup codes. It never sets a password and never signs
@@ -1934,7 +1939,16 @@ telegram_reconcile_menu() {
     dist/bootstrap-bot.cli.js --status --public-base-url "$(telegram_origin)" 2>/dev/null |
     tr -d '[:space:]')" || state=''
   case "$state" in
-    none | unavailable | '') return 0 ;;
+    none | '') return 0 ;;
+    unavailable)
+      # Not a menu problem and not one `register` can fix, so `register` is not run and
+      # not named. Since incident A (2026-10-07) this word also means Telegram REJECTED
+      # the stored token or could not be asked: a release that finishes silently over
+      # that is a bot that answers nobody while the operator is told all is well.
+      # `status` prints which cause it is and its remedy.
+      nexa_warn "the Telegram bot cannot receive updates right now, for a reason registering cannot fix; run 'botctl telegram status' for the cause and its remedy. The ${release} release itself is complete."
+      return 0
+      ;;
   esac
 
   # THE INSTALLATION LOCK IS HELD, by the caller, and that is what makes this
@@ -2008,7 +2022,10 @@ cmd_telegram() {
   case "$action" in
     status)
       # Read-only, and the one word goes to stdout so a script can read it
-      # without parsing prose.
+      # without parsing prose. Since incident A (2026-10-07) the word is decided
+      # from BOTH halves — the local registration marker AND Telegram's own
+      # getWebhookInfo, read with the stored token — and each half is printed on
+      # stderr beside it. `ready` only when they agree.
       nexa_compose run --rm --no-deps -T --entrypoint node api \
         dist/bootstrap-bot.cli.js --status --public-base-url "$(telegram_origin)"
       ;;
