@@ -233,7 +233,7 @@ price_product, Volume_constraint, Location, Service_time, Category`; the importe
 | Draft creation          | `ProductService.createWithin` — the product service's own create body inside the decision's transaction                                                                                                                                                                                                                                                                                  |
 | Export                  | `LegacyProductReviewService.exportMapping`, CLI `legacy-import products-export [--panel-map FILE]`                                                                                                                                                                                                                                                                                       |
 | Web                     | `LegacyProductsController` (`/api/v1/legacy-products…`), page `/legacy-products` in the sales/catalogue nav group                                                                                                                                                                                                                                                                        |
-| Tests                   | `tests/unit/legacy-product-review-domain.test.ts`, `legacy-products-read-set.test.ts`, `legacy-import-products-cli.test.ts`, `legacy-products-boundary.test.ts` (extended); `tests/integration/legacy-product-review.test.ts`; `tests/legacy-mysql/legacy-mysql-products.test.ts`; `tests/web/legacy-products.test.tsx`; mutation driver `scripts/mutate-mirza-pr2.py` (28 of 28 killed) |
+| Tests                   | `tests/unit/legacy-product-review-domain.test.ts`, `legacy-products-read-set.test.ts`, `legacy-import-products-cli.test.ts`, `legacy-products-boundary.test.ts` (extended); `tests/integration/legacy-product-review.test.ts`; `tests/legacy-mysql/legacy-mysql-products.test.ts`; `tests/web/legacy-products.test.tsx`; mutation driver `scripts/mutate-mirza-pr2.py` (29 of 29 killed) |
 
 ### Commands, routes and permissions (for later PRs and the runbook)
 
@@ -334,6 +334,10 @@ refusal of a decision is a `DENIED` row.
     different version is `legacy_product_review.version_conflict`. The checksum alone is
     not enough: a reopen and a new decision on unchanged facts leave it as it was, and a
     stale decision or reopen would overwrite the newer one (Codex review of #231).
+12. **A retried key answers its FIRST response.** The idempotency store keeps the decision's
+    response (the row and the approved product's title, as the deciding transaction saw
+    them), and a replay returns it unchanged and writes nothing — never the row as it is
+    after a later decision or reopen. A replayed approve-as-new creates no second draft.
 
 ### Not run (needs the real dump; WP G)
 
