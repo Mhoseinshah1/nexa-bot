@@ -10,7 +10,9 @@ import {
   updateBroadcastRequestSchema,
   uploadBroadcastMediaRequestSchema,
   type AudiencePreviewResponse,
+  type BroadcastBotDeliveryResponse,
   type BroadcastCounts,
+  type BroadcastHistoryResponse,
   type BroadcastListResponse,
   type BroadcastFailureReasonsResponse,
   type BroadcastRecipientListResponse,
@@ -256,6 +258,7 @@ export class BroadcastsController {
         resolvedAt: row.resolvedAt?.toISOString() ?? null,
         pinState: row.pinState,
         pinErrorCode: row.pinErrorCode,
+        nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
       })),
       nextCursor: rows.length > limit ? (page.at(-1)?.customerId ?? null) : null,
     };
@@ -269,6 +272,49 @@ export class BroadcastsController {
   ): Promise<BroadcastFailureReasonsResponse> {
     const { scope, actor } = await this.authenticate(request);
     return { reasons: [...(await this.container.broadcasts.failureReasons(scope, actor, id))] };
+  }
+
+  /** Roadmap C2: the delivery per bot. */
+  @Get(':id/bots')
+  async bots(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<BroadcastBotDeliveryResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const rows = await this.container.broadcasts.botDelivery(scope, actor, id);
+    return {
+      bots: rows.map((row) => ({
+        botInstanceId: row.botInstanceId,
+        botUsername: row.botUsername,
+        botStatus: row.botStatus,
+        counts: row.counts,
+        waitingRetry: row.waitingRetry,
+        heldUntil: row.heldUntil?.toISOString() ?? null,
+      })),
+    };
+  }
+
+  /** Roadmap C2: the broadcast's own history — tests, launch, steers, re-queues. */
+  @Get(':id/history')
+  async history(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<BroadcastHistoryResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const rows = await this.container.broadcasts.history(scope, actor, id);
+    return {
+      entries: rows.map((row) => ({
+        id: row.id,
+        action: row.action,
+        result: row.result,
+        actorLabel: row.actorLabel,
+        occurredAt: row.occurredAt.toISOString(),
+        testOutcome: row.testOutcome,
+        requeued: row.requeued,
+        fromState: row.fromState,
+        toState: row.toState,
+      })),
+    };
   }
 
   private async respond(

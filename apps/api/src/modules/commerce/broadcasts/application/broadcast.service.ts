@@ -4,7 +4,10 @@ import {
   BROADCAST_BODY_DEFINITION,
   BROADCAST_CAPTION_MAX_LENGTH,
   BROADCAST_ERROR_CODES,
+  BROADCAST_HISTORY_ACTIONS,
+  BROADCAST_HISTORY_MAX,
   BROADCAST_LARGE_AUDIENCE,
+  BROADCAST_STATES,
   BROADCAST_MEDIA_STAGED_MAX_BYTES,
   BROADCAST_TEXT_MAX_LENGTH,
   COMMERCE_ERROR_CODES,
@@ -19,11 +22,13 @@ import {
   type AuditWriter,
   type BroadcastButton,
   type BroadcastContentKind,
+  type BroadcastHistoryAction,
   type BroadcastPurpose,
   type BroadcastRecipientState,
   type BroadcastSource,
   type BroadcastState,
   type BroadcastTestResponse,
+  type AuditResult,
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
@@ -53,7 +58,9 @@ import {
   type AudienceService,
 } from '../../audience/application/audience.service.js';
 import type { FrozenAudienceRecord } from '../../audience/application/ports.js';
+import type { AuditHistoryReader } from '../../../platform/audit/application/ports.js';
 import type {
+  BotDeliveryRow,
   BroadcastRecord,
   BroadcastRepository,
   BroadcastTransport,
@@ -90,7 +97,33 @@ export interface BroadcastServiceDeps {
    * preview's opted-out estimate. It never narrows what is counted or materialised.
    */
   readonly marketingOptOut?: MarketingOptOutPolicy;
+  /**
+   * Roadmap C2: the broadcast's own audit rows, for its history card. Absent in a harness
+   * that does not read history; `history` then answers an empty list.
+   */
+  readonly auditHistory?: AuditHistoryReader;
 }
+
+/** Roadmap C2: one row of a broadcast's history, with only the facts the contract names. */
+export interface BroadcastHistoryRecord {
+  readonly id: string;
+  readonly action: BroadcastHistoryAction;
+  readonly result: AuditResult;
+  readonly actorLabel: string | null;
+  readonly occurredAt: Date;
+  readonly testOutcome: BroadcastTestResponse['outcome'] | null;
+  readonly requeued: number | null;
+  readonly fromState: BroadcastState | null;
+  readonly toState: BroadcastState | null;
+}
+
+const TEST_OUTCOMES: readonly string[] = ['SENT', 'NOT_SENT', 'UNCONFIRMED', 'RATE_LIMITED'];
+const isHistoryAction = (value: string): value is BroadcastHistoryAction =>
+  (BROADCAST_HISTORY_ACTIONS as readonly string[]).includes(value);
+const stateOf = (value: unknown): BroadcastState | null =>
+  typeof value === 'string' && (BROADCAST_STATES as readonly string[]).includes(value)
+    ? (value as BroadcastState)
+    : null;
 
 /**
  * Spec §9 (Codex review of #143): the promotional opt-out is decided at ONE point — the
@@ -210,6 +243,71 @@ export class BroadcastService {
     await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
     await this.require(scope, id);
     return this.deps.repository.failureReasons(scope, id);
+  }
+
+  /**
+   * Roadmap C2: the delivery per bot — each recipient's frozen bot, its counts, the
+   * recipients waiting for a retry, and the bot's 429 hold while in force. `broadcasts.view`.
+   */
+  async botDelivery(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+  ): Promise<readonly BotDeliveryRow[]> {
+    await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
+    await this.require(scope, id);
+    return this.deps.repository.botDelivery(scope, id, this.deps.clock.now());
+  }
+
+  /**
+   * Roadmap C2: what was done to this broadcast — its own `broadcast.*` audit rows, newest
+   * first, reduced to the contract's closed facts. `broadcasts.view`: the page already names
+   * who created and launched it; the raw `before`/`after` never leave.
+   */
+  async history(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+  ): Promise<readonly BroadcastHistoryRecord[]> {
+    await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
+    await this.require(scope, id);
+    if (this.deps.auditHistory === undefined) return [];
+    const rows = await this.deps.auditHistory.entityHistory(
+      scope,
+      { entityType: 'Broadcast', entityId: id, actionPrefix: 'broadcast.' },
+      BROADCAST_HISTORY_MAX,
+    );
+    const entries: BroadcastHistoryRecord[] = [];
+    for (const row of rows) {
+      if (!isHistoryAction(row.action)) continue;
+      const after = row.after ?? {};
+      const before = row.before ?? {};
+      const outcome = after['outcome'];
+      const requeued = after['requeued'];
+      entries.push({
+        id: row.id,
+        action: row.action,
+        result: row.result,
+        actorLabel: row.actorLabel,
+        occurredAt: row.occurredAt,
+        testOutcome:
+          row.action === 'broadcast.test' &&
+          typeof outcome === 'string' &&
+          TEST_OUTCOMES.includes(outcome)
+            ? (outcome as BroadcastTestResponse['outcome'])
+            : null,
+        requeued:
+          row.action === 'broadcast.retry_failed' &&
+          typeof requeued === 'number' &&
+          Number.isInteger(requeued) &&
+          requeued >= 0
+            ? requeued
+            : null,
+        fromState: stateOf(before['state']),
+        toState: stateOf(after['state']),
+      });
+    }
+    return entries;
   }
 
   // --- composing -----------------------------------------------------------------------
