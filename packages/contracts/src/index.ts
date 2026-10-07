@@ -129,6 +129,8 @@ export * from './reporting.js';
 export * from './payment-operations.js';
 /** Roadmap E1: the under-review UX — one situation classifier over recorded payment facts. */
 export * from './payment-situations.js';
+/** Roadmap E4: one payment's money as one breakdown, computed once on the server. */
+export * from './payment-amounts.js';
 // Program §11: gateway health, and the typed signal the Notification Center consumes.
 export * from './gateway-health.js';
 /** Round W: the Web Admin dashboard and sidebar counters, over the reports above. */

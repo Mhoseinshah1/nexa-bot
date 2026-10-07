@@ -43,6 +43,7 @@ import {
   refinePaymentOpsWindow,
 } from './payment-operations.js';
 import { paymentSituationViewSchema } from './payment-situations.js';
+import { paymentAmountsViewSchema } from './payment-amounts.js';
 import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
@@ -4484,6 +4485,13 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
     })
     .nullable()
     .default(null),
+  /**
+   * Roadmap E4 (`docs/payment-fees-fx.md`): the payment's money as ONE breakdown —
+   * principal, fee, customer paid, received, wallet credit and debit, refund ceiling, and
+   * merchant net named as not recorded — from `paymentAmountsOf` on the server. The Web
+   * Admin renders it and computes nothing. Defaulted on parse for older responses.
+   */
+  amounts: paymentAmountsViewSchema.nullable().default(null),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
