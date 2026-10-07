@@ -11,6 +11,7 @@ import {
   type PaymentOpsQueue,
   type PaymentSituation,
   type PaymentSituationFacts,
+  type PaymentSituationGuide,
   type PaymentState,
 } from '@nexa/contracts';
 import { CatalogueTranslator } from '@nexa/i18n';
@@ -118,6 +119,14 @@ function* everyFacts(): Generator<PaymentSituationFacts> {
   }
 }
 
+/** Every combination and its guide, classified once for the whole file. */
+let rows:
+  readonly { readonly f: PaymentSituationFacts; readonly g: PaymentSituationGuide }[] | null = null;
+function everyRow() {
+  rows ??= [...everyFacts()].map((f) => ({ f, g: paymentSituationOf(f) }));
+  return rows;
+}
+
 describe('the payment situation classifier', () => {
   it('names each situation from the facts that define it', () => {
     const cases: [PaymentSituation, Partial<PaymentSituationFacts>][] = [
@@ -153,34 +162,40 @@ describe('the payment situation classifier', () => {
   });
 
   it('never merges accounting states: each situation comes only from its own states', () => {
-    let checked = 0;
-    for (const one of everyFacts()) {
-      const situation = paymentSituationCode(one);
-      expect(STATES_OF[situation], `${one.state} → ${situation}`).toContain(one.state);
-      checked += 1;
-    }
-    expect(checked).toBeGreaterThan(10_000);
+    const rows = everyRow();
+    expect(rows.length).toBeGreaterThan(10_000);
+    expect(
+      rows
+        .filter(({ f, g }) => !STATES_OF[g.situation].includes(f.state))
+        .map(({ f, g }) => `${f.state} → ${g.situation}`),
+    ).toEqual([]);
   });
 
   it('never shows an UNKNOWN as a failure, as no money, or as something to pay again', () => {
-    for (const one of everyFacts()) {
-      if (one.state !== 'UNKNOWN') continue;
-      const guide = paymentSituationOf(one);
-      expect(['FAILED', 'REJECTED', 'EXPIRED', 'CANCELLED']).not.toContain(guide.situation);
-      expect(guide.money).not.toBe('NO');
-      expect(guide.customer).toBe('WAIT_DO_NOT_PAY_AGAIN');
-      expect(guide.needsAction).toBe(true);
-    }
+    const unknown = everyRow().filter(({ f }) => f.state === 'UNKNOWN');
+    expect(unknown.length).toBeGreaterThan(0);
+    expect(
+      unknown.filter(
+        ({ g }) =>
+          ['FAILED', 'REJECTED', 'EXPIRED', 'CANCELLED'].includes(g.situation) ||
+          g.money === 'NO' ||
+          g.customer !== 'WAIT_DO_NOT_PAY_AGAIN' ||
+          !g.needsAction,
+      ),
+    ).toEqual([]);
   });
 
   it('tells the customer not to pay again wherever money may already have moved', () => {
-    for (const one of everyFacts()) {
-      const guide = paymentSituationOf(one);
-      if (['CLAIMED', 'POSSIBLY', 'PARTIALLY', 'AT_PROVIDER'].includes(guide.money)) {
-        expect(guide.customer, guide.situation).toBe('WAIT_DO_NOT_PAY_AGAIN');
-      }
-      if (guide.customer === 'MAY_PAY_AGAIN') expect(guide.money).toBe('NO');
-    }
+    expect(
+      everyRow()
+        .filter(
+          ({ g }) =>
+            (['CLAIMED', 'POSSIBLY', 'PARTIALLY', 'AT_PROVIDER'].includes(g.money) &&
+              g.customer !== 'WAIT_DO_NOT_PAY_AGAIN') ||
+            (g.customer === 'MAY_PAY_AGAIN' && g.money !== 'NO'),
+        )
+        .map(({ g }) => g.situation),
+    ).toEqual([]);
   });
 
   it('keeps a credited receipt apart from a rejection, though both are FAILED by an administrator', () => {
@@ -209,17 +224,20 @@ describe('the payment situation classifier', () => {
   });
 
   it('marks for action exactly what an existing command can resolve, so the queue drains', () => {
-    for (const one of everyFacts()) {
-      const guide = paymentSituationOf(one);
-      expect(guide.needsAction).toBe(paymentNeedsAction(guide.situation, one.state));
-      expect(guide.needsAction).toBe(
-        one.state === 'UNKNOWN' ||
-          guide.situation === 'CUSTOMER_SIGNALLED' ||
-          guide.situation === 'REFUND_IN_PROGRESS',
-      );
-      // A situation that needs a person always names at least one thing they can do.
-      if (guide.needsAction) expect(guide.actions.length, guide.situation).toBeGreaterThan(0);
-    }
+    expect(
+      everyRow()
+        .filter(
+          ({ f, g }) =>
+            g.needsAction !== paymentNeedsAction(g.situation, f.state) ||
+            g.needsAction !==
+              (f.state === 'UNKNOWN' ||
+                g.situation === 'CUSTOMER_SIGNALLED' ||
+                g.situation === 'REFUND_IN_PROGRESS') ||
+            // A situation that needs a person always names at least one thing they can do.
+            (g.needsAction && g.actions.length === 0),
+        )
+        .map(({ f, g }) => `${f.state}/${g.situation}`),
+    ).toEqual([]);
     // Late money on an attempt that already ended has no domain exit (OQ-WP11A-03): it is
     // shown with what exists, and kept OUT of the work queue, which would never drain of it.
     const late = paymentSituationOf(
@@ -231,17 +249,16 @@ describe('the payment situation classifier', () => {
   });
 
   it('offers reconciliation only on an UNKNOWN gateway payment', () => {
-    for (const one of everyFacts()) {
-      const guide = paymentSituationOf(one);
-      const reconciles =
-        guide.actions.includes('RECONCILE') || guide.actions.includes('ASK_PROVIDER_AGAIN');
-      expect(reconciles, `${one.state}/${one.method}/${guide.situation}`).toBe(
-        reconciles && one.state === 'UNKNOWN' && one.method === 'GATEWAY',
-      );
-      if (one.state === 'UNKNOWN' && one.method === 'GATEWAY') {
-        expect(guide.actions).toContain('RECONCILE');
-      }
-    }
+    expect(
+      everyRow()
+        .filter(({ f, g }) => {
+          const eligible = f.state === 'UNKNOWN' && f.method === 'GATEWAY';
+          const reconciles =
+            g.actions.includes('RECONCILE') || g.actions.includes('ASK_PROVIDER_AGAIN');
+          return (reconciles && !eligible) || (eligible && !g.actions.includes('RECONCILE'));
+        })
+        .map(({ f, g }) => `${f.state}/${f.method}/${g.situation}`),
+    ).toEqual([]);
   });
 
   it('offers a refund only where a channel exists and an order was bought', () => {
@@ -256,13 +273,13 @@ describe('the payment situation classifier', () => {
       paymentSituationOf(facts({ state: 'CONFIRMED', method: 'MANUAL_TRANSFER', topup: true }))
         .actions,
     ).toEqual([]);
-    for (const one of everyFacts()) {
-      if (paymentSituationOf(one).actions.includes('ISSUE_REFUND')) {
-        expect(one.state).toBe('CONFIRMED');
-        expect(one.method).not.toBe('GATEWAY');
-        expect(one.topup).toBe(false);
-      }
-    }
+    expect(
+      everyRow().filter(
+        ({ f, g }) =>
+          g.actions.includes('ISSUE_REFUND') &&
+          (f.state !== 'CONFIRMED' || f.method === 'GATEWAY' || f.topup),
+      ),
+    ).toEqual([]);
   });
 
   it('sends late or partial money on a closed payment to the provider and the wallet adjustment, flagged undecided', () => {

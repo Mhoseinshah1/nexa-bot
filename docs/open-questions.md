@@ -3720,3 +3720,14 @@ and `OQ-T-4` are live again and apply to inline buttons too.
     (`boundedLastSeen`). Either refusal stores nothing, so the card keeps the LAST KNOWN
     value. If a panel spells it differently, correct `readLastSeen` AND the fake in one
     commit.
+
+## OQ-E — payments roadmap E1–E6 (2026-10-07)
+
+- **OQ-E6-01 — one label for the tracking code.** The invoice labels the payment's code
+  «شناسه فاکتور» (the owner's invoice layout) while every later message labels the same
+  `payments.reference` «کد پیگیری پرداخت». Unifying the label is the owner's copy decision
+  (`docs/payments-under-review-ux.md` §6).
+- **OQ-E2-01 — late or partial money on an ended attempt has no work-queue exit.** It is kept
+  out of `NEEDS_ACTION` (which must drain) and visible in its own facets until `OQ-WP11A-03`
+  decides between "credit by hand" and "nothing"; a domain resolution, if decided, joins the
+  queue with its exit.
