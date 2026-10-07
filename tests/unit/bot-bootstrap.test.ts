@@ -193,6 +193,31 @@ class FakeBots implements BotBootstrapRepository {
     return true;
   }
 
+  usernameWrites: { id: string; username: string }[] = [];
+
+  /** D3: the real statement's predicates — same bot id, and no other row holding the name. */
+  async reconcileUsername(
+    _scope: unknown,
+    id: string,
+    input: { readonly telegramBotId: string; readonly username: string },
+  ): Promise<
+    | { readonly outcome: 'UPDATED'; readonly before: string }
+    | { readonly outcome: 'UNCHANGED' }
+    | { readonly outcome: 'TAKEN'; readonly before: string }
+  > {
+    const row = this.rows.find((candidate) => candidate.id === id);
+    if (!row || row.telegramBotId !== input.telegramBotId || row.username === input.username) {
+      return { outcome: 'UNCHANGED' };
+    }
+    const before = row.username;
+    if (this.rows.some((other) => other.id !== id && other.username === input.username)) {
+      return { outcome: 'TAKEN', before };
+    }
+    this.usernameWrites.push({ id, username: input.username });
+    row.username = input.username;
+    return { outcome: 'UPDATED', before };
+  }
+
   async resolveToken(_scope: unknown, id: string): Promise<string> {
     const row = this.rows.find((candidate) => candidate.id === id);
     if (!row) throw new Error(`no bot instance ${id}`);
@@ -1976,5 +2001,110 @@ describe('bot bootstrap — register is the safe reconcile for the incident stat
       after: { stage: 'SET_WEBHOOK', outcome: 'REFUSED' },
     });
     expect(JSON.stringify(built.audit)).not.toContain(TOKEN);
+  });
+});
+
+/**
+ * Roadmap D3 — a bot renamed in BotFather.
+ *
+ * The stored `username` is what the ops-group connect command and the Web Admin's
+ * `t.me/…` links print. A rename used to leave it stale until a token replacement; a
+ * register (or installer rerun) now records the name `getMe` reports for the SAME bot,
+ * audited, while `status` only shows the drift.
+ */
+describe('bot bootstrap — a BotFather rename is reconciled by register, shown by status', () => {
+  async function installed(): Promise<ReturnType<typeof build>> {
+    const built = build();
+    await built.service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
+    built.telegram.held = webhookRead(built.telegram.webhookCalls[0]?.url ?? null);
+    return built;
+  }
+  const renamed = (built: ReturnType<typeof build>, username: string) => {
+    built.telegram.probe = {
+      outcome: 'IDENTIFIED',
+      botId: '8123456789',
+      username,
+      isBot: true,
+    };
+  };
+
+  it('register records the new name for the same bot, audits it, and rotates nothing', async () => {
+    const built = await installed();
+    const audits = built.audit.length;
+    renamed(built, 'acme_renamed_bot');
+
+    const result = await built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result).toMatchObject({ kind: 'ALREADY_COMPLETE', username: 'acme_renamed_bot' });
+    expect(built.bots.rows[0]?.username).toBe('acme_renamed_bot');
+    expect(built.bots.usernameWrites).toEqual([
+      { id: built.bots.rows[0]?.id, username: 'acme_renamed_bot' },
+    ]);
+    expect(built.bots.tokenWrites).toEqual([TOKEN]);
+    const entry = built.audit
+      .slice(audits)
+      .find((row) => row.action === 'bot_instance.username_reconciled');
+    expect(entry).toMatchObject({
+      result: 'SUCCESS',
+      before: { username: 'acme_bot' },
+      after: { username: 'acme_renamed_bot' },
+    });
+    expect(JSON.stringify(built.audit)).not.toContain(TOKEN);
+  });
+
+  it('writes nothing when the name has not changed', async () => {
+    const built = await installed();
+    const audits = built.audit.length;
+
+    await built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(built.bots.usernameWrites).toEqual([]);
+    expect(built.audit.slice(audits).map((row) => row.action)).not.toContain(
+      'bot_instance.username_reconciled',
+    );
+  });
+
+  it('keeps the stored name when another row holds the new one, audits FAILED, and still completes', async () => {
+    const built = await installed();
+    built.bots.rows.push({
+      ...built.bots.rows[0]!,
+      id: '01890000-0000-7000-8000-0000000001ee',
+      username: 'acme_renamed_bot',
+      telegramBotId: '1111111111',
+    });
+    renamed(built, 'acme_renamed_bot');
+
+    const result = await built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('ALREADY_COMPLETE');
+    expect(built.bots.rows[0]?.username).toBe('acme_bot');
+    expect(built.audit.at(-1)).toMatchObject({
+      action: 'bot_instance.username_reconciled',
+      result: 'FAILED',
+      before: { username: 'acme_bot' },
+      after: { username: 'acme_bot', reported: 'acme_renamed_bot' },
+    });
+  });
+
+  it('status SHOWS the drift and writes nothing; ready is unaffected', async () => {
+    const built = await installed();
+    renamed(built, 'acme_renamed_bot');
+    const audits = built.audit.length;
+
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+
+    expect(report.state).toBe('ready');
+    expect(report.detail?.usernameDrift).toEqual({
+      stored: 'acme_bot',
+      reported: 'acme_renamed_bot',
+    });
+    expect(built.bots.usernameWrites).toEqual([]);
+    expect(built.audit).toHaveLength(audits);
+  });
+
+  it('status carries no drift for a bot whose name matches', async () => {
+    const built = await installed();
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+    expect(report.detail).not.toHaveProperty('usernameDrift');
   });
 });

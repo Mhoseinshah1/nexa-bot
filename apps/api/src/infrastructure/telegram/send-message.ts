@@ -175,6 +175,37 @@ export function sentFileOf(
 }
 
 /**
+ * D1 (roadmap, Telegram robustness): the longest wait a 429 is honoured for, 24 hours.
+ *
+ * A ceiling rather than a rejection: a `retry_after` above it is still a definite "not
+ * now", and asking again at 24 hours is safe — Telegram declines a rate-limited request, it
+ * does not deliver it, so the worst an early ask costs is a second 429. Without a ceiling a
+ * garbled or hostile number parks a message for years, or overflows the `integer` columns
+ * the lanes store the wait in (`retry_after_ms`, at most ~24.8 days in milliseconds).
+ */
+export const TELEGRAM_RETRY_AFTER_MAX_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Telegram's `parameters.retry_after`, in whole milliseconds — or `undefined` when the
+ * timing is not DEFINITE.
+ *
+ * The Bot API documents an Integer of seconds. Anything that is not a finite, non-negative
+ * number is not a wait: before, `retry_after * 1000` turned a string into `NaN` (and `null`
+ * into 0), `Math.max(NaN, floor)` is `NaN`, and the lane's `new Date(NaN)` failed the very
+ * write that was meant to defer the message. An indefinite 429 is still a 429 — the caller
+ * waits its own floor or default. A fraction is rounded UP, so the wait is never shorter
+ * than Telegram asked; a wait over `TELEGRAM_RETRY_AFTER_MAX_MS` is held to it.
+ *
+ * Exported so every reader of a 429 uses one parse, and for the unit tests.
+ */
+export function telegramRetryAfterMs(retryAfter: unknown): number | undefined {
+  if (typeof retryAfter !== 'number' || !Number.isFinite(retryAfter) || retryAfter < 0) {
+    return undefined;
+  }
+  return Math.min(Math.ceil(retryAfter * 1000), TELEGRAM_RETRY_AFTER_MAX_MS);
+}
+
+/**
  * ONE Telegram API call, with the result left intact.
  *
  * Extracted from `telegramSend` rather than copied beside it, and the reason is the
@@ -227,12 +258,13 @@ async function telegramCall(request: TelegramRequest): Promise<TelegramCallOutco
     );
 
     let payload: {
-      ok?: boolean;
+      ok?: unknown;
       // `unknown`, because this function serves every method. Each caller narrows it.
       result?: unknown;
       description?: string;
       error_code?: number;
-      parameters?: { retry_after?: number };
+      // `unknown`: read only through `telegramRetryAfterMs`, which decides whether it is a wait.
+      parameters?: { retry_after?: unknown };
     } | null;
     try {
       payload = (await response.json()) as typeof payload;
@@ -244,23 +276,38 @@ async function telegramCall(request: TelegramRequest): Promise<TelegramCallOutco
       return { outcome: 'SUCCEEDED', result: payload.result ?? null };
     }
 
-    if (payload === null && response.ok) {
+    /*
+     * D1 (roadmap, Telegram robustness): a 2xx is a refusal ONLY when its body says so —
+     * `ok: false`, which Telegram does send under a 200 for some failures. A 2xx whose body
+     * did not parse, or parsed into something that is not a Bot API answer at all (no `ok`
+     * field, a bare value, `null`), is the UNKNOWN outcome: Telegram accepted the request and
+     * very likely processed it. Before, a parsed body without `ok` fell through to
+     * `telegram.rejected.200` — a DEFINITE refusal — and the one caller that retries a
+     * definite refusal (the messenger's icon-less retry, `deliverDecorated`) sent the same
+     * message a second time.
+     */
+    if (response.ok && payload?.ok !== false) {
       return {
         outcome: 'FAILED_RETRYABLE',
         errorCode: 'telegram.unreadable_response',
-        errorMessage: `HTTP ${response.status} with a body that could not be parsed.`,
+        errorMessage:
+          payload === null
+            ? `HTTP ${response.status} with a body that could not be parsed.`
+            : `HTTP ${response.status} with a body that is not a Bot API answer.`,
       };
     }
 
     const description = payload?.description ?? `HTTP ${response.status}`;
-    const retryAfter = payload?.parameters?.retry_after;
 
     if (response.status === 429) {
+      // D1: the wait is carried only when it is DEFINITE (`telegramRetryAfterMs`); a 429
+      // without a usable number is still a 429 — declined, nothing sent — just untimed.
+      const retryAfterMs = telegramRetryAfterMs(payload?.parameters?.retry_after);
       return {
         outcome: 'FAILED_RETRYABLE',
         errorCode: 'telegram.rate_limited',
         errorMessage: description,
-        ...(retryAfter !== undefined ? { retryAfterMs: retryAfter * 1000 } : {}),
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
       };
     }
 

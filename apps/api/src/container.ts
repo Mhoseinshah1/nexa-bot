@@ -4661,6 +4661,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       categoryIconsFor: (scope) =>
         settingsResolver.valueOf<CategoryIcons>(scope, 'bot.category_icons'),
     },
+    // Roadmap D4: best-effort bookkeeping around a send is logged, never thrown.
+    logger,
   );
   const appearance = new AppearanceService({
     repository: appearanceRepository,

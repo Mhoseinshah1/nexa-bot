@@ -262,4 +262,16 @@ describe('statusDetailLines', () => {
     expect(text).toMatch(/remote \(Telegram\)\s+TOKEN_REJECTED/);
     expect(text).not.toContain('pending updates');
   });
+
+  // Roadmap D3: a BotFather rename is shown with its remedy, and only when there is one.
+  it('names a username drift and the command that records it', () => {
+    const text = statusDetailLines({
+      ...detail,
+      usernameDrift: { stored: 'acme_bot', reported: 'acme_renamed_bot' },
+    }).join('\n');
+    expect(text).toMatch(
+      /username\s+@acme_renamed_bot at Telegram, stored as @acme_bot — run `botctl telegram register`/,
+    );
+    expect(statusDetailLines(detail).join('\n')).not.toMatch(/^username/m);
+  });
 });

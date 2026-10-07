@@ -260,6 +260,13 @@ export function statusDetailLines(detail: BotWebhookStatusDetail): string[] {
       );
     }
   }
+  if (detail.usernameDrift !== undefined) {
+    // D3: a BotFather rename. Usernames are public; nothing here is a credential.
+    lines.push(
+      `username               @${detail.usernameDrift.reported} at Telegram, stored as ` +
+        `@${detail.usernameDrift.stored} — run \`botctl telegram register\` to record it`,
+    );
+  }
   if (detail.problems.length > 0)
     lines.push(`problems               ${detail.problems.join(', ')}`);
   return lines;
