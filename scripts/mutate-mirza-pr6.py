@@ -81,13 +81,13 @@ M = [
     # --- the service, the importer and the CLI, end to end ----------------------------------
     ('I-01', [(SVC, '          if (run === null) {\n            throw errors.conflict(\n              LEGACY_CUTOVER_ERROR_CODES.READ_SET_NOT_RECORDED,',
                '          if (false) {\n            throw errors.conflict(\n              LEGACY_CUTOVER_ERROR_CODES.READ_SET_NOT_RECORDED,')], T_INT, 'RECORDED read sets'),
-    ('I-02', [(SVC, '    // which a revocation may have changed since.\n    if (found !== null) return reviveApproval(found.result);',
-               '    // which a revocation may have changed since.\n    if (found !== null) {\n      const now = await this.deps.repository.findApproval(scope, found.result.id);\n      if (now !== null) return now;\n    }')],
+    ('I-02', [(SVC, '    const found = await replay();\n    if (found !== null) return reviveApproval(found.result);\n\n    const id',
+               '    const found = await replay();\n    if (found !== null) {\n      const now = await this.deps.repository.findApproval(scope, found.result.id);\n      if (now !== null) return now;\n    }\n\n    const id')],
      T_INT, 'RECORDED read sets'),
     ('I-03', [(SVC, '        if (same !== undefined) {', '        if (false) {')], T_INT, 'RECORDED read sets'),
     ('I-04', [(SVC, '        if (before.revocation !== null) {', '        if (false) {')], T_INT, 'RECORDED read sets'),
-    ('I-05', [(SVC, '        await this.assertScopeActive(scope, tx);\n        await this.deps.repository.lockTenantApprovals(scope, tx);\n        const binding',
-               '        await this.deps.repository.lockTenantApprovals(scope, tx);\n        const binding')], T_INT, 'owner-only'),
+    ('I-05', [(SVC, '        await this.assertScopeActive(scope, tx);\n        await this.deps.repository.lockTenantApprovals(scope, tx);\n        // Asked again UNDER the lock',
+               '        await this.deps.repository.lockTenantApprovals(scope, tx);\n        // Asked again UNDER the lock')], T_INT, 'owner-only'),
     ('I-06', [(SVC, '          if (!prior) {', '          if (false) {')], T_INT, 'RECORDED read sets'),
     ('I-07', [(IMP, '      await this.deps.uow.run(scope, (tx) => this.requireCutover(input, gate, tx));\n', ''),
               (IMP, '      const cutover = gate === null ? null : await this.requireCutover(input, gate, tx);',
@@ -102,6 +102,33 @@ M = [
     ('I-13', [(IMP, '    const holds = reportHolds(final, usersWallets, serviceOutcomes) && finalV2.verdict.holds;',
                '    const holds = reportHolds(final, usersWallets, serviceOutcomes);')], T_INT, 'report v2 validates'),
     ('I-14', [(SVC, '      if (run === null) {\n        return {\n          ok: false,', '      if (false) {\n        return {\n          ok: false,')], T_INT, 're-checks the approval'),
+    # --- Codex review on #239 ------------------------------------------------------------------
+    # P1: the gate hashes the dump FILE (the approved value is never echoed back as proof).
+    ('G-06', [(GATE, '        dumpSha256: await deps.hashFile(args.finalDump),', '        dumpSha256: String(expectation.finalDumpSha256),')],
+     T_INT, 'cutover gate proves'),
+    ('G-07', [(GATE, '  if (input.dumpSha256 !== input.expectedFinalDumpSha256) {', '  if (false) {')], T_GATE, 'final dump'),
+    ('G-08', [(GATE, "      .on('data', (chunk) => hash.update(chunk))", "      .once('data', (chunk) => hash.update(chunk))")], T_GATE, 'final dump'),
+    # P1: stop_sales is sampled again, last.
+    ('G-09', [(GATE, '      const again = stopSalesHolds(await deps.stopSalesFacts());', "      const again = { holds: true, detail: '' };")],
+     T_INT, 'cutover gate proves'),
+    # P2: the report's acknowledgement is decided by decideCutoverImport over the WHOLE binding.
+    ('V-14', [(V2, '  const unacknowledged = unacknowledgedSources(sourceFingerprint, facts, prior);',
+               "  const unacknowledged = prior.filter((s) => !facts.approvals.some((a) => a.revocation === null && a.kind === 'RERUN_OVER_PRIOR_IMPORT' && a.priorSourceFingerprint === s));")],
+     T_V2, 'acknowledged earlier import'),
+    ('V-15', [(V2, '      (facts.runCutoverApprovalId === null || a.id === facts.runCutoverApprovalId),', '      true,')],
+     T_V2, 'acknowledged earlier import'),
+    ('I-15', [(REPO, "      SELECT after -> 'cutover' ->> 'cutoverApprovalId' AS approval_id FROM audit_logs",
+               "      SELECT NULL::text AS approval_id FROM audit_logs")], T_INT, 'SOURCE_SUPERSEDED'),
+    # P2: the permission before the untrusted body.
+    ('I-16', [(SVC, '    await this.requireApprove(scope, actor, action, null);\n    const command = legacyCutoverApproveRequestSchema.parse(body);',
+               '    const command = legacyCutoverApproveRequestSchema.parse(body);\n    await this.requireApprove(scope, actor, action, null);')], T_INT, 'owner-only'),
+    ('I-17', [(SVC, '    await this.requireApprove(scope, actor, action, id);\n    const command = legacyCutoverRevokeRequestSchema.parse(body);',
+               '    const command = legacyCutoverRevokeRequestSchema.parse(body);\n    await this.requireApprove(scope, actor, action, id);')], T_INT, 'owner-only'),
+    # P2: a concurrent same-key request is a replay, re-asked under the tenant lock.
+    ('I-18', [(SVC, '        const committed = await replay();\n        if (committed !== null) return reviveApproval(committed.result);\n        const binding',
+               '        const binding')], T_INT, 'concurrent requests'),
+    ('I-19', [(SVC, '        const committed = await replay();\n        if (committed !== null) return reviveApproval(committed.result);\n        const before',
+               '        const before')], T_INT, 'concurrent requests'),
     # --- the web page --------------------------------------------------------------------
     ('W-01', [(WEB, 'const HEX = /^[0-9a-f]{64}$/u;', 'const HEX = /^.{1,64}$/u;')], T_WEB, 'exact SHA-256'),
     ('W-02', [(WEB, '(HEX.test(prior) && prior !== values.sourceFingerprint)', 'HEX.test(prior)')], T_WEB, 'prior source other'),
@@ -110,6 +137,8 @@ M = [
 # Contract mutations: the tests read packages/contracts from dist, so each is rebuilt.
 C = [
     ('C-01', [(CONTRACT, "['COMPLETED', 'ABORTED', 'FAILED'] as const", "['COMPLETED', 'ABORTED'] as const")], T_RULES, 'SOURCE_SUPERSEDED'),
+    ('C-03', [('packages/contracts/src/audit-log.ts', "  'legacy.cutover.revoke': ['legacy.cutover.approve'],\n", '')],
+     ('unit', 'tests/unit/audit-log-contract.test.ts'), 'cutover approval and its revocation'),
     ('C-02', [(CONTRACT, '        ? r.priorSourceFingerprint !== null && r.priorSourceFingerprint !== r.sourceFingerprint',
                '        ? r.priorSourceFingerprint !== null')], T_RULES, 'prior source other than this one'),
 ]
