@@ -90,7 +90,7 @@ M = [
     ('I-16', [(IMP, "        if (claimed === null) {\n          tallies.services.approvals.claimLost += 1;\n          continue;\n        }\n", "")], T_INT, 'reopening an approval mid-run'),
     # The section: the closure, and its reconcile check.
     ('U-12', [(OUT, "        decidedByAnotherRun === 0 &&\n", "")], T_RULES, 'the closure'),
-    ('I-19', [(IMP, "      usersWallets.holds &&\n      serviceOutcomes.invariant.holds;", "      usersWallets.holds;")], T_INT, 'exactly ONE outcome'),
+    ('U-13', [(IMP, "    usersWallets.holds &&\n    serviceOutcomes.invariant.holds\n", "    usersWallets.holds\n")], T_RULES, 'report verdict'),
     ('I-17', [(IMP, "        serviceOutcomes.invariant.holds,", "        true,")], T_INT, 'exactly ONE outcome'),
 ]
 

@@ -24,6 +24,7 @@ import {
   candidateOutcome,
   claimsByName,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/service-outcomes';
+import { reportHolds } from '../../apps/api/src/modules/platform/legacy-importer/application/legacy-importer.service';
 import { SERVICE_CANDIDATE_CATEGORIES } from '../../apps/api/src/modules/platform/legacy-importer/application/decisions';
 import { parsePanelMapping } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
 import type { LegacyInvoiceRow } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
@@ -420,5 +421,21 @@ describe('the evidence and the section', () => {
       rows: new Map([rec('a0000001'), rec('a0000002', { sourceFingerprint: H('e') })]) as never,
     });
     expect(other.invariant).toMatchObject({ holds: false, fromAnotherSource: 1 });
+  });
+});
+
+describe('the report verdict', () => {
+  it('the closure of the service outcomes is part of the report verdict', () => {
+    const final = { reconciliation: [{ holds: true }] };
+    expect(reportHolds(final, { holds: true }, { invariant: { holds: true } })).toBe(true);
+    expect(reportHolds(final, { holds: true }, { invariant: { holds: false } })).toBe(false);
+    expect(reportHolds(final, { holds: false }, { invariant: { holds: true } })).toBe(false);
+    expect(
+      reportHolds(
+        { reconciliation: [{ holds: false }] },
+        { holds: true },
+        { invariant: { holds: true } },
+      ),
+    ).toBe(false);
   });
 });

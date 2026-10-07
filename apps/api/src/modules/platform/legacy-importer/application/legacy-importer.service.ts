@@ -2011,10 +2011,7 @@ export class LegacyImporterService {
     // Mirza PR5: beside the closed v1 report too; PR6 folds it into schema version 2. Its
     // closure is part of the verdict, as the users-and-wallets checks are.
     const serviceOutcomes = this.serviceOutcomesSection(snapshot, run.id, prepared);
-    const holds =
-      final.reconciliation.every((r) => r.holds) &&
-      usersWallets.holds &&
-      serviceOutcomes.invariant.holds;
+    const holds = reportHolds(final, usersWallets, serviceOutcomes);
     return {
       ...this.report('REPORT', scope, snapshot, startedAt, final, run.status),
       verdict: `${run.status}${holds ? '' : '_WITH_DISCREPANCY'}`,
@@ -2232,6 +2229,23 @@ export class LegacyImporterService {
       return run;
     });
   }
+}
+
+/**
+ * The report's verdict holds only when every v1 equation, every users-and-wallets check
+ * (PR4) and the service outcomes' closure (PR5) hold: a section beside the closed v1
+ * document is part of the verdict, never decoration.
+ */
+export function reportHolds(
+  final: { readonly reconciliation: readonly { readonly holds: boolean }[] },
+  usersWallets: { readonly holds: boolean },
+  serviceOutcomes: { readonly invariant: { readonly holds: boolean } },
+): boolean {
+  return (
+    final.reconciliation.every((r) => r.holds) &&
+    usersWallets.holds &&
+    serviceOutcomes.invariant.holds
+  );
 }
 
 function isAdoptedOutcomeKind(kind: string): boolean {
