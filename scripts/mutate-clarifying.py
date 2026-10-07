@@ -69,9 +69,10 @@ M = [
  ('widening not charged', S,
   "              next.maxConsecutiveClarifyingQuestions > prev.maxConsecutiveClarifyingQuestions ||\n",
   "", 'int'),
- ('default 3 instead of 2', C,
-  "maxConsecutiveClarifyingQuestions: { min: 1, max: 10, default: 2 },",
-  "maxConsecutiveClarifyingQuestions: { min: 1, max: 10, default: 3 },", 'unit+int'),
+ # Roadmap A2 (2026-10-07) moved the default to 3; the mutation reverts it to the old 2.
+ ('default 2 instead of 3', C,
+  "maxConsecutiveClarifyingQuestions: { min: 1, max: 10, default: 3 },",
+  "maxConsecutiveClarifyingQuestions: { min: 1, max: 10, default: 2 },", 'unit+int'),
  ('web: no widening warning', W,
   "    (draft.mode === 'AUTO_REPLY_SAFE' &&\n      toNumber(draft.maxConsecutiveClarifyingQuestions) >\n        response.config.maxConsecutiveClarifyingQuestions);",
   "    false;", 'web'),

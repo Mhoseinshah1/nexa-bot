@@ -152,3 +152,31 @@ job and row multiply to one. Every new test also fails against the unchanged `ma
 new contract and column).
 
 **23 of 23 killed.**
+
+## Roadmap A1/A2 (2026-10-07): the session reply budget, the hourly limit, the clarifying default
+
+Driver: `scripts/mutate-sai-limits.py` (each mutation replaces one exact string, runs the named
+suites — the A1/A2, hotfix and loop-guard cases of `tests/integration/support-auto-reply.test.ts`,
+`tests/unit/support-auto-reply-guards.test.ts`, `tests/web/support-ai-limits.test.tsx` — and
+restores the file byte for byte). Run on 2026-10-07 against a dedicated database.
+
+| #     | Mutation                                                                  | Killed by (examples)                                                                                  | Result |
+| ----- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------ |
+| SL-00 | The budget `>=` → `>`                                                     | preflight unit; A1 budget of 5; five hours still one session; takeover; defaults; enqueue recheck (6) | KILLED |
+| SL-01 | A GREETING reply counted in the session                                   | GREETING replies never spend the budget; a greeting job with no topic                                 | KILLED |
+| SL-02 | No inactivity reset (every row of the epoch counts)                       | six hours of inactivity start a new session                                                           | KILLED |
+| SL-03 | `now` not part of the activity                                            | six hours of inactivity start a new session                                                           | KILLED |
+| SL-04 | The session not bound to the epoch                                        | stops when the budget is spent; takeover; the hourly limit across epochs; defaults                    | KILLED |
+| SL-05 | An unknown topic (NULL) treated as GREETING (`<>` for `IS DISTINCT FROM`) | seven tests, among them a greeting job with no recorded topic counts                                  | KILLED |
+| SL-06 | The hourly limit a constant 30                                            | caps per window; greetings fill the hour; the hourly limit is the tenant's                            | KILLED |
+| SL-07 | The session budget a constant 20                                          | budget of 5; five hours; takeover; enqueue recheck; stops when spent                                  | KILLED |
+| SL-08 | Raising the budget in AUTO not charged                                    | nit: raising the reply limits needs `support_ai.auto_reply`                                           | KILLED |
+| SL-09 | Raising the hourly limit in AUTO not charged                              | nit: raising the reply limits needs `support_ai.auto_reply`                                           | KILLED |
+| SL-10 | An absent budget saved as the default (not the stored value)              | a save without the new fields keeps the stored values                                                 | KILLED |
+| SL-11 | A2: a GREETING reply resets the clarifying streak                         | the streak unit; a GREETING reply between questions does not reset                                    | KILLED |
+| SL-12 | A2: the clarifying default back to 2                                      | the default unit; 7 (A2) the column default and a stored 2 kept                                       | KILLED |
+| SL-13 | A1: the budget default 4                                                  | 3 unit, 44 integration (the default no longer passes its own bounds)                                  | KILLED |
+| SL-14 | Web: no widening warning for the budget                                   | sessionReplyBudget: an increase under AUTO_REPLY_SAFE warns                                           | KILLED |
+| SL-15 | Web: no widening warning for the hour                                     | maxAutoRepliesPerHour: an increase under AUTO_REPLY_SAFE warns                                        | KILLED |
+
+**16 of 16 killed.** `scripts/mutate-clarifying.py` CQ-19 now reverts the default 3 to 2.
