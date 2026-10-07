@@ -242,7 +242,11 @@ export class LegacySourceRefused extends Error {
       /** A read set asked for rows the table catalogue does not let it read. */
       | 'SOURCE_TABLE_NOT_READABLE'
       /** The snapshot is not the source the operator approved (`--expected-fingerprint`). */
-      | 'SOURCE_FINGERPRINT_MISMATCH',
+      | 'SOURCE_FINGERPRINT_MISMATCH'
+      /** A read set is not the one the operator approved (`--expected-<set>-fingerprint`). */
+      | 'READ_SET_FINGERPRINT_MISMATCH'
+      /** A read set's delivery pass read other rows than its verified pass, in one session. */
+      | 'READ_SET_SNAPSHOT_DIVERGED',
     readonly detail: string,
   ) {
     super(`${code}: ${detail}`);

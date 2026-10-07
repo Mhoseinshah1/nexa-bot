@@ -42,6 +42,9 @@ import {
  *   value for the source; each read set prints its own fingerprint for its own approval.
  *
  * Rows are streamed and handed to the caller in bounded batches; the reader keeps none.
+ * Delivery requires the read set's approved fingerprint and is preceded by a digest-only
+ * pass in the same snapshot, so no row reaches a consumer before the read set is proven to
+ * be the approved one (`readLegacyReadSet`).
  *
  * ## For later read sets
  *
@@ -50,12 +53,18 @@ import {
  *       tables: [{ table: 'product', primaryKey: 'id',
  *                  columns: ['id', 'code_product', …], optionalColumns: ['agent', …] }],
  *     });
+ *     // Approval: a digest-only read prints the fingerprint the owner approves.
+ *     const { fingerprint } = await withBoundReadSetSession(connector, approvedV1, (session) =>
+ *       readLegacyReadSet(session, PRODUCTS_READ_SET),
+ *     );
+ *     // Use: delivery requires the approved value; a mismatch delivers nothing.
  *     await withBoundReadSetSession(connector, approvedV1, async (session, v1) => {
  *       const result = await readLegacyReadSet(session, PRODUCTS_READ_SET, {
  *         batchSize: 500,
+ *         expectedFingerprint: approvedProducts, // --expected-products-fingerprint
  *         onBatch: async (batch) => { … decide / write batch.rows … },
  *       });
- *       // result.fingerprint: compare with --expected-products-fingerprint, record it.
+ *       // result.fingerprint === approvedProducts: record it.
  *     });
  *
  * The name must also join `LEGACY_READ_SET_NAMES` (a contract change) before its run can be
@@ -183,24 +192,100 @@ export function readSetFingerprint(
 
 const NOTHING_EXCLUDED: ReadonlySet<string> = new Set();
 
+/** Reading a read set without delivering a row: computes the fingerprint to approve. */
+export interface LegacyReadSetDigestOptions {
+  readonly batchSize?: number;
+  /** When given, the read refuses (`READ_SET_FINGERPRINT_MISMATCH`) unless it matches. */
+  readonly expectedFingerprint?: string;
+  readonly onBatch?: undefined;
+}
+
+/**
+ * Reading a read set AND handing its rows to `onBatch`. The approved fingerprint is
+ * required: no row reaches a consumer before the read set is proven to be the approved one.
+ */
+export interface LegacyReadSetDeliveryOptions {
+  readonly batchSize?: number;
+  /** The read set fingerprint the operator approved (`--expected-<set>-fingerprint`). */
+  readonly expectedFingerprint: string;
+  readonly onBatch: (batch: LegacyReadSetBatch) => Promise<void> | void;
+}
+
+export type LegacyReadSetOptions = LegacyReadSetDigestOptions | LegacyReadSetDeliveryOptions;
+
+function refuseUnexpected(definition: LegacyReadSetDefinition, actual: string, expected: string) {
+  if (actual !== expected) {
+    throw new LegacySourceRefused(
+      'READ_SET_FINGERPRINT_MISMATCH',
+      `the ${definition.fingerprintVersion} fingerprint is ${actual}, but the approved one is ` +
+        `${expected}: this is not the read set that was approved. No row was delivered.`,
+    );
+  }
+}
+
 /**
  * Reads one read set inside the session's snapshot: refuses a missing table or required
  * column before any row, then streams each table in primary-key byte order through its
- * digest, handing the rows to `onBatch` at most `batchSize` at a time and awaiting it before
- * reading on. Nothing is kept here; the caller decides what a batch becomes.
+ * digest.
+ *
+ * Verification precedes every side effect. Without `onBatch` it is one digest-only pass —
+ * the way to compute a fingerprint for approval (and, with `expectedFingerprint`, to check
+ * one). With `onBatch`, `expectedFingerprint` is REQUIRED, and the read is two passes over
+ * the SAME session (the same READ ONLY snapshot):
+ *
+ * 1. a digest-only pass that delivers nothing, compared with `expectedFingerprint` — a
+ *    mismatch is refused (`READ_SET_FINGERPRINT_MISMATCH`) before `onBatch` is ever called;
+ * 2. the delivery pass, handing the rows to `onBatch` at most `batchSize` at a time and
+ *    awaiting it before reading on, while recomputing the digest; it must equal pass 1's,
+ *    or the read fails (`READ_SET_SNAPSHOT_DIVERGED`) after the last batch. A snapshot
+ *    cannot change, so that failure means the session is not one; the caller's writes must
+ *    be in a transaction this error rolls back.
+ *
+ * Nothing is kept here in either pass; the caller decides what a batch becomes.
  */
 export async function readLegacyReadSet(
   session: LegacySourceSession,
   definition: LegacyReadSetDefinition,
-  options: {
-    readonly batchSize?: number;
-    readonly onBatch?: (batch: LegacyReadSetBatch) => Promise<void> | void;
-  } = {},
+  options: LegacyReadSetOptions = {},
 ): Promise<LegacyReadSetResult> {
   const batchSize = options.batchSize ?? READ_SET_DEFAULT_BATCH;
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > READ_SET_MAX_BATCH) {
     throw new Error(`a read set batch is 1-${String(READ_SET_MAX_BATCH)} rows`);
   }
+  const expected = options.expectedFingerprint;
+  if (options.onBatch !== undefined && expected === undefined) {
+    throw new Error(
+      `read set ${definition.name}: delivering rows requires the approved read set fingerprint`,
+    );
+  }
+  if (expected !== undefined && !LEGACY_SHA256_PATTERN.test(expected)) {
+    throw new Error(
+      'the approved read set fingerprint is a SHA-256 as 64 lowercase hex characters',
+    );
+  }
+
+  const verified = await scanReadSet(session, definition, batchSize, undefined);
+  if (expected !== undefined) refuseUnexpected(definition, verified.fingerprint, expected);
+  if (options.onBatch === undefined) return verified;
+
+  const delivered = await scanReadSet(session, definition, batchSize, options.onBatch);
+  if (delivered.fingerprint !== verified.fingerprint) {
+    throw new LegacySourceRefused(
+      'READ_SET_SNAPSHOT_DIVERGED',
+      `the ${definition.fingerprintVersion} delivery pass read ${delivered.fingerprint}, but ` +
+        `the verified pass read ${verified.fingerprint}: the session is not one snapshot. ` +
+        'Roll back everything the batches produced.',
+    );
+  }
+  return delivered;
+}
+
+async function scanReadSet(
+  session: LegacySourceSession,
+  definition: LegacyReadSetDefinition,
+  batchSize: number,
+  onBatch: ((batch: LegacyReadSetBatch) => Promise<void> | void) | undefined,
+): Promise<LegacyReadSetResult> {
   const catalog = await session.catalogColumns();
   const synthetic = (await session.syntheticMarker()) !== null;
   const schemaHash = readSetSchemaHash(definition, catalog);
@@ -224,19 +309,25 @@ export async function readLegacyReadSet(
   const tables: Record<string, LegacyTableEvidence> = {};
   for (const { spec, columns } of plan) {
     const digest = new TableDigest(spec.table, columns, NOTHING_EXCLUDED);
-    let batch: (readonly LegacyCell[])[] = [];
-    const flush = async () => {
-      if (batch.length === 0) return;
-      const rows = batch;
-      batch = [];
-      await options.onBatch?.({ table: spec.table, columns, rows });
-    };
-    for await (const row of session.readSetRows(spec.table, spec.primaryKey, columns)) {
-      digest.add(row);
-      batch.push(row);
-      if (batch.length >= batchSize) await flush();
+    if (onBatch === undefined) {
+      for await (const row of session.readSetRows(spec.table, spec.primaryKey, columns)) {
+        digest.add(row);
+      }
+    } else {
+      let batch: (readonly LegacyCell[])[] = [];
+      const flush = async () => {
+        if (batch.length === 0) return;
+        const rows = batch;
+        batch = [];
+        await onBatch({ table: spec.table, columns, rows });
+      };
+      for await (const row of session.readSetRows(spec.table, spec.primaryKey, columns)) {
+        digest.add(row);
+        batch.push(row);
+        if (batch.length >= batchSize) await flush();
+      }
+      await flush();
     }
-    await flush();
     tables[spec.table] = digest.done();
   }
 

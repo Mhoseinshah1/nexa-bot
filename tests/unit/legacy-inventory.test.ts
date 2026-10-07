@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { LEGACY_TABLE_CLASSIFICATION, systemJobActor, type CorrelationId } from '@nexa/contracts';
 import {
@@ -398,11 +401,12 @@ describe('scripts/legacy-freeze-checksum.sql (the runbook freeze proof)', () => 
     .map((s) => s.replace(/\s+/gu, ' ').trim())
     .filter((s) => s !== '');
 
-  it('is read-only: session settings, one information_schema read, CHECKSUM TABLE', () => {
+  it('is read-only: session settings, information_schema reads, CHECKSUM TABLE', () => {
     expect(statements.map((s) => s.split(' ').slice(0, 2).join(' '))).toEqual([
       'SET SESSION',
       'SET SESSION',
       "SELECT CONCAT('CHECKSUM",
+      'SELECT COUNT(*)',
       'PREPARE nexa_freeze_checksum',
       'EXECUTE nexa_freeze_checksum',
       'DEALLOCATE PREPARE',
@@ -419,5 +423,95 @@ describe('scripts/legacy-freeze-checksum.sql (the runbook freeze proof)', () => 
     expect(select).toContain("WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'");
     expect(select).not.toMatch(/TABLE_NAME\s*(=|IN|LIKE|<>|NOT)/iu);
     expect(select).toContain('ORDER BY CAST(TABLE_NAME AS BINARY)');
+    // The count the checker holds the checksum lines to: the same tables, no filter.
+    expect(statements[3]).toBe(
+      "SELECT COUNT(*) AS base_tables FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'",
+    );
+  });
+});
+
+describe('scripts/legacy-freeze-checksum-verify.sh (no file is a freeze proof by itself)', () => {
+  const GOOD =
+    'base_tables\n3\nTable\tChecksum\noldbot.invoice\t11\noldbot.product\t0\noldbot.user\t42\n';
+
+  function verify(...contents: (string | null)[]): { status: number | null; out: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-freeze-'));
+    try {
+      const files = contents.map((content, i) => {
+        const file = join(dir, `run-${String(i)}.tsv`);
+        if (content !== null) writeFileSync(file, content);
+        return file;
+      });
+      const run = spawnSync('bash', ['scripts/legacy-freeze-checksum-verify.sh', ...files], {
+        encoding: 'utf8',
+      });
+      return { status: run.status, out: `${run.stdout}${run.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('accepts a well-formed run, and two equal runs under different database names', () => {
+    expect(verify(GOOD)).toMatchObject({ status: 0 });
+    const restored = GOOD.replaceAll('oldbot.', 'restored.');
+    const both = verify(GOOD, restored);
+    expect(both.status).toBe(0);
+    expect(both.out).toContain('EQUAL');
+  });
+
+  it('refuses what a failed client leaves behind, so two failures never compare equal', () => {
+    const failed: [string, string | null][] = [
+      ['missing file', null],
+      ['empty file', ''],
+      ['count only', 'base_tables\n3\n'],
+      ['header only', 'base_tables\n3\nTable\tChecksum\n'],
+      ['one table short', GOOD.replace('oldbot.user\t42\n', '')],
+      ['NULL checksum', GOOD.replace('oldbot.user\t42', 'oldbot.user\tNULL')],
+      ['table twice', GOOD.replace('oldbot.product\t0', 'oldbot.invoice\t0')],
+      ['no count', GOOD.replace('base_tables\n3\n', '')],
+      ['zero tables', 'base_tables\n0\nTable\tChecksum\n'],
+      ['an error line', `${GOOD}ERROR 1142 (42000): SELECT command denied\n`],
+    ];
+    for (const [why, content] of failed) {
+      expect(verify(content).status, why).toBe(1);
+      expect(verify(content, content).status, `${why}, compared with itself`).toBe(1);
+      expect(verify(GOOD, content).status, `${why}, as the restored copy`).toBe(1);
+    }
+  });
+
+  it('refuses two well-formed runs that differ, naming the table and no value', () => {
+    const changed = verify(GOOD, GOOD.replace('oldbot.user\t42', 'oldbot.user\t43'));
+    expect(changed.status).toBe(1);
+    expect(changed.out).toMatch(/DIFFERENT[\s\S]*\buser\b/u);
+    expect(changed.out).not.toContain('43');
+    expect(verify(GOOD, GOOD.replace('oldbot.product', 'oldbot.products')).status).toBe(1);
+  });
+
+  it("the runbooks capture the client's own exit status and compare only through it", () => {
+    const blocks = [
+      readFileSync('docs/legacy-migration/cutover-runbook.md', 'utf8'),
+      readFileSync('docs/legacy-migration/rollback-runbook.md', 'utf8'),
+    ].flatMap((doc) =>
+      doc
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.includes('legacy-freeze-checksum')),
+    );
+    const runs = blocks.filter((line) => /legacy-freeze-checksum\.sql \| tee /u.test(line));
+    // Step 7, step 9, R5: every run of the script records the client's status, not tee's.
+    expect(runs).toHaveLength(3);
+    for (const line of runs) expect(line, line).toContain('echo "exit ${PIPESTATUS[0]}"');
+    const checks = blocks.filter((line) => line.startsWith('bash ') && line.includes('-verify.sh'));
+    // Step 7 checks its own file; step 9 and R5 compare against step 7's through the checker.
+    expect(checks.map((line) => /-verify\.sh ([^;]*);/u.exec(line)?.[1]?.split(' '))).toEqual([
+      ['freeze-checksum-step7.tsv'],
+      ['freeze-checksum-step7.tsv', 'freeze-checksum-step9.tsv'],
+      ['freeze-checksum-step7.tsv', 'freeze-checksum-R5.tsv'],
+    ]);
+    for (const line of checks) expect(line, line).toContain('echo "verify exit $?"');
+    for (const doc of ['cutover-runbook.md', 'rollback-runbook.md']) {
+      const text = readFileSync(`docs/legacy-migration/${doc}`, 'utf8');
+      expect(text, doc).not.toMatch(/^\s*diff freeze-checksum/mu);
+    }
   });
 });

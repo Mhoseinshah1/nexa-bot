@@ -102,7 +102,10 @@ the cutover snapshot is newer.
 The cutover's freeze proof (`cutover-runbook.md` steps 7 and 9) is
 `scripts/legacy-freeze-checksum.sql`: one `CHECKSUM TABLE` over every base table, so it
 covers every table of every read set, not only `user` and `invoice`. The inventory prints
-the same statement. Record the table list here once it is filled:
+the same statement. Each output file counts only after the client exited 0 and
+`scripts/legacy-freeze-checksum-verify.sh` accepted it (one line per counted base table,
+none NULL); the two are compared through that checker, never a bare `diff`. Record the
+table list here once it is filled:
 
 | at                           | tables covered | output file / SHA-256 |
 | ---------------------------- | -------------- | --------------------- |

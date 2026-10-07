@@ -263,8 +263,18 @@ Only after R4 passes and the owner decides to give customers back to MirzaBot:
 
 1. Confirm the legacy database is unchanged since the freeze — the same SELECT-only
    `scripts/legacy-freeze-checksum.sql` (every table) as cutover step 7, equal to the
-   recorded values. (It was
-   read-only; this proves it.)
+   recorded values. (It was read-only; this proves it.) Capture the client's own exit
+   status and let the checker compare, never a bare `diff`:
+
+   ```bash
+   mysql --user=oldbot_ro --password --batch oldbot \
+     < legacy-freeze-checksum.sql | tee freeze-checksum-R5.tsv; echo "exit ${PIPESTATUS[0]}"
+   bash legacy-freeze-checksum-verify.sh freeze-checksum-step7.tsv freeze-checksum-R5.tsv; echo "verify exit $?"
+   ```
+
+   Both `exit 0`, and `EQUAL`. An empty or partial file (a failed client) is refused by the
+   checker; it is no proof.
+
 2. Owner-operated on the legacy host: lift `read_only` / `super_read_only`, restart MirzaBot
    and its cron/webhook.
 3. Announce to customers that the old bot is back; resolve or update NEXA's maintenance
