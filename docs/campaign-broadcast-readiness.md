@@ -5,7 +5,7 @@ lane (`docs/round-n-broadcast-audit.md`, `docs/round-n-campaigns-audit.md`,
 `docs/round-n-close-audit.md`, `docs/broadcast-v2.md`). It does not replace it.
 
 - C1/C2 are on `roadmap/campaign-broadcast-readiness`.
-- C3/C4 are on `roadmap/campaign-advanced-safe` (§C3 and §C4 below).
+- C3/C4 (and the D2-F1 fix) are on `roadmap/campaign-advanced-safe` (sections below).
 - No migration was added. No permission, state, event or template key was added. The contract
   change is additive and has its own commit (`contracts(broadcasts): per-bot delivery, history,
 and a recipient's next attempt`).
@@ -80,25 +80,129 @@ Web tests: `tests/web/broadcast-readiness.test.tsx` (9), plus the changed cases 
 `tests/web/broadcast-v2.test.tsx` and `tests/web/campaigns.test.tsx` («takes a run command
 once…»).
 
+## D2-F1 — a "chat not found" on a forward or copy
+
+The Telegram agent found this. A `forwardMessage` or `copyMessage` request names two chats:
+`chat_id` (the recipient) and `from_chat_id` (the source). Telegram's
+`Bad Request: chat not found` and `PEER_ID_INVALID` do not say which one is meant.
+
+Before the fix, `classify` read these as the recipient's UNREACHABLE. That outcome is final and
+never re-queued. So a source that one bot cannot reach was reported as every one of that bot's
+recipients being unreachable.
+
+The description cannot tell the two apart, so the **request's shape** decides:
+
+- On a sourced send, these two answers are REFUSED, which is recorded as `FAILED` with the
+  transport's code (`telegram.rejected.400`).
+  - The page shows it per bot, with the sentence "Telegram did not accept (e.g. the bot cannot
+    reach the source)".
+  - It can be re-queued once the bot can reach the source.
+- Answers that can only be about the recipient stay UNREACHABLE: blocked, deactivated, never
+  started.
+- A composed message names one chat, so for it nothing changes.
+
+It is not routed to the broadcast-wide `BOT_UNAVAILABLE` pause. The bot works; it lacks access
+to one chat. Pausing every bot for that is the over-reach this record already notes.
+
+## C3 — advanced, only where it composes
+
+| Item                                                                     | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| campaign referral incentive from the existing referral engine            | **Not built.** The engine's terms are three tenant-wide settings read at confirmation (`ReferralProgram.terms`); there is no window and no audience. A campaign could only express an incentive by writing `referral.commission_percent` and writing it back. That rewards every referrer in the tenant, and the write-back is a lost update over an operator's edit made in between. Changing `commission_scope` re-terms everybody who registers in the window for life (it is snapshotted per attribution). A per-recipient `{referralLink}` placeholder is not a cleaner route either: the link comes from `ReferralProgram.invite`, which is a WRITE (it records the code) plus a live `getMe` per bot, so the dispatcher would gain a write path and a Telegram dependency per recipient. Recorded as OQ-C1-02 (unchanged). |
+| better audience scoping with existing primitives                         | **Built: the audience by bot** (`botInstanceIds`) — see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| attribution and analytics from persisted effects and the frozen audience | **Built: `audienceAttribution`** on campaign results — see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+**The audience by bot.**
+
+- A customer is reached through `customers.first_bot_instance_id`. That is the bot a broadcast
+  freezes onto each recipient row, and the one it sends through.
+- One predicate in the one audience builder, so the preview, a broadcast, a mass action and a
+  campaign all read it the same way.
+- Canonical form:
+  - The key is appended only when it narrows, so every hash stored before it still matches
+    (unit test).
+  - An empty list is refused rather than read as "every bot".
+- An id of another tenant's bot selects nobody, and a customer who never wrote to a bot is
+  selected by no bot.
+- The options list each bot's id, username and status, and never a token (integration test).
+- The builder draws the section only for a tenant with more than one bot.
+
+**Attribution.**
+
+- Built from persisted rows only:
+  - the announcement's `broadcast_recipients`, which are its frozen audience. Unlike
+    `frozen_audience_members` they are never released, so the figure survives the campaign;
+  - the campaign discount's `discount_redemptions`, counted only where the order is PAID.
+- Distinct customers: told, delivered, redeemers among those told, redeemers among those
+  delivered, and redeemers who were never told. The last group exists because the rule's scope
+  is not the audience (OQ-C1-01).
+- Null unless the campaign has both an announcement and a discount.
+- The page says in words that this is not a cause, and the old pin that the results carry no
+  revenue or conversion field still holds.
+
+## C4 — the promotional opt-out
+
+**No override was built.** The customer's `/stop` is authoritative.
+
+- An operator override for a MARKETING send would, by construction, send promotion to someone
+  who asked not to receive it.
+- Requiring a reason and a permission changes who is accountable. It does not change what the
+  customer receives.
+- The installation already has two explicit, non-silent controls:
+  - the `SERVICE_ANNOUNCEMENT` purpose, for facts about the customer's own service, composed and
+    confirmed on the Broadcast page;
+  - the owner-level `customer_marketing_opt_out` flag (spec §9), which is tenant-wide and never
+    erases a stored preference.
+
+**A silent bypass was found and closed.**
+
+- The campaign form offered "service announcement" for a campaign's announcement.
+- Such a campaign is promotional by what it is: an offer or a gift.
+- Had the choice been honoured, it would have reached every opted-out customer with no reason
+  given.
+- In fact the repository never persisted the purpose (`configToJson` dropped it), so every
+  campaign announcement already went as MARKETING. The form offered a choice it ignored.
+- Now:
+  - `SERVICE_ANNOUNCEMENT` on a campaign is refused at create, edit and schedule
+    (`campaign.announcement_purpose_invalid`), including a draft stored before the rule.
+  - The hand-over sends MARKETING.
+  - The form says the announcement is promotional and that a service fact is a Broadcast of
+    its own.
+- The tests show an opted-out customer SKIPPED on a campaign's announcement, with their
+  preference untouched.
+
+## C5 — not built
+
+- No repin or unpin loop: one pin attempt per recipient, as before.
+- No paid broadcast: `allow_paid_broadcast` is never passed.
+- No opt-out bypass (above).
+- No caption rewrite on a COPY.
+
 ## Mutations
 
 The driver is `scripts/mutate-campaign-broadcast.py`. It reverts each rule in place, runs the
 named test, and restores the file from the copy it read. Every mutant below was KILLED.
 
-| #     | Rule reverted                                                              | Test that failed                                         |
-| ----- | -------------------------------------------------------------------------- | -------------------------------------------------------- |
-| CB-01 | the stamp's in-transaction opt-out read (`if (input.marketing)` → `false`) | refused recipient who opts out before the re-queue       |
-| CB-02 | the claim returns the customer's CURRENT bot instead of the frozen one     | sends and pins each recipient through its own FROZEN bot |
-| CB-03 | the re-queue also moves UNCONFIRMED                                        | re-sends only the refusals                               |
-| CB-04 | the re-queue also moves an in-flight SENDING row                           | re-sends only the refusals                               |
-| CB-05 | a 429 hold applied to every bot of the tenant                              | a 429 holds the bot that got it and no other             |
-| CB-06 | the per-bot read loses the bot's own row                                   | …counts the delivery per bot                             |
-| CB-07 | broadcast pause button not disabled while pending                          | web: takes a steer once                                  |
-| CB-08 | campaign pause button not disabled while pending                           | web: takes a run command once                            |
-| CB-09 | test enabled with unsaved edits                                            | web: withholds the test and the count                    |
-| CB-10 | re-queue without asking                                                    | web: asks before a re-queue                              |
-| CB-11 | the launch's count/fingerprint comparison removed (frozen audience)        | broadcasts.test: freezes exactly the previewed audience  |
-| CB-17 | a test send no longer refreshes the history (Codex P2 on PR #237)          | web: reads the history again after a test                |
+| #     | Rule reverted                                                                    | Test that failed                                                         |
+| ----- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| CB-01 | the stamp's in-transaction opt-out read (`if (input.marketing)` → `false`)       | refused recipient who opts out before the re-queue                       |
+| CB-02 | the claim returns the customer's CURRENT bot instead of the frozen one           | sends and pins each recipient through its own FROZEN bot                 |
+| CB-03 | the re-queue also moves UNCONFIRMED                                              | re-sends only the refusals                                               |
+| CB-04 | the re-queue also moves an in-flight SENDING row                                 | re-sends only the refusals                                               |
+| CB-05 | a 429 hold applied to every bot of the tenant                                    | a 429 holds the bot that got it and no other                             |
+| CB-06 | the per-bot read loses the bot's own row                                         | …counts the delivery per bot                                             |
+| CB-07 | broadcast pause button not disabled while pending                                | web: takes a steer once                                                  |
+| CB-08 | campaign pause button not disabled while pending                                 | web: takes a run command once                                            |
+| CB-09 | test enabled with unsaved edits                                                  | web: withholds the test and the count                                    |
+| CB-10 | re-queue without asking                                                          | web: asks before a re-queue                                              |
+| CB-11 | the launch's count/fingerprint comparison removed (frozen audience)              | broadcasts.test: freezes exactly the previewed audience                  |
+| CB-17 | a test send no longer refreshes the history (Codex P2 on PR #237)                | web: reads the history again after a test                                |
+| CB-12 | the bot predicate dropped from the one audience builder                          | audience-bots: selects the customers of the named bots only              |
+| CB-13 | a campaign announcement may be a service announcement                            | campaigns: refuses a campaign announcement called a service announcement |
+| CB-14 | schedule no longer re-checks a stored announcement's purpose                     | campaigns: refuses to schedule a draft saved before the rule             |
+| CB-15 | attribution counts unpaid redemptions                                            | campaigns: sets the discount's PAID redeemers against who was told       |
+| CB-16 | attribution's "delivered" ignores the recipient's state                          | the same                                                                 |
+| CB-18 | a sourced send's "chat not found" read as the recipient's unreachability (D2-F1) | unit: broadcast-transport, both D2-F1 cases                              |
 
 ## Manual acceptance — NOT RUN
 
@@ -143,3 +247,16 @@ never in production.
 8. **Double click.**
    - Click pause twice quickly on a sending broadcast, and on an active campaign.
    - Expected: one audit row each in the history.
+9. **The audience by bot (C3).**
+   - On a tenant with two bots, build an audience with only bot B ticked.
+   - Expected: the count equals bot B's customers.
+   - Expected: the launched broadcast's per-bot card shows bot B only.
+10. **D2-F1.**
+    - COPY a post from a channel that bot B is not in.
+    - Expected: B's recipients are FAILED with `telegram.rejected.400`, not "unreachable".
+    - Add bot B to the channel and re-queue.
+    - Expected: they receive it once.
+11. **Attribution (C3).**
+    - Run a discount + announcement campaign on staging.
+    - Pay one order as a told customer and one as a customer registered after the confirmation.
+    - Expected: the results card shows 1 told redeemer and 1 not told.

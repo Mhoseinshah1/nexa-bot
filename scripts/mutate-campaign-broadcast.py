@@ -23,6 +23,8 @@ CSVC='apps/api/src/modules/commerce/campaigns/application/campaign.service.ts'
 CREPO='apps/api/src/modules/commerce/campaigns/infrastructure/drizzle-campaign.repository.ts'
 T_AB=('integration','tests/integration/audience-bots.test.ts')
 T_C=('integration','tests/integration/campaigns.test.ts')
+TRANSPORT='apps/api/src/modules/commerce/broadcasts/infrastructure/telegram-broadcast.transport.ts'
+T_U=('unit','tests/unit/broadcast-transport.test.ts')
 
 M=[
  # Opt-out authority: the stamp re-reads the preference in its own transaction, so a refused
@@ -68,6 +70,8 @@ M=[
  ('CB-16',[(CREPO,"WHERE t.customer_id = r.customer_id AND t.state = 'SENT'))::int","WHERE t.customer_id = r.customer_id))::int")],T_C,'PAID redeemers against who was told'),
  # Web: a test send is a history row; the history is read again after it (Codex P2, PR #237).
  ('CB-17',[(PAGE,"      void client.invalidateQueries({ queryKey: ['broadcast-history', record.id] });\n    },\n  });\n  const large","    },\n  });\n  const large")],T_W,'reads the history again after a test'),
+ # D2-F1: on a forward/copy, "chat not found" may name the SOURCE: a refusal, not unreachable.
+ ('CB-18',[(TRANSPORT,"  if (request.sourced && AMBIGUOUS_ON_SOURCED_SEND.test(outcome.errorMessage)) {","  if (false && AMBIGUOUS_ON_SOURCED_SEND.test(outcome.errorMessage)) {")],T_U,'D2-F1|may name the source chat'),
  ('CB-10',[(PAGE,"              onClick={() => setRetryAsked(true)}","              onClick={() => steer.mutate('retryFailed')}")],T_W,'asks before a re-queue'),
 ]
 
