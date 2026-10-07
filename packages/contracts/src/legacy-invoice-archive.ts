@@ -183,9 +183,23 @@ export const LEGACY_INVOICE_ARCHIVE_ROUTES = {
   detail: (id: string) => `/legacy-invoices/rows/${encodeURIComponent(id)}`,
 } as const;
 
+/**
+ * A search on a field the archive stores TRIMMED (`panel_code`, `product_code`): trimming the
+ * term is the same comparison the stored value already had.
+ */
 const searchTerm = z
   .string()
   .trim()
+  .min(1)
+  .max(LEGACY_INVOICE_ARCHIVE_SEARCH_MAX)
+  .refine((value) => !/\p{Cc}/u.test(value), { message: 'no control characters' });
+/**
+ * A search on a field the archive stores VERBATIM (`id_invoice`, `id_user`, `username`,
+ * `Status`): compared exactly as typed, spaces included — a legacy id ` padded ` is found
+ * only by ` padded `. Never trimmed; only an empty term is refused.
+ */
+const verbatimTerm = z
+  .string()
   .min(1)
   .max(LEGACY_INVOICE_ARCHIVE_SEARCH_MAX)
   .refine((value) => !/\p{Cc}/u.test(value), { message: 'no control characters' });
@@ -232,12 +246,12 @@ export type LegacyInvoiceArchiveRowView = z.infer<typeof legacyInvoiceArchiveRow
 
 export const legacyInvoiceArchiveListQuerySchema = z.object({
   /** The invoice id, or its beginning, exactly as stored (case-sensitive). */
-  invoiceId: searchTerm.optional(),
+  invoiceId: verbatimTerm.optional(),
   /** PII: the legacy owner's id, exactly. Needs `legacy.invoices.pii.view`. */
-  legacyUserId: searchTerm.optional(),
+  legacyUserId: verbatimTerm.optional(),
   /** PII: the legacy account username or its beginning, case-insensitive. Needs PII. */
-  username: searchTerm.optional(),
-  status: searchTerm.optional(),
+  username: verbatimTerm.optional(),
+  status: verbatimTerm.optional(),
   panelCode: searchTerm.optional(),
   productCode: searchTerm.optional(),
   classification: legacyInvoiceArchiveClassSchema.optional(),
