@@ -190,6 +190,8 @@ export interface LegacyCutoverRepository {
    * when the run has no such row (not finished, or finished by a release before PR6).
    */
   applyOutcome(scope: TenantContext, runId: string): Promise<LegacyCutoverApplyOutcome | null>;
+  /** The CUTOVER approval id the run's start audit row recorded, or null (an ungated run). */
+  runCutoverApprovalId(scope: TenantContext, runId: string): Promise<string | null>;
 }
 
 /** An APPLY run's recorded leftovers (PR5's approval counters and every attention count). */

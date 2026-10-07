@@ -13,7 +13,10 @@ import {
 } from '@nexa/contracts';
 import { isExportable } from '../../../commerce/legacy-product-review/domain/review-transitions.js';
 import type { LegacyCutoverReportFacts } from '../../legacy-cutover/application/legacy-cutover.service.js';
-import { supersededSources } from '../../legacy-cutover/domain/cutover-rules.js';
+import {
+  decideCutoverImport,
+  supersededSources,
+} from '../../legacy-cutover/domain/cutover-rules.js';
 import type { FinalReport } from './final-report.js';
 import type { LegacyInventory } from './legacy-inventory.js';
 import type { ServiceOutcomesSection } from './service-outcomes.js';
@@ -291,12 +294,56 @@ export function buildInvoiceArchiveSection(
   };
 }
 
+/**
+ * The earlier sources NOT acknowledged as re-runs, decided by the ONE evaluator the import
+ * uses (`decideCutoverImport`), never by a second rule: an acknowledgement counts only when
+ * its complete binding — all seven values — is the applicable CUTOVER approval's, it is
+ * unrevoked, and its evidence class is that approval's. The applicable approval is the one
+ * the reported run started under (its start audit), or, for a run that recorded none, any
+ * unrevoked CUTOVER approval of this source; with none at all, every earlier source is
+ * unacknowledged.
+ */
+function unacknowledgedSources(
+  sourceFingerprint: string,
+  facts: LegacyCutoverReportFacts,
+  prior: readonly string[],
+): readonly string[] {
+  if (prior.length === 0) return [];
+  const approvals = facts.approvals.map((a) => ({ ...a, revoked: a.revocation !== null }));
+  const applicable = approvals.filter(
+    (a) =>
+      a.kind === 'CUTOVER' &&
+      !a.revoked &&
+      a.sourceFingerprint === sourceFingerprint &&
+      (facts.runCutoverApprovalId === null || a.id === facts.runCutoverApprovalId),
+  );
+  let best: readonly string[] = prior;
+  for (const approval of applicable) {
+    const decision = decideCutoverImport({
+      expectation: {
+        sourceFingerprint: approval.sourceFingerprint,
+        panelMapFingerprint: approval.panelMapFingerprint,
+        inventoryFingerprint: approval.inventoryFingerprint,
+        productsFingerprint: approval.productsFingerprint,
+        invoiceArchiveFingerprint: approval.invoiceArchiveFingerprint,
+        freezeProofSha256: approval.freezeProofSha256,
+        finalDumpSha256: approval.finalDumpSha256,
+      },
+      approvals,
+      applyRuns: facts.applyRuns,
+      snapshotSynthetic: approval.synthetic,
+      productionLikeTarget: false,
+    });
+    const left = decision.ok ? [] : decision.code === 'SOURCE_SUPERSEDED' ? decision.detail : prior;
+    if (left.length < best.length) best = left;
+  }
+  return best;
+}
+
 export function buildCutoverSection(sourceFingerprint: string, facts: LegacyCutoverReportFacts) {
-  const live = facts.approvals.filter((a) => a.revocation === null);
   const prior = supersededSources(facts.applyRuns, sourceFingerprint);
-  const acknowledged = (source: string) =>
-    live.some((a) => a.kind === 'RERUN_OVER_PRIOR_IMPORT' && a.priorSourceFingerprint === source);
-  const unacknowledged = prior.filter((s) => !acknowledged(s));
+  const unacknowledged = unacknowledgedSources(sourceFingerprint, facts, prior);
+  const acknowledged = (source: string) => !unacknowledged.includes(source);
   const checks = [
     check(
       'X1',

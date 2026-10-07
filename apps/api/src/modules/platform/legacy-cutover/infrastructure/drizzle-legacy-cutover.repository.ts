@@ -450,7 +450,23 @@ export class DrizzleLegacyCutoverRepository implements LegacyCutoverRepository {
     `);
     return countsOf(result.rows[0]?.outcome);
   }
+
+  async runCutoverApprovalId(scope: TenantContext, runId: string): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{ approval_id: unknown }>(sql`
+      SELECT after -> 'cutover' ->> 'cutoverApprovalId' AS approval_id FROM audit_logs
+       WHERE tenant_id = ${tenantId} AND action = 'legacy_import.run.start'
+         AND entity_id = ${runId} AND result = 'SUCCESS'
+       ORDER BY occurred_at DESC, id DESC
+       LIMIT 1
+    `);
+    const value = result.rows[0]?.approval_id;
+    return typeof value === 'string' && APPROVAL_ID.test(value) ? value : null;
+  }
 }
+
+/** A recorded approval id: a lowercase uuid, or nothing. */
+const APPROVAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** The recorded counts, parsed: two objects of non-negative integers, or nothing at all. */
 function countsOf(value: unknown): LegacyCutoverApplyOutcome | null {

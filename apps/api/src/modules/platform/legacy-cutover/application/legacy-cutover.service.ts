@@ -75,6 +75,8 @@ export interface LegacyCutoverReportFacts {
   readonly duplicates: LegacyCutoverDuplicateFacts;
   /** The reported run's recorded leftovers; null when none was recorded. */
   readonly applyOutcome: LegacyCutoverApplyOutcome | null;
+  /** The CUTOVER approval the reported run started under (its start audit); null if none. */
+  readonly runCutoverApprovalId: string | null;
 }
 
 /**
@@ -426,6 +428,7 @@ export class LegacyCutoverService {
       archive,
       duplicates,
       applyOutcome,
+      runCutoverApprovalId,
     ] = await Promise.all([
       repository.approvalsForSource(scope, sourceFingerprint),
       repository.applyRuns(scope),
@@ -436,6 +439,7 @@ export class LegacyCutoverService {
       repository.latestCompletedArchiveRun(scope, sourceFingerprint),
       repository.duplicateFacts(scope),
       repository.applyOutcome(scope, runId),
+      repository.runCutoverApprovalId(scope, runId),
     ]);
     return {
       approvals,
@@ -445,6 +449,7 @@ export class LegacyCutoverService {
       archive,
       duplicates,
       applyOutcome,
+      runCutoverApprovalId,
     };
   }
 

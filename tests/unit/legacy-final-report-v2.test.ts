@@ -118,6 +118,7 @@ function holdingInput(): Mutable<FinalReportV2Input> {
         serviceApprovals: { executed: 0, withdrawnDuringRun: 0, unconfirmed: 0 },
         attention: { approvalUnconfirmed: 0, total: 0 },
       },
+      runCutoverApprovalId: null,
     },
     openingsPerCustomerMax: 1,
   } as Mutable<FinalReportV2Input>;
@@ -416,16 +417,67 @@ describe('final report v2: the verdict is the AND of every section and every inv
         finishedAt: new Date(),
       },
     ];
-    input.facts.approvals = [
-      {
-        kind: 'RERUN_OVER_PRIOR_IMPORT',
-        priorSourceFingerprint: H('e'),
+    const binding = {
+      sourceFingerprint: FP,
+      panelMapFingerprint: H('6'),
+      inventoryFingerprint: H('1'),
+      productsFingerprint: H('3'),
+      invoiceArchiveFingerprint: H('4'),
+      freezeProofSha256: H('7'),
+      finalDumpSha256: H('8'),
+    };
+    const approval = (id: string, kind: string, prior: string | null, over = {}) =>
+      ({
+        id,
+        kind,
+        ...binding,
+        priorSourceFingerprint: prior,
+        synthetic: false,
         approvedAt: new Date('2026-10-07T00:00:00Z'),
         revocation: null,
-      } as never,
+        ...over,
+      }) as never;
+    const CUT = '0190aaaa-0000-7000-8000-0000000000c1';
+    const ACK = '0190aaaa-0000-7000-8000-0000000000c2';
+    input.facts.approvals = [
+      approval(CUT, 'CUTOVER', null),
+      approval(ACK, 'RERUN_OVER_PRIOR_IMPORT', H('e')),
     ];
     expect(failed(input).holds).toBe(true);
-    (input.facts.approvals[0] as any).revocation = { revokedAt: new Date() };
+    input.facts.runCutoverApprovalId = CUT;
+    expect(failed(input).holds).toBe(true);
+
+    // The acknowledgement's WHOLE binding must be the applicable CUTOVER approval's: one value
+    // different (here the final dump) and it acknowledges nothing — as decideCutoverImport says.
+    for (const field of Object.keys(binding).filter((f) => f !== 'sourceFingerprint')) {
+      input.facts.approvals = [
+        approval(CUT, 'CUTOVER', null),
+        approval(ACK, 'RERUN_OVER_PRIOR_IMPORT', H('e'), { [field]: H('9') }),
+      ];
+      expect(failed(input).failedSections, field).toEqual(['cutover']);
+    }
+    // Another evidence class acknowledges nothing either.
+    input.facts.approvals = [
+      approval(CUT, 'CUTOVER', null),
+      approval(ACK, 'RERUN_OVER_PRIOR_IMPORT', H('e'), { synthetic: true }),
+    ];
+    expect(failed(input).failedSections).toEqual(['cutover']);
+    // An acknowledgement with no CUTOVER approval beside it acknowledges nothing.
+    input.facts.approvals = [approval(ACK, 'RERUN_OVER_PRIOR_IMPORT', H('e'))];
+    expect(failed(input).failedSections).toEqual(['cutover']);
+    // The run started under ANOTHER approval: this pair is not the applicable one.
+    input.facts.approvals = [
+      approval(CUT, 'CUTOVER', null),
+      approval(ACK, 'RERUN_OVER_PRIOR_IMPORT', H('e')),
+    ];
+    input.facts.runCutoverApprovalId = '0190aaaa-0000-7000-8000-0000000000c9';
+    expect(failed(input).failedSections).toEqual(['cutover']);
+    input.facts.runCutoverApprovalId = CUT;
+    // Revoked, it acknowledges nothing.
+    input.facts.approvals = [
+      approval(CUT, 'CUTOVER', null),
+      approval(ACK, 'RERUN_OVER_PRIOR_IMPORT', H('e'), { revocation: { revokedAt: new Date() } }),
+    ];
     expect(failed(input).failedSections).toEqual(['cutover']);
   });
 

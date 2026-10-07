@@ -765,6 +765,30 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     ).finalV2 as Record<string, any>;
     expect(again['sections'].cutover.holds).toBe(false);
     expect(again['verdict'].failedSections).toContain('cutover');
+
+    // A NEW approval pair under other values (another freeze proof) acknowledges a re-run that
+    // never ran. The reported run started under the first approval, whose acknowledgement is
+    // revoked: the applicable binding is that run's, so the earlier import stays unacknowledged.
+    const other = { freezeProofSha256: 'c'.repeat(64) };
+    await cutover().approve(tenantA, owner, { ...approveBody(fpB), ...other });
+    await cutover().approve(tenantA, owner, {
+      ...approveBody(fpB, 'RERUN_OVER_PRIOR_IMPORT', fpA.v1),
+      ...other,
+    });
+    const third = (
+      await importer().finalReport({
+        scope: tenantA,
+        actor: job('report-3'),
+        snapshot: snapB,
+        mapping,
+        productionLikeTarget: false,
+        evidenceClass: 'synthetic',
+      })
+    ).finalV2 as Record<string, any>;
+    expect(third['sections'].cutover.supersededSources).toEqual([
+      { sourceFingerprint: fpA.v1, acknowledged: false },
+    ]);
+    expect(third['verdict'].failedSections).toContain('cutover');
   });
 
   // --- report v2 --------------------------------------------------------------------------------
