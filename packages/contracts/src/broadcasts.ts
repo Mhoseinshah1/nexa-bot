@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { audienceFingerprintSchema } from './audience.js';
 import { uuidV7Schema } from './ids.js';
 import type { StateMachineDefinition } from './state-machine.js';
+import { AUDIT_RESULTS } from './ports.js';
+import { BOT_INSTANCE_STATUSES } from './tenant.js';
 import type { TemplateDefinition } from './templates.js';
 
 /**
@@ -556,6 +558,13 @@ export const broadcastRecipientSchema = z.object({
   /** The pin's own outcome; null when no pin was asked for or the send did not deliver. */
   pinState: z.enum(BROADCAST_PIN_STATES).nullable(),
   pinErrorCode: z.string().nullable(),
+  /**
+   * Roadmap C2 (retry visibility): when a PENDING recipient that was already answered once —
+   * a 429 deferral or a bot that could not send — is next due. Null for every other row.
+   */
+  // Optional (PR #237 review B1): a row from an API replica before this field — met during
+  // a rolling update — must still parse, or the whole recipients card fails.
+  nextAttemptAt: z.iso.datetime().nullable().optional(),
 });
 export type BroadcastRecipientRow = z.infer<typeof broadcastRecipientSchema>;
 
@@ -627,6 +636,83 @@ export const broadcastTestResponseSchema = z.object({
 });
 export type BroadcastTestResponse = z.infer<typeof broadcastTestResponseSchema>;
 
+/**
+ * Roadmap C2 — delivery per bot. A recipient is sent through the bot the customer FIRST wrote
+ * to (`customers.first_bot_instance_id`, frozen onto the recipient row at launch), so a tenant
+ * with several bots has one delivery per bot, each paced and held on its own. One row per bot
+ * that has recipients in this broadcast, plus one row (`botInstanceId: null`) for the
+ * recipients recorded with no bot at all. Counted from the recipient rows, so the rows sum to
+ * `counts`.
+ *
+ * - `waitingRetry`: PENDING recipients that already have an answer on record — a 429 deferral
+ *   (no attempt spent) or a bot that could not send — and wait for `nextAttemptAt`.
+ * - `heldUntil`: the bot's 429 hold (`retry_after`) while it is still in force; every replica
+ *   waits for it. Null when the bot is not held.
+ */
+export const broadcastBotDeliverySchema = z.object({
+  botInstanceId: z.string().nullable(),
+  botUsername: z.string().nullable(),
+  botStatus: z.enum(BOT_INSTANCE_STATUSES).nullable(),
+  counts: broadcastCountsSchema,
+  waitingRetry: z.number().int().nonnegative(),
+  heldUntil: z.iso.datetime().nullable(),
+});
+export type BroadcastBotDelivery = z.infer<typeof broadcastBotDeliverySchema>;
+
+export const broadcastBotDeliveryResponseSchema = z.object({
+  bots: z.array(broadcastBotDeliverySchema),
+});
+export type BroadcastBotDeliveryResponse = z.infer<typeof broadcastBotDeliveryResponseSchema>;
+
+/**
+ * Roadmap C2 — what was done to this broadcast, and by whom: its own audit rows, newest
+ * first, as a closed set of actions with closed facts. Never the raw `before`/`after`: a test
+ * send's outcome, how many recipients a retry re-queued, and the state a steer moved between
+ * are the only facts carried. A refused attempt is listed with its result.
+ */
+export const BROADCAST_HISTORY_ACTIONS = [
+  'broadcast.create',
+  'broadcast.update',
+  'broadcast.media_set',
+  'broadcast.media_remove',
+  'broadcast.test',
+  'broadcast.launch',
+  'broadcast.pause',
+  'broadcast.resume',
+  'broadcast.cancel',
+  'broadcast.retry_failed',
+] as const;
+export type BroadcastHistoryAction = (typeof BROADCAST_HISTORY_ACTIONS)[number];
+/** How many history rows one read returns at most. */
+export const BROADCAST_HISTORY_MAX = 50;
+
+export const broadcastHistoryEntrySchema = z.object({
+  id: z.string(),
+  action: z.enum(BROADCAST_HISTORY_ACTIONS),
+  result: z.enum(AUDIT_RESULTS),
+  actorLabel: z.string().nullable(),
+  occurredAt: z.iso.datetime(),
+  /** `broadcast.test`: what the operator's own Telegram answered. */
+  testOutcome: broadcastTestResponseSchema.shape.outcome.nullable(),
+  /** `broadcast.retry_failed`: how many FAILED recipients went back on the queue. */
+  requeued: z.number().int().nonnegative().nullable(),
+  /** A steer (pause, resume, cancel, retry): the state it was in and the state it went to. */
+  fromState: z.enum(BROADCAST_STATES).nullable(),
+  toState: z.enum(BROADCAST_STATES).nullable(),
+});
+export type BroadcastHistoryEntry = z.infer<typeof broadcastHistoryEntrySchema>;
+
+export const broadcastHistoryResponseSchema = z.object({
+  entries: z.array(broadcastHistoryEntrySchema),
+  /**
+   * PR #237 review N4: older rows exist beyond `BROADCAST_HISTORY_MAX` (the newest are
+   * shown). The page says so and points to the audit log, rather than imply the list is
+   * the whole story. Defaults to false for a response that predates it.
+   */
+  truncated: z.boolean().default(false),
+});
+export type BroadcastHistoryResponse = z.infer<typeof broadcastHistoryResponseSchema>;
+
 /** Paths under `API_PREFIX`. */
 export const BROADCAST_ROUTES = {
   list: '/broadcasts',
@@ -645,6 +731,10 @@ export const BROADCAST_ROUTES = {
   recipients: (id: string) => `/broadcasts/${id}/recipients`,
   /** Broadcast V2: the failures, grouped by state and reason. */
   failures: (id: string) => `/broadcasts/${id}/failures`,
+  /** Roadmap C2: delivery per bot. */
+  bots: (id: string) => `/broadcasts/${id}/bots`,
+  /** Roadmap C2: the broadcast's own audit trail — tests, launch, steers, re-queues. */
+  history: (id: string) => `/broadcasts/${id}/history`,
 } as const;
 
 export const BROADCAST_ERROR_CODES = {
