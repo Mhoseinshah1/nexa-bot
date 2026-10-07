@@ -243,6 +243,17 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    // Mirza migration PR2: the legacy (Mirza) products read for migration, one code at a
+    // time (`docs/legacy-product-review-design.md` §8). Under the catalogue, beside the
+    // products a decision maps a code to. Its own permission, never `catalog.*`.
+    id: 'legacy-products',
+    path: '/legacy-products',
+    label: 'web.nav_legacy_products',
+    icon: 'archive',
+    permission: 'legacy.products.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'custom-service',
     path: '/custom-service',
     label: 'web.nav_custom_service',

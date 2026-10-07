@@ -51,6 +51,7 @@ import { SupportKnowledgeController } from './surfaces/web/support-knowledge.con
 import { AuditLogController } from './surfaces/web/audit-log.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServiceRefundRequestsController } from './surfaces/web/service-refund-requests.controller.js';
+import { LegacyProductsController } from './surfaces/web/legacy-products.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
 import { RecoveryController } from './surfaces/web/recovery.controller.js';
@@ -153,6 +154,7 @@ export class AppModule implements NestModule {
         SupportKnowledgeController as never,
         RefundsController as never,
         ServiceRefundRequestsController as never,
+        LegacyProductsController as never,
         ServicesController as never,
         PanelsController as never,
         RecoveryController as never,

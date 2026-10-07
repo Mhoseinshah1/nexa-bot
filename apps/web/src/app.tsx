@@ -46,6 +46,7 @@ import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chat
 import { SupportAiPage } from './pages/support-ai';
 import { SupportAnalyticsPage } from './pages/support-analytics';
 import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
+import { LegacyProductsPage } from './pages/legacy-products';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -175,6 +176,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/products',
   '/products/:id',
   '/product-categories',
+  // Mirza PR2: the legacy product review.
+  '/legacy-products',
   '/extra-devices',
   '/service-locations',
   '/orders',
@@ -406,6 +409,21 @@ export function resolve(
     };
   }
 
+  // Mirza PR2: the legacy product review (its own service; never the importer's queue).
+  if (route.path === '/legacy-products') {
+    return {
+      element: (
+        <LegacyProductsPage
+          denied={!may('legacy.products.view')}
+          mayDecide={may('legacy.products.decide')}
+          mayCreateProduct={may('catalog.edit')}
+          mayPickProduct={may('catalog.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.lpr_title') }],
+      title: t('web.lpr_title'),
+    };
+  }
   if (route.path === '/product-categories') {
     return {
       element: (

@@ -2,6 +2,9 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
+  SESSION_COOKIE_NAME,
+  legacyProductReviewListResponseSchema,
+  legacyProductReviewResponseSchema,
   money,
   systemJobActor,
   type ActorContext,
@@ -16,6 +19,7 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { digestProductsReadSet } from '../../apps/api/src/modules/platform/legacy-importer/application/products-read-set';
 import { readImportV1Identity } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import { FixtureLegacySourceConnector } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/fixture-legacy-source';
+import { LegacyProductsController } from '../../apps/api/src/surfaces/web/legacy-products.controller';
 import { buildSyntheticLegacyDataset } from '../fixtures/legacy/synthetic-legacy';
 import { changedTables, databaseFingerprint } from '../support/database-fingerprint';
 import {
@@ -149,7 +153,7 @@ describe('Mirza PR2: legacy product review', () => {
   it('a products fingerprint that is not the approved one writes NOTHING', async () => {
     const before = await databaseFingerprint(db());
     await expect(read('A', fingerprints.B.products)).rejects.toThrow(
-      /SOURCE_FINGERPRINT_MISMATCH/u,
+      /READ_SET_FINGERPRINT_MISMATCH/u,
     );
     expect(changedTables(before, await databaseFingerprint(db()))).toEqual({});
   });
@@ -230,6 +234,43 @@ describe('Mirza PR2: legacy product review', () => {
       sql`SELECT * FROM legacy_product_reviews ORDER BY code_product`,
     );
     expect(second.rows).toEqual(first.rows);
+  });
+
+  it('a delivery pass that does not reproduce the verified one writes NOTHING', async () => {
+    // A session whose second product scan differs: not a snapshot. The legacy source is
+    // never like this; the point is that the review is written only after the read is proven.
+    const diverging = {
+      label: 'diverging',
+      open: async () => {
+        const session = await connector('A').open();
+        let scans = 0;
+        return {
+          ...session,
+          readSetRows: (table: string, primaryKey: string, columns: readonly string[]) => {
+            scans += table === 'product' ? 1 : 0;
+            const rows = session.readSetRows(table, primaryKey, columns);
+            if (table !== 'product' || scans < 2) return rows;
+            return (async function* () {
+              for await (const row of rows) yield row.map((cell) => (cell === 'p1' ? 'p1x' : cell));
+            })();
+          },
+        };
+      },
+    };
+    const before = await databaseFingerprint(db());
+    await expect(
+      runProductsRead(
+        ctx.container.legacyImporter(),
+        diverging,
+        {
+          expectedFingerprint: fingerprints.A.v1,
+          expectedProductsFingerprint: fingerprints.A.products,
+          batchSize: 3,
+        },
+        { scope: tenantA, actor: job, productionLikeTarget: false },
+      ),
+    ).rejects.toThrow(/READ_SET_SNAPSHOT_DIVERGED/u);
+    expect(changedTables(before, await databaseFingerprint(db()))).toEqual({});
   });
 
   it('a stopped tenant is refused and nothing is written', async () => {
@@ -452,6 +493,67 @@ describe('Mirza PR2: legacy product review', () => {
     await read('A', 'approved', tenantB);
     expect((await service().list(tenantB, ownerB, {})).items.length).toBeGreaterThan(0);
     expect((await rowByCode('p1')).state).toBe('PENDING_REVIEW');
+  });
+
+  // --- the HTTP surface ------------------------------------------------------------------
+
+  it('the Web Admin surface: the wire shape parses, a decision goes through the service', async () => {
+    await read('A');
+    const { token } = await ctx.container.auth.login(
+      tenantA,
+      {
+        type: 'API',
+        id: null,
+        label: null,
+        surface: 'WEB',
+        correlationId: 'lpr-web' as CorrelationId,
+      },
+      { username: 'owner-lpr', password: 'a-perfectly-fine-password' },
+      { ip: '203.0.113.10', userAgent: 'vitest' },
+    );
+    type WebRequest = Parameters<LegacyProductsController['list']>[0];
+    const request = (method: string) =>
+      ({
+        method,
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
+        ip: '203.0.113.10',
+      }) as unknown as WebRequest;
+    const controller = new LegacyProductsController(ctx.container);
+    const listed = legacyProductReviewListResponseSchema.parse(
+      await controller.list(request('GET'), { attention: 'true', limit: '5' }),
+    );
+    expect(listed.reviews).toHaveLength(5);
+    expect(listed.nextCursor).toBe(listed.reviews[4]?.codeProduct);
+    const next = legacyProductReviewListResponseSchema.parse(
+      await controller.list(request('GET'), { attention: 'true', after: listed.nextCursor }),
+    );
+    expect(next.reviews.map((r) => r.codeProduct)).not.toContain(listed.reviews[0]?.codeProduct);
+    const p1 = listed.reviews.find((r) => r.codeProduct === 'p1');
+    expect(p1).toMatchObject({
+      historicalPriceMinor: '150000',
+      historicalPriceCurrency: 'IRT',
+      exportable: false,
+    });
+    const rejected = legacyProductReviewResponseSchema.parse(
+      await controller.reject(request('POST'), p1?.id ?? '', {
+        idempotencyKey: key(),
+        expectedFactsChecksum: p1?.factsChecksum,
+        reason: 'از طریق وب',
+      }),
+    );
+    expect(rejected.review.state).toBe('REJECTED');
+    expect(rejected.review.decisionReason).toBe('از طریق وب');
+    // A body that asks the draft for a price is refused by the strict schema.
+    await expect(
+      controller.approveNew(request('POST'), p1?.id ?? '', {
+        idempotencyKey: key(),
+        expectedFactsChecksum: p1?.factsChecksum,
+        title: 'x',
+        durationDays: 30,
+        trafficBytes: '1',
+        price: { amountMinor: '150000', currency: 'IRT' },
+      }),
+    ).rejects.toThrow();
   });
 
   // --- a newer snapshot, and the export --------------------------------------------------
