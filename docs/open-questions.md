@@ -3580,7 +3580,15 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
   found only when its title, tags or body share a (folded, lightly stemmed) word with the query.
   A synonym the article does not use («کانکت» for «اتصال») is found only if a tag says it. Whether
   real conversations need more than tags is settled by running the eval corpus against a real
-  model (A10), not by guessing.
+  model (`docs/support-agent/sai-eval.md`), not by guessing.
+- **OQ-SAI2-03 — an image resolution option for Anthropic (A9).** OpenAI's `image_url.detail` is
+  documented (`low`/`high`/`auto`) and A9 sends `high`. The Anthropic Messages reference the
+  adapter was audited against documents no such field for an image block, so none is sent. If the
+  current reference documents one, it is added with a fixture from a real call — never guessed.
+- **OQ-SAI2-04 — four images against the real request-size limits (A9).** Four images are bounded
+  to 15 MiB decoded together (about 20 MB of base64). That this is inside each provider's
+  request-size limit is the provider's documentation, not yet a real call; acceptance step S2
+  records it. Z.AI is blind and unaffected.
 
 ## OQ-A4 — tutorial video and guide in one message (pre-support item A4)
 

@@ -2,6 +2,7 @@ import {
   SUPPORT_AI_AVAILABLE_CODE,
   SUPPORT_AI_UNAVAILABLE_CODE,
   SUPPORT_AI_VISION_MAX_IMAGES,
+  SUPPORT_AI_VISION_MAX_TOTAL_BYTES,
   supportAiFailureDetailOf,
   supportAiOutcomeFallsBack,
   type SupportAiConfigInput,
@@ -131,8 +132,9 @@ const NO_SIGHT: StepSight = { seen: [], unseen: new Map() };
  * and the image is a type and a size the adapter declares. An image that does not fit is
  * dropped FOR THIS STEP ONLY (marked unseen, `NO_VISION_CAPABILITY`), so one oversized older
  * image never blinds a step to the latest one. At most `SUPPORT_AI_VISION_MAX_IMAGES` go, the
- * most recent; an older one is `OVER_LIMIT`. Core code branches on capabilities, never on a
- * provider name (ADR-0034 §2).
+ * most recent; an older one is `OVER_LIMIT`, and so is an older one that would take the images
+ * together past `SUPPORT_AI_VISION_MAX_TOTAL_BYTES` (A9). Core code branches on capabilities,
+ * never on a provider name (ADR-0034 §2).
  */
 export function stepSight(
   config: Pick<SupportAiConfigInput, 'visionEnabled'>,
@@ -153,7 +155,20 @@ export function stepSight(
   });
   const over = Math.max(0, fits.length - SUPPORT_AI_VISION_MAX_IMAGES);
   for (const { id } of fits.slice(0, over)) unseen.set(id, 'OVER_LIMIT');
-  return { seen: fits.slice(over).map(({ id }) => id), unseen };
+  // A9: the images together stay within `SUPPORT_AI_VISION_MAX_TOTAL_BYTES`, the most recent
+  // kept first; an older one that would pass the total is OVER_LIMIT like an older fifth image.
+  const seen: string[] = [];
+  let total = 0;
+  for (const { id, image } of fits.slice(over).reverse()) {
+    const bytes = base64ByteLength(image.base64);
+    if (total + bytes > SUPPORT_AI_VISION_MAX_TOTAL_BYTES) {
+      unseen.set(id, 'OVER_LIMIT');
+      continue;
+    }
+    total += bytes;
+    seen.unshift(id);
+  }
+  return { seen, unseen };
 }
 
 /**

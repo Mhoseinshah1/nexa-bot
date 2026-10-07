@@ -66,6 +66,9 @@ export class AnthropicAdapter implements SupportAiAdapter {
           messages: request.messages.map((message) => ({
             role: message.role,
             content: [
+              // A9: no resolution or "detail" field is sent. The Messages reference this adapter
+              // was audited against (TB4) documents none for an image block; the image is sent
+              // as it is, within `maxImageBytes`. Whether one exists is OQ-SAI2-03, never guessed.
               ...(message.images ?? []).map((image) => ({
                 type: 'image',
                 source: { type: 'base64', media_type: image.mediaType, data: image.base64 },

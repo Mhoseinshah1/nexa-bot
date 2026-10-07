@@ -96,6 +96,12 @@ const STOPWORDS = new Set([
   'نمیشود',
   'لطفا',
   'سلام',
+  // A10: «وقت بخیر» is a greeting, and «وقتی» (when) is in every other sentence; the eval
+  // corpus found a bare greeting matching the expiry article through them.
+  'وقت',
+  'وقتی',
+  'بخیر',
+  'درود',
   'ممنون',
   'مرسی',
   'یا',

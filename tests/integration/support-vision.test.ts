@@ -536,17 +536,18 @@ describe('Vision in Assist Mode (TB6)', () => {
     },
   );
 
-  it('at most the two most recent images go with a request; the oldest is OVER_LIMIT', async () => {
+  it('at most the four most recent images go with a request; the oldest is OVER_LIMIT', async () => {
     await configure([{ provider: 'OPENAI', model: 'gpt' }]);
     ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-1' }));
-    await say(scopeA, BOT_A, { fileId: 'photo-2' });
-    await say(scopeA, BOT_A, { fileId: 'photo-3' });
+    for (const fileId of ['photo-2', 'photo-3', 'photo-4', 'photo-5']) {
+      await say(scopeA, BOT_A, { fileId });
+    }
     const result = await draft();
-    expect(allImages(adapters.OPENAI)).toHaveLength(2);
-    expect(result).toMatchObject({ imagesSeen: 2, imagesUnseen: 1 });
+    expect(allImages(adapters.OPENAI)).toHaveLength(4);
+    expect(result).toMatchObject({ imagesSeen: 4, imagesUnseen: 1 });
     const outcomes = await jobs.imageOutcomes(scopeA, result.id);
-    expect(outcomes.map((o) => o.reason).sort()).toEqual(['OVER_LIMIT', null, null]);
-    expect(requests.filter((url) => url.endsWith('/getFile'))).toHaveLength(2);
+    expect(outcomes.map((o) => o.reason).sort()).toEqual(['OVER_LIMIT', null, null, null, null]);
+    expect(requests.filter((url) => url.endsWith('/getFile'))).toHaveLength(4);
   });
 
   it('never fetches another tenant’s message, whatever ids it is handed', async () => {

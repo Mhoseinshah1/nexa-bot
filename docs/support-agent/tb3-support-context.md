@@ -264,6 +264,9 @@ model, no I/O) and changes three things:
    a 12 KiB knowledge reserve (was 16 KiB and 6 KiB): about three full Persian articles survive
    any cut, instead of two of twenty.
 
+The A10 corpus (`sai-eval.md`) scores this retrieval on 40 conversations, for every model
+alike, and is where a regression in it shows first.
+
 Only `APPROVED` and enabled articles are candidates (`activeForContext`), with the `ACTIVE` FAQ;
 that is unchanged. Policy rule 4b tells the model the entries are the few that match, most
 relevant first, and that an entry that does not fit is never a reason to answer.

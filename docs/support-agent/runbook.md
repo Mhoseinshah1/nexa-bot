@@ -448,3 +448,16 @@ from an answer («فرستاده شد», `sent`), and opens no ticket.
 
 - **Policy version.** Telemetry records `sai4m-2026-10-07` (or later) for requests built with
   these rules.
+
+## 15. Screenshots and the evaluation corpus (A9, A10 — 2026-10-07)
+
+- **Screenshots.** With vision on and a vision-capable step, up to the four most recent customer
+  images (at most 15 MiB together) go with a request; OpenAI reads them at high detail. An image
+  that could not be seen is never described; if it is the customer's latest message, the
+  conversation is handed off with no model asked (TB6, unchanged). Per-image outcomes are in
+  `support_ai_image_outcomes` as before; `OVER_LIMIT` now means a fifth image, or an older one
+  past the 15 MiB total.
+- **Comparing models before changing one.** `docs/support-agent/sai-eval.md`. The corpus runs in
+  CI against a fake provider. To compare real models, an operator with a TEST key (never a
+  tenant's) runs `support-ai-eval --live` outside CI; it reports and changes nothing. The
+  production model is changed only through `/support-ai` by the owner, after reading a report.

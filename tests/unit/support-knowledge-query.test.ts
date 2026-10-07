@@ -256,6 +256,9 @@ describe('A8 — scoring and selection', () => {
 
   it('a greeting matches nothing and carries no knowledge', () => {
     expect(matchTerms('سلام')).toEqual(new Set());
+    // A10 found «وقت بخیر» matching an expiry article through «وقتی» (when).
+    expect(matchTerms('سلام وقت بخیر، درود')).toEqual(new Set());
+    expect(matchTerms('وقتی حجم تمام شود').has('وقت')).toBe(false);
     expect(selectRelevantKnowledge(ARTICLES, knowledgeQueryFor([customer('سلام')], []), 8)).toEqual(
       [],
     );

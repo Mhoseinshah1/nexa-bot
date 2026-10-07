@@ -4,6 +4,7 @@ import {
   SUPPORT_AI_DEFAULT_CONFIG,
   SUPPORT_AI_VISION_MAX_BYTES,
   SUPPORT_AI_VISION_MAX_IMAGES,
+  SUPPORT_AI_VISION_MAX_TOTAL_BYTES,
   supportAiDecisionSchema,
   type SupportAiOutcome,
   type SupportAiProvider,
@@ -369,7 +370,8 @@ describe('each adapter sends an image in its native format', () => {
         { type: 'text', text: imageRequest.messages[0]!.text },
         {
           type: 'image_url',
-          image_url: { url: `data:image/png;base64,${b64(PNG)}`, detail: 'low' },
+          // A9: high detail, so a screenshot's error text is readable.
+          image_url: { url: `data:image/png;base64,${b64(PNG)}`, detail: 'high' },
         },
       ],
     });
@@ -619,8 +621,25 @@ describe('images go only to a step that can see them', () => {
       vision.adapter,
       images(SUPPORT_AI_VISION_MAX_IMAGES + 1),
     );
-    expect(over.seen).toEqual(['m2', 'm3']);
+    expect(SUPPORT_AI_VISION_MAX_IMAGES).toBe(4);
+    expect(over.seen).toEqual(['m2', 'm3', 'm4', 'm5']);
     expect([...over.unseen]).toEqual([['m1', 'OVER_LIMIT']]);
+  });
+
+  it('A9: the images together stay within the total, the most recent kept first', () => {
+    // Four images of 5 MiB each fit a step one by one; together they pass 15 MiB.
+    const fiveMiB = new Uint8Array(SUPPORT_AI_VISION_MAX_BYTES);
+    fiveMiB.set(JPEG);
+    const vision = recordingAdapter('OPENAI', {
+      vision: true,
+      maxImageBytes: SUPPORT_AI_VISION_MAX_BYTES,
+    });
+    const sight = stepSight({ visionEnabled: true }, vision.adapter, images(4, fiveMiB));
+    expect(sight.seen).toEqual(['m2', 'm3', 'm4']);
+    expect([...sight.unseen]).toEqual([['m1', 'OVER_LIMIT']]);
+    expect(SUPPORT_AI_VISION_MAX_TOTAL_BYTES).toBe(15 * 1024 * 1024);
+    // The latest image always fits: it is at most the per-image bound.
+    expect(SUPPORT_AI_VISION_MAX_BYTES).toBeLessThanOrEqual(SUPPORT_AI_VISION_MAX_TOTAL_BYTES);
   });
 
   /*
@@ -710,19 +729,21 @@ describe('which images a request may carry', () => {
   });
   const on = { visionEnabled: true, visionStepConfigured: true };
 
-  it('the two most recent customer images, newest first; older ones OVER_LIMIT', () => {
+  it('the four most recent customer images, newest first; older ones OVER_LIMIT', () => {
     const plan = planVision(
       [
         line('p1', 'INBOUND', 'PHOTO'),
         line('p2', 'INBOUND', 'PHOTO'),
         line('t', 'HUMAN', 'TEXT'),
         line('p3', 'INBOUND', 'PHOTO'),
+        line('p4', 'INBOUND', 'PHOTO'),
+        line('p5', 'INBOUND', 'PHOTO'),
       ],
       on,
     );
-    expect(plan.fetch).toEqual(['p3', 'p2']);
+    expect(plan.fetch).toEqual(['p5', 'p4', 'p3', 'p2']);
     expect([...plan.skipped]).toEqual([['p1', 'OVER_LIMIT']]);
-    expect(plan.latestInboundImageId).toBe('p3');
+    expect(plan.latestInboundImageId).toBe('p5');
   });
 
   it('never the business’s own photos; the latest image only when the customer’s latest message is one', () => {
