@@ -136,8 +136,12 @@ describe('Mirza PR1: read set runs', () => {
           source_engine, synthetic, table_count, row_count, recorded_at)
         VALUES (gen_random_uuid(), ${tenantA.tenantId}, ${readSet}, 1, ${version},
           ${'a'.repeat(64)}, ${'b'.repeat(64)}, ${'c'.repeat(64)}, 'MYSQL', false, 1, 1, now())`);
-    expect(await refusal(insert('invoice-archive', 'legacy-read-set:invoice-archive:v1'))).toMatch(
+    // `invoice-archive` joined the set in Mirza PR3; a name no read set has is still refused.
+    expect(await refusal(insert('payments', 'legacy-read-set:payments:v1'))).toMatch(
       /legacy_read_set_runs_read_set_check/u,
+    );
+    expect(await refusal(insert('invoice-archive', 'legacy-read-set:invoice-archive:v1'))).toBe(
+      'ACCEPTED',
     );
     expect(await refusal(insert('inventory', 'legacy-read-set:inventory:v2'))).toMatch(
       /legacy_read_set_runs_version_check/u,
