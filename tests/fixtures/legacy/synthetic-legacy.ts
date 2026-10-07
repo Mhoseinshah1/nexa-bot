@@ -100,9 +100,10 @@ export const SYNTHETIC_PRODUCT_REVIEW_COLUMNS: readonly SyntheticColumn[] = [
 /**
  * The review variant's product rows, one per branch the review must keep apart. Snapshot
  * `A` is the first read; `B` is a NEWER snapshot of the same source: `p1`'s price changed,
- * `p5` is gone and `p20` is new — everything else is byte-identical.
+ * `p5` is gone and `p20` is new — everything else is byte-identical. `C` is newer still: as
+ * `B`, with `p20`'s price changed — `p5` is STILL gone (a code absent from two reads in a row).
  */
-function productReviewRows(snapshot: 'A' | 'B'): SyntheticRow[] {
+function productReviewRows(snapshot: 'A' | 'B' | 'C'): SyntheticRow[] {
   const product = (
     id: string,
     code: string | null,
@@ -163,8 +164,8 @@ function productReviewRows(snapshot: 'A' | 'B'): SyntheticRow[] {
     product('13', ' p13 ', 'padded code', '50000', '10.5', '15'),
     product('14', null, 'null code', '1000', '10', '10'),
   ];
-  if (snapshot === 'B') {
-    rows.push(product('20', 'p20', 'new plan', '250000', '60', '30'));
+  if (snapshot !== 'A') {
+    rows.push(product('20', 'p20', 'new plan', snapshot === 'B' ? '250000' : '260000', '60', '30'));
     return rows.filter((row) => row['code_product'] !== 'p5');
   }
   return rows;
@@ -356,8 +357,8 @@ export const SYNTHETIC_EXPECTED = {
 export function buildSyntheticLegacyDataset(
   options: {
     extraUsers?: number;
-    /** Mirza PR2: the product review variant, as snapshot A or the newer snapshot B. */
-    productReview?: 'A' | 'B';
+    /** Mirza PR2: the product review variant, as snapshot A or the newer snapshots B and C. */
+    productReview?: 'A' | 'B' | 'C';
   } = {},
 ): SyntheticLegacyDataset {
   invoiceSeq = 0;

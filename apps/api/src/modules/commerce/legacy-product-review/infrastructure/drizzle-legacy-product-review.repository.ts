@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type {
   LegacyProductParseNote,
   LegacyProductParsedField,
@@ -175,7 +175,11 @@ export class DrizzleLegacyProductReviewRepository implements LegacyProductReview
         and(
           eq(legacyProductReviews.tenantId, tenantId),
           ne(legacyProductReviews.readFingerprint, readFingerprint),
-          isNull(legacyProductReviews.missingSinceReadFingerprint),
+          // Not yet acknowledged by THIS read: never absent before, or absent in an earlier one.
+          or(
+            isNull(legacyProductReviews.missingSinceReadFingerprint),
+            ne(legacyProductReviews.missingSinceReadFingerprint, readFingerprint),
+          ),
         ),
       )
       .orderBy(asc(legacyProductReviews.codeProduct))

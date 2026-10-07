@@ -304,7 +304,7 @@ export function productsReadReport(outcome: ProductsReadOutcome, format: 'md' | 
       `- review rows: created ${String(c.created)}, unchanged ${String(c.unchanged)}, ` +
         `refreshed ${String(c.touched)} (reappeared ${String(c.reappeared)}), facts updated ` +
         `${String(c.factsUpdated)}, SOURCE_CHANGED ${String(c.sourceChanged)}, marked absent ` +
-        `${String(c.markedMissing)}`,
+        `${String(c.markedMissing)}, still absent ${String(c.stillAbsent)}`,
       `- product rows not reviewable: empty code ${String(outcome.written.skipped.CODE_EMPTY)}, ` +
         `invalid code ${String(outcome.written.skipped.CODE_INVALID)}`,
       `- read set run: ${outcome.written.recorded.run.id}${outcome.written.recorded.created ? '' : ' (already recorded)'}`,

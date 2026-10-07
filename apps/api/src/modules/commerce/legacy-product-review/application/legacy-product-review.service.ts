@@ -97,6 +97,8 @@ export interface LegacyProductIngestCounts {
   factsUpdated: number;
   sourceChanged: number;
   markedMissing: number;
+  /** Absent in an earlier read and still absent: the mark moved to this read. */
+  stillAbsent: number;
 }
 
 export function emptyIngestCounts(): LegacyProductIngestCounts {
@@ -108,6 +110,7 @@ export function emptyIngestCounts(): LegacyProductIngestCounts {
     factsUpdated: 0,
     sourceChanged: 0,
     markedMissing: 0,
+    stillAbsent: 0,
   };
 }
 
@@ -235,7 +238,7 @@ export class LegacyProductReviewService {
             forUpdate: true,
           });
           if (row === null || row.readFingerprint === read.readSetFingerprint) continue;
-          const decision = decideAbsence(row);
+          const decision = decideAbsence(row, read.readSetFingerprint);
           if (decision.kind === 'NONE') continue;
           const change: LegacyProductReviewChange =
             decision.kind === 'SOURCE_CHANGED'
@@ -254,7 +257,8 @@ export class LegacyProductReviewService {
             tx,
           );
           if (after === null) throw new Error('a locked review row moved');
-          counts.markedMissing += 1;
+          if (decision.kind === 'STILL_ABSENT') counts.stillAbsent += 1;
+          else counts.markedMissing += 1;
           if (decision.kind === 'SOURCE_CHANGED') counts.sourceChanged += 1;
           await this.auditRow(
             scope,

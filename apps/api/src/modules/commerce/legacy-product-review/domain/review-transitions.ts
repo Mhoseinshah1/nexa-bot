@@ -76,16 +76,26 @@ export function decideIngest(
 }
 
 export type AbsenceDecision =
-  /** Already marked absent by an earlier read: nothing to write. */
+  /** This read already recorded the absence: nothing to write. */
   | { readonly kind: 'NONE' }
-  /** Undecided: marked absent, state kept. */
+  /** Undecided and present until now: marked absent, state kept. */
   | { readonly kind: 'MARK_MISSING' }
+  /**
+   * Absent in an earlier read and STILL absent in this one: the mark moves to this read, state
+   * kept. Without it a code that stays gone pins the review to the read that first missed it,
+   * and no later read could ever be exported (Codex review of #231, P1).
+   */
+  | { readonly kind: 'STILL_ABSENT' }
   /** Decided: a code that vanished from the source is a changed source. */
   | { readonly kind: 'SOURCE_CHANGED'; readonly prior: DecidedState };
 
-/** A completed read did not contain this code. */
-export function decideAbsence(existing: ReviewSourceState): AbsenceDecision {
-  if (existing.missingSinceReadFingerprint !== null) return { kind: 'NONE' };
+/** A completed read (`readFingerprint`) did not contain this code. */
+export function decideAbsence(
+  existing: ReviewSourceState,
+  readFingerprint: string,
+): AbsenceDecision {
+  if (existing.missingSinceReadFingerprint === readFingerprint) return { kind: 'NONE' };
+  if (existing.missingSinceReadFingerprint !== null) return { kind: 'STILL_ABSENT' };
   return isDecided(existing.state)
     ? { kind: 'SOURCE_CHANGED', prior: existing.state }
     : { kind: 'MARK_MISSING' };

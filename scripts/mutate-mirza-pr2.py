@@ -62,6 +62,9 @@ M = [
     ('I-09', [(SVC, "    if (rows.length === 0 || stale.length > 0) {", "    if (rows.length === 0) {")], T_INT, 'snapshot B'),
     # The draft's order refusal rests on INACTIVE, and the review never activates.
     ('I-10', [(SVC, "        const created = await this.deps.products.createWithin(scope, actor, draft, tx);", "        const created = await this.deps.products.createWithin(scope, actor, draft, tx);\n        await tx.tx.execute(sql`UPDATE products SET status = 'ACTIVE' WHERE id = ${created.id}`);"), (SVC, "import type { PermissionGuard }", "import { sql } from 'drizzle-orm';\nimport type { PermissionGuard }")], T_INT, 'approve-as-new'),
+    # Codex #231 P1: a code absent from two reads in a row is acknowledged by the later one.
+    ('D-11', [(TRANS, "  if (existing.missingSinceReadFingerprint !== null) return { kind: 'STILL_ABSENT' };", "  if (existing.missingSinceReadFingerprint !== null) return { kind: 'NONE' };")], T_DOM, 'LATER read'),
+    ('I-11', [(REPO, "          or(\n            isNull(legacyProductReviews.missingSinceReadFingerprint),\n            ne(legacyProductReviews.missingSinceReadFingerprint, readFingerprint),\n          ),", "          isNull(legacyProductReviews.missingSinceReadFingerprint),")], T_INT, 'absent from two reads'),
     # The permission is MEDIUM: a LOW key is handed to every observer.
     ('C-01', [(PERMS, "  p('legacy.products.view', 'View the legacy product review', 'MEDIUM'),", "  p('legacy.products.view', 'View the legacy product review', 'LOW'),")], T_INT, 'permissions'),
     # The nav entry is gated on its own key.

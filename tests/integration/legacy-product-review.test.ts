@@ -44,19 +44,20 @@ describe('Mirza PR2: legacy product review', () => {
   let ctx: TestContext;
   let owner: ActorContext;
   const job = systemJobActor('legacy-import:products-read', 'corr-products' as CorrelationId);
-  const connector = (snapshot: 'A' | 'B') =>
+  const connector = (snapshot: 'A' | 'B' | 'C') =>
     new FixtureLegacySourceConnector(
       buildSyntheticLegacyDataset({ productReview: snapshot }) as never,
     );
   const db = () => ctx.container.database.db;
-  const fingerprints: Record<'A' | 'B', { v1: string; products: string }> = {
+  const fingerprints: Record<'A' | 'B' | 'C', { v1: string; products: string }> = {
     A: { v1: '', products: '' },
     B: { v1: '', products: '' },
+    C: { v1: '', products: '' },
   };
 
   beforeAll(async () => {
     ctx = await createTestContext();
-    for (const snapshot of ['A', 'B'] as const) {
+    for (const snapshot of ['A', 'B', 'C'] as const) {
       const session = await connector(snapshot).open();
       fingerprints[snapshot] = {
         v1: (await readImportV1Identity(session)).fingerprint,
@@ -77,7 +78,7 @@ describe('Mirza PR2: legacy product review', () => {
   });
 
   const read = (
-    snapshot: 'A' | 'B',
+    snapshot: 'A' | 'B' | 'C',
     approved: 'approved' | 'unapproved' | string = 'approved',
     scope = tenantA,
   ) =>
@@ -290,6 +291,7 @@ describe('Mirza PR2: legacy product review', () => {
     const decided = await service().approveNew(tenantA, owner, p3.id, {
       idempotencyKey: key(),
       expectedFactsChecksum: p3.factsChecksum,
+      expectedVersion: p3.version,
       title: p3.title,
       durationDays: p3.durationDays,
       trafficBytes: String(p3.trafficBytes),
@@ -343,6 +345,7 @@ describe('Mirza PR2: legacy product review', () => {
     const body = {
       idempotencyKey: key(),
       expectedFactsChecksum: p1.factsChecksum,
+      expectedVersion: p1.version,
       productId: target,
       reason: 'same plan',
     };
@@ -356,11 +359,13 @@ describe('Mirza PR2: legacy product review', () => {
       service().reject(tenantA, owner, p1.id, {
         idempotencyKey: key(),
         expectedFactsChecksum: p1.factsChecksum,
+        expectedVersion: p1.version,
         reason: 'no',
       }),
     ).rejects.toMatchObject({ code: 'legacy_product_review.not_in_state' });
     const reopened = await service().reopen(tenantA, owner, p1.id, {
       idempotencyKey: key(),
+      expectedVersion: first.review.version,
       reason: 'look again',
     });
     expect(reopened.review).toMatchObject({
@@ -379,6 +384,7 @@ describe('Mirza PR2: legacy product review', () => {
     const rejected = await service().reject(tenantA, owner, p1.id, {
       idempotencyKey: key(),
       expectedFactsChecksum: p1.factsChecksum,
+      expectedVersion: reopened.review.version,
       reason: 'not migrating it',
     });
     expect(rejected.review.state).toBe('REJECTED');
@@ -392,6 +398,7 @@ describe('Mirza PR2: legacy product review', () => {
       service().approveExisting(tenantA, owner, dup.id, {
         idempotencyKey: key(),
         expectedFactsChecksum: dup.factsChecksum,
+        expectedVersion: dup.version,
         productId: target,
         reason: null,
       }),
@@ -401,6 +408,7 @@ describe('Mirza PR2: legacy product review', () => {
       service().approveExisting(tenantA, owner, p2.id, {
         idempotencyKey: key(),
         expectedFactsChecksum: p2.factsChecksum,
+        expectedVersion: p2.version,
         productId: '0190a000-0000-7000-8000-000000000000',
         reason: null,
       }),
@@ -410,6 +418,7 @@ describe('Mirza PR2: legacy product review', () => {
         await service().reject(tenantA, owner, dup.id, {
           idempotencyKey: key(),
           expectedFactsChecksum: dup.factsChecksum,
+          expectedVersion: dup.version,
           reason: 'two rows',
         })
       ).review.state,
@@ -433,6 +442,7 @@ describe('Mirza PR2: legacy product review', () => {
         service().reject(tenantA, actor, p1.id, {
           idempotencyKey: key(),
           expectedFactsChecksum: p1.factsChecksum,
+          expectedVersion: p1.version,
           reason: 'x',
         }),
       ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
@@ -450,6 +460,7 @@ describe('Mirza PR2: legacy product review', () => {
       service().approveNew(tenantA, adminActorFor(decider), p3.id, {
         idempotencyKey: key(),
         expectedFactsChecksum: p3.factsChecksum,
+        expectedVersion: p3.version,
         title: 'x',
         durationDays: 30,
         trafficBytes: '1',
@@ -466,6 +477,7 @@ describe('Mirza PR2: legacy product review', () => {
         await service().reject(tenantA, adminActorFor(decider), p3.id, {
           idempotencyKey: key(),
           expectedFactsChecksum: p3.factsChecksum,
+          expectedVersion: p3.version,
           reason: 'no',
         })
       ).review.state,
@@ -486,6 +498,7 @@ describe('Mirza PR2: legacy product review', () => {
       service().reject(tenantB, ownerB, p1.id, {
         idempotencyKey: key(),
         expectedFactsChecksum: p1.factsChecksum,
+        expectedVersion: p1.version,
         reason: 'x',
       }),
     ).rejects.toMatchObject({ code: 'legacy_product_review.not_found' });
@@ -538,6 +551,7 @@ describe('Mirza PR2: legacy product review', () => {
       await controller.reject(request('POST'), p1?.id ?? '', {
         idempotencyKey: key(),
         expectedFactsChecksum: p1?.factsChecksum,
+        expectedVersion: p1?.version,
         reason: 'از طریق وب',
       }),
     );
@@ -548,6 +562,7 @@ describe('Mirza PR2: legacy product review', () => {
       controller.approveNew(request('POST'), p1?.id ?? '', {
         idempotencyKey: key(),
         expectedFactsChecksum: p1?.factsChecksum,
+        expectedVersion: p1?.version,
         title: 'x',
         durationDays: 30,
         trafficBytes: '1',
@@ -565,6 +580,7 @@ describe('Mirza PR2: legacy product review', () => {
     await service().approveExisting(tenantA, owner, p1.id, {
       idempotencyKey: key(),
       expectedFactsChecksum: p1.factsChecksum,
+      expectedVersion: p1.version,
       productId: target,
       reason: null,
     });
@@ -572,12 +588,14 @@ describe('Mirza PR2: legacy product review', () => {
     await service().reject(tenantA, owner, p5.id, {
       idempotencyKey: key(),
       expectedFactsChecksum: p5.factsChecksum,
+      expectedVersion: p5.version,
       reason: 'gift, not migrated',
     });
     const p3 = await rowByCode('p3');
     await service().approveNew(tenantA, owner, p3.id, {
       idempotencyKey: key(),
       expectedFactsChecksum: p3.factsChecksum,
+      expectedVersion: p3.version,
       title: 'twin',
       durationDays: 30,
       trafficBytes: String(p3.trafficBytes),
@@ -627,6 +645,7 @@ describe('Mirza PR2: legacy product review', () => {
       service().approveExisting(tenantA, owner, p5b.id, {
         idempotencyKey: key(),
         expectedFactsChecksum: p5b.factsChecksum,
+        expectedVersion: p5b.version,
         productId: target,
         reason: null,
       }),
@@ -635,6 +654,7 @@ describe('Mirza PR2: legacy product review', () => {
     const again = await service().approveExisting(tenantA, owner, p1b.id, {
       idempotencyKey: key(),
       expectedFactsChecksum: p1b.factsChecksum,
+      expectedVersion: p1b.version,
       productId: target,
       reason: 'price change only',
     });
@@ -649,6 +669,41 @@ describe('Mirza PR2: legacy product review', () => {
     await read('A');
     expect((await rowByCode('p1')).state).toBe('SOURCE_CHANGED');
     expect(await rowByCode('p5')).toMatchObject({ missingSinceReadFingerprint: null });
+  });
+
+  it('a code absent from two reads in a row is acknowledged by each: the later read exports', async () => {
+    await read('A');
+    const target = await activeProduct();
+    const p3 = await rowByCode('p3');
+    const p5 = await rowByCode('p5');
+    await service().reject(tenantA, owner, p5.id, {
+      idempotencyKey: key(),
+      expectedFactsChecksum: p5.factsChecksum,
+      expectedVersion: p5.version,
+      reason: 'gift',
+    });
+    await service().approveExisting(tenantA, owner, p3.id, {
+      idempotencyKey: key(),
+      expectedFactsChecksum: p3.factsChecksum,
+      expectedVersion: p3.version,
+      productId: target,
+      reason: null,
+    });
+    await read('B'); // p5 vanishes: SOURCE_CHANGED, absent in B
+    expect((await rowByCode('p5')).missingSinceReadFingerprint).toBe(fingerprints.B.products);
+    const c = await read('C'); // p5 is STILL gone; p20 changed
+    expect(c.written?.counts).toMatchObject({ stillAbsent: 1, markedMissing: 0 });
+    expect(await rowByCode('p5')).toMatchObject({
+      state: 'SOURCE_CHANGED',
+      priorState: 'REJECTED',
+      missingSinceReadFingerprint: fingerprints.C.products,
+    });
+    const exported = await service().exportMapping(tenantA, job, fingerprints.C.products);
+    expect(exported.products).toEqual([{ codeProduct: 'p3', productId: target }]);
+    expect(exported.notExported['ABSENT_FROM_READ']).toBe(1);
+    // Re-reading C acknowledges nothing new.
+    const again = await read('C');
+    expect(again.written?.counts).toMatchObject({ stillAbsent: 0, markedMissing: 0 });
   });
 
   it('the table refuses an approval without its product and a forged state', async () => {
