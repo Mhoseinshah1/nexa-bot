@@ -58,6 +58,8 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'dropped_coalesced':
     case 'dropped_connection':
     case 'dropped_scope':
+    // A6: ended silently — nothing sent, nobody handed off.
+    case 'no_action':
       return 'DROPPED';
     case 'guard_content':
     case 'guard_customer_blocked':
@@ -77,6 +79,9 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'handoff_output_invalid':
     case 'handoff_ai_unavailable':
     case 'handoff_stale':
+    case 'guard_no_progress':
+    case 'guard_repeated_advice':
+    case 'guard_inbound_flood':
       return 'HANDED_OFF';
     default: {
       const unreachable: never = outcome;

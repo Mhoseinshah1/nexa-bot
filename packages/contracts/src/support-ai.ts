@@ -517,6 +517,31 @@ export const SUPPORT_AI_AUTO_WINDOW = { windowSeconds: 3_600 } as const;
  */
 export const SUPPORT_AI_AUTO_STALE_SECONDS = 600;
 
+/**
+ * Roadmap A3 — `no_progress`: this many failure-feedback messages in a row («نشد», «هنوز وصل
+ * نمیشه», «بازم همونه», «جواب نداد», «درست نشد», and the Finglish forms), each after an
+ * automatic reply of the current epoch, hand off before the provider is asked again.
+ */
+export const SUPPORT_AI_NO_PROGRESS_LIMIT = 3;
+
+/**
+ * Roadmap A3 — `repeated_advice`: a reply whose normalised character-trigram similarity
+ * (Jaccard) to an automatic reply already delivered in this epoch is at least this is not
+ * sent; the conversation is handed off.
+ */
+export const SUPPORT_AI_REPEAT_SIMILARITY = 0.8;
+
+/**
+ * Roadmap A3 — `inbound_flood`: the same message (normalised) `sameMessage` times in the
+ * epoch, or more than `maxInbound` customer messages within `windowSeconds`, hand off instead
+ * of asking the provider again.
+ */
+export const SUPPORT_AI_INBOUND_FLOOD = {
+  sameMessage: 3,
+  maxInbound: 8,
+  windowSeconds: 60,
+} as const;
+
 const idempotencyKeySchema = z.string().min(8).max(128);
 
 export const supportAiConfigUpdateRequestSchema = z.object({
@@ -981,6 +1006,22 @@ export const SUPPORT_AI_AUTO_GUARDS = [
    * `maxConsecutiveClarifyingQuestions`.
    */
   'clarifying_limit',
+  // --- Roadmap A3 (2026-10-07): deterministic progress guards, each its own code.
+  /**
+   * The customer said it still does not work (`SUPPORT_AI_NO_PROGRESS_LIMIT` failure-feedback
+   * messages in a row after an automatic reply in this epoch): decided BEFORE the provider.
+   */
+  'no_progress',
+  /**
+   * The new reply is near-identical (`SUPPORT_AI_REPEAT_SIMILARITY`) to an automatic reply the
+   * customer already received in this epoch: decided AFTER the provider; nothing is sent.
+   */
+  'repeated_advice',
+  /**
+   * The customer repeated one message `SUPPORT_AI_INBOUND_FLOOD.sameMessage` times this epoch,
+   * or sent more than `maxInbound` messages in `windowSeconds`: decided BEFORE the provider.
+   */
+  'inbound_flood',
 ] as const;
 export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
 
@@ -1027,6 +1068,17 @@ export const SUPPORT_AI_AUTO_OUTCOMES = [
   'handoff_output_invalid',
   'handoff_ai_unavailable',
   'handoff_stale',
+  // --- Roadmap A3/A6 (2026-10-07).
+  'guard_no_progress',
+  'guard_repeated_advice',
+  'guard_inbound_flood',
+  /**
+   * A6 — the customer closed the matter («مرسی», «حل شد», «اوکی درست شد»), the model answered
+   * `NO_ACTION` on an allowlisted, non-sensitive topic and every guard a reply passes passed:
+   * the job ends silently. Nothing is sent, nobody is handed off, no ticket; the conversation
+   * stays `AI_ACTIVE` and the customer's next message is answered as usual.
+   */
+  'no_action',
 ] as const;
 export type SupportAiAutoOutcome = (typeof SUPPORT_AI_AUTO_OUTCOMES)[number];
 
