@@ -623,6 +623,7 @@ export function CandidateDetail({
         )}
         <p className="muted small">{t('web.lsr_archive_pii_note')}</p>
       </Card>
+      <DecisionRecord row={row} panelName={panelName} />
       {mayDecide ? (
         <Decisions
           key={`${row.id}:${String(row.version)}`}
@@ -634,6 +635,69 @@ export function CandidateDetail({
         <Banner tone="info">{t('web.lsr_view_only')}</Banner>
       )}
     </div>
+  );
+}
+
+/**
+ * What a person decided, as recorded: for an approval (waiting, or being executed by a run)
+ * the panel it names — the map's own when it named none — and, when the invoice's name was
+ * held on several panels, that the operator chose ONE of them; for any decision the reason,
+ * who decided and when.
+ */
+export function DecisionRecord({
+  row,
+  panelName,
+}: {
+  row: LegacyServiceCandidateView;
+  panelName: (id: string) => string;
+}) {
+  const approval = row.reviewState === 'ADOPT_APPROVED' || row.reviewState === 'ADOPTING';
+  if (!approval && row.decidedAt === null) return null;
+  const holders = row.evidence.holders.length;
+  return (
+    <Card title={approval ? t('web.lsr_approval_title') : t('web.lsr_decision_title')}>
+      {approval && (row.outcome === 'AMBIGUOUS_PANEL' || holders > 1) && (
+        <Banner tone="warn">
+          {t('web.lsr_approval_ambiguous')} (<Num value={holders} />)
+        </Banner>
+      )}
+      <dl className="kv">
+        {approval && (
+          <>
+            <dt>{t('web.lsr_approval_panel')}</dt>
+            <dd>
+              {row.approvedPanelId !== null
+                ? panelName(row.approvedPanelId)
+                : row.evidence.mappedPanelId !== null
+                  ? `${panelName(row.evidence.mappedPanelId)} · ${t('web.lsr_approval_panel_map')}`
+                  : t('web.lsr_approval_panel_map')}
+            </dd>
+          </>
+        )}
+        {row.decisionReason !== null && (
+          <>
+            <dt>{t('web.lsr_reason')}</dt>
+            <dd>
+              <bdi>{row.decisionReason}</bdi>
+            </dd>
+          </>
+        )}
+        {row.decidedByAdminId !== null && (
+          <>
+            <dt>{t('web.lsr_decided_by')}</dt>
+            <dd>
+              <Ltr>{row.decidedByAdminId}</Ltr>
+            </dd>
+          </>
+        )}
+        {row.decidedAt !== null && (
+          <>
+            <dt>{t('web.lsr_decided_at')}</dt>
+            <dd>{formatTimestamp(row.decidedAt)}</dd>
+          </>
+        )}
+      </dl>
+    </Card>
   );
 }
 

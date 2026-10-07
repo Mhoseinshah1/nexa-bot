@@ -8505,6 +8505,14 @@ export const WEB_FA = {
   'web.lsr_fault_panel':
     'این پنل پذیرفته نیست: باید پنل نگاشت‌شده‌ای باشد که حساب را دقیقاً دارد، و نگاشت موجود هرگز جایگزین نمی‌شود.',
   'web.lsr_fault_stopped': 'این نصب دیگر کار تازه نمی‌پذیرد.',
+  'web.lsr_approval_title': 'انتقال تأییدشده',
+  'web.lsr_decision_title': 'آخرین تصمیم',
+  'web.lsr_approval_panel': 'پنل تأییدشده',
+  'web.lsr_approval_panel_map': 'پنل نگاشت‌شده همین کد',
+  'web.lsr_approval_ambiguous':
+    'این نام کاربری روی چند پنل بود و تأییدکننده یکی از آن‌ها را برگزید؛ پیش از اجرای بعدی، درستی پنل را بررسی کنید.',
+  'web.lsr_decided_by': 'تصمیم‌گیرنده (شناسه مدیر)',
+  'web.lsr_decided_at': 'زمان تصمیم',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;
