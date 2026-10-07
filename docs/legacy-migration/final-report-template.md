@@ -154,18 +154,20 @@ expected and actual figure. Any `holds = no` must name its cause and its decisio
 
 ### 10b. Cutover gate (`legacy-import cutover-gate`)
 
-| step                  | result | detail (no PII) |
-| --------------------- | ------ | --------------- |
-| STOP_SALES_ACTIVE     |        |                 |
-| FREEZE_PROOF_VERIFIED |        |                 |
-| FRESH_FINGERPRINTS    |        |                 |
-| TABLES_CLASSIFIED     |        |                 |
-| APPROVAL_MATCHES      |        |                 |
-| SOURCE_NOT_SUPERSEDED |        |                 |
-| IMPORT_COMPLETED      |        |                 |
-| RECONCILED            |        |                 |
-| REPORT_V2_HOLDS       |        |                 |
-| **verdict**           |        |                 |
+| step                    | result | detail (no PII) |
+| ----------------------- | ------ | --------------- |
+| STOP_SALES_ACTIVE       |        |                 |
+| FREEZE_PROOF_VERIFIED   |        |                 |
+| FINAL_DUMP_VERIFIED     |        |                 |
+| FRESH_FINGERPRINTS      |        |                 |
+| TABLES_CLASSIFIED       |        |                 |
+| APPROVAL_MATCHES        |        |                 |
+| SOURCE_NOT_SUPERSEDED   |        |                 |
+| IMPORT_COMPLETED        |        |                 |
+| RECONCILED              |        |                 |
+| REPORT_V2_HOLDS         |        |                 |
+| STOP_SALES_STILL_ACTIVE |        |                 |
+| **verdict**             |        |                 |
 
 ## 11. Manual acceptance
 

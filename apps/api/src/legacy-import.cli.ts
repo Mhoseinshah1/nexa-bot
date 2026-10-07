@@ -106,6 +106,7 @@ import {
   readBytes,
   runCutoverGate,
   runFreezeChecker,
+  sha256OfFile,
 } from './legacy-import-cutover.js';
 import { LegacyCutoverRefused } from './modules/platform/legacy-cutover/domain/cutover-rules.js';
 import { takeLegacyInventory } from './modules/platform/legacy-importer/application/legacy-inventory.js';
@@ -986,6 +987,7 @@ async function cutoverGateMain(argv: readonly string[]): Promise<number> {
         },
         runChecker: runFreezeChecker,
         readBytes,
+        hashFile: sha256OfFile,
         now: () => container.clock.now(),
       },
       args,

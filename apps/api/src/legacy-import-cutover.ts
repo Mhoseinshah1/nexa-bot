@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { assertOutsideTransaction } from './infrastructure/transaction-boundary.js';
+import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import {
   LEGACY_CUTOVER_BINDING_FIELDS,
@@ -258,6 +259,34 @@ export function freezeProofHolds(input: {
   return { holds: true, detail: `EQUAL; frozen proof sha256 ${input.frozenSha256}` };
 }
 
+/**
+ * Step 3: the final dump FILE is the approved one. The hash is of the bytes the gate was
+ * pointed at, streamed — never the approved value echoed back.
+ */
+export function finalDumpHolds(input: {
+  readonly dumpSha256: string;
+  readonly expectedFinalDumpSha256: string | null;
+}): { readonly holds: boolean; readonly detail: string } {
+  if (input.dumpSha256 !== input.expectedFinalDumpSha256) {
+    return {
+      holds: false,
+      detail: `the final dump's sha256 is ${input.dumpSha256}, not the approved ${String(input.expectedFinalDumpSha256)}`,
+    };
+  }
+  return { holds: true, detail: `final dump sha256 ${input.dumpSha256}, as approved` };
+}
+
+/** SHA-256 of a file, streamed (a final dump is too large to read whole). Lowercase hex. */
+export function sha256OfFile(path: string): Promise<string> {
+  return new Promise((done, fail) => {
+    const hash = createHash('sha256');
+    createReadStream(path)
+      .on('error', fail)
+      .on('data', (chunk) => hash.update(chunk))
+      .on('end', () => done(hash.digest('hex')));
+  });
+}
+
 // --- the gate --------------------------------------------------------------------------------
 
 export interface GateStepOutcome {
@@ -332,6 +361,7 @@ export interface CutoverGateArgs {
   readonly freezeProof: string;
   readonly freezeProofRestored: string;
   readonly freezeChecker: string;
+  readonly finalDump: string;
   readonly format: 'md' | 'json';
   readonly allowProductionTarget: boolean;
 }
@@ -346,15 +376,18 @@ export const CUTOVER_GATE_USAGE = [
   '                                  --expected-freeze-proof-sha256 HEX --expected-final-dump-sha256 HEX',
   '                                  --freeze-proof FROZEN.tsv --freeze-proof-restored RESTORED.tsv',
   '                                  --freeze-checker PATH/legacy-freeze-checksum-verify.sh',
+  '                                  --final-dump FINAL.dump',
   '                                  [--format md|json] [--source-password-env NAME]',
   '                                  [--allow-production-target]',
   '',
   "  Proves, in order, and stops at the first failure: NEXA stop_sales is active; PR1's",
   '  freeze checker found the frozen and the restored proof EQUAL (and the frozen file is the',
-  '  approved one); a fresh read gives every approved fingerprint; no legacy table is',
+  '  approved one); the final dump file hashes to the approved SHA-256; a fresh read gives',
+  '  every approved fingerprint; no legacy table is',
   '  UNCLASSIFIED; an unrevoked owner approval matches every value; no earlier import is',
   '  superseded unacknowledged; the import ran (COMPLETED, this source and map); reconcile is',
-  '  RECONCILED; the final report v2 holds. Writes nothing. Exit 0 CUTOVER_READY, 3 REFUSED.',
+  '  RECONCILED; the final report v2 holds; stop_sales is STILL active. Writes nothing.',
+  '  Exit 0 CUTOVER_READY, 3 REFUSED.',
 ].join('\n');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -374,6 +407,7 @@ export function parseCutoverGateArgs(argv: readonly string[]): CutoverGateArgs {
     '--freeze-proof',
     '--freeze-proof-restored',
     '--freeze-checker',
+    '--final-dump',
     '--format',
     ...Object.values(CUTOVER_EXPECTED_FLAGS),
   ]);
@@ -463,6 +497,7 @@ export function parseCutoverGateArgs(argv: readonly string[]): CutoverGateArgs {
     freezeProof: required('--freeze-proof'),
     freezeProofRestored: required('--freeze-proof-restored'),
     freezeChecker: required('--freeze-checker'),
+    finalDump: required('--final-dump'),
     format,
     allowProductionTarget,
   };
@@ -480,6 +515,8 @@ export interface CutoverGateDeps {
   readonly readSnapshot: () => Promise<LegacySnapshot>;
   readonly runChecker: typeof runFreezeChecker;
   readonly readBytes: (path: string) => Promise<Buffer>;
+  /** Streams a file through SHA-256 (`sha256OfFile`). */
+  readonly hashFile: (path: string) => Promise<string>;
   readonly now: () => Date;
 }
 
@@ -525,6 +562,11 @@ export async function runCutoverGate(
         expectedFreezeProofSha256: expectation.freezeProofSha256,
       });
     },
+    FINAL_DUMP_VERIFIED: async () =>
+      finalDumpHolds({
+        dumpSha256: await deps.hashFile(args.finalDump),
+        expectedFinalDumpSha256: expectation.finalDumpSha256,
+      }),
     FRESH_FINGERPRINTS: async () => {
       snapshot = await deps.readSnapshot();
       const source = snapshot.fingerprint;
@@ -628,6 +670,16 @@ export async function runCutoverGate(
         detail: v2.verdict.holds
           ? 'every section and every invariant holds'
           : `failed sections: ${v2.verdict.failedSections.join(', ') || '—'}; failed invariants: ${v2.verdict.failedInvariants.join(', ') || '—'}`,
+      };
+    },
+    // Sampled again, LAST: an operator may have resumed sales while the steps above ran.
+    STOP_SALES_STILL_ACTIVE: async () => {
+      const again = stopSalesHolds(await deps.stopSalesFacts());
+      return {
+        holds: again.holds,
+        detail: again.holds
+          ? `still stopped at the end of the gate: ${again.detail}`
+          : `sales are no longer stopped: ${again.detail}`,
       };
     },
   });

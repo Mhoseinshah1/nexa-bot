@@ -719,15 +719,21 @@ import); anything else means an earlier snapshot was applied to this target — 
 One read-only command proves the whole checklist, IN ORDER, and stops at the first step that
 fails: NEXA `stop_sales` is active (an ACTIVE MAINTENANCE incident with `stop_sales`, every
 active panel drained, every gateway disabled) → PR1's freeze checker found step 7's and step
-9's proofs EQUAL, and step 7's file is the approved one → a fresh read gives the approved
+9's proofs EQUAL, and step 7's file is the approved one → the final dump FILE of step 8,
+streamed through SHA-256 by the gate itself, is the approved value (the `--expected-*` value
+alone proves nothing) → a fresh read gives the approved
 source, panel-map, inventory, products and invoice-archive fingerprints → no table is
 UNCLASSIFIED → an unrevoked owner approval matches all seven values → no earlier import is
 superseded unacknowledged → the import ran (latest APPLY run COMPLETED, this source and map)
-→ reconcile is RECONCILED → the final report v2 holds. It writes nothing.
+→ reconcile is RECONCILED → the final report v2 holds → `stop_sales` is STILL active
+(sampled again last: it is mutable, and sales resumed while the gate ran refuse it). It
+writes nothing.
 
 ```bash
 # The freeze files and PR1's checker, readable by the container's uid 1000 (read-only mounts).
 sudo install -o 1000 -g 1000 -m 0400 freeze-checksum-step7.tsv freeze-checksum-step9.tsv /etc/nexa/legacy/
+# The final dump of step 8, the very file whose SHA-256 the owner approved.
+sudo install -o 1000 -g 1000 -m 0400 "oldbot-final-$STAMP.sql" /etc/nexa/legacy/oldbot-final.sql
 sudo install -o 1000 -g 1000 -m 0500 <checkout>/scripts/legacy-freeze-checksum-verify.sh /etc/nexa/legacy/
 sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
   -e LEGACY_SOURCE_DSN -e NEXA_LEGACY_IMPORT_TARGET_ACK -v /etc/nexa/legacy:/legacy:ro \
@@ -736,13 +742,17 @@ sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm
   --panel-map /legacy/panel-map.json --evidence-class production "${APPROVED_ARGS[@]}" \
   --freeze-proof /legacy/freeze-checksum-step7.tsv \
   --freeze-proof-restored /legacy/freeze-checksum-step9.tsv \
-  --freeze-checker /legacy/legacy-freeze-checksum-verify.sh | tee cutover-gate.md; echo "exit ${PIPESTATUS[0]}"
+  --freeze-checker /legacy/legacy-freeze-checksum-verify.sh \
+  --final-dump /legacy/oldbot-final.sql | tee cutover-gate.md; echo "exit ${PIPESTATUS[0]}"
 ```
 
-Check: exit `0`, verdict `CUTOVER_READY`, every one of the nine steps `PASS`. The checker
+Check: exit `0`, verdict `CUTOVER_READY`, every one of the eleven steps `PASS`. The checker
 is pinned by its SHA-256: a script other than the release's own `legacy-freeze-checksum-verify.sh`
 is refused. Exit `3` names the failed step and why; every later step is `NOT_REACHED`. A
-failure at or after `IMPORT_COMPLETED` is a rollback trigger to decide now (T1–T3); a failure
+failure at `IMPORT_COMPLETED`, `RECONCILED` or `REPORT_V2_HOLDS` is a rollback trigger to
+decide now (T1–T3, T9). `STOP_SALES_STILL_ACTIVE` failing means somebody resumed sales during
+the gate: stop them again (step 6), find out who and what was sold, and re-run the gate; a
+failure
 before it means the approval no longer describes what is in the database — stop and decide
 with the owner. Attach `cutover-gate.md` to the report.
 

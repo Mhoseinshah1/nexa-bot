@@ -136,6 +136,7 @@ export const EXPECTED_PASS_PROGRAM = [
   'b_report_v2_rerun_acknowledged',
   'b_cutover_gate_ready',
   'b_cutover_gate_changed_dump_refused',
+  'b_cutover_gate_tampered_dump_refused',
 ];
 
 /** Recorded once, as cycle 0: what the fake panels received on the wire. */

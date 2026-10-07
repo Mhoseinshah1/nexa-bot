@@ -706,9 +706,12 @@ with `stop_sales`; every ACTIVE panel drained; every gateway disabled — the ex
 incident mechanism, not a new flag) → `FREEZE_PROOF_VERIFIED` (PR1's
 `scripts/legacy-freeze-checksum-verify.sh`, pinned by its SHA-256, run with `bash` over the
 frozen and the restored proof: exit 0 and `EQUAL`; and the frozen file's SHA-256 is the
-approved one) → `FRESH_FINGERPRINTS` → `TABLES_CLASSIFIED` → `APPROVAL_MATCHES` →
-`SOURCE_NOT_SUPERSEDED` → `IMPORT_COMPLETED` → `RECONCILED` → `REPORT_V2_HOLDS`. It is
-read-only on every database; exit 0 `CUTOVER_READY`, 3 `REFUSED`.
+approved one) → `FINAL_DUMP_VERIFIED` (the `--final-dump` FILE, streamed through SHA-256,
+is the approved value — the gate never takes the `--expected-*` value as proof of itself) →
+`FRESH_FINGERPRINTS` → `TABLES_CLASSIFIED` → `APPROVAL_MATCHES` → `SOURCE_NOT_SUPERSEDED` →
+`IMPORT_COMPLETED` → `RECONCILED` → `REPORT_V2_HOLDS` → `STOP_SALES_STILL_ACTIVE` (stop_sales
+sampled again, last: it is mutable). It is read-only on every database; exit 0
+`CUTOVER_READY`, 3 `REFUSED`.
 
 ### Actors
 

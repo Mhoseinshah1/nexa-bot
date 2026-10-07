@@ -1645,19 +1645,30 @@ SQL
     --evidence-class "$EVIDENCE_CLASS" "${P_EXPECTED[@]}" \
     --freeze-proof "$OUT/snapshots/p-b-freeze-frozen.tsv" \
     --freeze-proof-restored "$OUT/snapshots/p-b-freeze-restored.tsv" \
-    --freeze-checker "$FREEZE_CHECKER" --format json
+    --freeze-checker "$FREEZE_CHECKER" --final-dump "$OUT/snapshots/p-b-final-dump.tsv" --format json
   cp "$(p_out b-cutover-gate)" "$OUT/cutover-gate.json"
   check "$P" b_cutover_gate_ready "0 CUTOVER_READY" "$P_RC $(json_get "$OUT/cutover-gate.json" verdict)"
-  # Changed after approval: a dump that is not the approved one voids it — the gate refuses.
+  # Changed after approval: an expected hash other than the approved one voids the approval,
+  # and the gate refuses at once, because the dump file it hashes is not that value either.
   local wrong_dump
   wrong_dump="$(printf 'not the approved dump' | sha256sum | cut -d' ' -f1)"
   p_call b-cutover-gate-changed legacy_sub cutover-gate --panel-map "$PANEL_MAP" \
     --evidence-class "$EVIDENCE_CLASS" "${P_EXPECTED[@]:0:12}" --expected-final-dump-sha256 "$wrong_dump" \
     --freeze-proof "$OUT/snapshots/p-b-freeze-frozen.tsv" \
     --freeze-proof-restored "$OUT/snapshots/p-b-freeze-restored.tsv" \
-    --freeze-checker "$FREEZE_CHECKER" --format json
-  check "$P" b_cutover_gate_changed_dump_refused "3 APPROVAL_MATCHES" \
+    --freeze-checker "$FREEZE_CHECKER" --final-dump "$OUT/snapshots/p-b-final-dump.tsv" --format json
+  check "$P" b_cutover_gate_changed_dump_refused "3 FINAL_DUMP_VERIFIED" \
     "$P_RC $(json_get "$(p_out b-cutover-gate-changed)" failedStep)"
+  # The approved hash, but a dump FILE edited since: the gate hashes the bytes, so it refuses.
+  cp "$OUT/snapshots/p-b-final-dump.tsv" "$OUT/snapshots/p-b-final-dump-tampered.tsv"
+  printf 'one more row\n' >>"$OUT/snapshots/p-b-final-dump-tampered.tsv"
+  p_call b-cutover-gate-tampered legacy_sub cutover-gate --panel-map "$PANEL_MAP" \
+    --evidence-class "$EVIDENCE_CLASS" "${P_EXPECTED[@]}" \
+    --freeze-proof "$OUT/snapshots/p-b-freeze-frozen.tsv" \
+    --freeze-proof-restored "$OUT/snapshots/p-b-freeze-restored.tsv" \
+    --freeze-checker "$FREEZE_CHECKER" --final-dump "$OUT/snapshots/p-b-final-dump-tampered.tsv" --format json
+  check "$P" b_cutover_gate_tampered_dump_refused "3 FINAL_DUMP_VERIFIED" \
+    "$P_RC $(json_get "$(p_out b-cutover-gate-tampered)" failedStep)"
 }
 
 run_program

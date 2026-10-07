@@ -24,6 +24,7 @@ import {
   CUTOVER_EXPECTED_FLAGS,
   runCutoverGate,
   runFreezeChecker,
+  sha256OfFile,
   type CutoverGateArgs,
 } from '../../apps/api/src/legacy-import-cutover';
 import { runInventory } from '../../apps/api/src/legacy-import-inventory';
@@ -865,6 +866,9 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     const restored = join(dir, 'freeze-step9.tsv');
     writeFileSync(frozen, FREEZE_FROZEN);
     writeFileSync(restored, FREEZE_RESTORED);
+    // The final dump the owner approved (DUMP_SHA is its SHA-256): the gate hashes THIS file.
+    const dump = join(dir, 'final.dump');
+    writeFileSync(dump, 'the final dump');
     const args: CutoverGateArgs = {
       tenant: 'acme',
       source: 'fixture:unused.json',
@@ -876,6 +880,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
       freezeProof: frozen,
       freezeProofRestored: restored,
       freezeChecker: CHECKER,
+      finalDump: dump,
       format: 'json',
       allowProductionTarget: false,
     };
@@ -888,6 +893,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
           readSnapshot: () => snapshotOf(ds),
           runChecker: runFreezeChecker,
           readBytes: (path) => Promise.resolve(readFileSync(path)),
+          hashFile: sha256OfFile,
           now: () => ctx.container.clock.now(),
         },
         args,
@@ -929,16 +935,26 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
       'FREEZE_PROOF_VERIFIED',
     );
 
-    // 5. No approval yet.
+    // 3. A dump file other than the approved one: the approved hash alone proves nothing.
+    writeFileSync(dump, 'the final dump, edited after approval');
+    const otherDump = await gate();
+    expect(otherDump.failedStep).toBe('FINAL_DUMP_VERIFIED');
+    expect(otherDump.steps.find((s) => s.step === 'FINAL_DUMP_VERIFIED')?.detail).toContain(
+      'not the approved',
+    );
+    writeFileSync(dump, 'the final dump');
+
+    // 6. No approval yet.
     const noApproval = await gate();
     expect(resultOf(noApproval)).toMatchObject({
       STOP_SALES_ACTIVE: 'PASS',
       FREEZE_PROOF_VERIFIED: 'PASS',
+      FINAL_DUMP_VERIFIED: 'PASS',
       FRESH_FINGERPRINTS: 'PASS',
       TABLES_CLASSIFIED: 'PASS',
       APPROVAL_MATCHES: 'FAIL',
     });
-    // 7. Approved, not imported.
+    // 8. Approved, not imported.
     await cutover().approve(tenantA, owner, approveBody(fp));
     const notImported = await gate();
     expect(notImported.failedStep).toBe('IMPORT_COMPLETED');
@@ -975,6 +991,35 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     };
     expect((await runCutoverGateWith(changedArgs)).failedStep).toBe('FRESH_FINGERPRINTS');
 
+    // stop_sales is mutable: an operator resumes sales while the gate runs (between its first
+    // sample and its last). Every other step passes; the gate still refuses at the end.
+    let samples = 0;
+    const resumed = await runCutoverGate(
+      {
+        importer: importer(),
+        stopSalesFacts: async () => {
+          samples += 1;
+          if (samples === 2) {
+            await db().execute(
+              sql`UPDATE incidents SET status = 'RESOLVED', resolved_at = now() WHERE tenant_id = ${tenantA.tenantId}`,
+            );
+          }
+          return cutover().stopSalesFacts(tenantA);
+        },
+        connector: connectorOf(ds),
+        readSnapshot: () => snapshotOf(ds),
+        runChecker: runFreezeChecker,
+        readBytes: (path) => Promise.resolve(readFileSync(path)),
+        hashFile: sha256OfFile,
+        now: () => ctx.container.clock.now(),
+      },
+      args,
+      { scope: tenantA, actor: job('gate-3'), mapping, productionLikeTarget: false },
+    );
+    expect(samples).toBe(2);
+    expect(resumed).toMatchObject({ verdict: 'REFUSED', failedStep: 'STOP_SALES_STILL_ACTIVE' });
+    expect(resumed.steps.slice(0, -1).every((s) => s.result === 'PASS')).toBe(true);
+
     function runCutoverGateWith(a: CutoverGateArgs) {
       return runCutoverGate(
         {
@@ -984,6 +1029,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
           readSnapshot: () => snapshotOf(ds),
           runChecker: runFreezeChecker,
           readBytes: (path) => Promise.resolve(readFileSync(path)),
+          hashFile: sha256OfFile,
           now: () => ctx.container.clock.now(),
         },
         a,

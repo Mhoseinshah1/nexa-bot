@@ -87,7 +87,7 @@ production with `--evidence-class production`.
    (step 14). Refusals exit 65 and write nothing.
 10. **Reconcile** → `RECONCILED` (step 15).
 11. **Cutover gate**: `legacy-import cutover-gate … --freeze-proof … --freeze-proof-restored …
---freeze-checker …` → `CUTOVER_READY`, nine steps PASS (step 15b).
+--freeze-checker … --final-dump …` → `CUTOVER_READY`, eleven steps PASS (step 15b).
 12. Manual acceptance, unfreeze NEXA (MirzaBot never), observe (steps 16–18).
 13. **Report v2** and the final report (step 19).
 14. **Rollback** if a trigger fires (`rollback-runbook.md`, T1–T9); never a drop path.
@@ -114,7 +114,8 @@ p7 import --expected-fingerprint <fp> --expected-panel-map-fingerprint <mfp> \
 #   Web Admin: /legacy-products /legacy-invoices /legacy-debts /legacy-services
 p7 reconcile | tee reconcile.txt                                           # RECONCILED
 legacy-import cutover-gate … <the seven values> --freeze-proof step7.tsv \
-  --freeze-proof-restored step9.tsv --freeze-checker legacy-freeze-checksum-verify.sh | tee cutover-gate.md
+  --freeze-proof-restored step9.tsv --freeze-checker legacy-freeze-checksum-verify.sh \
+  --final-dump oldbot-final.sql | tee cutover-gate.md
 p7 report --format json > final-report.json
 node scripts/legacy-rehearsal-report-check.mjs validate docs/legacy-migration/final-report-v2.schema.json final-report.json
 # rollback, only on a trigger: rollback-runbook.md R0–R5 (the recovery lane; two renames; nothing dropped)

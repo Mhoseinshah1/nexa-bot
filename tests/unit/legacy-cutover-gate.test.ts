@@ -9,10 +9,12 @@ import {
   LEGACY_FREEZE_CHECKER_SHA256,
   cutoverGateExitCode,
   cutoverGateText,
+  finalDumpHolds,
   freezeProofHolds,
   parseCutoverGateArgs,
   runFreezeChecker,
   runGateSteps,
+  sha256OfFile,
   stopSalesHolds,
 } from '../../apps/api/src/legacy-import-cutover';
 import { parseArgs } from '../../apps/api/src/legacy-import.cli';
@@ -179,6 +181,30 @@ describe('the freeze proof: PR1 checker, pinned', () => {
   });
 });
 
+describe('the final dump: the FILE is hashed, never the approved value echoed back', () => {
+  it('streams the file through SHA-256 and holds only when it is the approved hash', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-dump-'));
+    const dump = join(dir, 'final.dump');
+    // Larger than one stream chunk (64 KiB), so the streamed hash covers every chunk.
+    const bytes = Buffer.alloc(200_000, 7);
+    writeFileSync(dump, bytes);
+    const approved = createHash('sha256').update(bytes).digest('hex');
+    expect(await sha256OfFile(dump)).toBe(approved);
+    expect(
+      finalDumpHolds({ dumpSha256: await sha256OfFile(dump), expectedFinalDumpSha256: approved }),
+    ).toMatchObject({ holds: true });
+    writeFileSync(dump, Buffer.concat([bytes, Buffer.from('x')]));
+    expect(
+      finalDumpHolds({ dumpSha256: await sha256OfFile(dump), expectedFinalDumpSha256: approved })
+        .holds,
+    ).toBe(false);
+    expect(finalDumpHolds({ dumpSha256: approved, expectedFinalDumpSha256: null }).holds).toBe(
+      false,
+    );
+    await expect(sha256OfFile(join(dir, 'missing.dump'))).rejects.toThrow();
+  });
+});
+
 describe('the command lines', () => {
   const gate = [
     '--tenant',
@@ -211,10 +237,13 @@ describe('the command lines', () => {
     'step9.tsv',
     '--freeze-checker',
     CHECKER,
+    '--final-dump',
+    'final.dump',
   ];
 
   it('the gate needs every value; each is an exact lowercase SHA-256', () => {
     expect(parseCutoverGateArgs(gate).expectation.finalDumpSha256).toBe(H('1'));
+    expect(parseCutoverGateArgs(gate).finalDump).toBe('final.dump');
     for (let i = 10; i < gate.length; i += 2) {
       const without = [...gate.slice(0, i), ...gate.slice(i + 2)];
       expect(() => parseCutoverGateArgs(without), gate[i]).toThrow(CutoverUsageError);
