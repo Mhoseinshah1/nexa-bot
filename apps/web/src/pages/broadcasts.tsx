@@ -18,18 +18,22 @@ import {
   type AudiencePreview,
   type BroadcastOutcome,
   type BroadcastContentKind,
+  type BroadcastHistoryAction,
   type BroadcastPinState,
   type BroadcastPurpose,
   type BroadcastRecipientState,
   type BroadcastResponseItem,
   type BroadcastState,
+  type BroadcastTestResponse,
 } from '@nexa/contracts';
 import { renderTemplateBody } from '@nexa/i18n';
 import {
   ApiError,
   createBroadcast,
   fetchBroadcast,
+  fetchBroadcastBots,
   fetchBroadcastFailures,
+  fetchBroadcastHistory,
   fetchBroadcastRecipients,
   fetchBroadcasts,
   launchBroadcast,
@@ -152,6 +156,53 @@ const RECIPIENT_LABELS: Readonly<Record<BroadcastRecipientState, WebKey>> = {
   UNREACHABLE: 'web.bc_r_unreachable',
   SKIPPED: 'web.bc_r_skipped',
   CANCELLED: 'web.bc_r_cancelled',
+};
+
+/*
+ * Roadmap C2 (failure visibility): what a recipient's transport code means, in words. The code
+ * itself is always shown beside it — the sentence explains, the code is what a log names. A
+ * code this table does not know is shown as it is.
+ */
+const REASON_LABELS: Readonly<Record<string, WebKey>> = {
+  'telegram.rejected.403': 'web.bcx_reason_blocked_bot',
+  'telegram.rejected.400': 'web.bcx_reason_bad_request',
+  'telegram.rejected.401': 'web.bcx_reason_bot_token',
+  'telegram.rejected.404': 'web.bcx_reason_bot_token',
+  'telegram.rate_limited': 'web.bcx_reason_rate_limited',
+  'telegram.unreachable': 'web.bcx_reason_unknown_outcome',
+  'telegram.unreadable_response': 'web.bcx_reason_unknown_outcome',
+  'broadcast.send_interrupted': 'web.bcx_reason_unknown_outcome',
+  'broadcast.no_bot': 'web.bcx_reason_bot_unavailable',
+  'broadcast.no_bot_recorded': 'web.bcx_reason_no_bot_recorded',
+  'broadcast.customer_blocked': 'web.bcx_reason_customer_blocked',
+  'broadcast.marketing_opted_out': 'web.bcx_reason_opted_out',
+  'broadcast.media_unavailable': 'web.bcx_reason_media_unavailable',
+  'broadcast.pin_interrupted': 'web.bcx_reason_unknown_outcome',
+};
+
+/** The sentence for a transport code, or null when the code is not one this page knows. */
+export function broadcastReasonLabel(code: string): string | null {
+  const key =
+    REASON_LABELS[code] ??
+    (code.startsWith('telegram.server_error.') ? 'web.bcx_reason_unknown_outcome' : undefined);
+  return key === undefined ? null : t(key);
+}
+
+/** A code with its sentence, the code always kept beside it. */
+function Reason({ code }: { code: string }) {
+  const label = broadcastReasonLabel(code);
+  return (
+    <span className="bcx-reason">
+      {label !== null && <span>{label}</span>} <Ltr>{code}</Ltr>
+    </span>
+  );
+}
+
+const TEST_OUTCOME_LABELS: Readonly<Record<BroadcastTestResponse['outcome'], WebKey>> = {
+  SENT: 'web.bc_test_sent',
+  NOT_SENT: 'web.bc_test_not_sent',
+  UNCONFIRMED: 'web.bcx_test_unconfirmed',
+  RATE_LIMITED: 'web.bcx_test_rate_limited',
 };
 
 /** This page's error sentences, for the codes the broadcast routes answer with. */
@@ -746,7 +797,14 @@ function MediaCard({
   );
 }
 
-function LaunchCard({ record }: { record: BroadcastResponseItem }) {
+function LaunchCard({
+  record,
+  blocked = false,
+}: {
+  record: BroadcastResponseItem;
+  /** Unsaved composer edits: the test and the count read the SAVED draft, so both wait. */
+  blocked?: boolean;
+}) {
   const client = useQueryClient();
   const toast = useToast();
   const submission = useSubmissionKey();
@@ -765,14 +823,16 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
       setTyped('');
     },
   });
+  /** The last test's answer, kept on the card: a toast is gone before it is read. */
+  const [tested, setTested] = useState<BroadcastTestResponse['outcome'] | null>(null);
   const test = useMutation({
     mutationFn: () => testBroadcast(record.id),
     onSuccess: (response) => {
-      toast(
-        response.outcome === 'SENT'
-          ? { tone: 'ok', message: t('web.bc_test_sent') }
-          : { tone: 'warn', message: t('web.bc_test_not_sent') },
-      );
+      setTested(response.outcome);
+      toast({
+        tone: response.outcome === 'SENT' ? 'ok' : 'warn',
+        message: t(TEST_OUTCOME_LABELS[response.outcome]),
+      });
       // A test that reached the operator verified a FORWARD/COPY source: read it back.
       void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
     },
@@ -815,19 +875,40 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
     <Card title={t('web.bc_launch')} hint={t('web.bc_launch_hint')} tone="danger">
       {sourced && (
         <Banner tone={record.sourceVerifiedAt === null ? 'warn' : 'ok'}>
-          {record.sourceVerifiedAt === null
-            ? t('web.bc_source_verified_no')
-            : t('web.bc_source_verified_yes')}
+          {record.sourceVerifiedAt === null ? (
+            t('web.bc_source_verified_no')
+          ) : (
+            <>
+              {t('web.bc_source_verified_yes')} ({formatTimestamp(record.sourceVerifiedAt)})
+            </>
+          )}
         </Banner>
       )}
+      {sourced && <p className="muted small">{t('web.bcx_source_per_bot')}</p>}
+      {blocked && <Banner tone="info">{t('web.bcx_save_before_test')}</Banner>}
       <div className="form-actions">
-        <Button size="sm" icon="send" disabled={test.isPending} onClick={() => test.mutate()}>
+        <Button
+          size="sm"
+          icon="send"
+          disabled={blocked || test.isPending}
+          onClick={() => test.mutate()}
+        >
           {t('web.bc_test')}
         </Button>
-        <Button size="sm" icon="users" disabled={count.isPending} onClick={() => count.mutate()}>
+        <Button
+          size="sm"
+          icon="users"
+          disabled={blocked || count.isPending}
+          onClick={() => count.mutate()}
+        >
           {t('web.bc_count')}
         </Button>
       </div>
+      {tested !== null && (
+        <p className="muted small" role="status">
+          {t('web.bcx_test_last')}: {t(TEST_OUTCOME_LABELS[tested])}
+        </p>
+      )}
       {test.error !== null && <Banner tone="danger">{broadcastMessage(test.error)}</Banner>}
       {count.error !== null && <Banner tone="danger">{broadcastMessage(count.error)}</Banner>}
       {preview !== null && (
@@ -838,6 +919,14 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
               label={t('web.aud_count_reachable')}
               value={formatNumber(preview.reachable)}
             />
+            {/* Counted and frozen, but recorded UNREACHABLE at once: no bot to send through. */}
+            {preview.customers > preview.reachable && (
+              <StatCard
+                label={t('web.bcx_no_bot')}
+                value={formatNumber(preview.customers - preview.reachable)}
+                hint={t('web.bcx_no_bot_hint')}
+              />
+            )}
             {/* Broadcast V2: an estimate only — the send's stamp decides (since #143). */}
             {preview.optedOut !== null && preview.optedOut !== undefined && (
               <StatCard
@@ -900,7 +989,7 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
                 <Button
                   variant="danger-solid"
                   icon="send"
-                  disabled={!ready || launch.isPending}
+                  disabled={!ready || blocked || launch.isPending}
                   onClick={() => setAsking(true)}
                 >
                   {mode === 'NOW' ? t('web.bc_send_now') : t('web.bc_schedule')}
@@ -944,9 +1033,13 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
       // A retry on a PAUSED broadcast leaves its state — the failures' key — unchanged and
       // nothing polls while paused, so the reasons are asked again here, not left stale.
       void client.invalidateQueries({ queryKey: ['broadcast-failures', record.id] });
+      // Roadmap C2: the per-bot split and the history record the steer too.
+      void client.invalidateQueries({ queryKey: ['broadcast-bots', record.id] });
+      void client.invalidateQueries({ queryKey: ['broadcast-history', record.id] });
     },
   });
   const [cancelAsked, setCancelAsked] = useState(false);
+  const [retryAsked, setRetryAsked] = useState(false);
   const c = record.counts;
   const outcome = broadcastOutcome(record.state, c);
   return (
@@ -1006,27 +1099,61 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
       {maySend && (
         <div className="form-actions">
           {record.state === 'SENDING' && (
-            <Button size="sm" icon="pause" onClick={() => steer.mutate('pause')}>
+            <Button
+              size="sm"
+              icon="pause"
+              disabled={steer.isPending}
+              onClick={() => steer.mutate('pause')}
+            >
               {t('web.bc_pause')}
             </Button>
           )}
           {record.state === 'PAUSED' && (
-            <Button size="sm" icon="play" onClick={() => steer.mutate('resume')}>
+            <Button
+              size="sm"
+              icon="play"
+              disabled={steer.isPending}
+              onClick={() => steer.mutate('resume')}
+            >
               {t('web.bc_resume')}
             </Button>
           )}
           {c.failed > 0 && ['SENDING', 'PAUSED', 'COMPLETED'].includes(record.state) && (
-            <Button size="sm" icon="refresh" onClick={() => steer.mutate('retryFailed')}>
-              {t('web.bc_retry_failed')}
+            <Button
+              size="sm"
+              icon="refresh"
+              disabled={steer.isPending}
+              onClick={() => setRetryAsked(true)}
+            >
+              {t('web.bc_retry_failed')} ({formatNumber(c.failed)})
             </Button>
           )}
           <span className="spacer" />
           {['SCHEDULED', 'SENDING', 'PAUSED'].includes(record.state) && (
-            <Button size="sm" variant="danger" onClick={() => setCancelAsked(true)}>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={steer.isPending}
+              onClick={() => setCancelAsked(true)}
+            >
               {t('web.bc_cancel')}
             </Button>
           )}
         </div>
+      )}
+      {retryAsked && (
+        <ConfirmDialog
+          title={record.title}
+          question={t('web.bcx_retry_question').replace('{count}', formatNumber(c.failed))}
+          detail={t('web.bcx_retry_detail')}
+          confirmLabel={t('web.bcx_retry_confirm')}
+          cancelLabel={t('web.bc_back')}
+          onConfirm={() => {
+            setRetryAsked(false);
+            steer.mutate('retryFailed');
+          }}
+          onCancel={() => setRetryAsked(false)}
+        />
       )}
       {cancelAsked && (
         <ConfirmDialog
@@ -1094,7 +1221,7 @@ function FailuresCard({ id, broadcastState }: { id: string; broadcastState: Broa
                   row.errorCode === null ? (
                     <span className="muted">{t('web.bc_failures_no_code')}</span>
                   ) : (
-                    <Ltr>{row.errorCode}</Ltr>
+                    <Reason code={row.errorCode} />
                   ),
               },
               {
@@ -1104,6 +1231,176 @@ function FailuresCard({ id, broadcastState }: { id: string; broadcastState: Broa
               },
             ]}
           />
+        )}
+      </StateSwitch>
+    </Card>
+  );
+}
+
+const BOT_STATUS_LABELS: Readonly<Record<string, WebKey>> = {
+  ACTIVE: 'web.bcx_bot_active',
+  STOPPED: 'web.bcx_bot_stopped',
+  DISABLED: 'web.bcx_bot_disabled',
+};
+
+/**
+ * Roadmap C2 — delivery per bot. Each recipient goes through the bot the customer first wrote
+ * to, frozen at launch; each bot is paced and held on its own. So a bot that cannot reach a
+ * FORWARD/COPY source, or that Telegram is holding after a 429, shows here as that bot's row,
+ * and the others' rows show they are unaffected.
+ */
+function BotsCard({ id, broadcastState }: { id: string; broadcastState: BroadcastState }) {
+  const bots = useQuery({
+    queryKey: ['broadcast-bots', id, broadcastState],
+    queryFn: () => fetchBroadcastBots(id),
+    refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
+  });
+  const rows = bots.data?.bots ?? [];
+  return (
+    <Card title={t('web.bcx_bots_title')} hint={t('web.bcx_bots_hint')}>
+      <StateSwitch query={bots}>
+        {rows.length === 0 ? (
+          <Empty variant="compact" title={t('web.bcx_bots_empty')} />
+        ) : (
+          <DataTable
+            caption={t('web.bcx_bots_title')}
+            dense
+            rows={rows}
+            rowKey={(row) => row.botInstanceId ?? 'none'}
+            columns={[
+              {
+                key: 'bot',
+                header: t('web.bcx_bot'),
+                render: (row) =>
+                  row.botInstanceId === null ? (
+                    <span className="muted">{t('web.bcx_bot_none')}</span>
+                  ) : (
+                    <span className="bcx-bot">
+                      <Ltr>
+                        {row.botUsername === null
+                          ? row.botInstanceId.slice(0, 8)
+                          : `@${row.botUsername}`}
+                      </Ltr>
+                      {row.botStatus !== null && row.botStatus !== 'ACTIVE' && (
+                        <Badge tone="danger">
+                          {t(BOT_STATUS_LABELS[row.botStatus] ?? 'web.bcx_bot_disabled')}
+                        </Badge>
+                      )}
+                    </span>
+                  ),
+              },
+              {
+                key: 'sent',
+                header: t('web.bc_r_sent'),
+                render: (row) => (
+                  <span className="num">
+                    {formatNumber(row.counts.sent)} / {formatNumber(row.counts.total)}
+                  </span>
+                ),
+              },
+              {
+                key: 'pending',
+                header: t('web.bc_r_pending'),
+                render: (row) => (
+                  <span className="num">
+                    {formatNumber(row.counts.pending + row.counts.sending)}
+                  </span>
+                ),
+              },
+              {
+                key: 'retry',
+                header: t('web.bcx_waiting_retry'),
+                render: (row) => <span className="num">{formatNumber(row.waitingRetry)}</span>,
+              },
+              {
+                key: 'failed',
+                header: t('web.bc_r_failed'),
+                render: (row) => (
+                  <span className="num">
+                    {formatNumber(row.counts.failed)}
+                    {row.counts.unconfirmed > 0 &&
+                      ` · ${t('web.bcx_unconfirmed_short')} ${formatNumber(row.counts.unconfirmed)}`}
+                  </span>
+                ),
+              },
+              {
+                key: 'unreachable',
+                header: t('web.bcx_unreachable_short'),
+                render: (row) => (
+                  <span className="num">
+                    {formatNumber(row.counts.unreachable + row.counts.skipped)}
+                  </span>
+                ),
+              },
+              {
+                key: 'held',
+                header: t('web.bcx_held'),
+                render: (row) =>
+                  row.heldUntil === null ? (
+                    '—'
+                  ) : (
+                    <Badge tone="warn">
+                      {t('web.bcx_held_until')} {formatTimestamp(row.heldUntil)}
+                    </Badge>
+                  ),
+              },
+            ]}
+          />
+        )}
+      </StateSwitch>
+    </Card>
+  );
+}
+
+const HISTORY_LABELS: Readonly<Record<BroadcastHistoryAction, WebKey>> = {
+  'broadcast.create': 'web.bcx_h_create',
+  'broadcast.update': 'web.bcx_h_update',
+  'broadcast.media_set': 'web.bcx_h_media_set',
+  'broadcast.media_remove': 'web.bcx_h_media_remove',
+  'broadcast.test': 'web.bcx_h_test',
+  'broadcast.launch': 'web.bcx_h_launch',
+  'broadcast.pause': 'web.bcx_h_pause',
+  'broadcast.resume': 'web.bcx_h_resume',
+  'broadcast.cancel': 'web.bcx_h_cancel',
+  'broadcast.retry_failed': 'web.bcx_h_retry_failed',
+};
+
+/**
+ * Roadmap C2 — what was done to this broadcast: tests (with what Telegram answered), the
+ * launch, every pause, resume and cancel, and every re-queue with how many it put back. A
+ * refused attempt is listed as refused. Read from the broadcast's own audit rows.
+ */
+function HistoryCard({ id, broadcastState }: { id: string; broadcastState: BroadcastState }) {
+  const history = useQuery({
+    queryKey: ['broadcast-history', id, broadcastState],
+    queryFn: () => fetchBroadcastHistory(id),
+  });
+  const rows = history.data?.entries ?? [];
+  return (
+    <Card title={t('web.bcx_history_title')}>
+      <StateSwitch query={history}>
+        {rows.length === 0 ? (
+          <Empty variant="compact" title={t('web.bcx_history_empty')} />
+        ) : (
+          <ul className="bcx-history small">
+            {rows.map((row) => (
+              <li key={row.id}>
+                <span className="num">{formatTimestamp(row.occurredAt)}</span>{' '}
+                <strong>{t(HISTORY_LABELS[row.action])}</strong>
+                {row.actorLabel !== null && <> · {row.actorLabel}</>}
+                {row.testOutcome !== null && <> · {t(TEST_OUTCOME_LABELS[row.testOutcome])}</>}
+                {row.requeued !== null && (
+                  <> · {t('web.bcx_h_requeued').replace('{count}', formatNumber(row.requeued))}</>
+                )}
+                {row.result !== 'SUCCESS' && (
+                  <>
+                    {' '}
+                    <Badge tone="danger">{t('web.bcx_h_refused')}</Badge>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </StateSwitch>
     </Card>
@@ -1185,13 +1482,18 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
                 {
                   key: 'error',
                   header: t('web.bc_error_code'),
-                  render: (row) => (row.errorCode === null ? '—' : <code>{row.errorCode}</code>),
+                  render: (row) => (row.errorCode === null ? '—' : <Reason code={row.errorCode} />),
                 },
                 {
                   key: 'at',
                   header: t('web.bc_resolved_at'),
+                  // Roadmap C2: a deferred or retried recipient says when it is due again.
                   render: (row) =>
-                    row.resolvedAt === null ? '—' : formatTimestamp(row.resolvedAt),
+                    row.resolvedAt !== null
+                      ? formatTimestamp(row.resolvedAt)
+                      : row.nextAttemptAt !== null
+                        ? `${t('web.bcx_next_attempt')} ${formatTimestamp(row.nextAttemptAt)}`
+                        : '—',
                 },
                 {
                   key: 'pin',
@@ -1340,21 +1642,28 @@ export function BroadcastDetailPage({
                   <MediaCard record={record} blocked={composerDirty} />
                   {/* Keyed by version: a saved edit (purpose, audience, text) voids the count
                       and its estimate, which were answers about the draft as it was. */}
-                  <LaunchCard key={record.version} record={record} />
+                  <LaunchCard key={record.version} record={record} blocked={composerDirty} />
                 </>
               )}
               {summary}
+              <HistoryCard id={record.id} broadcastState={record.state} />
             </>
           ) : (
             <TwoColumn
               main={
                 <>
                   <ReportCard record={record} maySend={maySend} />
+                  <BotsCard id={record.id} broadcastState={record.state} />
                   <FailuresCard id={record.id} broadcastState={record.state} />
                   <RecipientsCard id={record.id} broadcastState={record.state} />
                 </>
               }
-              side={summary}
+              side={
+                <>
+                  {summary}
+                  <HistoryCard id={record.id} broadcastState={record.state} />
+                </>
+              }
             />
           )}
         </>
