@@ -58,7 +58,7 @@ describe('what a measurement reports', () => {
   });
 
   it('fails a device that is not touch, a sideways page, a small target and a cut control', () => {
-    expect(responsiveProblems({ ...clean, coarse: false })[0]).toMatch(/coarse pointer/);
+    expect(responsiveProblems({ ...clean, coarse: false })[0]).toMatch(/touch-only pointer/);
     expect(responsiveProblems({ ...clean, horizontalOverflow: 12 })[0]).toMatch(/12px/);
     expect(
       responsiveProblems({

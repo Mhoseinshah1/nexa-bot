@@ -218,7 +218,7 @@ const MEASURE = `(() => {
     };
   }
   return {
-    coarse: matchMedia('(pointer: coarse)').matches,
+    coarse: matchMedia('(pointer: coarse) and (hover: none)').matches,
     width: innerWidth,
     horizontalOverflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
     targets,

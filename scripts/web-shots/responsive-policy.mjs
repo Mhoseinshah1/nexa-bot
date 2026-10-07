@@ -70,7 +70,7 @@ export function responsiveProblems(facts) {
       .map((t) => `${t.desc} ${t.w}×${t.h}`)
       .join(', ') + (items.length > 6 ? `, … ${items.length - 6} more` : '');
   return [
-    !facts.coarse && 'the device did not report a coarse pointer (touch emulation failed)',
+    !facts.coarse && 'the device did not report a touch-only pointer (touch emulation failed)',
     facts.horizontalOverflow > 0 && `page overflows sideways by ${facts.horizontalOverflow}px`,
     small.length > 0 && `${small.length} touch target(s) under ${MIN_TARGET}px: ${list(small)}`,
     cut.length > 0 && `${cut.length} control(s) cut off at the viewport edge: ${list(cut)}`,
