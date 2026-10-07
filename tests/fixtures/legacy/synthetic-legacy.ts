@@ -171,6 +171,117 @@ function productReviewRows(snapshot: 'A' | 'B'): SyntheticRow[] {
 }
 
 /**
+ * Mirza migration PR3 — the invoice ARCHIVE variant of the `invoice` table: the default
+ * columns plus every column the public `mirza_pro` fork adds (`db/tables/invoice.php`),
+ * INCLUDING the three the `invoice-archive` read set must never read — `user_info` (a
+ * subscription link), `uuid` (an account UUID) and `bottype` (a sub-bot's token). Their
+ * synthetic values are recognisable markers, so a test can prove no byte of them reaches
+ * PostgreSQL, a report or an audit row.
+ *
+ * Used ONLY by `buildSyntheticLegacyDataset({ invoiceArchive })`. The default dataset keeps
+ * its invoice table exactly as it was: every `invoice` column is an input of the v1 schema
+ * hash, and the SYNTHETIC v1 fingerprint is pinned literally.
+ */
+export const SYNTHETIC_INVOICE_ARCHIVE_COLUMNS: readonly SyntheticColumn[] = [
+  ...SYNTHETIC_SCHEMA.invoice,
+  { name: 'user_info', ddl: 'text NULL', dataType: 'text' },
+  { name: 'uuid', ddl: 'text NULL', dataType: 'text' },
+  { name: 'note', ddl: 'varchar(500) NULL', dataType: 'varchar' },
+  { name: 'bottype', ddl: 'varchar(200) NULL', dataType: 'varchar' },
+  { name: 'refral', ddl: 'varchar(100) NULL', dataType: 'varchar' },
+  { name: 'time_cron', ddl: 'varchar(100) NULL', dataType: 'varchar' },
+  { name: 'notifctions', ddl: 'text NULL', dataType: 'text' },
+];
+
+/** Markers the archive variant puts in the columns the archive must never read. */
+export const SYNTHETIC_ARCHIVE_SECRETS = {
+  userInfo: 'https://sub.synthetic.invalid/SECRET-SUBSCRIPTION-LINK',
+  uuid: '00000000-5ec2-4e70-0000-5ec2e7000000',
+  bottype: '123456789:SYNTHETIC-SECRET-BOT-TOKEN',
+} as const;
+
+/**
+ * The archive variant's extra invoices, one per branch the archive must keep apart. Each
+ * names its own id, so the default invoices keep theirs. Snapshot `B` is a NEWER snapshot:
+ * `ab000001` changed status, `ab000002` is gone, `ab000099` is new, and user `999999998`
+ * (the owner of orphan `ab000003`) now exists — everything else is byte-identical.
+ */
+function invoiceArchiveRows(snapshot: 'A' | 'B'): SyntheticRow[] {
+  const C = SYNTHETIC_PANEL_CODES;
+  const archived = (
+    id: string,
+    fields: Partial<Record<string, string | null>> = {},
+  ): SyntheticRow => ({
+    id_invoice: id,
+    id_user: '100000001',
+    username: 'svc_archive',
+    Service_location: 'synthetic panel',
+    time_sell: '1700000000',
+    name_product: 'synthetic',
+    price_product: '150000',
+    Volume: '30',
+    Service_time: '30',
+    Status: 'active',
+    code_panel: C.mappedA,
+    code_product: null,
+    is_test: '0',
+    is_custom: '0',
+    time_unit: '',
+    user_info: SYNTHETIC_ARCHIVE_SECRETS.userInfo,
+    uuid: SYNTHETIC_ARCHIVE_SECRETS.uuid,
+    note: 'my config',
+    bottype: SYNTHETIC_ARCHIVE_SECRETS.bottype,
+    refral: '100000002',
+    time_cron: null,
+    notifctions: '{"volume":false,"time":false}',
+    ...fields,
+  });
+  const rows: SyntheticRow[] = [
+    // changes status in snapshot B: one ROW_CHANGED revision
+    archived('ab000001', { Status: snapshot === 'A' ? 'active' : 'disabled' }),
+    // gone in snapshot B: kept, counted missing
+    archived('ab000002', { Status: 'end_of_time' }),
+    // an orphan whose owner appears in snapshot B: CONTEXT_CHANGED
+    archived('ab000003', { id_user: '999999998' }),
+    // more orphans: no id_user, an empty one
+    archived('ab000004', { id_user: null }),
+    archived('ab000005', { id_user: '' }),
+    // a code the legacy product table does not have; a named one
+    archived('ab000006', { code_product: 'p404' }),
+    archived('ab000007', { code_product: ' p1 ' }),
+    // a panel code nobody mapped (the importer's PANEL_UNMAPPED is PR5's)
+    archived('ab000008', { code_panel: C.unmapped }),
+    // empty and blank panel codes: NO_PANEL (owner decision 8)
+    archived('ab000009', { code_panel: '' }),
+    archived('ab00000a', { code_panel: '   ' }),
+    // a removed legacy trial: TEST; an expired service: NOT_LIVE
+    archived('ab00000b', { is_test: '1', Status: 'removed' }),
+    archived('ab00000c', { Status: 'end_of_time' }),
+    // odd key shapes, archived all the same
+    archived('INV/2024/001'),
+    archived('ABCD'),
+    archived('فاکتور-۱'),
+    archived(' padded '),
+    archived('0000'),
+    // timestamps: no zone, Jalali digits, empty, milliseconds
+    archived('ab00000d', { time_sell: '2024-01-02 03:04:05' }),
+    archived('ab00000e', { time_sell: '14030101' }),
+    archived('ab00000f', { time_sell: '' }),
+    archived('ab000010', { time_sell: '1700000000000' }),
+    // prices: grouped, Persian digits, negative, empty
+    archived('ab000011', { price_product: '150,000' }),
+    archived('ab000012', { price_product: '۱۵۰۰۰۰' }),
+    archived('ab000013', { price_product: '-5' }),
+    archived('ab000014', { price_product: null }),
+  ];
+  if (snapshot === 'B') {
+    rows.push(archived('ab000099', { Status: 'active' }));
+    return rows.filter((row) => row['id_invoice'] !== 'ab000002');
+  }
+  return rows;
+}
+
+/**
  * Tables beside the three the importer reads, so the table INVENTORY has more than the
  * import read set to see (Mirza migration PR1):
  *
@@ -222,6 +333,8 @@ export interface SyntheticLegacyDataset {
   >;
   /** The review variant's product columns (PR2); absent on the default dataset. */
   readonly productColumns?: readonly SyntheticColumn[];
+  /** The archive variant's invoice columns (PR3); absent on the default dataset. */
+  readonly invoiceColumns?: readonly SyntheticColumn[];
 }
 
 /** The legacy panel codes the dataset uses, and what the example mapping says of each. */
@@ -358,6 +471,10 @@ export function buildSyntheticLegacyDataset(
     extraUsers?: number;
     /** Mirza PR2: the product review variant, as snapshot A or the newer snapshot B. */
     productReview?: 'A' | 'B';
+    /** Mirza PR3: the invoice archive variant, as snapshot A or the newer snapshot B. */
+    invoiceArchive?: 'A' | 'B';
+    /** Mirza PR3: that many more plain archived invoices (volume rehearsals of the archive). */
+    extraInvoices?: number;
   } = {},
 ): SyntheticLegacyDataset {
   invoiceSeq = 0;
@@ -474,6 +591,51 @@ export function buildSyntheticLegacyDataset(
           },
         ];
 
+  if (options.invoiceArchive !== undefined) {
+    // Every default invoice gains the fork's columns (the secrets among them), as a real
+    // fork's table would hold them for every row.
+    for (let i = 0; i < invoices.length; i += 1) {
+      invoices[i] = {
+        user_info: SYNTHETIC_ARCHIVE_SECRETS.userInfo,
+        uuid: SYNTHETIC_ARCHIVE_SECRETS.uuid,
+        note: null,
+        bottype: SYNTHETIC_ARCHIVE_SECRETS.bottype,
+        refral: null,
+        time_cron: null,
+        notifctions: '{"volume":false,"time":false}',
+        ...(invoices[i] as SyntheticRow),
+      };
+    }
+    invoices.push(...invoiceArchiveRows(options.invoiceArchive));
+    if (options.invoiceArchive === 'B') users.push(user('999999998', '0', '1'));
+    for (let i = 0; i < (options.extraInvoices ?? 0); i += 1) {
+      invoices.push({
+        id_invoice: (0xc0000000 + i).toString(16),
+        id_user: '100000001',
+        username: `svc_bulk_${String(i)}`,
+        Service_location: 'synthetic panel',
+        time_sell: String(1_700_000_000 + i),
+        name_product: 'synthetic',
+        price_product: '150000',
+        Volume: '30',
+        Service_time: '30',
+        Status: i % 3 === 0 ? 'removed' : 'active',
+        code_panel: SYNTHETIC_PANEL_CODES.mappedA,
+        code_product: i % 2 === 0 ? 'p1' : null,
+        is_test: '0',
+        is_custom: '0',
+        time_unit: '',
+        user_info: SYNTHETIC_ARCHIVE_SECRETS.userInfo,
+        uuid: SYNTHETIC_ARCHIVE_SECRETS.uuid,
+        note: null,
+        bottype: SYNTHETIC_ARCHIVE_SECRETS.bottype,
+        refral: null,
+        time_cron: null,
+        notifctions: '{"volume":false,"time":false}',
+      });
+    }
+  }
+
   const extra = options.extraUsers ?? 0;
   for (let i = 0; i < extra; i += 1) {
     users.push(user(String(200_000_000 + i), String(((i * 7919) % 100_000) + 1), '1'));
@@ -481,7 +643,12 @@ export function buildSyntheticLegacyDataset(
 
   const described: readonly (readonly [string, readonly SyntheticColumn[]])[] = [
     ['user', SYNTHETIC_SCHEMA.user],
-    ['invoice', SYNTHETIC_SCHEMA.invoice],
+    [
+      'invoice',
+      options.invoiceArchive === undefined
+        ? SYNTHETIC_SCHEMA.invoice
+        : SYNTHETIC_INVOICE_ARCHIVE_COLUMNS,
+    ],
     [
       'product',
       options.productReview === undefined
@@ -518,6 +685,9 @@ export function buildSyntheticLegacyDataset(
     ...(options.productReview === undefined
       ? {}
       : { productColumns: SYNTHETIC_PRODUCT_REVIEW_COLUMNS }),
+    ...(options.invoiceArchive === undefined
+      ? {}
+      : { invoiceColumns: SYNTHETIC_INVOICE_ARCHIVE_COLUMNS }),
   };
 }
 
@@ -536,7 +706,9 @@ export function syntheticLegacySql(dataset: SyntheticLegacyDataset): string {
     const described =
       table === 'product'
         ? (dataset.productColumns ?? SYNTHETIC_SCHEMA.product)
-        : SYNTHETIC_SCHEMA[table];
+        : table === 'invoice'
+          ? (dataset.invoiceColumns ?? SYNTHETIC_SCHEMA.invoice)
+          : SYNTHETIC_SCHEMA[table];
     out.push(`DROP TABLE IF EXISTS \`${table}\`;`);
     out.push(
       `CREATE TABLE \`${table}\` (\n  ${described

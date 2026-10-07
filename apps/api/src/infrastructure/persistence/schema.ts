@@ -13497,10 +13497,18 @@ export const legacyInvoiceArchiveRuns = pgTable(
     sourceProductRows: bigint('source_product_rows', { mode: 'bigint' }),
     /** The last staged invoice key whose revision decision is committed. */
     promotedThrough: text('promoted_through'),
-    promotedRows: bigint('promoted_rows', { mode: 'bigint' }).notNull().default(sql`0`),
-    insertedNew: bigint('inserted_new', { mode: 'bigint' }).notNull().default(sql`0`),
-    insertedRevision: bigint('inserted_revision', { mode: 'bigint' }).notNull().default(sql`0`),
-    unchanged: bigint('unchanged', { mode: 'bigint' }).notNull().default(sql`0`),
+    promotedRows: bigint('promoted_rows', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    insertedNew: bigint('inserted_new', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    insertedRevision: bigint('inserted_revision', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    unchanged: bigint('unchanged', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
     /** Archived invoices this run's snapshot no longer has. Counted, never deleted. */
     missingInSnapshot: bigint('missing_in_snapshot', { mode: 'bigint' }),
     /** Distinct archived invoices once this run completed. */
@@ -13696,11 +13704,7 @@ export const legacyInvoiceArchive = pgTable(
       sql`lower(username) text_pattern_ops`,
     ),
     index('legacy_invoice_archive_status_idx').on(table.tenantId, table.status, table.invoiceKey),
-    index('legacy_invoice_archive_panel_idx').on(
-      table.tenantId,
-      table.panelCode,
-      table.invoiceKey,
-    ),
+    index('legacy_invoice_archive_panel_idx').on(table.tenantId, table.panelCode, table.invoiceKey),
     index('legacy_invoice_archive_product_idx').on(
       table.tenantId,
       table.productCode,
