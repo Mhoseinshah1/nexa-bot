@@ -39,9 +39,9 @@ M=[
  ('SAI-M09',[(PROMPT,"(K1 is the closest match)","(K1 is the best match)")],P,'in both directions'),
  # --- A8: knowledge retrieval ---
  ('SAI-M10',[(RELEVANCE,"    .filter(({ score }) => score > 0)\n","")],D,'no match, or no query, selects nothing'),
- ('SAI-M11',[(RELEVANCE,"      score += weight * (termWeights.get(term) ?? 0) * (rarity.get(term) ?? 0);","      score += weight * (rarity.get(term) ?? 0);")],K,'a weighted part scores less'),
- ('SAI-M12',[(RELEVANCE,"      weights.set(term, Math.max(known ?? 0, part.weight));","      weights.set(term, part.weight);")],K,'at the highest weight'),
- ('SAI-M13',[(RELEVANCE,"      if (known === undefined && weights.size >= KNOWLEDGE_QUERY_MAX_TERMS) continue;\n","")],K,'the term bound keeps'),
+ ('SAI-M11',[(RELEVANCE,"      score += where * termWeight * (rarity.get(term) ?? 0);","      score += where * (rarity.get(term) ?? 0);")],K,'a weighted part scores less'),
+ ('SAI-M12',[(RELEVANCE,"        known.weight = Math.max(known.weight, part.weight);","        known.weight = part.weight;")],K,'at the highest weight'),
+ ('SAI-M13',[(RELEVANCE,"      if (added >= limit || terms.size >= KNOWLEDGE_QUERY_MAX_TERMS) continue;","      if (added >= limit) continue;")],K,'the term bound keeps'),
  ('SAI-M14',[(QUERY,"  if (episode.open) {","  if (episode.open && false) {")],K,'THE EPISODE'),
  ('SAI-M15',[(QUERY,"  const stepOrQuestion = last.decision === 'REPLY' || last.decision === 'ASK_CLARIFYING_QUESTION';","  const stepOrQuestion = true;")],K,'troubleshooting is open only after'),
  ('SAI-M16',[(QUERY,"      .flatMap((job) => job.knowledgeLabels)","      .flatMap(() => [] as string[])")],K,'CONTINUITY'),

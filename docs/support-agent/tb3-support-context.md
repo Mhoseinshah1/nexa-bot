@@ -290,7 +290,7 @@ A7/A8 tests: `tests/unit/support-ai-transcript.test.ts` (authors, markers, the w
 `tests/unit/support-knowledge-query.test.ts` (the weighted query, the episode, continuity, the
 bounds, the source), `tests/unit/support-ai-prompt.test.ts` (rules 4b and 13, the policy digest)
 and `tests/integration/support-assist.test.ts` (`priorDecisions` and the end-to-end repeated
-failure). Mutation results are in `sai-memory-falsification.md` (21 of 21 killed).
+failure). Mutation results are in `sai-memory-falsification.md` (28 of 28 killed).
 
 ## Tests
 
