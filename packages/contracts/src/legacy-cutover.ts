@@ -154,6 +154,12 @@ export const LEGACY_INVENTORY_SECTION_VERSION = 'nexa-legacy-inventory/v1' as co
 export const LEGACY_PRODUCTS_SECTION_VERSION = 'nexa-legacy-products/v1' as const;
 /** The invoice archive section (PR3's closure equations). */
 export const LEGACY_INVOICE_ARCHIVE_SECTION_VERSION = 'nexa-legacy-invoice-archive/v1' as const;
+/**
+ * The apply-run section: what the reported APPLY run left for a person, as its finish audit
+ * row recorded it — PR5's approval counters (`withdrawnDuringRun`, `unconfirmed`, …) and every
+ * attention count (`approvalUnconfirmed` — ADOPTION_UNCONFIRMED — among them).
+ */
+export const LEGACY_APPLY_RUN_SECTION_VERSION = 'nexa-legacy-apply-run/v1' as const;
 /** The cutover section: approvals, prior APPLY runs and the duplicate-effect counters. */
 export const LEGACY_CUTOVER_SECTION_VERSION = 'nexa-legacy-cutover/v1' as const;
 
