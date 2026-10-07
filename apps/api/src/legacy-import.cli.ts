@@ -25,6 +25,17 @@ import {
   inventoryMarkdown,
 } from './modules/platform/legacy-importer/application/legacy-inventory.js';
 import {
+  PRODUCTS_EXPORT_USAGE,
+  PRODUCTS_READ_USAGE,
+  ProductsUsageError,
+  mergeProductsIntoMap,
+  parseProductsExportArgs,
+  parseProductsReadArgs,
+  productsReadExitCode,
+  productsReadReport,
+  runProductsRead,
+} from './legacy-import-products.js';
+import {
   REVIEW_USAGE,
   ReviewUsageError,
   parseReviewArgs,
@@ -111,6 +122,7 @@ export const USAGE = [
   '',
   '  Review queue (terminal only): legacy-import review counts|list|resolve|reopen …',
   '  Table inventory (read-only):   legacy-import inventory --tenant … --source … --target …',
+  '  Legacy product review:         legacy-import products-read|products-export --help',
   '',
   `  --inventory-page-size N             rows per RickPanel list page, 1-${String(INVENTORY_MAX_PAGE_SIZE)}. Default here:`,
   `                                      ${String(INVENTORY_MAX_PAGE_SIZE)}, the reader's maximum (fewest provider reads, shortest`,
@@ -709,6 +721,82 @@ async function inventoryMain(argv: readonly string[]): Promise<number> {
   }
 }
 
+/**
+ * `legacy-import products-read …` (Mirza PR2, `legacy-import-products.ts`): the legacy product
+ * table into the legacy product review, bound to both approvals. Returns the exit code.
+ */
+async function productsReadMain(argv: readonly string[]): Promise<number> {
+  const args = parseProductsReadArgs(argv);
+  const env = process.env;
+  const targetUrl = resolveTarget(args.target, env);
+  const target = guardTarget(args, targetUrl, env);
+  const connector = await sourceConnector(args, env);
+  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  try {
+    const importer = container.legacyImporter();
+    const tenantId = await importer.resolveTenant(args.tenant);
+    if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
+    const outcome = await runProductsRead(importer, connector, args, {
+      scope: { tenantId: tenantId as never, botInstanceId: null },
+      actor: systemJobActor('legacy-import:products-read', container.ids.uuid() as CorrelationId),
+      productionLikeTarget: target.productionLike,
+    });
+    process.stdout.write(productsReadReport(outcome, args.format));
+    return productsReadExitCode(outcome);
+  } finally {
+    await container.shutdown();
+  }
+}
+
+/**
+ * `legacy-import products-export …` (Mirza PR2): the panel map `products` section from the
+ * approved review rows. Read-only on every database; it never writes the map file.
+ */
+async function productsExportMain(argv: readonly string[]): Promise<number> {
+  const args = parseProductsExportArgs(argv);
+  const env = process.env;
+  const targetUrl = resolveTarget(args.target, env);
+  guardTarget(args, targetUrl, env);
+  const mapText =
+    args.panelMap === null
+      ? null
+      : await readFile(args.panelMap, 'utf8').catch(() => {
+          throw new UsageError(`The panel mapping file ${args.panelMap ?? ''} cannot be read.`);
+        });
+  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  try {
+    const tenantId = await container.legacyImporter().resolveTenant(args.tenant);
+    if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
+    const scope = { tenantId: tenantId as never, botInstanceId: null };
+    const actor = systemJobActor(
+      'legacy-import:products-export',
+      container.ids.uuid() as CorrelationId,
+    );
+    const exported = await container.legacyProductReviews.exportMapping(
+      scope,
+      actor,
+      args.expectedProductsFingerprint,
+    );
+    process.stderr.write(
+      `exported ${String(exported.products.length)} code(s) from products read ${exported.readSetFingerprint}; ` +
+        `not exported: ${JSON.stringify(exported.notExported)}\n`,
+    );
+    if (mapText === null) {
+      process.stdout.write(`${JSON.stringify({ products: exported.products }, null, 2)}\n`);
+      return 0;
+    }
+    const reviewed = await container.legacyProductReviews.reviewedCodes(scope, actor);
+    const merged = mergeProductsIntoMap(mapText, tenantId, exported, reviewed);
+    process.stdout.write(`${JSON.stringify(merged.file, null, 2)}\n`);
+    process.stderr.write(
+      `panel map fingerprint with these products: ${merged.fingerprint} — a NEW value the owner approves.\n`,
+    );
+    return 0;
+  } finally {
+    await container.shutdown();
+  }
+}
+
 /** `--help` / `-h` anywhere: the usage on stdout and exit 0 (a usage ERROR stays 64 on stderr). */
 export function wantsHelp(argv: readonly string[]): boolean {
   return argv.includes('--help') || argv.includes('-h');
@@ -741,7 +829,8 @@ export function exitCodeForError(error: unknown): number {
   if (
     error instanceof UsageError ||
     error instanceof ReviewUsageError ||
-    error instanceof InventoryUsageError
+    error instanceof InventoryUsageError ||
+    error instanceof ProductsUsageError
   ) {
     console.error(error.message);
     return 64;
@@ -788,11 +877,17 @@ async function main(): Promise<number> {
         ? REVIEW_USAGE
         : process.argv[2] === 'inventory'
           ? INVENTORY_USAGE
-          : USAGE;
+          : process.argv[2] === 'products-read'
+            ? PRODUCTS_READ_USAGE
+            : process.argv[2] === 'products-export'
+              ? PRODUCTS_EXPORT_USAGE
+              : USAGE;
     process.stdout.write(`${usage}\n`);
     return 0;
   }
   if (process.argv[2] === 'inventory') return inventoryMain(process.argv.slice(3));
+  if (process.argv[2] === 'products-read') return productsReadMain(process.argv.slice(3));
+  if (process.argv[2] === 'products-export') return productsExportMain(process.argv.slice(3));
   if (process.argv[2] === 'review') {
     await reviewMain(process.argv.slice(3));
     return 0;

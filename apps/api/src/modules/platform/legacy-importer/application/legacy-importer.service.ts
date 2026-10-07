@@ -32,6 +32,12 @@ import {
 import type { MigrationOpeningBalanceService } from '../../../commerce/wallet/application/migration-opening-balance.service.js';
 import type { LegacyTrialEligibilityService } from '../../../commerce/trials/application/legacy-trial-eligibility.service.js';
 import type { LegacyProductService } from '../../../commerce/catalog/application/legacy-product.service.js';
+import type { LegacyProductReviewService } from '../../../commerce/legacy-product-review/application/legacy-product-review.service.js';
+import {
+  readLegacyProducts,
+  type ProductsReadInput,
+  type ProductsReadOutcome,
+} from './products-ingest.js';
 import { legacyProfileUsername, type ServiceCandidateCategory } from './decisions.js';
 import { crossCheckEvidence, type LegacyEvidence } from './evidence-runner.js';
 import {
@@ -102,6 +108,8 @@ export interface LegacyImporterDeps {
   readonly runInputs: LegacyRunInputsRepository;
   /** Mirza migration PR1: read set observations (`legacy_read_set_runs`). */
   readonly readSetRuns: LegacyReadSetRunRepository;
+  /** Mirza migration PR2: the legacy product review the `products` read set is ingested into. */
+  readonly productReview: Pick<LegacyProductReviewService, 'ingestBatch' | 'markAbsent'>;
   readonly customers: LegacyCustomerWriter;
   readonly inventory: LegacyInventoryPort;
   readonly openings: Pick<MigrationOpeningBalanceService, 'post'>;
@@ -738,6 +746,23 @@ export class LegacyImporterService {
         return outcome;
       },
       'LegacyReadSetRun',
+    );
+  }
+
+  /**
+   * Mirza migration PR2 — `legacy-import products-read` (`products-ingest.ts`): digest the
+   * `products` read set for approval, or, with that approval, ingest it into the legacy
+   * product review under this tenant's importer claim and record the read set run.
+   */
+  readProducts(input: ProductsReadInput): Promise<ProductsReadOutcome> {
+    return readLegacyProducts(
+      {
+        processLock: this.deps.processLock,
+        review: this.deps.productReview,
+        recordReadSetRun: (scope, actor, observation) =>
+          this.recordReadSetRun(scope, actor, observation),
+      },
+      input,
     );
   }
 
