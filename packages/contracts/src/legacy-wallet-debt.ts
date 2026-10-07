@@ -216,9 +216,7 @@ export const legacyWalletDebtSummaryResponseSchema = z.object({
     z.object({ count: z.number().int().nonnegative(), sumMinor: z.string() }),
   ),
 });
-export type LegacyWalletDebtSummaryResponse = z.infer<
-  typeof legacyWalletDebtSummaryResponseSchema
->;
+export type LegacyWalletDebtSummaryResponse = z.infer<typeof legacyWalletDebtSummaryResponseSchema>;
 
 export const legacyWalletDebtResponseSchema = z.object({ debt: legacyWalletDebtViewSchema });
 export type LegacyWalletDebtResponse = z.infer<typeof legacyWalletDebtResponseSchema>;
