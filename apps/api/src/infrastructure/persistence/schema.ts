@@ -244,6 +244,8 @@ import {
   LEGACY_PRODUCT_REVIEW_DECIDED_STATES,
   LEGACY_PRODUCT_SOURCE_CONFLICTS,
   LEGACY_INVOICE_ARCHIVE_CLASSES,
+  LEGACY_WALLET_DEBT_CURRENCY,
+  LEGACY_WALLET_DEBT_STATES,
   LEGACY_INVOICE_ARCHIVE_RUN_FAILURES,
   LEGACY_INVOICE_ARCHIVE_RUN_STATES,
   LEGACY_INVOICE_PARSE_NOTES,
@@ -13743,6 +13745,85 @@ export const legacyInvoiceArchive = pgTable(
     check(
       'legacy_invoice_archive_hashes_check',
       sql`row_checksum ~ '^[0-9a-f]{64}$' AND archive_checksum ~ '^[0-9a-f]{64}$' AND read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND normalization_version ~ '^legacy-invoice-archive:v[1-9][0-9]{0,3}$'`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR4 — a legacy wallet DEBT (owner decision 6, 2026-10-07;
+ * `docs/migration-opening-balance.md` §Negative balances).
+ *
+ * A negative legacy `user.Balance` is held for review instead of becoming a ledger DEBIT:
+ * this row records it — the exact magnitude owed, its currency, the legacy user id and the
+ * snapshot it was read from — and the customer's NEXA balance starts at 0. It is NOT a
+ * wallet entry and there is deliberately no foreign key to `wallet_entries`, orders or
+ * payments: no balance, purchase, top-up, refund or clawback reads it, so nothing nets it
+ * off. The owner's per-customer decision is a label (`state`) and moves no money.
+ *
+ * One debt per customer and per legacy user id (the importer's derived idempotency key,
+ * like the opening reference). The recorded facts are immutable and the row is never
+ * deleted (`0227`); only the decision columns move, by a conditional UPDATE naming its
+ * `from` state at the version the operator saw.
+ */
+export const legacyWalletDebts = pgTable(
+  'legacy_wallet_debts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** The legacy `user.id`: the customer's own Telegram id (checked by the writer). */
+    legacyUserId: text('legacy_user_id').notNull(),
+    /** The MAGNITUDE owed, in minor units of `currency`. Always > 0. */
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The v1 source fingerprint of the snapshot the debt was read from. */
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    /** The legacy user row's `user:v1` checksum in that snapshot. */
+    rowChecksum: text('row_checksum').notNull(),
+    /** The APPLY run that recorded it. */
+    runId: uuid('run_id').notNull(),
+    state: text('state').notNull(),
+    decisionReason: text('decision_reason'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    decidedAt: timestamptz('decided_at'),
+    version: integer('version').notNull().default(1),
+    recordedAt: timestamptz('recorded_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_wallet_debts_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_wallet_debts_tenant_customer_key').on(table.tenantId, table.customerId),
+    unique('legacy_wallet_debts_tenant_legacy_user_key').on(table.tenantId, table.legacyUserId),
+    index('legacy_wallet_debts_tenant_state_idx').on(table.tenantId, table.state, table.id),
+    foreignKey({
+      name: 'legacy_wallet_debts_tenant_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'legacy_wallet_debts_tenant_run_fk',
+      columns: [table.tenantId, table.runId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+    }),
+    foreignKey({
+      name: 'legacy_wallet_debts_tenant_admin_fk',
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('legacy_wallet_debts_state_check', enumCheck('state', LEGACY_WALLET_DEBT_STATES)),
+    check(
+      'legacy_wallet_debts_amount_check',
+      sql`amount_minor > 0 AND currency = ${sql.raw(`'${LEGACY_WALLET_DEBT_CURRENCY}'`)}`,
+    ),
+    check(
+      'legacy_wallet_debts_identity_check',
+      sql`legacy_user_id ~ '^[1-9][0-9]{0,19}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND row_checksum ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_wallet_debts_decision_check',
+      sql`(state = 'PENDING_REVIEW' OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500) AND version >= 1`,
     ),
   ],
 );
