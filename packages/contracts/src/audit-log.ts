@@ -85,6 +85,10 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   'recovery_kit.exported': ['recovery.kit.export'],
   'recovery_kit.imported': ['recovery.kit.import'],
   'installation_key.removed': ['recovery.key.remove'],
+  // Mirza PR6: both the owner's cutover approval and its revocation are charged on the
+  // CRITICAL `legacy.cutover.approve` (`legacy-cutover.service.ts`, `requireApprove`).
+  'legacy.cutover.approve': ['legacy.cutover.approve'],
+  'legacy.cutover.revoke': ['legacy.cutover.approve'],
 };
 
 export const AUDIT_CRITICAL_ACTION_CODES: readonly string[] = Object.keys(AUDIT_CRITICAL_ACTIONS);
