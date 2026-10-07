@@ -265,6 +265,17 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    // Mirza migration PR4 (owner decision 6): negative legacy balances held for the owner's
+    // review — never a ledger entry, never collected. Beside the other legacy reviews. Its
+    // own MEDIUM permission (observers do not see it); deciding needs a HIGH one.
+    id: 'legacy-debts',
+    path: '/legacy-debts',
+    label: 'web.nav_legacy_debts',
+    icon: 'wallet',
+    permission: 'legacy.debts.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'custom-service',
     path: '/custom-service',
     label: 'web.nav_custom_service',
