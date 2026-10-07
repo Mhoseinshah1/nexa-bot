@@ -2199,6 +2199,36 @@ export const WEB_FA = {
   'web.payment_operator_action_issue_refund': 'بازپرداخت — کارت بازپرداخت‌ها',
   'web.payment_operator_action_settle_refund': 'تکمیل یا لغو بازپرداخت باز — کارت بازپرداخت‌ها',
   // --- end roadmap E1/E2 block ---
+  // --- roadmap E4/E5 (Agent 5, payments): one money breakdown, one rate provenance ---
+  'web.payment_amounts': 'مبالغ این پرداخت',
+  'web.payment_amounts_hint':
+    'همهٔ مبالغ را سرور از تصویر ثبت‌شدهٔ همین پرداخت حساب کرده است؛ این صفحه چیزی محاسبه نمی‌کند.',
+  'web.payment_amounts_principal': 'مبلغ اصل (سفارش یا شارژ)',
+  'web.payment_amounts_customer_fee': 'کارمزد درگاه (درآمد نیست، بازپرداخت‌پذیر نیست)',
+  'web.payment_amounts_customer_paid': 'پرداختی مشتری',
+  'web.payment_amounts_received': 'دریافت‌شده از بیرون (تأییدشده)',
+  'web.payment_amounts_wallet_credit': 'واریز به کیف پول با این پرداخت',
+  'web.payment_amounts_wallet_debit': 'برداشت از کیف پول با این پرداخت',
+  'web.payment_amounts_refund_ceiling': 'سقف بازپرداخت',
+  'web.payment_amounts_merchant_net': 'خالص دریافتی فروشنده',
+  'web.payment_amounts_merchant_net_not_recorded':
+    'ثبت نشده — هیچ درگاهی سهم خود را گزارش نمی‌کند و این عدد ساخته نمی‌شود.',
+  'web.payment_rate_provenance': 'منشأ نرخ تبدیل',
+  'web.payment_rate_provenance_hint':
+    'نرخی که هنگام ساخت این فاکتور ثبت و قفل شد؛ نرخ امروز آن را تغییر نمی‌دهد.',
+  'web.payment_rate_authority': 'مرجع نرخ',
+  'web.payment_rate_authority_none': 'بدون تبدیل (درگاه به ارز فروش صورت‌حساب می‌دهد)',
+  'web.payment_rate_authority_operator': 'نرخ ثابت تعیین‌شده توسط اپراتور',
+  'web.payment_rate_authority_market': 'نرخ مرکزی بازار',
+  'web.payment_rate_value': 'نرخ (واحد خرد ارز فروش به ازای هر واحد درگاه)',
+  'web.payment_rate_missing': 'نرخی ثبت نشده است؛ هیچ نرخ دیگری جایگزین نمی‌شود.',
+  'web.payment_rate_source': 'منبع',
+  'web.payment_rate_quoted_at': 'زمان دفتر سفارش منبع',
+  'web.payment_rate_fetched_at': 'زمان دریافت نرخ',
+  'web.payment_rate_quote_state': 'وضعیت نرخ هنگام قیمت‌گذاری',
+  'web.payment_rate_quote_id': 'شناسهٔ نرخ',
+  'web.payment_rate_frozen_at': 'زمان قفل شدن نرخ روی فاکتور',
+  // --- end roadmap E4/E5 block ---
   'web.payment_ops_gateway_all': 'همهٔ درگاه‌ها',
   'web.payment_ops_range': 'بازهٔ ایجاد',
   'web.payment_ops_range_all': 'همهٔ زمان‌ها',
@@ -2864,6 +2894,18 @@ export const WEB_FA = {
    * and the two must not be merged: the first is a payment that never نشست or a
    * روش that has no channel in this release.
    */
+  // --- roadmap E3 (Agent 5, payments): why a payment cannot be refunded, and what exists ---
+  'web.refund_refusal_not_settled':
+    'این پرداخت تأیید نشده است و پولی از آن دریافت نشده که بازگردانده شود. اگر پول نزد درگاه است (تأیید دیرهنگام یا پرداخت ناقص)، بازپرداخت درگاه در این نسخه وجود ندارد؛ راهنمای وضعیت بالای صفحه می‌گوید چه راهی هست.',
+  'web.refund_refusal_channel_unsupported':
+    'این پرداخت از درگاه آمده و برای بازگرداندن پول از طریق درگاه هیچ مسیر واقعی در این نسخه وجود ندارد؛ چیزی وانمود نمی‌شود. اگر سفارش تحویل نشود، مبلغ خودکار به کیف پول مشتری برمی‌گردد.',
+  'web.refund_refusal_topup':
+    'این شارژ کیف پول است و مبلغ آن پیش‌تر به کیف پول مشتری رفته است؛ بازپرداخت آن پول را دو بار برمی‌گرداند. برداشت از کیف پول به حساب بانکی عملیات جداگانه‌ای است که در این نسخه وجود ندارد.',
+  'web.refund_refusal_currency':
+    'بازپرداخت‌های این پرداخت با ارز دیگری ثبت شده‌اند؛ سامانه برای ایمنی آن را متوقف می‌کند. این را به پشتیبانی فنی گزارش دهید.',
+  'web.refund_refusal_delivery':
+    'ساخت سرویس این سفارش هنوز به نتیجهٔ قطعی نرسیده است و بازپرداخت پولِ سرویسی که شاید ساخته شده باشد مجاز نیست. با پایان ساخت، این محدودیت خودبه‌خود برطرف می‌شود.',
+  // --- end roadmap E3 block ---
   'web.refund_unavailable':
     'در حال حاضر این پرداخت قابل بازگشت نیست. یا هنوز تأیید نشده است، یا روش پرداخت آن در این نسخه مسیر بازگشتی ندارد، یا مبلغ آن پیش‌تر به کیف پول مشتری رفته است، یا ساخت سرویس سفارش آن هنوز به نتیجهٔ قطعی نرسیده است. مورد آخر با پایان ساخت خودبه‌خود برطرف می‌شود.',
   /*

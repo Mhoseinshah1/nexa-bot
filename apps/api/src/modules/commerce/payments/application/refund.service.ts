@@ -169,6 +169,8 @@ export interface RefundLedgerView {
   readonly refundableMinor: bigint;
   /** False when the payment cannot be refunded AT ALL, whatever the amount. */
   readonly refundable: boolean;
+  /** Roadmap E3: why `refundable` is false — the write path's own refusal — or null. */
+  readonly refusalReason: RefundRefusalReason | null;
 }
 
 /**
@@ -252,13 +254,16 @@ export class RefundService {
     const consumedMinor = rows
       .filter((refund) => refund.state !== 'FAILED')
       .reduce((total, refund) => total + refund.amount.amountMinor, 0n);
+    // ONE decision for the flag and the reason, the same one the write path refuses with.
+    const refusal = await this.refusalFor(scope, payment);
 
     return {
       refunds: rows,
       paid: payment.amount,
       consumedMinor,
       refundableMinor: refundableMinor(payment.amount.amountMinor, consumedMinor),
-      refundable: (await this.refusalFor(scope, payment)) === null,
+      refundable: refusal === null,
+      refusalReason: refusal,
     };
   }
 

@@ -775,4 +775,69 @@ describe('Phase E2: the financial statement', () => {
     );
     expect(misplaced.statusCode).toBe(400);
   });
+
+  /*
+   * Roadmap E4 (`docs/payment-fees-fx.md`): ONE source of truth for a payment's money. Every
+   * payment the cash section counts is fetched over HTTP, and the breakdown the server
+   * computed for its detail (`amounts`) is summed: the report's principal, customer fees and
+   * customer paid are exactly those sums, per currency; a confirmed payment's refund ceiling
+   * is its refund ledger's `paidMinor` and never includes the fee; and the fee-bearing
+   * gateway sale shows principal + fee = paid.
+   */
+  it('reports exactly the sum of the payments’ own money breakdowns, and refunds against the principal only (E4)', async () => {
+    const report = await financial(`${RANGE}&granularity=DAY`);
+    const start = report.buckets[0]?.start as string;
+    const end = report.buckets.at(-1)?.end as string;
+    const rows = (
+      (await run(sql`SELECT id FROM payments
+         WHERE tenant_id = ${tenantA.tenantId} AND state = 'CONFIRMED' AND method <> 'WALLET'
+           AND confirmed_at >= ${start}::timestamptz AND confirmed_at < ${end}::timestamptz`)) as unknown as {
+        rows: { id: string }[];
+      }
+    ).rows;
+    expect(rows.length).toBeGreaterThan(2);
+    const sums = new Map<string, { principal: bigint; fees: bigint; paid: bigint }>();
+    let feeBearing = 0;
+    for (const { id } of rows) {
+      const detail = await get(`/payments/${id}`);
+      expect(detail.statusCode, detail.body).toBe(200);
+      const payment = (
+        detail.json() as {
+          payment: { orderId: string | null; amounts: Record<string, unknown> | null };
+        }
+      ).payment;
+      const amounts = payment.amounts;
+      if (amounts === null) throw new Error(`no amounts on ${id}`);
+      const currency = amounts['currency'] as string;
+      const into = sums.get(currency) ?? { principal: 0n, fees: 0n, paid: 0n };
+      into.principal += BigInt(amounts['principal'] as string);
+      into.fees += BigInt(amounts['customerFee'] as string);
+      into.paid += BigInt(amounts['customerPaid'] as string);
+      sums.set(currency, into);
+      // Money that came from outside and was confirmed is exactly what the customer paid.
+      expect(amounts['received']).toBe(amounts['customerPaid']);
+      if (amounts['customerFee'] !== '0') {
+        feeBearing += 1;
+        expect(
+          BigInt(amounts['principal'] as string) + BigInt(amounts['customerFee'] as string),
+        ).toBe(BigInt(amounts['customerPaid'] as string));
+      }
+      // The refund ceiling is the principal — never the fee — and it is the figure the refund
+      // ledger bounds by. (Read for the top-ups: this fixture's orders carry no real quote,
+      // which the ledger's delivery check parses; `payment-money-truth.test.ts` reads orders.)
+      expect(amounts['refundCeiling']).toBe(amounts['principal']);
+      if (payment.orderId === null) {
+        const ledger = await get(`/payments/${id}/refunds`);
+        expect(ledger.statusCode, ledger.body).toBe(200);
+        expect((ledger.json() as { paidMinor: string }).paidMinor).toBe(amounts['refundCeiling']);
+      }
+    }
+    expect(feeBearing).toBeGreaterThan(0);
+    for (const total of report.totals) {
+      const mine = sums.get(total.currency) ?? { principal: 0n, fees: 0n, paid: 0n };
+      expect(total.principalReceived, total.currency).toBe(mine.principal.toString());
+      expect(total.customerFees, total.currency).toBe(mine.fees.toString());
+      expect(total.customerPaid, total.currency).toBe(mine.paid.toString());
+    }
+  });
 });
