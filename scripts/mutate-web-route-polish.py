@@ -21,6 +21,9 @@ SUB=W+'submission-key.ts'
 INC=W+'pages/incidents.tsx'
 T_SUB='tests/web/submission-key.test.tsx'
 T_INC='tests/web/incidents.test.tsx'
+RTR=W+'router.ts'
+APP=W+'app.tsx'
+T_RTR='tests/web/router.test.tsx'
 
 M=[
  # --- B3: one idempotency key per logical attempt -------------------------------------------
@@ -39,6 +42,9 @@ M=[
  ('WRP-11',[(SUB,"if (error instanceof ApiError && error.status === 409) handlers?.onConflict?.();","if (error instanceof ApiError && error.status >= 400) handlers?.onConflict?.();")],T_SUB,'on a 409, and on nothing else'),
  ('WRP-12',[(SUB,"if (error instanceof ApiError && error.status === 409) handlers?.onConflict?.();","")],T_INC,'re-reads the incident on a version conflict'),
  ('WRP-13',[(INC,"submission.settleOn(error, { onConflict: () => void refresh(queries, incident.id) }),","submission.settleOn(error),")],T_INC,'re-reads the incident on a version conflict'),
+ # --- B4: the breadcrumb returns to the list as it was left ----------------------------------
+ ('WRP-14',[(APP,"href: entry ? rememberedHref(entry.path) : '/'","href: entry ? entry.path : '/'")],T_RTR,'carries the filters'),
+ ('WRP-15',[(RTR,"  snapshot = read();\n  remember(snapshot);\n  emit();","  snapshot = read();\n  emit();")],T_RTR,'breadcrumb back to a list'),
 ]
 
 only=sys.argv[1:]

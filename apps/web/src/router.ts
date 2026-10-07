@@ -74,7 +74,30 @@ function refresh(): void {
   if (next === snapshotKey && snapshot !== null) return;
   snapshotKey = next;
   snapshot = read();
+  remember(snapshot);
   emit();
+}
+
+/**
+ * The query each path was last shown with, for this tab's session (roadmap B4).
+ *
+ * A list keeps its filters, its search and its cursor in the URL, so a detail page's
+ * breadcrumb back to the list could restore them — but it linked the bare path, and an
+ * operator who opened one row of a filtered list came back to the unfiltered first page.
+ * Back/Forward always restored them (history holds the URL); the crumb now does too.
+ * The sidebar link still goes to the bare path: choosing a section from the navigation
+ * is how an operator asks for it fresh.
+ */
+const lastQueries = new Map<string, string>();
+
+function remember(route: Route): void {
+  lastQueries.set(route.path, route.query.toString());
+}
+
+/** `path` with the query it was last shown with in this session, or `path` alone. */
+export function rememberedHref(path: string): string {
+  const query = lastQueries.get(path);
+  return query === undefined || query === '' ? path : `${path}?${query}`;
 }
 
 /*
@@ -313,6 +336,7 @@ function getSnapshot(): Route {
   if (snapshot === null) {
     snapshot = read();
     snapshotKey = key();
+    remember(snapshot);
   }
   return snapshot;
 }

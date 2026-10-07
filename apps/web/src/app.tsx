@@ -4,7 +4,15 @@ import { isPermissionKey, type PermissionKey, type SessionResponse } from '@nexa
 import { finalAnswer, pollSession } from './polling';
 import { ApiError, completeSecondFactor, fetchSession, signIn, signOut } from './api/client';
 import { t } from './i18n/web.fa';
-import { match, navigate, useDocumentTitle, useLinkHandler, useRoute, type Route } from './router';
+import {
+  match,
+  navigate,
+  rememberedHref,
+  useDocumentTitle,
+  useLinkHandler,
+  useRoute,
+  type Route,
+} from './router';
 import { useTheme } from './theme';
 import { Icon } from './ui/icons';
 import { Empty, LeaveGuardHost, ToastProvider } from './ui/kit';
@@ -278,7 +286,8 @@ export function resolve(
 
   const nav = (id: string): { label: string; href: string } => {
     const entry = NAV.find((candidate) => candidate.id === id);
-    return { label: entry ? t(entry.label) : id, href: entry ? entry.path : '/' };
+    // Back to the list as it was left: its filters, search and page (`rememberedHref`).
+    return { label: entry ? t(entry.label) : id, href: entry ? rememberedHref(entry.path) : '/' };
   };
 
   if (route.path === '/') {
