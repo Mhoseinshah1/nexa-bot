@@ -4,7 +4,6 @@ import {
   ProductObservationAssembler,
   digestProductsReadSet,
   liveInvoiceCountsByCode,
-  productCodeMultiplicity,
   readApprovedProductsReadSet,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/products-read-set';
 import {
@@ -98,7 +97,7 @@ describe('the products read set', () => {
     const onBatch = vi.fn();
     await expect(
       readApprovedProductsReadSet(await open('A'), 'f'.repeat(64), { batchSize: 2, onBatch }),
-    ).rejects.toThrow(/SOURCE_FINGERPRINT_MISMATCH/u);
+    ).rejects.toThrow(/READ_SET_FINGERPRINT_MISMATCH/u);
     expect(onBatch).not.toHaveBeenCalled();
   });
 
@@ -123,22 +122,15 @@ describe('assembling per-code observations', () => {
   it('keeps distinct codes distinct, groups a duplicated code, skips unreviewable codes', async () => {
     const session = await open('A');
     const approved = (await digestProductsReadSet(session)).fingerprint;
-    const assembler = new ProductObservationAssembler(
-      await productCodeMultiplicity(session),
-      await liveInvoiceCountsByCode(session),
-    );
-    const seen: { code: string; rows: number; live: number }[] = [];
+    const assembler = new ProductObservationAssembler(await liveInvoiceCountsByCode(session));
     await readApprovedProductsReadSet(session, approved, {
       // A batch of 1 puts the two `dup` rows in different batches: they are still one code.
       batchSize: 1,
-      onBatch: (batch) => {
-        for (const o of assembler.take(batch)) {
-          seen.push({ code: o.code, rows: o.rows.length, live: o.liveInvoiceCount });
-        }
-        return Promise.resolve();
-      },
+      onBatch: (batch) => assembler.take(batch),
     });
-    assembler.finish();
+    const seen = assembler
+      .finish()
+      .map((o) => ({ code: o.code, rows: o.rows.length, live: o.liveInvoiceCount }));
     const byCode = Object.fromEntries(seen.map((o) => [o.code, o]));
     expect(Object.keys(byCode).sort()).toEqual(
       ['dup', 'p1', 'p13', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9'].sort(),

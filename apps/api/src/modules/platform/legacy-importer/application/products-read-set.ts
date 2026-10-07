@@ -9,12 +9,7 @@ import {
   type LegacyReadSetBatch,
   type LegacyReadSetResult,
 } from './read-set.js';
-import {
-  LEGACY_LIVE_STATUSES,
-  LegacySourceRefused,
-  type LegacyCell,
-  type LegacySourceSession,
-} from './source-port.js';
+import { LEGACY_LIVE_STATUSES, type LegacyCell, type LegacySourceSession } from './source-port.js';
 
 /**
  * Mirza migration PR2 — the `products` read set (`legacy-read-set:products:v1`): the legacy
@@ -93,18 +88,6 @@ export async function liveInvoiceCountsByCode(
   return counts;
 }
 
-/** How many legacy rows carry each (trimmed) code, so a duplicated code is written whole. */
-export async function productCodeMultiplicity(
-  session: LegacySourceSession,
-): Promise<ReadonlyMap<string, number>> {
-  const counts = new Map<string, number>();
-  for await (const [, code] of session.readSetRows('product', 'id', ['id', 'code_product'])) {
-    const parsed = legacyProductCode(code ?? null);
-    if (parsed.ok) counts.set(parsed.code, (counts.get(parsed.code) ?? 0) + 1);
-  }
-  return counts;
-}
-
 export interface ProductRowsSkipped {
   /** A NULL or blank code: the importer's hidden-shape path, never a named product. */
   CODE_EMPTY: number;
@@ -113,23 +96,23 @@ export interface ProductRowsSkipped {
 }
 
 /**
- * Turns the delivering pass's batches into per-code observations. A code with one row is
- * handed on at once; the rows of a duplicated code are held until the last one arrives (the
- * multiplicity pass said how many), so the review sees every row of it together.
+ * Gathers the delivering pass's rows into per-code observations, in first-seen (primary-key
+ * byte) order, and hands them over only once the WHOLE read set has been delivered and
+ * verified (`finish`). Nothing is written while the legacy session is open: the MySQL source
+ * refuses to run inside a database transaction (`transaction-boundary.ts`), so a transaction
+ * cannot span the delivery, and holding the observations until `readLegacyReadSet` has
+ * returned is what makes a `READ_SET_SNAPSHOT_DIVERGED` read write NOTHING. Memory is the
+ * legacy `product` table — the merchant's plan catalogue, not a transaction table.
  */
 export class ProductObservationAssembler {
   readonly skipped: ProductRowsSkipped = { CODE_EMPTY: 0, CODE_INVALID: 0 };
   rows = 0;
-  private readonly pending = new Map<string, LegacyProductFactRow[]>();
+  private readonly byCode = new Map<string, LegacyProductFactRow[]>();
 
-  constructor(
-    private readonly multiplicity: ReadonlyMap<string, number>,
-    private readonly liveCounts: ReadonlyMap<string, number>,
-  ) {}
+  constructor(private readonly liveCounts: ReadonlyMap<string, number>) {}
 
-  take(batch: LegacyReadSetBatch): LegacyProductCodeObservation[] {
+  take(batch: LegacyReadSetBatch): void {
     if (batch.table !== 'product') throw new Error(`unexpected table ${batch.table}`);
-    const out: LegacyProductCodeObservation[] = [];
     const codeAt = batch.columns.indexOf('code_product');
     for (const cells of batch.rows) {
       this.rows += 1;
@@ -138,38 +121,19 @@ export class ProductObservationAssembler {
         this.skipped[parsed.reason] += 1;
         continue;
       }
-      const row = factRow(batch.columns, cells);
-      const expected = this.multiplicity.get(parsed.code) ?? 0;
-      const held = [...(this.pending.get(parsed.code) ?? []), row];
-      if (held.length < expected) {
-        this.pending.set(parsed.code, held);
-        continue;
-      }
-      if (held.length > expected) {
-        // The snapshot is one READ ONLY transaction: two passes cannot disagree.
-        throw new LegacySourceRefused(
-          'SOURCE_UNREADABLE',
-          'the product table changed between passes',
-        );
-      }
-      this.pending.delete(parsed.code);
-      out.push({
-        code: parsed.code,
-        rows: held,
-        liveInvoiceCount: this.liveCounts.get(parsed.code) ?? 0,
-      });
+      const held = this.byCode.get(parsed.code);
+      if (held === undefined) this.byCode.set(parsed.code, [factRow(batch.columns, cells)]);
+      else held.push(factRow(batch.columns, cells));
     }
-    return out;
   }
 
-  /** Every held code must have completed by the end of the pass. */
-  finish(): void {
-    if (this.pending.size > 0) {
-      throw new LegacySourceRefused(
-        'SOURCE_UNREADABLE',
-        'the product table changed between passes',
-      );
-    }
+  /** Every code, every row of it together (a duplicated code is one observation). */
+  finish(): LegacyProductCodeObservation[] {
+    return [...this.byCode].map(([code, rows]) => ({
+      code,
+      rows,
+      liveInvoiceCount: this.liveCounts.get(code) ?? 0,
+    }));
   }
 }
 
@@ -190,34 +154,18 @@ export function digestProductsReadSet(session: LegacySourceSession): Promise<Leg
 }
 
 /**
- * The products read set, delivered ONLY when it is the approved one: a digest-only pass
- * first, compared with `expectedFingerprint`, refused on a mismatch before `onBatch` ever
- * runs; then the delivering pass, in the same snapshot, which must produce the same value.
- * No write can happen for a read set nobody approved.
+ * The products read set, delivered ONLY when it is the approved one (`readLegacyReadSet`): a
+ * digest-only pass compared with `expectedFingerprint` — a mismatch is
+ * `READ_SET_FINGERPRINT_MISMATCH` before `onBatch` ever runs — then the delivering pass,
+ * which must reproduce it (`READ_SET_SNAPSHOT_DIVERGED` otherwise).
  */
-export async function readApprovedProductsReadSet(
+export function readApprovedProductsReadSet(
   session: LegacySourceSession,
   expectedFingerprint: string,
   options: {
     readonly batchSize: number;
-    readonly onBatch: (batch: LegacyReadSetBatch) => Promise<void>;
+    readonly onBatch: (batch: LegacyReadSetBatch) => Promise<void> | void;
   },
 ): Promise<LegacyReadSetResult> {
-  const digest = await readLegacyReadSet(session, PRODUCTS_READ_SET);
-  assertApprovedProducts(digest.fingerprint, expectedFingerprint);
-  const delivered = await readLegacyReadSet(session, PRODUCTS_READ_SET, options);
-  if (delivered.fingerprint !== digest.fingerprint) {
-    throw new LegacySourceRefused('SOURCE_UNREADABLE', 'the product table changed between passes');
-  }
-  return delivered;
-}
-
-export function assertApprovedProducts(actual: string, expected: string): void {
-  if (actual !== expected) {
-    throw new LegacySourceRefused(
-      'SOURCE_FINGERPRINT_MISMATCH',
-      `the products read set fingerprint is ${actual}, but --expected-products-fingerprint is ` +
-        `${expected}: this is not the product table that was approved. Nothing was written.`,
-    );
-  }
+  return readLegacyReadSet(session, PRODUCTS_READ_SET, { ...options, expectedFingerprint });
 }

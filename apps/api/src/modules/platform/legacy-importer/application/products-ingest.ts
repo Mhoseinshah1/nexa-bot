@@ -17,7 +17,6 @@ import {
   ProductObservationAssembler,
   digestProductsReadSet,
   liveInvoiceCountsByCode,
-  productCodeMultiplicity,
   readApprovedProductsReadSet,
   type ProductRowsSkipped,
 } from './products-read-set.js';
@@ -110,6 +109,7 @@ export async function readLegacyProducts(
     );
   }
   const approvedProducts = input.expectedProductsFingerprint;
+  const batchSize = input.batchSize ?? READ_SET_DEFAULT_BATCH;
 
   const lease = await deps.processLock.tryAcquire(input.scope.tenantId);
   if (lease === null) {
@@ -136,21 +136,31 @@ export async function readLegacyProducts(
         });
         if (!label.ok) throw new LegacySourceRefused('SOURCE_UNREADABLE', label.message);
         const liveCounts = await liveInvoiceCountsByCode(session);
-        const multiplicity = await productCodeMultiplicity(session);
-        const assembler = new ProductObservationAssembler(multiplicity, liveCounts);
-        const target = { readSetFingerprint: approvedProducts, sourceFingerprint: v1.fingerprint };
+        const assembler = new ProductObservationAssembler(liveCounts);
         const result = await readApprovedProductsReadSet(session, approvedProducts, {
-          batchSize: input.batchSize ?? READ_SET_DEFAULT_BATCH,
-          onBatch: async (batch) => {
-            if (lease.isLost()) throw lostClaim();
-            const observations = assembler.take(batch);
-            add(await deps.review.ingestBatch(input.scope, input.actor, target, observations));
-          },
+          batchSize,
+          onBatch: (batch) => assembler.take(batch),
         });
-        assembler.finish();
-        return { v1, result, skipped: assembler.skipped };
+        return { v1, result, skipped: assembler.skipped, observations: assembler.finish() };
       },
     );
+    // The legacy session is closed and the delivered read verified: only now is anything
+    // written, one transaction per batch of codes. A rerun after a crash is idempotent.
+    const target = {
+      readSetFingerprint: read.result.fingerprint,
+      sourceFingerprint: read.v1.fingerprint,
+    };
+    for (let i = 0; i < read.observations.length; i += batchSize) {
+      if (lease.isLost()) throw lostClaim();
+      add(
+        await deps.review.ingestBatch(
+          input.scope,
+          input.actor,
+          target,
+          read.observations.slice(i, i + batchSize),
+        ),
+      );
+    }
     if (lease.isLost()) throw lostClaim();
     add(
       await deps.review.markAbsent(input.scope, input.actor, {
