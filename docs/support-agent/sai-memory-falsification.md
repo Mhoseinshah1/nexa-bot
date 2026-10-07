@@ -35,7 +35,9 @@ decisions off at the context source, and the four were run again.
 | SAI-M19 | `priorDecisions` is tenant-scoped                                           | A8: priorDecisions reads decided jobs … never … another tenant's                                  | KILLED |
 | SAI-M20 | The earlier decisions reach the query, end to end through the database      | A8 end to end: on a repeated failure the draft still carries the article                          | KILLED |
 
-**20 of 20 killed.**
+| SAI-M21 | Each message is bounded before the join (PR #236 review, P2) | three long messages never push the newest one out of the customer part | KILLED |
+
+**21 of 21 killed** (SAI-M21 added and run after the PR #236 review).
 
 ## Not covered by a mutant
 

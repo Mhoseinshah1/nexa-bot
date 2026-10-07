@@ -255,7 +255,9 @@ model, no I/O) and changes three things:
    (`CONNECTION_TROUBLESHOOTING`, `APP_SETUP`, `SUBSCRIPTION_UPDATE`, `KNOWN_ERROR`). A term in two
    parts counts once, at the higher weight. At most `KNOWLEDGE_QUERY_MAX_TERMS` (64) distinct
    terms are scored, the highest-priority part's first, and each part is clipped, so scoring a
-   thousand candidates is bounded whatever the transcript holds.
+   thousand candidates is bounded whatever the transcript holds. A part made of several
+   messages holds each one to an equal share before joining them, so a long older message never
+   pushes the newest question out (PR #236 review).
 
 2. **A zero score is never sent.** An entry the query does not match at all is excluded from the
    top-k, so a greeting, an image with no caption or a question nothing answers carries no
@@ -278,7 +280,7 @@ A7/A8 tests: `tests/unit/support-ai-transcript.test.ts` (authors, markers, the w
 `tests/unit/support-knowledge-query.test.ts` (the weighted query, the episode, continuity, the
 bounds, the source), `tests/unit/support-ai-prompt.test.ts` (rules 4b and 13, the policy digest)
 and `tests/integration/support-assist.test.ts` (`priorDecisions` and the end-to-end repeated
-failure). Mutation results are in `sai-memory-falsification.md` (20 of 20 killed).
+failure). Mutation results are in `sai-memory-falsification.md` (21 of 21 killed).
 
 ## Tests
 
