@@ -407,9 +407,12 @@ export class DrizzleLegacyCutoverRepository implements LegacyCutoverRepository {
     };
   }
 
-  async stopSalesFacts(scope: TenantContext): Promise<LegacyCutoverStopSalesFacts> {
+  async stopSalesFacts(
+    scope: TenantContext,
+    tx?: TransactionScope,
+  ): Promise<LegacyCutoverStopSalesFacts> {
     const tenantId = requireTenantId(scope);
-    const result = await this.db.execute<{
+    const result = await this.exec(tx).execute<{
       incidents: string;
       panels: string;
       panels_open: string;

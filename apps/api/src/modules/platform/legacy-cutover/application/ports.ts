@@ -184,7 +184,8 @@ export interface LegacyCutoverRepository {
     sourceFingerprint: string,
   ): Promise<LegacyCutoverArchiveFacts | null>;
   duplicateFacts(scope: TenantContext): Promise<LegacyCutoverDuplicateFacts>;
-  stopSalesFacts(scope: TenantContext): Promise<LegacyCutoverStopSalesFacts>;
+  /** In `tx` when given: a gated import samples it inside its start and finish (aud6 F2). */
+  stopSalesFacts(scope: TenantContext, tx?: TransactionScope): Promise<LegacyCutoverStopSalesFacts>;
   /**
    * What the run's finish audit row recorded it left for a person (`applyOutcome`), or null
    * when the run has no such row (not finished, or finished by a release before PR6).

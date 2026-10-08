@@ -35,8 +35,12 @@ import type { LegacySnapshot } from './modules/platform/legacy-importer/applicat
 import {
   LegacyCutoverRefused,
   completeBinding,
+  stopSalesHolds,
   type CutoverExpectation,
 } from './modules/platform/legacy-cutover/domain/cutover-rules.js';
+
+// Moved to the domain (aud6 F2: a gated import samples it too); re-exported for callers.
+export { stopSalesHolds };
 import type { LegacyCutoverStopSalesFacts } from './modules/platform/legacy-cutover/application/ports.js';
 
 /**
@@ -178,24 +182,6 @@ export function assertExpectationComplete(expectation: CutoverExpectation): void
 }
 
 // --- the stop-sales and freeze steps (pure, tested) -------------------------------------------
-
-/** Step 1: an ACTIVE MAINTENANCE stop-sales incident; every active panel drained, every gateway off. */
-export function stopSalesHolds(facts: LegacyCutoverStopSalesFacts): {
-  readonly holds: boolean;
-  readonly detail: string;
-} {
-  const holds =
-    facts.activeStopSalesIncidents >= 1 &&
-    facts.activePanelsNotDrained === 0 &&
-    facts.gatewaysActive === 0;
-  return {
-    holds,
-    detail:
-      `active stop_sales MAINTENANCE incidents=${String(facts.activeStopSalesIncidents)}; ` +
-      `active panels not drained=${String(facts.activePanelsNotDrained)} of ${String(facts.activePanels)}; ` +
-      `gateways still ACTIVE=${String(facts.gatewaysActive)} of ${String(facts.gateways)}`,
-  };
-}
 
 export interface FreezeCheckerRun {
   readonly exitCode: number;

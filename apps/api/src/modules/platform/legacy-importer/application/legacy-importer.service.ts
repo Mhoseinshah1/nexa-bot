@@ -115,6 +115,7 @@ import {
 import type { LegacyCutoverService } from '../../legacy-cutover/application/legacy-cutover.service.js';
 import {
   LegacyCutoverRefused,
+  stopSalesHolds,
   type CutoverDecision,
   type CutoverExpectation,
 } from '../../legacy-cutover/domain/cutover-rules.js';
@@ -184,7 +185,7 @@ export interface LegacyImporterDeps {
    * Mirza PR6: the owner's cutover approvals, read inside the start transaction of a gated
    * import (`decideImport`), and the facts the final report v2 reads (`reportFacts`).
    */
-  readonly cutover: Pick<LegacyCutoverService, 'decideImport' | 'reportFacts'>;
+  readonly cutover: Pick<LegacyCutoverService, 'decideImport' | 'reportFacts' | 'stopSalesFacts'>;
   /** WP-D3: one applying process per tenant; a second import or resume is refused. */
   readonly processLock: LegacyImportProcessLock;
   readonly guard: PermissionGuard;
@@ -765,7 +766,10 @@ export class LegacyImporterService {
     // provider page — and again inside the start transaction, where it is authoritative.
     const gate = cutoverGateOf(input);
     if (gate !== null) {
-      await this.deps.uow.run(scope, (tx) => this.requireCutover(input, gate, tx));
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.requireCutover(input, gate, tx);
+        await this.requireStopSales(scope, 'START', tx);
+      });
     }
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
       forApply: true,
@@ -788,6 +792,9 @@ export class LegacyImporterService {
     const runId = this.deps.ids.uuid();
     const run = await this.mutate(scope, actor, 'legacy_import.run.start', runId, async (tx) => {
       const cutover = gate === null ? null : await this.requireCutover(input, gate, tx);
+      // aud6 F2: the freeze is measured in the import window itself, inside the transaction
+      // that starts (or resumes) the run — not only by the gate after it.
+      if (gate !== null) await this.requireStopSales(scope, 'START', tx);
       const outcome = await this.deps.runs.startOrResume(
         scope,
         {
@@ -965,6 +972,10 @@ export class LegacyImporterService {
       mapping,
       { status: 'COMPLETED' },
       { applyOutcome: applyOutcomeRecord(tallies, attention) },
+      // aud6 F2: and again in the transaction that finishes it. A run whose sales were
+      // reopened meanwhile is never COMPLETED: it stays RUNNING, and a resume under a
+      // restored freeze finishes it.
+      gate === null ? undefined : (tx) => this.requireStopSales(scope, 'FINISH', tx),
     );
     const adoptionPending = tallies.services.adoption.PENDING > 0;
     return this.report(
@@ -1976,17 +1987,23 @@ export class LegacyImporterService {
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
     const { destination } = this.deps;
     const tallies = prepared.plan.tallies;
-    const [wallet, openings, native, trials, shapes] = await Promise.all([
+    const [wallet, openings, native, trials, shapes, since] = await Promise.all([
       destination.walletTotals(scope, inputs.walletCurrency),
       destination.openingAggregates(scope),
       destination.walletTotals(scope, inputs.walletCurrency, { excludeOpenings: true }),
       destination.trialDecisionCounts(scope),
       destination.shapeStatusCounts(scope),
+      destination.movementSince(scope, run.startedAt),
     ]);
     // Movement is measured against the SAME boundary as the pre-import total: both are the
     // non-opening total (`excludeOpenings`), so an entry is either in the pre-import figure
     // or in the movement, never in neither, whenever it committed (before the run row, or
     // concurrently with that measurement). There is no timestamp boundary to fall between.
+    //
+    // aud6 F2/F3: the movement is LISTED, never folded into the expected side. The import
+    // runs under a write freeze; a renewal, a receipt, a TonPays approval or an operator's
+    // credit that moved money in the window is the owner's question (the runbook's money
+    // paths), so reconcile is a DISCREPANCY until the movement is zero.
     const movement = native.totalMinor - inputs.preImportWalletTotalMinor;
     const importable = prepared.plan.users.filter((u) => u.decision.kind === 'IMPORT');
     const present = await destination.customersByTelegramIds(
@@ -2013,9 +2030,27 @@ export class LegacyImporterService {
       ),
       check(
         'wallet.equation',
-        'pre-import NEXA total + Σ positive legacy Balance (+ non-opening movement since the run) = current total',
-        expectedWallet + movement,
+        'pre-import NEXA total + Σ positive legacy Balance = current total (no movement absorbed)',
+        expectedWallet,
         wallet.totalMinor,
+      ),
+      check(
+        'wallet.no_movement',
+        'the non-opening wallet total is the pre-import one: no money moved in the import window',
+        0n,
+        movement,
+      ),
+      check(
+        'wallet.no_entries_since_run',
+        'no non-opening wallet ledger entry was created since the run started',
+        0,
+        since.walletEntries,
+      ),
+      check(
+        'payments.none_since_run',
+        'no payment was created since the run started',
+        0,
+        since.payments,
       ),
       check(
         'wallet.openings_sum',
@@ -2112,8 +2147,18 @@ export class LegacyImporterService {
           preImportTotalMinor: inputs.preImportWalletTotalMinor,
           legacySumMinor: tallies.wallet.legacySumMinor,
           nonOpeningMovementSinceRunMinor: movement,
-          expectedTotalMinor: expectedWallet + movement,
+          expectedTotalMinor: expectedWallet,
           actualTotalMinor: wallet.totalMinor,
+          /**
+           * aud6 F2/F3: what moved since the run started (`run.startedAt`), listed for the
+           * owner's decision and never folded into an equation. Counts and a net only.
+           */
+          movementSinceRun: {
+            since: run.startedAt.toISOString(),
+            nonOpeningWalletEntries: since.walletEntries,
+            nonOpeningWalletNetMinor: since.walletNetMinor,
+            payments: since.payments,
+          },
           openings,
           negativeLegacyBalances: tallies.wallet.negative,
           legacyDebts: debts,
@@ -2364,6 +2409,27 @@ export class LegacyImporterService {
     return this.deps.uow.run(input.scope, (tx) => this.decideCutover(input, gate, tx));
   }
 
+  /**
+   * aud6 F2 — a gated import's freeze, sampled inside `tx` with the gate's own predicate
+   * (`stopSalesHolds`): refused (`STOP_SALES_NOT_ACTIVE`, exit 65) unless an ACTIVE stop_sales
+   * MAINTENANCE incident holds, every ACTIVE panel is drained and no gateway is ACTIVE. At
+   * START nothing is written; at FINISH the run stays RUNNING (the transaction rolls back).
+   */
+  private async requireStopSales(
+    scope: TenantContext,
+    when: 'START' | 'FINISH',
+    tx: TransactionScope,
+  ): Promise<void> {
+    const sample = stopSalesHolds(await this.deps.cutover.stopSalesFacts(scope, tx));
+    if (sample.holds) return;
+    throw new LegacyCutoverRefused(
+      'STOP_SALES_NOT_ACTIVE',
+      when === 'START'
+        ? `sales are not stopped at the import's start (${sample.detail}). Stop sales (runbook step 1) and run again. Nothing was written.`
+        : `sales were reopened during the import (${sample.detail}). The run stays RUNNING, never COMPLETED: stop sales again, check the movement reconcile lists, and resume.`,
+    );
+  }
+
   /** The decision, or a `LegacyCutoverRefused` (exit 65, nothing written). */
   private async requireCutover(
     input: LegacyImportInput,
@@ -2604,8 +2670,10 @@ export class LegacyImporterService {
     mapping: PanelMapping,
     outcome: { readonly status: 'COMPLETED' | 'ABORTED' },
     extra?: Readonly<Record<string, unknown>>,
+    beforeFinish?: (tx: TransactionScope) => Promise<void>,
   ): Promise<LegacyImportRunRecord> {
     return this.mutate(scope, actor, 'legacy_import.run.finish', runId, async (tx) => {
+      if (beforeFinish !== undefined) await beforeFinish(tx);
       const run = await this.deps.runs.finish(scope, runId, outcome, this.deps.clock.now(), tx);
       await this.auditRun(scope, actor, 'legacy_import.run.finish', run, mapping, tx, extra);
       return run;

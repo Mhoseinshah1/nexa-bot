@@ -109,6 +109,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
   let panelB: FakeRickpanel;
   let owner: ActorContext;
   let mapping: PanelMapping;
+  let p1Product: string;
   let mappingText: string;
   let keySeq = 0;
   const key = () => `cutover-${String((keySeq += 1))}-${ctx.container.ids.uuid()}`;
@@ -189,6 +190,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
       product.id,
     );
     mapping = parsePanelMapping(mappingText, tenantA.tenantId as unknown as string);
+    p1Product = product.id;
     await ctx.container.customers.resolveFromUpdate(tenantA, job('webhook'), {
       idempotencyKey: 'pr6-existing',
       telegramUserId: SYNTHETIC_EXISTING_CUSTOMER,
@@ -239,6 +241,20 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
       expectedFingerprint: v1,
       expectedProductsFingerprint: products.fingerprint,
     });
+    // aud5 F5: the map's p1 entry is what the approved review exports (as products-export
+    // would write it); an APPLY refuses a map the review does not back.
+    const p1 = (
+      await ctx.container.legacyProductReviews.list(tenantA, owner, { q: 'p1' })
+    ).items.find((i) => i.review.codeProduct === 'p1')?.review;
+    if (p1 !== undefined && p1.state === 'PENDING_REVIEW') {
+      await ctx.container.legacyProductReviews.approveExisting(tenantA, owner, p1.id, {
+        idempotencyKey: key(),
+        expectedFactsChecksum: p1.factsChecksum,
+        expectedVersion: p1.version,
+        productId: p1Product,
+        reason: 'the panel map names this product',
+      });
+    }
     const archive = await importer().readInvoiceArchive({
       ...read,
       connector: connectorOf(ds),
@@ -332,6 +348,30 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
       count('services'),
       count('legacy_service_candidates'),
     ]);
+
+  /**
+   * Stop sales the runbook's way: a MAINTENANCE incident ACTIVE with stop_sales, every panel
+   * drained, every gateway disabled. A gated import requires it at its start and its finish
+   * (aud6 F2). Returns a function that reopens sales (resolves the incident).
+   */
+  async function stopSales(): Promise<() => Promise<void>> {
+    await db().execute(sql`
+      INSERT INTO incidents (id, tenant_id, kind, severity, status, title, stop_sales, admin_banner,
+                             started_at, created_at, updated_at)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'MAINTENANCE', 'MAJOR', 'ACTIVE',
+              'migration window', true, true, now(), now(), now())`);
+    await db().execute(
+      sql`UPDATE panels SET drained_at = now(), drain_reason = 'cutover' WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+    await db().execute(
+      sql`UPDATE payment_gateways SET status = 'DISABLED' WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+    return async () => {
+      await db().execute(
+        sql`UPDATE incidents SET status = 'RESOLVED', resolved_at = now() WHERE tenant_id = ${tenantA.tenantId} AND status = 'ACTIVE'`,
+      );
+    };
+  }
 
   async function refusal(promise: Promise<unknown>): Promise<LegacyCutoverRefused> {
     const error = await promise.then(
@@ -605,6 +645,12 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     expect(await businessWrites()).toEqual(before);
 
     const fresh = await cutover().approve(tenantA, owner, approveBody(fp));
+    // aud6 F2: approved, and sales still open — refused at the start, nothing written.
+    const open = await refusal(apply('sales-open', snap, { gate: expectationOf(fp) }));
+    expect(open.code).toBe('STOP_SALES_NOT_ACTIVE');
+    expect(open.message).toContain('Nothing was written');
+    expect(await businessWrites()).toEqual(before);
+    await stopSales();
     const report = await apply('approved', snap, { gate: expectationOf(fp) });
     expect(report.verdict).toMatch(/^COMPLETED/u);
     const start = await db().execute<{ after: Record<string, any> }>(
@@ -615,6 +661,50 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
       rerunApprovalIds: [],
       supersededSources: [],
     });
+  });
+
+  it('aud6 F2: sales reopened DURING a gated import: the run is never COMPLETED; a resume under a restored freeze finishes it', async () => {
+    const ds = cleanDataset();
+    const fp = await recordReadSets(ds);
+    const snap = await snapshotOf(ds);
+    await cutover().approve(tenantA, owner, approveBody(fp));
+    const reopen = await stopSales();
+    const gated = (
+      name: string,
+      mode: 'IMPORT' | 'RESUME',
+      afterPhase?: (p: string) => Promise<void>,
+    ) =>
+      importer().apply({
+        scope: tenantA,
+        actor: job(name),
+        snapshot: snap,
+        mapping,
+        productionLikeTarget: false,
+        mode,
+        cutoverGate: { expectation: expectationOf(fp) },
+        ...(afterPhase === undefined ? {} : { afterPhase }),
+      });
+    // An operator resumes sales while the import runs (after its customers phase).
+    const refused = await refusal(
+      gated('reopened', 'IMPORT', async (phase) => {
+        if (phase === 'customers') await reopen();
+      }),
+    );
+    expect(refused.code).toBe('STOP_SALES_NOT_ACTIVE');
+    expect(refused.message).toContain('stays RUNNING');
+    const runs = await db().execute<{ status: string }>(
+      sql`SELECT status FROM legacy_import_runs WHERE tenant_id = ${tenantA.tenantId} AND mode = 'APPLY'`,
+    );
+    expect(runs.rows.map((r) => r.status)).toEqual(['RUNNING']);
+    // A resume while sales are still open is refused at its start, and writes nothing.
+    const before = await businessWrites();
+    expect((await refusal(gated('resume-open', 'RESUME'))).code).toBe('STOP_SALES_NOT_ACTIVE');
+    expect(await businessWrites()).toEqual(before);
+    // Freeze restored: the resume finishes the run.
+    await stopSales();
+    const resumed = await gated('resume', 'RESUME');
+    expect(resumed.verdict).toMatch(/^COMPLETED/u);
+    expect((resumed.sections as Record<string, any>)['run'].status).toBe('COMPLETED');
   });
 
   it("a gated import re-checks the approval's read sets at import time: one no longer recorded refuses it", async () => {
@@ -721,6 +811,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     const snapB = await snapshotOf(b);
     await cutover().approve(tenantA, owner, approveBody(fpB));
     const writes = await businessWrites();
+    await stopSales();
     const superseded = await refusal(apply('superseded', snapB, { gate: expectationOf(fpB) }));
     expect(superseded.code).toBe('SOURCE_SUPERSEDED');
     expect(superseded.message).toContain(fpA.v1);
@@ -837,6 +928,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     const fp = await recordReadSets(ds);
     const snap = await snapshotOf(ds);
     await cutover().approve(tenantA, owner, approveBody(fp));
+    await stopSales();
     await apply('import', snap, { gate: expectationOf(fp) });
     const input = {
       scope: tenantA,

@@ -342,6 +342,30 @@ export class DrizzleLegacyImporterRepository
     }));
   }
 
+  async movementSince(
+    scope: TenantContext,
+    since: Date,
+  ): Promise<{ walletEntries: number; walletNetMinor: bigint; payments: number }> {
+    const tenantId = requireTenantId(scope);
+    const at = since.toISOString();
+    const result = await this.db.execute<{ entries: number; net: string; payments: number }>(sql`
+      SELECT
+        (SELECT count(*)::int FROM wallet_entries WHERE tenant_id = ${tenantId}
+            AND reason <> ${OPENING_REASON} AND created_at >= ${at}::timestamptz) AS entries,
+        COALESCE((SELECT sum(CASE direction WHEN 'CREDIT' THEN amount ELSE -amount END)
+                    FROM wallet_entries WHERE tenant_id = ${tenantId}
+                     AND reason <> ${OPENING_REASON} AND created_at >= ${at}::timestamptz), 0)::text AS net,
+        (SELECT count(*)::int FROM payments WHERE tenant_id = ${tenantId}
+            AND created_at >= ${at}::timestamptz) AS payments
+    `);
+    const row = result.rows[0];
+    return {
+      walletEntries: row?.entries ?? 0,
+      walletNetMinor: BigInt(row?.net ?? '0'),
+      payments: row?.payments ?? 0,
+    };
+  }
+
   async walletTotals(
     scope: TenantContext,
     currency: string,

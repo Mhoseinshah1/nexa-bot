@@ -470,8 +470,11 @@ export class LegacyCutoverService {
   }
 
   /** The destination's stop-sales state (cutover gate step 1). Read only. */
-  stopSalesFacts(scope: TenantContext): Promise<LegacyCutoverStopSalesFacts> {
-    return this.deps.repository.stopSalesFacts(scope);
+  stopSalesFacts(
+    scope: TenantContext,
+    tx?: TransactionScope,
+  ): Promise<LegacyCutoverStopSalesFacts> {
+    return this.deps.repository.stopSalesFacts(scope, tx);
   }
 
   // --- internals -----------------------------------------------------------------------

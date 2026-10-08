@@ -796,7 +796,13 @@ activity read inside the transaction and an audit row.
   users since the imported snapshot). `RECONCILED`/`DISCREPANCY`.
   Wallet movement is the non-opening total now minus the recorded pre-import non-opening
   total — one predicate, one boundary, so an entry committed between that measurement and
-  the run start is movement, never in neither figure.
+  the run start is movement, never in neither figure. Since aud6 F2/F3 the movement is
+  LISTED, never absorbed: `wallet.equation` is `pre-import + Σ positive = current`, and
+  `wallet.no_movement`, `wallet.no_entries_since_run` (non-opening ledger entries created
+  since the run started) and `payments.none_since_run` must all be zero, with the figures
+  in `wallet.movementSinceRun`. A gated import also requires stop_sales in its start and
+  finish transactions (`legacy_cutover.stop_sales_not_active`); a run whose sales were
+  reopened meanwhile stays RUNNING, and a resume under a restored freeze finishes it.
 - **report** — Item 16 (§7), for the latest APPLY run, refused unless the snapshot and the
   mapping are the ones that run was made from (it may describe a RUNNING or ABORTED run,
   and its verdict says which). The markdown also renders the `usersWallets` section after

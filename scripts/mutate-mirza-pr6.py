@@ -40,6 +40,9 @@ T_V2 = ('unit', 'tests/unit/legacy-final-report-v2.test.ts')
 T_GATE = ('unit', 'tests/unit/legacy-cutover-gate.test.ts')
 T_INT = ('integration', 'tests/integration/legacy-cutover.test.ts')
 T_WEB = ('web', 'tests/web/legacy-cutover.test.tsx')
+T_IMP = ('integration', 'tests/integration/legacy-importer.test.ts')
+PMR = f'{MOD}/legacy-importer/application/product-map-review.ts'
+IREPO = f'{MOD}/legacy-importer/infrastructure/drizzle-legacy-importer.repository.ts'
 
 M = [
     # --- the one evaluator (decideCutoverImport) ------------------------------------------
@@ -74,7 +77,8 @@ M = [
                '      holds: failedInvariants.length === 0,')], T_V2, 'section'),
     # --- the gate ---------------------------------------------------------------------------
     ('G-01', [(GATE, '    if (!outcome.holds) failedStep = step;\n', '')], T_GATE, 'stops the gate there'),
-    ('G-02', [(GATE, '    facts.activePanelsNotDrained === 0 &&', '    true &&')], T_GATE, 'every panel drained'),
+    # stopSalesHolds moved to the domain (aud6 F2: a gated import samples it too).
+    ('G-02', [(RULES, '    facts.activePanelsNotDrained === 0 &&', '    true &&')], T_GATE, 'every panel drained'),
     ('G-03', [(GATE, '  if (input.checkerSha256 !== LEGACY_FREEZE_CHECKER_SHA256) {', '  if (false) {')], T_GATE, 'stand-in checker'),
     ('G-04', [(GATE, " || !/^EQUAL: /mu.test(input.run.stdout)", '')], T_GATE, 'stand-in checker'),
     ('G-05', [(GATE, '  if (input.frozenSha256 !== input.expectedFreezeProofSha256) {', '  if (false) {')], T_GATE, 'real checker'),
@@ -89,7 +93,7 @@ M = [
     ('I-05', [(SVC, '        await this.assertScopeActive(scope, tx);\n        await this.deps.repository.lockTenantApprovals(scope, tx);\n        // Asked again UNDER the lock',
                '        await this.deps.repository.lockTenantApprovals(scope, tx);\n        // Asked again UNDER the lock')], T_INT, 'owner-only'),
     ('I-06', [(SVC, '          if (!prior) {', '          if (false) {')], T_INT, 'RECORDED read sets'),
-    ('I-07', [(IMP, '      await this.deps.uow.run(scope, (tx) => this.requireCutover(input, gate, tx));\n', ''),
+    ('I-07', [(IMP, '        await this.requireCutover(input, gate, tx);\n', ''),
               (IMP, '      const cutover = gate === null ? null : await this.requireCutover(input, gate, tx);',
                '      const cutover = null as Extract<CutoverDecision, { ok: true }> | null;')], T_INT, 'gated import refuses'),
     ('I-08', [(IMP, '      expectation.sourceFingerprint !== input.snapshot.fingerprint\n', '      false\n')], T_INT, 'gated import refuses'),
@@ -132,6 +136,23 @@ M = [
     # --- the web page --------------------------------------------------------------------
     ('W-01', [(WEB, 'const HEX = /^[0-9a-f]{64}$/u;', 'const HEX = /^.{1,64}$/u;')], T_WEB, 'exact SHA-256'),
     ('W-02', [(WEB, '(HEX.test(prior) && prior !== values.sourceFingerprint)', 'HEX.test(prior)')], T_WEB, 'prior source other'),
+    # aud6 F1 = aud5 F5: report v2's products section checks the panel map against the review.
+    ('X-01', [(V2, "      str(panelMap.refused.length),", "      '0',")], T_V2, 'aud6 F1'),
+    ('X-02', [(PMR, "            : row.approvedProductId !== productId", "            : false")], T_V2, 'aud6 F1'),
+    # aud6 F2: a gated import measures stop_sales in its start and finish transactions.
+    ('D-01', [(IMP, "        await this.requireStopSales(scope, 'START', tx);\n", ""),
+              (IMP, "      if (gate !== null) await this.requireStopSales(scope, 'START', tx);\n", "")], T_INT, 'refuses without a matching approval'),
+    ('D-02', [(IMP, "      gate === null ? undefined : (tx) => this.requireStopSales(scope, 'FINISH', tx),", "      undefined,")], T_INT, 'aud6 F2'),
+    ('D-03', [(IMP, "    if (sample.holds) return;", "    return;")], T_INT, 'aud6 F2'),
+    # aud6 F2/F3: reconcile lists movement in the window, never absorbs it.
+    ('D-04', [(IMP, "        expectedWallet,\n        wallet.totalMinor,", "        expectedWallet + movement,\n        wallet.totalMinor,")], T_IMP, 'aud6 F2/F3'),
+    ('D-05', [(IMP, "        0n,\n        movement,", "        0n,\n        0n,")], T_IMP, 'aud6 F2/F3'),
+    ('D-06', [(IMP, "        since.walletEntries,", "        0,")], T_IMP, 'aud6 F2/F3'),
+    ('D-07', [(IMP, "        since.payments,", "        0,")], T_IMP, 'aud6 F2/F3'),
+    ('D-08', [(IREPO, "            AND reason <> ${OPENING_REASON} AND created_at >= ${at}::timestamptz) AS entries,", "            AND false) AS entries,")], T_IMP, 'aud6 F2/F3'),
+    # aud6 F4: the restored freeze proof is another file.
+    ('F4-01', [(GATE, "  if (resolve(input.frozenPath) === resolve(input.restoredPath)) {", "  if (false) {")], T_GATE, 'the real checker'),
+    ('F4-02', [(GATE, "  if (resolve(input.frozenPath) === resolve(input.restoredPath)) {", "  if (input.frozenPath === input.restoredPath) {")], T_GATE, 'the real checker'),
 ]
 
 # Contract mutations: the tests read packages/contracts from dist, so each is rebuilt.

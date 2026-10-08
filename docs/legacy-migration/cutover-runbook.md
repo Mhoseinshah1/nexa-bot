@@ -118,6 +118,30 @@ git -C <checkout> rev-parse HEAD   # must equal the commit `botctl version` repo
 Check: the incident is `SCHEDULED`; at T − 0 it is `ACTIVE` and its effects list shows a
 drain per panel and a disable per gateway.
 
+**stop_sales is not a full money freeze (aud6 F3).** It stops new sales and gateway
+payments, and NOT these paths, which can still move money in the import window:
+
+- **wallet-funded renewals and add-ons** — RENEW, ADD_TRAFFIC and ADD_TIME of an existing
+  service do not consult panel eligibility, so a drained panel does not stop them;
+- **manual-transfer receipts** — a reference issued before the freeze can still be receipted
+  and confirmed by an operator;
+- **TonPays** — an attempt created before the freeze can still be approved inside its
+  70-minute window (`PaymentService.confirmGatewayPayment`);
+- **operator credits and debits** — a manual wallet adjustment.
+
+So the import does not trust the freeze, it MEASURES it: a gated import refuses to start
+unless stop_sales holds in its start transaction, and refuses to finish (the run stays
+RUNNING, never COMPLETED) unless it still holds in its finish transaction
+(`legacy_cutover.stop_sales_not_active`, exit 65). And `reconcile` lists every movement since
+the run started — non-opening wallet entries (count and net) and payments created — under
+`wallet.movementSinceRun`, with the checks `wallet.no_movement`,
+`wallet.no_entries_since_run` and `payments.none_since_run`; the wallet equation no longer
+absorbs movement. Any movement is a `DISCREPANCY`, so the gate's `RECONCILED` step refuses:
+it is the owner's decision (find what moved and why; roll back, or accept it explicitly in
+the report), never folded in. Before T − 0, also: confirm no TonPays attempt is younger than
+70 minutes, ask operators to hold manual credits, and settle or cancel outstanding
+manual-transfer references.
+
 ## Step 2 — the approved release is deployed
 
 ```bash
@@ -719,13 +743,17 @@ import); anything else means an earlier snapshot was applied to this target — 
 One read-only command proves the whole checklist, IN ORDER, and stops at the first step that
 fails: NEXA `stop_sales` is active (an ACTIVE MAINTENANCE incident with `stop_sales`, every
 active panel drained, every gateway disabled) → PR1's freeze checker found step 7's and step
-9's proofs EQUAL, and step 7's file is the approved one → the final dump FILE of step 8,
+9's proofs EQUAL, step 7's file is the approved one, and step 9's is ANOTHER file (the same
+path passed twice is refused; the restored proof's SHA-256 is recorded in the step's detail —
+copy it into the report beside step 7's) → the final dump FILE of step 8,
 streamed through SHA-256 by the gate itself, is the approved value (the `--expected-*` value
 alone proves nothing) → a fresh read gives the approved
 source, panel-map, inventory, products and invoice-archive fingerprints → no table is
 UNCLASSIFIED → an unrevoked owner approval matches all seven values → no earlier import is
 superseded unacknowledged → the import ran (latest APPLY run COMPLETED, this source and map)
-→ reconcile is RECONCILED → the final report v2 holds → `stop_sales` is STILL active
+→ reconcile is RECONCILED (which now includes "no money moved since the run started", see
+step 1) → the final report v2 holds (its products section includes `PR5`: every panel-map
+products entry is exported by the approved review) → `stop_sales` is STILL active
 (sampled again last: it is mutable, and sales resumed while the gate ran refuse it). It
 writes nothing.
 

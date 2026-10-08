@@ -200,9 +200,43 @@ export class LegacyCutoverRefused extends Error {
       | 'APPROVAL_MISSING'
       | 'APPROVAL_SYNTHETIC'
       | 'SOURCE_SUPERSEDED'
-      | 'TABLES_UNCLASSIFIED',
+      | 'TABLES_UNCLASSIFIED'
+      | 'STOP_SALES_NOT_ACTIVE',
     readonly detail: string,
   ) {
     super(`${code}: ${detail}`);
   }
+}
+
+// --- stop_sales (the gate's steps 1 and 11, and a gated import's start and finish) ----------
+
+/**
+ * Sales are stopped: an ACTIVE MAINTENANCE stop-sales incident; every active panel drained,
+ * every gateway off. The gate's steps 1 and 11, and — since aud6 F2 — a gated import's start
+ * transaction and its finish: one predicate for all four samples.
+ */
+/** What a stop_sales sample reads (`LegacyCutoverStopSalesFacts`, structurally). */
+export interface StopSalesFacts {
+  readonly activeStopSalesIncidents: number;
+  readonly activePanels: number;
+  readonly activePanelsNotDrained: number;
+  readonly gateways: number;
+  readonly gatewaysActive: number;
+}
+
+export function stopSalesHolds(facts: StopSalesFacts): {
+  readonly holds: boolean;
+  readonly detail: string;
+} {
+  const holds =
+    facts.activeStopSalesIncidents >= 1 &&
+    facts.activePanelsNotDrained === 0 &&
+    facts.gatewaysActive === 0;
+  return {
+    holds,
+    detail:
+      `active stop_sales MAINTENANCE incidents=${String(facts.activeStopSalesIncidents)}; ` +
+      `active panels not drained=${String(facts.activePanelsNotDrained)} of ${String(facts.activePanels)}; ` +
+      `gateways still ACTIVE=${String(facts.gatewaysActive)} of ${String(facts.gateways)}`,
+  };
 }

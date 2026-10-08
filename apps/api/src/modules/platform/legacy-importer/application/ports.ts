@@ -42,6 +42,18 @@ export interface LegacyImporterDestination {
   ): Promise<string | null>;
   /** Every legacy product review row of the tenant, as PR2's export predicate reads it. */
   productReviewRows(scope: TenantContext): Promise<readonly ProductReviewRowFacts[]>;
+  /**
+   * aud6 F2/F3: what moved in the tenant since `since` (an APPLY run's start): non-opening
+   * wallet ledger entries (any currency) — count and signed net — and payments created.
+   */
+  movementSince(
+    scope: TenantContext,
+    since: Date,
+  ): Promise<{
+    readonly walletEntries: number;
+    readonly walletNetMinor: bigint;
+    readonly payments: number;
+  }>;
   /** Telegram id → customer id, for the ids that are customers of this tenant. */
   customersByTelegramIds(
     scope: TenantContext,

@@ -176,8 +176,11 @@ enters NEXA only when the review is resolved and that user's opening is posted.
 
 **Residual traffic.** W2 and W3 assume no other wallet movement in the import window — the
 cutover's maintenance window (stop-sales incident on every gateway and panel) is what makes
-that true. If they fail, list what moved, by reason, and subtract it explicitly; never
-absorb it:
+that true, and it is measured, not assumed (aud6 F2/F3): `legacy-import reconcile` lists
+`wallet.movementSinceRun` and fails `wallet.no_movement`, `wallet.no_entries_since_run` and
+`payments.none_since_run` on any movement, and its `wallet.equation` no longer folds
+movement into the expected side. If they fail, list what moved, by reason, and decide it
+explicitly with the owner; never absorb it:
 
 ```sql
 -- psql -v tenant=<slug> -v since='<PRE snapshot time, UTC>'
