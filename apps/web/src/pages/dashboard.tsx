@@ -76,6 +76,7 @@ import type { SeriesTone } from '../ui/charts';
 import type { QueryView } from '../view-state';
 import { mayRequest, queryState, shownData } from '../view-state';
 import { formatInstantIn } from './business';
+import { AttentionQueueCard } from './dashboard-attention';
 
 /** How many open conditions the attention card draws before it counts the rest. */
 const ATTENTION_SHOWN = 6;
@@ -241,6 +242,12 @@ export function DashboardPage({
             }
           : {})}
       />
+
+      {/*
+       * Attention first (roadmap B6): what waits for a person, before any figure about the
+       * business. Drawn for whoever holds a permission one of its rows is counted under.
+       */}
+      <AttentionQueueCard permissions={permissions} />
 
       {superAdmin &&
         (complete ? (

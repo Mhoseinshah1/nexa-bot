@@ -312,3 +312,153 @@ Mutation record (each reverted alone, `dashboard.test.tsx` + `reports.test.tsx` 
 | P11 | the services badge not loud for unreconciled services      | places each counter beside the link that acts on it                                                                        |
 | P12 | deltas drawn whatever the comparison                       | turns the comparison off without asking again                                                                              |
 | P13 | the refresh button drawn over a refused summary            | draws no refresh over a refused summary                                                                                    |
+
+---
+
+## 7. Roadmap B6 — attention first
+
+The dashboard now opens on **صف رسیدگی** (`pages/dashboard-attention.tsx`, rules in
+`apps/web/src/attention-view.ts`, rows drawn by `pages/attention-list.tsx`): what waits for a
+person NOW, above every business figure. Each row is one link — the server's count, what it
+counts, and the page that handles it, filtered to what was counted where that page can filter.
+A zero, a withheld count (`null`) and a source not asked draw no row. The existing «نیازمند
+توجه» card (the open conditions themselves) stays where it was; the queue's conditions row
+links to `/alerts`.
+
+### Rows, in urgency order
+
+| Row                                    | Source (existing unless noted)                                                            | Permission            | Link                                     | Tone   |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- | --------------------- | ---------------------------------------- | ------ |
+| عملیات تأمین گیرکرده                   | `/system/diagnostics` `LEASE_EXPIRED + UNANNOUNCED` (disjoint reasons: one `CASE`)        | `opslog.view`         | `/system?section=diagnostics`            | danger |
+| عملیات تأمین با نتیجهٔ نامعلوم         | `/system/diagnostics` `UNKNOWN_OUTCOME`                                                   | `opslog.view`         | `/system?section=diagnostics`            | danger |
+| رویداد ارسال‌نشده با تلاش‌های تمام‌شده | `/system/diagnostics` `outbox.exhausted`                                                  | `opslog.view`         | `/system?section=diagnostics`            | danger |
+| سرویس تطبیق‌نشده                       | `/nav-counters` `unreconciledServices`                                                    | `services.view`       | `/services?state=UNRECONCILED`           | danger |
+| پنل ناسالم                             | `/nav-counters` `unhealthyPanels`                                                         | `panels.view`         | `/panel-health`                          | danger |
+| پرداخت نامعلوم در انتظار تطبیق         | `/nav-counters` `paymentsUnknown`                                                         | `payments.view`       | `/payments?queue=UNKNOWN`                | warn   |
+| پرداخت آمادهٔ تطبیق                    | `/payment-operations/attention` `totals.NEEDS_RECONCILIATION`                             | `payments.view`       | `/payments?queue=NEEDS_RECONCILIATION`   | warn   |
+| درخواست بازپرداخت در انتظار            | `/nav-counters` `refundRequestsAwaiting`                                                  | `refunds.view`        | `/services` (the requests card heads it) | warn   |
+| گفتگوی بیزینس در انتظار اپراتور        | `/nav-counters` **`businessHandoffs` (new)**: `business_conversations` `HANDOFF_REQUIRED` | `business_chats.view` | `/business-chats?state=HANDOFF_REQUIRED` | warn   |
+| تیکت در انتظار پشتیبانی                | `/nav-counters` `ticketsAwaitingSupport`                                                  | `tickets.view`        | `/tickets`                               | info   |
+| هشدار مدیریتی باز                      | `/nav-counters` `openConditions`                                                          | `opslog.view`         | `/alerts`                                | warn   |
+
+The one new aggregate is `businessHandoffs`, a sidebar counter like the other six: capped at
+`COUNTER_CAP`, withheld without `business_chats.view` (no recorded denial), on the leading keys
+of `business_conversations_inbox_priority_idx`. The sidebar draws it beside «گفتگوهای تلگرام
+بیزینس» (warn).
+
+### Requests and cadence
+
+- `/nav-counters` is the shell's own query key: the queue adds no request for its seven rows.
+- `/system/diagnostics` is the System page's key and cadence (30 s), asked only with
+  `opslog.view` — without it the service would record a 403 on every poll.
+- `/payment-operations/attention` is asked only with `payments.view`, at the reports' five
+  minutes: it is one grouped statement over every payment of the tenant with no window, and
+  the queue reads one figure of it.
+- A viewer holding none of `ATTENTION_PERMISSIONS` gets no card and no request.
+
+### What the queue never claims
+
+«صف رسیدگی خالی است» is drawn only when EVERY source asked has answered. A source that failed
+(or a 403 on a permission list a minute old) is said to have failed, with a retry, and the
+empty state is withheld: an empty list over a failed read is the one false thing this card could
+say. While a source is still loading and nothing is known, a skeleton.
+
+### Omitted, and why
+
+- **Receipts awaiting review** (card-to-card). `underReviewCondition` (support context) knows
+  "PENDING and the customer said they paid", but no Web Admin list filters by it, so a row
+  would count a set its link cannot show — the reason §3 gave, still true. Open question for
+  the payments workstream (E1): a `queue=UNDER_REVIEW` facet would make it a row.
+- **Payment facets that are history** — `MISMATCH`, `PARTIAL`, `LATE_COMPLETION`,
+  `PROVIDER_ERROR`, `REFUND_RELATED` match a payment in ANY state and never close, so they are
+  not "waiting for a person now". `PENDING` is unpaid, not attention (owner revision 3).
+- **Gateway route health** (`ATTENTION` state) lives on the payment-method page, is not polled,
+  and is built partly from the same UNKNOWN counts — a row would double-count them.
+- **Failed payments** in the period stay the owner's KPI (`failures.payments`); a per-period
+  failure is a business figure, not a queue.
+- **Retrying operations** (`RETRYING`) are in motion, not stuck; the System page lists them.
+
+### Tests and falsification
+
+`tests/web/dashboard-attention.test.tsx` (11): the rows, order, tones and exact links; no source
+asked without its permission and no row it withheld; no card and no request with no
+permission; "empty" only when every source answered, never over a failed one; the queue is the
+first card on `/`; zero/withheld/not-asked draw nothing; caps are floors and exact counts never;
+history facets and `RETRYING` are no rows; `ATTENTION_PERMISSIONS`. `tests/web/dashboard.test.tsx`
+pins the new sidebar badge. `tests/integration/dashboard.test.ts` counts the handoffs (not
+`AI_ACTIVE`, not `HUMAN_ACTIVE`, not tenant B's), withholds them from `technical`, isolates
+tenant B, and bounds the counter.
+
+Mutation driver: `scripts/mutate-customer360-dashboard.py` (`--api` adds the database
+mutations). Record in §8.
+
+### Review round (PR #240)
+
+- **B1 — rolling-update skew.** `businessHandoffs` is optional on the wire and read as `null`,
+  so an old API's six-key `/nav-counters` parses (unit test on the old shape; web test that the
+  queue still draws AND that the next minute's poll is still asked — the recovery itself). `polling.ts` is unchanged: it still treats a parse failure as final,
+  which is right for the case it was written for (an OLD bundle reading a NEW API, cured only
+  by a reload) and which this contract change keeps from arising in the opposite direction.
+  Whether a parse failure should drop to the slow lane instead is a shared-primitive decision
+  for the lead, not this PR's. `docs/deployment.md` carries the update-window note.
+- **N1.** `GET /tickets` gained a read-only `awaiting=support` facet
+  (`TICKET_AWAITING_SUPPORT_STATUSES`, ANDed with `status`); the inbox has a «در انتظار
+  پشتیبانی» chip, and both "awaiting support" rows link to it. Count and list are one set
+  (integration test).
+- **N4.** The per-customer counts now read one customer's rows: payments and services through
+  the existing `(customer_id, created_at, id)` indexes (EXPLAIN ANALYZE on 20 000 customers,
+  `scripts/explain-customer360-counts.sql`, result recorded in its header),
+  business handoffs through a new ONLINE index `business_conversations_tenant_customer_handoff_idx`
+  `(tenant_id, customer_id) WHERE state = 'HANDOFF_REQUIRED'` — no migration.
+- **N5.** The sidebar counters run concurrently: each was already its own pool statement in no
+  transaction, so no answer changes.
+- **N7.** Left as is: `paymentsReconcilable` is a subset of `paymentsUnknown`.
+
+## 8. Roadmap B5/B6 mutation record
+
+`python3 scripts/mutate-customer360-dashboard.py --api` on the agent's own database: each rule
+reverted alone, the B5/B6 suites run (API: `customer-workspace.test.ts`, `dashboard.test.ts`;
+web: `customer-workspace.test.tsx`, `dashboard-attention.test.tsx`, `dashboard.test.tsx`), the
+file restored. **24 of 24 killed.** A2 first SURVIVED: the payments section was gated twice
+(its count and its list), so ungating one half was invisible; the service now gates each
+section once, and the re-run killed it.
+
+| #   | Mutation                                                     | Verdict                         |
+| --- | ------------------------------------------------------------ | ------------------------------- |
+| A1  | tickets section computed without `tickets.view`              | killed                          |
+| A2  | payments section computed without `payments.view`            | killed (after the one-gate fix) |
+| A3  | handoffs section computed without `business_chats.view`      | killed                          |
+| A4  | the workspace does not charge `users.view`                   | killed                          |
+| A5  | tickets awaiting support include WAITING_FOR_CUSTOMER        | killed                          |
+| A6  | handoffs not scoped to the customer                          | killed                          |
+| A7  | latest orders oldest first                                   | killed                          |
+| A8  | latest payments tie-broken the wrong way                     | killed                          |
+| A9  | a workspace count reads every row (no LIMIT)                 | killed                          |
+| A10 | the handoff counter counts every conversation                | killed                          |
+| W1  | diagnostics asked without `opslog.view`                      | killed                          |
+| W2  | payment queues asked without `payments.view`                 | killed                          |
+| W3  | the queue drawn for a viewer holding none of its permissions | killed                          |
+| W4  | "empty" claimed over a failed source                         | killed                          |
+| W5  | a zero drawn as a row                                        | killed                          |
+| W6  | a capped counter drawn as exact                              | killed                          |
+| W7  | a retrying operation counted as stuck                        | killed                          |
+| W8  | a customer attention link loses the customer filter          | killed                          |
+| W9  | customer tickets asked without `tickets.view`                | killed                          |
+| W10 | payments shortcut offered without `payments.view`            | killed                          |
+| W11 | the route derives tickets from `users.view`                  | killed                          |
+| W12 | the route derives the handoff shortcut from `users.view`     | killed                          |
+| W13 | the sidebar drops the handoff badge                          | killed                          |
+| W14 | the latest card links a withheld half to its list            | killed                          |
+| A11 | the named handoff is the oldest, not the newest              | killed                          |
+| A12 | the awaiting-support facet ignored by the ticket list        | killed                          |
+| W15 | B1: the handoff counter required on the wire again           | killed                          |
+| W16 | N3: "nothing waits" drawn over a withheld counting section   | killed                          |
+| W17 | N3: the latest orders reported as a withheld count           | killed                          |
+| W18 | N1: the tickets row links to every status                    | killed                          |
+| W19 | N2: a single handoff links to the tenant inbox               | killed                          |
+| W20 | N1: the inbox drops the awaiting facet                       | killed                          |
+| W21 | N5: the sidebar counters asked one after another             | killed                          |
+
+Review round (PR #240), re-run after merging `parallel/roadmap-2-7`: the web suites gained
+`tickets.test.tsx` and `tests/unit/dashboard-aggregates.test.ts` (W15 rebuilds the contracts
+package around the mutant). **33 of 33 killed.**
