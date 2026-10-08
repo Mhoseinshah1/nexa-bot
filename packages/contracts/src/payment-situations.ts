@@ -4,7 +4,7 @@ import type { GatewayInvoiceCreationState } from './gateway-invoices.js';
 import type { PaymentMethod, PaymentState } from './payment.js';
 import type { PaymentOpsQueue } from './payment-operations.js';
 import type { ReceiptDisposition } from './payment-receipts.js';
-import { REFUND_METHOD_SUPPORT } from './refunds.js';
+import type { RefundRefusalReason } from './refunds.js';
 import type { TemplateKey } from './templates.js';
 
 /**
@@ -30,7 +30,7 @@ import type { TemplateKey } from './templates.js';
  * `paymentSituationOf` is the ONE classifier. The server calls it while building a payment
  * summary and sends its answer; the Web Admin renders that answer and never classifies. The
  * operator's actions are decided here too, from the same facts the services decide them on
- * (`REFUND_METHOD_SUPPORT`, the reconcile rule's `UNKNOWN`), so a button the guide offers is a
+ * (the refund service's own refusal, the reconcile rule's `UNKNOWN`), so a button the guide offers is a
  * command the server will accept the shape of — the server still decides authoritatively.
  */
 export const PAYMENT_SITUATIONS = [
@@ -145,8 +145,9 @@ export type PaymentCustomerGuidance = (typeof PAYMENT_CUSTOMER_GUIDANCE)[number]
  *   The only path that exists for money the domain cannot settle (late or partial money on a
  *   payment that is no longer UNKNOWN); whether to use it is UNRESOLVED (`OQ-WP11A-03`), and
  *   the guide says so wherever it offers it.
- * - `ISSUE_REFUND` — an operator refund (`refunds.issue`), only where `REFUND_METHOD_SUPPORT`
- *   has a channel and the payment bought an order (a top-up is already on the wallet).
+ * - `ISSUE_REFUND` — an operator refund (`refunds.issue`), only where `RefundService` itself
+ *   would not refuse one (`refundRefusal` is null: settled, a channel exists, an order was
+ *   bought, no delivery in progress, no currency mismatch) and something is left to give back.
  * - `SETTLE_REFUND` — complete or fail an open refund (`refunds.issue`).
  */
 export const PAYMENT_OPERATOR_ACTIONS = [
@@ -192,6 +193,13 @@ export interface PaymentSituationFacts {
   readonly refundCompleted: boolean;
   /** Something is left to refund: the principal exceeds what consuming refunds hold. */
   readonly refundRemaining: boolean;
+  /**
+   * Why an operator refund would be refused, or null when it would not — the AUTHORITATIVE
+   * decision, `RefundService`'s own (`refusalFor` and the currency witness), passed through
+   * rather than re-derived here (review of PR #248, CX4): a second copy without the delivery
+   * and currency facts offered "issue refund" on payments the server refuses.
+   */
+  readonly refundRefusal: RefundRefusalReason | null;
 }
 
 export interface PaymentSituationGuide {
@@ -330,13 +338,9 @@ function actionsFor(
 ): readonly PaymentOperatorAction[] {
   // Reconciliation exists for an UNKNOWN gateway payment and nothing else.
   const reconcilable = facts.state === 'UNKNOWN' && facts.method === 'GATEWAY';
-  // An operator refund needs a channel this release performs, an order it bought, and
-  // something left to give back.
-  const refundable =
-    REFUND_METHOD_SUPPORT[facts.method].supported &&
-    !facts.topup &&
-    facts.state === 'CONFIRMED' &&
-    facts.refundRemaining;
+  // An operator refund is offered exactly where the refund service would accept one (its own
+  // refusal, passed through — CX4), and something is left to give back.
+  const refundable = facts.refundRefusal === null && facts.refundRemaining;
   switch (situation) {
     case 'RECEIPT_UNDER_REVIEW':
       return ['REVIEW_RECEIPT_IN_TELEGRAM'];
