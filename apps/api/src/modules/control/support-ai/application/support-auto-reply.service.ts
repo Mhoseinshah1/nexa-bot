@@ -60,7 +60,7 @@ import {
   type SupportAiVisionVariant,
 } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
-import { readSupportTranscript } from './support-transcript.js';
+import { SUPPORT_TRANSCRIPT_READ_LINES, readSupportTranscript } from './support-transcript.js';
 import { withKnowledgeCounts } from './knowledge-telemetry.js';
 
 /** The key that makes an automatic job idempotent on its message (and content version). */
@@ -505,7 +505,7 @@ export class SupportAutoReplyService {
       decision.knowledgeRefs,
       context.knowledgeAliases,
     );
-    return this.enqueue(scope, job, decision, produced, grounding, images, knowledgeLabels);
+    return this.enqueue(scope, job, decision, produced, grounding, since, images, knowledgeLabels);
   }
 
   /**
@@ -627,6 +627,8 @@ export class SupportAutoReplyService {
       readonly knownAliases: ReadonlySet<string>;
       readonly knownKnowledgeAliases: ReadonlySet<string>;
     },
+    /** Where this epoch's AI part began (`epochStartedAt`): the repeated-advice window. */
+    since: Date | null,
     images?: ImageWrite,
     knowledgeLabels: readonly string[] = [],
   ): Promise<AutoJobResult> {
@@ -666,6 +668,24 @@ export class SupportAutoReplyService {
           });
       if (!recheck.pass)
         return this.handOffChecked(scope, job, recheck, decision, produced, now, tx);
+      /*
+       * Review of PR #248, CX5 — repeated advice, decided again on what is DELIVERED now. The
+       * check before the provider call read the transcript as it was then; an earlier automatic
+       * reply can reach DELIVERED while the provider is thinking, and this reply would repeat
+       * it. Read again here, under the conversation's lock taken above, with the same predicate;
+       * a repeat hands off exactly as the earlier check does (or drops, if the conversation
+       * moved on).
+       */
+      const deliveredNow = await readSupportTranscript(
+        this.deps,
+        scope,
+        job.conversationId,
+        SUPPORT_TRANSCRIPT_READ_LINES,
+        tx,
+      );
+      const repeated = autoRepeatedAdviceGuard(decision, deliveredNow, since);
+      if (!repeated.pass)
+        return this.handOffChecked(scope, job, repeated, decision, produced, now, tx);
       const queued = await this.deps.control.enqueueAutoSend(
         scope,
         {

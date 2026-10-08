@@ -3139,6 +3139,35 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       ]);
     });
 
+    it('A3, review of PR #248 CX5: advice DELIVERED while the provider was thinking is not sent again', async () => {
+      const advice = 'لطفاً برنامه را کامل ببندید، لینک اشتراک را به‌روز کنید و دوباره وصل شوید.';
+      // The first reply is enqueued and NOT yet delivered when the second job asks the provider.
+      next = scripted({ replyText: advice });
+      const id = (await record(message({ text: 'وصل نمیشم' }))).conversationId;
+      await tick();
+      expect(transport.sent).toHaveLength(0);
+      // The second job's pre-call check reads no delivered advice; the first reply is delivered
+      // DURING its provider call, and the model then repeats it.
+      next = scripted({
+        replyText: 'لطفا برنامه را کامل ببنديد، لينک اشتراک را بهروز کنيد و دوباره وصل شويد',
+      });
+      duringCall = async () => {
+        duringCall = null;
+        await deliver();
+      };
+      await record(message({ text: 'با Sing-box هستم' }));
+      await tick();
+      await deliver();
+      expect(calls).toBe(2);
+      expect(await outcomes(id)).toEqual(['sent', 'guard_repeated_advice']);
+      // The advice reached the customer once; the conversation went to a person.
+      expect(transport.sent.map((m) => m.text)).toEqual([advice]);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'REPEATED_ADVICE',
+      });
+    });
+
     it('A3: the same greeting twice is courtesy, not repeated advice', async () => {
       const hello = scripted({
         topic: 'GREETING',

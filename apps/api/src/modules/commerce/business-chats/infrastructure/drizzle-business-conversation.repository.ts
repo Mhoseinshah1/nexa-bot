@@ -575,9 +575,10 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
     scope: ScopeContext,
     conversationId: string,
     limit: number,
+    tx?: unknown,
   ): Promise<readonly BusinessMessageRecord[]> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.db
+    const rows = await executorOf(this.db, tx)
       .select()
       .from(businessMessages)
       .where(
@@ -783,10 +784,11 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
     scope: ScopeContext,
     conversationId: string,
     input: { readonly since: Date | null; readonly limit: number },
+    tx?: unknown,
   ): Promise<readonly BusinessOutboundRecord[]> {
     const tenantId = requireTenantId(scope);
     const at = sql`coalesce(${businessOutboundMessages.sendStartedAt}, ${businessOutboundMessages.resolvedAt}, ${businessOutboundMessages.createdAt})`;
-    const rows = await this.db
+    const rows = await executorOf(this.db, tx)
       .select()
       .from(businessOutboundMessages)
       .where(

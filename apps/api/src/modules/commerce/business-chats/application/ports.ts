@@ -389,10 +389,12 @@ export interface BusinessMessageRepository {
     tx: unknown,
   ): Promise<number>;
 
+  /** In `tx` when given (review of PR #248, CX5: the auto-reply's final recheck). */
   recent(
     scope: ScopeContext,
     conversationId: string,
     limit: number,
+    tx?: unknown,
   ): Promise<readonly BusinessMessageRecord[]>;
 
   /**
@@ -494,6 +496,7 @@ export interface BusinessOutboundRepository {
     scope: ScopeContext,
     conversationId: string,
     input: { readonly since: Date | null; readonly limit: number },
+    tx?: unknown,
   ): Promise<readonly BusinessOutboundRecord[]>;
 
   /** Whether this bot sent `telegramMessageId` in this conversation (echo proof). */

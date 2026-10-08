@@ -16,7 +16,8 @@ export const SUPPORT_TRANSCRIPT_READ_LINES = 60;
 /**
  * D7 — the transcript an AI request reads: received messages and NEXA's delivered replies
  * (`mergeTranscript`), whether or not Telegram echoed those replies back. Two bounded reads,
- * both tenant-scoped by the repositories.
+ * both tenant-scoped by the repositories. In `tx` when given: the auto-reply reads it again inside
+ * its final enqueue transaction (review of PR #248, CX5).
  */
 export async function readSupportTranscript(
   deps: {
@@ -26,11 +27,12 @@ export async function readSupportTranscript(
   scope: ScopeContext,
   conversationId: string,
   limit: number = SUPPORT_TRANSCRIPT_READ_LINES,
+  tx?: unknown,
 ): Promise<readonly SupportTranscriptLine[]> {
-  const messages = await deps.messages.recent(scope, conversationId, limit);
+  const messages = await deps.messages.recent(scope, conversationId, limit, tx);
   // The replies of the same window (review item 6): when the messages filled their bound, from
   // the oldest of them; DELIVERED only, so pending or failed rows never push one out.
   const since = messages.length >= limit ? (messages[0]?.sentAt ?? null) : null;
-  const replies = await deps.outbound.deliveredSince(scope, conversationId, { since, limit });
+  const replies = await deps.outbound.deliveredSince(scope, conversationId, { since, limit }, tx);
   return mergeTranscript(messages, replies, limit);
 }
