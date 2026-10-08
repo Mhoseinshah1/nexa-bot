@@ -178,6 +178,11 @@ describe('refund refusal reasons and rate provenance', () => {
     // A delivered wallet-funded order IS refundable by an operator, back to the wallet.
     const walletLedger = await ledger(wallet);
     expect(walletLedger).toMatchObject({ refundable: true, refusalReason: null });
+    // CX4: and the guide offers that refund, from the same decision.
+    expect(
+      paymentResponseSchema.parse((await get(`/payments/${wallet}`)).json()).payment.situation
+        ?.actions,
+    ).toContain('ISSUE_REFUND');
     // E4: the breakdown names the wallet debit and NO refund figure of its own — how much is
     // refundable is the ledger's answer alone (review of PR #247, F1).
     const detail = paymentResponseSchema.parse((await get(`/payments/${wallet}`)).json());
@@ -251,6 +256,12 @@ describe('refund refusal reasons and rate provenance', () => {
       const id = await make();
       const read = await ledger(id);
       expect(read, reason).toMatchObject({ refundable: false, refusalReason: reason });
+      // The situation guide offers no refund the write refuses: it reads the SAME refusal
+      // (review of PR #248, CX4) — a delivery in progress and a currency mismatch included.
+      const situation = paymentResponseSchema.parse((await get(`/payments/${id}`)).json()).payment
+        .situation;
+      expect(situation, reason).not.toBeNull();
+      expect(situation?.actions, reason).not.toContain('ISSUE_REFUND');
       const before = (
         (await run(
           sql`SELECT count(*)::int AS n FROM refunds WHERE payment_id = ${id}`,

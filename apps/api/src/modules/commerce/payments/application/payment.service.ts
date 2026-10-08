@@ -298,8 +298,11 @@ export interface PaymentServiceDeps {
    * The ONE credit path (`RefundService.refundUndeliverable`), for the reconciliation of an
    * UNKNOWN gateway payment whose order another payment has already settled: the money
    * moved, so it is returned to the wallet (OQ-TPTG-17, decided).
+   *
+   * And `refusalOf`: the refund service's own answer to "would an operator refund be refused",
+   * passed through to the situation guide (review of PR #248, CX4) rather than re-derived.
    */
-  readonly refunds: Pick<RefundService, 'refundUndeliverable'>;
+  readonly refunds: Pick<RefundService, 'refundUndeliverable' | 'refusalOf'>;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
@@ -763,9 +766,14 @@ export class PaymentService {
       scope,
       records.map((record) => record.id),
     );
+    const byId = new Map(records.map((record) => [record.id, record]));
     const found = new Map<PaymentId, PaymentSituationRead>();
     for (const [id, recorded] of facts) {
-      const guide = paymentSituationOf(recorded);
+      const record = byId.get(id);
+      if (record === undefined) continue;
+      // CX4: whether ISSUE_REFUND is offered is the refund service's decision, not a copy.
+      const refundRefusal = await this.deps.refunds.refusalOf(scope, record);
+      const guide = paymentSituationOf({ ...recorded, refundRefusal });
       found.set(id, {
         /*
          * `needsAction` is the SQL facet's answer, from the same statement as every other

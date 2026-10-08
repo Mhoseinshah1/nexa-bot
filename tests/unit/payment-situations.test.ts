@@ -5,6 +5,7 @@ import {
   PAYMENT_SITUATIONS,
   PAYMENT_SITUATION_CUSTOMER_TEMPLATES,
   PAYMENT_STATES,
+  REFUND_REFUSAL_REASONS,
   paymentSituationCode,
   paymentNeedsAction,
   paymentSituationOf,
@@ -40,6 +41,8 @@ const base: PaymentSituationFacts = {
   refundOpen: false,
   refundCompleted: false,
   refundRemaining: true,
+  // What the refund service answers for a payment that is not CONFIRMED (CX4).
+  refundRefusal: 'PAYMENT_NOT_SETTLED',
 };
 
 const facts = (over: Partial<PaymentSituationFacts>): PaymentSituationFacts => ({
@@ -101,11 +104,12 @@ function* everyFacts(): Generator<PaymentSituationFacts> {
                     [false, true],
                     [true, true],
                   ] as const) {
-                    for (const topup of [false, true]) {
+                    for (const refundRefusal of [null, 'DELIVERY_IN_PROGRESS'] as const) {
                       yield {
                         state,
                         method,
-                        topup,
+                        topup: false,
+                        refundRefusal,
                         customerSignalled,
                         receiptFiled,
                         refundRemaining: !refundCompleted,
@@ -332,29 +336,27 @@ describe('the payment situation classifier', () => {
     ).toEqual([]);
   });
 
-  it('offers a refund only where a channel exists and an order was bought', () => {
-    const order = (method: (typeof PAYMENT_METHODS)[number]) =>
-      paymentSituationOf(facts({ state: 'CONFIRMED', method })).actions;
-    expect(order('WALLET')).toEqual(['ISSUE_REFUND']);
-    expect(order('MANUAL_TRANSFER')).toEqual(['ISSUE_REFUND']);
-    // REFUND_METHOD_SUPPORT: a gateway refund has no adapter — nothing fake is offered.
-    expect(order('GATEWAY')).toEqual([]);
-    // A top-up's money is already on the wallet (TOPUP_CREDITED_TO_WALLET).
-    expect(
-      paymentSituationOf(facts({ state: 'CONFIRMED', method: 'MANUAL_TRANSFER', topup: true }))
-        .actions,
-    ).toEqual([]);
-    // Nothing left after a full refund: the guide does not promise one the server refuses.
-    expect(
+  it('offers a refund exactly where the refund service would not refuse one (review of PR #248, CX4)', () => {
+    const confirmed = (over: Partial<PaymentSituationFacts>) =>
       paymentSituationOf(
-        facts({ state: 'CONFIRMED', refundCompleted: true, refundRemaining: false }),
-      ).actions,
-    ).toEqual([]);
+        facts({ state: 'CONFIRMED', method: 'MANUAL_TRANSFER', refundRefusal: null, ...over }),
+      ).actions;
+    expect(confirmed({ refundRefusal: null })).toEqual(['ISSUE_REFUND']);
+    // Every refusal the service can answer withholds the action — the two the guide's own copy
+    // used to miss (a delivery still in progress, refunds in another currency) included.
+    for (const reason of REFUND_REFUSAL_REASONS) {
+      expect(confirmed({ refundRefusal: reason }), reason).toEqual([]);
+      expect(
+        confirmed({ refundRefusal: reason, refundCompleted: true, refundRemaining: true }),
+        reason,
+      ).toEqual([]);
+    }
+    // Nothing left after a full refund: the guide does not promise one the server refuses.
+    expect(confirmed({ refundCompleted: true, refundRemaining: false })).toEqual([]);
     expect(
       everyRow().filter(
         ({ f, g }) =>
-          g.actions.includes('ISSUE_REFUND') &&
-          (f.state !== 'CONFIRMED' || f.method === 'GATEWAY' || f.topup || !f.refundRemaining),
+          g.actions.includes('ISSUE_REFUND') && (f.refundRefusal !== null || !f.refundRemaining),
       ),
     ).toEqual([]);
   });
