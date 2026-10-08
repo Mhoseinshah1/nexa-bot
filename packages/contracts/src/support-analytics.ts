@@ -83,8 +83,14 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'guard_inbound_flood':
       return 'HANDED_OFF';
     default: {
-      const unreachable: never = outcome;
-      throw new Error(`unclassified automatic outcome ${String(unreachable)}`);
+      // Compile-time: every outcome this release knows is listed above. Run-time: a NEWER
+      // replica's outcome (a rolling deploy) is classified by its family rather than failing
+      // the whole analytics read (review of PR #246, m8 — an older classifier threw here).
+      const unknown: never = outcome;
+      const code = String(unknown);
+      if (code.startsWith('sent')) return 'SENT';
+      if (code.startsWith('guard_') || code.startsWith('handoff_')) return 'HANDED_OFF';
+      return 'DROPPED';
     }
   }
 }
