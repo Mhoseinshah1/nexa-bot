@@ -27,6 +27,41 @@
   border-bottom: none;
 }
 
+/*
+ * Roadmap B5/B6: an attention row is ONE link — count, label, the way to the page that
+ * handles it — so the whole row is the touch target. Shared by the dashboard's queue and
+ * Customer 360's attention card (`pages/attention-list.tsx`).
+ */
+.attn-list > li {
+  padding: 0;
+}
+.attn-link {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 4px;
+  border-radius: var(--radius-ctl);
+  color: var(--fg);
+  text-decoration: none;
+}
+.attn-link:hover,
+.attn-link:focus-visible {
+  background: var(--bg-2);
+}
+.attn-go {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+.attn-danger .attn-link .badge,
+.attn-warn .attn-link .badge {
+  font-weight: 600;
+}
+
 /* --- Page head ------------------------------------------------------------- */
 
 .dash-updated {

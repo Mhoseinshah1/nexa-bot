@@ -220,7 +220,8 @@ export class DrizzleSupportAiJobRepository {
 
   /**
    * A8 — the conversation's latest DECIDED jobs, newest first, as the knowledge query reads
-   * them: an Assist draft or an automatic decision that carries a decision, and was not thrown
+   * them: an Assist draft or an automatic decision that carries a decision — a READY draft, or a
+   * SENT job whose lane row is PENDING, DELIVERED or UNCONFIRMED — and was not thrown
    * away (`DISCARDED` — an operator's rejection, a superseded draft, a dropped or handed-off
    * automatic job — and `FAILED` say nothing reliable about what the conversation is about).
    * Tenant- and conversation-scoped; bounded by `limit`; `support_ai_jobs_conversation_idx`.
@@ -239,12 +240,28 @@ export class DrizzleSupportAiJobRepository {
         knowledgeLabels: supportAiJobs.knowledgeLabels,
       })
       .from(supportAiJobs)
+      // PR #244 (CX1): a SENT job counts only while its lane row could have reached the
+      // customer — the same states `clarifyingStreak` counts. A send Telegram refused (FAILED) or
+      // that the conversation moved past (SUPERSEDED) is not something the customer read.
+      .leftJoin(
+        businessOutboundMessages,
+        and(
+          eq(businessOutboundMessages.tenantId, supportAiJobs.tenantId),
+          eq(businessOutboundMessages.id, supportAiJobs.sentOutboundId),
+        ),
+      )
       .where(
         and(
           eq(supportAiJobs.tenantId, tenantId),
           eq(supportAiJobs.conversationId, conversationId),
           isNotNull(supportAiJobs.decision),
-          inArray(supportAiJobs.state, ['READY', 'SENT']),
+          or(
+            eq(supportAiJobs.state, 'READY'),
+            and(
+              eq(supportAiJobs.state, 'SENT'),
+              inArray(businessOutboundMessages.state, ['PENDING', 'DELIVERED', 'UNCONFIRMED']),
+            ),
+          ),
         ),
       )
       .orderBy(desc(supportAiJobs.createdAt), desc(supportAiJobs.id))

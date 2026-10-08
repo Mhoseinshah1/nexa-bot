@@ -2127,6 +2127,37 @@ detail page for a CentralPay payment also fails on that binary (it reads the des
    stay as history (keep the numbers: a customer's CentralPay `userId` must not change across
    a roll-forward). `botctl rollback` never restores the database.
 
+### Roadmap B5/B6: Customer 360 workspace and the attention queue
+
+No migration and no write path. This release adds `GET /users/:id/workspace`, a seventh
+sidebar counter, `businessHandoffs`, to `GET /nav-counters`, and a read-only `awaiting=support`
+facet to `GET /tickets` (`docs/web-redesign/dashboard.md` §7, `docs/web-redesign/commerce-a.md`
+§15). One ONLINE index, `business_conversations_tenant_customer_handoff_idx` — `(tenant_id,
+customer_id) WHERE state = 'HANDOFF_REQUIRED'`, so one customer's handoff count reads that
+customer's conversations — is built concurrently by `runMigrations` after the migrator (see
+"Indexes that must not lock the table they are built on" below); the table is never locked
+against writes. A rollback leaves it in place, unused and harmless.
+
+**During the update itself** the new Web Admin can meet an old API replica:
+
+- Its `/nav-counters` answer has six counters. The contract reads the missing
+  `businessHandoffs` as `null` ("not counted"), so the sidebar badges and the dashboard's
+  «صف رسیدگی» keep polling and simply draw no handoff row. The key is optional on the wire
+  precisely so this answer is not a parse failure — `polling.ts` treats a parse failure as
+  final, and a required key froze every badge until a reload (review B1, PR #240).
+- `/users/:id/workspace` answers 404. Customer 360's «نیازمند رسیدگی» and «آخرین سفارش‌ها و
+  پرداخت‌ها» cards show their error state and do not poll; every other card on the page,
+  the support card included (it reads `/tickets`), works. A reload after the update answers
+  them.
+- `/tickets?awaiting=support` reaching an old replica: the old query schema strips the
+  unknown key, so the inbox lists every status for that request (a wider list, never a
+  narrower one) until the next request lands on a new replica.
+
+All three last only as long as old and new replicas run side by side.
+
+**Rolling back** to the release before it: the old Web Admin asks for none of the three, and
+the online index stays behind unused. Nothing to do.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

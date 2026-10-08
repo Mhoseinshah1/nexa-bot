@@ -20,6 +20,31 @@ holds. When it cannot, nobody pretends that it did.
 | Fail closed | See decision 1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Telemetry   | `support_ai_image_outcomes` holds one row per customer image a draft considered. Each row records `PROCESSED`, or `SKIPPED` with its reason, the **sniffed** type and the size. It never stores a byte, a file id or a URL. An image is `PROCESSED` only when the step that **answered** was given it. An image the answering step was not given is `SKIPPED`/`NO_VISION_CAPABILITY` (a blind fallback answered, or the image did not fit that step), or `OVER_LIMIT`. If nothing answered, it is `NOT_ANSWERED`. The rows are written only after the job's own conditional result write has landed, in the same transaction, so a job discarded meanwhile, or produced twice after a lease takeover, gets none, and a scope stopped during the call gets none. `imagesUnseen` counts the customer's images only.                                                                    |
 
+## A9 — sharper and more images (2026-10-07)
+
+- **Detail.** OpenAI's `image_url` part now carries `detail: 'high'` (was `low`): at `low` the
+  image is read in one 512×512 pass and a screenshot's error text is not legible. `low`, `high`
+  and `auto` are the values the Chat Completions reference documents for that field. Anthropic's
+  image block carries no resolution field: the Messages reference the adapter was audited
+  against (TB4) documents none, so none is sent and the image goes as it is, within the
+  adapter's 3,750,000-byte bound (`OQ-SAI2-03`). Z.AI stays blind (`OQ-TB-30`).
+- **Four images.** `SUPPORT_AI_VISION_MAX_IMAGES` is 4 (was 2): the four most recent customer
+  images in the 40-line window are candidates, older ones `OVER_LIMIT`. Safe in the code paths:
+  the lease is derived from the bound (it grows from 60 s to 120 s of download legs), the
+  draft's `images_seen` has no upper CHECK, the fail-closed rule is unchanged (the latest image
+  must be seen or nobody answers), and images are fetched one at a time outside any transaction.
+- **A total.** `SUPPORT_AI_VISION_MAX_TOTAL_BYTES` (15 MiB decoded) bounds one request's images
+  together, so four images at the 5 MiB bound never make a ~28 MB JSON body; `stepSight` keeps
+  the most recent first and marks an older one past the total `OVER_LIMIT`. The latest always
+  fits. Whether each provider's documented request-size limit holds for four real screenshots is
+  `OQ-SAI2-04`, settled by the acceptance step, not assumed.
+- **Kept.** The 5 MiB per-image bound, the magic-byte sniff, the unseen-image fail-closed rule,
+  and no OCR.
+
+A9 tests: `support-ai-vision.test.ts` (detail, four images, the total) and
+`support-vision.test.ts` (four images end to end). Mutation results:
+`sai-vision-eval-falsification.md`.
+
 ## Decisions made in this package
 
 1. **Fail closed: a HANDOFF draft that no model wrote.** If the customer's latest message is an image nothing could process, the `assistant` role asks no model. The possible causes are: vision off, no capable step, too large, wrong type, download failure, or a missing reference. The draft is `READY` with `decision: HANDOFF`, topic `OTHER`, confidence `LOW`, an empty reply, no provider, `imagesSeen: 0`, and `unseenImageHandoff` set to the reason. The other option was to tell the model to ask for a text description, but that still sends a model a turn about an image it cannot see. It answers the caption, or nothing, as if it had looked, and its output is the only evidence that it did not pretend. A CHECK pins the draft's shape: HANDOFF, no provider, no model, no summary, nothing seen, and an empty reply, or no reply once retention has purged it. The same applies when vision steps exist but none of the configured steps could take this image: the chain returns `NO_VISION_STEP` without calling any step, and raises no outage alert because nothing failed. In Assist mode the draft only flags the conversation for the operator. It does not change the conversation's state, which stays TB7's responsibility.

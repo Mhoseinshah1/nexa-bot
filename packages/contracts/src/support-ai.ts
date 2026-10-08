@@ -885,9 +885,18 @@ export type SupportAiJobState = (typeof SUPPORT_AI_JOB_STATES)[number];
 
 /**
  * At most this many images go with one request: the most recent ones. An older image is
- * marked unseen in the transcript, never silently dropped.
+ * marked unseen in the transcript, never silently dropped. A9 (2026-10-07): four, was two — a
+ * customer often sends the error, the settings screen and the app list in a row.
  */
-export const SUPPORT_AI_VISION_MAX_IMAGES = 2;
+export const SUPPORT_AI_VISION_MAX_IMAGES = 4;
+
+/**
+ * A9: the images of one request together, in decoded bytes. Four images at the per-image bound
+ * would be 20 MiB, about 28 MB once base64-encoded into a JSON body; this keeps the encoded total
+ * near 20 MB whatever the per-image bound of a step. The most recent images are kept first, and
+ * since one image is at most `SUPPORT_AI_VISION_MAX_BYTES` the latest one always fits.
+ */
+export const SUPPORT_AI_VISION_MAX_TOTAL_BYTES = 15 * 1024 * 1024;
 
 /**
  * The largest image NEXA will fetch from Telegram for a model, enforced on the declared size,

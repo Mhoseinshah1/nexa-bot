@@ -3978,7 +3978,13 @@ export interface BotRuntimeDeps {
    */
   readonly receipts: Pick<
     ReceiptService,
-    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf' | 'finalRecord' | 'filedForCustomer'
+    | 'submit'
+    | 'reviewQueue'
+    | 'reviewItem'
+    | 'dispositionOf'
+    | 'finalRecord'
+    | 'filedForCustomer'
+    | 'trackingCodeForCustomer'
   >;
   /**
    * The reviewer's amount capture for the credit-to-wallet disposition (Payment File 02
@@ -5027,6 +5033,44 @@ function refusal(error: unknown): PendingReply {
   const key = isNexaError(error) ? REFUSAL_REPLIES[error.code] : undefined;
   if (key === undefined) throw error;
   return { key, values: refusalValuesFor(key), buttons: [], orderId: null };
+}
+
+/**
+ * A receipt's refusal (roadmap E6). The shared table, except a receipt that arrived after its
+ * window closed: while the payment can still take one, the sentence that says "press the
+ * button below" carries that button — the same «پرداخت را انجام دادم | ارسال رسید» tap that
+ * opened the first window, which opens a new one (`signalTransferSent`, a new key). The prompt
+ * edited the invoice's own button away, so without it the remedy named a button that was
+ * nowhere. A payment that can no longer take a receipt is told so instead of being sent to a
+ * button that would refuse.
+ */
+function receiptRefusal(error: unknown): PendingReply {
+  if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.RECEIPT_WINDOW_EXPIRED) {
+    const paymentId = error.details?.['paymentId'];
+    const next = error.details?.['next'];
+    const reference = error.details?.['reference'];
+    // Past its deadline but holding a receipt: still waiting for a reviewer, never "closed".
+    if (next === 'UNDER_REVIEW') {
+      return {
+        key: 'bot.payment.received_for_review',
+        values: typeof reference === 'string' ? { reference } : {},
+        buttons: [],
+        orderId: null,
+      };
+    }
+    if (typeof paymentId !== 'string' || next !== 'REOPEN') {
+      return { key: 'bot.payment.not_pending', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.payment.receipt_expired',
+      values: {},
+      buttons: [
+        { ...inlineLabel('payment.sent'), data: `${PAY_SENT_CALLBACK_PREFIX}${paymentId}` },
+      ],
+      orderId: null,
+    };
+  }
+  return refusal(error);
 }
 
 /** The external gateway cannot be used right now (WP11A): never the customer's failure. */
@@ -15347,7 +15391,8 @@ export class BotRuntime {
       if (receiptWindow === null) {
         return {
           key: 'bot.payment.received_for_review',
-          values: {},
+          // Roadmap E6: the code the invoice carried stays on the message that replaces it.
+          values: { reference: payment.reference },
           // Nothing more to do on this message: no button, as the receipt's final state.
           buttons: [],
           orderId: null,
@@ -15457,6 +15502,7 @@ export class BotRuntime {
             actor,
             botInstanceId,
             chatId,
+            customer.id,
             submitted.paymentId,
             idempotencyKey,
           );
@@ -15470,7 +15516,7 @@ export class BotRuntime {
       if (!submitted.first) return { key: null, values: {}, buttons: [], orderId: null };
       return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };
     } catch (error) {
-      return refusal(error);
+      return receiptRefusal(error);
     }
   }
 
@@ -15491,6 +15537,7 @@ export class BotRuntime {
     actor: ActorContext,
     botInstanceId: BotInstanceId,
     chatId: string,
+    customerId: UserId,
     paymentId: PaymentId,
     updateKey: string,
   ): Promise<void> {
@@ -15522,11 +15569,45 @@ export class BotRuntime {
         messageId: target.messageId,
         botInstanceId: target.botInstanceId,
         templateKey: RECEIPT_INVOICE_FINAL_KEY,
-        values: {},
+        values: await this.receiptInvoiceFinalValues(scope, actor, customerId, paymentId),
         buttons: [],
       },
       false,
     );
+  }
+
+  /**
+   * Roadmap E6: what the invoice's final state renders — the payment's tracking code, so the
+   * one code the customer quotes is still in the chat after the invoice that first carried
+   * it is edited. An unreadable code drops the line (the template's optional token), never
+   * the edit.
+   */
+  private async receiptInvoiceFinalValues(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    paymentId: PaymentId,
+  ): Promise<TemplateValues> {
+    /*
+     * Never the reason the edit does not happen (review of PR #243, m4): the wizard is
+     * already marked final when this runs, so a throw here would leave the prompt on the
+     * message with nothing left to retry it. An unreadable code drops the line instead.
+     */
+    try {
+      const reference = await this.deps.receipts.trackingCodeForCustomer(
+        scope,
+        actor,
+        customerId,
+        paymentId,
+      );
+      return reference === null ? {} : { reference };
+    } catch (error) {
+      this.deps.logger?.error(
+        { err: error, paymentId, tenantId: scope.tenantId },
+        'reading the tracking code for the final invoice failed; edited without it',
+      );
+      return {};
+    }
   }
 
   /**
@@ -15795,6 +15876,13 @@ export class BotRuntime {
     );
     if (!filed) return;
     const moved = await state.moveAll(scope, actor, where, ['RECEIPT_WAIT'], 'RECEIPT_REVIEW');
+    if (moved.length === 0) return;
+    const values = await this.receiptInvoiceFinalValues(
+      scope,
+      actor,
+      prompt.customerId as UserId,
+      prompt.paymentId as PaymentId,
+    );
     for (const wizard of moved) {
       await editSent(
         this.deps.messenger,
@@ -15804,7 +15892,7 @@ export class BotRuntime {
           messageId: wizard.messageId,
           botInstanceId: wizard.botInstanceId,
           templateKey: RECEIPT_INVOICE_FINAL_KEY,
-          values: {},
+          values,
           buttons: [],
         },
         false,

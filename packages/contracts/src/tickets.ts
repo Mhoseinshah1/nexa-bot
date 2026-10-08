@@ -738,6 +738,13 @@ export type TicketDetailResponse = z.infer<typeof ticketDetailResponseSchema>;
 export const ticketListQuerySchema = z
   .object({
     status: ticketStatusSchema.optional(),
+    /**
+     * Roadmap B5/B6 (review N1): `support` keeps only the tickets whose next word is
+     * support's — `TICKET_AWAITING_SUPPORT_STATUSES`, the predicate the sidebar's and
+     * Customer 360's "awaiting support" counts use — so a count and the list it links to
+     * agree. ANDed with `status` when both are given.
+     */
+    awaiting: z.literal('support').optional(),
     categoryId: uuidV7Schema.optional(),
     customer: z.string().trim().min(1).max(64).optional(),
     assigned: z.union([z.enum(['me', 'none']), uuidV7Schema]).optional(),

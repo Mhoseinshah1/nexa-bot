@@ -1,4 +1,5 @@
 import type {
+  GatewayInvoiceCreationState,
   ListSearchTerm,
   Money,
   OrderId,
@@ -233,6 +234,28 @@ export interface PaymentGatewaySignalRecord {
   readonly outcome: string | null;
   readonly lateCompletionObservedAt: Date | null;
   readonly reconcileInquiryRequestedAt: Date | null;
+}
+
+/**
+ * Roadmap E1: every recorded fact the situation classifier reads, from ONE statement — the
+ * payment's own columns, its receipt disposition, which Payment Operations Center queues it is
+ * in (the SAME SQL predicates the queue list uses), the refund facts and the gateway invoice's
+ * creation state.
+ */
+export interface PaymentSituationFactsRecord {
+  readonly state: PaymentState;
+  readonly method: PaymentMethod;
+  readonly topup: boolean;
+  readonly customerSignalled: boolean;
+  readonly providerReviewOpened: boolean;
+  readonly resolvedByAdmin: boolean;
+  readonly receiptDisposition: ReceiptDisposition | null;
+  readonly receiptFiled: boolean;
+  readonly queues: readonly PaymentOpsQueue[];
+  readonly refundOpen: boolean;
+  readonly refundCompleted: boolean;
+  readonly refundRemaining: boolean;
+  readonly invoiceCreation: GatewayInvoiceCreationState | null;
 }
 
 export interface PaymentRepository {
@@ -537,6 +560,16 @@ export interface PaymentRepository {
     paymentIds: readonly PaymentId[],
     tx?: unknown,
   ): Promise<ReadonlyMap<PaymentId, PaymentGatewaySignalRecord>>;
+
+  /**
+   * Roadmap E1: the situation facts of each of these payments, one query for a page. Every
+   * id this tenant holds has an entry. Read-only and unlocked.
+   */
+  situationFacts(
+    scope: TenantContext,
+    paymentIds: readonly PaymentId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<PaymentId, PaymentSituationFactsRecord>>;
 
   /**
    * The reason an administrator REJECTED this payment (File 01 §7): its `resolution_note`,

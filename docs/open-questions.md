@@ -3589,7 +3589,15 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
   found only when its title, tags or body share a (folded, lightly stemmed) word with the query.
   A synonym the article does not use («کانکت» for «اتصال») is found only if a tag says it. Whether
   real conversations need more than tags is settled by running the eval corpus against a real
-  model (A10), not by guessing.
+  model (`docs/support-agent/sai-eval.md`), not by guessing.
+- **OQ-SAI2-03 — an image resolution option for Anthropic (A9).** OpenAI's `image_url.detail` is
+  documented (`low`/`high`/`auto`) and A9 sends `high`. The Anthropic Messages reference the
+  adapter was audited against documents no such field for an image block, so none is sent. If the
+  current reference documents one, it is added with a fixture from a real call — never guessed.
+- **OQ-SAI2-04 — four images against the real request-size limits (A9).** Four images are bounded
+  to 15 MiB decoded together (about 20 MB of base64). That this is inside each provider's
+  request-size limit is the provider's documentation, not yet a real call; acceptance step S2
+  records it. Z.AI is blind and unaffected.
 
 ## OQ-A4 — tutorial video and guide in one message (pre-support item A4)
 
@@ -3739,6 +3747,19 @@ and `OQ-T-4` are live again and apply to inline buttons too.
     (`boundedLastSeen`). Either refusal stores nothing, so the card keeps the LAST KNOWN
     value. If a panel spells it differently, correct `readLastSeen` AND the fake in one
     commit.
+
+## OQ-E — payments roadmap E1–E6 (2026-10-07)
+
+- **OQ-E6-01 — one label for the tracking code.** The invoice labels the payment's code
+  «شناسه فاکتور» (the owner's invoice layout) while every later message labels the same
+  `payments.reference` «کد پیگیری پرداخت». Unifying the label is the owner's copy decision
+  (`docs/payments-under-review-ux.md` §6). Also: `bot.payment.expired` now quotes the code
+  of a closed payment, while `bot.payment.cancelled` says the old code is no longer valid; the
+  owner may want the expiry copy to say the code is for support only (review of PR #243).
+- **OQ-E2-01 — late or partial money on an ended attempt has no work-queue exit.** It is kept
+  out of `NEEDS_ACTION` (which must drain) and visible in its own facets until `OQ-WP11A-03`
+  decides between "credit by hand" and "nothing"; a domain resolution, if decided, joins the
+  queue with its exit.
 
 ## OQ-TG-06 — a network error that certainly sent nothing is still filed UNKNOWN
 

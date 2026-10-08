@@ -455,6 +455,7 @@ export class DrizzleTicketRepository implements TicketRepository {
         and(
           eq(tickets.tenantId, tenantId),
           filter.status === undefined ? undefined : eq(tickets.status, filter.status),
+          filter.statuses === undefined ? undefined : inArray(tickets.status, [...filter.statuses]),
           filter.categoryId === undefined ? undefined : eq(tickets.categoryId, filter.categoryId),
           filter.customerId === undefined ? undefined : eq(tickets.customerId, filter.customerId),
           filter.assignedAdminId === undefined

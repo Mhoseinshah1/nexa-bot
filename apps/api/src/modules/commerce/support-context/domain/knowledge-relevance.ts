@@ -133,6 +133,11 @@ const STOPWORDS = new Set([
   'نمیشود',
   'لطفا',
   'سلام',
+  // «بخیر» and «درود» only greet. «وقت» is NOT a stop word: it is how customers say a service's
+  // remaining time («وقتم تموم شد»); the greeting «وقت بخیر» is removed as a PHRASE (PR #244,
+  // MAJOR-1 — a stop word tuned to the eval corpus broke expiry questions).
+  'بخیر',
+  'درود',
   'ممنون',
   'مرسی',
   'یا',
@@ -242,10 +247,14 @@ function stem(word: string): string {
   return out;
 }
 
+/** Greetings that say nothing about the question, removed whole before the words are split. */
+const GREETING_PHRASES = /(?<!\p{L})وقت(?:تون|تان|ت|شما)?\s*(?:به\s*)?بخیر(?!\p{L})/gu;
+
 /** The distinct terms of a text: folded, split on anything not a letter or a digit, stemmed. */
 export function matchTerms(text: string): Set<string> {
   const terms = new Set<string>();
-  for (const word of foldForMatching(text).split(/[^\p{L}\p{N}]+/u)) {
+  const folded = foldForMatching(text).replace(GREETING_PHRASES, ' ');
+  for (const word of folded.split(/[^\p{L}\p{N}]+/u)) {
     if (word.length < 2 || STOPWORDS.has(word)) continue;
     const term = stem(word);
     if (term.length >= 2 && !STOPWORDS.has(term)) terms.add(term);

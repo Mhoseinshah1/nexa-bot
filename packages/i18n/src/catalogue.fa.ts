@@ -800,7 +800,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * reply could not be delivered.
    */
   'bot.payment.received_for_review':
-    '{icon:info} اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+    '{icon:info} اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.receipt_prompt':
     'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.',
   /*
@@ -815,7 +815,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.receipt_not_expected':
     'در حال حاضر منتظر رسیدی از شما نیستیم. برای ارسال رسید، ابتدا پیام پرداخت خود را باز کنید و دکمهٔ ارسال رسید را بزنید.',
   'bot.payment.receipt_expired':
-    'مهلت ارسال رسید به پایان رسید. لطفاً دوباره از پیام پرداخت، دکمهٔ ارسال رسید را بزنید.',
+    'مهلت ارسال رسید به پایان رسید و این تصویر ثبت نشد. برای ارسال رسید، دکمهٔ زیر را بزنید و سپس تصویر رسید را دوباره بفرستید.',
   'bot.payment.receipt_limit':
     'برای این پرداخت {limit} رسید ثبت شده است و بیش از این پذیرفته نمی‌شود. همین رسیدها بررسی می‌شوند.',
   'bot.payment.window_too_short':
@@ -837,8 +837,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * One kind, one frozen template (ADR 0030), so the sentence has to be true of both.
    */
   'bot.payment.rejected':
-    '{icon:error} پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
-  'bot.payment.expired': '{icon:time} مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
+    '{icon:error} پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.expired':
+    '{icon:time} مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.\n\nکد پیگیری پرداخت: {reference}',
   /* WP-A9: one reminder before the window closes, while it can still be paid. */
   'bot.payment.pending_reminder':
     '{icon:time} تنها {minutes} دقیقه تا پایان مهلت پرداخت فاکتور {reference} باقی مانده است (تا {expiresAt}).\n' +

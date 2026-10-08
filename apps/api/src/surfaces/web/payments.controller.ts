@@ -60,6 +60,7 @@ import type { PaymentDestinationRecord } from '../../modules/commerce/payments/a
 import type { PaymentReceiptRecord } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
 import type { GatewayCardFacts } from '../../modules/commerce/payments/application/gateway-payment.service.js';
+import type { PaymentSituationRead } from '../../modules/commerce/payments/application/payment.service.js';
 
 /**
  * Payments over HTTP, at `/payments`, and the compensation list at `/compensations`.
@@ -140,6 +141,8 @@ export class PaymentsController {
     );
     // What each gateway attempt last recorded, for the queue rows (program §10).
     const signals = await this.container.payments.gatewaySignals(scope, actor, result.items);
+    // Roadmap E1: each payment's situation, from the ONE classifier, and its queues.
+    const situations = await this.container.payments.situations(scope, actor, result.items);
     return {
       // The LIST omits `evidenceNote`: it is an operator's own text about somebody's
       // bank transfer, and it is returned only on the detail, behind the same
@@ -150,6 +153,7 @@ export class PaymentsController {
           identities.get(record.customerId),
           dispositions.get(record.id) ?? null,
           signals.get(record.id) ?? null,
+          situations.get(record.id) ?? null,
         ),
       ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
@@ -207,6 +211,11 @@ export class PaymentsController {
     // A card-transfer attempt's card-change and receipt lanes (§10): states only, no bytes.
     const cardFacts =
       invoice === null ? null : await this.container.gatewayPayments.cardFactsFor(scope, invoice);
+    // Roadmap E1: the situation the detail's guidance card renders, and the row signal.
+    const [situations, signals] = await Promise.all([
+      this.container.payments.situations(scope, actor, [payment]),
+      this.container.payments.gatewaySignals(scope, actor, [payment]),
+    ]);
     return {
       payment: toDetail(
         payment,
@@ -216,6 +225,8 @@ export class PaymentsController {
         identities.get(payment.customerId),
         dispositions.get(payment.id) ?? null,
         cardFacts,
+        situations.get(payment.id) ?? null,
+        signals.get(payment.id) ?? null,
       ),
     };
   }
@@ -435,6 +446,7 @@ function toSummary(
   identity: PaymentCustomerIdentity | undefined,
   receiptDisposition: ReceiptDisposition | null,
   gatewaySignal: PaymentGatewaySignalRecord | null = null,
+  situation: PaymentSituationRead | null = null,
 ): PaymentSummaryResponse {
   return {
     id: record.id,
@@ -468,6 +480,18 @@ function toSummary(
     providerReviewUntil:
       record.providerReviewUntil === null ? null : record.providerReviewUntil.toISOString(),
     gatewaySignal: gatewaySignal === null ? null : toGatewaySignal(gatewaySignal),
+    // Roadmap E1: rendered by the Web Admin as sent; it never classifies.
+    situation:
+      situation === null
+        ? null
+        : {
+            situation: situation.guide.situation,
+            money: situation.guide.money,
+            customer: situation.guide.customer,
+            actions: [...situation.guide.actions],
+            needsAction: situation.guide.needsAction,
+          },
+    queues: situation === null ? [] : [...situation.queues],
   };
 }
 
@@ -591,9 +615,11 @@ function toDetail(
   identity: PaymentCustomerIdentity | undefined,
   receiptDisposition: ReceiptDisposition | null,
   cardFacts: GatewayCardFacts | null = null,
+  situation: PaymentSituationRead | null = null,
+  gatewaySignal: PaymentGatewaySignalRecord | null = null,
 ): PaymentDetailResponse {
   return {
-    ...toSummary(record, identity, receiptDisposition),
+    ...toSummary(record, identity, receiptDisposition, gatewaySignal, situation),
     evidenceNote: record.evidenceNote,
     resolutionNote: record.resolutionNote,
     destination: destination === null ? null : toDestinationView(destination),
