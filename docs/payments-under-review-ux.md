@@ -31,24 +31,25 @@ classifies.
 The classifier reads the queue facets from the **same SQL predicates** the queue list and
 counts use, so a situation and the queue it lists under cannot disagree.
 
-| Situation            | State(s) it comes from              | What happened                                          | Money probably moved?     | Customer should        | Operator actions that exist                                                     | Needs a person |
-| -------------------- | ----------------------------------- | ------------------------------------------------------ | ------------------------- | ---------------------- | ------------------------------------------------------------------------------- | -------------- |
-| `AWAITING_PAYMENT`   | PENDING                             | instructions or link sent, customer said nothing       | not yet                   | pay within the window  | none                                                                            | no             |
-| `INVOICE_NOT_ISSUED` | PENDING (gateway)                   | the create was refused or its answer lost; no link     | no                        | start again            | none                                                                            | no             |
-| `CUSTOMER_SIGNALLED` | PENDING (manual)                    | the customer SAYS they sent it; nobody checked         | claimed                   | wait, do not pay again | review the receipt — in Telegram only (File 02 §10)                             | yes            |
-| `PROVIDER_REVIEW`    | PENDING (gateway)                   | the provider took the receipt and is reviewing it      | possibly                  | wait, do not pay again | none (wait for the provider)                                                    | no             |
-| `OUTCOME_UNKNOWN`    | UNKNOWN                             | the outside world may have taken money; Nexa can't say | possibly                  | wait, do not pay again | ask the provider again; reconcile from the recorded answer                      | yes            |
-| `MISMATCH`           | UNKNOWN                             | the lane held it: another amount, customer, reference  | possibly                  | wait, do not pay again | verify at the provider; ask again; reconcile                                    | yes            |
-| `PARTIAL`            | PENDING, UNKNOWN, FAILED/EXP./CANC. | the provider recorded a partial payment                | partially                 | wait, do not pay again | UNKNOWN: verify, ask again, reconcile. Ended: verify, manual wallet adjustment¹ | only UNKNOWN   |
-| `LATE_COMPLETION`    | UNKNOWN, FAILED/EXP./CANC.          | the provider approved after the attempt's window       | at the provider, not here | wait, do not pay again | UNKNOWN: verify, ask again, reconcile. Ended: verify, manual wallet adjustment¹ | only UNKNOWN   |
-| `CONFIRMED`          | CONFIRMED                           | confirmed by trusted evidence                          | yes                       | nothing                | refund² (`refunds.issue`)                                                       | no             |
-| `REFUND_IN_PROGRESS` | CONFIRMED                           | a refund is still open                                 | being returned            | nothing                | complete or fail the refund                                                     | yes            |
-| `REFUNDED`           | CONFIRMED                           | some or all of it went back                            | returned                  | nothing                | refund the rest² — the server computes what is left                             | no             |
-| `CREDITED_TO_WALLET` | FAILED                              | a reviewer credited what they saw to the wallet        | to the wallet             | nothing                | none                                                                            | no             |
-| `REJECTED`           | FAILED (by an administrator)        | a reviewer did not accept the receipt                  | no                        | may pay again          | none                                                                            | no             |
-| `FAILED`             | FAILED (no administrator)           | the gateway said unsuccessful, or reconciliation       | no                        | may pay again          | none                                                                            | no             |
-| `EXPIRED`            | EXPIRED                             | the window closed with nothing confirmed               | no                        | may pay again          | none                                                                            | no             |
-| `CANCELLED`          | CANCELLED                           | withdrawn before confirmation                          | no                        | nothing                | none                                                                            | no             |
+| Situation              | State(s) it comes from                                              | What happened                                                                                                       | Money probably moved?     | Customer should        | Operator actions that exist                                                         | Needs a person |
+| ---------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------- | ---------------------- | ----------------------------------------------------------------------------------- | -------------- |
+| `AWAITING_PAYMENT`     | PENDING                                                             | instructions or link sent, customer said nothing                                                                    | not yet                   | pay within the window  | none                                                                                | no             |
+| `INVOICE_NOT_ISSUED`   | PENDING (gateway)                                                   | the create was refused or its answer lost; no link                                                                  | no                        | start again            | none                                                                                | no             |
+| `CUSTOMER_SIGNALLED`   | PENDING (manual)                                                    | the customer SAYS they sent it; no receipt yet                                                                      | claimed                   | send the receipt       | none (nothing to review yet)                                                        | no             |
+| `RECEIPT_UNDER_REVIEW` | PENDING (manual)                                                    | a receipt is filed; a reviewer decides                                                                              | claimed                   | wait, do not pay again | review the receipt — in Telegram only (File 02 §10)                                 | yes            |
+| `PROVIDER_REVIEW`      | PENDING (gateway)                                                   | the provider took the receipt and is reviewing it                                                                   | possibly                  | wait, do not pay again | none (wait for the provider)                                                        | no             |
+| `OUTCOME_UNKNOWN`      | UNKNOWN                                                             | the outside world may have taken money; Nexa can't say                                                              | possibly                  | wait, do not pay again | ask the provider again; reconcile from the recorded answer                          | yes            |
+| `MISMATCH`             | UNKNOWN                                                             | the lane held it: another amount, customer, reference                                                               | possibly                  | wait, do not pay again | verify at the provider; ask again; reconcile                                        | yes            |
+| `PARTIAL`              | PENDING, UNKNOWN, FAILED/EXP./CANC.                                 | the provider recorded a partial payment                                                                             | partially                 | wait, do not pay again | UNKNOWN: verify, ask again, reconcile. Ended: verify, manual wallet adjustment¹     | only UNKNOWN   |
+| `LATE_COMPLETION`      | PENDING, UNKNOWN, FAILED/EXP./CANC.                                 | the provider approved after the attempt's window (the outcome, or the durable `late_completion_observed_at` marker) | at the provider, not here | wait, do not pay again | UNKNOWN: verify, ask again, reconcile. Otherwise: verify, manual wallet adjustment¹ | only UNKNOWN   |
+| `CONFIRMED`            | CONFIRMED                                                           | confirmed by trusted evidence                                                                                       | yes                       | nothing                | refund² (`refunds.issue`)                                                           | no             |
+| `REFUND_IN_PROGRESS`   | CONFIRMED                                                           | an operator's refund is still open (a service refund request's reservation is its workflow's)                       | being returned            | nothing                | complete or fail the refund                                                         | yes            |
+| `REFUNDED`             | CONFIRMED, or FAILED/EXP./CANC. refunded to the wallet (OQ-TPTG-17) | some or all of it went back                                                                                         | returned                  | nothing                | refund the rest² while something is left                                            | no             |
+| `CREDITED_TO_WALLET`   | FAILED                                                              | a reviewer credited what they saw to the wallet                                                                     | to the wallet             | nothing                | none                                                                                | no             |
+| `REJECTED`             | FAILED (a manual transfer an administrator failed)                  | the receipt's REJECTED disposition, or a signal-only transfer rejected                                              | no                        | may pay again          | none                                                                                | no             |
+| `FAILED`               | FAILED (a gateway payment)                                          | the gateway said unsuccessful, or an operator reconciled it to FAILED                                               | no                        | may pay again          | none                                                                                | no             |
+| `EXPIRED`              | EXPIRED                                                             | the window closed with nothing confirmed                                                                            | no                        | may pay again          | none                                                                                | no             |
+| `CANCELLED`            | CANCELLED                                                           | withdrawn before confirmation                                                                                       | no                        | nothing                | none                                                                                | no             |
 
 ¹ `MANUAL_WALLET_ADJUSTMENT` is the customer page's wallet credit (`users.wallet.credit`).
 It is the only path that exists for money the domain cannot settle, and whether to use it
@@ -168,6 +169,23 @@ UNKNOWN out of tenant A's list, a resolved refund out of the queue, and the read
   payment that can no longer take a receipt is answered `bot.payment.not_pending`, with no
   button. Nothing about money changed: the button opens a window, never a decision.
 
+## 3a. The review of PR #243
+
+Each finding, and where it was fixed (contracts commit, then the code commit):
+
+| Finding                                                             | Fix                                                                                                                                                    |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CX1 — a refused-then-approved attempt classified FAILED             | The `LATE_COMPLETION` facet reads `late_completion_observed_at` as well as the outcome; one definition, used by the classifier through the queues.     |
+| M1 — a PENDING late approval read "awaiting payment"                | `LATE_COMPLETION` heads the PENDING branch; not in NEEDS_ACTION (its exit is the expiry sweep).                                                        |
+| CX2 — a claim with no receipt was review work                       | New `RECEIPT_UNDER_REVIEW` (a filed receipt); `CUSTOMER_SIGNALLED` is the bare claim, customer guidance `SEND_RECEIPT`, no action.                     |
+| CX3 — a service refund reservation advertised SETTLE_REFUND         | `refundOpen` excludes reservations (`service_refund_requests.refund_id`); still `REFUND_RELATED`.                                                      |
+| CX4/M2 — reconciliations read as rejections; refunds as "no money"  | REJECTED needs the receipt's REJECTED disposition or a manual transfer; FAILED + a completed refund is `REFUNDED`.                                     |
+| m1 — NEEDS_ACTION defined twice, read across two statements         | Every fact is read in one statement; the badge's `needsAction` is the SQL facet's answer; `paymentNeedsAction` stays the tested specification.         |
+| m2 — a late receipt on a receipted payment said "no longer pending" | The refusal names what comes next: `REOPEN` (button), `UNDER_REVIEW` (`received_for_review` with the code), `CLOSED` (`not_pending`).                  |
+| m3 — mutants R1, R4, R8, R9 survived                                | Tests for each; R9 (a gateway payment with `customer_signalled_at`) is refused by `payments_customer_signal_check`, and the badge now reads the facet. |
+| m4 — a throw reading the code skipped the edit                      | The read falls back to `{}`; the edit always happens.                                                                                                  |
+| NIT — refund offered after a full refund                            | `refundRemaining` fact; ISSUE_REFUND only while something is left.                                                                                     |
+
 ## 4. Falsification
 
 `scripts/mutate-payments-ops-ux.py` reverts one rule at a time and runs the named test; the
@@ -175,35 +193,50 @@ results of the last run are in §4.1.
 
 ### 4.1 Results
 
-Run on `nexa_test_pay` at the head of `roadmap/payments-ops-ux`: **21 of 21 killed**.
+After the review of PR #243, re-run on `nexa_test_pay`: **34 of 34 killed** (the first run's SQL-01 survived as an equivalent mutant — a manual transfer never carries a provider review — and was replaced by one that adds a PENDING provider review to the facet). The first round was 21 of 21.
 
-| #      | Rule reverted                                                            | Named test                                    |
-| ------ | ------------------------------------------------------------------------ | --------------------------------------------- |
-| SIT-01 | a late completion on an ended attempt outranks how it ended              | unit `payment-situations` — killed            |
-| SIT-02 | a credited receipt is not a rejection                                    | unit — killed                                 |
-| SIT-03 | an UNKNOWN tells the customer not to pay again                           | unit — killed                                 |
-| SIT-04 | a refund only where `REFUND_METHOD_SUPPORT` has a channel                | unit — killed                                 |
-| SIT-05 | reconciliation only on an UNKNOWN gateway payment                        | unit — killed                                 |
-| SIT-06 | an open refund is `REFUND_IN_PROGRESS`, ahead of a completed one         | integration `payment-situations` — killed     |
-| SIT-07 | late money on an ended attempt is not work (the queue drains)            | unit — killed                                 |
-| SQL-01 | NEEDS_ACTION excludes a PENDING provider review                          | integration — killed                          |
-| SQL-02 | NEEDS_ACTION excludes late money on an ended attempt                     | integration — killed                          |
-| SQL-03 | an open refund is REQUESTED or AWAITING_EXTERNAL, never FAILED           | integration — killed                          |
-| SQL-04 | the situations read charges `payments.view`                              | integration — killed                          |
-| WEB-01 | NEEDS_ACTION leads the chips                                             | web `payment-situations` — killed             |
-| WEB-02 | the detail shows the guidance card                                       | web — killed                                  |
-| WEB-03 | the row renders the server's situation, never one derived from the state | web — killed                                  |
-| E6-01  | the expired-window reply carries the send-receipt button                 | integration `telegram-payment-flow` — killed  |
-| E6-02  | no button for a payment past its own deadline                            | integration — killed                          |
-| E6-03  | the receipt turn's final invoice carries the tracking code               | integration — killed                          |
-| E6-04  | the prompt turn's final invoice carries the tracking code                | integration — killed                          |
-| E6-05  | the expiry notice carries the tracking code                              | integration `customer-notifications` — killed |
-| E6-06  | the rejection notice carries the tracking code                           | integration — killed                          |
-| E6-07  | the window's minutes are rounded UP                                      | unit `receipt-window` — killed                |
+| #      | Rule reverted                                                            | Named test                                     |
+| ------ | ------------------------------------------------------------------------ | ---------------------------------------------- |
+| SIT-01 | a late completion on an ended attempt outranks how it ended              | unit `payment-situations` — killed             |
+| SIT-02 | a credited receipt is not a rejection                                    | unit — killed                                  |
+| SIT-03 | an UNKNOWN tells the customer not to pay again                           | unit — killed                                  |
+| SIT-04 | a refund only where `REFUND_METHOD_SUPPORT` has a channel                | unit — killed                                  |
+| SIT-05 | reconciliation only on an UNKNOWN gateway payment                        | unit — killed                                  |
+| SIT-06 | an open refund is `REFUND_IN_PROGRESS`, ahead of a completed one         | integration `payment-situations` — killed      |
+| SIT-07 | late money on an ended attempt is not work (the queue drains)            | unit — killed                                  |
+| SQL-01 | NEEDS_ACTION excludes a PENDING provider review                          | integration — killed                           |
+| SQL-02 | NEEDS_ACTION excludes late money on an ended attempt                     | integration — killed                           |
+| SQL-03 | an open refund is REQUESTED or AWAITING_EXTERNAL, never FAILED           | integration — killed                           |
+| SQL-04 | the situations read charges `payments.view`                              | integration — killed                           |
+| WEB-01 | NEEDS_ACTION leads the chips                                             | web `payment-situations` — killed              |
+| WEB-02 | the detail shows the guidance card                                       | web — killed                                   |
+| WEB-03 | the row renders the server's situation, never one derived from the state | web — killed                                   |
+| E6-01  | the expired-window reply carries the send-receipt button                 | integration `telegram-payment-flow` — killed   |
+| E6-02  | no button for a payment past its own deadline                            | integration — killed                           |
+| E6-03  | the receipt turn's final invoice carries the tracking code               | integration — killed                           |
+| E6-04  | the prompt turn's final invoice carries the tracking code                | integration — killed                           |
+| E6-05  | the expiry notice carries the tracking code                              | integration `customer-notifications` — killed  |
+| E6-06  | the rejection notice carries the tracking code                           | integration — killed                           |
+| E6-07  | the window's minutes are rounded UP                                      | unit `receipt-window` — killed                 |
+| SIT-08 | a PENDING late approval is LATE_COMPLETION (M1)                          | unit — killed                                  |
+| SIT-09 | only a FILED receipt is under review (CX2)                               | unit — killed                                  |
+| SIT-10 | a gateway reconciliation to FAILED is not REJECTED (CX4)                 | unit — killed                                  |
+| SIT-11 | FAILED refunded to the wallet is REFUNDED (M2)                           | unit — killed                                  |
+| SIT-12 | no refund offered once nothing is left                                   | unit — killed                                  |
+| SQL-05 | the LATE_COMPLETION facet reads the durable marker (CX1)                 | integration `payment-situations` — killed      |
+| SQL-06 | NEEDS_ACTION needs a filed receipt (CX2)                                 | integration — killed                           |
+| SQL-07 | a service refund reservation is not an operator's open refund (CX3)      | integration `service-refund-requests` — killed |
+| E6-08  | the tracking-code read checks the owner (R1)                             | integration `payment-receipts` — killed        |
+| E6-09  | a payment closed inside its deadline gets no new window (R4)             | integration `payment-receipts` — killed        |
+| E6-10  | a receipted payment past its deadline is under review (m2)               | integration `telegram-payment-flow` — killed   |
+| E6-11  | the claim reply keeps the code (R8)                                      | integration — killed                           |
+| E6-12  | an unreadable code never stops the edit (m4)                             | integration — killed                           |
 
-Not covered by mutation, stated rather than hidden: the claim reply's tracking code on the
-path where no window can be opened (`receiptWindow === null` in `signalTransferSent`) — the
-same value as the two finalisations, unexercised by a Telegram-level test.
+Equivalent mutants, stated rather than hidden: dropping the owner check from `reopenable`
+(the capture is per customer), dropping `NOT PARTIAL` or `provider_review_until IS NULL` from
+the manual arm of NEEDS_ACTION (a manual transfer is never partial and never under provider
+review), and deriving the badge from `paymentNeedsAction` instead of the facet (the two agree on
+every fixture, which `payment-situations.test.ts` asserts).
 
 ## 5. Manual acceptance — NOT RUN
 
@@ -230,6 +263,7 @@ Real Telegram and real providers were not exercised. On a staging bot:
 
 - `OQ-WP11A-03` (existing) decides whether late or partial money on an ended attempt gets a
   domain resolution. If it does, that resolution's exit can join `NEEDS_ACTION`.
+- **OQ-E6-01 (also)** — `bot.payment.expired` now quotes the code of a payment that is closed, while `bot.payment.cancelled` says the old code is no longer valid. Kept (support still finds the payment by it); the owner may want the expiry copy to say the code is for support only.
 - **OQ-E6-01** — the invoice labels the code «شناسه فاکتور» (the owner's invoice layout)
   while every later message labels it «کد پیگیری پرداخت». Both print the same
   `payments.reference`. Unifying the label is a copy decision for the owner.

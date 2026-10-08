@@ -58,7 +58,10 @@ M=[
  # NIT: no refund offered once nothing is left.
  ('SIT-12',[(SIT,"    facts.state === 'CONFIRMED' &&\n    facts.refundRemaining;","    facts.state === 'CONFIRMED';")],U_SIT,'offers a refund only'),
  # --- E2: the NEEDS_ACTION facet in SQL --------------------------------------------------------
- ('SQL-01',[(SQL,"      AND ${payments.providerReviewUntil} IS NULL\n      AND NOT ${paymentOpsQueueCondition('LATE_COMPLETION')}","      AND NOT ${paymentOpsQueueCondition('LATE_COMPLETION')}")],I_SIT,'derives each arm'),
+ # A PENDING provider review waits for the provider: never work for a person. (The first
+ # SQL-01, dropping `provider_review_until IS NULL` from the manual arm, is EQUIVALENT: a
+ # manual transfer never carries a provider review, `payments_provider_review_check`.)
+ ('SQL-01',[(SQL,"    OR ${payments.state} = 'UNKNOWN'\n","    OR ${payments.state} = 'UNKNOWN'\n    OR (${payments.state} = 'PENDING' AND ${payments.providerReviewUntil} IS NOT NULL)\n")],I_SIT,'derives each arm'),
  ('SQL-02',[(SQL,"    OR (${payments.state} = 'CONFIRMED' AND ${openRefundCondition()})\n  )`;","    OR (${payments.state} = 'CONFIRMED' AND ${openRefundCondition()})\n    OR (${payments.state} IN ('FAILED', 'EXPIRED') AND ${paymentOpsQueueCondition('LATE_COMPLETION')})\n  )`;")],I_SIT,'derives each arm'),
  ('SQL-03',[(SQL,"       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL')\n       AND NOT EXISTS (","       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL', 'FAILED')\n       AND NOT EXISTS (")],I_SIT,'moves a payment out of NEEDS_ACTION'),
  # The situations read charges payments.view.
