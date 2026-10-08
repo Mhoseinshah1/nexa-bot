@@ -142,12 +142,7 @@ export class PaymentsController {
     // What each gateway attempt last recorded, for the queue rows (program §10).
     const signals = await this.container.payments.gatewaySignals(scope, actor, result.items);
     // Roadmap E1: each payment's situation, from the ONE classifier, and its queues.
-    const situations = await this.container.payments.situations(
-      scope,
-      actor,
-      result.items,
-      dispositions,
-    );
+    const situations = await this.container.payments.situations(scope, actor, result.items);
     return {
       // The LIST omits `evidenceNote`: it is an operator's own text about somebody's
       // bank transfer, and it is returned only on the detail, behind the same
@@ -218,7 +213,7 @@ export class PaymentsController {
       invoice === null ? null : await this.container.gatewayPayments.cardFactsFor(scope, invoice);
     // Roadmap E1: the situation the detail's guidance card renders, and the row signal.
     const [situations, signals] = await Promise.all([
-      this.container.payments.situations(scope, actor, [payment], dispositions),
+      this.container.payments.situations(scope, actor, [payment]),
       this.container.payments.gatewaySignals(scope, actor, [payment]),
     ]);
     return {

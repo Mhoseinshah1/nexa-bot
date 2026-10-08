@@ -750,15 +750,13 @@ export class PaymentService {
 
   /**
    * Roadmap E1 (`docs/payments-under-review-ux.md`): each payment's situation, from the ONE
-   * classifier (`paymentSituationOf`) over the record, its receipt disposition and the facts
-   * the queue predicates read — plus the queues themselves. `payments.view`; read-only. The
-   * dispositions are the caller's, already read for the same page.
+   * classifier (`paymentSituationOf`) over facts read in ONE statement, plus the queues
+   * themselves. `payments.view`; read-only.
    */
   async situations(
     scope: TenantContext,
     actor: ActorContext,
     records: readonly PaymentRecord[],
-    dispositions: ReadonlyMap<PaymentId, ReceiptDisposition>,
   ): Promise<ReadonlyMap<PaymentId, PaymentSituationRead>> {
     await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
     const facts = await this.deps.repository.situationFacts(
@@ -766,23 +764,16 @@ export class PaymentService {
       records.map((record) => record.id),
     );
     const found = new Map<PaymentId, PaymentSituationRead>();
-    for (const record of records) {
-      const recorded = facts.get(record.id);
-      if (recorded === undefined) continue;
-      found.set(record.id, {
-        guide: paymentSituationOf({
-          state: record.state,
-          method: record.method,
-          topup: record.orderId === null,
-          customerSignalled: record.customerSignalledAt !== null,
-          providerReviewOpened: record.providerReviewUntil !== null,
-          resolvedByAdmin: record.resolvedByAdminId !== null,
-          receiptDisposition: dispositions.get(record.id) ?? null,
-          invoiceCreation: recorded.invoiceCreation,
-          queues: recorded.queues,
-          refundOpen: recorded.refundOpen,
-          refundCompleted: recorded.refundCompleted,
-        }),
+    for (const [id, recorded] of facts) {
+      const guide = paymentSituationOf(recorded);
+      found.set(id, {
+        /*
+         * `needsAction` is the SQL facet's answer, from the same statement as every other
+         * fact: ONE definition of NEEDS_ACTION, so the badge and the queue that lists the
+         * payment cannot disagree (review of PR #243, m1). `paymentNeedsAction` is the
+         * specification both are tested against.
+         */
+        guide: { ...guide, needsAction: recorded.queues.includes('NEEDS_ACTION') },
         queues: recorded.queues,
       });
     }

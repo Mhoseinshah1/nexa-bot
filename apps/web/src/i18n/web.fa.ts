@@ -2101,7 +2101,8 @@ export const WEB_FA = {
     'این راهنما از رویدادهای ثبت‌شده استخراج می‌شود و جای وضعیت حسابداری پرداخت را نمی‌گیرد.',
   'web.payment_situation_awaiting_payment': 'در انتظار پرداخت مشتری',
   'web.payment_situation_invoice_not_issued': 'فاکتور درگاه صادر نشد',
-  'web.payment_situation_customer_signalled': 'مشتری اعلام واریز کرده است',
+  'web.payment_situation_customer_signalled': 'مشتری اعلام واریز کرده است (بدون رسید)',
+  'web.payment_situation_receipt_under_review': 'رسید در انتظار بررسی',
   'web.payment_situation_provider_review': 'در بررسی درگاه',
   'web.payment_situation_outcome_unknown': 'نتیجه نامعلوم',
   'web.payment_situation_mismatch': 'مغایرت',
@@ -2120,7 +2121,9 @@ export const WEB_FA = {
   'web.payment_situation_what_invoice_not_issued':
     'درگاه ساخت فاکتور را رد کرد یا پاسخ آن دریافت نشد؛ لینکی به مشتری داده نشده است.',
   'web.payment_situation_what_customer_signalled':
-    'مشتری می‌گوید مبلغ را واریز کرده است. این ادعای مشتری است و هنوز کسی آن را بررسی نکرده است.',
+    'مشتری می‌گوید مبلغ را واریز کرده است، اما هنوز رسیدی نفرستاده است. این ادعای مشتری است و چیزی برای بررسی وجود ندارد.',
+  'web.payment_situation_what_receipt_under_review':
+    'مشتری رسید واریز را فرستاده است و پرداخت منتظر تصمیم بازبین است. رسید ادعای مشتری است، نه تأیید.',
   'web.payment_situation_what_provider_review':
     'درگاه رسید مشتری را دریافت کرده و پرداخت در مهلت بررسی خود درگاه است.',
   'web.payment_situation_what_outcome_unknown':
@@ -2136,10 +2139,11 @@ export const WEB_FA = {
   'web.payment_situation_what_refund_in_progress':
     'پرداخت تأیید شده است و یک بازپرداخت هنوز باز است.',
   'web.payment_situation_what_refunded':
-    'پرداخت تأیید شده است و تمام یا بخشی از آن بازپرداخت شده است.',
+    'تمام یا بخشی از مبلغ این پرداخت بازپرداخت شده است (برای پرداختی که به سفارش نرسید، به کیف پول مشتری).',
   'web.payment_situation_what_credited_to_wallet':
     'بازبین رسید را بررسی کرد و مبلغی را که دید به کیف پول مشتری واریز کرد؛ سفارش با این پرداخت پرداخت نشد.',
-  'web.payment_situation_what_rejected': 'بازبین رسید را بررسی کرد و آن را نپذیرفت.',
+  'web.payment_situation_what_rejected':
+    'مدیر این واریز کارت‌به‌کارت را بررسی کرد و آن را نپذیرفت.',
   'web.payment_situation_what_failed':
     'درگاه پرداخت را ناموفق اعلام کرد یا پرداخت با تطبیق ناموفق بسته شد.',
   'web.payment_situation_what_expired': 'مهلت پرداخت تمام شد و چیزی تأیید نشد.',
@@ -2149,6 +2153,8 @@ export const WEB_FA = {
   'web.payment_situation_safe_invoice_not_issued':
     'از اینجا نمی‌توان فاکتور را دوباره ساخت؛ مشتری می‌تواند پرداخت تازه‌ای آغاز کند.',
   'web.payment_situation_safe_customer_signalled':
+    'کاری لازم نیست تا رسید برسد؛ اگر نرسد، پرداخت در پایان مهلت خودش بسته می‌شود.',
+  'web.payment_situation_safe_receipt_under_review':
     'پیش از تأیید، واریز را در صورت‌حساب بانک ببینید. تأیید، رد یا واریز به کیف پول فقط در تلگرام انجام می‌شود.',
   'web.payment_situation_safe_provider_review':
     'تا پایان مهلت بررسی درگاه منتظر بمانید و پرداخت را دستی تأیید یا رد نکنید.',
@@ -2185,6 +2191,7 @@ export const WEB_FA = {
   'web.payment_money_returning': 'بازپرداخت در جریان است',
   'web.payment_money_returned': 'تمام یا بخشی بازپرداخت شد',
   'web.payment_customer_guidance_pay_within_window': 'تا پایان مهلت پرداخت کند',
+  'web.payment_customer_guidance_send_receipt': 'رسید واریز را از طریق ربات بفرستد',
   'web.payment_customer_guidance_start_again': 'می‌تواند پرداخت تازه‌ای آغاز کند',
   'web.payment_customer_guidance_wait_do_not_pay_again': 'منتظر بماند و دوباره پرداخت نکند',
   'web.payment_customer_guidance_may_pay_again': 'در صورت تمایل دوباره پرداخت کند',

@@ -315,6 +315,7 @@ const SITUATION_LABELS: Readonly<Record<PaymentSituation, WebKey>> = {
   AWAITING_PAYMENT: 'web.payment_situation_awaiting_payment',
   INVOICE_NOT_ISSUED: 'web.payment_situation_invoice_not_issued',
   CUSTOMER_SIGNALLED: 'web.payment_situation_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_receipt_under_review',
   PROVIDER_REVIEW: 'web.payment_situation_provider_review',
   OUTCOME_UNKNOWN: 'web.payment_situation_outcome_unknown',
   MISMATCH: 'web.payment_situation_mismatch',
@@ -334,6 +335,7 @@ const SITUATION_WHAT: Readonly<Record<PaymentSituation, WebKey>> = {
   AWAITING_PAYMENT: 'web.payment_situation_what_awaiting_payment',
   INVOICE_NOT_ISSUED: 'web.payment_situation_what_invoice_not_issued',
   CUSTOMER_SIGNALLED: 'web.payment_situation_what_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_what_receipt_under_review',
   PROVIDER_REVIEW: 'web.payment_situation_what_provider_review',
   OUTCOME_UNKNOWN: 'web.payment_situation_what_outcome_unknown',
   MISMATCH: 'web.payment_situation_what_mismatch',
@@ -353,6 +355,7 @@ const SITUATION_SAFE: Readonly<Record<PaymentSituation, WebKey>> = {
   AWAITING_PAYMENT: 'web.payment_situation_safe_awaiting_payment',
   INVOICE_NOT_ISSUED: 'web.payment_situation_safe_invoice_not_issued',
   CUSTOMER_SIGNALLED: 'web.payment_situation_safe_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_safe_receipt_under_review',
   PROVIDER_REVIEW: 'web.payment_situation_safe_provider_review',
   OUTCOME_UNKNOWN: 'web.payment_situation_safe_outcome_unknown',
   MISMATCH: 'web.payment_situation_safe_mismatch',
@@ -376,7 +379,8 @@ const SITUATION_SAFE: Readonly<Record<PaymentSituation, WebKey>> = {
 const SITUATION_TONES: Readonly<Record<PaymentSituation, Tone>> = {
   AWAITING_PAYMENT: 'neutral',
   INVOICE_NOT_ISSUED: 'neutral',
-  CUSTOMER_SIGNALLED: 'warn',
+  CUSTOMER_SIGNALLED: 'info',
+  RECEIPT_UNDER_REVIEW: 'warn',
   PROVIDER_REVIEW: 'info',
   OUTCOME_UNKNOWN: 'warn',
   MISMATCH: 'warn',
@@ -407,6 +411,7 @@ const MONEY_LABELS: Readonly<Record<PaymentMoneySignal, WebKey>> = {
 
 const CUSTOMER_GUIDANCE_LABELS: Readonly<Record<PaymentCustomerGuidance, WebKey>> = {
   PAY_WITHIN_WINDOW: 'web.payment_customer_guidance_pay_within_window',
+  SEND_RECEIPT: 'web.payment_customer_guidance_send_receipt',
   START_AGAIN: 'web.payment_customer_guidance_start_again',
   WAIT_DO_NOT_PAY_AGAIN: 'web.payment_customer_guidance_wait_do_not_pay_again',
   MAY_PAY_AGAIN: 'web.payment_customer_guidance_may_pay_again',
@@ -491,7 +496,6 @@ export function SituationCard({ value }: { value: PaymentSituationView | null })
 // List
 // ---------------------------------------------------------------------------
 
-/** The queues, in the order the workspace shows them (program §10). */
 /**
  * The chips, attention first (roadmap E2): `NEEDS_ACTION` — everything a person must act on,
  * oldest first — leads, then the facets in the contract's own order. A display order only;

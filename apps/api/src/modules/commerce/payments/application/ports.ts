@@ -237,15 +237,24 @@ export interface PaymentGatewaySignalRecord {
 }
 
 /**
- * Roadmap E1: the recorded facts the situation classifier reads that a `PaymentRecord` does
- * not carry — which Payment Operations Center queues the payment is in (from the SAME SQL
- * predicates the queue list uses), whether a refund is open or completed, and the gateway
- * invoice's creation state.
+ * Roadmap E1: every recorded fact the situation classifier reads, from ONE statement — the
+ * payment's own columns, its receipt disposition, which Payment Operations Center queues it is
+ * in (the SAME SQL predicates the queue list uses), the refund facts and the gateway invoice's
+ * creation state.
  */
 export interface PaymentSituationFactsRecord {
+  readonly state: PaymentState;
+  readonly method: PaymentMethod;
+  readonly topup: boolean;
+  readonly customerSignalled: boolean;
+  readonly providerReviewOpened: boolean;
+  readonly resolvedByAdmin: boolean;
+  readonly receiptDisposition: ReceiptDisposition | null;
+  readonly receiptFiled: boolean;
   readonly queues: readonly PaymentOpsQueue[];
   readonly refundOpen: boolean;
   readonly refundCompleted: boolean;
+  readonly refundRemaining: boolean;
   readonly invoiceCreation: GatewayInvoiceCreationState | null;
 }
 

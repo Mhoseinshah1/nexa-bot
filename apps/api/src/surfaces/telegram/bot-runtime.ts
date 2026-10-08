@@ -5047,7 +5047,18 @@ function refusal(error: unknown): PendingReply {
 function receiptRefusal(error: unknown): PendingReply {
   if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.RECEIPT_WINDOW_EXPIRED) {
     const paymentId = error.details?.['paymentId'];
-    if (typeof paymentId !== 'string' || error.details?.['reopenable'] !== true) {
+    const next = error.details?.['next'];
+    const reference = error.details?.['reference'];
+    // Past its deadline but holding a receipt: still waiting for a reviewer, never "closed".
+    if (next === 'UNDER_REVIEW') {
+      return {
+        key: 'bot.payment.received_for_review',
+        values: typeof reference === 'string' ? { reference } : {},
+        buttons: [],
+        orderId: null,
+      };
+    }
+    if (typeof paymentId !== 'string' || next !== 'REOPEN') {
       return { key: 'bot.payment.not_pending', values: {}, buttons: [], orderId: null };
     }
     return {
@@ -15577,13 +15588,26 @@ export class BotRuntime {
     customerId: UserId,
     paymentId: PaymentId,
   ): Promise<TemplateValues> {
-    const reference = await this.deps.receipts.trackingCodeForCustomer(
-      scope,
-      actor,
-      customerId,
-      paymentId,
-    );
-    return reference === null ? {} : { reference };
+    /*
+     * Never the reason the edit does not happen (review of PR #243, m4): the wizard is
+     * already marked final when this runs, so a throw here would leave the prompt on the
+     * message with nothing left to retry it. An unreadable code drops the line instead.
+     */
+    try {
+      const reference = await this.deps.receipts.trackingCodeForCustomer(
+        scope,
+        actor,
+        customerId,
+        paymentId,
+      );
+      return reference === null ? {} : { reference };
+    } catch (error) {
+      this.deps.logger?.error(
+        { err: error, paymentId, tenantId: scope.tenantId },
+        'reading the tracking code for the final invoice failed; edited without it',
+      );
+      return {};
+    }
   }
 
   /**

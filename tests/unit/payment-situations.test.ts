@@ -31,6 +31,7 @@ const base: PaymentSituationFacts = {
   method: 'MANUAL_TRANSFER',
   topup: false,
   customerSignalled: false,
+  receiptFiled: false,
   providerReviewOpened: false,
   resolvedByAdmin: false,
   receiptDisposition: null,
@@ -38,6 +39,7 @@ const base: PaymentSituationFacts = {
   queues: [],
   refundOpen: false,
   refundCompleted: false,
+  refundRemaining: true,
 };
 
 const facts = (over: Partial<PaymentSituationFacts>): PaymentSituationFacts => ({
@@ -50,14 +52,16 @@ const STATES_OF: Readonly<Record<PaymentSituation, readonly PaymentState[]>> = {
   AWAITING_PAYMENT: ['PENDING'],
   INVOICE_NOT_ISSUED: ['PENDING'],
   CUSTOMER_SIGNALLED: ['PENDING'],
+  RECEIPT_UNDER_REVIEW: ['PENDING'],
   PROVIDER_REVIEW: ['PENDING'],
   OUTCOME_UNKNOWN: ['UNKNOWN'],
   MISMATCH: ['UNKNOWN'],
   PARTIAL: ['PENDING', 'UNKNOWN', 'FAILED', 'EXPIRED', 'CANCELLED'],
-  LATE_COMPLETION: ['UNKNOWN', 'FAILED', 'EXPIRED', 'CANCELLED'],
+  LATE_COMPLETION: ['PENDING', 'UNKNOWN', 'FAILED', 'EXPIRED', 'CANCELLED'],
   CONFIRMED: ['CONFIRMED'],
   REFUND_IN_PROGRESS: ['CONFIRMED'],
-  REFUNDED: ['CONFIRMED'],
+  // A refund is money back on the wallet whether the payment confirmed or failed (OQ-TPTG-17).
+  REFUNDED: ['CONFIRMED', 'FAILED', 'EXPIRED', 'CANCELLED'],
   CREDITED_TO_WALLET: ['FAILED'],
   REJECTED: ['FAILED'],
   FAILED: ['FAILED'],
@@ -82,7 +86,11 @@ function* everyFacts(): Generator<PaymentSituationFacts> {
   for (const state of PAYMENT_STATES) {
     for (const method of PAYMENT_METHODS) {
       for (const queues of queueSets) {
-        for (const customerSignalled of [false, true]) {
+        for (const [customerSignalled, receiptFiled] of [
+          [false, false],
+          [true, false],
+          [true, true],
+        ] as const) {
           for (const providerReviewOpened of [false, true]) {
             for (const resolvedByAdmin of [false, true]) {
               for (const receiptDisposition of [null, 'CREDITED_TO_WALLET', 'REJECTED'] as const) {
@@ -99,6 +107,8 @@ function* everyFacts(): Generator<PaymentSituationFacts> {
                         method,
                         topup,
                         customerSignalled,
+                        receiptFiled,
+                        refundRemaining: !refundCompleted,
                         providerReviewOpened,
                         resolvedByAdmin,
                         receiptDisposition,
@@ -135,6 +145,12 @@ describe('the payment situation classifier', () => {
       ['INVOICE_NOT_ISSUED', { method: 'GATEWAY', invoiceCreation: 'CREATE_FAILED' }],
       ['AWAITING_PAYMENT', { method: 'GATEWAY', invoiceCreation: 'CREATING' }],
       ['CUSTOMER_SIGNALLED', { customerSignalled: true }],
+      ['RECEIPT_UNDER_REVIEW', { customerSignalled: true, receiptFiled: true }],
+      // A late approval while still PENDING is money at the provider (review M1).
+      [
+        'LATE_COMPLETION',
+        { method: 'GATEWAY', invoiceCreation: 'CREATED', queues: ['PENDING', 'LATE_COMPLETION'] },
+      ],
       ['PROVIDER_REVIEW', { method: 'GATEWAY', providerReviewOpened: true }],
       ['OUTCOME_UNKNOWN', { state: 'UNKNOWN', method: 'GATEWAY' }],
       ['MISMATCH', { state: 'UNKNOWN', method: 'GATEWAY', queues: ['MISMATCH'] }],
@@ -150,7 +166,15 @@ describe('the payment situation classifier', () => {
         { state: 'FAILED', resolvedByAdmin: true, receiptDisposition: 'CREDITED_TO_WALLET' },
       ],
       ['REJECTED', { state: 'FAILED', resolvedByAdmin: true }],
+      ['REJECTED', { state: 'FAILED', resolvedByAdmin: true, receiptDisposition: 'REJECTED' }],
       ['FAILED', { state: 'FAILED', method: 'GATEWAY' }],
+      // An operator's reconciliation of a gateway payment is not a receipt rejection (CX4).
+      ['FAILED', { state: 'FAILED', method: 'GATEWAY', resolvedByAdmin: true }],
+      // Reconciled FAILED and refunded to the wallet (OQ-TPTG-17): money went back (M2).
+      [
+        'REFUNDED',
+        { state: 'FAILED', method: 'GATEWAY', resolvedByAdmin: true, refundCompleted: true },
+      ],
       ['EXPIRED', { state: 'EXPIRED' }],
       ['CANCELLED', { state: 'CANCELLED' }],
     ];
@@ -190,8 +214,9 @@ describe('the payment situation classifier', () => {
       everyRow()
         .filter(
           ({ g }) =>
+            // Waiting, or sending the receipt of the transfer already made — never paying.
             (['CLAIMED', 'POSSIBLY', 'PARTIALLY', 'AT_PROVIDER'].includes(g.money) &&
-              g.customer !== 'WAIT_DO_NOT_PAY_AGAIN') ||
+              !['WAIT_DO_NOT_PAY_AGAIN', 'SEND_RECEIPT'].includes(g.customer)) ||
             (g.customer === 'MAY_PAY_AGAIN' && g.money !== 'NO'),
         )
         .map(({ g }) => g.situation),
@@ -231,7 +256,7 @@ describe('the payment situation classifier', () => {
             g.needsAction !== paymentNeedsAction(g.situation, f.state) ||
             g.needsAction !==
               (f.state === 'UNKNOWN' ||
-                g.situation === 'CUSTOMER_SIGNALLED' ||
+                g.situation === 'RECEIPT_UNDER_REVIEW' ||
                 g.situation === 'REFUND_IN_PROGRESS') ||
             // A situation that needs a person always names at least one thing they can do.
             (g.needsAction && g.actions.length === 0),
@@ -246,6 +271,52 @@ describe('the payment situation classifier', () => {
     expect(late.situation).toBe('LATE_COMPLETION');
     expect(late.needsAction).toBe(false);
     expect(late.actions.length).toBeGreaterThan(0);
+  });
+
+  it('asks nobody to review a claim that has no receipt, and a reviewer to review one that has (CX2)', () => {
+    const claim = paymentSituationOf(facts({ customerSignalled: true }));
+    expect(claim).toMatchObject({
+      situation: 'CUSTOMER_SIGNALLED',
+      customer: 'SEND_RECEIPT',
+      actions: [],
+      needsAction: false,
+    });
+    const receipt = paymentSituationOf(facts({ customerSignalled: true, receiptFiled: true }));
+    expect(receipt).toMatchObject({
+      situation: 'RECEIPT_UNDER_REVIEW',
+      customer: 'WAIT_DO_NOT_PAY_AGAIN',
+      actions: ['REVIEW_RECEIPT_IN_TELEGRAM'],
+      needsAction: true,
+    });
+  });
+
+  it('never tells an operator "pay within the window" for a late approval still PENDING (M1)', () => {
+    const late = paymentSituationOf(
+      facts({ method: 'GATEWAY', invoiceCreation: 'CREATED', queues: ['LATE_COMPLETION'] }),
+    );
+    expect(late).toMatchObject({
+      situation: 'LATE_COMPLETION',
+      money: 'AT_PROVIDER',
+      customer: 'WAIT_DO_NOT_PAY_AGAIN',
+      // Its exit is the expiry sweep: not work for a person (the drain rule).
+      needsAction: false,
+    });
+  });
+
+  it('calls a reconciled gateway failure FAILED and money refunded to the wallet REFUNDED (CX4, M2)', () => {
+    const reconciled = paymentSituationOf(
+      facts({ state: 'FAILED', method: 'GATEWAY', resolvedByAdmin: true }),
+    );
+    expect(reconciled.situation).toBe('FAILED');
+    const returned = paymentSituationOf(
+      facts({ state: 'FAILED', method: 'GATEWAY', resolvedByAdmin: true, refundCompleted: true }),
+    );
+    expect(returned).toMatchObject({
+      situation: 'REFUNDED',
+      money: 'RETURNED',
+      customer: 'NOTHING',
+    });
+    expect(returned.actions).toEqual([]);
   });
 
   it('offers reconciliation only on an UNKNOWN gateway payment', () => {
@@ -273,11 +344,17 @@ describe('the payment situation classifier', () => {
       paymentSituationOf(facts({ state: 'CONFIRMED', method: 'MANUAL_TRANSFER', topup: true }))
         .actions,
     ).toEqual([]);
+    // Nothing left after a full refund: the guide does not promise one the server refuses.
+    expect(
+      paymentSituationOf(
+        facts({ state: 'CONFIRMED', refundCompleted: true, refundRemaining: false }),
+      ).actions,
+    ).toEqual([]);
     expect(
       everyRow().filter(
         ({ f, g }) =>
           g.actions.includes('ISSUE_REFUND') &&
-          (f.state !== 'CONFIRMED' || f.method === 'GATEWAY' || f.topup),
+          (f.state !== 'CONFIRMED' || f.method === 'GATEWAY' || f.topup || !f.refundRemaining),
       ),
     ).toEqual([]);
   });

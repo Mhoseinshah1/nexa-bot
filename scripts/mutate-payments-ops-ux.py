@@ -27,6 +27,10 @@ I_TG=('integration','tests/integration/telegram-payment-flow.test.ts')
 I_LANE=('integration','tests/integration/customer-notifications.test.ts')
 W_SIT=('web','tests/web/payment-situations.test.tsx')
 
+U_RCP=('integration','tests/integration/payment-receipts.test.ts')
+I_SRR=('integration','tests/integration/service-refund-requests.test.ts')
+RCP='apps/api/src/modules/commerce/payments/application/receipt.service.ts'
+
 M=[
  # --- E1: the classifier ---------------------------------------------------------------------
  # What the provider said after the end outranks how the attempt ended.
@@ -36,19 +40,35 @@ M=[
  # An UNKNOWN tells the customer not to pay again.
  ('SIT-03',[(SIT,"  OUTCOME_UNKNOWN: 'WAIT_DO_NOT_PAY_AGAIN',","  OUTCOME_UNKNOWN: 'MAY_PAY_AGAIN',")],U_SIT,'never shows an UNKNOWN'),
  # A refund only where REFUND_METHOD_SUPPORT has a channel.
- ('SIT-04',[(SIT,"    REFUND_METHOD_SUPPORT[facts.method].supported && !facts.topup && facts.state === 'CONFIRMED';","    !facts.topup && facts.state === 'CONFIRMED';")],U_SIT,'offers a refund only'),
+ ('SIT-04',[(SIT,"    REFUND_METHOD_SUPPORT[facts.method].supported &&\n    !facts.topup &&","    !facts.topup &&")],U_SIT,'offers a refund only'),
  # Reconciliation only on an UNKNOWN gateway payment.
  ('SIT-05',[(SIT,"  const reconcilable = facts.state === 'UNKNOWN' && facts.method === 'GATEWAY';","  const reconcilable = facts.method === 'GATEWAY';")],U_SIT,'offers reconciliation only'),
  # An open refund is its own situation, ahead of a completed one.
  ('SIT-06',[(SIT,"      if (facts.refundOpen) return 'REFUND_IN_PROGRESS';\n","")],I_SIT,'derives each arm'),
  # The work queue drains: late money on an ended attempt is not work.
- ('SIT-07',[(SIT,"    state === 'UNKNOWN' || situation === 'CUSTOMER_SIGNALLED' || situation === 'REFUND_IN_PROGRESS'","    state === 'UNKNOWN' ||\n    situation === 'CUSTOMER_SIGNALLED' ||\n    situation === 'REFUND_IN_PROGRESS' ||\n    situation === 'LATE_COMPLETION'")],U_SIT,'so the queue drains'),
+ ('SIT-07',[(SIT,"    situation === 'RECEIPT_UNDER_REVIEW' ||\n    situation === 'REFUND_IN_PROGRESS'\n","    situation === 'RECEIPT_UNDER_REVIEW' ||\n    situation === 'REFUND_IN_PROGRESS' ||\n    situation === 'LATE_COMPLETION'\n")],U_SIT,'so the queue drains'),
+ # Review of PR #243 — M1: a PENDING late approval is LATE_COMPLETION.
+ ('SIT-08',[(SIT,"      if (inQueue('LATE_COMPLETION')) return 'LATE_COMPLETION';\n      if (facts.providerReviewOpened) return 'PROVIDER_REVIEW';","      if (facts.providerReviewOpened) return 'PROVIDER_REVIEW';")],U_SIT,'pay within the window'),
+ # CX2: only a FILED receipt is under review.
+ ('SIT-09',[(SIT,"      if (facts.method === 'MANUAL_TRANSFER' && facts.receiptFiled) return 'RECEIPT_UNDER_REVIEW';","      if (facts.method === 'MANUAL_TRANSFER' && facts.customerSignalled) return 'RECEIPT_UNDER_REVIEW';")],U_SIT,'claim that has no receipt'),
+ # CX4: a gateway reconciliation to FAILED is not a rejection.
+ ('SIT-10',[(SIT,"      if (facts.method === 'MANUAL_TRANSFER' && facts.resolvedByAdmin) return 'REJECTED';","      if (facts.resolvedByAdmin) return 'REJECTED';")],U_SIT,'reconciled gateway failure'),
+ # M2: money refunded to the wallet on a FAILED payment is REFUNDED.
+ ('SIT-11',[(SIT,"      if (facts.refundCompleted && !facts.refundOpen) return 'REFUNDED';\n","")],U_SIT,'reconciled gateway failure'),
+ # NIT: no refund offered once nothing is left.
+ ('SIT-12',[(SIT,"    facts.state === 'CONFIRMED' &&\n    facts.refundRemaining;","    facts.state === 'CONFIRMED';")],U_SIT,'offers a refund only'),
  # --- E2: the NEEDS_ACTION facet in SQL --------------------------------------------------------
- ('SQL-01',[(SQL,"      AND ${payments.providerReviewUntil} IS NULL\n      AND NOT ${paymentOpsQueueCondition('PARTIAL')})","      AND NOT ${paymentOpsQueueCondition('PARTIAL')})\n    OR (${payments.state} = 'PENDING' AND ${payments.providerReviewUntil} IS NOT NULL)")],I_SIT,'derives each arm'),
+ ('SQL-01',[(SQL,"      AND ${payments.providerReviewUntil} IS NULL\n      AND NOT ${paymentOpsQueueCondition('LATE_COMPLETION')}","      AND NOT ${paymentOpsQueueCondition('LATE_COMPLETION')}")],I_SIT,'derives each arm'),
  ('SQL-02',[(SQL,"    OR (${payments.state} = 'CONFIRMED' AND ${openRefundCondition()})\n  )`;","    OR (${payments.state} = 'CONFIRMED' AND ${openRefundCondition()})\n    OR (${payments.state} IN ('FAILED', 'EXPIRED') AND ${paymentOpsQueueCondition('LATE_COMPLETION')})\n  )`;")],I_SIT,'derives each arm'),
- ('SQL-03',[(SQL,"       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL'))`;","       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL', 'FAILED'))`;")],I_SIT,'moves a payment out of NEEDS_ACTION'),
- # The situation is read behind payments.view.
- ('SQL-04',[(PAY,"    dispositions: ReadonlyMap<PaymentId, ReceiptDisposition>,\n  ): Promise<ReadonlyMap<PaymentId, PaymentSituationRead>> {\n    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);\n","    dispositions: ReadonlyMap<PaymentId, ReceiptDisposition>,\n  ): Promise<ReadonlyMap<PaymentId, PaymentSituationRead>> {\n")],I_SIT,'without payments.view'),
+ ('SQL-03',[(SQL,"       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL')\n       AND NOT EXISTS (","       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL', 'FAILED')\n       AND NOT EXISTS (")],I_SIT,'moves a payment out of NEEDS_ACTION'),
+ # The situations read charges payments.view.
+ ('SQL-04',[(PAY,"  ): Promise<ReadonlyMap<PaymentId, PaymentSituationRead>> {\n    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);\n","  ): Promise<ReadonlyMap<PaymentId, PaymentSituationRead>> {\n")],I_SIT,'without payments.view'),
+ # CX1: the durable late marker, not only the outcome.
+ ('SQL-05',[(SQL,"        sql`(gi.outcome = 'LATE_COMPLETION' OR gi.late_completion_observed_at IS NOT NULL)`,","        sql`(gi.outcome = 'LATE_COMPLETION')`,")],I_SIT,'derives each arm'),
+ # CX2: NEEDS_ACTION needs a filed receipt, not a claim.
+ ('SQL-06',[(SQL,"      AND ${receiptFiledCondition()}\n","      AND ${payments.customerSignalledAt} IS NOT NULL\n")],I_SIT,'derives each arm'),
+ # CX3: a service refund request's reservation is not an operator's open refund.
+ ('SQL-07',[(SQL,"       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL')\n       AND NOT EXISTS (\n         SELECT 1 FROM service_refund_requests s\n          WHERE s.tenant_id = r.tenant_id AND s.refund_id = r.id))`;","       AND r.state IN ('REQUESTED', 'AWAITING_EXTERNAL'))`;")],I_SRR,'reserved refund out of the operator'),
  # --- E1/E2 on the Web Admin ------------------------------------------------------------------
  ('WEB-01',[(WEB,"const QUEUE_ORDER: readonly PaymentOpsQueue[] = [\n  'NEEDS_ACTION',\n  ...PAYMENT_OPS_QUEUES.filter((one) => one !== 'NEEDS_ACTION'),\n];","const QUEUE_ORDER: readonly PaymentOpsQueue[] = PAYMENT_OPS_QUEUES;")],W_SIT,'leads the chips'),
  ('WEB-02',[(WEB,"                  <SituationCard value={row.situation} />\n","")],W_SIT,'says on the detail'),
@@ -61,6 +81,16 @@ M=[
  ('E6-05',[(LANE,"    if (row.kind === 'PAYMENT_EXPIRED' || row.kind === 'PAYMENT_TRANSFER_RECORDED') {","    if (row.kind === 'PAYMENT_TRANSFER_RECORDED') {")],I_LANE,'quotes the payment'),
  ('E6-06',[(LANE,"      return reference === null\n        ? { reason: reason ?? '\\u2014' }\n        : { reason: reason ?? '\\u2014', reference };","      return { reason: reason ?? '\\u2014' };")],I_LANE,'quotes the payment'),
  ('E6-07',[(PAY,"  return Math.max(1, Math.ceil((expiresAt.getTime() - now.getTime()) / 60_000));","  return Math.max(1, Math.floor((expiresAt.getTime() - now.getTime()) / 60_000));")],U_WIN,'rounds a part-minute UP'),
+ # Review of PR #243 — R1: another customer's tracking code is never read.
+ ('E6-08',[(RCP,"    if (payment === null || payment.customerId !== customerId) return null;\n    return payment.reference;","    if (payment === null) return null;\n    return payment.reference;")],U_RCP,'only for the customer whose payment'),
+ # R4: a payment closed inside its deadline gets no new window.
+ ('E6-09',[(SVC,"            expiredFor.customerId === customerId &&\n            expiredFor.state === 'PENDING';","            expiredFor.customerId === customerId;")],U_RCP,'names what comes next'),
+ # m2: a receipted payment past its deadline is under review, not closed.
+ ('E6-10',[(SVC,"          const underReview =\n            pending &&","          const underReview =\n            false &&")],I_TG,'under review, with its code'),
+ # R8: the claim reply keeps the code.
+ ('E6-11',[(BOT,"          values: { reference: payment.reference },","          values: {},")],I_TG,'no window can open'),
+ # m4: an unreadable code never stops the edit.
+ ('E6-12',[(BOT,"    } catch (error) {\n      this.deps.logger?.error(\n        { err: error, paymentId, tenantId: scope.tenantId },\n        'reading the tracking code for the final invoice failed; edited without it',\n      );\n      return {};\n    }","    } catch (error) {\n      throw error;\n    }")],I_TG,'reading the code throws'),
 ]
 
 def build_package(name):
