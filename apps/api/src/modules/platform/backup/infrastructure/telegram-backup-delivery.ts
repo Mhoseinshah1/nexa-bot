@@ -151,6 +151,20 @@ export class TelegramBackupDelivery implements BackupDeliveryChannel {
         };
       }
 
+      /*
+       * PR #238 review N4 (the D1 defect, in this lane's own copy of the call): a 2xx whose
+       * body parsed but does not SAY `ok: false` — no `ok`, a bare value — is not a refusal.
+       * Telegram accepted the upload; whether the document landed is unknown (ADR-0025).
+       * Before, it fell through to FAILED_DEFINITIVE: a backup reported refused that may be
+       * sitting in the group.
+       */
+      if (response.ok && (payload as { ok?: unknown }).ok !== false) {
+        return {
+          state: 'OUTCOME_UNKNOWN',
+          detail: `HTTP ${response.status} with a body that is not a Bot API answer.`,
+        };
+      }
+
       if (response.status >= 500 || response.status === 429) {
         return {
           state: 'OUTCOME_UNKNOWN',

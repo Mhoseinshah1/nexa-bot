@@ -331,6 +331,16 @@ It never asks for a token and never replaces one. It:
    Telegram shows exactly that URL; anything else fails with the marker unwritten,
    so `status` keeps saying `incomplete`.
 
+A bot **renamed in BotFather** keeps its id, so `getMe` in step 1 still names the
+same bot — under a new username. `register` (and an installer rerun) records that
+name on the bot row, audited as `bot_instance.username_reconciled`; nothing about
+the webhook changes for it, and the run says "the stored username is now …". If
+another bot row still holds the new name, nothing is changed, the audit row is
+`FAILED` with the reason, and the run prints a WARNING naming the name it kept —
+rerunning will not help until that other row lets the name go. `status` only
+**shows** the drift, as a `username` line on stderr naming both names (and, in that
+case, saying `register` cannot record it); it never writes it.
+
 Both outcomes leave an audit row `bot_instance.webhook_registered`: `SUCCESS`
 with the URL, `verifiedBy`, the pending count and `dropPendingUpdates` (`false` on
 every reconcile, `true` only on the first registration of a brand-new bot row), or
