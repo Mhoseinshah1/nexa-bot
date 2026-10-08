@@ -208,6 +208,13 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
     signature: searchSignature,
     cursors: [],
   });
+  /*
+   * A different filter starts a new trail — RESET here, not merely ignored. Ignoring it
+   * let the old trail come back when the filter did: page forward, filter, clear the
+   * filter, and the list reopened on page two of the unfiltered list (review of #242).
+   * Setting state while rendering is React's pattern for state derived from a prop.
+   */
+  if (trail.signature !== searchSignature) setTrail({ signature: searchSignature, cursors: [] });
   const cursors = trail.signature === searchSignature ? trail.cursors : [];
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
 
