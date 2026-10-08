@@ -208,6 +208,46 @@ describe('A10 — the runner against the reference provider (what CI runs)', () 
     expect(calls).toBe(0);
   });
 
+  it('roadmap A3: the production progress guards hand off before the model, and repeated advice is caught', async () => {
+    const base = byId('repeated-01');
+    const [customer, step] = base.transcript;
+    const said = (text: string) => ({ ...customer!, text });
+    const advised = (text: string) => ({ ...step!, text });
+    const looping = {
+      ...base,
+      transcript: [
+        said('سلام، سرویس روی آیفون وصل نمیشه'),
+        advised('لطفاً برنامه را کامل ببندید و دوباره باز کنید.'),
+        said('نشد'),
+        advised('از تنظیمات برنامه، پروتکل را روی TCP بگذارید.'),
+        said('هنوز وصل نمیشه'),
+        advised('لینک اشتراک را از ربات دوباره دریافت کنید.'),
+        said('بازم همونه'),
+      ],
+    };
+    expect(prepareScenario(looping).progressHandoff).toBe(true);
+    expect(prepareScenario(base).progressHandoff).toBe(false);
+    let calls = 0;
+    const counting: EvalProvider = {
+      label: 'counting',
+      paid: false,
+      capabilities: REFERENCE_CAPABILITIES,
+      generate: async (_r, sc) => {
+        calls += 1;
+        return { kind: 'OK', output: sc.reference };
+      },
+    };
+    const result = await runScenario(looping, counting);
+    expect(result.providerCalled).toBe(false);
+    expect(calls).toBe(0);
+    // The model repeating the step the customer already had does not pass the guard.
+    const repeating = {
+      ...base,
+      reference: { ...base.reference, replyText: 'لطفاً برنامه را کامل ببندید و دوباره باز کنید.' },
+    };
+    expect((await runScenario(repeating, counting)).guardPassed).toBe(false);
+  });
+
   it('prepares the request through the production prompt, transcript and retrieval', () => {
     const repeated = prepareScenario(byId('repeated-01'));
     expect(repeated.knowledgeTitles[0]).toBe('وصل نمی‌شود');

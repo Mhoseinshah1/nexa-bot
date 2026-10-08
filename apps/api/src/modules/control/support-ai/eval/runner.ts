@@ -22,7 +22,11 @@ import { stepSight } from '../application/support-ai-chain.js';
 import {
   autoDecisionGuards,
   autoImageGuard,
+  autoInboundFloodGuard,
   autoMoneyGuard,
+  autoNoProgressGuard,
+  autoRepeatedAdviceGuard,
+  type ProgressLine,
   clarifyingStreakOf,
   customerTextsSinceReply,
 } from '../domain/auto-reply-guards.js';
@@ -146,6 +150,13 @@ export interface EvalPrepared {
   readonly failClosed: boolean;
   /** The money check hands off before any model is asked. */
   readonly moneyHandoff: boolean;
+  /**
+   * Roadmap A3: the production progress guards (`no_progress`, `inbound_flood`) hand off before
+   * any model is asked. A scenario is one epoch, so nothing is excluded by `since`.
+   */
+  readonly progressHandoff: boolean;
+  /** The scenario's lines, for the production `repeated_advice` guard after the decision. */
+  readonly lines: readonly ProgressLine[];
 }
 
 export function prepareScenario(
@@ -242,6 +253,13 @@ export function prepareScenario(
   const failClosed =
     !autoImageGuard({ required, loaded: new Set(loaded.keys()) }).pass ||
     required.some((id) => loaded.has(id) && !seen.has(id));
+  // Roadmap A3: a scenario's lines carry no time; two minutes apart, they read as a conversation
+  // (never a burst), in order.
+  const progressLines: ProgressLine[] = lines.map((line, index) => ({
+    origin: line.origin,
+    text: line.text,
+    sentAt: new Date(index * 120_000),
+  }));
   const lastCustomer = [...lines].reverse().find((line) => line.origin === 'INBOUND');
   const money = autoMoneyGuard(customerTextsSinceReply(lines, lastCustomer?.text ?? null));
   const messages: TranscriptTurn[] = transcriptMessages(
@@ -274,6 +292,10 @@ export function prepareScenario(
     knowledgeAliases: new Set(payload.knowledge.map((entry) => entry.alias)),
     failClosed,
     moneyHandoff: !money.pass,
+    progressHandoff:
+      !autoNoProgressGuard(progressLines, null).pass ||
+      !autoInboundFloodGuard(progressLines, null).pass,
+    lines: progressLines,
   };
 }
 
@@ -388,7 +410,7 @@ export async function runScenario(
   let decision: SupportAiDecision | null = null;
   let guardPassed: boolean;
   let providerCalled = false;
-  if (prepared.failClosed || prepared.moneyHandoff) {
+  if (prepared.failClosed || prepared.moneyHandoff || prepared.progressHandoff) {
     // No model is asked: the pipeline's own handoff is the decision.
     guardPassed = false;
     check(
@@ -427,7 +449,8 @@ export async function runScenario(
         // the clarifying-question limit is actually evaluated.
         clarifyingStreak: clarifyingStreakOf(scenario.prior ?? []),
       });
-      guardPassed = verdict.pass;
+      // Roadmap A3: the production repeated-advice guard runs after the decision guards.
+      guardPassed = verdict.pass && autoRepeatedAdviceGuard(decision, prepared.lines, null).pass;
       check(
         'citations',
         decision.factRefs.every((ref) => prepared.factAliases.has(ref)) &&
