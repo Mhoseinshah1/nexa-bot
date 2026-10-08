@@ -35,14 +35,14 @@ import type {
 } from '../../../commerce/business-chats/application/ports.js';
 import type { AutoContextFlags } from '../domain/auto-reply-guards.js';
 import {
-  SUPPORT_AI_TRANSCRIPT_MESSAGES,
+  promptWindow,
   supportSystemPrompt,
   transcriptMessages,
   type TranscriptImage,
   type TranscriptLine,
 } from '../domain/prompt.js';
 import { planVision } from '../domain/vision.js';
-import { latestCustomerWords } from '../domain/transcript.js';
+import type { SupportTranscriptLine } from '../domain/transcript.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import type {
   DrizzleSupportAiConfigRepository,
@@ -85,8 +85,16 @@ export interface SupportContextSource {
   build(
     scope: ScopeContext,
     customerId: string | null,
-    /** D2: the customer's latest words, which choose the knowledge sent. */
-    options?: { readonly query?: string | null },
+    /**
+     * What chooses the knowledge sent. A8: the conversation and its transcript, from which the
+     * source builds the weighted query (`knowledgeQueryFor`); `query` alone is the D2 form, the
+     * customer's latest words.
+     */
+    options?: {
+      readonly query?: string | null;
+      readonly conversationId?: string;
+      readonly transcript?: readonly SupportTranscriptLine[];
+    },
   ): Promise<{
     readonly json: string;
     /** The FACT aliases (`S…`, `O…`, `P…`) — the only ones a fact ref may name. */
@@ -379,7 +387,8 @@ export class SupportAssistService {
       readSupportTranscript(this.deps, scope, conversation.id),
     ]);
     const context = await this.deps.context.build(scope, conversation.customerId, {
-      query: latestCustomerWords(transcript),
+      conversationId: conversation.id,
+      transcript,
     });
 
     /*
@@ -406,6 +415,7 @@ export class SupportAssistService {
     }
     const lines: TranscriptLine[] = transcript.map((m) => ({
       origin: m.origin,
+      author: m.author,
       text: m.text,
       kind: m.kind,
       image: loaded.get(m.id)?.image ?? null,
@@ -414,9 +424,10 @@ export class SupportAssistService {
     if (turns.length === 0) return this.fail(scope, job, 'transcript.empty');
     // The CUSTOMER's images only: the business's own photos are never fetched, so they are not
     // images the draft failed to see (PR #201 review, N5).
-    const imagesInWindow = transcript
-      .slice(-SUPPORT_AI_TRANSCRIPT_MESSAGES)
-      .filter((m) => m.origin === 'INBOUND' && m.kind === 'PHOTO').length;
+    // The window the model is shown (A7, PR #236 review N6): the same one `planVision` reads.
+    const imagesInWindow = promptWindow(transcript).filter(
+      (m) => m.origin === 'INBOUND' && m.kind === 'PHOTO',
+    ).length;
 
     /*
      * FAIL CLOSED (program §28): the customer's latest message is an image nobody could
@@ -450,6 +461,7 @@ export class SupportAssistService {
               transcriptMessages(
                 transcript.map((m) => ({
                   origin: m.origin,
+                  author: m.author,
                   text: m.text,
                   kind: m.kind,
                   image: seen.has(m.id) ? (loaded.get(m.id)?.image ?? null) : null,
