@@ -22,10 +22,14 @@ export class DrizzleAuditHistoryReader implements AuditHistoryReader {
       readonly entityType: string;
       readonly entityId: string;
       readonly actionPrefix: string;
+      readonly actions?: readonly string[];
+      readonly results?: readonly AuditResult[];
     },
     limit: number,
   ): Promise<readonly AuditHistoryRecord[]> {
     const tenantId = requireTenantId(scope);
+    // An empty list names nothing: answered as such rather than as `IN ()`.
+    if (query.actions?.length === 0 || query.results?.length === 0) return [];
     const rows = await this.db
       .select({
         id: auditLogs.id,
@@ -45,6 +49,9 @@ export class DrizzleAuditHistoryReader implements AuditHistoryReader {
           eq(auditLogs.entityType, query.entityType),
           eq(auditLogs.entityId, query.entityId),
           sql`starts_with(${auditLogs.action}, ${query.actionPrefix})`,
+          // CX2: narrowed before the limit, so the cap counts only rows the caller shows.
+          query.actions === undefined ? undefined : inArray(auditLogs.action, [...query.actions]),
+          query.results === undefined ? undefined : inArray(auditLogs.result, [...query.results]),
         ),
       )
       .orderBy(desc(auditLogs.occurredAt), desc(auditLogs.id))

@@ -661,6 +661,65 @@ describe('broadcast readiness (roadmap C1)', () => {
       expect(full.find((row) => row.action === 'broadcast.launch')?.actorLabel).not.toBeNull();
     });
 
+    it('narrows to what the viewer may see BEFORE the cap (review of PR #248, CX2)', async () => {
+      await twoBotAudience();
+      const record = await composed();
+      await launch(record.id);
+      const support = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'support-cx2',
+          roleKeys: ['support'],
+        }),
+      );
+      // More refusals than the cap, every one NEWER than the create and the launch.
+      for (let i = 0; i <= BROADCAST_HISTORY_MAX; i += 1) {
+        await expect(broadcasts.pause(tenantA, support, record.id)).rejects.toBeDefined();
+      }
+      const roleId = ctx.container.ids.uuid();
+      const db = ctx.container.database.db;
+      await db.execute(sql`INSERT INTO roles (id, tenant_id, key, name, is_system)
+        VALUES (${roleId}::uuid, ${tenantA.tenantId}::uuid, 'marketing_cx2', 'Marketing', false)`);
+      await db.execute(sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+        VALUES (${tenantA.tenantId}::uuid, ${roleId}::uuid, 'broadcasts.view')`);
+      const marketer = await createAdmin(ctx.container, tenantA, { username: 'marketer-cx2' });
+      await db.execute(sql`INSERT INTO admin_roles (tenant_id, admin_id, role_id)
+        VALUES (${tenantA.tenantId}::uuid, ${marketer.id}::uuid, ${roleId}::uuid)`);
+
+      const seen = await broadcasts.history(tenantA, adminActorFor(marketer), record.id);
+      // The successes behind the refusals are still shown, and nothing beyond them is claimed.
+      expect(seen.entries.map((row) => row.action)).toEqual(
+        expect.arrayContaining(['broadcast.create', 'broadcast.launch']),
+      );
+      expect(seen.entries.every((row) => row.result === 'SUCCESS')).toBe(true);
+      expect(seen.truncated).toBe(false);
+      // The owner reads the refusals, capped, and is told older rows exist.
+      const full = await broadcasts.history(tenantA, owner, record.id);
+      expect(full.entries).toHaveLength(BROADCAST_HISTORY_MAX);
+      expect(full.truncated).toBe(true);
+    });
+
+    it('narrows to the history actions BEFORE the cap (review of PR #248, CX2)', async () => {
+      await twoBotAudience();
+      const record = await composed();
+      await launch(record.id);
+      // A `broadcast.` row that is not a history fact (none is written today; one may be): more
+      // than the cap of them, all newer, must not push the facts the card shows out of it.
+      const db = ctx.container.database.db;
+      for (let i = 0; i <= BROADCAST_HISTORY_MAX; i += 1) {
+        await db.execute(sql`INSERT INTO audit_logs
+          (id, tenant_id, occurred_at, actor_type, action, entity_type, entity_id,
+           correlation_id, source_surface, result)
+          VALUES (${ctx.container.ids.uuid()}::uuid, ${tenantA.tenantId}::uuid,
+                  now() + interval '1 hour', 'SYSTEM_JOB', 'broadcast.not_a_history_fact',
+                  'Broadcast', ${record.id}, 'cx2', 'WORKER', 'SUCCESS')`);
+      }
+      const history = await broadcasts.history(tenantA, owner, record.id);
+      expect(history.entries.map((row) => row.action)).toEqual(
+        expect.arrayContaining(['broadcast.create', 'broadcast.launch']),
+      );
+      expect(history.truncated).toBe(false);
+    });
+
     it('says when older history rows exist beyond the cap (review N4)', async () => {
       await twoBotAudience();
       const record = await composed();

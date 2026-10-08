@@ -280,9 +280,22 @@ export class BroadcastService {
     await this.require(scope, id);
     if (this.deps.auditHistory === undefined) return { entries: [], truncated: false };
     const audited = await this.deps.guard.has(scope, actor, AUDIT_VIEW_PERMISSION);
+    /*
+     * What this viewer may see is decided IN THE QUERY, before the cap (review of PR #248,
+     * CX2): read 51 raw rows and drop the refusals afterwards, and a viewer without
+     * `audit.view` lost every success behind 51 refusals — and `truncated` counted rows they
+     * would never be shown. The checks below stay as the same rule for a reader that ignores
+     * the narrowing.
+     */
     const rows = await this.deps.auditHistory.entityHistory(
       scope,
-      { entityType: 'Broadcast', entityId: id, actionPrefix: 'broadcast.' },
+      {
+        entityType: 'Broadcast',
+        entityId: id,
+        actionPrefix: 'broadcast.',
+        actions: BROADCAST_HISTORY_ACTIONS,
+        ...(audited ? {} : { results: ['SUCCESS'] as const }),
+      },
       BROADCAST_HISTORY_MAX + 1,
     );
     const truncated = rows.length > BROADCAST_HISTORY_MAX;

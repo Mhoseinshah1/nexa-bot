@@ -37,13 +37,21 @@ export interface AuditHistoryRecord {
 }
 
 export interface AuditHistoryReader {
-  /** Newest first, at most `limit` rows. Another tenant's rows are never returned. */
+  /**
+   * Newest first, at most `limit` rows. Another tenant's rows are never returned.
+   *
+   * `actions` and `results`, when given, narrow the rows IN THE QUERY, before the limit
+   * (review of PR #248, CX2): a caller that filtered after reading `limit` rows would lose
+   * every row it may show that sat behind rows it may not.
+   */
   entityHistory(
     scope: TenantContext,
     query: {
       readonly entityType: string;
       readonly entityId: string;
       readonly actionPrefix: string;
+      readonly actions?: readonly string[];
+      readonly results?: readonly AuditResult[];
     },
     limit: number,
   ): Promise<readonly AuditHistoryRecord[]>;
