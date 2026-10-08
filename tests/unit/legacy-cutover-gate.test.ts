@@ -136,10 +136,38 @@ describe('the freeze proof: PR1 checker, pinned', () => {
     writeFileSync(b, restored);
     const equal = await runFreezeChecker(CHECKER, a, b);
     expect(equal.exitCode).toBe(0);
-    const base = { checkerSha256: LEGACY_FREEZE_CHECKER_SHA256, frozenSha256: sha(frozen) };
+    const base = {
+      checkerSha256: LEGACY_FREEZE_CHECKER_SHA256,
+      frozenSha256: sha(frozen),
+      frozenPath: a,
+      restoredPath: b,
+      restoredSha256: sha(restored),
+    };
     expect(
-      freezeProofHolds({ ...base, run: equal, expectedFreezeProofSha256: sha(frozen) }).holds,
-    ).toBe(true);
+      freezeProofHolds({ ...base, run: equal, expectedFreezeProofSha256: sha(frozen) }),
+    ).toMatchObject({
+      holds: true,
+      detail: expect.stringContaining(`restored proof sha256 ${sha(restored)}`),
+    });
+    // aud6 F4: the frozen proof passed as its own restored copy is EQUAL by construction, and
+    // refused, whatever spelling of the path is used.
+    const self = await runFreezeChecker(CHECKER, a, a);
+    expect(self.exitCode).toBe(0);
+    for (const restoredPath of [a, join(dir, '.', 'a.tsv'), join(dir, 'x', '..', 'a.tsv')]) {
+      expect(
+        freezeProofHolds({
+          ...base,
+          run: self,
+          restoredPath,
+          restoredSha256: sha(frozen),
+          expectedFreezeProofSha256: sha(frozen),
+        }),
+        restoredPath,
+      ).toMatchObject({
+        holds: false,
+        detail: expect.stringContaining('is the frozen proof itself'),
+      });
+    }
     // Not the frozen file the owner approved.
     expect(freezeProofHolds({ ...base, run: equal, expectedFreezeProofSha256: H('9') }).holds).toBe(
       false,
@@ -167,6 +195,9 @@ describe('the freeze proof: PR1 checker, pinned', () => {
         },
         frozenSha256: H('1'),
         expectedFreezeProofSha256: H('1'),
+        frozenPath: '/x/a.tsv',
+        restoredPath: '/x/b.tsv',
+        restoredSha256: H('2'),
       }),
     ).toMatchObject({ holds: false });
     // Exit 0 without the EQUAL line (one file accepted, no comparison) is not a proof either.
@@ -176,6 +207,9 @@ describe('the freeze proof: PR1 checker, pinned', () => {
         run: { exitCode: 0, stdout: 'accepted: a.tsv (2 base tables)\n' },
         frozenSha256: H('1'),
         expectedFreezeProofSha256: H('1'),
+        frozenPath: '/x/a.tsv',
+        restoredPath: '/x/b.tsv',
+        restoredSha256: H('2'),
       }).holds,
     ).toBe(false);
   });

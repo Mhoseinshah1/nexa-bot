@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { assertOutsideTransaction } from './infrastructure/transaction-boundary.js';
 import { createReadStream } from 'node:fs';
@@ -223,7 +224,21 @@ export function freezeProofHolds(input: {
   readonly run: FreezeCheckerRun | null;
   readonly frozenSha256: string;
   readonly expectedFreezeProofSha256: string | null;
+  /**
+   * aud6 F4: the two files' paths, resolved. The restored proof must be ANOTHER file: the
+   * same path passed twice compares a file with itself and is EQUAL by construction.
+   */
+  readonly frozenPath: string;
+  readonly restoredPath: string;
+  /** The restored proof's SHA-256, recorded in the step's detail. */
+  readonly restoredSha256: string;
 }): { readonly holds: boolean; readonly detail: string } {
+  if (resolve(input.frozenPath) === resolve(input.restoredPath)) {
+    return {
+      holds: false,
+      detail: `--freeze-proof-restored is the frozen proof itself (${resolve(input.restoredPath)}): the restored copy's own CHECKSUM TABLE output is required`,
+    };
+  }
   if (input.checkerSha256 !== LEGACY_FREEZE_CHECKER_SHA256) {
     return {
       holds: false,
@@ -242,7 +257,10 @@ export function freezeProofHolds(input: {
       detail: `the frozen proof file's sha256 is ${input.frozenSha256}, not the approved ${String(input.expectedFreezeProofSha256)}`,
     };
   }
-  return { holds: true, detail: `EQUAL; frozen proof sha256 ${input.frozenSha256}` };
+  return {
+    holds: true,
+    detail: `EQUAL; frozen proof sha256 ${input.frozenSha256}; restored proof sha256 ${input.restoredSha256}`,
+  };
 }
 
 /**
@@ -532,9 +550,10 @@ export async function runCutoverGate(
   const { steps, failedStep } = await runGateSteps({
     STOP_SALES_ACTIVE: async () => stopSalesHolds(await deps.stopSalesFacts()),
     FREEZE_PROOF_VERIFIED: async () => {
-      const [checker, frozen] = await Promise.all([
+      const [checker, frozen, restored] = await Promise.all([
         deps.readBytes(args.freezeChecker),
         deps.readBytes(args.freezeProof),
+        deps.readBytes(args.freezeProofRestored),
       ]);
       const checkerSha256 = sha256OfText(checker);
       const run =
@@ -546,6 +565,9 @@ export async function runCutoverGate(
         run,
         frozenSha256: sha256OfText(frozen),
         expectedFreezeProofSha256: expectation.freezeProofSha256,
+        frozenPath: args.freezeProof,
+        restoredPath: args.freezeProofRestored,
+        restoredSha256: sha256OfText(restored),
       });
     },
     FINAL_DUMP_VERIFIED: async () =>
