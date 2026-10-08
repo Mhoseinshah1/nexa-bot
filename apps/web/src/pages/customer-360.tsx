@@ -63,6 +63,14 @@ import {
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
 import { CustomerCrmSection } from './customer-360-crm';
+// Roadmap B5: the workspace — attention, the newest rows, support, shortcuts.
+import {
+  CustomerAttentionCard,
+  CustomerLatestCard,
+  CustomerTicketsCard,
+  OperatorShortcutsCard,
+  customerShortcuts,
+} from './customer-360-workspace';
 import {
   Badge,
   Banner,
@@ -130,6 +138,9 @@ export function UserDetailPage({
   mayWriteNotes = false,
   mayAssignTags = false,
   mayManageTags = false,
+  mayViewPayments = false,
+  mayViewTickets = false,
+  mayViewBusinessChats = false,
   denied,
 }: {
   id: string;
@@ -191,6 +202,16 @@ export function UserDetailPage({
   mayAssignTags?: boolean;
   /** `users.tags.manage` */
   mayManageTags?: boolean;
+  /*
+   * Roadmap B5. Each decides only whether a section is ASKED for or a link drawn; the
+   * server withholds the section regardless (`CUSTOMER_WORKSPACE_PERMISSIONS`).
+   */
+  /** `payments.view` — the payments shortcut. */
+  mayViewPayments?: boolean;
+  /** `tickets.view` — the support card and its shortcut. */
+  mayViewTickets?: boolean;
+  /** `business_chats.view` — the handoff inbox shortcut. */
+  mayViewBusinessChats?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -364,8 +385,10 @@ export function UserDetailPage({
             )}
 
             <nav className="c360-nav" aria-label={t('web.c360_nav_label')}>
+              <a href="#c360-attention">{t('web.c360_nav_attention')}</a>
               <a href="#c360-general">{t('web.c360_nav_general')}</a>
               <a href="#c360-services">{t('web.c360_nav_services')}</a>
+              <a href="#c360-support">{t('web.c360_nav_support')}</a>
               <a href="#c360-financial">{t('web.c360_nav_financial')}</a>
               <a href="#c360-controls">{t('web.c360_nav_controls')}</a>
               <a href="#c360-relations">{t('web.c360_nav_relations')}</a>
@@ -465,14 +488,18 @@ export function UserDetailPage({
               onClose={() => setMessageOpen(false)}
             />
 
+            <CustomerAttentionCard customerId={id} />
+
             <TwoColumn
               main={
                 <>
+                  <CustomerLatestCard customerId={id} />
                   <div id="c360-services" className="stack">
                     <ServiceCountsStrip customerId={id} />
                     <CustomerServicesCard customerId={id} mayView={mayViewServices} />
                     <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
                   </div>
+                  <CustomerTicketsCard customerId={id} mayView={mayViewTickets} />
                   <FinancialSummaryCard customerId={id} />
                   <div id="c360-wallet">
                     <WalletCard
@@ -502,6 +529,16 @@ export function UserDetailPage({
               }
               side={
                 <>
+                  <OperatorShortcutsCard
+                    shortcuts={customerShortcuts(id, {
+                      orders: mayViewOrders,
+                      services: mayViewServices,
+                      payments: mayViewPayments,
+                      tickets: mayViewTickets,
+                      wallet: mayViewWallet,
+                      businessChats: mayViewBusinessChats,
+                    })}
+                  />
                   <GeneralInfoCard
                     row={row}
                     overview={controls}

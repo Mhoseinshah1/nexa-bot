@@ -33,7 +33,12 @@ export const SUPPORT_CONTEXT_LIMITS = {
   payments: 5,
   incidents: 3,
   clientApps: 6,
-  knowledge: 20,
+  /**
+   * A8 (2026-10-07): at most eight knowledge entries, every one of them RELEVANT — an entry the
+   * query does not match at all is never sent. It was twenty, chosen by recency and then by
+   * relevance, and the byte budget cut most of them anyway.
+   */
+  knowledge: 8,
 } as const;
 
 /** A client app's rendered guide is cut to this many characters (an ellipsis marks a cut). */
@@ -44,7 +49,7 @@ export const SUPPORT_CONTEXT_GUIDE_MAX_CHARS = 1500;
  * whole entries from the TAIL of each family, in `SUPPORT_CONTEXT_TRUNCATION_ORDER`, until
  * it fits. Flags are computed before any cut, so a dropped entry never clears a flag.
  */
-export const SUPPORT_CONTEXT_MAX_BYTES = 16 * 1024;
+export const SUPPORT_CONTEXT_MAX_BYTES = 24 * 1024;
 
 /**
  * Which family gives way first (D2). Client apps first: they are long, and an app whose guide
@@ -69,9 +74,10 @@ export const SUPPORT_CONTEXT_TRUNCATION_ORDER = [
  * The knowledge entries' own share of `SUPPORT_CONTEXT_MAX_BYTES` (D2), as the UTF-8 bytes of
  * the knowledge array's JSON. Knowledge is cut in its turn only down to this, and never below
  * its first (most relevant) entry; the rest of it gives way only once every other family is
- * empty. About two full Persian articles.
+ * empty. A8 (2026-10-07): half of the 24 KiB budget, about three full Persian articles (it was
+ * 6 KiB of 16 KiB, about two).
  */
-export const SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES = 6 * 1024;
+export const SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES = 12 * 1024;
 export type SupportContextFamily = (typeof SUPPORT_CONTEXT_TRUNCATION_ORDER)[number];
 
 /**

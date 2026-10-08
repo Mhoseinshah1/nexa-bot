@@ -63,6 +63,8 @@ export function navCountersFrom(response: NavCountersResponse): NavCounters {
   one('tickets', c.ticketsAwaitingSupport);
   one('panels', c.unhealthyPanels, 'danger');
   one('payments', c.paymentsUnknown, 'warn');
+  // Roadmap B6: support handoffs — a person must answer, the AI has stood down.
+  one('business-chats', c.businessHandoffs, 'warn');
   if (c.unreconciledServices !== null || c.refundRequestsAwaiting !== null) {
     const unreconciled = c.unreconciledServices ?? 0;
     put(

@@ -36,24 +36,28 @@
   --line-2: #323a46;
   --fg: #e7e9ed;
   --fg-2: #a3aab6;
-  --fg-3: #6f7784;
-  --accent: #6d9bf4;
+  /* AA (4.5:1, with margin) on every surface, bg-0 to bg-4; the reference's #6f7784 read 3.45 on bg-3. */
+  --fg-3: #9098a4;
+  --accent: #719ef4;
   --accent-strong: #4f83ea;
   --accent-fg: #0b1220;
-  --accent-soft: rgba(109, 155, 244, 0.14);
+  --accent-soft: rgba(113, 158, 244, 0.14);
   --ok: #3fc383;
   --ok-soft: rgba(63, 195, 131, 0.14);
   --warn: #e8ac3f;
   --warn-soft: rgba(232, 172, 63, 0.14);
-  --danger: #f06565;
-  --danger-soft: rgba(240, 101, 101, 0.14);
-  --info: #6d9bf4;
-  --info-soft: rgba(109, 155, 244, 0.14);
-  --violet: #a58cff;
-  --violet-soft: rgba(165, 140, 255, 0.14);
+  --danger: #f27777;
+  --danger-soft: rgba(242, 119, 119, 0.14);
+  --info: #719ef4;
+  --info-soft: rgba(113, 158, 244, 0.14);
+  --violet: #a68dff;
+  --violet-soft: rgba(166, 141, 255, 0.14);
   --teal: #3cc7c0;
   --teal-soft: rgba(60, 199, 192, 0.14);
   --on-solid: #ffffff;
+  /* Text on a solid danger / warn fill: white on the dark fills read 3.11 and 2.02. */
+  --on-danger: #0b1220;
+  --on-warn: #0b1220;
   --overlay: rgba(4, 6, 10, 0.55);
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -79,24 +83,31 @@
   --line-2: #cfd4dc;
   --fg: #161a22;
   --fg-2: #5a6372;
-  --fg-3: #8b94a3;
-  --accent: #2f6fe4;
+  /* AA (4.5:1, with margin) on every surface, bg-0 to bg-4; the reference's #8b94a3 read 2.78 on bg-0. */
+  --fg-3: #616a78;
+  /* Text on bg-0 at AA; #2f6fe4 read 4.23. */
+  --accent: #2760c9;
   --accent-strong: #235bc4;
   --accent-fg: #ffffff;
-  --accent-soft: rgba(47, 111, 228, 0.1);
-  --ok: #1f9a5f;
-  --ok-soft: rgba(31, 154, 95, 0.12);
-  --warn: #b97a0c;
-  --warn-soft: rgba(185, 122, 12, 0.12);
-  --danger: #d43d3d;
-  --danger-soft: rgba(212, 61, 61, 0.1);
-  --info: #2f6fe4;
-  --info-soft: rgba(47, 111, 228, 0.1);
-  --violet: #6f4fe0;
-  --violet-soft: rgba(111, 79, 224, 0.1);
-  --teal: #178f89;
-  --teal-soft: rgba(23, 143, 137, 0.12);
+  --accent-soft: rgba(39, 96, 201, 0.1);
+  /* Text on the light surfaces at AA; #1f9a5f read 3.26. */
+  --ok: #147145;
+  --ok-soft: rgba(20, 113, 69, 0.12);
+  /* Text on the light surfaces at AA; #b97a0c read 3.26. */
+  --warn: #885908;
+  --warn-soft: rgba(136, 89, 8, 0.12);
+  /* Text on bg-0 at AA; #d43d3d read 4.21. */
+  --danger: #b73535;
+  --danger-soft: rgba(183, 53, 53, 0.1);
+  --info: #2760c9;
+  --info-soft: rgba(39, 96, 201, 0.1);
+  --violet: #694bd5;
+  --violet-soft: rgba(105, 75, 213, 0.1);
+  --teal: #126e69;
+  --teal-soft: rgba(18, 110, 105, 0.12);
   --on-solid: #ffffff;
+  --on-danger: #ffffff;
+  --on-warn: #ffffff;
   --overlay: rgba(20, 26, 38, 0.35);
   --shadow: 0 12px 32px rgba(20, 30, 50, 0.16);
   --shadow-sm: 0 1px 4px rgba(20, 30, 50, 0.1);
@@ -139,4 +150,17 @@
   --card-head-titles-min: 12rem;
   --topbar-h: 52px;
   --gap: 14px;
+}
+
+/*
+ * Touch (a phone, a tablet): every control a finger has to hit is at least 44px
+ * square (WCAG 2.5.5). Only the control tokens change; a mouse keeps the dense
+ * desk layout, and so does a device whose primary pointer can hover (a touch
+ * laptop, an iPad with a trackpad), which `hover: none` excludes. `pnpm web:responsive` measures every route against this.
+ */
+@media (pointer: coarse) and (hover: none) {
+  :root {
+    --ctl-h: 44px;
+    --ctl-h-sm: 44px;
+  }
 }

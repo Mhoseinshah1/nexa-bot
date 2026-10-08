@@ -179,6 +179,30 @@ describe('the ticket inbox', () => {
     ).toBe(24 * 60 * 60 * 1000);
   });
 
+  /*
+   * Review N1 (PR #240): the sidebar's, the dashboard's and Customer 360's "awaiting support"
+   * counts open `?awaiting=support`; the inbox sends it, presses its chip, and a status chip
+   * or «همه» clears it.
+   */
+  it('lists only what awaits support when linked there, and lets a status chip replace it', async () => {
+    const api = stubApi([
+      { url: '/tickets', body: { tickets: [], nextCursor: null } },
+      { url: '/ticket-categories', body: categories },
+    ]);
+    const at = route('awaiting=support');
+    renderPage(
+      <TicketsPage route={at} denied={false} mayAssign={false} mayEditCategories={false} />,
+    );
+    await screen.findByText(t('web.tickets_filter_empty'));
+    const list = api.calls.find((call) => call.url.includes('/tickets?'));
+    expect(new URL(list!.url, 'http://x').searchParams.get('awaiting')).toBe('support');
+    const chip = screen.getByRole('button', { name: t('web.ticket_filter_awaiting_support') });
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    expect(
+      screen.getByRole('button', { name: t('web.ticket_filter_all') }).getAttribute('aria-pressed'),
+    ).toBe('false');
+  });
+
   it('draws the category editor only for the key that edits categories', async () => {
     stubApi([
       { url: '/tickets', body: { tickets: [], nextCursor: null } },

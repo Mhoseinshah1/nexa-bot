@@ -685,6 +685,8 @@ import {
   type DirectMessageListResponse,
   type DirectMessageResponse,
 } from '@nexa/contracts';
+// Roadmap B5: Customer 360's workspace summary.
+import { customerWorkspaceResponseSchema, type CustomerWorkspaceResponse } from '@nexa/contracts';
 
 /**
  * The typed API client.
@@ -4048,6 +4050,8 @@ export function testAppearance(input: {
 /** The inbox's filters, as the page holds them; each is optional and sent only when set. */
 export interface TicketFilters {
   readonly status?: TicketStatus;
+  /** Review N1: only the tickets whose next word is support's (OPEN, WAITING_FOR_SUPPORT). */
+  readonly awaiting?: 'support';
   readonly categoryId?: string;
   /** A customer's id, numeric Telegram id or username — whatever the operator holds. */
   readonly customer?: string;
@@ -4057,16 +4061,20 @@ export interface TicketFilters {
   readonly from?: string;
   readonly to?: string;
   readonly cursor?: { readonly at: string; readonly id: string };
+  /** Page size, at most `TICKET_PAGE_MAX`; the server's default when absent. */
+  readonly limit?: number;
 }
 
 export function fetchTickets(filters: TicketFilters = {}): Promise<TicketListResponse> {
   const params = new URLSearchParams();
   if (filters.status !== undefined) params.set('status', filters.status);
+  if (filters.awaiting !== undefined) params.set('awaiting', filters.awaiting);
   if (filters.categoryId !== undefined) params.set('categoryId', filters.categoryId);
   if (filters.customer !== undefined) params.set('customer', filters.customer);
   if (filters.assigned !== undefined) params.set('assigned', filters.assigned);
   if (filters.from !== undefined) params.set('from', filters.from);
   if (filters.to !== undefined) params.set('to', filters.to);
+  if (filters.limit !== undefined) params.set('limit', String(filters.limit));
   if (filters.cursor !== undefined) {
     params.set('before', filters.cursor.at);
     params.set('beforeId', filters.cursor.id);
@@ -4889,6 +4897,16 @@ export function fetchCustomerFinancialSummary(
 
 export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineResponse> {
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
+}
+
+/**
+ * Roadmap B5: what about one customer waits for a person, and their newest orders and
+ * payments. Each section the viewer may not open is null; `users.view` is charged.
+ */
+export function fetchCustomerWorkspace(
+  id: string,
+): Promise<{ workspace: CustomerWorkspaceResponse }> {
+  return authedGet(CUSTOMER_360_ROUTES.workspace(id), customerWorkspaceResponseSchema);
 }
 
 // --- Phase B3: the notification center -----------------------------------------------

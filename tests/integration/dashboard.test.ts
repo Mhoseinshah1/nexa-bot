@@ -246,6 +246,28 @@ describe('Round W dashboard', () => {
   }
   let ticketCategory = '';
 
+  /** A Telegram Business conversation (TB2) in `state`, on its own connection. */
+  async function conversation(
+    tenantId: string,
+    bot: string,
+    state: 'HANDOFF_REQUIRED' | 'AI_ACTIVE' | 'HUMAN_ACTIVE',
+    customerId: string | null = null,
+  ): Promise<void> {
+    n += 1;
+    const connectionRowId = uuid();
+    await run(sql`INSERT INTO telegram_business_connections
+        (id, tenant_id, bot_instance_id, connection_id, owner_telegram_user_id,
+         owner_user_chat_id, is_enabled, rights, connected_at, last_confirmed_at)
+      VALUES (${connectionRowId}, ${tenantId}, ${bot}, ${`dash-${n}`}, '5000009',
+              '5000009', true, ARRAY['can_reply'], now(), now())`);
+    const chat = String(7_200_000 + n);
+    await run(sql`INSERT INTO business_conversations
+        (id, tenant_id, bot_instance_id, owner_telegram_user_id, chat_id, connection_row_id,
+         peer_telegram_user_id, customer_id, state, control_epoch, handoff_reason)
+      VALUES (${uuid()}, ${tenantId}, ${bot}, '5000009', ${chat}, ${connectionRowId}, ${chat},
+              ${customerId}, ${state}, 1, ${state === 'HANDOFF_REQUIRED' ? 'HANDOFF_TOPIC' : null})`);
+  }
+
   const now = () => Date.now();
 
   beforeEach(async () => {
@@ -506,6 +528,14 @@ describe('Round W dashboard', () => {
     for (const status of ['OPEN', 'WAITING_FOR_SUPPORT', 'WAITING_FOR_CUSTOMER', 'CLOSED']) {
       await ticket(status);
     }
+
+    // Roadmap B6: two support handoffs waiting for a person; a conversation the AI holds and
+    // one a person already took are not; nor is tenant B's handoff.
+    await conversation(tenantA.tenantId, SEED_IDS.botA1, 'HANDOFF_REQUIRED');
+    await conversation(tenantA.tenantId, SEED_IDS.botA1, 'HANDOFF_REQUIRED', ids.c1);
+    await conversation(tenantA.tenantId, SEED_IDS.botA1, 'AI_ACTIVE');
+    await conversation(tenantA.tenantId, SEED_IDS.botA1, 'HUMAN_ACTIVE');
+    await conversation(tenantB.tenantId, SEED_IDS.botB1, 'HANDOFF_REQUIRED');
 
     await run(sql`INSERT INTO service_refund_requests (id, tenant_id, service_id, customer_id, order_id, payment_id,
         bot_instance_id, state, reason, filing_key, principal_minor, currency)
@@ -831,6 +861,8 @@ describe('Round W dashboard', () => {
       // The OPEN request; not the REJECTED one.
       refundRequestsAwaiting: 1,
       paymentsUnknown: 1,
+      // HANDOFF_REQUIRED; not AI_ACTIVE, not HUMAN_ACTIVE, not tenant B's.
+      businessHandoffs: 2,
     });
   });
 
@@ -847,6 +879,7 @@ describe('Round W dashboard', () => {
       unreconciledServices: 1,
       refundRequestsAwaiting: null,
       paymentsUnknown: null,
+      businessHandoffs: 2,
     });
     expect(await counters('technical')).toEqual({
       openConditions: 1,
@@ -855,6 +888,7 @@ describe('Round W dashboard', () => {
       unreconciledServices: 1,
       refundRequestsAwaiting: null,
       paymentsUnknown: null,
+      businessHandoffs: null,
     });
     expect(Object.values(await counters('sales')).every((value) => value === null)).toBe(true);
     expect(await denials()).toBe(before);
@@ -872,6 +906,7 @@ describe('Round W dashboard', () => {
       unreconciledServices: 0,
       refundRequestsAwaiting: 0,
       paymentsUnknown: 0,
+      businessHandoffs: 1,
     });
   });
 
@@ -889,6 +924,8 @@ describe('Round W dashboard', () => {
     const repository = new DrizzleOperationsOverviewRepository(api.container.database.db);
     expect(await repository.navCounter(tenantA, 'paymentsUnknown', 10)).toBe(3);
     expect(await repository.navCounter(tenantA, 'paymentsUnknown', 2)).toBe(2);
+    expect(await repository.navCounter(tenantA, 'businessHandoffs', 10)).toBe(2);
+    expect(await repository.navCounter(tenantA, 'businessHandoffs', 1)).toBe(1);
   });
 
   it('bounds the unreconciled badge, and counts the dashboard’s unreconciled gauge in full', async () => {

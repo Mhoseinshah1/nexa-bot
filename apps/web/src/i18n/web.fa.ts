@@ -8223,6 +8223,15 @@ export const WEB_FA = {
   'web.kb_fault_base_moved': 'مطلب پس از اجرای ساخت تغییر کرده است. ساخت را دوباره اجرا کنید.',
   'web.kb_fault_not_conflict': 'این پیشنهاد تعارض در انتظار انتخاب نیست.',
   'web.kb_fault_not_found': 'این ساخت پیدا نشد.',
+  // --- roadmap web-route-polish (Agent 2a) ---
+  'web.inc_form_reloaded':
+    'رخداد در این فاصله تغییر کرده بود. فرم با مقادیر کنونی دوباره پر شد و تغییرهای شما ذخیره نشد؛ بررسی کنید و دوباره ذخیره کنید.',
+  'web.list_filters_clear': 'پاک کردن همهٔ فیلترها',
+  'web.list_read_at': 'خوانده‌شده در {time}',
+  'web.list_refresh': 'خواندن دوباره',
+  'web.list_refreshing': 'در حال خواندن…',
+  'web.referral_banner_clear_question':
+    'بنر معرفی حذف شود؟ فایل آن از این نصب پاک می‌شود و برای برگرداندنش باید دوباره بارگذاری شود.',
   // --- Roadmap C2: broadcast operator UX (campaign & broadcast workstream) ---------------
   'web.bcx_reason_blocked_bot': 'کاربر ربات را مسدود کرده است',
   'web.bcx_reason_bad_request':
@@ -8282,6 +8291,64 @@ export const WEB_FA = {
   'web.bcx_h_requeued': '{count} گیرنده دوباره در صف',
   'web.bcx_h_refused': 'اجازه داده نشد',
   // --- end roadmap C2 block -----------------------------------------------------------
+
+  // --- Roadmap B5/B6 (Agent 2b): Customer 360 workspace and the attention-first dashboard ---
+  'web.attn_at_least': 'یا بیشتر',
+  'web.attn_open': 'رسیدگی',
+  'web.c360_nav_attention': 'نیازمند رسیدگی',
+  'web.c360_nav_support': 'پشتیبانی',
+  'web.c360ws_attention_title': 'نیازمند رسیدگی',
+  'web.c360ws_attention_hint':
+    'هر عدد شمارش سرور از ردیف‌های ذخیره‌شدهٔ همین مشتری است و به صفحه‌ای می‌رود که در آن رسیدگی می‌شود.',
+  'web.c360ws_nothing': 'برای این مشتری چیزی در انتظار رسیدگی نیست.',
+  'web.c360ws_withheld': 'بخش‌هایی که مجوز صفحهٔ آن‌ها را ندارید در این خلاصه شمرده نشده‌اند.',
+  'web.c360ws_tickets_awaiting': 'تیکت در انتظار پاسخ پشتیبانی',
+  'web.c360ws_handoffs': 'گفتگوی بیزینس در انتظار اپراتور',
+  'web.c360ws_payments_unknown': 'پرداخت با نتیجهٔ نامعلوم (در انتظار تطبیق)',
+  'web.c360ws_services_unreconciled': 'سرویس تطبیق‌نشده',
+  'web.c360ws_latest_title': 'آخرین سفارش‌ها و پرداخت‌ها',
+  'web.c360ws_latest_hint':
+    'جدیدترین ردیف‌ها، جدیدترین اول. فهرست کامل با صفحه‌بندی در صفحهٔ هر کدام است.',
+  'web.c360ws_latest_orders': 'آخرین سفارش‌ها',
+  'web.c360ws_latest_payments': 'آخرین پرداخت‌ها',
+  'web.c360ws_latest_orders_empty': 'این مشتری سفارشی ندارد.',
+  'web.c360ws_latest_payments_empty': 'این مشتری پرداختی ندارد.',
+  'web.c360ws_payments_all': 'همهٔ پرداخت‌های این مشتری',
+  'web.c360ws_tickets_title': 'تیکت‌های پشتیبانی',
+  'web.c360ws_tickets_hint': 'جدیدترین تیکت‌های این مشتری، جدیدترین اول.',
+  'web.c360ws_tickets_empty': 'این مشتری تیکتی ندارد.',
+  'web.c360ws_tickets_all': 'همهٔ تیکت‌های این مشتری',
+  'web.c360ws_tickets_denied': 'برای دیدن تیکت‌های این مشتری دسترسی tickets.view لازم است.',
+  'web.c360ws_tickets_open': 'تیکت باز',
+  'web.c360ws_shortcuts_title': 'میان‌برهای اپراتور',
+  'web.c360ws_shortcuts_hint': 'هر پیوند همان فهرست را با فیلتر همین مشتری باز می‌کند.',
+  'web.c360ws_shortcut_orders': 'باز کردن سفارش‌ها',
+  'web.c360ws_shortcut_services': 'باز کردن سرویس‌ها',
+  'web.c360ws_shortcut_payments': 'باز کردن پرداخت‌ها',
+  'web.c360ws_shortcut_tickets': 'باز کردن تیکت‌ها',
+  'web.c360ws_shortcut_wallet': 'رفتن به کیف پول و دفتر حساب',
+  'web.c360ws_shortcut_handoffs': 'صندوق گفتگوهای بیزینس',
+  'web.c360ws_shortcuts_none': 'با دسترسی‌های شما میان‌بری برای این مشتری وجود ندارد.',
+  'web.dash_attn_title': 'صف رسیدگی',
+  'web.dash_attn_hint':
+    'آنچه همین حالا منتظر یک نفر است، از شمارش‌های سرور. هر مورد به صفحه‌ای می‌رود که در آن رسیدگی می‌شود.',
+  'web.dash_attn_clear': 'صف رسیدگی خالی است.',
+  'web.dash_attn_clear_hint': 'در بخش‌هایی که به آن‌ها دسترسی دارید چیزی منتظر نیست.',
+  'web.dash_attn_stuck_operations': 'عملیات تأمین گیرکرده',
+  'web.dash_attn_unknown_operations': 'عملیات تأمین با نتیجهٔ نامعلوم',
+  'web.dash_attn_outbox_exhausted': 'رویداد ارسال‌نشده با تلاش‌های تمام‌شده',
+  'web.dash_attn_unreconciled': 'سرویس تطبیق‌نشده',
+  'web.dash_attn_payments_unknown': 'پرداخت نامعلوم در انتظار تطبیق',
+  'web.dash_attn_payments_reconcilable': 'پرداخت آمادهٔ تطبیق',
+  'web.dash_attn_refund_requests': 'درخواست بازپرداخت در انتظار',
+  'web.dash_attn_handoffs': 'گفتگوی بیزینس در انتظار اپراتور',
+  'web.dash_attn_tickets': 'تیکت در انتظار پشتیبانی',
+  'web.dash_attn_panels': 'پنل ناسالم',
+  'web.dash_attn_conditions': 'هشدار مدیریتی باز',
+  'web.dash_attn_partial':
+    'بخشی از صف خوانده نشد؛ موارد آن بخش در این فهرست نیامده‌اند و «خالی» بودن صف قطعی نیست.',
+  'web.ticket_filter_awaiting_support': 'در انتظار پشتیبانی',
+  // --- end Roadmap B5/B6 (Agent 2b) ---
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

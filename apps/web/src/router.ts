@@ -74,7 +74,46 @@ function refresh(): void {
   if (next === snapshotKey && snapshot !== null) return;
   snapshotKey = next;
   snapshot = read();
+  remember(snapshot);
   emit();
+}
+
+/**
+ * The filters and search each path was last shown with, for this signed-in session
+ * (roadmap B4).
+ *
+ * A list keeps its filters and search in the URL, so a detail page's breadcrumb back to
+ * the list could restore them — but it linked the bare path, and an operator who opened
+ * one row of a filtered list came back to the unfiltered list. Back/Forward always restored
+ * them (history holds the URL); the crumb now does too. The sidebar link still goes to the
+ * bare path: choosing a section from the navigation is how an operator asks for it fresh.
+ *
+ * Two things are deliberately NOT carried:
+ * - the keyset `cursor`: most lists keep their cursor trail in component state, and a
+ *   cursor saved before a write can point past rows that have changed since — the crumb
+ *   returns to the first page of the same filter;
+ * - anything across a sign-out or a new sign-in: `forgetRememberedQueries` runs at both
+ *   session boundaries (`app.tsx`), beside the query-cache wipe, because a remembered
+ *   search can be another operator's customer phone number or name.
+ */
+const NOT_REMEMBERED: ReadonlySet<string> = new Set(['cursor']);
+const lastQueries = new Map<string, string>();
+
+function remember(route: Route): void {
+  const kept = new URLSearchParams(route.query);
+  for (const key of NOT_REMEMBERED) kept.delete(key);
+  lastQueries.set(route.path, kept.toString());
+}
+
+/** `path` with the filters and search it was last shown with this session, or `path` alone. */
+export function rememberedHref(path: string): string {
+  const query = lastQueries.get(path);
+  return query === undefined || query === '' ? path : `${path}?${query}`;
+}
+
+/** Drops every remembered list query: a session boundary (sign-in, sign-out). */
+export function forgetRememberedQueries(): void {
+  lastQueries.clear();
 }
 
 /*
@@ -313,6 +352,7 @@ function getSnapshot(): Route {
   if (snapshot === null) {
     snapshot = read();
     snapshotKey = key();
+    remember(snapshot);
   }
   return snapshot;
 }

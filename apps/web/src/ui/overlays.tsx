@@ -11,6 +11,7 @@ import { createPortal } from 'react-dom';
 import { Icon, type IconName } from './icons';
 import { t } from '../i18n/web.fa';
 import { confirmDialogOpen } from './confirm-dialog';
+import { isTopTrap, nextTrapRank, pushTrap, tabbable } from './focusable';
 
 /**
  * Overlays: a modal dialog, a side drawer and a menu.
@@ -21,15 +22,15 @@ import { confirmDialogOpen } from './confirm-dialog';
  * (or `screen`), never the container a page was rendered into.
  */
 
-const FOCUSABLE =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), ' +
-  'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
 /**
  * Keeps keyboard focus inside `ref` while `active`, closes on Escape, and
  * returns focus to whatever had it before when it deactivates.
  *
  * `initial` is focused first if given; otherwise the first focusable control.
+ *
+ * Traps stack: only the innermost open one answers Tab and Escape, so a dialog opened from a
+ * drawer closes alone and keeps Tab to itself. An Escape a control inside has already handled
+ * (a menu closing itself calls `preventDefault`) closes nothing else.
  */
 export function useFocusTrap(
   ref: RefObject<HTMLElement | null>,
@@ -41,18 +42,30 @@ export function useFocusTrap(
   useLayoutEffect(() => {
     escape.current = onEscape;
   });
+  // Ranked in RENDER (parent-first) when the trap turns active; see `isTopTrap`.
+  const rank = useRef<{ active: boolean; value: number }>({ active: false, value: 0 });
+  if (active && !rank.current.active) rank.current = { active: true, value: nextTrapRank() };
+  else if (!active && rank.current.active) rank.current = { active: false, value: 0 };
 
   useEffect(() => {
     if (!active) return undefined;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const container = ref.current;
-    const first = initial?.current ?? container?.querySelector<HTMLElement>(FOCUSABLE) ?? container;
-    first?.focus();
+    const token = {};
+    const release = pushTrap(token, rank.current.value);
+    // A trap opened beneath one already on top (a drawer whose dialog activated in the same
+    // commit) leaves focus where the top one put it.
+    if (isTopTrap(token)) {
+      const first =
+        initial?.current ?? (container === null ? null : (tabbable(container)[0] ?? container));
+      first?.focus();
+    }
 
     const onKey = (event: KeyboardEvent) => {
       // A confirmation is always the topmost layer, and it owns the keyboard:
       // its Escape cancels the question, not the surface underneath as well.
       if (confirmDialogOpen()) return;
+      if (!isTopTrap(token) || event.defaultPrevented) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         escape.current();
@@ -61,7 +74,7 @@ export function useFocusTrap(
       if (event.key !== 'Tab') return;
       const node = ref.current;
       if (node === null) return;
-      const controls = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE));
+      const controls = tabbable(node);
       const head = controls[0];
       const tail = controls[controls.length - 1];
       if (head === undefined || tail === undefined) {
@@ -84,6 +97,7 @@ export function useFocusTrap(
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
+      release();
       if (opener !== null && opener.isConnected) opener.focus();
     };
     // `initial` and `ref` are refs: stable identities, read when the trap activates.

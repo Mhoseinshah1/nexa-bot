@@ -19,6 +19,7 @@
     "check:i18n": "node scripts/check-i18n-keys.mjs",
     "check:shell": "bash scripts/check-shell.sh",
     "web:shots": "node scripts/web-shots/shots.mjs",
+    "web:responsive": "node scripts/web-shots/responsive.mjs",
     "test": "vitest run --project unit",
     "test:web": "vitest run --project web",
     "test:integration": "vitest run --project integration",

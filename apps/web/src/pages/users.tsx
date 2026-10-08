@@ -6,7 +6,12 @@ import { formatTimestamp } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
-import { ListSearchBox, appliedListSearch } from '../ui/list-search';
+import {
+  ClearFiltersButton,
+  ListFreshness,
+  ListSearchBox,
+  appliedListSearch,
+} from '../ui/list-search';
 import { ChipGroup } from './commerce-parts';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
 import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
@@ -103,6 +108,9 @@ export function customersFirstScreen(): readonly PageQuery[] {
   ];
 }
 
+/** Every URL key the customer list filters on, its search included (`ClearFiltersButton`). */
+const USER_FILTER_KEYS = ['q', 'status', 'tag'] as const;
+
 export function UsersPage({
   route,
   maySearch,
@@ -158,6 +166,13 @@ export function UsersPage({
     signature: searchSignature,
     cursors: [],
   });
+  /*
+   * A different filter starts a new trail — RESET here, not merely ignored. Ignoring it
+   * let the old trail come back when the filter did: page forward, filter, clear the
+   * filter, and the list reopened on page two of the unfiltered list (review of #242).
+   * Setting state while rendering is React's pattern for state derived from a prop.
+   */
+  if (trail.signature !== searchSignature) setTrail({ signature: searchSignature, cursors: [] });
   const cursors = trail.signature === searchSignature ? trail.cursors : [];
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
   const pushCursor = (next: string) =>
@@ -246,15 +261,16 @@ export function UsersPage({
       <PageHead
         title={t('web.users_title')}
         subtitle={t('web.users_intro')}
-        {...(mayManageTags
-          ? {
-              actions: (
-                <Button size="sm" icon="tag" onClick={() => setManagingTags(true)}>
-                  {t('web.crm_tags_manage')}
-                </Button>
-              ),
-            }
-          : {})}
+        actions={
+          <>
+            <ListFreshness query={customers} hidden={toolbarHidden} />
+            {mayManageTags && (
+              <Button size="sm" icon="tag" onClick={() => setManagingTags(true)}>
+                {t('web.crm_tags_manage')}
+              </Button>
+            )}
+          </>
+        }
       />
       <TagCatalogueModal
         open={mayManageTags && managingTags}
@@ -321,6 +337,7 @@ export function UsersPage({
               </Select>
             </label>
           )}
+          <ClearFiltersButton route={route} keys={USER_FILTER_KEYS} />
         </div>
 
         <StateSwitch

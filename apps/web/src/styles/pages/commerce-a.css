@@ -393,6 +393,29 @@
   }
 }
 
+/* Roadmap B5 (Agent 2b): Customer 360 workspace — latest rows, shortcuts. */
+.c360ws-half-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-block-end: 6px;
+}
+.c360ws-half-head h3 {
+  margin: 0;
+  font-size: var(--fs-ui);
+}
+.c360ws-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* end Roadmap B5 (Agent 2b) */
+
 /* Phase B3: the notification center and its bell. */
 .nc-bell {
   position: relative;
@@ -407,11 +430,12 @@
   font-size: var(--fs-2xs);
   line-height: 18px;
   text-align: center;
-  color: var(--on-solid);
+  color: var(--on-warn);
   background: var(--warn);
 }
 .nc-bell-count.danger {
   background: var(--danger);
+  color: var(--on-danger);
 }
 .nc-filters {
   display: flex;
@@ -580,4 +604,13 @@
 }
 .filter-row .filter-select select {
   max-inline-size: 220px;
+}
+
+/* Touch: a link in a detail page's row list is a 44px target (tokens.css). */
+@media (pointer: coarse) and (hover: none) {
+  .ca-rows a:not(.btn) {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--ctl-h);
+  }
 }

@@ -13,6 +13,7 @@ import {
   dashboardSaleKindOf,
   isPermissionKey,
   isRegisteredMetric,
+  navCountersResponseSchema,
   orderPurposeIsSale,
   type OrderPurpose,
 } from '@nexa/contracts';
@@ -183,5 +184,100 @@ describe('the unreconciled-services figure', () => {
     });
     const counters = await service.navCounters(scope, actor);
     expect(counters.counters.unreconciledServices).toBe(COUNTER_CAP);
+  });
+});
+
+/*
+ * Roadmap B6, review B1: a new bundle reading an API released before `businessHandoffs`.
+ * During a rolling update a poll can reach an old replica; a required key would make its
+ * six-key answer unparseable, which polling treats as final and never asks again.
+ */
+describe('the sidebar counters across a rolling update', () => {
+  it('parses an old API’s six-key answer, reading the missing counter as not counted', () => {
+    const old = navCountersResponseSchema.parse({
+      generatedAt: '2026-10-07T10:00:00.000Z',
+      counters: {
+        openConditions: 1,
+        ticketsAwaitingSupport: 2,
+        unhealthyPanels: null,
+        unreconciledServices: 0,
+        refundRequestsAwaiting: null,
+        paymentsUnknown: 3,
+      },
+    });
+    expect(old.counters.businessHandoffs).toBeNull();
+    expect(old.counters.paymentsUnknown).toBe(3);
+  });
+
+  it('still reads the counter when the API sends it, and still refuses a malformed one', () => {
+    const base = {
+      openConditions: null,
+      ticketsAwaitingSupport: null,
+      unhealthyPanels: null,
+      unreconciledServices: null,
+      refundRequestsAwaiting: null,
+      paymentsUnknown: null,
+    };
+    const parse = (businessHandoffs: unknown) =>
+      navCountersResponseSchema.safeParse({
+        generatedAt: '2026-10-07T10:00:00.000Z',
+        counters: { ...base, businessHandoffs },
+      });
+    const sent = parse(4);
+    expect(sent.success && sent.data.counters.businessHandoffs).toBe(4);
+    expect(parse(-1).success).toBe(false);
+  });
+});
+
+/*
+ * Roadmap B6, review N5: the sidebar's counters are independent pool statements in no
+ * transaction, so a poll asks them side by side rather than one round trip after another.
+ * A withheld counter still starts no statement and answers null.
+ */
+describe('the sidebar counters of one poll', () => {
+  it('are all asked before any is answered, and a withheld one is never asked', async () => {
+    const withheld = NAV_COUNTER_KEYS[0]!;
+    const asked: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const repository: OperationsOverviewRepository = {
+      panelFleet: async () => [],
+      provisioningQueue: async () => ({ queued: 0, unknown: 0 }),
+      unreconciledServices: async () => 0,
+      expiringServices: async () => 0,
+      navCounter: async (_scope, key) => {
+        asked.push(key);
+        await gate;
+        return 1;
+      },
+    };
+    const service = new OperationsOverviewService({
+      permissions: {
+        permissionsOf: async () =>
+          new Set(
+            NAV_COUNTER_KEYS.filter((key) => key !== withheld).map(
+              (key) => NAV_COUNTER_PERMISSIONS[key],
+            ),
+          ),
+      },
+      repository,
+      clock: { now: () => new Date('2026-10-07T10:00:00.000Z') },
+      counterCap: COUNTER_CAP,
+    });
+    const poll = service.navCounters(
+      { tenantId: '019210ab-cdef-7012-8345-6789abcdef01' } as never,
+      {
+        type: 'WEB_ADMIN',
+      } as never,
+    );
+    // Let every counter that is going to start, start — while none has been answered.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect([...asked].sort()).toEqual(NAV_COUNTER_KEYS.filter((key) => key !== withheld).sort());
+    release();
+    const { counters } = await poll;
+    expect(counters[withheld]).toBeNull();
+    for (const key of NAV_COUNTER_KEYS) if (key !== withheld) expect(counters[key]).toBe(1);
   });
 });
