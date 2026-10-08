@@ -34,6 +34,8 @@ const HOURS_PER_DAY = 24;
  *   tickets                 `tickets_tenant_status_idx`
  *   service_refund_requests the tenant filter; the attention set is small by construction
  *   payments                `payments_unknown_idx` / `payments_tenant_state_idx`
+ *   business_conversations  `business_conversations_inbox_priority_idx` (its leading
+ *                           `(tenant_id, state = 'HANDOFF_REQUIRED')` keys)
  *
  * A sidebar counter reads at most `cap` rows (`LIMIT` inside the count), so a backlog of a
  * million costs what a backlog of a thousand does, and the answer says "this many or more".
@@ -157,6 +159,15 @@ export class DrizzleOperationsOverviewRepository implements OperationsOverviewRe
         return this.count(
           capped(
             sql`SELECT 1 FROM payments p WHERE p.tenant_id = ${t} AND p.state = 'UNKNOWN'`,
+            cap,
+          ),
+        );
+      case 'businessHandoffs':
+        // The inbox's own first sort key, so the predicate is the index's expression.
+        return this.count(
+          capped(
+            sql`SELECT 1 FROM business_conversations c
+               WHERE c.tenant_id = ${t} AND (c.state = 'HANDOFF_REQUIRED')`,
             cap,
           ),
         );

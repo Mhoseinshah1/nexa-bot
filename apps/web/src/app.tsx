@@ -354,6 +354,9 @@ export function resolve(
           mayWriteNotes={may('users.notes.write')}
           mayAssignTags={may('users.tags.assign')}
           mayManageTags={may('users.tags.manage')}
+          mayViewPayments={may('payments.view')}
+          mayViewTickets={may('tickets.view')}
+          mayViewBusinessChats={may('business_chats.view')}
           denied={!may('users.view')}
         />
       ),

@@ -18,6 +18,7 @@ import {
   SupportAutoReplyService,
 } from '../../apps/api/src/modules/control/support-ai/application/support-auto-reply.service';
 import type { AutoContextFlags } from '../../apps/api/src/modules/control/support-ai/domain/auto-reply-guards';
+import { SUPPORT_AI_AUTHOR_MARKERS } from '../../apps/api/src/modules/control/support-ai/domain/prompt';
 import type { SupportImageLoad } from '../../apps/api/src/modules/control/support-ai/application/ports';
 import { DrizzleSupportAiJobRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository';
 import { DrizzleSupportAiConfigRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
@@ -98,7 +99,9 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   /** D7: the transcript each provider call was given, as role and text. */
   let requests: { role: string; text: string }[][];
   /** D2: the query the context was built with, last call. */
+  /** A8: the customer's words in the transcript the context source was given, and for which conversation. */
   let contextQuery: string | null | undefined;
+  let contextConversation: string | undefined;
   let duringCall: (() => Promise<void>) | null;
   let flags: AutoContextFlags;
   /** The knowledge aliases (`K…`) the scripted context carries, as the real source builds them. */
@@ -325,7 +328,11 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       ids: c.ids,
       context: {
         build: async (_scope, _customer, options) => {
-          contextQuery = options?.query;
+          contextQuery = options?.transcript
+            ?.filter((line) => line.origin === 'INBOUND')
+            .map((line) => line.text)
+            .join('\n');
+          contextConversation = options?.conversationId;
           return {
             json: '{"services":[{"alias":"S1"}]}',
             aliases: new Map([['S1', 'سرویس user123']]),
@@ -393,8 +400,9 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     await deliver();
     expect(transport.sent).toEqual([{ chatId: CUSTOMER, text: grounded.replyText }]);
     expect(await count('tickets')).toBe(0); // an ordinary answered question opens no ticket
-    // D2: the knowledge is chosen by the customer's own words.
+    // D2/A8: the knowledge is chosen from this conversation's transcript (the customer's words).
     expect(contextQuery).toBe('سلام، اینترنتم وصل نمی‌شود');
+    expect(contextConversation).toBe(first.conversationId);
     // D2 telemetry, recorded with the job's result.
     const telemetry = await db().execute(
       sql`SELECT knowledge_sent, knowledge_available FROM support_ai_jobs
@@ -402,6 +410,23 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     );
     expect(telemetry.rows).toEqual([{ knowledge_sent: 3, knowledge_available: 4 }]);
     expect(await count('business_conversation_escalations')).toBe(0);
+  });
+
+  it('A8 review N2: a sent automatic reply records the knowledge it cited, by title', async () => {
+    next = {
+      outcome: 'OK',
+      output: { ...grounded, knowledgeRefs: ['K1', 'K1'] },
+      usage: { inputTokens: 10, outputTokens: 10 },
+      model: 'gpt-5.5',
+    };
+    const first = await record(message());
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([{ state: 'SENT' }]);
+    const labels = await db().execute(
+      sql`SELECT knowledge_labels FROM support_ai_jobs WHERE conversation_id = ${first.conversationId}`,
+    );
+    // Cited twice, recorded once.
+    expect(labels.rows).toEqual([{ knowledge_labels: ['خطای اتصال در Sing-box'] }]);
   });
 
   it('D9: «وصل نمیشه، پولمو پس بدید» never auto-replies, whatever topic the model picks', async () => {
@@ -638,7 +663,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(calls).toBe(2);
     expect(requests[1]).toEqual([
       { role: 'user', text: 'سلام، سرویسم وصل نمیشه' },
-      { role: 'assistant', text: grounded.replyText },
+      { role: 'assistant', text: `${SUPPORT_AI_AUTHOR_MARKERS.AI_AUTO}\n${grounded.replyText}` },
       { role: 'user', text: 'باز کردم، هنوز وصل نمیشه' },
     ]);
     expect((await autoJobs(first.conversationId))[1]).toMatchObject({ outcome: 'sent' });
@@ -668,7 +693,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(calls).toBe(2);
     expect(requests[1]).toEqual([
       { role: 'user', text: 'سلام، سرویسم وصل نمیشه' },
-      { role: 'assistant', text: grounded.replyText },
+      { role: 'assistant', text: `${SUPPORT_AI_AUTHOR_MARKERS.AI_AUTO}\n${grounded.replyText}` },
       { role: 'user', text: 'باز کردم، هنوز وصل نمیشه' },
     ]);
   });
@@ -2422,7 +2447,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       await turn('Sing-box', askOut('چه خطایی می‌بینید؟'));
       expect(requests[1]).toEqual([
         { role: 'user', text: 'مشکل در اتصال دارم' },
-        { role: 'assistant', text: QUESTION },
+        { role: 'assistant', text: `${SUPPORT_AI_AUTHOR_MARKERS.AI_AUTO}\n${QUESTION}` },
         { role: 'user', text: 'Sing-box' },
       ]);
       expect(await outcomes(id)).toEqual(['sent_clarifying', 'sent_clarifying']);

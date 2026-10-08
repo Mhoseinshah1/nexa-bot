@@ -38,7 +38,7 @@ rows and the `Clock`. The integration test pins that `support_faq_seeds`, `audit
 | `payments[≤5]`    | `alias` P1.., `amount`, `method`, `routeLabelKey`, `state`, `underReview`, `createdAt`, `confirmedAt`.                                                                                                                                                                                   |
 | `clientApps[≤6]`  | `platform`, `name`, `description`, `guide` (rendered, at most 1500 chars), `helpUrl`, `officialUrl`.                                                                                                                                                                                     |
 | `incidents[≤3]`   | `customerMessage`, `startedAt`, `scheduledEndAt`.                                                                                                                                                                                                                                        |
-| `knowledge[≤20]`  | `{ source: 'FAQ', question, answer }`.                                                                                                                                                                                                                                                   |
+| `knowledge[≤8]`   | `{ alias, source, question, answer }`: only entries the query matched (A8).                                                                                                                                                                                                              |
 | `supportAccounts` | The `support.accounts` setting.                                                                                                                                                                                                                                                          |
 | `flags`           | `hasUnderReviewPayment`, `hasUnreconciledService`, `identityLinked`, `customerBlocked`.                                                                                                                                                                                                  |
 
@@ -167,7 +167,8 @@ two rules cannot drift silently.
 
 ## Byte budget and truncation
 
-The budget is `SUPPORT_CONTEXT_MAX_BYTES` (16 KiB of UTF-8 JSON). When the payload is over
+The budget is `SUPPORT_CONTEXT_MAX_BYTES` (24 KiB of UTF-8 JSON since A8, 2026-10-07; it was
+16 KiB). When the payload is over
 it, `fitPayload` drops **whole entries from the tail** of each family, family by family, in
 `SUPPORT_CONTEXT_TRUNCATION_ORDER`:
 
@@ -192,8 +193,8 @@ Now:
   already carries (a NEXA_BUILD `CLIENT_APP` article) is sent with an empty `guide`, so the same
   text is not counted twice.
 - **A knowledge reserve.** In its turn knowledge is cut only down to
-  `SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES` (6 KiB of its own JSON), and never below its first,
-  most relevant entry. The rest of it gives way only after every other family is empty.
+  `SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES` (12 KiB of its own JSON since A8; it was 6 KiB), and
+  never below its first, most relevant entry. The rest of it gives way only after every other family is empty.
 - **Telemetry.** `support_ai_jobs.knowledge_sent` and `.knowledge_available` record, with the
   job's result, how many entries the request carried and how many there were to choose from
   (null when no provider was asked).
@@ -202,6 +203,94 @@ An incident affecting this customer gives way last among the account facts. The 
 `flags` and the `supportAccounts` are never cut, and flags are computed before any cut. Every
 family can be emptied, so the result always fits. The worst case for 20 FAQs at the stored maxima
 is about 90 KB of Persian, which is why the cut exists.
+
+## A7 — the transcript beside the context (2026-10-07)
+
+The payload above is the account; the transcript is the conversation, and it is read from the
+rows each time — `business_messages` plus the delivered `business_outbound_messages`
+(`readSupportTranscript`, `mergeTranscript`). No copy of it is stored anywhere.
+
+- **60 read, 40 shown.** `SUPPORT_TRANSCRIPT_READ_LINES` is 60 (was 40) and the prompt shows the
+  latest `SUPPORT_AI_TRANSCRIPT_MESSAGES` = 40 (was 20). Each line is still cut to 1,500
+  characters, so the transcript is bounded by 40 × 1,500 characters plus NEXA's markers.
+- **Who wrote each line.** Every line carries an `author` decided from the rows: `CUSTOMER`;
+  `STAFF` (an operator's send, or an outgoing message not provably ours — the conservative rule);
+  `AI_AUTO` (an automatic reply); `AI_ASSIST` (an AI draft a person reviewed and sent);
+  `AUTOMATED` (Telegram's away message, another bot); `UNATTRIBUTED` (an echo of ours whose
+  outbound row is outside the window). An echo takes the lane of the reply it is, so an automatic
+  reply that Telegram echoed back before the lane wrote its id — classified `HUMAN` — is still
+  the AI's. A customer's message is never relabelled.
+- **Markers nobody can type.** Each support-side line opens with a square-bracketed marker
+  (`SUPPORT_AI_AUTHOR_MARKERS`, e.g. `[support staff (a person) wrote]`,
+  `[earlier automatic AI reply]`). Like the TB6 image markers they are written only by the server:
+  a line's own text is NFKC-normalised and then every opening and closing punctuation
+  (`\p{Ps}`/`\p{Pe}`) and the bracket pieces U+23A1–U+23A6 and U+23B4–U+23B5 become parentheses
+  (PR #236 review, B1: the earlier LIST of bracket characters let `⁅…⁆`, `⦋…⦌`, `⌈…⌉`, `〈…〉`
+  and others through). A customer, a caption or a business message therefore cannot forge "a
+  person wrote this". Persian quotation marks («») are quotes, not brackets, and stay. Policy rule
+  13 explains the markers, forbids repeating a step an earlier line gave, forbids contradicting
+  what a person said, and forbids writing a marker into a reply.
+- **A character ceiling** (PR #236 review, N6). Past `SUPPORT_AI_TRANSCRIPT_MAX_CHARS` (24,000
+  characters of line text) the oldest lines leave the window first; the latest always stays.
+  `promptWindow` is the one definition of the window: the transcript, the vision plan and the
+  draft's unseen-image count all read it, so no image is fetched for a line the model is not
+  shown.
+
+## A8 — knowledge retrieval with conversation memory (2026-10-07)
+
+D2 chose knowledge by the customer's latest three messages. A customer five steps into a
+connection problem who wrote «باز هم نشد» matched nothing, and the article the conversation was
+about left the request just when it was needed. A8 keeps the lexical scorer (no embeddings, no
+model, no I/O) and changes three things:
+
+1. **A weighted query** (`support-ai/domain/knowledge-query.ts`, `knowledgeQueryFor`), every part
+   decided by NEXA from rows, never by a model:
+
+   | Part                        | Source                                                            | Weight |
+   | --------------------------- | ----------------------------------------------------------------- | ------ |
+   | the customer's latest words | the latest three customer messages with text                      | 1      |
+   | the last intent             | the latest decided job's `intent`                                 | 0.6    |
+   | the knowledge cited before  | the titles the latest two decided jobs cited (`knowledge_labels`) | 0.5    |
+   | the troubleshooting episode | up to six earlier customer messages, while an episode is open     | 0.5    |
+   | the last topic              | a fixed Persian vocabulary per safe topic (`TOPIC_QUERY_TERMS`)   | 0.4    |
+
+   Since the PR #236 review an automatic decision records the titles it cited too (`finishAuto`
+   takes the resolved labels, as `markReady` does), so continuity works under `AUTO_REPLY_SAFE`.
+   A "decided job" is an `ASSIST_DRAFT` or `AUTO_DECISION` row with a decision in `READY` or
+   `SENT` — never `DISCARDED` (an operator's rejection, a superseded draft, a handed-off or
+   dropped automatic job) or `FAILED`. `DrizzleSupportAiJobRepository.priorDecisions` reads at
+   most three, tenant- and conversation-scoped, over `support_ai_jobs_conversation_idx`. The
+   troubleshooting episode is **open** when the latest decided job gave a step or asked a
+   question (`REPLY`, `ASK_CLARIFYING_QUESTION`) on a troubleshooting topic
+   (`CONNECTION_TROUBLESHOOTING`, `APP_SETUP`, `SUBSCRIPTION_UPDATE`, `KNOWN_ERROR`). A term in two
+   parts counts once, at the higher weight. At most `KNOWLEDGE_QUERY_MAX_TERMS` (64) distinct
+   terms are scored; the customer's words take at most 48 before every later part has had four of
+   its own (PR #236 review, N3: a long pasted log no longer switches memory off), and each part is
+   clipped, so scoring a
+   thousand candidates is bounded whatever the transcript holds. A part made of several
+   messages holds each one to an equal share before joining them, so a long older message never
+   pushes the newest question out (PR #236 review).
+
+2. **A zero score is never sent.** An entry the query does not match at all is excluded from the
+   top-k, so a greeting, an image with no caption or a question nothing answers carries no
+   knowledge — the model is not handed eight unrelated articles to cite.
+3. **At most eight entries** (`SUPPORT_CONTEXT_LIMITS.knowledge`, was 20) in a 24 KiB budget with
+   a 12 KiB knowledge reserve (was 16 KiB and 6 KiB): about three full Persian articles survive
+   any cut, instead of two of twenty.
+
+Only `APPROVED` and enabled articles are candidates (`activeForContext`), with the `ACTIVE` FAQ;
+that is unchanged. Policy rule 4b tells the model the entries are the few that match, most
+relevant first, and that an entry that does not fit is never a reason to answer.
+
+**Generic topic words** («سرویس», «خطا») count only where they match a title or a tag, never a
+body (PR #236 review, N4), so a vague «باز هم نشد» after a `SERVICE_INFO` decision does not fill
+the request with every article that mentions a service.
+
+A7/A8 tests: `tests/unit/support-ai-transcript.test.ts` (authors, markers, the window),
+`tests/unit/support-knowledge-query.test.ts` (the weighted query, the episode, continuity, the
+bounds, the source), `tests/unit/support-ai-prompt.test.ts` (rules 4b and 13, the policy digest)
+and `tests/integration/support-assist.test.ts` (`priorDecisions` and the end-to-end repeated
+failure). Mutation results are in `sai-memory-falsification.md` (28 of 28 killed).
 
 ## Tests
 

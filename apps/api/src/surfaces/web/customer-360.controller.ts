@@ -16,6 +16,7 @@ import {
   type CustomerOverviewResponse,
   type CustomerServicesToggleResponse,
   type CustomerTimelineResponse,
+  type CustomerWorkspaceResponse,
   type CustomerTransferPreviewResponse,
   type CustomerTransferResultResponse,
   type LedgerDirection,
@@ -196,6 +197,58 @@ export class Customer360Controller {
       paymentId: payment.id,
       totalAmount: order.totals.total.amountMinor.toString(),
       currency: order.totals.currency,
+    };
+  }
+
+  /**
+   * Roadmap B5: what about this customer waits for a person, and their newest orders and
+   * payments. `users.view` is charged by the service; each section is computed only under
+   * the permission of the page it deep-links to, and is otherwise null.
+   */
+  @Get('users/:id/workspace')
+  async workspace(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<{ workspace: CustomerWorkspaceResponse }> {
+    const { scope, actor } = await this.authenticate(request);
+    const found = await this.container.customerInsights.workspace(scope, actor, id);
+    return {
+      workspace: {
+        generatedAt: this.container.clock.now().toISOString(),
+        tickets: found.tickets === null ? null : { ...found.tickets },
+        businessHandoffs: found.businessHandoffs,
+        businessHandoffConversationId: found.businessHandoffConversationId,
+        payments:
+          found.payments === null
+            ? null
+            : {
+                unknown: found.payments.unknown,
+                latest: found.payments.latest.map((row) => ({
+                  id: row.id,
+                  reference: row.reference,
+                  method: row.method,
+                  state: row.state,
+                  amount: row.amount.toString(),
+                  currency: row.currency as CurrencyCode,
+                  createdAt: row.createdAt.toISOString(),
+                })),
+              },
+        services: found.services === null ? null : { unreconciled: found.services.unreconciled },
+        orders:
+          found.orders === null
+            ? null
+            : {
+                latest: found.orders.latest.map((row) => ({
+                  id: row.id,
+                  lineTitle: row.lineTitle,
+                  purpose: row.purpose,
+                  state: row.state,
+                  totalAmount: row.totalAmount.toString(),
+                  currency: row.currency as CurrencyCode,
+                  createdAt: row.createdAt.toISOString(),
+                })),
+              },
+      },
     };
   }
 

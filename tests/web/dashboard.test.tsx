@@ -808,6 +808,7 @@ describe('the sidebar counters', () => {
         unreconciledServices: null,
         refundRequestsAwaiting: null,
         paymentsUnknown: null,
+        businessHandoffs: null,
         ...values,
       },
     });
@@ -822,6 +823,7 @@ describe('the sidebar counters', () => {
           paymentsUnknown: 1,
           unreconciledServices: 2,
           refundRequestsAwaiting: 1,
+          businessHandoffs: 4,
         }),
       ),
     ).toEqual({
@@ -830,6 +832,8 @@ describe('the sidebar counters', () => {
       panels: { count: 2, tone: 'danger' },
       payments: { count: 1, tone: 'warn' },
       services: { count: 3, tone: 'danger' },
+      // Roadmap B6: support handoffs beside the inbox that answers them.
+      'business-chats': { count: 4, tone: 'warn' },
     });
   });
 

@@ -4,6 +4,7 @@ type ZodLike = object;
 import {
   SUPPORT_CONTEXT_GUIDE_MAX_CHARS,
   SUPPORT_CONTEXT_LIMITS,
+  SUPPORT_CONTEXT_MAX_BYTES,
   SUPPORT_CONTEXT_SERVICE_DISPLAY_STATUSES,
   SUPPORT_CONTEXT_TRUNCATION_ORDER,
   supportContextPayloadSchema,
@@ -335,20 +336,20 @@ describe('TB3 support context — pure helpers', () => {
       'incidents',
     ]);
     const big = payload({
-      knowledge: Array.from({ length: 20 }, (_, i) => ({
+      knowledge: Array.from({ length: SUPPORT_CONTEXT_LIMITS.knowledge }, (_, i) => ({
         alias: `K${String(i + 1)}`,
         source: 'FAQ' as const,
         question: `q${String(i)}`,
-        answer: 'ا'.repeat(1000), // 2000 UTF-8 bytes each
+        answer: 'ا'.repeat(2000), // 4000 UTF-8 bytes each
       })),
     });
-    expect(payloadBytes(big)).toBeGreaterThan(16 * 1024);
+    expect(payloadBytes(big)).toBeGreaterThan(SUPPORT_CONTEXT_MAX_BYTES);
     const fitted = fitPayload(big);
-    expect(payloadBytes(fitted)).toBeLessThanOrEqual(16 * 1024);
+    expect(payloadBytes(fitted)).toBeLessThanOrEqual(SUPPORT_CONTEXT_MAX_BYTES);
     // The client apps gave way first, then knowledge, from the tail: the first entries survive.
     expect(fitted.clientApps).toEqual([]);
     expect(fitted.knowledge.length).toBeGreaterThan(0);
-    expect(fitted.knowledge.length).toBeLessThan(20);
+    expect(fitted.knowledge.length).toBeLessThan(SUPPORT_CONTEXT_LIMITS.knowledge);
     expect(fitted.knowledge[0]?.question).toBe('q0');
     expect(fitted.services).toEqual(big.services);
     expect(fitted.flags).toEqual(big.flags);
