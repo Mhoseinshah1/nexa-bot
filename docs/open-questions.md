@@ -3763,3 +3763,25 @@ so the second cannot occur from it, and the broadcast lane already reads 401 and
 as `BOT_UNAVAILABLE`. Not evidenced: whether Telegram ever answers 404 for anything else on a
 valid token (it is not documented either way). If a real run shows a 404 that is not about
 the token, narrow the messenger back to 401 and record the sentence Telegram used.
+
+## OQ-CB-01 — which Bot API answers on a forward or copy are about the SOURCE chat?
+
+Status: OPEN (roadmap C1, D2-F1; PR #245 review m6; `docs/campaign-broadcast-readiness.md`).
+
+On a `forwardMessage`/`copyMessage` the broadcast transport now reads `Bad Request: chat not
+found` and `PEER_ID_INVALID` as a refusal (FAILED, re-queueable) instead of the recipient's
+unreachability. That fix rests on this repository's own reading of Telegram's descriptions,
+not on a real run. Two things are unproven and are NOT guessed:
+
+- A source the recipient's bot cannot reach may be answered with a **403** instead (for
+  example `Forbidden: bot is not a member of the channel chat`, or `CHANNEL_PRIVATE`). The
+  transport still files every 403 as UNREACHABLE, which is final, so such a source would again
+  mark every recipient of that bot unreachable.
+- A genuine recipient "chat not found" on a sourced send is now FAILED, and stays FAILED
+  through every operator "retry failed" (harmless: a 400 delivered nothing, and the stamp
+  re-reads the opt-out each time, but those rows never clear).
+
+**Decide** after manual acceptance step 10 (`docs/campaign-broadcast-readiness.md`): copy a
+post from a channel the second bot is not in, record the exact status and description
+Telegram answers, and narrow or widen the sourced-send rule to exactly those answers in the
+same commit that records them.

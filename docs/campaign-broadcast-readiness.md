@@ -142,11 +142,15 @@ to one chat. Pausing every bot for that is the over-reach this record already no
 - Built from persisted rows only:
   - the announcement's `broadcast_recipients`, which are its frozen audience. Unlike
     `frozen_audience_members` they are never released, so the figure survives the campaign;
-  - the campaign discount's `discount_redemptions`, counted only where the order is PAID.
-- Distinct customers: told, delivered, redeemers among those told, redeemers among those
-  delivered, and redeemers who were never told. The last group exists because the rule's scope
-  is not the audience (OQ-C1-01).
-- Null unless the campaign has both an announcement and a discount.
+  - the campaign discount's `discount_redemptions`, counted only where the order is PAID now
+    (never REFUNDED) and was settled at or after that recipient's own stamp (PR #245 m2).
+- Distinct customers:
+  - `audience` (every frozen row), `told` (SENT or UNCONFIRMED), `delivered` (SENT) and
+    `skipped` (opted out or blocked at the send — never told; PR #245 m1);
+  - redeemers told before they paid, redeemers delivered before they paid, and every other
+    redeemer. The last group exists because the rule's scope is not the audience (OQ-C1-01).
+- Null unless the campaign has both an announcement and a discount, and unless the reader may
+  read the announcement (`broadcasts.view`; PR #245 CX1).
 - The page says in words that this is not a cause, and the old pin that the results carry no
   revenue or conversion field still holds.
 
@@ -181,6 +185,20 @@ to one chat. Pausing every bot for that is the over-reach this record already no
 - The tests show an opted-out customer SKIPPED on a campaign's announcement, with their
   preference untouched.
 
+## PR #245 review
+
+| Finding                                                        | Answer                                                                                                                                                              |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CX1 — attribution around the guarded broadcast read            | computed only after `broadcasts.counts` succeeds; CB-24                                                                                                             |
+| CX2 / M1 — a 409 re-read discards edits; two composers mounted | distinct keys; the Composer keeps unsaved edits and asks ("load the latest" / "keep mine on it"), and save waits for the choice; CB-31, CB-32                       |
+| m1 — "told" includes SKIPPED and failures                      | `told` is SENT or UNCONFIRMED; `audience` and `skipped` are reported apart; CB-25, CB-26                                                                            |
+| m2 — no time order; refunded untested                          | an order counts only if PAID now and settled at or after the recipient's stamp; CB-27, CB-28                                                                        |
+| m3 — the new bundle against the old API; rollback              | `wireAudience` drops default-valued keys (CB-36); `docs/deployment.md` "Before rolling back past the audience by bot"                                               |
+| m4 — a replayed hand-over launching an edited draft            | refused `campaign.binding_invalid` unless the draft is still the campaign's own; CB-29                                                                              |
+| m5 — surviving mutants                                         | X5 → CB-30; X9 → CB-34; X10 → CB-33; X11 → CB-35; X12 → CB-37; no token on the HTTP response (`audience-http.test.ts`)                                              |
+| m6 — D2-F1 unproven for a 403                                  | `docs/open-questions.md` OQ-CB-01, awaiting acceptance step 10                                                                                                      |
+| n1 / n2 / n3                                                   | a non-active bot is marked; the criterion is described by name when the options are cached; the permanently FAILED genuine "chat not found" is recorded in OQ-CB-01 |
+
 ## C5 — not built
 
 - No repin or unpin loop: one pin attempt per recipient, as before.
@@ -193,31 +211,45 @@ to one chat. Pausing every bot for that is the over-reach this record already no
 The driver is `scripts/mutate-campaign-broadcast.py`. It reverts each rule in place, runs the
 named test, and restores the file from the copy it read. Every mutant below was KILLED.
 
-| #     | Rule reverted                                                                               | Test that failed                                                         |
-| ----- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| CB-01 | the stamp's in-transaction opt-out read (`if (input.marketing)` → `false`)                  | refused recipient who opts out before the re-queue                       |
-| CB-02 | the claim returns the customer's CURRENT bot instead of the frozen one                      | sends and pins each recipient through its own FROZEN bot                 |
-| CB-03 | the re-queue also moves UNCONFIRMED                                                         | re-sends only the refusals                                               |
-| CB-04 | the re-queue also moves an in-flight SENDING row                                            | re-sends only the refusals                                               |
-| CB-05 | a 429 hold applied to every bot of the tenant                                               | a 429 holds the bot that got it and no other                             |
-| CB-06 | the per-bot read loses the bot's own row                                                    | …counts the delivery per bot                                             |
-| CB-07 | broadcast pause button not disabled while pending                                           | web: takes a steer once                                                  |
-| CB-08 | campaign pause button not disabled while pending                                            | web: takes a run command once                                            |
-| CB-09 | test enabled with unsaved edits                                                             | web: withholds the test and the count                                    |
-| CB-10 | re-queue without asking                                                                     | web: asks before a re-queue                                              |
-| CB-11 | the launch's count/fingerprint comparison removed (frozen audience)                         | broadcasts.test: freezes exactly the previewed audience                  |
-| CB-17 | a test send no longer refreshes the history (Codex P2 on PR #237)                           | web: reads the history again after a test                                |
-| CB-19 | "waiting for a retry" counts every PENDING row (review N2)                                  | a 429 holds the bot that got it and no other                             |
-| CB-20 | refused rows shown without `audit.view` (review N1)                                         | without audit.view, shows the successful facts only                      |
-| CB-21 | operator names shown without `audit.view` (review N1)                                       | the same                                                                 |
-| CB-22 | the history never says it is truncated (review N4)                                          | says when older history rows exist beyond the cap                        |
-| CB-12 | the bot predicate dropped from the one audience builder                                     | audience-bots: selects the customers of the named bots only              |
-| CB-13 | a campaign announcement may be a service announcement                                       | campaigns: refuses a campaign announcement called a service announcement |
-| CB-14 | schedule no longer re-checks a stored announcement's purpose                                | campaigns: refuses to schedule a draft saved before the rule             |
-| CB-15 | attribution counts unpaid redemptions                                                       | campaigns: sets the discount's PAID redeemers against who was told       |
-| CB-16 | attribution's "delivered" ignores the recipient's state                                     | the same                                                                 |
-| CB-18 | a sourced send's "chat not found" read as the recipient's unreachability (D2-F1)            | unit: broadcast-transport, both D2-F1 cases                              |
-| CB-23 | a 409 on a campaign run command no longer re-reads the campaign (web foundation `settleOn`) | web: reads the campaign again when a run command is refused as stale     |
+| #     | Rule reverted                                                                               | Test that failed                                                              |
+| ----- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| CB-01 | the stamp's in-transaction opt-out read (`if (input.marketing)` → `false`)                  | refused recipient who opts out before the re-queue                            |
+| CB-02 | the claim returns the customer's CURRENT bot instead of the frozen one                      | sends and pins each recipient through its own FROZEN bot                      |
+| CB-03 | the re-queue also moves UNCONFIRMED                                                         | re-sends only the refusals                                                    |
+| CB-04 | the re-queue also moves an in-flight SENDING row                                            | re-sends only the refusals                                                    |
+| CB-05 | a 429 hold applied to every bot of the tenant                                               | a 429 holds the bot that got it and no other                                  |
+| CB-06 | the per-bot read loses the bot's own row                                                    | …counts the delivery per bot                                                  |
+| CB-07 | broadcast pause button not disabled while pending                                           | web: takes a steer once                                                       |
+| CB-08 | campaign pause button not disabled while pending                                            | web: takes a run command once                                                 |
+| CB-09 | test enabled with unsaved edits                                                             | web: withholds the test and the count                                         |
+| CB-10 | re-queue without asking                                                                     | web: asks before a re-queue                                                   |
+| CB-11 | the launch's count/fingerprint comparison removed (frozen audience)                         | broadcasts.test: freezes exactly the previewed audience                       |
+| CB-17 | a test send no longer refreshes the history (Codex P2 on PR #237)                           | web: reads the history again after a test                                     |
+| CB-19 | "waiting for a retry" counts every PENDING row (review N2)                                  | a 429 holds the bot that got it and no other                                  |
+| CB-20 | refused rows shown without `audit.view` (review N1)                                         | without audit.view, shows the successful facts only                           |
+| CB-21 | operator names shown without `audit.view` (review N1)                                       | the same                                                                      |
+| CB-22 | the history never says it is truncated (review N4)                                          | says when older history rows exist beyond the cap                             |
+| CB-12 | the bot predicate dropped from the one audience builder                                     | audience-bots: selects the customers of the named bots only                   |
+| CB-13 | a campaign announcement may be a service announcement                                       | campaigns: refuses a campaign announcement called a service announcement      |
+| CB-14 | schedule no longer re-checks a stored announcement's purpose                                | campaigns: refuses to schedule a draft saved before the rule                  |
+| CB-15 | attribution counts unpaid redemptions                                                       | campaigns: counts a redeemer as told only when told…                          |
+| CB-16 | attribution's "delivered" counts every recipient row                                        | the same                                                                      |
+| CB-18 | a sourced send's "chat not found" read as the recipient's unreachability (D2-F1)            | unit: broadcast-transport, both D2-F1 cases                                   |
+| CB-23 | a 409 on a campaign run command no longer re-reads the campaign (web foundation `settleOn`) | web: reads the campaign again when a run command is refused as stale          |
+| CB-24 | attribution computed around Broadcast's guarded read (Codex CX1)                            | campaigns: gives no attribution to a reader who may not read the announcement |
+| CB-25 | "told" counts every frozen row (review m1)                                                  | campaigns: counts a redeemer as told only when told…                          |
+| CB-26 | a redeemer counts as told whatever their row's state (m1)                                   | the same                                                                      |
+| CB-27 | no time order between the send and the payment (m2)                                         | the same                                                                      |
+| CB-28 | REFUNDED orders counted as PAID (m2, X14)                                                   | the same                                                                      |
+| CB-29 | a replayed hand-over launches an edited draft (m4)                                          | campaigns: a retried hand-over never launches a draft someone edited          |
+| CB-30 | the hand-over takes the stored purpose (m5, X5)                                             | campaigns: …launches MARKETING even if a stored purpose says otherwise        |
+| CB-31 | Composer and LaunchCard share the key `record.version` (M1)                                 | web: keeps the operator's text after a 409, with ONE editor                   |
+| CB-32 | unsaved edits replaced silently by a newer version (CX2)                                    | the same                                                                      |
+| CB-33 | composer save's 409 does not re-read (X10)                                                  | the same                                                                      |
+| CB-34 | launch's 409 does not re-read (X9)                                                          | web: re-reads the draft when a launch is refused as stale                     |
+| CB-35 | campaign confirmation's 409 does not re-read (X11)                                          | web: re-reads the campaign when its confirmation is refused as stale          |
+| CB-36 | `botInstanceIds: null` sent on the wire (m3)                                                | web: sends no audience key at its default                                     |
+| CB-37 | the bot section drawn for a tenant with one bot (X12)                                       | web audience-bots: draws no bot section for a tenant with one bot             |
 
 ## Manual acceptance — NOT RUN
 
