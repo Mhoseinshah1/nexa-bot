@@ -3,6 +3,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   fractionToDecimalText,
+  gatewayRateProvenanceOf,
+  paymentAmountsOf,
   rateToDecimalText,
   COMMERCE_ERROR_CODES,
   COMPENSATION_ROUTES,
@@ -553,6 +555,27 @@ function toGatewayInvoiceView(
               invoice.fx.effectiveRate.denominator,
             ),
           },
+    // Roadmap E5: which authority priced the attempt, at what, when — its own snapshot.
+    rateProvenance: gatewayRateProvenanceOf({
+      policy: invoice.conversionPolicy,
+      fixedRateMinor: invoice.conversionRateMinor,
+      fx:
+        invoice.fx === null
+          ? null
+          : {
+              source: invoice.fx.source,
+              quoteId: invoice.fx.quoteId,
+              policyVersion: invoice.fx.policyVersion,
+              sourceAt: invoice.fx.sourceAt,
+              fetchedAt: invoice.fx.fetchedAt,
+              quoteState: invoice.fx.quoteState,
+              effectiveRateText: fractionToDecimalText(
+                invoice.fx.effectiveRate.numerator,
+                invoice.fx.effectiveRate.denominator,
+              ),
+            },
+      createdAt: invoice.createdAt,
+    }),
     providerChargeId: invoice.providerChargeId,
     requestAmount: amount(invoice.requestAmount),
     finalAmount: amount(invoice.finalAmount),
@@ -626,6 +649,8 @@ function toDetail(
     receiptCredit: credit === null ? null : toReceiptCreditView(credit),
     topupCashbackPercent: record.topupCashbackPercent,
     gatewayInvoice: invoice === null ? null : toGatewayInvoiceView(invoice, cardFacts),
+    // Roadmap E4: the ONE breakdown, from the snapshot; the browser computes nothing.
+    amounts: toAmountsView(record, credit),
     // Beside the principal, never added to it (WP18).
     customerFee:
       record.customerFee === null
@@ -635,6 +660,40 @@ function toDetail(
             fee: record.customerFee.fee.amountMinor.toString(),
             payable: record.customerFee.payable.amountMinor.toString(),
           },
+  };
+}
+
+/** Roadmap E4: `paymentAmountsOf` over the payment's own snapshot, as decimal strings. */
+function toAmountsView(
+  record: PaymentRecord,
+  credit: ReceiptCreditRecord | null,
+): NonNullable<PaymentDetailResponse['amounts']> {
+  const amounts = paymentAmountsOf({
+    state: record.state,
+    method: record.method,
+    topup: record.orderId === null,
+    principalMinor: record.amount.amountMinor,
+    customerFee:
+      record.customerFee === null
+        ? null
+        : {
+            basisPoints: record.customerFee.basisPoints,
+            feeMinor: record.customerFee.fee.amountMinor,
+            payableMinor: record.customerFee.payable.amountMinor,
+          },
+    receiptCreditMinor: credit === null ? null : credit.amount.amountMinor,
+  });
+  return {
+    currency: record.amount.currency,
+    principal: amounts.principalMinor.toString(),
+    customerFee: amounts.customerFeeMinor.toString(),
+    customerFeeBasisPoints: amounts.customerFeeBasisPoints,
+    payable: amounts.payableMinor.toString(),
+    received: amounts.receivedMinor.toString(),
+    walletCredit: amounts.walletCreditMinor.toString(),
+    walletDebit: amounts.walletDebitMinor.toString(),
+    merchantNet: amounts.merchantNetMinor,
+    merchantNetReason: amounts.merchantNetReason,
   };
 }
 
