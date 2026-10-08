@@ -13570,6 +13570,11 @@ export const businessOutboundMessages = pgTable(
     telegramMessageId: bigint('telegram_message_id', { mode: 'number' }),
     failureCode: text('failure_code'),
     bodyPurgedAt: timestamptz('body_purged_at'),
+    /**
+     * Roadmap A4: a `HANDOFF_NOTICE` row names its template instead of carrying a body — the
+     * text is rendered when the row is sent, never stored (CLAUDE.md, Phase 2).
+     */
+    templateKey: text('template_key'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -13608,10 +13613,15 @@ export const businessOutboundMessages = pgTable(
       'business_outbound_messages_body_check',
       sql`body IS NULL OR length(body) BETWEEN 1 AND 4096`,
     ),
-    // A person's send names the person; the AI's never does.
+    // A person's send names the person; the AI's and the handoff notice never do.
     check(
       'business_outbound_messages_author_check',
-      sql`(origin = 'AUTO') = (created_by_admin_id IS NULL)`,
+      sql`(origin IN ('AUTO', 'HANDOFF_NOTICE')) = (created_by_admin_id IS NULL)`,
+    ),
+    // Roadmap A4: the notice, and only the notice, is a template with no stored body.
+    check(
+      'business_outbound_messages_template_check',
+      sql`(origin = 'HANDOFF_NOTICE') = (template_key IS NOT NULL) AND (template_key IS NULL OR body IS NULL)`,
     ),
     // Resolved exactly when not PENDING; a delivered row knows its Telegram message.
     check(
@@ -13643,6 +13653,20 @@ export const businessConversationEscalations = pgTable(
     controlEpoch: integer('control_epoch').notNull(),
     reason: text('reason').notNull(),
     summary: text('summary'),
+    /**
+     * Roadmap A5: the safe operator context of the handoff — the latest AI decision's topic and
+     * intent in this conversation (the intent is AI text, purged with the summary) and the
+     * automatic replies of the session (steps tried). Never the customer's words.
+     */
+    topic: text('topic'),
+    intent: text('intent'),
+    stepsTried: integer('steps_tried'),
+    /**
+     * Review of PR #246 (M1): when the summary and intent were copied from an EARLIER decision
+     * rather than the deciding one, that decision's time. The text is purged 30 days after the
+     * older of this and `created_at`, so a copy never outlives its source.
+     */
+    contextFrom: timestamptz('context_from'),
     ticketId: uuid('ticket_id'),
     ticketOutcome: text('ticket_outcome').notNull(),
     jobId: uuid('job_id'),
@@ -13685,6 +13709,15 @@ export const businessConversationEscalations = pgTable(
     check(
       'business_conversation_escalations_summary_check',
       sql`summary IS NULL OR length(summary) <= 600`,
+    ),
+    check('business_conversation_escalations_topic_check', enumCheck('topic', SUPPORT_AI_TOPICS)),
+    check(
+      'business_conversation_escalations_intent_check',
+      sql`intent IS NULL OR length(intent) <= 600`,
+    ),
+    check(
+      'business_conversation_escalations_steps_check',
+      sql`steps_tried IS NULL OR steps_tried >= 0`,
     ),
     check('business_conversation_escalations_epoch_check', sql`control_epoch >= 1`),
   ],
@@ -14063,6 +14096,13 @@ export const supportAiJobs = pgTable(
     ),
     /** TB10 analytics: a tenant's jobs in a window (AUTO outcomes, Assist drafts). */
     index('support_ai_jobs_created_idx').on(table.tenantId, table.createdAt),
+    /**
+     * Roadmap A3 (review of PR #246, n4): `epochStartedAt` — an epoch's automatic jobs, exactly,
+     * rather than every job the conversation ever had.
+     */
+    index('support_ai_jobs_auto_epoch_idx')
+      .on(table.tenantId, table.conversationId, table.controlEpoch)
+      .where(sql`kind = 'AUTO_DECISION'`),
     foreignKey({
       columns: [table.tenantId, table.conversationId],
       foreignColumns: [businessConversations.tenantId, businessConversations.id],

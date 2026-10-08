@@ -8217,6 +8217,13 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.support.handoff_notice',
+    description:
+      'Roadmap A4: the one message a Telegram Business conversation gets when the support AI hands it to a person — sent from the business account at most once per handoff, never if a person answered first.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.order.preinvoice',
     description:
       'The pre-invoice a customer pays from. B1: the product is described to the customer ' +

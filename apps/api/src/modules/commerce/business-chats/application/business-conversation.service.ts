@@ -1,5 +1,6 @@
 import {
   BUSINESS_CHAT_DETAIL_MESSAGES,
+  BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY,
   BUSINESS_TAKEOVER_ORIGINS,
   BUSINESS_UPDATE_FAILED_CODE,
   businessChatSendRequestSchema,
@@ -478,7 +479,63 @@ export class BusinessConversationService {
     if (moved === null) return false;
     await this.deps.outbound.supersedeStale(scope, conversationId, moved.controlEpoch, now, tx);
     await this.deps.escalation.escalate(scope, { conversation: moved, reason, detail, now }, tx);
+    await this.enqueueHandoffNotice(scope, moved, now, tx);
     return true;
+  }
+
+  /**
+   * Roadmap A4 — a handoff is never silent: ONE template message to the customer
+   * («پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد…»), enqueued in the handoff's own
+   * transaction at the epoch the handoff produced. Never AI text: the row names a template key
+   * and no body, and the lane renders it when it sends.
+   *
+   * - **At most one per handoff epoch**: its idempotency key is the conversation and that
+   *   epoch, so a replayed or second handoff at one epoch writes nothing more.
+   * - **Not if a person answered first**: the lane sends it only while the conversation is still
+   *   `HANDOFF_REQUIRED` at that epoch (`businessOutboundSendable`); a takeover, a person's
+   *   message or a return to the AI moves the epoch and supersedes it.
+   * - **Never resent**: like every lane row, an UNKNOWN outcome is `UNCONFIRMED` for good, and
+   *   neither that nor a refusal hands anything off again (the conversation is already with a
+   *   person).
+   * - A connection that cannot send gets no row at all — read in this transaction (review of
+   *   PR #246, m4), the same snapshot as the handoff.
+   * - The idempotency lookup is a backstop: `handOff` moves only from AI_ACTIVE or PAUSED, so
+   *   one epoch cannot hand off twice (m4 d: the lookup is equivalent today, kept on purpose).
+   */
+  private async enqueueHandoffNotice(
+    scope: ScopeContext,
+    conversation: BusinessConversationRecord,
+    now: Date,
+    tx: unknown,
+  ): Promise<void> {
+    const connection = await this.deps.connections.findById(
+      scope,
+      conversation.connectionRowId,
+      tx,
+    );
+    if (connection === null || connection.status !== 'ACTIVE') return;
+    const key = `handoff-notice:${conversation.id}:${conversation.controlEpoch}`;
+    if ((await this.deps.outbound.findByIdempotencyKey(scope, key, tx)) !== null) return;
+    await this.deps.outbound.insert(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        conversationId: conversation.id,
+        origin: 'HANDOFF_NOTICE',
+        body: null,
+        templateKey: BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY,
+        createdByAdminId: null,
+        controlEpoch: conversation.controlEpoch,
+        idempotencyKey: key,
+        requestHash: hashRequest({
+          command: 'business_chat.handoff_notice',
+          conversationId: conversation.id,
+          epoch: conversation.controlEpoch,
+        }),
+        now,
+      },
+      tx,
+    );
   }
 
   /**

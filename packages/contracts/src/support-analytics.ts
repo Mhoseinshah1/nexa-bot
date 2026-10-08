@@ -58,6 +58,7 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'dropped_coalesced':
     case 'dropped_connection':
     case 'dropped_scope':
+    case 'no_action': // A6: ended silently — nothing sent, nobody handed off.
       return 'DROPPED';
     case 'guard_content':
     case 'guard_customer_blocked':
@@ -77,10 +78,19 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'handoff_output_invalid':
     case 'handoff_ai_unavailable':
     case 'handoff_stale':
+    case 'guard_no_progress':
+    case 'guard_repeated_advice':
+    case 'guard_inbound_flood':
       return 'HANDED_OFF';
     default: {
-      const unreachable: never = outcome;
-      throw new Error(`unclassified automatic outcome ${String(unreachable)}`);
+      // Compile-time: every outcome this release knows is listed above. Run-time: a NEWER
+      // replica's outcome (a rolling deploy) is classified by its family rather than failing
+      // the whole analytics read (review of PR #246, m8 — an older classifier threw here).
+      const unknown: never = outcome;
+      const code = String(unknown);
+      if (code.startsWith('sent')) return 'SENT';
+      if (code.startsWith('guard_') || code.startsWith('handoff_')) return 'HANDED_OFF';
+      return 'DROPPED';
     }
   }
 }

@@ -269,6 +269,13 @@ export const BUSINESS_HANDOFF_REASONS = [
    * `maxConsecutiveClarifyingQuestions` sent in a row: a person continues (hotfix 2026-10-06).
    */
   'CLARIFYING_LIMIT',
+  // --- Roadmap A3 (2026-10-07): the deterministic progress guards.
+  /** The customer said three times in a row that the AI's advice did not work. */
+  'NO_PROGRESS',
+  /** The AI's new reply repeated advice the customer already received; it was not sent. */
+  'REPEATED_ADVICE',
+  /** The customer repeated one message, or sent many in a minute: a person reads them. */
+  'INBOUND_FLOOD',
 ] as const;
 export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
 
@@ -314,7 +321,16 @@ export type BusinessMessageKind = (typeof BUSINESS_MESSAGE_KINDS)[number];
  * signal (ADR-0033 §4, TB0 review F7) and it is sent on an equal epoch alone. `AUTO` is the
  * AI (TB7) and additionally needs the conversation to be `AI_ACTIVE` at the final check.
  */
-export const BUSINESS_OUTBOUND_ORIGINS = ['OPERATOR', 'ASSIST', 'AUTO'] as const;
+/**
+ * Who wrote a lane row. Roadmap A4 (2026-10-07): `HANDOFF_NOTICE` is the ONE customer message a
+ * handoff produces — a template (`BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY`), never AI text, rendered
+ * when it is sent (no body is stored), at most one per handoff epoch (its idempotency key), sent
+ * only while the conversation is still `HANDOFF_REQUIRED` at that epoch.
+ */
+export const BUSINESS_OUTBOUND_ORIGINS = ['OPERATOR', 'ASSIST', 'AUTO', 'HANDOFF_NOTICE'] as const;
+
+/** Roadmap A4 — the handoff notice's template (customer text is a key, never a string). */
+export const BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY = 'bot.support.handoff_notice';
 export type BusinessOutboundOrigin = (typeof BUSINESS_OUTBOUND_ORIGINS)[number];
 
 /**
@@ -352,6 +368,8 @@ export function businessOutboundSendable(input: {
 }): boolean {
   if (input.rowEpoch !== input.conversationEpoch) return false;
   if (input.origin === 'AUTO') return input.conversationState === 'AI_ACTIVE';
+  // A4: the notice says "a person will answer" — true only while nobody has yet.
+  if (input.origin === 'HANDOFF_NOTICE') return input.conversationState === 'HANDOFF_REQUIRED';
   return true;
 }
 
@@ -502,8 +520,24 @@ const outboundViewSchema = z.object({
 export const businessEscalationViewSchema = z.object({
   id: z.string(),
   reason: z.enum(BUSINESS_HANDOFF_REASONS),
-  /** The AI's short operator-facing note; null when none was produced, or once purged. */
+  /**
+   * The AI's short operator-facing note; null when none was produced, or once purged. Roadmap
+   * A5: for a handoff decided before the provider was asked (loop, progress, money, provider
+   * unavailable, unsupported image, stale), the last useful note the AI wrote in this
+   * conversation, so the person picking it up is not starting from nothing.
+   */
   summary: z.string().nullable(),
+  /**
+   * Roadmap A5 — the rest of the safe operator context, from what NEXA already recorded (never
+   * the customer's words): the topic and the intent of the latest AI decision in this
+   * conversation (a `SupportAiTopic`, pinned by a CHECK; the intent is AI text, purged with the
+   * summary), and how many automatic replies the customer received this session (the steps
+   * tried). Each null when there is nothing to say.
+   */
+  // Optional when READ (review of the rolling deploy): an older replica does not send them.
+  topic: z.string().nullish(),
+  intent: z.string().nullish(),
+  stepsTried: z.number().int().min(0).nullish(),
   ticketId: z.string().nullable(),
   ticketOutcome: z.enum(BUSINESS_ESCALATION_TICKET_OUTCOMES),
   createdAt: z.string(),

@@ -351,6 +351,31 @@ records it. On the TEST tenant under `AUTO_REPLY_SAFE` with `CONNECTION_TROUBLES
    the count, a real answer does.
 8. Set the limits back to 20, 30 and the tenant's previous clarifying limit.
 
+## O. Progress guards, handoff notice and context, NO_ACTION (roadmap A3–A6) — NOT RUN
+
+Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
+records it. On the TEST tenant under `AUTO_REPLY_SAFE`, `CONNECTION_TROUBLESHOOTING` and
+`GREETING` allowlisted.
+
+1. **No progress.** Ask a connection question; after each answer reply «نشد», «هنوز وصل نمیشه»,
+   «بازم همونه». **Expect:** three answers, then no fourth; one message from the business
+   account: «پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد. لطفاً همین‌جا ادامه بده؛ نیازی به
+   ارسال دوباره نیست.»; «نیازمند پشتیبان» with «مشتری چند بار گفت راهنمایی هوش مصنوعی جواب نداد»,
+   and in «سپردن‌ها به پشتیبان» the topic, intent and «پاسخ‌های خودکار این جلسه: ۳».
+2. **The notice is sent once.** Keep writing to the handed-off chat. **Expect:** no second notice.
+3. **A person first.** Trigger a handoff («پولمو پس بدید») and take the conversation over from the
+   Web Admin within a few seconds, before the lane's next pass. **Expect:** no notice (its row
+   `SUPERSEDED`). Timing-dependent: record what happened.
+4. **Repeated advice.** Hard to provoke on demand; record any `guard_repeated_advice` seen in
+   «آمار پشتیبانی» with the two replies.
+5. **Flood.** Send «کسی هست؟» three times, waiting for each answer; and separately nine short
+   messages within a minute. **Expect:** a handoff with «مشتری پیام تکراری…» each time.
+6. **NO_ACTION.** After an answer, write «مرسی، حل شد». **Expect:** no reply, no notice, no ticket,
+   the chat stays «هوش مصنوعی فعال»; «بی‌پاسخ بسته شد» in the analytics; the next question is
+   answered.
+7. **Template.** Edit `bot.support.handoff_notice` in `/templates`, trigger a handoff. **Expect:**
+   the edited text.
+
 ## R. Memory and knowledge retrieval (A7, A8 — 2026-10-07) — NOT RUN
 
 Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
@@ -444,6 +469,13 @@ no real provider key and no Telegram Business account (program §0).
 | N5 hourly limit hands off                                 | NOT RUN               |            |          |                                               |
 | N6 raising a limit is the owner's widening                | NOT RUN               |            |          |                                               |
 | N7 clarifying default 3; stored 2 kept; greeting no reset | NOT RUN               |            |          |                                               |
+| O1 three «نشد» hand off, notice once, context shown       | NOT RUN               |            |          |                                               |
+| O2 no second notice in one handoff                        | NOT RUN               |            |          |                                               |
+| O3 a person first → no notice                             | NOT RUN               |            |          |                                               |
+| O4 repeated advice observed                               | NOT RUN               |            |          |                                               |
+| O5 same message ×3 / nine in a minute hand off            | NOT RUN               |            |          |                                               |
+| O6 «مرسی، حل شد» ends silently                            | NOT RUN               |            |          |                                               |
+| O7 the notice template override is what is sent           | NOT RUN               |            |          |                                               |
 | R1 repeated failure keeps its article (A8)                | NOT RUN               |            |          |                                               |
 | R2 a person's words stay a person's (A7)                  | NOT RUN               |            |          |                                               |
 | R3 a greeting carries no knowledge (A8)                   | NOT RUN               |            |          |                                               |

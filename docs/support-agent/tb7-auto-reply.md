@@ -171,7 +171,118 @@ warns about the widening before the save.
 **A2.** The clarifying default is 3 (see «Release defaults»: stored values are untouched), a real
 `REPLY` resets the streak, a greeting does not, and a takeover or resume keeps its epoch reset.
 
-## Schema (migrations `0205`, `0206`, `0218`, `0219`)
+## Progress guards, the handoff notice, the handoff's context, NO_ACTION (roadmap A3–A6, 2026-10-07)
+
+### A3 — three deterministic progress guards
+
+Each reads only what NEXA recorded — the transcript the job already reads, and when the AI's part
+in this epoch began (`epochStartedAt`: the earliest message that triggered an automatic job at the
+epoch, so a takeover or a return to the AI starts every count again) — and each hands off with its
+own guard, outcome and reason (contract commit; CHECKs widened by `0220`).
+
+| Guard             | When                     | Rule                                                                                                                                                                                                                                                                                                                                                                                                                               | Outcome / reason                            |
+| ----------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `no_progress`     | before the provider      | `SUPPORT_AI_NO_PROGRESS_LIMIT` (3) failure-feedback messages in a row, each after an automatic reply of the epoch. The matcher runs on folded text (`foldCustomerText`: ZWNJ, Arabic ي/ك, marks): «نشد», «درست نشد», «هنوز وصل نمیشه», «بازم همونه», «جواب نداد», «کار نکرد», «فرقی نکرد», Finglish (`nashod`, `nemishe`, `bazam hamoone`, `javab nadad`…) and English. Any other customer message ends the run; so does a person. | `guard_no_progress` / `NO_PROGRESS`         |
+| `inbound_flood`   | before the provider      | The customer's newest message repeated `sameMessage` (3) times in the epoch (normalised as TB8's dedupe normalises, after folding), or more than `maxInbound` (8) customer messages within `windowSeconds` (60) of the newest, in the epoch.                                                                                                                                                                                       | `guard_inbound_flood` / `INBOUND_FLOOD`     |
+| `repeated_advice` | after the provider, last | The reply (or question) has character-trigram Jaccard similarity ≥ `SUPPORT_AI_REPEAT_SIMILARITY` (0.8) to an automatic reply already DELIVERED in the epoch (TB8's `trigramSimilarity`, reused). Not sent. A `GREETING` is not advice and is exempt.                                                                                                                                                                              | `guard_repeated_advice` / `REPEATED_ADVICE` |
+
+Order: the preflight (content, blocked, session budget, hourly limit), the scope check, the
+connection, the money guard, then `no_progress`, then `inbound_flood`; after the decision, the
+decision guards, then `repeated_advice`. The two before-provider guards are not decided again in
+the enqueue transaction: a new customer message during the call replaces the job (coalescing),
+and nothing else can add to what they read.
+
+### A4 — the handoff notice
+
+A handoff is never silent. In the handoff's own transaction (`BusinessConversationService.handOff`,
+the one path every handoff takes — the AI's and the lane's), ONE lane row is enqueued:
+
+- origin `HANDOFF_NOTICE`, **no body**, `template_key = bot.support.handoff_notice` — the text
+  «پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد. لطفاً همین‌جا ادامه بده؛ نیازی به ارسال دوباره
+  نیست.» is a template (an owner may override it), rendered by the lane at the send and never
+  stored. A CHECK pins "notice ⇔ template key, and then no body"; the author CHECK treats it like
+  an AUTO row (no admin).
+- **One per handoff epoch**: its idempotency key is `handoff-notice:<conversation>:<epoch>`.
+- **Not if a person answered first**: `businessOutboundSendable` sends it only while the
+  conversation is `HANDOFF_REQUIRED` at that epoch. A takeover, a person's message or a return to
+  the AI moves the epoch; the row is `SUPERSEDED`.
+- **The mode rules it like an AUTO reply**: OFF silences a queued notice (`support_ai.mode_off`).
+- **Never resent**: UNKNOWN is `UNCONFIRMED` for good, a refusal `FAILED`; neither hands off again
+  (only an `AUTO` row's outcome does). A connection that cannot send gets no row. An override that
+  cannot render fails the row once (`business.notice_template`) instead of stalling the lane.
+- Delivered, it stamps `last_message_at` only — it is neither the AI's answer (`last_ai_at`, which
+  the cooldown reads) nor a person's. Its echo is relabelled `OWN_ECHO` by the delivered message id,
+  as every lane send is, so it never reads as a takeover.
+- Auto-return from a handoff stays OFF; nothing here returns a conversation to the AI.
+
+### A5 — the handoff's operator context
+
+Every escalation now carries, besides the reason: `summary` (the deciding decision's own; else the
+latest the AI recorded in the conversation), `topic` and `intent` (the same decision's), and
+`steps_tried` (the automatic replies of the session that ended — `sessionReplyCount` at the epoch
+before the bump, greetings not counted). Read by `SupportHandoffContext` inside the handoff's
+transaction, through the `HandoffContextSource` port, so the handoffs decided BEFORE a provider
+call — loop and progress guards, money, provider unavailable, an unseen image, a stale job, and
+the lane's own — say where things stood. Nothing new is stored about the conversation: no
+transcript is copied; `intent` is AI text and is purged with `summary` after 30 days. The ticket
+detail gates all four on `business_chats.view`, like the summary. `/business-chats` and
+`/tickets` draw them («موضوع», «خواستهٔ مشتری به برداشت هوش مصنوعی», «پاسخ‌های خودکار این جلسه»).
+
+### A6 — NO_ACTION ends silently
+
+«مرسی», «حل شد», «اوکی درست شد»: when the model answers `NO_ACTION`, the job ends as `no_action`
+(DISCARDED; class `DROPPED`) — no reply, no handoff, no ticket, the conversation stays `AI_ACTIVE`
+and the customer's next message is answered as usual — only when (`autoNoActionAllowed`) EVERY
+customer line the reply would answer is a closing acknowledgement (every word in a closed
+vocabulary of thanks and "solved", at least one of them a thanks or a resolution, no question
+mark, at most eight words), AND the decision passes every guard a reply passes that can apply to
+silence: not `HUMAN_REQUESTED`, not a hard topic, on the allowlist, identity for an account topic,
+no blocked customer or account under review, the confidence floor. Anything else is the old
+handoff (`DECISION_NOT_REPLY`). The money guard runs before the provider, so a «مرسی، پولمو پس
+بدید» never gets here.
+
+### Review of PR #246 (2026-10-08)
+
+What the review changed in the rules above. Each change has a test and a mutant (`tb7-falsification.md`).
+
+- **A3, only the AI's own advice (CX3).** `ProgressLine` carries the transcript `author` (A7).
+  - `no_progress` and `repeated_advice` read only `AI_AUTO` lines as the AI's advice.
+  - A person's send or a reviewed Assist draft (`STAFF`, `AI_ASSIST`) ends a run.
+  - An unattributed or automated echo is neither advice nor an end to the run.
+- **A3, rounds (m7).** `no_progress` counts ROUNDS: a different AI reply, then the customer's «it did not work».
+  - Three «نشد» after a single reply are one round.
+  - The lexicon gains «نمیتونم وصل بشم», «هنوزم مشکل داره», "not connecting", "did not connect" and "still no".
+- **A3, flood (m1).** "The same message three times" is counted inside the 60-second window, not across the epoch.
+  - A closing acknowledgement is exempt, so a customer who thanks after each step is not flooding. A third «مرسی» may still close silently.
+- **A3, corrections (m9).** `repeated_advice` needs BOTH conditions: trigram similarity of at least 0.8, AND the same words after folding.
+  - A ZWNJ joins words here rather than splitting them.
+  - A correction («… کنید» → «… نکنید») is therefore sendable.
+- **A4, the notice.**
+  - The connection is read inside the handoff's transaction (m4).
+  - A notice older than `SUPPORT_AI_AUTO_STALE_SECONDS` is superseded (`support_ai.notice_stale`) and never sent hours late (n3).
+  - The notice and its Telegram echo are left out of the transcript the model reads (CX4). `deliveredSince` now returns the bodiless notice row, so its Telegram message id is known.
+  - The lane stores no body. Telegram's echo of the notice is a message row, purged with the transcript (n2).
+  - The race "a takeover commits between the send stamp and Telegram's answer" is the same window every AUTO reply has, and is accepted (n5).
+- **A5, context bounds (M1).**
+  - The fallback context comes only from an automatic decision of the epoch that just ended, written inside the 30-day retention.
+  - When the summary or intent is copied from such a decision, `context_from` keeps its time (migration `0221`). The purge then uses the older of `context_from` and the row's own `created_at`, so a copy never outlives its source.
+  - The deciding decision's own summary, topic and intent are passed into `handOff` and win over the fallback (m6).
+  - Steps tried counts only the replies Telegram confirmed DELIVERED, excluding free greetings (CX5).
+- **A6, the silent close (CX1, CX2, m2).**
+  - It runs in its own transaction, which re-reads the mode, then locks the conversation (epoch and state), then reads the account facts in that transaction.
+  - If silence is no longer allowed, the conversation is handed off with the specific reason (`autoNoActionVerdict`):
+    - a customer blocked during the call (`CUSTOMER_BLOCKED`);
+    - a payment put under review, or an unreconciled service (`ACCOUNT_UNDER_REVIEW`);
+    - a hard topic or `HUMAN_REQUESTED`;
+    - otherwise, `DECISION_NOT_REPLY`.
+  - A mode switched off or an epoch that moved drops the job.
+  - A closed matter stamps `last_ai_at`, so the inbox shows no growing wait. The next automatic reply's cooldown runs from it.
+  - The closing matcher rejects every question mark (ASCII, Arabic, fullwidth, ⁇ ⁈ ⁉ ❓ ❔) and every question word (آیا, چرا, چطور…, is, does, how…).
+  - A status word («وصل», «درست», «حل», solved, fixed) closes only with a completion word («شد», «شده»). «وصل» alone may mean "connect me".
+- **Rolling deploy (m8, n6).** The run-time classifier counts an unknown outcome by its family instead of throwing. See the runbook §16 rollout notes for an older replica.
+- **n4.** `support_ai_jobs_auto_epoch_idx` makes `epochStartedAt` read exactly one epoch's automatic jobs.
+
+## Schema (migrations `0205`, `0206`, `0218`, `0219`, `0220`, `0221`)
 
 - `support_ai_jobs` gains the following columns. A CHECK pins the shape of an automatic job.
   - `trigger_telegram_message_id`, `trigger_content_version`;
@@ -193,6 +304,14 @@ warns about the widening before the save.
   `session_reply_budget` (DEFAULT 20, CHECK 5–40) and `max_auto_replies_per_hour` (DEFAULT 30,
   CHECK 10–60), sets the column default of `max_consecutive_clarifying_questions` to 3 (no row
   rewritten) and gives the retired `max_consecutive_replies` a DEFAULT 4. Additive only.
+- `0220` (roadmap A3–A5) widens the four CHECKs built from `BUSINESS_HANDOFF_REASONS`
+  (+`NO_PROGRESS`, `REPEATED_ADVICE`, `INBOUND_FLOOD`) and `SUPPORT_AI_AUTO_OUTCOMES`
+  (+`guard_no_progress`, `guard_repeated_advice`, `guard_inbound_flood`, `no_action`), the lane's
+  origin CHECK (+`HANDOFF_NOTICE`) and author CHECK; adds `business_outbound_messages.template_key`
+  with its shape CHECK, and `business_conversation_escalations.topic` (CHECK ⊆ topics), `intent`
+  (≤ 600) and `steps_tried` (≥ 0). Additive only.
+- `0221` (review of PR #246) adds `business_conversation_escalations.context_from` (M1) and the
+  partial index `support_ai_jobs_auto_epoch_idx` (n4). Additive only.
 
 No grants are needed (no new permission).
 

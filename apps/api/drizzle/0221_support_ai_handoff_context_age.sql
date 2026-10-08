@@ -1,0 +1,2 @@
+ALTER TABLE "business_conversation_escalations" ADD COLUMN "context_from" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "support_ai_jobs_auto_epoch_idx" ON "support_ai_jobs" USING btree ("tenant_id","conversation_id","control_epoch") WHERE kind = 'AUTO_DECISION';

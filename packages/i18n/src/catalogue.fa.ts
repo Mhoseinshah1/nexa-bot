@@ -1154,6 +1154,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.contact_button': '📨 ارسال پیام به پشتیبانی',
   'bot.support.contact': '{icon:support} برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
+  'bot.support.handoff_notice':
+    'پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد. لطفاً همین‌جا ادامه بده؛ نیازی به ارسال دوباره نیست.',
   'bot.order.preinvoice':
     '{icon:invoice} پیش فاکتور شما:\n\n{icon:user} نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n{icon:amount} قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n\n{description}\n\n{icon:wallet} موجودی کیف پول شما: {walletBalance}\n\n{icon:wallet} سفارش شما آماده پرداخت است',
   'bot.order.preinvoice_custom':

@@ -28,6 +28,7 @@ import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
 import { setQuery, useLinkHandler, type Route } from '../router';
+import { HandoffContextView } from './handoff-context';
 import { HANDOFF_LABELS } from './handoff-labels';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
@@ -172,6 +173,7 @@ const OUTBOUND_ORIGIN_LABELS: Readonly<Record<BusinessOutboundOrigin, WebKey>> =
   OPERATOR: 'web.bchat_outbound_origin_operator',
   ASSIST: 'web.bchat_outbound_origin_assist',
   AUTO: 'web.bchat_outbound_origin_auto',
+  HANDOFF_NOTICE: 'web.bchat_outbound_origin_handoff_notice',
 };
 
 /** The refusals this page can name better than the server's English sentence. */
@@ -797,6 +799,11 @@ function EscalationsCard({ detail }: { detail: BusinessChatDetailResponse }) {
               )}
             </div>
             {escalation.summary !== null && <p className="muted small">{escalation.summary}</p>}
+            <HandoffContextView
+              topic={escalation.topic}
+              intent={escalation.intent}
+              stepsTried={escalation.stepsTried}
+            />
             {escalation.aiFailure !== null && (
               <FailureDiagnosticView failure={escalation.aiFailure} />
             )}

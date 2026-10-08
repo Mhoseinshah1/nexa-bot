@@ -1,5 +1,6 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import {
+  SUPPORT_AI_DRAFT_RETENTION_DAYS,
   SUPPORT_AI_FREE_GREETING_MAX_CHARS,
   SUPPORT_AI_LIMITS,
   SUPPORT_AI_SESSION_INACTIVITY_SECONDS,
@@ -421,6 +422,90 @@ export class DrizzleSupportAiJobRepository {
   }
 
   /**
+   * Roadmap A3 — when the AI's part in this epoch began: the time (Telegram's) of the earliest
+   * message that triggered an automatic job at `epoch`, whatever became of the job (a coalesced
+   * one included, so the first message of a burst counts). Every customer message under
+   * `AUTO_REPLY_SAFE` in an `AI_ACTIVE` conversation enqueues one, so this is the epoch's first
+   * customer message the AI was asked about. Null when there is none. The progress guards read
+   * nothing older: a person's takeover or a return to the AI starts their count again.
+   */
+  async epochStartedAt(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number },
+    tx?: unknown,
+  ): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select({ at: sql<Date | null>`min(${businessMessages.sentAt})` })
+      .from(supportAiJobs)
+      .innerJoin(
+        businessMessages,
+        and(
+          eq(businessMessages.tenantId, supportAiJobs.tenantId),
+          eq(businessMessages.conversationId, supportAiJobs.conversationId),
+          eq(businessMessages.telegramMessageId, supportAiJobs.triggerTelegramMessageId),
+        ),
+      )
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, input.conversationId),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.controlEpoch, input.epoch),
+        ),
+      );
+    const at = row?.at ?? null;
+    return at === null ? null : new Date(at);
+  }
+
+  /**
+   * Roadmap A5 — the latest decision the AI recorded IN THE EPOCH THAT JUST ENDED (an automatic
+   * job at `epoch`), and only inside the text retention (review of PR #246, M1): an older issue's
+   * summary is not this handoff's context, and a copy must not outlive its source. Returns the
+   * decision's time with its text, so the escalation can purge the copy by the source's age.
+   * AI text only, never the customer's words; null fields when there is none.
+   */
+  async latestDecisionContext(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number; readonly now: Date },
+    tx?: unknown,
+  ): Promise<{
+    readonly summary: string | null;
+    readonly topic: string | null;
+    readonly intent: string | null;
+    readonly at: Date | null;
+  }> {
+    const tenantId = requireTenantId(scope);
+    const retained = new Date(input.now.getTime() - SUPPORT_AI_DRAFT_RETENTION_DAYS * 86_400_000);
+    const [row] = await exec(this.db, tx)
+      .select({
+        summary: supportAiJobs.summary,
+        topic: supportAiJobs.topic,
+        intent: supportAiJobs.intent,
+        at: supportAiJobs.createdAt,
+      })
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, input.conversationId),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.controlEpoch, input.epoch),
+          isNotNull(supportAiJobs.decision),
+          gte(supportAiJobs.createdAt, retained),
+        ),
+      )
+      .orderBy(desc(supportAiJobs.createdAt), desc(supportAiJobs.id))
+      .limit(1);
+    return {
+      summary: row?.summary?.trim() ? row.summary : null,
+      topic: row?.topic ?? null,
+      intent: row?.intent?.trim() ? row.intent : null,
+      at: row?.at ?? null,
+    };
+  }
+
+  /**
    * Roadmap A1 — the automatic replies this SESSION has had, for the session reply budget.
    *
    * A session is derived, never stored: the AUTO lane rows at the job's control epoch (every
@@ -443,11 +528,24 @@ export class DrizzleSupportAiJobRepository {
    */
   async sessionReplyCount(
     scope: ScopeContext,
-    input: { readonly conversationId: string; readonly epoch: number; readonly now: Date },
+    input: {
+      readonly conversationId: string;
+      readonly epoch: number;
+      readonly now: Date;
+      /**
+       * Review of PR #246 (CX5): only replies Telegram confirmed it DELIVERED — the "steps
+       * tried" a handoff reports. The budget itself counts every attempt (fail closed).
+       */
+      readonly deliveredOnly?: boolean;
+    },
     tx?: unknown,
   ): Promise<number> {
     const tenantId = requireTenantId(scope);
     const gap = sql.raw(`interval '${SUPPORT_AI_SESSION_INACTIVITY_SECONDS} seconds'`);
+    const delivered =
+      input.deliveredOnly === true
+        ? sql`AND ${businessOutboundMessages.state} = 'DELIVERED'`
+        : sql``;
     const o = businessOutboundMessages;
     const m = businessMessages;
     const j = supportAiJobs;
@@ -468,6 +566,7 @@ export class DrizzleSupportAiJobRepository {
           AND ${o.origin} = 'AUTO'
           AND ${o.controlEpoch} = ${input.epoch}
           AND ${o.state} <> 'SUPERSEDED'
+          ${delivered}
       ),
       scan AS (SELECT min(created_at) - ${gap} AS since FROM epoch_rows),
       activity AS (
