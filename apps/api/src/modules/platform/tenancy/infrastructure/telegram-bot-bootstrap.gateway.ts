@@ -83,14 +83,21 @@ export class TelegramBotBootstrapGateway
           ? { outcome: 'NOT_TELEGRAM', detail: outcome.errorMessage }
           : { outcome: 'REJECTED', detail: outcome.errorMessage };
       /*
+       * PR #238 review N5: a 2xx whose JSON is not a Bot API answer at all. Deterministic —
+       * it parsed, and has no `ok` — so whatever answered at the API base is not Telegram,
+       * exactly the `getme_shape` case above: NOT_TELEGRAM, not "rerun, check egress".
+       */
+      /*
        * Everything else is UNREACHABLE, 429 included.
        *
        * A rate limit is not a rejected token: the credential is fine and the
        * remedy is to rerun. Filing it as REJECTED would tell an operator to go
        * and mint a new token, which is the wrong afternoon.
        */
-      default:
-        return { outcome: 'UNREACHABLE', detail: outcome.errorMessage };
+      case 'FAILED_RETRYABLE':
+        return outcome.notBotApiAnswer === true
+          ? { outcome: 'NOT_TELEGRAM', detail: outcome.errorMessage }
+          : { outcome: 'UNREACHABLE', detail: outcome.errorMessage };
     }
   }
 

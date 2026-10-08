@@ -1694,6 +1694,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
     telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+    // Roadmap D3 (PR #238 review N2): a rename that could not be recorded is logged.
+    logger,
   });
 
   /*
@@ -4661,6 +4663,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       categoryIconsFor: (scope) =>
         settingsResolver.valueOf<CategoryIcons>(scope, 'bot.category_icons'),
     },
+    // Roadmap D4: best-effort bookkeeping around a send is logged, never thrown.
+    logger,
   );
   const appearance = new AppearanceService({
     repository: appearanceRepository,
@@ -4963,6 +4967,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     // Broadcast V2: the preview's opted-out estimate only; the stamp still decides.
     marketingOptOut: marketingOptOutPolicy,
+    // Roadmap C2: the broadcast's own history card.
+    auditHistory: new DrizzleAuditHistoryReader(database.db),
   });
   const broadcastDispatcher = new BroadcastDispatcher({
     repository: broadcastRepository,

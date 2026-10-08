@@ -199,6 +199,35 @@ export interface BotBootstrapRepository {
     input: { readonly telegramBotId: string; readonly username: string; readonly now: Date },
     tx: unknown,
   ): Promise<boolean>;
+  /**
+   * D3 (roadmap, Telegram robustness): records the username `getMe` reported for a bot
+   * whose identity is ALREADY recorded — a rename in BotFather.
+   *
+   * Not a repoint: the WHERE names the stored `telegram_bot_id`, so a row bound to another
+   * bot is never touched. `username` is unique installation-wide, so a name another row
+   * still holds (a stale copy nobody reconciled) is `TAKEN` and nothing changes — deciding
+   * which row keeps a name is not this statement's call. `before` is the name the row held,
+   * read under the row's lock in the same transaction.
+   */
+  /**
+   * PR #238 review N1: whether a bot row OTHER than `id` holds `username` (installation-wide,
+   * as the unique index is). A read, for `status`.
+   */
+  usernameHeldByAnotherRow(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    username: string,
+  ): Promise<boolean>;
+  reconcileUsername(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: { readonly telegramBotId: string; readonly username: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<
+    | { readonly outcome: 'UPDATED'; readonly before: string }
+    | { readonly outcome: 'UNCHANGED' }
+    | { readonly outcome: 'TAKEN'; readonly before: string }
+  >;
 }
 
 /**

@@ -23,7 +23,24 @@ import { ApiError, newIdempotencyKey } from './api/client';
  * `mutations.retry` in `main.tsx` covers the automatic attempt; this covers
  * the person pressing the button, which is the case that reaches a queue.
  */
-export function useSubmissionKey(): {
+/**
+ * How long a constant-payload command ("run now") keeps its key after an unanswered
+ * failure: long enough for a re-press to re-ask the lost request, short enough that a press
+ * much later starts a new run instead of being answered with the old one.
+ */
+export const RUN_KEY_HELD_MS = 3 * 60_000;
+
+export function useSubmissionKey(
+  options: {
+    /**
+     * How long a key held after an UNANSWERED failure stays the same command. A command whose
+     * payload is a constant ("run a backup now") is, an hour later, a new request rather than
+     * a re-ask of the lost one — replaying the old key would answer it with the old run.
+     * Omitted: held until answered, as for a write whose payload names what it changes.
+     */
+    heldForMs?: number;
+  } = {},
+): {
   /**
    * The key for the submission now beginning.
    *
@@ -47,23 +64,33 @@ export function useSubmissionKey(): {
   /**
    * Retires the key only when the outcome is KNOWN — a 4xx the server
    * authored. A 5xx or a transport failure keeps it.
+   *
+   * `onConflict` runs for a 409: the row the write was based on is stale, so
+   * the caller refreshes it (an invalidation) and the next press is a new
+   * question against the fresh version. Without it a page kept submitting the
+   * version it last read and was refused the same way on every press.
    */
-  settleOn: (error: unknown) => void;
+  settleOn: (error: unknown, handlers?: { readonly onConflict?: () => void }) => void;
 } {
-  const held = useRef<{ key: string; payload: string } | null>(null);
+  const held = useRef<{ key: string; payload: string; at: number } | null>(null);
   const settle = () => {
     held.current = null;
   };
   return {
     current: (payload: unknown) => {
       const fingerprint = JSON.stringify(payload ?? null);
-      if (held.current?.payload !== fingerprint) {
-        held.current = { key: newIdempotencyKey(), payload: fingerprint };
+      const now = Date.now();
+      const expired =
+        options.heldForMs !== undefined &&
+        held.current !== null &&
+        now - held.current.at > options.heldForMs;
+      if (held.current?.payload !== fingerprint || expired) {
+        held.current = { key: newIdempotencyKey(), payload: fingerprint, at: now };
       }
       return held.current.key;
     },
     settle,
-    settleOn: (error: unknown) => {
+    settleOn: (error: unknown, handlers?: { readonly onConflict?: () => void }) => {
       // A 4xx is an ANSWER: the server considered the command and refused it,
       // so the next press is a new question and deserves a new key.
       //
@@ -80,6 +107,7 @@ export function useSubmissionKey(): {
       // that saw nothing at all. The retry then carries the key its first
       // attempt used, and the server recognises the same command.
       if (error instanceof ApiError && error.status < 500) settle();
+      if (error instanceof ApiError && error.status === 409) handlers?.onConflict?.();
     },
   };
 }
