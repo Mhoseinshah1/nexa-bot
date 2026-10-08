@@ -20,10 +20,12 @@ L = 'apps/api/src/modules/commerce/business-chats/application/business-outbound.
 E = 'apps/api/src/modules/commerce/business-chats/application/business-escalation.service.ts'
 D = 'apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository.ts'
 T = 'apps/api/src/modules/commerce/tickets/application/ticket.service.ts'
+EV = 'apps/api/src/modules/control/support-ai/eval/runner.ts'
 
 UNIT = 'pnpm exec vitest run --project unit tests/unit/support-progress-guards.test.ts'
 INT = 'pnpm exec vitest run --project integration tests/integration/support-auto-reply.test.ts -t "roadmap A3"'
 TB2 = 'pnpm exec vitest run --project integration tests/integration/business-conversations.test.ts'
+EVAL = 'pnpm exec vitest run --project unit tests/unit/support-ai-eval.test.ts'
 
 M = [
  ('«نشد» not failure feedback', G, "  /(?<!\\p{L})نشد(?:ه|ش)?(?!\\p{L})/u,\n", "", [UNIT, INT]),
@@ -67,6 +69,13 @@ M = [
  ('NO_ACTION: a question closes', G, "  if (text === null || /[?؟]/u.test(text)) return false;", "  if (text === null) return false;", [UNIT]),
  ('service: NO_ACTION always hands off', A,
   "if (autoNoActionAllowed({ decision, config, flags: context.flags, customerTexts })) {", "if (false) {", [INT]),
+ # A10's runner applies the production guards (after the merge with PR #244).
+ ('eval: progress guards not applied before the model', EV,
+  "  if (prepared.failClosed || prepared.moneyHandoff || prepared.progressHandoff) {",
+  "  if (prepared.failClosed || prepared.moneyHandoff) {", [EVAL]),
+ ('eval: repeated advice not applied', EV,
+  "      guardPassed = verdict.pass && autoRepeatedAdviceGuard(decision, prepared.lines, null).pass;",
+  "      guardPassed = verdict.pass;", [EVAL]),
 ]
 
 env = dict(os.environ)

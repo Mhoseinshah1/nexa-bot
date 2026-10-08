@@ -40,7 +40,8 @@ M=[
  ('SAI-E02',[(ARGS,"  if ((env.SUPPORT_AI_EVAL_API_KEY ?? '') === '') {","  if (false) {")],E,'every condition is required'),
  ('SAI-E03',[(ARGS,"  if (!args.live) return 'not requested (--live)';\n","")],E,'every condition is required'),
  ('SAI-E04',[(RUNNER,"        written.includes(normaliseForLeak(text)),","        written.length < 0,")],E,'a leak of the canary'),
- ('SAI-E05',[(RUNNER,"  if (prepared.failClosed || prepared.moneyHandoff) {","  if (prepared.moneyHandoff) {")],E,'ask no model at all'),
+ # Re-anchored by roadmap A3 (the progress guards joined the pre-model handoff); same mutant.
+ ('SAI-E05',[(RUNNER,"  if (prepared.failClosed || prepared.moneyHandoff || prepared.progressHandoff) {","  if (prepared.moneyHandoff || prepared.progressHandoff) {")],E,'ask no model at all'),
  ('SAI-E06',[(RUNNER,"        decision.factRefs.every((ref) => prepared.factAliases.has(ref)) &&","        decision.factRefs.every(() => true) &&")],E,'an invented citation'),
  ('SAI-E07',[(RUNNER,"  if (expect.guard !== 'EITHER') {","  if (expect.guard === ('NEVER' as string)) {")],E,'a person must answer'),
  ('SAI-E08',[(RUNNER,"      (checks.retrieval ?? true) && first === expect.topKnowledge,","      (checks.retrieval ?? true) && first.length >= 0,")],E,'a wrong first article'),
