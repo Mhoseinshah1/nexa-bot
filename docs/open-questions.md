@@ -3425,6 +3425,18 @@ real staging copy (NOT RUN) — never by guessing.
 - **OQ-LWD-06 — DECISION: who sees legacy debts.** `legacy.debts.view` (MEDIUM) shows the
   legacy Telegram id and the amount owed; owner-only by default. Whether an operator role
   should hold it, and for how long the list is kept, is the owner's.
+- **OQ-LWD-07 — DECIDED by the owner (2026-10-08): a user blocked in MirzaBot is imported
+  BLOCKED.** aud4 F1 found the importer never read `user.User_Status` and created every
+  customer ACTIVE, so an operator's ban was lifted at cutover and the banned user's credit
+  became spendable. Decision: `User_Status = 'block'` → a BLOCKED customer; the opening
+  CREDIT or legacy debt is recorded exactly as anybody's (reconciliation totals unchanged;
+  the block stops spending, not the balance); an existing NEXA customer's status is never
+  changed; any status other than exactly `Active` or `block` is manual review, never ACTIVE.
+  The v1 read set stays frozen: the column is the `user-status` read set
+  (`legacy-read-set:user-status:v1`). Counts: `plan.customers.legacyStatus`,
+  `usersWallets.users.legacyStatus` and `.blocked`. Still the owner's: whether a blocked
+  user's legacy debt or credit should be treated differently later (today it is not), and
+  whether the MirzaBot block reason text should ever be carried (today it is not read).
 
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 

@@ -28,10 +28,20 @@ function planned(
   balance: string,
   checksum = C(Number(id) || 1),
   agent = 'f',
+  status: 'ACTIVE' | 'BLOCKED' | 'UNKNOWN' = 'ACTIVE',
 ): PlannedUser {
-  const decision = decideLegacyUser({ id, balance }, false);
+  const decision = decideLegacyUser({ id, balance, status }, false);
   return {
-    row: { id, balance, limitUsertest: '1', agent, username: null, phone: 'ABSENT', checksum },
+    row: {
+      id,
+      balance,
+      limitUsertest: '1',
+      agent,
+      username: null,
+      phone: 'ABSENT',
+      status,
+      checksum,
+    },
     decision,
     existingCustomerId: null,
     opening: null,
@@ -82,10 +92,71 @@ describe('the users-and-wallets section', () => {
     expect(LEGACY_BALANCE_CHANGE_CLASSES).toHaveLength(8);
   });
 
+  it("OQ-LWD-07: blocked users are counted, and their money is in the equations exactly as anybody's", () => {
+    const users = [
+      planned('301', '500', C(301), 'f', 'BLOCKED'),
+      planned('302', '-300', C(302), 'f', 'BLOCKED'),
+      planned('303', '200', C(303), 'f', 'BLOCKED'),
+      planned('304', '100'),
+      planned('305', '900', C(305), 'f', 'UNKNOWN'),
+    ];
+    const maps = new Map([
+      ['301', mapRow('301', C(301))],
+      ['302', mapRow('302', C(302))],
+      ['303', mapRow('303', C(303), { reasonCode: 'EXISTING_CUSTOMER' })],
+      ['304', mapRow('304', C(304))],
+      [
+        '305',
+        mapRow('305', C(305), {
+          status: 'MANUAL_REVIEW',
+          reasonCode: 'INVALID_SOURCE_ROW',
+          entityType: null,
+          entityId: null,
+          reviewState: 'OPEN',
+        }),
+      ],
+    ]);
+    const section = buildUsersWalletsSection({
+      sourceFingerprint: C(42),
+      synthetic: false,
+      currency: 'IRT',
+      users,
+      mapRows: maps,
+      openings: new Map([
+        ['301', 500n],
+        ['303', 200n],
+        ['304', 100n],
+      ]),
+      debts: new Map([['302', 300n]]),
+      openingTotals: { count: 3, sumMinor: 800n, negative: 0 },
+      debtTotals: {
+        count: 1,
+        sumMinor: 300n,
+        byState: { PENDING_REVIEW: { count: 1, sumMinor: 300n } },
+        synthetic: 0,
+      },
+    });
+    expect(section.users.legacyStatus).toEqual({ ACTIVE: 1, BLOCKED: 3, UNKNOWN: 1 });
+    expect(section.users.blocked).toEqual({
+      sourceRows: 3,
+      importedNew: 2,
+      importedExisting: 1,
+      notImported: 0,
+    });
+    expect(section.users.outcomes.SKIPPED_STATUS_UNKNOWN).toBe(1);
+    expect(section.wallet.positive).toMatchObject({ users: 3, sumMinor: '800' });
+    expect(section.wallet.legacyDebts).toMatchObject({ users: 1, sumMinor: '300' });
+    expect(section.holds).toBe(true);
+  });
+
   it('gives every source row exactly one outcome', () => {
     expect(userOutcome(planned('not-an-id', '1'), undefined)).toBe('SKIPPED_INVALID_IDENTITY');
     expect(userOutcome(planned('101', 'x'), undefined)).toBe('SKIPPED_BALANCE_UNREADABLE');
     expect(userOutcome(planned('102', '5'), undefined)).toBe('NOT_YET_IMPORTED');
+    // OQ-LWD-07: an unknown User_Status is its own skip, never a balance one, never imported.
+    expect(userOutcome(planned('106', '5', C(106), 'f', 'UNKNOWN'), undefined)).toBe(
+      'SKIPPED_STATUS_UNKNOWN',
+    );
     const p = planned('103', '5');
     expect(userOutcome(p, mapRow('103', p.row.checksum))).toBe('IMPORTED_NEW');
     expect(userOutcome(p, mapRow('103', p.row.checksum, { reasonCode: 'EXISTING_CUSTOMER' }))).toBe(

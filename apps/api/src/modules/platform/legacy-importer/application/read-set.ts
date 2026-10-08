@@ -376,3 +376,46 @@ export async function withBoundReadSetSession<T>(
     await session.close();
   }
 }
+
+// --- user-status (Mirza PR4 fix, owner decision 2026-10-08, OQ-LWD-07) ---------------------
+
+/**
+ * `legacy-read-set:user-status:v1` — the legacy `user` table's `id` and `User_Status`, and
+ * nothing else. The frozen v1 import read set does not carry `User_Status` (its fingerprint
+ * is pinned by `legacy-import-read-set-v1.test.ts`), so the status the users import decides
+ * from is this read set, at its own version, with its own fingerprint.
+ *
+ * `User_Status` is REQUIRED: a source without it is refused before any row is read
+ * (`SOURCE_SCHEMA_MISSING_COLUMN`), never read as "everybody is active".
+ *
+ * Defined HERE, after the functions it uses, and not in a module of its own: the importer's
+ * snapshot (`source-snapshot.ts`) reads it, and this module imports that one, so a separate
+ * module would evaluate `defineLegacyReadSet` inside the import cycle.
+ */
+export const USER_STATUS_READ_SET = defineLegacyReadSet({
+  name: 'user-status',
+  version: 1,
+  tables: [{ table: 'user', primaryKey: 'id', columns: ['id', 'User_Status'] }],
+});
+
+/**
+ * Reads `USER_STATUS_READ_SET` ONCE inside the importer's own snapshot session, handing every
+ * `[id, User_Status]` row to `onRow` while its digest is computed — exactly as the v1 import
+ * tables are read (`readFromSession`): the decisions are made from the same bytes the
+ * fingerprint is computed over, in the same READ ONLY snapshot as the approved v1 source.
+ *
+ * It is not `readLegacyReadSet`'s delivery: there is no separately approved value to compare
+ * with BEFORE reading. Instead the fingerprint travels with the snapshot, is printed by
+ * `audit`, and an APPLY run records it in `legacy_read_set_runs` against the v1 source
+ * fingerprint and refuses when that source already has a DIFFERENT user-status observation
+ * (`LegacyImporterService.applyClaimed`): two status snapshots of one source are never
+ * interleaved.
+ */
+export async function readUserStatusInSnapshot(
+  session: LegacySourceSession,
+  onRow: (id: string | null, status: LegacyCell) => void,
+): Promise<LegacyReadSetResult> {
+  return scanReadSet(session, USER_STATUS_READ_SET, READ_SET_MAX_BATCH, (batch) => {
+    for (const row of batch.rows) onRow(row[0] ?? null, row[1] ?? null);
+  });
+}

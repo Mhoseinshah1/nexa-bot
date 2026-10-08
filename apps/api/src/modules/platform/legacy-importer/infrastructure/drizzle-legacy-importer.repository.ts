@@ -487,6 +487,25 @@ export class DrizzleLegacyImporterRepository
 
   // --- read set runs (Mirza migration PR1) -------------------------------------------------
 
+  async readSetFingerprintsOf(
+    scope: TenantContext,
+    readSet: LegacyReadSetName,
+    readSetVersion: number,
+    sourceFingerprint: string,
+    tx: TransactionScope,
+  ): Promise<readonly string[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute<{ read_set_fingerprint: string }>(sql`
+      SELECT DISTINCT read_set_fingerprint
+        FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = ${readSet}
+         AND read_set_version = ${readSetVersion}
+         AND source_fingerprint = ${sourceFingerprint}
+       ORDER BY read_set_fingerprint
+    `);
+    return result.rows.map((r) => r.read_set_fingerprint);
+  }
+
   async recordReadSetRun(
     scope: TenantContext,
     run: LegacyReadSetRun,
@@ -561,6 +580,11 @@ export class DrizzleLegacyImporterRepository
    * the customer just spoke to the bot. An imported customer did not.
    *
    * `first_bot_instance_id` is NULL: they arrived through no bot of this installation.
+   *
+   * `status` (OQ-LWD-07): a user blocked in MirzaBot is created BLOCKED, `blocked_at` the
+   * import's instant (`customers_blocked_at_check`) and no reason — the legacy reason text is
+   * not read, and a reason here would be shown to the customer. It applies to the INSERT
+   * only: the conflict path never touches the existing row.
    */
   async insertIfAbsent(
     scope: TenantContext,
@@ -569,10 +593,13 @@ export class DrizzleLegacyImporterRepository
   ): Promise<{ readonly customerId: string; readonly created: boolean }> {
     const tenantId = requireTenantId(scope);
     const at = input.now.toISOString();
+    const status = input.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE';
+    const blockedAt = status === 'BLOCKED' ? at : null;
     const inserted = await this.exec(tx).execute<{ id: string }>(sql`
-      INSERT INTO customers (id, tenant_id, telegram_user_id, username, status,
+      INSERT INTO customers (id, tenant_id, telegram_user_id, username, status, blocked_at,
                              first_seen_at, last_seen_at, created_at, updated_at)
-      VALUES (${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username}, 'ACTIVE',
+      VALUES (${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username},
+              ${status}, ${blockedAt}::timestamptz,
               ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz)
       ON CONFLICT (tenant_id, telegram_user_id) DO NOTHING
       RETURNING id
