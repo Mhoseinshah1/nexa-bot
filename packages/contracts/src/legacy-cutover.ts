@@ -95,6 +95,13 @@ export const LEGACY_CUTOVER_ERROR_CODES = {
   SOURCE_SUPERSEDED: 'legacy_cutover.source_superseded',
   /** The import was refused: the fresh inventory has a table nobody classified. */
   TABLES_UNCLASSIFIED: 'legacy_cutover.tables_unclassified',
+  /**
+   * A gated import was refused (or its run left RUNNING at its finish): sales were not
+   * stopped — no ACTIVE `stop_sales` MAINTENANCE incident, an ACTIVE panel not drained, or a
+   * payment gateway still ACTIVE (aud6 F2). The freeze is measured during the import window,
+   * not only by the gate after it.
+   */
+  STOP_SALES_NOT_ACTIVE: 'legacy_cutover.stop_sales_not_active',
 } as const;
 export type LegacyCutoverErrorCode =
   (typeof LEGACY_CUTOVER_ERROR_CODES)[keyof typeof LEGACY_CUTOVER_ERROR_CODES];
