@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import { LEGACY_READ_SET_NAMES } from '@nexa/contracts';
 import {
   READ_SET_MAX_BATCH,
+  USER_STATUS_READ_SET,
   defineLegacyReadSet,
   readLegacyReadSet,
   withBoundReadSetSession,
@@ -473,5 +475,26 @@ describe('a read set session is bound to the approved v1 source', () => {
 
   it('requires a well-formed approved value', async () => {
     await expect(withBoundReadSetSession(connectorOf(), 'ABC', vi.fn())).rejects.toThrow();
+  });
+});
+
+describe('the user-status read set (OQ-LWD-07)', () => {
+  it('is legacy-read-set:user-status:v1 over user.id and user.User_Status, and nothing else', () => {
+    expect(USER_STATUS_READ_SET.fingerprintVersion).toBe('legacy-read-set:user-status:v1');
+    expect(USER_STATUS_READ_SET.tables).toEqual([
+      { table: 'user', primaryKey: 'id', columns: ['id', 'User_Status'], optionalColumns: [] },
+    ]);
+    expect(LEGACY_READ_SET_NAMES).toContain(USER_STATUS_READ_SET.name);
+  });
+
+  it('travels with the import snapshot, and the frozen v1 identity is unchanged by it', async () => {
+    const connector = new FixtureLegacySourceConnector(buildSyntheticLegacyDataset() as never);
+    const snapshot = await readFromSession(connector.label, await connector.open());
+    const v1 = await readImportV1Identity(await connector.open());
+    expect(snapshot.fingerprint).toBe(v1.fingerprint);
+    const direct = await readLegacyReadSet(await connector.open(), USER_STATUS_READ_SET);
+    expect(snapshot.userStatus.fingerprint).toBe(direct.fingerprint);
+    expect(snapshot.userStatus.tables['user']?.rows).toBe(11);
+    expect(snapshot.users.every((u) => u.status === 'ACTIVE')).toBe(true);
   });
 });

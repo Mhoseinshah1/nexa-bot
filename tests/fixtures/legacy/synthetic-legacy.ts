@@ -428,6 +428,12 @@ export const SYNTHETIC_EXPECTED = {
     opening: { POSITIVE: 5, ZERO: 2, NEGATIVE: 1 },
     /** Σ legacy Balance over the eight importable users. */
     legacyBalanceSumMinor: 50_000n - 20_000n + 30_000n + 1_000n + 7_000n + 12_345n,
+    /**
+     * Mirza PR4 (owner decision 6): only the positive balances become ledger openings; the
+     * one negative balance is a legacy debt of its magnitude, beside the ledger.
+     */
+    positiveBalanceSumMinor: 50_000n + 30_000n + 1_000n + 7_000n + 12_345n,
+    debtSumMinor: 20_000n,
     /** Over every source row. */
     phone: { ABSENT: 8, VALID: 1, INVALID: 2 },
     agents: 2,

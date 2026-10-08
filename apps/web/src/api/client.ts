@@ -696,6 +696,19 @@ import {
   type LegacyInvoiceArchiveListResponse,
   type LegacyInvoiceArchiveSummaryResponse,
 } from '@nexa/contracts';
+// Mirza PR4: legacy wallet debts (negative legacy balances held for review).
+import {
+  LEGACY_WALLET_DEBT_ROUTES,
+  legacyWalletDebtListResponseSchema,
+  legacyWalletDebtResponseSchema,
+  legacyWalletDebtSummaryResponseSchema,
+  type LegacyWalletDebtDecideRequest,
+  type LegacyWalletDebtListResponse,
+  type LegacyWalletDebtReopenRequest,
+  type LegacyWalletDebtResponse,
+  type LegacyWalletDebtState,
+  type LegacyWalletDebtSummaryResponse,
+} from '@nexa/contracts';
 // Phase A2: a direct message from Customer 360.
 import {
   DIRECT_MESSAGE_ROUTES,
@@ -5276,4 +5289,52 @@ export function fetchLegacyInvoice(id: string): Promise<LegacyInvoiceArchiveDeta
     LEGACY_INVOICE_ARCHIVE_ROUTES.detail(id),
     legacyInvoiceArchiveDetailResponseSchema,
   );
+}
+
+// --- Mirza PR4: legacy wallet debts (owner decision 6) -------------------------------------
+
+/**
+ * One page of legacy wallet debts (`legacy.debts.view`): negative legacy balances held for
+ * the owner's review, never a ledger entry and never collected. `after` is the last id of
+ * the page before.
+ */
+export function fetchLegacyDebts(
+  query: {
+    readonly state?: LegacyWalletDebtState;
+    readonly legacyUserId?: string;
+    readonly after?: string;
+  } = {},
+): Promise<LegacyWalletDebtListResponse> {
+  const params = new URLSearchParams();
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.legacyUserId !== undefined && query.legacyUserId.trim() !== '') {
+    params.set('legacyUserId', query.legacyUserId.trim());
+  }
+  if (query.after !== undefined) params.set('after', query.after);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${LEGACY_WALLET_DEBT_ROUTES.list}?${suffix}` : LEGACY_WALLET_DEBT_ROUTES.list,
+    legacyWalletDebtListResponseSchema,
+  );
+}
+
+/** Count and Σ owed per state. Aggregates only. */
+export function fetchLegacyDebtSummary(): Promise<LegacyWalletDebtSummaryResponse> {
+  return authedGet(LEGACY_WALLET_DEBT_ROUTES.summary, legacyWalletDebtSummaryResponseSchema);
+}
+
+/** ACKNOWLEDGED or WAIVED (`legacy.debts.decide`). A label: it moves no money. */
+export function decideLegacyDebt(
+  input: LegacyWalletDebtDecideRequest & { readonly id: string },
+): Promise<LegacyWalletDebtResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_WALLET_DEBT_ROUTES.decide(id), body, legacyWalletDebtResponseSchema);
+}
+
+/** A decided debt back to PENDING_REVIEW (`legacy.debts.decide`). */
+export function reopenLegacyDebt(
+  input: LegacyWalletDebtReopenRequest & { readonly id: string },
+): Promise<LegacyWalletDebtResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_WALLET_DEBT_ROUTES.reopen(id), body, legacyWalletDebtResponseSchema);
 }

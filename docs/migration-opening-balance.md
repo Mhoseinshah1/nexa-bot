@@ -7,14 +7,14 @@ Status: built (schema, contracts, service, tests). The importer that calls it (P
 
 Each legacy customer's `user.Balance` (Toman) becomes **one** wallet ledger entry in NEXA:
 
-| Field                              | Value                                                                      |
-| ---------------------------------- | -------------------------------------------------------------------------- |
-| `reason`                           | `MIGRATION_OPENING_BALANCE` (contract, `packages/contracts/src/ledger.ts`) |
-| `direction`                        | `CREDIT` for a positive balance, `DEBIT` (of the magnitude) for a negative |
-| `amount`                           | `                                                                          | legacy Balance | `in minor units;`IRT` has 0 minor digits, so Toman = minor |
-| `currency`                         | the tenant's `sales.currency` (refused otherwise)                          |
-| `reference`                        | `legacy:opening:<telegram_user_id>` (`migrationOpeningReference`)          |
-| order / payment / reversal / admin | all NULL (CHECK-pinned)                                                    |
+| Field                              | Value                                                                       |
+| ---------------------------------- | --------------------------------------------------------------------------- |
+| `reason`                           | `MIGRATION_OPENING_BALANCE` (contract, `packages/contracts/src/ledger.ts`)  |
+| `direction`                        | `CREDIT` — a positive balance only (a negative one is a legacy debt, below) |
+| `amount`                           | `                                                                           | legacy Balance | `in minor units;`IRT` has 0 minor digits, so Toman = minor |
+| `currency`                         | the tenant's `sales.currency` (refused otherwise)                           |
+| `reference`                        | `legacy:opening:<telegram_user_id>` (`migrationOpeningReference`)           |
+| order / payment / reversal / admin | all NULL (CHECK-pinned)                                                     |
 
 `wallet_transaction` is **not** replayed: the legacy balance is the migration-time truth.
 
@@ -28,13 +28,61 @@ Each legacy customer's `user.Balance` (Toman) becomes **one** wallet ledger entr
   the balance is already right. The service answers `ZERO_NO_ENTRY` (never a fake
   "posted"); the importer's run metadata (P4) records the decision. A zero after a non-zero
   opening was already posted is a payload mismatch, not a silent no-op.
-- **Negative (38 legacy users in the historical staging snapshot — a dated baseline, never
-  an expected count; the cutover snapshot is newer):** a `DEBIT` written **without** the overdraft check. This is
-  the only path that may take a wallet below zero: the debt already exists and is recorded,
-  not created. Every ordinary debit (`WalletService.adjust`, purchases, clawbacks) still runs
-  `canCover` with a zero allowance, so a wallet that opens negative refuses the next ordinary
-  debit until credits bring it to cover (`docs/reseller-phase3-closure.md`: no credit, never
-  below zero by an ordinary path). The negative opening is reported as legacy debt.
+- **Negative** (38 legacy users in the historical staging snapshot — a dated baseline,
+  never an expected count; the cutover snapshot is newer): **held for review, never a
+  ledger entry** (owner decision 6, 2026-10-07; Mirza PR4). See the next section.
+
+## Negative balances (owner decision 6 — Mirza PR4)
+
+The owner decided on 2026-10-07: a negative legacy balance is HELD FOR REVIEW. Before that
+decision this service wrote it as a `DEBIT` of the magnitude without `canCover`, so the
+wallet opened negative and the customer's next top-up silently repaid it — the debt was in
+effect collected. That path is gone:
+
+| What           | Now                                                                                                                                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ledger         | **No entry.** The NEXA balance is untouched (0 for a new customer).                                                                                                                                                                     |
+| Record         | One row in `legacy_wallet_debts` (migration 0226): the MAGNITUDE owed, `IRT`, the legacy user id, the customer, the v1 source fingerprint, the `user:v1` row checksum, the import run, whether the source was synthetic, `recorded_at`. |
+| Audit          | `legacy.wallet_debt.recorded` (entity = the debt's id; no Telegram id; `ledgerEntry: null`).                                                                                                                                            |
+| Outcome        | `DEBT_RECORDED` (with `amountMinor`); `DEBT_ALREADY_RECORDED` on a rerun.                                                                                                                                                               |
+| Map row        | Unchanged: `IMPORTED` / `CUSTOMER` with warning reason `NEGATIVE_BALANCE`.                                                                                                                                                              |
+| Collection     | **Never.** No top-up, purchase, refund, clawback, settlement or balance query reads the table (`tests/unit/legacy-wallet-debts-boundary.test.ts`).                                                                                      |
+| Owner decision | Per customer in the Web Admin (`/legacy-debts`): `PENDING_REVIEW` → `ACKNOWLEDGED` \| `WAIVED`, and reopen. A label: none of them moves money.                                                                                          |
+
+- **Idempotent like the opening.** One debt per `(tenant, customer)` and per
+  `(tenant, legacy user id)` (unique keys). A rerun with the same figure is `DEBT_ALREADY_RECORDED`;
+  a different figure — another amount, a non-negative balance after a debt, a negative
+  one after a CREDIT opening — is `platform.idempotency_payload_mismatch` (the importer
+  counts `CONFLICT`). So is a debt recorded from a SYNTHETIC source met by a real one (or
+  the reverse): test data is never taken for a real debt (PR3's review lesson, #232).
+- **Immutable facts.** 0227: the amount, currency, legacy user, customer, fingerprint,
+  checksum, run, `synthetic` and `recorded_at` are never rewritten, and a debt is never
+  deleted, for every role. Only the decision columns move, by a conditional UPDATE at the
+  version the operator saw.
+- **Provenance is required.** A negative balance without its provenance (`runId`,
+  `sourceFingerprint`, `rowChecksum`, `synthetic`) is refused before anything is read.
+- **Collecting a debt is OUT OF SCOPE.** It would need a new ledger reason (e.g. a
+  `LEGACY_DEBT_COLLECTION` debit — a contract change) and an explicit owner instruction.
+  Neither exists; nothing in this release can take money for a legacy debt.
+
+### Rows the code before the decision may already have written
+
+`legacy:opening:<telegram_user_id>` DEBIT rows were written by every APPLY run of the
+importer before this change, wherever it ran:
+
+- **CI and local synthetic rehearsals** — certainly: the synthetic fixture has one negative
+  user (`100000003`, −20 000). Those databases are throwaway.
+- **A real-data rehearsal on a non-production target** — UNKNOWN whether one was run
+  (`OQ-LWD-01`); the repository records no real-archive result (readiness G5–G18 open).
+- **Production** — none: no production import has ever run.
+
+They are **not rewritten** (the ledger is append-only, and this PR changes no ledger row). A
+rerun of the importer on such a target meets the DEBIT and answers `PRIOR_DEBIT_OPENING`:
+nothing written, no debt beside it (that would count it twice), counted in the run's
+`attention.priorDebitOpening` so the verdict is `COMPLETED_WITH_FAILURES`, and reconcile's
+`usersWallets` U6/U7 fail. The remedy is the one the rollback runbook already gives: restore
+the target to its pre-import state (the database-rename rollback) and import again with
+this code. Never "fix" the ledger by hand.
 
 ## Write path
 
@@ -101,8 +149,13 @@ movement, and opening + Σ movements = closing still holds. The Web Admin labels
 
 ## Not done here (HOLD or manual)
 
-- The P7 importer (reads legacy MySQL, resolves/creates customers, calls `post`). HOLD.
-- Production import and reconciliation against `SUM(user.Balance) = 2,874,365,519` Toman:
-  after a real run, `Σ signed MIGRATION_OPENING_BALANCE entries` must equal that sum (minus
-  any skipped test users), and the count of entries must equal the number of non-zero
-  legacy balances (60,217 + 38). Manual acceptance; no legacy DB exists in this environment.
+- Collecting, netting or converting a legacy debt (owner instruction + a new ledger reason).
+- Making a legacy agent a NEXA reseller (`OQ-LWD-03`).
+- Production import and reconciliation (manual acceptance; no legacy DB exists in this
+  environment). After a real run on the CUTOVER snapshot — whose figures are new; the
+  staging snapshot's (`SUM(user.Balance) = 2,874,365,519` Toman, 60,217 positive and 38
+  negative balances, as of the historical staging read) are dated baselines, never
+  expected values — `reconcile` must show: Σ `MIGRATION_OPENING_BALANCE` entries = Σ
+  POSITIVE legacy balances of imported users, one entry per positive balance, Σ legacy
+  debts = Σ |negative| balances, one debt per negative balance, and no DEBIT opening
+  (`usersWallets` U2–U6, `docs/legacy-migration/reconciliation.md` §6).

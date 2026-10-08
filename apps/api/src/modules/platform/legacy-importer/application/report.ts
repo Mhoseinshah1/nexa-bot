@@ -35,6 +35,13 @@ export interface LegacyImportReport {
    * `docs/legacy-migration/final-report.schema.json`; `--format json` prints exactly it.
    */
   readonly final?: unknown;
+  /**
+   * `report` mode only (Mirza PR4): the users-and-wallets section
+   * (`LEGACY_USERS_WALLETS_SECTION_VERSION`), rendered after the final report in markdown.
+   * NOT in `--format json`, which prints the closed v1 document exactly; `reconcile` carries
+   * the same section in its JSON `sections`. PR6 folds it into schema version 2.
+   */
+  readonly usersWallets?: unknown;
 }
 
 export interface LegacyReportInvocation {
@@ -143,5 +150,6 @@ export function reportMarkdown(report: LegacyImportReport): string {
   }
   out.push('');
   for (const [name, value] of Object.entries(report.sections)) renderValue(name, value, 0, out);
+  if (report.usersWallets !== undefined) renderValue('usersWallets', report.usersWallets, 0, out);
   return `${out.join('\n').replace(/\n{3,}/gu, '\n\n')}\n`;
 }

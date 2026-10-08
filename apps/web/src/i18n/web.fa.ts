@@ -8296,6 +8296,57 @@ export const WEB_FA = {
   'web.lia_fault_not_found': 'این فاکتور پیدا نشد.',
   'web.lia_fault_request': 'درخواست نامعتبر است.',
   'web.lia_fault_pii': 'برای این کار دسترسی اطلاعات شخصی لازم است.',
+  // Mirza migration PR4: legacy wallet debts (owner decision 6 — held for review, never collected).
+  'web.nav_legacy_debts': 'بدهی‌های ربات قدیمی',
+  'web.perm_legacy_debts_view': 'دیدن بدهی‌های کیف پول ربات قدیمی که برای بررسی نگه داشته شده‌اند',
+  'web.perm_legacy_debts_decide':
+    'ثبت تصمیم مالک درباره بدهی قدیمی (تأیید، بخشش، بازگشایی؛ هیچ‌وقت وصول نمی‌کند)',
+  'web.lwd_title': 'بدهی‌های ربات قدیمی',
+  'web.lwd_subtitle':
+    'موجودی‌های منفی ربات قدیمی (میرزا) که برای تصمیم مالک نگه داشته شده‌اند؛ هر مشتری جداگانه.',
+  'web.lwd_banner':
+    'موجودی منفی قدیمی به کیف پول نیامده است: موجودی مشتری در سامانه از صفر شروع شده و این بدهی هرگز از شارژ، خرید یا بازپرداخت کم نمی‌شود. تصمیم شما فقط ثبت می‌شود و پولی جابه‌جا نمی‌کند.',
+  'web.lwd_summary_title': 'جمع بدهی‌ها',
+  'web.lwd_summary_total': 'همه',
+  'web.lwd_state_pending': 'در انتظار بررسی',
+  'web.lwd_state_acknowledged': 'تأیید شده',
+  'web.lwd_state_waived': 'بخشیده شده',
+  'web.lwd_filter_all': 'همه وضعیت‌ها',
+  'web.lwd_search_legacy_user': 'شناسه کاربر قدیمی',
+  'web.lwd_col_legacy_user': 'شناسه کاربر قدیمی (تلگرام)',
+  'web.lwd_col_amount': 'مبلغ بدهی',
+  'web.lwd_col_state': 'وضعیت',
+  'web.lwd_col_actions': 'عملیات',
+  'web.lwd_open': 'جزئیات',
+  'web.lwd_empty': 'بدهی قدیمی‌ای ثبت نشده است',
+  'web.lwd_empty_hint':
+    'وقتی واردکننده موجودی منفی‌ای از ربات قدیمی بخواند، اینجا برای بررسی نمایش داده می‌شود.',
+  'web.lwd_never_collected': 'این بدهی هرگز وصول نمی‌شود و موجودی کیف پول مشتری را تغییر نمی‌دهد.',
+  'web.lwd_recorded_title': 'آنچه ثبت شد',
+  'web.lwd_synthetic':
+    'این بدهی از داده آزمایشی (مصنوعی) خوانده شده است، نه از ربات واقعی؛ آن را بدهی واقعی ندانید.',
+  'web.lwd_customer': 'مشتری',
+  'web.lwd_open_customer': 'باز کردن مشتری',
+  'web.lwd_recorded_at': 'زمان ثبت',
+  'web.lwd_source_fingerprint': 'اثر انگشت منبع',
+  'web.lwd_row_checksum': 'چک‌سام ردیف قدیمی',
+  'web.lwd_run': 'اجرای واردکردن',
+  'web.lwd_decided_at': 'زمان تصمیم',
+  'web.lwd_reason': 'دلیل',
+  'web.lwd_reason_hint': 'برای هر تصمیم لازم است و در گزارش ممیزی می‌ماند.',
+  'web.lwd_view_only': 'برای ثبت تصمیم، دسترسی تصمیم درباره بدهی‌های قدیمی لازم است.',
+  'web.lwd_decide_title': 'تصمیم مالک',
+  'web.lwd_decision_moves_no_money':
+    'هیچ تصمیمی پولی جابه‌جا نمی‌کند. وصول بدهی دلیل دفتر کل تازه و دستور صریح مالک لازم دارد و در این نسخه وجود ندارد.',
+  'web.lwd_acknowledge': 'تأیید بدهی',
+  'web.lwd_waive': 'بخشیدن بدهی',
+  'web.lwd_reopen': 'بازگشت به بررسی',
+  'web.lwd_saved': 'تصمیم ثبت شد',
+  'web.lwd_fault_not_found': 'این بدهی پیدا نشد.',
+  'web.lwd_fault_not_in_state': 'این تصمیم در وضعیت فعلی این بدهی ممکن نیست.',
+  'web.lwd_fault_version':
+    'این بدهی از وقتی آن را باز کردید تغییر کرده است. دوباره باز کنید و تصمیم بگیرید.',
+  'web.lwd_fault_stopped': 'این نصب دیگر کار تازه نمی‌پذیرد.',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

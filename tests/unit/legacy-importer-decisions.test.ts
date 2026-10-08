@@ -12,6 +12,7 @@ import {
   parseLegacyBalance,
   type ServiceDecisionContext,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/decisions';
+import { classifyLegacyUserStatus } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import {
   openingPlanFor,
   planLegacyImport,
@@ -62,53 +63,112 @@ describe('customers and balances', () => {
   });
 
   it('refuses an identity that is not a Telegram id, before anything else', () => {
-    expect(decideLegacyUser({ id: 'not-a-telegram-id', balance: '100' }, false)).toEqual({
+    expect(
+      decideLegacyUser({ id: 'not-a-telegram-id', balance: '100', status: 'ACTIVE' }, false),
+    ).toEqual({
       kind: 'INVALID_IDENTITY',
     });
-    expect(decideLegacyUser({ id: '0123', balance: '100' }, false).kind).toBe('INVALID_IDENTITY');
-    expect(decideLegacyUser({ id: '12345678901234567890', balance: '1' }, false).kind).toBe(
+    expect(decideLegacyUser({ id: '0123', balance: '100', status: 'ACTIVE' }, false).kind).toBe(
       'INVALID_IDENTITY',
     );
+    expect(
+      decideLegacyUser({ id: '12345678901234567890', balance: '1', status: 'ACTIVE' }, false).kind,
+    ).toBe('INVALID_IDENTITY');
   });
 
   it('sends an unreadable or out-of-range balance to manual review, never a guess', () => {
-    expect(decideLegacyUser({ id: '100', balance: '12.5' }, false)).toMatchObject({
+    expect(decideLegacyUser({ id: '100', balance: '12.5', status: 'ACTIVE' }, false)).toMatchObject(
+      {
+        kind: 'MANUAL_REVIEW',
+        reason: 'BALANCE_UNREADABLE',
+        mapReason: 'INVALID_SOURCE_ROW',
+      },
+    );
+    expect(decideLegacyUser({ id: '100', balance: null, status: 'ACTIVE' }, true)).toMatchObject({
       kind: 'MANUAL_REVIEW',
       reason: 'BALANCE_UNREADABLE',
-      mapReason: 'INVALID_SOURCE_ROW',
     });
-    expect(decideLegacyUser({ id: '100', balance: null }, true)).toMatchObject({
-      kind: 'MANUAL_REVIEW',
-      reason: 'BALANCE_UNREADABLE',
-    });
-    expect(decideLegacyUser({ id: '100', balance: '1000000000001' }, false)).toMatchObject({
+    expect(
+      decideLegacyUser({ id: '100', balance: '1000000000001', status: 'ACTIVE' }, false),
+    ).toMatchObject({
       kind: 'MANUAL_REVIEW',
       reason: 'BALANCE_OUT_OF_RANGE',
     });
-    expect(decideLegacyUser({ id: '100', balance: '-1000000000000' }, false).kind).toBe('IMPORT');
+    expect(
+      decideLegacyUser({ id: '100', balance: '-1000000000000', status: 'ACTIVE' }, false).kind,
+    ).toBe('IMPORT');
   });
 
   it('imports positive, zero and negative balances, with the map warning they carry', () => {
-    expect(decideLegacyUser({ id: '100', balance: '5' }, false)).toMatchObject({
+    expect(decideLegacyUser({ id: '100', balance: '5', status: 'ACTIVE' }, false)).toMatchObject({
       kind: 'IMPORT',
       customer: 'NEW',
       openingKind: 'POSITIVE',
       balanceMinor: 5n,
       mapReason: null,
     });
-    expect(decideLegacyUser({ id: '100', balance: '0' }, false)).toMatchObject({
+    expect(decideLegacyUser({ id: '100', balance: '0', status: 'ACTIVE' }, false)).toMatchObject({
       openingKind: 'ZERO',
       mapReason: null,
     });
-    expect(decideLegacyUser({ id: '100', balance: '-7' }, false)).toMatchObject({
+    expect(decideLegacyUser({ id: '100', balance: '-7', status: 'ACTIVE' }, false)).toMatchObject({
       openingKind: 'NEGATIVE',
       balanceMinor: -7n,
       mapReason: 'NEGATIVE_BALANCE',
     });
-    expect(decideLegacyUser({ id: '100', balance: '-7' }, true)).toMatchObject({
+    expect(decideLegacyUser({ id: '100', balance: '-7', status: 'ACTIVE' }, true)).toMatchObject({
       customer: 'EXISTING',
       mapReason: 'EXISTING_CUSTOMER',
     });
+  });
+
+  it('OQ-LWD-07: a blocked legacy user is imported blocked, with the same money decision', () => {
+    for (const balance of ['5', '0', '-7']) {
+      const active = decideLegacyUser({ id: '100', balance, status: 'ACTIVE' }, false);
+      const blocked = decideLegacyUser({ id: '100', balance, status: 'BLOCKED' }, false);
+      expect(active).toMatchObject({ kind: 'IMPORT', blocked: false });
+      expect(blocked).toEqual({ ...active, blocked: true });
+    }
+    expect(decideLegacyUser({ id: '100', balance: '5', status: 'BLOCKED' }, true)).toMatchObject({
+      kind: 'IMPORT',
+      customer: 'EXISTING',
+      blocked: true,
+    });
+  });
+
+  it('OQ-LWD-07: an unknown User_Status goes to manual review, never ACTIVE', () => {
+    expect(decideLegacyUser({ id: '100', balance: '5', status: 'UNKNOWN' }, false)).toEqual({
+      kind: 'MANUAL_REVIEW',
+      reason: 'STATUS_UNKNOWN',
+      mapReason: 'INVALID_SOURCE_ROW',
+    });
+    expect(decideLegacyUser({ id: '100', balance: '5', status: 'UNKNOWN' }, true).kind).toBe(
+      'MANUAL_REVIEW',
+    );
+    // Identity still comes first.
+    expect(decideLegacyUser({ id: 'x', balance: '5', status: 'UNKNOWN' }, false).kind).toBe(
+      'INVALID_IDENTITY',
+    );
+  });
+
+  it('OQ-LWD-07: only the two MirzaBot spellings are known, compared exactly', () => {
+    expect(classifyLegacyUserStatus('Active')).toBe('ACTIVE');
+    expect(classifyLegacyUserStatus('block')).toBe('BLOCKED');
+    for (const raw of [
+      null,
+      '',
+      'active',
+      'ACTIVE',
+      'Block',
+      'BLOCK',
+      ' block',
+      'block ',
+      'blocked',
+      'toString',
+      '__proto__',
+    ]) {
+      expect(classifyLegacyUserStatus(raw), String(raw)).toBe('UNKNOWN');
+    }
   });
 
   it('keeps a profile username only when it is one; reports agents', () => {
@@ -122,13 +182,35 @@ describe('customers and balances', () => {
     expect(legacyIsAgent('n2')).toBe(true);
   });
 
+  const real = (amountMinor: bigint) => ({ amountMinor, synthetic: false });
+
   it('plans an opening against what is already posted', () => {
     expect(openingPlanFor(5n, undefined)).toBe('POST');
     expect(openingPlanFor(0n, undefined)).toBe('ZERO_NO_ENTRY');
     expect(openingPlanFor(5n, 5n)).toBe('ALREADY_POSTED');
-    expect(openingPlanFor(-5n, -5n)).toBe('ALREADY_POSTED');
     expect(openingPlanFor(6n, 5n)).toBe('CONFLICT');
     expect(openingPlanFor(0n, 5n)).toBe('CONFLICT');
+  });
+
+  it('plans a NEGATIVE balance as a legacy debt, never a ledger entry (owner decision 6)', () => {
+    expect(openingPlanFor(-5n, undefined)).toBe('RECORD_DEBT');
+    expect(openingPlanFor(-5n, undefined, real(5n))).toBe('DEBT_ALREADY_RECORDED');
+    // A different figure, in amount or in kind, is a conflict — never re-applied.
+    expect(openingPlanFor(-6n, undefined, real(5n))).toBe('CONFLICT');
+    expect(openingPlanFor(5n, undefined, real(5n))).toBe('CONFLICT');
+    expect(openingPlanFor(0n, undefined, real(5n))).toBe('CONFLICT');
+    expect(openingPlanFor(-5n, 5n)).toBe('CONFLICT');
+    // A DEBIT opening the code before the decision wrote: left alone, never doubled.
+    expect(openingPlanFor(-5n, -5n)).toBe('PRIOR_DEBIT_OPENING');
+    expect(openingPlanFor(-6n, -5n)).toBe('CONFLICT');
+  });
+
+  it('plans a debt of another evidence class as a CONFLICT, as APPLY refuses it (Codex on #233)', () => {
+    const synthetic = { amountMinor: 5n, synthetic: true };
+    // A real snapshot meeting a synthetic debt of the same magnitude, and the reverse.
+    expect(openingPlanFor(-5n, undefined, synthetic, false)).toBe('CONFLICT');
+    expect(openingPlanFor(-5n, undefined, real(5n), true)).toBe('CONFLICT');
+    expect(openingPlanFor(-5n, undefined, synthetic, true)).toBe('DEBT_ALREADY_RECORDED');
   });
 });
 
@@ -336,12 +418,17 @@ describe('the plan over the SYNTHETIC dataset', () => {
     expect(tallies.wallet.positive.count).toBe(u.opening.POSITIVE);
     expect(tallies.wallet.zero).toBe(u.opening.ZERO);
     expect(tallies.wallet.negative.count).toBe(u.opening.NEGATIVE);
+    // Owner decision 6: the negative balance is a legacy debt, not a sixth posted entry.
     expect(tallies.wallet.openings).toEqual({
-      POST: 6,
+      POST: u.opening.POSITIVE,
       ALREADY_POSTED: 0,
       ZERO_NO_ENTRY: 2,
       CONFLICT: 0,
+      RECORD_DEBT: u.opening.NEGATIVE,
+      DEBT_ALREADY_RECORDED: 0,
+      PRIOR_DEBIT_OPENING: 0,
     });
+    expect(tallies.customers.duplicateSourceIds).toEqual({ ids: 0, rows: 0 });
     expect(tallies.trials).toMatchObject(u.trial);
     expect(tallies.services.candidates).toBe(SYNTHETIC_EXPECTED.services.candidates);
     expect(tallies.services.categories).toEqual(SYNTHETIC_EXPECTED.services.categories);

@@ -1,0 +1,2 @@
+ALTER TABLE "legacy_read_set_runs" DROP CONSTRAINT "legacy_read_set_runs_read_set_check";--> statement-breakpoint
+ALTER TABLE "legacy_read_set_runs" ADD CONSTRAINT "legacy_read_set_runs_read_set_check" CHECK (read_set IN ('inventory', 'products', 'invoice-archive', 'user-status'));

@@ -85,6 +85,8 @@ export const PERMISSION_LABELS: Readonly<Record<PermissionKey, WebKey>> = {
   'legacy.products.decide': 'web.perm_legacy_products_decide',
   'legacy.invoices.view': 'web.perm_legacy_invoices_view',
   'legacy.invoices.pii.view': 'web.perm_legacy_invoices_pii_view',
+  'legacy.debts.view': 'web.perm_legacy_debts_view',
+  'legacy.debts.decide': 'web.perm_legacy_debts_decide',
   'tickets.reply': 'web.perm_tickets_reply',
   'tickets.assign': 'web.perm_tickets_assign',
   'tickets.close': 'web.perm_tickets_close',

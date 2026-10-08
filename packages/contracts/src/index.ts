@@ -148,6 +148,8 @@ export * from './legacy-inventory.js';
 export * from './legacy-product-review.js';
 /** Mirza migration PR3: the legacy invoice archive (classes, run states, HTTP shapes). */
 export * from './legacy-invoice-archive.js';
+/** Mirza migration PR4: legacy wallet debts (negative balances held for review), the users/wallets report section. */
+export * from './legacy-wallet-debt.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */
 export * from './business-chats.js';
 /** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */

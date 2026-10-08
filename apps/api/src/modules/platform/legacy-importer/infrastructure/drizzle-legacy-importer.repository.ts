@@ -23,6 +23,7 @@ import type {
   LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
+  RecordedDebt,
 } from '../application/ports.js';
 import type { LegacySourceEngine } from '../application/source-port.js';
 
@@ -148,6 +149,59 @@ export class DrizzleLegacyImporterRepository
       }
     }
     return out;
+  }
+
+  /**
+   * Mirza PR4: Telegram id → the legacy debt recorded for it — its magnitude AND its
+   * evidence class (owner decision 6; Codex on #233: the plan must decide "the same debt"
+   * exactly as the opening service does). Read here for the plan and the reconciliation
+   * only; no balance query reads the table.
+   */
+  async debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, RecordedDebt>> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{
+      legacy_user_id: string;
+      amount_minor: string;
+      synthetic: boolean;
+    }>(sql`
+      SELECT legacy_user_id, amount_minor::text AS amount_minor, synthetic
+        FROM legacy_wallet_debts
+       WHERE tenant_id = ${tenantId}
+    `);
+    return new Map(
+      result.rows.map((r) => [
+        r.legacy_user_id,
+        { amountMinor: BigInt(r.amount_minor), synthetic: r.synthetic },
+      ]),
+    );
+  }
+
+  /** Mirza PR4: count and Σ of recorded legacy debts, in total and per owner-decision state. */
+  async debtAggregates(scope: TenantContext) {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{
+      state: string;
+      n: number;
+      total: string;
+      synthetic: number;
+    }>(sql`
+      SELECT state, count(*)::int AS n, COALESCE(sum(amount_minor), 0)::text AS total,
+             count(*) FILTER (WHERE synthetic)::int AS synthetic
+        FROM legacy_wallet_debts
+       WHERE tenant_id = ${tenantId}
+       GROUP BY state ORDER BY state
+    `);
+    const byState: Record<string, { count: number; sumMinor: bigint }> = {};
+    let count = 0;
+    let sumMinor = 0n;
+    let synthetic = 0;
+    for (const row of result.rows) {
+      synthetic += row.synthetic;
+      byState[row.state] = { count: row.n, sumMinor: BigInt(row.total) };
+      count += row.n;
+      sumMinor += BigInt(row.total);
+    }
+    return { count, sumMinor, byState, synthetic };
   }
 
   async trialOverrides(
@@ -433,6 +487,25 @@ export class DrizzleLegacyImporterRepository
 
   // --- read set runs (Mirza migration PR1) -------------------------------------------------
 
+  async readSetFingerprintsOf(
+    scope: TenantContext,
+    readSet: LegacyReadSetName,
+    readSetVersion: number,
+    sourceFingerprint: string,
+    tx: TransactionScope,
+  ): Promise<readonly string[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute<{ read_set_fingerprint: string }>(sql`
+      SELECT DISTINCT read_set_fingerprint
+        FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = ${readSet}
+         AND read_set_version = ${readSetVersion}
+         AND source_fingerprint = ${sourceFingerprint}
+       ORDER BY read_set_fingerprint
+    `);
+    return result.rows.map((r) => r.read_set_fingerprint);
+  }
+
   async recordReadSetRun(
     scope: TenantContext,
     run: LegacyReadSetRun,
@@ -507,6 +580,11 @@ export class DrizzleLegacyImporterRepository
    * the customer just spoke to the bot. An imported customer did not.
    *
    * `first_bot_instance_id` is NULL: they arrived through no bot of this installation.
+   *
+   * `status` (OQ-LWD-07): a user blocked in MirzaBot is created BLOCKED, `blocked_at` the
+   * import's instant (`customers_blocked_at_check`) and no reason — the legacy reason text is
+   * not read, and a reason here would be shown to the customer. It applies to the INSERT
+   * only: the conflict path never touches the existing row.
    */
   async insertIfAbsent(
     scope: TenantContext,
@@ -515,10 +593,13 @@ export class DrizzleLegacyImporterRepository
   ): Promise<{ readonly customerId: string; readonly created: boolean }> {
     const tenantId = requireTenantId(scope);
     const at = input.now.toISOString();
+    const status = input.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE';
+    const blockedAt = status === 'BLOCKED' ? at : null;
     const inserted = await this.exec(tx).execute<{ id: string }>(sql`
-      INSERT INTO customers (id, tenant_id, telegram_user_id, username, status,
+      INSERT INTO customers (id, tenant_id, telegram_user_id, username, status, blocked_at,
                              first_seen_at, last_seen_at, created_at, updated_at)
-      VALUES (${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username}, 'ACTIVE',
+      VALUES (${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username},
+              ${status}, ${blockedAt}::timestamptz,
               ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz)
       ON CONFLICT (tenant_id, telegram_user_id) DO NOTHING
       RETURNING id

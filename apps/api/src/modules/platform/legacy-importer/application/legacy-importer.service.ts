@@ -10,6 +10,7 @@ import {
   type CurrencyCode,
   type IdGenerator,
   type LegacyImportMapStatus,
+  type LegacyReadSetName,
   type OperationalEventRecorder,
   type PermissionKey,
   type TenantContext,
@@ -22,9 +23,14 @@ import type { SessionRepository } from '../../identity/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
+  LegacyImportMapRecord,
   LegacyImportRepository,
   LegacyImportRunRecord,
 } from '../../legacy-import/application/legacy-import-ports.js';
+import {
+  buildUsersWalletsSection,
+  type UsersWalletsSection,
+} from './users-wallets-reconciliation.js';
 import {
   isReviewClosedToRerun,
   resumeDecision,
@@ -67,11 +73,16 @@ import type {
   LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
+  RecordedDebt,
 } from './ports.js';
 import { buildFinalReport } from './final-report.js';
 import { decideEvidenceClass, type EvidenceClass } from './production-guard.js';
 import { LEGACY_REPORT_FORMAT, type LegacyImportReport, type LegacyReportMode } from './report.js';
 import { sha256Hex, type LegacySnapshot } from './source-snapshot.js';
+import { USER_STATUS_READ_SET } from './read-set.js';
+
+/** The `user-status` read set's recorded name (OQ-LWD-07). */
+const USER_STATUS_READ_SET_NAME: LegacyReadSetName = 'user-status';
 
 /**
  * Migration P7 — the legacy importer (`docs/legacy-migration/importer.md`).
@@ -169,11 +180,16 @@ interface Prepared {
   readonly plan: LegacyPlan;
   readonly inventories: ReadonlyMap<string, LegacyInventoryRead>;
   readonly salesCurrency: string;
+  /** What NEXA had recorded when the plan was made: signed openings, debt magnitudes. */
+  readonly existingOpenings: ReadonlyMap<string, bigint>;
+  readonly existingDebts: ReadonlyMap<string, RecordedDebt>;
 }
 
 export interface ApplyTallies {
   customers: {
     created: number;
+    /** Of `created`: blocked in MirzaBot, so created BLOCKED (OQ-LWD-07). */
+    createdBlocked: number;
     matchedExisting: number;
     manualReviewRecorded: number;
     sourceChanged: number;
@@ -186,6 +202,13 @@ export interface ApplyTallies {
     ZERO_NO_ENTRY: number;
     CONFLICT: number;
     postedSumMinor: bigint;
+    /** Mirza PR4 (owner decision 6): negative balances recorded as legacy debts, no entry. */
+    DEBT_RECORDED: number;
+    DEBT_ALREADY_RECORDED: number;
+    /** Σ magnitude of the debts THIS run recorded. */
+    debtRecordedSumMinor: bigint;
+    /** A ledger DEBIT opening from before owner decision 6: left as it is, never doubled. */
+    PRIOR_DEBIT_OPENING: number;
   };
   trials: {
     APPLIED: number;
@@ -237,6 +260,9 @@ export function applyAttention(tallies: ApplyTallies) {
     customerSourceChanged: tallies.customers.sourceChanged,
     customerEntityMismatch: tallies.customers.entityMismatch,
     openingConflict: tallies.openings.CONFLICT,
+    // A rehearsal target that ran the code before owner decision 6 holds a ledger DEBIT the
+    // decision forbids. Never rewritten here — and never reported as success either.
+    priorDebitOpening: tallies.openings.PRIOR_DEBIT_OPENING,
     trialConflict: tallies.trials.CONFLICT,
     invoiceMapRefused: tallies.services.map.REFUSED,
     adoptionFailed: tallies.services.adoption.FAILED,
@@ -291,12 +317,14 @@ export class LegacyImporterService {
       .filter((id) => /^[1-9][0-9]{0,18}$/u.test(id));
     const existingCustomers = await destination.customersByTelegramIds(scope, telegramIds);
     const existingIds = [...existingCustomers.values()];
-    const [existingOpenings, trialOverrides, trialDecided, tariffCandidates] = await Promise.all([
-      destination.openingsByTelegramId(scope),
-      destination.trialOverrides(scope, existingIds),
-      destination.trialDecided(scope, existingIds),
-      destination.tariffCandidates(scope),
-    ]);
+    const [existingOpenings, existingDebts, trialOverrides, trialDecided, tariffCandidates] =
+      await Promise.all([
+        destination.openingsByTelegramId(scope),
+        destination.debtsByTelegramId(scope),
+        destination.trialOverrides(scope, existingIds),
+        destination.trialDecided(scope, existingIds),
+        destination.tariffCandidates(scope),
+      ]);
 
     const inventories = new Map<string, LegacyInventoryRead>();
     for (const panelId of mapping.policy.productionPanelIds) {
@@ -310,6 +338,7 @@ export class LegacyImporterService {
       salesCurrency,
       existingCustomers,
       existingOpenings,
+      existingDebts,
       trialOverrides,
       trialDecided,
       existingShapes: new Map(),
@@ -326,13 +355,14 @@ export class LegacyImporterService {
       salesCurrency,
       existingCustomers,
       existingOpenings,
+      existingDebts,
       trialOverrides,
       trialDecided,
       existingShapes,
       tariffCandidates,
       inventories,
     });
-    return { plan, inventories, salesCurrency };
+    return { plan, inventories, salesCurrency, existingOpenings, existingDebts };
   }
 
   private providerSection(prepared: Prepared) {
@@ -357,6 +387,8 @@ export class LegacyImporterService {
       fingerprint: snapshot.fingerprint,
       schemaHash: snapshot.schemaHash,
       tables: snapshot.tables,
+      /** OQ-LWD-07: the `user-status` read set this snapshot decided statuses from. */
+      userStatus: snapshot.userStatus,
     };
   }
 
@@ -567,6 +599,7 @@ export class LegacyImporterService {
           'There is no RUNNING import of this source to resume. Use --mode import.',
         );
       }
+      await this.bindUserStatus(scope, actor, snapshot, tx);
       const stored = await this.recordInputs(
         scope,
         outcome.run.id,
@@ -596,13 +629,24 @@ export class LegacyImporterService {
     const tallies: ApplyTallies = {
       customers: {
         created: 0,
+        createdBlocked: 0,
         matchedExisting: 0,
         manualReviewRecorded: 0,
         sourceChanged: 0,
         entityMismatch: 0,
         reviewClosed: 0,
       },
-      openings: { POSTED: 0, ALREADY_POSTED: 0, ZERO_NO_ENTRY: 0, CONFLICT: 0, postedSumMinor: 0n },
+      openings: {
+        POSTED: 0,
+        ALREADY_POSTED: 0,
+        ZERO_NO_ENTRY: 0,
+        CONFLICT: 0,
+        postedSumMinor: 0n,
+        DEBT_RECORDED: 0,
+        DEBT_ALREADY_RECORDED: 0,
+        debtRecordedSumMinor: 0n,
+        PRIOR_DEBIT_OPENING: 0,
+      },
       trials: { APPLIED: 0, REPLAYED: 0, CONFLICT: 0, decisions: {} },
       products: { created: 0, existing: 0, unmappable: 0, tariff: {} },
       services: {
@@ -645,7 +689,7 @@ export class LegacyImporterService {
       const imported = await this.customersPhase(scope, actor, run.id, prepared.plan, tallies);
       await hook('customers');
       phase = 'openings';
-      await this.openingsPhase(scope, actor, prepared, imported, tallies);
+      await this.openingsPhase(scope, actor, run.id, snapshot, prepared, imported, tallies);
       await hook('openings');
       phase = 'trials';
       await this.trialsPhase(scope, actor, run.id, prepared, snapshot, imported, tallies);
@@ -892,6 +936,9 @@ export class LegacyImporterService {
                 id: this.deps.ids.uuid(),
                 telegramUserId: decision.telegramUserId,
                 username: legacyProfileUsername(row.username),
+                // OQ-LWD-07: a MirzaBot ban survives the cutover. Applies only to a customer
+                // this statement creates; an existing customer's status is never touched.
+                status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
                 now,
               },
               tx,
@@ -938,6 +985,7 @@ export class LegacyImporterService {
             }
             if (created) {
               tallies.customers.created += 1;
+              if (decision.blocked) tallies.customers.createdBlocked += 1;
               await this.deps.audit.record(
                 scope,
                 actor,
@@ -946,7 +994,11 @@ export class LegacyImporterService {
                   entityType: 'Customer',
                   entityId: customerId,
                   before: null,
-                  after: { source: 'LEGACY_MIGRATION', runId },
+                  after: {
+                    source: 'LEGACY_MIGRATION',
+                    runId,
+                    status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
+                  },
                   result: 'SUCCESS',
                 },
                 tx,
@@ -979,6 +1031,8 @@ export class LegacyImporterService {
   private async openingsPhase(
     scope: TenantContext,
     actor: ActorContext,
+    runId: string,
+    snapshot: LegacySnapshot,
     prepared: Prepared,
     imported: ReadonlyMap<string, { telegramUserId: string; customerId: string }>,
     tallies: ApplyTallies,
@@ -993,9 +1047,19 @@ export class LegacyImporterService {
           telegramUserId: who.telegramUserId,
           legacyBalanceMinor: planned.decision.balanceMinor,
           currency: prepared.salesCurrency as CurrencyCode,
+          // A negative balance is recorded as a legacy debt, with the snapshot it came from.
+          provenance: {
+            runId,
+            sourceFingerprint: snapshot.fingerprint,
+            rowChecksum: planned.row.checksum,
+            synthetic: snapshot.synthetic,
+          },
         });
         tallies.openings[outcome.kind] += 1;
         if (outcome.kind === 'POSTED') tallies.openings.postedSumMinor += outcome.signedAmountMinor;
+        if (outcome.kind === 'DEBT_RECORDED') {
+          tallies.openings.debtRecordedSumMinor += outcome.amountMinor;
+        }
       } catch (error) {
         if (
           isNexaError(error) &&
@@ -1239,28 +1303,51 @@ export class LegacyImporterService {
       scope,
       importable.map((u) => (u.decision.kind === 'IMPORT' ? u.decision.telegramUserId : '')),
     );
-    const expectedWallet = inputs.preImportWalletTotalMinor + tallies.wallet.legacySumMinor;
+    // Owner decision 6: only POSITIVE legacy balances reach the ledger; a negative one is a
+    // legacy debt beside it. So the wallet moves by Σ positive, and Σ |negative| is debts.
+    const expectedWallet = inputs.preImportWalletTotalMinor + tallies.wallet.positive.sumMinor;
     const categorySum = Object.values(tallies.services.categories).reduce((a, b) => a + b, 0);
-    const nonZero = tallies.wallet.positive.count + tallies.wallet.negative.count;
+    const [debts, usersWallets] = await Promise.all([
+      destination.debtAggregates(scope),
+      this.usersWalletsSection(scope, snapshot, prepared, inputs.walletCurrency),
+    ]);
     const counts = this.deps.inventory.requestCounts();
     const checks = [
       check(
         'wallet.equation',
-        'pre-import NEXA total + Σ legacy Balance (+ non-opening movement since the run) = current total',
+        'pre-import NEXA total + Σ positive legacy Balance (+ non-opening movement since the run) = current total',
         expectedWallet + movement,
         wallet.totalMinor,
       ),
       check(
         'wallet.openings_sum',
-        'Σ migration openings = Σ legacy Balance of imported users',
-        tallies.wallet.legacySumMinor,
+        'Σ migration openings = Σ positive legacy Balance of imported users',
+        tallies.wallet.positive.sumMinor,
         openings.sumMinor,
       ),
       check(
         'wallet.openings_count',
-        'one opening per non-zero imported balance',
-        nonZero,
+        'one opening per positive imported balance',
+        tallies.wallet.positive.count,
         openings.count,
+      ),
+      check(
+        'wallet.no_debit_opening',
+        'no ledger DEBIT opening: a negative legacy balance is never a ledger entry',
+        0,
+        openings.negative,
+      ),
+      check(
+        'wallet.debts_sum',
+        'Σ legacy debts = Σ |negative legacy Balance| of imported users',
+        -tallies.wallet.negative.sumMinor,
+        debts.sumMinor,
+      ),
+      check(
+        'wallet.debts_count',
+        'one legacy debt per negative imported balance',
+        tallies.wallet.negative.count,
+        debts.count,
       ),
       check(
         'wallet.no_duplicate_opening',
@@ -1281,7 +1368,15 @@ export class LegacyImporterService {
         tallies.customers.importable +
           tallies.customers.manualReview.BALANCE_UNREADABLE +
           tallies.customers.manualReview.BALANCE_OUT_OF_RANGE +
+          tallies.customers.manualReview.DUPLICATE_SOURCE_ID +
+          tallies.customers.manualReview.STATUS_UNKNOWN +
           tallies.customers.invalidIdentity,
+      ),
+      check(
+        'users_wallets.section',
+        'the users-and-wallets section holds (U1–U7)',
+        true,
+        usersWallets.holds,
       ),
       check(
         'trials.decided',
@@ -1323,8 +1418,12 @@ export class LegacyImporterService {
           actualTotalMinor: wallet.totalMinor,
           openings,
           negativeLegacyBalances: tallies.wallet.negative,
-          note: 'An opening balance is not revenue: it is filed as OPENING_BALANCE and read by no sales figure.',
+          legacyDebts: debts,
+          note:
+            'An opening balance is not revenue: it is filed as OPENING_BALANCE and read by no sales figure. ' +
+            'A negative legacy balance is a legacy debt held for the owner, never a ledger entry and never collected.',
         },
+        usersWallets,
         trials,
         products: shapes,
         services: {
@@ -1404,15 +1503,60 @@ export class LegacyImporterService {
         inventoriesComplete: prepared.plan.inventories.every((p) => p.complete),
       },
     });
-    const holds = final.reconciliation.every((r) => r.holds);
+    // Mirza PR4: beside the closed v1 final report, never inside it (its schema is closed);
+    // PR6 folds this section into schema version 2. Its checks (U1–U8) are part of the
+    // verdict (Codex on #233): a failed U-check — a synthetic debt beside a real snapshot,
+    // a DEBIT opening, a per-user mismatch — is a discrepancy, never COMPLETED.
+    const usersWallets = await this.usersWalletsSection(scope, snapshot, prepared, currency);
+    const holds = final.reconciliation.every((r) => r.holds) && usersWallets.holds;
     return {
       ...this.report('REPORT', scope, snapshot, startedAt, final, run.status),
       verdict: `${run.status}${holds ? '' : '_WITH_DISCREPANCY'}`,
       final,
+      usersWallets,
     };
   }
 
   // --- helpers -------------------------------------------------------------------------
+
+  /**
+   * Mirza PR4 — the users-and-wallets section (`users-wallets-reconciliation.ts`): the
+   * plan's users against their map rows and what NEXA recorded. Read only.
+   */
+  private async usersWalletsSection(
+    scope: TenantContext,
+    snapshot: LegacySnapshot,
+    prepared: Prepared,
+    currency: string,
+  ): Promise<UsersWalletsSection> {
+    const ids = [...new Set(prepared.plan.users.map((u) => u.row.id))].filter((id) =>
+      /^[1-9][0-9]{0,19}$/u.test(id),
+    );
+    const mapRows = new Map<string, LegacyImportMapRecord>();
+    for (let i = 0; i < ids.length; i += CUSTOMER_BATCH) {
+      const rows = await this.deps.runs.findByLegacyKeys(
+        scope,
+        'user',
+        ids.slice(i, i + CUSTOMER_BATCH),
+      );
+      for (const row of rows) mapRows.set(row.legacyId, row);
+    }
+    const [openingTotals, debtTotals] = await Promise.all([
+      this.deps.destination.openingAggregates(scope),
+      this.deps.destination.debtAggregates(scope),
+    ]);
+    return buildUsersWalletsSection({
+      sourceFingerprint: snapshot.fingerprint,
+      synthetic: snapshot.synthetic,
+      currency,
+      users: prepared.plan.users,
+      mapRows,
+      openings: prepared.existingOpenings,
+      debts: new Map([...prepared.existingDebts].map(([id, d]) => [id, d.amountMinor])),
+      openingTotals,
+      debtTotals,
+    });
+  }
 
   /**
    * The tenant's latest APPLY run, as reconcile and report may read it: made from THIS
@@ -1500,6 +1644,79 @@ export class LegacyImporterService {
         }
         return fn(tx);
       },
+    );
+  }
+
+  /**
+   * OQ-LWD-07 — binds the `user-status` read set this snapshot decided statuses from to its
+   * v1 source fingerprint, inside the run's start transaction. The v1 fingerprint does not
+   * cover `User_Status`, so two reads of "the same" approved source can disagree about who is
+   * blocked; a run (or a resume) never mixes them. A source that already has a DIFFERENT
+   * user-status observation is refused, and nothing is written; otherwise this one is
+   * recorded in `legacy_read_set_runs` (insert-or-nothing) and audited.
+   */
+  private async bindUserStatus(
+    scope: TenantContext,
+    actor: ActorContext,
+    snapshot: LegacySnapshot,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const status = snapshot.userStatus;
+    const recorded = await this.deps.readSetRuns.readSetFingerprintsOf(
+      scope,
+      USER_STATUS_READ_SET_NAME,
+      USER_STATUS_READ_SET.version,
+      snapshot.fingerprint,
+      tx,
+    );
+    const other = recorded.filter((f) => f !== status.fingerprint);
+    if (other.length > 0) {
+      throw errors.conflict(
+        LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+        `This source (${snapshot.fingerprint}) was imported with ${status.fingerprintVersion} ` +
+          `${other.join(', ')}, and reads ${status.fingerprint} now: a legacy User_Status ` +
+          'changed under an unchanged v1 fingerprint. Freeze the source and take a new snapshot; nothing was written.',
+      );
+    }
+    const userTable = status.tables['user'];
+    const outcome = await this.deps.readSetRuns.recordReadSetRun(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        readSet: USER_STATUS_READ_SET_NAME,
+        readSetVersion: USER_STATUS_READ_SET.version,
+        fingerprintVersion: status.fingerprintVersion,
+        readSetFingerprint: status.fingerprint,
+        sourceFingerprint: snapshot.fingerprint,
+        sourceSchemaHash: snapshot.schemaHash,
+        sourceEngine: snapshot.descriptor.engine,
+        synthetic: snapshot.synthetic,
+        tableCount: Object.keys(status.tables).length,
+        rowCount: BigInt(userTable?.rows ?? 0),
+        codeVersion: this.deps.codeVersion,
+        recordedAt: this.deps.clock.now(),
+      },
+      tx,
+    );
+    if (!outcome.created) return;
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'legacy_import.read_set.record',
+        entityType: 'LegacyReadSetRun',
+        entityId: outcome.run.id,
+        before: null,
+        after: {
+          readSet: outcome.run.readSet,
+          fingerprintVersion: outcome.run.fingerprintVersion,
+          readSetFingerprint: outcome.run.readSetFingerprint,
+          sourceFingerprint: outcome.run.sourceFingerprint,
+          created: true,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
     );
   }
 

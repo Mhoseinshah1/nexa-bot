@@ -48,6 +48,7 @@ import { SupportAnalyticsPage } from './pages/support-analytics';
 import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
 import { LegacyProductsPage } from './pages/legacy-products';
 import { LegacyInvoicesPage } from './pages/legacy-invoices';
+import { LegacyDebtsPage } from './pages/legacy-debts';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -181,6 +182,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/legacy-products',
   // Mirza PR3: the legacy invoice archive (read-only).
   '/legacy-invoices',
+  // Mirza PR4: legacy wallet debts held for the owner's review.
+  '/legacy-debts',
   '/extra-devices',
   '/service-locations',
   '/orders',
@@ -438,6 +441,19 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.lia_title') }],
       title: t('web.lia_title'),
+    };
+  }
+  // Mirza PR4: legacy wallet debts (a decision is a label; it moves no money).
+  if (route.path === '/legacy-debts') {
+    return {
+      element: (
+        <LegacyDebtsPage
+          denied={!may('legacy.debts.view')}
+          mayDecide={may('legacy.debts.decide')}
+        />
+      ),
+      crumbs: [{ label: t('web.lwd_title') }],
+      title: t('web.lwd_title'),
     };
   }
   if (route.path === '/product-categories') {

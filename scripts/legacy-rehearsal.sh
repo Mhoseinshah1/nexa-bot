@@ -782,12 +782,23 @@ imported_balance() {
     awk 'BEGIN { print "INSERT INTO nexa_reconcile.customer_missing VALUES (\"-\")" } $1 ~ /^[0-9a-f]+$/ { printf ",(\"%s\")", $1 } END { print ";" }' |
     mdb_root
   mdb_root -N -B -e "
+    -- Mirza PR4 (owner decision 6): only POSITIVE balances become ledger openings; a
+    -- negative one is a legacy debt of its magnitude, beside the ledger.
     SELECT 'imported_balance_sum', CAST(COALESCE(SUM(CAST(u.Balance AS DECIMAL(24,4))), 0) AS CHAR)
       FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) > 0
     UNION ALL
     SELECT 'imported_nonzero_users', CAST(COUNT(*) AS CHAR)
       FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
-     WHERE CAST(u.Balance AS DECIMAL(24,4)) <> 0
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) > 0
+    UNION ALL
+    SELECT 'imported_negative_users', CAST(COUNT(*) AS CHAR)
+      FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) < 0
+    UNION ALL
+    SELECT 'imported_negative_magnitude', CAST(COALESCE(-SUM(CAST(u.Balance AS DECIMAL(24,4))), 0) AS CHAR)
+      FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) < 0
     UNION ALL
     -- W8: a fractional Toman balance is never imported (IRT has no minor digits): it is held
     -- for review, never rounded.
@@ -1274,11 +1285,16 @@ for cycle in $(seq 1 "$CYCLES"); do
   check "$cycle" no_duplicate_openings 0 "$(metric "$POST" opening_customers_with_duplicates)"
   check "$cycle" opening_reference_matches_customer 0 "$(metric "$POST" opening_reference_mismatch)"
   check "$cycle" opening_links_no_money 0 "$(metric "$POST" opening_linked_to_money)"
-  # The equation: Σ openings = Σ legacy Balance over imported users (exact, decimal-safe),
-  # and one opening per imported user with a non-zero balance.
+  # The equation: Σ openings = Σ POSITIVE legacy Balance over imported users (exact,
+  # decimal-safe), and one opening per imported user with a positive balance. Mirza PR4
+  # (owner decision 6): a negative balance is a legacy debt, never a ledger DEBIT — so no
+  # DEBIT opening exists, and the debts equal the negative population exactly.
   IMPORTED_SUM="$(metric "$S-legacy-imported.tsv" imported_balance_sum)"
   check "$cycle" wallet_equation_imported_balance "$IMPORTED_SUM" "$(printf '%.4f' "$(delta opening_signed_total_minor)")"
   check "$cycle" openings_one_per_nonzero_user "$(metric "$S-legacy-imported.tsv" imported_nonzero_users)" "$(delta opening_entries_total)"
+  check "$cycle" no_debit_openings 0 "$(metric "$POST" opening_debit_entries)"
+  check "$cycle" legacy_debts_one_per_negative_user "$(metric "$S-legacy-imported.tsv" imported_negative_users)" "$(delta legacy_debts_total)"
+  check "$cycle" legacy_debts_equal_negative_magnitude "$(metric "$S-legacy-imported.tsv" imported_negative_magnitude)" "$(printf '%.4f' "$(delta legacy_debts_sum_minor)")"
 
   # Not revenue, and no money moved.
   for k in sale_orders_paid sale_orders_paid_total_minor payments_total wallet_topup_signed_total_minor; do

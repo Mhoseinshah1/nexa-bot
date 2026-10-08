@@ -83,25 +83,37 @@ the customer row and the opening agree.
 
 The legacy wallet source is `user.Balance` and nothing else; `wallet_transaction` and the
 payment history are **never replayed** (PROGRAM §2, §22). Each imported user with a
-non-zero balance becomes exactly one `MIGRATION_OPENING_BALANCE` entry: `CREDIT` for a
-positive balance, `DEBIT` of the magnitude for a negative one, additive onto whatever the
-customer already held (`docs/migration-opening-balance.md`).
+POSITIVE balance becomes exactly one `MIGRATION_OPENING_BALANCE` `CREDIT`, additive onto
+whatever the customer already held. A NEGATIVE balance is **not** a ledger entry (owner
+decision 6, 2026-10-07): it is one legacy debt in `legacy_wallet_debts`, held for the
+owner's review and never collected (`docs/migration-opening-balance.md` §Negative balances).
+Before that decision a negative balance was a `DEBIT`; the equations below are the ones
+after it.
 
 The program's equation:
 
 ```
-Σ(pre-import NEXA balances) + Σ(legacy Balance of imported users) = Σ(post-import NEXA balances)
+Σ(pre-import NEXA balances) + Σ(POSITIVE legacy Balance of imported users) = Σ(post-import NEXA balances)
+Σ(|NEGATIVE legacy Balance| of imported users) = Σ(legacy_wallet_debts.amount_minor)
 ```
 
 in snapshot terms:
 
 - **W1** `PRE[wallet_signed_total_minor] + legacy_imported_balance_sum = POST[wallet_signed_total_minor]`
-  — exact, negatives included (a negative legacy balance lowers the total).
+  — exact; `legacy_imported_balance_sum` is over POSITIVE balances only (a negative one
+  moves no wallet).
 - **W2** `delta(wallet_signed_total_minor) = delta(opening_signed_total_minor)` — nothing but
   openings moved the wallet during the import window.
 - **W3** `delta(wallet_entries_total) = delta(opening_entries_total)`.
 - **W4** `delta(opening_entries_total) = legacy_imported_nonzero_users` — one opening per
-  imported user with a non-zero balance: none missing, none extra.
+  imported user with a POSITIVE balance (the metric keeps its name; it counts `Balance > 0`):
+  none missing, none extra.
+- **W9** `POST[opening_debit_entries] = 0` — no ledger DEBIT opening exists (rehearsal
+  check `no_debit_openings`).
+- **W10** `delta(legacy_debts_total) = legacy imported_negative_users` and
+  `delta(legacy_debts_sum_minor) = imported_negative_magnitude` — one debt per imported user
+  with a negative balance, of exactly its magnitude (`legacy_debts_one_per_negative_user`,
+  `legacy_debts_equal_negative_magnitude`).
 - **W5** `POST[opening_customers_with_duplicates] = 0` — **no duplicate openings** (the
   partial unique index `wallet_entries_migration_opening_customer_key` forbids it; this
   proves it held).
@@ -113,7 +125,7 @@ in snapshot terms:
   zero minor digits; a fractional Toman balance is a decision the importer must have
   surfaced (manual review), never a rounding.
 
-`legacy_imported_balance_sum` is `Σ user.Balance` over exactly the users the NEXA map
+`legacy_imported_balance_sum` is `Σ user.Balance > 0` over exactly the users the NEXA map
 records as `IMPORTED`. The legacy schema is read-only, so the set of imported ids is
 carried into a **separate scratch schema on the restored source instance** — never the
 live server, never a temporary table in the legacy schema — through a pipe, without
@@ -131,10 +143,19 @@ sudo $DC exec -T postgres psql -U nexa -d nexa -X -q -At -c "
 mariadb -N -B -e "
   SELECT 'imported_balance_sum', CAST(COALESCE(SUM(CAST(u.Balance AS DECIMAL(24,4))), 0) AS CHAR)
     FROM <restored-schema>.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+   WHERE CAST(u.Balance AS DECIMAL(24,4)) > 0
   UNION ALL
   SELECT 'imported_nonzero_users', CAST(COUNT(*) AS CHAR)
     FROM <restored-schema>.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
-   WHERE CAST(u.Balance AS DECIMAL(24,4)) <> 0"
+   WHERE CAST(u.Balance AS DECIMAL(24,4)) > 0
+  UNION ALL
+  SELECT 'imported_negative_users', CAST(COUNT(*) AS CHAR)
+    FROM <restored-schema>.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+   WHERE CAST(u.Balance AS DECIMAL(24,4)) < 0
+  UNION ALL
+  SELECT 'imported_negative_magnitude', CAST(COALESCE(-SUM(CAST(u.Balance AS DECIMAL(24,4))), 0) AS CHAR)
+    FROM <restored-schema>.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+   WHERE CAST(u.Balance AS DECIMAL(24,4)) < 0"
 mariadb -e "DROP DATABASE nexa_reconcile"
 ```
 
@@ -296,6 +317,104 @@ burst (cutover runbook, observation step).
   (`KEPT_EXISTING_OVERRIDE`).
 - `delta(trial_grants) = 0` — no migrated customer was given a trial by the import.
 
+## 6. Users and wallets — the `usersWallets` section (Mirza PR4)
+
+`legacy-import reconcile` prints it in its JSON `sections.usersWallets` (and as a check,
+`users_wallets.section`); `legacy-import report` renders it after the v1 final report in
+markdown only, because `final-report.schema.json` v1 is closed. **PR6 folds this section,
+unchanged, into the final report's schema version 2.** Built by
+`apps/api/src/modules/platform/legacy-importer/application/users-wallets-reconciliation.ts`
+from the plan, the `user` map rows, the openings and the debts. Counts, sums and opaque map
+refs only — never a Telegram id, a username or one person's amount.
+
+Shape (`LEGACY_USERS_WALLETS_SECTION_VERSION` = `nexa-legacy-users-wallets/v1`):
+
+```jsonc
+{
+  "version": "nexa-legacy-users-wallets/v1",
+  "sourceFingerprint": "<v1 fingerprint of the snapshot reconciled>",
+  "users": {
+    "sourceRows": 0,
+    // one key per LEGACY_USER_OUTCOMES, all present: IMPORTED_NEW, IMPORTED_EXISTING,
+    // SKIPPED_INVALID_IDENTITY, SKIPPED_BALANCE_UNREADABLE, SKIPPED_BALANCE_OUT_OF_RANGE,
+    // SKIPPED_DUPLICATE_SOURCE_ID, SKIPPED_STATUS_UNKNOWN, SKIPPED_REVIEW_CLOSED,
+    // SOURCE_CHANGED, NOT_YET_IMPORTED
+    "outcomes": { "IMPORTED_NEW": 0 },
+    "agents": { "sourceRows": 0, "importedAsCustomers": 0, "resellerGrants": "NONE" },
+    // OQ-LWD-07: User_Status of every source row (Σ = sourceRows), and where the users
+    // blocked in MirzaBot ended: created BLOCKED, matched to an existing NEXA customer whose
+    // status the import never changes, or not imported. Their money is in the wallet
+    // figures below exactly like anybody's.
+    "legacyStatus": { "ACTIVE": 0, "BLOCKED": 0, "UNKNOWN": 0 },
+    "blocked": { "sourceRows": 0, "importedNew": 0, "importedExisting": 0, "notImported": 0 },
+  },
+  "wallet": {
+    "currency": "IRT",
+    "positive": { "users": 0, "sumMinor": "0", "openingEntries": 0, "openingSumMinor": "0" },
+    "zero": { "users": 0 },
+    "legacyDebts": {
+      "users": 0,
+      "sumMinor": "0", // negative balances imported from THIS snapshot
+      "recorded": 0,
+      "recordedSumMinor": "0", // every debt of the tenant
+      "byState": { "PENDING_REVIEW": { "count": 0, "sumMinor": "0" } },
+      "synthetic": 0,
+    },
+    "ledgerDebitOpenings": 0,
+    "perUser": {
+      "matching": 0,
+      "missingOpening": 0,
+      "missingDebt": 0,
+      "priorDebitOpening": 0,
+      "conflicting": 0,
+    },
+    "carried": {
+      // recorded from an earlier snapshot, never re-applied
+      "changedOpenings": { "count": 0, "sumMinor": "0" },
+      "changedDebts": { "count": 0, "sumMinor": "0" },
+      "absentOpenings": { "count": 0, "sumMinor": "0" },
+      "absentDebts": { "count": 0, "sumMinor": "0" },
+    },
+  },
+  "sourceChanged": {
+    "users": 0,
+    // one key per LEGACY_BALANCE_CHANGE_CLASSES: PROFILE_ONLY, POSITIVE_CHANGED,
+    // NEGATIVE_CHANGED, POSITIVE_TO_NEGATIVE, NEGATIVE_TO_POSITIVE, TO_ZERO, FROM_ZERO,
+    // UNREADABLE_NOW — each { count, recordedSumMinor, sourceSumMinor, differenceMinor }
+    "byClass": {},
+    // the sign flips, for the owner: sorted legacy_import_map.ref uuids, never an id
+    "ownerReview": { "POSITIVE_TO_NEGATIVE": [], "NEGATIVE_TO_POSITIVE": [] },
+  },
+  "checks": [{ "id": "U1", "what": "…", "holds": true, "expected": "…", "actual": "…" }],
+  "holds": true,
+}
+```
+
+The checks:
+
+- **U1** every source user row is in exactly one outcome (Σ outcomes = source rows).
+- **U2/U3** Σ and count of openings = the positive balances imported from this snapshot +
+  the openings carried by SOURCE_CHANGED users and by users this snapshot no longer has.
+- **U4/U5** the same for legacy debts against the negative balances.
+- **U6** no ledger DEBIT opening (owner decision 6).
+- **U7** per imported user, NEXA holds exactly the source figure (a CREDIT, a debt, or
+  nothing for zero); a missing opening, a missing debt, a prior DEBIT or any other value
+  fails it.
+- **U8** no debt recorded from a synthetic source, unless the snapshot reconciled is
+  synthetic (PR3's review lesson on recorded state).
+
+**A newer snapshot (owner constraint 4).** A user whose row changed since the snapshot NEXA
+imported from is `SOURCE_CHANGED`: the customers phase skips it, so no second opening, no
+second debt and no adjustment is ever written (in the plan a changed figure is a
+`CONFLICT`). The section classes each such user by how the balance moved and sums the
+recorded figure, the source figure and the difference. The two sign flips are listed by
+opaque map ref for the owner; resolving a ref to a person is a terminal-only step on the
+target (`SELECT legacy_id FROM legacy_import_map WHERE ref = '<ref>'`, never pasted into a
+ticket). Applying a changed balance would need a new ledger reason and an owner instruction
+(`OQ-LWD-02`). The top-level reconcile checks (`wallet.*`) still compare the NEW snapshot's
+balances with the ledger and so report `DISCREPANCY` on a changed snapshot — honestly; the
+section is what explains the difference, to the Toman.
+
 ## Result table (filled per run; aggregates only)
 
 **Generated, not transcribed (WP-D5).** `scripts/legacy-rehearsal-reconciliation.mjs`
@@ -327,6 +446,8 @@ invoice with the CUSTOMER_MISSING review rows, in the throwaway engine's scratch
 | W6       |                   |            |       |
 | W7       |                   |            |       |
 | W8       |                   |            |       |
+| W9       |                   |            |       |
+| W10      |                   |            |       |
 | R1       |                   |            |       |
 | R2       |                   |            |       |
 | R3       |                   |            |       |

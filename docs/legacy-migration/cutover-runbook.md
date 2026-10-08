@@ -468,6 +468,7 @@ Put the production dry-run beside the last successful staging rehearsal (Item 11
 | legacy users                             |                   |                    |                         |
 | new / existing customers                 |                   |                    |                         |
 | Σ legacy Balance; positive/zero/negative |                   |                    |                         |
+| legacy debts to record (count, Σ)        |                   |                    |                         |
 | service candidates (live invoices)       |                   |                    |                         |
 | adoptable                                |                   |                    |                         |
 | manual review, per reason                |                   |                    |                         |
@@ -545,7 +546,9 @@ below. Exit `3`: read the verdict at the top of `import.txt`:
   finished but left money, a trial or a service undone; the report's `attention` section
   counts each kind: `customerSourceChanged`, `customerEntityMismatch`, `openingConflict`,
   `trialConflict`, `invoiceMapRefused`, `adoptionFailed` (`PROVIDER_READ_FAILED` —
-  retried by `resume`), `adoptedSourceChanged`. Record the counts in the report. The owner
+  retried by `resume`), `adoptedSourceChanged`, `priorDebitOpening` (a ledger DEBIT
+  opening from the code before owner decision 6 — on a production target this must be 0;
+  anything else means the target is not the clean one the runbook restored: roll back). Record the counts in the report. The owner
   decides between a `resume` (for retryable adoption failures), a documented follow-up for
   each counted row, or a rollback (trigger T1). It is never treated as a finished import.
 - `COMPLETED_ADOPTION_PENDING_P6` — an importer built without P6: the wrong release; roll
@@ -595,10 +598,18 @@ sudo $DC exec -T postgres psql -U nexa -d nexa -X -q -At -F "$(printf '\t')" \
   -v tenant="$NEXA_TENANT" -f - < <checkout>/scripts/legacy-rehearsal-checks.sql | tee nexa-POST.tsv
 ```
 
-Then evaluate every equation in [`reconciliation.md`](reconciliation.md) (C1–C3, W1–W8,
-R1–R3, S1–S5, P1–P4) with `nexa-PRE.tsv`, `nexa-POST.tsv` and `legacy-source.tsv`, and the
-imported-balance join of §2. **Every one must hold exactly.** Any failure is a rollback
-trigger to be decided now, before customers return (rollback runbook § Triggers).
+Then evaluate every equation in [`reconciliation.md`](reconciliation.md) (C1–C3, W1–W10,
+R1–R3, S1–S5, P1–P4, and the `usersWallets` section's U1–U8 from `reconcile.txt`) with
+`nexa-PRE.tsv`, `nexa-POST.tsv` and `legacy-source.tsv`, and the imported-balance join of
+§2. **Every one must hold exactly.** Any failure is a rollback trigger to be decided now,
+before customers return (rollback runbook § Triggers).
+
+Legacy debts (owner decision 6): record `usersWallets.wallet.legacyDebts` (count and Σ,
+aggregates only) in the report. The debts are now listed in the Web Admin
+(`/legacy-debts`) for the owner's per-customer decision — after cutover, at the owner's
+pace; none of them blocks unfreezing, and none is ever collected. On the cutover snapshot
+`usersWallets.sourceChanged.users` must be 0 (the target was restored clean before the
+import); anything else means an earlier snapshot was applied to this target — stop.
 
 ## Step 16 — manual acceptance
 

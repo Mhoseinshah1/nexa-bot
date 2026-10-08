@@ -1583,6 +1583,34 @@
       "when": 1791378017433,
       "tag": "0225_legacy_invoice_archive_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 226,
+      "version": "7",
+      "when": 1791385061155,
+      "tag": "0226_legacy_wallet_debts",
+      "breakpoints": true
+    },
+    {
+      "idx": 227,
+      "version": "7",
+      "when": 1791385061255,
+      "tag": "0227_legacy_wallet_debts_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 228,
+      "version": "7",
+      "when": 1791385061256,
+      "tag": "0228_legacy_wallet_debt_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 229,
+      "version": "7",
+      "when": 1791446557746,
+      "tag": "0229_legacy_read_set_user_status",
+      "breakpoints": true
     }
   ]
 }

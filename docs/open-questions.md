@@ -3392,6 +3392,52 @@ real staging copy (NOT RUN) or by the owner — never by guessing.
   reach the archive and its checksums as mojibake (OQ-MZ-INV-03); the inventory reports
   `NOT_UTF8MB4`.
 
+## OQ-LWD — legacy users and wallets (Mirza PR4): what the evidence does not settle
+
+Owner decision 6 (2026-10-07) is implemented: a negative legacy balance is a legacy debt
+held for review, never a ledger entry, never collected (`docs/migration-opening-balance.md`).
+Counts from the historical staging snapshot (38 negative balances, 197,700 / 197,461 users)
+are dated baselines, never expected values. Each item is settled by the owner or from the
+real staging copy (NOT RUN) — never by guessing.
+
+- **OQ-LWD-01 — UNKNOWN: was a real-data rehearsal ever applied anywhere?** Before PR4 every
+  APPLY run wrote a negative balance as a `legacy:opening:<tg>` DEBIT. CI and local
+  synthetic rehearsals certainly did (throwaway). Whether a non-production target holds a
+  real-data rehearsal is not recorded in the repository (readiness G5–G18 open). Such rows
+  are never rewritten; a rerun reports `PRIOR_DEBIT_OPENING`, and the remedy is the
+  rollback runbook's restore of the pre-import state, then a fresh import.
+- **OQ-LWD-02 — DECISION: a changed balance in a newer snapshot.** A user imported from an
+  earlier snapshot whose balance changed is reported (`usersWallets.sourceChanged`, sign
+  flips listed by map ref) and never applied. Carrying a delta would need a new ledger reason
+  (e.g. `MIGRATION_OPENING_ADJUSTMENT`) and an owner instruction; the default is that only
+  the final frozen snapshot is applied to production (audit §6.2).
+- **OQ-LWD-03 — DECISION: legacy agents.** `user.agent` is counted and the agent is imported
+  as an ordinary customer: no reseller row, no tier, never credit. Whether a legacy agent
+  becomes a NEXA reseller (which tier, which terms) is the owner's; the per-user agent value
+  is not persisted in NEXA (the v1 read set is frozen; it stays in the source dump).
+- **OQ-LWD-04 — DECISION: collecting a legacy debt.** Out of scope by owner decision 6. If
+  the owner ever wants it, it needs a new ledger reason (a contract change), an explicit
+  instruction per customer or policy, and its own review — none exists.
+- **OQ-LWD-05 — UNKNOWN: the real user count.** The repository's 197,461 numeric ids and the
+  owner's 197,700 users are both staging baselines; `usersWallets.users.outcomes` closes over
+  whatever the cutover snapshot holds (U1). Re-evidenced on the cutover snapshot, never
+  assumed.
+- **OQ-LWD-06 — DECISION: who sees legacy debts.** `legacy.debts.view` (MEDIUM) shows the
+  legacy Telegram id and the amount owed; owner-only by default. Whether an operator role
+  should hold it, and for how long the list is kept, is the owner's.
+- **OQ-LWD-07 — DECIDED by the owner (2026-10-08): a user blocked in MirzaBot is imported
+  BLOCKED.** aud4 F1 found the importer never read `user.User_Status` and created every
+  customer ACTIVE, so an operator's ban was lifted at cutover and the banned user's credit
+  became spendable. Decision: `User_Status = 'block'` → a BLOCKED customer; the opening
+  CREDIT or legacy debt is recorded exactly as anybody's (reconciliation totals unchanged;
+  the block stops spending, not the balance); an existing NEXA customer's status is never
+  changed; any status other than exactly `Active` or `block` is manual review, never ACTIVE.
+  The v1 read set stays frozen: the column is the `user-status` read set
+  (`legacy-read-set:user-status:v1`). Counts: `plan.customers.legacyStatus`,
+  `usersWallets.users.legacyStatus` and `.blocked`. Still the owner's: whether a blocked
+  user's legacy debt or credit should be treated differently later (today it is not), and
+  whether the MirzaBot block reason text should ever be carried (today it is not read).
+
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 
 Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.
