@@ -58,8 +58,7 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'dropped_coalesced':
     case 'dropped_connection':
     case 'dropped_scope':
-    // A6: ended silently — nothing sent, nobody handed off.
-    case 'no_action':
+    case 'no_action': // A6: ended silently — nothing sent, nobody handed off.
       return 'DROPPED';
     case 'guard_content':
     case 'guard_customer_blocked':
