@@ -254,8 +254,19 @@ export class RefundService {
     const consumedMinor = rows
       .filter((refund) => refund.state !== 'FAILED')
       .reduce((total, refund) => total + refund.amount.amountMinor, 0n);
-    // ONE decision for the flag and the reason, the same one the write path refuses with.
-    const refusal = await this.refusalFor(scope, payment);
+    /*
+     * ONE decision for the flag and the reason, the same one the write path refuses with —
+     * the refusal, then the currency witness `request` checks after it over the CONSUMING
+     * refunds (review of PR #247, CX1/F3): a payment whose refunds are in another currency is
+     * refused there, so it is not "refundable" here.
+     */
+    const refusal =
+      (await this.refusalFor(scope, payment)) ??
+      (rows.some(
+        (refund) => refund.state !== 'FAILED' && refund.amount.currency !== payment.amount.currency,
+      )
+        ? 'CURRENCY_MISMATCH'
+        : null);
 
     return {
       refunds: rows,
