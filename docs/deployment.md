@@ -1803,6 +1803,38 @@ There is no migration. These are reads and a page:
 **A rollback** removes the two cards and the next-attempt time. Nothing is stored by them, so
 nothing is stranded.
 
+### Before rolling back past the audience by bot (roadmap C3)
+
+There is no migration. The audience definition gains one key, `botInstanceIds`. It is stored
+only when an operator ticked a bot.
+
+**Before rolling back**, clear the bot criterion on every draft broadcast and every draft
+campaign that has one. The previous release's audience schema is strict:
+
+- it refuses such a definition;
+- its broadcast LIST reads every row through that schema, so one bot-filtered broadcast makes
+  the list answer an error for the whole tenant;
+- a campaign hand-over on it refuses as well (`audience.definition_invalid`). That refusal is
+  fail-closed, and nothing is sent.
+
+Find the rows:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT 'broadcast' AS kind, id, state FROM broadcasts WHERE audience_definition ? 'botInstanceIds'
+   UNION ALL
+   SELECT 'campaign', id, state FROM campaigns WHERE audience ? 'botInstanceIds'"
+```
+
+Launched broadcasts and scheduled campaigns that name a bot cannot be edited. Each is
+cancelled, or left to finish, before the rollback.
+
+**During the update itself**, this bundle can meet the previous API. It sends the key only
+when a bot is ticked, and drops tags and active service at their default the same way
+(PR #245 review m3), so previews and saves keep working there. A bot filter is the one thing
+the previous API refuses.
+
 ### What a rollback leaves as text: appearance markers (round P, Premium UI)
 
 The Premium UI release puts `{icon:…}` markers into the DEFAULT bodies of about forty
