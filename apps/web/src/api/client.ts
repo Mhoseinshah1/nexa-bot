@@ -563,8 +563,8 @@ import {
   supportAiUsageResponseSchema,
   supportAnalyticsResponseSchema,
   type SupportAnalyticsResponse,
-  type SupportAiConfigInput,
   type SupportAiConfigResponse,
+  type SupportAiConfigSave,
   type SupportAiDraftView,
   type SupportAiProvider,
   type SupportAiTestResponse,
@@ -4323,7 +4323,8 @@ export function fetchSupportAiConfig(): Promise<SupportAiConfigResponse> {
 export function saveSupportAiConfig(input: {
   readonly idempotencyKey: string;
   readonly expectedVersion: number | null;
-  readonly config: SupportAiConfigInput;
+  /** A save (absent fields keep the stored values); `maxConsecutiveReplies` only for an older replica. */
+  readonly config: SupportAiConfigSave & { readonly maxConsecutiveReplies?: number };
 }): Promise<{ version: number }> {
   return put(SUPPORT_AI_ROUTES.config, input, oneField('version', 'number'));
 }

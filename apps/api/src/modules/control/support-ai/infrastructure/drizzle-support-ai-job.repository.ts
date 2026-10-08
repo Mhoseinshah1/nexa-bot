@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import {
+  SUPPORT_AI_FREE_GREETING_MAX_CHARS,
   SUPPORT_AI_LIMITS,
+  SUPPORT_AI_SESSION_INACTIVITY_SECONDS,
   type BusinessHandoffReason,
   type ScopeContext,
   type SupportAiAutoOutcome,
@@ -14,6 +16,7 @@ import {
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  businessMessages,
   businessOutboundMessages,
   supportAiImageOutcomes,
   supportAiJobs,
@@ -384,12 +387,15 @@ export class DrizzleSupportAiJobRepository {
   ): Promise<number> {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
-      .select({ decision: supportAiJobs.decision })
+      .select({ decision: supportAiJobs.decision, topic: supportAiJobs.topic })
       .from(businessOutboundMessages)
       .innerJoin(
         supportAiJobs,
         and(
           eq(supportAiJobs.tenantId, businessOutboundMessages.tenantId),
+          // Review of PR #241 (N2): the conversation too, so the join is index-bounded
+          // (`support_ai_jobs_conversation_idx`) rather than over the tenant's every job.
+          eq(supportAiJobs.conversationId, businessOutboundMessages.conversationId),
           eq(supportAiJobs.sentOutboundId, businessOutboundMessages.id),
           eq(supportAiJobs.kind, 'AUTO_DECISION'),
           eq(supportAiJobs.state, 'SENT'),
@@ -402,12 +408,91 @@ export class DrizzleSupportAiJobRepository {
           eq(businessOutboundMessages.origin, 'AUTO'),
           eq(businessOutboundMessages.controlEpoch, input.epoch),
           inArray(businessOutboundMessages.state, ['PENDING', 'DELIVERED', 'UNCONFIRMED']),
+          // Roadmap A2: a GREETING reply neither counts nor resets, so it is not read at all —
+          // filtered HERE, not in the walk, so no number of greetings can push the questions
+          // before them out of the bounded read (review of PR #241, N1).
+          sql`${supportAiJobs.topic} IS DISTINCT FROM 'GREETING'`,
         ),
       )
       .orderBy(desc(businessOutboundMessages.createdAt), desc(businessOutboundMessages.id))
       // Past the highest limit there is nothing more to know.
       .limit(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.max + 1);
     return clarifyingStreakOf(rows);
+  }
+
+  /**
+   * Roadmap A1 — the automatic replies this SESSION has had, for the session reply budget.
+   *
+   * A session is derived, never stored: the AUTO lane rows at the job's control epoch (every
+   * human signal, takeover and resume moves it), after the latest gap of
+   * `SUPPORT_AI_SESSION_INACTIVITY_SECONDS` in the conversation's activity. Activity is every
+   * recorded message either way (`business_messages`, Telegram's time), every lane row of any
+   * origin, and `now` itself — so a customer who comes back after six hours, or a job produced
+   * six hours after anything happened, starts a fresh budget.
+   *
+   * What counts is what `countAuto` counts (every AUTO row but SUPERSEDED: FAILED and
+   * UNCONFIRMED are attempts the loop guard owes nothing for), except a reply whose job's topic
+   * is `GREETING` and whose text is at most `SUPPORT_AI_FREE_GREETING_MAX_CHARS` (the topic is
+   * the model's label: a long "greeting" is an answer, review of PR #241 N3). A row with no job,
+   * a job with no topic, or a purged body counts: unknown is fail closed.
+   *
+   * I/O (review N2): both joins and both activity reads are index-bounded by tenant and
+   * conversation, and the activity reads by time too — but from six hours before the epoch's
+   * FIRST automatic reply, so a long-lived epoch reads its whole lifetime (accepted: a person's
+   * action ends an epoch).
+   */
+  async sessionReplyCount(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number; readonly now: Date },
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const gap = sql.raw(`interval '${SUPPORT_AI_SESSION_INACTIVITY_SECONDS} seconds'`);
+    const o = businessOutboundMessages;
+    const m = businessMessages;
+    const j = supportAiJobs;
+    const result = await exec(this.db, tx).execute(sql`
+      WITH epoch_rows AS (
+        SELECT ${o.createdAt} AS created_at,
+          -- N3: a GREETING is free only while it reads like one; a purged body counts.
+          (${j.topic} = 'GREETING' AND ${o.body} IS NOT NULL
+            AND char_length(${o.body}) <= ${SUPPORT_AI_FREE_GREETING_MAX_CHARS}) AS free
+        FROM ${o}
+        LEFT JOIN ${j}
+          ON ${j.tenantId} = ${o.tenantId}
+         AND ${j.conversationId} = ${o.conversationId}
+         AND ${j.sentOutboundId} = ${o.id}
+         AND ${j.kind} = 'AUTO_DECISION'
+        WHERE ${o.tenantId} = ${tenantId}
+          AND ${o.conversationId} = ${input.conversationId}
+          AND ${o.origin} = 'AUTO'
+          AND ${o.controlEpoch} = ${input.epoch}
+          AND ${o.state} <> 'SUPERSEDED'
+      ),
+      scan AS (SELECT min(created_at) - ${gap} AS since FROM epoch_rows),
+      activity AS (
+        -- N2: the bound as a scalar subquery, so it is an Index Cond, not a Join Filter.
+        SELECT ${m.sentAt} AS t FROM ${m}
+        WHERE ${m.tenantId} = ${tenantId}
+          AND ${m.conversationId} = ${input.conversationId}
+          AND ${m.sentAt} >= (SELECT since FROM scan)
+        UNION ALL
+        SELECT ${o.createdAt} FROM ${o}
+        WHERE ${o.tenantId} = ${tenantId}
+          AND ${o.conversationId} = ${input.conversationId}
+          AND ${o.createdAt} >= (SELECT since FROM scan)
+        UNION ALL
+        SELECT ${input.now.toISOString()}::timestamptz
+      ),
+      gaps AS (SELECT t, t - lag(t) OVER (ORDER BY t) AS idle FROM activity),
+      session AS (SELECT max(t) AS started FROM gaps WHERE idle >= ${gap})
+      SELECT count(*)::int AS replies
+      FROM epoch_rows, session
+      WHERE (session.started IS NULL OR epoch_rows.created_at >= session.started)
+        AND epoch_rows.free IS NOT TRUE
+    `);
+    const [row] = result.rows as unknown as { replies: number }[];
+    return Number(row?.replies ?? 0);
   }
 
   /**

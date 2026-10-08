@@ -3,6 +3,7 @@ import {
   SUPPORT_AI_BREAKER_OPEN_MS,
   SUPPORT_AI_BREAKER_THRESHOLD,
   SUPPORT_AI_DEFAULT_CONFIG,
+  SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
   type ScopeContext,
   type SecretCipher,
   type SupportAiConfigInput,
@@ -442,6 +443,11 @@ export interface StoredSupportAiConfig {
   readonly config: SupportAiConfigInput;
   /** 0 when no row exists: the tenant runs on `SUPPORT_AI_DEFAULT_CONFIG`. */
   readonly version: number;
+  /**
+   * Review of PR #241: the retired `max_consecutive_replies`, read only to be projected into the
+   * configuration response for older web bundles. Never enforced, never written.
+   */
+  readonly retiredMaxConsecutiveReplies?: number;
 }
 
 /** TB4 — the per-tenant configuration row (ADR-0021 optimistic versioning). */
@@ -455,9 +461,16 @@ export class DrizzleSupportAiConfigRepository {
       .from(supportAiConfigs)
       .where(eq(supportAiConfigs.tenantId, tenantId))
       .limit(1);
-    if (row === undefined) return { config: SUPPORT_AI_DEFAULT_CONFIG, version: 0 };
+    if (row === undefined) {
+      return {
+        config: SUPPORT_AI_DEFAULT_CONFIG,
+        version: 0,
+        retiredMaxConsecutiveReplies: SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
+      };
+    }
     return {
       version: row.version,
+      retiredMaxConsecutiveReplies: row.maxConsecutiveReplies,
       config: {
         mode: row.mode as SupportAiConfigInput['mode'],
         primary:
@@ -468,7 +481,8 @@ export class DrizzleSupportAiConfigRepository {
         visionEnabled: row.visionEnabled,
         timeoutMs: row.timeoutMs,
         maxOutputChars: row.maxOutputChars,
-        maxConsecutiveReplies: row.maxConsecutiveReplies,
+        sessionReplyBudget: row.sessionReplyBudget,
+        maxAutoRepliesPerHour: row.maxAutoRepliesPerHour,
         maxConsecutiveClarifyingQuestions: row.maxConsecutiveClarifyingQuestions,
         cooldownSeconds: row.cooldownSeconds,
         settleDelaySeconds: row.settleDelaySeconds,
@@ -502,7 +516,8 @@ export class DrizzleSupportAiConfigRepository {
       visionEnabled: input.config.visionEnabled,
       timeoutMs: input.config.timeoutMs,
       maxOutputChars: input.config.maxOutputChars,
-      maxConsecutiveReplies: input.config.maxConsecutiveReplies,
+      sessionReplyBudget: input.config.sessionReplyBudget,
+      maxAutoRepliesPerHour: input.config.maxAutoRepliesPerHour,
       maxConsecutiveClarifyingQuestions: input.config.maxConsecutiveClarifyingQuestions,
       cooldownSeconds: input.config.cooldownSeconds,
       settleDelaySeconds: input.config.settleDelaySeconds,

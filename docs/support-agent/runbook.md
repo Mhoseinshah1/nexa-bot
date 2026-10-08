@@ -21,8 +21,8 @@ Conventions used below:
 - **Who may act.** Changing the mode, the chain or a key needs `support_ai.configure`
   (owner and admin). Entering `AUTO_REPLY_SAFE`, adding an automatic topic or lowering the
   confidence floor needs `support_ai.auto_reply` (owner only), and so does raising a limit
-  under `AUTO_REPLY_SAFE` — «بیشترین پاسخ خودکار پیاپی», «حداکثر سؤال تکمیلی پیاپی», the reply
-  length — or shortening its delays. Taking a conversation over or
+  under `AUTO_REPLY_SAFE` — «سقف پاسخ خودکار در هر جلسه», «سقف پاسخ خودکار در هر ساعت»,
+  «حداکثر سؤال تکمیلی پیاپی», the reply length — or shortening its delays. Taking a conversation over or
   replying needs `business_chats.reply`.
 
 ## 0. What the alerts mean
@@ -397,11 +397,12 @@ topic («با چه برنامه‌ای وصل می‌شید؟») instead of hand
 question is shown in «آمار پشتیبانی» as «سؤال تکمیلی فرستاده شد» (`sent_clarifying`), apart
 from an answer («فرستاده شد», `sent`), and opens no ticket.
 
-- **The limit.** «حداکثر سؤال تکمیلی پیاپی» on `/support-ai` (default 2, 1–10) is how many
-  questions in a row the AI may send before a person continues. The count runs from the AI's
-  last automatic answer; a customer's reply does not reset it, an AI answer does, and a
-  takeover or «سپردن دوباره به هوش مصنوعی» starts a new count. A refused or superseded send is
-  never counted.
+- **The limit.** «حداکثر سؤال تکمیلی پیاپی» on `/support-ai` (default 3 since roadmap A2, 1–10;
+  a tenant saved before it keeps its stored value, usually 2) is how many questions in a row
+  the AI may send before a person continues. The count runs from the AI's last automatic answer;
+  a customer's reply does not reset it, an AI answer does (a greeting does not), and a takeover
+  or «سپردن دوباره به هوش مصنوعی» starts a new count. A refused or superseded send is never
+  counted.
 - **At the limit** the conversation is handed off with «سؤال‌های تکمیلی پیاپی هوش مصنوعی به سقف
   رسید» (`CLARIFYING_LIMIT`, outcome `guard_clarifying_limit`) and a ticket, like any handoff.
   Nothing more is sent to the customer automatically.
@@ -416,6 +417,44 @@ from an answer («فرستاده شد», `sent`), and opens no ticket.
     LEFT JOIN business_outbound_messages o ON o.tenant_id = j.tenant_id AND o.id = j.sent_outbound_id
    WHERE j.kind = 'AUTO_DECISION' AND j.conversation_id = '<conversation id>'
    ORDER BY j.created_at;
+  ```
+
+## 13. The session reply budget and the hourly limit (roadmap A1)
+
+Two limits on `/support-ai` bound how much the AI answers on its own; either one reached hands
+the conversation off with «پاسخ‌های خودکار جلسه یا ساعت به سقف رسید» (`LOOP_GUARD`) and a
+ticket, before any provider is paid.
+
+- **«سقف پاسخ خودکار در هر جلسه»** (`sessionReplyBudget`, default 20, 5–40): automatic replies
+  in one session, shown in «آمار پشتیبانی» as «سقف پاسخ در جلسه» (`guard_consecutive`). A session
+  ends when a person acts in the conversation (a message, a takeover, «سپردن دوباره به هوش
+  مصنوعی») or after **six hours with no message either way**. A greeting reply is not counted.
+- **«سقف پاسخ خودکار در هر ساعت»** (`maxAutoRepliesPerHour`, default 30, 10–60): automatic
+  replies to one conversation in the last 60 minutes, every kind counted, whatever happened in
+  between — «سقف پاسخ در یک ساعت» (`guard_window`). This is the loop safety a new session never
+  lifts.
+- **Existing tenants** read 20 and 30 from migration `0219`; the old «بیشترین پاسخ خودکار
+  پیاپی» (default 4, counted for as long as nobody touched the conversation) is gone from the
+  page and no longer applies.
+- **During the rollout** (review of PR #241): an `assistant` replica still on the previous
+  release enforces the old rules — 4 automatic replies per epoch and a fixed 10 per hour — so a
+  few extra `LOOP_GUARD` handoffs while the deploy rolls are expected and harmless. Either web
+  bundle works against either API: the new API still sends the retired value an older page
+  needs, and a new page leaves out the two limits an older API does not know.
+- **A greeting is free only while it is short** (≤ 200 characters): a reply the model labelled
+  «خوشامدگویی» but that is longer is an answer and spends the budget.
+- **If conversations hit the session budget often**, read them before raising it: a long
+  automatic exchange that does not end is usually a problem the knowledge does not cover
+  (TB8/TB9). Raising either limit under `AUTO_REPLY_SAFE` needs `support_ai.auto_reply`.
+- **From the database (read-only)**, the automatic replies of a conversation with their epoch
+  and topic, to see where its sessions began:
+
+  ```sql
+  SELECT o.created_at, o.control_epoch, o.state, j.topic, j.outcome
+    FROM business_outbound_messages o
+    LEFT JOIN support_ai_jobs j ON j.tenant_id = o.tenant_id AND j.sent_outbound_id = o.id
+   WHERE o.origin = 'AUTO' AND o.conversation_id = '<conversation id>'
+   ORDER BY o.created_at;
   ```
 
 ## 14. Conversation memory and knowledge selection (A7, A8 — 2026-10-07)

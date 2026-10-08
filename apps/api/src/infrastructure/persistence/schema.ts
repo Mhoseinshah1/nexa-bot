@@ -13714,14 +13714,26 @@ export const supportAiConfigs = pgTable(
     visionEnabled: boolean('vision_enabled').notNull().default(false),
     timeoutMs: integer('timeout_ms').notNull(),
     maxOutputChars: integer('max_output_chars').notNull(),
-    maxConsecutiveReplies: integer('max_consecutive_replies').notNull(),
+    /**
+     * RETIRED by roadmap A1 (0219): no longer read or written by this release; its value is the
+     * old per-epoch limit. Kept (with a default so the new writer may omit it) because a column is
+     * dropped only in the release after the one that stopped writing it.
+     */
+    maxConsecutiveReplies: integer('max_consecutive_replies').notNull().default(4),
+    /**
+     * Roadmap A1 (0219): automatic replies per session, and per conversation per hour. Added with
+     * the contract defaults, so every existing tenant reads 20 and 30.
+     */
+    sessionReplyBudget: integer('session_reply_budget').notNull().default(20),
+    maxAutoRepliesPerHour: integer('max_auto_replies_per_hour').notNull().default(30),
     /**
      * Hotfix (2026-10-06): sent automatic clarifying questions in a row before a handoff.
      * Added by 0218 with the contract default, so an existing tenant keeps a working limit.
+     * Roadmap A2 (0219): the column default is 3; stored values are left as they are.
      */
     maxConsecutiveClarifyingQuestions: integer('max_consecutive_clarifying_questions')
       .notNull()
-      .default(2),
+      .default(3),
     cooldownSeconds: integer('cooldown_seconds').notNull(),
     settleDelaySeconds: integer('settle_delay_seconds').notNull().default(6),
     toneInstructions: text('tone_instructions').notNull().default(''),
@@ -13763,6 +13775,11 @@ export const supportAiConfigs = pgTable(
     check('support_ai_configs_timeout_check', sql`timeout_ms BETWEEN 5000 AND 120000`),
     check('support_ai_configs_output_check', sql`max_output_chars BETWEEN 200 AND 4000`),
     check('support_ai_configs_replies_check', sql`max_consecutive_replies BETWEEN 1 AND 20`),
+    check('support_ai_configs_session_budget_check', sql`session_reply_budget BETWEEN 5 AND 40`),
+    check(
+      'support_ai_configs_hourly_limit_check',
+      sql`max_auto_replies_per_hour BETWEEN 10 AND 60`,
+    ),
     check(
       'support_ai_configs_clarifying_check',
       sql`max_consecutive_clarifying_questions BETWEEN 1 AND 10`,

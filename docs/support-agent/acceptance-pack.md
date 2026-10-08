@@ -291,12 +291,10 @@ both.
 
 Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
 records it. On the TEST tenant under `AUTO_REPLY_SAFE` with `CONNECTION_TROUBLESHOOTING` and
-`GREETING` allowlisted, the confidence floor `HIGH`, «حداکثر سؤال تکمیلی پیاپی» at its default
-2, «بیشترین پاسخ خودکار پیاپی» (`maxConsecutiveReplies`) at **5 or more**, and at least one approved,
-enabled article about Sing-box connection errors. At its default of 4 the loop guard counts
-every automatic reply — the greeting too — so a flow of greeting, two questions and an answer
-uses all four, and any further automatic reply in the same epoch hands off as `LOOP_GUARD`
-(«پاسخ‌های خودکار پشت‌سرهم به سقف رسید»), not as the clarifying limit.
+`GREETING` allowlisted, the confidence floor `HIGH`, «حداکثر سؤال تکمیلی پیاپی» at 2, and at
+least one approved, enabled article about Sing-box connection errors. (Roadmap A1 replaced
+«بیشترین پاسخ خودکار پیاپی» with the session budget, default 20, which a greeting never spends;
+see section N.)
 
 1. **The conversation.** From the customer, one message at a time, waiting for each answer:
 
@@ -323,6 +321,35 @@ uses all four, and any further automatic reply in the same epoch hands off as `L
 4. **The widening.** As an `admin` without `support_ai.auto_reply`, raise «حداکثر سؤال تکمیلی
    پیاپی». **Expect:** the warning before saving, and the save refused.
 5. Set the limit back to 2.
+
+## N. Session budget, hourly limit, clarifying default (roadmap A1/A2) — NOT RUN
+
+Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
+records it. On the TEST tenant under `AUTO_REPLY_SAFE` with `CONNECTION_TROUBLESHOOTING` and
+`GREETING` allowlisted.
+
+1. **The fields.** Open `/support-ai`. **Expect:** «سقف پاسخ خودکار در هر جلسه» (20, range 5 – 40)
+   and «سقف پاسخ خودکار در هر ساعت» (30, range 10 – 60), each with its help text; no
+   «بیشترین پاسخ خودکار پیاپی». Type 4 and 41 into the first, 9 and 61 into the second:
+   «بازهٔ مجاز» error and the save disabled each time.
+2. **The budget.** Set the session budget to 5 and save. From the customer send six connection
+   messages, one at a time, each answered before the next. **Expect:** five automatic replies;
+   the sixth message is not answered, the conversation is «نیازمند پشتیبان» with «پاسخ‌های خودکار
+   جلسه یا ساعت به سقف رسید», a ticket, and `guard_consecutive` in the evidence query of M1.
+3. **Greetings are free.** Return it to the AI. Send «سلام» six times, then one connection
+   message. **Expect:** seven automatic replies, no handoff.
+4. **Inactivity.** Leave a conversation that used part of its budget with no message either way
+   for six hours, then write. **Expect:** answered; `sessionReplyCount` would read 1 (the evidence
+   query in runbook §13 shows the gap). A conversation silent five hours continues its session.
+5. **The hour.** Set the hourly limit to 10 and the budget to 40. Send eleven messages within an
+   hour. **Expect:** ten replies, then `guard_window` and a handoff.
+6. **The widening.** As an `admin` without `support_ai.auto_reply`, raise either limit.
+   **Expect:** the warning before saving, and the save refused; lowering it is saved.
+7. **Clarifying default (A2).** On a tenant that never set «حداکثر سؤال تکمیلی پیاپی» it reads 3;
+   on one saved earlier at 2, it still reads 2. With 3: three questions in a row are sent, the
+   fourth hands off with `CLARIFYING_LIMIT`; a «سلام» answered between questions does not reset
+   the count, a real answer does.
+8. Set the limits back to 20, 30 and the tenant's previous clarifying limit.
 
 ## R. Memory and knowledge retrieval (A7, A8 — 2026-10-07) — NOT RUN
 
@@ -410,6 +437,13 @@ no real provider key and no Telegram Business account (program §0).
 | M2 clarifying limit hands off, resume starts fresh        | NOT RUN               |            |          |                                               |
 | M3 money still hands off before the provider              | NOT RUN               |            |          |                                               |
 | M4 raising the limit is the owner's widening              | NOT RUN               |            |          |                                               |
+| N1 the two fields, bounds in Persian                      | NOT RUN               |            |          |                                               |
+| N2 session budget of 5 hands off the sixth                | NOT RUN               |            |          |                                               |
+| N3 greetings never spend the budget                       | NOT RUN               |            |          |                                               |
+| N4 six hours of inactivity start a new session            | NOT RUN               |            |          |                                               |
+| N5 hourly limit hands off                                 | NOT RUN               |            |          |                                               |
+| N6 raising a limit is the owner's widening                | NOT RUN               |            |          |                                               |
+| N7 clarifying default 3; stored 2 kept; greeting no reset | NOT RUN               |            |          |                                               |
 | R1 repeated failure keeps its article (A8)                | NOT RUN               |            |          |                                               |
 | R2 a person's words stay a person's (A7)                  | NOT RUN               |            |          |                                               |
 | R3 a greeting carries no knowledge (A8)                   | NOT RUN               |            |          |                                               |

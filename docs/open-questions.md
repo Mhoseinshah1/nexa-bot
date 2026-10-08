@@ -3443,9 +3443,11 @@ TB7 (AUTO_REPLY_SAFE, handoff and tickets, `docs/support-agent/tb7-auto-reply.md
   as `UNSUPPORTED_CONTENT` (fail closed) rather than dropping quietly. An edit re-enqueues
   only while the conversation still has a pending job; an edit of an already-answered message
   starts nothing.
-- **OQ-TB-45 — the loop guard's window is a constant.** At most 10 automatic replies per
-  conversation per hour (`SUPPORT_AI_AUTO_WINDOW`), beside the configurable consecutive limit
-  (`maxConsecutiveReplies`). Whether the window should be a setting is open.
+- **OQ-TB-45 — the loop guard's window is a constant (resolved, roadmap A1, 2026-10-07).** The
+  hourly limit is the tenant's `maxAutoRepliesPerHour` (default 30, 10–60) over
+  `SUPPORT_AI_AUTO_WINDOW.windowSeconds` (3600 s), and the per-epoch `maxConsecutiveReplies` is
+  replaced by a session reply budget (`sessionReplyBudget`, default 20, 5–40; a session ends after
+  six hours of inactivity; greetings not counted). `docs/support-agent/tb7-auto-reply.md`.
 - **OQ-TB-46 — images in automatic replies (resolved by integrating TB6).** A customer photo
   is no longer refused outright. It goes through TB6's vision path: the tenant's
   `visionEnabled`, a vision-capable configured step, and the bounded, sniffed fetch. An AUTO job

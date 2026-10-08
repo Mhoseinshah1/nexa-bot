@@ -25,6 +25,7 @@ import {
   type SupportAiTestCheckView,
   type SupportAiTestResponse,
   type UnitOfWork,
+  SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -175,7 +176,13 @@ export class SupportAiConfigService {
     const now = this.deps.clock.now();
     const byProvider = new Map(states.map((state) => [state.provider, state]));
     return {
-      config: stored.config,
+      // Review of PR #241: an older web bundle requires the retired `maxConsecutiveReplies` when
+      // it reads the configuration; it is projected here, and ignored on every save.
+      config: {
+        ...stored.config,
+        maxConsecutiveReplies:
+          stored.retiredMaxConsecutiveReplies ?? SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
+      },
       version: stored.version,
       credentials: SUPPORT_AI_PROVIDERS.map((provider) => {
         const state = byProvider.get(provider);
@@ -249,11 +256,15 @@ export class SupportAiConfigService {
         // N4 (review of PR #228): a save that omits the clarifying limit — an older client that
         // does not know it — keeps the stored value (the default when nothing is stored). It is
         // merged BEFORE the permission and version logic, so an absent field is never a widening.
+        // Roadmap A1: the same for the session reply budget and the hourly limit.
         const config: SupportAiConfigInput = {
           ...command.config,
           maxConsecutiveClarifyingQuestions:
             command.config.maxConsecutiveClarifyingQuestions ??
             before.config.maxConsecutiveClarifyingQuestions,
+          sessionReplyBudget: command.config.sessionReplyBudget ?? before.config.sessionReplyBudget,
+          maxAutoRepliesPerHour:
+            command.config.maxAutoRepliesPerHour ?? before.config.maxAutoRepliesPerHour,
         };
         // ENTERING automatic replies is the owner's call alone; staying in it or leaving it is not.
         if (config.mode === 'AUTO_REPLY_SAFE' && before.config.mode !== 'AUTO_REPLY_SAFE') {
@@ -263,9 +274,9 @@ export class SupportAiConfigService {
         // never is. Two kinds of widening (substitute review of PR #202):
         //  - what may be answered at all — a topic added to the allowlist, a lower confidence
         //    accepted — charged in every mode, because the allowlist means nothing else;
-        //  - how much and how often — more consecutive replies, more consecutive clarifying
-        //    questions (hotfix 2026-10-06), longer replies, a shorter cooldown, a shorter
-        //    settle delay — charged when the result is AUTO_REPLY_SAFE.
+        //  - how much and how often — a larger session reply budget or hourly limit (roadmap
+        //    A1), more consecutive clarifying questions (hotfix 2026-10-06), longer replies, a
+        //    shorter cooldown, a shorter settle delay — charged when the result is AUTO_REPLY_SAFE.
         //    These also shape Assist drafts, so outside AUTO they are ordinary configuration;
         //    and entering AUTO is itself charged above, so whoever enters it adopts every bound
         //    on the form under the CRITICAL permission. What is left is an AUTO tenant's bounds
@@ -276,7 +287,8 @@ export class SupportAiConfigService {
           next.autoTopics.some((topic) => !prev.autoTopics.includes(topic)) ||
           (next.autoMinConfidence === 'MEDIUM' && prev.autoMinConfidence !== 'MEDIUM') ||
           (next.mode === 'AUTO_REPLY_SAFE' &&
-            (next.maxConsecutiveReplies > prev.maxConsecutiveReplies ||
+            (next.sessionReplyBudget > prev.sessionReplyBudget ||
+              next.maxAutoRepliesPerHour > prev.maxAutoRepliesPerHour ||
               next.maxConsecutiveClarifyingQuestions > prev.maxConsecutiveClarifyingQuestions ||
               next.maxOutputChars > prev.maxOutputChars ||
               next.cooldownSeconds < prev.cooldownSeconds ||
