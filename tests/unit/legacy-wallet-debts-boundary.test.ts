@@ -34,6 +34,9 @@ const ALLOWED = new Set([
   'apps/api/src/modules/commerce/wallet/application/migration-opening-balance.service.ts',
   // The importer's read-only plan and reconciliation aggregates.
   'apps/api/src/modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.ts',
+  // Mirza PR6: the final report v2's duplicate counter (the most debts one customer holds),
+  // one read-only aggregate. It reads no amount and writes nothing.
+  'apps/api/src/modules/platform/legacy-cutover/infrastructure/drizzle-legacy-cutover.repository.ts',
   // The Web Admin's list and decisions (through the review service only).
   'apps/api/src/surfaces/web/legacy-debts.controller.ts',
 ]);

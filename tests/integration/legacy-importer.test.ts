@@ -1042,7 +1042,7 @@ describe('Migration P7: the legacy importer', () => {
     expectOnlyReads();
   });
 
-  it('the wallet equation holds with a pre-existing NEXA balance and activity after the import', async () => {
+  it('aud6 F2/F3: money that moves in the import window is LISTED, never absorbed — reconcile is a DISCREPANCY until it is zero', async () => {
     const existingId = (
       await ctx.container.database.db.execute<{ id: string }>(
         sql`SELECT id FROM customers WHERE telegram_user_id = ${SYNTHETIC_EXISTING_CUSTOMER}`,
@@ -1061,24 +1061,66 @@ describe('Migration P7: the legacy importer', () => {
     await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
     // NEXA balance + legacy balance for the existing customer, additive.
     expect(await walletTotal()).toBe(10_000n + SYNTHETIC_EXPECTED.users.positiveBalanceSumMinor);
+    // A balance that existed BEFORE the run is the pre-import figure, not movement.
+    expect((await importer().reconcile(input('reconcile-clean', snap))).verdict).toBe('RECONCILED');
+
+    // An operator's credit in the window (a path stop_sales does not stop: aud6 F3).
     await credit('post-import', 500n);
     const reconcile = await importer().reconcile(input('reconcile', snap));
-    expect(reconcile.verdict).toBe('RECONCILED');
-    const wallet = (reconcile.sections as Record<string, any>)['wallet'];
-    expect(wallet).toMatchObject({
+    expect(reconcile.verdict).toBe('DISCREPANCY');
+    const sections = reconcile.sections as Record<string, any>;
+    const failed = (sections['checks'] as { id: string; ok: boolean }[])
+      .filter((c) => !c.ok)
+      .map((c) => c.id)
+      .sort();
+    expect(failed).toEqual([
+      'wallet.equation',
+      'wallet.no_entries_since_run',
+      'wallet.no_movement',
+    ]);
+    expect(sections['wallet']).toMatchObject({
       preImportTotalMinor: 10_000n,
       nonOpeningMovementSinceRunMinor: 500n,
+      // Never folded into the expected side.
+      expectedTotalMinor: 10_000n + SYNTHETIC_EXPECTED.users.positiveBalanceSumMinor,
       actualTotalMinor: 10_500n + SYNTHETIC_EXPECTED.users.positiveBalanceSumMinor,
+      movementSinceRun: { nonOpeningWalletEntries: 1, nonOpeningWalletNetMinor: 500n, payments: 0 },
     });
+
+    // A payment created in the window (a manual transfer reference) is listed and fails too.
+    const productId = mapping.products.get('p1') as string;
+    const draft = await ctx.container.orders.createDraft(tenantA, importerActor('order'), {
+      idempotencyKey: 'window-draft',
+      customerId: existingId as never,
+      productId: productId as never,
+    });
+    const order = await ctx.container.orders.confirm(tenantA, importerActor('order'), {
+      idempotencyKey: 'window-confirm',
+      customerId: existingId as never,
+      orderId: draft.id,
+    });
+    await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      importerActor('order'),
+      existingId as never,
+      { idempotencyKey: 'window-transfer', orderId: order.id },
+    );
+    const withPayment = await importer().reconcile(input('reconcile-2', snap));
+    const sections2 = withPayment.sections as Record<string, any>;
+    expect(sections2['wallet'].movementSinceRun.payments).toBe(1);
+    expect(
+      (sections2['checks'] as { id: string; ok: boolean }[]).find(
+        (c) => c.id === 'payments.none_since_run',
+      )?.ok,
+    ).toBe(false);
+
+    // The v1 final report is closed and unchanged: its W1 still reads the NEXA-native total now.
     const report = await importer().finalReport({
       ...input('report', snap),
       evidenceClass: 'synthetic',
     });
     const final = report.final as Record<string, any>;
     expect(final['wallet'].preImportTotalMinor).toBe('10500');
-    expect(final['reconciliation'].find((r: { id: string }) => r.id === 'W1')).toMatchObject({
-      holds: true,
-    });
   });
 
   it('a row a person closed in the review queue is counted and never retried, even when the source changes', async () => {
@@ -1368,7 +1410,7 @@ describe('Migration P7: the legacy importer', () => {
   });
 
   // Finding 7.
-  it('the wallet equation holds when an entry commits between the pre-import total and the run start', async () => {
+  it('an entry that commits between the pre-import total and the run start is listed movement, never absorbed', async () => {
     const existingId = (
       await ctx.container.database.db.execute<{ id: string }>(
         sql`SELECT id FROM customers WHERE telegram_user_id = ${SYNTHETIC_EXISTING_CUSTOMER}`,
@@ -1400,12 +1442,20 @@ describe('Migration P7: the legacy importer', () => {
     const snap = await snapshot();
     await svc.apply({ ...input('import', snap), mode: 'IMPORT' });
     expect(injected).toBe(true);
+    // aud6 F2: an entry that committed after the pre-import total is movement in the window:
+    // listed (the same boundary as the pre-import figure), never absorbed into the equation.
     const reconcile = await importer().reconcile(input('reconcile', snap));
-    expect(reconcile.verdict).toBe('RECONCILED');
+    expect(reconcile.verdict).toBe('DISCREPANCY');
     expect((reconcile.sections as Record<string, any>)['wallet']).toMatchObject({
       preImportTotalMinor: 0n,
       nonOpeningMovementSinceRunMinor: 700n,
     });
+    expect(
+      ((reconcile.sections as Record<string, any>)['checks'] as { id: string; ok: boolean }[])
+        .filter((c) => !c.ok)
+        .map((c) => c.id)
+        .sort(),
+    ).toEqual(expect.arrayContaining(['wallet.equation', 'wallet.no_movement']));
   });
 
   it('reconcile reports a discrepancy instead of passing over one', async () => {

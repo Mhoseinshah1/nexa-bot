@@ -40,6 +40,23 @@ the same: written at cutover step 10, after the step 6 backup, so a restore remo
 `nexa_pre_restore_<id>` keeps it. Its rows are append-only (UPDATE and DELETE refused by
 trigger) and nothing else drops them; a later re-read appends revisions, never rewrites.
 
+The legacy wallet debts (PR4), the service candidates and their reviews (PR5), and the
+owner's cutover approvals and revocations (`legacy_cutover_approvals`,
+`legacy_cutover_approval_revocations`, Mirza PR6) are the same again: all of them live in the
+one database, so the restore removes them with the import and `nexa_pre_restore_<id>` keeps
+them. The approval tables are append-only (UPDATE and DELETE refused by trigger, `0234`):
+there is no path that drops or edits an approval, and none is added for a rollback.
+
+**After a rollback the owner's approval is gone with the import** (it was recorded after
+the step 6 backup). A second attempt is a new step 13: a new approval, bound to whatever
+the second attempt reads. The old approval survives only in the displaced database, as the
+record of what was approved the first time.
+
+**A rollback is the default answer to `SOURCE_SUPERSEDED`.** A production-like tenant that
+already holds a finished import of another snapshot refuses a new one; rather than
+acknowledging a re-run over it, restore the tenant to the backup taken before that earlier
+import, and import the approved snapshot once.
+
 ## When — triggers
 
 Roll back when any of these holds and the owner (or the operator the owner named for the
@@ -56,6 +73,7 @@ of no easy return" below.
 | T6  | duplicate money: an opening or adoption counted twice anywhere (W5, S5)                                                             | step 15         |
 | T7  | the window runs out before step 16 has passed                                                                                       | any             |
 | T8  | the owner decides                                                                                                                   | any             |
+| T9  | the cutover gate (`cutover-gate`, cutover step 15b) is `REFUSED` at `IMPORT_COMPLETED`, `RECONCILED` or `REPORT_V2_HOLDS`           | step 15b        |
 
 ### The point of no easy return: unfreeze
 
@@ -245,6 +263,8 @@ Check, every one:
   provisioning operations, hidden products, trial overrides, reminders, import runs and map;
 - the production import's `APPLY` run is **absent** from `legacy_import_runs` (it lives only
   in the displaced database); no run is `RUNNING`;
+- `legacy_cutover_approvals` holds no approval recorded after `<PRE_IMPORT_BACKUP_ID>` (it
+  lives only in the displaced database): a new attempt needs a new owner approval;
 - `nexa_pre_restore_<id>` exists — keep it until the incident review is closed;
 - in the Web Admin: a customer imported by the run is unknown to NEXA again (or, for an
   existing customer, shows the pre-import balance); the recovery request is `SUCCEEDED`;

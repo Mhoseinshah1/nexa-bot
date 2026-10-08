@@ -81,6 +81,8 @@ import type {
   RecordedDebt,
 } from './ports.js';
 import { buildFinalReport } from './final-report.js';
+import { buildFinalReportV2 } from './final-report-v2.js';
+import type { LegacyInventory } from './legacy-inventory.js';
 import { decideEvidenceClass, type EvidenceClass } from './production-guard.js';
 import { LEGACY_REPORT_FORMAT, type LegacyImportReport, type LegacyReportMode } from './report.js';
 import { sha256Hex, type LegacySnapshot } from './source-snapshot.js';
@@ -110,6 +112,13 @@ import {
   isMaterialChange,
   reviewStateAfterRun,
 } from '../../legacy-service-review/domain/candidate-rules.js';
+import type { LegacyCutoverService } from '../../legacy-cutover/application/legacy-cutover.service.js';
+import {
+  LegacyCutoverRefused,
+  stopSalesHolds,
+  type CutoverDecision,
+  type CutoverExpectation,
+} from '../../legacy-cutover/domain/cutover-rules.js';
 import { USER_STATUS_READ_SET } from './read-set.js';
 
 /** The `user-status` read set's recorded name (OQ-LWD-07). */
@@ -172,6 +181,11 @@ export interface LegacyImporterDeps {
   readonly adoption: LegacyAdoptionPort | null;
   /** Mirza PR5: the service candidates — one outcome per live invoice, and the review's approvals. */
   readonly serviceCandidates: LegacyServiceCandidateStore;
+  /**
+   * Mirza PR6: the owner's cutover approvals, read inside the start transaction of a gated
+   * import (`decideImport`), and the facts the final report v2 reads (`reportFacts`).
+   */
+  readonly cutover: Pick<LegacyCutoverService, 'decideImport' | 'reportFacts' | 'stopSalesFacts'>;
   /** WP-D3: one applying process per tenant; a second import or resume is refused. */
   readonly processLock: LegacyImportProcessLock;
   readonly guard: PermissionGuard;
@@ -197,6 +211,17 @@ export interface LegacyImportInput {
    * against this before any run acts on it. Absent = production-like: fail closed.
    */
   readonly productionLikeTarget?: boolean;
+}
+
+/**
+ * Mirza PR6 — the cutover gate, as an import is given it: every `--expected-*` value (null
+ * where none was given). The gate APPLIES to an import or resume whenever the target is
+ * explicitly production-like (`productionLikeTarget: true`) or this is present (the CLI's
+ * `--cutover-gate`, to rehearse it on staging); where it applies, an absent expectation is
+ * an incomplete one and is refused.
+ */
+export interface LegacyCutoverGateInput {
+  readonly expectation: CutoverExpectation;
 }
 
 /** Test seam: called after each phase of `apply`. A throw here is an interruption. */
@@ -359,6 +384,30 @@ export function applyAttention(tallies: ApplyTallies) {
   };
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return { ...counts, total };
+}
+
+/**
+ * Mirza PR6 — what an APPLY run left for a person, as its finish audit row records it and the
+ * final report v2 reads it back: the approval counters (PR5, `withdrawnDuringRun` and
+ * `unconfirmed` among them) and every attention count. Counts only.
+ */
+export function applyOutcomeRecord(
+  tallies: ApplyTallies,
+  attention: ReturnType<typeof applyAttention>,
+) {
+  const a = tallies.services.approvals;
+  return {
+    serviceApprovals: {
+      executed: a.executed,
+      refused: Object.values(a.refused).reduce((x, y) => x + y, 0),
+      left: Object.values(a.left).reduce((x, y) => x + y, 0),
+      claimLost: a.claimLost,
+      withdrawnDuringRun: a.withdrawnDuringRun,
+      unconfirmed: a.unconfirmed,
+      released: a.released,
+    },
+    attention,
+  };
 }
 
 /** G10's blocker sentence, or null when every live real code_panel is accounted for. */
@@ -683,6 +732,7 @@ export class LegacyImporterService {
     input: LegacyImportInput & {
       readonly mode: 'IMPORT' | 'RESUME';
       readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
+      readonly cutoverGate?: LegacyCutoverGateInput;
     },
   ): Promise<LegacyImportReport> {
     // Claimed BEFORE anything is read, held until the last write: a second process is
@@ -706,11 +756,21 @@ export class LegacyImporterService {
     input: LegacyImportInput & {
       readonly mode: 'IMPORT' | 'RESUME';
       readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
+      readonly cutoverGate?: LegacyCutoverGateInput;
     },
     lease: LegacyImportProcessLease,
   ): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
+    // Mirza PR6: the cutover gate, decided FIRST — before the inventory walk reads a single
+    // provider page — and again inside the start transaction, where it is authoritative.
+    const gate = cutoverGateOf(input);
+    if (gate !== null) {
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.requireCutover(input, gate, tx);
+        await this.requireStopSales(scope, 'START', tx);
+      });
+    }
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
       forApply: true,
     });
@@ -731,6 +791,10 @@ export class LegacyImporterService {
     });
     const runId = this.deps.ids.uuid();
     const run = await this.mutate(scope, actor, 'legacy_import.run.start', runId, async (tx) => {
+      const cutover = gate === null ? null : await this.requireCutover(input, gate, tx);
+      // aud6 F2: the freeze is measured in the import window itself, inside the transaction
+      // that starts (or resumes) the run — not only by the gate after it.
+      if (gate !== null) await this.requireStopSales(scope, 'START', tx);
       const outcome = await this.deps.runs.startOrResume(
         scope,
         {
@@ -777,6 +841,15 @@ export class LegacyImporterService {
         outcome.run,
         mapping,
         tx,
+        cutover === null
+          ? undefined
+          : {
+              cutover: {
+                cutoverApprovalId: cutover.approvalId,
+                rerunApprovalIds: cutover.rerunApprovalIds,
+                supersededSources: cutover.supersededSources,
+              },
+            },
       );
       return outcome.run;
     });
@@ -889,9 +962,22 @@ export class LegacyImporterService {
     } catch (error) {
       throw new LegacyImportInterrupted(run.id, phase, error);
     }
-    const finished = await this.finish(scope, actor, run.id, mapping, { status: 'COMPLETED' });
-    const adoptionPending = tallies.services.adoption.PENDING > 0;
     const attention = applyAttention(tallies);
+    // Mirza PR6: the counts a person must see are recorded with the run's finish, so the
+    // final report v2 READS them (`applyRun` section) instead of assuming a clean run.
+    const finished = await this.finish(
+      scope,
+      actor,
+      run.id,
+      mapping,
+      { status: 'COMPLETED' },
+      { applyOutcome: applyOutcomeRecord(tallies, attention) },
+      // aud6 F2: and again in the transaction that finishes it. A run whose sales were
+      // reopened meanwhile is never COMPLETED: it stays RUNNING, and a resume under a
+      // restored freeze finishes it.
+      gate === null ? undefined : (tx) => this.requireStopSales(scope, 'FINISH', tx),
+    );
+    const adoptionPending = tallies.services.adoption.PENDING > 0;
     return this.report(
       input.mode,
       scope,
@@ -1901,17 +1987,23 @@ export class LegacyImporterService {
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
     const { destination } = this.deps;
     const tallies = prepared.plan.tallies;
-    const [wallet, openings, native, trials, shapes] = await Promise.all([
+    const [wallet, openings, native, trials, shapes, since] = await Promise.all([
       destination.walletTotals(scope, inputs.walletCurrency),
       destination.openingAggregates(scope),
       destination.walletTotals(scope, inputs.walletCurrency, { excludeOpenings: true }),
       destination.trialDecisionCounts(scope),
       destination.shapeStatusCounts(scope),
+      destination.movementSince(scope, run.startedAt),
     ]);
     // Movement is measured against the SAME boundary as the pre-import total: both are the
     // non-opening total (`excludeOpenings`), so an entry is either in the pre-import figure
     // or in the movement, never in neither, whenever it committed (before the run row, or
     // concurrently with that measurement). There is no timestamp boundary to fall between.
+    //
+    // aud6 F2/F3: the movement is LISTED, never folded into the expected side. The import
+    // runs under a write freeze; a renewal, a receipt, a TonPays approval or an operator's
+    // credit that moved money in the window is the owner's question (the runbook's money
+    // paths), so reconcile is a DISCREPANCY until the movement is zero.
     const movement = native.totalMinor - inputs.preImportWalletTotalMinor;
     const importable = prepared.plan.users.filter((u) => u.decision.kind === 'IMPORT');
     const present = await destination.customersByTelegramIds(
@@ -1938,9 +2030,27 @@ export class LegacyImporterService {
       ),
       check(
         'wallet.equation',
-        'pre-import NEXA total + Σ positive legacy Balance (+ non-opening movement since the run) = current total',
-        expectedWallet + movement,
+        'pre-import NEXA total + Σ positive legacy Balance = current total (no movement absorbed)',
+        expectedWallet,
         wallet.totalMinor,
+      ),
+      check(
+        'wallet.no_movement',
+        'the non-opening wallet total is the pre-import one: no money moved in the import window',
+        0n,
+        movement,
+      ),
+      check(
+        'wallet.no_entries_since_run',
+        'no non-opening wallet ledger entry was created since the run started',
+        0,
+        since.walletEntries,
+      ),
+      check(
+        'payments.none_since_run',
+        'no payment was created since the run started',
+        0,
+        since.payments,
       ),
       check(
         'wallet.openings_sum',
@@ -2037,8 +2147,18 @@ export class LegacyImporterService {
           preImportTotalMinor: inputs.preImportWalletTotalMinor,
           legacySumMinor: tallies.wallet.legacySumMinor,
           nonOpeningMovementSinceRunMinor: movement,
-          expectedTotalMinor: expectedWallet + movement,
+          expectedTotalMinor: expectedWallet,
           actualTotalMinor: wallet.totalMinor,
+          /**
+           * aud6 F2/F3: what moved since the run started (`run.startedAt`), listed for the
+           * owner's decision and never folded into an equation. Counts and a net only.
+           */
+          movementSinceRun: {
+            since: run.startedAt.toISOString(),
+            nonOpeningWalletEntries: since.walletEntries,
+            nonOpeningWalletNetMinor: since.walletNetMinor,
+            payments: since.payments,
+          },
           openings,
           negativeLegacyBalances: tallies.wallet.negative,
           legacyDebts: debts,
@@ -2067,7 +2187,21 @@ export class LegacyImporterService {
    * inputs, what NEXA holds now and a fresh plan over the same snapshot. Read only.
    */
   async finalReport(
-    input: LegacyImportInput & { readonly evidenceClass: EvidenceClass },
+    input: LegacyImportInput & {
+      readonly evidenceClass: EvidenceClass;
+      /**
+       * Mirza PR6: a fresh inventory, read by a session bound to this snapshot's source
+       * (`takeLegacyInventory` with the snapshot's fingerprint). Without one the v2 report's
+       * inventory section says `read: false` and does not hold — never assumed.
+       */
+      readonly inventory?: LegacyInventory | null;
+      /**
+       * Which document's verdict the report carries: 2 (default) the AND of every v2 section
+       * and invariant; 1 the closed v1 document with PR4's and PR5's sections, exactly as before
+       * PR6 — a consumer of version 1 keeps version 1's verdict, and no v2 document is built.
+       */
+      readonly reportSchema?: 1 | 2;
+    },
   ): Promise<LegacyImportReport> {
     const { scope, snapshot, mapping } = input;
     // The label a caller asks for is checked against the source's own marker HERE too, so
@@ -2135,11 +2269,34 @@ export class LegacyImporterService {
     // Mirza PR5: beside the closed v1 report too; PR6 folds it into schema version 2. Its
     // closure is part of the verdict, as the users-and-wallets checks are.
     const serviceOutcomes = this.serviceOutcomesSection(snapshot, run.id, prepared);
-    const holds = reportHolds(final, usersWallets, serviceOutcomes);
+    // Mirza PR6: version 2 carries the closed v1 document unchanged as `core` and folds in
+    // every section; its verdict is the AND of all of them and of the seven invariants.
+    if (input.reportSchema === 1) {
+      const v1Holds = reportHolds(final, usersWallets, serviceOutcomes);
+      return {
+        ...this.report('REPORT', scope, snapshot, startedAt, final, run.status),
+        verdict: `${run.status}${v1Holds ? '' : '_WITH_DISCREPANCY'}`,
+        final,
+        usersWallets,
+        serviceOutcomes,
+      };
+    }
+    const finalV2 = buildFinalReportV2({
+      core: final,
+      usersWallets,
+      serviceOutcomes,
+      snapshot,
+      inventory: input.inventory ?? null,
+      facts: await this.deps.cutover.reportFacts(scope, snapshot.fingerprint, run.id),
+      productMap: mapping.products,
+      openingsPerCustomerMax: openings.perCustomerMax,
+    });
+    const holds = reportHolds(final, usersWallets, serviceOutcomes) && finalV2.verdict.holds;
     return {
       ...this.report('REPORT', scope, snapshot, startedAt, final, run.status),
       verdict: `${run.status}${holds ? '' : '_WITH_DISCREPANCY'}`,
       final,
+      finalV2,
       usersWallets,
       serviceOutcomes,
     };
@@ -2237,6 +2394,95 @@ export class LegacyImporterService {
       );
     }
     return { run, inputs };
+  }
+
+  /**
+   * Mirza PR6 — the cutover gate's decision for this import, read-only, in its own
+   * transaction: what `legacy-import cutover-gate` reports. A gated `apply` decides the same
+   * thing again inside its start transaction (`requireCutover`).
+   */
+  async cutoverDecision(
+    input: LegacyImportInput & { readonly cutoverGate?: LegacyCutoverGateInput },
+  ): Promise<CutoverDecision> {
+    const gate = cutoverGateOf({ ...input, productionLikeTarget: true });
+    if (gate === null) throw new Error('unreachable: a production-like gate always applies');
+    return this.deps.uow.run(input.scope, (tx) => this.decideCutover(input, gate, tx));
+  }
+
+  /**
+   * aud6 F2 — a gated import's freeze, sampled inside `tx` with the gate's own predicate
+   * (`stopSalesHolds`): refused (`STOP_SALES_NOT_ACTIVE`, exit 65) unless an ACTIVE stop_sales
+   * MAINTENANCE incident holds, every ACTIVE panel is drained and no gateway is ACTIVE. At
+   * START nothing is written; at FINISH the run stays RUNNING (the transaction rolls back).
+   */
+  private async requireStopSales(
+    scope: TenantContext,
+    when: 'START' | 'FINISH',
+    tx: TransactionScope,
+  ): Promise<void> {
+    const sample = stopSalesHolds(await this.deps.cutover.stopSalesFacts(scope, tx));
+    if (sample.holds) return;
+    throw new LegacyCutoverRefused(
+      'STOP_SALES_NOT_ACTIVE',
+      when === 'START'
+        ? `sales are not stopped at the import's start (${sample.detail}). Stop sales (runbook step 1) and run again. Nothing was written.`
+        : `sales were reopened during the import (${sample.detail}). The run stays RUNNING, never COMPLETED: stop sales again, check the movement reconcile lists, and resume.`,
+    );
+  }
+
+  /** The decision, or a `LegacyCutoverRefused` (exit 65, nothing written). */
+  private async requireCutover(
+    input: LegacyImportInput,
+    gate: LegacyCutoverGateInput,
+    tx: TransactionScope,
+  ): Promise<Extract<CutoverDecision, { ok: true }>> {
+    const decision = await this.decideCutover(input, gate, tx);
+    if (!decision.ok) throw new LegacyCutoverRefused(decision.code, decision.message);
+    return decision;
+  }
+
+  /**
+   * The one evaluator over what `tx` reads. The expectation's source and panel map must also
+   * be the snapshot's and the mapping's: an approval binds what is imported, not what was
+   * typed.
+   */
+  private async decideCutover(
+    input: LegacyImportInput,
+    gate: LegacyCutoverGateInput,
+    tx: TransactionScope,
+  ): Promise<CutoverDecision> {
+    const { expectation } = gate;
+    if (
+      expectation.sourceFingerprint !== null &&
+      expectation.sourceFingerprint !== input.snapshot.fingerprint
+    ) {
+      return {
+        ok: false,
+        code: 'APPROVAL_MISSING',
+        message: `the snapshot's source fingerprint is ${input.snapshot.fingerprint}, not the expected ${expectation.sourceFingerprint}. Nothing was written.`,
+        detail: ['sourceFingerprint'],
+      };
+    }
+    if (
+      expectation.panelMapFingerprint !== null &&
+      expectation.panelMapFingerprint !== input.mapping.fingerprint
+    ) {
+      return {
+        ok: false,
+        code: 'APPROVAL_MISSING',
+        message: `the panel mapping fingerprint is ${input.mapping.fingerprint}, not the expected ${expectation.panelMapFingerprint}. Nothing was written.`,
+        detail: ['panelMapFingerprint'],
+      };
+    }
+    return this.deps.cutover.decideImport(
+      input.scope,
+      {
+        expectation,
+        snapshotSynthetic: input.snapshot.synthetic,
+        productionLikeTarget: input.productionLikeTarget === true,
+      },
+      tx,
+    );
   }
 
   private async latestApplyRun(scope: TenantContext): Promise<LegacyImportRunRecord> {
@@ -2392,6 +2638,7 @@ export class LegacyImporterService {
     run: LegacyImportRunRecord,
     mapping: PanelMapping,
     tx: TransactionScope,
+    extra?: Readonly<Record<string, unknown>>,
   ): Promise<void> {
     await this.deps.audit.record(
       scope,
@@ -2406,6 +2653,9 @@ export class LegacyImporterService {
           status: run.status,
           sourceFingerprint: run.sourceFingerprint,
           panelMappingFingerprint: mapping.fingerprint,
+          // Mirza PR6: the approval (and re-run acknowledgements) a gated import ran under
+          // (start), and what the run left for a person (finish) — counts only.
+          ...(extra ?? {}),
         },
         result: 'SUCCESS',
       },
@@ -2419,10 +2669,13 @@ export class LegacyImporterService {
     runId: string,
     mapping: PanelMapping,
     outcome: { readonly status: 'COMPLETED' | 'ABORTED' },
+    extra?: Readonly<Record<string, unknown>>,
+    beforeFinish?: (tx: TransactionScope) => Promise<void>,
   ): Promise<LegacyImportRunRecord> {
     return this.mutate(scope, actor, 'legacy_import.run.finish', runId, async (tx) => {
+      if (beforeFinish !== undefined) await beforeFinish(tx);
       const run = await this.deps.runs.finish(scope, runId, outcome, this.deps.clock.now(), tx);
-      await this.auditRun(scope, actor, 'legacy_import.run.finish', run, mapping, tx);
+      await this.auditRun(scope, actor, 'legacy_import.run.finish', run, mapping, tx, extra);
       return run;
     });
   }
@@ -2473,4 +2726,28 @@ function check(
   actual: bigint | number | boolean,
 ) {
   return { id, what, expected, actual, ok: expected === actual };
+}
+
+/**
+ * Whether the cutover gate applies to this import, and with what: where the target is
+ * explicitly production-like, or a gate was asked for. Where it applies without an
+ * expectation, every value is missing — refused as incomplete, never skipped.
+ */
+export function cutoverGateOf(input: {
+  readonly productionLikeTarget?: boolean;
+  readonly cutoverGate?: LegacyCutoverGateInput;
+}): LegacyCutoverGateInput | null {
+  if (input.cutoverGate !== undefined) return input.cutoverGate;
+  if (input.productionLikeTarget !== true) return null;
+  return {
+    expectation: {
+      sourceFingerprint: null,
+      panelMapFingerprint: null,
+      inventoryFingerprint: null,
+      productsFingerprint: null,
+      invoiceArchiveFingerprint: null,
+      freezeProofSha256: null,
+      finalDumpSha256: null,
+    },
+  };
 }

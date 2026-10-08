@@ -49,6 +49,13 @@ export interface LegacyImportReport {
    * carries it in its JSON `sections`. PR6 folds it into schema version 2.
    */
   readonly serviceOutcomes?: unknown;
+  /**
+   * `report` mode only (Mirza PR6): the final report, schema version 2
+   * (`docs/legacy-migration/final-report-v2.schema.json`) — the v1 document unchanged as
+   * `core`, every later section with its version, the seven invariants and the verdict.
+   * `--format json` prints it (`--report-schema 1` prints `final` instead).
+   */
+  readonly finalV2?: unknown;
 }
 
 export interface LegacyReportInvocation {
@@ -160,6 +167,17 @@ export function reportMarkdown(report: LegacyImportReport): string {
   if (report.usersWallets !== undefined) renderValue('usersWallets', report.usersWallets, 0, out);
   if (report.serviceOutcomes !== undefined) {
     renderValue('serviceOutcomes', report.serviceOutcomes, 0, out);
+  }
+  if (report.finalV2 !== null && typeof report.finalV2 === 'object') {
+    // The v2 document without `core` (rendered above as the sections) and without the two
+    // sections already rendered: the verdict, the new sections and the invariants.
+    const { core: _core, sections, ...rest } = report.finalV2 as Record<string, unknown>;
+    const {
+      usersWallets: _uw,
+      serviceOutcomes: _so,
+      ...newSections
+    } = (sections ?? {}) as Record<string, unknown>;
+    renderValue('finalReportV2', { ...rest, sections: newSections }, 0, out);
   }
   return `${out.join('\n').replace(/\n{3,}/gu, '\n\n')}\n`;
 }

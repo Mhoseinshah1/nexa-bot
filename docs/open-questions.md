@@ -3212,7 +3212,9 @@ Still open:
   step 7 and rollback step R5 name the effect (no customer action reaches it; writes are
   refused; `CHECKSUM TABLE` proves nothing changed) but the commands belong to the legacy
   host, which this repository has never seen. **Settled by** the owner writing them into
-  those two steps before the production gate.
+  those two steps before the production gate. (Mirza PR6: still open. What IS enforced now:
+  the freeze proof over EVERY table is checked by PR1's checker inside the cutover gate,
+  and its file's SHA-256 is bound into the owner's recorded approval — OQ-LCO-04.)
 
 ## OQ-P7 — the legacy importer (Migration P7): decisions recorded, not guessed
 
@@ -3470,6 +3472,38 @@ owner's, or settled from the real staging copy (NOT RUN) — never by guessing.
 - **OQ-LSR-05 — DECISION: who reviews.** `legacy.services.view` (MEDIUM) and
   `legacy.services.decide` (HIGH) are owner-only by default. Whether an operator role should
   hold them is the owner's.
+
+## OQ-LCO — the legacy cutover (Mirza PR6): what the evidence does not settle
+
+- **OQ-LCO-01 — DECISION (proposed): the owner's approval is recorded in the Web Admin, not
+  on the command line.** An approval is a statement about WHO consented; the CLI's
+  `SYSTEM_JOB` actor could only type a name, which CLAUDE.md forbids as a fabricated actor.
+  The production-target acknowledgement stays a CLI env/flag pair (it is about WHERE the CLI
+  writes). `legacy.cutover.approve` is CRITICAL and owner-only. **Settled by** the owner
+  accepting it, or naming another approver role in a reviewed commit.
+- **OQ-LCO-02 — DECISION (proposed): a FAILED APPLY run supersedes too.** The audit's policy
+  names COMPLETED and ABORTED runs; a run fails after phases that may already have written
+  customers and openings, so a FAILED run of another source is treated as a prior import
+  (SOURCE_SUPERSEDED). **Settled by** the owner confirming it.
+- **OQ-LCO-03 — DECISION (proposed): the default answer to SOURCE_SUPERSEDED is a rollback,
+  not an acknowledgement.** A production tenant holding a historical import is restored to
+  the backup taken before it, and the approved snapshot imported once; a re-run
+  acknowledgement exists for the case the owner chooses deliberately, and still applies no
+  balance delta (OQ-LWD-02 stays open).
+- **OQ-LCO-04 — UNKNOWN: the real freeze commands (OQ-REH-02) and the final dump tool.** The
+  gate verifies the freeze proof FILES with PR1's checker and binds the frozen file's and the
+  dump's SHA-256; it cannot prove MirzaBot was stopped or that `read_only` was set. The
+  synthetic rehearsal's "dump" is a TSV export (no dump binary in the CI's MySQL packages).
+  **Settled by** OQ-REH-02, and a staging rehearsal with the real `mysqldump`.
+- **OQ-LCO-05 — UNKNOWN: whether `stop_sales` covers every money path during the window.**
+  The gate's step 1 reads the existing mechanism: an ACTIVE MAINTENANCE incident with
+  `stop_sales`, every ACTIVE panel drained and every payment gateway disabled. A wallet
+  renewal of an EXISTING service on a drained panel is not a new allocation; whether it can
+  move wallet money in the window is not proven here (the wallet equation tolerates it as
+  "non-opening movement"). **Settled by** a staging check during a real window.
+- **OQ-LCO-06 — UNKNOWN: the real legacy table list.** Every table but `user`, `invoice`,
+  `product` is UNCLASSIFIED until `table-inventory.md` is filled from the real dump and a
+  reviewed commit classifies it (OQ-MZ-INV). The cutover refuses until then, by design.
 
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 

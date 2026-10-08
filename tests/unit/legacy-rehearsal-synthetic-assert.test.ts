@@ -3,7 +3,9 @@ import {
   EXPECTED_PASS_CYCLE_0,
   EXPECTED_PASS_EVERY_CYCLE,
   EXPECTED_PASS_LATER_CYCLES,
+  EXPECTED_PASS_PROGRAM,
   EXPECTED_PENDING,
+  PROGRAM_CYCLE,
   assertSynthetic,
 } from '../../scripts/legacy-rehearsal-synthetic-assert.mjs';
 
@@ -20,7 +22,10 @@ function summary(over: Partial<Record<string, unknown>> = {}, extra: Check[] = [
     expected: 'x',
     actual: 'x',
   });
-  const checks: Check[] = EXPECTED_PASS_CYCLE_0.map((c) => pass(0, c));
+  const checks: Check[] = [
+    ...EXPECTED_PASS_CYCLE_0.map((c) => pass(0, c)),
+    ...EXPECTED_PASS_PROGRAM.map((c) => pass(PROGRAM_CYCLE, c)),
+  ];
   for (const cycle of [1, 2]) {
     for (const check of EXPECTED_PASS_EVERY_CYCLE) checks.push(pass(cycle, check));
     if (cycle > 1) for (const check of EXPECTED_PASS_LATER_CYCLES) checks.push(pass(cycle, check));
@@ -91,6 +96,31 @@ describe('assertSynthetic', () => {
     s.pendingDecisions = s.pendingDecisions.map((d) => ({ ...d, decision: 'ACCEPTED' as never }));
     expect(assertSynthetic(s)).toContain(
       'a synthetic pendingDecisions entry carries a decision; only the owner records one',
+    );
+  });
+
+  it('refuses a summary whose migration program phase (Mirza PR6) is missing a check, or holds a PENDING', () => {
+    const s = summary();
+    const without = {
+      ...s,
+      checks: s.checks.filter(
+        (c) => !(c.cycle === PROGRAM_CYCLE && c.check === 'b_cutover_gate_ready'),
+      ),
+    };
+    expect(assertSynthetic(without)).toEqual([
+      `expected PASS not recorded: ${String(PROGRAM_CYCLE)}:b_cutover_gate_ready`,
+    ]);
+    const pendingInProgram = summary({}, [
+      {
+        cycle: PROGRAM_CYCLE,
+        check: 'b_report_v2_holds',
+        result: 'PENDING',
+        expected: '0',
+        actual: '1',
+      },
+    ]);
+    expect(assertSynthetic(pendingInProgram).join()).toContain(
+      `unexpected PENDING: ${String(PROGRAM_CYCLE)}:b_report_v2_holds`,
     );
   });
 });

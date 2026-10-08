@@ -137,7 +137,7 @@ import window.
 | A2  | existing NEXA customer      | `A2`                            | map `user` IMPORTED onto the EXISTING row (`existed_before_import = t`), no second customer for that Telegram id; balance = pre-import NEXA balance + legacy `Balance`                     |
 | B1  | positive wallet             | `B1`                            | exactly one `CREDIT` opening of `Balance`; `ref_ok`, `no_money`; Web Admin + Telegram show it; not in sales/revenue                                                                        |
 | B2  | zero wallet                 | `B2`                            | NO opening entry (zero writes none); balance unchanged                                                                                                                                     |
-| B3  | negative wallet             | `B3`                            | exactly one `DEBIT` opening of the magnitude of `Balance`; balance negative; an ordinary purchase from the wallet is refused (no credit)                                                   |
+| B3  | negative wallet             | `B3`                            | NO ledger entry (owner decision 6): NEXA balance 0, exactly one `legacy_wallet_debts` row of the magnitude of `Balance`, `PENDING_REVIEW`, listed in `/legacy-debts`; never collected      |
 | C1  | normal product              | `C1`                            | service's product is a normal (non-HIDDEN) catalogue product; renewal quotes its current price                                                                                             |
 | C2  | hidden product              | `C2`                            | product `audience = HIDDEN`, shape `is_custom = f`, `tariff_status = RESOLVED`; absent from the customer catalogue; renewal quotes the current tariff                                      |
 | C3  | custom product              | `C3`                            | shape `is_custom = t`, resolved (matched or operator-stated); renewable; never orderable new                                                                                               |
@@ -297,3 +297,22 @@ report for the import day: sales and revenue unmoved, the openings only under «
 
 A FAIL that is not a documented manual-review outcome is a rollback trigger (T4) at
 cutover; on staging it blocks the production gate (G15).
+
+## The migration program's Web Admin and gate checks (Mirza PR2–PR6)
+
+**Status: NOT RUN.** Done once per staging rehearsal (and again at cutover), by a person,
+in the Web Admin and on the operator's terminal — aggregates and NEXA ids only, never a
+legacy username, Telegram id, price or link pasted anywhere. Each row records what was
+SEEN, against the run's own reports; counts are dated baselines of that snapshot, never
+limits.
+
+| check | where                         | what a person confirms                                                                                                                                                                | capture                                          | result  |
+| ----- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------- |
+| W1    | `/legacy-products`            | the review rows equal the products read's code count; every `SOURCE_CHANGED`/`PENDING_REVIEW` row decided or knowingly left; a historical price is labelled historical, never a price | counts by state; `products-read.md` fingerprint  | NOT RUN |
+| W2    | `/legacy-invoices`            | the archive's count equals `invoices-read.md`'s closure; a row opens with its provenance; personal fields hidden without `legacy.invoices.pii.view`                                   | archive count; one row's provenance (ids only)   | NOT RUN |
+| W3    | `/legacy-debts`               | one debt per negative legacy balance, Σ equal to `usersWallets.wallet.legacyDebts`; no decision moves money                                                                           | count and Σ                                      | NOT RUN |
+| W4    | `/legacy-services`            | the candidate count equals `serviceOutcomes.candidates`; `NO_PANEL` never adopted automatically; an ADOPT approval executes only on the next run                                      | counts by outcome and review state               | NOT RUN |
+| W5    | `/legacy-cutover`             | the owner (only) records the CUTOVER approval with the seven values of the runbook's step 13; a non-owner sees no approve control; the approval lists who and when                    | approval id, approver admin id, time (UTC)       | NOT RUN |
+| W6    | terminal, `p7 import` (gated) | before the approval: `APPROVAL_MISSING`, exit 65, no APPLY run written; with one value changed: refused the same way                                                                  | the refusal's first line; run count before/after | NOT RUN |
+| W7    | terminal, `cutover-gate`      | `CUTOVER_READY`, all eleven steps `PASS`; then with a wrong `--expected-final-dump-sha256`, and again with an edited `--final-dump` file: `REFUSED` at `FINAL_DUMP_VERIFIED`          | `cutover-gate.md`, both runs                     | NOT RUN |
+| W8    | terminal, `p7 report`         | v2 schema-valid; `verdict.holds = true`; `sections.applyRun.serviceApprovals.withdrawnDuringRun` and `attention.approvalUnconfirmed` recorded                                         | `final-report.json` (aggregates)                 | NOT RUN |

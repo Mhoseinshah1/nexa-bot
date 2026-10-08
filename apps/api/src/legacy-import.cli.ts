@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  LEGACY_TABLE_CLASSIFICATION,
   isNexaError,
   systemJobActor,
   type CorrelationId,
@@ -92,6 +93,23 @@ import {
   parseMysqlDsn,
 } from './modules/platform/legacy-importer/infrastructure/mysql-legacy-source.js';
 import { INVENTORY_MAX_PAGE_SIZE } from './modules/platform/providers/infrastructure/rickpanel-inventory.js';
+import {
+  CUTOVER_GATE_USAGE,
+  CutoverUsageError,
+  assertExpectationComplete,
+  assertFreshMatches,
+  cutoverExpectationOf,
+  cutoverGateExitCode,
+  cutoverGateText,
+  freshCutoverFingerprints,
+  parseCutoverGateArgs,
+  readBytes,
+  runCutoverGate,
+  runFreezeChecker,
+  sha256OfFile,
+} from './legacy-import-cutover.js';
+import { LegacyCutoverRefused } from './modules/platform/legacy-cutover/domain/cutover-rules.js';
+import { takeLegacyInventory } from './modules/platform/legacy-importer/application/legacy-inventory.js';
 
 /**
  * `legacy-import` — the P7 legacy importer (`docs/legacy-migration/importer.md`).
@@ -119,6 +137,10 @@ export const USAGE = [
   '                     [--format md|json] [--out DIR] [--inventory-page-size N]',
   '                     [--abort-running] [--source-password-env NAME]',
   '                     [--expected-fingerprint HEX] [--expected-panel-map-fingerprint HEX]',
+  '                     [--expected-inventory-fingerprint HEX] [--expected-products-fingerprint HEX]',
+  '                     [--expected-invoice-archive-fingerprint HEX]',
+  '                     [--expected-freeze-proof-sha256 HEX] [--expected-final-dump-sha256 HEX]',
+  '                     [--cutover-gate] [--report-schema 1|2]',
   `                     [${ALLOW_PRODUCTION_FLAG}]`,
   '',
   '  MODE     audit | dry-run | import | resume | reconcile | report  (or --mode MODE)',
@@ -134,6 +156,7 @@ export const USAGE = [
   '  Table inventory (read-only):   legacy-import inventory --tenant … --source … --target …',
   '  Legacy product review:         legacy-import products-read|products-export --help',
   '  Legacy invoice archive:        legacy-import invoices-read --help',
+  '  The final cutover gate:        legacy-import cutover-gate --help',
   '',
   `  --inventory-page-size N             rows per RickPanel list page, 1-${String(INVENTORY_MAX_PAGE_SIZE)}. Default here:`,
   `                                      ${String(INVENTORY_MAX_PAGE_SIZE)}, the reader's maximum (fewest provider reads, shortest`,
@@ -145,6 +168,18 @@ export const USAGE = [
   '                                      approved (from audit); anything else is refused, exit 65.',
   '                                      REQUIRED against a production-like target.',
   '  --expected-panel-map-fingerprint HEX  import/resume: the same for the panel mapping file.',
+  '',
+  '  The CUTOVER GATE (Mirza PR6) applies to import/resume against a production-like target,',
+  '  and anywhere with --cutover-gate (to rehearse it on staging). It needs all seven values —',
+  '  --expected-fingerprint, --expected-panel-map-fingerprint, --expected-inventory-fingerprint,',
+  '  --expected-products-fingerprint, --expected-invoice-archive-fingerprint,',
+  '  --expected-freeze-proof-sha256, --expected-final-dump-sha256 — re-reads the three read sets',
+  '  (every table classified, each fingerprint as approved), and refuses (exit 65, nothing',
+  '  written) without an unrevoked owner approval (Web Admin) matching all seven, or over an',
+  "  earlier import of another source without the owner's re-run acknowledgement",
+  '  (SOURCE_SUPERSEDED).',
+  '  --report-schema 1|2                 report: the final report version --format json prints',
+  '                                      (default 2; 1 is the closed v1 document, unchanged).',
   '',
   '  Nothing that decides WHAT is imported defaults. A production-like target also needs',
   `  ${ALLOW_PRODUCTION_FLAG} AND ${TARGET_ACK_ENV}=<ack printed by the refusal>.`,
@@ -175,6 +210,16 @@ export interface Args {
   readonly expectedFingerprint: string | null;
   /** import/resume: the same, for the panel mapping file's fingerprint. Optional. */
   readonly expectedPanelMapFingerprint: string | null;
+  /** import/resume (Mirza PR6): the other five values a cutover approval binds. */
+  readonly expectedInventoryFingerprint: string | null;
+  readonly expectedProductsFingerprint: string | null;
+  readonly expectedInvoiceArchiveFingerprint: string | null;
+  readonly expectedFreezeProofSha256: string | null;
+  readonly expectedFinalDumpSha256: string | null;
+  /** import/resume: apply the cutover gate on a target that is not production-like. */
+  readonly cutoverGate: boolean;
+  /** report: the final report version `--format json` prints. */
+  readonly reportSchema: 1 | 2;
 }
 
 /**
@@ -201,6 +246,12 @@ const VALUE_FLAGS = new Set([
   '--mode',
   '--expected-fingerprint',
   '--expected-panel-map-fingerprint',
+  '--expected-inventory-fingerprint',
+  '--expected-products-fingerprint',
+  '--expected-invoice-archive-fingerprint',
+  '--expected-freeze-proof-sha256',
+  '--expected-final-dump-sha256',
+  '--report-schema',
   '--tenant',
   '--source',
   '--source-password-env',
@@ -211,7 +262,7 @@ const VALUE_FLAGS = new Set([
   '--format',
   '--evidence-class',
 ]);
-const BOOLEAN_FLAGS = new Set([ALLOW_PRODUCTION_FLAG, '--abort-running']);
+const BOOLEAN_FLAGS = new Set([ALLOW_PRODUCTION_FLAG, '--abort-running', '--cutover-gate']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const DATABASE_NAME = /^[a-z_][a-z0-9_]{0,62}$/u;
@@ -331,11 +382,29 @@ export function parseArgs(argv: readonly string[]): Args {
   };
   const expectedFingerprint = expected(EXPECTED_FINGERPRINT_FLAG);
   const expectedPanelMapFingerprint = expected(EXPECTED_PANEL_MAP_FINGERPRINT_FLAG);
+  const cutoverGate = flags.has('--cutover-gate');
+  if (cutoverGate && mode !== 'import' && mode !== 'resume') {
+    throw new UsageError('--cutover-gate applies to import and resume only.');
+  }
+  const rawSchema = values.get('--report-schema');
+  if (rawSchema !== undefined && mode !== 'report') {
+    throw new UsageError('--report-schema applies to report only.');
+  }
+  if (rawSchema !== undefined && rawSchema !== '1' && rawSchema !== '2') {
+    throw new UsageError('--report-schema must be 1 or 2.');
+  }
   return {
     mode: mode as Mode,
     tenant,
     expectedFingerprint,
     expectedPanelMapFingerprint,
+    expectedInventoryFingerprint: expected('--expected-inventory-fingerprint'),
+    expectedProductsFingerprint: expected('--expected-products-fingerprint'),
+    expectedInvoiceArchiveFingerprint: expected('--expected-invoice-archive-fingerprint'),
+    expectedFreezeProofSha256: expected('--expected-freeze-proof-sha256'),
+    expectedFinalDumpSha256: expected('--expected-final-dump-sha256'),
+    cutoverGate,
+    reportSchema: rawSchema === '1' ? 1 : 2,
     source,
     sourcePasswordEnv,
     target,
@@ -554,8 +623,10 @@ export async function emit(
   const markdown = reportMarkdown(report);
   // `report --format json` prints the Item 16 document alone, so a harness can parse
   // stdout; every other mode prints its own report.
+  // Mirza PR6: version 2 when it was built (the default), else the v1 document.
+  const document = report.finalV2 ?? report.final;
   const json =
-    report.final === undefined ? reportJson(report) : `${JSON.stringify(report.final, null, 2)}\n`;
+    document === undefined ? reportJson(report) : `${JSON.stringify(document, null, 2)}\n`;
   io.stdout(format === 'json' ? json : markdown);
   if (out === null) return;
   const stem = `legacy-import-${report.mode.toLowerCase()}-${report.generatedAt.replace(/[:.]/gu, '-')}`;
@@ -614,6 +685,11 @@ export async function runMode(
         'target: pass the source fingerprint the owner approved (audit prints it).',
     );
   }
+  // Mirza PR6: the cutover gate. Against a production-like target every import and resume is
+  // gated; elsewhere `--cutover-gate` asks for it. All seven values or nothing is even read.
+  const gated = writes && (context.productionLikeTarget || args.cutoverGate);
+  const expectation = cutoverExpectationOf(args);
+  if (gated) assertExpectationComplete(expectation);
   if (
     args.expectedPanelMapFingerprint !== null &&
     args.expectedPanelMapFingerprint !== mapping.fingerprint
@@ -661,6 +737,15 @@ export async function runMode(
     mapping,
     productionLikeTarget: context.productionLikeTarget,
   };
+  const readContext = { scope, actor, productionLikeTarget: context.productionLikeTarget };
+  if (gated) {
+    // A FRESH read of every read set the approval binds, by sessions bound to this source:
+    // every table classified, every fingerprint the approved one — before anything is written.
+    assertFreshMatches(
+      await freshCutoverFingerprints(importer, connector, snapshot.fingerprint, readContext),
+      expectation,
+    );
+  }
   switch (args.mode) {
     case 'audit':
       return importer.audit({
@@ -670,13 +755,37 @@ export async function runMode(
     case 'dry-run':
       return importer.dryRun(input);
     case 'import':
-      return importer.apply({ ...input, mode: 'IMPORT' });
+      return importer.apply({
+        ...input,
+        mode: 'IMPORT',
+        ...(gated ? { cutoverGate: { expectation } } : {}),
+      });
     case 'resume':
-      return importer.apply({ ...input, mode: 'RESUME' });
+      return importer.apply({
+        ...input,
+        mode: 'RESUME',
+        ...(gated ? { cutoverGate: { expectation } } : {}),
+      });
     case 'reconcile':
       return importer.reconcile(input);
-    case 'report':
-      return importer.finalReport({ ...input, evidenceClass: label.evidenceClass });
+    case 'report': {
+      // Mirza PR6: version 2 reads a fresh inventory in a session bound to THIS snapshot's
+      // source, so its inventory section lists what was read, never what usually is.
+      const inventory =
+        args.reportSchema === 2
+          ? await takeLegacyInventory(
+              connector,
+              snapshot.fingerprint,
+              Object.keys(LEGACY_TABLE_CLASSIFICATION),
+            )
+          : null;
+      return importer.finalReport({
+        ...input,
+        evidenceClass: label.evidenceClass,
+        inventory,
+        reportSchema: args.reportSchema,
+      });
+    }
   }
 }
 
@@ -844,6 +953,58 @@ async function productsExportMain(argv: readonly string[]): Promise<number> {
   }
 }
 
+/**
+ * `legacy-import cutover-gate …` (Mirza PR6, `legacy-import-cutover.ts`): the final gate,
+ * every step in order. Read-only on every database. Returns the exit code.
+ */
+async function cutoverGateMain(argv: readonly string[]): Promise<number> {
+  const args = parseCutoverGateArgs(argv);
+  const env = process.env;
+  const targetUrl = resolveTarget(args.target, env);
+  const target = guardTarget(args, targetUrl, env);
+  const mappingText = await readFile(args.panelMap, 'utf8').catch(() => {
+    throw new CutoverUsageError(`The panel mapping file ${args.panelMap} cannot be read.`);
+  });
+  const connector = await sourceConnector(args, env);
+  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  try {
+    const importer = container.legacyImporter();
+    const tenantId = await importer.resolveTenant(args.tenant);
+    if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
+    const scope: TenantContext = { tenantId: tenantId as never, botInstanceId: null };
+    const report = await runCutoverGate(
+      {
+        importer,
+        stopSalesFacts: () => container.legacyCutover.stopSalesFacts(scope),
+        connector,
+        readSnapshot: async () => {
+          const session = await connector.open();
+          try {
+            return await readFromSession(connector.label, session);
+          } finally {
+            await session.close();
+          }
+        },
+        runChecker: runFreezeChecker,
+        readBytes,
+        hashFile: sha256OfFile,
+        now: () => container.clock.now(),
+      },
+      args,
+      {
+        scope,
+        actor: systemJobActor('legacy-import:cutover-gate', container.ids.uuid() as CorrelationId),
+        mapping: parsePanelMapping(mappingText, tenantId),
+        productionLikeTarget: target.productionLike,
+      },
+    );
+    process.stdout.write(cutoverGateText(report, args.format));
+    return cutoverGateExitCode(report);
+  } finally {
+    await container.shutdown();
+  }
+}
+
 /** `--help` / `-h` anywhere: the usage on stdout and exit 0 (a usage ERROR stays 64 on stderr). */
 export function wantsHelp(argv: readonly string[]): boolean {
   return argv.includes('--help') || argv.includes('-h');
@@ -878,7 +1039,8 @@ export function exitCodeForError(error: unknown): number {
     error instanceof ReviewUsageError ||
     error instanceof InventoryUsageError ||
     error instanceof ProductsUsageError ||
-    error instanceof InvoicesUsageError
+    error instanceof InvoicesUsageError ||
+    error instanceof CutoverUsageError
   ) {
     console.error(error.message);
     return 64;
@@ -887,7 +1049,8 @@ export function exitCodeForError(error: unknown): number {
     error instanceof PanelMappingRefused ||
     error instanceof LegacySourceRefused ||
     error instanceof InvoiceArchiveRefused ||
-    error instanceof InvoiceArchiveStagingRefused
+    error instanceof InvoiceArchiveStagingRefused ||
+    error instanceof LegacyCutoverRefused
   ) {
     console.error(error.message);
     return 65;
@@ -936,7 +1099,9 @@ async function main(): Promise<number> {
               ? PRODUCTS_EXPORT_USAGE
               : process.argv[2] === 'invoices-read'
                 ? INVOICES_READ_USAGE
-                : USAGE;
+                : process.argv[2] === 'cutover-gate'
+                  ? CUTOVER_GATE_USAGE
+                  : USAGE;
     process.stdout.write(`${usage}\n`);
     return 0;
   }
@@ -944,6 +1109,7 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'products-read') return productsReadMain(process.argv.slice(3));
   if (process.argv[2] === 'products-export') return productsExportMain(process.argv.slice(3));
   if (process.argv[2] === 'invoices-read') return invoicesReadMain(process.argv.slice(3));
+  if (process.argv[2] === 'cutover-gate') return cutoverGateMain(process.argv.slice(3));
   if (process.argv[2] === 'review') {
     await reviewMain(process.argv.slice(3));
     return 0;

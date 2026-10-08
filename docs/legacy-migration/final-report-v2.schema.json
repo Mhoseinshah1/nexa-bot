@@ -1,0 +1,1588 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.invalid/schemas/legacy-migration/final-report/v2",
+  "title": "NEXA legacy migration — final report, schema version 2 (machine-readable)",
+  "description": "Mirza migration PR6. What `legacy-import report --format json` prints by default (apps/api/src/modules/platform/legacy-importer/application/final-report-v2.ts; `--report-schema 1` prints the closed v1 document instead). Version 1 is unchanged and is carried here VERBATIM as `core`, validated by final-report.schema.json itself. Every later section carries its own version string. AGGREGATES ONLY: no field may carry a Telegram id, username, phone, subscription link, config, credential, token, card, invoice id or product code. Money is a decimal string of integer minor units with an explicit currency. The verdict is the AND of every section and every invariant. Any change to a field is a new schemaVersion, made together with the emitter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "evidenceClass",
+    "generatedAt",
+    "sourceFingerprint",
+    "synthetic",
+    "verdict",
+    "core",
+    "sections",
+    "invariants"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "2"
+    },
+    "evidenceClass": {
+      "enum": ["synthetic", "staging", "production"]
+    },
+    "generatedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "sourceFingerprint": {
+      "$ref": "#/$defs/sha256"
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["holds", "failedSections", "failedInvariants"],
+      "properties": {
+        "holds": {
+          "type": "boolean"
+        },
+        "failedSections": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "core",
+              "inventory",
+              "products",
+              "invoiceArchive",
+              "usersWallets",
+              "serviceOutcomes",
+              "cutover",
+              "applyRun"
+            ]
+          }
+        },
+        "failedInvariants": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "USERS_ACCOUNTED",
+              "INVOICES_ACCOUNTED",
+              "PRODUCTS_ACCOUNTED",
+              "WALLETS_RECONCILED",
+              "SERVICES_ONE_OUTCOME",
+              "UNRESOLVED_RETAINED",
+              "RERUN_NO_DUPLICATES"
+            ]
+          }
+        }
+      }
+    },
+    "core": {
+      "description": "the v1 document, unchanged, validated by version 1's own schema",
+      "$ref": "final-report.schema.json"
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventory",
+        "products",
+        "invoiceArchive",
+        "usersWallets",
+        "serviceOutcomes",
+        "cutover",
+        "applyRun"
+      ],
+      "properties": {
+        "inventory": {
+          "description": "PR1 — the inventory as THIS report's own session, bound to this source, read it (read: true), or not read at all (read: false, never holds). Classes, counts and hashes only.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "read", "recorded", "holds"],
+              "properties": {
+                "version": {
+                  "const": "nexa-legacy-inventory/v1"
+                },
+                "read": {
+                  "const": false
+                },
+                "recorded": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["readSetFingerprint", "recordedAt"],
+                      "properties": {
+                        "readSetFingerprint": {
+                          "$ref": "#/$defs/sha256"
+                        },
+                        "recordedAt": {
+                          "$ref": "#/$defs/timestamp"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "holds": {
+                  "const": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "read",
+                "fingerprintVersion",
+                "fingerprint",
+                "synthetic",
+                "recorded",
+                "tables",
+                "rows",
+                "byClass",
+                "verdict",
+                "checks",
+                "holds"
+              ],
+              "properties": {
+                "version": {
+                  "const": "nexa-legacy-inventory/v1"
+                },
+                "read": {
+                  "const": true
+                },
+                "fingerprintVersion": {
+                  "const": "legacy-read-set:inventory:v1"
+                },
+                "fingerprint": {
+                  "$ref": "#/$defs/sha256"
+                },
+                "synthetic": {
+                  "type": "boolean"
+                },
+                "recorded": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["readSetFingerprint", "recordedAt"],
+                      "properties": {
+                        "readSetFingerprint": {
+                          "$ref": "#/$defs/sha256"
+                        },
+                        "recordedAt": {
+                          "$ref": "#/$defs/timestamp"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "tables": {
+                  "$ref": "#/$defs/count"
+                },
+                "rows": {
+                  "$ref": "#/$defs/minor"
+                },
+                "byClass": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "SUPPORTED",
+                    "ARCHIVE",
+                    "SECRETS_MANUAL",
+                    "OWNER_DECISION",
+                    "UNCLASSIFIED"
+                  ],
+                  "properties": {
+                    "SUPPORTED": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "ARCHIVE": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SECRETS_MANUAL": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "OWNER_DECISION": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "UNCLASSIFIED": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                },
+                "verdict": {
+                  "enum": ["COMPLETE", "BLOCKED", "UNCLASSIFIED_TABLES", "FINGERPRINT_UNBOUND"]
+                },
+                "checks": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/check"
+                  }
+                },
+                "holds": {
+                  "type": "boolean"
+                }
+              }
+            }
+          ]
+        },
+        "products": {
+          "description": "PR2 — the legacy product review (PR2 defined no report section; this is it): counts by state, export readiness, the products read set fingerprint. No code, title or price.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "readSet",
+            "sourceDistinctCodes",
+            "reviewRows",
+            "presentRows",
+            "absentRows",
+            "missingFromReview",
+            "notInSource",
+            "byState",
+            "sourceConflicts",
+            "exportReadiness",
+            "panelMap",
+            "checks",
+            "holds"
+          ],
+          "properties": {
+            "version": {
+              "const": "nexa-legacy-products/v1"
+            },
+            "readSet": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/readSetRef"
+                }
+              ]
+            },
+            "sourceDistinctCodes": {
+              "$ref": "#/$defs/count"
+            },
+            "reviewRows": {
+              "$ref": "#/$defs/count"
+            },
+            "presentRows": {
+              "$ref": "#/$defs/count"
+            },
+            "absentRows": {
+              "$ref": "#/$defs/count"
+            },
+            "missingFromReview": {
+              "$ref": "#/$defs/count"
+            },
+            "notInSource": {
+              "$ref": "#/$defs/count"
+            },
+            "byState": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "PENDING_REVIEW",
+                "APPROVED_EXISTING",
+                "APPROVED_NEW",
+                "REJECTED",
+                "SOURCE_CHANGED"
+              ],
+              "properties": {
+                "PENDING_REVIEW": {
+                  "$ref": "#/$defs/count"
+                },
+                "APPROVED_EXISTING": {
+                  "$ref": "#/$defs/count"
+                },
+                "APPROVED_NEW": {
+                  "$ref": "#/$defs/count"
+                },
+                "REJECTED": {
+                  "$ref": "#/$defs/count"
+                },
+                "SOURCE_CHANGED": {
+                  "$ref": "#/$defs/count"
+                }
+              }
+            },
+            "sourceConflicts": {
+              "$ref": "#/$defs/count"
+            },
+            "exportReadiness": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ready", "exportable", "notExported"],
+              "properties": {
+                "ready": {
+                  "type": "boolean"
+                },
+                "exportable": {
+                  "$ref": "#/$defs/count"
+                },
+                "notExported": {
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/count"
+                  }
+                }
+              }
+            },
+            "panelMap": {
+              "description": "aud5 F5 = aud6 F1: the panel map's products entries against the approved review under this source's latest products read (check PR5). Counts only — no code.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["entries", "refused", "byReason"],
+              "properties": {
+                "entries": {
+                  "$ref": "#/$defs/count"
+                },
+                "refused": {
+                  "$ref": "#/$defs/count"
+                },
+                "byReason": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "NO_PRODUCTS_READ",
+                    "NO_REVIEW_ROW",
+                    "NOT_EXPORTABLE",
+                    "TARGET_DIFFERS"
+                  ],
+                  "properties": {
+                    "NO_PRODUCTS_READ": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "NO_REVIEW_ROW": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "NOT_EXPORTABLE": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "TARGET_DIFFERS": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                }
+              }
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        },
+        "invoiceArchive": {
+          "description": "PR3 — the invoice archive's closure equations for the latest COMPLETED archive run of THIS source. Counts only, never an invoice.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "readSet", "snapshotInvoiceRows", "run", "checks", "holds"],
+          "properties": {
+            "version": {
+              "const": "nexa-legacy-invoice-archive/v1"
+            },
+            "readSet": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/readSetRef"
+                }
+              ]
+            },
+            "snapshotInvoiceRows": {
+              "$ref": "#/$defs/minor"
+            },
+            "run": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "runId",
+                    "sourceInvoiceRows",
+                    "promotedRows",
+                    "insertedNew",
+                    "insertedRevision",
+                    "unchanged",
+                    "missingInSnapshot",
+                    "archiveInvoicesAfter",
+                    "archivedInvoicesNow"
+                  ],
+                  "properties": {
+                    "runId": {
+                      "$ref": "#/$defs/uuid"
+                    },
+                    "sourceInvoiceRows": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "promotedRows": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "insertedNew": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "insertedRevision": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "unchanged": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "missingInSnapshot": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "archiveInvoicesAfter": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "archivedInvoicesNow": {
+                      "$ref": "#/$defs/minor"
+                    }
+                  }
+                }
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        },
+        "usersWallets": {
+          "description": "PR4 — users and wallets, exactly as its own version defines it. Aggregates and opaque map refs only — never a Telegram id or a per-user amount.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "sourceFingerprint",
+            "users",
+            "wallet",
+            "sourceChanged",
+            "checks",
+            "holds"
+          ],
+          "properties": {
+            "version": {
+              "const": "nexa-legacy-users-wallets/v1"
+            },
+            "sourceFingerprint": {
+              "$ref": "#/$defs/sha256"
+            },
+            "users": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sourceRows", "outcomes", "agents", "legacyStatus", "blocked"],
+              "properties": {
+                "sourceRows": {
+                  "$ref": "#/$defs/count"
+                },
+                "outcomes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "IMPORTED_NEW",
+                    "IMPORTED_EXISTING",
+                    "SKIPPED_INVALID_IDENTITY",
+                    "SKIPPED_BALANCE_UNREADABLE",
+                    "SKIPPED_BALANCE_OUT_OF_RANGE",
+                    "SKIPPED_DUPLICATE_SOURCE_ID",
+                    "SKIPPED_STATUS_UNKNOWN",
+                    "SKIPPED_REVIEW_CLOSED",
+                    "SOURCE_CHANGED",
+                    "NOT_YET_IMPORTED"
+                  ],
+                  "properties": {
+                    "IMPORTED_NEW": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "IMPORTED_EXISTING": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SKIPPED_INVALID_IDENTITY": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SKIPPED_BALANCE_UNREADABLE": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SKIPPED_BALANCE_OUT_OF_RANGE": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SKIPPED_DUPLICATE_SOURCE_ID": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SKIPPED_STATUS_UNKNOWN": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SKIPPED_REVIEW_CLOSED": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SOURCE_CHANGED": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "NOT_YET_IMPORTED": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                },
+                "agents": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["sourceRows", "importedAsCustomers", "resellerGrants"],
+                  "properties": {
+                    "sourceRows": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "importedAsCustomers": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "resellerGrants": {
+                      "const": "NONE"
+                    }
+                  }
+                },
+                "legacyStatus": {
+                  "description": "OQ-LWD-07: User_Status of every source row, classified (exactly Active, exactly block, anything else). Sum = sourceRows.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["ACTIVE", "BLOCKED", "UNKNOWN"],
+                  "properties": {
+                    "ACTIVE": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "BLOCKED": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "UNKNOWN": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                },
+                "blocked": {
+                  "description": "OQ-LWD-07: where the users blocked in MirzaBot ended — created BLOCKED, matched to an existing NEXA customer whose status is never changed, or not imported. Their money is in the wallet figures like anybody's.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["sourceRows", "importedNew", "importedExisting", "notImported"],
+                  "properties": {
+                    "sourceRows": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "importedNew": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "importedExisting": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "notImported": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                }
+              }
+            },
+            "wallet": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "currency",
+                "positive",
+                "zero",
+                "legacyDebts",
+                "ledgerDebitOpenings",
+                "perUser",
+                "carried"
+              ],
+              "properties": {
+                "currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "positive": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["users", "sumMinor", "openingEntries", "openingSumMinor"],
+                  "properties": {
+                    "users": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "sumMinor": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "openingEntries": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "openingSumMinor": {
+                      "$ref": "#/$defs/minor"
+                    }
+                  }
+                },
+                "zero": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["users"],
+                  "properties": {
+                    "users": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                },
+                "legacyDebts": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "users",
+                    "sumMinor",
+                    "recorded",
+                    "recordedSumMinor",
+                    "byState",
+                    "synthetic"
+                  ],
+                  "properties": {
+                    "users": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "sumMinor": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "recorded": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "recordedSumMinor": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "byState": {
+                      "type": "object",
+                      "propertyNames": {
+                        "pattern": "^(PENDING_REVIEW|ACKNOWLEDGED|WAIVED)$"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/countAndSum"
+                      }
+                    },
+                    "synthetic": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                },
+                "ledgerDebitOpenings": {
+                  "$ref": "#/$defs/count"
+                },
+                "perUser": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "matching",
+                    "missingOpening",
+                    "missingDebt",
+                    "priorDebitOpening",
+                    "conflicting"
+                  ],
+                  "properties": {
+                    "matching": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "missingOpening": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "missingDebt": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "priorDebitOpening": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "conflicting": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                },
+                "carried": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["changedOpenings", "changedDebts", "absentOpenings", "absentDebts"],
+                  "properties": {
+                    "changedOpenings": {
+                      "$ref": "#/$defs/countAndSum"
+                    },
+                    "changedDebts": {
+                      "$ref": "#/$defs/countAndSum"
+                    },
+                    "absentOpenings": {
+                      "$ref": "#/$defs/countAndSum"
+                    },
+                    "absentDebts": {
+                      "$ref": "#/$defs/countAndSum"
+                    }
+                  }
+                }
+              }
+            },
+            "sourceChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["users", "byClass", "ownerReview"],
+              "properties": {
+                "users": {
+                  "$ref": "#/$defs/count"
+                },
+                "byClass": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "PROFILE_ONLY",
+                    "POSITIVE_CHANGED",
+                    "NEGATIVE_CHANGED",
+                    "POSITIVE_TO_NEGATIVE",
+                    "NEGATIVE_TO_POSITIVE",
+                    "TO_ZERO",
+                    "FROM_ZERO",
+                    "UNREADABLE_NOW"
+                  ],
+                  "properties": {
+                    "PROFILE_ONLY": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "count",
+                        "recordedSumMinor",
+                        "sourceSumMinor",
+                        "differenceMinor"
+                      ],
+                      "properties": {
+                        "count": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "recordedSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "sourceSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "differenceMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "POSITIVE_CHANGED": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "count",
+                        "recordedSumMinor",
+                        "sourceSumMinor",
+                        "differenceMinor"
+                      ],
+                      "properties": {
+                        "count": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "recordedSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "sourceSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "differenceMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "NEGATIVE_CHANGED": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "count",
+                        "recordedSumMinor",
+                        "sourceSumMinor",
+                        "differenceMinor"
+                      ],
+                      "properties": {
+                        "count": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "recordedSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "sourceSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "differenceMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "POSITIVE_TO_NEGATIVE": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "count",
+                        "recordedSumMinor",
+                        "sourceSumMinor",
+                        "differenceMinor"
+                      ],
+                      "properties": {
+                        "count": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "recordedSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "sourceSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "differenceMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "NEGATIVE_TO_POSITIVE": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "count",
+                        "recordedSumMinor",
+                        "sourceSumMinor",
+                        "differenceMinor"
+                      ],
+                      "properties": {
+                        "count": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "recordedSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "sourceSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "differenceMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "TO_ZERO": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "count",
+                        "recordedSumMinor",
+                        "sourceSumMinor",
+                        "differenceMinor"
+                      ],
+                      "properties": {
+                        "count": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "recordedSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "sourceSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "differenceMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "FROM_ZERO": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "count",
+                        "recordedSumMinor",
+                        "sourceSumMinor",
+                        "differenceMinor"
+                      ],
+                      "properties": {
+                        "count": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "recordedSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "sourceSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "differenceMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "UNREADABLE_NOW": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "count",
+                        "recordedSumMinor",
+                        "sourceSumMinor",
+                        "differenceMinor"
+                      ],
+                      "properties": {
+                        "count": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "recordedSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "sourceSumMinor": {
+                          "$ref": "#/$defs/minor"
+                        },
+                        "differenceMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    }
+                  }
+                },
+                "ownerReview": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["POSITIVE_TO_NEGATIVE", "NEGATIVE_TO_POSITIVE"],
+                  "properties": {
+                    "POSITIVE_TO_NEGATIVE": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "NEGATIVE_TO_POSITIVE": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        },
+        "serviceOutcomes": {
+          "description": "PR5 — service outcomes, exactly as its own version defines it. Codes and counts only.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "sourceFingerprint",
+            "synthetic",
+            "runId",
+            "candidates",
+            "recorded",
+            "outcomes",
+            "invariant",
+            "adopted",
+            "archivedHistory",
+            "review"
+          ],
+          "properties": {
+            "version": {
+              "const": "nexa-legacy-service-outcomes/v1"
+            },
+            "sourceFingerprint": {
+              "$ref": "#/$defs/sha256"
+            },
+            "synthetic": {
+              "type": "boolean"
+            },
+            "runId": {
+              "$ref": "#/$defs/uuid"
+            },
+            "candidates": {
+              "$ref": "#/$defs/count"
+            },
+            "recorded": {
+              "$ref": "#/$defs/count"
+            },
+            "outcomes": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ADOPTED",
+                "ALREADY_ADOPTED",
+                "ADOPTION_ELIGIBLE",
+                "INVOICE_KEY_INVALID",
+                "TEST_INVOICE_SKIPPED",
+                "TEST_PANEL_SKIPPED",
+                "INVALID_SOURCE_ROW",
+                "ORPHAN",
+                "CUSTOMER_NOT_IMPORTED",
+                "INVALID_USERNAME",
+                "INVENTORY_INCOMPLETE",
+                "NO_PANEL",
+                "PANEL_UNMAPPED",
+                "PROVIDER_MISSING",
+                "AMBIGUOUS_PANEL",
+                "USERNAME_CASE_COLLISION",
+                "AMBIGUOUS_OWNERSHIP",
+                "UNSUPPORTED_SHAPE",
+                "PRODUCT_UNRESOLVED",
+                "SUBSCRIPTION_REF_BLOCKED",
+                "PROVIDER_READ_FAILED",
+                "REVIEW_CLOSED"
+              ],
+              "properties": {
+                "ADOPTED": {
+                  "$ref": "#/$defs/count"
+                },
+                "ALREADY_ADOPTED": {
+                  "$ref": "#/$defs/count"
+                },
+                "ADOPTION_ELIGIBLE": {
+                  "$ref": "#/$defs/count"
+                },
+                "INVOICE_KEY_INVALID": {
+                  "$ref": "#/$defs/count"
+                },
+                "TEST_INVOICE_SKIPPED": {
+                  "$ref": "#/$defs/count"
+                },
+                "TEST_PANEL_SKIPPED": {
+                  "$ref": "#/$defs/count"
+                },
+                "INVALID_SOURCE_ROW": {
+                  "$ref": "#/$defs/count"
+                },
+                "ORPHAN": {
+                  "$ref": "#/$defs/count"
+                },
+                "CUSTOMER_NOT_IMPORTED": {
+                  "$ref": "#/$defs/count"
+                },
+                "INVALID_USERNAME": {
+                  "$ref": "#/$defs/count"
+                },
+                "INVENTORY_INCOMPLETE": {
+                  "$ref": "#/$defs/count"
+                },
+                "NO_PANEL": {
+                  "$ref": "#/$defs/count"
+                },
+                "PANEL_UNMAPPED": {
+                  "$ref": "#/$defs/count"
+                },
+                "PROVIDER_MISSING": {
+                  "$ref": "#/$defs/count"
+                },
+                "AMBIGUOUS_PANEL": {
+                  "$ref": "#/$defs/count"
+                },
+                "USERNAME_CASE_COLLISION": {
+                  "$ref": "#/$defs/count"
+                },
+                "AMBIGUOUS_OWNERSHIP": {
+                  "$ref": "#/$defs/count"
+                },
+                "UNSUPPORTED_SHAPE": {
+                  "$ref": "#/$defs/count"
+                },
+                "PRODUCT_UNRESOLVED": {
+                  "$ref": "#/$defs/count"
+                },
+                "SUBSCRIPTION_REF_BLOCKED": {
+                  "$ref": "#/$defs/count"
+                },
+                "PROVIDER_READ_FAILED": {
+                  "$ref": "#/$defs/count"
+                },
+                "REVIEW_CLOSED": {
+                  "$ref": "#/$defs/count"
+                }
+              }
+            },
+            "invariant": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "statement",
+                "holds",
+                "missing",
+                "unrecordable",
+                "decidedByAnotherRun",
+                "fromAnotherSource",
+                "checksumDiffers"
+              ],
+              "properties": {
+                "statement": {
+                  "const": "every service candidate assigned exactly one deterministic outcome"
+                },
+                "holds": {
+                  "type": "boolean"
+                },
+                "missing": {
+                  "$ref": "#/$defs/count"
+                },
+                "unrecordable": {
+                  "$ref": "#/$defs/count"
+                },
+                "decidedByAnotherRun": {
+                  "$ref": "#/$defs/count"
+                },
+                "fromAnotherSource": {
+                  "$ref": "#/$defs/count"
+                },
+                "checksumDiffers": {
+                  "$ref": "#/$defs/count"
+                }
+              }
+            },
+            "adopted": {
+              "$ref": "#/$defs/count"
+            },
+            "archivedHistory": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["notAdopted", "linkedToArchive", "notLinkedToArchive"],
+              "properties": {
+                "notAdopted": {
+                  "$ref": "#/$defs/count"
+                },
+                "linkedToArchive": {
+                  "$ref": "#/$defs/count"
+                },
+                "notLinkedToArchive": {
+                  "$ref": "#/$defs/count"
+                }
+              }
+            },
+            "review": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "OPEN",
+                "ACKNOWLEDGED",
+                "KEPT_AS_HISTORY",
+                "ADOPT_APPROVED",
+                "ADOPTING",
+                "ADOPTED"
+              ],
+              "properties": {
+                "OPEN": {
+                  "$ref": "#/$defs/count"
+                },
+                "ACKNOWLEDGED": {
+                  "$ref": "#/$defs/count"
+                },
+                "KEPT_AS_HISTORY": {
+                  "$ref": "#/$defs/count"
+                },
+                "ADOPT_APPROVED": {
+                  "$ref": "#/$defs/count"
+                },
+                "ADOPTING": {
+                  "$ref": "#/$defs/count"
+                },
+                "ADOPTED": {
+                  "$ref": "#/$defs/count"
+                }
+              }
+            }
+          }
+        },
+        "cutover": {
+          "description": "PR6 — the owner's approvals of THIS source (fingerprints, digests, the approving admin's NEXA id), every APPLY run and its source, the superseded sources and whether each was acknowledged, and the duplicate-effect counters.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "sourceFingerprint",
+            "approvals",
+            "applyRuns",
+            "supersededSources",
+            "duplicates",
+            "checks",
+            "holds"
+          ],
+          "properties": {
+            "version": {
+              "const": "nexa-legacy-cutover/v1"
+            },
+            "sourceFingerprint": {
+              "$ref": "#/$defs/sha256"
+            },
+            "approvals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "kind",
+                  "panelMapFingerprint",
+                  "inventoryFingerprint",
+                  "productsFingerprint",
+                  "invoiceArchiveFingerprint",
+                  "freezeProofSha256",
+                  "finalDumpSha256",
+                  "priorSourceFingerprint",
+                  "synthetic",
+                  "approvedByAdminId",
+                  "approvedAt",
+                  "revoked"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/uuid"
+                  },
+                  "kind": {
+                    "enum": ["CUTOVER", "RERUN_OVER_PRIOR_IMPORT"]
+                  },
+                  "panelMapFingerprint": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "inventoryFingerprint": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "productsFingerprint": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "invoiceArchiveFingerprint": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "freezeProofSha256": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "finalDumpSha256": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "priorSourceFingerprint": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/$defs/sha256"
+                      }
+                    ]
+                  },
+                  "synthetic": {
+                    "type": "boolean"
+                  },
+                  "approvedByAdminId": {
+                    "$ref": "#/$defs/uuid"
+                  },
+                  "approvedAt": {
+                    "$ref": "#/$defs/timestamp"
+                  },
+                  "revoked": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "applyRuns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "runId",
+                  "status",
+                  "sourceFingerprint",
+                  "startedAt",
+                  "finishedAt",
+                  "priorSource"
+                ],
+                "properties": {
+                  "runId": {
+                    "$ref": "#/$defs/uuid"
+                  },
+                  "status": {
+                    "enum": ["RUNNING", "COMPLETED", "FAILED", "ABORTED"]
+                  },
+                  "sourceFingerprint": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "startedAt": {
+                    "$ref": "#/$defs/timestamp"
+                  },
+                  "finishedAt": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "priorSource": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "supersededSources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sourceFingerprint", "acknowledged"],
+                "properties": {
+                  "sourceFingerprint": {
+                    "$ref": "#/$defs/sha256"
+                  },
+                  "acknowledged": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "duplicates": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "debtsPerCustomerMax",
+                "customersPerTelegramIdMax",
+                "invoicesPerAdoptedServiceMax",
+                "adoptionOrders",
+                "mappedAdoptedServices",
+                "archiveRepeatedRevisions"
+              ],
+              "properties": {
+                "debtsPerCustomerMax": {
+                  "$ref": "#/$defs/count"
+                },
+                "customersPerTelegramIdMax": {
+                  "$ref": "#/$defs/count"
+                },
+                "invoicesPerAdoptedServiceMax": {
+                  "$ref": "#/$defs/count"
+                },
+                "adoptionOrders": {
+                  "$ref": "#/$defs/count"
+                },
+                "mappedAdoptedServices": {
+                  "$ref": "#/$defs/count"
+                },
+                "archiveRepeatedRevisions": {
+                  "$ref": "#/$defs/count"
+                }
+              }
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        },
+        "applyRun": {
+          "description": "PR6 — what the reported APPLY run left for a person, read back from its finish audit row: PR5's approval counters (executed, refused, left, claimLost, withdrawnDuringRun, unconfirmed, released) and every attention count (approvalUnconfirmed = ADOPTION_UNCONFIRMED among them). Counts only; null when the run recorded none.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "runId",
+            "recorded",
+            "serviceApprovals",
+            "attention",
+            "checks",
+            "holds"
+          ],
+          "properties": {
+            "version": {
+              "const": "nexa-legacy-apply-run/v1"
+            },
+            "runId": {
+              "$ref": "#/$defs/uuid"
+            },
+            "recorded": {
+              "type": "boolean"
+            },
+            "serviceApprovals": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/count"
+                  }
+                }
+              ]
+            },
+            "attention": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/count"
+                  }
+                }
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "invariants": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "statement", "holds", "evidence"],
+        "properties": {
+          "id": {
+            "enum": [
+              "USERS_ACCOUNTED",
+              "INVOICES_ACCOUNTED",
+              "PRODUCTS_ACCOUNTED",
+              "WALLETS_RECONCILED",
+              "SERVICES_ONE_OUTCOME",
+              "UNRESOLVED_RETAINED",
+              "RERUN_NO_DUPLICATES"
+            ]
+          },
+          "statement": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "holds": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 600
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "minor": {
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]{0,30})$",
+      "description": "an integer as a decimal string"
+    },
+    "countAndSum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "sumMinor"],
+      "properties": {
+        "count": {
+          "$ref": "#/$defs/count"
+        },
+        "sumMinor": {
+          "$ref": "#/$defs/minor"
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?Z$"
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "what", "holds", "expected", "actual"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z]{1,2}[0-9]{1,2}$"
+        },
+        "what": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "holds": {
+          "type": "boolean"
+        },
+        "expected": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "actual": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "readSetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprintVersion", "fingerprint", "synthetic", "recordedAt"],
+      "properties": {
+        "fingerprintVersion": {
+          "type": "string",
+          "pattern": "^legacy-read-set:[a-z][a-z0-9-]{0,31}:v[1-9][0-9]{0,3}$"
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/sha256"
+        },
+        "synthetic": {
+          "type": "boolean"
+        },
+        "recordedAt": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    }
+  }
+}

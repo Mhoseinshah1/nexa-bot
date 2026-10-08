@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUDIT_CRITICAL_ACTIONS,
+  LEGACY_CUTOVER_AUDIT_ACTIONS,
   auditLogExportQuerySchema,
   auditLogListQuerySchema,
   auditSecurityClasses,
@@ -19,6 +20,13 @@ describe('the CRITICAL action table', () => {
       for (const key of keys) {
         expect(permissionDefinition(key).riskLevel, `${action} -> ${key}`).toBe('CRITICAL');
       }
+    }
+  });
+
+  it("lists the owner's cutover approval and its revocation, both charged on legacy.cutover.approve", () => {
+    for (const action of Object.values(LEGACY_CUTOVER_AUDIT_ACTIONS)) {
+      expect(AUDIT_CRITICAL_ACTIONS[action], action).toEqual(['legacy.cutover.approve']);
+      expect(auditSecurityClasses({ action, result: 'SUCCESS' })).toEqual(['CRITICAL']);
     }
   });
 
