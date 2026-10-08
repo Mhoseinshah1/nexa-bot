@@ -672,6 +672,19 @@ import {
   type MarkInboxResponse,
   type NotificationCategory,
 } from '@nexa/contracts';
+// Mirza PR2: the legacy product review.
+import {
+  LEGACY_PRODUCT_REVIEW_ROUTES,
+  legacyProductReviewListResponseSchema,
+  legacyProductReviewResponseSchema,
+  type LegacyProductApproveExistingRequest,
+  type LegacyProductApproveNewRequest,
+  type LegacyProductRejectRequest,
+  type LegacyProductReopenRequest,
+  type LegacyProductReviewListResponse,
+  type LegacyProductReviewResponse,
+  type LegacyProductReviewState,
+} from '@nexa/contracts';
 // Phase A2: a direct message from Customer 360.
 import {
   DIRECT_MESSAGE_ROUTES,
@@ -5133,4 +5146,71 @@ export function sendIncidentNotice(
 ): Promise<IncidentNoticeResponse> {
   const { id, ...body } = input;
   return post(INCIDENT_ROUTES.notice(encodeURIComponent(id)), body, incidentNoticeResponseSchema);
+}
+
+// --- Mirza PR2: the legacy product review -------------------------------------------------
+
+/**
+ * The legacy product review rows, by code (`legacy.products.view`). `attention` is the two
+ * states that still want a decision; `after` is the last code of the page before.
+ */
+export function fetchLegacyProductReviews(
+  query: {
+    readonly state?: LegacyProductReviewState;
+    readonly attention?: true;
+    readonly q?: string;
+    readonly after?: string;
+  } = {},
+): Promise<LegacyProductReviewListResponse> {
+  const params = new URLSearchParams();
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.attention === true) params.set('attention', 'true');
+  if (query.q !== undefined && query.q.trim() !== '') params.set('q', query.q.trim());
+  if (query.after !== undefined) params.set('after', query.after);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${LEGACY_PRODUCT_REVIEW_ROUTES.list}?${suffix}` : LEGACY_PRODUCT_REVIEW_ROUTES.list,
+    legacyProductReviewListResponseSchema,
+  );
+}
+
+export function fetchLegacyProductReview(id: string): Promise<LegacyProductReviewResponse> {
+  return authedGet(LEGACY_PRODUCT_REVIEW_ROUTES.detail(id), legacyProductReviewResponseSchema);
+}
+
+/** Maps the code to an existing product. `legacy.products.decide`; bound to the facts shown. */
+export function approveLegacyProductExisting(
+  input: LegacyProductApproveExistingRequest & { readonly id: string },
+): Promise<LegacyProductReviewResponse> {
+  const { id, ...body } = input;
+  return post(
+    LEGACY_PRODUCT_REVIEW_ROUTES.approveExisting(id),
+    body,
+    legacyProductReviewResponseSchema,
+  );
+}
+
+/**
+ * Creates a DRAFT product (inactive, hidden, unpriced, no category, no panel) and maps the
+ * code to it. `legacy.products.decide` AND `catalog.edit`. There is no price to send.
+ */
+export function approveLegacyProductNew(
+  input: LegacyProductApproveNewRequest & { readonly id: string },
+): Promise<LegacyProductReviewResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_PRODUCT_REVIEW_ROUTES.approveNew(id), body, legacyProductReviewResponseSchema);
+}
+
+export function rejectLegacyProduct(
+  input: LegacyProductRejectRequest & { readonly id: string },
+): Promise<LegacyProductReviewResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_PRODUCT_REVIEW_ROUTES.reject(id), body, legacyProductReviewResponseSchema);
+}
+
+export function reopenLegacyProduct(
+  input: LegacyProductReopenRequest & { readonly id: string },
+): Promise<LegacyProductReviewResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_PRODUCT_REVIEW_ROUTES.reopen(id), body, legacyProductReviewResponseSchema);
 }

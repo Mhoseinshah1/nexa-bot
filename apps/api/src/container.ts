@@ -250,6 +250,8 @@ import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/lo
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
+import { LegacyProductReviewService } from './modules/commerce/legacy-product-review/application/legacy-product-review.service.js';
+import { DrizzleLegacyProductReviewRepository } from './modules/commerce/legacy-product-review/infrastructure/drizzle-legacy-product-review.repository.js';
 import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
 import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
 import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
@@ -938,6 +940,12 @@ export interface Container {
    * prerequisites only — no surface calls it yet (P6/P7 are on hold).
    */
   readonly legacyProducts: LegacyProductService;
+  /**
+   * Mirza migration PR2: the legacy product review (`docs/legacy-product-review-design.md`).
+   * The Web Admin reads and decides under `legacy.products.*`; the CLI ingest and export run
+   * under `maintenance.run`. Never a price, a panel or a sale.
+   */
+  readonly legacyProductReviews: LegacyProductReviewService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   /** Discount rules, as an operator manages them (WP8). */
@@ -2066,6 +2074,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     uow,
     idempotency,
+    clock,
+    ids,
+  });
+
+  const legacyProductReviewService = new LegacyProductReviewService({
+    repository: new DrizzleLegacyProductReviewRepository(database.db),
+    products: productService,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
     clock,
     ids,
   });
@@ -6756,6 +6778,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customerServicesToggle: customerServicesToggleService,
     products: productService,
     legacyProducts: legacyProductService,
+    legacyProductReviews: legacyProductReviewService,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,
@@ -7165,6 +7188,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         runs: new DrizzleLegacyImportRepository(database.db),
         runInputs: importerRepository,
         readSetRuns: importerRepository,
+        productReview: legacyProductReviewService,
         customers: importerRepository,
         inventory: legacyInventory(options),
         openings: migrationOpeningBalance,

@@ -76,6 +76,102 @@ export const SYNTHETIC_SCHEMA: Readonly<
 };
 
 /**
+ * Mirza migration PR2 — the legacy product review's view of the `product` table: the public
+ * columns the default dataset leaves out (`Location`, `Category`) and three the public
+ * `mirza_pro` fork adds (`note`, `one_buy_status`, `hide_panel`), so the `products` read
+ * set has optional columns to read and a review has "status" cells to keep verbatim.
+ *
+ * Used ONLY by `buildSyntheticLegacyDataset({ productReview })`. The default dataset keeps
+ * its product table exactly as it was, because every column of `product` — read or not —
+ * is an input of the v1 schema hash, and the SYNTHETIC v1 fingerprint is pinned literally
+ * (`tests/unit/legacy-import-read-set-v1.test.ts`). The review variant is a different
+ * synthetic source with its own v1 fingerprint, which is the point: the v1 fingerprint of a
+ * source is unchanged by READING its products, never by changing them.
+ */
+export const SYNTHETIC_PRODUCT_REVIEW_COLUMNS: readonly SyntheticColumn[] = [
+  ...SYNTHETIC_SCHEMA.product,
+  { name: 'Location', ddl: 'varchar(1000) NULL', dataType: 'varchar' },
+  { name: 'Category', ddl: 'varchar(600) NULL', dataType: 'varchar' },
+  { name: 'note', ddl: 'text NULL', dataType: 'text' },
+  { name: 'one_buy_status', ddl: 'varchar(20) NULL', dataType: 'varchar' },
+  { name: 'hide_panel', ddl: 'text NULL', dataType: 'text' },
+];
+
+/**
+ * The review variant's product rows, one per branch the review must keep apart. Snapshot
+ * `A` is the first read; `B` is a NEWER snapshot of the same source: `p1`'s price changed,
+ * `p5` is gone and `p20` is new — everything else is byte-identical. `C` is newer still: as
+ * `B`, with `p20`'s price changed — `p5` is STILL gone (a code absent from two reads in a row).
+ */
+function productReviewRows(snapshot: 'A' | 'B' | 'C'): SyntheticRow[] {
+  const product = (
+    id: string,
+    code: string | null,
+    name: string | null,
+    price: string | null,
+    volume: string | null,
+    days: string | null,
+    extra: Partial<
+      Record<
+        'agent' | 'Location' | 'Category' | 'note' | 'one_buy_status' | 'hide_panel',
+        string | null
+      >
+    > = {},
+  ): SyntheticRow => ({
+    id,
+    code_product: code,
+    name_product: name,
+    price_product: price,
+    Volume_constraint: volume,
+    Service_time: days,
+    agent: extra.agent ?? 'f',
+    Location: extra.Location ?? 'rp1',
+    Category: extra.Category ?? 'monthly',
+    note: extra.note ?? '',
+    one_buy_status: extra.one_buy_status ?? '0',
+    hide_panel: extra.hide_panel ?? '{}',
+  });
+  const rows: SyntheticRow[] = [
+    // regular, single location; the live invoice in the dataset names it
+    product('1', 'p1', 'synthetic 30GB', snapshot === 'A' ? '150000' : '160000', '30', '30'),
+    // a reseller (agent) product
+    product('2', 'p2', 'synthetic agent plan', '120000', '50', '30', { agent: 'n' }),
+    // the SAME duration and volume as p1, a different product: never collapsed into p1
+    product('3', 'p3', 'synthetic 30GB twin', '175000', '30', '30'),
+    // labelled unlimited, volume 0: ZERO_MEANING_UNKNOWN, never "unlimited"
+    product('4', 'p4', 'نامحدود ۳۰ روزه', '300000', '0', '30'),
+    // a gift volume at price 0 (gone in snapshot B)
+    product('5', 'p5', 'هدیه ۵ گیگ', '0', '5', '7'),
+    // disabled: hidden on every panel (the fork's hide_panel), kept verbatim
+    product('6', 'p6', 'disabled plan', '90000', '20', '30', {
+      hide_panel: '{"rp1":"rp1","rp2":"rp2"}',
+    }),
+    // a test product, one purchase only
+    product('7', 'p7', 'تست', '0', '1', '1', { note: 'test product', one_buy_status: '1' }),
+    // multi-location, second reseller tier
+    product('8', 'p8', 'multi location', '200000', '40', '60', {
+      agent: 'n2',
+      Location: 'rp1,rp2',
+    }),
+    // a price in Persian digits: NOT_A_NUMBER, kept raw
+    product('9', 'p9', 'persian price', '۱۵۰۰۰۰', '30', '30'),
+    // one code on two rows: CODE_DUPLICATED, nothing parsed
+    product('10', 'dup', 'dup one', '100', '10', '10'),
+    product('11', 'dup', 'dup two', '200', '10', '10'),
+    // no code: not reviewable
+    product('12', '', 'no code', '1000', '10', '10'),
+    // a padded code: reviewed as `p13`; a decimal volume
+    product('13', ' p13 ', 'padded code', '50000', '10.5', '15'),
+    product('14', null, 'null code', '1000', '10', '10'),
+  ];
+  if (snapshot !== 'A') {
+    rows.push(product('20', 'p20', 'new plan', snapshot === 'B' ? '250000' : '260000', '60', '30'));
+    return rows.filter((row) => row['code_product'] !== 'p5');
+  }
+  return rows;
+}
+
+/**
  * Tables beside the three the importer reads, so the table INVENTORY has more than the
  * import read set to see (Mirza migration PR1):
  *
@@ -125,6 +221,8 @@ export interface SyntheticLegacyDataset {
       readonly SyntheticRow[]
     >
   >;
+  /** The review variant's product columns (PR2); absent on the default dataset. */
+  readonly productColumns?: readonly SyntheticColumn[];
 }
 
 /** The legacy panel codes the dataset uses, and what the example mapping says of each. */
@@ -257,7 +355,11 @@ export const SYNTHETIC_EXPECTED = {
  * branch coverage above and are excluded from `SYNTHETIC_EXPECTED`.
  */
 export function buildSyntheticLegacyDataset(
-  options: { extraUsers?: number } = {},
+  options: {
+    extraUsers?: number;
+    /** Mirza PR2: the product review variant, as snapshot A or the newer snapshots B and C. */
+    productReview?: 'A' | 'B' | 'C';
+  } = {},
 ): SyntheticLegacyDataset {
   invoiceSeq = 0;
   const C = SYNTHETIC_PANEL_CODES;
@@ -349,26 +451,29 @@ export function buildSyntheticLegacyDataset(
     }),
   ];
 
-  const products: SyntheticRow[] = [
-    {
-      id: '1',
-      code_product: 'p1',
-      name_product: 'synthetic 30GB',
-      price_product: '150000',
-      Volume_constraint: '30',
-      Service_time: '30',
-      agent: 'f',
-    },
-    {
-      id: '2',
-      code_product: 'p2',
-      name_product: 'synthetic agent plan',
-      price_product: '120000',
-      Volume_constraint: '50',
-      Service_time: '30',
-      agent: 'n',
-    },
-  ];
+  const products: SyntheticRow[] =
+    options.productReview !== undefined
+      ? productReviewRows(options.productReview)
+      : [
+          {
+            id: '1',
+            code_product: 'p1',
+            name_product: 'synthetic 30GB',
+            price_product: '150000',
+            Volume_constraint: '30',
+            Service_time: '30',
+            agent: 'f',
+          },
+          {
+            id: '2',
+            code_product: 'p2',
+            name_product: 'synthetic agent plan',
+            price_product: '120000',
+            Volume_constraint: '50',
+            Service_time: '30',
+            agent: 'n',
+          },
+        ];
 
   const extra = options.extraUsers ?? 0;
   for (let i = 0; i < extra; i += 1) {
@@ -378,7 +483,12 @@ export function buildSyntheticLegacyDataset(
   const described: readonly (readonly [string, readonly SyntheticColumn[]])[] = [
     ['user', SYNTHETIC_SCHEMA.user],
     ['invoice', SYNTHETIC_SCHEMA.invoice],
-    ['product', SYNTHETIC_SCHEMA.product],
+    [
+      'product',
+      options.productReview === undefined
+        ? SYNTHETIC_SCHEMA.product
+        : SYNTHETIC_PRODUCT_REVIEW_COLUMNS,
+    ],
     [SYNTHETIC_UNCLASSIFIED_TABLE, SYNTHETIC_UNCLASSIFIED_COLUMNS],
     ['nexa_synthetic_fixture', SYNTHETIC_MARKER_COLUMNS],
   ];
@@ -406,6 +516,9 @@ export function buildSyntheticLegacyDataset(
       ],
       nexa_synthetic_fixture: [{ label: SYNTHETIC_LABEL }],
     },
+    ...(options.productReview === undefined
+      ? {}
+      : { productColumns: SYNTHETIC_PRODUCT_REVIEW_COLUMNS }),
   };
 }
 
@@ -421,13 +534,17 @@ export function syntheticLegacySql(dataset: SyntheticLegacyDataset): string {
     '-- Generated by tests/fixtures/legacy/synthetic-legacy.ts. NOT EVIDENCE.',
   ];
   for (const table of ['user', 'invoice', 'product'] as const) {
+    const described =
+      table === 'product'
+        ? (dataset.productColumns ?? SYNTHETIC_SCHEMA.product)
+        : SYNTHETIC_SCHEMA[table];
     out.push(`DROP TABLE IF EXISTS \`${table}\`;`);
     out.push(
-      `CREATE TABLE \`${table}\` (\n  ${SYNTHETIC_SCHEMA[table]
+      `CREATE TABLE \`${table}\` (\n  ${described
         .map((c) => `\`${c.name}\` ${c.ddl}`)
         .join(',\n  ')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;`,
     );
-    const columns = SYNTHETIC_SCHEMA[table].map((c) => c.name);
+    const columns = described.map((c) => c.name);
     for (const row of dataset.tables[table]) {
       out.push(
         `INSERT INTO \`${table}\` (${columns.map((c) => `\`${c}\``).join(', ')}) VALUES (${columns

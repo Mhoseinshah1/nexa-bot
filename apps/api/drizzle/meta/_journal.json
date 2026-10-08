@@ -1548,6 +1548,20 @@
       "when": 1791360923964,
       "tag": "0220_legacy_read_set_runs_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 221,
+      "version": "7",
+      "when": 1791372724570,
+      "tag": "0221_legacy_product_reviews",
+      "breakpoints": true
+    },
+    {
+      "idx": 222,
+      "version": "7",
+      "when": 1791372732561,
+      "tag": "0222_legacy_product_review_grants",
+      "breakpoints": true
     }
   ]
 }

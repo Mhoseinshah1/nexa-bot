@@ -1,11 +1,10 @@
 # Legacy product review — design (hardening batch 2026-10-07, §5)
 
-**Status: DESIGN ONLY. Nothing here is built.** The hardening batch asked whether an
-operator review queue for named legacy (Mirza) products could be built cleanly inside the
-hotfix. It cannot: it needs a contract change, a migration, a new source read with its own
-fingerprint, a service, a Web Admin surface and importer wiring. Built inside a hotfix it
-would change the source fingerprint the owner already approved and widen the catalogue's
-invariants without review. This document is the proposal; the work packages are at §11.
+**Status: IMPLEMENTED (Mirza migration PR2, 2026-10-07)** — work packages A–F. §13 says what
+was built and every place the build departs from this design, with the reason. WP G (manual
+acceptance against the real Mirza dump) is NOT RUN. The sections below are the original
+proposal (written for the hardening batch, which could not build it inside a hotfix) and are
+kept as written; where they disagree with §13, §13 is what the code does.
 
 What the hotfix did NOT change: a named `code_product` that the owner's map does not list
 is still `PRODUCT_UNRESOLVED` → `PRODUCT_MAPPING_UNRESOLVED` manual review, and nothing maps
@@ -219,3 +218,131 @@ price_product, Volume_constraint, Location, Service_time, Category`; the importe
   `HIDDEN`, current price) or be offered for sale? Owner decision; the flow never decides.
 - **OQ-LPR-07** Reseller (`agent`) products: in scope for review, or out (resellers were
   out of Phase 1 of the migration)?
+
+## 13. As implemented (Mirza PR2)
+
+### What exists
+
+| Piece                   | Where                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contracts (own commits) | `LEGACY_READ_SET_NAMES` gains `products` (`packages/contracts/src/legacy-inventory.ts`); `legacy.products.view` (MEDIUM) and `legacy.products.decide` (HIGH, requires view) in `permissions.ts`; states, parse notes, source conflicts, error codes, audit actions, routes and HTTP schemas in `packages/contracts/src/legacy-product-review.ts`                                         |
+| Table                   | `legacy_product_reviews`, migration `0221` (and the `legacy_read_set_runs` CHECK widened to `products`); `0222` backfills both keys to existing system `owner` roles only                                                                                                                                                                                                                |
+| Read set                | `PRODUCTS_READ_SET` (`legacy-read-set:products:v1`), `apps/api/src/modules/platform/legacy-importer/application/products-read-set.ts`                                                                                                                                                                                                                                                    |
+| Ingest                  | `products-ingest.ts` (`LegacyImporterService.readProducts`), CLI `legacy-import products-read`                                                                                                                                                                                                                                                                                           |
+| Service                 | `apps/api/src/modules/commerce/legacy-product-review/` (domain: facts, parsers, transitions; application: `LegacyProductReviewService`; infrastructure: the Drizzle repository)                                                                                                                                                                                                          |
+| Draft creation          | `ProductService.createWithin` — the product service's own create body inside the decision's transaction                                                                                                                                                                                                                                                                                  |
+| Export                  | `LegacyProductReviewService.exportMapping`, CLI `legacy-import products-export [--panel-map FILE]`                                                                                                                                                                                                                                                                                       |
+| Web                     | `LegacyProductsController` (`/api/v1/legacy-products…`), page `/legacy-products` in the sales/catalogue nav group                                                                                                                                                                                                                                                                        |
+| Tests                   | `tests/unit/legacy-product-review-domain.test.ts`, `legacy-products-read-set.test.ts`, `legacy-import-products-cli.test.ts`, `legacy-products-boundary.test.ts` (extended); `tests/integration/legacy-product-review.test.ts`; `tests/legacy-mysql/legacy-mysql-products.test.ts`; `tests/web/legacy-products.test.tsx`; mutation driver `scripts/mutate-mirza-pr2.py` (29 of 29 killed) |
+
+### Commands, routes and permissions (for later PRs and the runbook)
+
+```bash
+# 1. Digest only: prints the products read set fingerprint for approval. Writes nothing. Exit 3.
+legacy-import products-read --tenant T --source SOURCE --target TARGET \
+    --expected-fingerprint <approved v1 fingerprint> [--format md|json]
+# 2. With the approval: both fingerprints checked before any write; ingests; exit 0.
+legacy-import products-read … --expected-fingerprint <v1> --expected-products-fingerprint <products>
+    [--batch-size N]   # 1-5000, default 1000
+# 3. The panel map's `products` section from approved rows; read-only; never writes the file.
+legacy-import products-export --tenant T --target TARGET --expected-products-fingerprint <products> \
+    [--panel-map FILE]  # prints the merged map; its NEW fingerprint goes to stderr
+```
+
+Exit codes: 0 done; 3 digest only (not approved, nothing written); 64 usage; 65 a refused
+source (`SOURCE_FINGERPRINT_MISMATCH`, `READ_SET_FINGERPRINT_MISMATCH`,
+`READ_SET_SNAPSHOT_DIVERGED`, a synthetic source against a production-like target) or a
+refused map (`PanelMappingRefused`); 1 anything else (a `legacy_product_review.*` refusal
+included).
+
+| Route (`/api/v1`)                                                                                                                             | Permission                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `GET /legacy-products?state=&attention=true&q=&after=&limit=`                                                                                 | `legacy.products.view`                    |
+| `GET /legacy-products/:id`                                                                                                                    | `legacy.products.view`                    |
+| `POST /legacy-products/:id/approve-existing` `{idempotencyKey, expectedFactsChecksum, expectedVersion, productId, reason}`                    | `legacy.products.decide`                  |
+| `POST /legacy-products/:id/approve-new` `{idempotencyKey, expectedFactsChecksum, expectedVersion, title, durationDays, trafficBytes, reason}` | `legacy.products.decide` + `catalog.edit` |
+| `POST /legacy-products/:id/reject` `{idempotencyKey, expectedFactsChecksum, expectedVersion, reason}`                                         | `legacy.products.decide`                  |
+| `POST /legacy-products/:id/reopen` `{idempotencyKey, expectedVersion, reason}`                                                                | `legacy.products.decide`                  |
+
+The CLI ingest and export run as `SYSTEM_JOB` under `maintenance.run`. Audit actions:
+`legacy.product_review.read`, `.source_changed`, `.approve_existing`, `.approve_new`,
+`.reject`, `.reopen` (and the product service's own `product.create` for a draft); every
+refusal of a decision is a `DENIED` row.
+
+### Departures from the design, and why
+
+1. **The products read set reads `product` only.** The live-invoice count (§4) is computed
+   in the same bound session from the v1 `invoice` columns (`code_product`, `Status`,
+   `is_test`, `is_custom` — live statuses, real, not custom, trimmed code), which the
+   approved v1 fingerprint already binds. Putting `invoice` into the products read set
+   would change the products fingerprint with every invoice and void a products approval
+   for no product change.
+2. **The column allowlist** is the public `botmirzapanel` product columns plus the public
+   `mirza_pro` fork's `agent`, `note`, `data_limit_reset`, `one_buy_status`, `category`,
+   `hide_panel` — all optional, kept verbatim, never interpreted. `inbounds` and `proxies`
+   are deliberately NOT read (panel configuration; OQ-MZ-INV-02). The real columns are
+   still OQ-LPR-01. There is no "status" or "test" column in either public source: a
+   disabled or test product is a review row like any other, its `hide_panel`,
+   `one_buy_status`, `note` and name kept as cells (OQ-LPR-08).
+3. **Two approvals, and nothing written before the read is proven.** `products-read` writes
+   only with `--expected-products-fingerprint`, through PR1's verified delivery
+   (`readLegacyReadSet` with `expectedFingerprint`). One transaction cannot span the
+   delivery — the MySQL source refuses to run inside a database transaction — so the rows
+   are gathered per code (bounded by the legacy plan catalogue) and written in batched
+   transactions only after the delivery pass has reproduced the verified fingerprint. A
+   refused or diverged read writes nothing (integration test).
+4. **`legacy_facts` is an array** — one object per legacy row naming the code. A code on
+   two rows (OQ-LPR-05) is ONE review row with `source_conflict = CODE_DUPLICATED`, nothing
+   parsed, and it can only be rejected. This is the fail-closed interim answer; the owner's
+   answer to OQ-LPR-05 is still open.
+5. **Absent codes.** A complete read that no longer has a code sets
+   `missing_since_read_fingerprint` to ITS fingerprint; a decided row also moves to
+   `SOURCE_CHANGED` at its first absence. Every later read that still lacks the code
+   re-acknowledges it (the column is the LATEST read without the code; the first one is in
+   the audit trail), so the export of that later read is not blocked by an earlier one
+   (Codex review of #231). An absent code cannot be approved, only rejected.
+6. **`SOURCE_CHANGED` remembers the decision it invalidated**: `prior_state` (CHECK: set
+   iff `SOURCE_CHANGED`), and an approved row keeps its `approved_product_id` and
+   `approved_facts_checksum` for the operator to see. It still never exports: an export
+   needs an APPROVED state bound to the current checksum. §4's CHECK is relaxed accordingly
+   (only PENDING_REVIEW and REJECTED must have no product).
+7. **The historical price unit**: the owner decided Mirza prices are Toman (decision 7,
+   2026-10-07). So `historical_price_minor` is whole Toman as IRT minor units (exponent 0)
+   when the raw text is ASCII digits; anything else (`150000.5`, `150,000`, Persian
+   digits, negative) is `NOT_A_NUMBER` and stays raw only. `historical_price_raw` keeps
+   the cell verbatim. It is metadata: nothing reads it into a product, a tariff or a quote
+   (boundary test).
+8. **Approve-as-new is one transaction.** The draft is created by
+   `ProductService.createWithin` inside the decision's transaction (same checks, same
+   `product.create` audit, `catalog.edit` checked there and early with its DENIED audit), so
+   a lost race leaves no orphan product. The request carries title, days and traffic (the
+   page prefills them from the parsed proposal); there is no price, panel, category,
+   audience or status field, and the strict schema refuses one. Device limit is null.
+9. **Export consistency check at export time, not at `prepare`.** `products-export
+--panel-map FILE` refuses (65) a hand-written map entry for a reviewed code that
+   contradicts the review, keeps entries for codes the review has no row for, and prints
+   the merged map and its new fingerprint. The `prepare` check (§9) and the `audit`
+   per-code `PRODUCT_UNRESOLVED` aggregates (§9) are NOT built — PR5/PR6 own the
+   importer's review and report surfaces.
+10. **The list is ordered by code** (keyset on the immutable code), not by live-invoice
+    count: a keyset over a count that changes on every read skips or repeats rows. The count
+    is a column. The default view is the rows that want a decision (PENDING_REVIEW and
+    SOURCE_CHANGED).
+11. **A decision binds to the facts checksum AND the version the operator saw**
+    (`expectedFactsChecksum`, `expectedVersion`), checked under the row lock; so does a
+    reopen (version). A different checksum is `legacy_product_review.facts_changed`; a
+    different version is `legacy_product_review.version_conflict`. The checksum alone is
+    not enough: a reopen and a new decision on unchanged facts leave it as it was, and a
+    stale decision or reopen would overwrite the newer one (Codex review of #231).
+12. **A retried key answers its FIRST response.** The idempotency store keeps the decision's
+    response (the row and the approved product's title, as the deciding transaction saw
+    them), and a replay returns it unchanged and writes nothing — never the row as it is
+    after a later decision or reopen. A replayed approve-as-new creates no second draft.
+
+### Not run (needs the real dump; WP G)
+
+- `products-read` against the staging copy of the real archive: the real columns
+  (OQ-LPR-01), units (OQ-LPR-02), price shapes, duplicate codes (OQ-LPR-05).
+- The owner's review of the real rows in the Web Admin, and the export into the final map.
+- MySQL 8.0 for `tests/legacy-mysql/legacy-mysql-products.test.ts` (run here on MariaDB
+  10.11 only; CI's matrix has MySQL 8.0).

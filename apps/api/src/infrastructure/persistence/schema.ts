@@ -240,6 +240,9 @@ import {
   LEGACY_IMPORT_RUN_FAILURE_CODES,
   LEGACY_IMPORT_RUN_MODES,
   LEGACY_READ_SET_NAMES,
+  LEGACY_PRODUCT_REVIEW_STATES,
+  LEGACY_PRODUCT_REVIEW_DECIDED_STATES,
+  LEGACY_PRODUCT_SOURCE_CONFLICTS,
   LEGACY_IMPORT_RUN_STATUSES,
   LEGACY_IMPORT_SOURCE_TABLES,
   LEGACY_REVIEW_REASON_CODES,
@@ -13333,6 +13336,116 @@ export const legacyReadSetRuns = pgTable(
     check(
       'legacy_read_set_runs_code_version_check',
       sql`code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR2 — the legacy product review (`docs/legacy-product-review-design.md`).
+ *
+ * One row per legacy `code_product` (trimmed, as the importer matches it) per tenant: the
+ * legacy row's cells VERBATIM (`legacy_facts`, an array because a duplicated code keeps
+ * every row it has — `source_conflict`), their checksum, the fields parsed from them as a
+ * proposal (with closed `parse_notes`), and the operator's decision.
+ *
+ * NOT a product. Nothing here is listed, ordered, priced or renewed, and no column of
+ * `products` is touched by it except through the product service when an operator creates
+ * a draft. `historical_price_*` is METADATA — the owner states Mirza prices are Toman, so
+ * the normalised figure is IRT minor units (exponent 0) beside the raw text — and nothing
+ * copies it to `products.price_*`.
+ *
+ * Every state change is a conditional UPDATE naming its from-states. An approval binds to
+ * `facts_checksum` (`approved_facts_checksum`); a later read whose facts differ — or which
+ * no longer has the code (`missing_since_read_fingerprint`) — moves a decided row to
+ * SOURCE_CHANGED, remembering the decision it invalidated in `prior_state`.
+ */
+export const legacyProductReviews = pgTable(
+  'legacy_product_reviews',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    codeProduct: text('code_product').notNull(),
+    /** The legacy `product.id` (the first by byte order when the code is duplicated). */
+    legacyProductId: text('legacy_product_id').notNull(),
+    /** One object per legacy row naming this code: column name to the cell as read. */
+    legacyFacts: jsonb('legacy_facts').notNull(),
+    factsChecksum: text('facts_checksum').notNull(),
+    sourceConflict: text('source_conflict'),
+    title: text('title'),
+    trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }),
+    durationDays: integer('duration_days'),
+    /** The legacy `price_product` cell verbatim. */
+    historicalPriceRaw: text('historical_price_raw'),
+    /** Metadata only: whole Toman as IRT minor units. Never a selling price. */
+    historicalPriceMinor: bigint('historical_price_minor', { mode: 'bigint' }),
+    historicalPriceCurrency: text('historical_price_currency'),
+    parseNotes: jsonb('parse_notes').notNull(),
+    /** Live, non-test, non-custom invoices naming this code in the read's snapshot. */
+    liveInvoiceCount: integer('live_invoice_count').notNull(),
+    state: text('state').notNull(),
+    priorState: text('prior_state'),
+    approvedProductId: uuid('approved_product_id'),
+    approvedFactsChecksum: text('approved_facts_checksum'),
+    decisionReason: text('decision_reason'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    decidedAt: timestamptz('decided_at'),
+    /** The `products` read set fingerprint of the read that last saw this code. */
+    readFingerprint: text('read_fingerprint').notNull(),
+    /** The approved v1 source fingerprint that read was bound to. */
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    missingSinceReadFingerprint: text('missing_since_read_fingerprint'),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_product_reviews_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_product_reviews_tenant_code_key').on(table.tenantId, table.codeProduct),
+    index('legacy_product_reviews_tenant_state_idx').on(table.tenantId, table.state),
+    foreignKey({
+      name: 'legacy_product_reviews_tenant_product_fk',
+      columns: [table.tenantId, table.approvedProductId],
+      foreignColumns: [products.tenantId, products.id],
+    }),
+    foreignKey({
+      name: 'legacy_product_reviews_tenant_admin_fk',
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('legacy_product_reviews_state_check', enumCheck('state', LEGACY_PRODUCT_REVIEW_STATES)),
+    check(
+      'legacy_product_reviews_prior_state_check',
+      sql`(${nullableEnumCheck('prior_state', LEGACY_PRODUCT_REVIEW_DECIDED_STATES)}) AND ((state = 'SOURCE_CHANGED') = (prior_state IS NOT NULL))`,
+    ),
+    check(
+      'legacy_product_reviews_conflict_check',
+      sql`(${nullableEnumCheck('source_conflict', LEGACY_PRODUCT_SOURCE_CONFLICTS)}) AND jsonb_typeof(legacy_facts) = 'array' AND jsonb_array_length(legacy_facts) >= 1 AND ((source_conflict IS NULL) = (jsonb_array_length(legacy_facts) = 1))`,
+    ),
+    check(
+      'legacy_product_reviews_approval_check',
+      sql`((approved_product_id IS NULL) = (approved_facts_checksum IS NULL)) AND (state NOT IN ('APPROVED_EXISTING', 'APPROVED_NEW') OR approved_product_id IS NOT NULL) AND (state NOT IN ('PENDING_REVIEW', 'REJECTED') OR approved_product_id IS NULL)`,
+    ),
+    check(
+      'legacy_product_reviews_decision_check',
+      sql`(state NOT IN ('APPROVED_EXISTING', 'APPROVED_NEW', 'REJECTED') OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500)`,
+    ),
+    check(
+      'legacy_product_reviews_price_check',
+      sql`((historical_price_minor IS NULL) = (historical_price_currency IS NULL)) AND (historical_price_currency IS NULL OR historical_price_currency = 'IRT') AND (historical_price_minor IS NULL OR historical_price_minor >= 0)`,
+    ),
+    check(
+      'legacy_product_reviews_code_check',
+      sql`char_length(code_product) BETWEEN 1 AND 200 AND code_product !~ '[[:cntrl:]]' AND code_product = btrim(code_product)`,
+    ),
+    check(
+      'legacy_product_reviews_hashes_check',
+      sql`facts_checksum ~ '^[0-9a-f]{64}$' AND (approved_facts_checksum IS NULL OR approved_facts_checksum ~ '^[0-9a-f]{64}$') AND read_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND (missing_since_read_fingerprint IS NULL OR missing_since_read_fingerprint ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      'legacy_product_reviews_counts_check',
+      sql`(traffic_bytes IS NULL OR traffic_bytes >= 0) AND (duration_days IS NULL OR duration_days >= 0) AND live_invoice_count >= 0 AND version >= 1 AND jsonb_typeof(parse_notes) = 'object'`,
     ),
   ],
 );

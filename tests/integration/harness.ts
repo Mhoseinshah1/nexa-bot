@@ -164,6 +164,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        trial_limit_overrides, resellers,
        -- WP11A, before the payments they reference.
        gateway_invoices, payment_gateway_credentials, payment_gateway_call_budgets,
+       -- Mirza PR2: the legacy product review, before the products and admins it names.
+       legacy_product_reviews,
        provisioning_operations, services, payments, orders, discounts, products,
        -- AFTER products, which reference it. Named for the same reason as the rest:
        -- the tenants table above does CASCADE to it today, and a table whose clearing

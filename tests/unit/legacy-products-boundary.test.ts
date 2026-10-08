@@ -62,4 +62,40 @@ describe('hidden legacy products: one pricing system', () => {
     const fields = [...body.matchAll(/readonly (\w+)/gu)].map((match) => match[1]);
     expect(fields).toEqual(['codePanel', 'volume', 'serviceTime', 'timeUnit', 'isCustom']);
   });
+
+  /*
+   * Mirza PR2 — the legacy product review. Its historical price is IRT METADATA (owner
+   * decision 7): the review module imports nothing from pricing or the commercial actions,
+   * and the one product it creates is built with `price: null` in exactly one place.
+   */
+  it('the legacy product review computes no price and gives its draft none', () => {
+    const files = [
+      ...sources('apps/api/src/modules/commerce/legacy-product-review'),
+      'apps/api/src/modules/platform/legacy-importer/application/products-read-set.ts',
+      'apps/api/src/modules/platform/legacy-importer/application/products-ingest.ts',
+      'apps/api/src/legacy-import-products.ts',
+    ];
+    expect(files.length).toBeGreaterThan(6);
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      const imports = text.match(/^import[\s\S]*?from '[^']*';$/gmu) ?? [];
+      expect(imports.join('\n'), file).not.toMatch(
+        /\/pricing\/|pricing-engine|PricingService|\/commercial\//u,
+      );
+      // No write path names a product price column or a price setter.
+      expect(text, file).not.toMatch(/price_amount|priceAmount|setPrice|price:\s*money\(/u);
+    }
+    const service = readFileSync(
+      'apps/api/src/modules/commerce/legacy-product-review/application/legacy-product-review.service.ts',
+      'utf8',
+    );
+    const draft = /export function legacyDraftProduct[\s\S]*?\n\}\n/u.exec(service)?.[0] ?? '';
+    expect(draft).toMatch(/price: null,/u);
+    expect(draft).toMatch(/panelId: null,/u);
+    expect(draft).toMatch(/categoryId: null,/u);
+    expect(draft).toMatch(/audience: 'HIDDEN',/u);
+    // The only `createWithin` call passes the draft that builder made.
+    expect(service.match(/createWithin\(/gu)).toHaveLength(1);
+    expect(service).toMatch(/const draft = legacyDraftProduct\(/u);
+  });
 });

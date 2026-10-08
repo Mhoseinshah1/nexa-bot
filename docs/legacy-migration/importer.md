@@ -241,9 +241,9 @@ Any other read of the legacy database is a **versioned read set** (`read-set.ts`
   - read set names pinned by `LEGACY_READ_SET_NAMES`;
   - never in `legacy_import_run_inputs`, which is per APPLY run and compared on resume.
 
-The first read set is `inventory` (below). `products` (PR2) and `invoice-archive` (PR3)
-each add their definition, their name in `LEGACY_READ_SET_NAMES` (a contract change) and
-the CHECK's widening.
+The first read set is `inventory` (below). The second is `products` (Mirza PR2,
+`legacy-read-set:products:v1`, below). `invoice-archive` (PR3) adds its definition, its name
+in `LEGACY_READ_SET_NAMES` (a contract change) and the CHECK's widening the same way.
 
 ## 4. The panel mapping file (Item 6)
 
@@ -417,6 +417,50 @@ A SYNTHETIC-marked source is never recorded against a production-like target.
 
 The verdict fails closed. Exit 0 means `COMPLETE`. Exit 3 means `UNCLASSIFIED_TABLES`,
 `BLOCKED` (a view, or a name no statement can carry) or `FINGERPRINT_UNBOUND`.
+
+### Products subcommands (the legacy product review, Mirza PR2)
+
+```bash
+pnpm legacy-import products-read --tenant T --source SOURCE --target TARGET \
+     --expected-fingerprint HEX [--expected-products-fingerprint HEX] [--batch-size N] \
+     [--format md|json] [--source-password-env NAME] [--allow-production-target]
+pnpm legacy-import products-export --tenant T --target TARGET \
+     --expected-products-fingerprint HEX [--panel-map FILE] [--allow-production-target]
+```
+
+`products-read` reads the legacy `product` table through the `products` read set
+(`products-read-set.ts`: `id`, `code_product` required; the public MirzaBot and `mirza_pro`
+product columns optional and kept verbatim; never `inbounds` or `proxies`) into
+`legacy_product_reviews` (`docs/legacy-product-review-design.md` §13):
+
+- `--expected-fingerprint` (the approved v1 value) is always required: the session that
+  reads the products recomputes v1 and refuses a mismatch before reading a product row.
+  Reading products never changes v1 (unit test against the pinned synthetic value).
+- Without `--expected-products-fingerprint` it prints the products fingerprint for the
+  owner to approve and writes NOTHING (exit 3).
+- With it, under the importer's per-tenant claim, PR1's verified delivery refuses a
+  different products fingerprint before any row is delivered; the rows are written only
+  after the delivery pass reproduced it, in batched transactions (`maintenance.run`,
+  scope activity read inside, audited). Codes absent from the read are marked; the run is
+  recorded in `legacy_read_set_runs`. Re-reading the same source writes no review row.
+- A decided row whose facts changed — or whose code vanished — becomes `SOURCE_CHANGED` and
+  stops exporting until an operator decides again. Nothing is ever re-approved silently.
+- A SYNTHETIC source is refused against a production-like target before any write.
+
+Decisions are made in the Web Admin (`/legacy-products`, `legacy.products.view` /
+`legacy.products.decide`; approve-as-new also `catalog.edit`) — never through the importer's
+terminal-only review queue, which stays unreachable from every surface.
+
+`products-export` is read-only. It prints the `products` section of the panel map from rows
+approved against the facts the APPROVED products read saw (`--expected-products-fingerprint`),
+and refuses (`legacy_product_review.not_in_state`, exit 1) when the review does not reflect
+that read. With `--panel-map FILE` it prints the whole map with `products` replaced
+(hand-written entries for codes the review has no row for are kept) and the map's NEW
+fingerprint on stderr; a hand-written entry that contradicts a review row is refused (65).
+The importer still reads only the map file, bound by `--expected-panel-map-fingerprint`:
+the owner approves the new map exactly as before. An approved-as-new draft is INACTIVE and
+unpriced, so P6 leaves its services `PRODUCT_MAPPING_UNRESOLVED` until the owner prices and
+activates it — the intended order.
 
 ### Actors
 

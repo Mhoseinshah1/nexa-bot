@@ -413,30 +413,7 @@ export class ProductService {
       PRODUCT_EDIT_PERMISSION,
       { action: 'product.create', entityType: 'Product', entityId: null },
       async (tx) => {
-        await this.assertScopeActive(scope, tx);
-        await this.assertPanelIsOurs(scope, input.draft.panelId, tx);
-        await this.assertCategoryIsOurs(scope, input.draft.categoryId, tx);
-        await this.assertPriceCurrency(scope, input.draft.price, tx);
-
-        const created = await this.deps.repository.create(
-          scope,
-          { id, draft: input.draft, now },
-          tx,
-        );
-
-        await this.deps.audit.record(
-          scope,
-          actor,
-          {
-            action: 'product.create',
-            entityType: 'Product',
-            entityId: created.id,
-            before: null,
-            after: auditView(created),
-            result: 'SUCCESS',
-          },
-          tx,
-        );
+        const created = await this.insertProduct(scope, actor, id, input.draft, now, tx);
 
         await rememberOnce(
           this.deps.idempotency,
@@ -450,6 +427,75 @@ export class ProductService {
         return created;
       },
     );
+  }
+
+  /**
+   * Creates an INACTIVE product INSIDE a caller's transaction — the legacy product review's
+   * "approve as new" (Mirza PR2), which must create the draft and record the decision in ONE
+   * commit, so a lost race leaves no orphan product behind.
+   *
+   * The same checks and the same `product.create` audit row as `create`, and the same
+   * permission: `catalog.edit` is checked HERE, on the caller's transaction, whatever the
+   * caller itself is charged. The caller owns idempotency (its command's key covers this
+   * write) and must have called `authorizeCreate` before its transaction, so a refusal
+   * leaves the audit trail `create` leaves.
+   */
+  async createWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    draft: ProductDraft,
+    tx: TransactionScope,
+  ): Promise<ProductRecord> {
+    await this.deps.guard.check(scope, actor, PRODUCT_EDIT_PERMISSION, tx);
+    return this.insertProduct(
+      scope,
+      actor,
+      this.deps.ids.uuid() as ProductId,
+      draft,
+      this.deps.clock.now(),
+      tx,
+    );
+  }
+
+  /** The early `catalog.edit` check `create` makes, with its DENIED audit row, for `createWithin`'s callers. */
+  async authorizeCreate(scope: TenantContext, actor: ActorContext): Promise<void> {
+    await this.authorize(scope, actor, {
+      action: 'product.create',
+      entityType: 'Product',
+      entityId: null,
+    });
+  }
+
+  /** The body both creates share: preconditions inside the transaction, the row, its audit. */
+  private async insertProduct(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: ProductId,
+    draft: ProductDraft,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<ProductRecord> {
+    await this.assertScopeActive(scope, tx);
+    await this.assertPanelIsOurs(scope, draft.panelId, tx);
+    await this.assertCategoryIsOurs(scope, draft.categoryId, tx);
+    await this.assertPriceCurrency(scope, draft.price, tx);
+
+    const created = await this.deps.repository.create(scope, { id, draft, now }, tx);
+
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'product.create',
+        entityType: 'Product',
+        entityId: created.id,
+        before: null,
+        after: auditView(created),
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return created;
   }
 
   /**

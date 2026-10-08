@@ -136,7 +136,7 @@ describe('Mirza PR1: read set runs', () => {
           source_engine, synthetic, table_count, row_count, recorded_at)
         VALUES (gen_random_uuid(), ${tenantA.tenantId}, ${readSet}, 1, ${version},
           ${'a'.repeat(64)}, ${'b'.repeat(64)}, ${'c'.repeat(64)}, 'MYSQL', false, 1, 1, now())`);
-    expect(await refusal(insert('products', 'legacy-read-set:products:v1'))).toMatch(
+    expect(await refusal(insert('invoice-archive', 'legacy-read-set:invoice-archive:v1'))).toMatch(
       /legacy_read_set_runs_read_set_check/u,
     );
     expect(await refusal(insert('inventory', 'legacy-read-set:inventory:v2'))).toMatch(

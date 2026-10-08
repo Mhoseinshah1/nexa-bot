@@ -81,6 +81,8 @@ export const PERMISSION_LABELS: Readonly<Record<PermissionKey, WebKey>> = {
   'support_knowledge.view': 'web.perm_support_knowledge_view',
   'support_knowledge.propose': 'web.perm_support_knowledge_propose',
   'support_knowledge.review': 'web.perm_support_knowledge_review',
+  'legacy.products.view': 'web.perm_legacy_products_view',
+  'legacy.products.decide': 'web.perm_legacy_products_decide',
   'tickets.reply': 'web.perm_tickets_reply',
   'tickets.assign': 'web.perm_tickets_assign',
   'tickets.close': 'web.perm_tickets_close',
@@ -154,6 +156,7 @@ export const PERMISSION_DOMAIN_LABELS: Readonly<Record<PermissionDomain, WebKey>
   recovery: 'web.perm_domain_recovery',
   tenant: 'web.perm_domain_tenant',
   maintenance: 'web.perm_domain_maintenance',
+  legacy: 'web.perm_domain_legacy',
   terms: 'web.perm_domain_terms',
   incidents: 'web.perm_domain_incidents',
 };

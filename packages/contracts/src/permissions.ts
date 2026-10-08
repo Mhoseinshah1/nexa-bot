@@ -523,6 +523,26 @@ export const PERMISSIONS = [
   p('recovery.kit.import', 'Import a Recovery Kit as decrypt-only keys', 'CRITICAL'),
   p('recovery.key.remove', 'Remove an imported decrypt-only key', 'CRITICAL'),
 
+  /*
+   * Mirza migration PR2 — the legacy product review (`docs/legacy-product-review-design.md`
+   * §6). A review row is a legacy `product` row read into NEXA for an operator to decide on:
+   * its raw facts, its historical price and its live-invoice count. It carries no Telegram
+   * id, username or balance — but it is business data the legacy owner priced, and nothing
+   * migration-only is handed to the read-only `observer` role by accident: VIEW is MEDIUM,
+   * not LOW, so it is never auto-granted with every LOW key.
+   *
+   * DECIDE is HIGH: an approval is what `products-export` hands the importer's panel map,
+   * and an approved code adopts legacy services as the product it names. Approving AS NEW
+   * additionally needs `catalog.edit` — it creates a product (INACTIVE, HIDDEN, unpriced,
+   * uncategorised, panel-less). Both owner-only by default.
+   */
+  p('legacy.products.view', 'View the legacy product review', 'MEDIUM'),
+  p(
+    'legacy.products.decide',
+    'Approve, reject or reopen a legacy product review row (the mapping the importer is given)',
+    'HIGH',
+  ),
+
   // Platform
   p('tenant.cross_read', 'Read data across tenants', 'CRITICAL'),
   p('maintenance.run', 'Run maintenance operations', 'CRITICAL'),
@@ -938,6 +958,11 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
    */
   'support_knowledge.propose': 'business_chats.view',
   'support_knowledge.review': 'support_knowledge.view',
+  /*
+   * Mirza PR2. A decision is made FROM a review row — its raw facts and the checksum the
+   * decision binds to — which `legacy.products.view` reads.
+   */
+  'legacy.products.decide': 'legacy.products.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass

@@ -29,6 +29,12 @@ else was writing (cutover step 6). Restoring it is exact by construction, and th
 lane keeps the post-import database as `nexa_pre_restore_<id>` — nothing is lost, and the
 rollback is itself reversible by two renames.
 
+The legacy product review (`legacy_product_reviews`, its `legacy_read_set_runs` rows and any
+draft products approve-as-new created, all INACTIVE and unpriced) lives in the same
+database: written at cutover step 10, which is after the step 6 backup, so a restore
+removes it with everything else, and `nexa_pre_restore_<id>` keeps it. Nothing drops it on
+its own — there is no separate delete path.
+
 ## When — triggers
 
 Roll back when any of these holds and the owner (or the operator the owner named for the

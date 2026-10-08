@@ -384,6 +384,37 @@ Check: every table is classified (verdict `COMPLETE`, exit 0). An `UNCLASSIFIED_
 verdict stops the cutover until a reviewed commit classifies the table. The freeze
 statement it prints lists the same tables as `freeze-checksum-step7.tsv`.
 
+Then the legacy product review (`importer.md` §Products subcommands;
+`legacy-product-review-design.md` §13). The decisions themselves are taken in staging
+rehearsals and re-confirmed here on the FINAL snapshot: a product whose facts changed since
+it was decided is `SOURCE_CHANGED` and is decided again, never carried over.
+
+```bash
+# 1. Digest only, bound to the audit's source fingerprint. Writes nothing (exit 3).
+sudo --preserve-env=LEGACY_SOURCE_DSN,NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
+  -e LEGACY_SOURCE_DSN -e NEXA_LEGACY_IMPORT_TARGET_ACK \
+  --entrypoint node api dist/legacy-import.cli.js products-read \
+  --tenant "$NEXA_TENANT" --source env:LEGACY_SOURCE_DSN --target nexa --allow-production-target \
+  --expected-fingerprint <audit source.fingerprint> | tee products-read-digest.md
+# 2. The owner approves the products fingerprint it printed; then the same with
+#    --expected-products-fingerprint <that value> | tee products-read.md   (exit 0)
+# 3. Re-decide every SOURCE_CHANGED / PENDING row in the Web Admin (/legacy-products).
+# 4. The map's products section from the approved rows; the map file is NOT written.
+sudo --preserve-env=NEXA_LEGACY_IMPORT_TARGET_ACK $DC run --rm --no-deps -T \
+  -e NEXA_LEGACY_IMPORT_TARGET_ACK -v /etc/nexa/legacy:/etc/nexa/legacy:ro \
+  --entrypoint node api dist/legacy-import.cli.js products-export \
+  --tenant "$NEXA_TENANT" --target nexa --allow-production-target \
+  --expected-products-fingerprint <approved products fingerprint> \
+  --panel-map /etc/nexa/legacy/panel-map.json > panel-map.next.json
+```
+
+Check: `products-read.md` says `INGESTED`; the export's stderr lists what is NOT exported
+and why. If `panel-map.next.json` differs from the installed map, its fingerprint (stderr)
+is a new value: install the reviewed file, re-run `p7 audit`, and take the new
+`panelMapping.fingerprint` to step 13. The products fingerprint goes to step 13 too. The
+product table is part of the freeze proof (`freeze-checksum-step7.tsv` checksums every base
+table), so a product edited after step 7 is caught there.
+
 ## Step 11 — production dry-run
 
 ```bash
@@ -438,6 +469,7 @@ the owner exactly this packet, aggregates only, and waits:
 | the staging comparison and every explained difference                                                                                                                                                 | step 12                 |
 | the pre-import backup id, its SHA-256, `verified`, and that the encrypted archive and Recovery Kit are off-host                                                                                       | step 6, `backup-id.txt` |
 | the legacy freeze proof: `CHECKSUM TABLE` before and on the restored copy, dump SHA-256, the audit's source fingerprint (`source.fingerprint`) and panel-map fingerprint (`panelMapping.fingerprint`) | steps 7–10              |
+| the products read set fingerprint (`products-read.md`) and the review: approved, rejected, still pending, `SOURCE_CHANGED`, not exported and why (aggregates)                                         | step 10                 |
 | the release: version, commit, digest                                                                                                                                                                  | step 2                  |
 | the readiness gate is green, with its evidence                                                                                                                                                        | `production-gate.md`    |
 | the rollback plan, its trigger list and who decides                                                                                                                                                   | `rollback-runbook.md`   |
