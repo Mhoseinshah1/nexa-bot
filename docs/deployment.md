@@ -1832,8 +1832,10 @@ cancelled, or left to finish, before the rollback.
 
 **During the update itself**, this bundle can meet the previous API. It sends the key only
 when a bot is ticked, and drops tags and active service at their default the same way
-(PR #245 review m3), so previews and saves keep working there. A bot filter is the one thing
-the previous API refuses.
+(PR #245 review m3), so previews and saves keep working there. Mass operations send the same
+wire form for their preview and their create (review of PR #248, CX3); before that fix they sent
+every key, and the previous API refused every mass-operation preview. A bot filter is the one
+thing the previous API refuses.
 
 ### During an update: the handoff notice in a business-chat detail (roadmap A4)
 

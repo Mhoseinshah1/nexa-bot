@@ -63,6 +63,7 @@ import {
   EMPTY_AUDIENCE,
   audienceMessage,
   describeAudience,
+  wireAudience,
   type AudienceDraft,
 } from './audience-builder';
 
@@ -334,7 +335,10 @@ export function BulkOperationNewPage({
     mutationFn: () => {
       const g = grant();
       if (g === null) throw new Error('grant');
-      return previewBulkOperation({ grant: g, definition: audience });
+      // CX3 (review of PR #248): the wire form, as broadcasts and campaigns send it — the keys
+      // added since the first release are dropped at their default, so an older, strict API
+      // (a rolling update, a rollback) still accepts a preview that uses none of them.
+      return previewBulkOperation({ grant: g, definition: wireAudience(audience) });
     },
     onSuccess: (response) => {
       setPreview(response.preview);
@@ -348,7 +352,7 @@ export function BulkOperationNewPage({
       if (g === null || preview === null) throw new Error('preview');
       const input = {
         grant: g,
-        definition: audience,
+        definition: wireAudience(audience),
         // Program §13: a status change has no notice to send.
         notify: isStatusKind(kind) ? false : notify,
         note,
