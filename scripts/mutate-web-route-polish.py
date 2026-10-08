@@ -73,8 +73,8 @@ M=[
  ('WRP-23',[(RKT,"idempotencyKey: importKey.current({ file: tokenOf(input.file) }),","idempotencyKey: importKey.current({\n          name: input.file.name,\n          size: input.file.size,\n          lastModified: input.file.lastModified,\n        }),")],T_REC,'import key for the same file'),
  ('WRP-24',[(SUB,"        options.heldForMs !== undefined &&","        options.heldForMs === -1 &&")],T_SUB,'expire after heldForMs'),
  # --- list polish (RP) ---------------------------------------------------------------------
- ('WRP-25',[(LS,"onClick={() => void query.refetch()}","onClick={() => undefined}")],T_LP,'reads them again on request'),
- ('WRP-26',[(LS,"if (hidden || query.dataUpdatedAt === 0) return null;","if (query.dataUpdatedAt === 0) return null;")],T_LP,'withdrawn once the list is refused'),
+ ('WRP-25',[(LS,"if (!query.isFetching) void query.refetch();","if (query.isFetching) void query.refetch();")],T_LP,'reads them again on request'),
+ ('WRP-26',[(LS,"const shown = !hidden && query.dataUpdatedAt !== 0;","const shown = query.dataUpdatedAt !== 0;")],T_LP,'withdrawn once the list is refused'),
  ('WRP-27',[(LS,"[...keys, 'cursor'].map","[...keys].map")],T_LP,'cursor together'),
  ('WRP-28',[(ORD,"          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).\n          autoApply\n","")],T_LP,'applies itself'),
  ('WRP-29',[(REF,"onClick={() => setConfirmingClear(true)}","onClick={() => clear.mutate()}")],T_RB,'after asking'),
