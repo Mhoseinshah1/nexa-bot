@@ -8153,6 +8153,10 @@ export const WEB_FA = {
   'web.bcx_held_until': 'تا',
   'web.bcx_history_title': 'تاریخچهٔ این ارسال',
   'web.bcx_history_empty': 'هنوز کاری ثبت نشده است.',
+  'web.bcx_draft_changed':
+    'این پیش‌نویس در این فاصله تغییر کرده است. تغییرات ذخیره‌نشدهٔ شما نگه داشته شده؛ پیش از ذخیره انتخاب کنید:',
+  'web.bcx_draft_load_latest': 'بارگذاری نسخهٔ تازه (تغییرات من کنار گذاشته شود)',
+  'web.bcx_draft_keep_mine': 'نگه‌داشتن تغییرات من روی نسخهٔ تازه',
   'web.bcx_history_truncated':
     'فقط تازه‌ترین موارد نشان داده شده است؛ موارد قدیمی‌تر در گزارش رویدادها (Audit log) هست.',
   'web.bcx_h_create': 'ساخت پیش‌نویس',
@@ -8169,23 +8173,26 @@ export const WEB_FA = {
   'web.bcx_h_refused': 'اجازه داده نشد',
   // --- Roadmap C3/C4: audience by bot, attribution, the announcement's purpose --------
   'web.aud_bots': 'ربات',
+  'web.aud_bot_not_active':
+    'این ربات فعال نیست؛ گیرندگانش ارسال را برای همه متوقف می‌کنند تا ربات درست شود.',
   'web.aud_bots_hint':
     'مشتریانی که از این ربات‌ها پیام می‌گیرند (رباتی که اول به آن پیام داده‌اند). هیچ‌کدام انتخاب نشود یعنی همهٔ ربات‌ها.',
   'web.campaign_error_purpose_promotional':
     'اطلاعیهٔ کمپین همیشه تبلیغاتی است تا انصراف مشتریان رعایت شود. برای اطلاع‌رسانی خدماتی، یک «ارسال همگانی» جدا با هدف اطلاع‌رسانی خدمات بسازید.',
   'web.campaign_purpose_promotional_hint':
     'اطلاعیهٔ کمپین تبلیغاتی است و به مشتریانی که از پیام تبلیغاتی انصراف داده‌اند نمی‌رسد. برای اطلاع‌رسانی خدماتی (مثلاً جبران قطعی) یک «ارسال همگانی» جدا بسازید.',
-  'web.campaign_attr_title': 'گیرندگان اطلاعیه و استفاده از تخفیف',
-  'web.campaign_attr_told': 'گیرندگان اطلاعیه:',
-  'web.campaign_attr_delivered': 'تحویل‌شده:',
-  'web.campaign_attr_redeemers_told': 'از گیرندگان، تخفیف را در سفارش پرداخت‌شده استفاده کردند:',
-  'web.campaign_attr_redeemers_delivered': 'از آن‌ها، اطلاعیه به دستشان رسیده بود:',
-  'web.campaign_attr_redeemers_not_told': 'استفاده‌کنندگانی که گیرندهٔ اطلاعیه نبودند:',
+  'web.campaign_attr_title': 'اطلاعیه و استفاده از تخفیف',
+  'web.campaign_attr_audience': 'مخاطبان ثبت‌شدهٔ اطلاعیه:',
+  'web.campaign_attr_told': 'پیام را گرفتند (یا شاید گرفته باشند):',
+  'web.campaign_attr_delivered': 'تحویل قطعی:',
+  'web.campaign_attr_skipped': 'کنار گذاشته شد (انصراف یا مسدود):',
+  'web.campaign_attr_redeemers_told':
+    'پس از گرفتن پیام، تخفیف را در سفارش پرداخت‌شده استفاده کردند:',
+  'web.campaign_attr_redeemers_delivered': 'از آن‌ها، با تحویل قطعی:',
+  'web.campaign_attr_redeemers_not_told':
+    'سایر استفاده‌کنندگان (پیام را نگرفتند، یا پیش از آن پرداخت کردند):',
   'web.campaign_attr_note':
-    'شمارش افراد از ردیف‌های ثبت‌شده است، نه علت خرید: این اعداد نمی‌گویند اطلاعیه باعث خرید شده است.',
-  // --- end roadmap C2 block -----------------------------------------------------------
-
-  // --- Roadmap B5/B6 (Agent 2b): Customer 360 workspace and the attention-first dashboard ---
+    'شمارش افراد از ردیف‌های ثبت‌شده است و فقط سفارش‌های پرداخت‌شده (نه بازپرداخت‌شده) پس از ارسال پیام را می‌شمارد؛ این اعداد نمی‌گویند اطلاعیه باعث خرید شده است.',
   'web.attn_at_least': 'یا بیشتر',
   'web.attn_open': 'رسیدگی',
   'web.c360_nav_attention': 'نیازمند رسیدگی',

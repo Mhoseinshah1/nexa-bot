@@ -47,7 +47,9 @@ import {
   AudienceBuilder,
   EMPTY_AUDIENCE,
   describeAudience,
+  useCachedBotNames,
   draftOf,
+  wireAudience,
   type AudienceDraft,
 } from './audience-builder';
 import { messageFor } from './settings';
@@ -584,7 +586,7 @@ export function campaignBodyOf(
     description: state.description.trim(),
     start: { date: state.startDate, time: state.startTime },
     end: { date: state.endDate, time: state.endTime },
-    audience,
+    audience: wireAudience(audience),
     actions,
   };
 }
@@ -1523,6 +1525,7 @@ export function CampaignDetailPage({
 }
 
 function SummaryCard({ campaign }: { campaign: CampaignDetail }) {
+  const botNames = useCachedBotNames();
   const at = (iso: string | null) => (iso === null ? '—' : <Ltr>{iso.slice(0, 16)}</Ltr>);
   return (
     <Card title={t('web.campaign_section_summary')}>
@@ -1539,7 +1542,7 @@ function SummaryCard({ campaign }: { campaign: CampaignDetail }) {
           [
             t('web.campaign_audience'),
             <ul key="aud" className="plain">
-              {describeAudience(campaign.audience).map((line) => (
+              {describeAudience(campaign.audience, botNames).map((line) => (
                 <li key={line}>{line}</li>
               ))}
             </ul>,
@@ -2094,9 +2097,13 @@ function ResultsCard({ id }: { id: string }) {
                       t('web.campaign_attr_title'),
                       <ul key="attr" className="plain">
                         <li>
+                          {t('web.campaign_attr_audience')}{' '}
+                          <Num value={r.audienceAttribution.audience} /> ·{' '}
                           {t('web.campaign_attr_told')} <Num value={r.audienceAttribution.told} /> ·{' '}
                           {t('web.campaign_attr_delivered')}{' '}
-                          <Num value={r.audienceAttribution.delivered} />
+                          <Num value={r.audienceAttribution.delivered} /> ·{' '}
+                          {t('web.campaign_attr_skipped')}{' '}
+                          <Num value={r.audienceAttribution.skipped} />
                         </li>
                         <li>
                           {t('web.campaign_attr_redeemers_told')}{' '}

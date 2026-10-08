@@ -86,6 +86,38 @@ export const EMPTY_AUDIENCE: AudienceDraft = {
   botInstanceIds: null,
 };
 
+/**
+ * The definition as it goes on the wire (PR #245 review m3): the keys added after the first
+ * release — tags, active service, bots — are dropped while they hold their default. They mean
+ * nothing then, and a release that predates one refuses it by its strict schema, so a tab on
+ * this bundle talking to an older server (a rollback, a rolling update) would otherwise fail
+ * every preview and save with no bot ticked. The canonical form omits them the same way, so
+ * the hash is the one the server computes either way.
+ */
+export function wireAudience(draft: AudienceDraft): Record<string, unknown> {
+  const { tags, activeService, botInstanceIds, ...rest } = draft;
+  return {
+    ...rest,
+    ...(tags === null ? {} : { tags }),
+    ...(activeService === 'ANY' ? {} : { activeService }),
+    ...(botInstanceIds === null ? {} : { botInstanceIds }),
+  };
+}
+
+/**
+ * Review n2: the bots' names from the builder's options, if this page has already read them —
+ * never a request of its own (a reader of a report may not hold the options' key).
+ */
+export function useCachedBotNames(): ReadonlyMap<string, string> | undefined {
+  const options = useQuery({
+    queryKey: ['audience-options'],
+    queryFn: fetchAudienceOptions,
+    enabled: false,
+  });
+  const bots = options.data?.bots;
+  return bots === undefined ? undefined : new Map(bots.map((bot) => [bot.id, bot.username]));
+}
+
 /** A stored canonical definition, back into the builder's shape (every key is present). */
 export function draftOf(definition: unknown): AudienceDraft {
   return { ...EMPTY_AUDIENCE, ...(definition as Partial<AudienceDraft>) };
@@ -196,7 +228,7 @@ export function AudienceBuilder({
   disabled?: boolean;
 }) {
   const options = useQuery({ queryKey: ['audience-options'], queryFn: fetchAudienceOptions });
-  const count = useMutation({ mutationFn: () => previewAudience(value) });
+  const count = useMutation({ mutationFn: () => previewAudience(wireAudience(value)) });
   const [serviceOpen, setServiceOpen] = useState(value.service !== null);
   const set = (patch: Partial<AudienceDraft>) => onChange({ ...value, ...patch });
   const opts: AudienceOptionsResponse | undefined = options.data;
@@ -286,6 +318,10 @@ export function AudienceBuilder({
                   }}
                 />{' '}
                 <Ltr>@{bot.username}</Ltr>
+                {/* Review n1: a bot that cannot send pauses the broadcast for everyone. */}
+                {bot.status !== 'ACTIVE' && (
+                  <span className="muted small"> — {t('web.aud_bot_not_active')}</span>
+                )}
               </label>
             ))}
           </div>
@@ -643,7 +679,11 @@ export function AudienceBuilder({
  * The filters of a frozen definition, as sentences an operator reads on a report — the
  * brief's "filters" on a broadcast and a mass operation.
  */
-export function describeAudience(definition: unknown): string[] {
+export function describeAudience(
+  definition: unknown,
+  /** Review n2: the bots' names when the builder's options are at hand; a count otherwise. */
+  botNames?: ReadonlyMap<string, string>,
+): string[] {
   const d = draftOf(definition);
   const lines: string[] = [];
   lines.push(`${t('web.aud_status')}: ${t(STATUS_LABELS[d.customerStatus])}`);
@@ -670,7 +710,12 @@ export function describeAudience(definition: unknown): string[] {
     lines.push(`${t('web.aud_active_service')}: ${t(ACTIVE_SERVICE_LABELS[d.activeService])}`);
   }
   if (d.botInstanceIds !== null) {
-    lines.push(`${t('web.aud_bots')}: ${formatNumber(d.botInstanceIds.length)}`);
+    const named = d.botInstanceIds.map((id) => botNames?.get(id));
+    lines.push(
+      named.every((name) => name !== undefined)
+        ? `${t('web.aud_bots')}: ${named.map((name) => `@${String(name)}`).join(' · ')}`
+        : `${t('web.aud_bots')}: ${formatNumber(d.botInstanceIds.length)}`,
+    );
   }
   if (d.tags !== null) {
     const bits = [

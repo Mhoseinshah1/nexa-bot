@@ -79,7 +79,9 @@ import {
   EMPTY_AUDIENCE,
   audienceMessage,
   describeAudience,
+  useCachedBotNames,
   draftOf,
+  wireAudience,
   type AudienceDraft,
 } from './audience-builder';
 
@@ -428,10 +430,38 @@ function Composer({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [state, setState] = useState<ComposerState>(() => initial(record));
-  // Unsaved edits, compared with what the saved draft holds. The detail page blocks media
-  // actions while this is true: a media change bumps the version, the composer remounts on
-  // it, and the edits would be dropped (Codex R5 on PR #117).
-  const dirty = JSON.stringify(state) !== JSON.stringify(initial(record));
+  /*
+   * The saved draft the edits are based on, and whose version a save names. PR #245 (Codex
+   * CX2, review M1): when the server's draft moves on — a 409 re-read, another operator's
+   * save, a media change — the composer is NOT remounted from it. With no unsaved edits it
+   * simply follows the new version; with unsaved edits it keeps them and says the draft
+   * changed, and the operator chooses: load the latest (dropping theirs) or keep theirs on
+   * top of it. Nothing is discarded silently, and save waits for that choice.
+   */
+  const [base, setBase] = useState<BroadcastResponseItem | null>(record);
+  const [stale, setStale] = useState(false);
+  // Unsaved edits, compared with the saved draft they are based on. The detail page blocks
+  // media actions while this is true (Codex R5 on PR #117).
+  const dirty = JSON.stringify(state) !== JSON.stringify(initial(base));
+  useEffect(() => {
+    // Only a NEWER server version moves the base: a save already took its own answer as base.
+    if (record === null || base === null || record.version <= base.version) return;
+    if (dirty) {
+      setStale(true);
+    } else {
+      setBase(record);
+      setState(initial(record));
+    }
+  }, [record, base, dirty]);
+  const loadLatest = () => {
+    setBase(record);
+    setState(initial(record));
+    setStale(false);
+  };
+  const keepMine = () => {
+    setBase(record);
+    setStale(false);
+  };
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useUnsavedChanges(dirty);
   const toast = useToast();
@@ -455,17 +485,24 @@ function Composer({
             : state.buttons.filter(
                 (button) => button.label.trim() !== '' || button.url.trim() !== '',
               ),
-        audience: state.audience,
+        audience: wireAudience(state.audience),
         purpose: state.purpose,
         source: sourceOf(state),
         pin: state.pin,
       };
       return record === null
         ? createBroadcast({ ...content, idempotencyKey: submission.current(content) })
-        : updateBroadcast(record.id, { ...content, expectedVersion: record.version });
+        : updateBroadcast(record.id, {
+            ...content,
+            expectedVersion: base?.version ?? record.version,
+          });
     },
     onSuccess: (response) => {
       submission.settle();
+      // The saved draft is the new base: the edits are no longer unsaved.
+      setBase(response.broadcast);
+      setState(initial(response.broadcast));
+      setStale(false);
       toast({ tone: 'ok', message: t('web.bc_saved') });
       void client.invalidateQueries({ queryKey: ['broadcasts'] });
       void client.invalidateQueries({ queryKey: ['broadcast', response.broadcast.id] });
@@ -487,6 +524,7 @@ function Composer({
 
   const saveDisabled =
     save.isPending ||
+    stale ||
     state.title.trim() === '' ||
     (isSourcedBroadcastKind(state.contentKind) && sourceOf(state) === null);
   return (
@@ -507,6 +545,21 @@ function Composer({
         </SaveBar>
       }
     >
+      {stale && (
+        <div className="cb-form-error">
+          <Banner tone="warn">
+            {t('web.bcx_draft_changed')}
+            <span className="form-actions">
+              <Button size="sm" onClick={loadLatest}>
+                {t('web.bcx_draft_load_latest')}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={keepMine}>
+                {t('web.bcx_draft_keep_mine')}
+              </Button>
+            </span>
+          </Banner>
+        </div>
+      )}
       <FormSection id="bc-section-content" title={t('web.cb_section_content')} grid={false}>
         <div className="bc-compose">
           <div className="stack-sm">
@@ -1567,6 +1620,7 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
 
 /** What the broadcast is and whom it goes to, as saved. */
 function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
+  const botNames = useCachedBotNames();
   return (
     <Card title={t('web.bc_summary')}>
       <KV
@@ -1615,7 +1669,7 @@ function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
         <p className="muted small">{t('web.bc_frozen_audience')}</p>
       )}
       <ul className="small">
-        {describeAudience(record.audience).map((line) => (
+        {describeAudience(record.audience, botNames).map((line) => (
           <li key={line}>{line}</li>
         ))}
       </ul>
@@ -1670,11 +1724,19 @@ export function BroadcastDetailPage({
             <>
               {maySend && (
                 <>
-                  <Composer key={record.version} record={record} onDirtyChange={setComposerDirty} />
+                  <Composer
+                    key={`composer-${record.id}`}
+                    record={record}
+                    onDirtyChange={setComposerDirty}
+                  />
                   <MediaCard record={record} blocked={composerDirty} />
                   {/* Keyed by version: a saved edit (purpose, audience, text) voids the count
                       and its estimate, which were answers about the draft as it was. */}
-                  <LaunchCard key={record.version} record={record} blocked={composerDirty} />
+                  <LaunchCard
+                    key={`launch-${String(record.version)}`}
+                    record={record}
+                    blocked={composerDirty}
+                  />
                 </>
               )}
               {summary}

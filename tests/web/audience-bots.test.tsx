@@ -57,20 +57,51 @@ describe('the audience builder by bot', () => {
   });
 
   it('draws no bot section for a tenant with one bot, or an older server that lists none', async () => {
-    stubApi([options([{ id: BOT_1, username: 'shop_bot', status: 'ACTIVE' }])]);
+    // Review m5 (X12): the options are awaited first — a tier they carry is on screen — so the
+    // absence below is about the options, not about a query that has not answered yet.
+    const tier = { id: '01900000-0000-7000-8000-0000000000d1', name: 'نقره‌ای' };
+    stubApi([
+      {
+        url: '/audience/options',
+        body: {
+          currency: 'IRT',
+          resellerTiers: [tier],
+          products: [],
+          panels: [],
+          tags: [],
+          bots: [{ id: BOT_1, username: 'shop_bot', status: 'ACTIVE' }],
+        },
+      },
+    ]);
     const { unmount } = renderPage(<Harness onDraft={() => undefined} />);
-    await screen.findByText(t('web.aud_who'));
+    await screen.findByText(new RegExp(tier.name));
     expect(screen.queryByText(t('web.aud_bots_hint'))).toBeNull();
+    expect(screen.queryByLabelText('@shop_bot')).toBeNull();
     unmount();
     stubApi([
       {
         url: '/audience/options',
-        body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
+        body: { currency: 'IRT', resellerTiers: [tier], products: [], panels: [], tags: [] },
       },
     ]);
     renderPage(<Harness onDraft={() => undefined} />);
-    await screen.findByText(t('web.aud_who'));
+    await screen.findByText(new RegExp(tier.name));
     expect(screen.queryByText(t('web.aud_bots_hint'))).toBeNull();
+  });
+
+  it('marks a bot that is not active, and describes a criterion by the bots’ names when known (n1, n2)', async () => {
+    stubApi([
+      options([
+        { id: BOT_1, username: 'shop_bot', status: 'ACTIVE' },
+        { id: BOT_2, username: 'old_bot', status: 'DISABLED' },
+      ]),
+    ]);
+    renderPage(<Harness onDraft={() => undefined} />);
+    await screen.findByLabelText(/@old_bot/);
+    expect(screen.getByText(new RegExp(t('web.aud_bot_not_active')))).toBeInTheDocument();
+    expect(
+      describeAudience({ version: 1, botInstanceIds: [BOT_2] }, new Map([[BOT_2, 'old_bot']])),
+    ).toContain(`${t('web.aud_bots')}: @old_bot`);
   });
 
   it('describes a stored bot criterion in the report’s sentences', () => {

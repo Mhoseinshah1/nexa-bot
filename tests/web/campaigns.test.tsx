@@ -322,6 +322,39 @@ describe('one campaign', () => {
     });
   });
 
+  it('re-reads the campaign when its confirmation is refused as stale (409, review m5 X11)', async () => {
+    const api = stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/preview`, body: preview },
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/schedule`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'campaign.transition_invalid',
+            message: 'The campaign moved.',
+            correlationId: 'test',
+          },
+        },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    const reads = () =>
+      api.calls.filter(
+        (call) => call.method === 'GET' && call.url.endsWith(`/campaigns/${CAMPAIGN_ID}`),
+      ).length;
+    await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
+    fireEvent.change(screen.getByLabelText('برای تأیید، تعداد را تایپ کنید'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByLabelText(/پیش‌نمایش را بررسی کردم/));
+    const before = reads();
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید و زمان‌بندی' }));
+    await waitFor(() => expect(posts(api, '/schedule')).toHaveLength(1));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
   it('starts the confirmation over when the preview comes back different', async () => {
     const previewRoute = { url: `/campaigns/${CAMPAIGN_ID}/preview`, body: preview as unknown };
     stubApi([
@@ -623,8 +656,10 @@ describe('roadmap C3/C4 on the campaign page', () => {
         body: {
           ...results(),
           audienceAttribution: {
+            audience: 130,
             told: 120,
             delivered: 97,
+            skipped: 6,
             redeemersTold: 14,
             redeemersDelivered: 11,
             redeemersNotTold: 3,
@@ -636,7 +671,10 @@ describe('roadmap C3/C4 on the campaign page', () => {
     renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} may={ALL} />);
     const card = (await screen.findByText('نتایج')).closest('section') as HTMLElement;
     await waitFor(() => expect(card.textContent).toContain(t('web.campaign_attr_title')));
+    expect(card.textContent).toContain(`${t('web.campaign_attr_audience')} 130`);
     expect(card.textContent).toContain(`${t('web.campaign_attr_told')} 120`);
+    // Review m1: the opted-out and blocked are counted apart, never as told.
+    expect(card.textContent).toContain(`${t('web.campaign_attr_skipped')} 6`);
     expect(card.textContent).toContain(`${t('web.campaign_attr_redeemers_delivered')} 11`);
     expect(card.textContent).toContain(`${t('web.campaign_attr_redeemers_not_told')} 3`);
     expect(card.textContent).toContain(t('web.campaign_attr_note'));
