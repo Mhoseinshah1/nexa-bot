@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   CampaignDetailPage,
@@ -10,6 +10,21 @@ import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
+
+/** Holds every request whose URL contains `path` until `release` is called. */
+function holdRequests(path: string): { release: () => void } {
+  const inner = globalThis.fetch;
+  let open: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+    String(input).includes(path)
+      ? gate.then(() => inner(input as string, init))
+      : inner(input as string, init),
+  );
+  return { release: () => open() };
+}
 
 /**
  * Round N, C1 on the Web Admin: «کمپین‌ها».
@@ -379,6 +394,25 @@ describe('one campaign', () => {
     expect(screen.getByText(/برگردانده نمی‌شود/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'بله، لغو شود' }));
     await waitFor(() => expect(posts(api, '/cancel')).toHaveLength(1));
+  });
+
+  it('takes a run command once: its buttons wait while one is in flight', async () => {
+    const api = stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },
+      { url: `/campaigns/${CAMPAIGN_ID}/pause`, body: detail({ state: 'PAUSED' }) },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    const pause = await screen.findByRole('button', { name: 'توقف موقت' });
+    // A double click: the second lands while the first is pending and sends nothing.
+    const held = holdRequests('/pause');
+    fireEvent.click(pause);
+    // While the first is in flight every command button waits; a second click sends nothing.
+    await waitFor(() => expect(pause).toBeDisabled());
+    fireEvent.click(pause);
+    expect(screen.getByRole('button', { name: 'لغو کمپین' })).toBeDisabled();
+    held.release();
+    await waitFor(() => expect(posts(api, '/pause')).toHaveLength(1));
   });
 
   it('reports persisted facts only, with no revenue attributed to the campaign', async () => {

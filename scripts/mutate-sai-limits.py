@@ -18,14 +18,14 @@ C = 'packages/contracts/src/support-ai.ts'
 W = 'apps/web/src/pages/support-ai.tsx'
 
 INT_FILE = 'tests/integration/support-auto-reply.test.ts'
-INT_FILTER = '-t "roadmap A1|hotfix|loop guard|per window|stops when|nit:"'
+INT_FILTER = '-t "roadmap A1|hotfix|loop guard|per window|stops when|nit:|N1:|N3:|rolling deploy"'
 
 M = [
  ('budget off by one (>)', G,
   "if (input.sessionReplies >= input.sessionReplyBudget) return fail('consecutive', 'LOOP_GUARD');",
   "if (input.sessionReplies > input.sessionReplyBudget) return fail('consecutive', 'LOOP_GUARD');", 'unit+int'),
  ('GREETING counted in the session', R,
-  "        AND epoch_rows.topic IS DISTINCT FROM 'GREETING'\n",
+  "        AND epoch_rows.free IS NOT TRUE\n",
   "", 'int'),
  ('no inactivity reset', R,
   "      WHERE (session.started IS NULL OR epoch_rows.created_at >= session.started)\n",
@@ -37,8 +37,8 @@ M = [
   "          AND ${o.controlEpoch} = ${input.epoch}\n",
   "", 'int'),
  ('unknown topic treated as GREETING', R,
-  "        AND epoch_rows.topic IS DISTINCT FROM 'GREETING'\n",
-  "        AND epoch_rows.topic <> 'GREETING'\n", 'int'),
+  "        AND epoch_rows.free IS NOT TRUE\n",
+  "        AND epoch_rows.free IS NOT FALSE\n", 'int'),
  ('hourly limit a constant 30', A,
   "      maxPerWindow: config.maxAutoRepliesPerHour,",
   "      maxPerWindow: 30,", 'int'),
@@ -64,11 +64,29 @@ M = [
   "sessionReplyBudget: { min: 5, max: 40, default: 20 },",
   "sessionReplyBudget: { min: 5, max: 40, default: 4 },", 'unit+int'),
  ('web: no widening warning for the budget', W,
-  "        toNumber(draft.sessionReplyBudget) > response.config.sessionReplyBudget ||\n",
+  "        toNumber(draft.sessionReplyBudget) >\n          (response.config.sessionReplyBudget ?? Number.POSITIVE_INFINITY) ||\n",
   "", 'web'),
  ('web: no widening warning for the hour', W,
-  "        toNumber(draft.maxAutoRepliesPerHour) > response.config.maxAutoRepliesPerHour));",
+  "        toNumber(draft.maxAutoRepliesPerHour) >\n          (response.config.maxAutoRepliesPerHour ?? Number.POSITIVE_INFINITY)));",
   "        false));", 'web'),
+ # Review of PR #241.
+ ('N1: greetings read by the streak query (then the bounded read loses the questions)', R,
+  "          sql`${supportAiJobs.topic} IS DISTINCT FROM 'GREETING'`,\n",
+  "", 'int'),
+ ('N3: a greeting is free at any length', R,
+  "            AND char_length(${o.body}) <= ${SUPPORT_AI_FREE_GREETING_MAX_CHARS}) AS free",
+  ") AS free", 'int'),
+ # (A first version only dropped `IS NOT NULL`: equivalent, since char_length(NULL) is NULL and
+ # a NULL `free` counts. This one makes a purged body read as length 0.)
+ ('N3: a purged greeting is free', R,
+  "          (${j.topic} = 'GREETING' AND ${o.body} IS NOT NULL\n            AND char_length(${o.body})",
+  "          (${j.topic} = 'GREETING'\n            AND coalesce(char_length(${o.body}), 0)", 'int'),
+ ('rolling deploy: the retired limit not projected', S,
+  "        maxConsecutiveReplies:\n          stored.retiredMaxConsecutiveReplies ?? SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,\n",
+  "", 'int'),
+ ('N5: an absent limit sent as NaN', W,
+  "  return draft.absent.includes(field) && draft[field].trim() === ''",
+  "  return false", 'web'),
 ]
 
 env = dict(os.environ)

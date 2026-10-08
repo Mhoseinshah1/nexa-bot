@@ -1963,8 +1963,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       );
       const current = (await ctx.container.supportAiConfig.view(tenantA as never, owner)).config;
       for (const change of [
-        { sessionReplyBudget: current.sessionReplyBudget + 1 },
-        { maxAutoRepliesPerHour: current.maxAutoRepliesPerHour + 1 },
+        { sessionReplyBudget: current.sessionReplyBudget! + 1 },
+        { maxAutoRepliesPerHour: current.maxAutoRepliesPerHour! + 1 },
         { maxOutputChars: current.maxOutputChars + 100 },
         { cooldownSeconds: current.cooldownSeconds - 1 },
         { settleDelaySeconds: current.settleDelaySeconds - 1 },
@@ -1974,8 +1974,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         );
       }
       // Tightening is ordinary configuration.
-      await configure({ sessionReplyBudget: current.sessionReplyBudget - 1 }, admin);
-      await configure({ maxAutoRepliesPerHour: current.maxAutoRepliesPerHour - 1 }, admin);
+      await configure({ sessionReplyBudget: current.sessionReplyBudget! - 1 }, admin);
+      await configure({ maxAutoRepliesPerHour: current.maxAutoRepliesPerHour! - 1 }, admin);
       // Outside AUTO these shape only Assist drafts: ordinary configuration too.
       await configure({ mode: 'ASSIST_ONLY' });
       await configure({ maxOutputChars: current.maxOutputChars + 100 }, admin);
@@ -2843,6 +2843,107 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         'guard_clarifying_limit',
       ]);
       expect(await conversation(id)).toMatchObject({ handoffReason: 'CLARIFYING_LIMIT' });
+    });
+
+    // --- review of PR #241 -----------------------------------------------------------------
+
+    /** Copies a SENT automatic reply (its lane row and its job) `n` times, newest last. */
+    const cloneReply = async (conversationId: string, n: number) => {
+      const [source] = (
+        await db().execute(
+          sql`SELECT j.id AS job, j.sent_outbound_id AS row FROM support_ai_jobs j
+              WHERE j.conversation_id = ${conversationId} AND j.state = 'SENT'
+              ORDER BY j.created_at DESC LIMIT 1`,
+        )
+      ).rows as { job: string; row: string }[];
+      for (let i = 0; i < n; i += 1) {
+        const row = ctx.container.ids.uuid();
+        await db().execute(sql`
+          INSERT INTO business_outbound_messages
+          SELECT (jsonb_populate_record(NULL::business_outbound_messages,
+                   to_jsonb(o) || jsonb_build_object('id', ${row}::text,
+                     'idempotency_key', ${key('clone')}::text, 'created_at', now(), 'updated_at', now()))).*
+          FROM business_outbound_messages o WHERE o.id = ${source!.row}`);
+        await db().execute(sql`
+          INSERT INTO support_ai_jobs
+          SELECT (jsonb_populate_record(NULL::support_ai_jobs,
+                   to_jsonb(j) || jsonb_build_object('id', ${ctx.container.ids.uuid()}::text,
+                     'idempotency_key', ${key('clone')}::text, 'sent_outbound_id', ${row}::text,
+                     'created_at', now(), 'updated_at', now()))).*
+          FROM support_ai_jobs j WHERE j.id = ${source!.job}`);
+      }
+    };
+
+    it('N1: forty-five greetings between questions cannot push the questions out of the read', async () => {
+      await configure({ maxConsecutiveClarifyingQuestions: 2, maxAutoRepliesPerHour: 60 });
+      const id = await turn('مشکل دارم', ask('سؤال ۱؟'));
+      await turn('Sing-box', ask('سؤال ۲؟'));
+      await turn('سلام', greeting);
+      await cloneReply(id, 44); // 45 greetings after the two questions, more than any old bound
+      const epoch = (await conversation(id)).controlEpoch;
+      expect(await jobs.clarifyingStreak(scopeA, { conversationId: id, epoch })).toBe(2);
+      await turn('خطا میده', ask('سؤال ۳؟'));
+      expect((await outcomes(id)).at(-1)).toBe('guard_clarifying_limit');
+    });
+
+    it('N3: a "greeting" longer than a greeting is an answer, and spends the budget', async () => {
+      const id = await turn('سلام', greeting);
+      expect(await session(id)).toBe(0);
+      await turn(
+        'سلام، یه سؤال',
+        scripted({ topic: 'GREETING', factRefs: [], replyText: 'سلام! '.repeat(50) }),
+      );
+      expect(await session(id)).toBe(1);
+      // A purged body cannot show it was short: it counts.
+      await db().execute(
+        sql`UPDATE business_outbound_messages SET body = NULL, body_purged_at = now()
+            WHERE conversation_id = ${id}`,
+      );
+      expect(await session(id)).toBe(2);
+    });
+
+    it('rolling deploy: the read still carries the retired limit an older bundle requires; a save ignores it', async () => {
+      // What an OLDER web bundle (before roadmap A1) requires of the configuration it reads:
+      // every one of its fields, `maxConsecutiveReplies` an integer 1–20 among them.
+      const read = await ctx.container.supportAiConfig.view(tenantA as never, owner);
+      const olderBundleFields = [
+        'mode',
+        'primary',
+        'fallbacks',
+        'visionEnabled',
+        'timeoutMs',
+        'maxOutputChars',
+        'maxConsecutiveReplies',
+        'maxConsecutiveClarifyingQuestions',
+        'cooldownSeconds',
+        'settleDelaySeconds',
+        'toneInstructions',
+        'autoTopics',
+        'autoMinConfidence',
+      ];
+      for (const field of olderBundleFields) expect(read.config, field).toHaveProperty(field);
+      const retired = read.config.maxConsecutiveReplies!;
+      expect(Number.isInteger(retired) && retired >= 1 && retired <= 20).toBe(true);
+      expect(read.config.maxConsecutiveReplies).toBe(4);
+      // An older bundle echoes it back (any value): ignored, the column untouched.
+      await ctx.container.supportAiConfig.update(tenantA as never, owner, {
+        idempotencyKey: key('cfg-older'),
+        expectedVersion: read.version,
+        config: { ...read.config, maxConsecutiveReplies: 9, cooldownSeconds: 25 },
+      });
+      const column = await db().execute(
+        sql`SELECT max_consecutive_replies AS n, cooldown_seconds AS c FROM support_ai_configs
+            WHERE tenant_id = ${SEED_IDS.tenantA}`,
+      );
+      expect(column.rows).toEqual([{ n: 4, c: 25 }]);
+      // A tenant with no row reads the column's default.
+      const bOwner = adminActorFor(
+        await createAdmin(ctx.container, tenantB, { username: 'bowner-rd', roleKeys: ['owner'] }),
+      );
+      expect(
+        (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config
+          .maxConsecutiveReplies,
+      ).toBe(4);
     });
 
     it('A2: a GREETING reply between questions does not reset the streak; a real REPLY does', async () => {

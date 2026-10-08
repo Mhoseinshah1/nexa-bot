@@ -436,6 +436,13 @@ ticket, before any provider is paid.
 - **Existing tenants** read 20 and 30 from migration `0219`; the old «بیشترین پاسخ خودکار
   پیاپی» (default 4, counted for as long as nobody touched the conversation) is gone from the
   page and no longer applies.
+- **During the rollout** (review of PR #241): an `assistant` replica still on the previous
+  release enforces the old rules — 4 automatic replies per epoch and a fixed 10 per hour — so a
+  few extra `LOOP_GUARD` handoffs while the deploy rolls are expected and harmless. Either web
+  bundle works against either API: the new API still sends the retired value an older page
+  needs, and a new page leaves out the two limits an older API does not know.
+- **A greeting is free only while it is short** (≤ 200 characters): a reply the model labelled
+  «خوشامدگویی» but that is longer is an answer and spends the budget.
 - **If conversations hit the session budget often**, read them before raising it: a long
   automatic exchange that does not end is usually a problem the knowledge does not cover
   (TB8/TB9). Raising either limit under `AUTO_REPLY_SAFE` needs `support_ai.auto_reply`.

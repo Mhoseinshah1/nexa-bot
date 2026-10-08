@@ -141,11 +141,21 @@ owner's, our echo), every lane row (`created_at`), and the moment of the decisio
 - six hours without a message either way: a new session for the same epoch — the customer who
   comes back is answered;
 - a row counts as `countAuto` counts it (every AUTO row but SUPERSEDED), except a reply whose
-  job's topic is `GREETING`. A row with no job, or a job with no topic, counts (fail closed).
+  job's topic is `GREETING` and whose text is at most `SUPPORT_AI_FREE_GREETING_MAX_CHARS` (200).
+  The topic is the model's own label; a long "greeting" is an answer (review of PR #241, N3). A
+  row with no job, a job with no topic, or a purged body counts (fail closed).
 
 No new state store: the epoch, the lane rows, the jobs' recorded topic and the messages already
-say everything. The scan reads activity from six hours before the epoch's first AUTO row, which
-is all the history the answer can depend on.
+say everything. The joins and the activity reads are index-bounded by tenant, conversation and
+time (review of PR #241, N2: the time bound is a scalar subquery, so it reaches the index); the
+reads start six hours before the epoch's FIRST automatic reply, so a long-lived epoch reads its
+whole lifetime — accepted, since a person's action ends an epoch.
+
+**Rolling deploy** (review of PR #241). The configuration response still carries the retired
+`maxConsecutiveReplies` (the stored column, else 4) because an older web bundle requires it; a
+save ignores it. A newer bundle reading an older API leaves the two A1 limits out of its save
+(`supportAiConfigReadSchema` makes them optional when read). While the deploy rolls, an older
+`assistant` replica still enforces 4 per epoch and 10 per hour.
 
 **Both are decided twice**, like every preflight: before the provider call, and again in the
 enqueue transaction under the conversation's lock (a reply that landed in the session during
@@ -294,7 +304,9 @@ the newest, the `ASK_CLARIFYING_QUESTION`s before the first `REPLY`.
 - A real `REPLY` ends the streak. A customer message does not: the point is question, answer,
   question, answer, troubleshooting step. Roadmap A2: a `REPLY` whose topic is `GREETING` is
   not a real answer — it neither counts nor resets, so a «سلام» between two questions cannot
-  launder a streak (before A2 a greeting reset it).
+  launder a streak (before A2 a greeting reset it). Greetings are filtered out of the streak's
+  read in SQL, so no number of them can push the questions before them out of its bounded read
+  (review of PR #241, N1).
 - A person's message, a takeover, a return to the AI and every handoff move the epoch: a new
   streak.
 - A lane row counts while `PENDING` (on its way — fail closed; it stops counting once

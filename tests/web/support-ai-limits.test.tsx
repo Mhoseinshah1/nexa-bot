@@ -141,4 +141,32 @@ describe('the session reply budget and the hourly limit on /support-ai', () => {
     expect(t(AUTO_OUTCOME_LABELS.guard_consecutive)).toBe('سقف پاسخ در جلسه');
     expect(t(AUTO_OUTCOME_LABELS.guard_window)).toBe('سقف پاسخ در یک ساعت');
   });
+
+  it('rolling deploy: against an older replica the absent limits are empty, never "undefined", and not sent', async () => {
+    const { sessionReplyBudget: _s, maxAutoRepliesPerHour: _h, ...older } = configResponse().config;
+    const api = stubApi([
+      {
+        url: '/support-ai/config',
+        method: 'GET',
+        body: { ...configResponse(), config: { ...older, maxConsecutiveReplies: 4 } },
+      },
+      { url: '/support-ai/config', method: 'PUT', body: { version: 8 } },
+      { url: '/support-ai/usage', body: { since: '2026-09-04T00:00:00.000Z', rows: [] } },
+    ]);
+    renderPage(<SupportAiPage denied={false} mayAutoReply={false} />);
+    expect((await input('web.sai_session_reply_budget')).value).toBe('');
+    expect((await input('web.sai_max_auto_replies_per_hour')).value).toBe('');
+    expect(document.body.textContent).not.toContain('undefined');
+    fireEvent.change(await screen.findByLabelText(t('web.sai_tone')), {
+      target: { value: 'کوتاه' },
+    });
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    const config = await sentConfig(api);
+    expect('sessionReplyBudget' in config).toBe(false);
+    expect('maxAutoRepliesPerHour' in config).toBe(false);
+    // The older replica requires the retired limit: echoed back as it sent it.
+    expect(config.maxConsecutiveReplies).toBe(4);
+    expect(config.toneInstructions).toBe('کوتاه');
+  });
 });

@@ -140,3 +140,16 @@
   --topbar-h: 52px;
   --gap: 14px;
 }
+
+/*
+ * Touch (a phone, a tablet): every control a finger has to hit is at least 44px
+ * square (WCAG 2.5.5). Only the control tokens change; a mouse keeps the dense
+ * desk layout, and so does a device whose primary pointer can hover (a touch
+ * laptop, an iPad with a trackpad), which `hover: none` excludes. `pnpm web:responsive` measures every route against this.
+ */
+@media (pointer: coarse) and (hover: none) {
+  :root {
+    --ctl-h: 44px;
+    --ctl-h-sm: 44px;
+  }
+}
