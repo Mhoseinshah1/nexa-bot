@@ -440,7 +440,10 @@ describe('Telegram Business conversations (TB2)', () => {
     });
     await lane.deliverDue(scopeA);
     // The AUTO row is never resent; the only later send is the handoff's own notice (A4).
-    expect(transport.sent.map((sent) => sent.text)).toEqual(['پاسخ پیشنهادی هوش مصنوعی', HANDOFF_NOTICE]);
+    expect(transport.sent.map((sent) => sent.text)).toEqual([
+      'پاسخ پیشنهادی هوش مصنوعی',
+      HANDOFF_NOTICE,
+    ]);
   });
 
   it('a 429 requeues the row without spending an attempt, and it sends later', async () => {

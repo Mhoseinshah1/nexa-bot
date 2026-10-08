@@ -457,7 +457,7 @@ ticket, before any provider is paid.
    ORDER BY o.created_at;
   ```
 
-## 14. Progress guards, the handoff notice, NO_ACTION (roadmap A3–A6)
+## 16. Progress guards, the handoff notice, NO_ACTION (roadmap A3–A6)
 
 Under `AUTO_REPLY_SAFE` three deterministic guards hand a conversation to a person (with a ticket,
 like any handoff), each with its own reason in «سپردن‌ها به پشتیبان» and «آمار پشتیبانی»:
