@@ -108,8 +108,9 @@ export class BusinessConnectionService {
   async findById(
     scope: ScopeContext,
     id: string,
+    tx?: unknown,
   ): Promise<(BusinessConnectionRecord & { readonly status: BusinessConnectionStatus }) | null> {
-    const connection = await this.deps.repository.findById(scope, id);
+    const connection = await this.deps.repository.findById(scope, id, tx);
     return connection === null
       ? null
       : { ...connection, status: businessConnectionStatus(connection) };

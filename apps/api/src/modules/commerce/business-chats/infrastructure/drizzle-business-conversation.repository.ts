@@ -794,7 +794,12 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
           eq(businessOutboundMessages.tenantId, tenantId),
           eq(businessOutboundMessages.conversationId, conversationId),
           eq(businessOutboundMessages.state, 'DELIVERED'),
-          isNotNull(businessOutboundMessages.body),
+          // Roadmap A4 (review of PR #246, CX4): a delivered handoff notice has no body, but its
+          // Telegram id is how the transcript recognises — and leaves out — its echo.
+          or(
+            isNotNull(businessOutboundMessages.body),
+            eq(businessOutboundMessages.origin, 'HANDOFF_NOTICE'),
+          ),
           input.since === null
             ? undefined
             : sql`${at} >= ${input.since.toISOString()}::timestamptz`,
@@ -1135,6 +1140,7 @@ export class DrizzleBusinessEscalationRepository implements BusinessEscalationRe
         topic: row.topic,
         intent: row.intent === null ? null : row.intent.slice(0, BUSINESS_ESCALATION_SUMMARY_MAX),
         stepsTried: row.stepsTried,
+        contextFrom: row.contextFrom,
         ticketId: row.ticketId,
         ticketOutcome: row.ticketOutcome,
         jobId: row.jobId,
@@ -1175,7 +1181,8 @@ export class DrizzleBusinessEscalationRepository implements BusinessEscalationRe
             isNotNull(businessConversationEscalations.summary),
             isNotNull(businessConversationEscalations.intent),
           ),
-          lt(businessConversationEscalations.createdAt, cutoff),
+          // M1: the older of the row and the decision its text was copied from.
+          sql`least(${businessConversationEscalations.contextFrom}, ${businessConversationEscalations.createdAt}) < ${cutoff}`,
         ),
       )
       .limit(limit);

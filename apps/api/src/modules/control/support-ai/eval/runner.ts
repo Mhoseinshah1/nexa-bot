@@ -257,6 +257,7 @@ export function prepareScenario(
   // (never a burst), in order.
   const progressLines: ProgressLine[] = lines.map((line, index) => ({
     origin: line.origin,
+    author: line.author,
     text: line.text,
     sentAt: new Date(index * 120_000),
   }));

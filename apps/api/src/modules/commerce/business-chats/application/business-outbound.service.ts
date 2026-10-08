@@ -251,7 +251,28 @@ export class BusinessOutboundService {
         );
         return null;
       }
-      // A4: the notice's text is the template's, rendered now and held in memory only. An
+      // A4 (review of PR #246, n3): a notice is still true while the handoff stands, but one held
+      // past the staleness bound (the lane was down, the tenant stopped) is not sent hours late.
+      if (
+        row.origin === 'HANDOFF_NOTICE' &&
+        now.getTime() - row.createdAt.getTime() > SUPPORT_AI_AUTO_STALE_SECONDS * 1000
+      ) {
+        await this.deps.outbound.resolve(
+          scope,
+          row.id,
+          {
+            state: 'SUPERSEDED',
+            fromStamped: false,
+            failureCode: 'support_ai.notice_stale',
+            attempted: false,
+            now,
+          },
+          tx,
+        );
+        return null;
+      }
+      // A4: the notice's text is the template's, rendered now and held in memory only (the lane
+      // stores no body; Telegram's echo of it is a message row, purged with the transcript). An
       // override that cannot render (an operator's bad edit) fails the row, unsent, once — it
       // never stalls the lane by throwing on every pass.
       let text = row.body ?? '';

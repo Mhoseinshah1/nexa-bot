@@ -4,6 +4,7 @@ import {
   SUPPORT_AI_AUTO_STALE_SECONDS,
   SUPPORT_AI_DEFAULT_CONFIG,
   SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS,
+  businessUnansweredSince,
   isNexaError,
   systemJobActor,
   type ActorContext,
@@ -3449,6 +3450,295 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
           handoffReason: item.reason,
         });
       }
+    });
+
+    // --- review of PR #246 -----------------------------------------------------------------
+
+    const customerRow = async () =>
+      (
+        (
+          await db().execute(
+            sql`SELECT id FROM customers WHERE telegram_user_id = ${CUSTOMER} AND tenant_id = ${SEED_IDS.tenantA}`,
+          )
+        ).rows[0] as { id: string }
+      ).id;
+    /** One answered turn, then «مرسی، حل شد» a minute later (the question is a minute older). */
+    const thankAfterAnswer = async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = sent_at - interval '1 minute'
+            WHERE conversation_id = ${id}`,
+      );
+      await db().execute(
+        sql`UPDATE business_conversations
+            SET last_inbound_at = last_inbound_at - interval '1 minute',
+                last_ai_at = last_ai_at - interval '1 minute',
+                last_message_at = last_message_at - interval '1 minute'
+            WHERE id = ${id}`,
+      );
+      return id;
+    };
+
+    it('CX1: a silent close is an answered one — the inbox shows no growing wait', async () => {
+      const id = await thankAfterAnswer();
+      // Written ten seconds before the job ran (the settle delay does that in production; a
+      // reply in the message's own Telegram second would not count as answering it).
+      next = closing();
+      await record(message({ text: 'مرسی، حل شد', sentAt: new Date(Date.now() - 10_000) }));
+      await tick();
+      expect((await outcomes(id)).at(-1)).toBe('no_action');
+      const after = await conversation(id);
+      expect(after.lastAiAt).not.toBeNull();
+      expect(
+        businessUnansweredSince({
+          lastInboundAt: after.lastInboundAt,
+          lastHumanAt: after.lastHumanAt,
+          lastAiAt: after.lastAiAt,
+          firstUnansweredAt: after.lastInboundAt,
+        }),
+      ).toBeNull();
+    });
+
+    it('CX2: a customer blocked during the provider call is handed off, not closed silently', async () => {
+      const id = await thankAfterAnswer();
+      duringCall = async () => {
+        await db().execute(
+          sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now() WHERE telegram_user_id = ${CUSTOMER}`,
+        );
+      };
+      await turn('مرسی، حل شد', closing());
+      expect((await autoJobs(id)).at(-1)).toMatchObject({
+        state: 'FAILED',
+        outcome: 'guard_customer_blocked',
+        handoff_reason: 'CUSTOMER_BLOCKED',
+      });
+      expect(await conversation(id)).toMatchObject({ state: 'HANDOFF_REQUIRED' });
+    });
+
+    it('CX2: a payment put under review during the provider call hands off', async () => {
+      const id = await thankAfterAnswer();
+      const customer = await customerRow();
+      duringCall = async () => {
+        await db().execute(sql`
+          INSERT INTO payments (id, tenant_id, customer_id, order_id, state, method, amount, currency,
+                                reference, external_reference, gateway_provider, created_at)
+          VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, ${customer}, NULL, 'UNKNOWN',
+                  'GATEWAY', 250000, 'IRT', ${key('pay-ref')}, 'ext-1', 'TONPAYS', now())`);
+      };
+      await turn('مرسی، حل شد', closing());
+      expect((await autoJobs(id)).at(-1)).toMatchObject({
+        outcome: 'guard_account_review',
+        handoff_reason: 'ACCOUNT_UNDER_REVIEW',
+      });
+    });
+
+    it('CX2: the mode switched off, or a person who took over, during the call: dropped, nothing stamped', async () => {
+      const id = await thankAfterAnswer();
+      duringCall = async () => {
+        await configure({ mode: 'ASSIST_ONLY' });
+      };
+      await turn('مرسی، حل شد', closing());
+      expect((await autoJobs(id)).at(-1)).toMatchObject({ outcome: 'dropped_mode' });
+      await configure({ mode: 'AUTO_REPLY_SAFE' });
+      const before = (await conversation(id)).lastAiAt;
+      duringCall = async () => {
+        await takeOver(id);
+      };
+      await turn('ممنون', closing());
+      expect((await autoJobs(id)).at(-1)).toMatchObject({ outcome: 'dropped_epoch' });
+      expect((await conversation(id)).lastAiAt?.getTime()).toBe(before?.getTime());
+    });
+
+    it('CX4: the handoff notice and its Telegram echo are left out of what the model reads', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      const [row] = (
+        await db().execute(
+          sql`SELECT telegram_message_id FROM business_outbound_messages
+              WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = ${id}`,
+        )
+      ).rows as { telegram_message_id: number }[];
+      // Telegram echoes the notice back to the bot.
+      await record(
+        message({
+          messageId: Number(row!.telegram_message_id),
+          fromUserId: OWNER,
+          senderBusinessBotId: OUR_BOT,
+          text: HANDOFF_NOTICE,
+        }),
+      );
+      await resume(id);
+      await turn('سؤال تازه دارم', step(1));
+      const read = requests
+        .at(-1)!
+        .map((m) => m.text)
+        .join('\n');
+      expect(read).not.toContain(HANDOFF_NOTICE);
+      expect(read).toContain('سؤال تازه دارم');
+    });
+
+    it('CX5: steps tried counts only the replies the customer actually received', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      const convo = await conversation(id);
+      // Two more attempts this session that Telegram never confirmed.
+      await seedAuto(id, convo.controlEpoch, 2, "interval '30 seconds'", 'UNCONFIRMED');
+      await turn('پولمو پس بدید', step(1));
+      expect(await escalations(id)).toMatchObject([{ reason: 'HANDOFF_TOPIC', steps_tried: 1 }]);
+    });
+
+    it('M1: an earlier epoch’s decision is never this handoff’s context', async () => {
+      const id = await turn('وصل نمیشم', step(0, { summary: 'یک مشکل قدیمی.' }));
+      await takeOver(id);
+      await resume(id);
+      await turn('پولمو پس بدید', step(1));
+      expect(await escalations(id)).toMatchObject([
+        { reason: 'HANDOFF_TOPIC', summary: null, intent: null, topic: null },
+      ]);
+    });
+
+    it('M1: a decision past the retention is not copied; a copied one is purged by its source’s age', async () => {
+      const id = await turn('وصل نمیشم', step(0, { summary: 'یادداشت ۲۹ روزه.' }));
+      await db().execute(
+        sql`UPDATE support_ai_jobs SET created_at = now() - interval '29 days'
+            WHERE conversation_id = ${id}`,
+      );
+      await turn('پولمو پس بدید', step(1));
+      expect(await escalations(id)).toMatchObject([{ summary: 'یادداشت ۲۹ روزه.' }]);
+      const [contextRow] = (
+        await db().execute(
+          sql`SELECT context_from FROM business_conversation_escalations WHERE conversation_id = ${id}`,
+        )
+      ).rows as { context_from: Date | null }[];
+      expect(contextRow?.context_from).not.toBeNull();
+      // Two days later the SOURCE is 31 days old: the copy goes with it, though the row is new.
+      await new DrizzleBusinessEscalationRepository(db()).purgeText(
+        scopeA,
+        new Date(Date.now() + 2 * 86_400_000 - 30 * 86_400_000),
+        new Date(),
+        500,
+        undefined,
+      );
+      expect(await escalations(id)).toMatchObject([{ summary: null, intent: null }]);
+
+      // A decision already past the retention is not copied at all.
+      const other = (
+        await record(message({ text: 'وصل نمیشم', chatId: '7000501', fromUserId: '7000501' }))
+      ).conversationId;
+      next = step(0, { summary: 'یادداشت ۳۱ روزه.' });
+      await tick();
+      await deliver();
+      await db().execute(
+        sql`UPDATE support_ai_jobs SET created_at = now() - interval '31 days'
+            WHERE conversation_id = ${other}`,
+      );
+      next = step(1);
+      await record(message({ text: 'پولمو پس بدید', chatId: '7000501', fromUserId: '7000501' }));
+      await tick();
+      expect(await escalations(other)).toMatchObject([{ summary: null, intent: null }]);
+    });
+
+    it('m4: a connection that cannot send gets no notice row; the handoff still happens', async () => {
+      const id = (await record(message({ text: 'سؤال' }))).conversationId;
+      await db().execute(sql`UPDATE telegram_business_connections SET is_enabled = false`);
+      await ctx.container.uow.run(scopeA, (tx) =>
+        ctx.container.businessConversations.handOff(scopeA, id, 'HANDOFF_TOPIC', new Date(), tx),
+      );
+      expect(await conversation(id)).toMatchObject({ state: 'HANDOFF_REQUIRED' });
+      expect(await noticeRows(id)).toEqual([]);
+    });
+
+    it('m4: an override that renders blank fails the notice once, unsent', async () => {
+      await db().execute(sql`
+        INSERT INTO template_overrides (id, tenant_id, template_key, locale, body, revision, updated_by_admin_id)
+        VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, 'bot.support.handoff_notice', 'fa',
+                ' ', 1, ${owner.id})`);
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      await deliver();
+      expect(await noticeRows(id)).toMatchObject([
+        { state: 'FAILED', failure_code: 'business.notice_template' },
+      ]);
+      expect(transport.notices).toEqual([]);
+      expect(transport.sent).toEqual([]);
+    });
+
+    it('m4: a delivered notice is neither a person’s answer nor the AI’s', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      const before = await conversation(id);
+      await deliver();
+      expect(transport.notices).toHaveLength(1);
+      const after = await conversation(id);
+      expect(after.lastHumanAt).toEqual(before.lastHumanAt);
+      expect(after.lastAiAt).toEqual(before.lastAiAt);
+      expect(after.lastMessageAt).not.toEqual(before.lastMessageAt);
+    });
+
+    it('m5: an escalation with an intent and no summary has its intent purged too', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await turn('پولمو پس بدید', step(1));
+      await db().execute(
+        sql`UPDATE business_conversation_escalations
+            SET summary = NULL, intent = 'فقط قصد', context_from = NULL,
+                created_at = now() - interval '31 days'
+            WHERE conversation_id = ${id}`,
+      );
+      await new DrizzleBusinessEscalationRepository(db()).purgeText(
+        scopeA,
+        new Date(Date.now() - 30 * 86_400_000),
+        new Date(),
+        500,
+        undefined,
+      );
+      expect(await escalations(id)).toMatchObject([{ summary: null, intent: null }]);
+    });
+
+    it('m6: the deciding decision’s own intent is recorded, not the previous one’s', async () => {
+      const advice = 'لطفاً برنامه را کامل ببندید، لینک اشتراک را به‌روز کنید و دوباره وصل شوید.';
+      const id = await turn('وصل نمیشم', step(0, { replyText: advice, intent: 'قصد قبلی' }));
+      await turn(
+        'با Sing-box هستم',
+        step(1, { replyText: advice, intent: 'قصد همین تصمیم', summary: 'خلاصهٔ همین تصمیم.' }),
+      );
+      expect(await escalations(id)).toMatchObject([
+        { reason: 'REPEATED_ADVICE', intent: 'قصد همین تصمیم', summary: 'خلاصهٔ همین تصمیم.' },
+      ]);
+      const [contextRow] = (
+        await db().execute(
+          sql`SELECT context_from FROM business_conversation_escalations WHERE conversation_id = ${id}`,
+        )
+      ).rows as { context_from: Date | null }[];
+      expect(contextRow?.context_from).toBeNull(); // nothing was copied from an earlier decision
+    });
+
+    it('n3: a notice held past the staleness bound is never sent late', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await db().execute(
+        sql`UPDATE business_outbound_messages SET created_at = now() - interval '11 minutes'
+            WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = ${id}`,
+      );
+      await deliver();
+      expect(transport.notices).toEqual([]);
+      expect(await noticeRows(id)).toMatchObject([
+        { state: 'SUPERSEDED', failure_code: 'support_ai.notice_stale' },
+      ]);
+      expect(await conversation(id)).toMatchObject({ state: 'HANDOFF_REQUIRED' });
+    });
+
+    it('m1: a third «مرسی» inside a minute still closes silently (not a flood)', async () => {
+      const id = await thankAfterAnswer();
+      await turn('مرسی', closing());
+      await turn('مرسی', closing());
+      await turn('مرسی', closing());
+      expect((await outcomes(id)).slice(-3)).toEqual(['no_action', 'no_action', 'no_action']);
+      expect(await conversation(id)).toMatchObject({ state: 'AI_ACTIVE' });
     });
   });
 });

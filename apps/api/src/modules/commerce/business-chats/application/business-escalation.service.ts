@@ -97,6 +97,12 @@ export class BusinessEscalationService implements HandoffEscalation {
         topic: input.detail.topic ?? context.topic,
         intent: input.detail.intent ?? context.intent,
         stepsTried: context.stepsTried,
+        // M1: text copied from an earlier decision is purged by ITS age, not this row's.
+        contextFrom:
+          (input.detail.summary === null && context.summary !== null) ||
+          ((input.detail.intent ?? null) === null && context.intent !== null)
+            ? context.at
+            : null,
         ticketId,
         ticketOutcome: outcome,
         jobId: input.detail.jobId,

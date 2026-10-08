@@ -497,7 +497,10 @@ export class BusinessConversationService {
    * - **Never resent**: like every lane row, an UNKNOWN outcome is `UNCONFIRMED` for good, and
    *   neither that nor a refusal hands anything off again (the conversation is already with a
    *   person).
-   * - A connection that cannot send gets no row at all.
+   * - A connection that cannot send gets no row at all — read in this transaction (review of
+   *   PR #246, m4), the same snapshot as the handoff.
+   * - The idempotency lookup is a backstop: `handOff` moves only from AI_ACTIVE or PAUSED, so
+   *   one epoch cannot hand off twice (m4 d: the lookup is equivalent today, kept on purpose).
    */
   private async enqueueHandoffNotice(
     scope: ScopeContext,
@@ -505,7 +508,11 @@ export class BusinessConversationService {
     now: Date,
     tx: unknown,
   ): Promise<void> {
-    const connection = await this.deps.connections.findById(scope, conversation.connectionRowId);
+    const connection = await this.deps.connections.findById(
+      scope,
+      conversation.connectionRowId,
+      tx,
+    );
     if (connection === null || connection.status !== 'ACTIVE') return;
     const key = `handoff-notice:${conversation.id}:${conversation.controlEpoch}`;
     if ((await this.deps.outbound.findByIdempotencyKey(scope, key, tx)) !== null) return;

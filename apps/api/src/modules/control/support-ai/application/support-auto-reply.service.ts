@@ -32,6 +32,7 @@ import {
   autoInboundFloodGuard,
   autoMoneyGuard,
   autoNoActionAllowed,
+  autoNoActionVerdict,
   autoNoProgressGuard,
   autoPreflight,
   autoRepeatedAdviceGuard,
@@ -179,7 +180,7 @@ export interface SupportAutoReplyServiceDeps {
   readonly images: SupportImageSource;
   readonly ids: IdGenerator;
   readonly context: SupportContextSource;
-  readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById'>;
+  readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById' | 'touch'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findByTelegramId'>;
   /** The loop guard's counts, and (D7) the delivered replies the transcript carries. */
   readonly outbound: Pick<BusinessOutboundRepository, 'countAuto' | 'deliveredSince'>;
@@ -477,9 +478,7 @@ export class SupportAutoReplyService {
     // every customer line it would answer only thanks or says it is solved, ends the job
     // silently. No reply, no handoff, no ticket; the conversation stays with the AI.
     if (autoNoActionAllowed({ decision, config, flags: context.flags, customerTexts })) {
-      return this.inJobTransaction(scope, job, images, (tx, now) =>
-        this.finish(scope, job, 'no_action', now, tx, { decision, produced }),
-      );
+      return this.closeSilently(scope, job, decision, produced, customerTexts, images);
     }
 
     // 6. NEXA decides. The clarifying streak is read from the rows, never from the model.
@@ -702,6 +701,48 @@ export class SupportAutoReplyService {
       );
       if (!ok) throw new JobGone();
       return outcome;
+    });
+  }
+
+  /**
+   * Roadmap A6 — the silent close, in ONE transaction that decides again on what is true now
+   * (review of PR #246, CX2), exactly as the reply path's enqueue does: the mode, then the
+   * conversation under its lock (epoch and state), then the configuration and the customer's
+   * account facts read in this transaction. If silence is no longer allowed — a customer blocked
+   * or put under payment review during the provider call, a topic removed from the allowlist —
+   * the conversation is handed off instead, with the specific reason.
+   *
+   * A closed matter is an ANSWERED one (CX1): `last_ai_at` is stamped, so the inbox does not show
+   * the customer's «مرسی» as a wait that keeps growing. (The next automatic reply's cooldown runs
+   * from it, as from any automatic answer.)
+   */
+  private async closeSilently(
+    scope: ScopeContext,
+    job: SupportAiJobRecord,
+    decision: SupportAiDecision,
+    produced: { readonly provider: SupportAiProvider; readonly model: string },
+    customerTexts: readonly (string | null)[],
+    images?: ImageWrite,
+  ): Promise<AutoJobResult> {
+    return this.inJobTransaction(scope, job, images, async (tx, now) => {
+      const { config } = await this.deps.configs.get(scope, tx);
+      if (config.mode !== 'AUTO_REPLY_SAFE') {
+        return this.finish(scope, job, 'dropped_mode', now, tx, { decision, produced });
+      }
+      const conversation = await this.deps.conversations.lockById(scope, job.conversationId, tx);
+      if (conversation === null || conversation.controlEpoch !== job.controlEpoch) {
+        return this.finish(scope, job, 'dropped_epoch', now, tx, { decision, produced });
+      }
+      if (conversation.state !== 'AI_ACTIVE') {
+        return this.finish(scope, job, 'dropped_state', now, tx, { decision, produced });
+      }
+      const flags = await this.deps.facts.autoGuardFlags(scope, conversation.customerId, tx);
+      const verdict = autoNoActionVerdict({ decision, config, flags, customerTexts });
+      if (!verdict.pass) {
+        return this.handOffChecked(scope, job, verdict, decision, produced, now, tx);
+      }
+      await this.deps.conversations.touch(scope, conversation.id, { lastAiAt: now, now }, tx);
+      return this.finish(scope, job, 'no_action', now, tx, { decision, produced });
     });
   }
 

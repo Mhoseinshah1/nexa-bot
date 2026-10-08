@@ -654,6 +654,8 @@ export interface HandoffContext {
   readonly summary: string | null;
   readonly topic: string | null;
   readonly intent: string | null;
+  /** When that summary and intent were written (review of PR #246, M1); null with none. */
+  readonly at: Date | null;
   readonly stepsTried: number | null;
 }
 export interface HandoffContextSource {
@@ -729,6 +731,8 @@ export interface BusinessEscalationRepository {
       readonly topic: string | null;
       readonly intent: string | null;
       readonly stepsTried: number | null;
+      /** The copied text's source time when it came from an earlier decision (M1). */
+      readonly contextFrom: Date | null;
       readonly ticketId: string | null;
       readonly ticketOutcome: BusinessEscalationTicketOutcome;
       readonly jobId: string | null;

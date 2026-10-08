@@ -49,7 +49,8 @@ const REPLY_AUTHOR: Readonly<Record<BusinessOutboundOrigin, SupportTranscriptAut
   OPERATOR: 'STAFF',
   ASSIST: 'AI_ASSIST',
   AUTO: 'AI_AUTO',
-  // Roadmap A4: the handoff notice is a template no person wrote (and, bodiless, never a line).
+  // Roadmap A4: a template no person wrote. Never reached: `mergeTranscript` leaves the notice
+  // and its echo out (review of PR #246, n1); the entry keeps the record total.
   HANDOFF_NOTICE: 'AUTOMATED',
 };
 
@@ -105,6 +106,15 @@ export function mergeTranscript(
   replies: readonly TranscriptReplyInput[],
   limit: number,
 ): SupportTranscriptLine[] {
+  // Roadmap A4 (review of PR #246, CX4): the handoff notice is a template NEXA sent, not part
+  // of the conversation the model reads — its echo is left out entirely.
+  const notices = new Set(
+    replies
+      .filter((reply) => reply.origin === 'HANDOFF_NOTICE' && reply.telegramMessageId !== null)
+      .map((reply) => reply.telegramMessageId as number),
+  );
+  messages = messages.filter((message) => !notices.has(message.telegramMessageId));
+  replies = replies.filter((reply) => reply.origin !== 'HANDOFF_NOTICE');
   const received = new Set(messages.map((message) => message.telegramMessageId));
   // The lane of each reply Telegram gave an id to: an echo of it is that reply.
   const replyLanes = new Map<number, BusinessOutboundOrigin>();

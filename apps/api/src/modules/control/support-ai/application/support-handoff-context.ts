@@ -34,10 +34,21 @@ export class SupportHandoffContext implements HandoffContextSource {
     tx: unknown,
   ): Promise<HandoffContext> {
     const [latest, stepsTried] = await Promise.all([
-      this.deps.jobs.latestDecisionContext(scope, input.conversationId, tx),
-      this.deps.jobs.sessionReplyCount(
+      // M1: the epoch that just ended, inside the retention — never an older issue's note.
+      this.deps.jobs.latestDecisionContext(
         scope,
         { conversationId: input.conversationId, epoch: input.epoch, now: input.now },
+        tx,
+      ),
+      // CX5: the steps tried are the replies the customer actually received.
+      this.deps.jobs.sessionReplyCount(
+        scope,
+        {
+          conversationId: input.conversationId,
+          epoch: input.epoch,
+          now: input.now,
+          deliveredOnly: true,
+        },
         tx,
       ),
     ]);
