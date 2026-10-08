@@ -21,6 +21,9 @@ E = 'apps/api/src/modules/commerce/business-chats/application/business-escalatio
 D = 'apps/api/src/modules/commerce/business-chats/infrastructure/drizzle-business-conversation.repository.ts'
 T = 'apps/api/src/modules/commerce/tickets/application/ticket.service.ts'
 EV = 'apps/api/src/modules/control/support-ai/eval/runner.ts'
+TR = 'apps/api/src/modules/control/support-ai/domain/transcript.ts'
+HC = 'apps/api/src/modules/control/support-ai/application/support-handoff-context.ts'
+AN = 'packages/contracts/src/support-analytics.ts'
 
 UNIT = 'pnpm exec vitest run --project unit tests/unit/support-progress-guards.test.ts'
 INT = 'pnpm exec vitest run --project integration tests/integration/support-auto-reply.test.ts -t "roadmap A3"'
@@ -34,17 +37,17 @@ M = [
   "return failureFeedbackRun(lines, since) > SUPPORT_AI_NO_PROGRESS_LIMIT", [UNIT, INT]),
  ('another message does not end the run', G,
   "      if (!isFailureFeedback(line.text)) break;\n", "      if (!isFailureFeedback(line.text)) continue;\n", [UNIT, INT]),
- ('failures before any reply counted', G, "      afterReply += 1;\n", "      afterReply += 1;\n      counted += 1;\n", [UNIT]),
+ ('failures counted one by one, not in rounds', G, "      pending = true;\n", "      pending = true;\n      rounds += 1;\n", [UNIT]),
  ('the run reads past the epoch', G,
   "    if (since !== null && line.sentAt.getTime() < since.getTime()) break;\n", "", [UNIT, INT]),
  ('same message needs 4', G,
   "if (repeats >= SUPPORT_AI_INBOUND_FLOOD.sameMessage)", "if (repeats > SUPPORT_AI_INBOUND_FLOOD.sameMessage)", [UNIT, INT]),
  ('rate: 8 in a minute already a flood', G,
-  "return recent > SUPPORT_AI_INBOUND_FLOOD.maxInbound", "return recent >= SUPPORT_AI_INBOUND_FLOOD.maxInbound", [UNIT]),
+  "return recent.length > SUPPORT_AI_INBOUND_FLOOD.maxInbound", "return recent.length >= SUPPORT_AI_INBOUND_FLOOD.maxInbound", [UNIT]),
  ('rate not bounded by the epoch', G,
   "    since === null ? Number.NEGATIVE_INFINITY : since.getTime(),\n", "    Number.NEGATIVE_INFINITY,\n", [UNIT]),
  ('repeated advice never matches', G,
-  "return adviceSimilarity(reply, earlier) >= SUPPORT_AI_REPEAT_SIMILARITY", "return adviceSimilarity(reply, earlier) > 1", [UNIT, INT]),
+  "return repeatsEarlierAdvice(decision.replyText, earlier)", "return false && repeatsEarlierAdvice(decision.replyText, earlier)", [UNIT, INT]),
  ('greetings not exempt', G, "  if (decision.topic === 'GREETING') return PASS;\n", "", [UNIT, INT]),
  ('service: no_progress not applied', A,
   "if (!progress.pass) return this.handOff(scope, job, progress, null, null);", "void progress;", [INT]),
@@ -65,8 +68,8 @@ M = [
  ('NO_ACTION: any closing line is enough', G,
   "    input.customerTexts.every((text) => isClosingAcknowledgement(text))", "    input.customerTexts.some((text) => isClosingAcknowledgement(text))", [UNIT, INT]),
  ('NO_ACTION: allowlist skipped', G,
-  "  if (!(config.autoTopics as readonly string[]).includes(decision.topic)) return false;\n", "", [UNIT, INT]),
- ('NO_ACTION: a question closes', G, "  if (text === null || /[?؟]/u.test(text)) return false;", "  if (text === null) return false;", [UNIT]),
+  "    (config.autoTopics as readonly string[]).includes(decision.topic) &&\n", "", [UNIT, INT]),
+ ('NO_ACTION: a question closes', G, "  if (text === null || QUESTION_MARKS.test(text)) return false;", "  if (text === null) return false;", [UNIT]),
  ('service: NO_ACTION always hands off', A,
   "if (autoNoActionAllowed({ decision, config, flags: context.flags, customerTexts })) {", "if (false) {", [INT]),
  # A10's runner applies the production guards (after the merge with PR #244).
@@ -76,6 +79,58 @@ M = [
  ('eval: repeated advice not applied', EV,
   "      guardPassed = verdict.pass && autoRepeatedAdviceGuard(decision, prepared.lines, null).pass;",
   "      guardPassed = verdict.pass;", [EVAL]),
+ # Review of PR #246.
+ ('CX3: any OWN_ECHO is AI advice (no_progress)', G,
+  "    } else if (line.author === 'AI_AUTO') {", "    } else if (line.origin === 'OWN_ECHO') {", [UNIT]),
+ ('CX3: any OWN_ECHO is AI advice (repeated_advice)', G,
+  "        line.author === 'AI_AUTO' &&", "        line.origin === 'OWN_ECHO' &&", [UNIT]),
+ ('m7: every reply is a round, failure or not', G,
+  "      if (pending) rounds += 1;", "      rounds += 1;", [UNIT, INT]),
+ ('m1: a closing acknowledgement can be a flood', G,
+  "  if (key !== '' && !isClosingAcknowledgement(newest.text)) {", "  if (key !== '') {", [UNIT, INT]),
+ ('m1: repeats counted over the whole epoch', G,
+  "    const repeats = recent.filter(", "    const repeats = inbound.filter(", [UNIT]),
+ ('m9: similar is enough (a correction is a repeat)', G,
+  "      sameTokens(words, tokenSet(text))", "      true", [UNIT]),
+ ('m2: question words ignored', G,
+  "  if (words.some((word) => QUESTION_WORDS.has(word))) return false;\n", "", [UNIT]),
+ ('m2: a bare status word closes', G,
+  "  return thanked || completed;", "  return thanked || words.some((word) => STATUS_WORDS.has(word));", [UNIT]),
+ ('m2: only ASCII and Arabic question marks', G,
+  "const QUESTION_MARKS = /[?؟？⁇⁈⁉❓❔]/u;", "const QUESTION_MARKS = /[?؟]/u;", [UNIT]),
+ ('CX2: silence not decided again in the transaction', A,
+  "      if (!verdict.pass) {\n        return this.handOffChecked(scope, job, verdict, decision, produced, now, tx);",
+  "      if (false) {\n        return this.handOffChecked(scope, job, verdict, decision, produced, now, tx);", [INT]),
+ ('CX2: the mode not read again', A,
+  "      if (config.mode !== 'AUTO_REPLY_SAFE') {\n        return this.finish(scope, job, 'dropped_mode', now, tx, { decision, produced });\n      }\n      const conversation",
+  "      const conversation", [INT]),
+ ('CX1: a silent close stamps no answer', A,
+  "      await this.deps.conversations.touch(scope, conversation.id, { lastAiAt: now, now }, tx);\n", "", [INT]),
+ ('CX4: the notice echo is read by the model', TR,
+  "  messages = messages.filter((message) => !notices.has(message.telegramMessageId));\n", "", [INT]),
+ ('CX5: steps tried counts undelivered attempts', HC, "          deliveredOnly: true,", "          deliveredOnly: false,", [INT]),
+ ('M1: context from any epoch', R,
+  "          eq(supportAiJobs.controlEpoch, input.epoch),\n          isNotNull(supportAiJobs.decision),\n          gte(",
+  "          isNotNull(supportAiJobs.decision),\n          gte(", [INT]),
+ ('M1: context past the retention copied', R, "          gte(supportAiJobs.createdAt, retained),\n", "", [INT]),
+ ('M1: a copy purged by its own age only', D,
+  "          sql`least(${businessConversationEscalations.contextFrom}, ${businessConversationEscalations.createdAt}) < ${cutoff}`,",
+  "          sql`${businessConversationEscalations.createdAt} < ${cutoff}`,", [INT]),
+ ('m4: the notice ignores the connection', V,
+  "    if (connection === null || connection.status !== 'ACTIVE') return;\n    const key = `handoff-notice:",
+  "    if (connection === null) return;\n    const key = `handoff-notice:", [INT]),
+ ('m4: a blank render is sent', L, "        if (text.trim() === '') {", "        if (false) {", [INT]),
+ ('m4: a delivered notice stamps lastHumanAt', L,
+  "                  { lastMessageAt: repliedAt, now }", "                  { lastMessageAt: repliedAt, lastHumanAt: repliedAt, now }", [INT]),
+ ('m5: an intent-only row not selected for purge', D, "            isNotNull(businessConversationEscalations.intent),\n", "", [INT]),
+ ('m6: the deciding intent dropped (the previous one shows)', A,
+  "        intent: decision === null || decision.intent.trim() === '' ? null : decision.intent,",
+  "        intent: null,", [INT]),
+ ('n3: a stale notice still sent', L,
+  "        row.origin === 'HANDOFF_NOTICE' &&\n        now.getTime() - row.createdAt.getTime() > SUPPORT_AI_AUTO_STALE_SECONDS * 1000",
+  "        row.origin === 'HANDOFF_NOTICE' &&\n        false", [INT]),
+ ('m8: an unknown guard outcome is DROPPED', AN,
+  "      if (code.startsWith('guard_') || code.startsWith('handoff_')) return 'HANDED_OFF';\n", "", [UNIT]),
 ]
 
 env = dict(os.environ)
@@ -94,7 +149,7 @@ for i, (name, f, old, new, cmds) in enumerate(M):
     assert src.count(old) == 1, (name, src.count(old))
     open(path, 'w').write(src.replace(old, new))
     try:
-        if f == C:
+        if f.startswith('packages/contracts'):
             subprocess.run('pnpm --filter @nexa/contracts build', cwd=ROOT, shell=True, capture_output=True)
         killed = []
         for c in cmds:
@@ -104,5 +159,5 @@ for i, (name, f, old, new, cmds) in enumerate(M):
             print('   ', k, flush=True)
     finally:
         open(path, 'w').write(src)
-        if f == C:
+        if f.startswith('packages/contracts'):
             subprocess.run('pnpm --filter @nexa/contracts build', cwd=ROOT, shell=True, capture_output=True)

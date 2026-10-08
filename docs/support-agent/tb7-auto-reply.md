@@ -241,7 +241,48 @@ no blocked customer or account under review, the confidence floor. Anything else
 handoff (`DECISION_NOT_REPLY`). The money guard runs before the provider, so a «مرسی، پولمو پس
 بدید» never gets here.
 
-## Schema (migrations `0205`, `0206`, `0218`, `0219`, `0220`)
+### Review of PR #246 (2026-10-08)
+
+What the review changed in the rules above. Each change has a test and a mutant (`tb7-falsification.md`).
+
+- **A3, only the AI's own advice (CX3).** `ProgressLine` carries the transcript `author` (A7).
+  - `no_progress` and `repeated_advice` read only `AI_AUTO` lines as the AI's advice.
+  - A person's send or a reviewed Assist draft (`STAFF`, `AI_ASSIST`) ends a run.
+  - An unattributed or automated echo is neither advice nor an end to the run.
+- **A3, rounds (m7).** `no_progress` counts ROUNDS: a different AI reply, then the customer's «it did not work».
+  - Three «نشد» after a single reply are one round.
+  - The lexicon gains «نمیتونم وصل بشم», «هنوزم مشکل داره», "not connecting", "did not connect" and "still no".
+- **A3, flood (m1).** "The same message three times" is counted inside the 60-second window, not across the epoch.
+  - A closing acknowledgement is exempt, so a customer who thanks after each step is not flooding. A third «مرسی» may still close silently.
+- **A3, corrections (m9).** `repeated_advice` needs BOTH conditions: trigram similarity of at least 0.8, AND the same words after folding.
+  - A ZWNJ joins words here rather than splitting them.
+  - A correction («… کنید» → «… نکنید») is therefore sendable.
+- **A4, the notice.**
+  - The connection is read inside the handoff's transaction (m4).
+  - A notice older than `SUPPORT_AI_AUTO_STALE_SECONDS` is superseded (`support_ai.notice_stale`) and never sent hours late (n3).
+  - The notice and its Telegram echo are left out of the transcript the model reads (CX4). `deliveredSince` now returns the bodiless notice row, so its Telegram message id is known.
+  - The lane stores no body. Telegram's echo of the notice is a message row, purged with the transcript (n2).
+  - The race "a takeover commits between the send stamp and Telegram's answer" is the same window every AUTO reply has, and is accepted (n5).
+- **A5, context bounds (M1).**
+  - The fallback context comes only from an automatic decision of the epoch that just ended, written inside the 30-day retention.
+  - When the summary or intent is copied from such a decision, `context_from` keeps its time (migration `0221`). The purge then uses the older of `context_from` and the row's own `created_at`, so a copy never outlives its source.
+  - The deciding decision's own summary, topic and intent are passed into `handOff` and win over the fallback (m6).
+  - Steps tried counts only the replies Telegram confirmed DELIVERED, excluding free greetings (CX5).
+- **A6, the silent close (CX1, CX2, m2).**
+  - It runs in its own transaction, which re-reads the mode, then locks the conversation (epoch and state), then reads the account facts in that transaction.
+  - If silence is no longer allowed, the conversation is handed off with the specific reason (`autoNoActionVerdict`):
+    - a customer blocked during the call (`CUSTOMER_BLOCKED`);
+    - a payment put under review, or an unreconciled service (`ACCOUNT_UNDER_REVIEW`);
+    - a hard topic or `HUMAN_REQUESTED`;
+    - otherwise, `DECISION_NOT_REPLY`.
+  - A mode switched off or an epoch that moved drops the job.
+  - A closed matter stamps `last_ai_at`, so the inbox shows no growing wait. The next automatic reply's cooldown runs from it.
+  - The closing matcher rejects every question mark (ASCII, Arabic, fullwidth, ⁇ ⁈ ⁉ ❓ ❔) and every question word (آیا, چرا, چطور…, is, does, how…).
+  - A status word («وصل», «درست», «حل», solved, fixed) closes only with a completion word («شد», «شده»). «وصل» alone may mean "connect me".
+- **Rolling deploy (m8, n6).** The run-time classifier counts an unknown outcome by its family instead of throwing. See the runbook §16 rollout notes for an older replica.
+- **n4.** `support_ai_jobs_auto_epoch_idx` makes `epochStartedAt` read exactly one epoch's automatic jobs.
+
+## Schema (migrations `0205`, `0206`, `0218`, `0219`, `0220`, `0221`)
 
 - `support_ai_jobs` gains the following columns. A CHECK pins the shape of an automatic job.
   - `trigger_telegram_message_id`, `trigger_content_version`;
@@ -269,6 +310,8 @@ handoff (`DECISION_NOT_REPLY`). The money guard runs before the provider, so a �
   origin CHECK (+`HANDOFF_NOTICE`) and author CHECK; adds `business_outbound_messages.template_key`
   with its shape CHECK, and `business_conversation_escalations.topic` (CHECK ⊆ topics), `intent`
   (≤ 600) and `steps_tried` (≥ 0). Additive only.
+- `0221` (review of PR #246) adds `business_conversation_escalations.context_from` (M1) and the
+  partial index `support_ai_jobs_auto_epoch_idx` (n4). Additive only.
 
 No grants are needed (no new permission).
 

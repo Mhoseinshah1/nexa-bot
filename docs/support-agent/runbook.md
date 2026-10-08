@@ -542,6 +542,14 @@ AI was asked (money, loop, an unreadable image, a stale job). Only `business_cha
 **«بی‌پاسخ بسته شد (تشکر یا حل شد)»** (`no_action`): the customer only thanked or said it was
 solved; nothing was sent, nobody was paged, and the conversation stays with the AI.
 
+**During the rollout** (review of PR #246), an older replica is still running:
+
+- **The notice.** An older lane worker supersedes a bodiless `HANDOFF_NOTICE` row as `conversation.moved_on`, so a few notices are lost during the deploy. Each handoff itself, with its ticket and its alert, is unaffected.
+- **Analytics.** An older replica's «آمار پشتیبانی» can answer an error once the range holds a `no_action` or a new guard outcome. A newer replica counts an unknown outcome by its family.
+- **An open browser tab.** An older bundle may draw a new reason or the «اطلاع ارجاع به پشتیبان» origin without its Persian label until the page is reloaded.
+
+**A notice is never sent late.** A notice held past 10 minutes (a stopped tenant, or a lane that was down) is superseded as `support_ai.notice_stale`.
+
 From the database (read-only), a conversation's notices:
 
 ```sql
